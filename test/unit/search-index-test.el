@@ -177,7 +177,6 @@
     (should-not (plist-get (drgnx-search-index root :embed (drgnx-search-index-test--stub)) :error))
     (let ((stamp (plist-get (drgnx-search-index-test--peek root #'drgnx-search-store-meta) :indexed-at)))
       (should (floatp stamp))
-      (sleep-for 0.02)
       (dolist (n '("f1.txt" "f2.txt" "f3.txt")) (drgnx-search-index-test--write root n (format "new %s\n" n)))
       (let ((r (drgnx-search-index root :embed (drgnx-search-index-test--stub-failing-from 2) :batch 1)))
         (should (string-match-p "HTTP 500" (plist-get r :error)))

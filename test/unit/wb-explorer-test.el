@@ -766,7 +766,7 @@
           (progn
             (drgnx-wb-focus-editor)
             (run-with-timer 0 nil (lambda () (unwind-protect (drgnx-explorer--follow main) (setq done t))))
-            (while (not done) (accept-process-output nil 0.01))
+            (drgnx-test-wait (lambda () done) :what "the follower's timer ran")
             (should (equal (with-current-buffer drgnx-explorer-buffer-name (drgnx-explorer-node-at (window-point w)))
                            (buffer-file-name main)))          ; it did move the Explorer
             (should-not drgnx-jank-guard-log))

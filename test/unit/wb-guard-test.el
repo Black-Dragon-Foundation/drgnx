@@ -3,12 +3,14 @@
 (require 'ert)
 (require 'drgnx-wb)
 (require 'drgnx-jank-guard)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defun drgnx-guard-test--from-timer (fn)
   "Run FN from a real timer and wait for it."
   (let ((done nil))
     (run-with-timer 0 nil (lambda () (unwind-protect (funcall fn) (setq done t))))
-    (while (not done) (accept-process-output nil 0.01))))
+    (drgnx-test-wait (lambda () done) :what "the timer ran")))
 
 (defmacro drgnx-guard-test--guarded (&rest body)
   `(let ((drgnx-jank-guard-log nil))

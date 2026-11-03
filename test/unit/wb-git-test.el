@@ -3,6 +3,7 @@
 (require 'ert)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/held-fixture" drgnx-dir) nil t)
 (require 'drgnx-git)
 (require 'drgnx-explorer)
@@ -248,9 +249,8 @@ build/ ignored (with build/out.o)."
       (should proc)
       (dotimes (i 16) (drgnx-cache-put 'git-status (format "/tmp/drgnx-fill-%d/" i) (list :branch nil)))
       (should-not (drgnx-cache-get 'git-status root))                                ; evicted while running
-      (let ((n 0))
-        (while (and (not (plist-get (drgnx-cache-get 'git-status root) :files)) (< (cl-incf n) 200))
-          (accept-process-output nil 0.05)))
+      ;; :files is set once the sentinel's look saw the run ended: its status is final then
+      (drgnx-test-wait (lambda () (plist-get (drgnx-cache-get 'git-status root) :files)) :what "the evicted root's status")
       (should-not (eq (process-status proc) 'signal))                                ; never killed
       (should (= (process-exit-status proc) 0))
       (should (eq (drgnx-git-status (expand-file-name "u.txt" root)) 'untracked))

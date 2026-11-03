@@ -594,12 +594,12 @@ without the binary."
 (ert-deftest drgnx-hub-client/ensure-never-waits-in-a-daemon-path ()
   (drgnx-hub-client-test--with
     (let ((process-environment
-           (cons (concat "DRGNX_RATATOSKR_BIN=" (drgnx-hub-client-test--stub root "exec sleep 3")) process-environment))
+           (cons (concat "DRGNX_RATATOSKR_BIN=" (drgnx-hub-client-test--stub root "read x")) process-environment))
           (inhibit-interaction t))
       (unwind-protect
           (progn
             (should-not (drgnx-hub-ensure))
-            ;; it came back while the stub (which sleeps) still runs: it did not wait for it
+            ;; it came back while the stub (which reads its stdin, held open by Emacs) still runs: it did not wait for it
             (should (process-live-p drgnx-hub--ensuring)))
         (when (process-live-p drgnx-hub--ensuring) (delete-process drgnx-hub--ensuring))
         (drgnx-timer-cancel 'hub-ensure)))))

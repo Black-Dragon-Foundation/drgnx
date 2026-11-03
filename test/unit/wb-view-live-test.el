@@ -12,6 +12,7 @@
 (require 'drgnx-signal)
 (require 'drgnx-timer)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/view-fixture" drgnx-dir) nil t)
 
@@ -144,10 +145,7 @@ core/workbench's setup has it (`drgnx-view-test-store-on'): the store has seen t
                             :filter #'drgnx-view-live-test--filter)))
       (unwind-protect
           (progn (process-send-string p "x\ny\n")
-                 (let ((tries 0))
-                   (while (and (< drgnx-view-live-test--lines 2) (< tries 50))
-                     (accept-process-output p 0.1)
-                     (setq tries (1+ tries)))))
+                 (drgnx-test-wait (lambda () (>= drgnx-view-live-test--lines 2)) :what "both lines through the filter"))
         (delete-process p))
       (should drgnx-view-live-test--seen)
       (dolist (seen drgnx-view-live-test--seen) (should (equal '("" 0) seen)))

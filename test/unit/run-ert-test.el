@@ -145,12 +145,13 @@
   (require 'filenotify)
   (let* ((dir (make-temp-file "drgnx-watch" t))
          (default-directory (file-name-as-directory dir))   ; the process below needs an existing directory
-         (w (file-notify-add-watch dir '(change) #'ignore)))
+         (seen nil)
+         (w (file-notify-add-watch dir '(change) (lambda (_event) (setq seen t)))))
     (unwind-protect
         (progn
           (write-region "x" nil (expand-file-name "a" dir) nil 'silent)
-          (accept-process-output nil 0.3)                                     ; the event arrives
-          (drgnx-run-ert-drain-events)
+          ;; the callback runs once the drain has fetched the event from the input queue
+          (drgnx-test-wait (lambda () (drgnx-run-ert-drain-events) seen) :secs 10 :what "the file-notify event")
           (let* ((got nil) (p (make-process :name "after-watch" :command '("true") :sentinel (lambda (&rest _) (setq got t)))))
             (drgnx-test-wait (lambda () got) :secs 3 :what "the process sentinel")
             (ignore p)))

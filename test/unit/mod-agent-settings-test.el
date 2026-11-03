@@ -10,6 +10,7 @@
 (require 'drgnx-registry)
 (require 'drgnx-keys)
 (require 'drgnx-agents)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/agent-config-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-agent-settings" drgnx-dir) nil t)
@@ -604,9 +605,7 @@ the first time (a fresh eln cache, as in CI), and those runs are not THUNK's."
 
 (defun drgnx-agent-settings-test--await (pred)
   "Wait (for a fake CLI) until PRED is non-nil; the value."
-  (let ((deadline (+ (float-time) 15)) v)
-    (while (and (not (setq v (funcall pred))) (< (float-time) deadline)) (accept-process-output nil 0.05))
-    v))
+  (drgnx-test-wait pred :secs 15 :what "the fake CLI's call"))
 
 (defun drgnx-agent-settings-test--argv-with (word)
   (seq-find (lambda (l) (string-search word l)) (drgnx-agent-config-test-argv)))
