@@ -36,7 +36,8 @@
                                  (plist-get (drgnx-ui-call sess "(progn (setq drgnx-test-timer-result nil)
                                     (run-with-timer 0 nil (lambda () (setq drgnx-test-timer-result
                                       (condition-case e (y-or-n-p \"Really? \") (error (format \"%S\" (car e)))))))
-                                    (sleep-for 0.3)
+                                    (let ((d (+ (float-time) 30)))
+                                      (while (and (null drgnx-test-timer-result) (< (float-time) d)) (accept-process-output nil 0.02)))
                                     (drgnx-uitest--json (list :r (format \"%s\" drgnx-test-timer-result))))") :r))))
       (drgnx-ui-stop (plist-get s :name))
       (delete-directory root t))))

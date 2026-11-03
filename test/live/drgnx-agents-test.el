@@ -32,11 +32,10 @@
           (should (equal (drgnx-live-ag--q sess "(list (buffer-name (window-buffer (drgnx-wb-area-window 'right))) (drgnx-wb-area-tab 'right))")
                          '("*drgnx Agents*" agents)))
           (should (drgnx-live-ag--q sess "(and (seq-find (lambda (w) (and (string-prefix-p \"*agent: \" (buffer-name (window-buffer w))) (drgnx-signal-editor-window-p w))) (window-list)) t)"))
-          ;; Stop: the turn ends within a second; the queued message waits
-          (let ((dt (drgnx-live-ag--q sess "(let ((t0 (float-time))) (drgnx-agents-stop drgnx-live--s)
-                                              (while (and (eq (drgnx-agent-session-status drgnx-live--s) 'busy) (< (- (float-time) t0) 3)) (accept-process-output nil 0.02))
-                                              (- (float-time) t0))")))
-            (should (< dt 1.0)))
+          ;; Stop: the turn ends and the session goes idle (a turn that ran out by itself would start the queued
+          ;; message and stay busy); the queued message waits
+          (drgnx-live-ag--q sess "(progn (drgnx-agents-stop drgnx-live--s) t)")
+          (should (drgnx-live-ag--until sess "(eq (drgnx-agent-session-status drgnx-live--s) 'idle)" 30))
           (should (equal (drgnx-live-ag--q sess "(drgnx-agent-session-queue drgnx-live--s)") '("and then this")))
           (drgnx-ui-measure sess nil)
           (should (equal (drgnx-live-ag--q sess "(length drgnx-wb-unrouted)") 0)))

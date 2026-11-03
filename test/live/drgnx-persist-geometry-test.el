@@ -18,14 +18,20 @@
                              (plist-get (drgnx-ui-call sess "(drgnx-uitest--json
   (list :v (prin1-to-string
             (with-selected-frame (seq-find (lambda (f) (and (display-graphic-p f) (not (frame-parent f)))) (frame-list))
-              (let ((f (make-frame '((drgnx-persist-restore . (ignore)) (width . 60) (height . 20)))) out)
+              (let ((f (make-frame '((drgnx-persist-restore . (ignore)) (width . 60) (height . 20)))) out
+                    ;; the compositor answers a size change later: wait until the frame has the size asked for
+                    (sized (lambda (f w h)
+                             (let ((d (+ (float-time) 30)))
+                               (while (and (not (and (eql (frame-text-width f) w) (eql (frame-text-height f) h)))
+                                           (< (float-time) d))
+                                 (accept-process-output nil 0.02))))))
                 (unwind-protect
                     (progn
-                      (set-frame-size f 600 400 t) (sleep-for 0.5)
+                      (set-frame-size f 600 400 t) (funcall sized f 600 400)
                       (dotimes (_ 3)
                         (let ((g (plist-get (drgnx-persist-state f) :geometry)))
                           (push (list (nth 2 g) (nth 3 g)) out)
-                          (drgnx-persist--place-frame f g) (sleep-for 0.5)))
+                          (drgnx-persist--place-frame f g) (funcall sized f (nth 2 g) (nth 3 g))))
                       (push (list (frame-text-width f) (frame-text-height f)) out)
                       (nreverse out))
                   (delete-frame f)))))))")
