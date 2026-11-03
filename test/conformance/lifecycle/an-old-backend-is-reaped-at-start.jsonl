@@ -1,0 +1,21 @@
+{"scenario": "lifecycle/an-old-backend-is-reaped-at-start", "requires": ["v1", "linux"], "doc": "An update over a running Lisp hub: its backend child (a process group of its own, recorded in runtime.db as purpose `backend` by the hub before phase 7) is still alive when the new hub starts. The new hub reaps the recorded group before it serves, so the first ping is answered and nothing waits on a dead backend. A recorded pid that is alive with another start time (a reused pid) is left alone. Here a `sleep` stands in for the backend and another for the reused pid; each is started detached (a shell starts it and exits, so init owns it, as it owned the real backend) and the scenario ends the second itself."}
+{"do": "spawn", "capture": "bootcat", "argv": ["cat", "/proc/sys/kernel/random/boot_id"], "capture_stdout": {"regex": "(\\S+)", "name": "boot"}}
+{"do": "spawn", "capture": "mk_old", "argv": ["sh", "-c", "setsid sleep 300 >/dev/null 2>&1 & echo $!"], "capture_stdout": {"regex": "(\\d+)", "name": "old"}}
+{"do": "spawn", "capture": "st_old", "argv": ["awk", "{print $22}", "/proc/$old/stat"], "capture_stdout": {"regex": "(\\d+)", "name": "old_start"}}
+{"do": "spawn", "capture": "mk_reused", "argv": ["sh", "-c", "setsid sleep 300 >/dev/null 2>&1 & echo $!"], "capture_stdout": {"regex": "(\\d+)", "name": "reused"}}
+{"do": "spawn", "capture": "st_reused", "argv": ["awk", "{print $22}", "/proc/$reused/stat"], "capture_stdout": {"regex": "(\\d+)", "name": "reused_start"}}
+{"do": "start", "hub": "h"}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0}
+{"do": "sqlite", "path": "$STATE/hub/runtime.db", "sql": ["insert into proc (purpose, pid, start_time, pgid, boot_id, at) values ('backend', $old, $old_start, $old, '$boot', 1.5)", "insert into proc (purpose, pid, start_time, pgid, boot_id, at) values ('backend', $reused, $reused_start + 1, $reused, '$boot', 1.5)"], "query": "select count(*) from proc", "expect": [[2]]}
+{"do": "pid", "capture": "old", "alive": true}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "connect", "conn": "c", "hub": "h2"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "ping"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"pid": "$PID(h2)"}}}
+{"do": "pid", "capture": "old", "alive": false, "within_ms": 4000}
+{"do": "pid", "capture": "reused", "alive": true}
+{"do": "file", "path": "$STATE/hub/log/hub-*.jsonl", "contains": "killed an orphan a crashed or older hub left"}
+{"do": "sqlite", "path": "$STATE/hub/runtime.db", "query": "select count(*) from proc", "expect": [[0]]}
+{"do": "kill", "pid": "reused", "signal": "TERM"}
+{"do": "pid", "capture": "reused", "alive": false, "within_ms": 4000}

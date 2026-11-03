@@ -173,6 +173,17 @@ pub async fn run(args: ServeArgs) -> Exit {
     if let Err(e) = reap_recorded(&runtime).await {
         tracing::warn!("{e}");
     }
+    // what the Lisp hub left in the state dir, moved aside (never deleted), before anything is served
+    let moving = env.clone();
+    match tokio::task::spawn_blocking(move || crate::legacy::migrate(&moving)).await {
+        Ok(Ok(m)) => {
+            if !m.moved.is_empty() || !m.left.is_empty() {
+                tracing::info!(moved = ?m.moved, left = ?m.left, "what the Lisp hub left");
+            }
+        }
+        Ok(Err(e)) => tracing::warn!("cannot move what the Lisp hub left: {e}"),
+        Err(e) => tracing::warn!("moving what the Lisp hub left failed: {e}"),
+    }
     let front = Arc::new(Front::with_graph(
         cap,
         socket.clone(),

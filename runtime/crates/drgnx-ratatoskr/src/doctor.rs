@@ -3,7 +3,10 @@
 //! `doctor --json` is
 //! `{binary: {path, commit, test_hooks}, running: {commit, pid}?, gateway: {port, registrations, providers, keys_held,
 //! warnings, keys_refused?}?, store: {schema, writer, failed, denied_in}?, socket_dir: {path, mode, ok}, sqlite,
-//! job_agents, sandbox: {backend, version, ok, reason, fix, landlock_abi, in_use, pins_note}}`.  `store` is the running hub's
+//! job_agents, sandbox: {backend, version, ok, reason, fix, landlock_abi, in_use, pins_note}, legacy: {moved, left, at,
+//! lisp_processes: [{pid, what}]}}`.  `legacy` is what the Lisp runtime left (`crate::legacy`): what the first start
+//! moved to `<state>/hub/migrated-p7/`, what stays (a command job still running), and the user's processes that are
+//! still the Lisp hub or its coordination server.  `store` is the running hub's
 //! work.db: a failed move to schema 7, and the copies that still hold what its deny-list kept out; and from files
 //! (also with no hub, when work.db exists) `wal_bytes`, `last_backup`, `backup_ok`, `backup_age_s`, `deny_list:
 //! {opted_in, warnings}`, `copies: {pre7, schema5}` and `warnings` (a WAL above 64 MiB, a backup older than 48 h or
@@ -122,6 +125,7 @@ pub fn report(env: &Env, binary: &Path, running: Option<Running>, sandbox: &Chec
         "sqlite_wal_fixed": urdr::wal_reset_fixed(urdr::sqlite_version_number()),
         "job_agents": JOB_AGENTS,
         "sandbox": sandbox_section(sandbox),
+        "legacy": crate::legacy::section(env),
     });
     if let Some(r) = running {
         v["running"] = json!({"pid": r.pid, "commit": r.commit});
@@ -456,6 +460,27 @@ fn text(v: &Value, sandbox: &Check) -> String {
     ));
     out.push_str(&format!("\njob agents: {}", t(&v["job_agents"])));
     out.push_str(&format!("\n{}", sandbox_line(sandbox)));
+    out.push_str(&legacy_lines(&v["legacy"]));
+    out
+}
+
+/// Lines about what the Lisp runtime left: a command job still running there, and its processes still alive.
+fn legacy_lines(legacy: &Value) -> String {
+    let list = |k: &str, f: &dyn Fn(&Value) -> String| {
+        legacy[k]
+            .as_array()
+            .map(|a| a.iter().map(f).collect::<Vec<_>>().join(", "))
+            .filter(|s| !s.is_empty())
+    };
+    let mut out = String::new();
+    if let Some(left) = list("left", &|v| v.as_str().unwrap_or("?").to_string()) {
+        out.push_str(&format!("\nlegacy: left in place until it ends: {left}"));
+    }
+    if let Some(p) = list("lisp_processes", &|v| {
+        format!("{} (pid {})", v["what"].as_str().unwrap_or("?"), v["pid"])
+    }) {
+        out.push_str(&format!("\nlegacy: Lisp runtime still running: {p}"));
+    }
     out
 }
 
@@ -515,6 +540,10 @@ mod tests {
         assert_eq!(v["sqlite_wal_fixed"], true);
         assert!(text(&v, &working()).contains("WAL-reset bug fixed"));
         assert_eq!(v["job_agents"], JOB_AGENTS);
+        for k in ["moved", "left", "lisp_processes"] {
+            assert!(v["legacy"][k].is_array(), "legacy.{k}");
+        }
+        assert!(v["legacy"]["at"].is_null());
         assert!(v.get("running").is_none());
         // too open: not ok
         std::fs::set_permissions(&sock_dir, std::fs::Permissions::from_mode(0o755)).unwrap();

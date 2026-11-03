@@ -1,0 +1,22 @@
+{"scenario": "lifecycle/a-second-start-moves-nothing", "requires": ["v1"], "doc": "After the first start recorded what it moved (migrated-p7/done), later starts move nothing from <state>/hub or <state>/sandbox, even when files of those names are there again (a rolled-back update). The first start's copies are untouched and the doctor's list does not grow."}
+{"do": "root"}
+{"do": "write_file", "path": "$STATE/hub/registrations.eld", "text": "old registrations"}
+{"do": "write_file", "path": "$STATE/sandbox/profile.eld", "text": "old sandbox"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "ping"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"pid": "$PID(h)"}}}
+{"do": "file", "path": "$STATE/hub/migrated-p7/registrations.eld", "contains": "old registrations"}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0}
+{"do": "write_file", "path": "$STATE/hub/registrations.eld", "text": "new registrations"}
+{"do": "write_file", "path": "$STATE/sandbox/profile.eld", "text": "new sandbox"}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "connect", "conn": "d", "hub": "h2"}
+{"do": "send", "conn": "d", "json": {"id": 2, "method": "ping"}}
+{"do": "expect", "conn": "d", "json": {"id": 2, "result": {"pid": "$PID(h2)"}}}
+{"do": "file", "path": "$STATE/hub/registrations.eld", "contains": "new registrations"}
+{"do": "file", "path": "$STATE/sandbox/profile.eld", "contains": "new sandbox"}
+{"do": "file", "path": "$STATE/hub/migrated-p7/registrations.eld", "contains": "old registrations", "lacks": "new"}
+{"do": "file", "path": "$STATE/hub/migrated-p7/sandbox/profile.eld", "contains": "old sandbox", "lacks": "new"}
+{"do": "run", "args": ["doctor", "--json"], "expect_code": 0, "expect_stdout": {"legacy": {"moved": ["hub/registrations.eld", "sandbox"], "left": []}}}

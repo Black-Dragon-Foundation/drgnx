@@ -1,0 +1,31 @@
+{"scenario": "lifecycle/lisp-state-is-moved-once", "requires": ["v1"], "doc": "The first start after phase 7 moves what the Lisp hub left in <state> into <state>/hub/migrated-p7 (0700), original names kept: registrations.eld, sessions.eld, port, hub-timers-report.eld, bodies/, every hub-*.d that holds only backend.sock, and sandbox/. A hub-*.d with anything else in it, and runtime.db, stay. Nothing is deleted, and `doctor --json` names what moved."}
+{"do": "root"}
+{"do": "write_file", "path": "$STATE/hub/registrations.eld", "text": "old registrations"}
+{"do": "write_file", "path": "$STATE/hub/sessions.eld", "text": "old sessions"}
+{"do": "write_file", "path": "$STATE/hub/port", "text": "4100"}
+{"do": "write_file", "path": "$STATE/hub/hub-timers-report.eld", "text": "old timers"}
+{"do": "write_file", "path": "$STATE/hub/bodies/b1", "text": "old body"}
+{"do": "write_file", "path": "$STATE/hub/hub-ab12.d/backend.sock", "text": ""}
+{"do": "write_file", "path": "$STATE/hub/hub-keep.d/backend.sock", "text": ""}
+{"do": "write_file", "path": "$STATE/hub/hub-keep.d/other", "text": "stays"}
+{"do": "write_file", "path": "$STATE/sandbox/profile.eld", "text": "old sandbox"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "ping"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"pid": "$PID(h)"}}}
+{"do": "file", "path": "$STATE/hub/migrated-p7", "mode": "0700"}
+{"do": "file", "path": "$STATE/hub/migrated-p7/registrations.eld", "contains": "old registrations"}
+{"do": "file", "path": "$STATE/hub/migrated-p7/sessions.eld", "contains": "old sessions"}
+{"do": "file", "path": "$STATE/hub/migrated-p7/port", "contains": "4100"}
+{"do": "file", "path": "$STATE/hub/migrated-p7/hub-timers-report.eld", "contains": "old timers"}
+{"do": "file", "path": "$STATE/hub/migrated-p7/bodies/b1", "contains": "old body"}
+{"do": "file", "path": "$STATE/hub/migrated-p7/hub-ab12.d/backend.sock"}
+{"do": "file", "path": "$STATE/hub/migrated-p7/sandbox/profile.eld", "contains": "old sandbox"}
+{"do": "file", "path": "$STATE/hub/registrations.eld", "exists": false}
+{"do": "file", "path": "$STATE/hub/bodies", "exists": false}
+{"do": "file", "path": "$STATE/hub/hub-ab12.d", "exists": false}
+{"do": "file", "path": "$STATE/sandbox", "exists": false}
+{"do": "file", "path": "$STATE/hub/hub-keep.d/other", "contains": "stays"}
+{"do": "file", "path": "$STATE/hub/runtime.db"}
+{"do": "file", "path": "$STATE/hub/migrated-p7/done", "contains": "hub/registrations.eld"}
+{"do": "run", "args": ["doctor", "--json"], "expect_code": 0, "expect_stdout": {"legacy": {"moved": ["hub/registrations.eld", "hub/sessions.eld", "hub/port", "hub/hub-timers-report.eld", "hub/bodies", "hub/hub-ab12.d", "sandbox"], "left": [], "at": "$STATE/hub/migrated-p7"}}}
