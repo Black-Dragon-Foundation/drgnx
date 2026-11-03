@@ -1,5 +1,5 @@
-{"scenario": "errors/every-error-has-a-code", "requires": ["v1"], "doc": "Each refusal of the dispatcher, and a handler's failure (a backend answer that does not fit env/set's result), is {id, error: {code, message}} with one of the contract's codes; a refused notification gets no answer. (schema: readonly/a-newer-work-db-refuses-writes.)"}
-{"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"env/set\": {\"result\": {\"bogus\": 1}}}"}}
+{"scenario": "errors/every-error-has-a-code", "requires": ["v1"], "doc": "Each refusal of the dispatcher is {id, error: {code, message}} with one of the contract's codes; a refused notification gets no answer. (schema: readonly/a-newer-work-db-refuses-writes.)"}
+{"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "connect", "conn": "s", "hub": "h", "as": "service"}
 {"do": "connect", "conn": "n", "hub": "h", "as": "service"}
@@ -14,8 +14,6 @@
 {"do": "expect", "conn": "c", "json": {"id": 4, "error": {"code": "invalid-params", "message": "$string", "path": "id"}}}
 {"do": "send", "conn": "c", "raw": "{\"id\":5,\"method\":"}
 {"do": "expect", "conn": "c", "json": {"id": 5, "error": {"code": "invalid-params", "message": "$string"}}}
-{"do": "send", "conn": "c", "json": {"id": 6, "method": "env/set", "params": {"env": []}}}
-{"do": "expect", "conn": "c", "json": {"id": 6, "error": {"code": "internal", "message": "$string"}}}
 {"do": "send", "conn": "c", "json": {"method": "no/such-method"}}
 {"do": "send", "conn": "c", "json": {"id": 7, "method": "ping"}}
 {"do": "expect_next", "conn": "c", "json": {"id": 7, "result": {"pid": "$PID(h)"}}}

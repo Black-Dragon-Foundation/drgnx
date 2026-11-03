@@ -1,0 +1,9 @@
+{"scenario": "errors/empty-lists-are-arrays", "requires": ["v1"], "doc": "An empty list in an answer is [] on the wire, never null (A-17): env/set's applied, agents/list's sessions and job/status's jobs, each answered by the hub with nothing to list."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "env/set", "params": {"env": []}}}
+{"do": "expect_next", "conn": "c", "json": {"id": 1, "result": {"applied": []}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/list"}}
+{"do": "expect_next", "conn": "c", "json": {"id": 2, "result": {"sessions": []}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "job/status"}}
+{"do": "expect_next", "conn": "c", "json": {"id": 3, "result": {"jobs": []}}}

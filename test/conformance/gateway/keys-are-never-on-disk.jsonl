@@ -1,8 +1,8 @@
-{"scenario": "gateway/keys-are-never-on-disk-or-in-the-backend", "requires": ["v1"], "doc": "Task 24, gate row: two canary keys (one by gateway/keys, one in a registration's `keys`) are used by requests: the provider's log shows both in its Authorization header, while no file of the hub's roots (runtime.db and its -wal, work.db, logs, the config and data directories) holds either canary and the fake backend's log has neither. The mock's own log sits beside the roots, not in them."}
+{"scenario": "gateway/keys-are-never-on-disk", "requires": ["v1"], "doc": "Task 24, gate row: two canary keys (one by gateway/keys, one in a registration's `keys`) are used by requests: the provider's log shows both in its Authorization header, while no file of the hub's roots (runtime.db and its -wal, work.db, logs, the config and data directories) holds either canary. The mock's own log sits beside the roots, not in them."}
 {"do": "root"}
 {"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$SCENARIOS/fixtures/llm-messages.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
-{"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"gateway/keys\": {\"result\": true}}"}}
+{"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do":"send","conn":"c","json":{"id":1,"method":"config/settings","params":{"overrides":[{"name":"drgnx-ai-providers","source":"row","value":{"a":{"kind":"anthropic","url":"http://127.0.0.1:$port","caps":["chat"],"messages":true,"key_env":"KEY"},"b":{"kind":"anthropic","url":"http://127.0.0.1:$port","caps":["chat"],"messages":true,"key_env":"KEY"}}}]}}}
 {"do":"expect","conn":"c","json":{"id":1,"result":{"applied":1}}}
@@ -21,4 +21,3 @@
 {"do": "file", "path": "$ROOT/llm.log", "contains": "Bearer canary-key-disk-1"}
 {"do": "file", "path": "$ROOT/llm.log", "contains": "Bearer canary-key-disk-2"}
 {"do": "file_grep", "paths": ["$ROOT/home/**", "$ROOT/run/**", "$ROOT/state/**", "$ROOT/data/**", "$ROOT/config/**"], "absent": "canary-key-disk"}
-{"do": "file", "path": "$STATE/fake-backend.log", "lacks": "canary"}

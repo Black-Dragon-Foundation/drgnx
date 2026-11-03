@@ -138,10 +138,18 @@ jobs:
           name: escape-report-container
           path: ${{ runner.temp }}/escape/escape-container.json
           if-no-files-found: warn
+      # the editor's own CLIs that the personal-notes canary row runs need Emacs
+      - name: Nidhogg 31.1 (the Emacs drgnx ships on)
+        id: nidhogg
+        if: ${{ !cancelled() }}
+        working-directory: ${{ github.workspace }}
+        run: |
+          dnf -y install curl tar xz
+          bash test/container/nidhogg.sh fedora-45
       # every row against Ratatoskr. --require-all: a skipped row fails the job, except a macOS-only row here and the
       # perf rows (they run below)
       - name: conformance
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.nidhogg.outcome == 'success' }}
         working-directory: ${{ github.workspace }}
         run: |
           runtime/target/debug/domr --hub-bin runtime/target/debug/ratatoskr \
@@ -573,10 +581,14 @@ jobs:
       - id: build
         if: ${{ !cancelled() }}
         run: cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr -p gleipnir-escape --features drgnx-ratatoskr/test-hooks
+      - name: Nidhogg 31.1 (writes DRGNX_EMACS to the environment)
+        id: nidhogg
+        if: ${{ !cancelled() }}
+        run: /bin/bash test/container/nidhogg.sh macos
       # as the runner user; the `sudo` rows reach the socket as nobody through passwordless `sudo -n -u nobody`, so
       # security/another-uid-is-refused covers tokio's getpeereid path. --require-all fails it if it is skipped
       - name: conformance
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.nidhogg.outcome == 'success' }}
         run: |
           sudo -n true
           runtime/target/debug/domr --hub-bin runtime/target/debug/ratatoskr \

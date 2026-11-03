@@ -1,4 +1,4 @@
-{"scenario": "events/subscribe-relays-events", "requires": ["v0"], "doc": "The same job's events arrive as an events event on a subscribed connection."}
+{"scenario": "events/subscribe-relays-events", "requires": ["v1"], "doc": "The same job's events arrive as an events event on a subscribed connection."}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "subscribe"}}

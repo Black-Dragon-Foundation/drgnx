@@ -1,4 +1,4 @@
-{"scenario": "self/spawn-conn", "requires": ["v0"], "doc": "The harness's own row: a child's stdin and stdout are a connection (cat echoes a line; closing the write side ends it), and a captured file value can be sent."}
+{"scenario": "self/spawn-conn", "requires": ["v1"], "doc": "The harness's own row: a child's stdin and stdout are a connection (cat echoes a line; closing the write side ends it), and a captured file value can be sent."}
 {"do": "root"}
 {"do": "write_file", "path": "$ROOT/x.json", "json": {"a": {"b": [7, "hello"]}}}
 {"do": "capture_file", "path": "$ROOT/x.json", "capture": "word", "json_path": "a.b.1"}

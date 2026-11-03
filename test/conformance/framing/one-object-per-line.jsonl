@@ -1,4 +1,4 @@
-{"scenario": "framing/one-object-per-line", "requires": ["v0"], "doc": "Two requests in one write are answered one line each, in order."}
+{"scenario": "framing/one-object-per-line", "requires": ["v1"], "doc": "Two requests in one write are answered one line each, in order."}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "raw": "{\"id\":1,\"method\":\"ping\"}\n{\"id\":2,\"method\":\"ping\"}"}

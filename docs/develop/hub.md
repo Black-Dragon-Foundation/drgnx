@@ -1357,7 +1357,7 @@ reading and fallbacks; `profiles.rs`, `providers.rs`: the types).
   `lisp-dump.json`: what the editor reads of `runtime-defaults.el`, its provider table for the fixture, and its
   `:runtime` declarations. The Rust tests compare with it; `drgnx-settings-runtime-dump/committed-dump-is-current`
   (`test/unit/settings-runtime-dump-test.el`) runs the same command and compares, so neither side drifts. Rows
-  `test/conformance/settings/*.jsonl` (`fake-backend`): `the-hub-reads-settings-el`,
+  `test/conformance/settings/*.jsonl`: `the-hub-reads-settings-el`,
   `no-editor-still-has-presets-and-profiles`, `a-package-entry-never-stops-the-hub`,
   `a-broken-file-gives-strict-agents-and-last-good-providers`.
 

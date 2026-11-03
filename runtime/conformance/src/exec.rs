@@ -35,7 +35,7 @@ pub struct Runner<'a> {
 type R<T = ()> = Result<T, String>;
 
 /// Longest first, so `$SOCKET_DIR` is not read as `$SOCKET` and `_DIR`.
-const VAR_NAMES: [&str; 13] = [
+const VAR_NAMES: [&str; 14] = [
     "BACKEND_SOCKET",
     "SCENARIOS",
     "SOCKET_DIR",

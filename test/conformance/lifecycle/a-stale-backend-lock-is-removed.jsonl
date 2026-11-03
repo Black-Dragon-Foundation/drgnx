@@ -1,4 +1,4 @@
-{"scenario": "lifecycle/a-stale-backend-lock-is-removed", "requires": ["v1", "lisp-backend"], "doc": "Review S1: a Lisp backend killed before it removed its lock directory left backend.sock.lock/pid, and the pid now names a live process that is no hub (here the harness). Ratatoskr removes that directory before it starts the backend, so the backend starts and a forwarded call (env/set, a method it still serves) is answered (before the fix the backend exited 3 at every start)."}
+{"scenario": "lifecycle/a-stale-backend-lock-is-removed", "requires": ["v1"], "doc": "Review S1: an older hub's Lisp backend, killed before it removed its lock directory, left backend.sock.lock/pid naming a live process that is no hub (here the harness). The hub no longer has a backend, so the leftover is no obstacle: it starts at once and answers (before the fix a backend that met such a lock exited 3 at every start)."}
 {"do": "root"}
 {"do": "write_file", "path": "$BACKEND_SOCKET.lock/pid", "text": "$HARNESS_PID"}
 {"do": "start", "hub": "h"}
