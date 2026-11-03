@@ -1,0 +1,14 @@
+{"scenario": "runner/resume-of-a-rejected-proposal-is-refused", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "job/stop of a proposal rejects it; job/resume of it is refused (it was never approved: the plan has to be proposed again) and the job stays stopped."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# One\n\n**Repo:** $ROOT/repo\n\n### Task 1: One\n\nx\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "status": "proposed"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "job/stop", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$job", "status": "stopped"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "job/resume", "params": {"id": "$job", "budget": 5}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "error": {"code": "invalid-params", "message": "$string"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "job/status", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"id": "$job", "status": "stopped"}}, "within_ms": 5000}

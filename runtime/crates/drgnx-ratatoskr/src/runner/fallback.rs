@@ -293,6 +293,11 @@ pub async fn resume(front: &Front, caller: &Caller, p: WithBudget) -> Result<Job
         return Err(invalid(format!("Job {id} is {status}, not paused")));
     }
     let mut data = data_of(&l.job);
+    if data.contains_key(super::NEVER_APPROVED) {
+        return Err(invalid(format!(
+            "Job {id} was never approved: propose the plan again"
+        )));
+    }
     if let Some(b) = p.budget.map(|b| b.get()) {
         data.insert("budget".into(), json!(b));
         set_budget(front, &l.job, b, false);

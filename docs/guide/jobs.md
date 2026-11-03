@@ -114,8 +114,8 @@ drgnx job resume job-20261017-101500 --budget 10      # go on (after a stop, or 
 
 `--json` on `status` gives the same as JSON (an empty list is `[]`); `status` without an id lists every job.
 `--budget` wants a number of USD (`5`, `.5`), nothing else. `propose --auto` starts at once, with no proposal card;
-`--repo DIR` names the repository when the plan is not inside it. `resume` of a proposal you rejected says the job
-was never approved: propose the plan again. In Emacs: **Start Job from Plan…** (the
+`--repo DIR` names the repository when the plan is not inside it. `resume` of a proposal you rejected (stopped before you approved it) is refused with "Job ID was
+never approved: propose the plan again", and the job stays stopped; a job you approved and then stopped resumes. In Emacs: **Start Job from Plan…** (the
 proposal, in the Work cockpit, with Approve and Reject), **Show Job in Work…**, **Approve Plan Job…**, **Show Plan
 Jobs**, **Stop Plan Job…** — in the palette (no keys by default; module `tools/jobs`).
 

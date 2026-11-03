@@ -389,6 +389,9 @@ pub(crate) fn user() -> Caller {
     }
 }
 
+/// The job's data key `job/stop` sets on a proposal (a rejected one): it never started, `job/resume` refuses it.
+pub(crate) const NEVER_APPROVED: &str = "never_approved";
+
 fn data_of(job: &Job) -> Map<String, Value> {
     match &job.data {
         Some(Value::Object(m)) => m.clone(),
@@ -1246,11 +1249,17 @@ pub async fn stop(front: &Front, caller: &Caller, p: ById) -> Result<JobSummary,
         (c.kind.as_deref() == Some("proposal")).then_some("reject")
     })
     .await?;
+    // a proposal that is stopped was rejected: the job's data says it was never approved, so `job/resume` refuses it
+    let rejected = (l.job.status.as_deref() == Some("proposed")).then(|| {
+        let mut data = data_of(&l.job);
+        data.insert(NEVER_APPROVED.into(), json!(true));
+        Value::Object(data)
+    });
     let jid = id.to_owned();
     front
         .writer
         .write(caller, "coord/job-set", move |tx| {
-            write_jobs::job_set(tx, &jid, Some("stopped"), None, now())
+            write_jobs::job_set(tx, &jid, Some("stopped"), rejected.as_ref(), now())
         })
         .await
         .map_err(fail)?;
@@ -1449,5 +1458,95 @@ mod price_tests {
         let usd = task_usd((3.0, 15.0));
         assert!((usd - 0.675).abs() < 1e-9, "{usd}");
         assert_eq!(task_usd((0.0, 0.0)), 0.0);
+    }
+}
+
+#[cfg(test)]
+mod resume_tests {
+    use super::*;
+    use crate::dispatch::NoBackend;
+    use crate::store::WorkDb;
+    use runstav::proof::Cap;
+
+    const JOB: &str = "job-20261103-100000";
+
+    fn front(dir: &Path) -> Front {
+        Front::new(
+            Cap::generate().unwrap(),
+            dir.join("hub-x.sock"),
+            WorkDb::spawn(dir.join("work.db")).unwrap(),
+            norn::store::CoordDb::spawn(dir.join("work.db")),
+            Arc::new(NoBackend),
+        )
+    }
+
+    fn user() -> Caller {
+        Caller {
+            class: Class::User,
+            sid: None,
+            job: None,
+            conn_id: 1,
+            backend: false,
+        }
+    }
+
+    async fn propose(front: &Front, caller: &Caller) {
+        front
+            .writer
+            .write(caller, "coord/job-create", |tx| {
+                write_jobs::job_create(
+                    tx,
+                    NewJob {
+                        id: JOB.into(),
+                        title: "t".into(),
+                        plan: None,
+                        repo: None,
+                        tasks: vec![],
+                        data: None,
+                    },
+                    now(),
+                )
+            })
+            .await
+            .unwrap();
+    }
+
+    fn by_id() -> ById {
+        serde_json::from_value(json!({ "id": JOB })).unwrap()
+    }
+
+    fn with_budget() -> WithBudget {
+        serde_json::from_value(json!({ "id": JOB })).unwrap()
+    }
+
+    async fn status_of(front: &Front) -> String {
+        let l = load(front, JOB, false).await.unwrap().unwrap();
+        l.job.status.unwrap_or_default()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_rejected_proposal_does_not_resume() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        let c = user();
+        propose(&f, &c).await;
+        stop(&f, &c, by_id()).await.unwrap();
+        assert_eq!(status_of(&f).await, "stopped");
+        let e = resume(&f, &c, with_budget()).await.unwrap_err();
+        assert!(e.message.contains("was never approved"), "{}", e.message);
+        assert_eq!(status_of(&f).await, "stopped");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_stopped_approved_job_resumes() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        let c = user();
+        propose(&f, &c).await;
+        approve_job(&f, &c, JOB, None).await.unwrap();
+        stop(&f, &c, by_id()).await.unwrap();
+        assert_eq!(status_of(&f).await, "stopped");
+        resume(&f, &c, with_budget()).await.unwrap();
+        assert_eq!(status_of(&f).await, "running");
     }
 }
