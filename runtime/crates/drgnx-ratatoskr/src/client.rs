@@ -222,32 +222,55 @@ mod tests {
         std::thread::spawn(move || {
             for s in listener.incoming().flatten() {
                 count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                let mut w = s.try_clone().unwrap();
-                let hub_nonce = "c".repeat(32);
-                let _ = writeln!(
-                    w,
-                    "{}",
-                    json!({"event": "challenge", "data": {"nonce": hub_nonce}})
-                );
-                for line in BufReader::new(s).lines().map_while(Result::ok) {
-                    let v: Value = serde_json::from_str(&line).unwrap();
-                    let answer = match v["method"].as_str() {
-                        Some("hello") => {
-                            let theirs = v["params"]["nonce"].as_str().unwrap();
-                            let right = proof::hmac_hex(
-                                cap.as_bytes(),
-                                &format!("drgnx-hub hub {theirs} {hub_nonce}"),
-                            );
-                            let p = proof.map_or(right, str::to_string);
-                            json!({"id": v["id"], "result": {"class": "user", "proof": p}})
-                        }
-                        _ => json!({"id": v["id"], "result": {"pid": 7}}),
-                    };
-                    let _ = writeln!(w, "{answer}");
-                }
+                // a thread per connection: one that stays open must not hold up the accepts behind it
+                let cap = cap.clone();
+                std::thread::spawn(move || {
+                    let mut w = s.try_clone().unwrap();
+                    let hub_nonce = "c".repeat(32);
+                    let _ = writeln!(
+                        w,
+                        "{}",
+                        json!({"event": "challenge", "data": {"nonce": hub_nonce}})
+                    );
+                    for line in BufReader::new(s).lines().map_while(Result::ok) {
+                        let v: Value = serde_json::from_str(&line).unwrap();
+                        let answer = match v["method"].as_str() {
+                            Some("hello") => {
+                                let theirs = v["params"]["nonce"].as_str().unwrap();
+                                let right = proof::hmac_hex(
+                                    cap.as_bytes(),
+                                    &format!("drgnx-hub hub {theirs} {hub_nonce}"),
+                                );
+                                let p = proof.map_or(right, str::to_string);
+                                json!({"id": v["id"], "result": {"class": "user", "proof": p}})
+                            }
+                            _ => json!({"id": v["id"], "result": {"pid": 7}}),
+                        };
+                        let _ = writeln!(w, "{answer}");
+                    }
+                });
             }
         });
         (socket, taken)
+    }
+
+    /// How many connections the stub has taken for the code under test. A connection is counted when the stub's thread
+    /// accepts it, which can be after the call that made it is over (and when it was refused, nothing came back to wait
+    /// on). So this first makes one connection of its own, plainly, and reads the challenge: the stub accepts in the
+    /// order of the queue, so when its challenge is here, every connection made before is counted. `own` counts such
+    /// connections, which are not the code's.
+    fn taken_by_the_code(
+        socket: &Path,
+        taken: &std::sync::atomic::AtomicUsize,
+        own: &std::cell::Cell<usize>,
+    ) -> usize {
+        let s = std::os::unix::net::UnixStream::connect(socket).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+        let mut challenge = String::new();
+        BufReader::new(s).read_line(&mut challenge).unwrap();
+        assert!(challenge.contains("challenge"), "{challenge:?}");
+        own.set(own.get() + 1);
+        taken.load(std::sync::atomic::Ordering::SeqCst) - own.get()
     }
 
     fn private(dir: &Path) {
@@ -270,7 +293,8 @@ mod tests {
             7
         );
         assert_eq!(refused(&socket), None);
-        let before = taken.load(std::sync::atomic::Ordering::SeqCst);
+        let own = std::cell::Cell::new(0);
+        let before = taken_by_the_code(&socket, &taken, &own);
         // open to others: each path refuses and nothing connects
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(ping(&socket, Duration::from_secs(2)), None);
@@ -280,9 +304,8 @@ mod tests {
             .unwrap();
         assert!(e.contains("is open to other users (mode 755"), "{e}");
         assert!(refused(&socket).is_some_and(|r| r.contains("open to other users")));
-        std::thread::sleep(Duration::from_millis(100));
         assert_eq!(
-            taken.load(std::sync::atomic::Ordering::SeqCst),
+            taken_by_the_code(&socket, &taken, &own),
             before,
             "a refused path connected"
         );
@@ -302,15 +325,15 @@ mod tests {
         assert_eq!(refused(&root.path().join("gone/hub-x.sock")), None);
         // a socket of another user's in a private directory (only root can make one here): not connected to
         if rustix::process::geteuid().is_root() {
-            let before = taken.load(std::sync::atomic::Ordering::SeqCst);
+            let before = taken_by_the_code(&socket, &taken, &own);
             std::os::unix::fs::lchown(&socket, Some(65534), Some(65534)).unwrap();
             assert_eq!(ping(&socket, Duration::from_secs(2)), None);
             let e = Client::user_at(&socket, Duration::from_secs(2))
                 .err()
                 .unwrap();
             assert!(e.ends_with("belongs to another user"), "{e}");
-            std::thread::sleep(Duration::from_millis(100));
-            assert_eq!(taken.load(std::sync::atomic::Ordering::SeqCst), before);
+            // (root connects to the other user's socket for the count, whatever its mode)
+            assert_eq!(taken_by_the_code(&socket, &taken, &own), before);
         }
     }
 
@@ -327,7 +350,7 @@ mod tests {
         std::os::unix::fs::symlink(&elsewhere, dir.join("hub-x.cap")).unwrap();
         assert!(Client::user_at(&socket, Duration::from_secs(2)).is_err());
         assert_eq!(
-            taken.load(std::sync::atomic::Ordering::SeqCst),
+            taken_by_the_code(&socket, &taken, &std::cell::Cell::new(0)),
             0,
             "connected without a cap"
         );
