@@ -52,7 +52,9 @@ Agent sessions and jobs can work on a task — any tracker node id, such as `tas
   in that checkout afterwards are never the dead session's.
 - A hub job that carries a task (`exec/list` names it): the HEAD of its folder's repository when the tracker first saw
   the job is its start, and HEAD when it ended (read on the next scan or refresh) its end; the commits between are
-  recorded once it ended — commits made after it ended are not its.
+  recorded once it ended — commits made after it ended are not its. The end is HEAD of the job's own folder (its
+  branch, merged or not) while that exists, else of the repository. A job the tracker first sees after it ended (Emacs
+  was closed meanwhile) has no start commit: the commits on that line made since the job's start time are its.
 - By hand, or from any agent: `drgnx work record [--task ID] [SHA…]` links the commits (default `HEAD`) of the
   current repository to the task (default `$DRGNX_TASK`).
 
