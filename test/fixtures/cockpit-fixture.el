@@ -20,9 +20,10 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'subr-x)
-(require 'drgnx-coord)
+(require 'drgnx-coord-read)
 (require 'drgnx-work-scan)
 (load (expand-file-name "work-fixture" (file-name-directory (or load-file-name buffer-file-name))) nil t)
+(load (expand-file-name "coord-seed-fixture" (file-name-directory (or load-file-name buffer-file-name))) nil t)
 
 (defun drgnx-cockpit-fixture-git (dir &rest args)
   "git ARGS in DIR (the fixture's own identity, nothing of the user's): its output, trimmed; an error when git fails."
@@ -91,8 +92,8 @@ the state store sees it."
 
 (defun drgnx-cockpit-fixture-hub-write (method params)
   "What the hub answers the editor's five writes (`cards/settle', `messages/send', `messages/mark', `events/add',
-`review/mark'), applied to the fixture's store with the Lisp writers (the hub's own writer is Rust: its rows live in
-the conformance suite): the result, or `:none' for any other METHOD."
+`review/mark'), applied to the fixture's store with the seed fixture's writers (the hub's own writer is Rust: its rows
+live in the conformance suite): the result, or `:none' for any other METHOD."
   (drgnx-work-fixture-as-hub (drgnx-cockpit-fixture--hub-write method params)))
 
 (defun drgnx-cockpit-fixture--hub-write (method params)

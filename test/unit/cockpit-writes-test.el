@@ -1,15 +1,14 @@
 ;;; cockpit-writes-test.el --- batch tests: the editor's five writes are hub calls -*- lexical-binding: t -*-
 ;; The cockpit writes nothing to work.db: cards/settle, messages/send, messages/mark, events/add and review/mark go to
 ;; the hub (docs/develop/coordination.md, "The editor writes through the hub").  Here the hub is stubbed (it records
-;; each call and answers as ANSWER says) and `drgnx-coord-writer' is `refuse'; the last test runs the real thing.
+;; each call and answers as ANSWER says) and the read-write handle refuses (`drgnx-work-db').
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx)
 (require 'drgnx-agents)
 (load (expand-file-name "modules/tools/drgnx-cockpit" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)   ; a fresh notice model: the real `drgnx-notify' runs
-
-(defvar drgnx-coord-writer)
+(require 'drgnx-coord-read)                                                ; `drgnx-coord-version', stubbed below
 
 (defvar drgnx-cockpit-writes-test--writers
   '(drgnx-coord-send drgnx-coord-mark drgnx-coord-event-add drgnx-coord-event-add-best-effort drgnx-coord-card-settle
@@ -24,7 +23,7 @@
 SAID what `message' said, newest first; ANSWER (a function of METHOD and PARAMS → (RESULT ERROR), default (t nil)) is
 what the hub answers.  The pane's agent is AGENT of JOB, with no session; SRC is its edit source."
   (declare (indent 0))
-  `(let ((drgnx-coord-writer 'refuse) (calls nil) (said nil) (answer nil)
+  `(let ((calls nil) (said nil) (answer nil)
          (drgnx-cockpit-edits--id "a1") (drgnx-cockpit-edits--job "j1") (drgnx-cockpit-edits--name "agent a1")
          (src (list :kind 'job :job "j1"))
          (drgnx-cockpit-edits--info (make-hash-table :test 'equal))
@@ -186,7 +185,7 @@ what the hub answers.  The pane's agent is AGENT of JOB, with no session; SRC is
     (should-not found)))
 
 (ert-deftest drgnx-cockpit-feed/writes-nothing-directly ()
-  ;; the gate's runtime half: every write path runs with the writer `refuse' and the stubbed hub, with no error
+  ;; the gate's runtime half: every write path runs with the stubbed hub and no read-write handle, with no error
   (drgnx-cockpit-writes-test--editor
     (drgnx-cockpit-answer (list :id 5 :kind "question" :agent "a1" :job "j1" :data (list :message 9)) "this way")
     (drgnx-cockpit-answer (list :id 6 :kind "question" :agent "a1" :job "j1" :card 3) "bar")
@@ -198,19 +197,5 @@ what the hub answers.  The pane's agent is AGENT of JOB, with no session; SRC is
     (drgnx-cockpit-edits-accept-file "README")
     (should (cl-every (lambda (m) (member m '("job/reply" "events/add" "messages/mark" "cards/settle" "messages/send" "review/mark")))
                       (drgnx-cockpit-writes-test--methods calls)))))
-
-;;;; Binary: the real hub
-
-(load (expand-file-name "test/unit/hub-client-test" drgnx-dir) nil t)   ; its Ratatoskr helpers
-
-(ert-deftest drgnx-cockpit-feed/an-answer-reaches-the-store-through-ratatoskr ()
-  ;; binary + Lisp backend: an ask card made with `coord/card-create'; the answer settles it in work.db
-  (drgnx-hub-client-test--with-ratatoskr
-    (let ((id (plist-get (drgnx-hub-call-sync "coord/card-create" (list :job "j1" :kind "ask" :title "which?") 10) :id)))
-      (should (natnump id))
-      (cl-letf (((symbol-function 'drgnx-cockpit-feed--changed) #'ignore))
-        (should (eq 'card (drgnx-cockpit-answer (list :kind "question" :agent "a1" :job "j1" :card id) "this one"))))
-      (drgnx-hub-client-test--wait (lambda () (equal (plist-get (drgnx-coord-card id) :state) "settled")) "the card is settled")
-      (should (equal (plist-get (drgnx-coord-card id) :choice) "this one")))))
 
 ;;; cockpit-writes-test.el ends here

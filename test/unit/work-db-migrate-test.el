@@ -2,13 +2,13 @@
 ;; test-class: det
 (require 'ert)
 (require 'drgnx-paths)
-(load (expand-file-name "test/support/work-db-gate" drgnx-dir) nil t)   ; the tests below are of the `local' writer
+(load (expand-file-name "test/support/work-db-gate" drgnx-dir) nil t)   ; the tests below migrate work.db as the hub's stand-in
 (require 'drgnx-work-db)
 (require 'drgnx-notice)
 (load (expand-file-name "test/fixtures/work-fixture" drgnx-dir) nil t)
 
 (defun drgnx-work-db-migrate-test--version ()
-  "The schema number after the local writer opened (and so migrated) the file: a reader never migrates."
+  "The schema number after the hub's stand-in opened (and so migrated) the file: a reader never migrates."
   (drgnx-work-db)
   (drgnx-work-db-version))
 
@@ -89,7 +89,8 @@
 ;;;; Schema 6: the data columns are JSON
 
 (require 'drgnx-records)
-(require 'drgnx-coord)
+(require 'drgnx-coord-read)
+(load (expand-file-name "test/fixtures/coord-seed-fixture" drgnx-dir) nil t)   ; `drgnx-coord-card'
 
 (defun drgnx-work-db-migrate-test--load-5 (file &optional extra)
   "Make FILE a schema-5 work.db from test/fixtures/work-db-5.sql (and the SQL statements EXTRA), in WAL mode as

@@ -225,8 +225,7 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
   (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
     (let ((heads (list (drgnx-cockpit-fixture-git repo "rev-parse" "main") (drgnx-cockpit-fixture-git wt-a "rev-parse" "HEAD")))
           (status (drgnx-cockpit-fixture-git wt-a "status" "--porcelain")))
-      (cl-letf (((symbol-function 'drgnx-job--merge) (lambda (&rest _) (ert-fail "Accept merged")))
-                ((symbol-function 'drgnx-hub-call)
+      (cl-letf (((symbol-function 'drgnx-hub-call)
                  (lambda (method params cb &rest _)
                    (unless (equal method "review/mark") (ert-fail (format "Accept asked the hub: %s" method)))
                    (drgnx-cockpit-fixture-hub-write method params)

@@ -4,7 +4,7 @@
 
 ;;; Commentary:
 ;; The editor no longer writes the tracker's nodes and edges (the hub does: graph/put-parsed, graph/record).  Tests
-;; that need rows write them here, into a schema-6 work.db made by the local writer (`drgnx-work-db'), and tests of
+;; that need rows write them here, into a schema-6 work.db made by the hub's stand-in (`drgnx-work-db'), and tests of
 ;; code that sends to the hub run it under `drgnx-work-fixture-with-hub': the hub's calls are answered by a small
 ;; applier that stores what the real hub stores (the rows only; the real hub is tested by the binary tests).
 
@@ -15,13 +15,11 @@
 (require 'drgnx-work-db)
 (require 'drgnx-hub-client)
 
-(defvar drgnx-coord-writer)             ; core/drgnx-coord.el, until the Lisp writers are deleted
-
 (defmacro drgnx-work-fixture-as-hub (&rest body)
   "BODY as the hub's stand-in: `drgnx-work-db' opens read-write, past the one-writer gate (test/support/work-db-gate.el).
 For a test's own seeding (the rows the hub would write) only: the code under test never runs inside it."
   (declare (indent 0))
-  `(let ((drgnx-coord-writer 'local) (drgnx-work-db-gate-hub-standin t)) ,@body))
+  `(let ((drgnx-work-db-gate-hub-standin t)) ,@body))
 
 (defun drgnx-work-fixture--db ()
   "The read-write handle, as the hub's stand-in (`drgnx-work-fixture-as-hub').  Only the fixture's own writes use

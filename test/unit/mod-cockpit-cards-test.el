@@ -7,9 +7,8 @@
 (require 'drgnx-agents)                                ; its session type, before the cockpit is loaded
 (load (expand-file-name "modules/tools/drgnx-job-ui" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-cockpit" drgnx-dir) nil t)
-(require 'drgnx-hub)                                   ; before any stub of its functions
-(require 'drgnx-coord)
-(require 'drgnx-job)                                   ; job/reply, as the hub runs it
+(require 'drgnx-hub-client)                            ; before any stub of its functions
+(require 'drgnx-coord-read)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/cockpit-fixture" drgnx-dir) nil t)   ; panes the state store sees; a project
@@ -672,8 +671,12 @@ their hooks and timers."
                  (typed nil)
                  (drgnx-cockpit-cards-test--answer
                   (lambda (method params)
-                    (when (equal method "job/reply")   ; the hub's answer, by its stand-in
-                      (drgnx-work-fixture-as-hub (drgnx-job-reply (plist-get params :message) (plist-get params :text))))
+                    (when (equal method "job/reply")   ; the hub's answer, by its stand-in: the reply is sent, its message acted on
+                      (let ((m (drgnx-coord-message (plist-get params :message))))
+                        (drgnx-work-fixture-as-hub
+                          (drgnx-coord-send :job (plist-get m :job) :recipient (plist-get m :sender) :text (plist-get params :text)
+                                            :seen (drgnx-coord-version) :answers (plist-get params :message))
+                          (drgnx-coord-mark (plist-get params :message) "acted"))))
                     (list t nil))))
             (plist-put s :messages (list (list :id q :sender "s-a" :text forged :state "queued")))
             (cl-letf (((symbol-function 'read-string) (lambda (&rest _) (pop typed)))

@@ -2,10 +2,11 @@
 ;; test-class: det
 (require 'ert)
 (require 'drgnx-paths)
-(load (expand-file-name "test/support/work-db-gate" drgnx-dir) nil t)   ; the tests below are of the `local' writer
+(load (expand-file-name "test/support/work-db-gate" drgnx-dir) nil t)   ; the tests below write work.db as the hub's stand-in
 (require 'cl-lib)
-(require 'drgnx-coord)
+(require 'drgnx-coord-read)
 (load (expand-file-name "test/fixtures/work-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/coord-seed-fixture" drgnx-dir) nil t)   ; a job and its events, as the hub writes them
 
 (defmacro drgnx-work-db-read-test--with (&rest body)
   "BODY with drgnx's data dir a fresh temp dir (`dir'), no database open."
@@ -139,8 +140,7 @@
 ;;; The static walk: no read goes through the writer handle
 
 (defconst drgnx-work-db-read-test--files
-  '("core/drgnx-work-db.el" "core/drgnx-coord.el" "core/drgnx-cockpit-model.el" "core/drgnx-work.el"
-    "core/drgnx-hub.el" "core/drgnx-job.el" "core/drgnx-coord-mcp.el"
+  '("core/drgnx-work-db.el" "core/drgnx-coord-read.el" "core/drgnx-cockpit-model.el" "core/drgnx-work.el"
     "modules/tools/drgnx-cockpit.el" "modules/tools/drgnx-cockpit-edits.el" "modules/tools/drgnx-cockpit-feed.el"))
 
 (defun drgnx-work-db-read-test--writer-call-p (x)
