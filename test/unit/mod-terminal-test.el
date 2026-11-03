@@ -328,10 +328,11 @@ panel's rules on."
                 (should (drgnx-terminal-test--wait-until (lambda () (buffer-local-value 'drgnx-terminal-eat--integrated buf))))
                 (should-not (process-query-on-exit-flag proc))
                 ;; a builtin that waits has no child process: the flag is eat's, so a refresh leaves it set
-                (process-send-string proc "read -t 2 x\n")
+                (process-send-string proc "read x\n")                   ; waits until the test sends its line
                 (should (drgnx-terminal-test--wait-until (lambda () (process-query-on-exit-flag proc))))
                 (drgnx-terminal-eat-refresh-query-flags)
                 (should (process-query-on-exit-flag proc))
+                (process-send-string proc "\n")                         ; the builtin ends
                 ;; the prompt after it clears the flag again
                 (should (drgnx-terminal-test--wait-until (lambda () (not (process-query-on-exit-flag proc)))))))
           ;; the shell may still be dying (the cleanup killed its terminal): not before it is gone, or HOME is not empty
