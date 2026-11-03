@@ -602,11 +602,6 @@ exists is connected to (asynchronously)."
   (interactive)
   (drgnx-agents-deliver-queue (drgnx-agents-ui--session)))
 
-(defun drgnx-agents-ui-take-over (profile session-id)
-  "Resume the agent session SESSION-ID with PROFILE here."
-  (interactive (list (completing-read "Agent profile: " (drgnx-agents-profile-names) nil t nil nil (drgnx-agents-default-profile)) (read-string "Session id: ")))
-  (drgnx-agents-ui-transcript (drgnx-agents-take-over profile (drgnx-agents-ui--cwd) session-id)))
-
 (defun drgnx-agents-ui-answer ()
   "Answer what the agent asks (permission to run a tool)."
   (interactive)
@@ -813,7 +808,6 @@ answered once the commands are gone, and must not stay counted (the next change 
                                         (agents-stop "Stop Agent" drgnx-agents-ui-stop "Cancel the running turn (the only thing that does)")
                                         (agents-deliver "Deliver Queued Messages" drgnx-agents-ui-deliver "Send what a Stop held back")
                                         (agents-edit-queued "Edit Queued Message…" drgnx-agents-ui-edit-queued "Change or remove a message before it is sent")
-                                        (agents-take-over "Take Over Agent Session…" drgnx-agents-ui-take-over "Resume a session by its id")
                                         (agents-answer "Answer Agent…" drgnx-agents-ui-answer "Allow or reject what the agent asks")
                                         (jobs-log "Show Job Log…" drgnx-agents-ui-job-log "A durable job's output")
                                         (jobs-stop "Stop Job…" drgnx-agents-ui-job-stop "Stop a durable job")))

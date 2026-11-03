@@ -53,7 +53,7 @@
     (cdr drgnx-sandbox-vc--cache)))
 
 (defun drgnx-sandbox-vc--write (folders)
-  "Keep FOLDERS in the list file (mode 0600), written beside it and renamed over it as `drgnx-hub--write-private' does."
+  "Keep FOLDERS in the list file (mode 0600), written to a temporary file beside it and renamed over it."
   (let* ((file (drgnx-sandbox-vc--file))
          (tmp (progn (with-file-modes #o700 (make-directory (file-name-directory file) t))
                      (with-file-modes #o600 (make-temp-file (concat file "-"))))))

@@ -143,18 +143,17 @@
 
 (ert-deftest drgnx-agents-eld/routes-come-from-the-settings ()
   (drgnx-test-with-runtime-settings
-    (let ((drgnx-job-routes nil))
-      (drgnx-test-runtime-settings-put "(drgnx-agents-routes ((implement \"a\" \"b\") (review \"c\")))")
-      (should (equal (drgnx-job--routes) '((implement "a" "b") (review "c"))))
-      (should (equal (drgnx-job-route 'implement) '("a" "b")))
-      (let ((drgnx-job-routes '((implement "z")))) (should (equal (drgnx-job-route 'implement) '("z"))))
-      (drgnx-test-runtime-settings-put "(drgnx-agents-routes ((implement . \"a\") (review \"c\")))") ; the v1 dotted form
-      (should-not drgnx-settings-apply-problems)
-      (should (equal (drgnx-job-route 'implement) '("a")))
-      (should (equal (drgnx-job-route 'review) '("c")))
-      (drgnx-test-runtime-settings-put "(drgnx-agents-routes ((implement . 5)))")                  ; neither: a mistake
-      (should drgnx-settings-apply-problems)
-      (should-not (drgnx-job--routes)))))
+    (drgnx-test-runtime-settings-put "(drgnx-agents-routes ((implement \"a\" \"b\") (review \"c\")))")
+    (should (equal (default-value 'drgnx-agents-routes) '((implement "a" "b") (review "c"))))
+    (should (equal (drgnx-agents-route 'implement) '("a" "b")))
+    (should (equal (drgnx-agents-route 'docs) '("claude")))         ; no route: claude
+    (drgnx-test-runtime-settings-put "(drgnx-agents-routes ((implement . \"a\") (review \"c\")))") ; the v1 dotted form
+    (should-not drgnx-settings-apply-problems)
+    (should (equal (drgnx-agents-route 'implement) '("a")))
+    (should (equal (drgnx-agents-route 'review) '("c")))
+    (drgnx-test-runtime-settings-put "(drgnx-agents-routes ((implement . 5)))")                  ; neither: a mistake
+    (should drgnx-settings-apply-problems)
+    (should-not (default-value 'drgnx-agents-routes))))
 
 (ert-deftest drgnx-agents-eld/a-dotted-route-keeps-the-profiles-and-openrouter-agents ()
   ;; (ROLE . "profile") is a documented v1 form: it is never a mistake that voids the rest of the file
@@ -166,7 +165,7 @@
     (should-not drgnx-settings-apply-problems)
     (should (drgnx-agents-profile "mine"))
     (should (equal (drgnx-agents-openrouter-restrictions) '(:only ("anthropic"))))
-    (should (equal (drgnx-job-route 'review) '("claude")))
-    (should (equal (drgnx-job-route 'implement) '("a")))))
+    (should (equal (drgnx-agents-route 'review) '("claude")))
+    (should (equal (drgnx-agents-route 'implement) '("a")))))
 
 ;;; agents-eld-test.el ends here

@@ -29,7 +29,6 @@
 (declare-function drgnx-hub-call "drgnx-hub-client")
 (declare-function drgnx-hub-call-sync "drgnx-hub-client")
 (declare-function drgnx-hub-ensure "drgnx-hub-client")
-(declare-function drgnx-job-format "drgnx-job")
 (declare-function drgnx-cockpit-show-job "drgnx-cockpit-cards")
 (declare-function drgnx-cockpit-show-jobs "drgnx-cockpit-cards")
 
@@ -37,11 +36,50 @@
   "The hub's client, loaded when it is not yet."
   (unless (fboundp 'drgnx-hub-call) (require 'drgnx-hub-client)))
 
-(defvar drgnx-job-merge-gate)
+(defvar drgnx-job-auto-start nil "Non-nil: a proposed job starts at once, without waiting for approval.")
+
+(defcustom drgnx-job-merge-gate 'review
+  "What a finished task of a job needs before it is merged into the job's branch.
+`review': its reviewer's pass (as before).  `review+accept': the pass, then every file its agent changed accepted in
+its edits (the Work cockpit's Accept: a review mark with the hash of the file's diff); until then a `review' card
+says how many are, with Open its edits.  Accepting never merges by itself, and the card's Merge as it is stays
+yours.  A job keeps the gate it was proposed with (the hub runs it): this option counts in the Emacs that proposes."
+  :type '(choice (const :tag "The reviewer's pass" review) (const :tag "The pass, then every file accepted" review+accept))
+  :group 'drgnx-cockpit)
+
 (defvar drgnx-notice--sources)
 (defvar drgnx-job-ui-attention-mode)
 
 (defun drgnx-job-ui--v (x) (unless (memq x '(:null :false)) x))
+
+(defun drgnx-job-format (job)
+  "JOB (a job summary the hub's `job/status' answers) as text."
+  (let ((v (lambda (x) (and x (not (eq x :null)) x))))
+    (concat
+     (format "%s  %s  [%s]\n" (plist-get job :id) (plist-get job :title) (plist-get job :status))
+     (format "  repository %s\n" (plist-get job :repo))
+     (mapconcat (lambda (task)
+                  (format "  Task %s: %s  — %s on %s, %s%s\n" (plist-get task :n) (plist-get task :title) (plist-get task :role)
+                          (plist-get task :profile) (plist-get task :status)
+                          (if-let* ((deps (funcall v (plist-get task :deps))))
+                              (format ", after %s" (mapconcat (lambda (d) (format "Task %s" d)) deps ", "))
+                            "")))
+                (funcall v (plist-get job :tasks)) "")
+     (let ((e (plist-get job :estimate)))
+       (format "  estimate ~%.2f USD, %s tokens%s\n" (or (funcall v (plist-get e :usd)) 0) (plist-get e :tokens)
+               (if-let* ((u (funcall v (plist-get e :unpriced)))) (format " (unpriced: %s)" (string-join u ", ")) "")))
+     (format "  budget %s, spent %.2f USD\n" (if-let* ((b (funcall v (plist-get job :budget)))) (format "%s USD" b) "none")
+             (or (funcall v (plist-get job :spent)) 0))
+     (mapconcat (lambda (w) (format "  warning: %s\n" w)) (funcall v (plist-get job :warnings)) "")
+     (mapconcat (lambda (a) (format "  agent %s (%s) %s on %s\n" (plist-get a :id) (plist-get a :profile) (plist-get a :status)
+                                    (plist-get a :task)))
+                (funcall v (plist-get job :agents)) "")
+     (mapconcat (lambda (p) (format "  asks: %s (%s)\n" (plist-get p :title) (plist-get p :agent))) (funcall v (plist-get job :permissions)) "")
+     (mapconcat (lambda (c) (format "  card #%s [%s] %s%s\n" (plist-get c :id) (plist-get c :kind) (if-let* ((task (funcall v (plist-get c :task)))) (concat task ": ") "")
+                                    (plist-get c :title)))
+                (funcall v (plist-get job :cards)) "")
+     (mapconcat (lambda (m) (format "  message #%s from %s: %s\n" (plist-get m :id) (plist-get m :sender) (plist-get m :text)))
+                (funcall v (plist-get job :messages)) ""))))
 
 (defun drgnx-job-ui--button (label action &rest props)
   (apply #'insert-text-button (format "[%s]" label) 'action (lambda (_) (funcall action)) 'follow-link t 'drgnx-label label props)

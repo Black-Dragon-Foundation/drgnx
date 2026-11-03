@@ -55,10 +55,8 @@ as it was.
 
 **Review Branch** asks an agent to review this branch's changes against its base before you push (module
 `tools/review`). The agent is the `review` route's profile, the one jobs use for reviews ([jobs.md](jobs.md)). It
-works under the job reviewer's policy:
-- it may read, search and run read-only git without asking;
-- it never writes;
-- anything else is asked of you, as for any agent.
+is a session of the hub like any agent: what its permission matrix does not allow is asked of you, as for any
+agent.
 
 It reports each problem on its own line:
 

@@ -112,17 +112,16 @@
       (insert-file-contents (expand-file-name file drgnx-dir))
       (should-not (re-search-forward "(sqlite-execute (drgnx-work-db)" nil t)))))
 
-(drgnx-work-db-writer-deftest drgnx-work-db/the-writer-refuses-outside-local-mode ()
-  ;; the hub is work.db's one writer: an editor (`refuse') and the Lisp backend behind Ratatoskr (`front') open
-  ;; nothing read-write — no file made, no handle kept, no migration; only `local' (the standalone Lisp hub) does
+(drgnx-work-db-writer-deftest drgnx-work-db/the-writer-refuses-outside-the-hubs-standin ()
+  ;; the hub is work.db's one writer: an editor opens nothing read-write — no file made, no handle kept, no
+  ;; migration; only a test's seeding that stands in for the hub does
   (drgnx-work-db-read-test--with
-    (dolist (mode '(refuse front nil))
-      (let ((drgnx-coord-writer mode))
-        (should (equal (error-message-string (should-error (drgnx-work-db) :type 'drgnx-work-db-not-the-writer))
-                       "work.db is written by the drgnx hub"))
-        (should-not (file-exists-p (concat dir "work.db")))
-        (should-not drgnx-work-db--handles)))
-    (let ((drgnx-coord-writer 'local))
+    (let ((drgnx-work-db-gate-hub-standin nil))
+      (should (equal (error-message-string (should-error (drgnx-work-db) :type 'drgnx-work-db-not-the-writer))
+                     "work.db is written by the drgnx hub"))
+      (should-not (file-exists-p (concat dir "work.db")))
+      (should-not drgnx-work-db--handles))
+    (let ((drgnx-work-db-gate-hub-standin t))
       (should (sqlitep (drgnx-work-db)))
       (should (file-exists-p (concat dir "work.db"))))))
 

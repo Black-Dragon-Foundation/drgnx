@@ -25,9 +25,31 @@
 (declare-function drgnx-settings-workspace-project "drgnx-settings-workspace" (dir))
 (declare-function drgnx-settings-live--global-p "drgnx-settings-live" (file))
 (defvar drgnx-hub--events)
-(defvar drgnx-hub--behind-front)
 (defvar drgnx-settings-changed-functions)
 (defvar drgnx-settings-file-written-functions)
+
+;;;; Settings the runtime reads
+
+(drgnx-defsetting drgnx-sandbox-memory-max "4G"
+  "The memory cap of each sandboxed agent, the `:memory-max' of a spec that does not give one: a systemd size (4G,
+512M, 50%) or nil for none.  It applies where a systemd user manager answers (`drgnx-sandbox-memory-prefix').  An
+operational guard, so that one agent's build cannot run the session out of memory; not a security boundary."
+  :type '(choice (const :tag "No cap" nil) string) :group 'drgnx :scope 'global :workspace 'never :agents 'never)
+
+(drgnx-defsetting drgnx-sandbox-secret-files
+  '(".npmrc" "etc/npmrc" ".yarnrc" ".yarnrc.yml" ".pypirc" ".netrc" ".git-credentials" ".env" "credentials"
+    "credentials.toml" "credentials.json" "auth.json")
+  "Where package managers keep tokens, relative to a toolchain root: each that exists inside a root of
+`drgnx-sandbox-toolchain-roots' is hidden in the sandbox (`drgnx-sandbox-toolchain-hide').  npm's global config is
+PREFIX/etc/npmrc."
+  :type '(repeat string) :group 'drgnx :scope 'global :workspace 'never :agents 'never)
+
+(drgnx-defsetting drgnx-sandbox-proxy-pinned-addresses nil
+  "Names the job proxies resolve to a fixed address instead of asking DNS: ((NAME . ADDRESS)…), ADDRESS an IPv4 or
+IPv6 literal.  A pinned name may lead to a private or loopback address (a registry on the company's network, a
+test's local upstream); a name resolved through DNS never does.  Pinning only resolves: the name must still be on the
+job's allowlist."
+  :type '(alist :key-type string :value-type string) :group 'drgnx :scope 'global :workspace 'never :agents 'never)
 
 ;;;; Encoding: Lisp values as the runtime types' JSON
 
@@ -164,7 +186,7 @@ project's (nothing until Urdr names ROOT's project).  The call's id, or nil."
   "Non-nil in an editor subscribed to a hub that proved itself: the only place settings go on a change."
   ;; the hub client may not be loaded: its variables are unbound then
   (let ((events (bound-and-true-p drgnx-hub--events)))
-    (and (not (bound-and-true-p drgnx-hub--behind-front)) (process-live-p events) (process-get events :drgnx-proven))))
+    (and (process-live-p events) (process-get events :drgnx-proven))))
 
 (defun drgnx-settings-runtime-changed ()
   "settings.el may have changed: the hub looks at its stamp (`config/changed')."

@@ -108,7 +108,7 @@
 
 (ert-deftest drgnx-agents-ui/every-command-is-registered ()
   (drgnx-test-with-modules '(tools/agents) :strict t
-                           (dolist (id '(agents-view agents-new agents-send agents-stop agents-deliver agents-take-over agents-answer jobs-log jobs-stop agents-open agents-reply agents-review-done agents-review-reject
+                           (dolist (id '(agents-view agents-new agents-send agents-stop agents-deliver agents-answer jobs-log jobs-stop agents-open agents-reply agents-review-done agents-review-reject
                                                      agents-new-durable))
                              (should (drgnx-commands-get id)))))
 

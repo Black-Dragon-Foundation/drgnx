@@ -34,7 +34,6 @@
 (declare-function drgnx-explorer-roots "drgnx-explorer")
 (declare-function drgnx-wb-sidebar-showing-p "drgnx-wb")
 (declare-function drgnx-wb-toggle-sidebar "drgnx-wb")
-(declare-function drgnx-agents-start "drgnx-agents")
 (declare-function drgnx-agents-profile-names "drgnx-agents")
 (declare-function drgnx-agents-ui-transcript "drgnx-agents-ui")
 
