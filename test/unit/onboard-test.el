@@ -3,6 +3,7 @@
 ;; Fixture git repos, boards and configs live in temp dirs: never ~/workspace, ~/org or ~/.config.
 (require 'ert)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
+(require 'drgnx-gate-fixture (expand-file-name "../fixtures/gate-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-file)
 (require 'drgnx-onboard)
 (require 'drgnx-projects)
@@ -949,6 +950,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
          (should (string-match-p "/login" (cadr r))))
        (let ((b (get-buffer "*Claude login*")))
          (should b)
+         ;; the stand-in `claude' of this fixture sleeps 30 s and is never asked to end here: a hold, not a race
          (should (process-live-p (get-buffer-process b)))
          (should (equal (car (last (process-command (get-buffer-process b)))) (concat bin "claude")))   ; term runs it through a shell
          (should (equal (buffer-local-value 'header-line-format b)
@@ -1445,6 +1447,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
     (drgnx-onboard-test--script (concat bin "slow-claude") "exec sleep 30\n")
     (cl-letf (((symbol-function 'drgnx-onboard--wait) (lambda (&rest _) (signal 'quit nil))))
       (should (eq 'quit (condition-case nil (drgnx-onboard--claude-login-state (concat bin "slow-claude")) (quit 'quit)))))
+    ;; safe: the code under test ends the process with `delete-process', which sets its status at once
     (should-not (seq-some (lambda (p) (and (string-prefix-p "drgnx-claude-auth" (process-name p)) (process-live-p p))) (process-list)))))
 
 (ert-deftest drgnx-ai-onboard/non-homebrew-npm-on-macos-uses-local-prefix ()
@@ -1573,21 +1576,23 @@ record the prompts and the default in the lists they return as the cars of (PROM
 
 (defun drgnx-onboard-test--children (forms)
   "Run each of FORMS (strings) in a child `emacs --batch' with this run's environment; wait for all (30 s bound)."
-  (let* ((at (+ (float-time) 2)) (bufs nil)
+  (let* ((bufs nil)
          (procs (mapcar
                  (lambda (form)
                    (let ((b (generate-new-buffer " *onboard-child*" t)))
                      (push b bufs)
                      (make-process
-                      :name "onboard-child" :buffer b :noquery t
+                      :name "onboard-child" :buffer b :noquery t :connection-type 'pipe
                       :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                      "--eval" (format "(setq load-path '%S load-prefer-newer t)" load-path)
                                      "--eval" "(require 'drgnx-onboard)"
-                                     "--eval" (format "(progn (sleep-for (max 0 (- %f (float-time)))) %s)" at form)))))
+                                     "--eval" (format "(progn %s %s)" drgnx-test-gate-form form)))))
                  forms)))
     (unwind-protect
         (progn
+          (drgnx-test-gate-open procs)
           (drgnx-test-wait-ended procs :secs 30 :what "the writer processes to end")
+          ;; safe: the wait above returns once every sentinel has run
           (dolist (p procs) (should (not (process-live-p p))))
           (cl-loop for p in procs for b in (reverse bufs)
                    do (should (equal (list (process-exit-status p) (with-current-buffer b (buffer-string)))

@@ -5,6 +5,7 @@
 ;; waits for them under a 90 s bound.
 (require 'ert)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
+(require 'drgnx-gate-fixture (expand-file-name "../fixtures/gate-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/config-fixture" drgnx-dir) nil t)
@@ -511,25 +512,27 @@
   (drgnx-settings-file-test--with-dir dir
     (let* ((f (expand-file-name "settings.el" dir))
            (core (file-name-directory (locate-library "drgnx-settings-file")))
-           (at (+ (float-time) 2)) (outs nil)
+           (outs nil)
            (start (lambda (tag)
                     (let ((b (generate-new-buffer " *drgnx-settings-file-child*" t)))
                       (push b outs)
                       (make-process
-                       :name tag :buffer b :noquery t
+                       :name tag :buffer b :noquery t :connection-type 'pipe
                        :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                       "--eval" "(setq load-prefer-newer t)" "-L" core "-l" "drgnx-settings-file"
                                       "--eval"
                                       (format "(progn (setq drgnx-settings-file-lock-timeout 30)
-                                                      (sleep-for (max 0 (- %f (float-time))))
+                                                      %s
                                                       (dotimes (i 100)
                                                         (drgnx-settings-file-put %S 'drgnx-settings nil (intern (format \"%s-%%03d\" i)) i))
                                                       (princ \"DONE\\n\"))"
-                                              at f tag))))))
+                                              drgnx-test-gate-form f tag))))))
            (procs (list (funcall start "a") (funcall start "b"))))
+      (drgnx-test-gate-open procs)
       (drgnx-test-wait-ended procs :secs 90 :what "the writer processes to end")
       (unwind-protect
           (progn
+            ;; safe: the wait above returns once every sentinel has run
             (should (cl-every (lambda (p) (and (not (process-live-p p)) (= (process-exit-status p) 0))) procs))
             (dolist (b outs) (should (string-match-p "DONE" (with-current-buffer b (buffer-string)))))
             (let* ((doc (drgnx-settings-file-read f 'drgnx-settings))

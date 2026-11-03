@@ -6,6 +6,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
+(require 'drgnx-gate-fixture (expand-file-name "../fixtures/gate-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-file)
 
 
@@ -307,25 +308,27 @@
   (drgnx-file-test--with-dir dir
     (let* ((f (expand-file-name "shared.eld" dir))
            (core (file-name-directory (locate-library "drgnx-file")))
-           (at (+ (float-time) 2)) (outs nil)
+           (outs nil)
            (start (lambda (tag)
                     (let ((b (generate-new-buffer " *drgnx-file-child*" t)))
                       (push b outs)
                       (make-process
-                       :name tag :buffer b :noquery t
+                       :name tag :buffer b :noquery t :connection-type 'pipe
                        :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                       "--eval" "(setq load-prefer-newer t)" "-L" core "-l" "drgnx-file"
                                       "--eval"
-                                      (format "(progn (sleep-for (max 0 (- %f (float-time))))
+                                      (format "(progn %s
                                                       (dotimes (i 100)
                                                         (drgnx-file-update %S (lambda (d) (list :items (cons (intern (format \"%s-%%d\" i)) (plist-get d :items))))
                                                                            :timeout 20))
                                                       (princ \"DONE\\n\"))"
-                                              at f tag))))))
+                                              drgnx-test-gate-form f tag))))))
            (procs (list (funcall start "a") (funcall start "b"))))
+      (drgnx-test-gate-open procs)
       (drgnx-test-wait-ended procs :secs 30 :what "the writer processes to end")
       (unwind-protect
           (progn
+            ;; safe: the wait above returns once every sentinel has run
             (should (cl-every (lambda (p) (and (not (process-live-p p)) (= (process-exit-status p) 0))) procs))
             (dolist (b outs) (should (string-match-p "DONE" (with-current-buffer b (buffer-string)))))
             (let ((items (plist-get (plist-get (drgnx-file-read f) :data) :items)))

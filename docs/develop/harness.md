@@ -1053,6 +1053,14 @@ slow is no hold: on a fast machine a `git status` of one file ends before the te
 child ended waits for the sentinel (or the done flag it sets), never for `process-status` to read `exit`: Emacs can
 mark the child exited on SIGCHLD before its last output and its sentinel have run.
 
+### Gated children
+
+A test that races several child Emacsen against one file (the lock and write tests) starts them all with
+`drgnx-test-gate-form` first in their work and `:connection-type 'pipe`, then calls `drgnx-test-gate-open` (in
+`test/fixtures/gate-fixture.el`): it waits until every child has said it is loaded and idle at its gate, then sends each
+one line, so they start together because the test saw them ready, not because a clock reached a time the children were
+told. A child that never reaches its gate fails the test with the processes' states.
+
 ### The audit: what a deterministic test really runs
 
 A static lint cannot see through macros and fixtures. `DRGNX_TEST_AUDIT=1` records, for each `:det` test, the real-time
