@@ -181,6 +181,25 @@ its environment, then AFTER."
         (drgnx-shell-env-test--run)          ; the same PATH again: unchanged, the hub is not told
         (should (= 1 (length calls)))))))
 
+(ert-deftest drgnx-shell-env/the-hub-gets-the-login-path-when-emacs-already-has-it ()
+  ;; Emacs started from a terminal has the login PATH already, and the hub was running before the read: the connect
+  ;; hook runs while the read is still going (nothing to send yet), then the read finds PATH unchanged.  The hub
+  ;; still has the service's bare PATH unless the read's finish tells it.
+  (drgnx-shell-env-test--with
+    (let ((calls nil)
+          (login (concat dir "oldbin:/usr/bin:/bin")))
+      (cl-letf (((symbol-function 'drgnx-hub-running-p) (lambda () t))
+                ((symbol-function 'drgnx-hub-call) (lambda (method params cb) (push (list method params cb) calls) 1)))
+        (let ((drgnx-shell-env--last nil))
+          (drgnx-shell-env-test--env-shell dir nil (list (concat "PATH=" login)))
+          (drgnx-shell-env--resend)           ; the connect, before the read finished
+          (should-not calls)
+          (let ((r (drgnx-shell-env-test--run)))
+            (should-not (cdr r)))             ; this Emacs's PATH did not change
+          (should (= 1 (length calls)))
+          (should (equal (car (car calls)) "env/set"))
+          (should (equal (cadr (car calls)) (list :env (list (list :name "PATH" :value login))))))))))
+
 (ert-deftest drgnx-shell-env/a-real-zsh-login ()
   (skip-unless (executable-find "zsh"))
   (drgnx-shell-env-test--with
