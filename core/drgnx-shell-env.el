@@ -28,8 +28,8 @@
   :type '(repeat string) :group 'drgnx)
 
 (defcustom drgnx-shell-env-extra-names nil
-  "More variables to take from your login shell, besides `drgnx-shell-env-names'.  A key never is: a name
-`drgnx-shell-env-refused-p' refuses is skipped also when listed here."
+  "More variables to take from your login shell, besides `drgnx-shell-env-names'.  A key never is, nor HOME, TMPDIR,
+XDG_RUNTIME_DIR and the like: a name `drgnx-shell-env-refused-p' refuses is skipped also when listed here."
   :type '(repeat string) :group 'drgnx)
 
 (defcustom drgnx-shell-env-timeout 5
@@ -45,9 +45,18 @@
 (defconst drgnx-shell-env--max-output (* 4 1024 1024)
   "Bytes a shell may print before it is stopped (an rc file that loops).")
 
+(defconst drgnx-shell-env--path-rule-names
+  '("HOME" "TMPDIR" "TMP" "TEMP" "XDG_RUNTIME_DIR" "XDG_DATA_HOME" "XDG_CONFIG_HOME" "XDG_STATE_HOME"
+    "DRGNX_DATA_DIR" "DRGNX_CONFIG_DIR" "DRGNX_DIR" "SSH_AUTH_SOCK" "DBUS_SESSION_BUS_ADDRESS")
+  "Names the hub's own path rules read (its state, socket and scratch folders): never taken from the shell, so the
+hub's overlay only reaches the children's PATH-like variables.  The hub refuses them too (`env/set',
+`PATH_RULE_NAMES' in shell_env.rs); keep the lists the same.")
+
 (defun drgnx-shell-env-refused-p (name)
-  "Is NAME never to be taken from the shell: any provider's key variable, or a name that looks like a secret?"
-  (or (let ((case-fold-search t)) (string-match-p drgnx-shell-env--refused-re name))
+  "Is NAME never to be taken from the shell: any provider's key variable, a name that looks like a secret, or one
+of `drgnx-shell-env--path-rule-names'?"
+  (or (member name drgnx-shell-env--path-rule-names)
+      (let ((case-fold-search t)) (string-match-p drgnx-shell-env--refused-re name))
       (and (require 'drgnx-ai nil t)
            (member name (delq nil (mapcar (lambda (p) (plist-get (cdr p) :key-env))
                                           (ignore-errors (drgnx-ai-providers)))))

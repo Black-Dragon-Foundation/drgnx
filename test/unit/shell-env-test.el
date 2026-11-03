@@ -91,6 +91,28 @@ its environment, then AFTER."
         (should-not (drgnx-shell-env-refused-p "PATH"))
         (should-not (drgnx-shell-env-parse "\036drgnx-env-begin\nZETA_AUTH=x\n\036drgnx-env-end\n" '("ZETA_AUTH")))))))
 
+(ert-deftest drgnx-shell-env/the-names-the-hubs-paths-rules-read-are-never-taken ()
+  ;; the hub refuses them too (`env/set'); they are not read, not set here and not sent, even when listed
+  (drgnx-shell-env-test--with
+    (dolist (n '("HOME" "TMPDIR" "TMP" "TEMP" "XDG_RUNTIME_DIR" "XDG_DATA_HOME" "XDG_CONFIG_HOME" "XDG_STATE_HOME"
+                 "DRGNX_DATA_DIR" "DRGNX_CONFIG_DIR" "DRGNX_DIR" "SSH_AUTH_SOCK" "DBUS_SESSION_BUS_ADDRESS"))
+      (should (drgnx-shell-env-refused-p n)))
+    (should-not (drgnx-shell-env-refused-p "FOO"))
+    (let* ((drgnx-shell-env-extra-names '("FOO" "TMPDIR" "XDG_RUNTIME_DIR" "SSH_AUTH_SOCK"))
+           (tmpdir (getenv "TMPDIR"))
+           (sent nil))
+      (should (equal (drgnx-shell-env--names) '("PATH" "MANPATH" "INFOPATH" "FOO")))
+      (drgnx-shell-env-test--env-shell dir nil
+                                       (list (concat "PATH=" dir "shellbin:/usr/bin") "FOO=bar" "TMPDIR=/canary/tmp"
+                                             "XDG_RUNTIME_DIR=/canary/run" "SSH_AUTH_SOCK=/canary/ssh"))
+      (cl-letf (((symbol-function 'drgnx-shell-env--tell-hub) (lambda (alist &optional _) (setq sent alist))))
+        (drgnx-shell-env-test--run))
+      (should (equal (getenv "FOO") "bar"))
+      (should (equal (getenv "TMPDIR") tmpdir))
+      (should-not (equal (getenv "XDG_RUNTIME_DIR") "/canary/run"))
+      (should-not (equal (getenv "SSH_AUTH_SOCK") "/canary/ssh"))
+      (should (equal (sort (mapcar #'car sent) #'string<) '("FOO" "PATH"))))))
+
 (ert-deftest drgnx-shell-env/noise-before-and-after-the-markers ()
   (let ((out (concat "\e[?1h\e=\e]0;p10k\a" "hi\n" "PATH=/evil\n"
                      "\036drgnx-env-begin\nPATH=/old\n\036drgnx-env-end\n"   ; an earlier block: only the last counts

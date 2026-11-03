@@ -29,8 +29,12 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   are an overlay in the hub's memory (`ShellEnv`), and every process the hub starts next (agent sessions, jobs, podman,
   git for plan runs) takes its environment from the process's with the overlay applied, so `PATH` is the login
   shell's directories, then the hub's own that the shell's do not name. The hub's own environment is never changed.
-  A name that looks like a secret (`KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PASSPHRASE`, `CREDENTIAL`) or is a
-  provider's key variable is left out of the answer's `applied` list; it is not an error. The overlay is in memory only,
+  A name that looks like a secret (`KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PASSPHRASE`, `CREDENTIAL`), is a
+  provider's key variable, or is one the hub's own path rules read (`PATH_RULE_NAMES`: `HOME`, `TMPDIR`, `TMP`,
+  `TEMP`, `XDG_RUNTIME_DIR`, `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `DRGNX_DATA_DIR`,
+  `DRGNX_CONFIG_DIR`, `DRGNX_DIR`, `SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`; the sockets, scratch folders and
+  sandbox context are computed from them, so a shell's value must not move them) is left out of the answer's `applied`
+  list; it is not an error. The editor does not send them either (`drgnx-shell-env-refused-p`). The overlay is in memory only,
   so the editor sends it again at every connect (`drgnx-hub-connected-functions`, run once the subscription has
   proved itself), also to a hub that restarted. The hub is never restarted for that: a restart would end its durable
   sessions.
