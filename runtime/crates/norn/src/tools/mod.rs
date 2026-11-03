@@ -65,12 +65,12 @@ impl Identity {
     }
 }
 
-/// A row of the backend's `agents/list`.
+/// A row of the hub's session table (`agents/list`).
 pub type SessionRow = runstav::methods::agents::Snapshot;
 
 /// What the tools need of the hub; Ratatoskr implements it (Task 9).
 pub trait Hub: Send + Sync {
-    /// The backend's `agents/list`, 2 s; `None` = no hub answer.
+    /// The hub's sessions, read from its own table; `None` = the hub is not ready.
     fn sessions(&self) -> BoxFuture<'_, Option<Vec<SessionRow>>>;
     /// A coalesced `coord/notify`.
     fn notify(&self);

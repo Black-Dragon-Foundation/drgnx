@@ -112,7 +112,6 @@ fn hub_caller() -> Caller {
         sid: None,
         job: None,
         conn_id: 0,
-        backend: false,
     }
 }
 

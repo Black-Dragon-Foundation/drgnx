@@ -25,8 +25,6 @@ pub struct Caller {
     pub job: Option<String>,
     /// The entity `n` of its project.
     pub project: Option<i64>,
-    /// The Lisp backend's connection (`Caller.backend` of the dispatcher).
-    pub backend: bool,
 }
 
 impl Caller {
@@ -39,7 +37,7 @@ impl Caller {
     /// - no identity: class `ext`, nothing else (an empty scope).
     ///
     /// A folder the cache has not resolved, or whose project is not registered yet, gives no project. Never the user
-    /// class, never `backend`.
+    /// class.
     pub fn from_identity(identity: &Identity, cache: &ProjectCache) -> Caller {
         match identity {
             Identity::Session {
@@ -55,7 +53,6 @@ impl Caller {
                 profile: profile.clone(),
                 job: job.clone(),
                 project: cache.project_n(home),
-                backend: false,
             },
             Identity::Outside { id, home, .. } => Caller {
                 class: Class::Ext,
@@ -64,7 +61,6 @@ impl Caller {
                 profile: None,
                 job: None,
                 project: home.as_deref().and_then(|h| cache.project_n(h)),
-                backend: false,
             },
             Identity::None => Caller {
                 class: Class::Ext,
@@ -73,14 +69,12 @@ impl Caller {
                 profile: None,
                 job: None,
                 project: None,
-                backend: false,
             },
         }
     }
 
-    /// A proven user connection (the editor, the CLI); BACKEND for the Lisp backend's connection, which may not
-    /// settle what would create a grant or close a task (storage §5.5).
-    pub fn user(backend: bool) -> Caller {
+    /// A proven user connection (the editor, the CLI).
+    pub fn user() -> Caller {
         Caller {
             class: Class::User,
             actor: "user".into(),
@@ -88,7 +82,6 @@ impl Caller {
             profile: None,
             job: None,
             project: None,
-            backend,
         }
     }
 
@@ -385,7 +378,6 @@ mod tests {
             profile: profile.map(Into::into),
             job: None,
             project,
-            backend: false,
         }
     }
 
@@ -408,7 +400,7 @@ mod tests {
         assert_eq!(s.reach(), Reach::Projects(&[a]));
         assert!(s.valid());
         // The user (and the hub) see everything.
-        let u = for_caller(&conn, &Caller::user(false), NOW).unwrap();
+        let u = for_caller(&conn, &Caller::user(), NOW).unwrap();
         assert_eq!(u.allows(Some(b)), Seen::Full);
         assert_eq!(u.allows(None), Seen::Full);
         assert_eq!(u.reach(), Reach::Everything);
@@ -562,7 +554,7 @@ mod tests {
         assert!(own.may_write_into(Some(a)));
         assert!(!own.may_write_into(Some(a + 1)));
         assert!(!own.may_write_into(None));
-        assert!(Caller::user(false).may_write_into(Some(a)));
+        assert!(Caller::user().may_write_into(Some(a)));
     }
 
     #[test]
@@ -583,7 +575,7 @@ mod tests {
         assert!(s.valid());
         // A change through a path that does not call `grants_changed` (a user-class update of the row) is seen by
         // the next scope computed on the database, which ends the older ones.
-        let n = grants::list(&conn, &Caller::user(false), &Default::default(), NOW).unwrap()[0].n;
+        let n = grants::list(&conn, &Caller::user(), &Default::default(), NOW).unwrap()[0].n;
         write(&mut conn, user(), |tx| {
             urdr::graph::entity::update(
                 tx,
@@ -602,7 +594,7 @@ mod tests {
         assert!(fresh.valid());
         assert_eq!(fresh.allows(Some(b)), Seen::Hidden);
         // The user's scope does not depend on grants.
-        let u = for_caller(&conn, &Caller::user(false), NOW).unwrap();
+        let u = for_caller(&conn, &Caller::user(), NOW).unwrap();
         grant(&mut conn, Who::Project(a), What::Project(c), None);
         assert!(u.valid());
     }
@@ -642,7 +634,6 @@ mod tests {
                 profile: Some("review".into()),
                 job: Some("7".into()),
                 project: Some(42),
-                backend: false,
             }
         );
         let meta = c.tx_meta("mcp:task_write/claim");
@@ -683,12 +674,9 @@ mod tests {
     }
 
     #[test]
-    fn caller_from_the_backend_is_marked() {
-        let backend = Caller::user(true);
-        assert!(backend.backend);
-        assert_eq!(backend.class, Class::User);
-        assert!(!Caller::user(false).backend);
-        // No identity of a tool connection makes a user-class or backend caller.
+    fn no_tool_connection_is_the_user() {
+        assert_eq!(Caller::user().class, Class::User);
+        // No identity of a tool connection makes a user-class caller.
         let cache = cache_with("/w/proj", 1);
         for id in [
             Identity::None,
@@ -708,7 +696,6 @@ mod tests {
         ] {
             let c = Caller::from_identity(&id, &cache);
             assert_ne!(c.class, Class::User);
-            assert!(!c.backend);
         }
         let none = Caller::from_identity(&Identity::None, &cache);
         assert_eq!((none.project, none.session), (None, None));

@@ -662,7 +662,7 @@ async fn record_with_collected_is_idempotent() {
         .unwrap();
     let repo = Path::new(&p).parent().unwrap().display().to_string();
     let record = |key: &str| -> (TxMeta, Record) {
-        let mut meta = TxMeta::new("backend", Class::System, "proto:graph/record");
+        let mut meta = TxMeta::new("hub", Class::System, "proto:graph/record");
         meta.req = Some(key.into());
         let req: Record = serde_json::from_value(json!({
             "task": format!("task:{p}#1"), "repo": repo, "collected": key,
@@ -823,7 +823,7 @@ fn record_once(
     .unwrap();
     let mut tx = Tx::for_test(
         c,
-        TxMeta::new("backend", Class::System, "proto:graph/record"),
+        TxMeta::new("hub", Class::System, "proto:graph/record"),
         guard(),
     );
     let a = parsed::record(&mut tx, deny, projects, req).unwrap();
@@ -927,7 +927,7 @@ fn record_refusal(c: &mut Connection, deny: &DenyList, task: &str, repo: &str) -
     .unwrap();
     let mut tx = Tx::for_test(
         c,
-        TxMeta::new("backend", Class::System, "proto:graph/record"),
+        TxMeta::new("hub", Class::System, "proto:graph/record"),
         guard(),
     );
     match parsed::record(&mut tx, deny, &mut ProjectCache::default(), req) {
@@ -993,7 +993,7 @@ fn record_needs_a_live_task_of_a_task_kind() {
     .unwrap();
     let mut tx = Tx::for_test(
         &mut c,
-        TxMeta::new("backend", Class::System, "proto:graph/record"),
+        TxMeta::new("hub", Class::System, "proto:graph/record"),
         guard(),
     );
     let a = parsed::record(&mut tx, &f.deny, &mut ProjectCache::default(), req).unwrap();

@@ -7,8 +7,10 @@
 //! - **`events`:** every committed write wakes [`broadcast_events`], which reads the new `event` rows on the reader's
 //!   thread and sends `events` `{since, last, events}` to the subscribers: at most 200 rows a batch, every 0.25 s at
 //!   most (the Lisp hub's `drgnx-hub--events-check`).  The 2 s schema tick wakes it too.
-//! - **The tools' hub** ([`ToolHub`]): `sessions()` is the front's `agents/list` (2 s), `notify()` wakes the
-//!   broadcast and the records' views.
+//! - **The tools' hub** ([`ToolHub`]): `sessions()` is the front's session table, read at once; `notify()` wakes the
+//!   broadcast, the records' views and the delivery.
+//! - **One writer:** the hub. A `tx` row's actor comes from the connection ([`tx_meta`]); no param names a writer, and
+//!   `messages/send` refuses `sender` from every caller.
 
 use crate::dispatch::Caller;
 use crate::front::Front;
@@ -18,7 +20,6 @@ use norn::store::{CoordDb, CoordError, WTx};
 use norn::tools::{Hub, SessionRow};
 use norn::write::{agents, cards, decisions, event, jobs, messages, meta, prune, review, tasks};
 use runstav::methods::Params;
-use runstav::methods::agents::Sessions;
 use runstav::methods::coord as api;
 use runstav::registry::{self, Class};
 use runstav::wire::{Error, ErrorCode};
@@ -33,14 +34,11 @@ use urdr::graph::{Class as TxClass, TxMeta};
 pub const PACE: Duration = Duration::from_millis(250);
 /// The most event rows one `events` event carries.
 pub const EVENTS_BATCH: u64 = 200;
-/// How long the tools wait for the front's `agents/list`.
-pub const SESSIONS_DEADLINE: Duration = Duration::from_secs(2);
 
 /// What a write wakes, and the writes counted for `status`.
 #[derive(Default)]
 pub struct Signals {
     events: Notify,
-    notify: Notify,
     /// A message may be waiting for a hub session (delivery, Task 24).
     pub deliver: Notify,
     writes: AtomicU64,
@@ -72,10 +70,9 @@ impl Signals {
         self.events.notify_one();
     }
 
-    /// The backend should hear `coord/notify` (coalesced).
+    /// A message may be waiting for a hub session: the delivery looks (coalesced).
     pub fn notify_soon(&self) {
         self.deliver.notify_one();
-        self.notify.notify_one();
     }
 
     /// The transactions the front's methods committed since the hub started.
@@ -114,18 +111,17 @@ impl Writer {
 }
 
 /// The `tx` row of a front method's write (Urdr Task 12): who it is comes from the connection, never from a param.
-/// - the Lisp backend's connection (`caller.backend`): actor `backend`, class `system`;
-/// - a seam method (`coord/*`) from anyone else: actor `hub`, class `system`;
-/// - the editor's own methods (`cards/settle`, `messages/*`, `events/add`, `review/mark`) from the user's connection:
-///   actor `user`, class `user`;
-/// - an agent socket's session: actor `agent:SID`, class `agent`.
+/// The hub is the one writer; the actor is
+/// - for a seam method (`coord/*`, the hub's own housekeeping): `hub`, class `system`;
+/// - for the editor's own methods (`cards/settle`, `messages/*`, `events/add`, `review/mark`) from the user's
+///   connection: `user`, class `user`;
+/// - for an agent socket's session: `agent:SID`, class `agent`;
+/// - for anyone else (a service connection, the front's own timers): `hub`, class `system`.
 ///
 /// `tool` is `proto:<method>`.
 pub fn tx_meta(caller: &Caller, method: &str) -> TxMeta {
     let tool = format!("proto:{method}");
-    let mut meta = if caller.backend {
-        TxMeta::new("backend", TxClass::System, tool)
-    } else if method.starts_with("coord/") {
+    let mut meta = if method.starts_with("coord/") {
         TxMeta::new("hub", TxClass::System, tool)
     } else {
         match (caller.class, &caller.sid) {
@@ -215,16 +211,17 @@ pub async fn serve(
             return Ok(crate::graph::settle(w, caller, card, choice, now).await);
         }
         Params::MessagesSend(p) => {
-            if p.sender.is_some() && !caller.backend {
+            // the sender is the connection's, never a param: no caller names one
+            if p.sender.is_some() {
                 return Ok(Err(Error {
-                    code: ErrorCode::NotAllowed,
-                    message: "only the backend names a message's sender".into(),
+                    code: ErrorCode::InvalidParams,
+                    message: "a message's sender is its connection's; no caller names one".into(),
                     path: Some("sender".into()),
                 }));
             }
             let s = messages::Send {
                 job: p.job.map(|j| j.as_str().to_owned()),
-                sender: p.sender.map(|s| s.as_str().to_owned()),
+                sender: None,
                 recipient: p.recipient.as_str().to_owned(),
                 text: p.text.as_str().to_owned(),
                 seen: p.seen,
@@ -548,15 +545,11 @@ pub async fn serve(
         }
         other => return Err(Box::new(other)),
     };
-    // the backend hears the editor's writes (delivery, the clash scan); its own it knows
-    if answer.is_ok() && !caller.backend {
-        w.signals.notify_soon();
-    }
     Ok(answer.map_err(fail))
 }
 
-/// Send the `events` the front's writer (and the backend's, until it moves) added, whenever woken: from the newest
-/// row at start, at most [`EVENTS_BATCH`] rows an event and one batch each [`PACE`].
+/// Send the `events` the writer added, whenever woken: from the newest row at start, at most [`EVENTS_BATCH`] rows
+/// an event and one batch each [`PACE`].
 pub async fn broadcast_events(front: Arc<Front>) {
     let signals = front.writer.signals.clone();
     let mut last = front.work_db.last_event_id().await.unwrap_or_else(|e| {
@@ -610,30 +603,10 @@ impl ToolHub {
 }
 
 impl Hub for ToolHub {
+    /// The front's own session table, read at once; `None` only before the front is bound.
     fn sessions(&self) -> BoxFuture<'_, Option<Vec<SessionRow>>> {
-        Box::pin(async move {
-            let front = self.front.get().and_then(std::sync::Weak::upgrade)?;
-            let m = registry::find("agents/list")?;
-            let (params, _) = (m.decode)(&json!({})).ok()?;
-            let caller = Caller {
-                class: Class::User,
-                sid: None,
-                job: None,
-                conn_id: 0,
-                backend: false,
-            };
-            let v = tokio::time::timeout(
-                SESSIONS_DEADLINE,
-                crate::agent_core::serve(&front, &caller, params),
-            )
-            .await
-            .ok()?
-            .ok()?
-            .ok()?;
-            serde_json::from_value::<Sessions>(v)
-                .ok()
-                .map(|s| s.sessions)
-        })
+        let front = self.front.get().and_then(std::sync::Weak::upgrade);
+        Box::pin(async move { front.map(|f| f.core.agents.snapshots()) })
     }
 
     fn proposal(
@@ -675,7 +648,6 @@ impl Hub for ToolHub {
                 sid: Some(sid),
                 job: None,
                 conn_id: 0,
-                backend: false,
             };
             match crate::agent_core::serve(&front, &caller, params).await {
                 Ok(answer) => answer.map_err(|e| e.message),
@@ -749,13 +721,12 @@ mod tests {
 
     const DDL: &str = include_str!("../../../../test/fixtures/work-db-6.sql");
 
-    fn caller(backend: bool) -> Caller {
+    fn caller() -> Caller {
         Caller {
             class: Class::User,
             sid: None,
             job: None,
             conn_id: 1,
-            backend,
         }
     }
 
@@ -770,8 +741,8 @@ mod tests {
         }
     }
 
-    async fn call(w: &Writer, backend: bool, method: &str, v: Value) -> Result<Value, Error> {
-        match serve(w, &caller(backend), params(method, v)).await {
+    async fn call(w: &Writer, method: &str, v: Value) -> Result<Value, Error> {
+        match serve(w, &caller(), params(method, v)).await {
             Ok(answer) => answer,
             Err(_) => panic!("{method} is not the writer's"),
         }
@@ -779,21 +750,27 @@ mod tests {
 
     #[test]
     fn tx_meta_per_caller_kind() {
-        let user = tx_meta(&caller(false), "cards/settle");
+        let user = tx_meta(&caller(), "cards/settle");
         assert_eq!(
             (user.actor.as_str(), user.class, user.tool.as_str()),
             ("user", TxClass::User, "proto:cards/settle")
         );
-        // the seam's methods are the hub's, the backend's own connection is the backend
-        let seam = tx_meta(&caller(false), "coord/decide");
+        // the seam's methods are the hub's, and so is a service connection's write
+        let seam = tx_meta(&caller(), "coord/decide");
         assert_eq!(
             (seam.actor.as_str(), seam.class, seam.tool.as_str()),
             ("hub", TxClass::System, "proto:coord/decide")
         );
-        let backend = tx_meta(&caller(true), "messages/send");
+        let service = tx_meta(
+            &Caller {
+                class: Class::Service,
+                ..caller()
+            },
+            "messages/send",
+        );
         assert_eq!(
-            (backend.actor.as_str(), backend.class),
-            ("backend", TxClass::System)
+            (service.actor.as_str(), service.class),
+            ("hub", TxClass::System)
         );
         // an agent socket's session writes as itself, with its job
         let agent = tx_meta(
@@ -802,7 +779,6 @@ mod tests {
                 sid: Some("s-1".into()),
                 job: Some("j".into()),
                 conn_id: 2,
-                backend: false,
             },
             "events/add",
         );
@@ -829,14 +805,9 @@ mod tests {
             )
             .unwrap();
         let w = writer(dir.path());
-        let e = call(
-            &w,
-            false,
-            "cards/settle",
-            json!({"card": 1, "choice": "ok"}),
-        )
-        .await
-        .unwrap_err();
+        let e = call(&w, "cards/settle", json!({"card": 1, "choice": "ok"}))
+            .await
+            .unwrap_err();
         assert_eq!(
             (e.code, e.message.as_str()),
             (
@@ -847,12 +818,12 @@ mod tests {
         assert_eq!(w.signals.writes(), 0);
         // the daily prune never fails its caller
         assert_eq!(
-            call(&w, true, "coord/prune", json!({})).await.unwrap(),
+            call(&w, "coord/prune", json!({})).await.unwrap(),
             json!({"pruned": false})
         );
         // another method's params come back
         assert!(
-            serve(&w, &caller(false), params("job/status", json!({})))
+            serve(&w, &caller(), params("job/status", json!({})))
                 .await
                 .is_err()
         );
@@ -869,7 +840,6 @@ mod tests {
         std::fs::rename(&next, &file).unwrap();
         let card = call(
             &w,
-            true,
             "coord/card-create",
             json!({"kind": "ask", "title": "t"}),
         )
@@ -889,7 +859,7 @@ mod tests {
             )
             .unwrap();
         let w = writer(dir.path());
-        let e = call(&w, false, "events/add", json!({"kind": "job"}))
+        let e = call(&w, "events/add", json!({"kind": "job"}))
             .await
             .unwrap_err();
         assert_eq!(
@@ -902,7 +872,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn writes_are_typed_and_counted_and_only_the_backend_names_a_sender() {
+    async fn writes_are_typed_and_counted() {
         let dir = tempfile::tempdir().unwrap();
         urdr::Connection::open(dir.path().join("work.db"))
             .unwrap()
@@ -911,7 +881,6 @@ mod tests {
         let w = writer(dir.path());
         let card = call(
             &w,
-            true,
             "coord/card-create",
             json!({"kind": "ask", "title": "t"}),
         )
@@ -920,18 +889,15 @@ mod tests {
         let id = card["id"].clone();
         let settle = json!({"card": id, "choice": "yes"});
         assert_eq!(
-            call(&w, false, "cards/settle", settle.clone())
-                .await
-                .unwrap(),
+            call(&w, "cards/settle", settle.clone()).await.unwrap(),
             json!({"settled": true})
         );
         assert_eq!(
-            call(&w, false, "cards/settle", settle).await.unwrap(),
+            call(&w, "cards/settle", settle).await.unwrap(),
             json!({"settled": false})
         );
         let e = call(
             &w,
-            false,
             "messages/send",
             json!({"recipient": "a1", "text": "hi", "sender": "a2"}),
         )
@@ -939,13 +905,12 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             (e.code, e.path.as_deref()),
-            (ErrorCode::NotAllowed, Some("sender"))
+            (ErrorCode::InvalidParams, Some("sender"))
         );
         let sent = call(
             &w,
-            true,
             "messages/send",
-            json!({"recipient": "a1", "text": "hi", "sender": "a2"}),
+            json!({"recipient": "a1", "text": "hi"}),
         )
         .await
         .unwrap();
@@ -954,14 +919,9 @@ mod tests {
             (json!(true), json!("queued"))
         );
         // every answer fits its method's result
-        let added = call(
-            &w,
-            false,
-            "events/add",
-            json!({"kind": "comment", "summary": "s"}),
-        )
-        .await
-        .unwrap();
+        let added = call(&w, "events/add", json!({"kind": "comment", "summary": "s"}))
+            .await
+            .unwrap();
         for (method, v) in [
             ("coord/card-create", card),
             ("messages/send", sent),
@@ -996,5 +956,98 @@ mod tests {
         tokio::time::timeout(Duration::from_millis(500), signals.records.notified())
             .await
             .expect("the follower was not woken");
+    }
+
+    #[tokio::test]
+    async fn sender_is_refused_for_every_class() {
+        let dir = tempfile::tempdir().unwrap();
+        urdr::Connection::open(dir.path().join("work.db"))
+            .unwrap()
+            .execute_batch(DDL)
+            .unwrap();
+        let w = writer(dir.path());
+        for c in [
+            caller(),
+            Caller {
+                class: Class::Service,
+                ..caller()
+            },
+            Caller {
+                class: Class::Agent,
+                sid: Some("s-1".into()),
+                ..caller()
+            },
+        ] {
+            let p = params(
+                "messages/send",
+                json!({"recipient": "a1", "text": "hi", "sender": "a2"}),
+            );
+            let e = match serve(&w, &c, p).await {
+                Ok(answer) => answer.unwrap_err(),
+                Err(_) => panic!("messages/send is not the writer's"),
+            };
+            assert_eq!(
+                (e.code, e.path.as_deref()),
+                (ErrorCode::InvalidParams, Some("sender")),
+                "{:?}",
+                c.class
+            );
+        }
+        assert_eq!(w.signals.writes(), 0, "a refused send writes nothing");
+    }
+
+    #[tokio::test]
+    async fn tool_hub_sessions_are_the_fronts() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("work.db");
+        urdr::Connection::open(&db)
+            .unwrap()
+            .execute_batch(DDL)
+            .unwrap();
+        let (config, work) = (dir.path().join("config"), dir.path().join("work"));
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::create_dir_all(&work).unwrap();
+        let mock = crate::embed::tests::mock_binary();
+        let file = config.join("settings.el");
+        std::fs::write(
+            &file,
+            format!(
+                "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command ({mock:?} \"acp\" \"--as\" \"claude\")))))\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let front = Arc::new(Front::new(
+            runstav::proof::Cap::generate().unwrap(),
+            dir.path().join("hub-x.sock"),
+            crate::store::WorkDb::spawn(db.clone()).unwrap(),
+            CoordDb::spawn(db),
+        ));
+        let (_store, runtime) = crate::runtime_db::open(dir.path()).unwrap();
+        front.settings.open(config, runtime);
+        let hub: Arc<ToolHub> = front.tool_hub.clone();
+        assert!(hub.sessions().await.is_none(), "no front bound yet");
+        hub.bind(&front);
+        assert_eq!(hub.sessions().await.map(|s| s.len()), Some(0));
+        let user = caller();
+        let start = params(
+            "agents/start",
+            json!({"profile": "mock-claude", "cwd": work.display().to_string()}),
+        );
+        let id = match crate::agent_core::serve(&front, &user, start).await {
+            Ok(Ok(v)) => v["id"].as_str().unwrap().to_owned(),
+            Ok(Err(e)) => panic!("agents/start: {}", e.message),
+            Err(_) => panic!("agents/start is not the agent core's"),
+        };
+        // listed at once, from the front's own table: no request, no deadline
+        let rows = hub.sessions().await.expect("the front is bound");
+        assert!(
+            rows.iter().any(|r| r.id == id),
+            "{id} not in {:?}",
+            rows.iter().map(|r| &r.id).collect::<Vec<_>>()
+        );
+        let kill = params("agents/kill", json!({"id": id}));
+        let _ = crate::agent_core::serve(&front, &user, kill).await;
     }
 }

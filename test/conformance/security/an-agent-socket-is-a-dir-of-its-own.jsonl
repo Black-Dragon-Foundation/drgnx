@@ -1,0 +1,10 @@
+{"scenario": "security/an-agent-socket-is-a-dir-of-its-own", "requires": ["v1", "test-hooks"], "doc": "Review M10: an agent socket is s/SID/hub.sock in the socket dir, a directory of its own per session (0700, the user's, as is s/), which is what a sandbox is given. The session dir goes at the stop."}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"]}
+{"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "hello", "conn": "a", "proof": "valid", "expect_class": "agent"}
+{"do": "file", "path": "$SOCKET_DIR/s", "mode": "0700", "owner": "user"}
+{"do": "file", "path": "$SOCKET_DIR/s/s1", "mode": "0700", "owner": "user"}
+{"do": "file", "path": "$SOCKET_DIR/s/s1/hub.sock", "mode": "0600", "owner": "user"}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0, "within_ms": 15000}
+{"do": "file", "path": "$SOCKET_DIR/s/s1", "exists": false}

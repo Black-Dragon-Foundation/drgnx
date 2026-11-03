@@ -42,7 +42,6 @@ impl Fx {
             profile: None,
             job: None,
             project,
-            backend: false,
         }
     }
 
@@ -50,7 +49,7 @@ impl Fx {
     pub(crate) fn user(&self, project: i64) -> Caller {
         Caller {
             project: Some(project),
-            ..Caller::user(false)
+            ..Caller::user()
         }
     }
 
@@ -671,7 +670,6 @@ async fn concurrent_label_adds_lose_none() {
         profile: None,
         job: None,
         project: Some(p),
-        backend: false,
     };
     let maker = agent("s0");
     let id = match db
@@ -1473,7 +1471,7 @@ fn ready_is_computed() {
     assert_eq!(ids(&fx, &a, &[]), [t2.clone(), t3.clone()]);
     // Another project's agent sees none of alpha's; the user sees every project's.
     assert_eq!(ids(&fx, &fx.agent_in("z", Some(fx.b)), &[]).len(), 1);
-    assert_eq!(ids(&fx, &Caller::user(false), &[]).len(), 3);
+    assert_eq!(ids(&fx, &Caller::user(), &[]).len(), 3);
     // Nothing stores readiness.
     assert_eq!(
         fx.count("select count(*) from entity where status = 'ready'"),

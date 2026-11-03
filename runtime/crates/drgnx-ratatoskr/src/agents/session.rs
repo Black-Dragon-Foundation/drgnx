@@ -1638,7 +1638,6 @@ async fn write_steps(
         sid: None,
         job: None,
         conn_id: 0,
-        backend: false,
     };
     let mut local = 0u64;
     let mut turn_start = true;
@@ -1861,7 +1860,7 @@ async fn record_entities(front: &Front, caller: &Caller, s: &Session) {
         s.profile.clone(),
         s.task.clone(),
     );
-    // the `start` event the Lisp backend wrote, for `events/since`
+    // the session's `start` event, for `events/since`
     let (job, started_name) = (s.job.clone(), name.clone());
     let data = json!({
         "profile": s.profile, "role": format!("{:?}", s.role).to_lowercase(), "cwd": s.cwd,
@@ -3481,7 +3480,6 @@ mod tests {
             sid: None,
             job: None,
             conn_id: 0,
-            backend: false,
         };
         let rows: Vec<(String, i64, String, Option<String>)> = writer
             .write(&caller, "agents/step", |tx| {

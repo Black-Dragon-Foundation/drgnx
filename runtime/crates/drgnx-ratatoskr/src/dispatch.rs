@@ -239,8 +239,6 @@ pub struct Caller {
     pub sid: Option<String>,
     pub job: Option<String>,
     pub conn_id: u64,
-    /// Always false: no connection is the Lisp backend's any more.
-    pub backend: bool,
 }
 
 #[cfg(test)]

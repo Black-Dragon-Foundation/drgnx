@@ -598,7 +598,6 @@ mod tests {
             profile: profile.map(Into::into),
             job: None,
             project,
-            backend: false,
         }
     }
 
@@ -633,7 +632,7 @@ mod tests {
         assert_eq!(seen, [made[0].id.clone(), made[1].id.clone()]);
         // The user sees them all; a filter narrows.
         assert_eq!(
-            list(&conn, &Caller::user(false), &Filter::default(), NOW)
+            list(&conn, &Caller::user(), &Filter::default(), NOW)
                 .unwrap()
                 .len(),
             4
@@ -643,7 +642,7 @@ mod tests {
             active: Some(true),
         };
         assert_eq!(
-            list(&conn, &Caller::user(false), &only, NOW).unwrap()[0].id,
+            list(&conn, &Caller::user(), &only, NOW).unwrap()[0].id,
             made[3].id
         );
         // An agent asking for another's grants by filter gets nothing.
@@ -812,7 +811,7 @@ mod tests {
         }
         // Nothing forged reached the rows.
         assert_eq!(
-            list(&conn, &Caller::user(false), &Filter::default(), NOW).unwrap(),
+            list(&conn, &Caller::user(), &Filter::default(), NOW).unwrap(),
             [existing]
         );
 
@@ -1390,7 +1389,7 @@ mod tests {
         .unwrap();
         assert_eq!(g.names.as_deref().unwrap().len(), 2);
         assert_eq!(
-            list(&conn, &Caller::user(false), &Filter::default(), NOW).unwrap(),
+            list(&conn, &Caller::user(), &Filter::default(), NOW).unwrap(),
             [g]
         );
         let me = agent(Some(a), "s1", Some("review"));
@@ -1670,6 +1669,6 @@ mod tests {
         assert!(may_edit_user_task(&conn, &me, t2, NOW).unwrap());
         // `*` still never reaches a task of another project.
         assert!(!may_edit_user_task(&conn, &me, tb, NOW).unwrap());
-        assert!(may_edit_user_task(&conn, &Caller::user(false), tb, NOW).unwrap());
+        assert!(may_edit_user_task(&conn, &Caller::user(), tb, NOW).unwrap());
     }
 }

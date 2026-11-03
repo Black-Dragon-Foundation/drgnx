@@ -291,7 +291,7 @@ schema table, before its own code), `Deadline`, `TooManyStatements`, or `Sql(tex
   twice a day. No copy starts while an excise runs (`backup_timer::excising`) or the writer is not `Ready`.
 - **Record.** `graph::run_backup` (the body of `graph/backup` and of the timer) logs and records the outcome;
   `status.store.last_backup` (RFC 3339) and `backup_ok` come from it.
-- **`graph::compact`** (`graph/compact`, user only, never from the backend's connection): per batch of 500 parsed
+- **`graph::compact`** (`graph/compact`, user only): per batch of 500 parsed
   entities, one writer request deletes the `entity_hist` versions that a later version of the same UTC day makes
   redundant (the kept version takes over the dropped one's `tx_from`, so as-of reads find no gap), then batches of
   500 `link_stat` rows of retired `session` entities that point at a `file` fold into a `<kind>_total` row whose
@@ -438,7 +438,7 @@ the store; `core/drgnx-store-privacy.el` holds the user's commands that write th
   `work.db.schema5`, `work.db.schema7-*`) and `exports_holding`. **`apply` and `tick` never delete a file:** a
   change of the opt-in file by anything else (an agent too) must not cost a backup. `delete_copies(work_db, wanted)`
   deletes those of WANTED that are deletable copies, nothing else and never an export; only `graph/privacy
-  {delete_copies}` calls it (not from the backend's connection), which the revoke and deny commands send after
+  {delete_copies}` (user only) calls it, which the revoke and deny commands send after
   asking, with the copies the first answer named. It must be the same command run: once excised, the values are
   gone, so nothing could find those copies again. This covers a revoked opt-in, a new deny entry
   and a change made while the hub was down alike. An entity already retired and excised since is skipped; relative
@@ -754,8 +754,7 @@ already collected by a put writes nothing either. A denied repository or task is
 
 Every other `graph/*` method and `tasks/*` are the front's, class `user` only (hub.md's table;
 `drgnx-ratatoskr/src/graph.rs`). Writes go through the front's writer as the user's tx (`actor user`, class `user`,
-tool the method's name); a write the backend's connection asks for (grants, settings, excise, import, `tasks/write`)
-is `not-allowed` even though its class is `user`.
+tool the method's name); another class is `not-allowed` at the registry, and `graph/grants` refuses one again itself.
 
 - **Reads:** `graph/entity {id, as_of?, include?: [links|notes|history]}` → `{entity, by: {created, updated},
   approximate?, links?, notes?, history?}`; `graph/neighbors` and `graph/path` (`max_depth` 1 to 6, default 3; kinds
@@ -767,9 +766,8 @@ is `not-allowed` even though its class is `user`.
 - **`graph/revert {tx} | {entity, ver}, cascade?`** → `{reverted?: {entities, links}, blocked?, listed?}`: a tx is put
   back by new versions, or blocked (nothing written) by the later txs named; an entity goes back to a version as a
   new one. `cascade` only lists. A reverted grant changes scopes at once. **`graph/proposed {accept | reject: [tx]}`**
-  settles proposed txs the same way (`hist::settle_proposed`). Both are the user's: the backend's connection is
-  `not-allowed` before anything is read or written, its `cascade` look included (as for scrub, compact, excise,
-  grants and import).
+  settles proposed txs the same way (`hist::settle_proposed`). Both are the user's (as scrub, compact, excise,
+  grants and import are).
 - **`graph/excise {target: tx | id, fields?, reason, rotate_backups?, transcripts?}`** → the excise report, the
   scrub's (`vacuumed`, `wal_truncated`, `blocked_by`), and the copies outside `work.db` that hold an excised value:
   `backups_holding` (or `backups_removed` with `rotate_backups`) and `transcripts_holding` (or `transcripts_redacted`:
@@ -802,8 +800,7 @@ grant of the target project for the requesting session, its project or its profi
 used again, while the other two last until revoked) and `refuse`; `resolved` is `refuse`; the requester gets a message either way. A `close` card's are `accept` (the task
 done as the user, its lease cleared, if it is still at the card's version: else the conflict, and the card stays
 open) and `reject` (`resolved` too: nothing changes, the proposing agent gets a notice). Any other choice is
-`invalid-params`. The backend's connection settles an access card only by refusing and a close card only by
-rejecting (`not-allowed` otherwise). Other card kinds settle as before.
+`invalid-params`. Other card kinds settle as before.
 
 **Sessions' tool sets:** `mcp/session` takes `profile?` and `tools?: {tracker}` (runtime.db `msession.profile` and
 `msession.tools`, migration 4). The session socket serves `norn::tools::tools_for` of: the task's

@@ -1,7 +1,7 @@
-//! Coordination: the front writes work.db's coordination and job tables (docs/develop/coordination.md, "Who writes
-//! what"):
+//! Coordination: the hub, the one writer, writes work.db's coordination and job tables (docs/develop/coordination.md,
+//! "Who writes what"):
 //!
-//! - `coord/notify`: a coordination server wrote; the front's events go out and the backend hears it (coalesced);
+//! - `coord/notify`: a coordination server wrote; the front's events go out and delivery runs (coalesced);
 //! - the editor's five writes: `cards/settle`, `messages/send`, `messages/mark`, `events/add`, `review/mark`;
 //! - the seam (`coord/*`): the Lisp job runner's writes, each one writer of `core/drgnx-coord.el`, until the job
 //!   runner itself moves (phase 6).
@@ -37,7 +37,8 @@ pub struct SendParams {
     pub text: Text,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job: Option<Id>,
-    /// Only the Lisp backend names a sender (its agents' messages); an editor always sends as the user.
+    /// Refused from every caller (`invalid-params`): a message's sender is its connection's, so an editor always
+    /// sends as the user.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender: Option<AgentName>,
     /// The decision-log version the sender last read: behind the log, nothing is sent and the answer is held.
@@ -530,7 +531,7 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "coord/notify", CoordNotify(Empty) -> bool,
             classes: [User, Agent, Service], writes: false,
-            doc: "a coordination server wrote: the new events go out, and the backend hears it (coalesced: one a 0.25 s) and runs delivery (a notification; users too, SB-T12-4)",
+            doc: "a coordination server wrote: the new events go out (coalesced: one a 0.25 s) and delivery runs (a notification; users too, SB-T12-4)",
         ),
         method!(
             "cards/settle", CardsSettle(SettleParams) -> Settled,
@@ -540,7 +541,7 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "messages/send", MessagesSend(SendParams) -> SendResult,
             classes: [User], writes: true,
-            doc: "a message, from the user (only the backend names another sender); held when seen is behind the decision log (drgnx-coord-send)",
+            doc: "a message, from the user (a sender param is refused); held when seen is behind the decision log (drgnx-coord-send)",
         ),
         method!(
             "messages/mark", MessagesMark(MarkParams) -> Changed,

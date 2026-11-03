@@ -465,7 +465,6 @@ impl MatrixGate {
             sid: None,
             job: None,
             conn_id: 0,
-            backend: false,
         };
         let title = card_title(a, &ctx.facts);
         let gate = writer

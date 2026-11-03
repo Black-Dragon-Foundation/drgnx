@@ -1,5 +1,5 @@
 //! The editor as the agents' settings tools reach it (unified-settings Task 32; design §13; docs/develop/hub.md,
-//! "Agents change settings"): the subscribed connections (each a user's: the backend's is never subscribed), the
+//! "Agents change settings"): the subscribed connections (each a user's), the
 //! `settings/proposed` and `settings/explain` events to them, and the answers a tool waits for (`settings/confirm`,
 //! `settings/explained`). No subscriber: no editor.
 

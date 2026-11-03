@@ -5034,7 +5034,7 @@
         "agent",
         "service"
       ],
-      "doc": "a coordination server wrote: the new events go out, and the backend hears it (coalesced: one a 0.25 s) and runs delivery (a notification; users too, SB-T12-4)",
+      "doc": "a coordination server wrote: the new events go out (coalesced: one a 0.25 s) and delivery runs (a notification; users too, SB-T12-4)",
       "name": "coord/notify",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -6545,7 +6545,7 @@
       "classes": [
         "user"
       ],
-      "doc": "provider keys to the hub's memory (never a file, never the backend)",
+      "doc": "provider keys to the hub's memory (never a file)",
       "name": "gateway/keys",
       "params": {
         "$defs": {
@@ -11825,7 +11825,7 @@
       "classes": [
         "user"
       ],
-      "doc": "a message, from the user (only the backend names another sender); held when seen is behind the decision log (drgnx-coord-send)",
+      "doc": "a message, from the user (a sender param is refused); held when seen is behind the decision log (drgnx-coord-send)",
       "name": "messages/send",
       "params": {
         "$defs": {
@@ -11897,7 +11897,7 @@
                 "type": "null"
               }
             ],
-            "description": "Only the Lisp backend names a sender (its agents' messages); an editor always sends as the user."
+            "description": "Refused from every caller (`invalid-params`): a message's sender is its connection's, so an editor always\nsends as the user."
           },
           "text": {
             "$ref": "#/$defs/Text"

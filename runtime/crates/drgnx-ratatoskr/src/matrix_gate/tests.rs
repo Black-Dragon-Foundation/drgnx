@@ -449,7 +449,6 @@ fn caller() -> Caller {
         sid: None,
         job: None,
         conn_id: 1,
-        backend: false,
     }
 }
 

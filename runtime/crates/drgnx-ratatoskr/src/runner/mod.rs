@@ -374,7 +374,6 @@ pub(crate) fn service() -> Caller {
         sid: None,
         job: None,
         conn_id: 0,
-        backend: false,
     }
 }
 
@@ -385,7 +384,6 @@ pub(crate) fn user() -> Caller {
         sid: None,
         job: None,
         conn_id: 0,
-        backend: false,
     }
 }
 

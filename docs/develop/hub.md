@@ -432,8 +432,8 @@ from its opening rule's last answer, the transactions the front's methods commit
 schema 6 committed, why a migration failed, the WAL's size, and the copies that still hold what the deny-list kept
 out of the migration (`last_backup` and `backup_ok` come with the daily backups).
 
-`messages/send`'s `sender` is refused from every connection (`not-allowed` at `sender`): no connection is the Lisp
-backend's any more (`Caller.backend` is always false).
+`messages/send`'s `sender` is refused from every connection (`invalid-params` at `sender`): a message's sender is
+its connection's, and the hub is work.db's one writer (coordination.md, "Who writes what").
 
 ### The reaper
 
@@ -654,10 +654,8 @@ resume, the tick goes on from the store with the same workers, and the wakes sti
 
 The front serves the store (`work.db`, schema 8) itself: `graph/*` (reads and walks, history, revert, excise, grants,
 proposed txs, read-only SQL, export, import, backup, settings, the personal-notes opt-ins) and `tasks/*` (the tracker
-for the editor), all class `user`, never forwarded to the backend. A write the backend's connection asks for among
-them (grants, settings, excise, import, revert, proposed txs, scrub, compact, `tasks/write`) is `not-allowed`. `cards/settle` of an `access` card makes a
-grant (or refuses) and of a `close` card closes the task (or rejects), in the settle's tx; the backend's connection
-can only refuse and reject. `mcp/session` takes the session's `profile` and its tool sets (`tools: {tracker}`), and
+for the editor), all class `user`. `cards/settle` of an `access` card makes a grant (or refuses) and of a `close`
+card closes the task (or rejects), in the settle's tx. `mcp/session` takes the session's `profile` and its tool sets (`tools: {tracker}`), and
 the session socket lists 21 tools, or 16 without the tracker tools (the task's setting first, then the profile's, else
 on). Each method's shape: [store.md](store.md#the-stores-methods-task-15b).
 
@@ -667,8 +665,7 @@ The front also records the history of your settings (unified settings design §1
 `runtime/crates/norn/src/write/options.rs`, served from `drgnx-ratatoskr/src/graph.rs`). The settings files stay the
 truth: the hub never writes one, and nothing it records applies a value.
 
-- **`settings/record {changes: [{id, value, file, line?}], tool, req, reverts?}` → `{tx}`** (user class; the
-  backend's connection is `not-allowed`). The editor sends it after each write of a settings file, and after it reads
+- **`settings/record {changes: [{id, value, file, line?}], tool, req, reverts?}` → `{tx}`** (user class). The editor sends it after each write of a settings file, and after it reads
   a file another program changed. One call is one transaction of the editor's (`user`), whatever it holds:
   - `id` is an option id (`option:global:<var>`, `option:private/<project>:…`, `option:shared/<project>:…`;
     [store.md](store.md#settings-history-and-grants-urdr-task-10b)); a malformed one is `invalid-params` at
