@@ -1,6 +1,6 @@
 //! The gateway: registrations, keys, the provider table and spend.  Every method here is the front's own (Task 22):
 //! the registrations live in `runtime.db` (hashes only), the keys in the hub's memory, and spend is read from
-//! `work.db`; nothing of it is forwarded to the Lisp backend.  None writes work.db (the engine's spend rows are its
+//! `work.db`; nothing of it leaves the hub.  None writes work.db (the engine's spend rows are its
 //! own), so a read-only hub still registers.
 
 use super::{Empty, method};
@@ -271,7 +271,7 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "gateway/keys", GatewayKeys(KeysParams) -> bool,
             classes: [User], writes: false,
-            doc: "provider keys to the hub's memory (never a file, never the backend)",
+            doc: "provider keys to the hub's memory (never a file)",
         ),
         method!(
             "gateway/set-budget", GatewaySetBudget(SetBudgetParams) -> bool,

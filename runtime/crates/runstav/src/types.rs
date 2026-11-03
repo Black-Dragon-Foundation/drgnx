@@ -457,7 +457,7 @@ impl JsonSchema for StringOrNumber {
 
 /// Provider id → key: at most 32, each at most 4096.  Kept secret: no `Debug`; the front keeps them in the gateway's
 /// memory (Task 22) and never forwards them.  The serialisation exposes them only because every method's params
-/// re-encode (`Params::to_value`); no line to the backend carries `gateway/*` params any more.
+/// re-encode (`Params::to_value`); no line out of the hub carries `gateway/*` params.
 pub struct ProviderKeys(BTreeMap<Id, SecretString>);
 
 impl ProviderKeys {
@@ -670,7 +670,7 @@ mod tests {
             k.providers().map(Id::as_str).collect::<Vec<_>>(),
             ["openrouter"]
         );
-        // the backend link's re-encode carries the key as it came
+        // a re-encode carries the key as it came
         assert_eq!(
             serde_json::to_value(&k).unwrap(),
             json!({"openrouter": "sk-canary"})

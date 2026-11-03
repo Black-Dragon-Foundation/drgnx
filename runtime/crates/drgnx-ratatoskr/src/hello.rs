@@ -73,7 +73,6 @@ impl Session {
             sid,
             job,
             conn_id: self.conn,
-            backend: false,
         }
     }
 }

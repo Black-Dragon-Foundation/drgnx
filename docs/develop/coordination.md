@@ -139,8 +139,8 @@ Ratatoskr writes the coordination tables through `norn`, on schema 7 (Urdr Task 
   - a coordination tool: the session's identity (`Identity::tx_meta`): class `agent` (a session drgnx runs) or `ext`
     (an outside agent), actor `agent:SID` / `ext:KIND:PID-HASH`, its session, profile and job, tool `mcp:<name>`;
   - an editor method (`cards/settle`, `messages/*`, `events/add`, `review/mark`) from the user's connection: actor
-    `user`, class `user`, tool `proto:<method>`; a seam method (`coord/*`) actor `hub`, and anything the Lisp
-    backend's connection writes actor `backend`, both class `system` (`drgnx-ratatoskr/src/coord.rs`, `tx_meta`);
+    `user`, class `user`, tool `proto:<method>`; a seam method (`coord/*`) and a service connection's write actor
+    `hub`, class `system` (`drgnx-ratatoskr/src/coord.rs`, `tx_meta`);
   - the gateway's `spend` rows and the rate card of a held report: actor `hub`, class `system`.
 
   The rows of the kept tables a write made (`event`, `message`, `card`, `review_mark`, `agent`, `job`; `spend` from
@@ -214,37 +214,25 @@ Ratatoskr writes the coordination tables through `norn`, on schema 7 (Urdr Task 
 
 ### Who writes what
 
-Under Ratatoskr, work.db has one writer per table group while the job runner is still Lisp (hub.md, "Ratatoskr and
-the Lisp backend"):
+work.db has one writer: the hub (Ratatoskr). Every write below is a transaction of its graph writer, and who made it
+(the `tx` row's actor and class) comes from the connection, never from a param (`coord::tx_meta`):
 
-| Writes | Through | Who calls |
-|---|---|---|
-| a card settled, a message sent or marked, an event, a review mark and its event | the front's `cards/settle`, `messages/send`, `messages/mark`, `events/add`, `review/mark` (`drgnx-ratatoskr/src/coord.rs` on `norn::write`) | the editor (a user connection); the Lisp backend too |
-| jobs, tasks, leases, decisions, agents, the job runner's cards, held counts, the daily prune | the seam's `coord/job-create`, `coord/job-set`, `coord/task-status`, `coord/leases`, `coord/decide`, `coord/agent`, `coord/card-create`, `coord/card-set`, `coord/held`, `coord/prune` | the Lisp job runner (the backend), until it moves to Rust (phase 6) |
-| what the coordination tools write | `norn::tools` on the same `CoordDb` (`Front.tools`) | agents, through the MCP hosting |
+| Writes | Through | Who calls | `tx` actor |
+|---|---|---|---|
+| a card settled, a message sent or marked, an event, a review mark and its event | the front's `cards/settle`, `messages/send`, `messages/mark`, `events/add`, `review/mark` (`drgnx-ratatoskr/src/coord.rs` on `norn::write`) | the editor (a user connection) | `user` |
+| jobs, tasks, leases, decisions, agents, cards, held counts, the daily prune | `coord/job-create`, `coord/job-set`, `coord/task-status`, `coord/leases`, `coord/decide`, `coord/agent`, `coord/card-create`, `coord/card-set`, `coord/held`, `coord/prune` (user class), and the hub's own runner and timers on `norn::write` | a user connection; the hub itself | `hub` (class `system`) |
+| what the coordination tools write | `norn::tools` on the same `CoordDb` (`Front.tools`) | agents, through the MCP hosting | `agent:SID` (or the outside agent's `ext:…`) |
 
-The Lisp side writes none of these tables itself. `drgnx-coord-writer` decides what each public writer of
-`core/drgnx-coord.el` does (a `pcase` in every one, including those that write with a direct `sqlite-execute`):
-- `front` (the backend behind Ratatoskr: `drgnx-hub-main` with a serve socket) calls the front's method above through
-  `drgnx-hub-call-front` (hub.md, "The backend writes through the front") and decodes its answer to the plist, id or
-  t/nil the function returned before. A refusal of the front is an `error` with its message. `claim`,
-  `set-status`, `heartbeat`, `set-seen` and `events-prune` have no front method (only the coordination tools,
-  `norn::tools`, write them): behind the front they signal "NAME has no front method"; `events-prune-daily` is
-  `coord/prune`, whose retention is the front's;
-- `local` (the standalone Lisp hub without a serve socket, `lisp-hub.sh`, and the unit tests: `harness/run-ert.el`
-  sets it, and a test's child Emacs that writes passes `--eval "(setq drgnx-coord-writer 'local)"`) writes work.db
-  as before;
-- `refuse`, the default, signals "coordination writes go through the drgnx hub (Ratatoskr)": an editor, the CLI and
-  the Lisp coordination server (`drgnx-coord-mcp-main`, until agents use the Rust bridge) never write these tables.
-  `drgnx-coord--tx` signals unless `local`.
+A service connection's write is the hub's (`hub`, class `system`); an agent socket's is its session's. No other
+process writes these tables: an editor, the CLI and any Lisp reach them only through the hub's methods.
 
-The front's methods take the Lisp keywords as params (`messages/send` `{recipient, text, job?, sender?, seen?,
-answers?, question?}`; only the backend may name a `sender`) and answer the Lisp results typed: `messages/send` is
-`{ok, id, state}` or `{held, version, changes}` (the decisions after `seen`, newest first, as `decisions_since` reads
-them), `coord/decide` `{ok, n, status, version}`, `{held, version, changes}` or `{error}`, `coord/leases`
-`{released: [{task, agent, job}]}`. Each is one transaction; each committed one is counted in `status`'s
-`store.writes`, sends its new events to subscribers and, unless the backend made it, tells the backend
-(`coord/notify`, coalesced) so it delivers.
+The front's methods take the Lisp keywords as params (`messages/send` `{recipient, text, job?, seen?, answers?,
+question?}`; a `sender` is refused from every caller, `invalid-params` with path `sender`: a message's sender is its
+connection's) and answer the Lisp results typed: `messages/send` is `{ok, id, state}` or `{held, version, changes}`
+(the decisions after `seen`, newest first, as `decisions_since` reads them), `coord/decide` `{ok, n, status,
+version}`, `{held, version, changes}` or `{error}`, `coord/leases` `{released: [{task, agent, job}]}`. Each is one
+transaction; each committed one is counted in `status`'s `store.writes`, sends its new events to subscribers and wakes
+delivery.
 
 ### Who opens work.db
 
@@ -497,8 +485,8 @@ Lisp's. `tests/tools.rs` replays the cases `gen.el` makes by running the Lisp to
 (`test/fixtures/coord-parity/tools-*.json`). `report.rs` has `hello`, `report_edit`, `report_test`, `ask_user` and
 `list_agents`; `job.rs` and `read.rs` have the rest. The hub's `Front` holds the one `Coord` (`Front.tools`, on the
 front's writer) and the list (`Front.tool_list`, `norn::tools::tools()`); its `Hub` (`coord::ToolHub`) answers
-`sessions()` with the backend's `agents/list` (2 s) and `notify()` with the front's `events` and the coalesced
-`coord/notify`.
+`sessions()` from the front's own session table, at once, and `notify()` with the front's `events`, the record views
+and delivery.
 
 **Who an agent is.** A call's context is `(Arc<Coord>, Identity)`, and the identity comes from the connection, never
 from an argument or an environment variable (`DRGNX_AGENT` is never read):

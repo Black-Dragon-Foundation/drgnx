@@ -1,0 +1,14 @@
+{"scenario": "messages/a-sender-is-refused", "requires": ["v1"], "doc": "One writer: a message's sender is its connection's, never a param. The user's messages/send with sender is invalid-params (path sender); a service connection's is refused before it (the method is the user's: not-allowed); neither writes anything. The user's send without one goes through as the user's."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "s", "hub": "h", "as": "service"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "messages/send", "params": {"recipient": "agent-2", "text": "hi", "sender": "agent-1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "invalid-params", "path": "sender"}}}
+{"do": "send", "conn": "s", "json": {"id": 2, "method": "messages/send", "params": {"recipient": "agent-2", "text": "hi", "sender": "agent-1"}}}
+{"do": "expect", "conn": "s", "json": {"id": 2, "error": {"code": "not-allowed"}}}
+{"do": "sql_expect", "sql": "select count(*) from message", "rows": [[0]]}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "messages/send", "params": {"recipient": "agent-2", "text": "hi"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"ok": true, "state": "queued"}}}
+{"do": "sql_expect", "sql": "select sender, recipient, text from message", "rows": [[null, "agent-2", "hi"]]}

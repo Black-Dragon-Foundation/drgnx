@@ -13,7 +13,7 @@
 //!   retired or changed meanwhile keeps no vector of the old text, and the next batch sends its text of now.
 //! - **The schedule** ([`Timer`]): a round runs after the store has seen no write that put an entity's text for
 //!   [`IDLE`] (the writer's `texts`, [`urdr::graph::writer::WriterStatus::texts`]).  Lease, status, event and `kv` writes do
-//!   not count: the Lisp backend's housekeeping writes every 60 s, and would keep every round away.  After a stop,
+//!   not count: housekeeping (leases, the prune) writes every minute, and would keep every round away.  After a stop,
 //!   one text is sent each idle minute, and rounds resume when the provider answers it.
 
 use norn::deny::{DenyList, Source, Verdict};
@@ -430,7 +430,7 @@ pub async fn run(db: &CoordDb, e: &dyn Embedder, deny: &DenyList, probe: bool) -
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::gateway::Gate;
     use runstav::methods::gateway::ProviderConfig;
@@ -441,7 +441,7 @@ mod tests {
     /// `ratatoskr-mock`, next to the test binary's own directory; built once when it is not there, into the run's own
     /// target dir and profile (DIR is `<target dir>/<profile dir>`, `debug` for the dev profile), so a run with
     /// `--target-dir` or `--release` finds it.
-    fn mock_binary() -> PathBuf {
+    pub(crate) fn mock_binary() -> PathBuf {
         let exe = std::env::current_exe().unwrap();
         let dir = exe.parent().unwrap().parent().unwrap();
         let bin = dir.join("ratatoskr-mock");
@@ -968,8 +968,8 @@ mod tests {
         assert_eq!(claimed, tasks::ClaimResult::Ok);
     }
 
-    /// One run of the Lisp backend's housekeeping (`drgnx-hub--housekeeping`, every 60 s) at unix time NOW, as the
-    /// front writes it: `coord/leases` (agent-a renewed, stale leases released), then `coord/prune`.
+    /// One run of housekeeping at unix time NOW, as the front writes it: `coord/leases` (agent-a renewed, stale leases
+    /// released), then `coord/prune`.
     async fn housekeeping(db: &CoordDb, now: f64) {
         use norn::write::{prune, tasks};
         db.write(

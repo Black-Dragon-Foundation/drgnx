@@ -292,7 +292,6 @@ pub fn card_request(data: &Value) -> Option<Result<(Caller, Change), String>> {
             profile: data["profile"].as_str().map(str::to_owned),
             job: data["job"].as_str().map(str::to_owned),
             project: data["project_n"].as_i64(),
-            backend: false,
         };
         let change = Change {
             scope,
@@ -852,7 +851,6 @@ mod tests {
             profile: None,
             job: None,
             project: None,
-            backend: false,
         };
         let change = Change {
             scope: SettingScope::Global,
@@ -935,7 +933,6 @@ mod tests {
             profile: None,
             job: None,
             project: None,
-            backend: false,
         };
         let ch = |value: &str| Change {
             scope: SettingScope::Global,

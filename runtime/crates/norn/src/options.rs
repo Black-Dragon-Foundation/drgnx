@@ -516,7 +516,6 @@ pub fn rule(
         profile: meta.profile.clone(),
         job: meta.job.clone(),
         project: meta.project,
-        backend: false,
     };
     may_write_keyed(conn, &caller, meta.req.as_deref(), target, at)
 }
@@ -711,7 +710,6 @@ mod tests {
             profile: Some("prof".into()),
             job: None,
             project: p,
-            backend: false,
         };
         let sid = |s: &str| Who::Session(s.into());
         let options = |conn: &mut Connection, who: Who, what: What| {
@@ -782,7 +780,7 @@ mod tests {
             may(&conn, &agent("s9", Some(a)), Global, NOW),
             Err(NO_READ_GRANT)
         );
-        assert_eq!(may(&conn, &Caller::user(false), Global, NOW), Ok(()));
+        assert_eq!(may(&conn, &Caller::user(), Global, NOW), Ok(()));
         // an outside agent under a grant of its session reads; the hub's class does not read by class
         let mut ext = agent("ext:claude:1-ab", Some(a));
         ext.class = Class::Ext;

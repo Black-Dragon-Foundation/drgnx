@@ -1,5 +1,5 @@
 //! `work.db`, read-only (storage design §9 step 0): the front's reads (`events/since`, the `events` broadcast, the
-//! schema tick); its writes go through norn's writer ([`crate::coord`]), the backend's own through the Lisp.  Read
+//! schema tick); its writes go through norn's writer ([`crate::coord`]), the one writer.  Read
 //! through `urdr::open_readonly` on a thread of its own, so SQLite never runs on an async worker.  The file may not exist yet
 //! (a fresh install): it is opened the first time it is there, and until then every read says so.
 

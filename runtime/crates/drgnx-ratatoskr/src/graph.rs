@@ -8,15 +8,14 @@
 //!   `history`, `sql`), history's writes (`graph/revert`, `graph/proposed`), `graph/excise`, `graph/grants`, the
 //!   copies (`export`, `import`, `backup`), the settings (`graph/settings`, `graph/privacy`) and the tracker for the
 //!   editor (`tasks/*`). Every one is user class at the registry; the writes are the caller's tx (`coord::tx_meta`:
-//!   the editor's `user`, the backend's connection `backend` of class `system`), so the store's own class rules (grants
-//!   and `setting:*` keys are the user's) apply again, and the backend's connection is refused here first.
+//!   the editor's `user`), so the store's own class rules (grants and `setting:*` keys are the user's) apply again.
 //! - **The settings' history** (unified-settings Task 24): `settings/record`, the editor's report of a settings file's
 //!   write, one tx of kind `option` per call ([`norn::write::options`]).
 //! - **Cards** ([`settle`]): an `access` card settles into a grant (`session`, `project`, `profile`) or nothing
 //!   (`refuse`, `resolved`), a `close` card into done (`accept`, at the version the card names) or a notice
-//!   (`reject`, `resolved`); never a grant or a close from the backend's connection. The requester hears either way.
+//!   (`reject`, `resolved`). The requester hears either way.
 //! - **Errors** as the front's other writes: a refusal is `invalid-params` with its text, a newer file `schema`, the
-//!   rest `internal`; what only the user may do, asked by the backend's connection, is `not-allowed`.
+//!   rest `internal`; what only the user may do, asked by another class, is `not-allowed`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -240,12 +239,12 @@ pub async fn serve(
         Params::GraphProposed(p) => proposed(w, caller, p).await,
         Params::GraphSql(p) => sql(tools, p).await,
         Params::GraphExport(p) => export_of(w, tools, p).await,
-        Params::GraphImport(p) => import(w, tools, caller, p).await,
+        Params::GraphImport(p) => import(w, tools, p).await,
         Params::GraphBackup(_) => backup_now(tools).await,
         Params::GraphCompact(p) => compact_of(w, tools, caller, p).await,
-        Params::GraphScrub(_) => scrub_of(w, caller).await,
+        Params::GraphScrub(_) => scrub_of(w).await,
         Params::GraphSettings(p) => settings(w, caller, p).await,
-        Params::GraphPrivacy(p) => privacy(w, tools, dirs, caller, p).await,
+        Params::GraphPrivacy(p) => privacy(w, tools, dirs, p).await,
         Params::SettingsRecord(p) => settings_record(w, tools, caller, p).await,
         // here rather than in crate::coord: a settings card's allowed change is proposed through the tools
         Params::CardsSettle(p) => {
@@ -325,19 +324,13 @@ pub async fn record(
 
 /// `settings/record` (unified-settings Task 24; design §12): one write of a settings file as one tx of the editor's on
 /// kind `option` (`norn::write::options`), keyed by the call's `req`, in the project its ids name (read before the
-/// write, checked again in it). Never the backend's connection's.
+/// write, checked again in it).
 async fn settings_record(
     w: &Writer,
     tools: &Coord,
     caller: &Caller,
     p: settings_api::RecordParams,
 ) -> Result<Value, Error> {
-    if caller.backend {
-        return Err(not_allowed(
-            "",
-            "only the editor records settings: the backend's connection never does",
-        ));
-    }
     for (i, c) in p.changes.iter().enumerate() {
         if let Err(e) = norn::options::parse_id(&c.id) {
             return Err(invalid(
@@ -368,18 +361,12 @@ async fn settings_record(
 /// `settings/confirm` (unified-settings Task 32; design §13): the editor's answer to `settings/proposed`, settled in
 /// one user tx: `ok` accepts the agent's proposed tx, else it is reverted (`blocked`, and nothing written, when a later
 /// change of the same setting came first). Only a proposed tx of `settings_change`; the agent gets a message either
-/// way. Never the backend's connection's.
+/// way.
 pub async fn settings_confirm(
     w: &Writer,
     caller: &Caller,
     p: settings_api::ConfirmParams,
 ) -> Result<Value, Error> {
-    if caller.backend {
-        return Err(not_allowed(
-            "",
-            "only the editor confirms settings: the backend's connection never does",
-        ));
-    }
     let t = int(p.tx);
     let (ok, error) = (p.ok, p.error.map(|e| e.into_inner()));
     let now = now();
@@ -737,12 +724,6 @@ fn revert_answer(out: hist::Revert, listed: bool) -> api::RevertAnswer {
 /// `graph/revert`: a tx (blocked: nothing written, the later txs named), or an entity put back to a version; with
 /// `cascade` only what it would do.
 async fn revert(w: &Writer, caller: &Caller, p: api::RevertParams) -> Result<Value, Error> {
-    if caller.backend {
-        return Err(not_allowed(
-            "",
-            "only the user reverts: the backend's connection never does",
-        ));
-    }
     let cascade = p.cascade == Some(true);
     let a = match (p.tx, p.entity, p.ver) {
         (Some(t), _, _) => {
@@ -782,12 +763,6 @@ async fn revert(w: &Writer, caller: &Caller, p: api::RevertParams) -> Result<Val
 
 /// `graph/proposed`.
 async fn proposed(w: &Writer, caller: &Caller, p: api::ProposedParams) -> Result<Value, Error> {
-    if caller.backend {
-        return Err(not_allowed(
-            "",
-            "only the user settles proposed changes: the backend's connection never does",
-        ));
-    }
     let (txs, accept) = match (p.accept, p.reject) {
         (Some(a), None) => (a.into_inner(), true),
         (None, Some(r)) => (r.into_inner(), false),
@@ -829,13 +804,7 @@ fn blocker(b: Option<Blocker>) -> Option<String> {
 }
 
 /// `graph/scrub`: `VACUUM` and a TRUNCATE checkpoint as a writer request (what an excise ends with, on its own).
-async fn scrub_of(w: &Writer, caller: &Caller) -> Result<Value, Error> {
-    if caller.backend {
-        return Err(not_allowed(
-            "",
-            "only the user scrubs: the backend's connection never does",
-        ));
-    }
+async fn scrub_of(w: &Writer) -> Result<Value, Error> {
     let writer =
         w.db.graph_writer()
             .cloned()
@@ -855,12 +824,6 @@ async fn compact_of(
     caller: &Caller,
     p: api::CompactParams,
 ) -> Result<Value, Error> {
-    if caller.backend {
-        return Err(not_allowed(
-            "",
-            "only the user compacts: the backend's connection never does",
-        ));
-    }
     let (g, _) = store(tools)?;
     let dry = p.dry_run == Some(true);
     let r = if dry {
@@ -887,12 +850,6 @@ async fn excise_of(
     caller: &Caller,
     p: api::ExciseParams,
 ) -> Result<Value, Error> {
-    if caller.backend {
-        return Err(not_allowed(
-            "target",
-            "only the user excises: the backend's connection never does",
-        ));
-    }
     let writer =
         w.db.graph_writer()
             .cloned()
@@ -1048,7 +1005,7 @@ async fn grants_of(w: &Writer, caller: &Caller, p: api::GrantsParams) -> Result<
                 None => None,
             };
             let filter = grants::Filter { who, active };
-            Ok(grants::list(c, &StoreCaller::user(false), &filter, at)?)
+            Ok(grants::list(c, &StoreCaller::user(), &filter, at)?)
         })
         .await?;
         return Ok(json!(api::GrantsAnswer {
@@ -1057,11 +1014,11 @@ async fn grants_of(w: &Writer, caller: &Caller, p: api::GrantsParams) -> Result<
         }));
     }
     // the registry's class check is the first door; this one holds without it
-    if caller.backend || caller.class != runstav::registry::Class::User {
+    if caller.class != runstav::registry::Class::User {
         let path = if p.grant.is_some() { "grant" } else { "revoke" };
         return Err(not_allowed(
             path,
-            "grants are the user's: an agent's or the backend's connection never makes or revokes one",
+            "grants are the user's: an agent's connection never makes or revokes one",
         ));
     }
     if let Some(g) = p.grant {
@@ -1115,20 +1072,13 @@ async fn grants_of(w: &Writer, caller: &Caller, p: api::GrantsParams) -> Result<
 
 // ------------------------------------------------------------------------------------------------------- cards
 
-/// An access card's choices that make a grant.
-const GRANT_CHOICES: [&str; 3] = ["session", "project", "profile"];
-
 /// How long a `session` grant from an access card lasts at most (Task 15b: `expires` = the session's end). The end
 /// is not known when the card is settled; a session id is never used again, so the grant opens nothing once its
 /// session is gone, and the expiry bounds the row, which would otherwise stay active for good.
 const SESSION_GRANT_SECS: f64 = 86_400.0;
 
-fn check_access(choice: &str, backend: bool) -> Result<(), Error> {
+fn check_access(choice: &str) -> Result<(), Error> {
     match choice {
-        c if GRANT_CHOICES.contains(&c) && backend => Err(not_allowed(
-            "choice",
-            "only the user grants access: the backend's connection settles an access card only by refusing",
-        )),
         "session" | "project" | "profile" | "refuse" | "resolved" => Ok(()),
         other => Err(invalid(
             "choice",
@@ -1139,12 +1089,8 @@ fn check_access(choice: &str, backend: bool) -> Result<(), Error> {
     }
 }
 
-fn check_close(choice: &str, backend: bool) -> Result<(), Error> {
+fn check_close(choice: &str) -> Result<(), Error> {
     match choice {
-        "accept" if backend => Err(not_allowed(
-            "choice",
-            "only the user closes a task: the backend's connection settles a close card only by rejecting",
-        )),
         "accept" | "reject" | "resolved" => Ok(()),
         other => Err(invalid(
             "choice",
@@ -1267,7 +1213,7 @@ pub(crate) fn settle_close(
         return Ok(false);
     }
     if choice == "accept" {
-        match tracker::accept_close(tx, &StoreCaller::user(false), &task, ver)? {
+        match tracker::accept_close(tx, &StoreCaller::user(), &task, ver)? {
             TaskAnswer::Done { .. } => {}
             TaskAnswer::Conflict { ver: at, .. } => {
                 return Err(refused(format!(
@@ -1300,12 +1246,8 @@ pub(crate) fn settle_close(
 /// How long a settings card's `once` grant lasts at most: it is revoked as soon as the change is proposed.
 const ONCE_GRANT_SECS: f64 = 60.0;
 
-fn check_setting_access(choice: &str, backend: bool) -> Result<(), Error> {
+fn check_setting_access(choice: &str) -> Result<(), Error> {
     match choice {
-        "once" | "session" if backend => Err(not_allowed(
-            "choice",
-            "only the user allows a settings change: the backend's connection settles a settings card only by refusing",
-        )),
         "once" | "session" | "refuse" | "resolved" => Ok(()),
         other => Err(invalid(
             "choice",
@@ -1477,9 +1419,8 @@ pub async fn settle(
     settle_with(w, None, caller, card, choice, now).await
 }
 
-/// `cards/settle`: an access or a close card as above (the choice checked first, the backend's connection held to
-/// refusing and rejecting), any other card settled as it is. A settings card's allowed change is proposed through
-/// TOOLS after the settle committed ([`allow`]).
+/// `cards/settle`: an access or a close card as above (the choice checked first), any other card settled as it is. A
+/// settings card's allowed change is proposed through TOOLS after the settle committed ([`allow`]).
 pub async fn settle_with(
     w: &Writer,
     tools: Option<&Coord>,
@@ -1488,7 +1429,6 @@ pub async fn settle_with(
     choice: String,
     now: f64,
 ) -> Result<Value, Error> {
-    let backend = caller.backend;
     let refusal: Arc<Mutex<Option<Error>>> = Arc::default();
     let theirs = refusal.clone();
     let allowed: Arc<Mutex<Option<Allowed>>> = Arc::default();
@@ -1509,9 +1449,9 @@ pub async fn settle_with(
             let d = card_data(data);
             let setting = kind.as_deref() == Some("access") && d.get("setting").is_some();
             let checked = match kind.as_deref() {
-                Some("access") if setting => check_setting_access(&choice, backend),
-                Some("access") => check_access(&choice, backend),
-                Some("close") => check_close(&choice, backend),
+                Some("access") if setting => check_setting_access(&choice),
+                Some("access") => check_access(&choice),
+                Some("close") => check_close(&choice),
                 _ => Ok(()),
             };
             if let Err(e) = checked {
@@ -1586,18 +1526,7 @@ async fn export_of(w: &Writer, tools: &Coord, p: api::ExportParams) -> Result<Va
 }
 
 /// `graph/import`: never a grant.
-async fn import(
-    w: &Writer,
-    tools: &Coord,
-    caller: &Caller,
-    p: api::ImportParams,
-) -> Result<Value, Error> {
-    if caller.backend {
-        return Err(not_allowed(
-            "dir",
-            "an import is the user's: the backend's connection never runs one",
-        ));
-    }
+async fn import(w: &Writer, tools: &Coord, p: api::ImportParams) -> Result<Value, Error> {
     let (g, deny) = store(tools)?;
     // door 2: the personal-notes deny-list (`norn::deny::may_import`)
     let allow: export::Allow = Arc::new(move |e: &Ent| {
@@ -1673,20 +1602,12 @@ pub(crate) fn put_setting(tx: &mut WTx<'_>, key: &str, on: bool) -> Result<(), C
 
 /// `graph/settings`: the settings after a `set`, or as they are.
 async fn settings(w: &Writer, caller: &Caller, p: api::SettingsParams) -> Result<Value, Error> {
-    if let Some(set) = p.set {
-        if caller.backend {
-            return Err(not_allowed(
-                "set",
-                "settings are the user's: the backend's connection never writes one",
-            ));
-        }
-        if let Some(on) = set.only_user_closes {
-            w.write(caller, "graph/settings", move |tx| {
-                put_setting(tx, tracker::ONLY_USER_CLOSES, on)
-            })
-            .await
-            .map_err(coord::fail)?;
-        }
+    if let Some(on) = p.set.and_then(|set| set.only_user_closes) {
+        w.write(caller, "graph/settings", move |tx| {
+            put_setting(tx, tracker::ONLY_USER_CLOSES, on)
+        })
+        .await
+        .map_err(coord::fail)?;
     }
     let on = read(w, |c| Ok(setting_on(c, tracker::ONLY_USER_CLOSES)?)).await?;
     Ok(json!(api::Settings {
@@ -1710,22 +1631,15 @@ fn held_copies(db: &Path, found: &[PathBuf], removed: &[PathBuf]) -> Vec<PathBuf
 }
 
 /// `graph/privacy {reload}`: the opt-ins read again, in force at once (so no door lets back in what goes), then
-/// applied (`norn::privacy`, Task 9b): its notice is an `event` row, and the backend hears `coord/notify`. With
-/// `delete_copies` (the user's revoke command, after asking), those of the named copies that are backups or set-aside
-/// copies are deleted; exports never are, and the backend's connection deletes nothing.
+/// applied (`norn::privacy`, Task 9b): its notice is an `event` row, and a delivery may be due. With `delete_copies`
+/// (the user's revoke command, after asking), those of the named copies that are backups or set-aside copies are
+/// deleted; exports never are.
 async fn privacy(
     w: &Writer,
     tools: &Coord,
     dirs: Option<&StoreDirs>,
-    caller: &Caller,
     p: api::PrivacyParams,
 ) -> Result<Value, Error> {
-    if p.delete_copies.is_some() && caller.backend {
-        return Err(not_allowed(
-            "delete_copies",
-            "only the user deletes copies: the backend's connection never does",
-        ));
-    }
     let (g, _) = store(tools)?;
     let d = dirs.ok_or_else(|| internal("the store's folders are not known yet"))?;
     let (home, config) = (d.home.clone(), d.config.clone());
@@ -1837,7 +1751,7 @@ async fn tasks_ready(w: &Writer, p: tasks_api::ReadyParams) -> Result<Value, Err
             None => None,
         };
         let at = now();
-        let scope = scope::for_caller(c, &StoreCaller::user(false), at)?;
+        let scope = scope::for_caller(c, &StoreCaller::user(), at)?;
         // a project's ready tasks are a filter of everyone's
         let ask = if only.is_some() { 10_000 } else { limit };
         let mut out = Vec::new();
@@ -2031,12 +1945,6 @@ async fn tasks_write(
     caller: &Caller,
     p: tasks_api::WriteParams,
 ) -> Result<Value, Error> {
-    if caller.backend {
-        return Err(not_allowed(
-            "op",
-            "the tracker's user ops are the user's: the backend's connection never writes them",
-        ));
-    }
     let found = match (&p.project, &p.cwd) {
         (None, Some(cwd)) => {
             let dir = PathBuf::from(cwd.as_str());
@@ -2054,7 +1962,7 @@ async fn tasks_write(
     let k2 = kept.clone();
     let written = w
         .write(caller, "tasks/write", move |tx| {
-            let mut who = StoreCaller::user(false);
+            let mut who = StoreCaller::user();
             who.project = match (&name, &found) {
                 (Some(name), _) => Some(named_project(tx.sql(), name)?),
                 (None, Some(p)) => Some(project::register(tx, p)?),
@@ -2105,13 +2013,12 @@ mod tests {
     const MINE: &str = "project:aaaaaaaaaaaa";
     const THEIRS: &str = "project:bbbbbbbbbbbb";
 
-    fn user(backend: bool) -> Caller {
+    fn user() -> Caller {
         Caller {
             class: Class::User,
             sid: None,
             job: None,
             conn_id: 1,
-            backend,
         }
     }
 
@@ -2173,7 +2080,7 @@ mod tests {
         w.db.read(|c| {
             Ok(grants::list(
                 c,
-                &StoreCaller::user(false),
+                &StoreCaller::user(),
                 &grants::Filter::default(),
                 now(),
             )?)
@@ -2195,7 +2102,7 @@ mod tests {
     }
 
     async fn task_write(w: &Writer, p: Value) -> Value {
-        tasks_write(w, &user(false), serde_json::from_value(p).unwrap())
+        tasks_write(w, &user(), serde_json::from_value(p).unwrap())
             .await
             .unwrap()
     }
@@ -2324,15 +2231,9 @@ mod tests {
                 if !delete.is_null() {
                     p["delete_copies"] = delete;
                 }
-                privacy(
-                    &w,
-                    &coord,
-                    Some(&dirs),
-                    &user(false),
-                    serde_json::from_value(p).unwrap(),
-                )
-                .await
-                .unwrap()
+                privacy(&w, &coord, Some(&dirs), serde_json::from_value(p).unwrap())
+                    .await
+                    .unwrap()
             }
         };
         race.allow(&[]);
@@ -2417,7 +2318,7 @@ mod tests {
         .unwrap();
         let (reached, go) = hooks::arm(race.writer().path());
         let (w, coord) = (race.w.clone(), race.coord.clone());
-        let rec = tokio::spawn(async move { record(&w, &coord, &user(false), p).await });
+        let rec = tokio::spawn(async move { record(&w, &coord, &user(), p).await });
         reached.await.unwrap();
         std::fs::write(
             race.config.join(norn::deny::DENY_FILE),
@@ -2470,7 +2371,6 @@ mod tests {
                 sid: Some("s1".into()),
                 job: None,
                 conn_id: 2,
-                backend: false,
             };
             for p in [
                 json!({"grant": {"who": "session:s1", "what": "*", "access": "read"}}),
@@ -2489,7 +2389,7 @@ mod tests {
     async fn access_card_settle_makes_a_grant() {
         let (_dir, w, a, b) = fixture().await;
         let card = access_card(&w, Some("p1")).await;
-        let r = settle(&w, &user(false), card, "project".into(), now()).await;
+        let r = settle(&w, &user(), card, "project".into(), now()).await;
         assert_eq!(r.unwrap(), json!({"settled": true}));
         let gs = grants_now(&w).await;
         assert_eq!(gs.len(), 1);
@@ -2504,16 +2404,16 @@ mod tests {
         )
         .await;
         assert_eq!(heard, 1);
-        let again = settle(&w, &user(false), card, "project".into(), now()).await;
+        let again = settle(&w, &user(), card, "project".into(), now()).await;
         assert_eq!(again.unwrap(), json!({"settled": false}));
         assert_eq!(grants_now(&w).await.len(), 1);
         // a session grant and a profile grant name the session and its profile
         let card = access_card(&w, Some("p1")).await;
-        settle(&w, &user(false), card, "session".into(), now())
+        settle(&w, &user(), card, "session".into(), now())
             .await
             .unwrap();
         let card = access_card(&w, Some("p1")).await;
-        settle(&w, &user(false), card, "profile".into(), now())
+        settle(&w, &user(), card, "profile".into(), now())
             .await
             .unwrap();
         let whos: Vec<Who> = grants_now(&w).await.into_iter().map(|g| g.who).collect();
@@ -2521,7 +2421,7 @@ mod tests {
         assert!(whos.contains(&Who::Profile("p1".into())), "{whos:?}");
         // a profile choice for a session without one is refused, the card left open
         let card = access_card(&w, None).await;
-        let e = settle(&w, &user(false), card, "profile".into(), now())
+        let e = settle(&w, &user(), card, "profile".into(), now())
             .await
             .unwrap_err();
         assert_eq!(e.code, ErrorCode::InvalidParams);
@@ -2538,7 +2438,7 @@ mod tests {
     async fn an_unknown_choice_is_invalid() {
         let (_dir, w, _, _) = fixture().await;
         let card = access_card(&w, None).await;
-        let e = settle(&w, &user(false), card, "maybe".into(), now())
+        let e = settle(&w, &user(), card, "maybe".into(), now())
             .await
             .unwrap_err();
         assert_eq!(
@@ -2555,7 +2455,7 @@ mod tests {
         let (_dir, w, _, _) = fixture().await;
         for choice in ["resolved", "refuse"] {
             let card = access_card(&w, Some("p1")).await;
-            let r = settle(&w, &user(false), card, choice.into(), now()).await;
+            let r = settle(&w, &user(), card, choice.into(), now()).await;
             assert_eq!(r.unwrap(), json!({"settled": true}), "{choice}");
         }
         assert!(grants_now(&w).await.is_empty());
@@ -2567,28 +2467,11 @@ mod tests {
         assert_eq!(heard, 2);
     }
 
-    #[tokio::test]
-    async fn the_backend_cannot_settle_a_grant() {
-        let (_dir, w, _, _) = fixture().await;
-        let card = access_card(&w, Some("p1")).await;
-        for choice in GRANT_CHOICES {
-            let e = settle(&w, &user(true), card, choice.into(), now())
-                .await
-                .unwrap_err();
-            assert_eq!(e.code, ErrorCode::NotAllowed, "{choice}");
-        }
-        assert!(grants_now(&w).await.is_empty());
-        // refusing is the backend's to do
-        let r = settle(&w, &user(true), card, "refuse".into(), now()).await;
-        assert_eq!(r.unwrap(), json!({"settled": true}));
-        assert!(grants_now(&w).await.is_empty());
-    }
-
     /// A user's task in project A, and a close card an agent proposed at its version: (task id, card).
     async fn close_card(w: &Writer, a: i64) -> (String, i64) {
         let id =
             w.db.write(TxMeta::new("user", TxClass::User, "test"), move |tx| {
-                let mut u = StoreCaller::user(false);
+                let mut u = StoreCaller::user();
                 u.project = Some(a);
                 match tracker::op(
                     tx,
@@ -2641,11 +2524,7 @@ mod tests {
     async fn close_accept_sets_done() {
         let (_dir, w, a, _) = fixture().await;
         let (id, card) = close_card(&w, a).await;
-        let e = settle(&w, &user(true), card, "accept".into(), now())
-            .await
-            .unwrap_err();
-        assert_eq!(e.code, ErrorCode::NotAllowed, "never from the backend");
-        let r = settle(&w, &user(false), card, "accept".into(), now()).await;
+        let r = settle(&w, &user(), card, "accept".into(), now()).await;
         assert_eq!(r.unwrap(), json!({"settled": true}));
         assert_eq!(status_of(&w, &id).await.as_deref(), Some("done"));
         // the change is the user's
@@ -2666,7 +2545,7 @@ mod tests {
             let e = entity::by_id(tx.sql(), &task)?.unwrap();
             Ok(tracker::op(
                 tx,
-                &StoreCaller::user(false),
+                &StoreCaller::user(),
                 TaskOp::Update {
                     id: task.clone(),
                     ver: e.ver,
@@ -2680,7 +2559,7 @@ mod tests {
         })
         .await
         .unwrap();
-        let e = settle(&w, &user(false), card, "accept".into(), now())
+        let e = settle(&w, &user(), card, "accept".into(), now())
             .await
             .unwrap_err();
         assert_eq!(e.code, ErrorCode::InvalidParams);
@@ -2704,12 +2583,8 @@ mod tests {
             "select count(*) from message where recipient = 'agent:s1'",
         )
         .await;
-        let r = settle(&w, &user(true), card, "reject".into(), now()).await;
-        assert_eq!(
-            r.unwrap(),
-            json!({"settled": true}),
-            "rejecting is the backend's too"
-        );
+        let r = settle(&w, &user(), card, "reject".into(), now()).await;
+        assert_eq!(r.unwrap(), json!({"settled": true}));
         assert_ne!(status_of(&w, &id).await.as_deref(), Some("done"));
         let after = count(
             &w,
@@ -2734,16 +2609,14 @@ mod tests {
                 only_user_closes: Some(on),
             }),
         };
-        let e = settings(&w, &user(true), set(true)).await.unwrap_err();
-        assert_eq!(e.code, ErrorCode::NotAllowed);
         assert_eq!(
-            settings(&w, &user(false), set(true)).await.unwrap(),
+            settings(&w, &user(), set(true)).await.unwrap(),
             json!({"only_user_closes": true})
         );
         // any other class is refused by the store itself
         for meta in [
             TxMeta::new("agent:s1", TxClass::Agent, "test"),
-            TxMeta::new("backend", TxClass::System, "test"),
+            TxMeta::new("hub", TxClass::System, "test"),
         ] {
             let r =
                 w.db.write(meta, |tx| put_setting(tx, tracker::ONLY_USER_CLOSES, false))
@@ -2758,60 +2631,9 @@ mod tests {
             set: None,
         };
         assert_eq!(
-            settings(&w, &user(false), get).await.unwrap(),
+            settings(&w, &user(), get).await.unwrap(),
             json!({"only_user_closes": true})
         );
-    }
-
-    /// Review finding 9: history's writes are the user's, as scrub, compact, excise, grants and import are; the
-    /// backend's connection is refused before anything is written (a revert, its cascade look, a version put back,
-    /// a proposed tx accepted or rejected).
-    #[tokio::test]
-    async fn the_backend_cannot_revert_or_settle_proposed_txs() {
-        let (_dir, w, _, _) = fixture().await;
-        let made = task_write(
-            &w,
-            json!({"op": "create", "title": "first", "project": MINE}),
-        )
-        .await;
-        let id = made["id"].as_str().unwrap().to_owned();
-        task_write(
-            &w,
-            json!({"op": "update", "id": id, "ver": made["ver"], "title": "second", "project": MINE}),
-        )
-        .await;
-        let t = count(&w, "select max(id) from tx").await;
-        let txs = count(&w, "select count(*) from tx").await;
-        for p in [
-            json!({"tx": t}),
-            json!({"tx": t, "cascade": true}),
-            json!({"entity": id, "ver": 1}),
-        ] {
-            let e = revert(&w, &user(true), serde_json::from_value(p.clone()).unwrap())
-                .await
-                .unwrap_err();
-            assert_eq!(e.code, ErrorCode::NotAllowed, "{p}");
-        }
-        for p in [json!({"accept": [t]}), json!({"reject": [t]})] {
-            let e = proposed(&w, &user(true), serde_json::from_value(p.clone()).unwrap())
-                .await
-                .unwrap_err();
-            assert_eq!(e.code, ErrorCode::NotAllowed, "{p}");
-        }
-        assert_eq!(count(&w, "select count(*) from tx").await, txs);
-        let title = text_of(&w, "select title from entity where kind = 'task'").await;
-        assert_eq!(title, "second");
-        // the user's own revert still runs
-        let r = revert(
-            &w,
-            &user(false),
-            serde_json::from_value(json!({"tx": t})).unwrap(),
-        )
-        .await
-        .unwrap();
-        assert!(r["reverted"].is_object(), "{r}");
-        let title = text_of(&w, "select title from entity where kind = 'task'").await;
-        assert_eq!(title, "first");
     }
 
     /// An excise of a task whose title a kept backup and a session transcript both hold; `flags` are the
@@ -2837,14 +2659,9 @@ mod tests {
             config: dir.path().join("config"),
             hub: dir.path().join("hub"),
         };
-        let a = excise_of(
-            &w,
-            Some(&dirs),
-            &user(false),
-            serde_json::from_value(p).unwrap(),
-        )
-        .await
-        .unwrap();
+        let a = excise_of(&w, Some(&dirs), &user(), serde_json::from_value(p).unwrap())
+            .await
+            .unwrap();
         (a, backup, transcript, dir)
     }
 
@@ -2936,7 +2753,7 @@ mod tests {
         let before = count(&w, "select max(id) from tx").await;
         let p: api::ExciseParams =
             serde_json::from_value(json!({"target": id, "reason": "r"})).unwrap();
-        let a = excise_of(&w, None, &user(false), p).await.unwrap();
+        let a = excise_of(&w, None, &user(), p).await.unwrap();
         let after = count(&w, "select max(id) from tx").await;
         assert_eq!(after, before + 1, "the excise is one tx");
         assert_eq!(a["tx"], json!(after), "{a}");
@@ -2965,7 +2782,7 @@ mod tests {
         let t = count(&w, "select max(id) from tx").await;
         let n = count(&w, "select n from entity where kind = 'task'").await;
         let txs = count(&w, "select count(*) from tx").await;
-        let me = user(false);
+        let me = user();
         let rev = |p: Value| revert(&w, &me, serde_json::from_value(p).unwrap());
         for p in [
             json!({"tx": t, "cascade": true}),
@@ -3029,7 +2846,7 @@ mod tests {
                 })?)
             })
         };
-        let me = user(false);
+        let me = user();
         let decide = |p: Value| proposed(&w, &me, serde_json::from_value(p).unwrap());
         let r = decide(json!({"accept": [propose[0]]})).await.unwrap();
         assert!(r["reverted"].is_object(), "{r}");
@@ -3068,7 +2885,7 @@ mod tests {
             })
             .await
             .unwrap();
-        let e = settle(&w, &user(false), card, "session".into(), now())
+        let e = settle(&w, &user(), card, "session".into(), now())
             .await
             .unwrap_err();
         assert!(e.message.contains("names no session"), "{}", e.message);
@@ -3084,11 +2901,11 @@ mod tests {
         let (_dir, w, _, _) = fixture().await;
         let at = now();
         let card = access_card(&w, Some("p1")).await;
-        settle(&w, &user(false), card, "session".into(), at)
+        settle(&w, &user(), card, "session".into(), at)
             .await
             .unwrap();
         let card = access_card(&w, Some("p1")).await;
-        settle(&w, &user(false), card, "project".into(), at)
+        settle(&w, &user(), card, "project".into(), at)
             .await
             .unwrap();
         let gs = grants_now(&w).await;
@@ -3144,7 +2961,7 @@ mod tests {
         let (_dir, w, _, _) = fixture().await;
         let at = now();
         let card = setting_card(&w, "global", "fill-column").await;
-        let r = settle(&w, &user(false), card, "session".into(), at).await;
+        let r = settle(&w, &user(), card, "session".into(), at).await;
         assert_eq!(r.unwrap(), json!({"settled": true}));
         let gs = grants_now(&w).await;
         assert_eq!(gs.len(), 1);
@@ -3171,9 +2988,7 @@ mod tests {
         // a project scope's grant is options:project; once is revoked at once (no tools: nothing proposed, and the
         // session hears that too)
         let card = setting_card(&w, "shared", "tab-width").await;
-        settle(&w, &user(false), card, "once".into(), at)
-            .await
-            .unwrap();
+        settle(&w, &user(), card, "once".into(), at).await.unwrap();
         let gs = grants_now(&w).await;
         let once = gs
             .iter()
@@ -3200,7 +3015,7 @@ mod tests {
         assert_eq!(failed, 2);
         for choice in ["refuse", "resolved"] {
             let card = setting_card(&w, "global", "fill-column").await;
-            let r = settle(&w, &user(false), card, choice.into(), at).await;
+            let r = settle(&w, &user(), card, choice.into(), at).await;
             assert_eq!(r.unwrap(), json!({"settled": true}), "{choice}");
             assert_ne!(card_state(&w, card).await, "open", "{choice}");
         }
@@ -3212,25 +3027,19 @@ mod tests {
         .await;
         assert_eq!(refused, 2);
         // settled once
-        let again = settle(&w, &user(false), card, "session".into(), at).await;
+        let again = settle(&w, &user(), card, "session".into(), at).await;
         assert_eq!(again.unwrap(), json!({"settled": false}));
         assert_eq!(grants_now(&w).await.len(), 2);
     }
 
-    /// Task 32: only the user allows; a choice of another card kind is invalid; a card whose request no longer holds
-    /// (a deny-listed or a glob name) is refused and stays open.
+    /// Task 32: a choice of another card kind is invalid; a card whose request no longer holds (a deny-listed or a
+    /// glob name) is refused and stays open.
     #[tokio::test]
     async fn a_settings_card_is_the_users_and_is_checked_again() {
         let (_dir, w, _, _) = fixture().await;
         let card = setting_card(&w, "global", "fill-column").await;
-        for choice in ["once", "session"] {
-            let e = settle(&w, &user(true), card, choice.into(), now())
-                .await
-                .unwrap_err();
-            assert_eq!(e.code, ErrorCode::NotAllowed, "{choice}");
-        }
         for choice in ["project", "profile", "maybe"] {
-            let e = settle(&w, &user(false), card, choice.into(), now())
+            let e = settle(&w, &user(), card, choice.into(), now())
                 .await
                 .unwrap_err();
             assert_eq!(
@@ -3243,24 +3052,20 @@ mod tests {
         assert!(grants_now(&w).await.is_empty());
         for name in ["load-path", "after-save-hook", "fill-*"] {
             let card = setting_card(&w, "global", name).await;
-            let e = settle(&w, &user(false), card, "session".into(), now())
+            let e = settle(&w, &user(), card, "session".into(), now())
                 .await
                 .unwrap_err();
             assert_eq!(e.code, ErrorCode::InvalidParams, "{name}: {}", e.message);
             assert_eq!(card_state(&w, card).await, "open", "{name}");
             // refusing it still works
-            let r = settle(&w, &user(false), card, "refuse".into(), now()).await;
+            let r = settle(&w, &user(), card, "refuse".into(), now()).await;
             assert_eq!(r.unwrap(), json!({"settled": true}), "{name}");
         }
-        // the backend refuses
-        let card = setting_card(&w, "global", "fill-column").await;
-        let r = settle(&w, &user(true), card, "refuse".into(), now()).await;
-        assert_eq!(r.unwrap(), json!({"settled": true}));
         assert!(grants_now(&w).await.is_empty());
     }
 
-    /// Task 32: `settings/confirm` settles only an agent's proposed tx of `settings_change`, never the backend's
-    /// connection's; ok accepts it, else it is reverted; the agent hears either.
+    /// Task 32: `settings/confirm` settles only an agent's proposed tx of `settings_change`; ok accepts it, else it is
+    /// reverted; the agent hears either.
     #[tokio::test]
     async fn settings_confirm_settles_only_a_proposed_settings_change() {
         let (_dir, w, _, _) = fixture().await;
@@ -3300,24 +3105,22 @@ mod tests {
             let p = serde_json::from_value(json!({"tx": tx, "ok": ok, "error": "no"})).unwrap();
             async move { settings_confirm(wr, &caller, p).await }
         };
-        let e = confirm(user(false), other, true).await.unwrap_err();
+        let e = confirm(user(), other, true).await.unwrap_err();
         assert!(
             e.message
                 .contains("not an agent's proposed settings change"),
             "{}",
             e.message
         );
-        let e = confirm(user(true), mine, true).await.unwrap_err();
-        assert_eq!(e.code, ErrorCode::NotAllowed);
         assert_eq!(
-            confirm(user(false), mine, true).await.unwrap(),
+            confirm(user(), mine, true).await.unwrap(),
             json!({"state": "accepted"})
         );
         assert_eq!(
-            confirm(user(false), mine2, false).await.unwrap(),
+            confirm(user(), mine2, false).await.unwrap(),
             json!({"state": "reverted"})
         );
-        let e = confirm(user(false), mine, true).await.unwrap_err();
+        let e = confirm(user(), mine, true).await.unwrap_err();
         assert!(
             e.message.contains("not an agent's proposed"),
             "{}",

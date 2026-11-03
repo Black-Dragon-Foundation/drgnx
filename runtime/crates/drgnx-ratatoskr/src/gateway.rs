@@ -13,8 +13,8 @@
 //!   restrictions, agent `editor` in its spend rows — owned by the caller's process, on the loopback listener only (a
 //!   row that says otherwise is dropped at start).  One per owner: a second call deletes the owner's earlier one.  It
 //!   is a `registration` row like an agent's, so it is kept across a restart and pruned with its owner.
-//! - **Keys** are held in memory only (`bifrost::keys::Keys`): never `runtime.db`, a file, a log, the environment or
-//!   the backend.  The ids whose key is held are what `status`, the doctor and `gateway/keys-held` name; the front
+//! - **Keys** are held in memory only (`bifrost::keys::Keys`): never `runtime.db`, a file, a log or the
+//!   environment.  The ids whose key is held are what `status`, the doctor and `gateway/keys-held` name; the front
 //!   tells user subscribers `gateway/keys-changed` when that set changes.
 //! - **The provider table** is the settings' (`crate::settings`: `settings.el` and the editor's `config/settings`
 //!   overrides), replaced whole whenever they change; its last good copy is the settings' (it holds no key).  A keyed provider over clear-text `http` off loopback is applied, with a
@@ -22,8 +22,7 @@
 //! - **The port:** `kv.gateway_port` is tried first, else a free one, and the result stored.
 //! - **Spend** is `work.db`'s `spend` table (`norn`): the engine records a row per request ([`WorkLedger`]), and the
 //!   budget is read from it.  A job's budget is the registration's, else the job's `data.budget`.
-//! - **Events:** the engine's `request`, `fallback`, `budget` and `gateway/need-keys` go to the subscribers; a
-//!   `budget` also goes to the backend as a notification `budget {job, spent, budget}` (fire and forget).  The
+//! - **Events:** the engine's `request`, `fallback`, `budget` and `gateway/need-keys` go to the subscribers.  The
 //!   providers kept registrations need and whose key is absent at start are told to each new subscriber until a key
 //!   comes.
 
@@ -1161,7 +1160,7 @@ pub(crate) async fn kv_set(db: &urdr::Handle, key: &str, value: &str) {
     }
 }
 
-/// The engine's events to FRONT's subscribers, until the gateway is gone; a `budget` also to the backend.
+/// The engine's events to FRONT's subscribers, until the gateway is gone.
 pub async fn run_events(mut events: mpsc::UnboundedReceiver<GatewayEvent>, front: Arc<Front>) {
     while let Some(e) = events.recv().await {
         match e {
@@ -1876,7 +1875,6 @@ mod tests {
             sid: None,
             job: job.map(str::to_owned),
             conn_id: 1,
-            backend: false,
         };
         let p = |v: Value| -> SpendParams { decoded("spend", v) };
         let all = g
