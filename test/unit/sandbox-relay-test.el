@@ -36,16 +36,24 @@ refused once the queue (Emacs's default, 5) is full, where Linux waits."
   (let ((err (generate-new-buffer " *relay-err*")))
     (let ((p (make-process :name "relay-entry" :noquery t :connection-type 'pipe :coding 'binary
                            :command (drgnx-sandbox-relay-entry pairs command)
-                           :buffer (generate-new-buffer " *relay-out*") :stderr err :sentinel #'ignore)))
+                           :buffer (generate-new-buffer " *relay-out*") :stderr err
+                           :sentinel #'drgnx-sandbox-relay-test--ended)))
       (process-put p :err err)
       p)))
+
+(defun drgnx-sandbox-relay-test--ended (proc _event)
+  "Mark PROC `:ended' once it has: its sentinel runs after the last of its output has been read."
+  (when (memq (process-status proc) '(exit signal))
+    (process-put proc :ended t)))
 
 (defun drgnx-sandbox-relay-test--out (proc)
   (with-current-buffer (process-buffer proc) (buffer-string)))
 
 (defun drgnx-sandbox-relay-test--exit (proc)
-  "PROC's exit status once it has ended, or nil after 20 s."
-  (and (drgnx-sandbox-relay-test--wait (lambda () (memq (process-status proc) '(exit signal))))
+  "PROC's exit status once it has ended and all its output is in, or nil after 20 s.  The sentinel says so, not
+`process-status': that reads `exit' as soon as the child is reaped, and output it wrote last may still be unread
+\(on macOS a reap could win over the agent's last line)."
+  (and (drgnx-sandbox-relay-test--wait (lambda () (process-get proc :ended)))
        (process-exit-status proc)))
 
 (defun drgnx-sandbox-relay-test--connect (port)
