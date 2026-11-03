@@ -8,6 +8,7 @@
 (require 'drgnx-timer)
 (require 'drgnx-notice)
 (require 'drgnx-hub-client)
+(require 'drgnx-shell-env)
 (require 'drgnx-hub)
 (require 'drgnx-agents-mirror)
 (require 'drgnx-coord-mcp)
@@ -1032,6 +1033,22 @@ without the binary."
         (drgnx-hub-client-test--wait (lambda () (> (length (drgnx-hub-client-test--sent hub "gateway/editor-token")) asked))
                                      "the token asked again")
         (drgnx-hub-client-test--wait (lambda () drgnx-hub--editor) "the token again")))))
+
+(ert-deftest drgnx-hub-client/env-resent-on-reconnect ()
+  ;; the hub keeps the login shell's variables in memory only: each subscription that proved itself sends them again
+  (drgnx-hub-client-test--with-fake
+      (:results (list (cons "gateway/editor-token" '(:token "tok-1" :url "http://127.0.0.1:4242"))
+                      (cons "gateway/keys-held" '(:providers []))))
+    (let ((drgnx-hub-connected-functions (list #'drgnx-shell-env--resend))
+          (drgnx-shell-env--last '(("PATH" . "/opt/x/bin:/usr/bin")))
+          (process-environment (drgnx-hub-client-test--no-keys-env)))
+      (drgnx-hub-connect)
+      (drgnx-hub-client-test--wait (lambda () (= 1 (length (drgnx-hub-client-test--sent hub "env/set")))) "env/set sent")
+      (should (equal (plist-get (car (drgnx-hub-client-test--sent hub "env/set")) :params)
+                     '(:env ((:name "PATH" :value "/opt/x/bin:/usr/bin")))))
+      (drgnx-hub-disconnect)
+      (drgnx-hub-connect)
+      (drgnx-hub-client-test--wait (lambda () (= 2 (length (drgnx-hub-client-test--sent hub "env/set")))) "env/set sent again"))))
 
 (ert-deftest drgnx-hub-client/a-key-the-hub-lost-is-a-notice ()
   ;; review M3: the hub held openrouter's key earlier this session and, after a restart, holds none; this Emacs cannot

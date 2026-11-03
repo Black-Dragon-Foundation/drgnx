@@ -68,6 +68,8 @@ pub struct HubGit {
     db: Option<urdr::Handle>,
     deadline: Duration,
     env: Vec<(String, String)>,
+    /// The login shell's variables the editor sent (`env/set`), under `env`.
+    shell: crate::shell_env::ShellEnv,
     checked: Mutex<HashMap<String, Checked>>,
     /// Held while a run store is cloned, fetched or copied: a run's tasks start at once, and two clones (or a fetch
     /// into a half-made clone) of one store fail.
@@ -124,6 +126,7 @@ impl HubGit {
             db,
             deadline: Duration::from_secs(120),
             env: Vec::new(),
+            shell: crate::shell_env::ShellEnv::default(),
             checked: Mutex::new(HashMap::new()),
             stores: tokio::sync::Mutex::new(()),
         }
@@ -132,6 +135,12 @@ impl HubGit {
     /// Extra environment for every git process (tests point HOME at a temp folder).
     pub fn with_env(mut self, env: Vec<(String, String)>) -> Self {
         self.env = env;
+        self
+    }
+
+    /// Start git on SHELL's environment (the hub's, with the login shell's variables applied).
+    pub fn with_shell_env(mut self, shell: crate::shell_env::ShellEnv) -> Self {
+        self.shell = shell;
         self
     }
 
@@ -162,6 +171,9 @@ impl HubGit {
             .env("LC_ALL", "C")
             .stdin(std::process::Stdio::null())
             .kill_on_drop(true);
+        for (k, v) in self.shell.overlay() {
+            c.env(k, v);
+        }
         for (k, v) in &self.env {
             c.env(k, v);
         }

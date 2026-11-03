@@ -538,6 +538,8 @@ mod tests {
             "gateway/keys-held",
             // the editor's settings_get answer (unified-settings Task 32)
             "settings/explained",
+            // the login shell's variables: an overlay on what the hub starts
+            "env/set",
         ];
         want.extend(FRONT_WRITES);
         want.extend(FRONT_READS);
@@ -590,7 +592,7 @@ mod tests {
             .iter()
             .find(|m| m["name"] == "env/set")
             .unwrap();
-        assert_eq!(env_set["home"], json!("backend"), "{env_set}");
+        assert_eq!(env_set["home"], json!("front"), "{env_set}");
     }
 
     /// The editor's switch (agent system part 1, Task 27): the hub serves every `agents/*` and `job/*` method; the

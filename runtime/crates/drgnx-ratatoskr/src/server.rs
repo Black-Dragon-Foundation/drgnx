@@ -271,15 +271,15 @@ pub async fn run(args: ServeArgs) -> Exit {
     crate::records::install_tool(&front);
     tokio::spawn(crate::records::follow(front.clone()));
     tokio::spawn(coord::notify_backend(front.clone()));
-    front
-        .core
-        .runs
-        .set_git(Arc::new(crate::runner::git::HubGit::new(
+    front.core.runs.set_git(Arc::new(
+        crate::runner::git::HubGit::new(
             crate::sandbox::runs_root(&env),
             crate::runner::TreeMode::Snapshot,
             Box::new(crate::runner::git::HubPolicy(Arc::downgrade(&front))),
             Some(runtime.clone()),
-        )));
+        )
+        .with_shell_env(front.shell_env.clone()),
+    ));
     front
         .core
         .runs

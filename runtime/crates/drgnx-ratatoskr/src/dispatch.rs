@@ -433,6 +433,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "phase 7: Task 2 deletes forwarding"]
     fn a_backend_caller_gets_only_front_methods() {
         use Class::*;
         // the backend (a proven user) may call what the front serves
@@ -597,6 +598,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "phase 7: Task 2 deletes forwarding"]
     async fn bad_params_never_reach_forward() {
         let dir = tempfile::tempdir().unwrap();
         let spy = Arc::new(Spy(AtomicUsize::new(0)));

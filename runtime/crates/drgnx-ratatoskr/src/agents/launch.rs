@@ -1,6 +1,6 @@
-//! Sandboxed launch (Task 10; `docs/develop/gleipnir.md`, "Ratatoskr's side"): `launch::spawn(plan, req) ->
+//! Sandboxed launch (Task 10; `docs/develop/gleipnir.md`, "Ratatoskr's side"): `launch::spawn(env, plan, req) ->
 //! draugr::Spec` for every worker and manager (its worktree writable, the lock's protected paths read-only, the
-//! network the matrix's `network` cell grants) and `launch::spawn_plain(plan, sid)` for a chat with no project (still
+//! network the matrix's `network` cell grants) and `launch::spawn_plain(env, plan, sid)` for a chat with no project (still
 //! in Gleipnir: a scratch cwd, provider network only).  No code path starts a session unsandboxed: `Unsandboxed` is
 //! never granted here, and a host with no sandbox refuses the launch.
 
@@ -42,13 +42,13 @@ pub struct Launch {
 
 /// A worker or manager session's launch: its worktree is the only project path it can write.  A `Role::Chat` is
 /// refused (a chat has no worktree: [`spawn_plain`]).
-pub fn spawn(plan: &LaunchPlan, req: &SandboxReq) -> Result<Launch, Refusal> {
+/// ENV is the hub's environment with the login shell's variables applied (`ShellEnv::paths_env`).
+pub fn spawn(env: &Env, plan: &LaunchPlan, req: &SandboxReq) -> Result<Launch, Refusal> {
     if req.role == Role::Chat {
         return Err(refusal("a chat has no worktree: use spawn_plain"));
     }
-    let env = Env::process();
     let (plan, shape) = worktree_launch(plan, req);
-    launch(&env, &plan, &shape)
+    launch(env, &plan, &shape)
 }
 
 /// The plan and shape of a worker's or manager's launch: its worktree writable, and the hooks and config of the git
@@ -70,9 +70,8 @@ pub fn worktree_launch(plan: &LaunchPlan, req: &SandboxReq) -> (LaunchPlan, Sess
 
 /// A chat with no project, still in Gleipnir: its cwd is a scratch dir of its own (`scratch_dir`), nothing of the
 /// project or the home is bound beyond the CLI's own login dir, and only the provider's network is reachable.
-pub fn spawn_plain(plan: &LaunchPlan, sid: &str) -> Result<Launch, Refusal> {
-    let env = Env::process();
-    let scratch = scratch_dir(&env, sid)?;
+pub fn spawn_plain(env: &Env, plan: &LaunchPlan, sid: &str) -> Result<Launch, Refusal> {
+    let scratch = scratch_dir(env, sid)?;
     let shape = SessionShape {
         sid: sid.to_string(),
         cwd: scratch.clone(),
@@ -80,7 +79,7 @@ pub fn spawn_plain(plan: &LaunchPlan, sid: &str) -> Result<Launch, Refusal> {
         read: vec![],
         net: NetCell::ProviderOnly,
     };
-    launch(&env, plan, &shape)
+    launch(env, plan, &shape)
 }
 
 /// A session's scratch dir, `<tmp>/drgnx-scratch-UID/SID`.  It is not in the session dir: that one is

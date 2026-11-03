@@ -5162,8 +5162,8 @@
       "classes": [
         "user"
       ],
-      "doc": "the user's login-shell variables the hub allows, for the agents and jobs it starts next",
-      "home": "backend",
+      "doc": "the user's login-shell variables the hub allows (never a key), for the agents and jobs it starts next",
+      "home": "front",
       "name": "env/set",
       "params": {
         "$defs": {

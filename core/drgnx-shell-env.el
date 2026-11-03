@@ -6,7 +6,8 @@
 ;; A daemon started by systemd, launchd or the macOS app lacks the PATH your login shell sets (~/.local/bin, mise
 ;; shims, cargo).  At start drgnx asks the login shell once — asynchronously, with a timeout, its input closed at
 ;; once — and takes PATH, MANPATH and INFOPATH (plus `drgnx-shell-env-extra-names') into this Emacs; never a key.
-;; A running hub is sent the new PATH (`env/set'), so what it starts next finds the programs too.
+;; A running hub is sent the new PATH (`env/set'), so what it starts next finds the programs too; it keeps them in
+;; memory only, so they are sent again whenever this Emacs connects to a hub (`drgnx-hub-connected-functions').
 ;; See docs/guide/shell.md ("Your PATH in drgnx").
 
 ;;; Code:
@@ -20,6 +21,7 @@
 (declare-function drgnx-ai-providers "drgnx-ai")
 (declare-function drgnx-hub-running-p "drgnx-hub-client")
 (declare-function drgnx-hub-call "drgnx-hub-client")
+(defvar drgnx-hub-connected-functions)  ; drgnx-hub-client.el
 
 (defcustom drgnx-shell-env-names '("PATH" "MANPATH" "INFOPATH")
   "The variables drgnx takes from your login shell at start (`drgnx-shell-env-start')."
@@ -111,15 +113,24 @@ to a command (Reload Environment), said in the echo area each time."
         ((eq system-type 'windows-nt) "Windows")
         ((let ((v (getenv "DRGNX_NO_SHELL_ENV"))) (and v (not (string-empty-p v)))) "DRGNX_NO_SHELL_ENV is set")))
 
-(defun drgnx-shell-env--tell-hub (alist)
-  "Send a running hub ALIST, so the agents and jobs it starts from now on get the new PATH.  Never an error."
+(defvar drgnx-shell-env--last nil
+  "The ((NAME . VALUE)…) last read from the login shell, for a hub that connects (or starts again) later.")
+
+(defun drgnx-shell-env--tell-hub (alist &optional connected)
+  "Send a running hub ALIST, so the agents and jobs it starts from now on get the new PATH.  CONNECTED: this Emacs
+just connected to the hub, which is known to run.  Never an error."
   (condition-case nil
       (progn (require 'drgnx-hub-client)
-             (when (drgnx-hub-running-p)
+             (when (or connected (drgnx-hub-running-p))
                (drgnx-hub-call "env/set"
                                (list :env (mapcar (lambda (c) (list :name (car c) :value (cdr c))) alist))
                                #'ignore)))
     (error nil)))
+
+(defun drgnx-shell-env--resend ()
+  "On `drgnx-hub-connected-functions': the hub keeps these variables in its memory only, so a hub that started
+again has none; send it what the login shell gave (nothing, before the shell was read)."
+  (when drgnx-shell-env--last (drgnx-shell-env--tell-hub drgnx-shell-env--last t)))
 
 (defun drgnx-shell-env--finish (output why callback)
   "The shell is done: OUTPUT parsed and applied unless WHY says it failed; the hub told; CALLBACK given the names
@@ -129,6 +140,7 @@ that changed."
         (if (not alist)
             (drgnx-shell-env--fail (or why "it printed no environment") callback)
           (let ((changed (drgnx-shell-env-apply alist)))
+            (setq drgnx-shell-env--last alist)
             (when (member "PATH" changed) (drgnx-shell-env--tell-hub alist))
             (when callback (funcall callback changed)))))
     (error (drgnx-shell-env--fail (error-message-string err) callback))))

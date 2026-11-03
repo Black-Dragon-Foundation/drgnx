@@ -183,7 +183,7 @@ fn a_chat_is_not_a_worker_and_a_bad_session_id_is_refused() {
         net: NetCell::ProviderOnly,
         role: Role::Chat,
     };
-    assert!(spawn(&fx.plan(".claude"), &req).is_err());
+    assert!(spawn(&fx.env(), &fx.plan(".claude"), &req).is_err());
     assert!(scratch_dir(&fx.env(), "../x").is_err());
 }
 

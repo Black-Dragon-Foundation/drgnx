@@ -25,9 +25,15 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   launcher passes the starting Emacs's environment on, so `drgnx-hub-ensure` unsets every provider's `:key-env` for
   it. Keys come over the socket instead (`gateway/keys`, below). Its `PATH` is the starting Emacs's, until an Emacs
   that read the user's login shell (`core/drgnx-shell-env.el`, at start and Shell: Reload Environment) finds `PATH`
-  changed and sends `env/set`: the hub applies it to its own `process-environment` and `exec-path`, so the agents and
-  jobs it starts next (`drgnx-jobs` passes `PATH` on to systemd-run) get it. It is never restarted for that: a
-  restart would end its durable sessions.
+  changed and sends `env/set`. The front serves `env/set` itself (`drgnx-ratatoskr/src/shell_env.rs`): the variables
+  are an overlay in the hub's memory (`ShellEnv`), and every process the hub starts next (agent sessions, jobs, podman,
+  git for plan runs) takes its environment from the process's with the overlay applied, so `PATH` is the login
+  shell's directories, then the hub's own that the shell's do not name. The hub's own environment is never changed.
+  A name that looks like a secret (`KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PASSPHRASE`, `CREDENTIAL`) or is a
+  provider's key variable is left out of the answer's `applied` list; it is not an error. The overlay is in memory only,
+  so the editor sends it again at every connect (`drgnx-hub-connected-functions`, run once the subscription has
+  proved itself), also to a hub that restarted. The hub is never restarted for that: a restart would end its durable
+  sessions.
   Its main loop is `accept-process-output` plus the event drain batch Emacs needs (queued events hold back
   sentinels). SIGTERM or `shutdown` removes its socket. It starts with SIGPIPE ignored (`trap '' PIPE`): the
   editing Emacs that launches it does not ignore it, and a write to a connection an agent closed must be an error,
@@ -894,7 +900,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `coord/prune` | user | `{}` | `{pruned: boolean}` | yes | front |
 | `coord/task-status` | user | `{agent?: AgentName, status: Status, task: TaskRef}` | `boolean` | yes | front |
 | `decisions/effects` | user | `{decision: string}` | `{commits?: [string], decision: string, label: string, later_hunks?: [Hunk]}` | no | front |
-| `env/set` | user | `{env: [{name: EnvName, value: string}]}` | `{applied?: [string]}` | no | backend |
+| `env/set` | user | `{env: [{name: EnvName, value: string}]}` | `{applied?: [string]}` | no | front |
 | `events/add` | user | `{agent?: AgentName, best_effort?: boolean, data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text, task?: TaskRef}` | `{id?: natnum}` | yes | front |
 | `events/since` | user | `{limit?: natnum, since?: natnum}` | `{events?: [EventRow], last: natnum, since: natnum}` | no | front |
 | `exec/get` | user | `{id: Id}` | `ExecRow` | no | front |

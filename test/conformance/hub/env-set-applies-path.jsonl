@@ -1,0 +1,12 @@
+{"scenario": "hub/env-set-applies-path", "requires": ["v1"], "doc": "env/set is the front's: the PATH an editor read from the login shell is what the hub's next job starts with (the process's own PATH stays behind it), and the answer names the variable it applied."}
+{"do": "root"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "env/set", "params": {"env": [{"name": "PATH", "value": "/opt/x/bin:/usr/bin"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": ["PATH"]}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "exec/start", "params": {"argv": ["sh", "-c", "case \":$PATH:\" in *:/opt/x/bin:*) echo path-has-opt-x;; *) echo path-lacks-opt-x;; esac"], "cwd": "$ROOT"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:job", "text": "$string"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "exec-done", "data": {"id": "$job", "status": "done", "summary": {"exit": 0, "lines": {"$contains": ["path-has-opt-x"]}}}}, "within_ms": 30000}

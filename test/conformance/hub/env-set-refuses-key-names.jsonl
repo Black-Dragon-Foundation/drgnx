@@ -1,0 +1,14 @@
+{"scenario": "hub/env-set-refuses-key-names", "requires": ["v1"], "doc": "env/set never takes a key: a name that looks like a secret, or the key variable of a provider in effect, is left out of the answer (not an error) and out of what the hub starts. The names carry the prefixes a job's environment passes (MISE_, RUST, CARGO), so only the refusal keeps them out."}
+{"do": "root"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-ai-providers", "source": "row", "value": {"acme": {"kind": "openai", "url": "https://api.acme.invalid/v1", "caps": ["chat"], "key_env": "CARGO_ACCESS"}}}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": "$any"}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "env/set", "params": {"env": [{"name": "MISE_API_KEY", "value": "canary-key"}, {"name": "RUST_TOKEN", "value": "canary-token"}, {"name": "CARGO_ACCESS", "value": "canary-access"}, {"name": "MISE_ROW_PROBE", "value": "kept"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"applied": ["MISE_ROW_PROBE"]}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "exec/start", "params": {"argv": ["sh", "-c", "echo probe=$MISE_ROW_PROBE key=$MISE_API_KEY token=$RUST_TOKEN access=$CARGO_ACCESS"], "cwd": "$ROOT"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$capture:job", "text": "$string"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "exec-done", "data": {"id": "$job", "status": "done", "summary": {"exit": 0, "lines": {"$contains": ["probe=kept key= token= access="]}}}}, "within_ms": 30000}

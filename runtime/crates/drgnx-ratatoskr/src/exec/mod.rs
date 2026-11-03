@@ -152,6 +152,8 @@ pub struct Hooks {
     pub forwarder: Option<PathBuf>,
     /// Jobs running at once on this machine; the next waits for a slot (the session's step is a machine-queue wait).
     pub slots: usize,
+    /// The login shell's variables (`env/set`): the base environment of every job and podman the hub starts.
+    pub shell_env: crate::shell_env::ShellEnv,
 }
 
 impl Default for Hooks {
@@ -168,6 +170,7 @@ impl Default for Hooks {
                 .filter(|f| f.is_file())
                 .or_else(|| unit::find_on_path("drgnx-fwd")),
             slots: 4,
+            shell_env: crate::shell_env::ShellEnv::default(),
         }
     }
 }
@@ -651,9 +654,10 @@ impl Inner {
             container::resolve(&caps, &job.image)?.to_string(),
         );
         // caps podman cannot enforce refuse the job: a container without its limits is never run
+        let shell = self.hooks.shell_env.clone();
         tokio::task::spawn_blocking(move || {
-            container::check_limits(&p, Duration::from_secs(30))?;
-            container::ensure_image(&p, &reference, container::PULL_TIMEOUT)
+            container::check_limits(&shell, &p, Duration::from_secs(30))?;
+            container::ensure_image(&shell, &p, &reference, container::PULL_TIMEOUT)
         })
         .await
         .map_err(|e| setup(format!("pulling the image: {e}")))??;
@@ -661,7 +665,7 @@ impl Inner {
             draugr::Spec {
                 program: podman,
                 args,
-                env: container::podman_env(),
+                env: container::podman_env(&self.hooks.shell_env),
                 cwd: Some(spec.cwd.clone()),
                 stdin_null: true,
                 pass_fds: vec![],
@@ -687,7 +691,9 @@ impl Inner {
                 (s, None)
             }
             // the conformance lane has no sandbox for a job: its jobs run as the user's do
-            Starter::Session(_) if unsandboxed_for_tests() => (plain_spec(&spec), None),
+            Starter::Session(_) if unsandboxed_for_tests() => {
+                (plain_spec(&spec, &self.hooks.shell_env), None)
+            }
             Starter::Session(sid) => {
                 let worktree = spec
                     .worktree
@@ -696,7 +702,7 @@ impl Inner {
                 // the lock's protected files stay read-only for a job as for the session itself
                 let plan = LaunchPlan {
                     argv: spec.argv.iter().map(OsString::from).collect(),
-                    env: tool_env(),
+                    env: tool_env(&self.hooks.shell_env),
                     session_meta: None,
                     protected_ro: crate::agents::lock::PROTECTED_RO
                         .iter()
@@ -712,15 +718,16 @@ impl Inner {
                     read: vec![],
                     net: NetCell::ProviderAndPackages,
                 };
-                let l = launch::launch(&Env::process(), &plan, &shape)?;
+                let l = launch::launch(&self.hooks.shell_env.paths_env(), &plan, &shape)?;
                 (l.spec, l.status)
             }
-            Starter::User => (plain_spec(&spec), None),
+            Starter::User => (plain_spec(&spec, &self.hooks.shell_env), None),
         };
         let wrapped = unit::wrap(
             inner,
             dir,
             name.as_deref().map(|n| (n, self.hooks.memory.as_str())),
+            &self.hooks.shell_env,
         );
         let child = draugr::spawn_pinned(wrapped)
             .await
@@ -1004,7 +1011,10 @@ impl Inner {
         self.prune();
         // a podman client that died with the last hub leaves its container: remove those no running job owns
         if let Some(podman) = self.hooks.podman.clone() {
-            tokio::task::spawn_blocking(move || container::remove_leftovers(&podman, &running));
+            let shell = self.hooks.shell_env.clone();
+            tokio::task::spawn_blocking(move || {
+                container::remove_leftovers(&shell, &podman, &running)
+            });
         }
     }
 }
@@ -1035,11 +1045,11 @@ async fn wait_gone(pid: i32, start_time: u64) {
 }
 
 /// A job run with the user's rights: the same for a user's job and (in the conformance lane) a session's.
-fn plain_spec(spec: &ExecSpec) -> draugr::Spec {
+fn plain_spec(spec: &ExecSpec, shell: &crate::shell_env::ShellEnv) -> draugr::Spec {
     draugr::Spec {
         program: PathBuf::from(&spec.argv[0]),
         args: spec.argv[1..].iter().map(OsString::from).collect(),
-        env: draugr::env::build(
+        env: shell.build(
             &[
                 "PATH", "HOME", "USER", "LOGNAME", "LANG", "TERM", "TMPDIR", "SHELL",
             ],
@@ -1075,10 +1085,15 @@ fn tail_of(path: &Path) -> String {
 }
 
 /// The environment a session's job gets inside its sandbox: the tool paths, nothing else of the hub's.
-fn tool_env() -> Vec<(String, String)> {
+fn tool_env(shell: &crate::shell_env::ShellEnv) -> Vec<(String, String)> {
     ["PATH", "LANG", "TERM", "CARGO_HOME", "RUSTUP_HOME"]
         .iter()
-        .filter_map(|k| std::env::var(k).ok().map(|v| (k.to_string(), v)))
+        .filter_map(|k| {
+            shell
+                .var_os(k)
+                .and_then(|v| v.into_string().ok())
+                .map(|v| (k.to_string(), v))
+        })
         .collect()
 }
 
@@ -1109,6 +1124,7 @@ fn runner(f: &Front) -> Result<&Runner, Error> {
         let mut hooks = Hooks {
             writer: Some(f.writer.clone()),
             editors: Some(f.editors.clone()),
+            shell_env: f.shell_env.clone(),
             ..Hooks::default()
         };
         if let Some((serde_json::Value::String(m), _)) =

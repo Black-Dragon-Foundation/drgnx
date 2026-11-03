@@ -144,7 +144,9 @@ never includes the shell's output.
 
 **After you change your rc file**, run **Shell: Reload Environment** (palette): it asks your shell again and says
 which names changed. When `PATH` changed and the [hub](agents.md#the-hub-and-the-gateway) runs, the hub gets the new
-`PATH` too: the agents and jobs it starts from then on find the new programs (running ones keep theirs).
+`PATH` too: the agents and jobs it starts from then on find the new programs (running ones keep theirs). The hub
+keeps it in memory only, so drgnx sends it again each time it connects to a hub, also one that restarted. Names that look
+like keys are never sent on.
 
 **Turning it off:** `DRGNX_NO_SHELL_ENV=1` in drgnx's environment (tests and CI; the harness sets it). It is also off
 in batch Emacs and on Windows.

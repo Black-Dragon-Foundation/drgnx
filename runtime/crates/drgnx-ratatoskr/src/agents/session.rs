@@ -678,6 +678,7 @@ fn step_provider(profile: &AgentProfile) -> Option<String> {
 /// through `launch::spawn` and Gleipnir.
 #[cfg(any(test, feature = "test-hooks"))]
 fn spawn_spec(
+    shell: &crate::shell_env::ShellEnv,
     p: &AgentProfile,
     plan: &plock::LaunchPlan,
     _: &Path,
@@ -707,7 +708,7 @@ fn spawn_spec(
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_os_str()))
         .collect();
-    let env = draugr::env::build(&["PATH", "HOME", "LANG", "TMPDIR"], &[], &set);
+    let env = shell.build(&["PATH", "HOME", "LANG", "TMPDIR"], &[], &set);
     let spec = draugr::Spec {
         program: PathBuf::from(prog),
         args: args.to_vec(),
@@ -724,6 +725,7 @@ fn spawn_spec(
 /// (`launch::scratch_dir`) is the plain one.  The network is the provider's alone: `Open` is never granted here.
 #[cfg(not(any(test, feature = "test-hooks")))]
 fn spawn_spec(
+    shell: &crate::shell_env::ShellEnv,
     _: &AgentProfile,
     plan: &plock::LaunchPlan,
     scratch: &Path,
@@ -738,10 +740,12 @@ fn spawn_spec(
     ),
     Error,
 > {
+    let env = shell.paths_env();
     let launched = if cwd == scratch {
-        launch::spawn_plain(plan, sid)
+        launch::spawn_plain(&env, plan, sid)
     } else {
         launch::spawn(
+            &env,
             plan,
             &launch::SandboxReq {
                 sid: sid.to_string(),
@@ -823,7 +827,8 @@ async fn prepare(
         )));
     }
     let scratch = launch::scratch_dir(&runstav::paths::Env::process(), sid).unwrap_or_default();
-    let (spec, status, unsandboxed) = spawn_spec(profile, &plan, &scratch, cwd, sid, role)?;
+    let (spec, status, unsandboxed) =
+        spawn_spec(&front.shell_env, profile, &plan, &scratch, cwd, sid, role)?;
     Ok(Prepared {
         spec,
         status,

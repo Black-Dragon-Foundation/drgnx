@@ -13,7 +13,8 @@ pub fn build(
     build_from(std::env::vars_os(), allow, allow_prefixes, set)
 }
 
-fn build_from(
+/// [`build`] over SOURCE instead of this process's environment (the hub's overlay of the login shell's variables).
+pub fn build_from(
     source: impl IntoIterator<Item = (OsString, OsString)>,
     allow: &[&str],
     allow_prefixes: &[&str],
