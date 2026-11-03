@@ -336,6 +336,25 @@ a test reaches by a call: a command a test binds to a key is named by `function'
       (should (stringp (car row)))
       (should (stringp (plist-get (cdr row) :why))))))
 
+(ert-deftest drgnx-run-ert/an-off-row-s-file-is-not-run ()
+  ;; A row with `:off t' (Lisp a plan deletes) leaves its file out of every run, a shard's list included, unless
+  ;; DRGNX_TEST_FROZEN=1; an exempt row without it still runs (the frozen UI).
+  (let* ((rows (with-temp-buffer
+                 (insert-file-contents (expand-file-name "test/class-exempt.eld" drgnx-dir))
+                 (read (current-buffer))))
+         (path (lambda (row) (file-truename (expand-file-name (car row) drgnx-dir))))
+         (off (funcall path (seq-find (lambda (r) (plist-get (cdr r) :off)) rows)))
+         (on (funcall path (seq-find (lambda (r) (not (plist-get (cdr r) :off))) rows)))
+         (dir (file-name-directory off)))
+    (let ((process-environment (cons "DRGNX_TEST_FROZEN" process-environment)))   ; unset
+      (let ((files (mapcar #'file-truename (drgnx-run-ert--files dir))))
+        (should files)
+        (should-not (member off files)))
+      (should (member on (mapcar #'file-truename (drgnx-run-ert--files (list on)))))
+      (should-not (drgnx-run-ert--files (list off))))
+    (let ((process-environment (cons "DRGNX_TEST_FROZEN=1" process-environment)))
+      (should (member off (mapcar #'file-truename (drgnx-run-ert--files dir)))))))
+
 (defun drgnx-lint-classes-test--tmp (class-line &rest forms)
   "A temp file `x-test.el' with CLASS-LINE (or nil) and FORMS in a new directory; return its name."
   (let ((file (expand-file-name "x-test.el" (make-temp-file "drgnx-class" t))))

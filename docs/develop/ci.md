@@ -234,7 +234,9 @@ command, in the perf job (allocation, CPU time and counts; [perf.md](perf.md)). 
 equivalent of the merge wave; no workflow runs it.
 
 Tests tagged `:frozen` (tests of Lisp that a plan replaces with Rust, run against the in-Emacs Lisp hub) are left out of
-every run, CI included; `DRGNX_TEST_FROZEN=1` runs them (`harness/run-ert.el`).
+every run, CI included; `DRGNX_TEST_FROZEN=1` runs them (`harness/run-ert.el`). The same holds for whole files: a row
+of `test/class-exempt.eld` with `:off t` (the Lisp runtime Ratatoskr P7 deletes, the Lisp search P8 deletes, gryphn)
+leaves its file out of every run, a shard's list included. The frozen UI's rows have no `:off`: it is still in use.
 
 DEFERRED DET-CI-ENV-1: the step uses `DRGNX_TEST_NO_TIMING=1` rather than `(not (tag :timing))`, and
 `test/no-skip.eld` has no darwin or Ubuntu rows until the first CI summaries list their skips.

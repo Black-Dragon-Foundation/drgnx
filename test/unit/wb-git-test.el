@@ -3,6 +3,7 @@
 (require 'ert)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/held-fixture" drgnx-dir) nil t)
 (require 'drgnx-git)
 (require 'drgnx-explorer)
 (require 'drgnx-buffers)
@@ -255,44 +256,25 @@ build/ ignored (with build/out.o)."
       (should (eq (drgnx-git-status (expand-file-name "u.txt" root)) 'untracked))
       (should (= (drgnx-cache-size 'git-status) 16)))))
 
-(defmacro drgnx-git-test--held (&rest body)
-  "BODY with the next git run held at its start until the test sends it a line: a `git' first on `exec-path' reads
-one line of its standard input before it runs the real git.  Only the first run after BODY starts is held; later
-runs go straight through."
-  `(let* ((real (executable-find "git"))
-          (dir (make-temp-file "drgnx-git-held" t))
-          (hold (expand-file-name "hold" dir))
-          (git (expand-file-name "git" dir))
-          (exec-path (cons dir exec-path)))
-     (unwind-protect
-         (progn
-           (write-region (format "#!/bin/sh\nif [ -e %s ]; then rm -f %s; read _; fi\nexec %s \"$@\"\n"
-                                 (shell-quote-argument hold) (shell-quote-argument hold) (shell-quote-argument real))
-                         nil git nil 'silent)
-           (set-file-modes git #o755)
-           (write-region "" nil hold nil 'silent)
-           ,@body)
-       (delete-directory dir t))))
-
 (ert-deftest drgnx-git/a-refresh-of-a-root-pushed-out-mid-run-starts-no-second-git ()
   ;; The root's entry, and with it its run, is gone from the cache; the run still goes, so a refresh now is done once
   ;; after it, not by a second git beside it.  The run is held until the test lets it go: a real git on one file can
   ;; end before the cache is filled (CI: not live at the look).
   (skip-unless (executable-find "git"))
   (drgnx-git-test--many-repos roots 1
-    (drgnx-git-test--held
-     (let ((root (car roots)) proc)
-       (drgnx-git-refresh root)
-       (setq proc (plist-get (drgnx-cache-get 'git-status root) :proc))
-       (dotimes (i 16) (drgnx-cache-put 'git-status (format "/tmp/drgnx-fill-%d/" i) (list :branch nil)))
-       (should-not (drgnx-cache-get 'git-status root))
-       (should (process-live-p proc))
-       (drgnx-git-refresh root)
-       (should (eq (plist-get (drgnx-cache-peek 'git-status root) :proc) proc))   ; the same run
-       (should (plist-get (drgnx-cache-peek 'git-status root) :again))            ; asked again after it
-       (process-send-string proc "\n")                                            ; let it go
-       (drgnx-git-refresh root t)
-       (should (eq (drgnx-git-status (expand-file-name "u.txt" root)) 'untracked))))))
+    (drgnx-test-with-held "git"
+      (let ((root (car roots)) proc)
+        (drgnx-git-refresh root)
+        (setq proc (plist-get (drgnx-cache-get 'git-status root) :proc))
+        (dotimes (i 16) (drgnx-cache-put 'git-status (format "/tmp/drgnx-fill-%d/" i) (list :branch nil)))
+        (should-not (drgnx-cache-get 'git-status root))
+        (should (process-live-p proc))
+        (drgnx-git-refresh root)
+        (should (eq (plist-get (drgnx-cache-peek 'git-status root) :proc) proc))   ; the same run
+        (should (plist-get (drgnx-cache-peek 'git-status root) :again))            ; asked again after it
+        (drgnx-test-release proc)                                                  ; let it go
+        (drgnx-git-refresh root t)
+        (should (eq (drgnx-git-status (expand-file-name "u.txt" root)) 'untracked))))))
 
 (ert-deftest drgnx-git/a-pushed-out-repository-s-own-row-stays-its-own ()
   ;; The Explorer names a repository's folder without a trailing slash: pushed out of the cache, it must not fall to
