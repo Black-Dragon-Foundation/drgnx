@@ -53,6 +53,11 @@ agent that sends any of them is refused with `invalid-params`:
   a user systemd on Linux it changes nothing; macOS has no memory cap for jobs, and refuses it.
 - **`nice`**: 0 to 19, how much nicer than the hub the job runs (`nice -n`, so the same with and without a unit).
 
+Your job starts from the hub's environment with what the editor read from your login shell (`env/set`), so variables
+such as `OLLAMA_MODELS`, `HTTPS_PROXY` or `CUDA_VISIBLE_DEVICES` reach local AI servers, installs and mermaid as they
+did when Emacs started them; `env` comes on top. Every name that looks like a key and every provider's `key_env` is
+left out. An agent's job gets only the tool paths.
+
 In Lisp, `core/drgnx-exec.el` is the client. `drgnx-exec-start` is asynchronous (its callback gets the job's id, or the
 reason it did not start); `drgnx-exec-get` and `drgnx-exec-list` read a cache that follows the hub's `exec-done` events
 and never call the hub, so timers and redisplay may use them; `drgnx-exec-log` and `drgnx-exec-stop` read a job's log

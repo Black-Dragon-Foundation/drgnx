@@ -1418,7 +1418,11 @@ The editor's own jobs are the user's `exec/start` with four more fields (`StartP
 (`user_job`: `invalid-params`), `env` and `memory_max` from a container job, and `memory_max` on macOS; the decode check
 (`check_start`) refuses a malformed size, a `nice` outside 0 to 19 and a key-like variable name
 (`runstav::methods::hub::refused_env_name`, `env/set`'s check), and `exec::start` a provider's `key_env`. The job's base
-environment is `env/set`'s overlay (`plain_spec` builds it from `ShellEnv`). They travel in `ExecSpec.user` (`UserJob`, also in a queued job's
+environment is the hub's whole environment with `env/set`'s overlay (`ShellEnv::vars_os`) less every key-like name and
+every provider's `key_env` (`user_env`; `Hooks::key_envs` reads the providers from the settings at each start); a
+session's job run unsandboxed (the conformance lane) keeps a short list (`agent_plain_env`), and a sandboxed one the
+tool paths (`tool_env`). `unit::wrap` hands the spec's environment to `systemd-run --scope` (the scope's command gets
+the caller's environment) or to the plain shell (macOS, no user systemd). They travel in `ExecSpec.user` (`UserJob`, also in a queued job's
 `pending.json`); the name is in `meta.json` and on the `ExecRow`. The unit takes `memory_max` as its `MemoryMax=`;
 `nice` is `nice -n N` in front of the command inside the logging shell (a scope takes no `Nice=`), the same line with
 and without a unit.

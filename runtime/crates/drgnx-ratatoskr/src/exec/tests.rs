@@ -430,6 +430,70 @@ async fn a_user_job_gets_its_name_env_and_nice() {
     assert_eq!(r.list(None, false)[0].name.as_deref(), Some("grammars"));
 }
 
+/// A user's job starts from the hub's whole environment with the login shell's overlay (a variable outside the agents'
+/// list reaches it), less a provider's key variable; an agent's job keeps the short list.
+#[tokio::test]
+async fn a_user_job_gets_the_shells_environment_and_an_agents_the_list() {
+    let d = tempfile::tempdir().unwrap();
+    let shell = crate::shell_env::ShellEnv::default();
+    shell.set(
+        vec![
+            ("OLLAMA_MODELS".into(), "/models/here".into()),
+            ("ACME_ACCESS".into(), "leak".into()),
+        ],
+        &[],
+    );
+    let r = Runner::default();
+    r.open(
+        d.path().join("exec"),
+        Hooks {
+            shell_env: shell,
+            key_envs: Arc::new(|| vec!["ACME_ACCESS".to_string()]),
+            plain_sessions: true,
+            ..hooks()
+        },
+    );
+    let script = "echo \"models=${OLLAMA_MODELS-unset} access=${ACME_ACCESS-unset}\"";
+    let user = r
+        .start(spec(
+            Starter::User,
+            d.path(),
+            script,
+            Duration::from_secs(30),
+        ))
+        .await
+        .unwrap();
+    let agent = r.start(agents(d.path(), script)).await.unwrap();
+    let lines = |row: ExecRow| row.summary.unwrap().lines;
+    assert_eq!(
+        lines(ended(&r, &user).await),
+        ["models=/models/here access=unset"]
+    );
+    assert_eq!(lines(ended(&r, &agent).await), ["models=unset access=unset"]);
+}
+
+/// The user's base environment drops what looks like a key, a provider's key variable and a name that is not text.
+#[test]
+fn a_user_jobs_base_environment_has_no_keys() {
+    use std::os::unix::ffi::OsStringExt;
+    let source: Vec<(OsString, OsString)> = [
+        ("OLLAMA_MODELS", "m"),
+        ("HTTPS_PROXY", "p"),
+        ("GH_TOKEN", "t"),
+        ("ANTHROPIC_API_KEY", "k"),
+        ("ACME_ACCESS", "a"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.into(), v.into()))
+    .chain([(OsString::from_vec(vec![0xff, b'X']), "x".into())])
+    .collect();
+    let names: Vec<OsString> = user_env(source, &["ACME_ACCESS".to_string()])
+        .into_iter()
+        .map(|(k, _)| k)
+        .collect();
+    assert_eq!(names, ["OLLAMA_MODELS", "HTTPS_PROXY"]);
+}
+
 /// The row `exec/runs-in-the-starters-sandbox`: needs the real sandbox's bwrap tier, which the build container lacks
 /// (run it on a host with bwrap or in GitHub CI: `cargo test -p drgnx-ratatoskr exec::tests -- --ignored`).
 #[tokio::test]

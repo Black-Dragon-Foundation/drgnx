@@ -186,6 +186,8 @@ pub struct Hooks {
     pub slots: usize,
     /// The login shell's variables (`env/set`): the base environment of every job and podman the hub starts.
     pub shell_env: crate::shell_env::ShellEnv,
+    /// The providers' key variables (`key_env`) as the settings say now: never in a user's job's environment.
+    pub key_envs: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
     /// Unit tests: a session's job runs as the user's do (they have no sandbox helper).
     #[cfg(test)]
     pub plain_sessions: bool,
@@ -206,6 +208,7 @@ impl Default for Hooks {
                 .or_else(|| unit::find_on_path("drgnx-fwd")),
             slots: 4,
             shell_env: crate::shell_env::ShellEnv::default(),
+            key_envs: Arc::new(Vec::new),
             #[cfg(test)]
             plain_sessions: false,
         }
@@ -743,9 +746,10 @@ impl Inner {
                 (s, None)
             }
             // the conformance lane has no sandbox for a job: its jobs run as the user's do
-            Starter::Session(_) if unsandboxed_for_tests(&self.hooks) => {
-                (plain_spec(&spec, &self.hooks.shell_env), None)
-            }
+            Starter::Session(_) if unsandboxed_for_tests(&self.hooks) => (
+                plain_spec(&spec, agent_plain_env(&self.hooks.shell_env)),
+                None,
+            ),
             Starter::Session(sid) => {
                 let worktree = spec
                     .worktree
@@ -773,7 +777,13 @@ impl Inner {
                 let l = launch::launch(&self.hooks.shell_env.paths_env(), &plan, &shape)?;
                 (l.spec, l.status)
             }
-            Starter::User => (plain_spec(&spec, &self.hooks.shell_env), None),
+            Starter::User => (
+                plain_spec(
+                    &spec,
+                    user_env(self.hooks.shell_env.vars_os(), &(self.hooks.key_envs)()),
+                ),
+                None,
+            ),
         };
         let mut inner = inner;
         for (k, v) in &spec.user.env {
@@ -1115,23 +1125,45 @@ async fn wait_gone(pid: i32, start_time: u64) {
     }
 }
 
-/// A job run with the user's rights: the same for a user's job and (in the conformance lane) a session's.
-fn plain_spec(spec: &ExecSpec, shell: &crate::shell_env::ShellEnv) -> draugr::Spec {
+/// A job run with the user's rights in ENV: a user's job and (in the conformance lane) a session's.
+fn plain_spec(spec: &ExecSpec, env: Vec<(OsString, OsString)>) -> draugr::Spec {
     draugr::Spec {
         program: PathBuf::from(&spec.argv[0]),
         args: spec.argv[1..].iter().map(OsString::from).collect(),
-        env: shell.build(
-            &[
-                "PATH", "HOME", "USER", "LOGNAME", "LANG", "TERM", "TMPDIR", "SHELL",
-            ],
-            &["LC_", "CARGO", "RUST", "MISE_"],
-            &[],
-        ),
+        env,
         cwd: Some(spec.cwd.clone()),
         stdin_null: true,
         pass_fds: vec![],
         new_session: false,
     }
+}
+
+/// The base environment of a session's job run unsandboxed (the conformance lane): a short list of the hub's.
+fn agent_plain_env(shell: &crate::shell_env::ShellEnv) -> Vec<(OsString, OsString)> {
+    shell.build(
+        &[
+            "PATH", "HOME", "USER", "LOGNAME", "LANG", "TERM", "TMPDIR", "SHELL",
+        ],
+        &["LC_", "CARGO", "RUST", "MISE_"],
+        &[],
+    )
+}
+
+/// The base environment of a user's job: SOURCE (the hub's environment with the login shell's overlay, as the editor's
+/// jobs had the user manager's or Emacs's whole environment), less every name that looks like a key
+/// (`refused_env_name`) and every provider's key variable (KEY_ENVS).
+fn user_env(
+    source: Vec<(OsString, OsString)>,
+    key_envs: &[String],
+) -> Vec<(OsString, OsString)> {
+    source
+        .into_iter()
+        .filter(|(k, _)| {
+            k.to_str().is_some_and(|k| {
+                !runstav::methods::hub::refused_env_name(k) && !key_envs.iter().any(|e| e == k)
+            })
+        })
+        .collect()
 }
 
 /// Tests and `test-hooks` builds with `DRGNX_TEST_PLAIN_JOBS` set: the conformance container has no sandbox helper;
@@ -1197,10 +1229,21 @@ fn runner(f: &Front) -> Result<&Runner, Error> {
             .dirs
             .get()
             .ok_or_else(|| error(ErrorCode::Internal, "exec: the store is not open yet"))?;
+        let settings = f.settings.clone();
         let mut hooks = Hooks {
             writer: Some(f.writer.clone()),
             editors: Some(f.editors.clone()),
             shell_env: f.shell_env.clone(),
+            // read at each start, so a provider added since is left out too (as `Front::provider_key_envs`)
+            key_envs: Arc::new(move || {
+                crate::settings::providers::effective(
+                    &crate::settings::defaults().presets,
+                    &settings.current().loaded.values.ai_providers,
+                )
+                .into_iter()
+                .filter_map(|p| p.key_env.clone())
+                .collect()
+            }),
             ..Hooks::default()
         };
         if let Some((serde_json::Value::String(m), _)) =

@@ -1,0 +1,14 @@
+{"scenario": "exec/a-user-job-gets-the-shells-environment", "requires": ["v1"], "doc": "A job the user starts begins from the hub's whole environment with env/set's overlay (a login-shell variable outside the agents' short list, such as OLLAMA_MODELS, reaches it), less every name that looks like a key and every provider's key_env, even when the hub's own environment has them."}
+{"do": "root"}
+{"do": "start", "hub": "h", "env": {"DRGNX_ROW_TOKEN": "leak", "ACME_ACCESS": "leak"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-ai-providers", "source": "row", "value": {"acme": {"kind": "openai", "url": "https://api.acme.invalid/v1", "caps": ["chat"], "key_env": "ACME_ACCESS"}}}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": "$any"}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "env/set", "params": {"env": [{"name": "OLLAMA_MODELS", "value": "/models/row"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"applied": ["OLLAMA_MODELS"]}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "exec/start", "params": {"argv": ["sh", "-c", "echo \"models=${OLLAMA_MODELS-unset} token=${DRGNX_ROW_TOKEN-unset} access=${ACME_ACCESS-unset}\""], "cwd": "$ROOT"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$capture:job", "text": "$string"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "exec-done", "data": {"id": "$job", "status": "done", "summary": {"exit": 0, "lines": {"$contains": ["models=/models/row token=unset access=unset"]}}}}, "within_ms": 30000}
