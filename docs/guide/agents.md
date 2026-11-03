@@ -158,11 +158,11 @@ they see the system, your toolchains read-only, their task's folder and a privat
 group:
 
 ```
-OK    job-sandbox          bwrap 0.12.0 ok; memory cap 4G per agent by default (drgnx-sandbox-memory-max)
+OK    job-sandbox          bwrap 0.12.0 ok
 ```
 
-or a warning with the reason and the fix. (`drgnx doctor` runs without your configuration, so it shows the cap's
-default; the doctor of the Welcome's Finish step shows yours.) Without a working sandbox, jobs do not start. What to install:
+or a warning with the reason and the fix (it reads what Ratatoskr, the agent runtime, reports). Without a working
+sandbox, jobs do not start. What to install:
 
 - **Fedora, RHEL:** `sudo dnf install bubblewrap`. **Debian, Ubuntu:** `sudo apt install bubblewrap`. **Arch:**
   `sudo pacman -S bubblewrap`. **openSUSE:** `sudo zypper install bubblewrap`. drgnx uses only a `bwrap` that only

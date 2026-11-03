@@ -98,49 +98,95 @@
     (let ((json (json-parse-string (drgnx-doctor-json results) :object-type 'plist)))
       (should (equal (plist-get (aref json 0) :status) "fail")))))
 
-(ert-deftest drgnx-doctor/job-sandbox-ok ()
-  "In the Agents group: the back end, its version, and whether agents run under the memory cap."
-  (should (equal (plist-get (alist-get 'job-sandbox drgnx-doctor--checks) :group) "Agents"))
-  (let ((r (drgnx-doctor-check 'job-sandbox (drgnx-doctor-test--facts
-                                             :sandbox '(:ok t :backend bwrap :version "0.12.0" :scope t :memory-max "4G")))))
-    (should (eq (car r) 'ok))
-    (should (string-prefix-p "bwrap 0.12.0 ok" (nth 1 r)))
-    (should (string-search "memory cap 4G" (nth 1 r))))
-  (let ((r (drgnx-doctor-check 'job-sandbox (drgnx-doctor-test--facts
-                                             :sandbox '(:ok t :backend bwrap :version "0.12.0" :scope nil :memory-max "4G")))))
-    (should (eq (car r) 'ok))
-    (should (string-search "no memory cap" (nth 1 r))))
-  ;; `drgnx doctor' runs with -Q: it sees the default, not the user's setting, and says so
-  (let ((r (drgnx-doctor-check 'job-sandbox (drgnx-doctor-test--facts
-                                             :sandbox '(:ok t :backend bwrap :version "0.12.0" :scope t :memory-max "4G"
-                                                            :memory-max-default t)))))
-    (should (string-search "memory cap 4G per agent by default (drgnx-sandbox-memory-max)" (nth 1 r))))
-  (require 'drgnx-sandbox)
-  (should (plist-get (cl-letf (((symbol-function 'drgnx-sandbox-check) (lambda () '(:ok t :backend bwrap))))
-                       (let ((user-init-file nil)) (drgnx-doctor--sandbox)))
-                     :memory-max-default))
-  (should (equal (nth 1 (drgnx-doctor-check 'job-sandbox (drgnx-doctor-test--facts :sandbox '(:ok t :backend seatbelt))))
-                 "sandbox-exec ok"))
-  ;; the fact is the sandbox's own check
-  (require 'drgnx-sandbox)
-  (cl-letf (((symbol-function 'drgnx-doctor--search) #'ignore)
-            ((symbol-function 'drgnx-sandbox-check) (lambda () '(:ok t :backend bwrap :version "9.9"))))
-    (should (equal (plist-get (plist-get (drgnx-doctor-facts) :sandbox) :version) "9.9"))))
+(defun drgnx-doctor-test--report (&rest report)
+  "Facts whose `ratatoskr doctor --json' answer is REPORT (keys :sandbox, :legacy …) beside the healthy one."
+  (let ((f (drgnx-doctor-test--facts)))
+    (plist-put f :ratatoskr
+               (plist-put (copy-sequence (plist-get f :ratatoskr)) :report
+                          (append report (plist-get (plist-get f :ratatoskr) :report))))))
 
-(ert-deftest drgnx-doctor/job-sandbox-problem ()
-  "A sandbox that cannot run is a warning with its reason and fix: jobs do not start, the rest of drgnx works."
-  (let ((r (drgnx-doctor-check 'job-sandbox (drgnx-doctor-test--facts
-                                             :sandbox '(:ok nil :backend bwrap :reason "bubblewrap (bwrap) is not installed"
+(ert-deftest drgnx-doctor/job-sandbox-from-ratatoskr ()
+  "In the Agents group, from Ratatoskr's `sandbox' section: the back end and version, or the reason and fix."
+  (should (equal (plist-get (alist-get 'job-sandbox drgnx-doctor--checks) :group) "Agents"))
+  (let ((r (drgnx-doctor-check 'job-sandbox (drgnx-doctor-test--report
+                                             :sandbox '(:ok t :backend "bwrap" :version "0.12.0" :landlock_abi 10)))))
+    (should (equal r '(ok "bwrap 0.12.0 ok" nil))))
+  (should (equal (nth 1 (drgnx-doctor-check 'job-sandbox (drgnx-doctor-test--report :sandbox '(:ok t :backend "seatbelt"))))
+                 "sandbox-exec ok"))
+  ;; a sandbox that cannot run is a warning with its reason and fix: jobs do not start, the rest of drgnx works
+  (let ((r (drgnx-doctor-check 'job-sandbox (drgnx-doctor-test--report
+                                             :sandbox '(:ok nil :backend "none" :reason "bubblewrap (bwrap) is not installed"
                                                             :fix "sudo dnf install bubblewrap")))))
     (should (eq (car r) 'warn))
     (should (string-search "bubblewrap (bwrap) is not installed" (nth 1 r)))
     (should (string-search "jobs" (nth 1 r)))
     (should (equal (nth 2 r) "sudo dnf install bubblewrap")))
-  (should (eq (car (drgnx-doctor-check 'job-sandbox (drgnx-doctor-test--facts :sandbox '(:error "boom")))) 'warn))
-  (require 'drgnx-sandbox)
-  (cl-letf (((symbol-function 'drgnx-doctor--search) #'ignore)
-            ((symbol-function 'drgnx-sandbox-check) (lambda () (error "Boom"))))
-    (should (equal (plist-get (drgnx-doctor-facts) :sandbox) '(:error "Boom")))))
+  ;; no section (an older binary) or no answer at all
+  (should (equal (drgnx-doctor-check 'job-sandbox (drgnx-doctor-test--facts))
+                 '(info "not checked: no answer from Ratatoskr" nil)))
+  (should (eq (drgnx-doctor-test--status 'job-sandbox (drgnx-doctor-test--facts :ratatoskr nil)) 'info))
+  ;; the Lisp sandbox's fact is gone
+  (should-not (fboundp 'drgnx-doctor--sandbox))
+  (should-not (plist-member (cl-letf (((symbol-function 'drgnx-doctor--search) #'ignore)) (drgnx-doctor-facts)) :sandbox)))
+
+(ert-deftest drgnx-doctor/lisp-runtime-fail-when-a-lisp-hub-runs ()
+  (should (equal (plist-get (alist-get 'lisp-runtime drgnx-doctor--checks) :group) "Agents"))
+  (let ((r (drgnx-doctor-check 'lisp-runtime
+                               (drgnx-doctor-test--report
+                                :legacy '(:moved nil :left nil :lisp_processes ((:pid 4242 :what "drgnx-hub-main")))))))
+    (should (eq (car r) 'fail))
+    (should (equal (nth 1 r) "a Lisp hub still runs (pid 4242)"))
+    (should (equal (nth 2 r) "`ratatoskr stop', then `kill 4242'; drgnx starts Ratatoskr again"))))
+
+(ert-deftest drgnx-doctor/lisp-runtime-warn-for-an-outside-config ()
+  (let ((r (drgnx-doctor-check 'lisp-runtime
+                               (append (list :coord-configs '("~/.claude.json")) (drgnx-doctor-test--report :legacy '(:moved nil))))))
+    (should (eq (car r) 'warn))
+    (should (equal (nth 1 r) "outside agent config ~/.claude.json still starts the Lisp coordination server"))
+    (should (equal (nth 2 r) "Agent settings → Register drgnx again"))))
+
+(ert-deftest drgnx-doctor/lisp-runtime-reads-the-agents-configs ()
+  "The fact names the config files whose MCP servers start the Lisp coordination server, and only those."
+  (let* ((dir (file-name-as-directory (make-temp-file "drgnx-doctor-agents" t)))
+         (process-environment (append (list (concat "CLAUDE_CONFIG_DIR=" dir "claude")
+                                            (concat "CODEX_HOME=" dir "codex")
+                                            (concat "GEMINI_CLI_HOME=" dir "gemini")
+                                            (concat "KIMI_CODE_HOME=" dir "kimi"))
+                                      process-environment))
+         (drgnx-agent-config-claude-managed-dir (concat dir "managed")))
+    (unwind-protect
+        (progn
+          (make-directory (concat dir "claude") t)
+          (with-temp-file (concat dir "claude/.claude.json")
+            (insert "{\"mcpServers\": {\"drgnx\": {\"command\": \"emacs\", \"args\": [\"--batch\", \"-l\", \"drgnx-coord-mcp\", \"-f\", \"drgnx-coord-mcp-main\"]},"
+                    " \"other\": {\"command\": \"npx\", \"args\": [\"x\"]}}}"))
+          (should (equal (drgnx-doctor--coord-configs) (list (abbreviate-file-name (concat dir "claude/.claude.json")))))
+          ;; Ratatoskr's bridge is not the Lisp server
+          (with-temp-file (concat dir "claude/.claude.json")
+            (insert "{\"mcpServers\": {\"drgnx\": {\"command\": \"/d/bin/ratatoskr\", \"args\": [\"mcp-bridge\", \"--outside\", \"--kind\", \"claude\"]}}}"))
+          (should-not (drgnx-doctor--coord-configs)))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-doctor/lisp-runtime-warn-for-command-jobs-left ()
+  (let ((r (drgnx-doctor-check 'lisp-runtime
+                               (drgnx-doctor-test--report :legacy '(:moved ("hub/x") :left ("jobs/a" "jobs/b") :lisp_processes nil)))))
+    (should (eq (car r) 'warn))
+    (should (equal (nth 1 r) "2 command jobs from before phase 7 still run"))
+    (should (equal (nth 2 r) "they finish on their own; drgnx moves their folders after"))))
+
+(ert-deftest drgnx-doctor/lisp-runtime-ok-when-gone ()
+  (should (equal (drgnx-doctor-check 'lisp-runtime
+                                     (drgnx-doctor-test--report :legacy '(:moved ("hub/a" "hub/b" "sandbox") :left nil :lisp_processes nil)))
+                 '(ok "gone; old files in hub/migrated-p7/ (3)" nil)))
+  (should (equal (drgnx-doctor-check 'lisp-runtime (drgnx-doctor-test--report :legacy '(:moved nil :left nil :lisp_processes nil)))
+                 '(ok "gone" nil)))
+  ;; the parsed answer holds vectors
+  (should (equal (nth 1 (drgnx-doctor-check 'lisp-runtime (drgnx-doctor-test--report :legacy '(:moved ["a"] :left [] :lisp_processes []))))
+                 "gone; old files in hub/migrated-p7/ (1)")))
+
+(ert-deftest drgnx-doctor/lisp-runtime-info-without-an-answer ()
+  (should (equal (drgnx-doctor-check 'lisp-runtime (drgnx-doctor-test--facts :ratatoskr nil))
+                 '(info "not checked: no answer from Ratatoskr" nil))))
 
 (ert-deftest drgnx-doctor/facts-from-this-emacs ()
   (let ((f (cl-letf (((symbol-function 'drgnx-doctor--search) #'ignore)) (drgnx-doctor-facts))))
@@ -970,10 +1016,11 @@ what `ratatoskr doctor --json' said)."
   (let ((check (lambda (&rest over) (drgnx-doctor-check 'ratatoskr (apply #'drgnx-doctor-test--rtsk over)))))
     (let ((r (funcall check :sandbox '(:backend "bwrap" :version "0.12.0" :ok t :landlock_abi 10 :in_use nil))))
       (should (eq (car r) 'ok))
-      (should (string-search "job sandbox backend: bwrap 0.12.0 works here (Landlock ABI 10, seccomp); job agents do not use it yet (phase 6)"
-                             (nth 1 r))))
+      (should (string-search "job sandbox backend: bwrap 0.12.0 works here (Landlock ABI 10, seccomp)"
+                             (nth 1 r)))
+      (should-not (string-search "do not use it yet" (nth 1 r))))
     (let ((r (funcall check :sandbox '(:backend "seatbelt" :ok t :landlock_abi 0))))
-      (should (string-search "job sandbox backend: seatbelt works here (Seatbelt);" (nth 1 r))))
+      (should (string-search "job sandbox backend: seatbelt works here (Seatbelt)" (nth 1 r))))
     ;; unavailable: the reason and the fix, and the status is the one without a sandbox section
     (let ((r (funcall check :sandbox '(:backend "none" :ok nil :landlock_abi 0 :reason "inside a container: bubblewrap needs user namespaces the container does not give"))))
       (should (eq (car r) 'ok))
