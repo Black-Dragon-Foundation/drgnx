@@ -317,6 +317,39 @@ hub hands that permission request to the editor."
         (should (= 2 (cl-count 'turn-end events :key #'car)))
         (should (= 2 (cl-count 'turn-start events :key #'car)))))))
 
+(ert-deftest drgnx-agents-mirror/a-failed-turn-ends-at-its-error-entry ()
+  ;; a turn that fails writes an `error' entry (marked `stop': it ends the turn), not a `stop' one; with its busy
+  ;; status throttled away it must still run `turn-end', once; an error in the middle of a turn (a refused wait) is
+  ;; not marked and ends nothing
+  (let (events)
+    (drgnx-agents-mirror-test--hooks events
+      (drgnx-agents-mirror--apply-snapshot (drgnx-agents-mirror-test--snap "idle" "T#1"))
+      (let ((turn (lambda (seq i)
+                    (drgnx-agents-mirror--event
+                     "agent-entries" (list :id "h-t" :seq seq
+                                           :entries (list (list i '(:type "user" :text "go"))
+                                                          (list (1+ i) '(:type "error" :text "boom" :stop "Error"))))))))
+        (funcall turn 1 0)
+        (should (equal (mapcar #'car (reverse events)) '(start turn-start turn-end)))
+        (funcall turn 2 0)                  ; the same entries again: nothing
+        (should (= 3 (length events)))
+        (funcall turn 3 2)                  ; the next failed turn: one more
+        (should (= 2 (cl-count 'turn-end events :key #'car)))
+        (should (= 2 (cl-count 'turn-start events :key #'car))))
+      ;; a refused wait inside a turn: no end
+      (drgnx-agents-mirror--event "agent-entries" (list :id "h-t" :seq 4
+                                                        :entries (list (list 4 '(:type "error" :text "your job runs")))))
+      (should (= 2 (cl-count 'turn-end events :key #'car))))))
+
+(ert-deftest drgnx-agents-mirror/a-turn-the-status-ended-is-not-ended-again-by-its-error-entry ()
+  (let (events)
+    (drgnx-agents-mirror-test--hooks events
+      (dolist (status '("idle" "busy" "idle"))
+        (drgnx-agents-mirror--apply-snapshot (drgnx-agents-mirror-test--snap status "T#1")))
+      (drgnx-agents-mirror--event "agent-entries"
+                                  (list :id "h-t" :seq 1 :entries (list (list 0 '(:type "error" :text "boom" :stop "Error")))))
+      (should (equal (mapcar #'car (reverse events)) '(start turn-start turn-end))))))
+
 (ert-deftest drgnx-agents-mirror/a-turn-the-status-ended-is-not-ended-again-by-its-stop-entry ()
   (let (events)
     (drgnx-agents-mirror-test--hooks events

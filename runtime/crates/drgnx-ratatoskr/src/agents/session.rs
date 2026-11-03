@@ -2849,6 +2849,8 @@ impl Session {
                 Err(hermod::Error::Closed) => {}
                 Err(e) => {
                     rest.insert("text".into(), json!(e.to_string()));
+                    // the editor tells this error, which ends the turn, from one inside a turn (a refused wait)
+                    rest.insert("stop".into(), json!("Error"));
                     st.push(EntryType::Error, rest);
                     st.paused = !st.ending;
                 }
