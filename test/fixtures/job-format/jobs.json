@@ -1,0 +1,55 @@
+[
+  {
+    "id": "job-0007",
+    "title": "Seam",
+    "status": "running",
+    "repo": "/work/repo",
+    "plan": "/work/plan.md",
+    "budget": 5.0,
+    "spent": 1.5,
+    "estimate": {"usd": 3.456, "tokens": 330000, "unpriced": ["local-llm", "other"]},
+    "warnings": ["budget does not cover the unpriced profiles"],
+    "tasks": [
+      {"n": 1, "title": "Do the thing", "role": "implement", "profile": "mock-claude", "status": "done", "deps": null},
+      {"n": 2, "title": "Check the thing", "role": "review", "profile": "mock-gemini", "status": "claimed", "deps": [1]},
+      {"n": "22b", "title": "Wrap up", "role": "implement", "profile": "mock-claude", "status": "pending", "deps": [1, 2]}
+    ],
+    "order": [1, 2, "22b"],
+    "agents": [
+      {"id": "s-3", "profile": "mock-gemini", "status": "running", "task": "job-0007#2", "review": true}
+    ],
+    "cards": [
+      {"id": 4, "kind": "ci", "task": "job-0007#1", "title": "CI is red", "actions": [["fix", "Fix"]], "data": null},
+      {"id": 5, "kind": "proposal", "task": null, "title": "Approve the plan", "actions": [], "data": null}
+    ],
+    "messages": [
+      {"id": 9, "sender": "agent:s-3", "text": "Is the seam public?", "state": "new"}
+    ],
+    "decisions": [],
+    "permissions": [
+      {"agent": "s-3", "title": "Run cargo test"}
+    ]
+  },
+  {
+    "id": "job-0008",
+    "title": "Small",
+    "status": "proposed",
+    "repo": "/work/repo",
+    "plan": "/work/small.md",
+    "budget": null,
+    "spent": null,
+    "estimate": {"tokens": 1200},
+    "warnings": null,
+    "tasks": [
+      {"n": 1, "title": "One", "role": "implement", "profile": "mock-claude", "status": "ready", "deps": null}
+    ],
+    "order": [1],
+    "agents": null,
+    "cards": [
+      {"id": 1, "kind": "proposal", "task": null, "title": "Approve Small", "actions": [["approve", "Approve"]], "data": null}
+    ],
+    "messages": null,
+    "decisions": null,
+    "permissions": null
+  }
+]

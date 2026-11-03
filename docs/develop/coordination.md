@@ -685,8 +685,8 @@ nudged (`:nudged`; cleared on review and on retry) and when a task in review beg
 reset them; `fallback` events carry job,
 task, agent, from, to, why, and the successor's handover names the decision log's version. The hub's `job/propose`, `job/approve`, `job/status`, `job/stop`,
 `job/resume` ([hub.md](hub.md)) answer `drgnx-job-summary` (a task's `:profile` is its current agent's, else the route's first); `job/resume`
-refuses a job with no job worktree (a rejected proposal); `bin/drgnx job` and the Plan Job commands use them
-(`--json` gives empty list fields as `[]`, `drgnx-job--json-lists`; `--budget` must be a number). A proposal with a
+refuses a job with no job worktree (a rejected proposal); `bin/drgnx job` (`ratatoskr job`, `job_cli.rs`: one call each, text from `format_job`
+or the answer with `--json`) and the Plan Job commands use them (`--budget` must be a number, else exit 2). A proposal with a
 budget lists in its data (`:unpriced-budget`) the profiles of its routes whose gateway chain has a provider without a
 `:price`, and warns (the proposal card, `:warnings` in the summary): the gateway cannot count what they spend.
 A notification to the hub (`coord/notify`) carries no id and gets no answer: the sender has hung up by then.
