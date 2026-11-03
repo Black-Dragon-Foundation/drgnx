@@ -194,7 +194,7 @@ the temp dir) and sleeps.  Return the process."
       ;; the default is half an hour: long enough for a queue of test runs, short enough that a hung holder shows
       (should (string-search ":-1800}" (with-temp-buffer (insert-file-contents drgnx-lease-test--bin) (buffer-string)))))))
 
-;; DET-LEASE-1: the light cap is 2G (the slot script's), heavy 4G
+;; the light cap is 2G, heavy 4G
 (ert-deftest drgnx-lease/the-memory-caps-are-2g-light-and-4g-heavy ()
   (drgnx-lease-test--with
     (let* ((bindir (drgnx-lease-test--file "fakebin"))

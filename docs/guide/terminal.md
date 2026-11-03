@@ -30,7 +30,7 @@ The table is `drgnx-tty-terminals` in `core/drgnx-tty.el`; onboarding and the do
 
 ## What each terminal can do
 
-Each row is **reported** (drgnx's builders have not run it) or **verified**: a test tier ran drgnx in it (the notes
+Each row is **reported** (no test tier has run it) or **verified**: a test tier ran drgnx in it (the notes
 under the table say what ran and what did not). A reported cell comes from official documentation: the linked page,
 or another official page or source named in [The fixes](#the-fixes), such as the kitty keyboard protocol's list of
 terminals, xterm's manual, tmux's manual, or the default shortcuts Ptyxis ships. A cell marked **(unconfirmed)** rests

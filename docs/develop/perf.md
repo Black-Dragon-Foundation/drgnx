@@ -129,7 +129,7 @@ judge them; the paired A/B run at n >= 100 does. The numbers the design fixed - 
 **Seeding.** `:alloc` and `:rows` come from the Emacs 31.1 container (the GUI image; `bin/drgnx test --container`
 has no `--perf` yet, so the tier runs by hand: `podman run --memory 4g --memory-swap 4g --security-opt
 seccomp=unconfined --security-opt label=disable -v CHECKOUT:/src:ro -v OUT:/out -e DRGNX_PERF_RESULTS=/out/r.json -w
-/src drgnx-test-gui:f45 bin/drgnx test --perf`, through the heavy slot), twice: allocation and rows must agree
+/src drgnx-test-gui:f45 bin/drgnx test --perf`), twice: allocation and rows must agree
 between the runs. The checkout is not built there, so the figures are those of code loaded from source; compiled
 code allocates less, so a built checkout stays under them. A workload that could not run in the container has no
 gated rows yet and is named, with the reason, in `drgnx-perf-run-unseeded` (a test checks both ways).
@@ -164,7 +164,7 @@ allocation grows with the command's wall time: in the Emacs 31.1 GUI container o
 `:alloc :p50` 12732 / 15755, CI's slower runner (input p50 51 ms) gave 33072 against a seed run of 25252 (budget 31565).
 An A/B run against the seed commit (047955be, host, n=176 per side) found 8074 against 8379 objects: no code change in
 the allocation. So the budget follows the larger of the two CI-image measurements, 33072 x 1.25 = 41340, and not a
-laptop's number; the other allocation rows, whose commands do not wait on a stream, agree to a few percent between
+local machine's number; the other allocation rows, whose commands do not wait on a stream, agree to a few percent between
 machines and keep their seeds. A row of this kind that moves again is judged by `--ab` first, not by re-seeding.
 
 The keys also used to arrive in bursts. The harness types onto `unread-command-events`, and while the view's slices and
@@ -490,9 +490,9 @@ The settings gates (start, provenance, watchers, page open, `drgnx sync`'s index
 deferral stands, so there is no `test/perf/settings-*.el`.
 
 Ratatoskr's reader is timed by `runtime/crates/huginn/tests/timing.rs`: 64 KiB of settings-shaped data, median of 200
-reads at most 1 ms. It is `#[ignore]`, run once and alone on the perf island, optimized:
+reads at most 1 ms. It is `#[ignore]`, run once and alone on a pinned host, optimized:
 `perf-exclusive.sh env DRGNX_PERF_CPUS=2 … cargo test --release -p huginn --test timing -- --ignored --nocapture`
-(2026-10-24, desktop, 2 pinned CPUs: median 0.60 ms, max 4.2 ms for 65,677 bytes).
+(2026-10-24, a pinned host, 2 CPUs: median 0.60 ms, max 4.2 ms for 65,677 bytes).
 
 In CI the `huginn_read` fuzz target runs in `runtime.yml`'s fuzz job, and `ci.yml`'s Nidhogg job builds huginn's `dump`
 example so the ERT differential (`drgnx-huginn/differential-fresh-seed`) compares it with Emacs's reader.
