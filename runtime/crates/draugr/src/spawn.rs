@@ -380,7 +380,7 @@ impl Child {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::io::{AsyncBufReadExt, BufReader};
 
     fn sh(script: &str, stdin_null: bool) -> Spec {
         Spec {
@@ -568,6 +568,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn pinned_spawn_survives_its_callers_thread() {
+        use tokio::io::AsyncWriteExt;
         // The runtime reports each thread that retires (its tid, from the thread itself).
         let (stopped_tx, mut stopped) = tokio::sync::mpsc::unbounded_channel();
         let rt = tokio::runtime::Builder::new_multi_thread()
