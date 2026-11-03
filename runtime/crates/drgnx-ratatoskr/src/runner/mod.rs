@@ -1482,7 +1482,6 @@ mod resume_tests {
             sid: None,
             job: None,
             conn_id: 1,
-            backend: false,
         }
     }
 
