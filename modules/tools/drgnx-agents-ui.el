@@ -22,7 +22,7 @@
 (require 'drgnx-view)
 (require 'drgnx-trust)
 (require 'drgnx-agents)
-(require 'drgnx-jobs)
+(require 'drgnx-exec)
 
 ;; `agents' is a segment of the status bar, defined by this module's setup (the bar's library comes with `ui/face')
 (declare-function drgnx-statusbar-define-segment "drgnx-statusbar")
@@ -82,7 +82,7 @@
 
 (defun drgnx-agents-ui--jobs ()
   (unless (and drgnx-agents-ui--jobs-cache (< (- (float-time) (car drgnx-agents-ui--jobs-cache)) 5))
-    (setq drgnx-agents-ui--jobs-cache (cons (float-time) (ignore-errors (drgnx-jobs-list)))))
+    (setq drgnx-agents-ui--jobs-cache (cons (float-time) (ignore-errors (drgnx-exec-list)))))
   (cdr drgnx-agents-ui--jobs-cache))
 
 (defun drgnx-agents-ui--entries ()
@@ -611,18 +611,18 @@ exists is connected to (asynchronously)."
 
 (defun drgnx-agents-ui-job-log (id)
   "Show durable job ID's log."
-  (interactive (list (completing-read "Job: " (mapcar (lambda (j) (plist-get j :id)) (drgnx-jobs-list)) nil t)))
+  (interactive (list (completing-read "Job: " (mapcar (lambda (j) (plist-get j :id)) (drgnx-exec-list)) nil t)))
   (with-current-buffer (get-buffer-create (format "*job: %s*" id))
-    (let ((inhibit-read-only t)) (erase-buffer) (insert (drgnx-jobs-log id)))
+    (let ((inhibit-read-only t)) (erase-buffer) (insert (drgnx-exec-log id 20000)))
     (special-mode)
     (pop-to-buffer (current-buffer))))
 
 (defun drgnx-agents-ui-job-stop (id)
   "Stop durable job ID."
   (interactive (list (completing-read "Stop job: " (mapcar (lambda (j) (plist-get j :id))
-                                                           (seq-filter (lambda (j) (eq (plist-get j :status) 'running)) (drgnx-jobs-list)))
+                                                           (seq-filter (lambda (j) (eq (plist-get j :status) 'running)) (drgnx-exec-list)))
                                       nil t)))
-  (drgnx-jobs-stop id))
+  (drgnx-exec-stop id))
 
 ;;;; Edit review (the agent's fs/write_text_file)
 

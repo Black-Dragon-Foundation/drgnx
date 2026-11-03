@@ -1,0 +1,14 @@
+{"scenario": "exec/an-agent-cannot-ask-for-no-time-box", "requires": ["v1", "fake-backend"], "doc": "A session (an agent) that asks job_start for no_timebox is refused (the tool's error names the field) and no job starts: only the user's jobs may run without a time box."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "s-0000000a", "job": "j1", "cwd": "$HOME", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18"}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "job_start", "arguments": {"argv": ["true"], "no_timebox": true}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "$string"}], "isError": true}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "exec/list", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"jobs": []}}, "within_ms": 10000}

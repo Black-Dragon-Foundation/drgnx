@@ -1075,7 +1075,7 @@ open_start() { # start drgnx's daemon (the systemd unit when it is enabled), wai
   else
     log="$(drgnx_dir state)/daemon.log"
     mkdir -p "${log%/*}"
-    # in its own session, outliving this shell: setsid, else perl (macOS), as core/drgnx-jobs.el does
+    # in its own session, outliving this shell: setsid, else perl (macOS), as drgnx-onboard--detach does
     emacs_bin >/dev/null || return 1   # none found: say so, start nothing
     if command -v setsid >/dev/null 2>&1; then
       setsid -f "$(emacs_bin || echo false)" --bg-daemon="$name" --init-directory="$here/init" </dev/null >>"$log" 2>&1

@@ -35,21 +35,15 @@
           (should (string-search want text)))))))
 
 (ert-deftest drgnx-agents-ui/the-list-has-sessions-and-jobs ()
-  (let* ((root (make-temp-file "drgnx-ui-jobs" t))
-         (process-environment (cons (concat "XDG_STATE_HOME=" root) process-environment))
+  (let* ((drgnx-agents-ui--jobs-cache nil)
          (drgnx-agents--sessions (list (drgnx-agents--make :name "mock · p" :status 'idle :queue '("a" "b") :paused t :via 'gateway))))
-    (unwind-protect
-        (progn
-          (make-directory (expand-file-name "drgnx/jobs/20261017-000000-1" root) t)
-          (with-temp-file (expand-file-name "drgnx/jobs/20261017-000000-1/job.eld" root)
-            (prin1 '(:id "20261017-000000-1" :name "index" :launcher detached) (current-buffer)))
-          (write-region "0" nil (expand-file-name "drgnx/jobs/20261017-000000-1/exit" root) nil 'silent)
-          (let ((rows (mapcar #'cadr (drgnx-agents-ui--entries))))
-            (should (equal (aref (car rows) 4) "gateway"))                 ; how its traffic goes
-            (should (equal (aref (car rows) 5) "2 queued (paused)"))
-            (should (equal (aref (cadr rows) 0) "job: index"))
-            (should (equal (aref (cadr rows) 1) "exited"))))
-      (delete-directory root t))))
+    (cl-letf (((symbol-function 'drgnx-exec-list)
+               (lambda () (list (list :id "20261017-000000-1" :name "index" :status 'done :exit 0)))))
+      (let ((rows (mapcar #'cadr (drgnx-agents-ui--entries))))
+        (should (equal (aref (car rows) 4) "gateway"))                 ; how its traffic goes
+        (should (equal (aref (car rows) 5) "2 queued (paused)"))
+        (should (equal (aref (cadr rows) 0) "job: index"))
+        (should (equal (aref (cadr rows) 1) "done"))))))
 
 (ert-deftest drgnx-agents-ui/last-active-column ()
   ;; Like Zed's agent list: how long ago each agent acted, from what the UI saw change.
@@ -267,7 +261,7 @@ answers recorded in ANSWERS)."
 (ert-deftest drgnx-agents-ui/the-list-reads-jobs-at-most-every-few-seconds ()
   ;; I9: the list redraws often while an agent streams; jobs are read on a slower cadence.
   (let ((calls 0) (drgnx-agents-ui--jobs-cache nil) (drgnx-agents--sessions nil))
-    (cl-letf (((symbol-function 'drgnx-jobs-list) (lambda () (setq calls (1+ calls)) nil)))
+    (cl-letf (((symbol-function 'drgnx-exec-list) (lambda () (setq calls (1+ calls)) nil)))
       (drgnx-agents-ui--entries) (drgnx-agents-ui--entries) (drgnx-agents-ui--entries)
       (should (= calls 1)))))
 

@@ -22,7 +22,7 @@
 (require 'drgnx-search-chunk)
 (require 'drgnx-ai-client)
 (require 'drgnx-settings-defaults)
-(require 'drgnx-jobs)
+(require 'drgnx-exec)
 (require 'drgnx-gc)
 
 (defvar drgnx-hub--editor)              ; drgnx-hub-client.el: (TOKEN . URL) once the hub gave this Emacs its editor token
@@ -297,34 +297,18 @@ only — never lists the jobs — so a timer may ask."
   (drgnx-search-index--lock-live-p (drgnx-search-index--lock-file root)))
 
 (defun drgnx-search-index--running-job (root)
-  "The running indexing job for ROOT (a directory name without trailing slash), if any.  Lists every job (a
-process query each): for commands the user runs, never a timer."
+  "The running indexing job for ROOT (a directory name without trailing slash), if any.  Reads the job cache
+\(`drgnx-exec-list'): no call to the hub."
   (cl-find-if (lambda (job) (and (eq (plist-get job :status) 'running)
                                  (string-prefix-p "search-index:" (or (plist-get job :name) ""))
-                                 (member root (plist-get job :command))))
-              (drgnx-jobs-list)))
+                                 (member root (plist-get job :argv))))
+              (drgnx-exec-list)))
 
 (defun drgnx-search-index-busy-p (root)
   "Non-nil when the project at ROOT is being indexed: its lock is held, or one of its index jobs runs (one that
-has not taken the lock yet).  For commands the user runs: it lists the jobs."
+has not taken the lock yet).  Reads the job cache: no call to the hub."
   (or (drgnx-search-index-running-p root)
       (drgnx-search-index--running-job (directory-file-name (expand-file-name root)))))
-
-(defun drgnx-search-index--reap (root)
-  "Remove the directories of ROOT's finished index jobs (exited or stopped: they have an exit file; gone: a pid
-file but no live process) but the newest.
-Reads each job's job.eld and looks for its exit file; only a job of ROOT without one costs a process query."
-  (let ((dir (drgnx-jobs-dir)) (kept nil))
-    (when (file-directory-p dir)
-      (dolist (id (sort (directory-files dir nil "\\`[0-9]") (lambda (a b) (string> a b))))
-        (let* ((jdir (drgnx-jobs--dir id)) (job (drgnx-jobs--read (expand-file-name "job.eld" jdir))))
-          (when (and (string-prefix-p "search-index:" (or (plist-get job :name) ""))
-                     (member root (plist-get job :command))
-                     (or (file-exists-p (expand-file-name "exit" jdir))
-                         ;; killed without an exit file (a reboot, a SIGKILL): started, but its process is gone
-                         (and (file-exists-p (expand-file-name "pid" jdir))
-                              (eq (plist-get (drgnx-jobs-get id) :status) 'gone))))
-            (if kept (ignore-errors (delete-directory jdir t)) (setq kept t))))))))
 
 ;; The job is a fresh process: it gets the editor's state directories (so it writes the index and lock the
 ;; editor reads) and the gateway's address; it never gets a key (it asks the hub for its own token).
@@ -346,41 +330,46 @@ directory."
 (defconst drgnx-search-index--start-grace 30
   "Seconds a job just started may take to hold the lock: a second start in that time waits for it.")
 
+(defvar drgnx-search-index--asked (make-hash-table :test #'equal)
+  "Project root → when (`float-time') this Emacs last asked the hub to start its index job: the hub answers later, and
+a second start in between must wait.  One entry per project that was indexed; an entry past the grace is ignored.")
+
 (defun drgnx-search-index--starting-p (root)
-  "Non-nil when a job of ROOT (a directory name without trailing slash) was started a moment ago and has no
-exit file: it may not hold the lock yet, and a second job would only exit with \"indexing\".  Reads the job
-directories, lists no process."
-  (let ((dir (drgnx-jobs-dir)))
-    (and (file-directory-p dir)
-         (cl-some (lambda (id)
-                    (let ((jdir (drgnx-jobs--dir id)))
-                      (and (not (file-exists-p (expand-file-name "exit" jdir)))
-                           (when-let* ((attrs (file-attributes jdir)))
-                             (< (float-time (time-since (file-attribute-modification-time attrs)))
-                                drgnx-search-index--start-grace))
-                           (let ((job (drgnx-jobs--read (expand-file-name "job.eld" jdir))))
-                             (and (string-prefix-p "search-index:" (or (plist-get job :name) ""))
-                                  (member root (plist-get job :command)))))))
-                  (directory-files dir nil "\\`[0-9]")))))
+  "Non-nil when a job of ROOT (a directory name without trailing slash) was started a moment ago: it may not hold
+the lock yet, and a second job would only exit with \"indexing\".  Reads this Emacs's own requests and the job
+cache: no call to the hub."
+  (let ((asked (gethash root drgnx-search-index--asked)))
+    (or (and asked (< (- (float-time) asked) drgnx-search-index--start-grace))
+        (cl-some (lambda (job)
+                   (and (eq (plist-get job :status) 'running)
+                        (string-prefix-p "search-index:" (or (plist-get job :name) ""))
+                        (member root (plist-get job :argv))
+                        (plist-get job :started)
+                        (< (- (float-time) (float-time (date-to-time (plist-get job :started))))
+                           drgnx-search-index--start-grace)))
+                 (drgnx-exec-list)))))
 
 (defun drgnx-search-index-start (root &optional rebuild)
-  "Index the project at ROOT in a background job (REBUILD: from scratch); returns the job's id, or nil when an
-indexer holds ROOT's lock or a job of ROOT started within the last 30 seconds (nothing starts then).  The finished
-index jobs of ROOT are removed first, the newest kept.
-The job is a batch Emacs of the running version, memory-capped at 1G and niced where the jobs run under systemd.
-Never lists the jobs (the re-index timer calls this), but a job of ROOT without an exit file costs a process query
-(under systemd a `systemctl' call) while the old jobs are reaped; a command the user runs asks
-`drgnx-search-index-busy-p' first."
+  "Ask the hub to index the project at ROOT in a background job (REBUILD: from scratch); t when it was asked, nil
+when an indexer holds ROOT's lock or a job of ROOT started within the last 30 seconds (nothing starts then).  The hub
+answers later (a start that fails is a message).
+The job is a batch Emacs of the running version, memory-capped at 1G (Linux) and niced.  Never waits and reads only
+caches (the re-index timer calls this); a command the user runs asks `drgnx-search-index-busy-p' first."
   (let ((root (directory-file-name (expand-file-name root))))
     (unless (or (drgnx-search-index-running-p root) (drgnx-search-index--starting-p root))
-      (drgnx-search-index--reap root)
-      (drgnx-jobs-start (format "search-index: %s" (file-name-nondirectory root))
+      (puthash root (float-time) drgnx-search-index--asked)
+      (drgnx-exec-start (format "search-index: %s" (file-name-nondirectory root))
                         (append (list (expand-file-name invocation-name invocation-directory)
                                       "--batch" "-Q" "--eval" "(setq load-prefer-newer t)" "-L" drgnx-search-index--core-dir
                                       "-l" "drgnx-search-index" "-f" "drgnx-search-index-cli" root)
                                 (and rebuild (list "--rebuild")))
-                        :cwd root :memory-max "1G" :nice 10
-                        :env (drgnx-search-index--job-env)))))
+                        :cwd root :memory-max (and (eq system-type 'gnu/linux) "1G") :nice 10 :timebox 86400
+                        :env (drgnx-search-index--job-env)
+                        :callback (lambda (id why)
+                                    (unless id
+                                      (remhash root drgnx-search-index--asked)
+                                      (message "drgnx: %s" why))))
+      t)))
 
 (provide 'drgnx-search-index)
 ;;; drgnx-search-index.el ends here

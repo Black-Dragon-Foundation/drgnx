@@ -7,7 +7,7 @@
 (require 'cl-lib)
 (require 'drgnx)
 (require 'drgnx-agents)
-(require 'drgnx-jobs)
+(require 'drgnx-exec)
 
 (defconst drgnx-live-test--websocket
   (or (locate-library "websocket")
@@ -37,7 +37,7 @@ no agents, and everything closed afterwards."
           (drgnx-live--browser (list :port port :ws (format "ws://127.0.0.1:%d/devtools/browser/mock" port) :job "job-live")))
      ;; batch Emacs has no display: the view needs a frame that shows images (a text frame is tested apart)
      (cl-letf (((symbol-function 'display-images-p) (lambda (&optional _) t))
-               ((symbol-function 'drgnx-jobs-get)
+               ((symbol-function 'drgnx-exec-get)
                 (lambda (id) (and (equal id "job-live") (list :id id :status 'running)))))
        (unwind-protect (drgnx-test-with-state ,@body)
          (when (get-buffer "*drgnx live*") (kill-buffer "*drgnx live*"))
@@ -223,15 +223,16 @@ no agents, and everything closed afterwards."
          ;; the "browser": a child process its lock names, which stopping the job ends
          (chrome (make-process :name "drgnx-live-test-chrome" :command '("sleep" "60") :noquery t))
          (s (drgnx-agents--make :name "a" :profile "claude")))
-    (cl-letf (((symbol-function 'drgnx-jobs-start)
+    (cl-letf (((symbol-function 'drgnx-exec-start)
                (lambda (name command &rest keys)
                  (push (list name command keys) starts)
                  ;; the browser writes its port where its profile is
                  (let ((d (substring (seq-find (lambda (a) (string-prefix-p "--user-data-dir=" a)) command) 16)))
                    (write-region "9555\n/devtools/browser/abc\n" nil (expand-file-name "DevToolsActivePort" d) nil 'silent))
-                 "job-1"))
-              ((symbol-function 'drgnx-jobs-get) (lambda (id) (and (equal id "job-1") (list :id id :status status))))
-              ((symbol-function 'drgnx-jobs-stop) (lambda (id) (push id stopped) (setq status 'stopped) (delete-process chrome))))
+                 (funcall (plist-get keys :callback) "job-1" nil)
+                 nil))
+              ((symbol-function 'drgnx-exec-get) (lambda (id) (and (equal id "job-1") (list :id id :status status))))
+              ((symbol-function 'drgnx-exec-stop) (lambda (id) (push id stopped) (setq status 'stopped) (delete-process chrome))))
       (unwind-protect
           (let ((drgnx-agents-env-functions (list #'drgnx-live--agent-env)))   ; as the module's setup adds it
             ;; no browser yet: nothing extra
@@ -246,7 +247,7 @@ no agents, and everything closed afterwards."
               (dolist (flag (list "--headless=new" "--remote-debugging-address=127.0.0.1" "--remote-debugging-port=0"
                                   (concat "--user-data-dir=" dir) "--no-first-run"))
                 (should (member flag command)))
-              (should (equal (plist-get keys :memory-max) "1G")))
+              (should (equal (plist-get keys :memory-max) (and (eq system-type 'gnu/linux) "1G"))))
             (should (member "PLAYWRIGHT_MCP_CDP_ENDPOINT=http://127.0.0.1:9555" (drgnx-agents--env s)))
             (should (memq s drgnx-live--given))
             ;; a job that reads as gone (systemd's) runs as long as the browser's own lock names a live process
@@ -276,8 +277,8 @@ no agents, and everything closed afterwards."
          (dir (expand-file-name "profile" root)) (stopped nil)
          (drgnx-live--browser nil) (drgnx-live--given nil))
     (make-directory dir)
-    (cl-letf (((symbol-function 'drgnx-jobs-stop) (lambda (id) (push id stopped)))
-              ((symbol-function 'drgnx-jobs-get) (lambda (id) (list :id id :status 'stopped))))
+    (cl-letf (((symbol-function 'drgnx-exec-stop) (lambda (id) (push id stopped)))
+              ((symbol-function 'drgnx-exec-get) (lambda (id) (list :id id :status 'stopped))))
       (unwind-protect
           (drgnx-test-with-modules '(tools/live) :strict t
                                    (should (memq #'drgnx-live--agent-env drgnx-agents-env-functions))
@@ -295,7 +296,7 @@ no agents, and everything closed afterwards."
   :tags '(:timing)
   ;; no Chrome: a user error that names it, and nothing is started
   (let ((drgnx-live--browser nil) (drgnx-live-chrome-programs '("drgnx-no-such-chrome")) (started nil))
-    (cl-letf (((symbol-function 'drgnx-jobs-start) (lambda (&rest _) (setq started t) "x")))
+    (cl-letf (((symbol-function 'drgnx-exec-start) (lambda (&rest _) (setq started t) nil)))
       (let ((err (should-error (drgnx-live-browser) :type 'user-error)))
         (should (string-match-p "no Chrome or Chromium" (cadr err))))
       (should-not started)))
@@ -303,9 +304,9 @@ no agents, and everything closed afterwards."
   (let* ((root (make-temp-file "drgnx-live" t))
          (process-environment (cons (concat "XDG_STATE_HOME=" root) process-environment))
          (drgnx-live--browser nil) (drgnx-live-chrome-programs '("sh")) (drgnx-live-start-timeout 5) (t0 (float-time)))
-    (cl-letf (((symbol-function 'drgnx-jobs-start) (lambda (&rest _) "job-2"))
-              ((symbol-function 'drgnx-jobs-get) (lambda (id) (list :id id :status 'exited :exit 1)))
-              ((symbol-function 'drgnx-jobs-log) (lambda (&rest _) "Missing X server or $DISPLAY\n")))
+    (cl-letf (((symbol-function 'drgnx-exec-start) (lambda (_name _command &rest keys) (funcall (plist-get keys :callback) "job-2" nil) nil))
+              ((symbol-function 'drgnx-exec-get) (lambda (id) (list :id id :status 'failed :exit 1)))
+              ((symbol-function 'drgnx-exec-log) (lambda (&rest _) "Missing X server or $DISPLAY\n")))
       (unwind-protect
           (let ((err (should-error (drgnx-live-browser) :type 'user-error)))
             (should (string-match-p "exited" (cadr err)))
@@ -401,7 +402,7 @@ are pushed to STEERED as (NAME TEXT)."
         (setq steered nil)
         (drgnx-live-test--open)
         (with-current-buffer "*drgnx live*" (drgnx-live-take-over))
-        (cl-letf (((symbol-function 'drgnx-jobs-stop) #'ignore))
+        (cl-letf (((symbol-function 'drgnx-exec-stop) #'ignore))
           (drgnx-live-stop-browser))
         (should (equal steered '(("busy" "the user handed the browser back") ("busy" "the user is driving the browser; wait"))))
         (with-current-buffer "*drgnx live*" (should-not drgnx-live-driving-mode))))))
@@ -412,10 +413,10 @@ are pushed to STEERED as (NAME TEXT)."
          (process-environment (cons (concat "XDG_STATE_HOME=" root) process-environment))
          (drgnx-live--browser nil) (drgnx-live-chrome-programs '("sh")) (stopped nil)
          (dir (expand-file-name (format "drgnx/live-profile-%d" (emacs-pid)) root)))
-    (cl-letf (((symbol-function 'drgnx-jobs-start) (lambda (&rest _) "job-q"))
-              ((symbol-function 'drgnx-jobs-get) (lambda (id) (list :id id :status (if (member id stopped) 'stopped 'running))))
-              ((symbol-function 'drgnx-jobs-stop) (lambda (id) (push id stopped)))
-              ((symbol-function 'sleep-for) (lambda (&rest _) (signal 'quit nil))))
+    (cl-letf (((symbol-function 'drgnx-exec-start) (lambda (_name _command &rest keys) (funcall (plist-get keys :callback) "job-q" nil) nil))
+              ((symbol-function 'drgnx-exec-get) (lambda (id) (list :id id :status (if (member id stopped) 'stopped 'running))))
+              ((symbol-function 'drgnx-exec-stop) (lambda (id) (push id stopped)))
+              ((symbol-function 'accept-process-output) (lambda (&rest _) (signal 'quit nil))))
       (unwind-protect
           (progn
             (should (eq 'quit (condition-case nil (progn (drgnx-live-browser) 'returned) (quit 'quit))))
@@ -424,19 +425,18 @@ are pushed to STEERED as (NAME TEXT)."
             (should-not drgnx-live--browser))
         (delete-directory root t)))))
 
-(ert-deftest drgnx-live/stopping-never-waits-on-systemd ()
-  ;; the unit is asked to stop without waiting for it (an exit never sits out systemd's stop timeout)
+(ert-deftest drgnx-live/stopping-asks-the-hub-and-never-waits ()
+  ;; the hub is asked to stop the job (asynchronously: an exit never waits for it), nothing else runs
   (let (calls)
-    (cl-letf (((symbol-function 'drgnx-jobs-get) (lambda (id) (list :id id :status 'gone :unit "drgnx-job-x")))
-              ((symbol-function 'drgnx-jobs-stop) #'ignore)
-              ((symbol-function 'call-process) (lambda (prog &rest args) (push (cons prog args) calls) 0)))
+    (cl-letf (((symbol-function 'drgnx-exec-stop) (lambda (id) (push id calls)))
+              ((symbol-function 'call-process) (lambda (&rest _) (ert-fail "a process was run"))))
       (drgnx-live--stop-job "x"))
-    (should (equal calls '(("systemctl" nil nil nil "--user" "--no-block" "stop" "drgnx-job-x"))))))
+    (should (equal calls '("x")))))
 
 (ert-deftest drgnx-live/a-text-frame-cannot-show-the-view ()
   ;; batch Emacs is a text frame: a user-error that says so, and no browser is started for a view nobody can see
   (let ((drgnx-live--browser nil) (started nil))
-    (cl-letf (((symbol-function 'drgnx-jobs-start) (lambda (&rest _) (setq started t) "x")))
+    (cl-letf (((symbol-function 'drgnx-exec-start) (lambda (&rest _) (setq started t) nil)))
       (should-not (display-images-p))
       (let ((err (should-error (drgnx-live-view) :type 'user-error)))
         (should (string-match-p "needs a graphical frame" (cadr err))))
@@ -445,7 +445,7 @@ are pushed to STEERED as (NAME TEXT)."
 
 (ert-deftest drgnx-live/watch-needs-websocket-before-chrome ()
   (let ((drgnx-live--browser nil) (drgnx-live-chrome-programs '("sh")) (started nil) (orig (symbol-function 'require)))
-    (cl-letf (((symbol-function 'drgnx-jobs-start) (lambda (&rest _) (setq started t) "x"))
+    (cl-letf (((symbol-function 'drgnx-exec-start) (lambda (&rest _) (setq started t) nil))
               ((symbol-function 'display-images-p) (lambda (&optional _) t))
               ((symbol-function 'require)
                (lambda (feature &rest args)
@@ -713,3 +713,14 @@ the CDP calls it makes are collected in `drgnx-live-test--sent' (METHOD names, n
     (drgnx-live-mode)
     (should-not (memq #'drgnx-live--shown-again window-buffer-change-functions))
     (should-not (memq #'drgnx-live--resized window-size-change-functions))))
+
+(load (expand-file-name "test/fixtures/exec-calls-fixture" drgnx-dir) nil t)
+
+(ert-deftest drgnx-live/the-browser-runs-without-a-time-box ()
+  ;; the browser for agents stays up for days: the hub is asked for no time box, not for a day
+  (drgnx-test-with-exec-calls calls
+    (should (equal (drgnx-live--exec-start '("true") "/tmp" (+ (float-time) 5)) "job-1"))
+    (should (= 1 (length calls)))
+    (should (equal (plist-get (car calls) :name) "live-browser"))
+    (should (eq (plist-get (car calls) :no_timebox) t))
+    (should-not (plist-member (car calls) :timebox_s))))

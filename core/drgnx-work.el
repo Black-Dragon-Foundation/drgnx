@@ -160,30 +160,47 @@ on a timer, never inside the process filter that saw the turn end."
 
 (add-hook 'drgnx-agents-task-functions #'drgnx-work--agent-task)
 
-(declare-function drgnx-jobs-list "drgnx-jobs")
-(declare-function drgnx-jobs--dir "drgnx-jobs")
+(declare-function drgnx-exec-list "drgnx-exec")
 (declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
-(declare-function drgnx-jobs--text "drgnx-jobs")
+
+(defvar drgnx-work--job-starts (make-hash-table :test #'equal)
+  "Job id → (:head SHA :repo DIR): the commit HEAD pointed at, and the repository, when a job that works on a task was
+first seen (the hub keeps neither).  Bounded: `drgnx-work-collect-jobs' drops the ids the hub no longer lists.")
+
+(defun drgnx-work--job-start (job)
+  "JOB's (:head :repo) as first seen (`drgnx-work--job-starts'), read from its folder now when that was not yet."
+  (let ((id (plist-get job :id)))
+    (or (gethash id drgnx-work--job-starts)
+        (puthash id (list :head (drgnx-work--head (plist-get job :cwd)) :repo (drgnx-work--main-repo (plist-get job :cwd)))
+                 drgnx-work--job-starts))))
 
 (defun drgnx-work-collect-jobs ()
   "Record the commits of the jobs that worked on a task and ended (each job once), in the repository
-the job started in (its worktree may be gone by now).  Through the hub: `graph/record' with the key `job ID' (which
-the hub keeps, so a job is never collected twice), or the key alone (`graph/put-parsed') when there is nothing to
-record."
-  (require 'drgnx-jobs)
-  (dolist (job (drgnx-jobs-list))
-    (let* ((id (plist-get job :id)) (key (concat "job " id)))
-      (when (and (plist-get job :task) (memq (plist-get job :status) '(exited stopped))
-                 (not (sqlite-select (drgnx-work-db-read) "select 1 from meta where key = ?" (list key))))
-        (let* ((repo (or (and (plist-get job :git-dir) (drgnx-work--main-repo (plist-get job :git-dir)))
-                         (drgnx-work--main-repo (plist-get job :cwd))))
-               (end (drgnx-jobs--text (expand-file-name "head" (drgnx-jobs--dir id)))))
-          (when repo                                   ; else: the repository may come back; try again later
-            (let ((new (drgnx-work--new-commits repo (plist-get job :head) end (or (plist-get job :start-time) 0))))
-              (if (and new (<= (length new) drgnx-work-collect-max))
-                  (progn (drgnx-work-record-commits (plist-get job :task) repo new key)
-                         (when (drgnx-work--notes-p) (dolist (c new) (drgnx-work--note repo (car c) (plist-get job :task)))))
-                (drgnx-work--hub "graph/put-parsed" (list :collected (vector key)))))))))))
+the job started in (its worktree may be gone by now).  A job's start commit is HEAD of its folder when this first saw
+it (`drgnx-work--job-start'), its end commit HEAD of the repository now.  Through the hub: `graph/record' with the key
+`job ID' (which the hub keeps, so a job is never collected twice), or the key alone (`graph/put-parsed') when there is
+nothing to record."
+  (require 'drgnx-exec)
+  (let* ((jobs (drgnx-exec-list))
+         (listed (mapcar (lambda (j) (plist-get j :id)) jobs))
+         (gone nil))
+    (maphash (lambda (id _) (unless (member id listed) (push id gone))) drgnx-work--job-starts)
+    (dolist (id gone) (remhash id drgnx-work--job-starts))
+    (dolist (job jobs)
+      (when (plist-get job :task)
+        (let* ((id (plist-get job :id)) (key (concat "job " id))
+               (start (drgnx-work--job-start job)))
+          (when (and (memq (plist-get job :status) '(done failed stopped))
+                     (not (sqlite-select (drgnx-work-db-read) "select 1 from meta where key = ?" (list key))))
+            (let* ((repo (plist-get start :repo))
+                   (end (and repo (drgnx-work--head repo))))
+              (when repo                               ; else: the repository may come back; try again later
+                (let ((new (drgnx-work--new-commits repo (plist-get start :head) end
+                                                    (if-let* ((s (plist-get job :started))) (float-time (date-to-time s)) 0))))
+                  (if (and new (<= (length new) drgnx-work-collect-max))
+                      (progn (drgnx-work-record-commits (plist-get job :task) repo new key)
+                             (when (drgnx-work--notes-p) (dolist (c new) (drgnx-work--note repo (car c) (plist-get job :task)))))
+                    (drgnx-work--hub "graph/put-parsed" (list :collected (vector key)))))))))))))
 
 ;;;; Scanning what the user works on
 

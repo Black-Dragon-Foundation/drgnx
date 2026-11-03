@@ -100,6 +100,24 @@ pub struct UserJob {
     /// `MemoryMax` of the unit, instead of `agents-job-memory`.
     pub memory_max: Option<String>,
     pub nice: Option<i8>,
+    /// The job has no time box: `ExecSpec::timebox` is not used and the timer never ends it.
+    #[serde(default)]
+    pub no_timebox: bool,
+}
+
+impl ExecSpec {
+    /// The job's time box, or none when it runs without one.
+    fn time_box(&self) -> Option<Duration> {
+        (!self.user.no_timebox).then_some(self.timebox)
+    }
+}
+
+impl Meta {
+    /// How long until the time box ends (none: it never does).
+    fn time_left(&self) -> Option<Duration> {
+        self.deadline
+            .map(|d| Duration::from_secs_f64((d - now()).max(0.0)))
+    }
 }
 
 /// What makes a job a container job: the allow-list name, the caps from settings, the network the matrix granted.
@@ -563,8 +581,8 @@ impl Inner {
             argv: spec.argv.clone(),
             cwd: spec.cwd.display().to_string(),
             started,
-            timebox_s: spec.timebox.as_secs_f64().ceil() as u64,
-            deadline: started + spec.timebox.as_secs_f64(),
+            timebox_s: spec.time_box().map(|t| t.as_secs_f64().ceil() as u64),
+            deadline: spec.time_box().map(|t| started + t.as_secs_f64()),
             unit: None,
             pid: None,
             start_time: None,
@@ -796,8 +814,8 @@ impl Inner {
             argv: spec.argv.clone(),
             cwd: spec.cwd.display().to_string(),
             started,
-            timebox_s: spec.timebox.as_secs_f64().ceil() as u64,
-            deadline: started + spec.timebox.as_secs_f64(),
+            timebox_s: spec.time_box().map(|t| t.as_secs_f64().ceil() as u64),
+            deadline: spec.time_box().map(|t| started + t.as_secs_f64()),
             unit: name,
             pid: Some(pid),
             start_time: draugr::start_time(pid).ok(),
@@ -832,7 +850,8 @@ impl Inner {
             argv: m.argv.clone(),
             cwd: m.cwd.clone(),
             kind: m.kind.clone(),
-            timebox_s: m.timebox_s as i64,
+            // 0: no time box
+            timebox_s: m.timebox_s.unwrap_or(0) as i64,
             started: m.started,
         };
         let meta = urdr::graph::TxMeta::new("hub", urdr::graph::Class::System, "exec/start");
@@ -854,12 +873,18 @@ impl Inner {
     async fn watch(self: Arc<Self>, id: &str, child: Option<draugr::Child>) {
         let Some(meta) = self.meta(id) else { return };
         let dir = self.dir(id);
-        let left = |m: &Meta| Duration::from_secs_f64((m.deadline - now()).max(0.0));
+        // a job without a time box has no timer arm: it ends only by itself or by a stop
+        let time_up = async {
+            match meta.time_left() {
+                Some(left) => tokio::time::sleep(left).await,
+                None => std::future::pending().await,
+            }
+        };
         match child {
             Some(mut c) => {
                 tokio::select! {
                     _ = c.wait() => {}
-                    () = tokio::time::sleep(left(&meta)) => {
+                    () = time_up => {
                         let _ = std::fs::write(dir.join("why"), "timed-out");
                         let _ = draugr::kill_group(c.id(), Duration::from_secs(2), &draugr::RealSignaller).await;
                         let _ = c.wait().await;
@@ -874,7 +899,7 @@ impl Inner {
                 };
                 tokio::select! {
                     () = gone => {}
-                    () = tokio::time::sleep(left(&meta)) => {
+                    () = time_up => {
                         let _ = std::fs::write(dir.join("why"), "timed-out");
                         if let Some(p) = meta.pid {
                             let _ = draugr::kill_group(p, Duration::from_secs(2), &draugr::RealSignaller)
@@ -1324,7 +1349,7 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
         cwd,
         worktree,
         argv: p.argv.iter().map(|a| a.to_string()).collect(),
-        timebox: Duration::from_secs(p.timebox_s.unwrap_or(3600)),
+        timebox: requested_timebox(&p),
         kind,
         container,
         user,
@@ -1342,6 +1367,11 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
         format!("job {id} runs: end your turn; you will be woken with the result")
     };
     Ok(Started { text, id })
+}
+
+/// The time box a request asks for: its `timebox_s`, else an hour (a job that asked for none ignores it).
+fn requested_timebox(p: &StartParams) -> Duration {
+    Duration::from_secs(p.timebox_s.unwrap_or(3600))
 }
 
 /// What the user's request adds to its job.  An agent's request that sets any of it is refused (its job's limits are
@@ -1378,6 +1408,7 @@ fn user_job(sid: &Option<String>, kind: CheckKind, p: &StartParams) -> Result<Us
             .collect(),
         memory_max: p.memory_max.as_ref().map(|m| m.to_string()),
         nice: p.nice,
+        no_timebox: p.no_timebox == Some(true),
     })
 }
 

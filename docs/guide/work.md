@@ -50,9 +50,9 @@ Agent sessions and jobs can work on a task — any tracker node id, such as `tas
   CWD's repository during it are recorded for the task (just after the turn, never while Emacs handles the agent's
   output). When the session exits, whatever it committed after its last turn ended is recorded once, at the exit; commits made
   in that checkout afterwards are never the dead session's.
-- `drgnx-jobs-start NAME COMMAND :cwd DIR :task TASK`: the job gets `DRGNX_TASK`; the git HEADs it started and
-  ended at are kept with the job, and its commits are recorded once it ended (on the next scan or refresh) —
-  commits made after it ended are not its.
+- A hub job that carries a task (`exec/list` names it): the HEAD of its folder's repository when the tracker first saw
+  the job is its start, and HEAD when it ended (read on the next scan or refresh) its end; the commits between are
+  recorded once it ended — commits made after it ended are not its.
 - By hand, or from any agent: `drgnx work record [--task ID] [SHA…]` links the commits (default `HEAD`) of the
   current repository to the task (default `$DRGNX_TASK`).
 

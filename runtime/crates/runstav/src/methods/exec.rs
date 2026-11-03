@@ -79,7 +79,9 @@ pub struct ExecRow {
     pub started: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended: Option<f64>,
-    pub timebox_s: u64,
+    /// Seconds before the hub ends it; absent: the job has no time box (`no_timebox`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timebox_s: Option<u64>,
     /// The transient unit's name (Linux), or none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unit: Option<String>,
@@ -101,6 +103,10 @@ pub struct StartParams {
     /// Seconds before it is ended: 1 to 86400 (default 3600).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timebox_s: Option<u64>,
+    /// The job has no time box: the hub never ends it for time (the user's jobs only; the editor's servers run for days).
+    /// `exec/stop` and the hub's stop still end it.  With `timebox_s` it is refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_timebox: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<ExecKind>,
     /// A container job's image: a name on `agents-container-images` (kind container only).
@@ -140,6 +146,8 @@ impl StartParams {
             Some("memory_max")
         } else if self.nice.is_some() {
             Some("nice")
+        } else if self.no_timebox == Some(true) {
+            Some("no_timebox")
         } else {
             None
         }
@@ -220,6 +228,12 @@ fn check_start(p: &StartParams) -> Result<(), Error> {
     }
     if p.timebox_s.is_some_and(|t| !(1..=86_400).contains(&t)) {
         return Err(invalid("timebox_s", "a time box of 1 to 86400 seconds"));
+    }
+    if p.no_timebox == Some(true) && p.timebox_s.is_some() {
+        return Err(invalid(
+            "no_timebox",
+            "either a time box (timebox_s) or none, not both",
+        ));
     }
     if let Some(m) = &p.memory_max {
         let size = m.as_str();

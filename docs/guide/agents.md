@@ -142,21 +142,17 @@ raw, is not served, and the file on disk is read instead, under the same limit.
 
 ## Durable jobs
 
-Background work that must survive a closed frame, a restart of Emacs or an interrupted chat runs as a **job**: a
-systemd user unit (`systemd-run --user`) where systemd runs your session, else its own process group (the detached
-launcher: `setsid`, or on macOS, which has no `setsid`, the perl every Mac has; with neither, starting a job says
-"Detached jobs need setsid or perl" and creates nothing). Each job has
-a directory under `~/.local/state/drgnx/jobs/` (its command, log, pid and exit code), so any Emacs lists it in the
-Agents tab (running, exited N, stopped, gone), shows its log (Show Job Log) and stops it (Stop Job: under systemd it returns once the job's unit is down, but after
-`drgnx-jobs-stop-wait` seconds, 3 by default, at the latest; a job that ignores TERM is left to systemd, which kills it
-after 90 s). A job's pid is
-trusted only within the boot that started it and for the process it started (a pid reused after a reboot is "gone",
-never signalled). Under systemd the job's wrapper line passes through the unit's ExecStart, which reads `$$` as `$`, so drgnx doubles
-every `$` in it: the `pid` file holds the job shell's real pid, and the job reads as running and can be stopped. A job can be memory-capped (`:memory-max "1G"` in `drgnx-jobs-start`: systemd's `MemoryMax`, no swap;
-`:nice 10` lowers its priority (`Nice=`); the detached launcher can do neither and ignores both). `:no-wait t`
-returns without waiting for the job's pid (the boot and start time that make it trustworthy are stamped from a short
-poll that gives up after 2 s, or at once when Emacs exits first): for callers in a timer that must not block, such as drgnx starting the local AI runner again. A job's `job.eld` is written atomically and stamped without waiting; a `job.eld` drgnx cannot read is never overwritten, and that job does not show in the list. Sessions and jobs started on a task get it as `DRGNX_TASK`, and the commits they make are
-recorded for it ([Work tracker](work.md)).
+Background work that must survive a closed frame, a restart of Emacs or an interrupted chat runs as a **job of the
+hub**: tree-sitter grammars, Mermaid diagrams, the Playwright server of Test Report, the browser for agents, local AI
+servers, the installs of onboarding and the search indexer all start with `drgnx-exec-start`
+(`docs/guide/jobs.md`, "The editor's jobs"). The hub runs each in a unit of its own and keeps its log and exit code, so
+any Emacs lists it in the Agents tab (running, done, failed, stopped, gone), shows its log (Show Job Log) and stops it
+(Stop Job). Starting a job is asynchronous: the hub answers a moment later, and a start it refuses (a `name`, `env`,
+`memory_max` or `nice` it does not accept) is a message. A job can be memory-capped (`:memory-max "1G"`: the unit's
+`MemoryMax` on Linux; macOS has no cap for jobs, so drgnx asks for none there) and made nicer (`:nice 10`). A job's
+time box is an hour unless the caller asks for more: the servers drgnx keeps (the local AI runner, the Playwright
+server, the browser for agents) run with no time box, so a daemon left up for days keeps them, and the runner is started
+again when it is down; the search indexer, a batch job, asks for the hub's longest, 24 hours. Commits a job makes while it works on a task are recorded for that task ([Work tracker](work.md)).
 
 ## The job sandbox
 

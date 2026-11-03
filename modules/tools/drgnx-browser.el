@@ -28,11 +28,11 @@
 (declare-function project-root "project")
 (declare-function drgnx-wb-editor-window "drgnx-wb")
 (declare-function drgnx-groups--split "drgnx-groups")
-(declare-function drgnx-jobs-stop "drgnx-jobs")
-(declare-function drgnx-jobs-start "drgnx-jobs")
-(declare-function drgnx-jobs-get "drgnx-jobs")
-(declare-function drgnx-jobs-list "drgnx-jobs")
-(declare-function drgnx-jobs-log "drgnx-jobs")
+(declare-function drgnx-exec-stop "drgnx-exec")
+(declare-function drgnx-exec-start "drgnx-exec")
+(declare-function drgnx-exec-get "drgnx-exec")
+(declare-function drgnx-exec-list "drgnx-exec")
+(declare-function drgnx-hub-call "drgnx-hub-client")
 (declare-function drgnx-agents-ui--session "drgnx-agents-ui")
 (declare-function drgnx-agent-session-name "drgnx-agents")
 (declare-function drgnx-agent-session-entries "drgnx-agents")
@@ -213,25 +213,11 @@ localhost URL; nil when there is none.  Colour codes and carriage returns are ig
               (string-match "\\(https?://\\(?:localhost\\|127\\.0\\.0\\.1\\|0\\.0\\.0\\.0\\|\\[::1\\]\\)[^ \t\n\e]*\\)" clean))
       (string-trim-right (match-string 1 clean) "[.,]+"))))
 
-(defun drgnx-browser--stop-job (id)
-  "Stop job ID: through the jobs, and its systemd unit too (which the jobs may not see running)."
-  (let ((job (drgnx-jobs-get id)))
-    (drgnx-jobs-stop id)
-    (when-let* ((unit (plist-get job :unit))
-                ((not (memq (plist-get job :status) '(exited stopped)))))
-      (call-process "systemctl" nil nil nil "--user" "stop" unit))))
+(defconst drgnx-browser--ended '(done failed stopped) "The statuses of a job that is over.")
 
-(defun drgnx-browser--stop-job-later (id)
-  "Ask for job ID to stop without waiting for it (for a timer, which must never block): its systemd unit
-with `systemctl --user stop --no-block' started as a process, a job without a unit by SIGTERM to its group."
-  (let ((job (drgnx-jobs-get id)))
-    (unless (memq (plist-get job :status) '(exited stopped))
-      (if-let* ((unit (plist-get job :unit)))
-          (ignore-errors
-            (make-process :name "drgnx-stop-job" :noquery t :connection-type 'pipe
-                          :command (list "systemctl" "--user" "stop" "--no-block" unit)))
-        (when-let* ((pid (plist-get job :pid)) ((eq (plist-get job :status) 'running)))
-          (ignore-errors (signal-process (- pid) 'SIGTERM)))))))
+(defun drgnx-browser--stop-job (id)
+  "Ask the hub to stop job ID.  Never waits (`drgnx-exec-stop'), so a timer may call it."
+  (drgnx-exec-stop id))
 
 (defun drgnx-browser--watch-job (id)
   "Open the server URL of job ID in the pane once the job's log has it.
@@ -240,31 +226,41 @@ Looked at every half second, 60 s at most; never waits."
                     :on-timeout #'drgnx-browser--watch-timeout :args (list id)))
 
 (defun drgnx-browser--watch-tick (id)
-  "The poll of `drgnx-browser--watch-job': non-nil when it is over (opened, the job ended, or an error).
-An error ends the wait (it would repeat every half second), and nothing here blocks."
+  "The poll of `drgnx-browser--watch-job': ask the hub for job ID's log (asynchronously: nothing here blocks);
+`drgnx-browser--watch-answer' ends the wait.  An error ends it too (it would repeat every half second); returns t then."
   (condition-case err
-      (let ((url (ignore-errors (drgnx-browser--log-url (drgnx-jobs-log id 4000))))
-            (status (plist-get (drgnx-jobs-get id) :status)))
-        (cond (url (drgnx-browser-open url t) t)
-              ;; `gone' can be a job systemd runs, so only the clock or an ended job ends the wait
-              ((memq status '(exited stopped))
-               (message "drgnx: the Playwright server did not print an address (Show Job Log: playwright)")
-               t)))
+      (progn (drgnx-hub-call "exec/log" (list :id id :from 0 :n 1000) (lambda (r _err) (drgnx-browser--watch-answer id r)))
+             nil)
     (error (message "drgnx: Test Report stopped waiting for the Playwright server: %s" (error-message-string err))
            t)))
 
+(defun drgnx-browser--watch-answer (id slice)
+  "The hub's answer SLICE (an `exec/log' result) about job ID: open the address it printed, or say the job ended
+without one; either ends the wait.  An answer that comes after the wait ended is ignored."
+  (let ((key (cons 'browser-watch id)))
+    (when (drgnx-timer-active-p key)
+      (let ((url (ignore-errors (drgnx-browser--log-url (mapconcat (lambda (l) (concat l "\n")) (plist-get slice :lines) ""))))
+            (status (plist-get (drgnx-exec-get id) :status)))
+        (cond (url (drgnx-timer-cancel key)
+                   ;; this runs in a process filter: the page opens from a timer
+                   (run-at-time 0 nil #'drgnx-browser-open url t))
+              ;; `gone' can be a job the hub lost sight of, so only the clock or an ended job ends the wait
+              ((memq status drgnx-browser--ended)
+               (drgnx-timer-cancel key)
+               (message "drgnx: the Playwright server did not print an address (Show Job Log: playwright)")))))))
+
 (defun drgnx-browser--watch-timeout (id)
   "Job ID printed no address in 60 s: stop it and say so."
-  (drgnx-browser--stop-job-later id)
+  (drgnx-browser--stop-job id)
   (message "drgnx: the Playwright server did not print an address (Show Job Log: playwright)"))
 
 (defun drgnx-browser--stop-others (keep root)
   "Stop the Playwright servers of ROOT other than job KEEP (a new report replaces the older servers)."
   (let ((dir (file-name-as-directory (expand-file-name root))))
-    (dolist (j (drgnx-jobs-list))
+    (dolist (j (drgnx-exec-list))
       (when (and (equal (plist-get j :name) "playwright") (not (equal (plist-get j :id) keep))
                  (equal (file-name-as-directory (expand-file-name (or (plist-get j :cwd) ""))) dir)
-                 (not (memq (plist-get j :status) '(exited stopped))))
+                 (not (memq (plist-get j :status) drgnx-browser--ended)))
         (drgnx-timer-cancel (cons 'browser-watch (plist-get j :id)))
         (drgnx-browser--stop-job (plist-get j :id))))))
 
@@ -277,18 +273,22 @@ An error ends the wait (it would repeat every half second), and nothing here blo
           ((not found)
            (message "drgnx: No Playwright report or trace under %s — run npx playwright test first" (abbreviate-file-name root)))
           (t
-           (require 'drgnx-jobs)
+           (require 'drgnx-exec)
            (let* ((report (eq (plist-get found :kind) 'report))
                   (command (list "npx" "playwright" (if report "show-report" "show-trace")
                                  (if report (directory-file-name (plist-get found :path)) (plist-get found :path))
                                  "--port" "0"))
-                  (running (seq-find (lambda (j) (and (eq (plist-get j :status) 'running) (equal (plist-get j :command) command)))
-                                     (drgnx-jobs-list)))
-                  (id (if running (plist-get running :id)
-                        (drgnx-jobs-start "playwright" command :cwd root :memory-max "1G" :no-wait t))))
-             (drgnx-browser--stop-others id root)
+                  (running (seq-find (lambda (j) (and (eq (plist-get j :status) 'running) (equal (plist-get j :argv) command)))
+                                     (drgnx-exec-list)))
+                  (serve (lambda (id) (drgnx-browser--stop-others id root) (drgnx-browser--watch-job id))))
              (message "Test Report: serving %s…" (abbreviate-file-name (plist-get found :path)))
-             (drgnx-browser--watch-job id))))))
+             (if running
+                 (funcall serve (plist-get running :id))
+               ;; the hub answers later; no memory cap on macOS (the hub refuses one there); a server: no time box
+               (drgnx-exec-start "playwright" command :cwd root :memory-max (and (eq system-type 'gnu/linux) "1G")
+                                 :no-timebox t
+                                 :callback (lambda (id why)
+                                             (if id (funcall serve id) (message "drgnx: %s" why))))))))))
 
 ;;;; Agent's Page
 

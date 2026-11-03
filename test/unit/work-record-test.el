@@ -3,7 +3,7 @@
 (require 'ert)
 (require 'drgnx-work)
 (require 'drgnx-agents)
-(require 'drgnx-jobs)
+(require 'drgnx-exec)
 (require 'drgnx-projects)
 (require 'drgnx-sandbox-vc)
 (load (expand-file-name "test/fixtures/work-fixture" drgnx-dir) nil t)
@@ -26,7 +26,7 @@
   `(let* ((root (file-name-as-directory (make-temp-file "drgnx-work-rec" t)))
           (,repo (concat root "repo/"))
           (process-environment (append (list (concat "DRGNX_DATA_DIR=" root "data") (concat "XDG_STATE_HOME=" root "state")
-                                             "DRGNX_JOBS_LAUNCHER=detached" "GIT_AUTHOR_NAME=t" "GIT_AUTHOR_EMAIL=t@t.invalid"
+                                             "GIT_AUTHOR_NAME=t" "GIT_AUTHOR_EMAIL=t@t.invalid"
                                              "GIT_COMMITTER_NAME=t" "GIT_COMMITTER_EMAIL=t@t.invalid")
                                        process-environment))
           (drgnx-work-db--handles nil) (drgnx-work--tasks nil))
@@ -105,14 +105,18 @@
 
 (ert-deftest drgnx-work/a-job-task-gets-its-commits-when-it-ends ()
   (drgnx-work-rec--with repo
-    (let ((id (drgnx-jobs-start "j" (list "sh" "-c" "echo x > j.txt && git add j.txt && git -c user.name=t -c user.email=t@t.invalid commit -q -m 'job work'")
-                                :cwd repo :task "task:/p.md#3")))
-      (drgnx-test-wait (lambda () (eq (plist-get (drgnx-jobs-get id) :status) 'exited)) :secs 10 :what "the job to exit")
-      (drgnx-work-collect-jobs)
-      (should (equal (drgnx-work-rec--titles "task:/p.md#3") '("job work")))
-      (drgnx-work-rec--commit repo "later, not the job's")                ; the job ended before this
-      (drgnx-work-collect-jobs)
-      (should (equal (drgnx-work-rec--titles "task:/p.md#3") '("job work"))))))
+    (let ((job (list :id "j3" :name "j" :task "task:/p.md#3" :status 'running :cwd repo
+                     :started (format-time-string "%FT%T%z" (time-subtract (current-time) 5))))
+          (drgnx-work--job-starts (make-hash-table :test #'equal)))
+      (cl-letf (((symbol-function 'drgnx-exec-list) (lambda () (list job))))
+        (drgnx-work-collect-jobs)                                         ; sees it running: its start commit is noted
+        (drgnx-work-rec--commit repo "job work")
+        (setq job (plist-put (copy-sequence job) :status 'done))
+        (drgnx-work-collect-jobs)
+        (should (equal (drgnx-work-rec--titles "task:/p.md#3") '("job work")))
+        (drgnx-work-rec--commit repo "later, not the job's")              ; the job ended before this
+        (drgnx-work-collect-jobs)
+        (should (equal (drgnx-work-rec--titles "task:/p.md#3") '("job work")))))))
 
 (ert-deftest drgnx-work/the-cli-records-a-commit-for-a-task ()
   (drgnx-work-rec--with repo
@@ -252,13 +256,17 @@
   (drgnx-work-rec--with repo
     (let ((wt (concat repo ".wt/")))
       (drgnx-work-rec--git repo "worktree" "add" "-q" wt "-b" "w")
-      (let ((id (drgnx-jobs-start "j" (list "sh" "-c" "echo x > j.txt && git add j.txt && git commit -q -m 'job in a worktree'")
-                                  :cwd wt :task "task:/p.md#14")))
-        (drgnx-test-wait (lambda () (eq (plist-get (drgnx-jobs-get id) :status) 'exited)) :secs 10 :what "the job to exit")
-        (drgnx-work-rec--git repo "merge" "-q" "--ff-only" "w")
-        (drgnx-work-rec--git repo "worktree" "remove" "--force" wt)
-        (drgnx-work-collect-jobs)
-        (should (equal (drgnx-work-rec--titles "task:/p.md#14") '("job in a worktree")))))))
+      (let ((job (list :id "j14" :name "j" :task "task:/p.md#14" :status 'running :cwd wt
+                       :started (format-time-string "%FT%T%z" (time-subtract (current-time) 5))))
+            (drgnx-work--job-starts (make-hash-table :test #'equal)))
+        (cl-letf (((symbol-function 'drgnx-exec-list) (lambda () (list job))))
+          (drgnx-work-collect-jobs)                                       ; sees it running in the worktree
+          (drgnx-work-rec--commit wt "job in a worktree")
+          (setq job (plist-put (copy-sequence job) :status 'done))
+          (drgnx-work-rec--git repo "merge" "-q" "--ff-only" "w")
+          (drgnx-work-rec--git repo "worktree" "remove" "--force" wt)
+          (drgnx-work-collect-jobs)
+          (should (equal (drgnx-work-rec--titles "task:/p.md#14") '("job in a worktree"))))))))
 
 (ert-deftest drgnx-work/git-notes-follow-the-environment ()
   (drgnx-work-rec--with repo

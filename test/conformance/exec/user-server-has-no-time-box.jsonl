@@ -1,0 +1,22 @@
+{"scenario": "exec/user-server-has-no-time-box", "requires": ["v1", "linux"], "doc": "A job the user starts with no_timebox has no deadline (its row carries no timebox_s) and the hub never ends it for time; exec/stop still ends it. A job without no_timebox keeps its time box (timebox_s 3600 by default), and no_timebox together with timebox_s is refused with invalid-params at no_timebox. No row waits for time to pass."}
+{"do": "root"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkfifo $ROOT/gate"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "exec/start", "params": {"argv": ["sh", "-c", "cat $ROOT/gate"], "cwd": "$ROOT", "no_timebox": true, "timebox_s": 60}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "invalid-params", "path": "no_timebox"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "exec/start", "params": {"argv": ["sh", "-c", "cat $ROOT/gate"], "cwd": "$ROOT", "name": "server", "no_timebox": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:server", "text": "$string"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "exec/get", "params": {"id": "$server"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$server", "name": "server", "status": "running", "timebox_s": "$absent"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "exec/start", "params": {"argv": ["sh", "-c", "cat $ROOT/gate"], "cwd": "$ROOT", "name": "boxed"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"id": "$capture:boxed", "text": "$string"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "exec/get", "params": {"id": "$boxed"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"id": "$boxed", "status": "running", "timebox_s": 3600}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "exec/stop", "params": {"id": "$server"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"id": "$server", "status": "stopped"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "exec/stop", "params": {"id": "$boxed"}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"id": "$boxed", "status": "stopped"}}, "within_ms": 10000}

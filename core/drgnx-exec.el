@@ -10,8 +10,8 @@
 ;; Everything that can run in a timer or in redisplay is a cache read: `drgnx-exec-get' and `drgnx-exec-list' read what
 ;; this client keeps from `exec/list' (at `drgnx-exec-sync') and from the hub's `exec-done' events, and never call
 ;; the hub.  `drgnx-exec-start' and `drgnx-exec-stop' are asynchronous.  `drgnx-exec-log' waits for the hub (5 s at
-;; most): commands only.  A job is a plist (:id :name :status :exit :cwd :started :argv) with :status one of `running',
-;; `done', `failed', `stopped', `gone', as `drgnx-jobs' gave.
+;; most): commands only.  A job is a plist (:id :name :status :exit :cwd :started :argv :task) with :status one of `running',
+;; `done', `failed', `stopped', `gone'.
 
 ;;; Code:
 (require 'cl-lib)
@@ -43,7 +43,7 @@ holds the jobs this client started or heard end, trimmed to `drgnx-exec--keep' b
   (let ((exit (plist-get (plist-get json :summary) :exit)))
     (list :id (plist-get json :id) :name (plist-get json :name)
           :status (drgnx-exec--status (plist-get json :status) exit) :exit exit
-          :cwd (plist-get json :cwd)
+          :cwd (plist-get json :cwd) :task (plist-get json :task)
           :started (and (numberp (plist-get json :started))
                         (format-time-string "%FT%T%z" (seconds-to-time (plist-get json :started))))
           :argv (plist-get json :argv))))
@@ -110,7 +110,8 @@ holds the jobs this client started or heard end, trimmed to `drgnx-exec--keep' b
 safe to call again.  `drgnx-exec-unsync' undoes it."
   (add-hook 'drgnx-hub-event-functions #'drgnx-exec--event)
   (add-hook 'drgnx-hub-disconnect-functions #'drgnx-exec--hub-gone)
-  (condition-case nil (drgnx-hub-connect) (error nil))
+  (unless (process-live-p drgnx-hub--events)    ; not again from the subscription's own answer
+    (condition-case nil (drgnx-hub-connect) (error nil)))
   (drgnx-exec--refresh))
 
 (defun drgnx-exec-unsync ()
@@ -127,18 +128,21 @@ safe to call again.  `drgnx-exec-unsync' undoes it."
               (list :name (if i (substring e 0 i) e) :value (if i (substring e (1+ i)) ""))))
           env))
 
-(cl-defun drgnx-exec-start (name argv &key cwd env memory-max nice timebox callback)
+(cl-defun drgnx-exec-start (name argv &key cwd env memory-max nice timebox no-timebox callback)
   "Run ARGV (a list of strings) as the hub's job NAME in CWD (default `default-directory').  Asynchronous: CALLBACK
 is called once with (ID ERROR): the job's id, or nil and a text saying why it did not start.  ENV (\"NAME=value\"…) is
 added to the job's environment (the hub refuses a name that looks like a key); MEMORY-MAX (\"2G\") caps the job's unit;
-NICE (10) runs it that much nicer than the hub; TIMEBOX is its seconds (default 3600).  The job is in the cache
+NICE (10) runs it that much nicer than the hub; TIMEBOX is its seconds (1 to 86400, default 3600).  NO-TIMEBOX non-nil
+runs it without a time box, for a server that stays up for days (the hub then ends it only on `drgnx-exec-stop' or
+when it stops); it replaces TIMEBOX.  The job is in the cache
 \(`drgnx-exec-get') before CALLBACK runs.  Returns nil."
   (let* ((params (append (list :argv argv :cwd (directory-file-name (expand-file-name (or cwd default-directory)))
                                :name name)
                          (and env (list :env (drgnx-exec--env env)))
                          (and memory-max (list :memory_max memory-max))
                          (and nice (list :nice nice))
-                         (and timebox (list :timebox_s (ceiling timebox)))))
+                         (cond (no-timebox (list :no_timebox t))
+                               (timebox (list :timebox_s (ceiling timebox))))))
          (done (lambda (id why)
                  (when callback
                    (drgnx-guard--call callback "exec start"
