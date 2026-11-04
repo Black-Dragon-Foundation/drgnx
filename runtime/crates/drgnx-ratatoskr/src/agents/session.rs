@@ -691,6 +691,19 @@ fn start_role(asked: Option<Role>, task_or_job: bool) -> Role {
     })
 }
 
+/// A chat in a project (`launch::Kind::Chat`) has the project bound read-only: refused when the matrix's
+/// `chat.project-read` is never for this session (its profile, its preset), rather than started without it.
+fn project_read_allowed(kind: launch::Kind, eff: &norn::matrix::Effective) -> Result<(), Error> {
+    if kind == launch::Kind::Chat
+        && eff.cell(Action::ChatProjectRead).verdict == norn::matrix::Verdict::Never
+    {
+        return Err(refuse(
+            "this chat may not read the project (chat.project-read is never): start it without a project",
+        ));
+    }
+    Ok(())
+}
+
 /// The launch of a test session: the plan's command, unsandboxed, with a short allowlisted environment.  Only tests
 /// and `test-hooks` builds have it (the mock agent lives outside any sandbox's reach); a shipped build always goes
 /// through `launch::spawn` and Gleipnir.
@@ -885,6 +898,7 @@ pub(super) async fn prepare(
         )));
     }
     let scratch = launch::scratch_dir(&runstav::paths::Env::process(), sid).unwrap_or_default();
+    project_read_allowed(launch::kind(role, cwd, &scratch), &eff)?;
     let (spec, status, unsandboxed) =
         spawn_spec(&front.shell_env, profile, &plan, &scratch, cwd, sid, role)?;
     Ok(Prepared {
@@ -3778,6 +3792,40 @@ mod tests {
             launch::kind(start_role(Some(Role::Chat), true), project, scratch),
             Kind::Chat
         );
+    }
+
+    /// A chat in a project starts under the shipped presets (`chat.project-read` asks) and is refused, naming the row,
+    /// when your matrix says never for it; the row does not apply to a plain chat or a worker.
+    #[test]
+    fn a_project_chat_is_refused_when_chat_project_read_is_never() {
+        use launch::Kind;
+        use norn::matrix::{Cell, Column, Matrix, Preset, Verdict, effective, preset};
+        let who = Who {
+            role: Some(Role::Chat),
+            agent: Some("claude".into()),
+            provider: None,
+        };
+        for p in [Preset::Cautious, Preset::Balanced, Preset::Autonomous] {
+            let eff = effective(&[&preset(p)], &who);
+            assert!(project_read_allowed(Kind::Chat, &eff).is_ok(), "{p:?}");
+        }
+        let mut mine = Matrix::default();
+        let never = Cell {
+            verdict: Verdict::Never,
+            limit: None,
+        };
+        // your matrix's chat column, over the preset's
+        mine.set(Action::ChatProjectRead, Column::Role(Role::Chat), never);
+        let eff = effective(&[&preset(Preset::Balanced), &mine], &who);
+        let refused = project_read_allowed(Kind::Chat, &eff).unwrap_err();
+        assert!(
+            refused.message.contains("chat.project-read is never")
+                && refused.message.contains("start it without a project"),
+            "{}",
+            refused.message
+        );
+        assert!(project_read_allowed(Kind::Plain, &eff).is_ok());
+        assert!(project_read_allowed(Kind::Worktree, &eff).is_ok());
     }
 
     #[test]
