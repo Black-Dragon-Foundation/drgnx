@@ -27,6 +27,7 @@ use runstav::registry;
 use runstav::registry::{Class, Method};
 use runstav::wire::{Answer, Error, ErrorAnswer, ErrorCode, Event, Id};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -40,6 +41,16 @@ pub const JOB_AGENTS: &str = "every session runs in the job sandbox; where it ca
 
 /// How long `shutdown` waits for its answer to be written before the hub stops.
 const SHUTDOWN_FLUSH: Duration = Duration::from_secs(1);
+
+/// How long the hub's end waits, in real time, for what is queued to its connections to be written before it closes
+/// them.
+const END_FLUSH: Duration = Duration::from_secs(1);
+
+fn lock_conns(
+    m: &Mutex<HashMap<u64, Arc<Outbox>>>,
+) -> std::sync::MutexGuard<'_, HashMap<u64, Arc<Outbox>>> {
+    m.lock().expect("the connections lock")
+}
 
 /// What every connection shares.
 pub struct Front {
@@ -87,6 +98,8 @@ pub struct Front {
     /// The stop asked for is a restart.
     restart: AtomicBool,
     next_conn: AtomicU64,
+    /// Every connection served now, on any socket: what [`Front::end_connections`] closes.
+    conns: Mutex<HashMap<u64, Arc<Outbox>>>,
 }
 
 impl Front {
@@ -165,11 +178,36 @@ impl Front {
             stop: Notify::new(),
             restart: AtomicBool::new(false),
             next_conn: AtomicU64::new(1),
+            conns: Mutex::new(HashMap::new()),
         }
     }
 
     pub fn next_conn(&self) -> u64 {
         self.next_conn.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Connection CONN is served, its lines going out through OUT (until [`Front::gone`]).
+    pub fn serving(&self, conn: u64, out: &Arc<Outbox>) {
+        lock_conns(&self.conns).insert(conn, out.clone());
+    }
+
+    /// The hub has stopped serving: every connection still open gets what is queued for it written (at most
+    /// [`END_FLUSH`] of real time for all of them), then is closed, so its client reads its end of file now, before the
+    /// hub waits on anything that can hang.
+    pub async fn end_connections(&self) {
+        let all: Vec<Arc<Outbox>> = lock_conns(&self.conns).values().cloned().collect();
+        let flushed = crate::clock::real_timeout(END_FLUSH, async {
+            for out in &all {
+                out.flushed(END_FLUSH).await;
+            }
+        })
+        .await;
+        if flushed.is_err() {
+            tracing::warn!("the hub ends with lines not yet written to a connection");
+        }
+        for out in all {
+            out.close("closed a connection: the hub ends");
+        }
     }
 
     /// work.db's schema is SCHEMA now (0: no file): read-only while it is newer than this hub's.  Logged when that
@@ -238,6 +276,7 @@ impl Front {
 
     /// The connection CONN is gone: no more events for it.
     pub fn gone(&self, conn: u64) {
+        lock_conns(&self.conns).remove(&conn);
         self.editors.gone(conn);
     }
 

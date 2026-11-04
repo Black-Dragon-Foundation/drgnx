@@ -378,8 +378,17 @@ pub async fn run(args: ServeArgs) -> Exit {
     front.mcp.unbind_all();
     remove_all(&agent_paths);
     remove(&socket, &cap_path);
-    let _ = tokio::task::spawn_blocking(move || store.shutdown()).await;
-    let _ = tokio::task::spawn_blocking(move || graph_writer.shutdown()).await;
+    // nothing more is served: the clients hear the end now, before any wait below that can hang
+    front.end_connections().await;
+    #[cfg(feature = "test-hooks")]
+    if args.test_hold_store {
+        hold_store(&runtime).await;
+    }
+    // the store threads stop (their connections close); one that does not within STOP_WITHIN is left, named
+    tokio::join!(
+        stop_thread("runtime.db's thread", move || store.shutdown()),
+        stop_thread("work.db's writer thread", move || graph_writer.shutdown()),
+    );
     if exit == Exit::Restart && args.supervisor == Supervisor::SelfDetached {
         // nothing supervises this hub, so `main` executes the binary again: the lock stays held until the exec
         // closes it (every descriptor is close-on-exec), and the new image takes it
@@ -456,6 +465,39 @@ async fn reap_recorded(db: &urdr::Handle) -> Result<(), String> {
         .await
         .map_err(|e| format!("cannot clear runtime.db's processes: {e}"))?;
     Ok(())
+}
+
+/// How long the hub's end waits, in real time, for each store thread to stop.
+const STOP_WITHIN: Duration = Duration::from_secs(5);
+
+/// STOP (a blocking join of the thread WHAT names) run off the runtime, waited for at most [`STOP_WITHIN`]: a thread
+/// that does not stop is left to end with the process, and named in the log.
+async fn stop_thread(what: &str, stop: impl FnOnce() + Send + 'static) {
+    if crate::clock::real_timeout(STOP_WITHIN, tokio::task::spawn_blocking(stop))
+        .await
+        .is_err()
+    {
+        tracing::error!("{what} did not stop within 5 s: the hub ends without it");
+    }
+}
+
+/// `--test-hold-store` (test-hooks): runtime.db's thread runs a job that never returns, so stopping it hangs; returns
+/// once the job holds the thread.
+#[cfg(feature = "test-hooks")]
+async fn hold_store(db: &urdr::Handle) {
+    let (held, holding) = tokio::sync::oneshot::channel();
+    let db = db.clone();
+    crate::clock::spawn("server:hold-store", async move {
+        let _ = db
+            .read(move |_| -> urdr::Result<()> {
+                let _ = held.send(());
+                loop {
+                    std::thread::park();
+                }
+            })
+            .await;
+    });
+    let _ = holding.await;
 }
 
 /// Accept on an agent socket for as long as the hub serves.

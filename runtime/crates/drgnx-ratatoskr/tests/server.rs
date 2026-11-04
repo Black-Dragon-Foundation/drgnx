@@ -404,6 +404,58 @@ fn the_lines_a_client_sent_before_it_left_are_served() {
     }
 }
 
+#[cfg(feature = "test-hooks")]
+#[test]
+fn a_hub_whose_store_hangs_at_its_end_closes_its_connections_and_ends() {
+    // `shutdown`, with runtime.db's thread held by a job that never returns (`--test-hold-store`), so stopping that
+    // thread never ends: each client still reads its end of file, and the hub ends, saying which thread it left
+    use std::io::BufRead;
+    let root = Root::new();
+    let socket = root.socket();
+    let mut hub = Hub::start_with(&root, 1, &["--test-hold-store"]);
+    hub.wait_ready(&socket);
+    let mut editor = Client::open(&socket);
+    editor.hello(&socket);
+    editor.send(json!({"id": 1, "method": "subscribe"}));
+    editor.answer(1);
+    let mut control = Client::open(&socket);
+    control.hello(&socket);
+    control.send(json!({"id": 1, "method": "shutdown"}));
+    control.answer(1);
+    for (name, c) in [("editor", &mut editor), ("control", &mut control)] {
+        // to the end of file; a read that runs out of time (`FAILED_AFTER`) is the failure
+        loop {
+            let mut line = String::new();
+            match c.reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(e) => panic!(
+                    "the {name}'s connection did not end: {e}\n{}",
+                    hub.stderr_text()
+                ),
+            }
+        }
+    }
+    let status = hub.wait_exit();
+    assert_eq!(status.code(), Some(0), "{}", hub.stderr_text());
+    let mut logs: Vec<std::path::PathBuf> = std::fs::read_dir(root.log_dir())
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    logs.sort();
+    let log: String = logs
+        .iter()
+        .map(|p| std::fs::read_to_string(p).unwrap())
+        .collect();
+    let closed = log
+        .find("the hub ends")
+        .expect("the connections' close is logged");
+    let left = log
+        .find("runtime.db's thread did not stop")
+        .unwrap_or_else(|| panic!("the held thread is named: {log}"));
+    assert!(closed < left, "the connections close first: {log}");
+}
+
 #[test]
 fn a_child_is_its_image_once_the_exec_handshake_ends() {
     use support::ExecHandshake;
