@@ -102,12 +102,15 @@ this returns.
   - network from the matrix's Network cell: `ProviderOnly` and `ProviderAndPackages` are isolated with the relay to
     `<session dir>/proxy.sock` and `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` set (the proxy's allowlist is what differs;
     the hub binds the session's proxy there before the spawn, [hub.md](hub.md#the-sessions-provider-proxy-proxysock));
-    `Open` shares the host network. A chat is always provider-only;
+    `Open` shares the host network. A chat is always provider-only. A plan on the gateway's socket
+    (`LaunchPlan::gateway`, a gateway profile) gets a second relay port, `GATEWAY_PORT` 3129, to
+    `<session dir>/gateway.sock`, with `ANTHROPIC_BASE_URL` on it (the plan's own is dropped) and loopback in
+    `NO_PROXY`/`no_proxy`; with an open network such a plan is refused;
   - the session dir (`run`, read-only) is made by the spec itself (`paths::make_session_dir`, which leaves one that
     is there alone), since validation requires `run`'s source to exist and a new session has none yet: `agents/start`
-    and `agents/probe` build the spec before anything else uses the id (the hub opens the session's MCP socket,
-    `mcp.sock`, after the launch is prepared and before the spawn). The sockets the spec names (`hub.sock`,
-    `proxy.sock`) need not exist at the start: the dir is bound, not each socket, and the relay connects per
+    and `agents/probe` build the spec before anything else uses the id (`agents/start` opens the session's MCP
+    socket, `mcp.sock`, which also makes the dir, just before it prepares the launch, and closes it when the launch is
+    refused). The sockets the spec names (`hub.sock`, `proxy.sock`, `gateway.sock`) need not exist at the start: the dir is bound, not each socket, and the relay connects per
     connection. A launch that is refused removes a session dir it made; the probe removes its own when it is done;
   - the full tier when bwrap is usable, else the reduced tier; neither: refused.
 - `ratatoskr relay --parent-pid PID [--ready-fd N] PORT=SOCKET…` runs [the relay](#the-relay-task-11).

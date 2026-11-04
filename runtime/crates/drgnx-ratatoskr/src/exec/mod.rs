@@ -799,6 +799,7 @@ impl Inner {
                         .collect(),
                     login_dir: None,
                     enforced: Enforced::Yes,
+                    gateway: false,
                 };
                 let shape = SessionShape {
                     sid: sid.clone(),

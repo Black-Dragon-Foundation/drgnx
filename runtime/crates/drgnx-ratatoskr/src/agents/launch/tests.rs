@@ -57,6 +57,7 @@ impl Fx {
             protected_ro: vec![self.p("wt/.codex")],
             login_dir: Some(self.p(&format!("home/{login}"))),
             enforced: Enforced::Yes,
+            gateway: false,
         }
     }
 
@@ -140,6 +141,69 @@ fn provider_cells_go_through_the_relay_and_open_shares() {
     let open = fx.spec(&fx.plan(".claude"), &fx.shape(NetCell::Open));
     assert_eq!(open.net, Net::Shared);
     assert!(open.env.iter().all(|(k, _)| k != "HTTPS_PROXY"));
+}
+
+/// A session on the gateway's socket (a sandboxed gateway profile) gets a second relay port, to its `gateway.sock`,
+/// and its `ANTHROPIC_BASE_URL` is that port's, whatever the plan's env said, with loopback kept off the proxy; a
+/// subscription profile's spec has the proxy's relay alone and no base URL.  Such a plan with an open network is
+/// refused.
+#[test]
+fn a_gateway_session_gets_a_second_relay_to_its_gateway_socket() {
+    let fx = Fx::new();
+    let base = |spec: &gleipnir::Spec| -> Vec<String> {
+        spec.env
+            .iter()
+            .filter(|(k, _)| k == "ANTHROPIC_BASE_URL")
+            .map(|(_, v)| v.clone())
+            .collect()
+    };
+    let sub = fx.spec(&fx.plan(".claude"), &fx.shape(NetCell::ProviderOnly));
+    let Net::Isolated { relay, .. } = &sub.net else {
+        panic!("not isolated: {:?}", sub.net);
+    };
+    assert_eq!(relay.len(), 1);
+    assert!(base(&sub).is_empty());
+
+    let mut plan = fx.plan(".claude");
+    plan.gateway = true;
+    plan.env.extend([
+        ("ANTHROPIC_BASE_URL".into(), "http://127.0.0.1:9".into()),
+        ("ANTHROPIC_AUTH_TOKEN".into(), "tok".into()),
+    ]);
+    let gw = fx.spec(&plan, &fx.shape(NetCell::ProviderOnly));
+    let Net::Isolated { relay, .. } = &gw.net else {
+        panic!("not isolated: {:?}", gw.net);
+    };
+    assert_eq!(relay.len(), 2);
+    let run = gw.run.as_ref().expect("a session dir").source.clone();
+    assert_eq!(relay[0].socket, run.join("proxy.sock"));
+    assert_eq!(relay[1].socket, run.join("gateway.sock"));
+    assert_ne!(relay[0].port, relay[1].port);
+    assert!(gw.sockets.contains(&relay[1].socket));
+    assert_eq!(base(&gw), [format!("http://127.0.0.1:{}", relay[1].port)]);
+    assert!(
+        gw.env
+            .contains(&("NO_PROXY".into(), "127.0.0.1,localhost".into()))
+    );
+    assert!(gw.env.contains(&("ANTHROPIC_AUTH_TOKEN".into(), "tok".into())));
+    assert!(gw.env.contains(&(
+        "HTTPS_PROXY".into(),
+        format!("http://127.0.0.1:{}", relay[0].port)
+    )));
+
+    let env = fx.env();
+    let ctx = context_for(&env, None);
+    let scratch = scratch_dir(&env, "S1").unwrap();
+    let open = session_spec(
+        &env,
+        &ctx,
+        &plan,
+        &fx.shape(NetCell::Open),
+        &scratch,
+        Tier::Reduced,
+        Target::LinuxReduced,
+    );
+    assert!(open.is_err(), "an open gateway session was built");
 }
 
 #[test]

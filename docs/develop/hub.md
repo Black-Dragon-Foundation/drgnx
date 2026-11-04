@@ -1103,8 +1103,8 @@ makes: the hub never grants `Open`) has no network but its sandbox's relay port,
 (`runtime/crates/drgnx-ratatoskr/src/agents/net.rs`):
 
 - **One proxy per session**, Gleipnir's CONNECT-only allowlist proxy (`gleipnir::net::proxy`, as a container job's),
-  held in `agents::net::SessionNet`. `launch()` binds it after the sandbox spec is prepared (which makes the session
-  directory) and the session's MCP bridge, and before the spawn: a stale file at the path is replaced, the socket is
+  held in `agents::net::SessionNet`. `launch()` binds it after the session's MCP bridge and the prepared sandbox spec
+  (either makes the session directory), and before the spawn: a stale file at the path is replaced, the socket is
   0600 (`sessions::bind_socket`).
 - **What it allows** (`net::provider_hosts`), each an exact `host:port`, in this order:
   - the base host and port of each provider the profile's gateway chain names in the provider table in effect (none
@@ -1174,6 +1174,15 @@ itself; nothing is forwarded.
 socket?, openrouter?}`: a token of 64 hex digits (32 random bytes) and, without `sid`, the loopback URL
 `http://127.0.0.1:PORT`; with `sid`, the session's `gateway.sock` (`SDIR/gateway.sock`, 0600, bound once per session
 and served until the session closes) instead, for an agent in a sandbox without the host's loopback.
+
+A session `agents/start` makes on a gateway profile is registered by the hub itself (`Gate::register_session`). Its
+launch is sandboxed, so the token is registered with the session's `sid`, on its `gateway.sock`: the hub opens the
+session's MCP session (which `gateway.sock` needs) before it prepares the launch, and closes it again when the launch
+is refused before the spawn. The spec relays a second port, 3129 on the full tier (`sandbox::GATEWAY_PORT`; any free
+one on the reduced tier), to that socket and sets `ANTHROPIC_BASE_URL=http://127.0.0.1:PORT` and
+`NO_PROXY=127.0.0.1,localhost` (and `no_proxy`), so the agent's requests go to the gateway straight, never through
+its provider proxy; the Claude options carry no base URL, so the process's is the one Claude uses. A session on any
+other profile gets no gateway relay. A test build's launch is the unsandboxed test one and keeps the loopback URL.
 
 - **The chain is judged first.** A step whose provider is not in the table ("not configured"), does not speak
   Messages ("the gateway cannot carry it") or has no key ("no key") cannot be used; with none usable the registration

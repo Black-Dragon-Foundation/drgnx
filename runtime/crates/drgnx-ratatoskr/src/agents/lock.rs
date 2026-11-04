@@ -55,6 +55,10 @@ pub struct LaunchPlan {
     /// sandbox binds it for this CLI alone (Task 10).
     pub login_dir: Option<PathBuf>,
     pub enforced: Enforced,
+    /// The session's gateway token is good on its `gateway.sock`: the sandbox relays a port to that socket and points
+    /// `ANTHROPIC_BASE_URL` at it (`sandbox::session_spec`).  Set by the session's start for a gateway profile, never
+    /// by a lock.
+    pub gateway: bool,
 }
 
 /// A lock that does not hold: the session is killed.
@@ -187,6 +191,7 @@ pub fn plan(p: &AgentProfile, role: Role, _e: &Effective) -> LaunchPlan {
         protected_ro,
         login_dir,
         enforced,
+        gateway: false,
     }
 }
 

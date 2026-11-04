@@ -68,6 +68,7 @@ impl Fx {
             protected_ro: vec![self.p("wt/.codex")],
             login_dir: Some(self.p("home/.claude")),
             enforced: Enforced::Yes,
+            gateway: false,
         }
     }
 
@@ -208,14 +209,13 @@ fn an_agent_sessions_stdin_reaches_the_program_inside() {
     assert_eq!(code, 0, "the program did not read the hub's line");
 }
 
-/// A sandboxed session reaches its provider through its own proxy: the hub's order (the launch makes the session dir,
-/// `agents::net::SessionNet` binds `proxy.sock` in it, then the spawn), and `curl` inside, tunnelling through
-/// `HTTPS_PROXY` (the relay port), reaches `ratatoskr-mock llm` under a pinned name.  The mock is domr's
-/// `ratatoskr-mock`, built beside this binary (`cargo build -p domr`).
-#[test]
-#[ignore = "needs the real sandbox (bwrap with user namespaces): the sandbox lane"]
-fn a_session_reaches_its_provider_through_the_proxy() {
-    use drgnx_ratatoskr::agents::net::SessionNet;
+/// A Messages API request body the mock LLM's script answers (`msg-1`).
+const BODY: &str =
+    r#"{"model": "m", "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]}"#;
+
+/// `ratatoskr-mock llm` (domr's, built beside this binary: `cargo build -p domr`) on the conformance fixture's script,
+/// logging to the fixture's `llm.log`: the child, its port and the log.
+fn mock_llm(fx: &Fx) -> (std::process::Child, u16, PathBuf) {
     use std::io::BufRead;
     let mock = Path::new(RATATOSKR).with_file_name("ratatoskr-mock");
     assert!(
@@ -223,8 +223,6 @@ fn a_session_reaches_its_provider_through_the_proxy() {
         "{} is not built: cargo build -p domr",
         mock.display()
     );
-    let fx = Fx::new();
-    let env = fx.env();
     let script = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../../test/conformance/fixtures/llm-messages.json");
     let log = fx.p("llm.log");
@@ -245,8 +243,128 @@ fn a_session_reaches_its_provider_through_the_proxy() {
         .strip_prefix("MOCK-LLM-PORT ")
         .and_then(|p| p.parse().ok())
         .unwrap_or_else(|| panic!("the mock said {line:?}"));
-    let body =
-        r#"{"model": "m", "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]}"#;
+    (llm, port, log)
+}
+
+/// A sandboxed session on a gateway profile reaches the hub's gateway through its relay: a real hub in the fixture's
+/// environment opens session S1's MCP session and registers its token on S1's `gateway.sock` (as `agents/start` does
+/// for a sandboxed gateway profile), the plan is on the gateway's socket (`LaunchPlan::gateway`), and `curl` inside
+/// posts to `$ANTHROPIC_BASE_URL` (the second relay port; loopback is in `NO_PROXY`, so not through the proxy), which
+/// the gateway forwards to `ratatoskr-mock llm`.
+#[test]
+#[ignore = "needs the real sandbox (bwrap with user namespaces): the sandbox lane"]
+fn a_gateway_session_reaches_the_hubs_gateway_through_its_relay() {
+    use drgnx_ratatoskr::client::Client;
+    use serde_json::json;
+    let fx = Fx::new();
+    let env = fx.env();
+    let (mut llm, port, log) = mock_llm(&fx);
+    let me = std::process::id();
+    // the hub's runtime dir is private, as a user's is
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(fx.p("run"), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let mut hub = std::process::Command::new(RATATOSKR)
+        .args(["serve", "--foreground", "--parent-pid", &me.to_string()])
+        .env_clear()
+        .envs([
+            ("HOME", fx.p("home")),
+            ("XDG_RUNTIME_DIR", fx.p("run")),
+            ("TMPDIR", fx.p("t")),
+            ("PATH", PathBuf::from("/usr/bin:/bin")),
+            ("RATATOSKR_SUPERVISOR", PathBuf::from("none")),
+        ])
+        .current_dir(fx.p(""))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::fs::File::create(fx.p("hub.err")).unwrap())
+        .spawn()
+        .expect("the hub");
+    let within = Duration::from_secs(10);
+    // a look repeated: the hub says nothing when it is ready; 30 s only bounds a failure
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let mut c = loop {
+        match Client::user(&env, Duration::from_secs(2)) {
+            Ok(c) => break c,
+            Err(e) if std::time::Instant::now() > deadline => panic!(
+                "no hub: {e}: {}",
+                std::fs::read_to_string(fx.p("hub.err")).unwrap_or_default()
+            ),
+            Err(_) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    };
+    let provider = json!({"a": {"kind": "anthropic", "url": format!("http://127.0.0.1:{port}"),
+                                "caps": ["chat"], "messages": true}});
+    c.call(
+        "config/settings",
+        json!({"overrides": [{"name": "drgnx-ai-providers", "source": "row", "value": provider}]}),
+        within,
+    )
+    .expect("the provider table");
+    c.call(
+        "mcp/session",
+        json!({"agent": "s-0000000a", "sid": "S1", "cwd": fx.p("wt"), "owner": me}),
+        within,
+    )
+    .expect("the session's MCP session");
+    let r = c
+        .call(
+            "gateway/register",
+            json!({"chain": [["a", null]], "agent": "s-0000000a", "sid": "S1"}),
+            within,
+        )
+        .expect("the session's registration");
+    let token = r["token"].as_str().expect("a token").to_string();
+    assert!(r["socket"].is_string() && r.get("url").is_none_or(|u| u.is_null()), "{r}");
+
+    let mut plan = fx.plan(&format!(
+        "out=$(curl -sS -H \"Authorization: Bearer $ANTHROPIC_AUTH_TOKEN\" -H 'content-type: application/json' \
+         -d '{BODY}' \"$ANTHROPIC_BASE_URL/v1/messages\") || exit 11; \
+         echo \"$out\" | grep -q msg-1 || exit 12; exit 0"
+    ));
+    plan.gateway = true;
+    plan.env = vec![("ANTHROPIC_AUTH_TOKEN".into(), token)];
+    let shape = fx.shape(NetCell::ProviderOnly);
+    let launch = launch_on(&env, &sandbox(Tier::Full), &plan, &shape)
+        .unwrap_or_else(|r| panic!("refused: {r}"));
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (code, tail) = rt.block_on(async {
+        let mut child = draugr::spawn_pinned(launch.spec).await.expect("spawn");
+        if let Some(fd) = launch.status {
+            gleipnir::read_status(fd, &|| child.stderr_tail(), Duration::from_secs(20))
+                .unwrap_or_else(|r| panic!("the sandbox did not start: {r}"));
+        }
+        let status = child.wait().await.expect("wait").expect("status");
+        (status.code().unwrap_or(-1), child.stderr_tail())
+    });
+    drop(c);
+    let _ = hub.kill();
+    let _ = hub.wait();
+    let _ = llm.kill();
+    let _ = llm.wait();
+    assert_eq!(code, 0, "the gateway was not reached: {tail}");
+    assert!(
+        std::fs::read_to_string(&log).is_ok_and(|t| t.contains("\"request\"")),
+        "the mock saw no request"
+    );
+}
+
+/// A sandboxed session reaches its provider through its own proxy: the hub's order (the launch makes the session dir,
+/// `agents::net::SessionNet` binds `proxy.sock` in it, then the spawn), and `curl` inside, tunnelling through
+/// `HTTPS_PROXY` (the relay port), reaches `ratatoskr-mock llm` under a pinned name.  The mock is domr's
+/// `ratatoskr-mock`, built beside this binary (`cargo build -p domr`).
+#[test]
+#[ignore = "needs the real sandbox (bwrap with user namespaces): the sandbox lane"]
+fn a_session_reaches_its_provider_through_the_proxy() {
+    use drgnx_ratatoskr::agents::net::SessionNet;
+    let fx = Fx::new();
+    let env = fx.env();
+    let (mut llm, port, log) = mock_llm(&fx);
+    let body = BODY;
     let plan = fx.plan(&format!(
         "out=$(curl -sS --proxytunnel -x \"$HTTPS_PROXY\" -H 'content-type: application/json' \
          -d '{body}' http://llm.test:{port}/v1/messages) || exit 11; \

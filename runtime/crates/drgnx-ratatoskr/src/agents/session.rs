@@ -852,13 +852,13 @@ pub(super) async fn prepare(
     module_env: &[(String, String)],
 ) -> Result<Prepared, Error> {
     // a gateway profile's agent reaches its provider only through the hub's gateway, with a token of its own
-    let (profile, gateway) = match gateway_env(front, profile, role, sid, job).await? {
-        Some((env, token)) => {
+    let (profile, gateway, relayed) = match gateway_env(front, profile, role, sid, job).await? {
+        Some((env, token, relayed)) => {
             let mut p = profile.clone();
             p.env.extend(env);
-            (p, Some(token))
+            (p, Some(token), relayed)
         }
-        None => (profile.clone(), None),
+        None => (profile.clone(), None, false),
     };
     let profile = &profile;
     let who = who_of(role, profile);
@@ -894,6 +894,8 @@ pub(super) async fn prepare(
             .collect();
         plan.env.extend(extra);
     }
+    // the spec relays a port to the session's gateway.sock and points ANTHROPIC_BASE_URL at it
+    plan.gateway = relayed;
     // what an editor module added comes last, so it wins over the profile's and the lock's
     plan.env.extend(module_env.iter().cloned());
     let why = match plan.enforced {
@@ -954,15 +956,21 @@ pub(crate) fn gateway_chain(front: &Front, p: &AgentProfile) -> Vec<(String, Opt
     }
 }
 
-/// A gateway profile's environment: the gateway's URL and a token registered for this session (booked under JOB, else
-/// the session id), never a key.  None for a profile with no gateway.
+/// Whether a session's launch is sandboxed: always in a shipped build; a test build's launch is the unsandboxed
+/// test one (the test `spawn_spec`), which reaches the gateway on its loopback port.
+const SANDBOXED_LAUNCH: bool = cfg!(not(any(test, feature = "test-hooks")));
+
+/// A gateway profile's environment and its token, registered for this session (booked under JOB, else the session
+/// id), never a key; and whether the token is good on the session's `gateway.sock` (a sandboxed launch: the spec
+/// relays a port to it and sets `ANTHROPIC_BASE_URL` there, `LaunchPlan::gateway`) rather than on the loopback
+/// port (the URL is in the environment then).  None for a profile with no gateway.
 async fn gateway_env(
     front: &Front,
     profile: &AgentProfile,
     role: Role,
     sid: &str,
     job: Option<&str>,
-) -> Result<Option<(Vec<String>, String)>, Error> {
+) -> Result<Option<(Vec<String>, String, bool)>, Error> {
     if profile.ai.is_none() {
         return Ok(None);
     }
@@ -973,16 +981,28 @@ async fn gateway_env(
     let scope = scope_of(role, sid);
     let r = front
         .gate
-        .register_session(chain, job.unwrap_or(sid), &profile.name, &scope, &front.mcp)
+        .register_session(
+            chain,
+            job.unwrap_or(sid),
+            &profile.name,
+            &scope,
+            &front.mcp,
+            SANDBOXED_LAUNCH.then_some(sid),
+        )
         .await?;
-    let url = r
-        .url
-        .ok_or_else(|| internal("the gateway gave no loopback URL"))?;
-    let mut env = vec![
-        format!("ANTHROPIC_BASE_URL={url}"),
+    let mut env = Vec::new();
+    let relayed = match (&r.url, &r.socket) {
+        (_, Some(_)) => true,
+        (Some(url), None) => {
+            env.push(format!("ANTHROPIC_BASE_URL={url}"));
+            false
+        }
+        (None, None) => return Err(internal("the gateway gave neither a URL nor a socket")),
+    };
+    env.extend([
         format!("ANTHROPIC_AUTH_TOKEN={}", r.token),
         "ANTHROPIC_API_KEY=".to_string(),
-    ];
+    ]);
     if let Some(m) = &profile.model {
         env.extend(
             [
@@ -995,7 +1015,7 @@ async fn gateway_env(
             .map(|n| format!("{n}={m}")),
         );
     }
-    Ok(Some((env, r.token)))
+    Ok(Some((env, r.token, relayed)))
 }
 
 /// The budget scope of a session.
@@ -1185,8 +1205,19 @@ async fn launch(
     existing: Option<&str>,
     (task, job, module_env): (Option<&str>, Option<&str>, &[(String, String)]),
 ) -> Result<(Launched, tokio::sync::mpsc::Receiver<Event>), Error> {
-    let prep = prepare(front, profile, role, sid, cwd, job, module_env).await?;
+    // the session's MCP session first: a sandboxed gateway profile's token is registered on its gateway.sock, which
+    // needs it.  A launch refused before the spawn closes the one it opened (its socket and dir go with it)
+    let opened = front.mcp.socket_of(sid).is_none();
     let mcp = bridge(front, profile, sid, cwd, task, job).await;
+    let prep = match prepare(front, profile, role, sid, cwd, job, module_env).await {
+        Ok(p) => p,
+        Err(e) => {
+            if opened && !mcp.is_empty() {
+                let _ = front.mcp.close(sid).await;
+            }
+            return Err(e);
+        }
+    };
     // the provider proxy the spec's relay reaches, bound before the spawn; a start that fails below drops it, and its
     // socket with it
     let net = super::net::start_session(front, profile, sid, SESSION_NET)

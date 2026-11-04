@@ -649,9 +649,11 @@ impl Gate {
         }
     }
 
-    /// A registration for the hub's own session SID (booked under JOB), on the loopback listener: the URL and the
-    /// token its agent gets.  Owned by this hub process, so a restart prunes it and the resumed session registers
-    /// again.  The session's nested `usd` limit becomes the registration's budget ([`Gate::follow_budget`]).
+    /// A registration for one of the hub's own sessions (booked under JOB): the token its agent gets, good on the
+    /// loopback listener (the URL) or, with SID, on that session's `gateway.sock` only (the socket; its MCP session
+    /// must be open), which a sandboxed agent reaches through its relay.  Owned by this hub process, so a restart
+    /// prunes it and the resumed session registers again.  The session's nested `usd` limit becomes the
+    /// registration's budget ([`Gate::follow_budget`]).
     pub async fn register_session(
         &self,
         chain: Vec<(String, Option<String>)>,
@@ -659,12 +661,17 @@ impl Gate {
         agent: &str,
         scope: &runstav::methods::timeline::BudgetScope,
         sessions: &Sessions,
+        sid: Option<&str>,
     ) -> Result<Registered, Error> {
         let chain: Vec<Value> = chain.into_iter().map(|(p, m)| json!([p, m])).collect();
-        let p: RegisterParams = serde_json::from_value(json!({
+        let mut params = json!({
             "chain": chain, "job": job, "agent": agent, "owner": std::process::id(),
-        }))
-        .map_err(|e| invalid("chain", e.to_string()))?;
+        });
+        if let Some(sid) = sid {
+            params["sid"] = json!(sid);
+        }
+        let p: RegisterParams =
+            serde_json::from_value(params).map_err(|e| invalid("chain", e.to_string()))?;
         let r = self.register(p, None, sessions).await?;
         if let Some(b) = self.budgets.get() {
             b.bind_job(job, scope);
