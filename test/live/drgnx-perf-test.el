@@ -1,5 +1,6 @@
 ;;; drgnx-perf-test.el --- live: the latency probe sees redisplay work -*- lexical-binding: t -*-
 ;; test-class: cond
+;; test-pattern: handshake
 ;; Redisplay work of 30 ms (a pre-redisplay function) must show in input latency: the probe measures key →
 ;; screen, not only the command.
 (require 'ert)
@@ -18,17 +19,17 @@
                                          (drgnx-uitest--json (list :ok t)))" (concat root "f.txt")))
           ;; under load the hook can run before f.txt is in the selected window, and the probe would count nothing:
           ;; show it there and wait for a redisplay that has run with it
-          (let ((deadline (+ (float-time) 15)) shown)
-            (while (and (not shown) (< (float-time) deadline))
-              (setq shown (eq t (plist-get
-                                 (drgnx-ui-call sess (format "(progn (switch-to-buffer (get-file-buffer %S)) (redisplay t)
-                                                                (drgnx-uitest--json (list :ok (if (eq (window-buffer (selected-window))
-                                                                                                      (get-file-buffer %S))
-                                                                                                  t :false))))"
-                                                             (concat root "f.txt") (concat root "f.txt")))
-                                 :ok)))
-              (unless shown (drgnx-test-pause 0.2 "between two looks: the loop waits on its condition")))
-            (should shown))
+          (let ((file (concat root "f.txt")))
+            (drgnx-test-wait
+             (lambda ()
+               (eq t (plist-get
+                      (drgnx-ui-call sess (format "(progn (switch-to-buffer (get-file-buffer %S)) (redisplay t)
+                                                     (drgnx-uitest--json (list :ok (if (eq (window-buffer (selected-window))
+                                                                                           (get-file-buffer %S))
+                                                                                       t :false))))"
+                                                  file file))
+                      :ok)))
+             :secs 15 :what "f.txt in the selected window after a redisplay"))
           (drgnx-ui-measure sess nil)
           (drgnx-ui-call sess "(progn (drgnx-perf-begin) (drgnx-uitest--json (list :ok t)))")
           (drgnx-ui-measure sess (list (list :type "abcdef")))

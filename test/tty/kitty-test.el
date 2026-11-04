@@ -1,5 +1,6 @@
 ;;; kitty-test.el --- tty tier, the exit test: emacsclient -t in a real kitty -*- lexical-binding: t -*-
 ;; test-class: cond
+;; test-pattern: handshake
 ;; Run under `drgnx-run-ert-batch' (temp HOME and XDG dirs).  One drgnx daemon under headless mutter and a kitty on
 ;; that display running `emacsclient -t' (`drgnx-tty-session-kitty-start').  Keys go in through kitty's own encoder
 ;; (`kitten @ send-key'), mouse reports as raw bytes (`send-text'); the screen comes from `get-text', the clipboard
@@ -54,9 +55,10 @@ afterwards.  (cdr SPEC) :kkp t: skip unless kkp is there; :size: kitty's size in
     (while (and (drgnx-tty-session-eval s '(and (active-minibuffer-window) t)) (< tries 5))
       (drgnx-tty-session-kitty-key s "ctrl+g")
       (setq tries (1+ tries))
-      (let ((deadline (+ (float-time) 1)))
-        (while (and (drgnx-tty-session-eval s '(and (active-minibuffer-window) t)) (< (float-time) deadline))
-          (drgnx-test-pause 0.05 "between two looks: the loop waits on its condition"))))
+      (condition-case nil
+          (drgnx-test-wait (lambda () (not (drgnx-tty-session-eval s '(and (active-minibuffer-window) t))))
+                           :secs 1 :what "the minibuffer to close")
+        (ert-test-failed nil)))
     (should-not (drgnx-tty-session-eval s '(active-minibuffer-window)))))
 
 ;;;; Keys
@@ -148,17 +150,15 @@ afterwards.  (cdr SPEC) :kkp t: skip unless kkp is there; :size: kitty's size in
             (defvar kx-returned nil)
             (defun kx-block ()
               (interactive)
-              (write-region "" nil ,started nil 'silent)
-              (unwind-protect (call-process "sleep" nil nil nil "30")
+              ;; the program itself says it is running: kkp has written the terminal's plain keys back before it starts
+              (unwind-protect (call-process "sh" nil nil nil "-c" ,(format ": > '%s'; exec sleep 30" started))
                 (setq kx-returned (float-time))))
             (push (list (cons t (let ((m (make-sparse-keymap))) (define-key m [f12] #'kx-block) m)))
                   emulation-mode-map-alists)
             t))
       (drgnx-tty-session-kitty-key s "f12")
       (drgnx-test-wait (lambda () (file-exists-p started)) :secs 10 :what "the program to start")
-      ;; kkp gives kitty its plain keys back as the program starts
-      ;; DEFERRED: a settle (Emacs is blocked in the program: nothing to ask it), until kkp's hand-back is visible
-      (drgnx-test-pause 0.5 "settle: kkp hands kitty its plain keys back, nothing to ask")
+      ;; kkp gives kitty its plain keys back as the program starts: it is back once the program is running
       (let ((sent (float-time)))
         (drgnx-tty-session-kitty-key s "ctrl+g")
         (should (< (- (drgnx-tty-session-wait s 'kx-returned 10) sent) 2)))

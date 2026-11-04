@@ -2,6 +2,7 @@
 ;; Fake shells are scripts in a temp dir (the runner's HOME is a temp dir too); the one real shell (zsh) runs with a
 ;; temp HOME and ZDOTDIR.  Never the user's rc files, keyring or live Emacs.
 ;; test-class: cond
+;; test-pattern: handshake
 (require 'ert)
 (require 'cl-lib)
 (require 'seq)
@@ -51,14 +52,14 @@ its environment, then AFTER."
                "env -i " (mapconcat #'shell-quote-argument vars " ") " /bin/sh -c \"$script\"\n"
                (or after ""))))
 
-(defun drgnx-shell-env-test--run (&optional callback)
-  "Start reading the shell's environment, wait (5 s at most) until it is done: (PROCESS . CHANGED)."
+(defun drgnx-shell-env-test--run (&optional callback secs)
+  "Start reading the shell's environment, wait (SECS, default 5, at most) until it is done: (PROCESS . CHANGED)."
   (let* ((done nil) (changed nil)
          (proc (drgnx-shell-env-start (lambda (c) (setq done t changed c) (when callback (funcall callback c))))))
     (should (processp proc))
     (drgnx-test-wait (lambda ()
                        done)
-                     :secs 5 :what "the shell environment read")
+                     :secs (or secs 5) :what "the shell environment read")
     (cons proc changed)))
 
 (defun drgnx-shell-env-test--failure-p (m)
@@ -141,7 +142,7 @@ its environment, then AFTER."
            (proc (drgnx-shell-env-start (lambda (_) (setq called t)))))
       (should (processp proc))
       (drgnx-test-wait-ended proc :secs 3 :what "the slow shell to be given up on")
-      (should-not (process-live-p proc))
+      (should-not (memq (process-status proc) '(run open)))
       (should (< (- (float-time) t0) 1))
       (should (equal (getenv "PATH") before))
       (should-not called)
@@ -151,7 +152,7 @@ its environment, then AFTER."
   (drgnx-shell-env-test--with
     (drgnx-shell-env-test--env-shell dir "read x" (list "PATH=/usr/bin" "MANPATH=/read/man"))
     (let ((r (drgnx-shell-env-test--run)))
-      (should-not (process-live-p (car r)))
+      (should-not (memq (process-status (car r)) '(run open)))
       (should (equal (getenv "MANPATH") "/read/man")))))
 
 (ert-deftest drgnx-shell-env/a-shell-that-exited-before-its-input-is-closed-still-answers ()
@@ -233,7 +234,12 @@ its environment, then AFTER."
       (setenv "ZDOTDIR" (directory-file-name home))
       (setenv "HISTFILE" "/dev/null")
       (setenv "SHELL" (executable-find "zsh"))
-      (drgnx-shell-env-test--run)
+      ;; How long a real zsh takes to start is not what this test is about (a loaded macOS runner took over the
+      ;; product's 5 s, its timer ended the shell, nothing changed): the product's time limit is out of play here, and
+      ;; the test waits for the shell's end.  The limit itself is the subject of `a-slow-shell-is-given-up-on'-style
+      ;; `a-slow-shell-times-out-quietly', with a fake shell.
+      (let ((drgnx-shell-env-timeout 3600))
+        (drgnx-shell-env-test--run nil 120))
       (should (string-prefix-p (concat home "mybin:") (getenv "PATH"))))))
 
 (provide 'shell-env-test)

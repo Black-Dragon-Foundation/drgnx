@@ -1,5 +1,6 @@
 ;;; drgnx-wm-test.el --- live: move and restore across monitors under sway, X11 and i3; mutter explains -*- lexical-binding: t -*-
 ;; test-class: cond
+;; test-pattern: handshake
 ;; Each test runs only in its compositor's tier (`bin/drgnx test --ui --compositor sway|x11|i3', or in the GUI
 ;; container: `bin/drgnx test --container --ui --compositor C'; the default tier is mutter); elsewhere it is skipped.
 ;; Every session has two monitors of 1280x800 (one in the missing-monitor test), config `drgnx', a temp state root.
@@ -19,10 +20,9 @@
 
 (defun drgnx-wm-move--until (thunk &optional seconds)
   "Call THUNK every 0.2 s until it returns non-nil (that value) or SECONDS (default 8) pass (nil)."
-  (let ((deadline (+ (float-time) (or seconds 8))) r)
-    (while (and (not (setq r (funcall thunk))) (< (float-time) deadline))
-      (drgnx-test-pause 0.2 "between two looks: the loop waits on its condition"))
-    r))
+  (condition-case nil
+      (drgnx-test-wait thunk :secs (or seconds 8) :what "the condition of a look")
+    (ert-test-failed nil)))
 
 (defmacro drgnx-wm-move--in-root (root &rest body)
   "BODY with ROOT a temp directory that is the harness state root (and where saved layouts go)."
@@ -368,7 +368,7 @@ Under X the window manager (or the pointer) gives Emacs the real event."
                   (should (equal (plist-get (cdr other-after) :id) (plist-get (cdr other-before) :id)))
                   ;; Emacs' two windows: the main one stayed on the output the other app is on
                   (should (equal (drgnx-wm-move--wm-outputs sess) '("HEADLESS-1" "HEADLESS-2"))))))
-          (when (process-live-p other) (delete-process other))
+          (delete-process other)
           (drgnx-ui-stop (plist-get sess :name)))))))
 
 ;;; drgnx-wm-test.el ends here

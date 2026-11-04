@@ -102,9 +102,11 @@ quits only that (\"[Quit]\"), as it would for a person, who presses it again."
     (while (and (drgnx-tty-session-eval s '(and (active-minibuffer-window) t)) (< tries 5))
       (drgnx-tty-session-key c "C-g" caps)
       (setq tries (1+ tries))
-      (let ((deadline (+ (float-time) 1)))
-        (while (and (drgnx-tty-session-eval s '(and (active-minibuffer-window) t)) (< (float-time) deadline))
-          (drgnx-test-pause 0.05 "between two looks: the loop waits on its condition"))))
+      ;; the C-g quit it, or it did not (the palette was filling): then the loop sends another
+      (condition-case nil
+          (drgnx-test-wait (lambda () (not (drgnx-tty-session-eval s '(and (active-minibuffer-window) t))))
+                           :secs 1 :what "the minibuffer to close")
+        (ert-test-failed nil)))
     (should-not (drgnx-tty-session-eval s '(active-minibuffer-window)))))
 
 (provide 'tty-keys-helpers)

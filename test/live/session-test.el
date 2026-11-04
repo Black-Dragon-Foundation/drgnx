@@ -1,5 +1,6 @@
 ;;; session-test.el --- live tests: real sessions through the controller -*- lexical-binding: t -*-
 ;; test-class: cond
+;; test-pattern: handshake
 ;; Run by `drgnx test --ui' in batch Emacs; each test starts real headless sessions.
 (require 'ert)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
@@ -111,10 +112,10 @@
         (should (eq (plist-get ready :init_running) t))
         (should (equal (plist-get ready :prompt) "Name? "))
         (drgnx-ui-measure sess (list (list :type "drgnx") (list :keys "RET")))
-        (let ((deadline (+ (float-time) 10)))
-          (while (and (not (file-exists-p (expand-file-name "ready.json" (plist-get s :run))))
-                      (< (float-time) deadline))
-            (drgnx-test-pause 0.1 "between two looks: the loop waits on its condition")))
+        (condition-case nil
+            (drgnx-test-wait (lambda () (file-exists-p (expand-file-name "ready.json" (plist-get s :run)))) :secs 10
+                             :what "the session's ready.json")
+          (ert-test-failed nil))
         (should (file-exists-p (expand-file-name "ready.json" (plist-get s :run))))
         (should (equal (plist-get (drgnx-ui-call sess "(drgnx-uitest--json (list :a drgnx-test-answer))") :a)
                        "drgnx"))))))

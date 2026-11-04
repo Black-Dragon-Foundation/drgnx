@@ -1,5 +1,6 @@
 ;;; frames-test.el --- tty tier: a terminal window is a workbench; EDITOR frames; what a terminal can do, asked once -*- lexical-binding: t -*-
 ;; test-class: cond
+;; test-pattern: handshake
 ;; Run under `drgnx-run-ert-batch' (temp HOME and XDG dirs); every test has its own tmux server.
 (require 'ert)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
@@ -216,17 +217,17 @@ once TEXT is on its screen."
     ;; for OSC 52).  drgnx may add less than a second to that.
     (let ((limit (1+ (drgnx-tty-session-eval s '(* xterm-query-timeout 2))))
           (slowest 0)
-          (deadline (+ (float-time) 15))
           frame)
       (drgnx-tty-session-pty-start :daemon-sess s)
       ;; every call answers in time while the silent terminal's frame is made and asked
-      (while (and (not frame) (< (float-time) deadline))
-        (let ((t0 (float-time)))
-          (setq frame (drgnx-tty-session-eval
-                       s '(seq-find (lambda (f) (equal (tty-type (frame-terminal f)) "xterm-256color")) (frame-list))
-                       (+ limit 5)))
-          (setq slowest (max slowest (- (float-time) t0))))
-        (unless frame (drgnx-test-pause 0.05 "between two looks: the loop waits on its condition")))
+      (drgnx-test-wait (lambda ()
+                         (let ((t0 (float-time)))
+                           (setq frame (drgnx-tty-session-eval
+                                        s '(seq-find (lambda (f) (equal (tty-type (frame-terminal f)) "xterm-256color")) (frame-list))
+                                        (+ limit 5)))
+                           (setq slowest (max slowest (- (float-time) t0)))
+                           frame))
+                       :secs 15 :what "the silent terminal's frame")
       (should frame)
       (should (< slowest limit))
       ;; it got its capabilities, without an answer

@@ -1,7 +1,9 @@
 ;;; drgnx-boot-test.el --- live smoke test: drgnx boots in a session (config=drgnx) -*- lexical-binding: t -*-
 ;; test-class: cond
+;; test-pattern: handshake
 (require 'ert)
 (require 'drgnx-ui)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 
 (ert-deftest drgnx-live/drgnx-boots-and-its-surfaces-work ()
   (let* ((root (make-temp-file "drgnx-boot" t))
@@ -32,12 +34,15 @@
           (should (seq-find (lambda (w) (equal (plist-get w :buffer) "*drgnx keys*"))
                             (plist-get (drgnx-ui-state sess) :windows)))
           ;; A prompt from a timer signals instead of freezing the session.
-          (should (string-search "drgnx-prompt-in-automatic-path"
-                                 (plist-get (drgnx-ui-call sess "(progn (setq drgnx-test-timer-result nil)
+          (drgnx-ui-call sess "(progn (setq drgnx-test-timer-result nil)
                                     (run-with-timer 0 nil (lambda () (setq drgnx-test-timer-result
                                       (condition-case e (y-or-n-p \"Really? \") (error (format \"%S\" (car e)))))))
-                                    (let ((d (+ (float-time) 30)))
-                                      (while (and (null drgnx-test-timer-result) (< (float-time) d)) (accept-process-output nil 0.02)))
-                                    (drgnx-uitest--json (list :r (format \"%s\" drgnx-test-timer-result))))") :r))))
+                                    (drgnx-uitest--json (list :r \"armed\")))")
+          (should (string-search "drgnx-prompt-in-automatic-path"
+                                 (drgnx-test-wait
+                                  (lambda ()
+                                    (let ((r (plist-get (drgnx-ui-call sess "(drgnx-uitest--json (list :r (format \"%s\" (or drgnx-test-timer-result \"\"))))") :r)))
+                                      (and (not (equal r "")) r)))
+                                  :secs 30 :what "the timer's prompt to be refused"))))
       (drgnx-ui-stop (plist-get s :name))
       (delete-directory root t))))

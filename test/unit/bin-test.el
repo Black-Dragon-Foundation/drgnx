@@ -646,28 +646,30 @@ with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and 
 
 (ert-deftest drgnx-bin/the-still-starting-notice-comes-while-waiting ()
   (drgnx-bin-test--with-open
-    ;; the daemon answers only when the test says so, after the notice
+    ;; The daemon answers when the notice has been said.  The reader that sees the notice makes it answer (touches
+    ;; `running') in the same pipe, so no step of the test sits between the notice and the answer: bin's own clock (6 s;
+    ;; the notice is due after 2) runs against a shell loop, never against a loaded test Emacs.
     (write-region "never" nil (expand-file-name "delay" dir))
-    (let* ((out "") (done nil) (events nil)
+    (let* ((out "")
            ;; DRGNX_EMACS unset, as `drgnx-bin-test--call' does: a run's own (CI sets it) would pick the real
            ;; emacsclient beside it over the fake on PATH
-           (process-environment (append (cons "DRGNX_OPEN_WAIT=6" env) (list "DRGNX_EMACS") process-environment))
-           ;; the filter runs for all of a run's output before its sentinel does: EVENTS is the order they happened in
-           (proc (make-process :name "drgnx-open" :command (list drgnx-bin-test--bin "open") :connection-type 'pipe
-                               :noquery t
-                               :filter (lambda (_p s)
-                                         (setq out (concat out s))
-                                         (when (and (string-search "still starting" out) (not (memq 'notice events)))
-                                           (push 'notice events)))
-                               :sentinel (lambda (_p _e) (push 'exit events) (setq done t)))))
+           (process-environment (append (list "DRGNX_OPEN_WAIT=6" (concat "DRGNX_TEST_BIN=" drgnx-bin-test--bin)
+                                              (concat "DRGNX_TEST_RUNNING=" (expand-file-name "running" dir)))
+                                        env (list "DRGNX_EMACS") process-environment))
+           (proc (make-process
+                  :name "drgnx-open" :connection-type 'pipe :noquery t
+                  :command (list "sh" "-c"
+                                 (concat "{ \"$DRGNX_TEST_BIN\" open 2>&1; echo \"exit $?\"; } | "
+                                         "while IFS= read -r line; do printf '%s\\n' \"$line\"; "
+                                         "case $line in *'still starting'*) : > \"$DRGNX_TEST_RUNNING\";; esac; done"))
+                  :filter (lambda (_p s) (setq out (concat out s))))))
       (unwind-protect
-          (progn                                   ; the notice is due after 2 s of the 6
-            (drgnx-test-wait (lambda () (memq 'notice events)) :what "the still-starting notice")
-            (write-region "" nil (expand-file-name "running" dir))
-            (drgnx-test-wait (lambda () done) :what "bin/drgnx open's exit")
-            (should (equal (reverse events) '(notice exit)))
-            (should (eql 0 (process-exit-status proc))))
-        (when (process-live-p proc) (delete-process proc))))))
+          (progn
+            (drgnx-test-wait-ended proc :what "bin/drgnx open's end")
+            (drgnx-test-wait (lambda () (string-search "exit " out)) :what "bin/drgnx open's exit line")
+            ;; the notice came first, and the open then succeeded: it could only because the notice made the daemon answer
+            (should (string-match "still starting.*\n\\(?:.*\n\\)*exit 0\n\\'" out)))
+        (delete-process proc)))))
 
 (ert-deftest drgnx-bin/the-open-lock-is-released-when-open-fails-or-is-stopped ()
   (drgnx-bin-test--with-open

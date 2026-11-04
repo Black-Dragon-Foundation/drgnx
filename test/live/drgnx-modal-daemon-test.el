@@ -1,5 +1,6 @@
 ;;; drgnx-modal-daemon-test.el --- live: Vim's quit commands close windows, never the drgnx daemon -*- lexical-binding: t -*-
 ;; test-class: cond
+;; test-pattern: handshake
 ;; A daemon session of config drgnx that keeps running in the background, evil from DRGNX_MODAL_ELPA and the Vim
 ;; stack: `:q' in the only window (one tab), `ZZ' on a changed file, `:qa' — after each the window is gone, the daemon
 ;; answers on its socket, the layout was saved and ZZ's file was written; with two windows `:q' closes only its own.
@@ -16,10 +17,10 @@
 
 (defun drgnx-modal-daemon-test--windows-become (sess n)
   "Wait (10 s at most) until SESS has N graphical windows; non-nil when it has."
-  (let ((deadline (+ (float-time) 10)))
-    (while (and (/= (drgnx-modal-daemon-test--windows sess) n) (< (float-time) deadline))
-      (drgnx-test-pause 0.1 "between two looks: the loop waits on its condition"))
-    (= (drgnx-modal-daemon-test--windows sess) n)))
+  (condition-case nil
+      (drgnx-test-wait (lambda () (= (drgnx-modal-daemon-test--windows sess) n)) :secs 10
+                       :what (format "%d graphical windows" n))
+    (ert-test-failed nil)))
 
 (defun drgnx-modal-daemon-test--answers-p (sess)
   "Whether the daemon of SESS evaluates (+ 1 1) on its socket."

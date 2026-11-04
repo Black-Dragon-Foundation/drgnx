@@ -1,5 +1,6 @@
 ;;; drgnx-persist-first-client-test.el --- live: a daemon's first `emacsclient -c' keeps the restored files -*- lexical-binding: t -*-
 ;; test-class: cond
+;; test-pattern: handshake
 ;; A layout with two editor groups (a.txt | b.txt) is saved by one daemon session; a fresh daemon gets that
 ;; state file and its first `emacsclient -c' (no file) opens: every editor group shows its saved file — the
 ;; server's *scratch* (shown in a client window that asked for no file) does not replace one — and the
@@ -58,11 +59,13 @@
                                                                       (1+ drgnx-persist-first-client--restores))))
                                   t)" state))
             (should (eql 0 (plist-get (drgnx-ui-new-frame sess) :exit)))
-            (let ((deadline (+ (float-time) 10)) shown)
-              (while (and (< (float-time) deadline)
-                          (not (equal (setq shown (drgnx-persist-first-client--eval sess drgnx-persist-first-client--shown))
-                                      (list (list a b) nil))))
-                (drgnx-test-pause 0.2 "between two looks: the loop waits on its condition"))
+            (let (shown)
+              (condition-case nil
+                  (drgnx-test-wait (lambda ()
+                                     (equal (setq shown (drgnx-persist-first-client--eval sess drgnx-persist-first-client--shown))
+                                            (list (list a b) nil)))
+                                   :secs 10 :what "the first client's restored layout")
+                (ert-test-failed nil))
               (should (equal shown (list (list a b) nil))))
             (drgnx-test-pause 1 "nothing may restore again a moment later")
             (should (eql 1 (drgnx-persist-first-client--eval sess "drgnx-persist-first-client--restores")))
