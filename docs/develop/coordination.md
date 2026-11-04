@@ -830,29 +830,35 @@ clears the count after carding.
 ## The permissions matrix
 
 `norn::matrix` (`runtime/crates/norn/src/matrix/`) is the policy on the wire's vocabulary
-(`runstav::methods::matrix`). Rows are the 22 `Action`s (ids such as `agents.start`, `push.main`); columns are
+(`runstav::methods::matrix`). Rows are the 25 `Action`s (ids such as `agents.start`, `push.main`); columns are
 roles (manager, worker, chat), named agents and providers; a cell is `Allow`, `Ask` or `Never` with an optional
 limit (`amount` in a `Unit`).
 
 - **Presets:** `preset(Cautious | Balanced | Autonomous)` builds a layer with every action in the three role columns.
   Balanced is the design mockup's table. `JobContainer` is Allow for managers and workers under Balanced and
   Autonomous, Ask under Cautious, Never for chat. A cell has one limit, so Balanced `spend` carries the dollar cap
-  (manager $40, worker $10, chat $2); the weekly-limit share is the gateway's budget check, not the cell.
+  (manager $40, worker $10, chat $2); the weekly-limit share is the gateway's budget check, not the cell. The
+  browser rows (after `network`): `browser` is Ask in Cautious, Allow for managers and workers in Balanced (Ask for
+  chat) and Allow everywhere in Autonomous; `browser.web` is Allow only in Autonomous, Ask otherwise;
+  `browser.private` is Ask in every column of every preset.
 - **Combination:** `effective(layers, who)` applies the layers in order (preset, user overrides, project, plan; a
   later layer replaces a cell), then takes the most restrictive of the columns that match the session: `Never >
   Ask > Allow`. A provider or agent column can tighten a role, never widen it. At the same verdict a limit beats
   none and the smaller limit wins; limits in different units do not compare, so the cell becomes Ask with no limit.
-  `unsandboxed` and `user.private` are Never whatever a layer says; an action without a cell is Never.
+  `unsandboxed` and `user.private` are Never whatever a layer says (`always_never`); an action without a cell is
+  Never. `browser.private` is capped at Ask (`always_ask`): after the merge an Allow there becomes Ask with its limit
+  kept, whichever layer or column said Allow; a Never stays Never.
 - **Deciding:** `decide(effective, action, amount)` is the cell's verdict; over the cell's limit it is Ask if
-  `spend.over` is not Never, else Never.
+  `spend.over` is not Never, else Never. It applies both caps itself, so a row capped at Ask answers Ask for an
+  Allow cell whatever `Effective` it is handed.
 - **Narrowing:** `narrow(parent, asked)` returns `asked` only if no cell is wider than the parent's: a verdict at
   least as restrictive and, where the parent has a limit, a limit in the same unit that is no greater (a child with
   no limit, or in another unit, is wider). Otherwise `Widening { action }` names the first offender.
 - **Time presets:** `active(base, time_presets, away, minute)` picks the first `Away` preset while the user is away,
   else the first `Between(from, to)` holding at that minute of day (wrapping past midnight), else the base.
 
-Tests: `cargo test -p norn matrix` (the Balanced table cell by cell, combination, overrides, narrowing as a
-property test, units, time presets).
+Tests: `cargo test -p norn matrix` (the Balanced table cell by cell, the browser rows in every preset, the Ask cap
+in every layer, combination, overrides, narrowing as a property test and for the browser rows, units, time presets).
 
 ### The matrix in the hub (`drgnx-ratatoskr/src/matrix_gate.rs`)
 

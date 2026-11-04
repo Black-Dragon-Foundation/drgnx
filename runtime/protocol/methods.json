@@ -12591,7 +12591,7 @@
       "params": {
         "$defs": {
           "Action": {
-            "description": "A row of the matrix: one thing an agent may do.  `unsandboxed` and `user.private` are Never in every column of\nevery preset and no override changes them.",
+            "description": "A row of the matrix: one thing an agent may do.  `unsandboxed` and `user.private` are Never in every column of\nevery preset and no override changes them; `browser.private` is at most Ask, whatever a layer says.\n\nThe browser rows: `browser` is the in-sandbox browser itself (its relay ports, its host and the CDP endpoint; its\nnetwork only the session's own local servers), `browser.web` lets that browser reach any public site on ports 80\nand 443, and `browser.private` lets it reach the private targets a grant names.",
             "enum": [
               "agents.start",
               "agents.model",
@@ -12610,6 +12610,9 @@
               "machines",
               "job.container",
               "network",
+              "browser",
+              "browser.web",
+              "browser.private",
               "unsandboxed",
               "settings.change",
               "user.private",
@@ -12816,7 +12819,7 @@
       "result": {
         "$defs": {
           "Action": {
-            "description": "A row of the matrix: one thing an agent may do.  `unsandboxed` and `user.private` are Never in every column of\nevery preset and no override changes them.",
+            "description": "A row of the matrix: one thing an agent may do.  `unsandboxed` and `user.private` are Never in every column of\nevery preset and no override changes them; `browser.private` is at most Ask, whatever a layer says.\n\nThe browser rows: `browser` is the in-sandbox browser itself (its relay ports, its host and the CDP endpoint; its\nnetwork only the session's own local servers), `browser.web` lets that browser reach any public site on ports 80\nand 443, and `browser.private` lets it reach the private targets a grant names.",
             "enum": [
               "agents.start",
               "agents.model",
@@ -12835,6 +12838,9 @@
               "machines",
               "job.container",
               "network",
+              "browser",
+              "browser.web",
+              "browser.private",
               "unsandboxed",
               "settings.change",
               "user.private",

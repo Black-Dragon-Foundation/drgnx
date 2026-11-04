@@ -410,6 +410,16 @@ edit code, commit, push, change settings), columns are its role (manager, worker
 provider. Each cell is Allow, Ask or Never, sometimes with a limit. Three presets ship: Cautious, Balanced and
 Autonomous. Your own cells, a project's and a plan's refine the preset; where several columns apply the most
 restrictive wins, and a more specific column never widens. `unsandboxed` and `user.private` are never allowed.
+Three rows are about the agent's own browser, which runs inside its sandbox:
+
+- **`browser`**: the session gets a browser of its own, which can reach only the agent's local servers. Cautious
+  asks; Balanced allows it for managers and workers and asks for chats; Autonomous allows it.
+- **`browser.web`**: that browser may open any public site (HTTPS and plain HTTP, ports 80 and 443). Only
+  Autonomous allows it; the other presets ask.
+- **`browser.private`**: that browser may reach a private address you name (your LAN, your tailnet, this computer).
+  It asks in every preset, Autonomous included, and an Allow you write for it still asks: no setting turns this
+  card off.
+
 A session's project and plan are those of the task it works on (a plan run's, or the task it was started with).
 A chat started in a project (the Agents panel, Review Branch) sees the project read-only (a linked worktree's
 repository too, so it can run `git log` and `git diff`) and writes only a scratch folder of its own; with `chat.project-read` set to Never for it, such a start is refused (start the chat without a
