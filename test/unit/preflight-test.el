@@ -89,6 +89,24 @@ $PF_TESTS, default 3, tests); ENV (\"K=V\" strings) goes first, ARGS after the o
     (should (eql 0 (car r)))
     (should (string-match-p "\\`[^ ]+ [0-9]+ [0-9]\\{4\\}-[0-9][0-9]-[0-9][0-9]\n\\'" (cdr r)))))
 
+(ert-deftest drgnx-preflight/p3-hub-runs-the-hub-files-under-each-seed ()
+  ;; --seeds 1: one P3-hub step, on the hub-client and ai-gateway files, with DRGNX_TEST_HUB_CHAOS=1; no other step has it
+  (let* ((log (make-temp-file "drgnx-pf-log"))
+         (process-environment (cons (concat "PF_LOG=" log) process-environment)))
+    (unwind-protect
+        (progn
+          (should (eql 0 (car (drgnx-preflight-test--run
+                               "echo \"$DRGNX_TEST_HUB_CHAOS|$DRGNX_TEST_SELECTOR\" >> \"$PF_LOG\"; exit 0"))))
+          (let ((lines (with-temp-buffer (insert-file-contents log) (split-string (buffer-string) "\n" t))))
+            (should (equal (seq-remove (lambda (l) (string-prefix-p "|" l)) lines)
+                           '("1|\"^drgnx-\\\\(hub-client\\\\|ai-gateway\\\\)/\"")))))
+      (delete-file log)))
+  ;; a red under hub chaos leaves no stamp
+  (let ((r (drgnx-preflight-test--run
+            "if [ -n \"$DRGNX_TEST_HUB_CHAOS\" ]; then echo '   FAILED  x/y'; exit 1; fi; exit 0")))
+    (should-not (eql 0 (car r)))
+    (should-not (cdr r))))
+
 (ert-deftest drgnx-preflight/a-difference-between-the-two-det-runs-is-red ()
   (let ((r (drgnx-preflight-test--run
             "case \"$DRGNX_TEST_SHUFFLE\" in *-b) echo '   FAILED  x/y'; exit 1;; esac; exit 0")))

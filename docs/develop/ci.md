@@ -212,7 +212,11 @@ core (`DRGNX_TEST_PODMAN_ARGS=--cpus=…`) N times each, and the `cond` tests of
 (`hub-client`, `test-proc`, `remote`, `shell-env`, `shell-completion`, `session`; `DRGNX_PREFLIGHT_P3_SELECTOR`
 overrides) on a chaos Nidhogg image: `DRGNX_TEST_CHAOS_IMAGE`, or the image `$DRGNX_DET_IMAGE TARBALL preflight` prints
 as its last `DRGNX_TEST_IMAGE=` line (`DRGNX_DET_IMAGE` is the org folder's `tooling/det-image.sh`); without an image P3 is
-skipped. The files are chosen by class tag, so exempt and unclassified files are never run, and a step that ran no test
+skipped. P3-hub needs no image: the `hub-client` and `ai-gateway` files N times, seeds 1 to N, with
+`DRGNX_TEST_HUB_CHAOS=SEED`, under which each hub connection's answers settle after that connection's own delay (none,
+or 10 to 200 ms, `test/fixtures/hub-chaos-fixture.el`): a CPU limit slows every connection alike, this changes which one
+is answered first (a test body that starts before its event connection is subscribed). A red prints its seed; the same
+variable replays it. The files are chosen by class tag, so exempt and unclassified files are never run, and a step that ran no test
 is red (a vacuous pass proves nothing). `REPORT.stamp` (`COMMIT PASSES DATE`) is written only when every step ran, ran
 tests and passed; a failed, skipped-P3, zero-test or killed run leaves none.
 

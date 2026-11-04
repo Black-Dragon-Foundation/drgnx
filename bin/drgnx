@@ -416,7 +416,7 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=
   # the run-control variables go in with their values when set: a narrowed run stays narrow, the files run at once
   # (CI: the runner's cores), a failed file reruns once, wall clock is skipped, the perf run's results and factors,
   # the sessions' monitor size, count and scales
-  local v pass=(DRGNX_TEST_SELECTOR DRGNX_TEST_JOBS DRGNX_TEST_RERUN DRGNX_TEST_NO_TIMING DRGNX_TEST_FROZEN DRGNX_WORK_DB_GATE NIDHOGG_TEST_CLOCK NIDHOGG_TEST_SEED DRGNX_TEST_SHUFFLE DRGNX_TEST_AUDIT DRGNX_TEST_AUDIT_ALL DRGNX_TEST_AUDIT_FAIL DRGNX_PERF_RESULTS
+  local v pass=(DRGNX_TEST_SELECTOR DRGNX_TEST_JOBS DRGNX_TEST_RERUN DRGNX_TEST_NO_TIMING DRGNX_TEST_FROZEN DRGNX_WORK_DB_GATE NIDHOGG_TEST_CLOCK NIDHOGG_TEST_SEED DRGNX_TEST_HUB_CHAOS DRGNX_TEST_SHUFFLE DRGNX_TEST_AUDIT DRGNX_TEST_AUDIT_ALL DRGNX_TEST_AUDIT_FAIL DRGNX_PERF_RESULTS
                 DRGNX_PERF_CPU_FACTOR DRGNX_PERF_WORKLOADS DRGNX_PERF_MACHINE DRGNX_UITEST_SETTLE_SCALE DRGNX_UI_TEST_TIMEOUT
                 DRGNX_UI_SIZE DRGNX_UI_MONITORS DRGNX_UI_SCALE DRGNX_UI_SCALES)
   for v in "${pass[@]}"; do
@@ -519,7 +519,8 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=
 test_preflight() { # --out REPORT [--seeds N] [--nidhogg-tarball F] — the ordering-bug pre-flight (docs/develop/ci.md)
   # P1: the det files twice, in two shuffle orders: any red, or a difference between the two runs, is red.
   # P2: the cond files at 1 CPU, 2 CPUs and half a core, 3 runs each.  P3: the process and hub-client files on the
-  # chaos image (DRGNX_TEST_CHAOS_IMAGE, or built from --nidhogg-tarball by $DRGNX_DET_IMAGE).  P5 (rr) is not run here.
+  # chaos image (DRGNX_TEST_CHAOS_IMAGE, or built from --nidhogg-tarball by $DRGNX_DET_IMAGE).  P3-hub: the hub-client and
+  # ai-gateway files with seeded answer delays per hub connection (DRGNX_TEST_HUB_CHAOS=1..N).  P5 (rr) is not run here.
   # Files without a class and the exempt files are never selected (the selectors are class tags).
   local out="" seeds=3 tarball="" chaos="${DRGNX_TEST_CHAOS_IMAGE:-}"
   while (($#)); do
@@ -582,6 +583,13 @@ test_preflight() { # --out REPORT [--seeds N] [--nidhogg-tarball F] — the orde
   else
     skipped=$((skipped + 1)); say "SKIP P3 (no chaos image: set DRGNX_TEST_CHAOS_IMAGE, or --nidhogg-tarball with DRGNX_DET_IMAGE=tooling/det-image.sh)"
   fi
+  # P3-hub: the files that talk to a real hub over several connections, each connection answered after its own seeded
+  # delay (test/fixtures/hub-chaos-fixture.el), seeds 1..N.  A CPU limit slows every connection alike; this changes
+  # which connection is answered first.  No chaos image needed.
+  local hubsel='"^drgnx-\\(hub-client\\|ai-gateway\\)/"'
+  for ((i = 1; i <= seeds; i++)); do
+    run_p "P3-hub-$i" "${DRGNX_PREFLIGHT_P3_HUB_SELECTOR:-$hubsel}" DRGNX_TEST_HUB_CHAOS="$i" || true; judge "P3-hub-$i"
+  done
   say "SKIP P5 (rr is not run by this command)"
   rm -rf "$work"
   if [ "$reds" -eq 0 ] && [ "$skipped" -eq 0 ]; then
