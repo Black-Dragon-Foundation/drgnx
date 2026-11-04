@@ -36,7 +36,7 @@
 ;; pinned release and by Nidhogg's CI on the tarballs it built (docs/develop/ci.md, "The tiers workflow").
 (ert-deftest drgnx-ci/the-push-workflows-call-the-tiers-workflow ()
   ;; (file, its `tiers:' line): the path filter's tiers, all of the workflow's when it said nothing
-  (dolist (spec '(("ci.yml" "${{ needs.changes.outputs.tiers || 'unit no-lisp-writes' }}")
+  (dolist (spec '(("ci.yml" "${{ needs.changes.outputs.tiers || 'unit no-lisp-writes hub-chaos' }}")
                   ("gui.yml" "${{ needs.changes.outputs.tiers || 'ui scenario perf' }}")
                   ("macos.yml" "macos") ("tty.yml" "tty")))
     (let ((yml (drgnx-ci-test--yml (car spec))))
@@ -50,19 +50,19 @@
   (let ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")))
     (skip-unless tiers)
     (drgnx-ci-test--has tiers "workflow_call:" "drgnx_ref:" "nidhogg:" "tiers:" "drgnx_commit:")
-    (dolist (job '("unit" "no-lisp-writes" "ui" "scenario" "perf" "tty" "timing" "macos"))
+    (dolist (job '("unit" "no-lisp-writes" "hub-chaos" "ui" "scenario" "perf" "tty" "timing" "macos"))
       (should (string-search (format "contains(format(' {0} ', inputs.tiers), ' %s ')" job)
                              (drgnx-ci-test--job tiers job))))
     ;; every job checks drgnx out into drgnx/ (in Nidhogg's run the caller's checkout is Nidhogg), at the asked ref
     (let ((count (lambda (needle) (length (drgnx-ci-test--matches (concat "\\(" (regexp-quote needle) "\\)") tiers)))))
-      (should (= 9 (funcall count "runs-on:")))
-      (should (= 9 (funcall count "          path: drgnx\n")))
-      (should (= 9 (funcall count "          ref: ${{ inputs.drgnx_ref }}\n"))))
+      (should (= 10 (funcall count "runs-on:")))
+      (should (= 10 (funcall count "          path: drgnx\n")))
+      (should (= 10 (funcall count "          ref: ${{ inputs.drgnx_ref }}\n"))))
     ;; the Linux jobs that run Ratatoskr fetch the binaries the run built once; macOS builds its own
-    (dolist (job '("unit" "no-lisp-writes" "ui" "perf"))
+    (dolist (job '("unit" "no-lisp-writes" "hub-chaos" "ui" "perf"))
       (drgnx-ci-test--has (drgnx-ci-test--job tiers job) "needs: bins-linux" "uses: ./drgnx/.github/actions/fetch-test-bins"))
     ;; and bins-linux runs for each of them
-    (dolist (tier '("unit" "no-lisp-writes" "ui" "perf"))
+    (dolist (tier '("unit" "no-lisp-writes" "hub-chaos" "ui" "perf"))
       (should (string-search (format "contains(format(' {0} ', inputs.tiers), ' %s ')" tier)
                              (drgnx-ci-test--job tiers "bins-linux"))))
     (drgnx-ci-test--has (drgnx-ci-test--job tiers "bins-linux")
@@ -105,6 +105,26 @@
       (drgnx-ci-test--has (drgnx-ci-test--job tiers job) "DRGNX_TEST_RERUN: \"1\"" "DRGNX_TEST_NO_TIMING: \"1\"" "DRGNX_TEST_JOBS="))
     (should-not (string-search "(tag :timing)" tiers))
     (should-not (string-search "emacs-30" tiers))))
+
+;; Hub chaos (docs/develop/ci.md, "Hub chaos"): the pre-flight's P3-hub step as a gating job, on every push.
+(ert-deftest drgnx-ci/hub-chaos-runs-the-hub-files-per-seed-without-a-rerun ()
+  (let ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")) (ci (drgnx-ci-test--yml "ci.yml"))
+        (fixture (drgnx-ci-test--file "test/fixtures/hub-chaos-fixture.el")))
+    (skip-unless (and tiers ci fixture))
+    (let ((job (drgnx-ci-test--job tiers "hub-chaos")))
+      ;; the files P3-hub selects, seeds 1 to 3, each seed's red named with its replay
+      (drgnx-ci-test--has job "DRGNX_TEST_SELECTOR: '\"^drgnx-\\\\(hub-client\\\\|ai-gateway\\\\)/\"'"
+                          "for seed in 1 2 3; do" "DRGNX_TEST_HUB_CHAOS=$seed" "bin/drgnx test --container"
+                          "DRGNX_TEST_NO_TIMING: \"1\"" "::error title=Hub chaos seed $seed::"
+                          ;; a seed that ran no test is red too
+                          "s/^drgnx: [0-9]+ test files.*: ([0-9]+) tests,.*/\\1/p")
+      ;; a red under chaos is a race: never rerun, never let off
+      (should-not (string-search "DRGNX_TEST_RERUN" job))
+      (should-not (string-search "selector: ${{" job)))
+    ;; the fixture reads the variable the job sets
+    (should (string-search "(getenv \"DRGNX_TEST_HUB_CHAOS\")" fixture))
+    ;; in CI gate: a push runs it (the gate needs the tiers job, which fails when it does)
+    (drgnx-ci-test--has (drgnx-ci-test--job ci "changes") "PUSH: rt-linux rt-msrv rt-escape rt-containers rt-android rt-deny rt-fuzz rt-macos unit no-lisp-writes hub-chaos\n")))
 
 (ert-deftest drgnx-ci/macos-has-no-time-factor ()
   (dolist (f '("macos.yml" "drgnx-tiers.yml"))
@@ -302,7 +322,7 @@
     (drgnx-ci-test--has action "image=\"ghcr.io/black-dragon-foundation/$NAME:$(sha256sum \"test/container/$FILE\" | cut -c1-16)\""
                         "podman pull -q \"$image\"" "echo \"$VAR=$base\"")
     (let ((pairs (drgnx-ci-test--matches "containerfile: \\([A-Za-z.]+\n *image: [a-z-]+\n *variable: [A-Z_]+\\)" tiers)))
-      (should (= 7 (length pairs)))
+      (should (= 8 (length pairs)))
       (dolist (p pairs)
         (should (string-match "\\`\\([A-Za-z.]+\\)\n *image: \\([a-z-]+\\)\n *variable: \\([A-Z_]+\\)\\'" p))
         (let ((file (match-string 1 p)) (name (match-string 2 p)) (var (match-string 3 p)))
