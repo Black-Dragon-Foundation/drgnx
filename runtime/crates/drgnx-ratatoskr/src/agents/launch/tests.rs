@@ -70,11 +70,11 @@ impl Fx {
         }
     }
 
-    /// The spec for `shape`, validated for the reduced tier.
+    /// The spec for `shape`, validated for the reduced tier, in `launch_on`'s order: nothing has made the session dir
+    /// before the spec is built.
     fn spec(&self, plan: &LaunchPlan, shape: &SessionShape) -> gleipnir::Spec {
         let env = self.env();
         let ctx = context_for(&env, None);
-        paths::make_session_dir(&env, &paths::socket_path(&env), &shape.sid).unwrap();
         let scratch = scratch_dir(&env, &shape.sid).unwrap();
         let spec = session_spec(
             &env,
@@ -151,6 +151,23 @@ fn the_session_dir_is_read_only_and_holds_the_hub_socket() {
     assert!(spec.sockets.contains(&run.source.join("hub.sock")));
     // The lock's env comes last, after the base.
     assert_eq!(spec.env.last().unwrap().0, "DRGNX_ROLE_HINT");
+}
+
+/// `agents/start` and the probe build the spec of a session id nothing has used yet: no MCP session and no agent
+/// socket has made `s/SID`, and Gleipnir requires `run`'s source to exist.  The spec makes it, private; the sockets it
+/// names need not exist yet (the hub binds `mcp.sock` after, and nothing inside needs one at start).
+#[test]
+fn the_spec_makes_the_session_dir_it_binds() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fx::new();
+    let env = fx.env();
+    let dir = paths::session_dir(&env, &paths::socket_path(&env), "S1").unwrap();
+    assert!(fs::symlink_metadata(&dir).is_err(), "made too early");
+    let spec = fx.spec(&fx.plan(".claude"), &fx.shape(NetCell::ProviderOnly));
+    assert_eq!(spec.run.map(|r| r.source), Some(dir.clone()));
+    let mode = fs::metadata(&dir).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o700, "{mode:o}");
+    assert!(spec.sockets.iter().all(|s| !s.exists()));
 }
 
 #[test]
@@ -335,7 +352,6 @@ fn a_worktree_under_the_hub_run_root_launches_with_only_the_run_root_opened() {
         net: NetCell::ProviderOnly,
     };
     let plan = fx.plan(".claude");
-    paths::make_session_dir(&env, &paths::socket_path(&env), &shape.sid).unwrap();
     let scratch = scratch_dir(&env, &shape.sid).unwrap();
     let build = |ctx: &gleipnir::Context| {
         let spec = session_spec(

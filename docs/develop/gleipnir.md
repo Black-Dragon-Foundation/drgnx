@@ -76,7 +76,9 @@ this returns.
     `env_deny`: `DRGNX_DATA_DIR DRGNX_CONFIG_DIR DRGNX_AGENT DRGNX_HUB_SERVE_SOCKET DRGNX_HUB_PARENT_PID
     DRGNX_HUB_SERVE_SECRET`.
 - `helper()` is this binary (its path resolved at start) with `sandbox-inner` and `relay`.
-- `to_draugr(invocation)` is the `draugr::Spec` (stdin `/dev/null`, the fds as `PassFd`s, `new_session`).
+- `to_draugr(invocation)` is the `draugr::Spec` (stdin `/dev/null`, the fds as `PassFd`s, `new_session`). An agent
+  session's launch (`launch::spawn`, `spawn_plain`, `spawn_chat`) gives the program a stdin pipe instead
+  (`launch::with_stdin`): the hub speaks ACP on its stdin and stdout. A job's stdin stays `/dev/null`.
 - Agent sessions (`agents/launch.rs`, `sandbox::session_spec`; Task 10): `launch::spawn(plan, req)` for a worker or
   manager, `launch::spawn_plain(plan, sid)` for a chat with no project and `launch::spawn_chat(plan, sid, project)`
   for a chat in a project (`launch::kind(role, cwd, scratch)` picks: the cwd is the scratch dir → plain; else a chat →
@@ -100,6 +102,12 @@ this returns.
   - network from the matrix's Network cell: `ProviderOnly` and `ProviderAndPackages` are isolated with the relay to
     `<session dir>/proxy.sock` and `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` set (the proxy's allowlist is what differs);
     `Open` shares the host network. A chat is always provider-only;
+  - the session dir (`run`, read-only) is made by the spec itself (`paths::make_session_dir`, which leaves one that
+    is there alone), since validation requires `run`'s source to exist and a new session has none yet: `agents/start`
+    and `agents/probe` build the spec before anything else uses the id (the hub opens the session's MCP socket,
+    `mcp.sock`, after the launch is prepared and before the spawn). The sockets the spec names (`hub.sock`,
+    `proxy.sock`) need not exist at the start: the dir is bound, not each socket, and the relay connects per
+    connection. A launch that is refused removes a session dir it made; the probe removes its own when it is done;
   - the full tier when bwrap is usable, else the reduced tier; neither: refused.
 - `ratatoskr relay --parent-pid PID [--ready-fd N] PORT=SOCKET…` runs [the relay](#the-relay-task-11).
 - `ratatoskr sandbox check` and the doctor's `sandbox` section run [the check](#the-check); `sandbox::run_probe`

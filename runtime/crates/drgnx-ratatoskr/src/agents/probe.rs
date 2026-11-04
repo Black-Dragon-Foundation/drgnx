@@ -61,10 +61,15 @@ pub async fn probe(front: &Front, caller: &Caller, p: ProbeParams) -> Result<Pro
     profile.ai = None;
     let wait = Duration::from_secs(p.wait_s.unwrap_or(WAIT_S));
     let sid = format!("probe{}", &new_sid()?[1..9]);
-    let cwd = crate::agents::launch::scratch_dir(&runstav::paths::Env::process(), &sid)
+    let env = runstav::paths::Env::process();
+    let cwd = crate::agents::launch::scratch_dir(&env, &sid)
         .map_err(|r| internal(format!("scratch directory: {}", r.message)))?;
     let result = run(front, &profile, &sid, &cwd, wait).await;
     let _ = std::fs::remove_dir_all(&cwd);
+    // the sandboxed launch made its session dir (and, on macOS, its profile file in it)
+    if let Ok(dir) = runstav::paths::session_dir(&env, &runstav::paths::socket_path(&env), &sid) {
+        let _ = std::fs::remove_dir_all(dir);
+    }
     result
 }
 

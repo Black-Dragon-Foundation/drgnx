@@ -51,7 +51,14 @@ pub fn spawn(env: &Env, plan: &LaunchPlan, req: &SandboxReq) -> Result<Launch, R
         ));
     }
     let (plan, shape) = worktree_launch(plan, req);
-    launch(env, &plan, &shape)
+    launch(env, &plan, &shape).map(with_stdin)
+}
+
+/// An agent session's launch: the hub speaks ACP on the agent's stdin and stdout, so its stdin is a pipe, not the
+/// `/dev/null` a job gets (`sandbox::to_draugr`).
+pub fn with_stdin(mut launch: Launch) -> Launch {
+    launch.spec.stdin_null = false;
+    launch
 }
 
 /// The plan and shape of a worker's or manager's launch: its worktree writable, and the hooks and config of the git
@@ -82,7 +89,7 @@ pub fn spawn_plain(env: &Env, plan: &LaunchPlan, sid: &str) -> Result<Launch, Re
         read: vec![],
         net: NetCell::ProviderOnly,
     };
-    launch(env, plan, &shape)
+    launch(env, plan, &shape).map(with_stdin)
 }
 
 /// A chat in a project (design §4.2: project-scoped, read access per the matrix): [`chat_launch`]'s shape.
@@ -93,7 +100,7 @@ pub fn spawn_chat(
     project: &Path,
 ) -> Result<Launch, Refusal> {
     let (plan, shape) = chat_launch(env, plan, sid, project)?;
-    launch(env, &plan, &shape)
+    launch(env, &plan, &shape).map(with_stdin)
 }
 
 /// The plan and shape of a chat in PROJECT: the project (as its true name: the editor's `default-directory` ends in a
@@ -202,7 +209,8 @@ pub fn launch(env: &Env, plan: &LaunchPlan, shape: &SessionShape) -> Result<Laun
     launch_on(env, &sb, plan, shape)
 }
 
-/// [`launch`] on a chosen sandbox.
+/// [`launch`] on a chosen sandbox.  The spec makes the session dir (`sandbox::session_spec`): a launch that is refused
+/// removes it again when it was not there before.
 pub fn launch_on(
     env: &Env,
     sb: &Sandbox,
@@ -212,6 +220,26 @@ pub fn launch_on(
     let target = sb
         .target()
         .ok_or_else(|| refusal("no sandbox backend here"))?;
+    let new_dir = paths::session_dir(env, &paths::socket_path(env), &shape.sid)
+        .ok()
+        .filter(|d| std::fs::symlink_metadata(d).is_err());
+    let launched = launch_in(env, sb, target, plan, shape);
+    if launched.is_err()
+        && let Some(d) = new_dir
+    {
+        // empty, as it was just made; one that something filled since is left
+        let _ = std::fs::remove_dir(d);
+    }
+    launched
+}
+
+fn launch_in(
+    env: &Env,
+    sb: &Sandbox,
+    target: gleipnir::Target,
+    plan: &LaunchPlan,
+    shape: &SessionShape,
+) -> Result<Launch, Refusal> {
     let ctx = sandbox::context(env);
     let scratch = scratch_dir(env, &shape.sid)?;
     let spec = sandbox::session_spec(env, &ctx, plan, shape, &scratch, sb.tier(), target)?;
