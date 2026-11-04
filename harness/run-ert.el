@@ -446,11 +446,11 @@ is virtual and not recorded; a process or a socket is real work under the fixtur
 (defvar drgnx-run-ert--audit-pattern-seen nil "The (TEST . MESSAGE) pairs the pattern checks recorded, newest first.")
 (defvar drgnx-run-ert--audit-gate-entered nil "Whether the :gated test that runs now has entered `drgnx-test-gated'.")
 (defvar drgnx-run-ert--audit-gate-held nil
-  "The gated checks' messages for the test that runs now, newest first: recorded when it ends, unless it never entered the gate and is listed as exempt.")
+  "The gated checks' messages for the test that runs now, newest first: recorded when it ends, unless it
+never entered the gate and is listed as exempt.")
 (defvar drgnx-test-gate--active)
 (defvar drgnx-test-gate--releasing)
 (declare-function drgnx-test-child-parked-p "handshake-fixture")
-
 (defconst drgnx-run-ert--audit-signals
   '(signal-process interrupt-process kill-process quit-process stop-process continue-process)
   "The calls that send a signal to a process.")
