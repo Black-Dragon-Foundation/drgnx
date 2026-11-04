@@ -1089,6 +1089,47 @@ audited, and the three variables are read once and removed from the environment,
 sees the runner's switches. CI's `unit` and `no-lisp-writes` jobs ([ci.md](ci.md)) and `bin/drgnx test --preflight`'s
 `det` step run with the audit on and failing.
 
+## Test patterns
+
+A `cond` test file names how its tests keep a race out, on a `;; test-pattern: P…` line within its first 15 lines,
+beside `;; test-class: cond`. P is one or more of `orders`, `gated` and `handshake`, space-separated (`;;
+test-pattern: handshake gated`); the line is exact, like the class line. A pure test is class `det`, not a pattern.
+
+- **orders**: the test explores every order of a pure core (`drgnx-test-every-order`).
+- **gated**: the test runs the real hub through the delivery gate (`drgnx-test-gated`).
+- **handshake**: the test drives a real child that announces its state and parks (`drgnx-test-child-*`). The GUI,
+  terminal and live tiers use it too: the compositor's numbered presented and shown states and the terminal's visible
+  states are the announcements. A file that cannot meet that stays in the register below, with its reason.
+
+`run-ert.el` reads the line (`drgnx-run-ert--file-patterns`, a list of the symbols `orders`, `gated`, `handshake`; nil
+when there is none) and tags each of the file's tests `:orders`, `:gated` and `:handshake` after loading it, so
+`(tag :gated)` selects them.
+
+**The register.** `test/pattern-pending.eld` lists the `cond` files that have no line yet. A `cond` file with no line
+that is not listed fails `drgnx-lint/every-cond-file-has-a-pattern-or-is-pending`, and a listed file that has a line, or
+is gone, fails `drgnx-lint/pending-rows-only-shrink`: the register only shrinks, and every new `cond` file carries a
+pattern. A row is a file name, or `(FILE :why STRING)` for a file that cannot meet a pattern. The register being
+empty is the end of the migration.
+
+**The rules.** `test/unit/lint-test-patterns-test.el` reads the files that name a pattern (it never loads them) with
+the class lints' reader: test-defining macros are expanded and the file's own helpers are followed; a fixture macro
+is a plain form.
+
+- **handshake** (`drgnx-lint/handshake-tests-signal-through-the-fixture`): no `signal-process`, `interrupt-process`,
+  `kill-process`, `quit-process`, `stop-process` or `continue-process` (the fixture signals a parked child through
+  `drgnx-test-child-signal`); no `process-live-p`; no `sleep-for`, positive `sit-for` or timer as a marker; no timed
+  `accept-process-output` outside `drgnx-test-wait`. A `drgnx-test-child-signal` comes after a
+  `drgnx-test-child-await` in body order (an argument counts before its call, a helper where it is called).
+- **gated** (`drgnx-lint/gated-tests-call-the-hub-inside-the-gate`): in a test that calls `drgnx-test-gated`, no
+  `drgnx-hub-call`, `drgnx-hub-call-sync`, `drgnx-hub-connect` or `drgnx-hub-disconnect` outside its body, in the test
+  or a helper it calls from there.
+- **gated** (`drgnx-lint/gated-asserts-follow-deliver-all`): in the body, every `should`, `should-not` and
+  `should-error` comes after a `drgnx-test-deliver-all` or `drgnx-test-hub-advance` at the same or an outer level: a
+  delivery in a `let` binding or an argument counts for what follows; one inside a branch (`if`, `when`, `cond`,
+  `and`, a loop, a lambda) counts only inside it.
+- **orders** (`drgnx-lint/orders-tests-declare-their-kinds`): `drgnx-test-every-order` has a non-empty `:kinds`: a
+  quoted list, a `list` of something, or a named constant.
+
 ## Frozen tests
 
 A test of code that a plan replaces carries `:frozen` in its `:tags` (within the first 8 lines of its form). It is left out

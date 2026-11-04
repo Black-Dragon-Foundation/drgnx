@@ -1254,3 +1254,29 @@ this test are not passed on."
                (should (advice-member-p #'drgnx-run-ert--idle-prompt-guard f))))
     (dolist (f drgnx-run-ert--prompt-functions)
       (advice-remove f #'drgnx-run-ert--idle-prompt-guard))))
+
+(defun drgnx-run-ert-test--pattern-file (pattern-line)
+  "A temp test file with a cond class line, PATTERN-LINE (or nil) and one test; return its name."
+  (let ((file (expand-file-name "p-test.el" (make-temp-file "drgnx-pattern" t))))
+    (with-temp-file file
+      (insert ";; test-class: cond\n")
+      (when pattern-line (insert pattern-line "\n"))
+      (insert "(ert-deftest x/plain () (should t))\n"))
+    file))
+
+(ert-deftest drgnx-run-ert/a-pattern-line-tags-its-tests ()
+  (let ((patterns (lambda (line) (drgnx-run-ert--file-patterns (drgnx-run-ert-test--pattern-file line)))))
+    (should (equal '(handshake gated) (funcall patterns ";; test-pattern: handshake gated")))
+    (should (equal '(orders) (funcall patterns ";; test-pattern: orders")))
+    (should-not (funcall patterns nil))
+    ;; an exact line only: an unknown word, a trailing word, a doubled space or a different prefix is no line
+    (dolist (bad '(";; test-pattern: pure" ";; test-pattern: gated and more" ";; test-pattern: gated  orders"
+                   ";; test-pattern:" ";; test-patterns: gated" ";;test-pattern: gated"))
+      (should-not (funcall patterns bad))))
+  ;; the tags reach the tests: the runner loads the file, then tags its tests
+  (let* ((file (drgnx-run-ert-test--pattern-file ";; test-pattern: handshake gated"))
+         (dir (file-name-directory file)) (results (expand-file-name "r.json" dir)))
+    (should (eql 0 (drgnx-run-ert-test--batch dir results "DRGNX_TEST_SELECTOR=(and (tag :handshake) (tag :gated) (tag :cond) \"^x/\")")))
+    (should (equal 1 (plist-get (drgnx-run-ert-test--json results) :total)))
+    (drgnx-run-ert-test--batch dir results "DRGNX_TEST_SELECTOR=(and (tag :orders) \"^x/\")")
+    (should (equal 0 (plist-get (drgnx-run-ert-test--json results) :total)))))

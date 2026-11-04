@@ -524,16 +524,39 @@ head ends in `deftest') has `:det' in its own quoted `:tags'.  Nil when FILE is 
                   (end-of-file nil)))))
           found))))
 
+(defun drgnx-run-ert--file-patterns (file)
+  "The patterns of the test FILE, a list of the symbols `orders', `gated' and `handshake': its `;; test-pattern: P…'
+line (P one or more of those words, space-separated), an exact line within the first 15 lines; nil when it has none
+\(or is unreadable)."
+  (ignore-errors
+    (with-temp-buffer
+      (insert-file-contents file nil 0 2000)
+      (goto-char (point-min))
+      (let ((n 0) patterns)
+        (while (and (not patterns) (< n 15) (not (eobp)))
+          (when (looking-at "^;; test-pattern: \\(\\(?:orders\\|gated\\|handshake\\)\\(?: \\(?:orders\\|gated\\|handshake\\)\\)*\\)$")
+            (setq patterns (mapcar #'intern (split-string (match-string 1) " " t))))
+          (forward-line 1)
+          (setq n (1+ n)))
+        (delete-dups patterns)))))
+
 (defun drgnx-run-ert--tag-classes (file)
   "Give each test loaded from FILE its file's class as an ERT tag, unless it has a class tag of its own, so that
-`(tag :det)' selects it."
-  (when-let* ((class (drgnx-run-ert--file-class file)))
-    (let ((base (file-name-sans-extension (file-truename file))))
-      (dolist (test (ert-select-tests t t))
-        (when-let* ((f (ignore-errors (ert-test-file-name test))))
-          (when (and (equal (file-name-sans-extension (file-truename f)) base)
-                     (not (seq-some (lambda (c) (memq c (ert-test-tags test))) '(:det :cond :timing))))
-            (setf (ert-test-tags test) (cons class (ert-test-tags test)))))))))
+`(tag :det)' selects it; and each of the file's patterns (`drgnx-run-ert--file-patterns') as a tag (`:orders',
+`:gated', `:handshake')."
+  (let ((class (drgnx-run-ert--file-class file))
+        (tags (mapcar (lambda (p) (intern (concat ":" (symbol-name p)))) (drgnx-run-ert--file-patterns file))))
+    (when (or class tags)
+      (let ((base (file-name-sans-extension (file-truename file))))
+        (dolist (test (ert-select-tests t t))
+          (when-let* ((f (ignore-errors (ert-test-file-name test))))
+            (when (equal (file-name-sans-extension (file-truename f)) base)
+              (dolist (tag tags)
+                (unless (memq tag (ert-test-tags test))
+                  (setf (ert-test-tags test) (cons tag (ert-test-tags test)))))
+              (when (and class
+                         (not (seq-some (lambda (c) (memq c (ert-test-tags test))) '(:det :cond :timing))))
+                (setf (ert-test-tags test) (cons class (ert-test-tags test)))))))))))
 
 (defun drgnx-run-ert--say-skipped (skipped)
   "Print the SKIPPED entries (:name :reason), if any."
