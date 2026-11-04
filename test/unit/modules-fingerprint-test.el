@@ -282,12 +282,13 @@
   :tags '(:cond)
   ;; Interpreted the scan costs ~10× more.  In an Emacs that has not loaded bytecomp (Emacs 31's ERT no longer loads
   ;; it), compiling the scan is its first load: a `byte-compile-warnings' bound before it would be lexical, and the
-  ;; load fails.  A fresh Emacs, so what this one loaded hides nothing.
+  ;; load fails.  A fresh Emacs, so what this one loaded hides nothing, and the file's source, so a built checkout's
+  ;; .elc does not skip the compile.
   (with-temp-buffer
     (call-process (expand-file-name invocation-name invocation-directory) nil t nil
                   "--batch" "-Q" "-L" (expand-file-name "core" drgnx-dir)
                   "--eval" (prin1-to-string
-                            '(progn (require 'drgnx-modules-fingerprint)
+                            `(progn (load ,(expand-file-name "core/drgnx-modules-fingerprint.el" drgnx-dir) nil t t)
                                     (drgnx-modules-fingerprint t)
                                     (princ (format "\nbytecomp=%s compiled=%s" (featurep 'bytecomp)
                                                    (compiled-function-p
