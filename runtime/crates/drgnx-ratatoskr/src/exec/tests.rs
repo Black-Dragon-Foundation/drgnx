@@ -240,7 +240,15 @@ fn agent_cannot_set_memory_max() {
         let e = user_job(&Some("s1".into()), CheckKind::Other, &p).unwrap_err();
         assert_eq!(e.code, ErrorCode::InvalidParams);
         assert!(e.message.contains("only the user"), "{}", e.message);
-        assert!(user_job(&None, CheckKind::Other, &p).is_ok());
+        // the user may, but macOS has nothing to cap a job's memory with: refused there, saying so
+        let user = user_job(&None, CheckKind::Other, &p);
+        if cfg!(target_os = "macos") && p.memory_max.is_some() {
+            let e = user.unwrap_err();
+            assert_eq!(e.code, ErrorCode::InvalidParams);
+            assert!(e.message.contains("macOS has no memory cap"), "{}", e.message);
+        } else {
+            assert!(user.is_ok());
+        }
     }
     // an agent that sends none of them is untouched
     let none = user_job(&Some("s1".into()), CheckKind::Other, &params(json!({}))).unwrap();
@@ -404,7 +412,8 @@ async fn a_user_job_gets_its_name_env_and_nice() {
     let mut s = spec(
         Starter::User,
         d.path(),
-        "echo \"$JOB_VAR\"; nice",
+        // the shell's niceness, from `ps`: a bare `nice` prints it only with GNU's (BSD's needs a utility)
+        "echo \"$JOB_VAR\"; echo $(ps -o nice= -p $$)",
         Duration::from_secs(30),
     );
     s.user = UserJob {

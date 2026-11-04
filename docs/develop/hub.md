@@ -1417,7 +1417,7 @@ tool paths (`tool_env`). `unit::wrap` hands the spec's environment to `systemd-r
 the caller's environment) or to the plain shell (macOS, no user systemd). They travel in `ExecSpec.user` (`UserJob`, also in a queued job's
 `pending.json`); the name is in `meta.json` and on the `ExecRow`. The unit takes `memory_max` as its `MemoryMax=`;
 `nice` is `nice -n N` in front of the command inside the logging shell (a scope takes no `Nice=`), the same line with
-and without a unit.
+and without a unit, and the form BSD's `nice` (macOS) takes too.
 
 A fifth user-only field, `no_timebox: true`, runs the job with no time box (the editor's servers stay up for days, and
 `timebox_s` stops at 86400): `user_only_field` names it for a session (refused like the others), `check_start` refuses it
