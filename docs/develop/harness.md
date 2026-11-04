@@ -1076,6 +1076,27 @@ A test that races several child Emacsen against one file (the lock and write tes
 one line, so they start together because the test saw them ready, not because a clock reached a time the children were
 told. A child that never reaches its gate fails the test with the processes' states.
 
+### Announce and park
+
+A test that needs a real child to be in a known state (before it signals it, or asserts what it holds) does not guess
+a time: the child says the state, then waits for the test. `test/fixtures/handshake-fixture.el` is that handshake. A
+child prints a line `DRGNX-STATE: NAME` on its standard output and, after each one, reads a line `GO` from its
+standard input; between the two it is parked.
+
+- `(drgnx-test-child-start :name N :command (PROGRAM ARG…) [:shim t] [:group t])` starts it. `:shim`/`:group` wrap a
+  third-party binary in `test/fixtures/handshake-shim.sh`: it runs the binary as one job in its own process group
+  (`set -m`), announces `RUNNING`, forwards TERM, INT, HUP, USR1 and USR2 to the group, and announces `STOPPED` only
+  once the job and every process of its group are gone (zombies do not count).
+- `(drgnx-test-child-await PROC STATE)` waits (through `drgnx-test-wait`) for the announcement; the child is then
+  parked (`drgnx-test-child-parked-p`). `(drgnx-test-child-go PROC)` sends `GO`.
+- `(drgnx-test-child-signal PROC SIG)` signals a parked child only, and never twice the same SIG before a new
+  announcement; otherwise it signals an error naming the rule. This is the substitute for a pidfd: a parked child is
+  alive and not yet reaped, so its pid cannot belong to another process.
+- A child Emacs loads the fixture with `-l` and calls `(drgnx-test-child-announce STATE)`.
+
+A handshake test file carries `;; test-pattern: handshake`. [Gated children](#gated-children) are the same idea for
+child Emacsen that only need to start together.
+
 ### The audit: what a deterministic test really runs
 
 A static lint cannot see through macros and fixtures. `DRGNX_TEST_AUDIT=1` records, for each `:det` test, the real-time
