@@ -836,6 +836,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     fn the_scan_finds_the_users_lisp_processes() {
         let t = tempfile::tempdir().unwrap();
         let uid = rustix::process::geteuid().as_raw();
@@ -868,6 +869,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     fn only_a_real_lisp_hub_command_line_counts() {
         let t = tempfile::tempdir().unwrap();
         let uid = rustix::process::geteuid().as_raw();
