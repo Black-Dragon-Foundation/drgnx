@@ -667,7 +667,8 @@ connects inside `drgnx-test-gated'.  `hub' is the hub's process; the fixture dis
         (drgnx-notice-clear 'hub 'restart-when-idle)))))
 
 (defun drgnx-hub-client-test--register ()
-  "Register what drgnx registers at start (Hub: Restart Now) in the registry bound by the caller: bind both the table and the order."
+  "Register what drgnx registers at start (Hub: Restart Now) in the registry bound by the caller: bind both the
+table and the order."
   (drgnx-command-define 'hub-restart-now :category "Agents" :title "Hub: Restart Now" :command #'drgnx-hub-restart-now :doc "Restart the hub"))
 
 (ert-deftest drgnx-hub-client/a-hub-notice-keeps-only-a-registered-command ()
