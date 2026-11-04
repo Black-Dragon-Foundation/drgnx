@@ -845,7 +845,9 @@ directory, `spawn_chat` for a chat in a project: the project read-only, its scra
 test builds spawn the mock unsandboxed), the sandbox status pipe read (`gleipnir::read_status`), the ACP
 handshake, `lock::verify` (a lock that does not hold kills the session). Every permission request then goes through
 `MatrixGate::check` with the session's id (so a manager's delegation applies): allowed answers at once, never
-refuses at once, an ask waits for the user; a session's `exec/start` is checked as `code.edit` the same way.
+refuses at once, an ask waits for the user; a session's `exec/start` is checked as `code.edit` the same way. For the
+browser rows an ask that the user's matrix grant for the session or its plan already covers is allowed with no card
+([coordination.md](coordination.md), "Grant records").
 
 ## Sessions across a restart
 

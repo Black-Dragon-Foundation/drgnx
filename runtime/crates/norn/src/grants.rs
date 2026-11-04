@@ -7,6 +7,12 @@
 //! "expires"?: unix seconds}`. An `options` grant (Urdr Task 10b; unified-settings design §13) lets agents write
 //! settings history of kind `option` ([`crate::options`]): `what` is always one of the two `options:` forms, and only
 //! it carries `names` (globs, `*` only, no `/`). A row that does not parse as one is ignored (it opens nothing).
+//!
+//! A `matrix` grant ([`create_matrix`]) is the user's yes to a browser row's card, kept so a retry makes no new card:
+//! `who` is `{"session": SID}` or `{"plan": ID}` (a plan entity's id; only a matrix grant names a plan), `what`
+//! `{"matrix": ACTION, "host"?: "H:P", "target"?: TARGET}` (a host only for `browser.web`, a target, required, only for
+//! `browser.private`), and `card` the card it answered. The matrix gate reads them ([`matrix_grants_for`]); they open
+//! no store access.
 
 use std::fmt;
 
@@ -34,25 +40,30 @@ pub enum Who {
     Project(i64),
     Profile(String),
     Session(String),
+    /// Every session of a plan (its entity's id): a matrix grant's only.
+    Plan(String),
 }
 
 impl Who {
-    /// Whether CALLER is who this names: its project, its profile or its session.
+    /// Whether CALLER is who this names: its project, its profile or its session.  A plan names no caller: a plan's
+    /// grant is the matrix gate's, never a store access.
     pub fn matches(&self, caller: &Caller) -> bool {
         match self {
             Who::Project(p) => caller.project == Some(*p),
             Who::Profile(name) => caller.profile.as_deref() == Some(name),
             Who::Session(sid) => caller.session.as_deref() == Some(sid),
+            Who::Plan(_) => false,
         }
     }
 
-    /// `project:N`, `profile:NAME` or `session:SID`.
+    /// `project:N`, `profile:NAME`, `session:SID` or `plan:ID`.
     pub fn parse(text: &str) -> Option<Who> {
         let (kind, rest) = text.split_once(':')?;
         match kind {
             "project" => rest.parse().ok().map(Who::Project),
             "profile" if !rest.is_empty() => Some(Who::Profile(rest.into())),
             "session" if !rest.is_empty() => Some(Who::Session(rest.into())),
+            "plan" if !rest.is_empty() => Some(Who::Plan(rest.into())),
             _ => None,
         }
     }
@@ -62,6 +73,7 @@ impl Who {
             Who::Project(n) => json!({ "project": n }),
             Who::Profile(name) => json!({ "profile": name }),
             Who::Session(sid) => json!({ "session": sid }),
+            Who::Plan(id) => json!({ "plan": id }),
         }
     }
 
@@ -72,6 +84,7 @@ impl Who {
             "project" => v.as_i64().map(Who::Project),
             "profile" => v.as_str().map(|s| Who::Profile(s.into())),
             "session" => v.as_str().map(|s| Who::Session(s.into())),
+            "plan" => v.as_str().map(|s| Who::Plan(s.into())),
             _ => None,
         }
     }
@@ -83,6 +96,7 @@ impl fmt::Display for Who {
             Who::Project(n) => write!(f, "project:{n}"),
             Who::Profile(name) => write!(f, "profile:{name}"),
             Who::Session(sid) => write!(f, "session:{sid}"),
+            Who::Plan(id) => write!(f, "plan:{id}"),
         }
     }
 }
@@ -98,6 +112,13 @@ pub enum What {
     OptionsGlobal,
     /// For `Options`: the private and shared settings of the agent's own project.
     OptionsProject,
+    /// For `Matrix`: a browser row (its id), with the host a `browser.web` once grant names or the target a
+    /// `browser.private` grant names.
+    Matrix {
+        action: String,
+        host: Option<String>,
+        target: Option<Value>,
+    },
 }
 
 const OPTIONS_GLOBAL: &str = "options:global";
@@ -126,6 +147,20 @@ impl What {
             What::Task(n) => json!({ "task": n }),
             What::OptionsGlobal => json!(OPTIONS_GLOBAL),
             What::OptionsProject => json!(OPTIONS_PROJECT),
+            What::Matrix {
+                action,
+                host,
+                target,
+            } => {
+                let mut o = json!({ "matrix": action });
+                if let Some(h) = host {
+                    o["host"] = json!(h);
+                }
+                if let Some(t) = target {
+                    o["target"] = t.clone();
+                }
+                o
+            }
         }
     }
 
@@ -136,6 +171,25 @@ impl What {
             Some(OPTIONS_PROJECT) => return Some(What::OptionsProject),
             Some(_) => return None,
             None => {}
+        }
+        if let Some(o) = v.as_object()
+            && let Some(action) = o.get("matrix")
+        {
+            if o.keys()
+                .any(|k| !matches!(k.as_str(), "matrix" | "host" | "target"))
+            {
+                return None;
+            }
+            let host = match o.get("host") {
+                None | Some(Value::Null) => None,
+                Some(h) => Some(h.as_str()?.to_owned()),
+            };
+            let target = o.get("target").filter(|t| !t.is_null()).cloned();
+            return Some(What::Matrix {
+                action: action.as_str()?.to_owned(),
+                host,
+                target,
+            });
         }
         let o = v.as_object().filter(|o| o.len() == 1)?;
         let (k, v) = o.iter().next()?;
@@ -155,6 +209,20 @@ impl fmt::Display for What {
             What::Task(n) => write!(f, "task:{n}"),
             What::OptionsGlobal => f.write_str(OPTIONS_GLOBAL),
             What::OptionsProject => f.write_str(OPTIONS_PROJECT),
+            What::Matrix {
+                action,
+                host,
+                target,
+            } => {
+                write!(f, "matrix:{action}")?;
+                if let Some(h) = host {
+                    write!(f, " host {h}")?;
+                }
+                if let Some(t) = target {
+                    write!(f, " target {t}")?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -165,15 +233,18 @@ pub enum Access {
     EditUserTasks,
     /// Write settings history (kind `option`) in an `options:` scope.
     Options,
+    /// A browser row of the permissions matrix, answered yes ([`create_matrix`]).
+    Matrix,
 }
 
 impl Access {
-    /// `read`, `edit-user-tasks` or `options`.
+    /// `read`, `edit-user-tasks`, `options` or `matrix`.
     pub fn as_str(self) -> &'static str {
         match self {
             Access::Read => "read",
             Access::EditUserTasks => "edit-user-tasks",
             Access::Options => "options",
+            Access::Matrix => "matrix",
         }
     }
 
@@ -182,19 +253,60 @@ impl Access {
             "read" => Some(Access::Read),
             "edit-user-tasks" => Some(Access::EditUserTasks),
             "options" => Some(Access::Options),
+            "matrix" => Some(Access::Matrix),
             _ => None,
         }
     }
 }
 
 /// Whether WHAT is one an ACCESS grant opens: the `options:` forms for `Options` only; a task for `EditUserTasks`
-/// only.
+/// only; a matrix row for `Matrix` only.
 fn fits(access: Access, what: &What) -> bool {
     match what {
         What::OptionsGlobal | What::OptionsProject => access == Access::Options,
         What::Task(_) => access == Access::EditUserTasks,
-        What::Project(_) | What::All => access != Access::Options,
+        What::Matrix { .. } => access == Access::Matrix,
+        What::Project(_) | What::All => !matches!(access, Access::Options | Access::Matrix),
     }
+}
+
+/// Whether WHO may hold an ACCESS grant: a session or a plan for `Matrix`, and a plan for nothing else.
+fn who_fits(access: Access, who: &Who) -> bool {
+    match who {
+        Who::Plan(_) => access == Access::Matrix,
+        Who::Session(_) => true,
+        Who::Project(_) | Who::Profile(_) => access != Access::Matrix,
+    }
+}
+
+/// The matrix rows a grant may name: the browser rows, whose cards offer a scope.
+const MATRIX_ROWS: [&str; 3] = ["browser", "browser.web", "browser.private"];
+
+/// Whether H is a `host:port` (a name or an address, a port 1 to 65535; a bracketed IPv6 literal too).
+fn host_port_ok(h: &str) -> bool {
+    h.len() <= 300
+        && !h.chars().any(|c| c.is_whitespace() || c.is_control())
+        && h.rsplit_once(':').is_some_and(|(host, port)| {
+            !host.is_empty() && port.parse::<u16>().is_ok_and(|p| p > 0)
+        })
+}
+
+/// Whether WHAT is a well-formed matrix grant's: a browser row, a host only for `browser.web` and a target (always)
+/// only for `browser.private`.
+fn matrix_what_ok(what: &What) -> bool {
+    let What::Matrix {
+        action,
+        host,
+        target,
+    } = what
+    else {
+        return true;
+    };
+    MATRIX_ROWS.contains(&action.as_str())
+        && host
+            .as_deref()
+            .is_none_or(|h| action == "browser.web" && host_port_ok(h))
+        && (target.is_some() == (action == "browser.private"))
 }
 
 /// The most names one grant holds, and the longest name glob.
@@ -325,10 +437,14 @@ fn parse(n: i64, id: String, status: Option<String>, data: &str) -> Option<Grant
         None | Some(Value::Null) => None,
         Some(v) => Some(v.as_i64()?),
     };
+    let who = Who::from_json(data.get("who")?)?;
+    if !who_fits(access, &who) || !matrix_what_ok(&what) {
+        return None;
+    }
     Some(Grant {
         n,
         id,
-        who: Who::from_json(data.get("who")?)?,
+        who,
         what,
         access,
         names,
@@ -412,7 +528,18 @@ fn create_with(
                 "an edit-user-tasks grant opens a task, a project or every project (*)"
             }
             Access::Options => "an options grant opens options:global or options:project",
+            Access::Matrix => "a matrix grant names a matrix row",
         }));
+    }
+    if !who_fits(access, &who) {
+        return Err(refused(
+            "a matrix grant is for a session or a plan, and only a matrix grant names a plan",
+        ));
+    }
+    if !matrix_what_ok(&what) {
+        return Err(refused(
+            "a matrix grant names browser, browser.web (a host:port at most) or browser.private (its target)",
+        ));
     }
     if let Some(list) = &names
         && (access != Access::Options || !names_ok(list))
@@ -429,11 +556,18 @@ fn create_with(
                 return Err(refused("a grant names its profile or session"));
             }
         }
+        Who::Plan(id) => {
+            if !entity::by_id(tx.sql(), id)?
+                .is_some_and(|e| e.kind == "plan" && e.retired_tx.is_none())
+            {
+                return Err(refused(&format!("no plan {id}")));
+            }
+        }
     }
     match &what {
         What::Project(p) => ends.push((*p, "project")),
         What::Task(t) => ends.push((*t, "task")),
-        What::All | What::OptionsGlobal | What::OptionsProject => {}
+        What::All | What::OptionsGlobal | What::OptionsProject | What::Matrix { .. } => {}
     }
     for (n, kind) in ends {
         if !is_live(tx, n, kind)? {
@@ -460,6 +594,7 @@ fn create_with(
     let title = match &names {
         Some(list) => format!("{who} may change settings {what} ({})", list.join(", ")),
         None if access == Access::Options => format!("{who} may change settings {what}"),
+        None if access == Access::Matrix => format!("{who} may use {what}"),
         None => format!("{who} may {} {what}", access.as_str()),
     };
     let mut id = None;
@@ -505,6 +640,50 @@ fn create_with(
         status: "active".into(),
         card,
     })
+}
+
+/// A new `matrix` grant: the user's yes to card CARD for ACTION (a browser row's id), for WHO (`Session`: once, with
+/// EXPIRES, or the session; `Plan`: every session of that plan). HOST (`H:P`) narrows a `browser.web` grant to one
+/// host; TARGET is a `browser.private` grant's target (required there). The guard refuses it from any class but
+/// `User`.
+pub fn create_matrix(
+    tx: &mut Tx<'_>,
+    who: Who,
+    action: &str,
+    target: Option<Value>,
+    host: Option<String>,
+    expires: Option<f64>,
+    card: i64,
+) -> Result<Grant, WriteError> {
+    let what = What::Matrix {
+        action: action.to_owned(),
+        host,
+        target,
+    };
+    create_with(tx, who, what, Access::Matrix, None, expires, Some(card))
+}
+
+/// The active, unexpired matrix grants of ACTION at NOW for SESSION or PLAN (a grant to either covers).
+pub fn matrix_grants_for(
+    conn: &Connection,
+    action: &str,
+    session: Option<&str>,
+    plan: Option<&str>,
+    now: f64,
+) -> Result<Vec<Grant>, urdr::SqliteError> {
+    Ok(live(conn)?
+        .into_iter()
+        .filter(|g| {
+            g.access == Access::Matrix
+                && g.active(now)
+                && matches!(&g.what, What::Matrix { action: a, .. } if a == action)
+                && match &g.who {
+                    Who::Session(s) => session == Some(s.as_str()),
+                    Who::Plan(p) => plan == Some(p.as_str()),
+                    Who::Project(_) | Who::Profile(_) => false,
+                }
+        })
+        .collect())
 }
 
 /// Set grant ID `revoked`; false when there was no active one. The guard refuses any class but `User`, found or not.
@@ -575,7 +754,7 @@ pub fn may_edit_user_task(
                 What::Task(n) => n == task,
                 What::Project(p) => p == project,
                 What::All => true,
-                What::OptionsGlobal | What::OptionsProject => false,
+                What::OptionsGlobal | What::OptionsProject | What::Matrix { .. } => false,
             }
     }))
 }
@@ -657,6 +836,214 @@ mod tests {
         let gone = list(&conn, &me, &inactive, NOW).unwrap();
         assert_eq!(gone.len(), 1);
         assert_eq!(gone[0].status, "revoked");
+    }
+
+    /// A grant write a test expects to be refused.
+    type Write = Box<dyn Fn(&mut Tx<'_>) -> Result<Grant, WriteError>>;
+
+    /// A plan entity ID, written by the user.
+    fn plan(conn: &mut Connection, id: &str) {
+        write(conn, user(), |tx| {
+            entity::create(
+                tx,
+                EntityNew {
+                    id: id.into(),
+                    kind: "plan".into(),
+                    project: None,
+                    title: Some("p".into()),
+                    status: None,
+                    body: None,
+                    priority: None,
+                    assignee: None,
+                    data: json!({}),
+                    origin: Origin::Recorded,
+                    source: None,
+                },
+            )
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn matrix_grant_only_from_user_class() {
+        let (_d, _p, mut conn) = db();
+        plan(&mut conn, "plan:p1");
+        for class in [Class::Agent, Class::Ext, Class::System] {
+            let r = write(&mut conn, TxMeta::new("agent:s1", class, "test"), |tx| {
+                create_matrix(tx, sid("s1"), "browser", None, None, None, 1)
+            });
+            assert_eq!(
+                r,
+                Err(WriteError::Refused(GRANTS_ARE_THE_USERS.into())),
+                "{class:?}"
+            );
+        }
+        // the user's: a session's, a plan's, with a host for browser.web and a target for browser.private
+        let target = json!({"host": "printer.lan", "port": 631});
+        let made: Vec<Grant> = [
+            (sid("s1"), "browser", None, None),
+            (Who::Plan("plan:p1".into()), "browser.web", None, None),
+            (sid("s1"), "browser.web", None, Some("example.com:443")),
+            (sid("s1"), "browser.private", Some(target.clone()), None),
+        ]
+        .into_iter()
+        .map(|(who, a, t, h)| {
+            write(&mut conn, user(), |tx| {
+                create_matrix(tx, who, a, t, h.map(Into::into), None, 7)
+            })
+            .unwrap()
+        })
+        .collect();
+        assert_eq!(made[0].access, Access::Matrix);
+        assert_eq!(made[0].card, Some(7));
+        // they read back as written, and open no store access
+        assert_eq!(live(&conn).unwrap(), made);
+        let data: String = conn
+            .query_row(
+                "select data from entity where id = ?1",
+                [&made[3].id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&data).unwrap(),
+            json!({"who": {"session": "s1"}, "what": {"matrix": "browser.private", "target": target},
+                   "access": "matrix", "card": 7})
+        );
+        let other = project(&mut conn, "other");
+        let me = agent(None, "s1", None);
+        let s = scope::for_caller(&conn, &me, NOW).unwrap();
+        assert_eq!(s.allows(Some(other)), Seen::Hidden);
+        // malformed ones are refused: another row, a host on browser, a private grant without its target, a plan
+        // that is not one, a plan for another access, a project for a matrix grant, a bad host
+        let bad: Vec<Write> = vec![
+            Box::new(|tx| create_matrix(tx, sid("s1"), "push.main", None, None, None, 1)),
+            Box::new(|tx| {
+                create_matrix(tx, sid("s1"), "browser", None, Some("a:1".into()), None, 1)
+            }),
+            Box::new(|tx| create_matrix(tx, sid("s1"), "browser.private", None, None, None, 1)),
+            Box::new(|tx| create_matrix(tx, sid("s1"), "browser", Some(json!("x")), None, None, 1)),
+            Box::new(|tx| {
+                create_matrix(
+                    tx,
+                    Who::Plan("plan:nope".into()),
+                    "browser",
+                    None,
+                    None,
+                    None,
+                    1,
+                )
+            }),
+            Box::new(|tx| {
+                create(
+                    tx,
+                    Who::Plan("plan:p1".into()),
+                    What::All,
+                    Access::Read,
+                    None,
+                )
+            }),
+            Box::new(|tx| {
+                create_matrix(tx, Who::Profile("p".into()), "browser", None, None, None, 1)
+            }),
+            Box::new(|tx| {
+                create_matrix(
+                    tx,
+                    sid("s1"),
+                    "browser.web",
+                    None,
+                    Some("no-port".into()),
+                    None,
+                    1,
+                )
+            }),
+        ];
+        for (i, f) in bad.iter().enumerate() {
+            assert!(
+                matches!(write(&mut conn, user(), f), Err(WriteError::Refused(_))),
+                "case {i}"
+            );
+        }
+        // a row with a matrix what under another access, or a plan under read, opens nothing when read back
+        for (i, data) in [
+            json!({"who": {"session": "s1"}, "what": {"matrix": "browser"}, "access": "read"}),
+            json!({"who": {"plan": "plan:p1"}, "what": "*", "access": "read"}),
+            json!({"who": {"session": "s1"}, "what": {"matrix": "browser", "x": 1}, "access": "matrix"}),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(parse(1, format!("grant:{i}"), Some("active".into()), &data.to_string()), None);
+        }
+    }
+
+    #[test]
+    fn once_expires() {
+        let (_d, _p, mut conn) = db();
+        plan(&mut conn, "plan:p1");
+        let (once, at) = write(&mut conn, user(), |tx| {
+            let at = tx.at();
+            let g = create_matrix(
+                tx,
+                sid("s1"),
+                "browser.web",
+                None,
+                Some("example.com:443".into()),
+                Some(at + 600.0),
+                3,
+            )?;
+            create_matrix(
+                tx,
+                Who::Plan("plan:p1".into()),
+                "browser",
+                None,
+                None,
+                None,
+                4,
+            )?;
+            create_matrix(tx, sid("s2"), "browser.web", None, None, None, 5)?;
+            Ok((g, at))
+        })
+        .unwrap();
+        let ids = |conn: &Connection,
+                   a: &str,
+                   s: Option<&str>,
+                   p: Option<&str>,
+                   now: f64|
+         -> Vec<Option<i64>> {
+            matrix_grants_for(conn, a, s, p, now)
+                .unwrap()
+                .into_iter()
+                .map(|g| g.card)
+                .collect()
+        };
+        // a once grant covers its session inside the window, and nothing after it
+        assert_eq!(
+            ids(&conn, "browser.web", Some("s1"), None, at + 599.0),
+            [Some(3)]
+        );
+        assert!(ids(&conn, "browser.web", Some("s1"), None, at + 600.0).is_empty());
+        assert_eq!(once.expires, Some(at + 600.0));
+        // a grant is for its action, its session or its plan only
+        assert!(ids(&conn, "browser", Some("s1"), None, at).is_empty());
+        assert_eq!(
+            ids(&conn, "browser", Some("s1"), Some("plan:p1"), at),
+            [Some(4)]
+        );
+        assert!(ids(&conn, "browser", None, Some("plan:p2"), at).is_empty());
+        assert_eq!(
+            ids(&conn, "browser.web", Some("s2"), None, at + 1e6),
+            [Some(5)]
+        );
+        // a revoked one is gone
+        write(&mut conn, user(), |tx| revoke(tx, &once.id)).unwrap();
+        assert!(ids(&conn, "browser.web", Some("s1"), None, at).is_empty());
+        // an expiry in the past is refused
+        let r = write(&mut conn, user(), |tx| {
+            let at = tx.at();
+            create_matrix(tx, sid("s1"), "browser", None, None, Some(at - 1.0), 1)
+        });
+        assert!(matches!(r, Err(WriteError::Refused(_))));
     }
 
     #[test]

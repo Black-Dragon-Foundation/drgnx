@@ -875,6 +875,17 @@ its entity's data and counts only when the user's tx wrote that field: urdr keep
 never decides it). `ActionCtx::of_session` fills a session's project and plan from the runner's scope table (a plan
 run's, or the one `open_as` derives from the task a session starts on).
 
+**Grant records (the browser rows).** A matrix card is otherwise one answer to one question, so a retry after a yes
+would make a new card. For `browser`, `browser.web` and `browser.private` the user's yes is a `grant` entity of
+access `matrix` (`norn::grants::create_matrix`; [store.md](store.md), "Grants"), with a scope: once (the session,
+`expires` now + `agents-browser-once-window`), the session (no expiry) or the plan (`who: {plan: ID}`, every session
+of that plan). When the verdict is Ask, `check` and `recheck` read the active grants for the session or its plan
+(`matrix_grants_for`) and answer Allow, with no card, when one covers the hub's facts: for `browser` any grant; for
+`browser.web` one with no host or with `facts.host`; for `browser.private` one whose target is exactly
+`facts.target` (the web proxy matches CIDR and all-private grants itself). `Facts.host` and `Facts.target` are the
+web proxy's, never an agent's. A Never verdict ignores every grant, and `browser.private` stays capped at Ask, so its
+grants are the only way it is ever allowed. `recheck` reads the card's own facts back from its data.
+
 `effective_for(conn, who, ctx, now)` is what a session may do now; the permission seam, the brief and the launch
 plan all call it. A worker a manager started gets `meet` (the cellwise tighter) of its own cells from every layer, its
 `Delegation` and the manager's own cells read again at that moment. `delegate` records the delegation (no wider than

@@ -16,6 +16,7 @@ use crate::backup_timer::local;
 use crate::dispatch::Caller;
 use crate::front::Front;
 use crate::settings::matrix as decode;
+use norn::grants;
 use norn::matrix::{
     Action, Cell, Column, Effective, Matrix, Preset, TimePreset, Verdict, Who, Widening, active,
     decide, effective, meet, narrow, preset,
@@ -130,6 +131,40 @@ fn user_override(conn: &urdr::Connection, id: &str) -> Option<Matrix> {
 
 fn minute(now: f64) -> u16 {
     local(now.max(0.0) as u64).minute as u16
+}
+
+/// Whether the user's matrix grants cover A in CTX at NOW, so an Ask needs no card: for `browser` any grant of the
+/// session or its plan; for `browser.web` one with no host or with the host of the facts; for `browser.private` one
+/// whose target is exactly the facts' (the web proxy matches the wider ones itself).  No other row has grants.
+fn granted(conn: &urdr::Connection, a: Action, ctx: &ActionCtx, now: f64) -> bool {
+    if !matches!(
+        a,
+        Action::Browser | Action::BrowserWeb | Action::BrowserPrivate
+    ) {
+        return false;
+    }
+    let Ok(found) = grants::matrix_grants_for(
+        conn,
+        a.id(),
+        ctx.session.as_deref(),
+        ctx.plan.as_deref(),
+        now,
+    ) else {
+        return false;
+    };
+    let facts = &ctx.facts;
+    found.iter().any(|g| {
+        let grants::What::Matrix { host, target, .. } = &g.what else {
+            return false;
+        };
+        match a {
+            Action::BrowserWeb => host
+                .as_deref()
+                .is_none_or(|h| facts.host.as_ref().is_some_and(|f| f.as_str() == h)),
+            Action::BrowserPrivate => target.is_some() && *target == facts.target,
+            _ => true,
+        }
+    })
 }
 
 fn card_title(a: Action, f: &Facts) -> String {
@@ -262,6 +297,7 @@ impl MatrixGate {
         Ok(match v {
             Verdict::Allow => Gate::Allow,
             Verdict::Never => Gate::Never(why),
+            Verdict::Ask if granted(tx.sql(), a, ctx, now) => Gate::Allow,
             Verdict::Ask => {
                 let data = json!({
                     "action": a.id(),
@@ -283,7 +319,8 @@ impl MatrixGate {
     }
 
     /// At execution: the card's answer under the matrix as it is now.  A switch that made the action Never refuses
-    /// it whatever the user said; an open card is still a question; a declined one is a refusal.
+    /// it whatever the user said; a grant that covers the card's facts allows it; an open card is still a question;
+    /// a declined one is a refusal.
     pub fn recheck(&self, conn: &urdr::Connection, card: i64, now: f64) -> Gate {
         let Ok(Some(c)) = matrix_card_get(conn, card) else {
             return Gate::Never("no such matrix card".into());
@@ -302,12 +339,19 @@ impl MatrixGate {
             plan: str_of("plan"),
             session: str_of("session"),
             amount: c.data.get("amount").and_then(Value::as_f64),
-            facts: Facts::default(),
+            facts: c
+                .data
+                .get("facts")
+                .and_then(|f| serde_json::from_value(f.clone()).ok())
+                .unwrap_or_default(),
         };
         let who = who_of(c.data.get("who").unwrap_or(&Value::Null));
         let (v, why) = self.verdict(conn, &who, a, &ctx, now);
         if v == Verdict::Never {
             return Gate::Never(why);
+        }
+        if v == Verdict::Ask && granted(conn, a, &ctx, now) {
+            return Gate::Allow;
         }
         match (c.state.as_str(), c.choice.as_deref()) {
             ("settled", Some("allow")) => Gate::Allow,

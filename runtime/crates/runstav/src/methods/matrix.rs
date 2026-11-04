@@ -270,6 +270,12 @@ pub struct Facts {
     pub paths: Bounded<Vec<AbsPath>, 64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff_hash: Option<Hex64>,
+    /// `browser.web`: the first `host:port` the session's browser was refused (the web proxy's, never the agent's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<Text>,
+    /// `browser.private`: the private target the web proxy refused (its resolved address, port and class).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
