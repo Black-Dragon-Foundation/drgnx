@@ -353,10 +353,11 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
   ;; The first graphical frame schedules the Welcome (a timer: never inside the hook); it opens when onboarding
   ;; never ran here, and marks it so it never opens by itself again.
   (drgnx-onboard-test--with root
-    (let ((opened 0) (noninteractive nil)
+    (let ((opened 0)
           (process-environment (cons "DRGNX_UI_RUN" process-environment)))
       (drgnx-test-with-clock (:auto t)
-        (cl-letf (((symbol-function 'drgnx-onboard-welcome) (lambda () (cl-incf opened))))
+        ;; a session, not batch, only inside: the fixture takes Nidhogg's clock in a batch Emacs
+        (cl-letf (((symbol-function 'drgnx-onboard-welcome) (lambda () (cl-incf opened))) (noninteractive nil))
           (drgnx-onboard--on-first-window)
           (should (drgnx-timer-active-p 'onboard-welcome))                ; one idle one-shot in the timer layer
           (should (= opened 0))                                            ; nothing inside the hook

@@ -7,8 +7,9 @@
 ;;
 ;; Nothing in the code under test changes: `timer-list'/`timer-idle-list' are bound to nil, so every timer BODY starts,
 ;; whoever starts it, lands in lists of its own and runs only when the test (or a wait that moves virtual time) says
-;; so.  In a batch Emacs with Nidhogg's test clock and NIDHOGG_TEST_CLOCK=1 the clock is Emacs's own; anywhere else
-;; `float-time', `current-time' and `timer--activate' are advised while BODY runs.  `current-idle-time',
+;; so.  In a batch Emacs with NIDHOGG_TEST_CLOCK=1 the clock is Nidhogg's own; on a system without /proc (macOS), where
+;; that clock cannot run, `float-time', `current-time' and `timer--activate' are advised while BODY runs, and
+;; anywhere else the fixture refuses to start.  `current-idle-time',
 ;; `input-pending-p', `sleep-for', `sit-for' and `accept-process-output' are advised on both (`drgnx-test--advice' says
 ;; why).  Docs: docs/develop/core.md "Testing: time, waits and processes", docs/develop/harness.md "Virtual time".
 (require 'ert)
@@ -34,10 +35,15 @@ On Nidhogg's test clock it is 0: the timers are on the virtual clock from the st
 
 (defun drgnx-test--core-p ()
   "Non-nil when `drgnx-test-with-clock' runs on Nidhogg's test clock.
-That takes a batch Emacs with the clock and NIDHOGG_TEST_CLOCK=1, and /proc for `drgnx-test-real-time'."
-  (and noninteractive (fboundp 'nidhogg-test-clock-start)
+That takes a batch Emacs with NIDHOGG_TEST_CLOCK=1 (`bin/drgnx test' sets it), and /proc for `drgnx-test-real-time'."
+  (and noninteractive
        (equal (getenv "NIDHOGG_TEST_CLOCK") "1")
        (file-readable-p "/proc/uptime")))
+
+(defun drgnx-test--advice-clock-p ()
+  "Non-nil where the clock reads and the timers' stamps are advice: a system with no /proc (macOS), where Nidhogg's
+test clock cannot run.  Where /proc is, the clock is Nidhogg's or none."
+  (not (file-readable-p "/proc/uptime")))
 
 (defun drgnx-test--uptime ()
   "Seconds since boot, a float.  On the test clock every time Emacs reports is virtual; this one is the kernel's."
@@ -298,6 +304,8 @@ The whole list on every clock, so what a run leaves in its eln directory does no
 (defun drgnx-test--call-with-clock (body allow-pending &optional auto)
   "Run BODY (a function) on the virtual clock; see `drgnx-test-with-clock'."
   (when drgnx-test--active (error "drgnx-test-with-clock: already inside one"))
+  (unless (or (drgnx-test--core-p) (drgnx-test--advice-clock-p))
+    (error "drgnx-test-with-clock: here it runs on Nidhogg's test clock, in a batch Emacs with NIDHOGG_TEST_CLOCK=1"))
   (drgnx-test--warm-trampolines)
   (let* ((timer-list nil) (timer-idle-list nil)
          (drgnx-test--core (and (drgnx-test--core-p) (if auto 'auto 'manual)))

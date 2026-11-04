@@ -1101,10 +1101,12 @@ for a timer. Load it with `(load (expand-file-name "test/fixtures/clock-fixture"
   (drgnx-test-idle 2.5 :input-at 1.0))    ; one pause; you type 1 s into it
 ```
 
-- **Two clocks, one API.** In a batch Emacs with Nidhogg's test clock and `NIDHOGG_TEST_CLOCK=1`
-  (`drgnx-test--core-p`; it also needs `/proc`, see below), the body runs on that clock, started at entry and stopped at
-  the end; `bin/drgnx test`'s unit tier sets the variable, and `NIDHOGG_TEST_CLOCK=0` turns it off. Anywhere else (an
-  Emacs without the clock, the `--ui` tier) the clock reads and the timers' stamps are advice, as described below.
+- **Two clocks, one API.** In a batch Emacs with `NIDHOGG_TEST_CLOCK=1` (`drgnx-test--core-p`; it also needs `/proc`,
+  see below), the body runs on Nidhogg's test clock (Nidhogg `.5` on), started at entry and stopped at the end;
+  `bin/drgnx test`'s unit tier sets the variable. On a system without `/proc` (macOS), where that clock cannot run, the
+  clock reads and the timers' stamps are advice, as described below (`drgnx-test--advice-clock-p`). Anywhere else (a
+  Linux Emacs with `NIDHOGG_TEST_CLOCK=0`, an interactive one) `drgnx-test-with-clock` refuses to start: there is no
+  advice of `float-time`, `current-time` or `timer--activate` beside the core clock.
   What differs on Nidhogg's clock:
   - every read of the time is virtual: `time-since`, `(time-subtract nil ...)` and `format-time-string` too, and
     `(float-time nil)`. `drgnx-test-real-time` reads `/proc/uptime` then, because nothing else in Emacs stays real

@@ -442,8 +442,20 @@ them and native code that calls `current-time' (ERT itself) jumps into unmapped 
    (should (= 2 (length drgnx-clock-test--runs)))
    (should (drgnx-clock-test--close (drgnx-test-clock-now) 6))))
 
-(ert-deftest drgnx-test-clock-core/without-the-switch-the-advice-runs-and-ignores-auto ()
-  (let ((process-environment (cons "NIDHOGG_TEST_CLOCK=0" process-environment)) ran)
+(ert-deftest drgnx-test-clock-core/where-the-core-clock-can-run-there-is-no-other ()
+  ;; with /proc, the clock reads are Nidhogg's or none: no advice of `float-time', `current-time' or `timer--activate'
+  (skip-unless (not (drgnx-test--advice-clock-p)))
+  (let ((process-environment (cons "NIDHOGG_TEST_CLOCK=0" process-environment)))
+    (let ((err (should-error (drgnx-test-with-clock () (ignore)))))
+      (should (equal (cadr err) "drgnx-test-with-clock: here it runs on Nidhogg's test clock, in a batch Emacs with NIDHOGG_TEST_CLOCK=1"))))
+  (should-not drgnx-test--active)
+  (dolist (f '(float-time current-time timer--activate))
+    (should-not (advice--p (advice--symbol-function f)))))
+
+(ert-deftest drgnx-test-clock-core/without-proc-the-advice-runs-and-ignores-auto ()
+  ;; macOS: no /proc, so the whole advice layer, clock reads and timer stamps included
+  (skip-unless (drgnx-test--advice-clock-p))
+  (let (ran)
     (drgnx-test-with-clock (:auto t)
       (should-not drgnx-test--core)
       (run-at-time 5 nil (lambda () (setq ran t)))

@@ -2997,7 +2997,8 @@ A polling loop with a `float-time` deadline therefore ends at once under virtual
 process keeps a realistic deadline. More than `drgnx-test-clock-max-runs` (10000) timer runs in one
 `drgnx-test-advance` is an error (a timer that re-arms with no delay).
 
-**The guard.** Only on the advice, where a wall timer is stamped by Emacs from the real clock. While the fixture is active a `:before` advice on
+**The guard.** Only on the advice (macOS, which has no `/proc` for Nidhogg's test clock), where a wall timer is
+stamped by Emacs from the real clock. While the fixture is active a `:before` advice on
 `timer--activate` moves such a timer to the virtual due time plus `drgnx-test-clock-horizon` (10^6 s), so C's timer
 check never finds it ripe during a real wait: a real wait fires no virtual timer. A timer is due at virtual *v* + *d*
 when it was made at *v* with delay *d*, also after an advance. A re-armed repeat is already in that era and is left
