@@ -260,7 +260,7 @@ pub async fn run(args: ServeArgs) -> Exit {
     match front.gate.listen(gateway_port).await {
         Ok(events) => {
             front.gate.restore(&front.mcp).await;
-            tokio::spawn(gateway::run_events(events, front.clone()));
+            crate::clock::spawn("gateway:events", gateway::run_events(events, front.clone()));
             crate::clock::spawn("gateway:watch", gateway::watch(front.clone()));
         }
         Err(e) => tracing::error!("the gateway does not listen: {e}"),
