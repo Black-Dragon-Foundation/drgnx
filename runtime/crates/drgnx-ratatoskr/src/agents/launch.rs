@@ -307,6 +307,7 @@ fn launch_in(
     let prepared = sb.prepare(
         valid,
         command,
+        None,
         #[cfg(feature = "test-hooks")]
         gleipnir::TestHooks::default(),
     )?;

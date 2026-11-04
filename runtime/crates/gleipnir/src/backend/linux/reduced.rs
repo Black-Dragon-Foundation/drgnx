@@ -118,6 +118,7 @@ mod tests {
             layers: Layers::for_target(Target::LinuxReduced),
             extra_tcp_ports: vec![8080],
             trace: Default::default(),
+            browser: None,
         }
     }
 

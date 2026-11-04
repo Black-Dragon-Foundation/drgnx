@@ -5,13 +5,14 @@ pub mod bwrap;
 pub mod reduced;
 
 use super::{BackendKind, Hooks, Invocation, Prepared, Sandbox};
-use crate::bwrap::{InnerCommand, SPEC_FD, STATUS_FD};
+use crate::bwrap::{BROWSER_FD, InnerCommand, SPEC_FD, STATUS_FD};
 use crate::inner::{self, InnerSpec};
 use crate::landlock::Tier;
 use crate::sbpl::MacContext;
 use crate::spec::{HELPER_INSIDE, ValidSpec};
 use crate::validate::{Refusal, Rule};
 use std::io;
+use std::os::fd::OwnedFd;
 use std::path::PathBuf;
 
 /// The backend for `tier`. The full tier needs bwrap ≥ 0.12.0 from a root-owned path (`bwrap_override`, a test
@@ -76,12 +77,14 @@ fn apply(inner: &mut InnerSpec, hooks: Hooks) {
 }
 
 /// The full tier: every source opened without links (`bwrap::open_sources`), the inner spec (Landlock for the
-/// inside paths, the relay run as [`HELPER_INSIDE`]) on a sealed memfd at fd 3, the status pipe's write end at 4,
-/// the binds from 5; bwrap's argv; no environment (the program's travels in the inner spec).
+/// inside paths, the relay and the browser host run as [`HELPER_INSIDE`]) on a sealed memfd at fd 3, the status
+/// pipe's write end at 4, the browser's socketpair end at 5 (when the spec has a browser), the binds from 6; bwrap's
+/// argv; no environment (the program's travels in the inner spec).
 pub(super) fn prepare_full(
     sandbox: &Sandbox,
     spec: ValidSpec,
     command: Vec<String>,
+    browser_hub: Option<OwnedFd>,
     hooks: Hooks,
 ) -> Result<Prepared, Refusal> {
     let program = sandbox
@@ -91,11 +94,19 @@ pub(super) fn prepare_full(
     let opened = bwrap::open_sources(&spec, &sandbox.helper)?;
     let relay = inner::relay_plan(HELPER_INSIDE, &sandbox.helper.relay_args, &spec)?;
     let mut inner = InnerSpec::for_spec(&spec, Tier::Full, relay);
+    inner.browser = inner::browser_plan_for(
+        HELPER_INSIDE,
+        &sandbox.helper.browser_host_args,
+        &spec,
+        Tier::Full,
+    )?;
     apply(&mut inner, hooks);
     let memfd = inner::spec_memfd(&inner).map_err(|e| setup("the inner spec", e))?;
     let (status, write_end) = inner::status_pipe().map_err(|e| setup("the status pipe", e))?;
     let (args, binds) = crate::bwrap::argv(&spec, opened, &command);
     let mut fds = vec![(memfd, SPEC_FD), (write_end, STATUS_FD)];
+    let browser = browser_hub.is_some();
+    fds.extend(browser_hub.map(|fd| (fd, BROWSER_FD)));
     fds.extend(binds);
     Ok(Prepared {
         invocation: Invocation {
@@ -108,6 +119,7 @@ pub(super) fn prepare_full(
         },
         status: Some(status),
         layers: None,
+        browser,
     })
 }
 
@@ -118,8 +130,13 @@ pub(super) fn prepare_reduced(
     sandbox: &Sandbox,
     spec: ValidSpec,
     command: Vec<String>,
+    browser_hub: Option<OwnedFd>,
     hooks: Hooks,
 ) -> Result<Prepared, Refusal> {
+    // Not yet on this tier (validation's rule 12 refuses it; this is the backstop).
+    if browser_hub.is_some() || spec.spec().browser.is_some() {
+        return Err(super::no_browser_here(sandbox.kind));
+    }
     let helper = &sandbox.helper;
     let mut inner = reduced::inner_spec(&spec, &helper.source, &helper.relay_args)?;
     unhideable(&spec, &inner)?;
@@ -137,6 +154,7 @@ pub(super) fn prepare_reduced(
         },
         status: Some(run.status),
         layers: None,
+        browser: false,
     })
 }
 

@@ -765,6 +765,7 @@ mod tests {
             layers: Layers::for_target(Target::LinuxBwrap),
             extra_tcp_ports: vec![8080, 3128],
             trace: Default::default(),
+            browser: None,
         }
     }
 
@@ -1429,6 +1430,7 @@ mod tests {
             layers: Layers::for_target(Target::LinuxReduced),
             extra_tcp_ports: vec![],
             trace: Default::default(),
+            browser: None,
         };
         plan(spec, Target::LinuxReduced, Tier::Reduced)
     }

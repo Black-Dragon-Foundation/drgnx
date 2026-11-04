@@ -23,16 +23,18 @@ One API runs a command in every backend (`gleipnir::backend`, re-exported at the
      gives it the developer dir; gleipnir reads none itself.
    - Anything else (Android among them): refused (`BackendKind::None`).
 
-   `helper` is an `InnerCommand`: the helper binary's path outside, its `inner_args` (`sandbox-inner`) and its
-   `relay_args` (`relay`).
+   `helper` is an `InnerCommand`: the helper binary's path outside, its `inner_args` (`sandbox-inner`), its
+   `relay_args` (`relay`) and its `browser_host_args` (`browser-host`).
 2. `gleipnir::validate(spec, &ctx, sandbox.target()?)` checks the spec for that backend's `Target`.
-3. `sandbox.prepare(valid, command)` returns a `Prepared { invocation, status, layers }`. Nothing is spawned; the
+3. `sandbox.prepare(valid, command, browser_hub)` returns a `Prepared { invocation, status, layers, browser }`.
+   `browser_hub` is the browser host's end of a socketpair the caller made (it keeps the other end), given exactly
+   when the spec has a `browser`, else `None`; a mismatch either way is `Malformed`. Nothing is spawned; the
    full tier's sources are opened here, so what was checked is what gets mounted. `Invocation` is the program, its
    args, its exact environment, its cwd, the fds to pass at fixed numbers, and `new_session`:
 
    | Backend | Program and args | Env | fds | `new_session` |
    |---|---|---|---|---|
-   | bwrap | bwrap's argv, ending `-- /run/gleipnir/helper sandbox-inner --spec-fd 3 -- CMD…` | none | 3 the inner spec (sealed memfd), 4 the status pipe's write end, 5… the binds | no (bwrap's `--new-session`) |
+   | bwrap | bwrap's argv, ending `-- /run/gleipnir/helper sandbox-inner --spec-fd 3 -- CMD…` | none | 3 the inner spec (sealed memfd), 4 the status pipe's write end, 5 the browser's socketpair end (only with a browser), 6… the binds | no (bwrap's `--new-session`) |
    | reduced | `HELPER sandbox-inner --spec-fd 3 -- CMD…` | none | 3, 4 | **yes**: the helper calls `setsid()` itself, which a process-group leader cannot |
    | Seatbelt | `sandbox-exec -f PROFILE CMD…` or `-p TEXT CMD…` | the spec's | none | no |
 
@@ -43,9 +45,11 @@ One API runs a command in every backend (`gleipnir::backend`, re-exported at the
    `LayersReport::seatbelt()` at once.
 4. The caller spawns the invocation from one long-lived thread (Ratatoskr: `draugr::spawn_pinned`, with `pass_fds`
    and, for `new_session`, `setsid` before exec instead of a process group of its own) and reads
-   `gleipnir::read_status(status, stderr_tail, deadline)`. On a refusal or a timeout it kills the process group.
+   `gleipnir::read_status(status, stderr_tail, deadline)`, or with `Prepared::browser` set
+   `gleipnir::inner::read_status_for(status, stderr_tail, deadline, true)`, which also refuses a status that does not
+   report the browser host. On a refusal or a timeout it kills the process group.
 
-With the `test-hooks` feature, `prepare` takes a third argument, `TestHooks { landlock_omit, abi_cap }`, which goes
+With the `test-hooks` feature, `prepare` takes a fourth argument, `TestHooks { landlock_omit, abi_cap }`, which goes
 into the inner spec (Task 15's rows `landlock-layer-2` and `landlock-below-required-refused`). A release build has
 neither the type nor the parameter.
 
@@ -203,6 +207,7 @@ seen inside.
 | `layers` | `{landlock_min_abi}` | the lowest Landlock ABI the run accepts; seccomp is not a field (always on) |
 | `extra_tcp_ports` | ports | TCP ports besides the relay's (Landlock's port rule, never counted as isolation); the full tier only, the reduced tier grants none |
 | `trace` | `"off"` (the default, left out of the JSON), `{"per_step": {"socket"}}` or `{"tree": {"socket"}}` | seeing the files the program's shell steps open ([sandbox.md](sandbox.md#seeing-the-files-a-shell-step-opens)); the socket must be one of `sockets`; `per_step` needs the full tier, and macOS refuses both (`Malformed`) |
+| `browser` | `{program, own_dir, web_port, local_ports, extra_read, host_args}` or absent | the agent browser's host, forked by the inner helper under a layer of its own ([The inner helper](#the-inner-helper), step 6b). `program` is the Chromium binary, `own_dir` its dir (`/tmp/drgnx-browser`), `web_port` the web relay's port, `local_ports` the agent's servers it may reach, `extra_read` more read roots of its layer, `host_args` the browser host's own flags (never a secret). The full tier only in phase 1 (rule 12) |
 
 `gleipnir::validate::validate(spec, &ctx, target)` checks a spec for one `Target` (`LinuxBwrap`, `LinuxReduced`,
 `Macos`) against a `Context` and returns a `ValidSpec` or a `Refusal { rule, path, message }`. Only a `ValidSpec`
@@ -261,6 +266,15 @@ the parts that do not exist yet. macOS's own links count like any other: `/tmp` 
     (`/run/gleipnir`) or `run`'s dest: not a bind's or the home's dest, not a `read`, `write`, `hide` or `tmp` path
     (those are mounted at their own path), and `run`'s dest not over the helper either. A bind over the helper would
     make bwrap exec a program that applies neither Landlock nor seccomp.
+
+12. **`Browser`.** A spec with a `browser` runs on `LinuxBwrap` only ("the agent browser on this tier comes in a
+    later phase" for the reduced tier and macOS); its `net` is isolated and `web_port` is one of the relay ports;
+    no local port is a relay port, and each one is in `extra_tcp_ports`; `program` is a file under `/usr`, `/opt`
+    or an `extra_read` entry; `own_dir` is `/tmp/drgnx-browser`; `host_args` hold at most 4 KiB in all, and no
+    `=` value of one equals an env value of the spec (a secret never goes in an argv). `program` and `extra_read`
+    are host paths for rule 1 (true names, no link), `own_dir` an inside path. A spec that passes has its
+    `layers.landlock_min_abi` raised to 9: the browser layer is no boundary below ABI 9, and the agent's own layer
+    is applied first, so the whole run is refused on such a kernel.
 
 Apart from rule 11, a dest may be any canonical absolute path: only sources expose anything.
 
@@ -353,7 +367,8 @@ steps (Task 7):
   the host's layout: which of `/bin /lib /lib64 /sbin` are links, and where `/etc/resolv.conf` leads.
 - `bwrap::argv(spec, opened, command)` is pure (built and tested on every target). It returns bwrap's arguments and
   the fds to pass, each with its number inside: 3 is the inner spec (a sealed memfd), 4 the status pipe (both the
-  caller's, Task 8), and the binds from 5 upward in argv order, the helper's last.
+  caller's, Task 8), 5 the browser's socketpair end (`BROWSER_FD`, the caller's, only with a browser; bwrap hands it
+  to the helper untouched), and the binds from 6 (`FIRST_BIND_FD`) upward in argv order, the helper's last.
 
 The argv, in this order (`argv_golden_shared` and `argv_golden_isolated` pin it):
 
@@ -364,7 +379,7 @@ The argv, in this order (`argv_golden_shared` and `argv_golden_isolated` pin it)
 --symlink usr/bin /bin   (where the host's /bin is a link; else --ro-bind-try /bin /bin; also lib lib64 sbin)
 --dev /dev --proc /proc --tmpfs /tmp --tmpfs /run --tmpfs /var/tmp
 --ro-bind-try RESOLVER RESOLVER                  where /etc/resolv.conf leads under /run
---bind-fd 5 HOME-DEST                            the home (--ro-bind-fd when its mode is ro)
+--bind-fd 6 HOME-DEST                            the home (--ro-bind-fd when its mode is ro)
 --ro-bind-fd N READ   --bind-fd N WRITE          at their own paths
 --ro-bind-fd N RUN-DEST                          the session dir, always read-only
 --ro-bind-fd N DEST  /  --bind-fd N DEST         binds, in order, each with its mode
@@ -436,12 +451,13 @@ an fd that is not sealed so. The program's environment travels here, never in ar
 
 | Field | What |
 |---|---|
-| `version` | 1 |
+| `version` | 2; a version-1 spec (which never has a `browser`) is still read and run, and one with a `browser` is refused |
 | `env` | the program's whole environment, exactly |
 | `chdir` | where the program starts |
 | `landlock` | the `LandlockPlan`; never optional (the floors are ABI ≥ 1 and ≥ 9). seccomp has no field: it is always on |
 | `new_session` | `setsid()` before Landlock; true for the reduced tier (no bwrap `--new-session` there), whose spec is refused without it |
 | `relay` | `{argv, ready_timeout_ms}` (5000), or absent |
+| `browser` | `{hub_fd, argv, env, own_dir, landlock, ready_timeout_ms}` (version 2), or absent: the browser host (step 6b). `hub_fd` is 5, `argv` is `/run/gleipnir/helper browser-host --hub-fd 3 --ready-fd 4 --program P --dir D --web-port N HOST_ARGS…`, `env` is `HOME`, `XDG_CACHE_HOME` and `TMPDIR` = D and `PATH=/usr/bin:/bin`, `landlock` is the browser layer ([Landlock](#landlock)), the timeout 5000 |
 | `landlock_omit`, `abi_cap` | only with gleipnir's `test-hooks` feature (the escape rows); a release build refuses them as unknown fields |
 
 **The order** (pinned):
@@ -463,6 +479,29 @@ an fd that is not sealed so. The program's environment travels here, never in ar
   any other parent ([The relay](#the-relay-task-11)).
   Then, when the plan has `tcp_bind_ports` (the reduced tier), one more Landlock layer refuses every TCP bind: the
   relay bound its ports under the first layer, and the program gets none.
+- **6b.** The browser host, if any. The helper first checks the browser layer's floor (ABI 9, against the kernel and
+  the test hook's cap), that fd 5 is open, and makes the browser's own dir (0700; one already there must be a
+  directory of this user's, not a link: a write root that does not exist would be skipped). Its argv and environment,
+  the browser's BPF program (`compile_browser`) and copies of the fds above 9 are made before the fork, so the child
+  only makes syscalls, applies the layer (the helper is single-threaded, step 2) and execs. Then it forks; in the
+  child:
+  1. `PR_SET_PDEATHSIG` SIGKILL, and an exit if the helper is no longer its parent;
+  2. stdin and stdout on `/dev/null` (never the agent's pipes), the hub's end at fd 3, a ready pipe's write end at
+     fd 4;
+  3. `close_range(5, ∞)`;
+  4. Landlock `restrict(browser.landlock, abi_cap)`, then `install(compile_browser(native()))`, each stacked on the
+     agent's layers;
+  5. `execve` of `argv` with exactly `env`.
+
+  The helper closes its copy of the hub's end, so only the host holds it (no listening socket exists for the agent to
+  race for), and waits for exactly `ready\n` within the timeout; a host that exits first, says something else or is
+  late fails the run (and is killed). The browser host is the agent's child after the exec: the agent, its ancestor
+  domain, can signal and trace it, and when the agent exits the death signal ends it. The layer is applied in the
+  child before the exec, so no instruction of the browser host runs unlayered, and its `ready` means "layered and
+  listening".
+- **6c.** Whole-tree tracing, if the spec asks for it (`trace` `tree`): the helper installs the open listener on itself
+  and offers it to the supervisor ([sandbox.md](sandbox.md#seeing-the-files-a-shell-step-opens)). It comes after the
+  relay and the browser host, so neither is traced: a forked child keeps its parent's filters.
 - **7.** One status line on fd 4, then fd 4 is closed.
 - **8.** Close every fd ≥ 3 (`close_range`).
 - **9.** `chdir`; `execve` of `CMD[0]` with exactly the spec's environment. A program with a `/` runs as given; a bare
@@ -471,8 +510,9 @@ an fd that is not sealed so. The program's environment travels here, never in ar
 A failure in steps 1–7 writes `{"ok":false,"error":"…"}` to fd 4 and exits 125, and nothing is exec'd. Not found
 exits 127, found but not runnable 126; a `chdir` that fails after the status line exits 125 with a stderr line
 only. The status line of a run is
-`{"ok":true,"landlock_abi":N,"landlock":"enforced","seccomp":true,"no_new_privs":true,"new_session":B,"relay":B,"seatbelt":false}`
-(`seatbelt` is true only in `LayersReport::seatbelt()`, the macOS report, which no helper sends).
+`{"ok":true,"landlock_abi":N,"landlock":"enforced","seccomp":true,"no_new_privs":true,"new_session":B,"relay":B,"seatbelt":false,"browser":B}`
+(`seatbelt` is true only in `LayersReport::seatbelt()`, the macOS report, which no helper sends; a line without
+`browser` reads as false).
 On other systems `sandbox-inner` exits 125 with "the inner helper is Linux only".
 
 **Reading the status.** `status_pipe()` gives the parent's read end and the write end the spawn moves to fd 4.
@@ -480,8 +520,10 @@ On other systems `sandbox-inner` exits 125 with "the inner helper is Linux only"
 - `ok: false` → "sandbox setup failed: " and the helper's error;
 - EOF with no line (the helper, or bwrap before it, failed) → "sandbox setup failed: " and the first stderr line;
 - a line that claims less than Landlock enforced, seccomp and `no_new_privs` → refused;
-- past the deadline (`status_deadline`: 5 s plus the relay's ready timeout) → "sandbox setup timed out", and the
-  caller kills the process group.
+- with `read_status_for(…, browser: true)` (the spec asked for the browser: `Prepared::browser`), a line without
+  `"browser": true` → refused;
+- past the deadline (`status_deadline`: 5 s plus the relay's and the browser host's ready timeouts) → "sandbox setup
+  timed out", and the caller kills the process group.
 
 EOF needs every write end closed: bwrap's monitor closes its copy, and draugr's `spawn` drops the hub's.
 
@@ -497,7 +539,15 @@ Tests: `inner::tests` (the arguments, the thread check in a threaded process, th
 `runtime/crates/drgnx-ratatoskr/tests/sandbox_inner.rs`, which runs the built `ratatoskr` as the helper without
 bwrap: the layers reported, exactly the spec's environment, no fd above 2, `NoNewPrivs` and one more seccomp filter,
 a floor refusal, the relay ready before the program (and three relay failures), an unsealed spec, the new session,
-a seccomp or Landlock install that an outer filter makes fail, and the reduced run end to end (ABI 9).
+a seccomp or Landlock install that an outer filter makes fail, and the reduced run end to end (ABI 9). With ABI 9,
+`a_browser_host_is_ready_before_exec`: the host holds the hub's end at fd 3 (what it writes reaches the test's end),
+writes its own dir, and is ready before the program; three host failures, a version-1 spec with a browser and a
+missing fd 5 each refuse the run. The `#[ignore]` `a_browser_child_is_layered_before_it_runs` (the VM; it needs
+`gleipnir-probe` beside `ratatoskr`) runs the escape probe as the host: `connect-unix` to `hub.sock` blocked (the
+agent reaches it), `create` in the agent's write root blocked, `create` in its own dir reached. `inner::tests` and
+`backend::tests` cover the wire form (`v1_spec_still_parses`, `v2_browser_roundtrip`,
+`status_without_browser_is_refused_when_asked`, `browser_plan_for_a_full_spec`) and the fds
+(`browser_fd_is_5_and_binds_start_at_6`, `browser_without_fd_is_malformed`); `validate::tests::browser_table` rule 12.
 
 ## Landlock
 

@@ -146,6 +146,7 @@ fn context_closes_data_state_config_and_sockets() {
         layers: Layers::for_target(Target::LinuxBwrap),
         extra_tcp_ports: vec![],
         trace: Default::default(),
+        browser: None,
     };
     validate(spec(fx.p("home/proj")), &ctx, Target::LinuxBwrap).expect("a task folder passes");
     for closed in [fx.p("real-data/drgnx/x"), fx.p("src"), fx.p("run/drgnx/s")] {
@@ -193,6 +194,7 @@ fn an_agent_session_dir_reaches_nothing_else_beside_the_socket() {
         layers: Layers::for_target(Target::LinuxBwrap),
         extra_tcp_ports: vec![],
         trace: Default::default(),
+        browser: None,
     };
     let run = |source: &Path| {
         Some(Bind {
@@ -257,6 +259,7 @@ fn helper_dir_is_closed() {
         layers: Layers::for_target(Target::LinuxBwrap),
         extra_tcp_ports: vec![],
         trace: Default::default(),
+        browser: None,
     };
     let r = validate(spec, &ctx, Target::LinuxBwrap).unwrap_err();
     assert_eq!(r.rule, Rule::ExposesUser, "{}", r.message);

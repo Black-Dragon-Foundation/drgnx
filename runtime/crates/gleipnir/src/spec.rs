@@ -138,6 +138,35 @@ pub struct Spec {
     /// Whether the files the program's shell steps open are seen ([`crate::trace`]): off unless asked.
     #[serde(default, skip_serializing_if = "Trace::is_off")]
     pub trace: Trace,
+    /// The agent browser: a host the inner helper forks under a Landlock layer and seccomp filter of its own, on an
+    /// inherited socketpair end (the full tier only; validation refuses it elsewhere).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<SpecBrowser>,
+}
+
+/// The browser's own dir on the full tier: a place in bwrap's private `/tmp`.
+pub const BROWSER_DIR_FULL: &str = "/tmp/drgnx-browser";
+
+/// What the browser host gets. Every path is seen inside; `program` and `extra_read` lie where the host has them too.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpecBrowser {
+    /// The Chromium binary: absolute, under `/usr`, `/opt` or an `extra_read` entry.
+    pub program: PathBuf,
+    /// The browser's own dir ([`BROWSER_DIR_FULL`] on the full tier); the helper makes it.
+    pub own_dir: PathBuf,
+    /// The web relay's port (one of the spec's relay ports): the browser's way out.
+    pub web_port: u16,
+    /// The agent's local servers the browser may reach; each one of `extra_tcp_ports`, none a relay port.
+    #[serde(default)]
+    pub local_ports: Vec<u16>,
+    /// More read-only roots of the browser layer (the hub passes `/var/cache/fontconfig`).
+    #[serde(default)]
+    pub extra_read: Vec<PathBuf>,
+    /// The browser host's own flags, after the ones gleipnir passes. Never a secret: at most 4 KiB in all, and no
+    /// `=` value may equal an env value of the spec.
+    #[serde(default)]
+    pub host_args: Vec<String>,
 }
 
 /// Seeing opens ([`crate::trace`]): `"off"`, `{"per_step": {"socket": …}}` or `{"tree": {"socket": …}}`. `socket`

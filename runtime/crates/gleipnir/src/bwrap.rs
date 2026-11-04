@@ -24,8 +24,11 @@ pub const FLOOR: (u32, u32, u32) = (0, 12, 0);
 pub const SPEC_FD: i32 = 3;
 /// The status pipe's write end inside bwrap (Task 8).
 pub const STATUS_FD: i32 = 4;
+/// The browser host's socketpair end (the hub's other end stays outside), inside bwrap and in the helper. Left
+/// unused when the spec has no browser.
+pub const BROWSER_FD: i32 = 5;
 /// The first bind's fd; the binds follow in argv order, and the helper's is the last.
-pub const FIRST_BIND_FD: i32 = 5;
+pub const FIRST_BIND_FD: i32 = 6;
 
 /// Root-owned system trees bound read-only by path where they exist (`--ro-bind-try`). `/usr` is always bound.
 pub const SYSTEM_READS: &[&str] = &["/etc", "/opt", "/nix", "/gnu", "/var/lib/flatpak"];
@@ -36,12 +39,14 @@ pub const USR_MERGED: &[&str] = &["bin", "lib", "lib64", "sbin"];
 
 /// How the helper (the `ratatoskr` binary) is started inside: `source` is its path outside, bound read-only at
 /// [`HELPER_INSIDE`] and run as `HELPER_INSIDE <inner_args> --spec-fd 3 -- <command>`. `relay_args` are what the
-/// inner spec's relay runs (`Sandbox::prepare`); the argv does not use them.
+/// inner spec's relay runs, and `browser_host_args` what its browser host runs (`Sandbox::prepare`); the argv uses
+/// neither.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InnerCommand {
     pub source: PathBuf,
     pub inner_args: Vec<OsString>,
     pub relay_args: Vec<OsString>,
+    pub browser_host_args: Vec<OsString>,
 }
 
 /// One source opened without links, and where it is bound. `dev` and `ino` are the identity it was checked under.
@@ -375,6 +380,7 @@ mod tests {
             layers: Layers::for_target(Target::LinuxBwrap),
             extra_tcp_ports: vec![],
             trace: Default::default(),
+            browser: None,
         }
     }
 
@@ -635,9 +641,14 @@ mod tests {
         );
     }
 
-    /// The fds are numbered from 5 in argv order, each passed once, the helper's last.
+    /// The fds are numbered from 6 in argv order, each passed once, the helper's last; 3, 4 and the browser's 5 are
+    /// the caller's.
     #[test]
-    fn fds_follow_the_argv_from_5() {
+    fn fds_follow_the_argv_from_6() {
+        assert_eq!(
+            (SPEC_FD, STATUS_FD, BROWSER_FD, FIRST_BIND_FD),
+            (3, 4, 5, 6)
+        );
         let s = spec(isolated());
         let want = planned(&s).len() + 1;
         let (argv, fds) = run(s, merged(), &["/bin/true"]);
@@ -650,7 +661,7 @@ mod tests {
         let expected: Vec<i32> = (FIRST_BIND_FD..FIRST_BIND_FD + want as i32).collect();
         assert_eq!(in_argv, expected);
         assert_eq!(fds, expected);
-        assert!(!fds.contains(&SPEC_FD) && !fds.contains(&STATUS_FD));
+        assert!(!fds.contains(&SPEC_FD) && !fds.contains(&STATUS_FD) && !fds.contains(&BROWSER_FD));
     }
 
     /// A hide covers the place it is seen at: its own path, and inside a bind whose dest differs from its source

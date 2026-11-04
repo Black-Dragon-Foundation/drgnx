@@ -685,6 +685,7 @@ mod tests {
                 new_session: true,
                 relay: true,
                 seatbelt: false,
+                browser: false,
             }),
             landlock_abi: 10,
             container: false,

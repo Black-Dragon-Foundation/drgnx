@@ -216,6 +216,7 @@ pub fn helper_at(exe: &Path) -> InnerCommand {
         source: exe.to_path_buf(),
         inner_args: vec![OsString::from("sandbox-inner")],
         relay_args: vec![OsString::from("relay")],
+        browser_host_args: vec![OsString::from("browser-host")],
     }
 }
 
@@ -272,6 +273,7 @@ pub async fn run_probe(prepared: Prepared, timeout: Duration) -> Ran {
         invocation,
         status,
         layers,
+        browser,
     } = prepared;
     let mut child = match draugr::spawn_pinned(to_draugr(invocation)).await {
         Ok(c) => c,
@@ -285,7 +287,7 @@ pub async fn run_probe(prepared: Prepared, timeout: Duration) -> Ran {
     };
     let report = match status {
         // Blocking, on the thread that drives this future; the runtime's worker keeps reading the stderr tail.
-        Some(fd) => gleipnir::read_status(fd, &|| child.stderr_tail(), left()),
+        Some(fd) => gleipnir::inner::read_status_for(fd, &|| child.stderr_tail(), left(), browser),
         None => layers.ok_or_else(|| setup("no status line and no layers".into())),
     };
     let mut exit = None;
@@ -447,6 +449,7 @@ mod run {
             invocation,
             status,
             layers,
+            browser,
         } = prepared;
         let mut child = match draugr::spawn_pinned(to_draugr(invocation)).await {
             Ok(c) => c,
@@ -475,7 +478,9 @@ mod run {
             + Duration::from_millis(gleipnir::inner::RELAY_READY_TIMEOUT_MS.into());
         let report = match status {
             // Blocking, on the thread that drives this future; the runtime's worker keeps reading the stderr tail.
-            Some(fd) => gleipnir::read_status(fd, &|| child.stderr_tail(), deadline),
+            Some(fd) => {
+                gleipnir::inner::read_status_for(fd, &|| child.stderr_tail(), deadline, browser)
+            }
             None => layers.ok_or_else(|| setup("no status line and no layers".into())),
         };
         let mut out = Outcome::default();
@@ -544,7 +549,7 @@ mod run {
             landlock_omit: a.landlock_omit.clone(),
             abi_cap: a.landlock_abi_cap,
         };
-        sandbox.prepare(valid, a.command.clone(), hooks)
+        sandbox.prepare(valid, a.command.clone(), None, hooks)
     }
 
     /// Say `opened` on `fifo`, then wait for one line back.
@@ -1264,6 +1269,7 @@ pub fn session_spec(
         layers: Layers::for_target(target),
         extra_tcp_ports: vec![],
         trace,
+        browser: None,
     };
     Ok(SessionSpec {
         spec,
