@@ -69,6 +69,14 @@ pub fn prelude(
             e.message
         )),
     })?;
+    // a top-level key besides id, method and params (a test client's `__seq` sent to a hub without the sequencer) is
+    // dropped and listed in `ignored` by its name
+    let extra: Vec<String> = v.as_object().map_or_else(Vec::new, |o| {
+        o.keys()
+            .filter(|k| !matches!(k.as_str(), "id" | "method" | "params"))
+            .cloned()
+            .collect()
+    });
     let req: Request = match serde_json::from_value(v) {
         Ok(r) => r,
         Err(e) => {
@@ -136,8 +144,9 @@ pub fn prelude(
         ));
     }
     // 4
-    let (params, ignored) =
+    let (params, mut ignored) =
         (m.decode)(&req.params).map_err(|e| refuse(ErrorCode::InvalidParams, e.message, e.path))?;
+    ignored.extend(extra);
     // 5
     if let Some(schema) = read_only.filter(|_| m.writes) {
         return Err(refuse(

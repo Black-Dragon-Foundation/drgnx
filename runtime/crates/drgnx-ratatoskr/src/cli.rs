@@ -178,6 +178,9 @@ pub struct ServeArgs {
     pub ignore_shutdown: bool,
     /// `--test-clock` (test-hooks only): the hub's clock is virtual, moved only by `__test_advance`.
     pub test_clock: bool,
+    /// `--test-sequencer` (test-hooks only, and it means `--test-clock`): requests served one at a time in the order of
+    /// their `__seq`, and `__test_barrier`.
+    pub test_sequencer: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -245,6 +248,11 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                     Long("test-ignore-shutdown") => a.ignore_shutdown = true,
                     #[cfg(feature = "test-hooks")]
                     Long("test-clock") => a.test_clock = true,
+                    #[cfg(feature = "test-hooks")]
+                    Long("test-sequencer") => {
+                        a.test_sequencer = true;
+                        a.test_clock = true;
+                    }
                     other => return Err(other.unexpected().to_string()),
                 }
             }
@@ -1006,6 +1014,7 @@ mod tests {
         assert!(p(&["serve", "--gateway-port", "4100"]).is_err());
         assert!(p(&["serve", "--test-ignore-shutdown"]).is_err());
         assert!(p(&["serve", "--test-clock"]).is_err());
+        assert!(p(&["serve", "--test-sequencer"]).is_err());
     }
 
     #[cfg(feature = "test-hooks")]
@@ -1058,6 +1067,15 @@ mod tests {
                 test_clock: true,
                 ..ServeArgs::default()
             }))
+        );
+        assert_eq!(
+            p(&["serve", "--test-sequencer"]),
+            Ok(Command::Serve(ServeArgs {
+                test_clock: true,
+                test_sequencer: true,
+                ..ServeArgs::default()
+            })),
+            "the sequencer runs on the virtual clock"
         );
         assert!(
             p(&["serve", "--agent-socket", "s1"]).is_err(),

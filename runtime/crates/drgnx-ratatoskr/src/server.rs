@@ -55,6 +55,11 @@ pub async fn run(args: ServeArgs) -> Exit {
     if args.test_clock {
         crate::clock::install_virtual();
     }
+    // `--test-sequencer`: before any connection, so every one is known to it
+    #[cfg(feature = "test-hooks")]
+    if args.test_sequencer {
+        crate::sequencer::install();
+    }
     // the executable's path, once, while it still names the file on disk (restart-when-idle, re-exec)
     if let Err(e) = idle::resolve_exe() {
         eprintln!("ratatoskr: cannot resolve its own path ({e}): restart-when-idle is off");

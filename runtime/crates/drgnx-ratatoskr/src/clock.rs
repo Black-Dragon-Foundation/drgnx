@@ -216,6 +216,20 @@ pub async fn advance(d: Duration) -> Advanced {
     v.advance(d).await
 }
 
+/// The origin of the task running now (test-hooks): its [`spawn`] name, none outside such a task.
+#[cfg(feature = "test-hooks")]
+pub(crate) fn origin_name() -> Option<String> {
+    virt::origin_name()
+}
+
+/// The virtual clock's time since it was installed, in ms; 0 on the real clock (test-hooks).
+#[cfg(feature = "test-hooks")]
+pub(crate) fn virtual_ms() -> u64 {
+    virt::current().map_or(0, |v| {
+        u64::try_from(v.elapsed().as_millis()).unwrap_or(u64::MAX)
+    })
+}
+
 #[cfg(feature = "test-hooks")]
 mod virt {
     use super::{Advanced, BUSY_AFTER, Elapsed, Origin};
@@ -243,6 +257,10 @@ mod virt {
 
     pub(super) fn install() {
         let _ = GLOBAL.set(Arc::new(Virtual::new()));
+    }
+
+    pub(super) fn origin_name() -> Option<String> {
+        TASK.try_with(|t| t.origin.as_str().to_string()).ok()
     }
 
     pub(super) fn current() -> Option<Arc<Virtual>> {

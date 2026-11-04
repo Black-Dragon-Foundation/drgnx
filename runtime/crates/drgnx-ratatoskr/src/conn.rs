@@ -3,7 +3,8 @@
 //! of its own with a queue that drops a client that stopped reading (16 MiB queued, or 10 s without the write making
 //! progress), so one stopped client never stalls another.  With the `test-hooks` feature a line calling
 //! `__test_flood`, `__test_owner_gone` or `__test_advance` is served here, before the dispatcher (none is a method of
-//! the registry).
+//! the registry), and under `serve --test-sequencer` lines are read and served in the order
+//! the `sequencer` gives (`__test_barrier` is its own).
 //!
 //! After `mcp/attach` is answered (an outside agent's bridge), the connection is MCP's: the answer and any call in
 //! flight are written, and the bytes after the attach line go to [`crate::sessions::Sessions::serve_outside`].
@@ -73,7 +74,20 @@ impl Outbox {
     }
 
     /// Queue LINE (with its newline); false when the connection is closed, or is closed now for being over the limit.
+    /// Under the test-hooks sequencer a push outside a serving step is held (and true) until the sequencer releases it.
     pub fn push(&self, line: Arc<str>) -> bool {
+        #[cfg(feature = "test-hooks")]
+        if let Some(seq) = crate::sequencer::current()
+            && !crate::sequencer::serving()
+        {
+            seq.hold(self.conn, line);
+            return true;
+        }
+        self.push_now(line)
+    }
+
+    /// [`Outbox::push`] at once, whatever step this is.
+    pub(crate) fn push_now(&self, line: Arc<str>) -> bool {
         let mut q = self.queue.lock().expect("the queue lock");
         if q.closed || q.finishing {
             return false;
@@ -239,6 +253,16 @@ async fn write_loop(mut w: OwnedWriteHalf, out: Arc<Outbox>) -> Option<OwnedWrit
 
 /// Serve one connection accepted on SOCKET until it closes.
 pub async fn serve(stream: UnixStream, front: Arc<Front>, socket: Socket) {
+    // under the sequencer the connection's own writes are serving steps: its challenge, its answers, what its
+    // requests broadcast
+    #[cfg(feature = "test-hooks")]
+    if crate::sequencer::current().is_some() {
+        return crate::sequencer::in_serving_step(serve_conn(stream, front, socket)).await;
+    }
+    serve_conn(stream, front, socket).await
+}
+
+async fn serve_conn(stream: UnixStream, front: Arc<Front>, socket: Socket) {
     let id = front.next_conn();
     let cred = match stream.peer_cred() {
         Ok(c) => c,
@@ -262,6 +286,12 @@ pub async fn serve(stream: UnixStream, front: Arc<Front>, socket: Socket) {
     tracing::debug!(conn = id, peer_pid = cred.pid(), "accepted a connection");
     let (mut r, w) = stream.into_split();
     let out = Arc::new(Outbox::new(id));
+    // known to the sequencer before its challenge: every line on it comes after
+    #[cfg(feature = "test-hooks")]
+    let sequencer = crate::sequencer::current().map(|s| {
+        let mail = s.register(id, out.clone());
+        (s, mail)
+    });
     let writer = clock::spawn("conn:write", write_loop(w, out.clone()));
     let mut session = Session::new(id, socket);
     session.peer_pid = cred.pid();
@@ -277,7 +307,30 @@ pub async fn serve(stream: UnixStream, front: Arc<Front>, socket: Socket) {
     let mut buf = BytesMut::with_capacity(8192);
     // `mcp/attach` answered: the identity the rest of the connection's bytes are MCP for
     let mut attached = None;
+    #[cfg(feature = "test-hooks")]
+    let sequenced = match sequencer {
+        Some((seq, mail)) => {
+            attached = sequenced(
+                &seq,
+                mail,
+                &r,
+                (&mut codec, &mut buf),
+                &front,
+                &out,
+                &mut session,
+            )
+            .await;
+            seq.unregister(id);
+            true
+        }
+        None => false,
+    };
+    #[cfg(not(feature = "test-hooks"))]
+    let sequenced = false;
     'read: loop {
+        if sequenced {
+            break;
+        }
         loop {
             match codec.decode(&mut buf) {
                 Ok(Some(l)) => {
@@ -285,6 +338,7 @@ pub async fn serve(stream: UnixStream, front: Arc<Front>, socket: Socket) {
                     if flood::serve(&out, &l).await
                         || owner_gone::serve(&front, &out, &l).await
                         || advance::serve(&out, &l).await
+                        || barrier_refused(&out, &l)
                     {
                         continue;
                     }
@@ -331,6 +385,145 @@ pub async fn serve(stream: UnixStream, front: Arc<Front>, socket: Socket) {
     };
     let rest = std::io::Cursor::new(buf.to_vec());
     front.mcp.serve_outside(who, rest.chain(r), w).await;
+}
+
+/// The read loop under the sequencer (test-hooks): the socket is read when the sequencer asks (each readable socket
+/// asks it to), and a line is served when it hands it back.  The identity `mcp/attach` answered, if it was.
+#[cfg(feature = "test-hooks")]
+async fn sequenced(
+    seq: &crate::sequencer::Sequencer,
+    mut mail: tokio::sync::mpsc::UnboundedReceiver<crate::sequencer::Msg>,
+    r: &tokio::net::unix::OwnedReadHalf,
+    (codec, buf): (&mut tokio_util::codec::LinesCodec, &mut BytesMut),
+    front: &Front,
+    out: &Arc<Outbox>,
+    session: &mut Session,
+) -> Option<norn::tools::Identity> {
+    use crate::sequencer::{End, Msg};
+    // asked to be read and not read since; read EOF; an `mcp/attach` handed over and not served
+    let (mut kicked, mut ended, mut attaching) = (false, false, false);
+    loop {
+        tokio::select! {
+            biased;
+            m = mail.recv() => match m {
+                None => return None,
+                Some(Msg::Drain(reply)) => {
+                    kicked = false;
+                    let d = drain(r, codec, buf, out, attaching);
+                    ended |= d.end.is_some();
+                    attaching |= d.lines.last().is_some_and(|l| l.attach);
+                    let closed = d.end == Some(End::Closed);
+                    let _ = reply.send(d);
+                    if closed {
+                        return None;
+                    }
+                }
+                Some(Msg::Serve(l, done)) => {
+                    if !(flood::serve(out, &l).await
+                        || owner_gone::serve(front, out, &l).await
+                        || advance::serve(out, &l).await)
+                    {
+                        front.line(session, out, &l).await;
+                    }
+                    if crate::sequencer::Line::read(l).attach {
+                        attaching = false;
+                    }
+                    let who = session.attach.take();
+                    let _ = done.send(());
+                    if who.is_some() {
+                        return who;
+                    }
+                }
+                Some(Msg::Finish) => {
+                    // EOF, and every line served: what is queued is still written
+                    out.finish();
+                    return None;
+                }
+            },
+            _ = r.readable(), if !kicked && !ended => {
+                kicked = true;
+                seq.kick();
+            }
+            () = out.closed() => return None,
+        }
+    }
+}
+
+/// R read to `WouldBlock` (or EOF, or an error, which closes OUT), and the complete lines in BUF decoded: none after
+/// an `mcp/attach` (ATTACHING: one is waiting to be served), whose bytes may be MCP's.
+#[cfg(feature = "test-hooks")]
+fn drain(
+    r: &tokio::net::unix::OwnedReadHalf,
+    codec: &mut tokio_util::codec::LinesCodec,
+    buf: &mut BytesMut,
+    out: &Outbox,
+    attaching: bool,
+) -> crate::sequencer::Drained {
+    use crate::sequencer::{Drained, End, Line};
+    let mut end = None;
+    loop {
+        // room first: a read into no room returns 0, which is EOF
+        buf.reserve(8192);
+        match r.try_read_buf(buf) {
+            Ok(0) => {
+                end = Some(End::Eof);
+                break;
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(e) => {
+                out.close(&format!("closed a connection: {e}"));
+                end = Some(End::Closed);
+                break;
+            }
+        }
+    }
+    let mut lines: Vec<Line> = Vec::new();
+    let mut waiting = attaching;
+    while end != Some(End::Closed) && !waiting {
+        match codec.decode(buf) {
+            Ok(Some(l)) => {
+                let l = Line::read(l);
+                waiting = l.attach;
+                lines.push(l);
+            }
+            Ok(None) => break,
+            Err(e) => {
+                out.close(&format!("closed a connection: {e}"));
+                end = Some(End::Closed);
+            }
+        }
+    }
+    Drained {
+        partial: !waiting && !buf.is_empty(),
+        lines,
+        end,
+    }
+}
+
+/// `__test_barrier` on a hub without `--test-sequencer` (test-hooks): refused (true), else left to the dispatcher.
+#[cfg(feature = "test-hooks")]
+fn barrier_refused(out: &Outbox, line: &str) -> bool {
+    use runstav::wire::{Error, ErrorAnswer, ErrorCode, Request};
+    let Ok(req) = serde_json::from_str::<Request>(line) else {
+        return false;
+    };
+    if req.method != "__test_barrier" {
+        return false;
+    }
+    if let Some(id) = req.id {
+        let a = serde_json::to_string(&ErrorAnswer {
+            id,
+            error: Error {
+                code: ErrorCode::NotAllowed,
+                message: "the hub runs without a sequencer (serve --test-sequencer)".into(),
+                path: None,
+            },
+        })
+        .expect("an answer serializes");
+        out.push(format!("{a}\n").into());
+    }
+    true
 }
 
 /// `__test_owner_gone {owner}` (test-hooks): the sessions OWNER owns closed as if it had died, now; answered with how
@@ -400,6 +593,10 @@ mod advance {
         } else {
             let ms = req.params["ms"].as_u64().unwrap_or(0);
             let a = clock::advance(Duration::from_millis(ms)).await;
+            // what the woken tasks wrote, before the answer
+            if let Some(seq) = crate::sequencer::current() {
+                seq.release();
+            }
             req.id.map(|id| {
                 serde_json::to_string(&Answer {
                     id,
