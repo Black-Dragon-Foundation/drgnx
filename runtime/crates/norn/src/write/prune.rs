@@ -1,5 +1,4 @@
-//! Pruning the event log (Task 6): `drgnx-coord-events-prune`, `--events-cap` and `-events-prune-daily`
-//! (`core/drgnx-coord.el`).  Questions, answers and decisions are never pruned.
+//! Pruning the event log (Task 6): by age, by row cap and the daily run.  Questions, answers and decisions are never pruned.
 
 use crate::store::{CoordDb, CoordError, WTx};
 use urdr::graph::TxMeta;

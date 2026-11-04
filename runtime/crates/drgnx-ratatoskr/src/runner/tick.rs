@@ -1,5 +1,4 @@
-//! The plan runner's 2 s step and starting a task's worker (`drgnx-job-step`, `drgnx-job--start-task`; the Lisp is
-//! the oracle).  The step reads work.db and the hub's sessions and writes; **no git runs on it**: a ready task's
+//! The plan runner's 2 s step and starting a task's worker.  The step reads work.db and the hub's sessions and writes; **no git runs on it**: a ready task's
 //! worktree is made by a task of its own (through [`super::RunGit`], with a deadline) and the task shows `starting`
 //! meanwhile.  Review hand-off, the merge gate, fallback and the budget pause are Task 16b's, through
 //! [`super::Hooks`].

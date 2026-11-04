@@ -1,6 +1,5 @@
-//! The events a hub sends unasked, `{event, data}`: the nine the Lisp backend broadcast on main (`core/drgnx-hub.el`,
-//! `drgnx-job.el`, `drgnx-gateway.el`) and the front's own `challenge`, `notice`, `gateway/need-keys`,
-//! `gateway/keys-changed`, `settings/proposed` and `settings/explain` (the agents' settings tools, to the editor),
+//! The events a hub sends unasked, `{event, data}`: the nine the old Lisp backend broadcast and the front's own `challenge`, `notice`,
+//! `gateway/need-keys`, `gateway/keys-changed`, `settings/proposed` and `settings/explain` (the agents' settings tools, to the editor),
 //! and the agent core's `agent-step`, `exec-done`, `supervisor`, `view-written` and `view-proposal` (agent system
 //! part 1).  The hub sends them all; `card` and `lease-released` were the Lisp backend's, and no one sends them now.
 
@@ -280,8 +279,7 @@ mod tests {
 
     #[test]
     fn event_types_are_the_broadcast_names() {
-        // what the Lisp backend broadcast (`drgnx-hub--broadcast`, `drgnx-job--broadcast`, `drgnx-gateway--emit`),
-        // frozen when the Lisp runtime was deleted
+        // what the old Lisp backend broadcast, frozen when the Lisp runtime was deleted
         let found: BTreeSet<String> = [
             "agent",
             "agent-entries",

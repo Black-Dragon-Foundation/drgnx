@@ -74,7 +74,8 @@ manual install and uninstall: [docs/guide/install.md](docs/guide/install.md). Ch
 - **Polish:** a compositor for rounded, shadowed, animated popups and panels. Linux Wayland first, then macOS.
 - **Speed:** no freezes while Lisp works; parsing, process output and JSON move off the main thread; smooth scrolling.
 - **Agents:** the agent runtime in Rust is built: the hub runs sessions, plan runs, managers, budgets and the permissions
-  matrix ([docs/guide/agents.md](docs/guide/agents.md)). Next, a panel that shows what agents do in detail (each step,
+  matrix ([docs/guide/agents.md](docs/guide/agents.md)), and since Ratatoskr's phase 7 (done) it is the only agent
+  runtime: the old Lisp one is deleted. Next, a panel that shows what agents do in detail (each step,
   diffs, permissions, context and cost), with collapse per step type that remembers your choice.
 - **Extensions:** WebAssembly extensions, so tools can be written in any language (agent tools first). Community
   Emacs packages keep working.
@@ -88,7 +89,7 @@ No dates and no promises: this is the direction, not a schedule.
 
 drgnx is free software under the **GNU General Public License v3.0 or later** (see `LICENSE`).
 Code derived from [Emacs Bedrock](https://codeberg.org/ashton314/emacs-bedrock) keeps its MIT notice.
-The Seatbelt base policy in `core/drgnx-sandbox-macos.el` is OpenAI Codex's, Copyright 2025 OpenAI, under the
+The Seatbelt base policy in `runtime/crates/gleipnir/src/sbpl/base.sbpl` is OpenAI Codex's, Copyright 2025 OpenAI, under the
 Apache License 2.0 (`LICENSES/Apache-2.0.txt`).
 The Black Dragon Foundation logo (`etc/images/banner.jpg`, `etc/images/drgnx-logo.jpg`) is Copyright 2026 Black Dragon
 Foundation, under the GPL v3.0 or later like the rest of drgnx.

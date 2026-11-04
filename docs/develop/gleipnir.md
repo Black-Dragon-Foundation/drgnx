@@ -3,8 +3,9 @@
 Gleipnir is the Rust sandbox in `runtime/crates/gleipnir` ([runtime.md](runtime.md#crate-names)). It runs a program
 inside a boundary the kernel enforces: bubblewrap with Landlock and seccomp on Linux (the full tier), Landlock and
 seccomp alone (the reduced tier), or Seatbelt on macOS. It is self-contained: the caller passes every path, name and
-port, and nothing in gleipnir names a drgnx directory or reads a drgnx variable. Nothing in drgnx uses it yet; job
-agents run as before until phase 6. The Lisp libraries on main are described in [sandbox.md](sandbox.md).
+port, and nothing in gleipnir names a drgnx directory or reads a drgnx variable. The hub runs every agent session in
+it ([hub.md](hub.md#session-start-lock-sandbox-and-matrix)); what is left of the old Lisp libraries is in
+[sandbox.md](sandbox.md).
 
 Each section below is written by the task named in it.
 
@@ -897,7 +898,7 @@ that changes after the check (rebinding) cannot lead it anywhere else.
 to do. `ratatoskr sandbox check [--json] [--tier full|reduced]` runs it (exit 0 when it works, else 1; the text is
 `backend bwrap 0.12.0: ok (Landlock ABI 10, seccomp)`, or `not available: REASON` and `fix: FIX`), and
 `ratatoskr doctor` carries its answer as a `sandbox` section `{backend, version, ok, reason, fix, landlock_abi,
-in_use}`. `in_use` is false until jobs run in the sandbox (phase 6), and nothing says a job is sandboxed.
+in_use}`. `in_use` is true: every session starts in the sandbox (`agents/launch.rs`), and a host where the check fails starts none.
 
 **The probe is the real invocation.** `check(helper, tier, bwrap_override, timeout, run)` detects the backend, makes a
 temp dir, and builds a spec as hard as a job's: the isolated network with one relay port to a real Unix socket in a
@@ -1077,7 +1078,7 @@ layer alone cap Landlock (`landlock_abi_cap: 3` takes its TCP rules away) or omi
 | Row | What it proves |
 |---|---|
 | `k1-hub-socket-absent`, `k1-reduced` | the hub's socket is not there (full) or not connectable (reduced, Landlock ABI 9); the listener sees nothing |
-| `k1-backend-socket-absent`, `k1-backend-socket-reduced` | the Lisp backend's `hub-HASH.d/backend.sock` and another session's `s/S2/hub.sock` cannot be seen or connected to; `s/` lists only the session's own `S1` (full) or cannot be listed (reduced) |
+| `k1-backend-socket-absent`, `k1-backend-socket-reduced` | an older hub's Emacs child's `hub-HASH.d/backend.sock` and another session's `s/S2/hub.sock` cannot be seen or connected to; `s/` lists only the session's own `S1` (full) or cannot be listed (reduced) |
 | `k2-work-db-absent`, `k2-reduced` | drgnx's data (`work.db`) can be neither read nor opened for writing |
 | `k5-user-sockets-absent`, `k5-reduced` | the Emacs server, the session bus and the ssh agent cannot be connected to; in the reduced tier the host's abstract socket neither (EPERM, Landlock's scope) |
 | `k6-isolated-refused` | the network namespace alone (Landlock's TCP rules capped away): the host's abstract socket, its loopback and its non-loopback listeners are unreachable |
@@ -1184,8 +1185,7 @@ real host; the proxy path itself is `mac-net-isolated`), and the `log show` look
 
 ## What this does not claim yet (Task 19)
 
-Nothing in drgnx runs an agent or a job under Gleipnir yet (phase 6 wires it), and nothing calls one "sandboxed".
-What the rows above hold is probe-level. These gaps are known, recorded by a row or a test where one can show them,
+The hub runs every agent session under Gleipnir, but what the rows above hold is probe-level. These gaps are known, recorded by a row or a test where one can show them,
 and each has a DEFERRED row:
 
 - **Reduced tier, `/proc`:** other processes' `cmdline` and `stat` are readable (accepted 2026-10-21;

@@ -1,6 +1,5 @@
 //! Clashes (Task 18; `docs/develop/coordination.md`, "Clashes"): the five rules (contradiction, proposed,
-//! against-decision, stale, overlap) as `clash::scan(run, decisions, diffs) -> Vec<Clash>`, each carded once; the
-//! Lisp `drgnx-job-clash.el` is the oracle.
+//! against-decision, stale, overlap) as `clash::scan(run, decisions, diffs) -> Vec<Clash>`, each carded once.
 //!
 //! Pure: no git, no store. The caller (the plan runner) builds [`RunState`] from its tables and [`DiffIndex`] from
 //! `HubGit::diff_hashes`, remembers each returned [`Clash::key`] in `RunState::carded`, and starts a reviewer for

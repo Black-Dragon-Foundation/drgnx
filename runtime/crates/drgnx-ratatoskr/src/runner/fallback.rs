@@ -1,5 +1,4 @@
-//! Plan runs: a provider at its limit and a budget reached (Task 16b; `drgnx-job--fall-back`,
-//! `drgnx-job--gateway-event`, `drgnx-job-resume` are the oracle).
+//! Plan runs: a provider at its limit and a budget reached (Task 16b).
 //!
 //! - **Fallback.**  A worker whose turn ended in an error that says its provider is at its limit (a 429, a rate limit,
 //!   overload, a quota) hands its task to the next profile of the task's role route, in the same tree, with a
@@ -27,7 +26,7 @@ use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// Does TEXT say a provider is at its limit (`drgnx-job--provider-limit`, case ignored)?
+/// Does TEXT say a provider is at its limit (case ignored)?
 pub(crate) fn provider_limit(text: &str) -> bool {
     let t = text.to_lowercase();
     if [

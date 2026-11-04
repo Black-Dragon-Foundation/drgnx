@@ -419,11 +419,10 @@ the perf workload `job-window` ([perf.md](../develop/perf.md)). Developer detail
   placed inside the worktree asks too. A command that names `.claude` or `.mcp.json` asks as well (the worktree's
   own absolute path, `…/.claude/worktrees/ID-N`, does not count); like the rest of the command check, this is best
   effort.
-- **What the cards do not hold.** Until job agents run in a sandbox, they run as your user. The command check above
-  is not a sandbox: a command an agent may run in its worktree can also reach drgnx's hub and answer a card itself,
-  start an MCP server's program directly, or write files the checks do not see. The cards keep an agent's tool
-  calls in front of you; they do not contain an agent that sets out to get past them. Give jobs only plans and
-  repositories you would let an agent work on unwatched.
+- **What the cards do not hold.** The command check above is not a sandbox. Every agent session runs inside the job
+  sandbox ([Agents](agents.md#the-job-sandbox)), which is what keeps it away from the hub's socket, your home and
+  other repositories; the cards keep an agent's tool calls in front of you, but they do not contain an agent that sets
+  out to get past them. Give jobs only plans and repositories you would let an agent work on unwatched.
 - **A provider's limit in the error's data.** Besides the message (and a dead agent's stderr), drgnx reads the
   JSON-RPC error's `data` — a string, or an object's `message`, `details` and `reason` — for a provider at its
   limit (an agent may answer `Internal error` with the provider's `429 Too Many Requests` in `data`).

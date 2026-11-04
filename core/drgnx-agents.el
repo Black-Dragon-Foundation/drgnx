@@ -149,7 +149,7 @@ PASSWORD, PASSPHRASE or CREDENTIAL), whatever this lists.  Only you can set it, 
 (defconst drgnx-agents-builtin-profiles
   (drgnx-settings-defaults-value 'drgnx-agents-builtin-profiles)
   "Profiles drgnx offers without setup; :ai names the provider environment the agent gets when it starts
-\(`drgnx-ai-agent-env'); :job-safe, that a job may run it (`drgnx-job-safe-p': Claude Code, whose job sessions
+\(`drgnx-ai-agent-env'); :job-safe, that a job may run it (Claude Code, whose job sessions
 ignore a repository's own settings).  Shipped in settings/runtime-defaults.el, which the hub reads too.")
 
 ;;;; The Claude Code adapter

@@ -3,7 +3,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; Agent sessions held by the hub (drgnx-hub.el) keep working when this Emacs closes; here they are mirrors: the
+;; Agent sessions held by the hub (Ratatoskr) keep working when this Emacs closes; here they are mirrors: the
 ;; same `drgnx-agent-session' struct, its `remote' slot the hub's id, filled from the hub's `agent' and
 ;; `agent-entries' events, so the Agents tab shows and drives them like local ones (actions on a mirror go to the
 ;; hub: `drgnx-agents--remote').  A new Emacs reattaches with `drgnx-agents-mirror-sync': the transcript is

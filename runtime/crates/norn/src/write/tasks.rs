@@ -1,5 +1,5 @@
-//! Tasks and leases (Task 6; entities since Urdr Task 12): `drgnx-coord-force-status`, `-claim`, `-heartbeat`,
-//! `-renew`, `-release-stale` and `-set-status` (`core/drgnx-coord.el`).  Every function takes the time as NOW (seconds
+//! Tasks and leases (Task 6; entities since Urdr Task 12): `force_status`, `claim`, `heartbeat`,
+//! `renew`, `release_stale` and `set_status`.  Every function takes the time as NOW (seconds
 //! since the epoch, as `float-time` gives) so a test can fix it.
 //!
 //! A job task is the entity `task:JOB#N` (call 5) with `data {job, n, role}`: its status is the entity's `status`, its

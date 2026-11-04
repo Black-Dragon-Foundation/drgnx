@@ -1,5 +1,4 @@
-//! The event writer (Task 4): `drgnx-coord--event` and `drgnx-coord-event-add[-best-effort]`, exactly
-//! (`core/drgnx-coord.el`).
+//! The event writer (Task 4): the one path every `event` row is written through.
 
 use crate::store::{CoordDb, CoordError, WTx};
 use runstav::text;

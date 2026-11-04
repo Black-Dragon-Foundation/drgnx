@@ -1,4 +1,4 @@
-//! Delivery, ported from `drgnx-hub--deliver` (free agents only, quoted peer headers, the decision-log notice once
+//! Delivery, as the old Lisp hub did it (free agents only, quoted peer headers, the decision-log notice once
 //! per version, the freshness gate on `edit|delete|move|execute`), and take-back: `messages/retract` succeeds only
 //! while the message is queued (Task 24).
 //!

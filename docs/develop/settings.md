@@ -648,11 +648,11 @@ after `drgnx-settings-live-start` get their watcher at the next sync.
   taken from `drgnx-agents-config-schema`. `drgnx-ai-providers` is `:workspace never`; `drgnx-ai-roles` is
   `:scope project`, `:workspace data` (a project may route roles among your providers); both are `:agents never` and
   `:runtime`, `:on-error last-good`. `drgnx-agents-allow-unsandboxed` is new (nothing reads it before the sandbox
-  tasks). The sandbox's `drgnx-sandbox-memory-max`, `drgnx-sandbox-secret-files` (`core/drgnx-sandbox.el`) and
-  `drgnx-sandbox-proxy-pinned-addresses` (`core/drgnx-sandbox-proxy.el`) are settings too: `:scope global`,
+  tasks). The sandbox's `drgnx-sandbox-memory-max`, `drgnx-sandbox-secret-files` and
+  `drgnx-sandbox-proxy-pinned-addresses` (`core/drgnx-settings-runtime.el`) are settings too: `:scope global`,
   `:workspace never`, `:agents never` (design §13).
 - **Callers read `default-value`.** `drgnx-agents-profile`, `-profile-names`, `-default-profile`, `-mcp-names`,
-  `drgnx-job--routes`, `drgnx-ai-providers` (the function), `drgnx-ai-role` and `drgnx-ai-user-role` read the global
+  `drgnx-ai-providers` (the function), `drgnx-ai-role` and `drgnx-ai-user-role` read the global
   value, so a buffer-local value (a `.dir-locals.el`, a `setq-local`) never reaches them. Tests bind the variable with
   `let`, which is the global value.
 - **Writers.** `drgnx-agents-set-setting KEY VALUE` (KEY `:profiles :default :mcp :routes :openrouter`) and

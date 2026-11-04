@@ -1,4 +1,4 @@
-;; A job's `data' after it ran: the proposal plus what the job keeps in it (drgnx-job.el, drgnx-job-clash.el).
+;; A job's `data' after it ran: the proposal plus what the job keeps in it (the hub's runner).
 (:plan "/work/repo/docs/plans/p.md" :sha "4f9a" :repo "/work/repo/" :title "Build the parser"
  :tasks ((:n 1 :title "The lexer" :role "implement" :deps nil :body "- [ ] Step 1")
          (:n 2 :title "The tests" :role "test" :deps (1) :body "- [ ] Step 1"))

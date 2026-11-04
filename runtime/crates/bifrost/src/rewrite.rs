@@ -1,5 +1,5 @@
 //! What reaches a provider: the body (an agent step's model, OpenRouter's restrictions), the upstream URL and the
-//! forwarded headers with the key, as the Lisp gateway's `drgnx-gateway--body` and `--forward` did.
+//! forwarded headers with the key, as the old Lisp gateway built them.
 //!
 //! The editor's route passes its body unchanged and never calls [`body`] (the user's answer 2).
 

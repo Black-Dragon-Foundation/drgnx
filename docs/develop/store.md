@@ -219,7 +219,7 @@ Entity vectors are made by the hub (`drgnx-ratatoskr/src/embed.rs`), through the
 - **Door 4.** An entity whose source, id or `data.path` the personal-notes deny-list denies (or whose source form is
   unknown) is never sent, whatever the scan's door let in. It stays stale and is looked at again each round.
 - **Schedule.** `embed::Timer`: a round starts when the graph writer has seen no write that put text (its `texts`
-  count) for a minute and none runs. Lease, status, event and `kv` writes do not count: the Lisp backend's
+  count) for a minute and none runs. Lease, status, event and `kv` writes do not count: the hub's
   housekeeping writes every 60 s and would otherwise keep every round away. After a stop the next round begins by sending one text; it goes on only when the provider answers.
 - **Spend.** `norn::write::spend::add_spend` takes the write's `Tx` and sets the row's `tx` (class `system`, tool
   `gateway`).
@@ -470,7 +470,7 @@ arguments.
   the repository's project); an outside agent is class `ext`, actor and session its `ext:KIND:PID-HASH` name, and
   the project of the cwd its bridge reported; no identity is class `ext` with nothing. It runs no git: the project
   comes from the `ProjectCache`, filled before (below). A folder the cache has not resolved and registered gives no
-  project. `Caller::user(backend)` is a proven user connection, `backend` marking the Lisp backend's. `tx_meta(tool)`
+  project. `Caller::user()` is a proven user connection. `tx_meta(tool)`
   makes the write's `TxMeta`; `may_write_into(project)` is the user anywhere, an agent only its own project.
 - **`scope::for_caller(conn, &caller, now)`**, computed from the rows on every call and never cached:
   - class `user` (and the hub's `system`): everything;
@@ -811,26 +811,23 @@ The list is fixed when the socket opens, and again when a session comes back aft
 
 ## The one-writer gate (Task 18)
 
-The hub is the one writer of `work.db` (schema 7). Lisp that stays reads it; nothing in Lisp but the standalone
-Lisp hub of the v0 conformance rows and the coordination unit tests of the `local` writer mode (`drgnx-coord-writer`)
-opens it read-write. The gate proves that.
+The hub is the one writer of `work.db` (schema 7). Lisp reads it; nothing in Lisp opens it read-write except the
+tests of the read layer that stand in for the hub (`drgnx-work-db-writer-deftest`). The gate proves that.
 
-- **Gate mode:** `DRGNX_WORK_DB_GATE=1`. The unit-test runner (`harness/run-ert.el`) and the Lisp backend
-  (`test/conformance/lisp-hub.sh`) load `test/support/work-db-gate.el`, which advises `sqlite-open` to signal
-  `drgnx-work-db-gate` when the file is named `work.db` and is not opened read-only. (`drgnx-work-db` already
-  signals `drgnx-work-db-not-the-writer` outside `local`; the gate also catches an `sqlite-open` that bypasses it.)
-- **The exemption is narrow.** A test of the `local` mode is defined with `drgnx-work-db-writer-deftest`: it carries
-  the ERT tag `:work-db-writer`, binds `drgnx-coord-writer` to `local`, and the runner leaves it out in gate mode (it
-  is listed as skipped). The backend half of `drgnx-hub`, `drgnx-job*` and `drgnx-coord*` in `front` mode are not
-  tagged: they run in gate mode, so a backend path that still opens `work.db` read-write fails the gate.
+- **Gate mode:** `DRGNX_WORK_DB_GATE=1`. The unit-test runner (`harness/run-ert.el`) loads
+  `test/support/work-db-gate.el`, which advises `sqlite-open` to signal `drgnx-work-db-gate` when the file is named
+  `work.db` and is not opened read-only. (`drgnx-work-db` already signals `drgnx-work-db-not-the-writer` outside the
+  hub's stand-in; the gate also catches an `sqlite-open` that bypasses it.)
+- **The exemption is narrow.** A test that writes `work.db` as the hub's stand-in is defined with
+  `drgnx-work-db-writer-deftest`: it carries the ERT tag `:work-db-writer`, binds `drgnx-work-db-gate-hub-standin`, and
+  the runner leaves it out in gate mode (it is listed as skipped). Every other test runs in gate mode, so an editor
+  path that still opens `work.db` read-write fails the gate.
 - **The lint** `drgnx-lint/work-db-writer-tags-only-in-local-mode` (`test/unit/lint-work-db-writers-test.el`) keeps
-  the tag to the test files of the Rust-bound Lisp (a fixed list in the lint), and requires the test to bind
-  `local`, so the tag cannot hide an editor writer or a backend reader. Phase 7 deletes the tagged tests and the list.
-- **CI:** the job `no-lisp-writes` (`.github/workflows/drgnx-tiers.yml`) runs the whole unit suite once in gate mode on Linux (`docs/develop/ci.md`). The
-  `lisp-backend` rows (`seam/*`, `coord/*` through the Lisp backend, `store/the-lisp-backend-starts-on-schema-7`) run
-  with the backend under `DRGNX_WORK_DB_GATE=1` before a push.
+  the tag to the test files of the read layer (a fixed list in the lint), so the tag cannot hide an editor writer.
+- **CI:** the job `no-lisp-writes` (`.github/workflows/drgnx-tiers.yml`) runs the whole unit suite once in gate mode
+  on Linux (`docs/develop/ci.md`).
 - **Readers' conformance:** `drgnx-work-db/every-reader-reads-schema-7` (`test/unit/work-db-readers-test.el`) loads
   `test/fixtures/work-db-7.sql` (a database the hub made: `test/fixtures/work-db-7-gen.el` migrates a small synthetic
   schema-6 database with `ratatoskr store migrate-check` and dumps it) and calls every reader of `drgnx-work-db.el`,
-  `drgnx-coord.el` and `drgnx-cockpit-model.el` through the compatibility views, with Nidhogg's linked SQLite (the
+  `drgnx-coord-read.el` and `drgnx-cockpit-model.el` through the compatibility views, with Nidhogg's linked SQLite (the
   oldest reader, 3.51.3 or later). When the container has a `sqlite3` binary, `sqlite3 -readonly` reads the views too.

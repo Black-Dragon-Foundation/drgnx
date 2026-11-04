@@ -1,6 +1,6 @@
-//! The report tools: hello, report_edit, report_test, ask_user, and list_agents (Task 7).  Each is the Lisp tool of
-//! the same name in `core/drgnx-coord-mcp.el`, ported exactly: the same rules, answers and error texts, except where
-//! the identity now comes from the socket (docs/develop/coordination.md, "The tools in Ratatoskr").
+//! The report tools: hello, report_edit, report_test, ask_user, and list_agents (Task 7).  Each is the tool of
+//! the same name of the old Lisp coordination server, ported exactly: the same rules, answers and error texts, except
+//! where the identity now comes from the socket (docs/develop/coordination.md, "The tools in Ratatoskr").
 //!
 //! The four reports count against the report limit ([`super::guard::REPORT_RATE`]).  Every write tells the hub
 //! (`Hub::notify`) after its commit.  Answers are JSON in the Lisp's key order (structs, not maps), so an agent reads

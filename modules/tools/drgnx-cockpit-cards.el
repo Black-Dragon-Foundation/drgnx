@@ -348,7 +348,7 @@ draw what changed."
   "The hub's answer R (or error E) about JOB (nil: every job).  A filter that changed meanwhile asked again."
   (when (and (equal job (drgnx-cockpit-cards-job)) (drgnx-cockpit-cards--buffers))
     (cond
-     ;; "No job ID": the hub's own error text for an unknown job (job/status in core/drgnx-hub.el); change both together
+     ;; "No job ID": the hub's own error text for an unknown job (job/status in the hub's runner); change both together
      ((and job (stringp e) (string-prefix-p "No job " e)) (drgnx-cockpit-cards--gone job))
      ((or e (not r)) (drgnx-cockpit-cards--no-hub (or e "no answer")))
      (t (if job (drgnx-cockpit-cards--draw job r)

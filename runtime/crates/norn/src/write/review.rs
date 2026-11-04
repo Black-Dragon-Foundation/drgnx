@@ -1,4 +1,4 @@
-//! The review-mark writer (Task 5): `drgnx-coord-review-mark` (`core/drgnx-coord.el`).
+//! The review-mark writer (Task 5).
 
 use super::event::{Event, event};
 use crate::store::{CoordError, WTx};

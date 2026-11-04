@@ -1,5 +1,5 @@
-//! Task 8's reading tools: inbox, ack, decisions, task and work status (`drgnx-coord-mcp--job-tools`,
-//! `core/drgnx-coord-mcp.el`; `work_status` is `drgnx-work--status-rows`, `core/drgnx-work.el`, run read-only).
+//! Task 8's reading tools: inbox, ack, decisions, task and work status (`work_status` is
+//! `drgnx-work--status-rows`, `core/drgnx-work.el`, run read-only).
 
 use mimir::BoxFuture;
 use schemars::JsonSchema;

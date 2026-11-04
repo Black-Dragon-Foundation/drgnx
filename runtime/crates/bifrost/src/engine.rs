@@ -1,5 +1,5 @@
-//! The forwarding engine (design §5.6; the plan's calls 11 and 15), as the Lisp gateway's `drgnx-gateway--handle`,
-//! `--try`, `--upstream-bytes` and `--spend` did.
+//! The forwarding engine (design §5.6; the plan's calls 11 and 15), which replaced the Lisp gateway's handling,
+//! trying of chain steps, upstream byte counting and spend recording.
 //!
 //! [`Gateway::handle`] takes one request from a listener (`listen`):
 //!
@@ -61,8 +61,7 @@ pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 /// An answer's body: a refusal, a gateway error, or a provider's stream.
 pub type ReplyBody = UnsyncBoxBody<Bytes, BoxError>;
 
-/// The statuses (besides 5xx) after which the next step is tried, while one remains (the Lisp's
-/// `drgnx-gateway--retry-statuses`).
+/// The statuses (besides 5xx) after which the next step is tried, while one remains.
 pub const FALLBACK_STATUSES: [u16; 5] = [401, 402, 408, 409, 429];
 
 /// How often, at most, [`GatewayEvent::NeedKeys`] names the same provider.

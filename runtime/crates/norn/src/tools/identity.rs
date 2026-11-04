@@ -2,8 +2,8 @@
 //!
 //! A session's `mcp.sock` is its identity (Task 10 builds [`Identity::Session`] from the session that socket was
 //! minted for); an outside bridge is `ext:KIND:PID-HASH`, computed by the hub from the bridge's peer process
-//! ([`Identity::outside`]).  `DRGNX_AGENT` is never read here.  The rules are `core/drgnx-coord-mcp.el`'s
-//! (`drgnx-coord-mcp--identity`, `--own`, `--not-outside`).
+//! ([`Identity::outside`]).  `DRGNX_AGENT` is never read here.  The rules are those of the old Lisp
+//! coordination server.
 
 use std::path::{Path, PathBuf};
 

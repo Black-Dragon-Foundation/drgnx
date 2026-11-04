@@ -2,7 +2,7 @@
 //! graph store (docs/develop/store.md).
 //!
 //! - [`store`]: one read-write connection on its own thread, opened only on a schema-6 file the Lisp side made.
-//! - [`write`]: the writers of `core/drgnx-coord.el`, ported with the Lisp as the oracle.
+//! - [`write`]: the coordination writers (ported from the old Lisp store, whose cases are kept as fixtures).
 //! - [`read`]: the readers the writers and the tools need.
 //! - [`tools`]: the coordination tools, served by `mimir`.
 //! - Schema 7 (the Urdr plan): [`kinds`], [`deny`], [`scope`], [`grants`], [`trust`], [`project`] (the policy),

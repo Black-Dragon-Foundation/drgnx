@@ -1,6 +1,6 @@
-//! Task 8's writing tools: messages, decisions, tasks (`drgnx-coord-mcp--job-tools`, `core/drgnx-coord-mcp.el`).
+//! Task 8's writing tools: messages, decisions, tasks.
 //!
-//! Each write is `drgnx-coord-mcp--write`: the store's answer as the tool's text (a held write says so first, with
+//! Each write is one transaction: the store's answer as the tool's text (a held write says so first, with
 //! the changes), the agent's held count noted in the same transaction, then the hub told.  Answers that are plists
 //! in the Lisp (`(:ok t …)`, `(:taken A)`, `(:error M)`) are JSON objects, keys in the Lisp's order; an empty list
 //! is `null`.

@@ -530,7 +530,7 @@ async fn open_store(
 
 /// work.db's schema every 2 s: read-only while it is newer than this hub's.  A read that fails keeps the last state.
 /// The writer looks at the file too (opened when it is there, again when it was replaced), and the `events`
-/// broadcaster sends what the Lisp backend wrote meanwhile (`drgnx-hub--events-check`'s 2 s).
+/// broadcaster sends what another process wrote meanwhile (its 2 s tick).
 async fn watch_schema(front: Arc<Front>) {
     let mut every = tokio::time::interval(SCHEMA_TICK);
     every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);

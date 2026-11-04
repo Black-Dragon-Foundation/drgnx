@@ -36,7 +36,7 @@ jobs:
   # the test binaries, built once for every Linux job that needs them (fetch-test-bins)
   bins-linux:
     name: Test binaries (Linux)
-    if: ${{ contains(format(' {0} ', inputs.tiers), ' unit ') || contains(format(' {0} ', inputs.tiers), ' no-lisp-writes ') || contains(format(' {0} ', inputs.tiers), ' ui ') }}
+    if: ${{ contains(format(' {0} ', inputs.tiers), ' unit ') || contains(format(' {0} ', inputs.tiers), ' no-lisp-writes ') || contains(format(' {0} ', inputs.tiers), ' ui ') || contains(format(' {0} ', inputs.tiers), ' perf ') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -100,8 +100,8 @@ jobs:
 
   # The one-writer gate (Urdr schema 7, storage §9 step 4): the whole unit suite once with DRGNX_WORK_DB_GATE=1, where
   # opening work.db read-write signals (test/support/work-db-gate.el) and only the tests tagged :work-db-writer (the
-  # `local' writer mode of Rust-bound Lisp, kept to that code by a lint) are left out. Same steps as unit; the evidence
-  # that no Lisp path but the standalone Lisp hub's still writes the tracker's database. docs/develop/ci.md
+  # hub's stand-in, kept to the read layer's tests by a lint) are left out. Same steps as unit; the evidence that no
+  # Lisp path writes the tracker's database. docs/develop/ci.md
   no-lisp-writes:
     name: No Lisp writes work.db (gate mode)
     needs: bins-linux
@@ -204,9 +204,12 @@ jobs:
           DRGNX_TEST_SELECTOR: ${{ inputs.selector }}
         run: bin/drgnx test --container --scenario
 
+  # Some scenarios start a hub and a mock agent (harness/drgnx-perf-run.el): Ratatoskr and `ratatoskr-mock` come from
+  # bins-linux like the unit and GUI tiers'. Whatever that job said: without them only those scenarios fail
   perf:
     name: Perf lab (headless mutter)
-    if: ${{ contains(format(' {0} ', inputs.tiers), ' perf ') }}
+    needs: bins-linux
+    if: ${{ !cancelled() && contains(format(' {0} ', inputs.tiers), ' perf ') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -219,7 +222,9 @@ jobs:
           ref: ${{ inputs.drgnx_ref }}
           path: drgnx
           persist-credentials: false
-      - uses: ./drgnx/.github/actions/test-image
+      - uses: ./drgnx/.github/actions/fetch-test-bins
+      - if: ${{ !cancelled() }}
+        uses: ./drgnx/.github/actions/test-image
         with:
           containerfile: Containerfile.gui
           image: drgnx-test-gui

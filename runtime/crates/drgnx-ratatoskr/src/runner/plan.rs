@@ -1,5 +1,4 @@
-//! Reading a plan file as a job (`drgnx-job-read-plan`, `drgnx-job--check`, `drgnx-job--needs`; the Lisp is the
-//! oracle): `# Title`, `**Repo:** path`, `### Task N: title` headings with `**Role:**` and `**Depends:** Task M`
+//! Reading a plan file as a job: `# Title`, `**Repo:** path`, `### Task N: title` headings with `**Role:**` and `**Depends:** Task M`
 //! lines in their bodies, `**Won't build:** subject` lines for the decision log.
 
 use std::path::{Path, PathBuf};

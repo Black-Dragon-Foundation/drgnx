@@ -76,6 +76,24 @@ function per crate. The type-check (`rustup target add aarch64-linux-android` fi
 does not link, so without the NDK stub the C compiler and archiver: `CC_aarch64_linux_android=/usr/bin/true
 AR_aarch64_linux_android=/usr/bin/true` (the Rust is still checked in full; only the C object files are fake).
 
+## The hub since phase 7
+
+There is no Lisp runtime. Ratatoskr is the whole server side, and the editor is its client ([hub.md](hub.md)):
+
+- **One process, one writer.** The hub serves every method of the registry itself; no backend process sits behind it
+  and nothing is forwarded. It is `work.db`'s only writer ([coordination.md](coordination.md#who-writes-what)), the
+  owner of every agent session and the gateway.
+- **The login shell's environment** reaches it as `env/set` (`shell_env.rs`): an overlay in the hub's memory that every
+  process it starts next takes.
+- **The editor's background jobs** (grammars, mermaid, the browser, local AI servers, onboarding installs) are the hub's
+  `exec/*` jobs (`core/drgnx-exec.el` is the client); a server that stays up for days starts with `no_timebox`
+  ([hub.md](hub.md#jobs-exec)).
+- **At start** the hub reaps the process groups `runtime.db` recorded and moves what the Lisp runtime left in the state
+  directory aside, once (`legacy::migrate`, [hub.md](hub.md#what-the-lisp-runtime-left)).
+- **The doctor** has a `lisp-runtime` check (a Lisp hub still running, an outside agent's config that still starts the
+  Lisp coordination server, old jobs still running, what waits in `hub/migrated-p7/`; [install.md](../guide/install.md))
+  and reads the job sandbox's state from `ratatoskr doctor --json`.
+
 ## runstav: the contract
 
 `crates/runstav` holds what the hub protocol is on the Rust side; the server, the client half and the tests share it.
@@ -360,7 +378,7 @@ stdin's end, and a line over the limit.
 
 `crates/bifrost` is the gateway's library: what an agent's or the editor's request must show to be forwarded, and
 what reaches the provider. It names no drgnx path: provider ids, URLs, listener ids and the token registry come from
-the caller. The port keeps what the Lisp gateway (`core/drgnx-gateway.el`) did, with the changes listed in the
+the caller. The port keeps what the old Lisp gateway did, with the changes listed in the
 Ratatoskr phase-3 plan (chunked request bodies, keep-alive, a drained refusal, a header-read timeout).
 
 **The caller's types** (crate root):
@@ -562,7 +580,7 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
   tunnelled, anything else gets 405 (`{"refused": "METHOD TARGET"}`).
 
 **Variables** in strings: `$MOCK $ROOT $HOME $RUN $STATE $DATA $CONFIG $SOCKET $SOCKET_DIR $BACKEND_SOCKET $CAP $LOCK $PID(hub)
-$HARNESS_PID` (of the step's `hub`, else the latest started; `$BACKEND_SOCKET` is where an older hub's Lisp backend
+$HARNESS_PID` (of the step's `hub`, else the latest started; `$BACKEND_SOCKET` is where an older hub's Emacs child
 kept its socket, for a row that plants its leftovers), `$SCENARIOS` (the scenarios' directory, absolute: its
 `fixtures/`), and `$NAME` for a capture. A string that is just `$PID(hub)`,
 `$HARNESS_PID` or a capture keeps its JSON type (a number stays a number). Agent sockets are
@@ -656,10 +674,10 @@ Rows with `"requires": ["v1"]` (all of them) run against Ratatoskr:
 | `coord/` | the front's writes (`sqlite` makes a schema-6 work.db from `fixtures/work-db-6.sql`): `cards-settle-once`, `messages-send-held-by-version`, `events-add-is-broadcast-once`, `review-mark-and-its-event-commit-together` (a trigger refuses the second event: neither is written), `a-write-before-work-db-is-ready-says-so`, `a-newer-work-db-refuses-coord-writes` (a `sender` on `messages/send`: `messages/a-sender-is-refused`) |
 | `graph/` ([store.md](store.md#parsed-entities-task-15a)) | `put-parsed-round-trip` (read back through the `node`, `file` and `link` rows; the same scan again writes nothing; a derived status; `gone`), `put-parsed-refuses-a-denied-source` (a personal-notes fixture under the row's HOME as a `file` source, a `spec` source and a plan's link end: refused whole, no row holds its canary or path), `record-twice-is-one` (keyed by the collected key) |
 | `settings/` ([hub.md](hub.md#settings)) | `the-hub-reads-settings-el` (a profile and a provider of the user's join the built-in ones: `status.settings`), `no-editor-still-has-presets-and-profiles` (16 and 7 with no file), `a-package-entry-never-stops-the-hub` (entries of any shape the hub does not know: no problem), `a-broken-file-gives-strict-agents-and-last-good-providers` (the file breaks; the next `mcp/session` reads it again: a `notice`, the profile gone, the provider kept from `kv`, and the same after a restart) |
-| `lifecycle/` (Task 16) | `ensure-starts-once` (two `ensure`s at once with no supervisor: one hub), `stop-ends-it`, `kill-9-then-ensure-restarts`, `stop-ends-a-non-dumpable-hub` (`test-hooks`: `--test-ignore-shutdown`, so `stop` reaches its SIGTERM through the listener's pidfd; `drop_ptrace`), `stop-never-signals-a-forged-argv0` (`test-hooks`, `linux`: the lock's text rewritten to name a `sleep` started as `exec -a ratatoskr`, with its true start time; `stop` exits 1 and both live), `stop-with-a-stale-lock-signals-nothing` (a lock file naming a live `sleep` that nobody holds: not running, no signal), `stop-ends-a-lisp-hub` (`lisp-backend`) |
+| `lifecycle/` (Task 16) | `ensure-starts-once` (two `ensure`s at once with no supervisor: one hub), `stop-ends-it`, `kill-9-then-ensure-restarts`, `stop-ends-a-non-dumpable-hub` (`test-hooks`: `--test-ignore-shutdown`, so `stop` reaches its SIGTERM through the listener's pidfd; `drop_ptrace`), `stop-never-signals-a-forged-argv0` (`test-hooks`, `linux`: the lock's text rewritten to name a `sleep` started as `exec -a ratatoskr`, with its true start time; `stop` exits 1 and both live), `stop-with-a-stale-lock-signals-nothing` (a lock file naming a live `sleep` that nobody holds: not running, no signal) |
 | `restart/` | `the-restart-method-exits-75`, `a-self-detached-hub-re-execs`; with `test-hooks` (`--idle-tick-ms 200`; a running turn of a mock agent is what keeps the hub): `a-changed-binary-sends-the-notice`, `a-busy-session-delays-it`, `a-missing-or-broken-new-binary-never-restarts` |
-| `reaper/` | `a-recorded-orphan-is-killed-at-start` (`linux`: the row plants a `runtime.db` record for a live process of its own group, as an older hub's Lisp backend left one; the next hub kills it within 4 s and logs it), `a-row-without-a-pid-is-dropped-and-kills-nothing` (NULL rows in `runtime.db`: removed, nothing signalled) |
-| `mcp/` | the coordination tools on session sockets and outside bridges ([hub.md](hub.md#sessions-and-their-sockets)): `the-session-directory-is-private`, `a-gone-owners-sessions-are-closed` (a `spawn`ed owner killed), `a-closed-session-is-gone`, `an-unknown-tool-is-32602`, `a-fifth-connection-is-closed`; with `fake-backend` (a schema-6 work.db): `a-session-socket-is-its-identity` (an `agent` argument changes nothing), `an-outside-bridge-is-ext-and-unverified`, `sessions-come-back-after-a-restart`, `bad-argument-is-a-tool-error-with-its-path`, `modern-and-legacy-handshakes`, `tool-writes-are-broadcast-as-events`, `drgnx-agent-in-the-environment-is-ignored`; with `test-hooks`: `attach-needs-service-or-gets-not-allowed` |
+| `reaper/` | `a-recorded-orphan-is-killed-at-start` (`linux`: the row plants a `runtime.db` record for a live process of its own group, as an older hub's Emacs child left one; the next hub kills it within 4 s and logs it), `a-row-without-a-pid-is-dropped-and-kills-nothing` (NULL rows in `runtime.db`: removed, nothing signalled) |
+| `mcp/` | the coordination tools on session sockets and outside bridges ([hub.md](hub.md#sessions-and-their-sockets)): `the-session-directory-is-private`, `a-gone-owners-sessions-are-closed` (a `spawn`ed owner killed), `a-closed-session-is-gone`, `an-unknown-tool-is-32602`, `a-fifth-connection-is-closed`, `a-session-socket-is-its-identity` (an `agent` argument changes nothing), `an-outside-bridge-is-ext-and-unverified`, `sessions-come-back-after-a-restart`, `bad-argument-is-a-tool-error-with-its-path`, `modern-and-legacy-handshakes`, `tool-writes-are-broadcast-as-events`, `drgnx-agent-in-the-environment-is-ignored`; with `test-hooks`: `attach-needs-service-or-gets-not-allowed` |
 | `bridge/` | `ratatoskr mcp-bridge` ([hub.md](hub.md#the-mcp-bridge)), a copy of the hub under test (`install_bin`) run by `spawn_conn`: `outside-refuses-an-untrusted-directory` (the socket's directory at 0755: exit 1, the reason on stderr); more: `survives-a-hub-restart` and `survives-a-hub-restart-modern` (the gate rows: a TERM, a start on the same root, the next call works; both eras), `an-in-flight-call-is-an-error-never-a-retry` (a call to a STOPped hub, then KILL: the went-away tool error, one event after the restart), `a-call-while-away-waits-then-errors`, `tools-list-from-the-cache-while-away`, `drgnx-agent-in-the-environment-is-ignored`, `outside-is-service-class-and-ext`, `stdin-eof-ends-it`; with `test-hooks` (`--bridge-backoff-ms`, `--bridge-give-up-ms`): `gives-up` |
 
 All rows run with one command:
@@ -759,7 +777,7 @@ mock's answers are `fixtures/llm-*.json` or a `write_file` in the row. All rows 
   `the-session-socket-serves-its-token` (`http` over `unix:`), `a-head-over-64-kib-is-431` (the 70,000-byte header comes
   from a `write_file` with `$repeat` and a `capture_file`), `a-body-over-32-mib-is-413`,
   `count-tokens-and-models-paths-pass`.
-- **Keys:** `keys-are-never-on-disk-or-in-the-backend` (`file_grep` over the hub's roots, the mock's log kept apart),
+- **Keys:** `keys-are-never-on-disk` (`file_grep` over the hub's roots, the mock's log kept apart),
   `the-agent-never-sees-the-key`, `need-keys-after-a-restart`.
 - **The editor's token:** `editor-chat-through-the-gateway` (the body byte for byte, the hub's key upstream),
   `editor-fim-through-the-gateway`, `editor-embed-through-the-gateway`, `editor-stream-through-the-gateway`,

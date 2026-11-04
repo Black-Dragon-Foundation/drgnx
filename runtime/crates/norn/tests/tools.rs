@@ -1,7 +1,7 @@
 //! The coordination tools (Tasks 7 and 8): who an agent is, the guard, the report limit, the report tools' rules, and
-//! the Lisp oracle's tool cases replayed.  `test/fixtures/coord-parity/tools-*.input.json` is run against the Rust
-//! tools with the case's clock and identities; each answer and the tables must equal `CASE.expect.json`, which
-//! `gen.el` made by running the Lisp tools of `core/drgnx-coord-mcp.el`.
+//! the old Lisp tools' cases replayed.  `test/fixtures/coord-parity/tools-*.input.json` is run against the Rust
+//! tools with the case's clock and identities; each answer and the tables must equal `CASE.expect.json`, which the
+//! old Lisp tools produced and which is now frozen.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

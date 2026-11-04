@@ -1,4 +1,4 @@
-//! Jobs (`core/drgnx-job.el`): every change answers the job as `drgnx-job-summary` has it.
+//! Jobs: every change answers the job summary the cockpit and `drgnx job` read.
 
 use super::agents::ById;
 use super::method;

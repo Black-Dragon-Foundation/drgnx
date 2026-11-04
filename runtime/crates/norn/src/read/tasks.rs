@@ -1,5 +1,4 @@
-//! The tasks readers (Task 6): `drgnx-coord-tasks`, `drgnx-coord-task` and the private row helpers of
-//! `core/drgnx-coord.el`.
+//! The tasks readers (Task 6): the list of tasks, one task and the private row helpers.
 
 use crate::store::{CoordError, Tx};
 

@@ -6,7 +6,7 @@
 //!   `coord/agent seen` answer `{}` instead); a writer's refusal `invalid-params` with its text.
 //! - **`events`:** every committed write wakes [`broadcast_events`], which reads the new `event` rows on the reader's
 //!   thread and sends `events` `{since, last, events}` to the subscribers: at most 200 rows a batch, every 0.25 s at
-//!   most (the Lisp hub's `drgnx-hub--events-check`).  The 2 s schema tick wakes it too.
+//!   most.  The 2 s schema tick wakes it too.
 //! - **The tools' hub** ([`ToolHub`]): `sessions()` is the front's session table, read at once; `notify()` wakes the
 //!   broadcast, the records' views and the delivery.
 //! - **One writer:** the hub. A `tx` row's actor comes from the connection ([`tx_meta`]); no param names a writer, and

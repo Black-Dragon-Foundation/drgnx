@@ -158,7 +158,7 @@ again when it is down; the search indexer, a batch job, asks for the hub's longe
 
 The agents of a [job](jobs.md) run in a sandbox: bubblewrap (`bwrap`) on Linux, `sandbox-exec` on macOS. Inside,
 they see the system, your toolchains read-only, their task's folder and a private home, and nothing else of yours
-(how it works: [the job sandbox](../develop/sandbox.md)). `drgnx doctor` says whether it works here, in the Agents
+(how it works: [Gleipnir](../develop/gleipnir.md)). `drgnx doctor` says whether it works here, in the Agents
 group:
 
 ```
@@ -726,31 +726,21 @@ condition clears. A silent session also gets a `stalled` step on the timeline.
 
 ## Tests
 
-- `test/unit/coord-test.el`, `coord-mcp-test.el`, `hub-agents-test.el`, `agents-mirror-test.el`, `coord-delivery-test.el`
-  — coordination: the store, the tools, durable sessions, mirrors, delivery ([coordination.md](../develop/coordination.md)).
-- `test/unit/gateway-test.el`, `test/unit/hub-test.el`, `test/unit/http-test.el`, `test/unit/agents-gateway-test.el`
-  — the gateway against mock providers (streaming, tokens, keys, spend, budget, fallback, a hang-up, a 1 MB body),
-  the hub (socket, events, restart, one hub, outliving its starter, the CLI), agents' environments.
+- The agent runtime is Rust: its sessions, queueing, steering, permissions, the gateway, the store, coordination and
+  delivery are tested by the Rust tests and the conformance rows against a real hub
+  ([coordination.md](../develop/coordination.md), [hub.md](../develop/hub.md), [runtime.md](../develop/runtime.md)).
+- `test/unit/hub-client-test.el` — the editor's client of the hub: the connection, its proof, the subscription, the
+  restart notice, the traffic the cockpit and the CLI send.
+- `test/unit/agents-mirror-test.el`, `agents-mirror-permission-test.el` — the editor's mirror of the hub's sessions.
 - `test/unit/agents-profiles-test.el` — the Kimi and DeepSeek profiles ([above](#kimi-and-deepseek)).
-- `test/unit/acp-test.el` — the transport against a mock agent: requests, notifications, the agent's own requests,
-  split / malformed / 1 MB lines, the agent exiting with its error output.
-- `test/unit/agents-test.el` — sessions: a turn's transcript, queueing during a turn (delivered in order, never
-  cancelling), steering (and its fallback), Stop within a second, permissions, tool calls, plans and subagents, a
-  dying agent, `/compact`; what waits on you as the `agents` set of the "needs you" count (a mirror's
-  too, scoped by job, gone once answered or ended, and no allocation for a session that did not change).
-- `test/unit/agents-claude-options-test.el` — a job session's Claude cannot be pre-allowed
-  ([above](#jobs-and-your-claude-settings)).
 - `test/unit/agents-adapter-test.el` — which adapter runs, from fake npm prefixes with `package.json` files only (no
   npm, no agent): the maintained package wins wherever it is on the `PATH`, the deprecated one still runs and says so
   once with its fix, an old version, a copy instead of a link, a program of no known package, other commands left
-  alone, sessions and jobs starting the chosen program, and the doctor's fact.
-- `test/unit/jobs-test.el`, `test/unit/agents-ui-test.el` (the transcript, the list, hunk-by-hunk review; the
-  transcript's view: a thousand chunks grow one row, a grow costs the same on a 4 kB and a 400 kB answer, a hidden
-  transcript draws nothing, a tool's status or a permission draws one row, the tail is followed and a reader scrolled up
-  stays put), `test/ui/view-ui-test.el` (typing beside a streaming transcript: no jank),
-  `test/unit/plans-sync-test.el`, `test/live/drgnx-agents-test.el` (queue, Stop and the dock in a GUI session).
-- `test/unit/agents-parity-test.el` — slash commands, context %, `/compact` lowering it: against the mock, or against
-  a real profile with `DRGNX_AGENT_PROFILE=NAME` (uses your subscription or key, and the network).
+  alone, and the doctor's fact.
+- `test/unit/agents-ui-test.el` (the transcript, the list, hunk-by-hunk review; the transcript's view: a thousand
+  chunks grow one row, a grow costs the same on a 4 kB and a 400 kB answer, a hidden transcript draws nothing, a tool's
+  status or a permission draws one row, the tail is followed and a reader scrolled up stays put),
+  `test/ui/view-ui-test.el` (typing beside a streaming transcript), `test/unit/plans-sync-test.el`.
 
 The mock agent (`test/fixtures/mock-acp.el`) is a batch Emacs whose turns are chosen by words in the prompt
 (`slow`, `stream N`, `tool`, `plan`, `subagent`, `permission`, `write PATH`, `crash`, `/compact`, `meta`: the `_meta`
