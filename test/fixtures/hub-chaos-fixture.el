@@ -6,7 +6,9 @@
 ;; theirs, as with a hub whose threads answer them in any order and a network that delivers them so.  The client's own
 ;; handling of what arrives is untouched.  CPU limits (P2) slow every connection alike, so an order such as "the
 ;; subscribe connection is answered after the test body started" needs this.  Connections opened on the virtual clock
-;; (`drgnx-test-with-clock') are left alone: there the test orders time itself.  Without the variable nothing changes.
+;; (`drgnx-test-with-clock') are left alone: there the test orders time itself.  So are those opened inside
+;; `drgnx-test-gated' (delivery-gate-fixture.el): there the test's schedule orders delivery.  Without the variable
+;; nothing changes.
 ;; Loaded by wait-fixture.el.
 (require 'cl-lib)
 
@@ -39,12 +41,14 @@ that output (D seconds from now is after the last of it)."
       (apply orig proc args))))
 
 (defvar drgnx-test--active)
+(defvar drgnx-test-gate--active)
 
 (defun drgnx-test-hub-chaos--open (conn)
   "After `drgnx-hub--open': CONN's output and end reach the client after its delay.  Not inside
 `drgnx-test-with-clock': its timers run on the virtual clock, so a delay there would be virtual time the test advances
-by hand, not a delivery order."
-  (when (and (processp conn) (not (bound-and-true-p drgnx-test--active)))
+by hand, not a delivery order.  Not inside `drgnx-test-gated' (delivery-gate-fixture.el) either: there the test's
+schedule chooses the order."
+  (when (and (processp conn) (not (bound-and-true-p drgnx-test--active)) (not (bound-and-true-p drgnx-test-gate--active)))
     (let ((d (drgnx-test-hub-chaos-draw drgnx-test-hub-chaos--seed drgnx-test-hub-chaos--count)))
       (setq drgnx-test-hub-chaos--count (1+ drgnx-test-hub-chaos--count))
       (when (> d 0)

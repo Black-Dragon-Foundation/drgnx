@@ -1117,7 +1117,8 @@ beside `;; test-class: cond`. P is one or more of `orders`, `gated` and `handsha
 test-pattern: handshake gated`); the line is exact, like the class line. A pure test is class `det`, not a pattern.
 
 - **orders**: the test explores every order of a pure core (`drgnx-test-every-order`, [Every order](#every-order)).
-- **gated**: the test runs the real hub through the delivery gate (`drgnx-test-gated`).
+- **gated**: the test runs the real hub through the delivery gate (`drgnx-test-gated`,
+  [The delivery gate](#the-delivery-gate)).
 - **handshake**: the test drives a real child that announces its state and parks (`drgnx-test-child-*`,
   [Announce and park](#announce-and-park)). The GUI, terminal and live tiers use it too: the compositor's numbered
   presented and shown states and the terminal's visible states are the announcements. A file that cannot meet that
@@ -1194,6 +1195,67 @@ The helper has no process and no clock, so a test of a core is `det`. `test/unit
 against skuld's known answers (12,870 for 2×8, 1,680 for 3×3, 1 with the edge that puts one chain first, 63,063,000
 for 4×4, binomials, the cap) and brute force over every interleaving for what an exhaustive or delay-bounded run visits
 (55 for 2×9 under two delays; three sources; edges), each once.
+
+#### The delivery gate
+
+A test of the hub client against the real hub cannot choose when the hub's lines arrive, or in which order two
+connections' lines do: the delivery gate (`test/fixtures/delivery-gate-fixture.el`) makes that the test's choice. It is
+the client half of the `gated` pattern; the hub half is Ratatoskr's test clock and sequencer ([hub.md](hub.md#test-hooks)).
+
+```elisp
+(drgnx-test-with-ratatoskr root :gated t          ; the hub with its test clock and sequencer; not connected
+  (drgnx-test-gated '((sub-1 :answer "subscribe")
+                      (:pause "stop")
+                      (sub-1 :eof)
+                      (call-1 :answer "gateway/editor-token"))
+    (drgnx-hub-connect)
+    (drgnx-test-wait (lambda () drgnx-hub--events))          ; the waits release the schedule
+    ...                                                       ; stop the hub while the token answer is held
+    (drgnx-test-gate-continue "stop")
+    (drgnx-test-deliver-all)                                  ; only now does the test assert
+    (should-not drgnx-hub--editor)))
+```
+
+- **Connections.** Each connection `drgnx-hub--open` makes inside the body is gated and named in open order: `sub-N`
+  for a subscription, `call-N` for the others. `(drgnx-test-gate-conn NAME)` is its process.
+- **Lines, not chunks.** What Emacs reads is split into whole lines and held per connection; each line reaches the
+  client's own filter in a call of its own. A connection's end (its sentinel) is held after its lines, and while it is
+  held the connection reads as open (`process-status`), so no close is seen before the data. The client's own
+  `delete-process` runs the client's sentinel at once and drops what was held; `set-process-sentinel` and
+  `process-sentinel` on a gated connection reach the client's sentinel behind the gate's.
+- **The schedule** is given up front: `(CONN :answer METHOD)`, `(CONN :event NAME)`, `(CONN :line)`, `(CONN :eof)`
+  and `(:pause LABEL)`. A step releases its connection's lines up to its own, in order: the gate reorders lines across
+  connections, never within one. A connection's challenge and the answers to its first `ping` and its `hello` are
+  released by themselves, at the first wait after they fall due, in the order the client caused them.
+- **Release inside every wait.** Every `accept-process-output` inside the body, also deep inside the code under test
+  (`drgnx-hub-call-sync`, `drgnx-onboard--until`), and every poll of `drgnx-test-wait`, releases what is due up to the
+  next pause. A step is due once its connection is open, and an answer once its call has gone out; the gate then waits,
+  for real (failing after 30 s), for its line. A timed wait with nothing to release is a zero-length look and a virtual
+  advance by its timeout, so the run does not depend on how fast the hub was. Lines no step names stay held until
+  `drgnx-test-deliver-all`.
+- **A pause holds everything,** handshake lines included, until `(drgnx-test-gate-continue LABEL)`. A wait in the code
+  under test while paused, with a line held or a call out, fails the test at once, naming the pause, the next step and
+  the waiting function: it would only end at a deadline. The test's own `drgnx-test-wait` just looks, so the test can
+  wait there for what it set up (`(drgnx-test-gate-held NAME)`: the held lines, then `:eof`).
+- **Stamps.** Each line the client writes on a gated connection gets `"__seq": N`, counted across connections in the
+  order written, and the hub serves them in that order. The gate waits for each new connection's challenge as it
+  opens, so the hub knows a connection before any later line is stamped.
+- **`(drgnx-test-deliver-all)`** sends `__test_barrier` on the gate's own connection and waits for the marker it
+  writes on each open connection, so everything the hub wrote by then is held; then it releases the remaining steps
+  (pauses skipped) and every held line in connection open order, and repeats while the client sent more. It returns
+  the marker, or nil once no hub answers (a test that stopped the hub). A barrier answer with `unnamed` > 0 (the hub
+  wrote from a task without an origin) or a step that cannot be met fails the test. Assertions come after it (the
+  lint `drgnx-lint/gated-asserts-follow-deliver-all`). `(drgnx-test-hub-advance MS)` moves the hub's clock
+  (`__test_advance`), then delivers all.
+- **Time.** The body runs on the manual clock (entered, pending timers allowed, when none is active): client timers
+  fire only when the test advances virtual time, never because real time passed while the gate waited.
+- `(drgnx-test-gate-transcript)` lists the deliveries so far, `(NAME . LINE)` or `(NAME . :eof)`, and
+  `drgnx-test-gate--releasing` names the connection while the gate hands a line over. Hub chaos (`DRGNX_TEST_HUB_CHAOS`)
+  leaves gated connections alone.
+
+`test/unit/delivery-gate-test.el` checks the gate against the real hub, among others that a connection's answer can be
+held past another connection's end (the forget-on-disconnect order) and that one schedule gives one transcript in
+twenty runs.
 
 ## Frozen tests
 
