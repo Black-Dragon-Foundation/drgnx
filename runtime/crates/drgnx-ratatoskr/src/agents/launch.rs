@@ -51,7 +51,14 @@ pub fn spawn(env: &Env, plan: &LaunchPlan, req: &SandboxReq) -> Result<Launch, R
         ));
     }
     let (plan, shape) = worktree_launch(plan, req);
-    launch(env, &plan, &shape)
+    launch(env, &plan, &shape).map(with_stdin)
+}
+
+/// An agent session's launch: the hub speaks ACP on the agent's stdin and stdout, so its stdin is a pipe, not the
+/// `/dev/null` a job gets (`sandbox::to_draugr`).
+pub fn with_stdin(mut launch: Launch) -> Launch {
+    launch.spec.stdin_null = false;
+    launch
 }
 
 /// The plan and shape of a worker's or manager's launch: its worktree writable, and the hooks and config of the git
@@ -82,7 +89,7 @@ pub fn spawn_plain(env: &Env, plan: &LaunchPlan, sid: &str) -> Result<Launch, Re
         read: vec![],
         net: NetCell::ProviderOnly,
     };
-    launch(env, plan, &shape)
+    launch(env, plan, &shape).map(with_stdin)
 }
 
 /// A chat in a project (design §4.2: project-scoped, read access per the matrix): [`chat_launch`]'s shape.
@@ -93,7 +100,7 @@ pub fn spawn_chat(
     project: &Path,
 ) -> Result<Launch, Refusal> {
     let (plan, shape) = chat_launch(env, plan, sid, project)?;
-    launch(env, &plan, &shape)
+    launch(env, &plan, &shape).map(with_stdin)
 }
 
 /// The plan and shape of a chat in PROJECT: the project (as its true name: the editor's `default-directory` ends in a

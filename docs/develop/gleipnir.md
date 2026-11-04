@@ -76,7 +76,9 @@ this returns.
     `env_deny`: `DRGNX_DATA_DIR DRGNX_CONFIG_DIR DRGNX_AGENT DRGNX_HUB_SERVE_SOCKET DRGNX_HUB_PARENT_PID
     DRGNX_HUB_SERVE_SECRET`.
 - `helper()` is this binary (its path resolved at start) with `sandbox-inner` and `relay`.
-- `to_draugr(invocation)` is the `draugr::Spec` (stdin `/dev/null`, the fds as `PassFd`s, `new_session`).
+- `to_draugr(invocation)` is the `draugr::Spec` (stdin `/dev/null`, the fds as `PassFd`s, `new_session`). An agent
+  session's launch (`launch::spawn`, `spawn_plain`, `spawn_chat`) gives the program a stdin pipe instead
+  (`launch::with_stdin`): the hub speaks ACP on its stdin and stdout. A job's stdin stays `/dev/null`.
 - Agent sessions (`agents/launch.rs`, `sandbox::session_spec`; Task 10): `launch::spawn(plan, req)` for a worker or
   manager, `launch::spawn_plain(plan, sid)` for a chat with no project and `launch::spawn_chat(plan, sid, project)`
   for a chat in a project (`launch::kind(role, cwd, scratch)` picks: the cwd is the scratch dir → plain; else a chat →

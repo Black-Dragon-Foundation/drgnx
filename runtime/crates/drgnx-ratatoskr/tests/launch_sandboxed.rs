@@ -5,12 +5,15 @@
 //! job, the desktop), never a container's, which has neither.  Fixtures live under /tmp/glp-XXXXXX; HOME points there.
 #![cfg(target_os = "linux")]
 
-use drgnx_ratatoskr::agents::launch::{NetCell, chat_launch, launch_on, scratch_dir};
+use drgnx_ratatoskr::agents::launch::{
+    NetCell, chat_launch, launch_on, scratch_dir, with_stdin,
+};
 use drgnx_ratatoskr::agents::lock::{Enforced, LaunchPlan};
 use drgnx_ratatoskr::sandbox::{SessionShape, helper_at};
 use gleipnir::{Sandbox, Tier};
 use runstav::paths::{self, Env};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 const RATATOSKR: &str = env!("CARGO_BIN_EXE_ratatoskr");
 
@@ -169,6 +172,42 @@ fn a_new_sessions_launch_makes_its_dir_and_a_refused_one_leaves_none() {
         "{} was left",
         gone.display()
     );
+}
+
+/// The hub speaks ACP on an agent session's stdin and stdout: what it writes reaches the program inside the sandbox
+/// (`launch::with_stdin`; a job's stdin stays `/dev/null`).
+#[test]
+#[ignore = "needs the real sandbox (bwrap with user namespaces): the sandbox lane"]
+fn an_agent_sessions_stdin_reaches_the_program_inside() {
+    use tokio::io::AsyncWriteExt;
+    let fx = Fx::new();
+    let env = fx.env();
+    let plan = fx.plan("read -r l || exit 11; [ \"$l\" = ping ] || exit 12; exit 0");
+    let launch = launch_on(
+        &env,
+        &sandbox(reduced()),
+        &plan,
+        &fx.shape(NetCell::ProviderOnly),
+    )
+    .unwrap_or_else(|r| panic!("refused: {r}"));
+    let launch = with_stdin(launch);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let code = rt.block_on(async {
+        let mut child = draugr::spawn_pinned(launch.spec).await.expect("spawn");
+        let mut stdin = child.take_stdin().expect("a pipe on the agent's stdin");
+        if let Some(fd) = launch.status {
+            gleipnir::read_status(fd, &|| child.stderr_tail(), Duration::from_secs(20))
+                .unwrap_or_else(|r| panic!("the sandbox did not start: {r}"));
+        }
+        stdin.write_all(b"ping\n").await.expect("write");
+        drop(stdin);
+        let status = child.wait().await.expect("wait").expect("status");
+        status.code().unwrap_or(-1)
+    });
+    assert_eq!(code, 0, "the program did not read the hub's line");
 }
 
 #[test]
