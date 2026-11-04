@@ -1246,7 +1246,11 @@ the client half of the `gated` pattern; the hub half is Ratatoskr's test clock a
   the marker, or nil once no hub answers (a test that stopped the hub). A barrier answer with `unnamed` > 0 (the hub
   wrote from a task without an origin) or a step that cannot be met fails the test. Assertions come after it (the
   lint `drgnx-lint/gated-asserts-follow-deliver-all`). `(drgnx-test-hub-advance MS)` moves the hub's clock
-  (`__test_advance`), then delivers all.
+  (`__test_advance`), then delivers all. A test of a real agent child (the agents mirror's) binds
+  `drgnx-test-gate-unnamed-ok` to t: the child's turns are tasks the hub cannot name, their writes are held and
+  released at the barrier like the rest, and the test waits for what the agent did as a condition (a look is a
+  `drgnx-test-deliver-all` or `drgnx-test-hub-advance`), never a deadline. Every step must be met by the time a
+  delivery runs, so such a test asks the hub with `drgnx-hub-call` and waits for the answer, not with `-sync`.
 - **Time.** The body runs on the manual clock (entered, pending timers allowed, when none is active): client timers
   fire only when the test advances virtual time, never because real time passed while the gate waited.
 - `(drgnx-test-gate-transcript)` lists the deliveries so far, `(NAME . LINE)` or `(NAME . :eof)`, and

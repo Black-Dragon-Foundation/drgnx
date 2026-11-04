@@ -77,7 +77,6 @@
  "test/unit/agent-check-test.el"
  "test/unit/agent-config-claude-test.el"
  "test/unit/agents-matrix-test.el"
- "test/unit/agents-mirror-test.el"
  "test/unit/ai-ask-test.el"
  "test/unit/ai-client-test.el"
  "test/unit/ai-edit-test.el"

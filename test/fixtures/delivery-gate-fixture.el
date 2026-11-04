@@ -31,6 +31,11 @@
 
 ;;;; State (bound by `drgnx-test-gated')
 
+(defvar drgnx-test-gate-unnamed-ok nil
+  "Non-nil: `unnamed' writes (a real agent child's turn, whose tasks the hub cannot name) do not fail the test.  They are
+held and released at the barrier like the named ones, so the order they reach the client in is the gate's; what is not
+the gate's is whether a write has happened yet, so a test that sets this waits for what the agent did as a condition.")
+
 (defvar drgnx-test-gate--active nil "Non-nil while `drgnx-test-gated' runs its body.")
 (defvar drgnx-test-gate--releasing nil
   "The connection's name while the gate hands a line or an end to the client, else nil.  The audit reads it.")
@@ -525,7 +530,7 @@ no hub answers."
     (when (plist-get answer :error)
       (drgnx-test-gate--fail (format "drgnx-test-gated: the hub refused %s (is Ratatoskr built with test-hooks?)" method)
                              :error (plist-get answer :error)))
-    (when (> (or (plist-get result :unnamed) 0) 0)
+    (when (and (> (or (plist-get result :unnamed) 0) 0) (not drgnx-test-gate-unnamed-ok))
       (drgnx-test-gate--fail "drgnx-test-gated: the hub wrote from tasks without an origin (not deterministic)"
                              :method method :unnamed (plist-get result :unnamed) :busy (plist-get result :busy)))
     result))
