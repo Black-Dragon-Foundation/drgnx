@@ -59,6 +59,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "absolute_head"
+path = "fuzz_targets/absolute_head.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "host_target"
 path = "fuzz_targets/host_target.rs"
 test = false

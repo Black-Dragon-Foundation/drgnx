@@ -976,12 +976,23 @@ The relay (`gleipnir::net::relay`) is the process that makes those ports: for ea
 An isolated sandbox has no network, only its own loopback. Its programs reach the outside through `HTTPS_PROXY`,
 which the relay forwards to a CONNECT proxy outside the sandbox (`net::proxy`). One proxy serves one job: the caller
 starts it with `proxy::start(config, resolver, events)` and hands it each session's listener with
-`listen(listener, tag)` (a Unix socket on Linux, a `127.0.0.1:0` TCP listener on macOS). Every listener shares the
-one allowlist, changed at run time with `allow(target)` and `deny(&target)`. `close(tag)` drops a session's listener
-and every connection it accepted; `shutdown()` (or dropping the handle) ends them all.
+`listen(listener, tag)` (a Unix socket on Linux, a `127.0.0.1:0` TCP listener on macOS). Every listener shares one
+policy, `ProxyConfig::policy`:
+- `Policy::Allowlist`, the default and the provider proxy's: exact targets, changed at run time with `allow(target)`
+  and `deny(&target)`, CONNECT only. A caller that builds `ProxyConfig { allow, pinned, ..Default::default() }` gets
+  it as before.
+- `Policy::Web(Arc<WebState>)`, a browser session's web proxy: the web policy (below), CONNECT and plain-HTTP
+  absolute-form. `allow` and `pinned` are not read. The caller keeps the `WebState` and changes it at run time with
+  `set_web(bool)`, `set_grants(Vec<PrivateGrant>)` and `set_deny_hosts(Vec<String>)`; `WebState::new(host_addrs,
+  never)` takes the host's addresses and the hub's endpoints as `Arc<RwLock<…>>`s the hub shares and keeps live. Each
+  request reads the state as it is then.
 
-**The answers.** The proxy reads the request head (the line and headers up to the blank line) and looks only at the
-request line, never at `Host:`:
+`close(tag)` drops a session's listener and every connection it accepted; `shutdown()` (or dropping the handle) ends
+them all. `start_for_tests` (feature `test-hooks`) takes the upstream connector too, so the escape fixture can send
+"public" addresses to a local server.
+
+**The answers.** The proxy reads the request head (the line and headers up to the blank line). Under the allowlist
+it looks only at the request line, never at `Host:`:
 
 | Request | Answer | Event |
 |---|---|---|
@@ -999,6 +1010,33 @@ request line, never at `Host:`:
 Each event is sent once per target per tag, before the client is answered; the tag tells the caller which session
 asked. Only `Denied` may become a question to the user: a private address, a wildcard or a malformed request is never
 offered. A refused request's `target` is shown with every byte outside printable ASCII escaped.
+
+Under the web policy the same parsing and the same 400s, 502s, SOCKS and connection rules apply, and the policy
+decides the rest:
+
+| Request | Answer | Event |
+|---|---|---|
+| CONNECT, or absolute-form, to a target `judge` connects | `200 Connection established` (CONNECT) or the rewritten head upstream (absolute-form), then the splice | `Reached { host }`, once per host |
+| a public target while `browser.web` is not granted | 403 | `WebOff { target }` |
+| a private target no grant opens | 403 | `Private { asked, addr, class }` |
+| a refusal of the web policy | 403 | `Refused { Never \| Port \| Embedded \| Loopback \| DenyListed \| Rebound }` |
+| `METHOD http://host[:port][/path] HTTP/1.x` that is malformed: another scheme (`https://` too), userinfo, a fragment, a byte outside printable ASCII in the URI, an obsolete line folding, a bare CR or LF, a NUL, a header line that is not `name: value` | 400 | `Refused { BadRequest }` |
+| an origin-form request (`GET /path`) | 400 | `Refused { BadRequest }` |
+
+`WebOff` and `Private` are the cards' questions; `Reached` is logged, not asked.
+
+**Plain HTTP (absolute-form, the web policy only).** Chromium sends an `http://` URL to its proxy as
+`GET http://host/path HTTP/1.1`. The URI's `host[:port]` (port 80 when none is named) is the target, parsed by
+`parse_target` and judged before anything is sent. The proxy connects, then sends:
+- the request line in origin-form, `METHOD /path?query HTTP/1.x` (`/` when the URI has no path), the client's version;
+- `Host:` from the target in its normal form, without the port when it is 80, in place of the received one;
+- the other headers in their order, minus the hop-by-hop ones: `Proxy-*`, `Keep-Alive`, `TE`, `Upgrade`,
+  `Connection` and every name it lists;
+- `Connection: close`, the blank line, then the bytes that came with the head (a body's start), once and in order.
+
+After that the bytes are spliced both ways as they are, and the response head is not rewritten. One request goes per
+connection: the upstream is fixed for the whole client connection (one checked target), so a second request hidden in
+a body reaches nothing a CONNECT to that target would not. WebSockets (`ws://`) go through CONNECT on port 80.
 
 **The matching.** A target is parsed strictly (`net::host::parse_target`), with no `idna` stack:
 - a name is ASCII letters, digits and inner hyphens, labels of 1–63 characters, at most 253 in all, lower-cased, one
@@ -1033,7 +1071,7 @@ that changes after the check (rebinding) cannot lead it anywhere else.
 - `deny` stops new connections only; a tunnel already spliced stays until either side closes.
 - There is no idle timeout on a spliced connection, and connecting upstream waits as long as the system's TCP
   connect does. Both hold one of the `max_conns` places meanwhile.
-- The proxy speaks HTTP CONNECT only: no plain HTTP forwarding and no SOCKS.
+- The proxy speaks HTTP CONNECT, and plain-HTTP absolute-form under the web policy only; never SOCKS.
 
 ### The web policy
 

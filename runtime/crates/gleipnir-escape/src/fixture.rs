@@ -204,6 +204,7 @@ impl Fixture {
                         ProxyEvent::Refused { target, why, .. } => {
                             format!("Refused {why:?} {target}")
                         }
+                        other => format!("{other:?}"),
                     });
                     sink.1.notify_all();
                 }
