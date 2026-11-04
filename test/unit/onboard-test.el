@@ -912,6 +912,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
        (should (file-exists-p (concat pkg "package.json")))))))
 
 (ert-deftest drgnx-onboard/claude-missing-says-no-and-nothing-is-installed ()
+  :tags '(:cond)                        ; the agents step starts the hub
   (drgnx-onboard-test--claude 'macos
     (let ((asked (drgnx-onboard-test--asked '(("\\`Set up Claude Code" . nil)))))
       (let ((r (cl-letf (((symbol-function 'y-or-n-p) (car asked))) (drgnx-onboard--agents-step '(:interactive t)))))
@@ -939,6 +940,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
                               (drgnx-onboard-test--slurp calls))))))
 
 (ert-deftest drgnx-onboard/a-vs-code-extensions-claude-does-not-count ()
+  :tags '(:cond)                        ; the agents step starts the hub
   (drgnx-onboard-test--claude 'macos
     (drgnx-onboard-test--script (concat home ".vscode/extensions/anthropic.claude-code-2/resources/native-binary/claude") "exit 0\n")
     (drgnx-onboard-test--have bin "npm" "claude-agent-acp")
@@ -1433,6 +1435,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
   (concat home ".local/bin"))
 
 (ert-deftest drgnx-ai-onboard/brew-dir-is-appended-to-path ()
+  :tags '(:cond)                        ; the agents step starts the hub
   ;; A directory onboarding finds a tool in goes behind the PATH you have, never in front of a program you chose.
   (drgnx-onboard-test--claude 'macos
     (let ((dir (drgnx-onboard-test--adapter-in-local-bin root home)))
@@ -1464,6 +1467,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
       (should-not (string-match-p "hub" (cadr (drgnx-onboard--agents-step '(:interactive nil))))))))
 
 (ert-deftest drgnx-ai-onboard/the-install-question-explains-the-vs-code-claude ()
+  :tags '(:cond)                        ; the agents step starts the hub
   ;; The install question says why a claude inside a VS Code extension does not count, only when claude is missing.
   (drgnx-onboard-test--claude 'macos
     (let ((asked (drgnx-onboard-test--asked '(("\\`Set up Claude Code" . nil)))))
@@ -1572,6 +1576,7 @@ record the prompts and the default in the lists they return as the cars of (PROM
      (should (equal (drgnx-agents-default-profile) "claude")))))
 
 (ert-deftest drgnx-ai-onboard/agent-defaults-keep-the-rest-of-settings-el ()
+  :tags '(:cond)                        ; the agents step starts the hub
   (drgnx-onboard-test--claude 'macos
     (let ((file (expand-file-name "settings.el" (drgnx-user-dir))) (a (drgnx-onboard-test--offers-answers "mine" nil nil)))
       (write-region ";; my agents\n(drgnx-settings :version 1\n (drgnx-agents-profiles ((\"mine\" :command (\"x\"))))\n (drgnx-agents-routes nil))\n"
