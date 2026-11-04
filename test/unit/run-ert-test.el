@@ -276,7 +276,9 @@ parsed summary."
                                               "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" suite))))
             (let ((seen (with-temp-buffer (insert-file-contents probe) (buffer-string))))
               (if (equal mode "DRGNX_TEST_ONE_PROCESS=1")
-                  (should (string-prefix-p (file-name-as-directory parent) seen))
+                  ;; one Emacs: the short root itself, gone with the run as well
+                  (progn (should (string-match-p "/drgnx-t-[A-Za-z0-9]\\{6\\}/\\'" seen))
+                         (should-not (file-exists-p seen)))
                 ;; per file: in the runner's short root (…/a-files-temp-dir-is-short-whatever-the-tmpdir), gone with the run as well
                 (should (string-match-p drgnx-run-ert-test--file-dir-re seen))
                 (should-not (file-exists-p (file-name-directory (directory-file-name seen))))))
@@ -1280,3 +1282,36 @@ this test are not passed on."
     (should (equal 1 (plist-get (drgnx-run-ert-test--json results) :total)))
     (drgnx-run-ert-test--batch dir results "DRGNX_TEST_SELECTOR=(and (tag :orders) \"^x/\")")
     (should (equal 0 (plist-get (drgnx-run-ert-test--json results) :total)))))
+
+(ert-deftest drgnx-run-ert/a-one-emacs-run-keeps-its-temp-directory-short-under-a-long-tmpdir ()
+  ;; One Emacs for every file has no short root of a file's own: under a long TMPDIR (macOS's, any deep one) the hub's
+  ;; socket three levels below the temp directory would pass the 103-byte limit.
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-long" t)))
+         (long (expand-file-name "drgnx-run.abc123/" (concat tmp (make-string 70 ?d) "/")))
+         (out (concat tmp "len")) (results (concat tmp "r.json")))
+    (unwind-protect
+        (progn
+          (make-directory long t)
+          (with-temp-file (concat tmp "len-test.el")
+            (insert (format "(require 'ert)\n(ert-deftest len/x () (write-region (format \"%%d\" (length temporary-file-directory)) nil %S nil 'silent))\n" out)))
+          (should (= 0 (drgnx-run-ert-test--batch (concat tmp "len-test.el") results
+                                                  "DRGNX_TEST_ONE_PROCESS=1" (concat "DRGNX_RUN_TMP=" long)
+                                                  (concat "TMPDIR=" (file-name-directory (directory-file-name long))))))
+          (should (< (string-to-number (with-temp-buffer (insert-file-contents out) (buffer-string))) 40)))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/the-audit-reaches-a-file-run-by-drgnx-test-run-isolated ()
+  ;; The runner takes its audit switches out of the environment; the child a test starts through
+  ;; `drgnx-test-run-isolated' gets them from `drgnx-run-ert--audit-child-env', so a det test there that sleeps is red.
+  (load (expand-file-name "modules-fixture" drgnx-run-ert-test--fixtures) nil t)
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t)))
+         (file (concat tmp "x-isolated.el")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert ";; test-class: det\n(require 'ert)\n(ert-deftest iso/sleeps () (sleep-for 0.01) (should t))\n"))
+          (let ((drgnx-run-ert--audit-child-env nil))
+            (should-not (drgnx-test-run-isolated file "iso/")))
+          (let ((drgnx-run-ert--audit-child-env '("DRGNX_TEST_AUDIT=1" "DRGNX_TEST_AUDIT_FAIL=1")))
+            (should (stringp (drgnx-test-run-isolated file "iso/")))))
+      (delete-directory tmp t))))

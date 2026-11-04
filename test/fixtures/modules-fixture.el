@@ -344,6 +344,8 @@ when it works.  Returns (EXIT-CODE . OUTPUT)."
                      "-l" (concat dir "harness/run-ert.el") "-f" "drgnx-run-ert-batch"
                      (expand-file-name file dir)))
          (process-environment (append (list (concat "DRGNX_TEST_SELECTOR=" (prin1-to-string selector)) "DRGNX_TEST_RESULTS")
+                                      ;; the runtime audit, when this run has it on: the child's det tests are audited too
+                                      (bound-and-true-p drgnx-run-ert--audit-child-env)
                                       process-environment))
          (cap (and (executable-find "systemd-run")
                    (zerop (call-process "systemd-run" nil nil nil "--user" "--scope" "-q" "true"))
