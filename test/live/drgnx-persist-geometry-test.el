@@ -33,12 +33,15 @@
                                            :secs 30 :what "the frame to have the size asked for")))
                  (sizes
                   (progn
+                    ;; born at the size under test: a resize asked of a window that has just been made is undone by
+                    ;; its first redisplay (the size it was made with comes back), so no resize is in flight here
                     (funcall q "(with-selected-frame (seq-find (lambda (f) (and (display-graphic-p f) (not (frame-parent f)))) (frame-list))
-                                  (setq drgnx-geometry-frame (make-frame '((drgnx-persist-restore . (ignore)) (width . 60) (height . 20))))
+                                  (setq drgnx-geometry-frame
+                                        (make-frame '((drgnx-persist-restore . (ignore))
+                                                      (width . (text-pixels . 600)) (height . (text-pixels . 400)))))
                                   t)")
                     (unwind-protect
                         (let (out)
-                          (funcall q (funcall from-the-first-window "(progn (set-frame-size drgnx-geometry-frame 600 400 t) t)"))
                           (funcall sized 600 400)
                           (dotimes (_ 3)
                             (let ((g (funcall q (funcall from-the-first-window "(plist-get (drgnx-persist-state drgnx-geometry-frame) :geometry)"))))
