@@ -173,21 +173,21 @@ fn check(c: &Conn, order: &[Ev]) -> Result<(), String> {
     Ok(())
 }
 
-/// Client `[LineRead×n, ClientEof]`, hub `[Push×n, Close]`, writer `[Written×n, WriteRefused]`, push i before write i.
-fn sources(n: u8) -> Partial<Ev> {
+/// The hub `[Push×pushes, Close]`, the writer `[Written×writes, WriteRefused]` (push i before write i) and the client
+/// `[LineRead×reads, ClientEof]`.  A push more than the writes leaves a line for the refused write to be writing.  The
+/// client is the last source: the natural order (the lowest source first) reads after the hub and the writer.
+fn sources(pushes: usize, writes: usize, reads: u8) -> Partial<Ev> {
     let mut p = Partial::new();
-    let mut client: Vec<Ev> = (0..n).map(Ev::LineRead).collect();
-    client.push(Ev::ClientEof);
-    let mut hub: Vec<Ev> = (0..n)
-        .map(|i| Ev::Push(10 * (usize::from(i) + 1)))
-        .collect();
+    let mut hub: Vec<Ev> = (0..pushes).map(|i| Ev::Push(10 * (i + 1))).collect();
     hub.push(Ev::Close);
-    let mut writer = vec![Ev::Written; usize::from(n)];
+    let mut writer = vec![Ev::Written; writes];
     writer.push(Ev::WriteRefused);
-    p.source("client", client);
+    let mut client: Vec<Ev> = (0..reads).map(Ev::LineRead).collect();
+    client.push(Ev::ClientEof);
     let hub = p.source("hub", hub);
     let writer = p.source("writer", writer);
-    for i in 0..usize::from(n) {
+    p.source("client", client);
+    for i in 0..writes {
         p.before((hub, i), (writer, i));
     }
     p
@@ -195,9 +195,10 @@ fn sources(n: u8) -> Partial<Ev> {
 
 #[test]
 fn every_order_serves_what_the_client_sent_unless_closed() {
-    let r = every_order(&sources(3), Bound::default(), Conn::default, check);
-    assert_eq!(r.mode, skuld::Mode::Exhaustive);
-    assert!(r.orders > 1000, "{} orders", r.orders);
+    // 33,605 orders: above the bound, so every order within two delays of the natural one
+    let r = every_order(&sources(4, 3, 3), Bound::default(), Conn::default, check);
+    assert_eq!(r.mode, skuld::Mode::DelayBounded(2));
+    assert!(r.orders > 100, "{} orders", r.orders);
 }
 
 /// The hub pushes past the limit while the writer has written at most the first line.
@@ -271,7 +272,7 @@ fn every_order_over_the_queue_limit_closes_once() {
 #[test]
 fn random_orders_seeds_1_to_500() {
     // four sources of six: a second hub source pushes too (another task's events)
-    let mut p = sources(5);
+    let mut p = sources(5, 5, 5);
     p.source("events", (0..6).map(|i| Ev::Push(1000 + i)).collect());
     let r = random_orders(&p, 1..501, Conn::default, check);
     assert_eq!(r.orders, 500);

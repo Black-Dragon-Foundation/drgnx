@@ -398,9 +398,10 @@ feeds every event through `ConnCore::step`:
 A refused write (the client left) drops the queue, but reading goes on to the client's end of file. A close, a read
 error, a malformed line, a stuck write or a queue over 16 MiB stops both.
 
-`conn/pure/tests.rs` runs the core in every order of a client `[LineRead×3, ClientEof]`, the hub `[Push×3, Close]`
-and the writer `[Written×3, WriteRefused]` (skuld, exhaustive: 9,405 orders). It runs the over-limit close in every
-order and 500 random orders of four sources of six. The edges those orders take as given are the shell's, each
+`conn/pure/tests.rs` runs the core in the orders of the hub `[Push×4, Close]`, the writer `[Written×3,
+WriteRefused]` and a client `[LineRead×3, ClientEof]` (skuld). There are 33,605 orders, above the bound, so it runs
+every order within two delays of the natural one. The fourth push leaves a line for the refused write to be writing.
+It also runs the over-limit close in every order, and 500 random orders of four sources of six. The edges those orders take as given are the shell's, each
 tested over a socket pair in `conn/tests.rs`:
 
 - a line is reported written only after its push, in order;
