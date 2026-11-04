@@ -58,7 +58,8 @@ jobs:
           retention-days: 1
 
   # the files a core each at once, a failed file rerun once, the :timing tests left out by name (docs/develop/ci.md).
-  # Whatever the binaries' job said: without them only the tests that need them fail
+  # Whatever the binaries' job said: without them only the tests that need them fail. The runtime audit is on and
+  # failing: a :det test that really waits or starts a process is red (docs/develop/harness.md, "The audit")
   unit:
     name: Unit suite (Linux, Fedora 45)
     needs: bins-linux
@@ -95,6 +96,8 @@ jobs:
           DRGNX_TEST_RERUN: "1"
           DRGNX_TEST_NO_TIMING: "1"
           DRGNX_TEST_LOCALE: C.UTF-8      # the one job under a UTF-8 locale; the others run with none
+          DRGNX_TEST_AUDIT: "1"
+          DRGNX_TEST_AUDIT_FAIL: "1"
           DRGNX_TEST_SELECTOR: ${{ inputs.selector }}
         run: DRGNX_TEST_JOBS="$(nproc)" bin/drgnx test --container
 
@@ -134,6 +137,8 @@ jobs:
           DRGNX_TEST_RERUN: "1"
           DRGNX_TEST_NO_TIMING: "1"
           DRGNX_WORK_DB_GATE: "1"
+          DRGNX_TEST_AUDIT: "1"
+          DRGNX_TEST_AUDIT_FAIL: "1"
           DRGNX_TEST_SELECTOR: ${{ inputs.selector }}
         run: DRGNX_TEST_JOBS="$(nproc)" bin/drgnx test --container
 
@@ -288,12 +293,13 @@ jobs:
 
   # The timing lane (report only): the tests tagged :timing, which every other tier leaves out (DRGNX_TEST_NO_TIMING),
   # judged against the runner's own speed (test/timing-lane.sh). Report only because the lane script reports and exits 0
-  # (a red job would make the run red); `CI gate` does not need it
+  # (a red job would make the run red); `CI gate` does not need it. The calibration runs in the test image the step
+  # below sets (DRGNX_TEST_IMAGE), one row per area's prefix (test/timing-rows.txt), 20 samples each
   timing:
     name: Timing tests (report only)
     if: ${{ contains(format(' {0} ', inputs.tiers), ' timing ') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 150
     permissions:
       contents: read
       packages: read

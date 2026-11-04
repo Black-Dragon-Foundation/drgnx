@@ -722,7 +722,7 @@ job stopped at the end."
         ;; a job runs it already: not a second one
         (setq drgnx-ai--ensure-time nil)
         (drgnx-ai-ensure-local)
-        (drgnx-test-pause 1.5)                              ; a second one may not come
+        (drgnx-test-pause 1.5 "a second one may not come")
         (should (= 1 (length (drgnx-ai-onboard-test--serving serve))))
         ;; it answers: nothing started
         (dolist (j (drgnx-exec-list)) (drgnx-exec-stop (plist-get j :id)))
@@ -731,7 +731,7 @@ job stopped at the end."
           (unwind-protect
               (progn (setq drgnx-ai--ensure-time nil)
                      (drgnx-ai-ensure-local)
-                     (drgnx-test-pause 1.5)                 ; nothing may start
+                     (drgnx-test-pause 1.5 "nothing may start")
                      (should-not (drgnx-ai-onboard-test--serving serve)))
             (delete-process mock)))))))
 
@@ -749,12 +749,12 @@ job stopped at the end."
         (dolist (j (drgnx-exec-list)) (drgnx-exec-stop (plist-get j :id)))
         (should (drgnx-ai-onboard-test--settle (lambda () (null (drgnx-ai-onboard-test--serving serve)))))
         (funcall ask)                                       ; again within the minute: left alone
-        (drgnx-test-pause 1.5)                              ; nothing may start
+        (drgnx-test-pause 1.5 "nothing may start")
         (should-not (drgnx-ai-onboard-test--serving serve))
         ;; another provider refusing never starts it
         (setq drgnx-ai--ensure-time nil)
         (drgnx-ai--refused 'lmstudio)
-        (drgnx-test-pause 1.5)                              ; nothing may start
+        (drgnx-test-pause 1.5 "nothing may start")
         (should-not (drgnx-ai-onboard-test--serving serve))))))
 
 (ert-deftest drgnx-ai/ensure-local-never-waits-for-the-job ()

@@ -2984,8 +2984,12 @@ what differs.
 - `sleep-for` and `sit-for` move it by their argument and run the timers that come due; process output is then looked
   at once with a zero wait. `sit-for` returns nil only when simulated input is pending, and simulated input ends it
   early;
-- a timed `accept-process-output` moves it by the real time it waited (`drgnx-test-real-time`), then the due timers run.
-  A test that must wait for a real process (a killed one to be reaped) while the clock stays put polls with the
+- a timed `accept-process-output` (SECONDS or MILLISEC above 0) moves it by its timeout, never by how long a real
+  wait took: output already there is taken with a zero-length look and time stays put; else time moves by the whole
+  timeout, the due timers run, and output is looked at again. Only a wait on a real child (a live process of type
+  `real`: the process waited on, or any one when none is named) waits for real, up to the timeout, and then moves time
+  by the timeout when nothing came. A pipe or a socket (a scripted peer) is no real child. With no timeout, or one of
+  0, the call is Emacs's own and time does not move. A test that must wait for a real process (a killed one to be reaped) while the clock stays put polls with the
   original, `(funcall drgnx-test--accept nil 0.02)`: on a loaded runner the advised wait would run the timers the
   test means to step through itself (`test/unit/acp-test.el`).
 
@@ -2993,7 +2997,8 @@ A polling loop with a `float-time` deadline therefore ends at once under virtual
 process keeps a realistic deadline. More than `drgnx-test-clock-max-runs` (10000) timer runs in one
 `drgnx-test-advance` is an error (a timer that re-arms with no delay).
 
-**The guard.** Only on the advice, where a wall timer is stamped by Emacs from the real clock. While the fixture is active a `:before` advice on
+**The guard.** Only on the advice (macOS, which has no `/proc` for Nidhogg's test clock), where a wall timer is
+stamped by Emacs from the real clock. While the fixture is active a `:before` advice on
 `timer--activate` moves such a timer to the virtual due time plus `drgnx-test-clock-horizon` (10^6 s), so C's timer
 check never finds it ripe during a real wait: a real wait fires no virtual timer. A timer is due at virtual *v* + *d*
 when it was made at *v* with delay *d*, also after an advance. A re-armed repeat is already in that era and is left
@@ -3035,7 +3040,8 @@ timer; when nothing can run and nothing is left to wait for it fails at once, wi
 - **Wait on a done flag.** Have the sentinel (or filter) set `(process-put p :done t)` and wait for
   `(process-get p :done)`. `process-live-p` turns nil before the sentinel has run, so a wait on it races the
   sentinel (M3b-19). `drgnx-lint/test-waits-read-a-done-flag-not-process-live-p` fails for any `drgnx-test-wait`
-  under `test/` whose PRED mentions `process-live-p`.
+  under `test/` whose PRED mentions `process-live-p`, and for a call of a file's own wrapper of it (a function that
+  calls `drgnx-test-wait`, or another such wrapper) that waits for `(not (process-live-p P))`.
 - **A chain of timers runs back to back.** One `accept-process-output` runs one link of a chain of zero-delay
   timers (a view drawing in slices) however long it waits, so while a timer is due the wait polls without a timeout.
   A 20 ms poll per link starved the Search view's 10,100 rows (`drgnx-view-ui/replace-retype-has-no-jank`).
@@ -3053,10 +3059,14 @@ timer; when nothing can run and nothing is left to wait for it fails at once, wi
   that starts nothing) lets processes and timers run with `(drgnx-test-pause SECS)` and then asserts. It is the only
   fixed real-time window in a test, and it can only miss a bug on a loaded machine, never fail a correct one. Not
   `sleep-for`: that runs one link of a timer chain. A helper converted to `drgnx-test-wait` never takes
-  `(lambda () nil)` or `#'ignore` for a pause, since that now fails at the deadline. In `test/ui` it says what may not
-  happen, `(drgnx-test-pause SECS "WHY")`, checked by `drgnx-lint/cond-tests-have-no-fixed-pause`.
+  `(lambda () nil)` or `#'ignore` for a pause, since that now fails at the deadline. It says what may not happen,
+  `(drgnx-test-pause SECS "WHY")`, in every tier, checked by `drgnx-lint/cond-tests-have-no-fixed-pause`: a pause
+  with no reason is a settle, and a settle waits for its condition.
 - **Inside the clock fixture** (`drgnx-test-with-clock`) it works unchanged: the deadline is read through
-  `drgnx-test-real-time`, and each timed `accept-process-output` advances virtual time by the real wait.
+  `drgnx-test-real-time`. On a manual clock it polls with Emacs's own `accept-process-output` (`drgnx-test--accept`)
+  and moves virtual time by the real time each poll took, so virtual time keeps step with these real-time waits; so
+  does `drgnx-test-pause`. The fixture's advised wait moves virtual time by its whole timeout at once, so a real-time
+  loop of it would race virtual time ahead (and run timers due minutes later inside a 0.2 s window).
 - **A GUI test that makes a frame waits for it to be mapped**: `(drgnx-test-wait (lambda () (eq (frame-visible-p F)
   t)) :what "…")` before it redisplays. The compositor maps a new frame when it gets to it (pgtk under mutter:
   after `make-frame` has returned), and redisplay skips a frame that is not mapped, so its mode lines are never

@@ -196,6 +196,8 @@
 (ert-deftest drgnx-gc-census/old-files-deleted-at-start ()
   (drgnx-gc-census-test--in-dirs
     (let* ((dir (drgnx-gc-census-directory))
+           ;; real days on purpose: the prune's own clock may be a day on (midnight between), and 20 days stays past
+           ;; the 14-day cutoff, 3 days and today stay inside it, so no midnight or DST hour moves a file across it
            (day (lambda (n) (format-time-string "%F.jsonl" (time-subtract nil (* n 86400)))))
            (old (funcall day 20)) (recent (funcall day 3)) (today (funcall day 0)))
       (make-directory dir t)

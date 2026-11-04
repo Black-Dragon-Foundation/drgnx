@@ -291,6 +291,12 @@ as skipped (CI's shared runners)."
     (if given (expand-file-name given)
       (expand-file-name "../test/no-skip.eld" (file-name-directory drgnx-run-ert--self)))))
 
+(defun drgnx-run-ert--must-run-p (selector)
+  "Whether a run of SELECTOR (the raw one, nil for every test) holds the must-run list: a full run, or a run of one
+class, `(tag :det)', `(tag :cond)' or `(tag :timing)' (the pre-flight's runs), whose skipped tests are that class's."
+  (or (null selector)
+      (and (eq (car-safe selector) 'tag) (memq (cadr selector) '(:det :cond :timing)) (null (cddr selector)))))
+
 (defun drgnx-run-ert--no-skip-failures (skipped)
   "Failures (:name :condition), one for each of SKIPPED (entries :name :reason) that the must-run list names for
 this `system-type'.  The list is `((PLATFORM NAME…)…)'; a file that is missing names nothing."
@@ -326,13 +332,17 @@ is a failure.  Prints the flakes."
       (message "\nFlaky (%d): failed first, passed on the rerun" (length flaky))
       (dolist (x flaky)
         (let* ((name (plist-get x :name))
-               ;; a deterministic test has no flake: flaky.eld never excuses it
-               (det (eq (drgnx-run-ert--test-class (plist-get x :file) name) :det))
+               (whole (string-prefix-p "file " name))
+               ;; a deterministic test has no flake: flaky.eld never excuses it, nor a whole file (a hang, a crash)
+               ;; that holds one, whatever the file's class: the det test may be what hung
+               (det (if whole
+                        (drgnx-run-ert--file-holds-det-p (plist-get x :file))
+                      (eq (drgnx-run-ert--test-class (plist-get x :file) name) :det)))
                (reason (and (not det) (drgnx-run-ert--flaky-listed name))))
           (if reason
               (message "   %s  flaky (listed: %s)" name reason)
             (message "   %s  flaky: %s" name (plist-get x :condition))
-            (let ((whole (string-prefix-p "file " name)))
+            (progn
               (setq summary
                     (plist-put (plist-put (plist-put (plist-put summary :failed (1+ (plist-get summary :failed)))
                                                      :passed (if whole (plist-get summary :passed) (1- (plist-get summary :passed))))
@@ -348,7 +358,8 @@ is a failure.  Prints the flakes."
 ;;;; The audit: what a deterministic test really runs
 ;; DRGNX_TEST_AUDIT=1 (or a report file) records, for each test tagged :det, the real-time primitives that actually
 ;; execute while it runs, as `drgnx-audit: TEST PRIMITIVE' lines in the run's output (and in the file, when the value is
-;; a path); DRGNX_TEST_AUDIT_ALL=1 audits every test, not only :det ones.  What `drgnx-test-with-clock' runs is virtual and does not count.  DRGNX_TEST_AUDIT_FAIL=1 (with the audit
+;; a path); DRGNX_TEST_AUDIT_ALL=1 audits every test, not only :det ones.  A wait that `drgnx-test-with-clock' runs is
+;; virtual and does not count; a process or a socket it starts does.  DRGNX_TEST_AUDIT_FAIL=1 (with the audit
 ;; on) makes such a test fail the run.  Off by default.
 
 (defvar drgnx-run-ert--audit-current nil "The name of the :det test that runs now (a string), while the audit is on.")
@@ -356,10 +367,15 @@ is a failure.  Prints the flakes."
 (defvar drgnx-run-ert--audit-file nil "A file the rows are appended to, or nil.")
 (defvar drgnx-test--active)
 
+(defconst drgnx-run-ert--audit-waits '(sleep-for sit-for accept-process-output)
+  "The watched waits: under the clock fixture they move virtual time, so they are not recorded there.")
+
 (defun drgnx-run-ert--audit-record (prim)
-  "Record PRIM as used by the :det test that runs now, once per test and primitive; not under the clock fixture."
+  "Record PRIM as used by the :det test that runs now, once per test and primitive.  A wait under the clock fixture
+is virtual and not recorded; a process or a socket is real work under the fixture too."
   (when (and drgnx-run-ert--audit-current
-             (not (and (boundp 'drgnx-test--active) drgnx-test--active)))
+             (not (and (memq prim drgnx-run-ert--audit-waits)
+                       (boundp 'drgnx-test--active) drgnx-test--active)))
     (let ((key (cons drgnx-run-ert--audit-current prim)))
       (unless (member key drgnx-run-ert--audit-seen)
         (push key drgnx-run-ert--audit-seen)
@@ -373,9 +389,13 @@ is a failure.  Prints the flakes."
   (pcase prim
     ('sleep-for (let ((s (car args))) (or (not (numberp s)) (> s 0))))
     ('sit-for (let ((s (car args))) (or (not (numberp s)) (> s 0))))
+    ;; a timeout (SECONDS plus MILLISEC) waits when it is over 0, and 0 is a look; with neither, a call on a live
+    ;; process waits for its output, and one on no process is a look
     ('accept-process-output
      (let ((p (car args)) (s (nth 1 args)) (ms (nth 2 args)))
-       (or (and (numberp s) (> s 0)) (and (numberp ms) (> ms 0)) (and (processp p) (process-live-p p)))))
+       (if (or s ms)
+           (> (+ (if (numberp s) s 0) (if (numberp ms) ms 0)) 0)
+         (and (processp p) (process-live-p p)))))
     (_ t)))
 
 (defconst drgnx-run-ert--audit-primitives
@@ -482,6 +502,27 @@ in its top-level `ert-deftest'), else the file's class (`drgnx-run-ert--file-cla
                            (and (stringp own) own))))
           (intern own))
         (drgnx-run-ert--file-class file))))
+
+(defun drgnx-run-ert--file-holds-det-p (file)
+  "Whether the test FILE holds a test of class det: its class is det, or a test defined in it (a top-level form whose
+head ends in `deftest') has `:det' in its own quoted `:tags'.  Nil when FILE is nil."
+  (when (stringp file)
+    (or (eq (drgnx-run-ert--file-class file) :det)
+        (let ((obarray (obarray-make)) (found nil))
+          (cl-labels ((named (x s) (and (symbolp x) (equal (symbol-name x) s))))
+            (ignore-errors
+              (with-temp-buffer
+                (insert-file-contents file)
+                (condition-case nil
+                    (while (not found)
+                      (let ((form (read (current-buffer))))
+                        (when (and (consp form) (symbolp (car form)) (string-suffix-p "deftest" (symbol-name (car form))))
+                          (let* ((key (seq-find (lambda (x) (named x ":tags")) form))
+                                 (tags (and key (cadr (memq key form)))))
+                            (when (and (named (car-safe tags) "quote") (listp (cadr tags)))
+                              (setq found (seq-some (lambda (x) (named x ":det")) (cadr tags))))))))
+                  (end-of-file nil)))))
+          found))))
 
 (defun drgnx-run-ert--tag-classes (file)
   "Give each test loaded from FILE its file's class as an ERT tag, unless it has a class tag of its own, so that
@@ -606,8 +647,8 @@ summary to RESULTS-FILE.  Return t if every test passed."
           (t (push (list :name name :condition (format "known red, but it errored: %s" (drgnx-run-ert--condition-text condition)))
                    failures)))))))
     (setq skipped (nreverse skipped))
-    ;; a test the must-run list names that skipped: a full run only (a per-file Emacs leaves it to its parent)
-    (when (and (null selector) (not drgnx-run-ert--order-in) (not drgnx-run-ert--file-child))
+    ;; a test the must-run list names that skipped: a full or a class run (a per-file Emacs leaves it to its parent)
+    (when (and (drgnx-run-ert--must-run-p selector) (not drgnx-run-ert--order-in) (not drgnx-run-ert--file-child))
       (setq load-failures (append load-failures (drgnx-run-ert--no-skip-failures skipped))))
     (setq skipped (append skipped (drgnx-run-ert--timing-skipped selector) (drgnx-run-ert--gate-skipped selector)))
     (unless drgnx-run-ert--file-child (drgnx-run-ert--say-skipped skipped))
@@ -1006,8 +1047,8 @@ file passed."
                                               :failures (vector f))
                                    :passed 0))))
       (setq summary (drgnx-run-ert--judge-flaky summary))
-      ;; a must-run test that skipped, in a full run (the files' own Emacsen leave it to this one)
-      (when (and (null selector) (not drgnx-run-ert--order-in))
+      ;; a must-run test that skipped, in a full or a class run (the files' own Emacsen leave it to this one)
+      (when (and (drgnx-run-ert--must-run-p selector) (not drgnx-run-ert--order-in))
         (when-let* ((more (drgnx-run-ert--no-skip-failures (append (plist-get summary :skipped) nil))))
           (setq summary (plist-put (plist-put (plist-put summary :total (+ (plist-get summary :total) (length more)))
                                               :failed (+ (plist-get summary :failed) (length more)))

@@ -1028,11 +1028,24 @@ deleted or replaced by a plan) are listed in `test/class-exempt.eld` as `(FILE :
   `drgnx-test-proc-await-exit`, `accept-process-output` with a time, or `float-time` deadline outside
   `drgnx-test-with-clock`, directly or through a function of the same file. A synchronous `call-process` is allowed.
   A det test failing and passing on the rerun fails the run, whatever `test/flaky.eld` lists.
-- **cond**: waits on conditions; no fixed pause (`sleep-for`, `sit-for` above 0). `drgnx-test-pause` stays allowed; in
-  `test/ui` it gives a reason (`(drgnx-test-pause SECS "WHY")`), and a wait for a frame is `drgnx-test-wait-presented`.
+- **cond**: waits on conditions; no fixed pause (`sleep-for`, `sit-for` above 0). `drgnx-test-pause` stays allowed as
+  the window for what must not happen, and says what that is (`(drgnx-test-pause SECS "WHY")`), in every tier: one
+  with no reason is a settle, which waits for its condition instead (`drgnx-test-wait`; a wait for a frame is
+  `drgnx-test-wait-presented`). A pause that only has to last long enough (past a delay) can never be too short.
 - **timing**: may assert elapsed time; no other class may `should` over a wall-clock comparison.
 
-`test/unit/lint-test-classes-test.el` has a lint for each rule. Every test file has a class, so
+`test/unit/lint-test-classes-test.el` has a lint for each rule. It reads the files (never loads them) and sees:
+
+- every `ert-deftest`, those a test-defining macro makes included: a top-level form whose head ends in `deftest` is
+  expanded with the file's own macro of that name or the one another test file defines
+  (`drgnx-platform-test--deftest`, `drgnx-work-db-writer-deftest`), and a form that makes no test fails the lint;
+- the file's helpers, called or passed by name (`#'h`, `'h` to `funcall`, a hook or a timer);
+- a clock read through a time of nil (`(time-less-p nil END)`, `(time-add nil 2)`, `format-time-string` or
+  `decode-time` with no time), which stays real inside `drgnx-test-with-clock` on the advice path;
+- a timed `accept-process-output` by its seconds or its milliseconds;
+- the `*-isolated.el` files under `test/unit/isolated`, which a `-test.el` file runs in an Emacs of its own.
+
+Every test file has a class, so
 `drgnx-lint-classes--all-classified` is set and a file without one fails; a row for a file that is gone fails always.
 
 `NIDHOGG_TEST_CLOCK` and `NIDHOGG_TEST_SEED` pass into the container; a failed run prints the seed.
@@ -1066,14 +1079,15 @@ told. A child that never reaches its gate fails the test with the processes' sta
 ### The audit: what a deterministic test really runs
 
 A static lint cannot see through macros and fixtures. `DRGNX_TEST_AUDIT=1` records, for each `:det` test, the real-time
-primitives that execute while it runs (`sleep-for` and `sit-for` above 0, `accept-process-output` with a wait or a live
-process, `make-process`, `start-process`, network, pipe and serial processes) as `drgnx-audit: TEST PRIMITIVE` lines in
-the output; a value other than `1` is a file the rows are also appended to. What runs under `drgnx-test-with-clock` is
-virtual and does not count. `DRGNX_TEST_AUDIT_ALL=1` audits every test (for a run before files carry a class).
+primitives that execute while it runs (`sleep-for` and `sit-for` above 0, `accept-process-output` with a timeout above
+0, or with none on a live process, `make-process`, `start-process`, network, pipe and serial processes) as
+`drgnx-audit: TEST PRIMITIVE` lines in the output; a value other than `1` is a file the rows are also appended to. A
+wait under `drgnx-test-with-clock` is virtual and does not count; a process or a socket started there does. `DRGNX_TEST_AUDIT_ALL=1` audits every test (for a run before files carry a class).
 `DRGNX_TEST_AUDIT_FAIL=1` makes each such `:det` test fail the run. All three are off by default. The primitives are
 advised only while an audited test runs, the two fixture test files (`clock-fixture-test`, `wait-fixture-test`) are not
 audited, and the three variables are read once and removed from the environment, so no other test (or a child it starts)
-sees the runner's switches. `bin/drgnx test --preflight` runs its `det` step with the audit on and failing.
+sees the runner's switches. CI's `unit` and `no-lisp-writes` jobs ([ci.md](ci.md)) and `bin/drgnx test --preflight`'s
+`det` step run with the audit on and failing.
 
 ## Virtual time
 
@@ -1088,10 +1102,12 @@ for a timer. Load it with `(load (expand-file-name "test/fixtures/clock-fixture"
   (drgnx-test-idle 2.5 :input-at 1.0))    ; one pause; you type 1 s into it
 ```
 
-- **Two clocks, one API.** In a batch Emacs with Nidhogg's test clock and `NIDHOGG_TEST_CLOCK=1`
-  (`drgnx-test--core-p`; it also needs `/proc`, see below), the body runs on that clock, started at entry and stopped at
-  the end; `bin/drgnx test`'s unit tier sets the variable, and `NIDHOGG_TEST_CLOCK=0` turns it off. Anywhere else (an
-  Emacs without the clock, the `--ui` tier) the clock reads and the timers' stamps are advice, as described below.
+- **Two clocks, one API.** In a batch Emacs with `NIDHOGG_TEST_CLOCK=1` (`drgnx-test--core-p`; it also needs `/proc`,
+  see below), the body runs on Nidhogg's test clock (Nidhogg `.5` on), started at entry and stopped at the end;
+  `bin/drgnx test`'s unit tier sets the variable. On a system without `/proc` (macOS), where that clock cannot run, the
+  clock reads and the timers' stamps are advice, as described below (`drgnx-test--advice-clock-p`). Anywhere else (a
+  Linux Emacs with `NIDHOGG_TEST_CLOCK=0`, an interactive one) `drgnx-test-with-clock` refuses to start: there is no
+  advice of `float-time`, `current-time` or `timer--activate` beside the core clock.
   What differs on Nidhogg's clock:
   - every read of the time is virtual: `time-since`, `(time-subtract nil ...)` and `format-time-string` too, and
     `(float-time nil)`. `drgnx-test-real-time` reads `/proc/uptime` then, because nothing else in Emacs stays real
@@ -1144,10 +1160,13 @@ for a timer. Load it with `(load (expand-file-name "test/fixtures/clock-fixture"
   Then `drgnx-timer-reset` runs, when bound. The timer layer's seams (`drgnx-timer--now`, `drgnx-timer--idle-time`,
   `drgnx-timer--input-pending-p`), when defined, follow the same clock, pause and input.
 - **What stays real on the advice:** `time-since`, `(time-subtract nil ...)` and `format-time-string` with no time read
-  the real clock; a test of code that uses them uses real time. `drgnx-test-real-time` is the real time as a float, for
+  the real clock; a test of code that uses them uses real time. A test whose code names a file or a key by today's
+  date holds the day instead, so the test's read and the code's never fall on two sides of midnight
+  (`drgnx-watchdog-doctor-test--on-one-day` in `test/unit/watchdog-doctor-test.el`). `drgnx-test-real-time` is the real time as a float, for
   waits and reports, on both clocks. `sleep-for` and `sit-for` move virtual time by their argument and a timed
-  `accept-process-output` by the real time it waited, each running the timers that come due ([core.md](core.md),
-  "Testing: time, waits and processes").
+  `accept-process-output` that finds no output by its timeout (a zero-length look; a real wait only on a real child),
+  each running the timers that come due, so no wait moves virtual time by how long the machine took
+  ([core.md](core.md), "Testing: time, waits and processes").
 - **The contract with the timer layer** ([core.md](core.md), Timers): the layer's three seams follow the virtual
   clock; a delay counts from the virtual start; one `drgnx-test-idle` call is one pause; pending layer timers are named
   and cleared at the end.

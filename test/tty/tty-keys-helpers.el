@@ -104,7 +104,7 @@ quits only that (\"[Quit]\"), as it would for a person, who presses it again."
       (setq tries (1+ tries))
       (let ((deadline (+ (float-time) 1)))
         (while (and (drgnx-tty-session-eval s '(and (active-minibuffer-window) t)) (< (float-time) deadline))
-          (drgnx-test-pause 0.05))))
+          (drgnx-test-pause 0.05 "between two looks: the loop waits on its condition"))))
     (should-not (drgnx-tty-session-eval s '(active-minibuffer-window)))))
 
 (provide 'tty-keys-helpers)

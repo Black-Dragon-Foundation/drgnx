@@ -85,7 +85,7 @@ LLM answering SPEC; `o' found running."
     (drgnx-ai-ghost--trigger)
     (insert "x")                                                   ; typed while the model thinks
     (drgnx-ai-ghost--post-command)
-    (drgnx-test-pause 2)                                           ; nothing may show
+    (drgnx-test-pause 2 "nothing may show")
     (should-not (drgnx-ai-ghost-text))))
 
 (ert-deftest drgnx-ai-ghost/an-answer-after-a-change-no-command-made-never-shows ()
@@ -226,7 +226,7 @@ LLM answering SPEC; `o' found running."
       (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
         (drgnx-ai-ghost--trigger)
         (drgnx-ai-ghost--trigger))
-      (drgnx-test-pause 0.3)
+      (drgnx-test-pause 0.3 "no suggestion and no message may come")
       (should-not (drgnx-ai-ghost-text))
       (should-not said)
       (should (= 1 (length (drgnx-notices :source 'ai)))))))

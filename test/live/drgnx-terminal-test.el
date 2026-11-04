@@ -25,7 +25,7 @@
   "FORM's value in SESS once it is non-nil, polled for up to SECONDS; nil if it never is."
   (let ((deadline (+ (float-time) seconds)) v)
     (while (and (not (setq v (drgnx-live-term--q sess form))) (< (float-time) deadline))
-      (drgnx-test-pause 0.1))
+      (drgnx-test-pause 0.1 "between two looks: the loop waits on its condition"))
     v))
 
 (defun drgnx-live-term--setup-form (zdotdir)
@@ -159,7 +159,7 @@
       (drgnx-live-term--q sess "(with-current-buffer \"COMMIT_EDITMSG\" (goto-char (point-min)) (insert \"first\") (save-buffer) (server-edit) t)")
       (let ((deadline (+ (float-time) 10)) subject)
         (while (and (not (equal (setq subject (funcall git "log" "-1" "--format=%s")) "first")) (< (float-time) deadline))
-          (drgnx-test-pause 0.2))
+          (drgnx-test-pause 0.2 "between two looks: the loop waits on its condition"))
         (should (equal subject "first"))))))
 
 (ert-deftest drgnx-live/terminal-keys-split ()

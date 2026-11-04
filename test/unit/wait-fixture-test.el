@@ -148,15 +148,26 @@ is signalled) and the root frame stubbed; the variable `calls' counts the sample
                (let ((orig (symbol-function 'accept-process-output)))
                  (lambda (&optional process secs &rest more) (apply orig process (min secs 0.001) more)))))
       (run-at-time 0 nil #'drgnx-wait-test--link)
-      (should-not (drgnx-test-pause 4)))
+      (should-not (drgnx-test-pause 4 "the chain runs back to back, not one link a wait")))
     (should (= drgnx-wait-test--links 50))
     (should (>= now 4))))
 
 (ert-deftest drgnx-test-wait/works-inside-the-clock-fixture ()
-  ;; Each timed `accept-process-output' advances virtual time by the real wait, so a virtual-time PRED comes true.
+  ;; On the manual clock a wait polls with Emacs's own call and virtual time keeps step with the real, so a
+  ;; virtual-time PRED comes true
   (drgnx-test-with-clock ()
     (let ((start (float-time)))
       (should (drgnx-test-wait (lambda () (> (float-time) (+ start 0.05))) :secs 5)))))
+
+(ert-deftest drgnx-test-pause/on-the-manual-clock-keeps-step-with-the-real-clock ()
+  ;; the clock's own timed waits move virtual time by their timeouts at once: a pause polling with them raced
+  ;; virtual time far ahead (0.2 s of real time was minutes, and timers due then ran in the window)
+  (drgnx-test-with-clock (:allow-pending t)
+    (let (ran)
+      (run-at-time 60 nil (lambda () (setq ran t)))
+      (drgnx-test-pause 0.2 "the 60 s timer may not run")
+      (should-not ran)
+      (should (< (drgnx-test-clock-now) 30)))))
 
 (ert-deftest drgnx-test-wait/on-the-auto-clock-it-stops-at-the-timer-that-made-pred-true ()
   (skip-unless (drgnx-test--core-p))
@@ -177,5 +188,5 @@ is signalled) and the root frame stubbed; the variable `calls' counts the sample
 (ert-deftest drgnx-test-pause/on-the-auto-clock-is-virtual ()
   (skip-unless (drgnx-test--core-p))
   (drgnx-test-with-clock (:auto t)
-    (should-not (drgnx-test-pause 5))
+    (should-not (drgnx-test-pause 5 "virtual seconds on the auto clock"))
     (should (= 5 (round (drgnx-test-clock-now))))))

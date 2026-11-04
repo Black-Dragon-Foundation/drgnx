@@ -112,7 +112,7 @@
              s '(progn (dolist (f (list drgnx-state-tty-test--a drgnx-state-tty-test--b))
                          (with-selected-frame f (drgnx-state-sync f) (drgnx-state-with-write (f 'restore) nil)))
                        t)))
-    (drgnx-test-pause 0.5)                                   ; redisplays and a command-free interval pass
+    (drgnx-test-pause 0.5 "redisplays and a command-free interval may not note a change")
     (should-not (drgnx-tty-session-eval s '(assq 'selected-changed drgnx-state-tty-test--log)))))
 
 ;;; state-test.el ends here

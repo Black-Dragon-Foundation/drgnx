@@ -62,9 +62,9 @@
               (while (and (< (float-time) deadline)
                           (not (equal (setq shown (drgnx-persist-first-client--eval sess drgnx-persist-first-client--shown))
                                       (list (list a b) nil))))
-                (drgnx-test-pause 0.2))
+                (drgnx-test-pause 0.2 "between two looks: the loop waits on its condition"))
               (should (equal shown (list (list a b) nil))))
-            (drgnx-test-pause 1)                  ; nothing restores again a moment later
+            (drgnx-test-pause 1 "nothing may restore again a moment later")
             (should (eql 1 (drgnx-persist-first-client--eval sess "drgnx-persist-first-client--restores")))
             (should (equal (drgnx-persist-first-client--eval sess drgnx-persist-first-client--shown) (list (list a b) nil)))))
       (mapc #'drgnx-ui-stop names)

@@ -1065,6 +1065,18 @@ this test are not passed on."
     (let ((listed (drgnx-run-ert-test--no-skip tmp (format "((%s \"iso-skip/needs\"))" system-type))))
       (should (eql 0 (car (drgnx-run-ert-test--go suite results listed "DRGNX_TEST_SELECTOR=\"^iso-skip/\"")))))))
 
+(ert-deftest drgnx-run-ert/a-must-run-test-that-skips-fails-a-class-run ()
+  ;; a run of one class (the pre-flight's `(tag :cond)') holds the must-run list for that class's tests
+  (drgnx-run-ert-test--with-suite (tmp suite results
+                                       `(("skip-test.el" . ,(concat ";; test-class: cond\n"
+                                                                    (cdar drgnx-run-ert-test--skipper)))))
+    (let ((listed (drgnx-run-ert-test--no-skip tmp (format "((%s \"iso-skip/needs\"))" system-type))))
+      (should (eql 1 (car (drgnx-run-ert-test--go suite results listed "DRGNX_TEST_SELECTOR=(tag :cond)"))))
+      (should (equal (plist-get (aref (plist-get (drgnx-run-ert-test--json results) :failures) 0) :condition)
+                     (format "iso-skip/needs must run on %s but skipped: no frobnicator" system-type)))
+      ;; a run of another class does not hold the test
+      (should (eql 0 (car (drgnx-run-ert-test--go suite results listed "DRGNX_TEST_SELECTOR=(tag :det)")))))))
+
 ;;;; A flake is a result (det Task 22)
 
 (defconst drgnx-run-ert-test--flaker

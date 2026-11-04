@@ -63,7 +63,7 @@ again.  Runs without a hub: no process of the user's, no `~'."
               (ignore-errors (let ((default-directory folder)) (vc-refresh-state)))
               (when (locate-library "magit")
                 (ignore-errors (require 'magit) (let ((default-directory folder)) (magit-status-setup-buffer folder))))
-              (drgnx-test-pause 0.3)                    ; a window in which nothing may run git
+              (drgnx-test-pause 0.3 "nothing may run git")
               (should-not (file-exists-p canary)))
           (when (buffer-live-p buf) (kill-buffer buf))
           (when-let* ((b (get-buffer "*vc-dir*"))) (kill-buffer b)))))))

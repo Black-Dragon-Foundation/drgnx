@@ -16,6 +16,25 @@
 timers however long it waits, so with a timer due the wait polls without a timeout: the chain runs back to back."
   (and timer-list (not (time-less-p nil (timer--time (car timer-list))))))
 
+(defvar drgnx-test--active)
+(defvar drgnx-test--accept)
+(declare-function drgnx-test-real-time "clock-fixture" ())
+(declare-function drgnx-test-advance "clock-fixture" (secs))
+
+(defun drgnx-test-wait--manual-p ()
+  "Non-nil inside `drgnx-test-with-clock' on a manual clock.  A timed `accept-process-output' there moves virtual time
+by its timeout at once (`drgnx-test--accept-process-output'), so a loop of them against the real clock would race
+virtual time ahead; the waits of this file poll with Emacs's own call instead (`drgnx-test-wait--manual-step')."
+  (and (bound-and-true-p drgnx-test--active) (not (eq (bound-and-true-p drgnx-test--core) 'auto))))
+
+(defun drgnx-test-wait--manual-step (secs)
+  "One poll of a wait on the manual clock: Emacs's own `accept-process-output' for up to SECS of real time, then
+virtual time moves by the real time it took.  These waits are real-time by their contract (their deadline is real):
+virtual time keeps step with them, as it did before the clock's own waits moved it by their timeouts."
+  (let ((began (drgnx-test-real-time)))
+    (funcall drgnx-test--accept nil secs)
+    (drgnx-test-advance (max 0 (- (drgnx-test-real-time) began)))))
+
 (defun drgnx-test-wait--auto-p ()
   "Non-nil inside `drgnx-test-with-clock' on Nidhogg's test clock with `:auto' t."
   (eq (bound-and-true-p drgnx-test--core) 'auto))
@@ -47,9 +66,9 @@ Wait on the sentinel's done flag, never on `process-live-p': it turns nil before
          (value (funcall pred))
          idle)
     (while (and (not value) (not idle) (< (drgnx-test-wait-now) deadline))
-      (if (drgnx-test-wait--auto-p)
-          (setq idle (drgnx-test-wait--auto-step))
-        (accept-process-output nil (if (drgnx-test-wait--due-p) 0 0.02)))
+      (cond ((drgnx-test-wait--auto-p) (setq idle (drgnx-test-wait--auto-step)))
+            ((drgnx-test-wait--manual-p) (drgnx-test-wait--manual-step (if (drgnx-test-wait--due-p) 0 0.02)))
+            (t (accept-process-output nil (if (drgnx-test-wait--due-p) 0 0.02))))
       (setq value (funcall pred)))
     (or value
         (signal 'ert-test-failed
@@ -125,12 +144,15 @@ A test with a popup that has no parent passes FRAME: `drgnx-uitest-root-frame' c
 in a short window (a second answer, a tick that starts nothing): a wait for something uses `drgnx-test-wait', and a
 wait for a frame `drgnx-test-wait-presented'.  WHY says what may not happen: the GUI tier's lint wants it.
 Unlike `sleep-for', which runs one link of a chain of timers, it runs the chain back to back.  On the auto clock it
-is SECS of virtual time: a wait returns at once there, and polling real time would spin."
+is SECS of virtual time: a wait returns at once there, and polling real time would spin.  On a manual clock it polls
+with Emacs's own call and virtual time keeps step with the real (`drgnx-test-wait--manual-step')."
   (if (drgnx-test-wait--auto-p)
       (ignore (sleep-for secs))
     (let ((end (+ (drgnx-test-wait-now) secs)))
       (while (< (drgnx-test-wait-now) end)
-        (accept-process-output nil (if (drgnx-test-wait--due-p) 0 0.02))))))
+        (if (drgnx-test-wait--manual-p)
+            (drgnx-test-wait--manual-step (if (drgnx-test-wait--due-p) 0 0.02))
+          (accept-process-output nil (if (drgnx-test-wait--due-p) 0 0.02)))))))
 
 ;; Emacs itself creates these buffers when native compilation runs mid-test (a cold eln cache, as in a fresh CI
 ;; container); a before/after comparison of the buffer list must not see them.

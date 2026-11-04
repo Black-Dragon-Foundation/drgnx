@@ -23,12 +23,14 @@
 synchronous `call-process' (git and the like) is allowed; `drgnx-test-pause' and `drgnx-test-proc-await-exit' are real
 waits; the `drgnx-timer-*' layer only fills timer lists.")
 
-(defconst drgnx-lint-classes--cond-banned '(sleep-for sit-for-positive)
-  "What a conditional test never calls: a fixed pause.  `drgnx-test-pause' stays allowed (the \"did not happen\" window);
-in test/ui it says what may not happen (`drgnx-lint-classes--gui-pauses').")
+(defconst drgnx-lint-classes--cond-banned '(sleep-for sit-for-positive pause-without-a-reason)
+  "What a conditional test never calls: a fixed pause.  `drgnx-test-pause' stays allowed as the \"did not happen\"
+window, and says what may not happen in it (`(drgnx-test-pause SECS \"WHY\")'): a pause with no reason is a settle,
+which waits for a condition instead.  In test/ui every top-level form is held to that (`drgnx-lint-classes--gui-pauses').")
 
-(defconst drgnx-lint-classes--clock-reads '(float-time-bare current-time time-since drgnx-test-real-time)
-  "Calls that read the wall clock; `float-time' of an argument only converts a time.")
+(defconst drgnx-lint-classes--clock-reads '(float-time-bare current-time time-since drgnx-test-real-time clock-read-nil)
+  "Calls that read the wall clock; `float-time' of an argument only converts a time, and `clock-read-nil' is a time of
+nil (`drgnx-lint-classes--nil-clock-read-p').")
 
 (defconst drgnx-lint-classes--comparisons '(< > <= >= = /= time-less-p time-equal-p))
 
@@ -41,12 +43,14 @@ in test/ui it says what may not happen (`drgnx-lint-classes--gui-pauses').")
     (mapcar #'car (read (current-buffer)))))
 
 (defun drgnx-lint-classes--files ()
-  "Every live test file (relative names): the test tiers' `*-test.el' files that are not exempt."
+  "Every live test file (relative names): the test tiers' `*-test.el' files that are not exempt, and the
+`*-isolated.el' files that a `-test.el' file runs in an Emacs of their own (test/unit/isolated)."
   (let ((exempt (drgnx-lint-classes--exempt)))
     (seq-remove (lambda (f) (member f exempt))
                 (mapcar (lambda (f) (file-relative-name f drgnx-dir))
                         (seq-mapcat (lambda (d)
-                                      (directory-files-recursively (expand-file-name d drgnx-dir) "-test\\.el\\'"))
+                                      (directory-files-recursively (expand-file-name d drgnx-dir)
+                                                                   "-\\(test\\|isolated\\)\\.el\\'"))
                                     drgnx-lint-classes--dirs)))))
 
 (defun drgnx-lint-classes--forms (file)
@@ -70,21 +74,75 @@ clock fixture, so what they wrap is on virtual time like the fixture's own body.
   "F is `drgnx-test-with-clock', or a file-local macro that wraps it."
   (and (consp f) (or (eq (car f) 'drgnx-test-with-clock) (memq (car f) drgnx-lint-classes--clock-macros))))
 
+(defun drgnx-lint-classes--deftest-macro-p (name)
+  "NAME is a macro that defines tests by the suite's convention: its name ends in `deftest' and is not `ert-deftest'."
+  (and (symbolp name) (not (eq name 'ert-deftest)) (string-suffix-p "deftest" (symbol-name name))))
+
+(defun drgnx-lint-classes--expander (def)
+  "The expander function of the `defmacro' or `cl-defmacro' form DEF: its arguments and body as a function."
+  (eval `(cl-function (lambda ,(nth 2 def) ,@(nthcdr 3 def))) t))
+
+(defvar drgnx-lint-classes--shared-macros nil
+  "The test-defining macros of the whole test tree, an alist of name to expander, read once: a file uses one another
+file defines (`drgnx-platform-test--deftest', `drgnx-work-db-writer-deftest').")
+
+(defun drgnx-lint-classes--shared-macros ()
+  (or drgnx-lint-classes--shared-macros
+      (setq drgnx-lint-classes--shared-macros
+            (let (out)
+              (dolist (d (append '("test/support" "test/fixtures") drgnx-lint-classes--dirs))
+                (dolist (file (directory-files-recursively (expand-file-name d drgnx-dir) "\\.el\\'"))
+                  (dolist (f (ignore-errors (drgnx-lint-classes--forms file)))
+                    (when (and (memq (car-safe f) '(defmacro cl-defmacro))
+                               (drgnx-lint-classes--deftest-macro-p (cadr f))
+                               (not (assq (cadr f) out)))
+                      (push (cons (cadr f) (drgnx-lint-classes--expander f)) out)))))
+              out))))
+
+(defvar drgnx-lint-classes--unexpanded nil
+  "The test-defining forms of the last parse that made no `ert-deftest', as (NAME . WHY): the lint cannot see them.")
+
+(defun drgnx-lint-classes--expand-tests (form macros &optional depth)
+  "The `ert-deftest' forms FORM makes: itself, or what a test-defining macro of MACROS (name to expander) expands it
+to, followed into the `ert-deftest's of the expansion."
+  (cond ((eq (car-safe form) 'ert-deftest) (list form))
+        ((> (or depth 0) 10) nil)
+        ((and (consp form) (assq (car form) macros))
+         (let ((exp (apply (cdr (assq (car form) macros)) (cdr form))) out)
+           (drgnx-lint-classes--walk
+            exp (lambda (x)
+                  (when (or (eq (car-safe x) 'ert-deftest) (and (consp x) (assq (car x) macros)))
+                    (setq out (append out (drgnx-lint-classes--expand-tests x macros (1+ (or depth 0)))))
+                    t)))
+           out))))
+
 (defun drgnx-lint-classes--parse (forms)
   "FORMS (a file's top-level forms) as (HELPERS . TESTS): HELPERS an alist of file-local function name to its form,
-TESTS the `ert-deftest' forms."
-  (let (helpers tests)
-    (setq drgnx-lint-classes--clock-macros nil)
+TESTS the `ert-deftest' forms, those a test-defining macro (`drgnx-lint-classes--deftest-macro-p') makes included:
+the file's own, or one of the test tree's."
+  (let (helpers tests local)
+    (setq drgnx-lint-classes--clock-macros nil drgnx-lint-classes--unexpanded nil)
     (dolist (f forms)
-      (when (consp f)
-        (when (and (memq (car f) '(defmacro cl-defmacro))
-                   (let (hit)
-                     (drgnx-lint-classes--walk f (lambda (x) (when (eq x 'drgnx-test-with-clock) (setq hit t)) hit))
-                     hit))
-          (push (cadr f) drgnx-lint-classes--clock-macros))
-        (cond ((memq (car f) '(defun cl-defun defsubst cl-defsubst defmacro cl-defmacro))
-               (push (cons (cadr f) f) helpers))
-              ((eq (car f) 'ert-deftest) (push f tests)))))
+      (when (and (memq (car-safe f) '(defmacro cl-defmacro)) (drgnx-lint-classes--deftest-macro-p (cadr f)))
+        (push (cons (cadr f) (ignore-errors (drgnx-lint-classes--expander f))) local)))
+    (let ((macros (append local (drgnx-lint-classes--shared-macros))))
+      (dolist (f forms)
+        (when (consp f)
+          (when (and (memq (car f) '(defmacro cl-defmacro))
+                     (let (hit)
+                       (drgnx-lint-classes--walk f (lambda (x) (when (eq x 'drgnx-test-with-clock) (setq hit t)) hit))
+                       hit))
+            (push (cadr f) drgnx-lint-classes--clock-macros))
+          (cond ((memq (car f) '(defun cl-defun defsubst cl-defsubst defmacro cl-defmacro))
+                 (push (cons (cadr f) f) helpers))
+                ((eq (car f) 'ert-deftest) (push f tests))
+                ((drgnx-lint-classes--deftest-macro-p (car f))
+                 (let ((made (condition-case err (drgnx-lint-classes--expand-tests f macros)
+                               (error (push (cons (cadr f) (format "%S" err)) drgnx-lint-classes--unexpanded) nil))))
+                   (if made
+                       (setq tests (append (reverse made) tests))
+                     (unless (assq (cadr f) drgnx-lint-classes--unexpanded)
+                       (push (cons (cadr f) "makes no ert-deftest") drgnx-lint-classes--unexpanded)))))))))
     (cons helpers (nreverse tests))))
 
 ;;;; Walking
@@ -96,17 +154,37 @@ TESTS the `ert-deftest' forms."
       (let ((x form))
         (while (consp x) (drgnx-lint-classes--walk (car x) fn) (setq x (cdr x)))))))
 
+(defun drgnx-lint-classes--nil-clock-read-p (f)
+  "F reads the wall clock through a time of nil (\"now\"): `(time-less-p nil END)', `(time-add nil 2)',
+`format-time-string' or `decode-time' with no time, `(float-time nil)'.  Real even inside the clock fixture on the
+advice path, which makes only `current-time' and a bare `float-time' virtual."
+  (and (consp f) (symbolp (car f))
+       (pcase (car f)
+         ((or 'time-less-p 'time-equal-p 'time-subtract 'time-add)
+          (or (and (cdr f) (null (nth 1 f))) (and (cddr f) (null (nth 2 f)))))
+         ('time-convert (and (cdr f) (null (nth 1 f))))
+         ('float-time (and (cdr f) (null (nth 1 f))))       ; bare: `float-time-bare'
+         ((or 'decode-time 'time-to-seconds 'current-time-string) (null (nth 1 f)))
+         ('format-time-string (and (cdr f) (null (nth 2 f)))))))
+
 (defun drgnx-lint-classes--calls (form)
-  "The calls in FORM, as symbols; the keys `sit-for-positive', `accept-process-output-timed' and `float-time-bare'
-stand for the forms that wait on a time or read the wall clock, and `pause-without-a-reason' for a `drgnx-test-pause'
-with no reason string.  What `drgnx-test-with-clock' wraps is not walked: the fixture moves time there."
+  "The calls in FORM, as symbols; the keys `sit-for-positive', `accept-process-output-timed', `float-time-bare' and
+`clock-read-nil' stand for the forms that wait on a time or read the wall clock, and `pause-without-a-reason' for a
+`drgnx-test-pause' with no reason string.  A function passed as a value is a call: `#'h' always, `'h' as a
+`(quote . h)' entry, which `drgnx-lint-classes--reaches' follows into a file-local helper.  What
+`drgnx-test-with-clock' wraps is not walked: the fixture moves time there."
   (let (out)
     (drgnx-lint-classes--walk
      form
      (lambda (f)
        (cond ((drgnx-lint-classes--clock-form-p f) t)
-             ((eq (car-safe f) 'quote) t)    ; a quoted symbol is data (stubs, lists), not a call
+             ((and (eq (car-safe f) 'function) (symbolp (cadr f)))
+              (push (cadr f) out) t)
+             ((eq (car-safe f) 'quote)       ; a quoted symbol is data (stubs, lists), unless it names a helper
+              (when (and (cadr f) (symbolp (cadr f))) (push (cons 'quote (cadr f)) out))
+              t)
              ((and (consp f) (symbolp (car f)))
+              (when (drgnx-lint-classes--nil-clock-read-p f) (push 'clock-read-nil out))
               (push (car f) out)
               (pcase (car f)
                 ;; a clock read that decides a loop is a deadline; one that only sets a stamp is not
@@ -116,7 +194,8 @@ with no reason string.  What `drgnx-test-with-clock' wraps is not walked: the fi
                    (push 'clock-loop out)))
                 ('sit-for (unless (eql (cadr f) 0) (push 'sit-for-positive out)))
                 ('drgnx-test-pause (unless (stringp (nth 2 f)) (push 'pause-without-a-reason out)))
-                ('accept-process-output (when (and (nth 2 f) (not (eql (nth 2 f) 0)))
+                ;; SECONDS or MILLISEC: either one that is not a literal 0 waits
+                ('accept-process-output (when (seq-some (lambda (a) (and a (not (eql a 0)))) (list (nth 2 f) (nth 3 f)))
                                           (push 'accept-process-output-timed out)))
                 ('float-time (unless (cdr f) (push 'float-time-bare out))))
               nil))))
@@ -127,7 +206,10 @@ with no reason string.  What `drgnx-test-with-clock' wraps is not walked: the fi
   (let (out seen)
     (cl-labels ((visit (f via)
                   (dolist (k (drgnx-lint-classes--calls f))
-                    (cond ((memq k banned)
+                    ;; a quoted symbol counts only as a file-local helper passed by name (`funcall', a hook, a timer)
+                    (when (eq (car-safe k) 'quote) (setq k (and (assq (cdr k) helpers) (cdr k))))
+                    (cond ((null k))
+                          ((memq k banned)
                            (cl-pushnew (if via (format "%s (through %s)" k via) (symbol-name k)) out :test #'equal))
                           ((and (assq k helpers) (not (memq k seen)))
                            (push k seen)
@@ -143,14 +225,18 @@ with no reason string.  What `drgnx-test-with-clock' wraps is not walked: the fi
 
 (defun drgnx-lint-classes--clock-read-p (f)
   (and (consp f) (or (memq (car f) '(current-time time-since drgnx-test-real-time))
-                     (and (eq (car f) 'float-time) (null (cdr f))))))
+                     (and (eq (car f) 'float-time) (null (cdr f)))
+                     (drgnx-lint-classes--nil-clock-read-p f))))
 
 (defun drgnx-lint-classes--virtual (f &optional in)
   "F with the clock reads inside `drgnx-test-with-clock' (and its wrappers) replaced by 0: the fixture makes them
-virtual, so they are no wall-clock reads.  `drgnx-test-real-time' stays: it reads the true clock."
+virtual, so they are no wall-clock reads.  `drgnx-test-real-time' stays: it reads the true clock; so does a time of
+nil, which the advice path leaves real."
   (cond ((atom f) f)
         ((eq (car f) 'quote) f)
-        ((and in (drgnx-lint-classes--clock-read-p f) (not (eq (car f) 'drgnx-test-real-time))) 0)
+        ((and in (drgnx-lint-classes--clock-read-p f) (not (eq (car f) 'drgnx-test-real-time))
+              (not (drgnx-lint-classes--nil-clock-read-p f)))
+         0)
         (t (let ((in (or in (drgnx-lint-classes--clock-form-p f))) out)
              (while (consp f)
                (push (drgnx-lint-classes--virtual (car f) in) out)
@@ -207,6 +293,9 @@ the clock fixture is virtual (except `drgnx-test-real-time'); a value stays a re
       (let* ((file (expand-file-name rel drgnx-dir)) (file-class (drgnx-run-ert--file-class file)))
         (when file-class
           (let ((parsed (drgnx-lint-classes--parse (drgnx-lint-classes--forms file))))
+            ;; a test-defining form the lint cannot expand is a test it cannot see
+            (dolist (u drgnx-lint-classes--unexpanded)
+              (push (format "%s: %s: did not expand: %s" rel (car u) (cdr u)) out))
             (dolist (test (cdr parsed))
               (let ((c (or (drgnx-lint-classes--own-class test) file-class)))
                 (when (if class (eq c class) (not (eq c :timing)))
@@ -285,7 +374,11 @@ a test reaches by a call: a command a test binds to a key is named by `function'
   (should (drgnx-lint-classes--check :cond #'drgnx-lint-classes--rule-cond "(ert-deftest a/b () (sleep-for 0.1))"))
   (should (drgnx-lint-classes--check :cond #'drgnx-lint-classes--rule-cond "(ert-deftest a/b () (sit-for 1))"))
   (should-not (drgnx-lint-classes--check :cond #'drgnx-lint-classes--rule-cond
-                                         "(ert-deftest a/b () (sit-for 0) (drgnx-test-pause 0.2) (run-at-time 1 nil #'ignore))"))
+                                         "(ert-deftest a/b () (sit-for 0) (drgnx-test-pause 0.2 \"no second answer\") (run-at-time 1 nil #'ignore))"))
+  ;; a pause with no reason is a settle, in any tier: through a helper too
+  (should (equal (drgnx-lint-classes--check :cond #'drgnx-lint-classes--rule-cond
+                                            "(defun settle () (drgnx-test-pause 0.1)) (ert-deftest a/b () (settle))")
+                 '("pause-without-a-reason (through settle)")))
   ;; a window in the GUI tier says what may not happen; the rest of the suite's windows are the plain call
   (should (memq 'pause-without-a-reason (drgnx-lint-classes--calls '(progn (drgnx-test-pause 0.3)))))
   (should-not (memq 'pause-without-a-reason (drgnx-lint-classes--calls '(drgnx-test-pause 0.3 "no second answer"))))
@@ -299,6 +392,63 @@ a test reaches by a call: a command a test binds to a key is named by `function'
                                          "(ert-deftest a/b () (let ((stamp (float-time))) (set-file-times f stamp)) (should (< (plist-get x :time) 4)))"))
   (should-not (drgnx-lint-classes--check nil #'drgnx-lint-classes--rule-asserts
                                          "(ert-deftest a/b () (drgnx-test-with-clock () (should (< (float-time) 5))))")))
+
+(ert-deftest drgnx-lint/class-lints-see-tests-a-macro-defines ()
+  ;; a file's own test-defining macro, and one another test file defines (platform-test.el, test/support)
+  (should (equal (drgnx-lint-classes--check
+                  :det #'drgnx-lint-classes--rule-det
+                  "(defmacro m--deftest (name &rest body) `(ert-deftest ,name () ,@body)) (m--deftest a/b (sleep-for 1))")
+                 '("sleep-for")))
+  (should (equal (drgnx-lint-classes--check :det #'drgnx-lint-classes--rule-det
+                                            "(drgnx-platform-test--deftest a/b () (drgnx-test-pause 0.1))")
+                 '("drgnx-test-pause")))
+  (should (equal (drgnx-lint-classes--check :det #'drgnx-lint-classes--rule-det
+                                            "(drgnx-work-db-writer-deftest a/b () \"Doc.\" (sleep-for 1))")
+                 '("sleep-for")))
+  ;; the macro's own tag still wins over the file's class
+  (should (eq :timing (drgnx-lint-classes--own-class
+                       (cadr (drgnx-lint-classes--read-test
+                              "(drgnx-platform-test--deftest a/b () :tags '(:timing) (ignore))")))))
+  ;; a test-defining form that makes no test is reported, not passed over
+  (drgnx-lint-classes--read-test "(defmacro m--deftest (&rest _) nil) (m--deftest a/b)")
+  (should (equal (mapcar #'car drgnx-lint-classes--unexpanded) '(a/b))))
+
+(ert-deftest drgnx-lint/class-lints-follow-a-helper-passed-as-a-value ()
+  (dolist (src '("(defun h (_) (sleep-for 1)) (ert-deftest a/b () (mapc #'h '(1)))"
+                 "(defun h () (sleep-for 1)) (ert-deftest a/b () (funcall 'h))"
+                 "(defun h () (sleep-for 1)) (ert-deftest a/b () (add-hook 'x-hook #'h))"))
+    (should (equal (drgnx-lint-classes--check :det #'drgnx-lint-classes--rule-det src) '("sleep-for (through h)"))))
+  ;; a quoted name that is no helper of the file stays data
+  (should-not (drgnx-lint-classes--check :det #'drgnx-lint-classes--rule-det
+                                         "(ert-deftest a/b () (cl-letf (((symbol-function 'make-process) #'ignore)) (ignore)))")))
+
+(ert-deftest drgnx-lint/class-lints-see-a-clock-read-of-nil ()
+  (dolist (src '("(ert-deftest a/b () (let ((end (time-add nil 3))) (while (time-less-p nil end) (ignore))))"
+                 "(ert-deftest a/b () (while (equal (format-time-string \"%S\") s) (ignore)))"
+                 "(ert-deftest a/b () (while (< (float-time nil) end) (ignore)))"))
+    (should (member "clock-loop" (drgnx-lint-classes--check :det #'drgnx-lint-classes--rule-det src))))
+  (should (drgnx-lint-classes--check nil #'drgnx-lint-classes--rule-asserts
+                                     "(ert-deftest a/b () (should (time-less-p nil deadline)))"))
+  (should (drgnx-lint-classes--check nil #'drgnx-lint-classes--rule-asserts
+                                     "(ert-deftest a/b () (let ((t0 (time-convert nil 'integer))) (should (< t0 5))))"))
+  ;; real on the advice path even inside the fixture, so still a reading there
+  (should (drgnx-lint-classes--check nil #'drgnx-lint-classes--rule-asserts
+                                     "(ert-deftest a/b () (drgnx-test-with-clock () (should (time-less-p nil deadline))))"))
+  ;; a time given is a conversion, not a read
+  (should-not (drgnx-lint-classes--check nil #'drgnx-lint-classes--rule-asserts
+                                         "(ert-deftest a/b () (should (time-less-p a b)) (should (equal (format-time-string \"%F\" 0) x)))")))
+
+(ert-deftest drgnx-lint/class-lints-see-a-millisecond-wait ()
+  (dolist (src '("(ert-deftest a/b () (accept-process-output p nil 500))"
+                 "(ert-deftest a/b () (accept-process-output p 0 500))"))
+    (should (equal (drgnx-lint-classes--check :det #'drgnx-lint-classes--rule-det src) '("accept-process-output-timed"))))
+  (should-not (drgnx-lint-classes--check :det #'drgnx-lint-classes--rule-det
+                                         "(ert-deftest a/b () (accept-process-output p 0 0))")))
+
+(ert-deftest drgnx-lint/class-lints-read-the-isolated-files ()
+  ;; test/unit/isolated/*-isolated.el run in an Emacs of their own, from a `-test.el' file: the lints read them too
+  (let ((files (drgnx-lint-classes--files)))
+    (should (seq-some (lambda (f) (string-match-p "\\`test/unit/isolated/.*-isolated\\.el\\'" f)) files))))
 
 (ert-deftest drgnx-lint/a-test-tag-wins-over-the-file-class ()
   (should (eq :cond (drgnx-lint-classes--own-class
@@ -318,6 +468,26 @@ a test reaches by a call: a command a test binds to a key is named by `function'
     (message "drgnx: %d test files (%d tests) have no class yet" (length without) n)
     (when drgnx-lint-classes--all-classified
       (should-not without))))
+
+(ert-deftest drgnx-lint/every-timing-test-is-in-a-row ()
+  ;; the timing lane (test/timing-lane.sh) runs the unit tier's :timing tests by the rows of test/timing-rows.txt, a
+  ;; name prefix each: a test no row starts runs nowhere
+  (let ((rows (with-temp-buffer
+                (insert-file-contents (expand-file-name "test/timing-rows.txt" drgnx-dir))
+                (cl-loop for line in (split-string (buffer-string) "\n" t)
+                         for name = (car (split-string (replace-regexp-in-string "#.*" "" line) " " t))
+                         when name collect name)))
+        missing)
+    (should rows)
+    (dolist (rel (drgnx-lint-classes--files))
+      (when (string-prefix-p "test/unit/" rel)
+        (let* ((file (expand-file-name rel drgnx-dir)) (file-class (drgnx-run-ert--file-class file)))
+          (dolist (test (cdr (drgnx-lint-classes--parse (drgnx-lint-classes--forms file))))
+            (when (eq (or (drgnx-lint-classes--own-class test) file-class) :timing)
+              (let ((name (symbol-name (cadr test))))
+                (unless (or (member "all" rows) (seq-some (lambda (r) (string-prefix-p r name)) rows))
+                  (push (format "%s: %s" rel name) missing))))))))
+    (should-not missing)))
 
 (ert-deftest drgnx-lint/no-stale-exempt-rows ()
   ;; always on, in either merge order: a row whose file is gone, or a file that has both a row and a class line
@@ -396,6 +566,21 @@ a test reaches by a call: a command a test binds to a key is named by `function'
       (should (equal 0 (plist-get (drgnx-run-ert--judge-flaky (funcall summary con)) :failed)))
       (should (equal 1 (plist-get (drgnx-run-ert--judge-flaky (funcall summary det)) :failed))))))
 
+(ert-deftest drgnx-run-ert/a-whole-file-flake-with-a-det-test-fails-even-when-listed ()
+  ;; a file that hung or died is judged by every test it holds: a :det test of a cond file may be what hung
+  (let* ((mixed (drgnx-lint-classes-test--tmp ";; test-class: cond" '(ert-deftest x/c () (should t))
+                                              '(ert-deftest x/d () :tags '(:det) (should t))))
+         (plain (drgnx-lint-classes-test--tmp ";; test-class: cond" '(ert-deftest x/c () (should t))))
+         (list-file (make-temp-file "drgnx-flaky"))
+         (summary (lambda (file)
+                    (list :total 1 :passed 1 :failed 0 :failures [] :known_red [] :tests [] :skipped []
+                          :flaky (vector (list :name "file x-test.el" :file file :condition "timed out")))))
+         (process-environment (cons (concat "DRGNX_TEST_FLAKY=" list-file) process-environment)))
+    (with-temp-file list-file (insert "((\"file x-test.el\" :reason \"a cause\" :stress \"a run\"))\n"))
+    (let ((inhibit-message t))
+      (should (equal 0 (plist-get (drgnx-run-ert--judge-flaky (funcall summary plain)) :failed)))
+      (should (equal 1 (plist-get (drgnx-run-ert--judge-flaky (funcall summary mixed)) :failed))))))
+
 (ert-deftest drgnx-run-ert/the-audit-records-a-real-sleep-and-ignores-the-clock ()
   (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
   (let ((drgnx-run-ert--audit-seen nil) (drgnx-run-ert--audit-file nil) (inhibit-message t))
@@ -407,8 +592,15 @@ a test reaches by a call: a command a test binds to a key is named by `function'
             (should (equal drgnx-run-ert--audit-seen '(("x/det" . accept-process-output))))
             (setq drgnx-run-ert--audit-seen nil)
             (accept-process-output nil 0)  ; no wait: not a use of real time
-            (drgnx-test-with-clock () (sleep-for 5) (sit-for 1))
-            (should-not drgnx-run-ert--audit-seen)))
+            (let ((pipe (make-pipe-process :name "drgnx-audit-pipe" :noquery t)))
+              (setq drgnx-run-ert--audit-seen nil)
+              (unwind-protect (accept-process-output pipe 0) ; a timeout of 0 on a live process is a look too
+                (delete-process pipe)))
+            (drgnx-test-with-clock () (sleep-for 5) (sit-for 1) (accept-process-output nil 1))
+            (should-not drgnx-run-ert--audit-seen)
+            ;; a process or a socket under the fixture is real work: recorded
+            (drgnx-test-with-clock () (drgnx-run-ert--audit-record 'make-process))
+            (should (equal drgnx-run-ert--audit-seen '(("x/det" . make-process))))))
       (drgnx-run-ert--audit-unadvise))))
 
 (ert-deftest drgnx-run-ert/the-audit-leaves-the-environment-and-the-primitives-alone ()

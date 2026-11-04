@@ -82,7 +82,8 @@
     ;; C-g stops busy Lisp
     (drgnx-tty-session-eval s drgnx-tty-tmux-test--busy)
     (drgnx-tty-session-key s "<f12>" 'mok)
-    (drgnx-test-pause 0.5)                ; Emacs is blocked in the program: nothing to ask it
+    ;; DEFERRED: a settle (Emacs is blocked in the program: nothing to ask it), until the hand-back is visible
+    (drgnx-test-pause 0.5 "settle: the keys are handed back, nothing to ask")
     (let ((sent (float-time)))
       (drgnx-tty-session-key s "C-g")
       (should (< (- (drgnx-tty-session-wait s 'kx-returned 10) sent) 2)))))
@@ -137,7 +138,7 @@
     (should-not (drgnx-tty-session-eval s '(plist-get (terminal-parameter nil 'drgnx-tty-caps) :osc52)))
     (drgnx-tty-tmux-test--copy s "stays here")
     (should (equal (drgnx-tty-session-eval s '(car kill-ring)) "stays here"))
-    (drgnx-test-pause 0.5)                ; no copy may reach the clipboard in this window
+    (drgnx-test-pause 0.5 "no copy may reach the clipboard")
     (should-not (drgnx-tty-session-clipboard s))))
 
 (ert-deftest drgnx-tty-tmux/focus-events-reach-drgnx ()

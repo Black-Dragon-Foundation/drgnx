@@ -21,7 +21,7 @@
   "Call THUNK every 0.2 s until it returns non-nil (that value) or SECONDS (default 8) pass (nil)."
   (let ((deadline (+ (float-time) (or seconds 8))) r)
     (while (and (not (setq r (funcall thunk))) (< (float-time) deadline))
-      (drgnx-test-pause 0.2))
+      (drgnx-test-pause 0.2 "between two looks: the loop waits on its condition"))
     r))
 
 (defmacro drgnx-wm-move--in-root (root &rest body)
@@ -276,7 +276,7 @@ Under X the window manager (or the pointer) gives Emacs the real event."
               (should (drgnx-wm-move--until
                        (lambda () (string-match-p "monitor is not connected" (drgnx-wm-move--eval sess messages)))
                        6))
-              (drgnx-test-pause 1)
+              (drgnx-test-pause 1 "the message may not come twice")
               (let ((text (drgnx-wm-move--eval sess messages)))
                 (should (= 1 (drgnx-wm-move--count "monitor is not connected" text)))
                 (should-not (string-match-p "after-restore function\\|was not restored" text))
@@ -320,7 +320,7 @@ Under X the window manager (or the pointer) gives Emacs the real event."
               (let ((r (drgnx-wm-move--move sess 2)))
                 (should (eq :error (car-safe r)))
                 (should (string-match-p "its own key" (cadr r))))
-              (drgnx-test-pause 1)
+              (drgnx-test-pause 1 "the window may not move")
               (should (equal (drgnx-wm-move--eval sess where) before))))
         (drgnx-ui-stop (plist-get sess :name))))))
 

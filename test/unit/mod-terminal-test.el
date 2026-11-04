@@ -54,11 +54,16 @@ panel's rules on."
              (when p (set-process-query-on-exit-flag p nil))
              (kill-buffer b)))))))
 
+(defun drgnx-terminal-test--writes (command file)
+  "A shell's script that writes COMMAND's output to FILE whole (a rename: it never shows half written), then waits."
+  (let ((q (shell-quote-argument file)) (tmp (shell-quote-argument (concat file ".tmp"))))
+    (format "%s > %s && mv %s %s\nexec sleep 30" command tmp tmp q)))
+
 (defun drgnx-terminal-test--wait-for-file (file)
-  "FILE's text once the shell has written it (waits up to 5 s), else nil."
-  (drgnx-terminal-test--wait-until (lambda () (and (file-exists-p file) (> (file-attribute-size (file-attributes file)) 0))))
+  "FILE's text once the shell has written it (waits up to 5 s), else nil.  The script writes it whole
+\(`drgnx-terminal-test--writes'), so it is read as soon as it is there."
+  (drgnx-terminal-test--wait-until (lambda () (file-exists-p file)))
   (when (file-exists-p file)
-    (drgnx-test-pause 0.2)
     (with-temp-buffer (insert-file-contents file) (buffer-string))))
 
 (ert-deftest drgnx-terminal/new-terminal-is-eat-running-the-users-shell ()
@@ -118,7 +123,7 @@ panel's rules on."
   (let* ((dir (make-temp-file "drgnx-term" t)) (sub (file-name-as-directory (expand-file-name "work dir" dir)))
          (out (expand-file-name "pwd.txt" dir)))
     (make-directory sub)
-    (let* ((script (drgnx-terminal-test--script dir (format "pwd -P > %s\nexec sleep 30" (shell-quote-argument out))))
+    (let* ((script (drgnx-terminal-test--script dir (drgnx-terminal-test--writes "pwd -P" out)))
            (process-environment (cons (concat "SHELL=" script) process-environment)))
       (unwind-protect
           (drgnx-terminal-test--fresh t
@@ -148,7 +153,7 @@ panel's rules on."
 (ert-deftest drgnx-terminal/the-shell-sees-this-server ()
   (unless (drgnx-terminal-test--eat-dir) (ert-skip drgnx-terminal-test--skip))
   (let* ((dir (make-temp-file "drgnx-term" t)) (out (expand-file-name "env.txt" dir))
-         (script (drgnx-terminal-test--script dir (format "env > %s\nexec sleep 30" (shell-quote-argument out))))
+         (script (drgnx-terminal-test--script dir (drgnx-terminal-test--writes "env" out)))
          (process-environment (cons (concat "SHELL=" script) process-environment))
          (server-socket-dir dir) (server-name "drgnx-term-test") (server-use-tcp nil) (server-process nil) (server-clients nil))
     (unwind-protect
@@ -166,7 +171,7 @@ panel's rules on."
 (ert-deftest drgnx-terminal/no-server-no-editor ()
   (unless (drgnx-terminal-test--eat-dir) (ert-skip drgnx-terminal-test--skip))
   (let* ((dir (make-temp-file "drgnx-term" t)) (out (expand-file-name "env.txt" dir))
-         (script (drgnx-terminal-test--script dir (format "env > %s\nexec sleep 30" (shell-quote-argument out))))
+         (script (drgnx-terminal-test--script dir (drgnx-terminal-test--writes "env" out)))
          (process-environment (append (list (concat "SHELL=" script) "EDITOR=their-editor") process-environment))
          (server-process nil))
     (unwind-protect
@@ -336,7 +341,8 @@ panel's rules on."
                 ;; the prompt after it clears the flag again
                 (should (drgnx-terminal-test--wait-until (lambda () (not (process-query-on-exit-flag proc)))))))
           ;; the shell may still be dying (the cleanup killed its terminal): not before it is gone, or HOME is not empty
-          (when shell-proc (drgnx-terminal-test--wait-until (lambda () (not (process-live-p shell-proc)))))
+          (when shell-proc
+            (condition-case nil (drgnx-test-wait-ended shell-proc :secs 5 :what "the shell's end") (ert-test-failed nil)))
           (delete-directory home t))))))
 
 (ert-deftest drgnx-terminal/the-fallback-scan-is-local-and-runs-once-per-pass ()

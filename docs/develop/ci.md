@@ -199,11 +199,14 @@ tested once:
 Every tier sets `DRGNX_TEST_NO_TIMING=1`, so the tests tagged `:timing` (wall-clock assertions) run in one place only:
 the `timing` job of the tiers workflow (`tiers: timing`), which runs `test/timing-lane.sh`. It is report-only
 (the script reports and exits 0, so a red verdict never reddens the run; `CI gate` does not need it). The lane takes 20 samples of each row of `test/timing-rows.txt`
-(`all`, or a test-name prefix when the set must be sharded), measures a fixed workload before and after (the calibration),
+(one row for each area's test-name prefix, so an area is judged on its own time; `drgnx-lint/every-timing-test-is-in-a-row`
+fails a `:timing` test no row holds), measures a fixed workload before and after (the calibration: a batch Emacs in the
+image the tests run in, `DRGNX_TEST_IMAGE`, never a host Emacs, which a CI runner does not have),
 and passes `DRGNX_TEST_TIME_FACTOR` = calibration / the budgets' reference calibration (`# island-calibration` in the rows
 file) to the tests. A row is `void` when the two calibrations differ by over 25 % (retried once), `red` when its median
 time exceeds the ratio times the calibration or over half the samples fail (rerun once; a pass on the rerun is `flaky`).
-`test/timing-lane.sh --self-test` checks the verdicts.
+`test/timing-lane.sh --self-test` checks the verdicts and where the calibration runs (`drgnx-ci/the-timing-lane-judges-and-calibrates-in-the-image`
+runs it with the unit suite).
 
 `bin/drgnx test --preflight --out REPORT [--seeds N] [--nidhogg-tarball FILE]` hunts ordering bugs: the `det` files twice
 in two shuffle orders with the runtime audit failing (`DRGNX_TEST_AUDIT_FAIL=1`: a `det` test that really sleeps, waits
@@ -228,6 +231,11 @@ line, and the summary at the end lists every unexpected result.
 The `unit` job (Linux, Fedora 45) also sets `DRGNX_TEST_LOCALE=C.UTF-8`, which `bin/drgnx test --container` turns into
 `LC_ALL` in the container; the other jobs run with no locale, so both are covered.
 
+The `unit` and `no-lisp-writes` jobs run the runtime audit and fail on it (`DRGNX_TEST_AUDIT=1`,
+`DRGNX_TEST_AUDIT_FAIL=1`; [harness.md](harness.md), "The audit"): a `det` test that really sleeps, waits with a timeout,
+or starts a process or a socket is red there, as it is in the pre-flight. The primitives are advised only around `det`
+tests, so the other tests run as before.
+
 No CI job runs a `:timing` test: a shared runner's clock judges nothing, so a budget in wall time lives where the
 machine is quiet (`bin/drgnx check`'s `unit-timing` job, [check.md](check.md)) and, for the frame and the work in a
 command, in the perf job (allocation, CPU time and counts; [perf.md](perf.md)). `bin/drgnx check` stays as the local
@@ -244,7 +252,7 @@ DEFERRED DET-CI-ENV-1: the step uses `DRGNX_TEST_NO_TIMING=1` rather than `(not 
 The same locally (the Emacs 31.1 job's step, without the container):
 
 ```
-DRGNX_TEST_JOBS=4 DRGNX_TEST_RERUN=1 DRGNX_TEST_NO_TIMING=1 bin/drgnx test
+DRGNX_TEST_JOBS=4 DRGNX_TEST_RERUN=1 DRGNX_TEST_NO_TIMING=1 DRGNX_TEST_AUDIT=1 DRGNX_TEST_AUDIT_FAIL=1 bin/drgnx test
 ```
 
 ## Reproduce a job locally

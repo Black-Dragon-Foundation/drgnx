@@ -114,7 +114,7 @@
         (let ((deadline (+ (float-time) 10)))
           (while (and (not (file-exists-p (expand-file-name "ready.json" (plist-get s :run))))
                       (< (float-time) deadline))
-            (drgnx-test-pause 0.1)))
+            (drgnx-test-pause 0.1 "between two looks: the loop waits on its condition")))
         (should (file-exists-p (expand-file-name "ready.json" (plist-get s :run))))
         (should (equal (plist-get (drgnx-ui-call sess "(drgnx-uitest--json (list :a drgnx-test-answer))") :a)
                        "drgnx"))))))

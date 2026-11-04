@@ -254,7 +254,7 @@
           (drgnx-ai-stop)
           (should-not drgnx-ai--active)
           (should-not (drgnx-ai-edit-test--curls))                       ; the process is gone
-          (drgnx-test-pause 2.0)                                         ; past the mock's answer (nothing may come)
+          (drgnx-test-pause 2.0 "past the mock's answer, nothing may come")
           (should-not (drgnx-ai-edit-test--review 0.1))                  ; the callback never ran
           (should-not (seq-find (lambda (m) (string-match-p "no answer" m)) said))
           (should (seq-find (lambda (m) (string-match-p "stopped" m)) said))

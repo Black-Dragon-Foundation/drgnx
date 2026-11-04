@@ -27,7 +27,7 @@
                                                                                                   t :false))))"
                                                              (concat root "f.txt") (concat root "f.txt")))
                                  :ok)))
-              (unless shown (drgnx-test-pause 0.2)))
+              (unless shown (drgnx-test-pause 0.2 "between two looks: the loop waits on its condition")))
             (should shown))
           (drgnx-ui-measure sess nil)
           (drgnx-ui-call sess "(progn (drgnx-perf-begin) (drgnx-uitest--json (list :ok t)))")
