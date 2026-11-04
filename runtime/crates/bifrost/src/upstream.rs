@@ -298,7 +298,6 @@ mod tests {
             Matcher::builder().build(),
         )
         .unwrap();
-        let t = std::time::Instant::now();
         let err = tokio::time::timeout(
             Duration::from_millis(200),
             up.send(get(&format!("http://127.0.0.1:{port}/"))),
@@ -307,7 +306,6 @@ mod tests {
         .expect("the connect error arrives within the test timeout")
         .unwrap_err();
         assert!(matches!(err, UpstreamError::Connect(_)), "{err}");
-        assert!(t.elapsed() < Duration::from_millis(200));
     }
 
     #[tokio::test]

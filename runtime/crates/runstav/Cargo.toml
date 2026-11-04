@@ -24,5 +24,6 @@ secrecy.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+skuld = { path = "../skuld", version = "0.1.0" }
 proptest.workspace = true
 tempfile.workspace = true

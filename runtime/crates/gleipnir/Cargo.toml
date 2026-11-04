@@ -27,6 +27,7 @@ landlock.workspace = true
 seccompiler.workspace = true
 
 [dev-dependencies]
+skuld = { path = "../skuld", version = "0.1.0" }
 insta.workspace = true
 proptest.workspace = true
 tempfile.workspace = true

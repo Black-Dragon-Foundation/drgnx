@@ -410,7 +410,7 @@ mod tests {
         // SAFETY: getppid takes nothing and cannot fail.
         assert_eq!(p.pid as i32, unsafe { libc::getppid() });
         let start = p.start.expect("the parent's start time reads");
-        let now = std::time::SystemTime::now()
+        let now = skuld::host_now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs_f64();

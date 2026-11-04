@@ -17,7 +17,9 @@
 //! re-entry deeper than [`Bound::reentry_depth`] each panic, naming the cause. The certainty a pass gives is "within
 //! the declared events and this bound".
 //!
-//! [`wait_until`] is the one real-time wait Rust tests may use: its deadline only bounds a failure.
+//! [`wait_until`] (and [`wait_until_async`]) is the one real-time wait Rust tests may use: its deadline only bounds a
+//! failure. [`window`] is a window in which nothing may happen; [`origin`] and [`host_now`] give a clock reading as a
+//! value, never to wait with. `tests/real_time_in_tests.rs` keeps every other real-time call out of test code.
 //!
 //! The crate is test support: other crates name it under `[dev-dependencies]` only.
 
@@ -30,7 +32,7 @@ mod tests;
 
 pub use count::count;
 pub use explore::{Bound, Mode, Report, every_order, random_orders};
-pub use wait::wait_until;
+pub use wait::{host_now, origin, wait_until, wait_until_async, window};
 
 /// A core's event type: every kind it declares must be produced by some order, or the run fails.
 ///

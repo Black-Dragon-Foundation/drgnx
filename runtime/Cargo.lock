@@ -522,6 +522,7 @@ version = "0.1.0"
 dependencies = [
  "eitri",
  "libc",
+ "skuld",
  "tempfile",
  "tokio",
 ]
@@ -555,6 +556,7 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "sha2",
+ "skuld",
  "tempfile",
  "tokio",
  "tokio-util",
@@ -783,6 +785,7 @@ dependencies = [
  "seccompiler",
  "serde",
  "serde_json",
+ "skuld",
  "tempfile",
  "tokio",
 ]
@@ -829,6 +832,7 @@ dependencies = [
  "runstav",
  "serde",
  "serde_json",
+ "skuld",
  "tokio",
  "tokio-util",
  "tracing",
@@ -1580,6 +1584,7 @@ dependencies = [
  "serde_path_to_error",
  "sha1",
  "sha2",
+ "skuld",
  "subtle",
  "tempfile",
  "tokio-util",
@@ -2016,6 +2021,7 @@ name = "skuld"
 version = "0.1.0"
 dependencies = [
  "proptest",
+ "tokio",
 ]
 
 [[package]]

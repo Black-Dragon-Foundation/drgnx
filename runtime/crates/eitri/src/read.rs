@@ -52,7 +52,7 @@ mod tests {
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::symlink;
     use std::sync::mpsc;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     fn root() -> (tempfile::TempDir, OwnedFd) {
         let root = tempfile::tempdir().unwrap();
@@ -69,19 +69,17 @@ mod tests {
         assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let t = Instant::now();
             let read = read_regular(fd.as_fd(), Path::new("p"), 16).map(drop);
             let pin = crate::open_beneath(fd.as_fd(), Path::new("p"), crate::Kind::File).map(drop);
             let pin_abs = crate::open_path(&fifo, crate::Kind::File).map(drop);
-            tx.send((t.elapsed(), read, pin, pin_abs)).unwrap();
+            tx.send((read, pin, pin_abs)).unwrap();
         });
-        let (took, read, pin, pin_abs) = rx
+        let (read, pin, pin_abs) = rx
             .recv_timeout(Duration::from_secs(1))
             .expect("a FIFO blocked");
         assert!(matches!(read, Err(FsError::NotRegular)), "{read:?}");
         assert!(matches!(pin, Err(FsError::NotRegular)), "{pin:?}");
         assert!(matches!(pin_abs, Err(FsError::NotRegular)), "{pin_abs:?}");
-        assert!(took < Duration::from_millis(100), "{took:?}");
     }
 
     #[test]

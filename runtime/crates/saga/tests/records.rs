@@ -134,8 +134,7 @@ fn unknown_org_syntax_is_kept_as_body() {
     assert!(d.items[2].properties.is_empty());
 }
 
-#[test]
-fn a_1600_row_table_parses_under_50_ms() {
+fn a_1600_row_table() -> String {
     let mut text = String::from("# Deferred\n\n| # | Area | Item | Status |\n|---|---|---|---|\n");
     for i in 0..1600 {
         text.push_str(&format!(
@@ -143,13 +142,29 @@ fn a_1600_row_table_parses_under_50_ms() {
             i % 7
         ));
     }
-    let start = Instant::now();
+    text
+}
+
+#[test]
+fn a_1600_row_table_parses_and_renders_whole() {
+    let text = a_1600_row_table();
     let d = deferred::parse(&text);
     let out = deferred::render(&d);
     let b = board_md::parse(&text);
-    let elapsed = start.elapsed();
     assert_eq!(d.rows().len(), 1600);
     assert_eq!(out, text);
     assert_eq!(b.tables()[0].rows.len(), 1600);
+}
+
+/// A timing test: the elapsed time is the assertion.
+#[test]
+#[ignore = "timing: a 1600-row table parses in under 50 ms"]
+fn a_1600_row_table_parses_under_50_ms() {
+    let text = a_1600_row_table();
+    let start = Instant::now();
+    let d = deferred::parse(&text);
+    let _ = deferred::render(&d);
+    let _ = board_md::parse(&text);
+    let elapsed = start.elapsed();
     assert!(elapsed.as_millis() < 50, "took {elapsed:?}");
 }

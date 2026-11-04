@@ -269,7 +269,7 @@ mod tests {
     #[test]
     fn the_wake_key_and_the_clock() {
         assert_eq!(wake_key("x1"), "wake:x1");
-        let t = std::time::SystemTime::now()
+        let t = skuld::host_now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs_f64();

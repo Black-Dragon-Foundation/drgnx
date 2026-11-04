@@ -448,7 +448,7 @@ mod tests {
         // a broken newer copy is skipped, and kept as it was
         let broken = r.data.join("backup").join("work-pre7-9999999999.db");
         fs::write(&broken, b"not a database").unwrap();
-        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        let later = skuld::host_now() + std::time::Duration::from_secs(60);
         fs::File::options()
             .write(true)
             .open(&broken)

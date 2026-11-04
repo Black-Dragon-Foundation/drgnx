@@ -17,3 +17,6 @@ serde_json.workspace = true
 tracing.workspace = true
 tokio-util.workspace = true
 bytes = "1"              # the read buffer the line codec decodes from (already in the tree through tokio)
+
+[dev-dependencies]
+skuld = { path = "../skuld", version = "0.1.0" }

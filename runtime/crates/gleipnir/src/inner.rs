@@ -1102,11 +1102,21 @@ mod tests {
         #[test]
         fn a_helper_that_hangs_is_refused_at_the_deadline() {
             let (mut child, rd, _) = spawn_with_status("exec sleep 60");
-            let start = Instant::now();
             let r = read_status(rd, &String::new, Duration::from_secs(1)).unwrap_err();
-            let took = start.elapsed();
             assert_eq!(r.rule, Rule::Setup);
             assert_eq!(r.message, "sandbox setup timed out");
+            child.kill().unwrap();
+            child.wait().unwrap();
+        }
+
+        /// The refusal comes at the deadline, not before and not long after: a timing test.
+        #[test]
+        #[ignore = "timing: the helper's deadline is kept"]
+        fn the_hung_helper_is_refused_at_the_deadline_not_before_or_long_after() {
+            let (mut child, rd, _) = spawn_with_status("exec sleep 60");
+            let start = Instant::now();
+            let _ = read_status(rd, &String::new, Duration::from_secs(1)).unwrap_err();
+            let took = start.elapsed();
             assert!(
                 took >= Duration::from_secs(1) && took < Duration::from_secs(3),
                 "{took:?}"

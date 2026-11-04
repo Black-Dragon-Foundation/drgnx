@@ -154,15 +154,27 @@ async fn a_term_ignoring_group_gets_kill_after_2s() {
     g.ready().await;
     let recs = [g.record()];
     let spy = Spy::real();
-    let began = Instant::now();
     let (out, _) = tokio::join!(timeout(LIMIT, reap(&recs, &spy)), g.child.wait());
     assert_eq!(out.unwrap(), vec![ReapOutcome::Killed]);
-    assert!(began.elapsed() >= GRACE, "{:?}", began.elapsed());
     assert!(!g.exists());
     assert_eq!(
         spy.sent(),
         vec![(-g.pgid, libc::SIGTERM), (-g.pgid, libc::SIGKILL)]
     );
+}
+
+/// The kill comes after the grace, not before: a timing test (the elapsed time is the assertion).
+#[tokio::test]
+#[ignore = "timing: the SIGKILL waits out the grace"]
+async fn a_term_ignoring_group_is_killed_only_after_the_grace() {
+    let mut g = Group::start("trap '' TERM; sleep 60 & echo ready; wait").await;
+    g.ready().await;
+    let recs = [g.record()];
+    let spy = Spy::real();
+    let began = Instant::now();
+    let (out, _) = tokio::join!(timeout(LIMIT, reap(&recs, &spy)), g.child.wait());
+    assert_eq!(out.unwrap(), vec![ReapOutcome::Killed]);
+    assert!(began.elapsed() >= GRACE, "{:?}", began.elapsed());
 }
 
 #[tokio::test]

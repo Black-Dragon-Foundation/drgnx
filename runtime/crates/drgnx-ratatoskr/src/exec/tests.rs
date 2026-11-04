@@ -943,7 +943,7 @@ async fn finished_job_folders_past_the_retention_are_pruned() {
     let d = tempfile::tempdir().unwrap();
     let r = open(d.path());
     let root = d.path().join("exec");
-    let ago = |secs: u64| std::time::SystemTime::now() - Duration::from_secs(secs);
+    let ago = |secs: u64| skuld::host_now() - Duration::from_secs(secs);
     let make = |name: &str, age: u64| {
         let dir = root.join(name);
         std::fs::create_dir_all(&dir).unwrap();

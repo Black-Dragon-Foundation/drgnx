@@ -53,4 +53,5 @@ zeroize.workspace = true  # the line that carries provider keys to the backend i
 # `test-hooks`: `urdr::graph::Tx::for_test` for the manager's unit tests (a `-p drgnx-ratatoskr` test build alone has no
 # other crate turning it on)
 urdr = { path = "../urdr", version = "0.1.0", features = ["test-hooks"] }
+skuld = { path = "../skuld", version = "0.1.0" }
 tempfile.workspace = true

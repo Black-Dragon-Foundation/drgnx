@@ -842,11 +842,11 @@ async fn no_key_sends_need_keys_once_a_minute() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_key_never_reaches_the_agent() {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let canary = format!("sk-canary-{}-{nanos:x}", std::process::id());
+    // a string no other run or test holds: this process, and this test
+    let canary = format!(
+        "sk-canary-{}-the-key-never-reaches-the-agent",
+        std::process::id()
+    );
     let mock = Mock::start(json!([{"path": "/a/", "body": "{\"ok\":true}"}]));
     let gw = Gw::start(
         vec![

@@ -521,6 +521,35 @@ naming `what` after `secs`. The deadline only bounds a failure, so a test never 
 exhaustive or a delay-bounded run visits (with and without edges, two and three sources), each once; the re-entry
 order, each vacuous run, the printed order, a seed's repeat, and a uniformity check that a per-step coin would fail.
 
+## Real time in tests
+
+Rust test code (a crate's `tests/` files, `tests.rs` files and `#[cfg(test)]` items) never sleeps or reads a clock:
+no `tokio::time::sleep`, `std::thread::sleep`, `Instant::now` or `SystemTime::now`. They make a test depend on how
+fast the machine is. `cargo test --workspace` runs `skuld`'s `real_time_in_tests::no_real_time_in_test_code`, which
+reads the sources (comments and strings blanked) and fails naming `file:line` for each banned call.
+
+What a test does instead:
+
+- **Waits for what it needs:** `skuld::wait_until(what, secs, || Some(value))` (or `wait_until_async` where the look
+  awaits) polls until the condition holds; the deadline only bounds a failure. A sleep that "lets it settle" becomes a
+  wait on what it waited for.
+- **Has no elapsed assertion:** an upper bound on a call that has its own timeout is dropped. A bound that is the
+  point (a grace kept, a deadline met, a parse under 50 ms) is its own **timing test**:
+  `#[ignore = "timing: …"]`, run alone with `-- --ignored` on a pinned host. It may read the clock; the correctness
+  assertions stay in a test that does not.
+- **Runs on paused tokio time:** `#[tokio::test(start_paused = true)]` makes `tokio::time::sleep` virtual, and the
+  check allows it there. In a file that imports `tokio::time::Instant` and has paused tests, `Instant::now` and the
+  sleeps of its helpers read the paused clock too (`std::time::Instant::now` is still banned).
+- **Needs a time as a value, not a wait:** `skuld::origin()` is an `Instant` to add durations to (a pure timer core's
+  test), `skuld::host_now()` the wall clock for a test that compares a time the OS reports (a process start, a file
+  time) with now. A unique name comes from the process id, not from the time.
+- **Needs a window in which nothing may happen:** `skuld::window(length, "what may not happen")`. Nothing marks that
+  nothing did, so the test can only wait; a window can make a wrong program pass if it is too short, never fail a right
+  one. It says what may not happen.
+
+Exempt: `#[ignore = "timing…"]` tests and `tests/timing.rs`, `skuld/src/wait.rs` (where these functions live) and the
+hub clock's module (`drgnx-ratatoskr/src/clock*`).
+
 ## The conformance harness
 
 `domr` runs **scenarios** (data) against a hub binary: a process that answers the hub protocol on its socket.

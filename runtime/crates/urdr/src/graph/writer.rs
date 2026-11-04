@@ -1200,15 +1200,26 @@ pub(crate) mod tests {
         // Size: ten queued requests go in batches of at most four.
         assert_eq!(*g.sizes.lock().unwrap(), vec![1, 4, 4, 2]);
         // Time: a lone request waits for company at most max_wait, then commits alone.
-        let started = Instant::now();
         h.write(meta(), put(11)).await.unwrap();
-        let took = started.elapsed();
-        assert!(took >= Duration::from_millis(300), "{took:?}");
-        assert!(took < Duration::from_secs(5), "{took:?}");
         assert_eq!(g.sizes.lock().unwrap().last(), Some(&1));
         assert_eq!(count(&path, "select count(*) from t"), 12);
         assert_eq!(h.status().batches, 5);
         assert_eq!(h.status().writes, 12);
+        stop(w).await;
+    }
+
+    /// A lone request waits for company for max_wait, then commits alone: a timing test (the elapsed time is the
+    /// assertion).
+    #[tokio::test]
+    #[ignore = "timing: a lone write waits max_wait for company"]
+    async fn a_lone_write_waits_max_wait_for_company() {
+        let dir = tempfile::tempdir().unwrap();
+        let (w, h, _path) = spawn_at(&dir, opts(4, 300), Hooks::default());
+        let started = Instant::now();
+        h.write(meta(), put(1)).await.unwrap();
+        let took = started.elapsed();
+        assert!(took >= Duration::from_millis(300), "{took:?}");
+        assert!(took < Duration::from_secs(5), "{took:?}");
         stop(w).await;
     }
 

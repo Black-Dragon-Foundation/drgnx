@@ -590,7 +590,7 @@ echo $!; read x"#,
         // The one wait that is a window, not an event: nothing must happen. The relay looks at its parent once a
         // second (`parent_gone`), so a window of a poll and a half covers a check that would wrongly end it.
         const A_POLL_AND_A_HALF: Duration = Duration::from_millis(1500);
-        std::thread::sleep(A_POLL_AND_A_HALF);
+        skuld::window(A_POLL_AND_A_HALF, "the relay ends while its parent lives");
         assert!(alive(pid), "still up after a poll while the parent lives");
         // The parent goes.
         drop(sh.stdin.take().unwrap().write_all(b"\n"));

@@ -195,13 +195,11 @@ fn the_relay_carries_the_program_to_the_session_socket() {
     server.join().unwrap();
     // The program is gone, so the relay is too: its port is free again. The relay is not our child and says nothing
     // when it ends, so the port is tried until it binds; 30 s only bounds a failure.
-    let gone = (0..600).any(|_| {
-        std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() || {
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            false
-        }
+    skuld::wait_until("the relay's port is free again", 30, || {
+        std::net::TcpListener::bind(("127.0.0.1", port))
+            .ok()
+            .map(drop)
     });
-    assert!(gone, "the relay outlived the program");
 }
 
 /// A spec the context refuses: exit 3, the rule in the result file, nothing spawned.
@@ -284,7 +282,10 @@ fn pause_before_spawn_waits_for_a_line() {
     // would have touched its marker well inside it (a `touch` after a fork and an exec); a slow machine can only
     // make this pass for a program that waited too little, never fail one that waited.
     const NOTHING_RUNS_FOR: std::time::Duration = std::time::Duration::from_millis(300);
-    std::thread::sleep(NOTHING_RUNS_FOR);
+    skuld::window(
+        NOTHING_RUNS_FOR,
+        "the program touches its marker before the line came back",
+    );
     assert!(!marker.exists(), "ran before the line came back");
     std::fs::write(&fifo, "go\n").unwrap();
     let out = child.wait_with_output().unwrap();

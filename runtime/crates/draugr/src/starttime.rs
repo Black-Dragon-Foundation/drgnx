@@ -193,7 +193,7 @@ mod tests {
         }
         #[cfg(not(target_os = "linux"))]
         {
-            let now = std::time::SystemTime::now()
+            let now = skuld::host_now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_secs_f64();
