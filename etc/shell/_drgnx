@@ -26,6 +26,7 @@ commands=(
   'work:the work tracker'
   'hub:the hub behind agents and jobs'
   'runtime:build and install Ratatoskr, the agent runtime'
+  'browser:the browser sandboxed agents get (install, list)'
   'job:jobs from plans'
   'search:semantic search'
   'keys:compare key profiles'
@@ -121,6 +122,16 @@ case $cmd in
       case $sub in
         build) _arguments '--install[install it after the build]' '--prefix[also link bin/ratatoskr and bin/rtsk here]:directory:_files -/' ;;
         install) _arguments '--prefix[also link bin/ratatoskr and bin/rtsk here]:directory:_files -/' ;;
+      esac
+    fi ;;
+  browser)
+    if (( CURRENT == 2 )); then
+      _values 'browser command' 'install[download the pinned headless shell]' 'list[the browsers sessions can get]'
+    else
+      shift words; (( CURRENT-- ))
+      case $sub in
+        install) _arguments '--version[a pinned version]:version:' '--json[machine-readable]' ;;
+        list) _arguments '--json[machine-readable]' ;;
       esac
     fi ;;
   job)
