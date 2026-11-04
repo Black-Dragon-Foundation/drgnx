@@ -112,7 +112,10 @@ fn browser_settings_refuse_bad_values() {
             v => serde_json::json!(v.parse::<u32>().unwrap()),
         };
         let mut values = RuntimeValues::default();
-        assert!(overrides::from_json(name, &json, &mut values).is_err(), "{name} {value}");
+        assert!(
+            overrides::from_json(name, &json, &mut values).is_err(),
+            "{name} {value}"
+        );
     }
     // good values are taken
     let dir = config(

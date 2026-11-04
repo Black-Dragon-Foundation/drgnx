@@ -372,6 +372,13 @@ drgnx runtime install [--prefix DIR] # <data>/bin/ratatoskr (by rename), links D
 `runtime install` refuses a binary built with test hooks. The build's commit (`ratatoskr version --json`) is what the
 doctor compares with the checkout.
 
+## A browser for agents
+
+Agent sessions on Linux can drive a headless Chromium. install.sh and `drgnx update` never download one. If your
+distro has a package (Fedora: `dnf install chromium-headless`), use that; otherwise run `drgnx browser install`, which
+fetches a checksum-pinned headless shell into drgnx's data folder when you ask. See the
+[agent browser guide](agent-browser.md).
+
 ## Staying up to date
 
 One command brings the install to the newest `main` on GitHub:

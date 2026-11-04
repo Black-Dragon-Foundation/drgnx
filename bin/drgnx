@@ -2014,6 +2014,9 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                a job from a plan: tasks, routes, estimate; nothing starts before approve
        drgnx job approve|resume ID [--budget USD] | stop ID | status [ID] [--json]
                                run, pause and inspect jobs in the hub (docs/guide/jobs.md)
+       drgnx browser install [--version V] [--json] | list [--json]
+                               the browser sandboxed agents get: a sha256-pinned download, only when you run it
+                               (docs/guide/agent-browser.md)
        drgnx search index ROOT [--rebuild] [--now]
                                build or refresh a project's semantic search index (docs/guide/search.md)
        drgnx search query ROOT QUESTION… [-k N] [--scope code|tests|docs|all] [--json]
@@ -2085,6 +2088,11 @@ case "${1:-help}" in
         if [[ ! -f "$rtsk" || ! -x "$rtsk" ]]; then echo "drgnx: Ratatoskr is not built: run \`drgnx runtime build'" >&2; exit 1; fi
         if [[ -z "${DRGNX_EMACS:-}" ]] && DRGNX_EMACS="$(emacs_bin 2>/dev/null)"; then export DRGNX_EMACS; fi
         DRGNX_DIR="$here" exec "$rtsk" job "$@" ;;
+  browser) shift   # the agent browser: install a pinned headless shell, or list what sessions get (Ratatoskr's)
+        rtsk="${DRGNX_RATATOSKR_BIN:-}"
+        if [[ "$rtsk" != /* || ! -f "$rtsk" || ! -x "$rtsk" ]]; then rtsk="$(drgnx_dir data)/bin/ratatoskr"; fi
+        if [[ ! -f "$rtsk" || ! -x "$rtsk" ]]; then echo "drgnx: Ratatoskr is not built: run \`drgnx runtime build'" >&2; exit 1; fi
+        exec "$rtsk" browser "$@" ;;
   work) shift
         "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-work -f drgnx-work-cli -- "$@" ;;

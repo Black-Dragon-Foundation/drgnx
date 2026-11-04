@@ -66,6 +66,7 @@ pub mod agents;
 pub mod backup_timer;
 pub mod bridge;
 pub mod brief;
+pub mod browser;
 pub mod budget;
 pub mod cli;
 pub mod client;

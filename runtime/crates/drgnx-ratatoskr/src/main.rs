@@ -71,6 +71,8 @@ fn main() -> ExitCode {
         }
         // No runtime: a blocking client of the running hub (started first when none runs).
         Command::Graph(g) => return code(drgnx_ratatoskr::graph_cli::run(&Env::process(), g)),
+        // Its own current-thread runtime for the download; never started but by this command.
+        Command::Browser(b) => return code(drgnx_ratatoskr::browser::run(&Env::process(), b)),
         // No runtime either: the job commands are one call each to the running hub.
         Command::Job(j) => return code(drgnx_ratatoskr::job_cli::run(&Env::process(), j)),
         Command::Machines(m) => {
