@@ -49,6 +49,7 @@ runtime/
 | `sleipnir` | the runner: the Linux machine probe and runner contract, the reservation files two schedulers share, the executor; its `linux` and `sync` features are blocking, never tokio, so jobq takes them ([sleipnir.md](sleipnir.md)) |
 | `vegvisir` | the Work space's map core: its model (items in six layers, edges, chains, overlaps, needs-you) and its layout, stepped by typed events with effects out; pure, `serde` only ([work-space.md](work-space.md)) |
 | `skuld` | test support, never shipped: every order of a pure core, and the one real-time wait Rust tests may use ([below](#every-order-skuld)); crates name it under `[dev-dependencies]` only |
+| `heimdall` | the CDP broker's pure part: envelope parsing over `serde_json`'s `RawValue` (params never re-encoded), routing one browser connection between the agent and the hub by session owner, the refusal list, downloads, cleanup when the agent goes, and the pipe's NUL and frame codecs; no I/O, std and serde only, built for Android too ([hub.md](hub.md#the-cdp-broker)) |
 | `domr` (formerly `drgnx-conformance`; lives in `runtime/conformance/`) | the conformance harness (this page) |
 
 The protocol is still called "the hub protocol", and the socket, cap and lock files keep their `hub-HASH.*` names.
@@ -76,7 +77,7 @@ Android stance. Rust's Android target is `target_os = "android"`, not `"linux"`,
 bwrap) `target_os = "linux"` alone with the Android stance (a stub, or "unsupported") in a comment. Every `cfg` chain
 ends in a fallback that returns `None` or `Unsupported`, never a missing item. Platform code sits in one module or
 function per crate. The type-check (`rustup target add aarch64-linux-android` first) is
-`cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p drgnx-ratatoskr`.
+`cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p heimdall -p drgnx-ratatoskr`.
 `drgnx-ratatoskr` depends on `urdr`, whose bundled SQLite is C, and compiling C for Android needs the NDK. A type-check
 does not link, so without the NDK stub the C compiler and archiver: `CC_aarch64_linux_android=/usr/bin/true
 AR_aarch64_linux_android=/usr/bin/true` (the Rust is still checked in full; only the C object files are fake).
@@ -1205,11 +1206,14 @@ runs each binary as `cargo fuzz run` does (`-artifact_prefix=runtime/fuzz/artifa
 | `saga_plan` | text through `saga::plan::parse` and `render`: the output equals the input |
 | `saga_deferred` | the same through `saga::deferred` |
 | `saga_org` | the same through `saga::org` (`board.org`) |
+| `cdp_envelope` | bytes as one browser connection through heimdall: NUL-split under a limit the first byte picks, each message's first byte choosing the agent, the browser or the agent's close; every envelope parses or is refused without a panic, whatever goes to the browser is a command with an id and no NUL, and no refused method from the agent reaches it; the same bytes through the frame decoder whole and in two pieces give the same frames |
 
 The seed corpus in `fuzz/corpus/<target>/` is the request lines of the conformance rows (phase 1; for `mcp_message` and
 `jsonrpc_parse` the JSON-RPC lines the `mcp/*` and `bridge/*` rows send), the unit tables (gleipnir's targets) and, for
 the gateway's targets, the SSE fixtures (`test/fixtures/sse`) and a few hand-made heads and bodies; for `huginn_read`
-it is huginn's hand corpus (`test/fixtures/huginn/corpus/`, copied as `accept-NAME` and `refuse-NAME`). The
+it is huginn's hand corpus (`test/fixtures/huginn/corpus/`, copied as `accept-NAME` and `refuse-NAME`); for
+`cdp_envelope` it is heimdall's transcripts (`crates/heimdall/tests/data/*.jsonl`, one seed each: `0` agent, `1`
+browser, `2` close before each message, NUL after). The
 bridge's `classify`, `id_in_prefix` and `read_bounded` are private to `mimir::bridge`; mimir's `fuzzing` feature
 exposes them through `bridge::fuzzing` for `bridge_line` (seeds: the `mcp_message` corpus behind a limit byte). A run adds files to the
 corpus directory, so run on a scratch copy and keep the repository's seeds as they are.

@@ -2073,3 +2073,71 @@ one `notice` (a running task's refs are never removed). Restore and fork are par
 
 `timeline/get {scope, id, since?, rollup?}` answers the steps of a session, task, plan or project (500 a page, `next`
 continues) and their rollup: seconds by class (closed steps), cost by unit (never summed across units) and tokens.
+
+## The CDP broker
+
+A session with the browser drives a Chromium inside its own sandbox over CDP. The hub is the broker between the
+agent's websocket and the browser's pipe. Its routing is the crate `heimdall`: pure, with no I/O and no async runtime,
+std and serde only, built for every target (Android included). The hub's websocket server and the browser host wrap
+it.
+
+**Envelopes** (`heimdall::envelope`). `parse(msg, max)` reads `id`, `method` and `sessionId`, and for `Target.*` the
+`targetId` and `sessionId` params. `params`, `result` and `error` stay `serde_json` `RawValue`s borrowed from the
+message, so a 20 MiB screenshot passes byte for byte and is never re-encoded. The parse is strict, so the broker and
+Chromium never read one message two ways:
+- one JSON object (serde would read an array as a struct);
+- a key the broker reads appears once;
+- the strings it routes by are plain (an escape is an error, not decoded);
+- `id` is a whole number;
+- a message has a method or a reply, not both;
+- over `max` (`agents-browser-max-message`) is `TooLarge`.
+
+The router itself takes no limit: the pipe's codec and the websocket enforce it before a message reaches the router.
+What the router sends is rebuilt from what it parsed, so only `id`, `method`, `sessionId` and `params` reach the
+browser, and a key CDP does not have is dropped.
+
+**Routing** (`heimdall::route::Router`). One router per browser start. `Router::new()` returns the hub's first command,
+`Target.attachToBrowserTarget` on the root session. The agent gets that browser session, so it sees what looks like a
+root connection:
+- every agent message without a `sessionId` gets the browser session, and replies and events on it lose it again;
+- the hub's own commands use ids from `HUB_ID_BASE` (2^30) to `i32::MAX`, because Chromium reads an id as a 32-bit
+  integer; an agent id at or above it is refused (`-32600`), and a reply with a hub id is the hub's whatever its session;
+- a child session belongs to the owner of the session its `Target.attachedToTarget` arrived on, and an attach event
+  never changes the owner of a session that exists;
+- an agent command on a session it does not own (the hub's, a closed one, an unknown one), or naming one or the browser
+  target in `Target.*` params, gets `-32000` "not yours";
+- `REFUSED_ALWAYS` gets `-32601` "refused by drgnx": `Target.exposeDevToolsProtocol`, `Target.setRemoteLocations`,
+  `Target.sendMessageToTarget` (a whole message for a non-flat session that would pass unread), `Tethering.*`,
+  `Extensions.*`, `Browser.close`, `Browser.crash` and `Browser.crashGpuProcess`;
+- messages to or from the hub's sessions never reach the agent.
+
+Until the attach is answered the router is not `ready()`: the broker holds the agent's messages until it is, and a
+message passed anyway gets `-32000` "the browser is starting". If the attach fails, the agent gets the root session as it
+is, the router reports `BrokerEvent::NoBrowserSession`, and the hub cannot watch that browser.
+
+**Downloads.** Playwright sets `Browser.setDownloadBehavior` with a path in its own artifacts dir, which the browser
+layer cannot write. The router answers the agent `{}` and sends its own on the root: `allowAndName` into
+`/tmp/drgnx-browser/downloads` (`DOWNLOAD_DIR`), with events and the agent's `browserContextId`. The download events
+then arrive on the root session. They go to the agent, and a `downloadProgress` with `state: "completed"` and a plain
+guid is also `BrokerEvent::Download { guid, path }` (`Step::ToAgentAndEvent`). Playwright's `download.path()` does not
+find the file; the agent reads it from that dir.
+
+**The agent goes** (`agent_closed`). The router:
+1. resumes every agent session still paused by auto-attach (`waitingForDebugger`, not yet resumed by the agent) that no
+   hub session holds, with `Runtime.runIfWaitingForDebugger`;
+2. detaches every agent session on its parent, children first;
+3. marks them closing (what they still send is dropped until Chromium reports them detached);
+4. attaches to the browser target again for the next agent, and is not ready until that is answered.
+
+In the fallback it instead turns the root's auto-attach and target discovery off.
+
+**Codecs** (`heimdall::codec`):
+- `Nul` splits Chromium's NUL-delimited pipe messages under a limit. An overlong message is one `Overlong` error, and
+  the next message after its NUL reads as usual. `Nul::encode` refuses a message with a NUL inside.
+- `Frame::encode(kind, payload)` and `FrameDecoder` carry the socketpair between the hub and the browser host,
+  `[kind u8][len u32 BE][payload]`: kind 1 (`KIND_CDP`) is one CDP message, kind 2 (`KIND_CONTROL`) control JSON. A header
+  over the decoder's limit fails it for good, since the stream cannot resync.
+
+Tests: unit tests in each module. `route`'s tests play transcripts written by hand from the protocol JSON
+(`crates/heimdall/tests/data/*.jsonl`: an input line, then what it must give), and the fuzz target `cdp_envelope`
+([runtime.md](runtime.md#fuzzing)) seeds from them.
