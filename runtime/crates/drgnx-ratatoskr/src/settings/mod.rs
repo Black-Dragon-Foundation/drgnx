@@ -199,7 +199,8 @@ pub struct RuntimeValues {
     pub agents_manager_context: f64,
     /// The browser an agent session gets (an absolute path), or none to find one.
     pub agents_browser_program: Option<String>,
-    /// The loopback ports a session's browser may reach as `host.drgnx.internal:PORT` once granted.
+    /// The ports on the sandbox's own loopback that a session with the browser lets its agent and browser connect to
+    /// (the agent's own servers).
     pub agents_browser_local_ports: Vec<u16>,
     pub agents_browser_deny_hosts: Vec<String>,
     /// Bytes.

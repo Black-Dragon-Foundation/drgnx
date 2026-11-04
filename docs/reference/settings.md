@@ -74,8 +74,9 @@ Only you can set it, never a repository.
 
 ## drgnx-agents-browser-local-ports
 
-The TCP ports on this machine's loopback that a session's browser may reach as host.drgnx.internal:PORT once you
-grant it (a list of port numbers, 1 to 65535).  Only you can set it, never a repository.
+The TCP ports on the sandbox's own loopback that a session with the browser lets its agent and browser
+connect to, for the servers the agent starts there (a list of port numbers, 1 to 65535).  Servers on this machine are
+reached only as host.drgnx.internal:PORT, through a grant.  Only you can set it, never a repository.
 
 | Key | Value |
 | --- | --- |

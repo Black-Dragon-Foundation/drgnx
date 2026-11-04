@@ -25,8 +25,8 @@ sandbox tier, a kernel below Landlock ABI 9, or no browser found.
 
 | Target | Needs | Notes |
 |---|---|---|
-| Servers the agent started inside its sandbox | nothing | `http://127.0.0.1:PORT` |
-| Servers on this computer | a `browser.private` grant | as `host.drgnx.internal:PORT`, only for the ports in `drgnx-agents-browser-local-ports` (3000, 3001, 4173, 4200, 5000, 5173, 8000, 8080, 8888) |
+| Servers the agent started inside its sandbox | nothing | `http://127.0.0.1:PORT`, only for the ports in `drgnx-agents-browser-local-ports` (3000, 3001, 4173, 4200, 5000, 5173, 8000, 8080, 8888) |
+| Servers on this computer | a `browser.private` grant | as `host.drgnx.internal:PORT`, one port per grant; never the hub's own ports or an Emacs server's |
 | Your LAN, tailnet, other private addresses | a `browser.private` grant | one target at a time, or a /24 or /64 for numbers on your LAN |
 | Public web sites | the `browser.web` row | HTTPS and plain HTTP on ports 80 and 443, through the session's web proxy |
 
@@ -34,10 +34,16 @@ Be clear about the web grant. It lets the agent's browser open any public site, 
 agent types into it or reads from your allowed servers. drgnx checks each connection (where it leads, not only the
 name), but it cannot judge what the agent chooses to send. That is why only Autonomous allows the web without asking.
 
-**Never reachable, whatever you grant:** the hub's own ports, an Emacs server port, any address of this computer outside
-the ports you listed, link-local metadata addresses such as `169.254.169.254`, non-web ports on the public web, and the
-hosts in `drgnx-agents-browser-deny-hosts`. A name that resolves to a different address than the one checked (DNS
-rebinding) is refused.
+**Never reachable, whatever you grant:** the hub's own ports, an Emacs server port, this computer's own addresses (its
+loopback, LAN, bridge and tailnet addresses) except as `host.drgnx.internal` on a port you granted, the cloud metadata
+addresses (`169.254.169.254` and the other providers' ones, and the names `metadata.google.internal` and
+`metadata.azure.com`), addresses that are neither public nor private (`0.0.0.0/8`, multicast, broadcast, reserved
+ranges), public sites on any port but 80 and 443, and the hosts in `drgnx-agents-browser-deny-hosts`. An IPv4 address
+wrapped in an IPv6 one is judged as the IPv4 address it carries.
+
+**DNS rebinding.** The web proxy asks DNS once per request and connects only to the addresses it checked. A name
+reaches a private address only when a grant names that very name: a name that leads to an address another grant opens
+is refused, and so is a name that leads to this computer's own addresses.
 
 ## Answering a card
 
@@ -51,8 +57,9 @@ session. The full list of answers is in [security.md](security.md#answering-a-br
 ## Downloads
 
 A download the page makes lands in the browser's downloads folder (`/tmp/drgnx-browser/downloads` in the sandbox), not
-in the folder Playwright asked for, because the browser cannot write there. Playwright's `download.path()` therefore
-does not find the file; the agent reads it from that folder.
+in the folder Playwright asked for, because the browser cannot write there. The file is named by the download's id
+(the `guid` of CDP's `Browser.downloadWillBegin` and `Browser.downloadProgress` events), not by the page's file name.
+Playwright's `download.path()` therefore does not find the file; the agent reads it from that folder.
 
 ## Memory and idle
 
