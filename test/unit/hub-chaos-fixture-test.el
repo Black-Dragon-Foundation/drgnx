@@ -2,6 +2,7 @@
 ;; test-class: det
 (require 'ert)
 (require 'cl-lib)
+(require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/hub-chaos-fixture" drgnx-dir) nil t)
 
 (ert-deftest drgnx-hub-chaos/a-seed-draws-the-same-delays-every-time ()
