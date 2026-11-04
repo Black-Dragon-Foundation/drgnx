@@ -3,7 +3,7 @@
 ;; (drgnx-test-gated SCHEDULE BODY...)   BODY on the manual clock, every hub connection it opens gated
 ;; (drgnx-test-gate-continue LABEL)      resume after the schedule's (:pause LABEL)
 ;; (drgnx-test-deliver-all)              barrier, the remaining steps, then every held line; the barrier's marker
-;; (drgnx-test-hub-advance MS)           the hub's clock moved by MS, then `drgnx-test-deliver-all'
+;; (drgnx-test-hub-advance MS [HOLD])    the hub's clock moved by MS, then `drgnx-test-deliver-all' (not with HOLD)
 ;; (drgnx-test-gate-conn NAME)           the process of connection NAME (`call-1', `sub-1', ...)
 ;; (drgnx-test-gate-held NAME)           what the gate holds for NAME: its lines, then `:eof'
 ;; (drgnx-test-gate-transcript)          what the gate delivered so far: ((NAME . LINE-or-:eof) ...)
@@ -53,6 +53,10 @@ the gate's is whether a write has happened yet, so a test that sets this waits f
 (defvar drgnx-test-gate--swap nil "K of `DRGNX_TEST_GATE_SWAP=K' for this run, or nil.")
 (defvar drgnx-test-gate--swap-pairs 0 "The pairs of lines from different connections met so far (only counted with a swap).")
 (defvar drgnx-test-gate--lag nil "The released line the swap holds back: (CONN . LINE), or nil.")
+(defvar drgnx-test-gate--before nil "The processes there when the body began: none of them is the body's child.")
+(defvar drgnx-test-gate--progress nil
+  "The real time the code under test last saw output, or a child end, while it waited on its children; nil between
+such waits.")
 
 (defvar drgnx-test--active)
 (defvar drgnx-test--core)
@@ -370,17 +374,45 @@ Whether anything was released."
                                 (not (drgnx-test-gate--conn-challenged c)))))
            drgnx-test-gate--conns))
 
+(defun drgnx-test-gate--children ()
+  "The body's live real children the code under test may wait on: started inside the body, not peers (a hub, a mock
+server or a handshake child the test drives: `:drgnx-test-peer').  The hub's jobs are its children, not these."
+  (cl-remove-if-not (lambda (p) (and (eq (process-type p) 'real) (process-live-p p)
+                                     (not (memq p drgnx-test-gate--before))
+                                     (not (process-get p :drgnx-test-peer))))
+                    (process-list)))
+
+(defun drgnx-test-gate--on-children (children)
+  "A timed wait of the code under test while CHILDREN (`drgnx-test-gate--children') live: no virtual time moves, a
+real look of up to 50 ms instead.  Non-nil when output came (from any process) or a child ended.  No output and no end
+for `drgnx-test-gate-block-secs' of real time fails the test, naming the children and the code that waits."
+  (let ((now (drgnx-test-real-time)))
+    (unless drgnx-test-gate--progress (setq drgnx-test-gate--progress now))
+    (if (or (funcall drgnx-test-gate--raw nil 0.05)
+            (cl-notevery #'process-live-p children))
+        (progn (setq drgnx-test-gate--progress (drgnx-test-real-time)) t)
+      (when (> (- (drgnx-test-real-time) drgnx-test-gate--progress) drgnx-test-gate-block-secs)
+        (drgnx-test-gate--fail "drgnx-test-gated: a real child the code under test waits on did not answer"
+                               :children (mapcar (lambda (p) (cons (process-name p) (process-command p))) children)
+                               :caller (drgnx-test-gate--caller) :secs drgnx-test-gate-block-secs))
+      nil)))
+
 (defun drgnx-test-gate--idle (orig process seconds millisec just-this-one)
-  "A wait with nothing to release: one on another process is the clock's own; else a zero-length look, virtual time
-moved by its timeout (its timers running), and a look again.  Nil: nothing was delivered."
+  "A wait with nothing to release: one on another process is the clock's own.  A timed one while the body's real
+children live waits on them for real (`drgnx-test-gate--on-children'); else a zero-length look, virtual time moved by
+its timeout (its timers running), and a look again.  Nil: nothing was delivered."
   (if (and process (not (drgnx-test-gate--of process)))
       (funcall orig process seconds millisec just-this-one)
-    (let ((secs (drgnx-test--wait-secs seconds millisec)))
-      (funcall drgnx-test-gate--raw process 0 nil just-this-one)
-      (when (and secs (> secs 0))
-        (drgnx-test-advance secs)
-        (funcall drgnx-test-gate--raw process 0 nil just-this-one))
-      nil)))
+    (let* ((secs (drgnx-test--wait-secs seconds millisec))
+           (children (and secs (> secs 0) (drgnx-test-gate--children))))
+      (if children
+          (drgnx-test-gate--on-children children)
+        (setq drgnx-test-gate--progress nil)
+        (funcall drgnx-test-gate--raw process 0 nil just-this-one)
+        (when (and secs (> secs 0))
+          (drgnx-test-advance secs)
+          (funcall drgnx-test-gate--raw process 0 nil just-this-one))
+        nil))))
 
 (defun drgnx-test-gate--accept (orig &optional process seconds millisec just-this-one)
   "`accept-process-output' inside the gate (also deep inside the code under test): what the schedule has due is
@@ -605,14 +637,16 @@ wrote from a task without an origin (`unnamed' > 0) or a step cannot be met."
           (setq done (drgnx-test-gate--settled-p mark)))))
     m))
 
-(defun drgnx-test-hub-advance (ms)
-  "Move the hub's clock MS milliseconds (`__test_advance'), then `drgnx-test-deliver-all'; its marker."
+(defun drgnx-test-hub-advance (ms &optional hold)
+  "Move the hub's clock MS milliseconds (`__test_advance'), then `drgnx-test-deliver-all'; its marker.
+HOLD non-nil: no `drgnx-test-deliver-all' (and no barrier) after it, for a test that lets the hub end first; the
+advance's result."
   (drgnx-test-gate--check-active)
   (drgnx-test-gate--rethrow)
-  (let ((answer (drgnx-test-gate--control-call "__test_advance" (list :ms ms))))
-    (unless answer (drgnx-test-gate--fail "drgnx-test-hub-advance: no hub answers"))
-    (drgnx-test-gate--check-answer answer "__test_advance"))
-  (drgnx-test-deliver-all))
+  (let* ((answer (drgnx-test-gate--control-call "__test_advance" (list :ms ms)))
+         (result (progn (unless answer (drgnx-test-gate--fail "drgnx-test-hub-advance: no hub answers"))
+                        (drgnx-test-gate--check-answer answer "__test_advance"))))
+    (if hold result (drgnx-test-deliver-all))))
 
 ;;;; The test's view
 
@@ -679,6 +713,7 @@ wrote from a task without an origin (`unnamed' > 0) or a step cannot be met."
         (drgnx-test-gate--transcript nil) (drgnx-test-gate--failure nil) (drgnx-test-gate--raw drgnx-test--accept)
         (drgnx-test-gate--opening nil) (drgnx-test-gate--control nil) (drgnx-test-gate--releasing nil)
         (drgnx-test-gate--swap (drgnx-test-gate--swap-env)) (drgnx-test-gate--swap-pairs 0) (drgnx-test-gate--lag nil)
+        (drgnx-test-gate--before (process-list)) (drgnx-test-gate--progress nil)
         (ok nil))
     (unwind-protect
         (progn (dolist (a drgnx-test-gate--advice) (advice-add (nth 0 a) (nth 1 a) (nth 2 a)))
@@ -722,7 +757,8 @@ the first wait after they fall due, in the order the client caused them.
 Every wait inside BODY (`accept-process-output', also deep inside the code under test, and `drgnx-test-wait')
 releases what is due up to the next pause: a step is due once its connection is open, and an answer once its call has
 gone out; the gate then waits, for real, for its line.  A timed wait with nothing to release is a zero-length look and
-a virtual advance by its timeout.  While paused, a wait in the code under test with a line held or a call out fails the
+a virtual advance by its timeout; while a real child BODY started lives (not a peer, `:drgnx-test-peer'), it is a real
+look instead and no virtual time moves (`drgnx-test-gate--on-children').  While paused, a wait in the code under test with a line held or a call out fails the
 test at once, naming the pause and the caller; the test's own `drgnx-test-wait' just looks.  Lines the schedule does
 not name stay held until `drgnx-test-deliver-all'.  Each line the client sends on a gated connection is stamped with
 `__seq'."

@@ -102,6 +102,7 @@ it errors when the port is taken.  Either way the port the mock reports is the p
       (when (process-live-p p) (delete-process p))
       (error "Mock LLM did not start (port %s): %s" (or port "any") (string-trim out)))
     (process-put p :port (string-to-number (match-string 1 out)))
+    (process-put p :drgnx-test-peer t)      ; a server: the delivery gate never waits on it for the code under test
     p))
 
 (when (getenv "MOCK_LLM_SERVE") (mock-llm-serve))

@@ -1276,13 +1276,35 @@ the client half of the `gated` pattern; the hub half is Ratatoskr's test clock a
   the marker, or nil once no hub answers (a test that stopped the hub). A barrier answer with `unnamed` > 0 (the hub
   wrote from a task without an origin) or a step that cannot be met fails the test. Assertions come after it (the
   lint `drgnx-lint/gated-asserts-follow-deliver-all`). `(drgnx-test-hub-advance MS)` moves the hub's clock
-  (`__test_advance`), then delivers all. A test of a real agent child (the agents mirror's) binds
+  (`__test_advance`), then delivers all; `(drgnx-test-hub-advance MS t)` only moves it, for a test that lets the hub
+  end first (restart-when-idle: what the hub held is written before its connections close, and the gate holds it). A
+  test of a real agent child (the agents mirror's) binds
   `drgnx-test-gate-unnamed-ok` to t: the child's turns are tasks the hub cannot name, their writes are held and
   released at the barrier like the rest, and the test waits for what the agent did as a condition (a look is a
   `drgnx-test-deliver-all` or `drgnx-test-hub-advance`), never a deadline. Every step must be met by the time a
   delivery runs, so such a test asks the hub with `drgnx-hub-call` and waits for the answer, not with `-sync`.
 - **Time.** The body runs on the manual clock (entered, pending timers allowed, when none is active): client timers
   fire only when the test advances virtual time, never because real time passed while the gate waited.
+- **Real I/O under virtual time.** The code under test often waits on a virtual-clock loop (`float-time` and a timed
+  `accept-process-output`) for real I/O. Who answers decides the rule:
+  - **A real child of this Emacs** (a curl to a provider, a version read) is outside the gate's control. A timed wait
+    in the code under test, with nothing to release, while a real child the body started is alive, moves no virtual
+    time. It is a real look of up to 50 ms instead, so the loop asks its condition again once output came or a child
+    ended. The loop's deadline is reached only when no such child is alive, so the answer counts however slow the
+    machine is. No output and no end for `drgnx-test-gate-block-secs` (30 s) of real time fails the test, naming the
+    children and the waiting function. A deadline never passes silently. Processes there before the body began, and
+    peers the test drives (`(process-put PROC :drgnx-test-peer t)`: a hub the test starts, the mock LLM
+    (`drgnx-ai-test-mock-llm`), a handshake child), are never waited on. Their timed waits stay virtual.
+  - **The hub, and the jobs it runs**, write hub lines (`exec/start`'s answer, `exec-done`, a notice). These come
+    through the schedule or `drgnx-test-deliver-all`, never through real time, and a real look never releases one.
+    A job's end is written by the hub's job task, so it is held at the hub until a barrier. A product loop that waits
+    for a job's end (onboarding's `drgnx-onboard--until`) can only be gated by a test that names a step for every
+    answer the loop waits on, and that lets the loop return before it delivers the end.
+  - **A child whose order matters** against the hub, or against the test, announces and parks
+    ([Announce and park](#announce-and-park)).
+
+  The audit's rules are unchanged: a real look reads a gated connection into the gate's queue, never into the
+  client's filter.
 - `(drgnx-test-gate-transcript)` lists the deliveries so far, `(NAME . LINE)` or `(NAME . :eof)`, and
   `drgnx-test-gate--releasing` names the connection while the gate hands a line over. Hub chaos (`DRGNX_TEST_HUB_CHAOS`)
   leaves gated connections alone.

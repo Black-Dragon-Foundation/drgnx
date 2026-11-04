@@ -12,6 +12,7 @@
 (require 'drgnx-hub-client)
 (require 'drgnx-exec)
 (require 'drgnx-ai)
+(require 'drgnx-onboard)                ; its waits are the code under test of the real-children tests
 (require 'drgnx-settings-runtime)
 (require 'drgnx-settings-agents nil t)
 (require 'drgnx-records-review nil t)
@@ -50,6 +51,12 @@
                     (or (null key) (and (consp (plist-get j :result)) (plist-member (plist-get j :result) key))))))
            (drgnx-test-gate-held name)))
 
+(defun drgnx-delivery-gate-test--paused-and-held ()
+  "Wait until the schedule is at its pause (the settings answer released: the client sends that call only after its
+hello's answer) and the subscribe answer is held: the two come in either real order."
+  (drgnx-test-wait (lambda () (and (drgnx-test-gate--paused-p) (drgnx-delivery-gate-test--answer-held-p 'sub-1)))
+                   :what "the pause, and the subscribe answer held"))
+
 (defun drgnx-delivery-gate-test--shape (entry)
   "A delivery (NAME . LINE) as what it is, not what varies by run (ids, nonces, tokens): (NAME . :eof),
 \(NAME :event EVENT), (NAME :error) or (NAME :answer RESULT-KEYS)."
@@ -73,7 +80,7 @@
     (let (before held)
       (drgnx-test-gated '((call-1 :answer "graph/settings") (:pause "held") (sub-1 :answer "subscribe"))
         (drgnx-hub-connect)
-        (drgnx-test-wait (lambda () (drgnx-delivery-gate-test--answer-held-p 'sub-1)) :what "the subscribe answer, held")
+        (drgnx-delivery-gate-test--paused-and-held)
         (setq before drgnx-hub--events held (drgnx-test-gate-held 'sub-1))
         (drgnx-test-gate-continue "held")
         (drgnx-test-deliver-all)
@@ -120,7 +127,7 @@ open to it until then."
       (unwind-protect
           (drgnx-test-gated '((call-1 :answer "graph/settings") (:pause "stop"))
             (drgnx-hub-connect)
-            (drgnx-test-wait (lambda () (drgnx-delivery-gate-test--answer-held-p 'sub-1)) :what "the subscribe answer, held")
+            (drgnx-delivery-gate-test--paused-and-held)
             (signal-process drgnx-test-ratatoskr-process 'term)
             (drgnx-test-wait (lambda () (memq :eof (drgnx-test-gate-held 'sub-1))) :what "the end of sub-1, held")
             (setq held (drgnx-test-gate-held 'sub-1)
@@ -169,6 +176,50 @@ naming the pause, the next step and the caller."
       ;; at its first wait: not one virtual tick toward the call's deadline went by
       (should (equal (plist-get data :virtual-secs) 0.0)))))
 
+;;;; Real children of the code under test
+
+(defun drgnx-delivery-gate-test--child (command said)
+  "A real child running COMMAND (a shell line); what it prints goes into the cell SAID."
+  (make-process :name "drgnx-gate-child" :noquery t :connection-type 'pipe :command (list "sh" "-c" command)
+                :filter (lambda (_p s) (setcar said (concat (car said) s)))))
+
+(ert-deftest drgnx-delivery-gate/a-wait-on-a-real-child-moves-no-virtual-time ()
+  "The code under test waits, 0.1 s on its clock, for a real child that answers only after real time passed (onboarding's
+`drgnx-onboard--wait' on a curl, say): the gate waits on the child for real, and no virtual time goes by meanwhile, so
+the answer comes within the code's deadline however slow the machine.  A peer the test drives is not waited on."
+  (let ((said (list nil)) (peer-said (list nil)) got now got-peer now-peer child)
+    (drgnx-test-gated nil
+      (drgnx-delivery-gate-test--child "sleep 0.2; echo answered" said)
+      (setq got (drgnx-onboard--wait (lambda () (car said)) 0.1)
+            now (drgnx-test-clock-now))
+      ;; a peer (a server the test started): the wait is the gate's virtual one, which never waits for it
+      (setq child (drgnx-delivery-gate-test--child "read line; echo answered" peer-said))
+      (process-put child :drgnx-test-peer t)
+      (setq got-peer (drgnx-onboard--wait (lambda () (car peer-said)) 0.1)
+            now-peer (drgnx-test-clock-now))
+      (delete-process child)
+      (drgnx-test-deliver-all))
+    (should (equal got "answered\n"))
+    (should (= now 0))
+    (should-not got-peer)
+    (should (>= now-peer 0.1))))
+
+(ert-deftest drgnx-delivery-gate/a-real-child-that-never-answers-fails-naming-it ()
+  "A real child the code under test waits on says nothing and does not end: the gate fails the test after its real
+bound, naming the child and the code that waits; never a timeout the code would take for an answer."
+  (let* ((child nil)
+         (err (unwind-protect
+                  (should-error (let ((drgnx-test-gate-block-secs 0.3))
+                                  (drgnx-test-gated nil
+                                    (setq child (drgnx-delivery-gate-test--child "read line" (list nil)))
+                                    (drgnx-onboard--wait #'ignore 0.1)))
+                                :type 'ert-test-failed)
+                (when (process-live-p child) (delete-process child))))
+         (data (cdr (cadr err))))
+    (should (string-match-p "a real child" (car (cadr err))))
+    (should (equal (car (car (plist-get data :children))) "drgnx-gate-child"))
+    (should (eq (plist-get data :caller) 'drgnx-onboard--wait))))
+
 (ert-deftest drgnx-delivery-gate/a-deleted-connection-gets-nothing-it-held ()
   "The client deletes a connection while the gate holds its lines: its sentinel runs once, at the delete, and nothing
 it held is delivered after."
@@ -177,7 +228,7 @@ it held is delivered after."
       (drgnx-test-gated '((call-1 :answer "graph/settings") (:pause "held"))
         (drgnx-hub-connect)
         (add-function :after (process-sentinel (drgnx-test-gate-conn 'sub-1)) (lambda (_p _e) (cl-incf runs)))
-        (drgnx-test-wait (lambda () (drgnx-delivery-gate-test--answer-held-p 'sub-1)) :what "the subscribe answer, held")
+        (drgnx-delivery-gate-test--paused-and-held)
         (setq held (drgnx-test-gate-held 'sub-1))
         (drgnx-hub-disconnect)
         (setq runs-at-delete runs after-delete (length (drgnx-test-gate-transcript)))

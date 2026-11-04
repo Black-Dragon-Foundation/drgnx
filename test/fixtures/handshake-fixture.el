@@ -40,8 +40,11 @@ job and its whole group are gone, STOPPED.  GROUP, non-nil, runs it in its own p
   (let ((command (if (or shim group)
                      (append (list "sh" (expand-file-name "handshake-shim.sh" drgnx-handshake--dir)) command)
                    command)))
-    (make-process :name (or name "drgnx-test-child") :command command :connection-type 'pipe :noquery t
-                  :coding 'utf-8-unix :filter #'drgnx-handshake--filter)))
+    ;; the test drives it: a peer, which the delivery gate never waits on for the code under test
+    (let ((p (make-process :name (or name "drgnx-test-child") :command command :connection-type 'pipe :noquery t
+                           :coding 'utf-8-unix :filter #'drgnx-handshake--filter)))
+      (process-put p :drgnx-test-peer t)
+      p)))
 
 (defun drgnx-test-child-parked-p (proc)
   "Non-nil when PROC has announced a state and has not been sent GO since."
