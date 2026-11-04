@@ -30,6 +30,7 @@
 (declare-function nidhogg-watchdog-ranking "nidhogg-watchdog-report")
 (declare-function nidhogg-watchdog--deep "nidhogg-watchdog")
 (declare-function drgnx-heap-audit-command "drgnx-heap")
+(declare-function find-library-name "find-func")
 (declare-function drgnx-gc-census-show "drgnx-gc-census")
 (declare-function drgnx-modules-list "drgnx-modules")
 (declare-function drgnx-owner-module-for-package "drgnx-owner")
@@ -179,7 +180,8 @@
 
 (defun drgnx-freezes-open-source (package)
   "Open the source of PACKAGE, the culprit's: its library, else its folder."
-  (let ((lib (ignore-errors (find-library-name package))) (desc (drgnx-freezes--package-desc package)))
+  (let ((lib (and (require 'find-func nil t) (ignore-errors (find-library-name package))))
+        (desc (drgnx-freezes--package-desc package)))
     (cond (lib (find-file lib))
           (desc (dired (package-desc-dir desc)))
           (t (user-error "No source found for %s" package)))))

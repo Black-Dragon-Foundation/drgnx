@@ -104,7 +104,8 @@ here would escape drgnx's init, so it is contained."
         (drgnx-watchdog-mode (if want 1 -1))))))
 
 (defun drgnx-watchdog-maybe-start ()
-  "Turn the watchdog on when this Emacs has it, is interactive, is not in safe mode and the setting is on; `drgnx-gc-setup' calls it."
+  "Turn the watchdog on when this Emacs has it, is interactive, is not in safe mode and the setting is on.
+`drgnx-gc-setup' calls it."
   (when (and (drgnx-watchdog-available-p) (not noninteractive) (not (getenv "DRGNX_SAFE")) (drgnx-watchdog--wanted-p))
     (drgnx-watchdog-mode 1)))
 
