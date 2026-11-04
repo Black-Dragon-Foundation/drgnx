@@ -75,7 +75,7 @@
  (drgnx-agents-routes nil)
  (drgnx-agents-openrouter nil)
  (drgnx-agents-allow-unsandboxed nil)
- (drgnx-agents-start-env-names ("PLAYWRIGHT_MCP_CDP_ENDPOINT"))
+ (drgnx-agents-start-env-names nil)
  (drgnx-agents-trace-opens ("claude"))
  (drgnx-agents-matrix (:preset balanced))
  (drgnx-agents-away-after 600)

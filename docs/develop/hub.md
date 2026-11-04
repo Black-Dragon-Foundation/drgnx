@@ -1247,7 +1247,7 @@ and name. The session is recorded in `runtime.db` (`asession`, migration 5) and 
 (`run_by` its agent, `works_on` its task; a brainstorm's topic note and design document are in its `data`).
 
 - **Module env.** `agents/start` takes `env` (at most 8 `{name, value}`): what the editor's modules add through
-  `drgnx-agents-env-functions` (the Live browser's `PLAYWRIGHT_MCP_CDP_ENDPOINT`). Each name must be on the runtime
+  `drgnx-agents-env-functions` (no module adds one by default). Each name must be on the runtime
   setting `drgnx-agents-start-env-names` and must not be `refused_env_name` (a name with KEY, TOKEN, SECRET, PASSWORD,
   PASSPHRASE or CREDENTIAL in it) nor a provider's `key_env` (as `env/set`), else `invalid-params` at `env[i].name`; the values are added to the launch plan's
   environment last, so they win over the profile's and the lock's. They belong to that start only: a session the hub

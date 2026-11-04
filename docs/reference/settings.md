@@ -514,7 +514,7 @@ PASSWORD, PASSPHRASE or CREDENTIAL), whatever this lists.  Only you can set it, 
 
 | Key | Value |
 | --- | --- |
-| Default | `("PLAYWRIGHT_MCP_CDP_ENDPOINT")` |
+| Default | `nil` |
 | Type | `(repeat string)` |
 | `:scope` | `global` |
 | `:workspace` | `never` |

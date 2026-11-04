@@ -355,8 +355,6 @@
         (browser-test-report :none "the palette")
         (browser-agent-page :none "the palette")
         (browser-go "RET" :map (drgnx-browser . drgnx-browser-mode-map))
-        (live-start-browser :none "the palette")
-        (live-stop-browser :none "the palette")
         (live-view :none "the palette")
         (live-take-over "C-c C-c" :map (drgnx-live . drgnx-live-mode-map))
         (remote-open "SPC r o")

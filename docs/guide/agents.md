@@ -334,13 +334,13 @@ you say yes.
 
 ### What modules add to a session
 
-A module can add variables to the environment of an agent you start from the editor (the Live browser adds
-`PLAYWRIGHT_MCP_CDP_ENDPOINT` while the browser for agents runs, [live.md](live.md)). The editor sends them with
+A module can add variables to the environment of an agent you start from the editor (no module of drgnx does now;
+the Live view no longer starts a browser for agents, [live.md](live.md)). The editor sends them with
 `agents/start`, and the hub starts the agent with them after the profile's own variables. Only the names in
-`drgnx-agents-start-env-names` go through, by default just the Playwright one:
+`drgnx-agents-start-env-names` go through, and by default there are none:
 
 ```elisp
-(drgnx-agents-start-env-names ("PLAYWRIGHT_MCP_CDP_ENDPOINT"))   ; only you can change it, never a repository or an agent
+(drgnx-agents-start-env-names ())   ; only you can change it, never a repository or an agent
 ```
 
 A name that is not on the list is dropped, with one notice naming it. A name that looks like a credential (it contains

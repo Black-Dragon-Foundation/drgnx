@@ -1,15 +1,12 @@
-;;; drgnx-live.el --- Module tools/live: watch and take over the browser drgnx starts for agents (CDP screencast) -*- lexical-binding: t -*-
+;;; drgnx-live.el --- Module tools/live: the Live view of an agent's browser (dormant until a later update) -*- lexical-binding: t -*-
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; drgnx starts one headless Chrome (or Chromium) for agents, as a durable job: its own throwaway profile
-;; under the state dir, a debugging port on 127.0.0.1 only (a random one), memory-capped.  Agents drgnx
-;; starts afterwards get its address (PLAYWRIGHT_MCP_CDP_ENDPOINT), so their Playwright MCP drives it
-;; instead of a browser of its own.  The Live view shows that browser's page through Chrome DevTools
-;; Protocol screencast frames (no xwidgets needed), with its tabs and URL on top; frames that arrive
-;; while Emacs is busy are dropped, never queued.  Take Over sends your clicks, scrolling and typing to
-;; the page and tells the agent the user is driving; the same command hands it back.
+;; drgnx no longer starts a browser for agents: agents' browsers run inside their sandboxes
+;; (docs/guide/agent-browser.md).  The Live view opens and says that watching comes with a later update.
+;; Its CDP screencast client (tabs, frames, Take Over) is kept as it was, frozen, until that update
+;; replaces it; nothing in the product connects it now.
 ;; See docs/guide/live.md.
 
 ;;; Code:
@@ -31,179 +28,14 @@
 (declare-function websocket-frame-text "websocket")
 ;; only in an Emacs with image support (Homebrew's terminal Emacs has none): each call is in `ignore-errors'
 (declare-function image-flush "image.c" (spec &optional frame))
-(declare-function drgnx-exec-start "drgnx-exec")
-(declare-function drgnx-exec-get "drgnx-exec")
-(declare-function drgnx-exec-list "drgnx-exec")
-(declare-function drgnx-exec-log "drgnx-exec")
-(declare-function drgnx-exec-stop "drgnx-exec")
-(declare-function drgnx-agents-sessions "drgnx-agents")
-(declare-function drgnx-agents-steer "drgnx-agents")
-(declare-function drgnx-agent-session-name "drgnx-agents")
-(declare-function drgnx-agent-session-status "drgnx-agents")
-(declare-function drgnx-browser-agent-url "drgnx-browser")
 (declare-function evil-emacs-state "evil-states")
 (declare-function evil-change-to-previous-state "evil-core")
-(defvar drgnx-agents-env-functions)
 
-(defvar drgnx-live-chrome-programs
-  '("google-chrome" "google-chrome-stable" "chromium" "chromium-browser" "chrome"
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-    "/Applications/Chromium.app/Contents/MacOS/Chromium")
-  "The browsers the Live view can start for agents, first found wins: names on PATH or absolute paths.")
-
-(defvar drgnx-live-start-timeout 10 "Seconds the browser has to open its debugging port.")
 (defvar drgnx-live-frame-interval 0.1 "Seconds between two drawn frames at most (about 10 a second); frames between are dropped.")
 (defconst drgnx-live-buffer-name "*drgnx live*")
-
-(defvar drgnx-live--browser nil
-  "The browser for agents this Emacs started: (:port N :ws URL :job ID :dir DIR), or nil.")
-(defvar drgnx-live--given nil "The agent sessions that were given the browser's endpoint.")
-
-;;;; The browser for agents
-
-(defun drgnx-live--profile-dir ()
-  "This Emacs's throwaway browser profile: <state>/live-profile-<pid>."
-  (expand-file-name (format "live-profile-%d" (emacs-pid)) (drgnx-state-dir)))
-
-(defun drgnx-live--chrome ()
-  "The Chrome or Chromium program to start, or nil."
-  (seq-some (lambda (p) (if (file-name-absolute-p p) (and (file-executable-p p) p) (executable-find p)))
-            drgnx-live-chrome-programs))
-
-(defun drgnx-live--chrome-pid (dir)
-  "The pid of the browser using the profile DIR while it runs (its SingletonLock names it), else nil."
-  (when-let* ((target (file-symlink-p (expand-file-name "SingletonLock" dir)))
-              ((string-match "-\\([0-9]+\\)\\'" target))
-              (pid (string-to-number (match-string 1 target)))
-              ((process-attributes pid)))
-    pid))
-
-(defun drgnx-live-running ()
-  "The browser for agents while it runs: (:port :ws :job :dir), else nil."
-  (when drgnx-live--browser
-    (require 'drgnx-exec)
-    (let ((status (plist-get (drgnx-exec-get (plist-get drgnx-live--browser :job)) :status)))
-      ;; a job the hub lost sight of reads as `gone' while it may run: then the browser's own lock says
-      (and (or (eq status 'running) (and (eq status 'gone) (drgnx-live--chrome-pid (plist-get drgnx-live--browser :dir))))
-           drgnx-live--browser))))
-
-(defun drgnx-live--stop-job (id)
-  "Ask the hub to stop the browser's job ID.  Not waited for: callers that need the browser gone wait for its pid, a
-bounded time."
-  (drgnx-exec-stop id))
-
-(defun drgnx-live--clean-stale ()
-  "Profiles of Emacs sessions that are gone: their browser job stops, their directory goes."
-  (dolist (dir (directory-files (drgnx-state-dir) t "\\`live-profile-[0-9]+\\'"))
-    (let ((pid (string-to-number (substring (file-name-nondirectory dir) 13))))
-      (unless (or (= pid (emacs-pid)) (process-attributes pid))
-        (dolist (job (drgnx-exec-list))
-          (when (and (not (memq (plist-get job :status) '(done failed stopped)))
-                     (member (concat "--user-data-dir=" dir) (plist-get job :argv)))
-            (drgnx-live--stop-job (plist-get job :id))))
-        (ignore-errors (delete-directory dir t))))))
-
-(defun drgnx-live--read-port (file)
-  "(PORT . PATH) from the browser's DevToolsActivePort FILE once it is complete, else nil."
-  (when (file-readable-p file)
-    (let ((lines (split-string (with-temp-buffer (insert-file-contents file) (buffer-string)) "\n" t)))
-      (and (= 2 (length lines)) (> (string-to-number (car lines)) 0)
-           (cons (string-to-number (car lines)) (cadr lines))))))
-
-(defun drgnx-live--exec-start (argv dir deadline)
-  "Start ARGV as the hub's job \"live-browser\" in DIR and wait for the hub to take it, until DEADLINE (`float-time'):
-the job's id.  Signals a `user-error' (and deletes DIR) when it did not start.  A command's wait, never a timer's.  A
-server: no time box; no memory cap on macOS (the hub refuses one there)."
-  (let (id why done)
-    (drgnx-exec-start "live-browser" argv :cwd dir :memory-max (and (eq system-type 'gnu/linux) "1G") :no-timebox t
-                      :callback (lambda (i w) (setq id i why w done t)))
-    (while (and (not done) (< (float-time) deadline)) (accept-process-output nil 0.05))
-    (unless id
-      (ignore-errors (delete-directory dir t))
-      (user-error "Live: the browser did not start: %s" (or why "the hub did not answer in time")))
-    id))
-
-(defun drgnx-live--start ()
-  "Start the browser for agents and wait (at most `drgnx-live-start-timeout') for its debugging port."
-  (let ((chrome (or (drgnx-live--chrome)
-                    (user-error "Live: no Chrome or Chromium found (looked for %s); install one to watch agents' browsers"
-                                (string-join (seq-remove #'file-name-absolute-p drgnx-live-chrome-programs) ", "))))
-        (dir (drgnx-live--profile-dir)))
-    (require 'drgnx-exec)
-    (make-directory (drgnx-state-dir) t)
-    (drgnx-live--cleanup)                                    ; an earlier browser of this Emacs: it has ended
-    (drgnx-live--clean-stale)
-    (when (file-directory-p dir) (delete-directory dir t))
-    (make-directory dir t)
-    (let* ((file (expand-file-name "DevToolsActivePort" dir))
-           (deadline (+ (float-time) drgnx-live-start-timeout))
-           (job (drgnx-live--exec-start
-                 (list chrome "--headless=new" "--remote-debugging-address=127.0.0.1"
-                       "--remote-debugging-port=0" (concat "--user-data-dir=" dir)
-                       "--no-first-run" "--no-default-browser-check" "about:blank")
-                 dir deadline))
-           port exited)
-      ;; whatever ends the wait without a port (the deadline, the browser exiting, C-g), the browser and its
-      ;; profile go: nothing else knows of them yet
-      (unwind-protect
-          (progn
-            (while (and (not (setq port (drgnx-live--read-port file))) (< (float-time) deadline)
-                        (not (setq exited (memq (plist-get (drgnx-exec-get job) :status) '(done failed stopped)))))
-              (accept-process-output nil 0.05))
-            (unless port
-              (let ((log (string-trim (or (ignore-errors (drgnx-exec-log job 600)) ""))))
-                (user-error "Live: %s %s%s" (file-name-nondirectory chrome)
-                            (if exited "exited before it opened its debugging port"
-                              (format "did not open its debugging port in %d s" drgnx-live-start-timeout))
-                            (if (string-empty-p log) "" (concat ": " log))))))
-        (unless port
-          (unless exited (ignore-errors (drgnx-live--stop-job job)))
-          (ignore-errors (delete-directory dir t))))
-      (setq drgnx-live--browser (list :port (car port) :ws (format "ws://127.0.0.1:%d%s" (car port) (cdr port))
-                                      :job job :dir dir)))))
-
-(defun drgnx-live-browser ()
-  "The browser for agents, started once per drgnx session: (:port N :ws URL).
-For interactive callers only: starting the browser waits up to `drgnx-live-start-timeout' seconds for its port, so
-never call this from a hook, timer or sentinel (`drgnx-live-running' answers without waiting)."
-  (let ((b (or (drgnx-live-running) (drgnx-live--start))))
-    (list :port (plist-get b :port) :ws (plist-get b :ws))))
-
-(defun drgnx-live-start-browser ()
-  "Start the browser for agents; agents started from now on use it (and the Live view shows it)."
-  (interactive)
-  (let ((b (drgnx-live-browser)))
-    (message "Live: the browser for agents listens on 127.0.0.1:%d; agents started now use it" (plist-get b :port))))
-
-(defun drgnx-live--cleanup ()
-  "Stop the browser for agents and delete its profile, once the browser has exited (3 s at most: it writes there as
-it ends, and a stop returns before it has)."
-  (when-let* ((b drgnx-live--browser))
-    ;; the agents hear that the user is no longer driving, whatever ends it
-    (when-let* ((buf (get-buffer drgnx-live-buffer-name)))
-      (with-current-buffer buf (when (bound-and-true-p drgnx-live-driving-mode) (drgnx-live--drive nil))))
-    (setq drgnx-live--browser nil drgnx-live--given nil)
-    (let* ((dir (or (plist-get b :dir) (drgnx-live--profile-dir))) (pid (drgnx-live--chrome-pid dir)) (deadline (+ (float-time) 3)))
-      (ignore-errors (drgnx-live--stop-job (plist-get b :job)))
-      (while (and pid (process-attributes pid) (< (float-time) deadline)) (sleep-for 0.05))
-      (ignore-errors (delete-directory dir t)))))
-
-(defun drgnx-live-stop-browser ()
-  "Stop the browser for agents; its throwaway profile is deleted."
-  (interactive)
-  (if (not drgnx-live--browser) (message "Live: no browser for agents is running")
-    (drgnx-live--cleanup)
-    (message "Live: the browser for agents is stopped")))
-
-(defun drgnx-live--agent-env (session)
-  "PLAYWRIGHT_MCP_CDP_ENDPOINT for SESSION's agent while the browser for agents runs."
-  (when-let* ((b (drgnx-live-running)))
-    (cl-pushnew session drgnx-live--given)
-    (list (format "PLAYWRIGHT_MCP_CDP_ENDPOINT=http://127.0.0.1:%d" (plist-get b :port)))))
-
-(defun drgnx-live--using ()
-  "The live agent sessions that were given the endpoint."
-  (setq drgnx-live--given (seq-remove (lambda (s) (eq (drgnx-agent-session-status s) 'exited)) drgnx-live--given)))
+(defconst drgnx-live--dormant-text
+  "Watching an agent's browser arrives with a later drgnx update; agents' browsers now run inside their sandboxes (docs/guide/agent-browser.md)"
+  "What the Live view says while it has nothing to watch.")
 
 ;;;; The connection (in the Live view's buffer)
 
@@ -268,7 +100,7 @@ it ends, and a stop returns before it has)."
                               :on-error (lambda (_ws _type e) (drgnx-live--in buf #'drgnx-live--say (format "Live: %s" (error-message-string e))))))
       (error
        (drgnx-live--say (if (string-match-p "refused" (error-message-string err))
-                            (format "Live: 127.0.0.1:%d refused the connection: the browser for agents is not running there (Live: Start Browser for Agents starts it; g tries again)"
+                            (format "Live: 127.0.0.1:%d refused the connection: no browser is listening there"
                                     (plist-get endpoint :port))
                           (format "Live: cannot reach the browser at 127.0.0.1:%d: %s" (plist-get endpoint :port) (error-message-string err))))))))
 
@@ -500,36 +332,18 @@ only the newest waits to be drawn."
     ;; an old frame's pixels stay in no cache; the first frame ends the wait the notes mention
     (if old (ignore-errors (image-flush old t)) (drgnx-live--render-notes))))
 
-(defun drgnx-live--agent-notes ()
-  "Lines about running agents that do not use this browser."
-  (when (featurep 'drgnx-agents)
-    (let ((urls (mapcar (lambda (tg) (string-trim-right (or (plist-get tg :url) "") "/")) drgnx-live--targets))
-          (using (drgnx-live--using)))
-      (delq nil
-            (mapcar (lambda (s)
-                      (unless (eq (drgnx-agent-session-status s) 'exited)
-                        (if (not (memq s using))
-                            (format "%s does not use this browser: it was started before it (or outside this Emacs); start the agent again to watch it here"
-                                    (drgnx-agent-session-name s))
-                          (when-let* ((url (and (fboundp 'drgnx-browser-agent-url) (drgnx-browser-agent-url s)))
-                                      ((not (member (string-trim-right url "/") urls))))
-                            (format "%s opened %s, which no tab here shows: its Playwright MCP may not use PLAYWRIGHT_MCP_CDP_ENDPOINT"
-                                    (drgnx-agent-session-name s) url)))))
-                    (drgnx-agents-sessions))))))
-
 (defun drgnx-live--schedule-notes ()
   (drgnx-timer-soon (cons 'live-notes (current-buffer)) 0.3 #'drgnx-live--render-notes :owner (current-buffer)))
 
 (defun drgnx-live--render-notes ()
-  "The text below the page: the connection's state and agents that do not use this browser."
+  "The text below the page: the connection's state."
   (let ((inhibit-read-only t))
     (save-excursion
       (when (= (point-min) (point-max)) (insert " \n"))
       (delete-region (+ 2 (point-min)) (point-max))
       (goto-char (point-max))
       (let ((lines (append (and drgnx-live--status (list drgnx-live--status))
-                           (and (not drgnx-live--status) (not drgnx-live--image) (list "Waiting for the page's first frame…"))
-                           (drgnx-live--agent-notes))))
+                           (and (not drgnx-live--status) (not drgnx-live--image) (list "Waiting for the page's first frame…")))))
         (dolist (l lines) (insert "\n" l))))))
 
 ;;;; The view
@@ -553,9 +367,9 @@ built again only when `live-tabs' was bumped (the tabs, the watched tab or drivi
 (defvar drgnx-live-mode-map (make-sparse-keymap) "Keys in the Live view (Live: Take Over / Hand Back).")
 
 (define-derived-mode drgnx-live-mode special-mode "Live"
-  "The page of the browser for agents, through screencast frames (docs/guide/live.md)."
+  "The Live view of an agent's browser (dormant until a later update; docs/guide/live.md)."
   (setq-local header-line-format '(:eval (drgnx-live--header)))
-  (setq-local revert-buffer-function (lambda (&rest _) (drgnx-live--open (current-buffer) (drgnx-live-browser))))
+  (setq-local revert-buffer-function (lambda (&rest _) (drgnx-live--say drgnx-live--dormant-text)))
   (setq-local cursor-type nil)
   (add-hook 'kill-buffer-hook #'drgnx-live--killed nil t))
 
@@ -565,17 +379,12 @@ built again only when `live-tabs' was bumped (the tabs, the watched tab or drivi
   (drgnx-live--disconnect))
 
 (defun drgnx-live-view ()
-  "Watch the browser for agents (starting it when it is not running)."
+  "Open the Live view, which says that watching an agent's browser comes with a later update."
   (interactive)
-  ;; before Chrome starts: a browser nobody can watch would only be left running
-  (unless (display-images-p)
-    (user-error "Live: the Live view shows the page as an image, which needs a graphical frame; this terminal cannot show it (docs/guide/live.md)"))
-  (condition-case nil (require 'websocket)
-    (error (user-error "Live: the Live view needs the websocket package (Preferences: Modules, docs/guide/live.md)")))
-  (let ((endpoint (drgnx-live-browser)) (buf (get-buffer-create drgnx-live-buffer-name)))
+  (let ((buf (get-buffer-create drgnx-live-buffer-name)))
     (with-current-buffer buf (unless (derived-mode-p 'drgnx-live-mode) (drgnx-live-mode)))
     (pop-to-buffer buf)
-    (drgnx-live--open buf endpoint)
+    (with-current-buffer buf (drgnx-live--say drgnx-live--dormant-text))
     buf))
 
 ;;;; Taking over
@@ -670,23 +479,16 @@ the page; evil's own keys are out of the way in its emacs state."
                  "Live: the page is the agent's again")))))
 
 (defun drgnx-live--drive (on)
-  "Start driving the page in this view (ON), or stop; busy agents using the browser are told either way."
-  (drgnx-live-driving-mode (if on 1 -1))
-  (dolist (s (drgnx-live--using))
-    (when (eq (drgnx-agent-session-status s) 'busy)
-      (drgnx-agents-steer s (if on "the user is driving the browser; wait" "the user handed the browser back")))))
+  "Start driving the page in this view (ON), or stop."
+  (drgnx-live-driving-mode (if on 1 -1)))
 
 ;;;; Module
 
 (defun drgnx-live--define-commands ()
   (pcase-dolist (`(,id ,title ,fn ,doc)
-                 '((live-start-browser "Start Browser for Agents" drgnx-live-start-browser
-                                       "A headless browser agents started from now on drive (their Playwright MCP)")
-                   (live-stop-browser "Stop Browser for Agents" drgnx-live-stop-browser
-                                      "Stop the browser for agents and delete its throwaway profile")
-                   (live-view "Watch Agents' Browser" drgnx-live-view "The page agents work on, live")
+                 '((live-view "Watch Agents' Browser" drgnx-live-view "The Live view of an agent's browser (arrives with a later update)")
                    (live-take-over "Take Over / Hand Back" drgnx-live-take-over
-                                   "Your clicks and keys go to the page (the agent is told), or hand it back")))
+                                   "Your clicks and keys go to the page, or hand it back")))
     (drgnx-command-define id :category "Live" :title title :command fn :doc doc :scope 'window
                           :map (and (eq id 'live-take-over) '(drgnx-live . drgnx-live-mode-map)))))
 
@@ -696,19 +498,14 @@ the page; evil's own keys are out of the way in its emacs state."
   (drgnx-state-subscribe 'pane-resized #'drgnx-live--resized))
 
 (defun drgnx-live--setup ()
-  "Give agents the browser's endpoint, stop the browser when Emacs ends, define the commands."
-  (require 'drgnx-agents)
+  "Follow the view's window through the store, define the commands."
   (drgnx-live--subscribe)
   (drgnx-memo-activate 'live-header)
-  (add-hook 'drgnx-agents-env-functions #'drgnx-live--agent-env)
-  (add-hook 'kill-emacs-hook #'drgnx-live--cleanup)
   (drgnx-live--define-commands))
 
 (drgnx-module-define 'tools/live
-                     :doc "Live: watch and take over the browser drgnx starts for agents (CDP screencast)."
+                     :doc "Live: the view of an agent's browser (dormant until a later update)."
                      :stage 'idle :packages '(websocket)
-                     ;; turned off: the browser for agents stops and its profile goes, as when Emacs ends
-                     :teardown #'drgnx-live--cleanup
                      :setup #'drgnx-live--setup)
 
 (provide 'drgnx-live)
