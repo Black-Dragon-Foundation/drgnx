@@ -1032,7 +1032,18 @@ deleted or replaced by a plan) are listed in `test/class-exempt.eld` as `(FILE :
   `test/ui` it gives a reason (`(drgnx-test-pause SECS "WHY")`), and a wait for a frame is `drgnx-test-wait-presented`.
 - **timing**: may assert elapsed time; no other class may `should` over a wall-clock comparison.
 
-`test/unit/lint-test-classes-test.el` has a lint for each rule. Every test file has a class, so
+`test/unit/lint-test-classes-test.el` has a lint for each rule. It reads the files (never loads them) and sees:
+
+- every `ert-deftest`, those a test-defining macro makes included: a top-level form whose head ends in `deftest` is
+  expanded with the file's own macro of that name or the one another test file defines
+  (`drgnx-platform-test--deftest`, `drgnx-work-db-writer-deftest`), and a form that makes no test fails the lint;
+- the file's helpers, called or passed by name (`#'h`, `'h` to `funcall`, a hook or a timer);
+- a clock read through a time of nil (`(time-less-p nil END)`, `(time-add nil 2)`, `format-time-string` or
+  `decode-time` with no time), which stays real inside `drgnx-test-with-clock` on the advice path;
+- a timed `accept-process-output` by its seconds or its milliseconds;
+- the `*-isolated.el` files under `test/unit/isolated`, which a `-test.el` file runs in an Emacs of its own.
+
+Every test file has a class, so
 `drgnx-lint-classes--all-classified` is set and a file without one fails; a row for a file that is gone fails always.
 
 `NIDHOGG_TEST_CLOCK` and `NIDHOGG_TEST_SEED` pass into the container; a failed run prints the seed.

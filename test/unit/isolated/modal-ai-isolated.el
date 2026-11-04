@@ -1,5 +1,6 @@
 ;;; modal-ai-isolated.el --- batch tests (own Emacs, test/unit/modal-ai-test.el): AI ghost text and the selection under Vim keys -*- lexical-binding: t -*-
-;; test-class: det
+;; test-class: cond
+;; Class cond: the `complete' role is a mock LLM, a real Emacs serving HTTP, and the tests wait for its answer.
 ;; Needs the real evil: DRGNX_MODAL_ELPA (docs/develop/harness.md, "Modal tests"); without it these tests skip.
 ;; The full registry and the startup modules run in a temp configuration (editor/evil chosen, the Vim stack
 ;; applied), so the keys are the shipped ones; the `complete' role is a mock LLM, as in test/unit/ai-ghost-test.el.
