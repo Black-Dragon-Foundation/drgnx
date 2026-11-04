@@ -119,7 +119,11 @@ this returns.
     instead). The program is the profile's command looked up on `PATH` (or its absolute path), its folder taken to its
     true name and its file name kept, and the launch runs it by that path. It is refused, naming the path, when it is
     not found or the sandbox would not show it or its link's target: outside every root, the session's own reads and
-    writes and the system's trees (`/usr` and bwrap's `SYSTEM_READS`; the reduced tier's `REDUCED_SYSTEM_ROOTS`). A
+    writes and the system's trees: what the sandbox really reads (bwrap's `/usr`, `SYSTEM_READS` and the `USR_MERGED`
+    top-level dirs, which a host without a merged `/usr` binds as they are; the reduced tier's `REDUCED_SYSTEM_ROOTS`;
+    Seatbelt's `SYSTEM_READ` without `SYSTEM_HIDDEN`, so on macOS `/bin/sh`, Homebrew's `/opt/homebrew` and
+    `/usr/local` pass, while MacPorts' `/opt/local` or an app bundle under `/Applications` is refused: deny-default
+    shows nothing else outside the home). A
     mise shim is refused so: it runs mise, which needs its config, and the shims folder is no root. `session_spec`
     returns a `SessionSpec { spec, program }`;
   - the tier whose check passes (`launch::detect`: [the check](#the-check), the doctor's, run once per hub while it

@@ -51,7 +51,8 @@ impl Fx {
 
     fn plan(&self, login: &str) -> LaunchPlan {
         LaunchPlan {
-            argv: vec!["/bin/true".into()],
+            // a program every target has at this path (macOS has no `/bin/true`)
+            argv: vec!["/bin/sh".into()],
             env: vec![("DRGNX_ROLE_HINT".into(), "x".into())],
             session_meta: None,
             protected_ro: vec![self.p("wt/.codex")],
@@ -744,10 +745,51 @@ fn a_program_the_sandbox_does_not_show_is_refused_by_its_path() {
     assert_eq!(ok.program, full);
     assert_eq!(
         t.spec(&env, &["sh"], Tier::Full).unwrap().program,
-        sandbox::true_name(Path::new("/usr/bin"))
-            .unwrap()
-            .join("sh")
+        system_sh()
     );
+}
+
+/// `sh` as a PATH of `/usr/bin:/bin` finds it, its folder by its true name: `/usr/bin/sh` on a merged `/usr`, `/bin/sh`
+/// where `/bin` is its own folder (macOS, older Linux).
+fn system_sh() -> PathBuf {
+    ["/usr/bin", "/bin"]
+        .iter()
+        .find(|d| Path::new(d).join("sh").exists())
+        .and_then(|d| sandbox::true_name(Path::new(d)))
+        .unwrap()
+        .join("sh")
+}
+
+/// On macOS the system is what Seatbelt's profile reads (deny-default), not every path outside the home: `/bin/sh`
+/// is shown, a program outside those trees and outside every root is refused, by its path.
+#[test]
+fn a_macos_program_outside_seatbelts_system_reads_is_refused() {
+    let t = Tools::new();
+    let env = t.env(&TOOL_PATH);
+    let ctx = context_for(&env, None);
+    let path = env.vars.get("PATH").unwrap().clone();
+    let tool = |program: &str| {
+        sandbox::toolchain(
+            &env,
+            &ctx,
+            &path,
+            std::ffi::OsStr::new(program),
+            &[],
+            Tier::Full,
+            Target::Macos,
+        )
+    };
+    assert_eq!(tool("sh").unwrap().program, system_sh());
+    let outside = t.fx.p("opt/agent");
+    fs::create_dir_all(outside.parent().unwrap()).unwrap();
+    fs::write(&outside, "x").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let r = tool(outside.to_str().unwrap()).unwrap_err();
+    assert_eq!(r.rule, gleipnir::Rule::Setup, "{r}");
+    assert_eq!(r.path, Some(outside), "{r}");
 }
 
 /// The launch's sandbox is the one whose check passes (the doctor's check, not bwrap's presence): the full tier, else

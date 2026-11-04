@@ -878,7 +878,9 @@ pub fn toolchain(
     let seen = |p: &Path| {
         roots.dirs.iter().chain(granted).any(|r| p.starts_with(r))
             || roots.files.iter().any(|f| f == p)
-            || (!p.starts_with(&ctx.home) && system_reads(target).iter().any(|s| p.starts_with(s)))
+            || (!p.starts_with(&ctx.home)
+                && system_reads(target).iter().any(|s| p.starts_with(s))
+                && !system_hidden(target).iter().any(|h| p.starts_with(h)))
     };
     for p in [&program, &real] {
         if !seen(p) || hide.iter().any(|h| h == p) {
@@ -904,19 +906,29 @@ fn is_executable(p: &Path) -> bool {
     std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
-/// The system trees a sandbox of `target` shows read-only (macOS: every path outside the home counts; Seatbelt's
-/// base policy reads the system).
+/// The system trees a sandbox of `target` shows read-only: bwrap's binds (`/usr`, its `SYSTEM_READS` and the
+/// top-level dirs a host without a merged `/usr` keeps apart), the reduced tier's Landlock roots, Seatbelt's
+/// `SYSTEM_READ` (deny-default: a path outside them, such as `/opt/local` or `/Applications`, is not readable).
 fn system_reads(target: gleipnir::Target) -> Vec<PathBuf> {
-    let names: Vec<&str> = match target {
+    let all = |names: &[&str]| names.iter().map(PathBuf::from).collect::<Vec<_>>();
+    match target {
         gleipnir::Target::LinuxBwrap => {
-            let mut v = vec!["/usr"];
-            v.extend(gleipnir::bwrap::SYSTEM_READS);
+            let mut v = all(&["/usr"]);
+            v.extend(all(gleipnir::bwrap::SYSTEM_READS));
+            v.extend(gleipnir::bwrap::USR_MERGED.iter().map(|d| Path::new("/").join(d)));
             v
         }
-        gleipnir::Target::LinuxReduced => gleipnir::landlock::REDUCED_SYSTEM_ROOTS.to_vec(),
-        gleipnir::Target::Macos => vec!["/"],
-    };
-    names.into_iter().map(PathBuf::from).collect()
+        gleipnir::Target::LinuxReduced => all(gleipnir::landlock::REDUCED_SYSTEM_ROOTS),
+        gleipnir::Target::Macos => all(gleipnir::sbpl::SYSTEM_READ),
+    }
+}
+
+/// The system paths a sandbox of `target` never shows, though they lie inside [`system_reads`].
+fn system_hidden(target: gleipnir::Target) -> &'static [&'static str] {
+    match target {
+        gleipnir::Target::Macos => gleipnir::sbpl::SYSTEM_HIDDEN,
+        gleipnir::Target::LinuxBwrap | gleipnir::Target::LinuxReduced => &[],
+    }
 }
 
 /// A session's spec ([`session_spec`]) and the program it runs ([`Toolchain::program`]).
