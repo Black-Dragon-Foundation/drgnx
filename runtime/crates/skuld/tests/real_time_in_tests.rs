@@ -13,7 +13,9 @@
 //! - `Instant::now` inside a paused test, in a file that imports tokio's `Instant`, unless written
 //!   `std::time::Instant::now`. A paused test is `start_paused = true` (not `false`) or a body that calls
 //!   `tokio::time::pause()`; the exemption covers that function only, never the rest of its file. A helper that only
-//!   paused tests call is marked `#[doc = "paused clock: …"]` and counts as paused.
+//!   paused tests call is marked `#[doc = "paused clock: …"]` and counts as paused, but only the helpers in `MARKED`
+//!   (file, fn, why) may carry it: a marker anywhere else fails, and so does a listed helper without its marker, so
+//!   the list only shrinks.
 //!
 //! Test code is any `cfg(...)` predicate naming `test` (`cfg(all(test, …))` too). The scan covers `crates/*` and
 //! `conformance`. A bare `sleep(` is classed by the file's `use` line (`std::thread::sleep` or tokio's), and
@@ -417,6 +419,52 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// The helpers allowed to carry the `paused clock` marker: (file suffix, fn name, why). Only ever shrinks.
+const MARKED: &[(&str, &str, &str)] = &[(
+    "mimir/src/bridge.rs",
+    "connect",
+    "the test connector (Fake) dials only inside the module's paused tests",
+)];
+
+/// The names of the fns in `src` that carry the `paused clock` marker attribute.
+fn marked_fns(src: &str) -> Vec<String> {
+    let lines: Vec<&str> = src.lines().collect();
+    let mut out = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let squeezed: String = line.split_whitespace().collect();
+        if !squeezed.starts_with("#[doc=\"pausedclock") {
+            continue;
+        }
+        let decl = lines[i + 1..].iter().take(6).find(|l| l.contains("fn "));
+        if let Some(rest) = decl.and_then(|l| l.split("fn ").nth(1)) {
+            let name: String = rest.chars().take_while(|&c| is_ident(c)).collect();
+            out.push(name);
+        }
+    }
+    out
+}
+
+/// Marker misuse in one file: a marked fn that `MARKED` does not list, or a listed one that lost its marker.
+fn marker_problems(rel: &str, src: &str) -> Vec<String> {
+    let marked = marked_fns(src);
+    let mut out = Vec::new();
+    for name in &marked {
+        if !MARKED.iter().any(|(f, n, _)| rel.ends_with(f) && n == name) {
+            out.push(format!(
+                "{rel}: fn {name} carries the paused-clock marker but is not in MARKED"
+            ));
+        }
+    }
+    for (f, n, why) in MARKED {
+        if rel.ends_with(f) && !marked.iter().any(|m| m == n) {
+            out.push(format!(
+                "{rel}: fn {n} is in MARKED ({why}) but carries no paused-clock marker: drop it from MARKED"
+            ));
+        }
+    }
+    out
+}
+
 fn exempt(rel: &str) -> bool {
     rel.ends_with("skuld/src/wait.rs")
         || rel.ends_with("/tests/timing.rs")
@@ -470,6 +518,7 @@ fn find(runtime: &Path) -> Vec<String> {
             continue;
         }
         let whole = rel.contains("/tests/") || rel.ends_with("/tests.rs") || test_files.contains(f);
+        out.extend(marker_problems(&rel, &fs::read_to_string(f).unwrap()));
         for (line, kind) in scan(&fs::read_to_string(f).unwrap(), whole, &mut Vec::new()) {
             out.push(format!("{rel}:{line}: {}", kind.name()));
         }
@@ -603,6 +652,32 @@ fn imported_names_are_classified_by_their_use_line() {
     let tokio_alias = "use tokio::time::Instant as Clock;\n#[tokio::test(start_paused = true)]\nasync fn p() {\n    Clock::now();\n}\n\
                        #[tokio::test]\nasync fn q() {\n    Clock::now();\n}\n";
     assert_eq!(sites_of(tokio_alias, true), vec![(8, Kind::InstantNow)]);
+}
+
+fn says(problems: &[String], a: &str, b: &str) -> bool {
+    problems.iter().any(|m| m.contains(a) && m.contains(b))
+}
+
+#[test]
+fn the_paused_clock_marker_is_fenced() {
+    let marker = "#[doc = \"paused clock: why\"]";
+    // listed, marked: fine
+    let ok = format!("impl X {{\n    {marker}\n    fn connect(&self) {{}}\n}}\n");
+    assert!(marker_problems("crates/mimir/src/bridge.rs", &ok).is_empty());
+    // marked but not listed (another fn, or another file)
+    let other = format!("{marker}\nfn helper() {{}}\n");
+    let p = marker_problems("crates/mimir/src/bridge.rs", &other);
+    assert!(says(&p, "fn helper", "not in MARKED"), "{p:?}");
+    let p = marker_problems("crates/norn/src/x.rs", &ok);
+    assert!(says(&p, "fn connect", "not in MARKED"), "{p:?}");
+    // listed but no longer marked
+    let p = marker_problems("crates/mimir/src/bridge.rs", "fn connect(&self) {}\n");
+    assert!(
+        says(&p, "fn connect", "carries no paused-clock marker"),
+        "{p:?}"
+    );
+    // a file that is not listed and has no marker is clean
+    assert!(marker_problems("crates/norn/src/x.rs", "fn a() {}\n").is_empty());
 }
 
 #[test]
