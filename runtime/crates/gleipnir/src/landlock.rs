@@ -11,8 +11,8 @@
 //! - [`restrict`] checks the floor, then applies the description for the effective ABI to the calling thread.
 
 use crate::spec::{
-    LANDLOCK_ABI_MAX, LANDLOCK_FLOOR_FULL, LANDLOCK_FLOOR_REDUCED, LANDLOCK_FLOOR_SHARED_NET, Mode,
-    Net, ValidSpec,
+    LANDLOCK_ABI_MAX, LANDLOCK_FLOOR_BROWSER, LANDLOCK_FLOOR_FULL, LANDLOCK_FLOOR_REDUCED,
+    LANDLOCK_FLOOR_SHARED_NET, Mode, Net, ValidSpec,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -331,6 +331,75 @@ pub fn plan_for(spec: &ValidSpec, tier: Tier) -> LandlockPlan {
                 tcp_bind_ports: Some(relay_ports),
             }
         }
+    }
+}
+
+/// The browser layer's system roots: read and execute only. Missing ones and links are skipped when applied.
+pub const BROWSER_SYSTEM_ROOTS: &[&str] = &[
+    "/usr", "/etc", "/opt", "/bin", "/lib", "/lib64", "/sbin", "/proc",
+];
+
+/// Device files the browser may read.
+pub const BROWSER_DEV_READ: &[&str] = &["/dev/null", "/dev/zero", "/dev/urandom", "/dev/random"];
+
+/// Device files the browser may write.
+pub const BROWSER_DEV_WRITE: &[&str] = &["/dev/null"];
+
+/// What the browser layer is built from: the caller's facts, as paths seen by the browser host (inside paths under
+/// bwrap).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserInputs {
+    pub tier: Tier,
+    /// The browser binary's directory.
+    pub program_dir: PathBuf,
+    /// The browser's own directory: its profile, downloads, cache and temporary files.
+    pub own_dir: PathBuf,
+    /// The helper the browser host runs as; its directory is read (the host is exec'd under the layer).
+    pub helper: PathBuf,
+    /// More read-only roots (the hub passes `/var/cache/fontconfig`).
+    pub extra_read: Vec<PathBuf>,
+    /// The web relay's port inside: the browser's only way out.
+    pub web_port: u16,
+    /// The agent's local servers the browser may reach (loopback ports inside the sandbox's network namespace).
+    pub local_ports: Vec<u16>,
+}
+
+/// The browser layer: a second Landlock domain on top of the agent's, for the browser host and every Chromium
+/// process under it (pure). Layers only narrow, so it only takes away:
+/// - reads only the system roots, the browser's directory, its own directory and the helper's;
+/// - writes only its own directory (and `/dev/shm` on the full tier, bwrap's private one) and `/dev/null`;
+/// - connects to no pathname Unix socket (no `resolve_unix` anywhere: not the hub's, the MCP socket or the agent's);
+/// - TCP connects only to the web relay port and the local ports, never the provider relay or the CDP relay;
+/// - binds no TCP port at all (`Some(vec![])`: handled, nothing allowed), so a renderer cannot squat a dev port;
+/// - scopes signals and abstract sockets to its own domain (ABI 6, as every plan).
+///
+/// `min_abi` is [`LANDLOCK_FLOOR_BROWSER`] on both tiers.
+pub fn browser_plan(b: &BrowserInputs) -> LandlockPlan {
+    let helper_dir = b.helper.parent().map(PathBuf::from);
+    let read = b
+        .extra_read
+        .iter()
+        .chain([&b.program_dir, &b.own_dir])
+        .chain(&helper_dir);
+    let read_roots = path_list(read, &[BROWSER_SYSTEM_ROOTS, BROWSER_DEV_READ].concat());
+    let shm: &[&str] = match b.tier {
+        Tier::Full => &["/dev/shm"],
+        Tier::Reduced => &[],
+    };
+    let mut ports: Vec<u16> = std::iter::once(b.web_port)
+        .chain(b.local_ports.iter().copied())
+        .collect();
+    ports.sort_unstable();
+    ports.dedup();
+    LandlockPlan {
+        tier: b.tier,
+        min_abi: LANDLOCK_FLOOR_BROWSER,
+        read_roots,
+        write_roots: path_list([&b.own_dir], shm),
+        dev_write_files: path_list([], BROWSER_DEV_WRITE),
+        unix_connect_roots: vec![],
+        tcp_connect_ports: Some(ports),
+        tcp_bind_ports: Some(vec![]),
     }
 }
 
@@ -1157,6 +1226,120 @@ mod tests {
         }
     }
 
+    fn browser_inputs(tier: Tier) -> BrowserInputs {
+        BrowserInputs {
+            tier,
+            program_dir: "/usr/lib64/chromium-browser".into(),
+            own_dir: "/tmp/drgnx-browser".into(),
+            helper: crate::spec::HELPER_INSIDE.into(),
+            extra_read: vec!["/var/cache/fontconfig".into()],
+            web_port: 3130,
+            local_ports: vec![3000, 3001, 4173, 4200, 5000, 5173, 8000, 8080, 8888],
+        }
+    }
+
+    /// One ABI's rule set as text, for the browser goldens.
+    fn render_desc(d: &RulesetDesc) -> String {
+        let mut out = String::new();
+        writeln!(out, "== ABI {}", d.abi).unwrap();
+        writeln!(out, "handled fs: {}", names(&d.handled_fs)).unwrap();
+        writeln!(out, "handled net: {}", names(&d.handled_net)).unwrap();
+        writeln!(out, "scoped: {}", names(&d.scoped)).unwrap();
+        writeln!(out, "tcp ports: {:?}", d.tcp_connect_ports).unwrap();
+        writeln!(out, "tcp bind ports: {:?}", d.tcp_bind_ports).unwrap();
+        for r in &d.path_rules {
+            writeln!(out, "{}: {}", r.path.display(), names(&r.allow)).unwrap();
+        }
+        out
+    }
+
+    /// The browser layer at ABI 9 on both tiers, pinned; and what must hold whatever the golden says: binds and
+    /// connects handled, no bind allowed, only the web port and the local ports (never the provider's 3128 or the
+    /// CDP relay's 9222), no Unix connect anywhere, and writes only in its own dir (and `/dev/shm` on full).
+    #[test]
+    fn browser_plan_table() {
+        for (tier, name) in [
+            (Tier::Full, "browser_plan_full"),
+            (Tier::Reduced, "browser_plan_reduced"),
+        ] {
+            let b = browser_inputs(tier);
+            let p = browser_plan(&b);
+            assert_eq!(p.min_abi, 9);
+            assert_eq!(p.tier, tier);
+            let d = rules_for_abi(&p, 9);
+            insta::assert_snapshot!(name, render_desc(&d));
+            assert_eq!(d.handled_net, vec![NetRight::BindTcp, NetRight::ConnectTcp]);
+            assert!(d.tcp_bind_ports.is_empty(), "{tier:?}");
+            assert_eq!(
+                d.tcp_connect_ports,
+                vec![3000, 3001, 3130, 4173, 4200, 5000, 5173, 8000, 8080, 8888]
+            );
+            assert!(!d.tcp_connect_ports.contains(&3128) && !d.tcp_connect_ports.contains(&9222));
+            assert!(p.unix_connect_roots.is_empty());
+            assert!(
+                d.path_rules
+                    .iter()
+                    .all(|r| !r.allow.contains(&FsRight::ResolveUnix)),
+                "{tier:?}: a path rule carries resolve_unix"
+            );
+            let mut allowed_writes = vec![b.own_dir.clone()];
+            if tier == Tier::Full {
+                allowed_writes.push("/dev/shm".into());
+            }
+            for w in &p.write_roots {
+                assert!(allowed_writes.contains(w), "{tier:?}: write root {w:?}");
+            }
+            assert_eq!(
+                p.write_roots.contains(&"/dev/shm".into()),
+                tier == Tier::Full
+            );
+            assert_eq!(p.dev_write_files, paths(&["/dev/null"]));
+            // Every path that gets a write right is its own dir, /dev/shm (full) or /dev/null.
+            for r in &d.path_rules {
+                let writes = r.allow.iter().any(|a| !READ_RIGHTS.contains(a));
+                if writes {
+                    assert!(
+                        allowed_writes.contains(&r.path) || r.path == Path::new("/dev/null"),
+                        "{tier:?}: {} is written",
+                        r.path.display()
+                    );
+                }
+            }
+            for root in ["/usr", "/proc", "/run/gleipnir", "/var/cache/fontconfig"] {
+                assert_eq!(
+                    rights_at(&d, root),
+                    [FsRight::Execute, FsRight::ReadFile, FsRight::ReadDir],
+                    "{tier:?}: {root}"
+                );
+            }
+            for never in ["/", "/home", "/run", "/run/drgnx", "/tmp", "/work"] {
+                assert!(rights_at(&d, never).is_empty(), "{tier:?}: {never}");
+            }
+        }
+    }
+
+    #[test]
+    fn browser_plan_refuses_below_9() {
+        for tier in [Tier::Full, Tier::Reduced] {
+            let p = browser_plan(&browser_inputs(tier));
+            assert!(
+                matches!(
+                    gate(&p, 8, None),
+                    Err(LandlockError::BelowFloor { need: 9, .. })
+                ),
+                "{tier:?}"
+            );
+            assert!(
+                matches!(
+                    gate(&p, 10, Some(8)),
+                    Err(LandlockError::BelowFloor { need: 9, .. })
+                ),
+                "{tier:?}"
+            );
+            assert_eq!(gate(&p, 9, None), Ok(9));
+        }
+    }
+
     // ---- Real tests: each runs in a re-exec'd child of this test binary, since Landlock cannot be undone.
 
     const CHILD: &str = "GLEIPNIR_LANDLOCK_TEST_CHILD";
@@ -1432,6 +1615,47 @@ mod tests {
             UnixStream::connect_addr(&addr).expect("control: reachable before");
             restrict(&write_plan(1, dir.path()), None).unwrap();
             assert_eq!(errno(UnixStream::connect_addr(&addr)), Some(libc::EPERM));
+        });
+    }
+
+    /// ABI 9: the browser layer, applied for real. A Unix socket made outside is refused, TCP reaches only the web
+    /// port, no bind at all, and only its own dir is written.
+    #[test]
+    fn browser_layer_narrows() {
+        in_child("browser_layer_narrows", 9, &[], || {
+            use std::net::{TcpListener, TcpStream};
+            use std::os::unix::net::{UnixListener, UnixStream};
+            let dir = fixture_dir();
+            let (own, other) = (dir.path().join("own"), dir.path().join("other"));
+            std::fs::create_dir(&own).unwrap();
+            std::fs::create_dir(&other).unwrap();
+            let sock = other.join("hub.sock");
+            let _unix = UnixListener::bind(&sock).unwrap();
+            let web = TcpListener::bind("127.0.0.1:0").unwrap();
+            let provider = TcpListener::bind("127.0.0.1:0").unwrap();
+            UnixStream::connect(&sock).expect("control: reachable before");
+            TcpStream::connect(provider.local_addr().unwrap()).expect("control: reachable before");
+            let p = browser_plan(&BrowserInputs {
+                own_dir: own.clone(),
+                extra_read: vec![],
+                web_port: web.local_addr().unwrap().port(),
+                local_ports: vec![],
+                ..browser_inputs(Tier::Full)
+            });
+            assert_eq!(restrict(&p, None).unwrap().abi, 9);
+            assert_eq!(errno(UnixStream::connect(&sock)), Some(libc::EACCES));
+            assert_eq!(
+                errno(TcpStream::connect(provider.local_addr().unwrap())),
+                Some(libc::EACCES)
+            );
+            TcpStream::connect(web.local_addr().unwrap()).expect("the web port is reached");
+            assert_eq!(errno(TcpListener::bind("127.0.0.1:0")), Some(libc::EACCES));
+            std::fs::write(own.join("f"), "x").expect("its own dir is written");
+            assert_eq!(
+                errno(std::fs::write(other.join("f"), "x")),
+                Some(libc::EACCES)
+            );
+            assert_eq!(errno(std::fs::read_dir(&other)), Some(libc::EACCES));
         });
     }
 

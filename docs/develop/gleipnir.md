@@ -591,6 +591,28 @@ ptrace scoping denies other processes' `environ`, `mem` and `fd` (EACCES). It do
 (2026-10-21). It is recorded by the test `reduced_proc_other_cmdline_is_the_gap` and the escape row
 `reduced-proc-cmdline-the-gap`, and phase 6 names it in the reduced badge's text.
 
+**The browser layer** (`landlock::browser_plan`). The agent browser's host and every Chromium process under it run
+in a second Landlock domain on top of the agent's. Landlock layers only narrow, so this layer can only take away.
+`browser_plan(&BrowserInputs { tier, program_dir, own_dir, helper, extra_read, web_port, local_ports })` is pure:
+
+| | The browser layer | Why |
+|---|---|---|
+| Floor | ABI ≥ 9 on both tiers (`LANDLOCK_FLOOR_BROWSER`) | TCP rules need 4, the scopes 6, and refusing every Unix connect 9. Without all three the layer is no boundary |
+| Read and execute | `/usr /etc /opt /bin /lib /lib64 /sbin /proc`, `/dev/{null,zero,urandom,random}`, `extra_read` (the hub passes `/var/cache/fontconfig`), the browser's dir, its own dir, the helper's dir | Chromium's libraries, fonts and its own files. Not `/`: the worktree, the CLI's login dir and the agent's `/tmp` are out of reach. The helper's dir (`/run/gleipnir` under bwrap) is there because the browser host is the helper binary, exec'd under the layer |
+| Write | its own dir (`/tmp/drgnx-browser` under bwrap), and on the full tier `/dev/shm` (bwrap's private one); `/dev/null` | the profile, downloads, cache and temporary files stay in one dir the hub can remove. The reduced tier never writes the host's `/dev/shm` |
+| Unix connect | none: `unix_connect_roots` is empty and no rule carries `resolve_unix` | not `hub.sock`, not `mcp.sock`, not anything the agent made |
+| TCP connect | the web relay port and the local ports only | never the provider relay (3128) or the CDP relay (9222) |
+| TCP bind | handled, nothing allowed (`tcp_bind_ports: Some([])`) | a renderer cannot squat one of the agent's dev ports |
+| Scopes | signals and abstract sockets, as every plan at ABI ≥ 6 | it cannot signal the agent or reach the agent's abstract sockets |
+
+`/proc` is readable, but Landlock's ptrace scoping refuses a sub-domain's access to its ancestor's `environ` and
+`mem`, so a renderer cannot read the agent's environment (where the CDP secret and the gateway token are). The agent,
+as the ancestor domain, can still trace, signal and kill its browser: it drives that browser anyway.
+
+Tests: `browser_plan_table` (an insta golden of the ABI-9 rule set on both tiers, plus the assertions above),
+`browser_plan_refuses_below_9`, and the real `browser_layer_narrows` (ABI 9: a Unix socket made outside refused, TCP
+only to the web port, no bind, writes only in its own dir).
+
 Tests: `landlock::tests`. The pure ones include the goldens `rules_per_abi_golden` (ABI 1–9 × full shared, full
 isolated, reduced), the floor table, and the check that the handled set equals the crate's own set for each ABI. The
 real ones each run in a re-exec'd child of the test binary, because a restriction cannot be undone. They skip with
@@ -608,6 +630,7 @@ The filter allows every call by default and refuses this list (`seccomp::rules()
 | `perf_event_open` | EPERM | Watches other processes, and is a large kernel attack surface. |
 | `bpf` | EPERM | Kernel attack surface. |
 | `userfaultfd` | EPERM | A common primitive for exploiting kernel races. |
+| `pidfd_getfd`, `process_vm_readv`, `process_vm_writev` | EPERM | They take another process's fds or read and write its memory with a ptrace-mode check but without `ptrace(2)`, which is refused already, so nothing that works today uses them. They also close the cheap ways for an agent to take its browser host's CDP socketpair end. Both tiers, and the browser host. |
 | `io_uring_setup`, `io_uring_enter`, `io_uring_register` | EPERM | io_uring operations are not system calls, so seccomp never sees them. It is also a frequent source of CVEs. |
 | `unshare`, `setns` | EPERM | A new namespace gives a namespaced root, kernel attack surface, and a way around the mount layout. |
 | `clone` with any `CLONE_NEW*` bit in its flags | EPERM | The same, through `clone`. These are seven rules, one per bit of `0x7E020000`, because seccompiler cannot express "masked value is not zero". |
@@ -629,6 +652,14 @@ cgroup either, so the process group the helper leads is what ends the run:
 | `socket(AF_INET or AF_INET6, SOCK_STREAM, protocol)` unless the protocol is 0 or `IPPROTO_TCP` | EPERM | SCTP and MPTCP stream sockets are not TCP to Landlock, which then leaves their connects alone. |
 | `sendto` (flags: argument 3), `sendmsg` (argument 2) and `sendmmsg` (argument 3) with `MSG_FASTOPEN` (`0x20000000`) in the flags | EPERM | A TCP Fast Open send connects without `connect(2)`. Kernels with ABI 9 but without the fix "landlock: fix TCP Fast Open connection bypass" (7.2-rc4, no ABI bump) never ask Landlock, so the program would reach any host on any port (gate review S2). A masked compare (`MaskedEq`), so other flags change nothing. `TCP_FASTOPEN_CONNECT` goes through `connect(2)`, which Landlock sees. |
 | `setsid`, `setpgid` | EPERM | Leaving the helper's process group (and session) would outlive the run: the group kill would miss the process, which keeps its Landlock grants (gate review S1). The helper's own `setsid` runs before the filter. Shells lose job control (`set -m`), and a `daemon(3)` fails. |
+
+**The browser host stacks a filter of its own** (`seccomp::browser_rules()`, compiled by `compile_browser(arch)`), on
+both tiers, on top of the agent's. It is `rules()` plus TCP Fast Open both ways:
+
+| Refused (browser host) | Result | Why |
+|---|---|---|
+| `sendto`, `sendmsg`, `sendmmsg` with `MSG_FASTOPEN` | EPERM | As in the reduced tier: unfixed kernels never show a Fast Open send to Landlock's `connect_tcp`. The full tier's agent filter allows it (the network namespace holds TCP to the relay ports), but the browser layer narrows those further, so a bypass there would reach the provider or the CDP relay. |
+| `setsockopt(fd, IPPROTO_TCP, TCP_FASTOPEN_CONNECT = 30, …)` | EPERM | Landlock does see that connect, but refusing it costs Chromium nothing and leaves no Fast Open path at all below the browser. Two `Eq` conditions on the low 32 bits of the level and the name. |
 
 Argument checks compare only the **low 32 bits** of the argument. The kernel reads an `ioctl` request and a `socket`
 domain, type and protocol as 32-bit ints, so `TIOCSTI | 1 << 32` is TIOCSTI to the kernel, and the filter must see it
@@ -657,7 +688,7 @@ Tests (`seccomp::tests`):
 - `bpf_golden_x86_64` and `bpf_golden_aarch64`: insta snapshots of each whole program in `src/snapshots/`, one line
   per instruction. A new seccompiler is checked against these.
 - `bpf_interpreter_table`: a classic-BPF interpreter in the test runs both programs over synthetic `seccomp_data`
-  (3232 cases):
+  (over 3200 cases):
   - every call number 0–1023;
   - each `CLONE_NEW*` bit alone, all seven together, and with thread flags, plus 0, fork and thread flags alone;
   - TIOCSTI and TIOCLINUX with and without high bits;
@@ -686,6 +717,12 @@ Tests (`seccomp::tests`):
   `reduced_group_and_fastopen_table` (the flags with and without Fast Open, other flags and high bits, Fast Open in
   another argument) and `reduced_differs_from_full_only_on_its_rules` (every other number, both argument extremes, the
   foreign-arch kill).
+- `bpf_golden_{x86_64,aarch64}_browser` and `browser_rules_refuse_fastopen_both_ways` (the list written out; the
+  sends with and without Fast Open; `setsockopt` with TCP Fast Open Connect, with high bits, and with other levels and
+  names; every other number answered as the full filter does). `every_session_refuses_fd_and_memory_theft`: the three
+  calls in every list, every filter of both arches under 4096 instructions. The real install adds
+  `process_vm_readv` on its own memory and `pidfd_getfd` of its own fd 0 (EPERM), and under the browser filter
+  `TCP_FASTOPEN_CONNECT` and a Fast Open `sendto` (EPERM) and `TCP_NODELAY` (set).
 
   A case is skipped, with the reason printed, when its control does not give the unfiltered result. Inside a podman
   container, the container's own filter already refuses `io_uring_setup`, `add_key` and vsock, so those three skip

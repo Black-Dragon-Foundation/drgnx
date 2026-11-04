@@ -88,6 +88,10 @@ pub const LANDLOCK_FLOOR_REDUCED: u8 = 9;
 /// scopes them. `Net::Isolated` has a namespace of its own and keeps [`LANDLOCK_FLOOR_FULL`].
 pub const LANDLOCK_FLOOR_SHARED_NET: u8 = 6;
 
+/// The agent browser's Landlock floor, on both Linux tiers: TCP rules need ABI 4, the scopes 6, and refusing every
+/// Unix connect 9. Without all three the browser layer is no boundary, so a session gets the browser only at 9.
+pub const LANDLOCK_FLOOR_BROWSER: u8 = 9;
+
 /// The highest Landlock ABI a spec may require: the last one the `landlock` crate knows. A newer kernel runs the
 /// ABI-9 rule set.
 pub const LANDLOCK_ABI_MAX: u8 = 9;
