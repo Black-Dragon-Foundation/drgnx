@@ -66,7 +66,7 @@ case $cmd in
       '--compositor[compositor of the GUI session]:compositor:(mutter sway x11 i3 kwin niri)' '--tty[terminal tests in private tmux servers]' \
       '--config[configuration of the session]:configuration:(drgnx gryphn)' \
       '--bench[the workbench vs treemacs and ibuffer]' '--perf[input latency, redisplay, frames, GC]' \
-      '--audit[what each hook function costs]' '--ab[judge wall clock against a git ref]:ref:' '--ab-env[paired A/B by an environment variable]:VAR=JUDGED,REF:' '--n[samples per side for --ab]:samples:' '--soak[the workloads in a loop]' \
+      '--audit[what each hook function costs]' '--ab[judge wall clock against a git ref]:ref:' '--ab-env[paired A/B by an environment variable]:VAR=JUDGED,REF:' '--n[samples per side for --ab]:samples:' '--soak[the workloads in a loop]' '--day[the synthetic day]' \
       '--preflight[the ordering-bug pre-flight]' '--out[with --preflight: the report file]:report:_files' \
       '--seeds[with --preflight: shuffle seeds]:seeds' '--nidhogg-tarball[with --preflight: the Nidhogg tarball]:tarball:_files' \
       '--container[inside a container]' '--install[install.sh in fresh distribution containers]' \

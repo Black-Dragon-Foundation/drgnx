@@ -77,6 +77,7 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l ab-env -x -d 'Paired A/B by an environment variable (VAR=JUDGED,REF)'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l n -r -d 'Samples per side for --ab'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l soak -d 'The workloads in a loop'
+    complete -c drgnx -n '__fish_seen_subcommand_from test' -l day -d 'The synthetic day'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l container -d 'Inside a container'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l install -d 'install.sh in fresh distribution containers'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l bootstrap -d 'drgnx bootstrap on a fresh Fedora container'
