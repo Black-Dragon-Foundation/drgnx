@@ -222,9 +222,9 @@ pub(crate) fn origin_name() -> Option<String> {
     virt::origin_name()
 }
 
-/// F, or [`Elapsed`] once D of real time has passed, whatever clock the hub runs on (test-hooks): only for a limit on
-/// a wait a standing virtual clock would never end (the sequencer's at the hub's end).
-#[cfg(feature = "test-hooks")]
+/// F, or [`Elapsed`] once D of real time has passed, whatever clock the hub runs on: only for a limit on a wait a
+/// standing virtual clock would never end (the hub's end: the sequencer's, the connections', the store threads').
+#[inline]
 pub(crate) async fn real_timeout<F: Future>(d: Duration, f: F) -> Result<F::Output, Elapsed> {
     tokio::time::timeout(d, f).await.map_err(|_| Elapsed)
 }

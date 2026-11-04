@@ -392,6 +392,8 @@ async fn serve_conn(stream: UnixStream, front: Arc<Front>, socket: Socket) {
     tracing::debug!(conn = id, peer_pid = cred.pid(), "accepted a connection");
     let (mut r, w) = stream.into_split();
     let out = Arc::new(Outbox::new(id));
+    // known to the front until it is gone: the hub's end closes it
+    front.serving(id, &out);
     // known to the sequencer before its challenge: every line on it comes after
     #[cfg(feature = "test-hooks")]
     let sequencer = crate::sequencer::current().map(|s| {

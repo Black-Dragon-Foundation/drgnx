@@ -181,6 +181,9 @@ pub struct ServeArgs {
     /// `--test-sequencer` (test-hooks only, and it means `--test-clock`): requests served one at a time in the order of
     /// their `__seq`, and `__test_barrier`.
     pub test_sequencer: bool,
+    /// `--test-hold-store` (test-hooks only): at the hub's end, runtime.db's thread is held by a job until SIGUSR1, with
+    /// a write queued behind it, so the end can be seen to close the connections first and then write that queue.
+    pub test_hold_store: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -253,6 +256,8 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                         a.test_sequencer = true;
                         a.test_clock = true;
                     }
+                    #[cfg(feature = "test-hooks")]
+                    Long("test-hold-store") => a.test_hold_store = true,
                     other => return Err(other.unexpected().to_string()),
                 }
             }
@@ -1015,6 +1020,7 @@ mod tests {
         assert!(p(&["serve", "--test-ignore-shutdown"]).is_err());
         assert!(p(&["serve", "--test-clock"]).is_err());
         assert!(p(&["serve", "--test-sequencer"]).is_err());
+        assert!(p(&["serve", "--test-hold-store"]).is_err());
     }
 
     #[cfg(feature = "test-hooks")]
@@ -1076,6 +1082,13 @@ mod tests {
                 ..ServeArgs::default()
             })),
             "the sequencer runs on the virtual clock"
+        );
+        assert_eq!(
+            p(&["serve", "--test-hold-store"]),
+            Ok(Command::Serve(ServeArgs {
+                test_hold_store: true,
+                ..ServeArgs::default()
+            }))
         );
         assert!(
             p(&["serve", "--agent-socket", "s1"]).is_err(),

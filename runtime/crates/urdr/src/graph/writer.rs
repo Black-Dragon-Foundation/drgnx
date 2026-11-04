@@ -294,6 +294,11 @@ fn spawn(
 }
 
 impl WriterHandle {
+    /// How many writes wait on the channel now (those in the batch being committed are not counted).
+    pub fn queued(&self) -> usize {
+        QUEUE - self.permits.available_permits()
+    }
+
     /// Run F in its own savepoint of the next batch, after the `tx` row from META. With `meta.req` set, a repeat of
     /// `(actor, req)` answers the first answer (`replayed: true`) and runs nothing. Never runs SQLite on the caller's
     /// thread; never answers before `COMMIT`.
