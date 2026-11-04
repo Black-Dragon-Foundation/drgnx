@@ -5,7 +5,7 @@
 //! job, the desktop), never a container's, which has neither.  Fixtures live under /tmp/glp-XXXXXX; HOME points there.
 #![cfg(target_os = "linux")]
 
-use drgnx_ratatoskr::agents::launch::{NetCell, launch_on, scratch_dir};
+use drgnx_ratatoskr::agents::launch::{NetCell, chat_launch, launch_on, scratch_dir};
 use drgnx_ratatoskr::agents::lock::{Enforced, LaunchPlan};
 use drgnx_ratatoskr::sandbox::{SessionShape, helper_at};
 use gleipnir::{Sandbox, Tier};
@@ -216,6 +216,36 @@ fn plain_chat_cannot_read_home() {
     let code = fx.run(reduced(), &fx.plan(&script), &shape);
     assert_eq!(code, 0);
     assert!(scratch.join("note").exists());
+}
+
+/// A chat in a project (the editor's agents panel, review): it starts in the project and reads it, and writes only its
+/// scratch dir: no file in the project, not its git folder's hooks or config.
+#[test]
+#[ignore = "needs the real sandbox (bwrap with user namespaces): the sandbox lane"]
+fn a_project_chat_reads_the_project_and_writes_only_its_scratch() {
+    let fx = Fx::new();
+    let env = fx.env();
+    let project = fx.p("proj");
+    std::fs::create_dir_all(project.join(".git/hooks")).unwrap();
+    std::fs::write(project.join(".git/config"), "[core]\n").unwrap();
+    std::fs::write(project.join("README"), "readme").unwrap();
+    let scratch = scratch_dir(&env, "C1").unwrap();
+    let script = format!(
+        "[ \"$(pwd)\" = {p} ] || exit 11; grep -q readme README || exit 12; echo n > {s}/note || exit 13; \
+         for f in new .envrc .git/hooks/post-checkout .git/config; do echo x >> {p}/$f 2>/dev/null && exit 14; done; \
+         exit 0",
+        p = project.display(),
+        s = scratch.display()
+    );
+    let (plan, shape) = chat_launch(&env, &fx.plan(&script), "C1", &project).unwrap();
+    let code = fx.run(reduced(), &plan, &shape);
+    assert_eq!(code, 0);
+    assert!(scratch.join("note").exists());
+    assert!(!project.join("new").exists() && !project.join(".envrc").exists());
+    assert_eq!(
+        std::fs::read_to_string(project.join(".git/config")).unwrap(),
+        "[core]\n"
+    );
 }
 
 /// B3 + B4 on the shipped layout: the worktree sits under `<state>/hub/runs` (inside Gleipnir's closed folders) and

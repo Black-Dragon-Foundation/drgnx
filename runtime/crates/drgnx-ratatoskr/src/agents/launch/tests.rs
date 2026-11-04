@@ -187,6 +187,55 @@ fn a_chat_is_not_a_worker_and_a_bad_session_id_is_refused() {
     assert!(scratch_dir(&fx.env(), "../x").is_err());
 }
 
+/// The editor's agents panel and review start a chat with the project as its cwd (with the trailing slash of
+/// `default-directory`): the project is the cwd and read-only, the scratch dir the only writable path beside the login
+/// dir, the network provider-only, and nothing is made in the project.
+#[test]
+fn a_chat_in_a_project_reads_it_and_writes_only_its_scratch() {
+    use crate::agents::lock::PROTECTED_RO;
+    let fx = Fx::new();
+    let env = fx.env();
+    let project = fx.p("proj");
+    fs::create_dir_all(project.join(".git/hooks")).unwrap();
+    fs::write(project.join(".git/config"), "[core]\n").unwrap();
+    let mut plan = fx.plan(".claude");
+    plan.protected_ro = PROTECTED_RO.iter().map(PathBuf::from).collect();
+    let given = PathBuf::from(format!("{}/", project.display()));
+    let (plan, shape) = chat_launch(&env, &plan, "C1", &given).unwrap();
+    let spec = fx.spec(&plan, &shape);
+    let scratch = scratch_path(&env, "C1");
+    assert_eq!(spec.chdir, project);
+    assert!(spec.read.contains(&project), "{:?}", spec.read);
+    assert_eq!(spec.write, vec![scratch, fx.p("home/.claude")]);
+    for w in &spec.write {
+        assert!(
+            !w.starts_with(&project) && !project.starts_with(w),
+            "{} is writable",
+            w.display()
+        );
+    }
+    assert!(
+        spec.binds
+            .iter()
+            .all(|b| b.mode == Mode::Ro && !b.source.starts_with(&project)),
+        "{:?}",
+        spec.binds
+    );
+    assert!(matches!(spec.net, Net::Isolated { .. }));
+    assert!(spec.env.iter().any(|(k, _)| k == "HTTPS_PROXY"));
+    for rel in PROTECTED_RO {
+        if !rel.starts_with(".git") {
+            assert!(!project.join(rel).exists(), "{rel} was made in the project");
+        }
+    }
+    // a project that is not a folder is refused, and a chat still never takes the worktree launch
+    assert!(chat_launch(&env, &fx.plan(".claude"), "C1", &fx.p("missing")).is_err());
+    assert_eq!(
+        kind(Role::Chat, &project, &scratch_path(&env, "C1")),
+        Kind::Chat
+    );
+}
+
 /// B3: the lock's real list is relative; it is pinned inside the worktree, missing entries included.
 #[test]
 fn the_real_protected_list_is_pinned_in_the_worktree() {

@@ -1,8 +1,9 @@
 //! Sandboxed launch (Task 10; `docs/develop/gleipnir.md`, "Ratatoskr's side"): `launch::spawn(env, plan, req) ->
 //! draugr::Spec` for every worker and manager (its worktree writable, the lock's protected paths read-only, the
-//! network the matrix's `network` cell grants) and `launch::spawn_plain(env, plan, sid)` for a chat with no project (still
-//! in Gleipnir: a scratch cwd, provider network only).  No code path starts a session unsandboxed: `Unsandboxed` is
-//! never granted here, and a host with no sandbox refuses the launch.
+//! network the matrix's `network` cell grants), `launch::spawn_plain(env, plan, sid)` for a chat with no project (still
+//! in Gleipnir: a scratch cwd, provider network only) and `launch::spawn_chat(env, plan, sid, project)` for a chat in a
+//! project (the project read-only, its scratch dir writable, provider network only).  [`kind`] picks one.  No code path
+//! starts a session unsandboxed: `Unsandboxed` is never granted here, and a host with no sandbox refuses the launch.
 
 use crate::agents::lock::LaunchPlan;
 use crate::sandbox::{self, SessionShape};
@@ -41,11 +42,13 @@ pub struct Launch {
 }
 
 /// A worker or manager session's launch: its worktree is the only project path it can write.  A `Role::Chat` is
-/// refused (a chat has no worktree: [`spawn_plain`]).
+/// refused (a chat has no worktree: [`spawn_plain`] or [`spawn_chat`]).
 /// ENV is the hub's environment with the login shell's variables applied (`ShellEnv::paths_env`).
 pub fn spawn(env: &Env, plan: &LaunchPlan, req: &SandboxReq) -> Result<Launch, Refusal> {
     if req.role == Role::Chat {
-        return Err(refusal("a chat has no worktree: use spawn_plain"));
+        return Err(refusal(
+            "a chat has no worktree: use spawn_plain or spawn_chat",
+        ));
     }
     let (plan, shape) = worktree_launch(plan, req);
     launch(env, &plan, &shape)
@@ -80,6 +83,66 @@ pub fn spawn_plain(env: &Env, plan: &LaunchPlan, sid: &str) -> Result<Launch, Re
         net: NetCell::ProviderOnly,
     };
     launch(env, plan, &shape)
+}
+
+/// A chat in a project (design §4.2: project-scoped, read access per the matrix): [`chat_launch`]'s shape.
+pub fn spawn_chat(
+    env: &Env,
+    plan: &LaunchPlan,
+    sid: &str,
+    project: &Path,
+) -> Result<Launch, Refusal> {
+    let (plan, shape) = chat_launch(env, plan, sid, project)?;
+    launch(env, &plan, &shape)
+}
+
+/// The plan and shape of a chat in PROJECT: the project (as its true name: the editor's `default-directory` ends in a
+/// slash, and a link would be refused) is its cwd and read-only, its scratch dir (`scratch_dir`) the only writable
+/// path beside the CLI's login dir, and only the provider's network is reachable.  Nothing in the project can be
+/// written, so its git folder's hooks and config are out of reach as well; the lock's protected paths are not pinned
+/// (they are read-only with the rest), so nothing is made in the user's project and a linked `.envrc` is no refusal.
+pub fn chat_launch(
+    env: &Env,
+    plan: &LaunchPlan,
+    sid: &str,
+    project: &Path,
+) -> Result<(LaunchPlan, SessionShape), Refusal> {
+    let dir = sandbox::true_name(project)
+        .filter(|p| p.is_dir())
+        .ok_or_else(|| setup(project, "the chat's project is not a folder"))?;
+    let scratch = scratch_dir(env, sid)?;
+    let mut plan = plan.clone();
+    plan.protected_ro.clear();
+    let shape = SessionShape {
+        sid: sid.to_string(),
+        cwd: dir.clone(),
+        write: vec![scratch],
+        read: vec![dir],
+        net: NetCell::ProviderOnly,
+    };
+    Ok((plan, shape))
+}
+
+/// Which launch a session gets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// [`spawn_plain`]: a chat in its own scratch dir.
+    Plain,
+    /// [`spawn_chat`]: a chat in a project.
+    Chat,
+    /// [`spawn`]: a worker or manager in its worktree.
+    Worktree,
+}
+
+/// The launch of a session in ROLE working in CWD, whose scratch dir is SCRATCH.
+pub fn kind(role: Role, cwd: &Path, scratch: &Path) -> Kind {
+    if cwd == scratch {
+        Kind::Plain
+    } else if role == Role::Chat {
+        Kind::Chat
+    } else {
+        Kind::Worktree
+    }
 }
 
 /// A session's scratch dir, `<tmp>/drgnx-scratch-UID/SID`.  It is not in the session dir: that one is

@@ -77,13 +77,20 @@ this returns.
 - `helper()` is this binary (its path resolved at start) with `sandbox-inner` and `relay`.
 - `to_draugr(invocation)` is the `draugr::Spec` (stdin `/dev/null`, the fds as `PassFd`s, `new_session`).
 - Agent sessions (`agents/launch.rs`, `sandbox::session_spec`; Task 10): `launch::spawn(plan, req)` for a worker or
-  manager and `launch::spawn_plain(plan, sid)` for a chat with no project return a `Launch { spec, status, layers }`:
+  manager, `launch::spawn_plain(plan, sid)` for a chat with no project and `launch::spawn_chat(plan, sid, project)`
+  for a chat in a project (`launch::kind(role, cwd, scratch)` picks: the cwd is the scratch dir → plain; else a chat →
+  project chat; else the worktree launch, which refuses a chat) return a `Launch { spec, status, layers }`:
   the `draugr::Spec` of the lock's argv inside Gleipnir, and the status pipe the caller reads with
   `gleipnir::read_status` after spawning (an unread status means the start is unknown: kill the session). No path
   starts a session unsandboxed. The spec:
   - writable: the worktree (a chat: its scratch dir `<tmp>/drgnx-scratch-UID/SID`, not in the session dir, which is
     read-only and takes nothing else) and the CLI's own login dir (`LaunchPlan.login_dir`, for that CLI alone); no
     home, no other login dir; `HOME` is told but unreadable beyond it;
+  - a chat in a project: the project (its true name: no trailing slash, links resolved) is its cwd and is
+    read-only (`read`), never in the write set; nothing in it can be written, so its git folder's hooks and config are
+    out of reach too, and the lock's protected paths are not pinned (nothing is made in your project). The hub's own
+    `fs/write_text_file` for such a chat refuses every path (a brainstorm's design document excepted), since the hub
+    writes outside the sandbox;
   - the lock's `protected_ro` paths are read-only binds (a pin inside the writable root: the full tier only, as for
     [your settings files](#ratatoskrs-side));
   - network from the matrix's Network cell: `ProviderOnly` and `ProviderAndPackages` are isolated with the relay to
