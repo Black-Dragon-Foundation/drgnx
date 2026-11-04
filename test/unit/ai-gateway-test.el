@@ -79,9 +79,16 @@
 `drgnx-ai-providers', here and in settings.el for the hub),
 this Emacs connected: it holds the editor token and the hub holds a's key.  Skipped without the binary.  BODY runs
 inside `drgnx-test-gated'.  `:steps STEPS' before BODY (not quoted): the schedule's steps for the calls BODY makes
-\((call-1 :answer METHOD)…), in the order the hub answers them."
+\((call-1 :answer METHOD)…), in the order the hub answers them.  `:ensure t' instead: a command also ensures the hub
+while the subscription is being made (`drgnx-hub-ensure', a hand-over of its own on the call connection), and the hub
+answers that hand-over before the subscribe; the subscription's own hand-over comes after it."
   (declare (indent 1))
-  (let ((steps (and (eq (car body) :steps) (prog1 (cadr body) (setq body (cddr body))))))
+  (let (steps ensure)
+    (while (keywordp (car body))
+      (pcase (pop body)
+        (:steps (setq steps (pop body)))
+        (:ensure (setq ensure (pop body)))
+        (k (error "drgnx-ai-gateway-test--with: no option %S" k))))
     `(let* ((bin (or (drgnx-ai-gateway-test--bin) (ert-skip "DRGNX_RATATOSKR_BIN (with ratatoskr-mock beside it) is not set")))
             (root (file-name-as-directory (make-temp-file "drgnx-ai-gw" t)))
             (mock nil) (port nil)
@@ -117,20 +124,26 @@ inside `drgnx-test-gated'.  `:steps STEPS' before BODY (not quoted): the schedul
              (drgnx-test-write-settings (concat root "config/settings.el")
                                         'drgnx-ai-providers drgnx-ai-providers 'drgnx-ai-roles drgnx-ai-roles)
              (drgnx-test-with-ratatoskr root :gated t
-                                        (drgnx-test-gated ',(if steps
-                                                                `((sub-1 :answer "subscribe") (call-1 :answer "gateway/keys-held")
-                                                                  (:pause "ready") ,@steps)
-                                                              '((sub-1 :answer "subscribe")))
+                                        (drgnx-test-gated ',(cond (ensure
+                                                                   ;; the ensure's token and held keys come while the subscribe
+                                                                   ;; answer is held: the wait below starts there
+                                                                   '((call-1 :answer "gateway/keys-held") (:pause "ensured")
+                                                                     (sub-1 :answer "subscribe") (call-1 :answer "gateway/keys-held")))
+                                                                  (steps
+                                                                   `((sub-1 :answer "subscribe") (call-1 :answer "gateway/keys-held")
+                                                                     (:pause "ready") ,@steps))
+                                                                  (t '((sub-1 :answer "subscribe"))))
                                           (drgnx-hub-connect)
+                                          ,@(and ensure '((drgnx-hub-ensure) (drgnx-test-gate-continue "ensured")))
                                           ;; the connect's hand-over (the table, the key, the token, the held keys) and the subscription: every
                                           ;; answer is delivered, and the body starts when the subscription is in and no call waits (a second
                                           ;; keys-held answer would overwrite what the body changes).  STEPS, the answers of calls the body
                                           ;; makes, wait behind the pause
-                                          ,@(if steps
-                                                '((drgnx-test-wait (lambda () (and drgnx-hub--events (listp drgnx-hub--keys-held)))
+                                          ,@(if (or steps ensure)
+                                                `((drgnx-test-wait (lambda () (and drgnx-hub--events (listp drgnx-hub--keys-held)))
                                                                    :what "the subscription and the held keys")
                                                   (drgnx-test-wait #'drgnx-hub-settled-p :what "the hand-over's answers")
-                                                  (drgnx-test-gate-continue "ready"))
+                                                  ,@(and steps '((drgnx-test-gate-continue "ready"))))
                                               '((drgnx-test-deliver-all)
                                                 (drgnx-test-wait #'drgnx-hub-settled-p
                                                                  :what "the subscription and the hand-over's answers")))
@@ -321,6 +334,21 @@ no provider key; the mock got the hub's key and never the editor's token."
           (should (equal (drgnx-ai-gateway-test--header req "authorization") "Bearer sk-from-the-store")))
         (should (member "b" (drgnx-hub-keys-held)))
         (should (equal (cadr (car drgnx-ai-gateway-test--sent)) (car drgnx-hub--editor)))))))
+
+(ert-deftest drgnx-ai-gateway/the-body-starts-after-the-subscriptions-hand-over ()
+  ;; a command's ensure handed over on the call connection, and the hub answered it (a token, a's key held) before the
+  ;; subscribe: the token and the keys are there, the subscription is not, and its own hand-over is still to come.  The
+  ;; fixture's wait lets the body start only once that hand-over is answered too: what the body starts with stays (the
+  ;; hub rotates the editor token on every `gateway/editor-token'), and opens the gateway
+  (drgnx-ai-gateway-test--with drgnx-ai-gateway-test--chat
+    :ensure t
+    (let ((token drgnx-hub--editor) (held (drgnx-hub-keys-held)))
+      (drgnx-test-deliver-all)
+      (should token)
+      (should (equal drgnx-hub--editor token))
+      (should (equal (drgnx-hub-keys-held) held))
+      (should (equal (car (drgnx-ai-gateway-test--ask 'chat '(:messages [(:role "user" :content "x")]))) "hi"))
+      (drgnx-ai-gateway-test--through root "/v1/chat/completions"))))
 
 (ert-deftest drgnx-ai-gateway/a-daemon-path-never-waits-for-the-hub ()
   ;; no hub, no token (this test starts none; DRGNX_NO_HUB_START is set): a timer or hook asks and hears an error at once,

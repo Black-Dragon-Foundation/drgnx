@@ -716,7 +716,10 @@ nothing of it comes after. A `subscribe` answer precedes that connection's event
 the hub's order on one connection.
 
 `drgnx-hub-settled-p` (`drgnx-hub-core-settled-p`) says the editor is subscribed and no call waits: no hand-over
-answer can still change the editor token or the held keys. A test that changes them waits for it first.
+answer can still change the editor token or the held keys. A test that changes them waits for it first. A token and
+held keys alone are not that: a command's `drgnx-hub-ensure` hands over on the call connection, and when the hub
+answers it before the `subscribe`, both are set while the subscription's own hand-over, which rotates the token, is
+still to come (`test/unit/ai-gateway-test.el`'s `:ensure` fixture gives the gate that order).
 
 ### Starting the hub, and Hub: Restart Now
 
