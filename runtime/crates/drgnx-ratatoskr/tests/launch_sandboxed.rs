@@ -246,6 +246,52 @@ fn a_project_chat_reads_the_project_and_writes_only_its_scratch() {
         std::fs::read_to_string(project.join(".git/config")).unwrap(),
         "[core]\n"
     );
+
+    // a linked worktree of a repository elsewhere (made by git, with HOME in the fixture): `git log` and `git diff`
+    // work, and the common git folder cannot be written
+    let git = |args: &[&str]| {
+        let ok = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "init.defaultBranch=main",
+            ])
+            .args(args)
+            .env("HOME", fx.p("home"))
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .status()
+            .expect("git")
+            .success();
+        assert!(ok, "git {args:?}");
+    };
+    let repo = fx.p("repo");
+    let linked = fx.p("lw");
+    let (r, l) = (repo.to_str().unwrap(), linked.to_str().unwrap());
+    git(&["init", "-q", r]);
+    std::fs::write(repo.join("f"), "one\n").unwrap();
+    git(&["-C", r, "add", "f"]);
+    git(&["-C", r, "commit", "-q", "-m", "first"]);
+    git(&["-C", r, "worktree", "add", "-q", l]);
+    let common = repo.join(".git");
+    let script = format!(
+        "git log --oneline -1 | grep -q first || exit 21; git diff --quiet HEAD || exit 22; \
+         echo x > {c}/planted 2>/dev/null && exit 23; echo x >> {c}/config 2>/dev/null && exit 24; \
+         echo x > {c}/hooks/post-checkout 2>/dev/null && exit 25; exit 0",
+        c = common.display()
+    );
+    let config = std::fs::read_to_string(common.join("config")).unwrap();
+    let (plan, shape) = chat_launch(&env, &fx.plan(&script), "C2", &linked).unwrap();
+    assert!(shape.read.contains(&common) && !shape.write.iter().any(|w| common.starts_with(w)));
+    let code = fx.run(reduced(), &plan, &shape);
+    assert_eq!(code, 0);
+    assert!(!common.join("planted").exists() && !common.join("hooks/post-checkout").exists());
+    assert_eq!(
+        std::fs::read_to_string(common.join("config")).unwrap(),
+        config
+    );
 }
 
 /// B3 + B4 on the shipped layout: the worktree sits under `<state>/hub/runs` (inside Gleipnir's closed folders) and

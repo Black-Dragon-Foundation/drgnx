@@ -101,6 +101,8 @@ pub fn spawn_chat(
 /// path beside the CLI's login dir, and only the provider's network is reachable.  Nothing in the project can be
 /// written, so its git folder's hooks and config are out of reach as well; the lock's protected paths are not pinned
 /// (they are read-only with the rest), so nothing is made in the user's project and a linked `.envrc` is no refusal.
+/// A linked worktree's (or a submodule's) git folders outside the project are read-only too ([`outside_git_dirs`]), so
+/// `git log` and `git diff` work in it; they are never writable.
 pub fn chat_launch(
     env: &Env,
     plan: &LaunchPlan,
@@ -113,14 +115,37 @@ pub fn chat_launch(
     let scratch = scratch_dir(env, sid)?;
     let mut plan = plan.clone();
     plan.protected_ro.clear();
+    let mut read = vec![dir.clone()];
+    read.extend(outside_git_dirs(&dir)?);
     let shape = SessionShape {
         sid: sid.to_string(),
-        cwd: dir.clone(),
+        cwd: dir,
         write: vec![scratch],
-        read: vec![dir],
+        read,
         net: NetCell::ProviderOnly,
     };
     Ok((plan, shape))
+}
+
+/// The git folders PROJECT's git needs that lie outside it, as true names (`sandbox::git_dirs`): a linked worktree's
+/// or a submodule's `.git` is a file naming its own folder, and that folder's `commondir` the common one (the objects,
+/// refs and config).  The common folder is given, and the own one when it is not inside it.  A plain checkout (`.git`
+/// a folder) or no `.git` needs none.  A `.git` file whose folders do not resolve is refused: the chat's git would read
+/// nothing, and a path that is not its true name is never bound.
+pub fn outside_git_dirs(project: &Path) -> Result<Vec<PathBuf>, Refusal> {
+    let dot = project.join(".git");
+    if !dot.symlink_metadata().is_ok_and(|m| m.is_file()) {
+        return Ok(vec![]);
+    }
+    let g = sandbox::git_dirs(project)
+        .ok_or_else(|| setup(&dot, "names a git folder that does not resolve"))?;
+    let mut out: Vec<PathBuf> = Vec::new();
+    for d in [g.common, g.gitdir] {
+        if !d.starts_with(project) && !out.iter().any(|o| d.starts_with(o)) {
+            out.push(d);
+        }
+    }
+    Ok(out)
 }
 
 /// Which launch a session gets.

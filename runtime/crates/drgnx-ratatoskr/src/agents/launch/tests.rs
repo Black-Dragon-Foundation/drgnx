@@ -228,6 +228,52 @@ fn a_chat_in_a_project_reads_it_and_writes_only_its_scratch() {
             assert!(!project.join(rel).exists(), "{rel} was made in the project");
         }
     }
+    // a plain checkout's git folder is inside the project: nothing more is bound
+    assert_eq!(
+        spec.read
+            .iter()
+            .filter(|r| !r.starts_with(&project))
+            .count(),
+        0,
+        "{:?}",
+        spec.read
+    );
+    // a linked worktree of a repository elsewhere: its common git folder (which holds its own) is read-only, and
+    // nowhere in the write set or the binds
+    let common = fx.p("repo/.git");
+    let own = common.join("worktrees/lw");
+    for d in ["objects", "refs/heads", "hooks"] {
+        fs::create_dir_all(common.join(d)).unwrap();
+    }
+    fs::create_dir_all(&own).unwrap();
+    fs::write(own.join("commondir"), "../..\n").unwrap();
+    let linked = fx.p("lw");
+    fs::create_dir_all(&linked).unwrap();
+    fs::write(linked.join(".git"), format!("gitdir: {}\n", own.display())).unwrap();
+    let (plan, shape) = chat_launch(&env, &fx.plan(".claude"), "C2", &linked).unwrap();
+    let spec = fx.spec(&plan, &shape);
+    assert_eq!(spec.chdir, linked);
+    assert_eq!(spec.read, vec![linked.clone(), common.clone()]);
+    assert_eq!(
+        spec.write,
+        vec![scratch_path(&env, "C2"), fx.p("home/.claude")]
+    );
+    for w in &spec.write {
+        assert!(
+            !w.starts_with(fx.p("repo")) && !common.starts_with(w),
+            "{} is writable",
+            w.display()
+        );
+    }
+    assert!(
+        spec.binds
+            .iter()
+            .all(|b| !b.source.starts_with(fx.p("repo")))
+    );
+    // a `.git` file whose folder does not resolve is refused
+    fs::write(linked.join(".git"), "gitdir: /nowhere/at/all\n").unwrap();
+    let refused = chat_launch(&env, &fx.plan(".claude"), "C2", &linked).unwrap_err();
+    assert_eq!(refused.path, Some(linked.join(".git")), "{refused}");
     // a project that is not a folder is refused, and a chat still never takes the worktree launch
     assert!(chat_launch(&env, &fx.plan(".claude"), "C1", &fx.p("missing")).is_err());
     assert_eq!(

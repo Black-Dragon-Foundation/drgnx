@@ -384,8 +384,8 @@ provider. Each cell is Allow, Ask or Never, sometimes with a limit. Three preset
 Autonomous. Your own cells, a project's and a plan's refine the preset; where several columns apply the most
 restrictive wins, and a more specific column never widens. `unsandboxed` and `user.private` are never allowed.
 A session's project and plan are those of the task it works on (a plan run's, or the task it was started with).
-A chat started in a project (the Agents panel, Review Branch) sees the project read-only and writes only a scratch
-folder of its own; with `chat.project-read` set to Never for it, such a start is refused (start the chat without a
+A chat started in a project (the Agents panel, Review Branch) sees the project read-only (a linked worktree's
+repository too, so it can run `git log` and `git diff`) and writes only a scratch folder of its own; with `chat.project-read` set to Never for it, such a start is refused (start the chat without a
 project).
 
 - **Ask** puts one card in front of you showing what the hub itself knows (the command, the paths, the diff's

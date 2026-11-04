@@ -88,7 +88,10 @@ this returns.
     home, no other login dir; `HOME` is told but unreadable beyond it;
   - a chat in a project: the project (its true name: no trailing slash, links resolved) is its cwd and is
     read-only (`read`), never in the write set; nothing in it can be written, so its git folder's hooks and config are
-    out of reach too, and the lock's protected paths are not pinned (nothing is made in your project). The hub's own
+    out of reach too, and the lock's protected paths are not pinned (nothing is made in your project). A linked
+    worktree's (or a submodule's) git folders outside the project (`launch::outside_git_dirs`: the common folder from
+    `.git`'s `gitdir:` and its `commondir`, as `sandbox::git_dirs` resolves them) are read-only as well, so `git log`
+    and `git diff` work; a `.git` file whose folders do not resolve refuses the launch. The hub's own
     `fs/write_text_file` for such a chat refuses every path (a brainstorm's design document excepted), since the hub
     writes outside the sandbox;
   - the lock's `protected_ro` paths are read-only binds (a pin inside the writable root: the full tier only, as for
