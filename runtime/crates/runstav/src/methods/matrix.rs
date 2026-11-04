@@ -273,9 +273,16 @@ pub struct Facts {
     /// `browser.web`: the first `host:port` the session's browser was refused (the web proxy's, never the agent's).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<Text>,
-    /// `browser.private`: the private target the web proxy refused (its resolved address, port and class).
+    /// `browser.private`: the private target the web proxy refused, in a grant's wire form (`{"host_port": "H:P"}`:
+    /// the name, literal or `host.drgnx.internal` port asked for), so a grant for exactly it matches.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<serde_json::Value>,
+    /// `browser.private`: the address and port the target led to (`192.168.1.20:631`, `[fd12::5]:80`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub addr: Option<Text>,
+    /// `browser.private`: the address's class (`lan`, `ula`, `link_local`, `cgnat`, `loopback`, `host_own`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class: Option<Text>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]

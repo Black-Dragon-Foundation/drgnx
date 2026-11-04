@@ -1,0 +1,32 @@
+{"scenario": "browser/private-grant-by-name-only-that-name", "requires": ["v1", "test-hooks"], "pending": "settling a browser card writes its grant", "doc": "A name that leads to a LAN address (pinned by the test hook) is refused with a browser.private card whose facts are the target as a grant names it ({\"host_port\": \"nas.test:8080\"}), the address and its class; the user's session answer opens that very name (the upstream sent to the mock LLM by the test hook), while another name that leads to the same address and the address itself stay refused, each another target with a card of its own."}
+{"do": "root"}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$SCENARIOS/fixtures/llm-messages.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "env": {"DRGNX_TEST_WEB_PROXY": "1", "DRGNX_TEST_WEB_REDIRECT": "127.0.0.1:$port", "DRGNX_TEST_PROXY_PINS": "nas.test=192.168.77.20,evil.test=192.168.77.20"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:agent", "name": "$string"}}, "within_ms": 30000}
+{"do": "http", "conn": "p1", "to": "unix:$SOCKET_DIR/s/$agent/web.sock", "method": "CONNECT", "path": "nas.test:8080", "headers": {"Host": "nas.test:8080"}, "read": "head"}
+{"do": "expect_http", "conn": "p1", "status": 403}
+{"do": "expect", "conn": "e", "json": {"event": "card", "data": {"id": "$capture:card", "kind": "matrix"}}, "within_ms": 10000}
+{"do": "sql_expect", "sql": "select json_extract(data, '$.action'), json_extract(data, '$.facts.target.host_port'), json_extract(data, '$.facts.addr'), json_extract(data, '$.facts.class') from card where id = $card", "rows": [["browser.private", "nas.test:8080", "192.168.77.20:8080", "lan"]]}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "cards/settle", "params": {"card": "$card", "choice": "session"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"settled": true}}}
+{"do": "sql_expect", "sql": "select json_extract(data, '$.what.target.host_port') from entity where kind = 'grant' and json_extract(data, '$.what.matrix') = 'browser.private'", "rows": [["nas.test:8080"]]}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "sleep 1"], "expect_code": 0}
+{"do": "http", "conn": "p2", "to": "unix:$SOCKET_DIR/s/$agent/web.sock", "method": "CONNECT", "path": "nas.test:8080", "headers": {"Host": "nas.test:8080"}, "read": "head"}
+{"do": "expect_http", "conn": "p2", "status": 200}
+{"do": "http", "conn": "p2", "method": "POST", "path": "/v1/messages", "headers": {"Host": "nas.test", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}"}
+{"do": "expect_http", "conn": "p2", "status": 200, "body_json": {"id": "msg-1"}}
+{"do": "http", "conn": "p3", "to": "unix:$SOCKET_DIR/s/$agent/web.sock", "method": "CONNECT", "path": "evil.test:8080", "headers": {"Host": "evil.test:8080"}, "read": "head"}
+{"do": "expect_http", "conn": "p3", "status": 403}
+{"do": "expect", "conn": "e", "json": {"event": "card", "data": {"id": "$capture:card2", "kind": "matrix"}}, "within_ms": 10000}
+{"do": "http", "conn": "p4", "to": "unix:$SOCKET_DIR/s/$agent/web.sock", "method": "CONNECT", "path": "192.168.77.20:8080", "headers": {"Host": "192.168.77.20:8080"}, "read": "head"}
+{"do": "expect_http", "conn": "p4", "status": 403}
+{"do": "expect", "conn": "e", "json": {"event": "card", "data": {"id": "$capture:card3", "kind": "matrix"}}, "within_ms": 10000}
+{"do": "sql_expect", "sql": "select json_extract(data, '$.facts.target.host_port') from card where kind = 'matrix' and json_extract(data, '$.action') = 'browser.private' order by id", "rows": [["nas.test:8080"], ["evil.test:8080"], ["192.168.77.20:8080"]]}

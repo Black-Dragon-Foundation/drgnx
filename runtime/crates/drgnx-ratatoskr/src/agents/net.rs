@@ -150,15 +150,17 @@ fn base_target(url: &str) -> Option<Target> {
     parse_target(&t).ok()
 }
 
-/// One session's network: its provider proxy, the socket it listens on, and the task that records what it denies.
-/// Dropping it closes the listener and every connection and removes the socket (when it is still this one's).  The
-/// browser's web proxy and CDP broker join it later.
+/// One session's network: its provider proxy, the socket it listens on, and the task that records what it denies;
+/// a browser session's web proxy too ([`SessionNet::set_web`]).  Dropping it closes the listeners and every
+/// connection and removes the sockets (when they are still this one's).  The CDP broker joins it later.
 pub struct SessionNet {
     provider: ProxyHandle,
     socket: PathBuf,
     /// The socket's (dev, inode), so a drop never removes a later session's socket on the same path.
     bound: (u64, u64),
     tasks: JoinSet<()>,
+    /// The browser's web proxy on `web.sock` (`crate::browser::web::start_web`), for a session with a browser.
+    web: Option<crate::browser::web::WebProxy>,
 }
 
 impl SessionNet {
@@ -183,6 +185,7 @@ impl SessionNet {
             socket,
             bound: (m.dev(), m.ino()),
             tasks,
+            web: None,
         })
     }
 
@@ -190,6 +193,33 @@ impl SessionNet {
     pub fn socket(&self) -> &Path {
         &self.socket
     }
+
+    /// The session's web proxy, which goes with the session from now on.
+    pub fn set_web(&mut self, web: crate::browser::web::WebProxy) {
+        self.web = Some(web);
+    }
+}
+
+/// A test-hooks hub with `DRGNX_TEST_WEB_PROXY` set gives every session with a network NET a web proxy on its
+/// `web.sock`, as a browser session's launch does, so the rows reach it before the launch wiring exists.
+#[cfg(feature = "test-hooks")]
+pub(crate) async fn test_web(
+    front: &crate::front::Front,
+    net: &mut Option<SessionNet>,
+    sid: &str,
+    who: norn::matrix::Who,
+) -> io::Result<()> {
+    let Some(n) = net.as_mut() else {
+        return Ok(());
+    };
+    if std::env::var_os("DRGNX_TEST_WEB_PROXY").is_none() {
+        return Ok(());
+    }
+    let dir = n.socket.parent().map(Path::to_path_buf).unwrap_or_default();
+    let ctx = crate::matrix_gate::ActionCtx::of_session(&front.core.runs.scopes(), sid);
+    let web = crate::browser::web::start_web(sid, &dir, ctx, who, front).await?;
+    n.set_web(web);
+    Ok(())
 }
 
 impl Drop for SessionNet {

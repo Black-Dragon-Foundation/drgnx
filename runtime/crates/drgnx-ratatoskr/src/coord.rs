@@ -49,6 +49,9 @@ pub struct Signals {
     pub map: Notify,
     /// What the proposal tools ask of the records (set once the hub's front is built).
     pub records_tool: std::sync::OnceLock<RecordsTool>,
+    /// Counts the writes that may have settled a card or made or revoked a grant (`cards/settle`, `graph/grants`):
+    /// each browser session's web proxy reads its grants and cards again ([`crate::browser::web`]).
+    pub grants: tokio::sync::watch::Sender<u64>,
 }
 
 /// The proposal tools' door into the records: the proposal ID, `None` to read it or `Some(accept)` to decide it,
@@ -109,6 +112,9 @@ impl Writer {
         let r = self.db.write(tx_meta(caller, method), f).await;
         if r.is_ok() {
             self.signals.wrote();
+            if matches!(method, "cards/settle" | "graph/grants") {
+                self.signals.grants.send_modify(|n| *n += 1);
+            }
         }
         r
     }

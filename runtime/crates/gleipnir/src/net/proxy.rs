@@ -42,6 +42,8 @@ pub enum Policy {
 #[derive(Debug, Default)]
 pub struct WebState {
     web: AtomicBool,
+    /// Public `host:port`s open while `web` is off (a `browser.web` once grant names one), each until it expires.
+    web_hosts: RwLock<Vec<(Target, Option<f64>)>>,
     grants: RwLock<Vec<PrivateGrant>>,
     deny_hosts: RwLock<Vec<String>>,
     host_addrs: Arc<RwLock<HostAddrs>>,
@@ -64,6 +66,13 @@ impl WebState {
         self.web.store(on, Ordering::SeqCst);
     }
 
+    /// Public targets judged as if `browser.web` were granted while it is not, each exactly (`host:port`) until its
+    /// expiry (Unix seconds; `None`: until replaced), replacing the last list. Everything else the web policy says
+    /// still holds for them (ports 80 and 443, the hard nevers, the deny list).
+    pub fn set_web_hosts(&self, hosts: Vec<(Target, Option<f64>)>) {
+        *write(&self.web_hosts) = hosts;
+    }
+
     /// The live `browser.private` grants, replacing the last list.
     pub fn set_grants(&self, grants: Vec<PrivateGrant>) {
         *write(&self.grants) = grants;
@@ -74,15 +83,24 @@ impl WebState {
         *write(&self.deny_hosts) = hosts;
     }
 
-    /// `f` on a context of the state as it is now (Unix seconds for `now`). No lock is held past `f`.
-    fn with_ctx<R>(&self, f: impl FnOnce(&WebCtx) -> R) -> R {
+    /// Whether public targets are open now: `browser.web`, else `target` alone through a live web host.
+    fn web_for(&self, target: &Target, now: f64) -> bool {
+        self.web.load(Ordering::SeqCst)
+            || read(&self.web_hosts)
+                .iter()
+                .any(|(t, e)| t == target && e.is_none_or(|e| now < e))
+    }
+
+    /// `f` on a context of the state as it is now for `target` (Unix seconds for `now`). No lock is held past `f`.
+    fn with_ctx<R>(&self, target: &Target, f: impl FnOnce(&WebCtx) -> R) -> R {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0.0, |d| d.as_secs_f64());
+        let web = self.web_for(target, now);
         let (grants, deny) = (read(&self.grants), read(&self.deny_hosts));
         let (host_addrs, never) = (read(&self.host_addrs), read(&self.never));
         f(&WebCtx {
-            web: self.web.load(Ordering::SeqCst),
+            web,
             deny_hosts: &deny,
             grants: &grants,
             now,
@@ -333,6 +351,14 @@ impl ProxyHandle {
             task.abort();
         }
         lock(&self.shared.said).retain(|e| e.tag() != tag);
+    }
+
+    /// Lets the questions of `tag` (its `WebOff` and `Private` events) be said again: the caller's answer changed
+    /// (a card settled, a grant ended), so the next refusal of a target asks anew. The other events stay said once.
+    pub fn forget_questions(&self, tag: u64) {
+        lock(&self.shared.said).retain(|e| {
+            e.tag() != tag || !matches!(e, ProxyEvent::WebOff { .. } | ProxyEvent::Private { .. })
+        });
     }
 
     /// Adds `target` to the allowlist every listener shares.
@@ -877,7 +903,7 @@ async fn web(
         let target = target.to_string();
         Stop::Say(ProxyEvent::Refused { tag, target, why }, FORBIDDEN)
     };
-    let answer = match w.with_ctx(|ctx| pre_resolve(target, ctx)) {
+    let answer = match w.with_ctx(target, |ctx| pre_resolve(target, ctx)) {
         Pre::Refuse(why) => return Err(refused(why)),
         Pre::Fixed(addrs) => addrs,
         Pre::Resolve => {
@@ -890,7 +916,7 @@ async fn web(
             }
         }
     };
-    match w.with_ctx(|ctx| judge(target, &answer, ctx)) {
+    match w.with_ctx(target, |ctx| judge(target, &answer, ctx)) {
         Judgement::Connect(addrs) if !addrs.is_empty() => Ok(addrs),
         Judgement::Connect(_) => Err(Stop::Answer(BAD_GATEWAY)),
         Judgement::WebOff => {
@@ -2073,6 +2099,59 @@ mod tests {
         assert!(echoes(&mut s, b"now").await);
         assert_eq!(r.said(), vec![reached(2, "web.test")]);
         assert_eq!(r.attempts(), vec![public]);
+    }
+
+    #[tokio::test]
+    async fn a_web_host_opens_only_itself_and_forgotten_questions_are_asked_again() {
+        let up = echo().await;
+        let public = SocketAddr::new(IpAddr::V4(PUBLIC), 443);
+        let any_port = SocketAddr::new(IpAddr::V4(PUBLIC), 0);
+        let w = Arc::new(WebState::default());
+        let mut r = rig(
+            web_cfg(&w),
+            &[
+                ("web.test", vec![vec![any_port]]),
+                ("other.test", vec![vec![any_port]]),
+                ("old.test", vec![vec![any_port]]),
+            ],
+            &[(public, up)],
+        );
+        let p = r.listen(2);
+        // a once grant opens its host:port alone, until it expires
+        w.set_web_hosts(vec![
+            (t("web.test:443"), None),
+            (t("old.test:443"), Some(1.0)),
+        ]);
+        let (mut s, code) = connect_to(&p, "web.test:443").await;
+        assert_eq!(code, 200);
+        assert!(echoes(&mut s, b"one").await);
+        for target in ["web.test:80", "other.test:443", "old.test:443"] {
+            let (_s, code) = connect_to(&p, target).await;
+            assert_eq!(code, 403, "{target}");
+        }
+        let weboff = |target: &str| ProxyEvent::WebOff {
+            tag: 2,
+            target: t(target),
+        };
+        assert_eq!(
+            r.said(),
+            vec![
+                reached(2, "web.test"),
+                weboff("web.test:80"),
+                weboff("other.test:443"),
+                weboff("old.test:443")
+            ]
+        );
+        // said once, until the caller forgets the questions; what was reached stays said
+        let (_s, code) = connect_to(&p, "other.test:443").await;
+        assert_eq!(code, 403);
+        assert!(r.said().is_empty());
+        r.handle.forget_questions(2);
+        r.handle.forget_questions(7);
+        for target in ["other.test:443", "web.test:443"] {
+            let _ = connect_to(&p, target).await;
+        }
+        assert_eq!(r.said(), vec![weboff("other.test:443")]);
     }
 
     #[tokio::test]

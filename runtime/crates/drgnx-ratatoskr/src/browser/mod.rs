@@ -1,12 +1,15 @@
 //! The browser an agent session gets (docs/guide/agent-browser.md): where to find one ([`resolve`]) and
-//! `ratatoskr browser install | list` ([`install`]), which `bin/drgnx browser` runs with the same arguments.
+//! `ratatoskr browser install | list` ([`install`]), which `bin/drgnx browser` runs with the same arguments; in the
+//! hub, each browser session's web proxy ([`web`]) and what no grant opens to it ([`nevers`]).
 //!
-//! Nothing here runs by itself: the download happens only when the user runs `browser install`, and no command reads
+//! Nothing of the commands runs by itself: the download happens only when the user runs `browser install`, and no command reads
 //! from the terminal.  Exit 0 when it did what was asked, 1 when it could not (the text is on stderr), 2 for
 //! arguments that do not parse.
 
 pub mod install;
+pub mod nevers;
 pub mod resolve;
+pub mod web;
 
 use std::ffi::OsString;
 

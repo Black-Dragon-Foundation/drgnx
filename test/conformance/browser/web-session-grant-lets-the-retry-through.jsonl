@@ -1,0 +1,26 @@
+{"scenario": "browser/web-session-grant-lets-the-retry-through", "requires": ["v1", "test-hooks"], "pending": "settling a browser card writes its grant", "doc": "The user answers a session's browser.web card with session: the grant reaches the session's web proxy, the agent's retry of the refused host goes through (the test hook sends the upstream to the mock LLM in place of the site), the host it reached is a browser-host event and never a card, and no second card is made."}
+{"do": "root"}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$SCENARIOS/fixtures/llm-messages.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "env": {"DRGNX_TEST_WEB_PROXY": "1", "DRGNX_TEST_WEB_REDIRECT": "127.0.0.1:$port"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:agent", "name": "$string"}}, "within_ms": 30000}
+{"do": "http", "conn": "p1", "to": "unix:$SOCKET_DIR/s/$agent/web.sock", "method": "CONNECT", "path": "93.184.215.14:443", "headers": {"Host": "93.184.215.14:443"}, "read": "head"}
+{"do": "expect_http", "conn": "p1", "status": 403}
+{"do": "expect", "conn": "e", "json": {"event": "card", "data": {"id": "$capture:card", "kind": "matrix"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "cards/settle", "params": {"card": "$card", "choice": "session"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"settled": true}}}
+{"do": "sql_expect", "sql": "select count(*) from entity where kind = 'grant' and json_extract(data, '$.what.matrix') = 'browser.web' and json_extract(data, '$.who.session') = '$agent'", "rows": [[1]]}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "sleep 1"], "expect_code": 0}
+{"do": "http", "conn": "p2", "to": "unix:$SOCKET_DIR/s/$agent/web.sock", "method": "CONNECT", "path": "93.184.215.14:443", "headers": {"Host": "93.184.215.14:443"}, "read": "head"}
+{"do": "expect_http", "conn": "p2", "status": 200}
+{"do": "http", "conn": "p2", "method": "POST", "path": "/v1/messages", "headers": {"Host": "93.184.215.14", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}"}
+{"do": "expect_http", "conn": "p2", "status": 200, "body_json": {"id": "msg-1"}}
+{"do": "expect", "conn": "e", "json": {"event": "events", "data": {"since": "$number", "last": "$number", "events": {"$contains": [{"kind": "status", "agent": "$agent", "data": {"browser-host": true, "session": "$agent", "host": "93.184.215.14"}}]}}}, "within_ms": 10000}
+{"do": "sql_expect", "sql": "select count(*) from card where kind = 'matrix' and json_extract(data, '$.action') = 'browser.web'", "rows": [[1]]}

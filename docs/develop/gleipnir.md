@@ -1125,6 +1125,20 @@ the literals in it except link-local; all-private covers LAN and ULA literals on
 DNS is resolved once per connection and pinned, so the answer judged is the address connected. That closes the gap
 inside one connection; step 6's name rule closes rebinding across connections.
 
+**The hub's side** ([hub.md](hub.md), "The web proxy"). The proxy's `WebState` is the hub's to change, and each
+setter takes effect on the next request:
+- `set_web(bool)`: `browser.web` granted (its cell allows it, or a grant with no host covers the session);
+- `set_web_hosts(Vec<(Target, Option<f64>)>)`: public targets judged as if `browser.web` were granted while it is not,
+  each exactly and until its expiry: what a `browser.web` once grant names. Everything else (80 and 443 only, the
+  nevers, the deny list) still holds for them;
+- `set_grants(Vec<PrivateGrant>)`: the live `browser.private` grants of the session and its plan;
+- `set_deny_hosts(Vec<String>)`: the `agents-browser-deny-hosts` setting.
+
+`HostAddrs` and `NeverSet` are one pair the hub shares with every session's state and keeps live
+(`browser::nevers`). The proxy says each `WebOff` and `Private` once per target; `ProxyHandle::forget_questions(tag)`
+lets them be said again once the hub's answer changed (a card settled, a grant ended), so a retry asks anew. `Reached`
+and `Refused` stay said once.
+
 ## The check
 
 `gleipnir::check` (`src/check.rs`) says whether the sandbox starts on this host, and when it does not, why and what

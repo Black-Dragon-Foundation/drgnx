@@ -1568,6 +1568,57 @@ makes: the hub never grants `Open`) has no network but its sandbox's relay port,
 Rows: `test/conformance/sandbox-net/`. The real launch: `tests/launch_sandboxed.rs`
 (`a_session_reaches_its_provider_through_the_proxy`, the sandbox lane).
 
+### The web proxy (`web.sock`)
+
+A session with the agent browser reaches the web only through its web relay port, 3130, whose other end is `web.sock`
+in its session directory (`runstav::paths::SESSION_WEB_SOCKET`). The hub serves it with **a web proxy of its own per
+session** (`runtime/crates/drgnx-ratatoskr/src/browser/web.rs`): a `gleipnir::net::proxy` under the web policy
+(`Policy::Web`, [gleipnir.md](gleipnir.md), "The web policy"), separate from the session's provider proxy, with its own
+connection cap (64), so one session's flood never takes another's places. `browser::web::start_web(sid, dir, ctx, who,
+front)` binds it (a stale file replaced, 0600), reads the state below, and only then listens; the
+`agents::net::SessionNet` it is given (`set_web`) drops it with the session, removing the socket when it is still its
+own.
+
+- **The state, read at the start and again at each change:**
+  - `browser.web` is on when the session's cell for it is Allow, or a grant with no host covers the session (a
+    `session` or `plan` answer); a grant that names a `host:port` (an `once` answer, until it expires) opens that one
+    target alone (`WebState::set_web_hosts`);
+  - the `browser.private` grants of the session and its plan (`norn::grants::matrix_grants_for`), each target in its
+    wire form, go to the proxy, which matches them against what was asked and where it leads;
+  - a Never cell ignores every grant;
+  - the deny list is the `agents-browser-deny-hosts` setting.
+- **What the proxy refuses becomes a card, at most:**
+  - **`WebOff`**, a public target while the web is off: `MatrixGate::decide(browser.web)` with the facts
+    `{host: "H:P"}`, the first host refused, so a page of thirty hosts makes one card. A session has at most one open
+    `browser.web` card; the targets refused while it is open make none. An Allow (the cell, or a grant that covers the
+    session) turns the web on without a card. Once the user refused one (a settled matrix card of the session with the
+    choice `refuse` or `deny`, or one marked `refused`), the session gets no more `browser.web` cards, after a hub
+    restart too.
+  - **`Private`**, a private target no grant opens: `decide(browser.private)` with the facts `{target, addr, class}`:
+    `target` the target as a grant names it, `{"host_port": "H:P"}` (the name, the literal or the
+    `host.drgnx.internal` port that was asked), `addr` the address and port it led to, `class` its class (`lan`,
+    `ula`, `link_local`, `cgnat`, `loopback`, `host_own`). One card per target; none for a refused target.
+    `browser.private` is capped at Ask, so every new target asks.
+  - **`Refused`** (a hard never, a port, a rebinding, a malformed request) is logged only; **`Reached`** is a store
+    event, once per host per session: kind `status`, the session as `agent`, data
+    `{"browser-host": true, "session": SID, "host": HOST}`.
+- **Changes reach it live.** Each write of `cards/settle` or `graph/grants` bumps `coord::Signals::grants`; every web
+  proxy then reads its state and cards again and lets the proxy ask its questions anew
+  (`ProxyHandle::forget_questions`), so the target refused while another card was open asks on its retry. The proxy
+  also reads again when the earliest grant in force expires.
+- **What no grant opens** (`browser/nevers.rs`, shared by every session's proxy, started with the hub):
+  - `HostAddrsWatch`: every interface address of the host (`getifaddrs`, every 5 s), which the policy treats as
+    loopback;
+  - `NeverSetWatch`: the hub's own TCP ports on the host's loopback: the gateway's (registered once it listens), every
+    listener the hub registers (`hold`, `release`), and an Emacs TCP server's port, read every 30 s from the first line
+    (`HOST:PORT PID`) of each server file in `~/.emacs.d/server/` and `$XDG_CONFIG_HOME/emacs/server/` (the hub's
+    HOME; the line with the key is never read).
+- **Test hooks.** A `test-hooks` hub with `DRGNX_TEST_WEB_PROXY` set gives every session a web proxy at its start;
+  `DRGNX_TEST_WEB_REDIRECT=ADDR:PORT` sends every upstream but the host's loopback there (the mock LLM stands for the
+  site), and `DRGNX_TEST_PROXY_PINS` pins names for it as for the provider proxy.
+
+Rows: `test/conformance/browser/web-*.jsonl`, `browser/private-*.jsonl`.
+
 ## The MCP bridge
 
 An agent speaks MCP over stdio; `ratatoskr mcp-bridge` is that stdio server, and it copies lines to the hub

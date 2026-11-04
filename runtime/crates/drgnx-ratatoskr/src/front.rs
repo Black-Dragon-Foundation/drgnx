@@ -89,6 +89,9 @@ pub struct Front {
     pub shell_env: crate::shell_env::ShellEnv,
     /// The agent core's state ([`crate::agent_core`]): sessions, jobs, plan runs, the matrix, …
     pub core: crate::agent_core::Core,
+    /// What every browser session's web proxy treats as the host itself: the host's addresses and the hub's own
+    /// loopback ports ([`crate::browser::nevers`]), kept live once the hub starts its watches.
+    pub browser_nevers: crate::browser::nevers::Nevers,
     refusals: Mutex<Refusals>,
     /// work.db's `meta.schema` at the last look (0: none).
     schema: AtomicU32,
@@ -172,6 +175,7 @@ impl Front {
                 matrix,
                 ..Default::default()
             },
+            browser_nevers: crate::browser::nevers::Nevers::default(),
             tools,
             tool_hub,
             tool_list,

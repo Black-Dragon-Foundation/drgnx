@@ -1507,8 +1507,13 @@ async fn launch(
     };
     // the provider proxy the spec's relay reaches, bound before the spawn; a start that fails below drops it, and its
     // socket with it
-    let net = super::net::start_session(front, profile, sid, SESSION_NET)
+    #[cfg_attr(not(feature = "test-hooks"), allow(unused_mut))]
+    let mut net = super::net::start_session(front, profile, sid, SESSION_NET)
         .map_err(|e| internal(format!("the session's provider proxy: {e}")))?;
+    #[cfg(feature = "test-hooks")]
+    super::net::test_web(front, &mut net, sid, who_of(role, profile))
+        .await
+        .map_err(|e| internal(format!("the session's web proxy: {e}")))?;
     // the trace supervisor's socket, served before the spawn too (a traced session); an untraced one labels its steps
     let env = runstav::paths::Env::process();
     let run = runstav::paths::make_session_dir(&env, &runstav::paths::socket_path(&env), sid)
