@@ -248,6 +248,7 @@ provider `o' served by a mock answering ANSWER, its LOG."
         (should (equal (drgnx-ai-role 'chat) '((o . "m"))))))))                    ; unchanged
 
 (ert-deftest drgnx-ai-gptel/its-backend-comes-from-the-chat-role ()
+  :tags '(:frozen)
   (drgnx-ai-ask-test--with "OK"
     (let ((spec (drgnx-ai-gptel-spec 'o "m")))
       (should (eq (car spec) 'gptel-make-ollama))
@@ -260,6 +261,7 @@ provider `o' served by a mock answering ANSWER, its LOG."
       (should-error (drgnx-ai-gptel-spec 'openrouter "openrouter/auto") :type 'drgnx-ai-gateway-unavailable))))
 
 (ert-deftest drgnx-ai-gptel/configured-unless-the-user-chose-a-backend-of-their-own ()
+  :tags '(:frozen)
   ;; gptel is not loaded here: its variables are set and unset by hand (never let-bound: they are special once
   ;; gptel loads)
   (drgnx-ai-ask-test--with "OK"

@@ -15,6 +15,7 @@
   (drgnx-test-wait (lambda () (drgnx-live-wk--q sess form)) :secs (max 30 secs) :what form))
 
 (ert-deftest drgnx-live/the-work-tab-fills-in-and-opens-what-it-shows ()
+  :tags '(:frozen)
   ;; the scan writes through the hub: the session starts the real Ratatoskr itself (state under its temp HOME and
   ;; runtime dir); without the binary the test skips like the hub tests
   (let* ((rbin (or (drgnx-test-ratatoskr-bin) (ert-skip "DRGNX_RATATOSKR_BIN is not set")))

@@ -40,6 +40,7 @@
   (seq-find (lambda (i) (equal (plist-get i :id) id)) (drgnx-needs-you-items)))
 
 (ert-deftest drgnx-job-ui/note-jobs-sets-cards-and-messages ()
+  :tags '(:frozen)
   (drgnx-job-ui-test--with
     ;; two cards and a message of a running job; a done job's card does not count
     (drgnx-job-ui-note-jobs (list drgnx-job-ui-test--summary
@@ -67,6 +68,7 @@
     (should (= 0 (drgnx-needs-you-count)))))
 
 (ert-deftest drgnx-job-ui/a-failed-recount-is-unknown-with-a-reason ()
+  :tags '(:frozen)
   (drgnx-job-ui-test--with
     (drgnx-job-ui-note-jobs (list drgnx-job-ui-test--summary))
     (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (_m _p &optional cb) (funcall cb nil "hub: connection lost"))))
@@ -88,6 +90,7 @@
     (should (= 3 (drgnx-needs-you-count)))))
 
 (ert-deftest drgnx-job-ui/a-disconnect-is-unknown ()
+  :tags '(:frozen)
   (drgnx-job-ui-test--with
     (drgnx-job-ui-note-jobs (list drgnx-job-ui-test--summary))
     (let ((drgnx-hub-disconnect-functions nil) (drgnx-hub-event-functions nil) (drgnx-job-ui-attention-mode nil))
@@ -101,6 +104,7 @@
                       (drgnx-notices :source 'jobs)))))
 
 (ert-deftest drgnx-job-ui/the-badge-is-gone ()
+  :tags '(:frozen)
   (dolist (s '(drgnx-job-ui--badge drgnx-job-ui--badge-job drgnx-job-ui--notified drgnx-job-ui--needs-you drgnx-job-ui-badge-map))
     (should-not (boundp s)))
   (dolist (f '(drgnx-job-ui--badge-segment drgnx-job-ui--badge-click drgnx-job-ui--badge-clear drgnx-job-ui--notify
@@ -110,12 +114,14 @@
                            (should-not (seq-find (lambda (e) (and (consp e) (string-search "badge" (format "%S" e)))) global-mode-string))))
 
 (ert-deftest drgnx-job-ui/badge-mode-is-an-obsolete-alias ()
+  :tags '(:frozen)
   (should (eq (indirect-function 'drgnx-job-ui-badge-mode) (indirect-function 'drgnx-job-ui-attention-mode)))
   (should (eq (indirect-variable 'drgnx-job-ui-badge-mode) 'drgnx-job-ui-attention-mode))
   (should (get 'drgnx-job-ui-badge-mode 'byte-obsolete-info))
   (should (get 'drgnx-job-ui-badge-mode 'byte-obsolete-variable)))
 
 (ert-deftest drgnx-job-ui/notify-is-an-obsolete-alias ()
+  :tags '(:frozen)
   (should (eq (indirect-variable 'drgnx-job-ui-notify) 'drgnx-notice-desktop))
   (should (get 'drgnx-job-ui-notify 'byte-obsolete-variable))
   (let ((drgnx-job-ui-notify nil)) (should-not drgnx-notice-desktop))
@@ -156,6 +162,7 @@
             (drgnx-notice-desktop-mode -1)))))))
 
 (ert-deftest drgnx-job-ui/overlap-cards-count-but-never-interrupt ()
+  :tags '(:frozen)
   (drgnx-job-ui-test--with
     (drgnx-job-ui-note-jobs (list (drgnx-job-ui-test--card-job 13 "overlap")))
     (should (= 1 (drgnx-needs-you-count)))
@@ -172,6 +179,7 @@
     (should-not (plist-member (drgnx-job-ui-test--item '(card . 14)) :echo))))
 
 (ert-deftest drgnx-job-ui/setup-defines-the-source-and-teardown-clears-it ()
+  :tags '(:frozen)
   (cl-letf (((symbol-function 'drgnx-hub-call) #'ignore))
     (drgnx-notice-test-with-model
       (drgnx-test-with-modules '(tools/jobs) :strict t
@@ -229,6 +237,7 @@
                                (should-not (gethash 'jobs drgnx-statusbar--segments))))))
 
 (ert-deftest drgnx-job-ui/note-jobs-is-quiet-while-the-module-is-off ()
+  :tags '(:frozen)
   ;; the cockpit's every-job pane calls it whether or not tools/jobs is on
   (drgnx-notice-test-with-model
     (should-not (gethash 'jobs drgnx-notice--sources))
@@ -236,6 +245,7 @@
     (should (= 0 (drgnx-needs-you-count)))))
 
 (ert-deftest drgnx-job-ui/the-commands-are-registered ()
+  :tags '(:frozen)
   (drgnx-test-with-modules '(tools/jobs) :strict t
                            (dolist (id '(job-show job-start job-approve job-status job-stop))
                              (should (drgnx-commands-get id))
@@ -249,6 +259,7 @@
                            (should-not (fboundp 'drgnx-job-ui--layout))))
 
 (ert-deftest drgnx-job-ui/turned-off-it-hears-the-hub-no-more ()
+  :tags '(:frozen)
   ;; the mode hears the hub and counts again through layer keys; turned off, both end
   (cl-letf (((symbol-function 'drgnx-hub-call) #'ignore))
     (drgnx-test-with-modules '(tools/jobs) :strict t
@@ -263,6 +274,7 @@
 ;; M9b4-1: once the hub has marked a dismissed message acted, the job does not wait on you (Dismiss itself:
 ;; mod-cockpit-cards-test.el); the count is the notice model's (`drgnx-needs-you-count', tested above).
 (ert-deftest drgnx-job-ui/what-waits-on-you-is-open-cards-and-unacted-messages ()
+  :tags '(:frozen)
   (let ((done (list :id "j2" :status "done" :cards '((:id 9 :kind "review")) :messages :null))
         (acted (list :id "j3" :status "running" :cards :null :messages '((:id 4 :state "acted")))))
     (should (drgnx-job-ui-waiting-p drgnx-job-ui-test--summary))
@@ -273,6 +285,7 @@
 
 ;; M12a-70
 (ert-deftest drgnx-job-ui/attention-mode-adds-and-removes-its-hooks ()
+  :tags '(:frozen)
   (let ((drgnx-hub-disconnect-functions nil) (drgnx-hub-event-functions nil) (drgnx-job-ui-attention-mode nil))
     (cl-letf (((symbol-function 'drgnx-job-ui--schedule-recount) #'ignore))
       (drgnx-job-ui-attention-mode 1)
@@ -287,6 +300,7 @@
   (let ((n 0)) (dolist (tm timer-idle-list n) (when (eq (timer--function tm) #'drgnx-timer--fire) (setq n (1+ n))))))
 
 (ert-deftest drgnx-job-ui/the-recount-timer-has-an-owner ()
+  :tags '(:frozen)
   ;; B1: the 60 s repeat belongs to the module's setup, so a second setup (or a reload) cannot stack another.
   (let* ((state (make-temp-file "drgnx-job-ui-state" t))
          (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment))

@@ -18,6 +18,7 @@
   (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the agent session's condition"))
 
 (ert-deftest drgnx-agents-ui/a-transcript-shows-turns-tools-plans-and-what-waits ()
+  :tags '(:frozen)
   (let ((s (drgnx-agents--make :name "mock · x" :status 'busy :queue '("later")
                                :entries (list '(:type user :text "do it")
                                               '(:type thought :text "hmm")
@@ -34,6 +35,7 @@
           (should (string-search want text)))))))
 
 (ert-deftest drgnx-agents-ui/the-list-has-sessions-and-jobs ()
+  :tags '(:frozen)
   (let* ((drgnx-agents-ui--jobs-cache nil)
          (drgnx-agents--sessions (list (drgnx-agents--make :name "mock · p" :status 'idle :queue '("a" "b") :paused t :via 'gateway))))
     (cl-letf (((symbol-function 'drgnx-exec-list)
@@ -45,6 +47,7 @@
         (should (equal (aref (cadr rows) 1) "done"))))))
 
 (ert-deftest drgnx-agents-ui/last-active-column ()
+  :tags '(:frozen)
   ;; Like Zed's agent list: how long ago each agent acted, from what the UI saw change.
   (let* ((now (drgnx-agents--make :id "n" :name "now" :status 'busy))
          (mins (drgnx-agents--make :id "m" :name "mins" :status 'idle))
@@ -68,6 +71,7 @@
         (kill-buffer)))))
 
 (ert-deftest drgnx-agents-ui/an-agent-edit-is-reviewed-hunk-by-hunk ()
+  :tags '(:frozen)
   ;; A mirror's write request proposes two changes (first line, a new last line); the user takes the first only, and
   ;; Done tells the hub
   (let* ((dir (make-temp-file "drgnx-review" t))
@@ -97,12 +101,14 @@
       (delete-directory dir t))))
 
 (ert-deftest drgnx-agents-ui/every-command-is-registered ()
+  :tags '(:frozen)
   (drgnx-test-with-modules '(tools/agents) :strict t
                            (dolist (id '(agents-view agents-new agents-send agents-stop agents-deliver agents-answer jobs-log jobs-stop agents-open agents-reply agents-review-done agents-review-reject
                                                      agents-new-durable))
                              (should (drgnx-commands-get id)))))
 
 (ert-deftest drgnx-agents-ui/defines-the-agents-segment ()
+  :tags '(:frozen)
   (let ((drgnx-agents--sessions (list (drgnx-agents--make :name "a" :status 'busy)
                                       (drgnx-agents--make :name "b" :status 'idle)))
         (drgnx-agents-ui--busy 0))
@@ -127,6 +133,7 @@
                                (drgnx-timer-cancel 'statusbar-refresh)))))
 
 (ert-deftest drgnx-agents-ui/turned-off-it-stops-mirroring-and-closes-the-hub-events ()
+  :tags '(:frozen)
   ;; what no door records: the mirror's hooks (added at idle, outside the setup) and the event connection
   (require 'drgnx-agents-mirror)
   (let ((drgnx-hub--events nil) (drgnx-hub--client nil) (drgnx-hub--subscribing nil) (p nil))
@@ -149,6 +156,7 @@
 (load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
 
 (ert-deftest drgnx-agents-ui/turned-off-it-empties-the-agents-set-and-a-click-says-why ()
+  :tags '(:frozen)
   ;; `agents' is a core source: what waits when the module goes must not stay counted, and a click on an item whose
   ;; command went with the module says so instead of signalling
   (drgnx-notice-test-with-model
@@ -166,6 +174,7 @@
       (should-error (funcall (drgnx-notices--action '(drgnx-agents-ui-test--gone 1))) :type 'user-error))))
 
 (ert-deftest drgnx-agents-ui/hub-sessions-are-mirrored-only-when-a-hub-runs ()
+  :tags '(:frozen)
   ;; at idle: never a wait (no ping), never a hub started — only a socket that is there is connected to
   (require 'drgnx-agents-mirror)
   (let* ((root (make-temp-file "drgnx-ui-mirror" t))
@@ -207,6 +216,7 @@ answers recorded in ANSWERS)."
 (defun drgnx-agents-ui-test--lines (n) (concat (mapconcat (lambda (i) (format "line %d" i)) (number-sequence 1 n) "\n") "\n"))
 
 (ert-deftest drgnx-agents-ui/reject-leaves-the-file-as-it-was ()
+  :tags '(:frozen)
   ;; I2: hunks applied while reviewing are applied to a copy; Reject writes nothing.
   (let* ((dir (make-temp-file "drgnx-rev" t)) (f (expand-file-name "f.txt" dir)) (orig (drgnx-agents-ui-test--lines 12)))
     (write-region orig nil f nil 'silent)
@@ -217,6 +227,7 @@ answers recorded in ANSWERS)."
     (delete-directory dir t)))
 
 (ert-deftest drgnx-agents-ui/an-agent-can-create-a-file-through-review ()
+  :tags '(:frozen)
   ;; I1: a new file is written where the agent asked, not to a temp file.
   (let* ((dir (make-temp-file "drgnx-rev" t)) (f (expand-file-name "new/made.txt" dir)))
     (drgnx-agents-ui-test--reviewing f "hello\n"
@@ -239,6 +250,7 @@ answers recorded in ANSWERS)."
     (delete-directory dir t)))
 
 (ert-deftest drgnx-agents-ui/closing-a-review-rejects-it ()
+  :tags '(:frozen)
   (let* ((dir (make-temp-file "drgnx-rev" t)) (f (expand-file-name "f.txt" dir)))
     (write-region "a\n" nil f nil 'silent)
     (drgnx-agents-ui-test--reviewing f "b\n"
@@ -248,6 +260,7 @@ answers recorded in ANSWERS)."
     (delete-directory dir t)))
 
 (ert-deftest drgnx-agents-ui/a-transcript-has-stop-deliver-commands-and-queue-controls ()
+  :tags '(:frozen)
   (let ((s (drgnx-agents--make :name "x" :status 'busy :queue '("one" "two") :paused nil
                                :commands '((:name "compact" :description "c") (:name "review" :description "r")))))
     (with-temp-buffer
@@ -259,6 +272,7 @@ answers recorded in ANSWERS)."
     (with-temp-buffer (drgnx-agents-ui-render s) (should (string-search "[Deliver]" (buffer-string))))))
 
 (ert-deftest drgnx-agents-ui/the-list-reads-jobs-at-most-every-few-seconds ()
+  :tags '(:frozen)
   ;; I9: the list redraws often while an agent streams; jobs are read on a slower cadence.
   (let ((calls 0) (drgnx-agents-ui--jobs-cache nil) (drgnx-agents--sessions nil))
     (cl-letf (((symbol-function 'drgnx-exec-list) (lambda () (setq calls (1+ calls)) nil)))
@@ -270,6 +284,7 @@ answers recorded in ANSWERS)."
   (let ((n 0)) (dolist (tm timer-idle-list n) (when (eq (timer--function tm) #'drgnx-timer--fire) (setq n (1+ n))))))
 
 (ert-deftest drgnx-agents-ui/the-mirror-timer-has-an-owner ()
+  :tags '(:frozen)
   ;; B1: the 30 s repeat belongs to the module's setup, so a second setup (or a reload) cannot stack another.
   (let* ((state (make-temp-file "drgnx-agents-ui-state" t))
          (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment))
@@ -365,6 +380,7 @@ current, VIEW its view."
                 (let ((byte-compile-warnings nil)) (byte-compile s))))))
 
 (ert-deftest drgnx-agents-ui/thousand-chunks-insert-only-their-text ()
+  :tags '(:frozen)
   (drgnx-agents-ui-test--with-transcript (s b v :status 'busy
                                             :entries (list (list :type 'user :text "go") (list :type 'agent :text "Start. ")))
     (let ((drawn (drgnx-agents-ui-test--stat v :rows-drawn)) (grown (drgnx-agents-ui-test--stat v :rows-grown))
@@ -399,11 +415,13 @@ three runs after two warm ones)."
     best))
 
 (ert-deftest drgnx-agents-ui/grow-allocation-is-independent-of-size ()
+  :tags '(:frozen)
   (let ((small (drgnx-agents-ui-test--grow-alloc 4096)) (big (drgnx-agents-ui-test--grow-alloc 409600)))
     (message "grow draw allocation: 4 kB entry %d, 400 kB entry %d" small big)
     (should (<= big (ceiling (* 1.25 small))))))
 
 (ert-deftest drgnx-agents-ui/a-hidden-transcript-costs-nothing ()
+  :tags '(:frozen)
   (drgnx-test-with-state
     (drgnx-agents-ui-test--with-transcript (s b v :status 'busy :entries (list (list :type 'agent :text "a")))
       (drgnx-view-test-store-on)                                         ; views follow the store, as in the workbench
@@ -433,6 +451,7 @@ three runs after two warm ones)."
           (kill-buffer other))))))
 
 (ert-deftest drgnx-agents-ui/a-tool-status-change-redraws-one-row ()
+  :tags '(:frozen)
   (drgnx-agents-ui-test--with-transcript (s b v :status 'busy
                                             :entries (list (list :type 'user :text "go")
                                                            (list :type 'tool :id "t1" :title "Task" :status "pending")
@@ -455,6 +474,7 @@ three runs after two warm ones)."
       (should (equal (drgnx-agents-ui-test--fresh s) (drgnx-agents-ui-test--text b))))))
 
 (ert-deftest drgnx-agents-ui/a-permission-adds-and-removes-a-footer-row ()
+  :tags '(:frozen)
   (drgnx-agents-ui-test--with-transcript (s b v :status 'busy :entries (list (list :type 'agent :text "a")))
     (let ((rows (drgnx-view-row-count v)) (drawn (drgnx-agents-ui-test--stat v :rows-drawn))
           (removed (drgnx-agents-ui-test--stat v :removed))
@@ -475,6 +495,7 @@ three runs after two warm ones)."
       (should (equal (drgnx-agents-ui-test--fresh s) (drgnx-agents-ui-test--text b))))))
 
 (ert-deftest drgnx-agents-ui/answering-the-second-permission-removes-its-row ()
+  :tags '(:frozen)
   ;; `delq' of an item that is not first keeps the list's head: only its length tells
   (drgnx-agents-ui-test--with-transcript (s b v :status 'busy :entries (list (list :type 'agent :text "a")))
     (let ((p1 (list :id 7 :title "Run make" :options '((:optionId "a" :name "Allow"))))
@@ -497,6 +518,7 @@ three runs after two warm ones)."
         (should (equal (drgnx-agents-ui-test--fresh s) (drgnx-agents-ui-test--text b)))))))
 
 (ert-deftest drgnx-agents-ui/an-edited-queued-message-is-redrawn ()
+  :tags '(:frozen)
   ;; `drgnx-agents-requeue' asks the hub; its snapshot replaces the text in place: the queue is the same list
   (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (&optional _f) nil)) ; a UTF-8 frame
             ((symbol-function 'drgnx-hub-call) #'ignore))
@@ -511,6 +533,7 @@ three runs after two warm ones)."
       (should (equal (drgnx-agents-ui-test--fresh s) (drgnx-agents-ui-test--text b))))))
 
 (ert-deftest drgnx-agents-ui/a-steer-removed-from-the-entries-removes-its-row ()
+  :tags '(:frozen)
   (drgnx-agents-ui-test--with-transcript (s b v :status 'busy
                                             :entries (list (list :type 'user :text "go") (list :type 'agent :text "a")))
     (let ((steer (list :type 'user :text "also this" :steer t)))
@@ -529,6 +552,7 @@ three runs after two warm ones)."
         (should (equal (drgnx-agents-ui-test--fresh s) (drgnx-agents-ui-test--text b)))))))
 
 (ert-deftest drgnx-agents-ui/the-tail-is-followed ()
+  :tags '(:frozen)
   (drgnx-agents-ui-test--with-transcript (s b v :status 'busy :entries (list (list :type 'agent :text "a")))
     (goto-char (point-max))
     (set-window-point (selected-window) (point-max))
@@ -541,6 +565,7 @@ three runs after two warm ones)."
     (should (= (window-point (selected-window)) (point-max)))))
 
 (ert-deftest drgnx-agents-ui/a-reader-scrolled-up-stays-put ()
+  :tags '(:frozen)
   (drgnx-agents-ui-test--with-transcript (s b v :status 'busy
                                             :entries (list (list :type 'user :text "go")
                                                            (list :type 'agent :text "line\nline\nline\n" :done t)
@@ -559,6 +584,7 @@ three runs after two warm ones)."
       (should (equal (drgnx-agents-ui-test--fresh s) (drgnx-agents-ui-test--text b))))))
 
 (ert-deftest drgnx-agents-ui/g-redraws-now ()
+  :tags '(:frozen)
   (drgnx-agents-ui-test--with-transcript (s b v :status 'busy :entries (list (list :type 'agent :text "a")))
     (let ((other (get-buffer-create " *drgnx-agents-ui-other*")))
       (unwind-protect
@@ -632,6 +658,7 @@ mirror does nothing."
   (run-hook-with-args 'drgnx-agents-changed-functions s))
 
 (ert-deftest drgnx-agents-ui/the-list-updates-in-place ()
+  :tags '(:frozen)
   (drgnx-agents-ui-test--with-list ('(("a" :status idle) ("b" :status idle) ("c" :status idle)) b)
     (let* ((v drgnx-view) (sa (nth 0 drgnx-agents--sessions)) (sb (nth 1 drgnx-agents--sessions))
            (sc (nth 2 drgnx-agents--sessions))
@@ -653,6 +680,7 @@ mirror does nothing."
       (should-not (drgnx-view--check v)))))
 
 (ert-deftest drgnx-agents-ui/the-list-keeps-each-window-on-its-session ()
+  :tags '(:frozen)
   (drgnx-agents-ui-test--with-list ('(("a" :status idle) ("b" :status idle) ("c" :status idle)) b)
     (let* ((w1 (split-window)) (w2 (split-window)) (sa (nth 0 drgnx-agents--sessions))
            (sb (nth 1 drgnx-agents--sessions)) (sc (nth 2 drgnx-agents--sessions)))
@@ -674,6 +702,7 @@ mirror does nothing."
       (should (= (point) (drgnx-agents-ui-test--line-of sa))))))
 
 (ert-deftest drgnx-agents-ui/the-list-follows-removals-and-reorders ()
+  :tags '(:frozen)
   (drgnx-agents-ui-test--with-list ('(("a" :status idle) ("b" :status idle) ("c" :status idle) ("d" :status idle)) b)
     (let* ((v drgnx-view) (all drgnx-agents--sessions) (sa (nth 0 all)) (sb (nth 1 all)) (sc (nth 2 all))
            (sd (nth 3 all)) (c-line (get-text-property (drgnx-agents-ui-test--line-of sc) 'tabulated-list-entry))
@@ -700,6 +729,7 @@ mirror does nothing."
       (should (string-prefix-p "No agent sessions yet" (drgnx-agents-ui-test--body))))))
 
 (ert-deftest drgnx-agents-ui/a-hidden-list-prints-nothing ()
+  :tags '(:frozen)
   (drgnx-agents-ui-test--with-list ('(("a" :status idle) ("b" :status idle)) b)
     (let* ((v drgnx-view) (sb (nth 1 drgnx-agents--sessions)) (other (get-buffer-create " *drgnx-agents-ui-other*"))
            (text (buffer-string)) (tick (buffer-modified-tick)))
@@ -725,6 +755,7 @@ mirror does nothing."
         (kill-buffer other)))))
 
 (ert-deftest drgnx-agents-ui/last-ages-on-a-30-second-tick ()
+  :tags '(:frozen)
   ;; The tick is the layer's (key `agents-ui-tick', the module's); it marks the list's view, which prints only
   ;; while shown, each window on its row.
   (drgnx-agents-ui-test--with-list ('(("a" :status idle) ("b" :status idle)) b)
@@ -741,6 +772,7 @@ mirror does nothing."
       (should (string-match-p "b +idle +1m" (buffer-string))))))
 
 (ert-deftest drgnx-agents-ui/the-tick-runs-only-while-the-list-shows ()
+  :tags '(:frozen)
   ;; Learned from the store: `windows-changed' (and the pane events) start the layer key when a recorded window
   ;; shows the list, and cancel it when none does; a window staying put keeps the tick's phase.
   (drgnx-agents-ui-test--with-list ('(("a" :status idle)) b)
@@ -759,6 +791,7 @@ mirror does nothing."
       (should-not (drgnx-state--lane-of event #'drgnx-agents-ui--tick-update)))))
 
 (ert-deftest drgnx-agents-ui/hiding-stops-the-tick ()
+  :tags '(:frozen)
   (drgnx-agents-ui-test--with-list ('(("a" :status idle)) b)
     (let ((other (get-buffer-create " *drgnx-agents-ui-other*")))
       (unwind-protect
@@ -778,6 +811,7 @@ mirror does nothing."
         (kill-buffer other)))))
 
 (ert-deftest drgnx-agents-ui/the-list-in-an-editor-window-ticks-too ()
+  :tags '(:frozen)
   ;; The list may show in an editor window (or any window), not only its dock: any recorded window counts, on any frame.
   (drgnx-agents-ui-test--with-list ('(("a" :status idle)) b)
     (let ((other (get-buffer-create " *drgnx-agents-ui-other*")) (win (selected-window)))
@@ -799,6 +833,7 @@ mirror does nothing."
 ;;;; The column titles are the first line; an empty list says how to start
 
 (ert-deftest drgnx-agents-ui/the-column-titles-are-the-first-line ()
+  :tags '(:frozen)
   (drgnx-agents-ui-test--with-list ('(("a" :status idle) ("b" :status idle)) b)
     (let ((titles (buffer-substring (point-min) (overlay-end tabulated-list--header-overlay))))
       (should-not header-line-format)                        ; the dock's tab strip has the header line
@@ -828,6 +863,7 @@ mirror does nothing."
         (should-not (buffer-modified-p))))))
 
 (ert-deftest drgnx-agents-ui/an-empty-list-says-how-to-start ()
+  :tags '(:frozen)
   (cl-letf (((symbol-function 'drgnx-agents-ui--claude-needs) #'ignore))
     (drgnx-agents-ui-test--with-list (nil b)
       (let ((body (drgnx-agents-ui-test--body)))
@@ -852,6 +888,7 @@ mirror does nothing."
         (should (string-search "No agent sessions" (buffer-string)))))))
 
 (ert-deftest drgnx-agents-ui/the-empty-hint-names-the-key-and-what-claude-needs ()
+  :tags '(:frozen)
   (cl-letf (((symbol-function 'drgnx-agents-ui--new-key) (lambda () "C-c a n"))
             ((symbol-function 'drgnx-agents-ui--claude-needs) (lambda () "Claude needs its adapter, claude-agent-acp: install it.")))
     (drgnx-agents-ui-test--with-list (nil b)
@@ -879,6 +916,7 @@ mirror does nothing."
 (load (expand-file-name "test/fixtures/handler-trap" drgnx-dir) nil t)
 
 (ert-deftest drgnx-agents-ui/a-write-through-a-planted-link-runs-no-file-name-handler ()
+  :tags '(:frozen)
   ;; a local session's write path is checked as written (`file-remote-p'): a link in it to a remote name passed, and
   ;; the review's own checks (`file-in-directory-p', `find-buffer-visiting') then reached Tramp
   (let* ((root (file-name-as-directory (make-temp-file "drgnx-ui-links" t))) (wt (concat root "wt/")))

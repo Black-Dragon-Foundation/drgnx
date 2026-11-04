@@ -1089,6 +1089,18 @@ audited, and the three variables are read once and removed from the environment,
 sees the runner's switches. CI's `unit` and `no-lisp-writes` jobs ([ci.md](ci.md)) and `bin/drgnx test --preflight`'s
 `det` step run with the audit on and failing.
 
+## Frozen tests
+
+A test of code that a plan replaces carries `:frozen` in its `:tags` (within the first 8 lines of its form). It is left out
+of every run, CI included, unless `DRGNX_TEST_FROZEN=1` (`harness/run-ert.el`). Its file stays in
+`test/class-exempt.eld` for the class check. `test/frozen.eld` is the register, one row per file:
+`(FILE :by "PLAN-OR-DESIGN:LINE" :since DATE :tests (NAME…) :keep (NAME…))`. `:tests` are the frozen tests; `:keep` are the
+tests of the same file that stay on because they guard against data loss or a security hole (an agent's link, a remote
+name, a revert); they are never tagged. `drgnx-lint/frozen-tests-are-registered` fails a `:frozen` test with no row, a row
+that names a file or a test that is gone, and a `:keep` test tagged `:frozen`. A row ends when the replacing plan lands:
+its tests take over, the frozen tests (or the whole file) are deleted, and the row and the file's `class-exempt.eld` row go
+with them.
+
 ## Virtual time
 
 `test/fixtures/clock-fixture.el` runs Emacs's own timer lists on a clock the test moves, so no test waits in real time

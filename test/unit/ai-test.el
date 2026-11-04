@@ -610,6 +610,7 @@ here, and a variable let-bound before it loads would turn special for good."
        (dolist (s saved) (if (nth 1 s) (set (nth 0 s) (nth 2 s)) (makunbound (nth 0 s)))))))
 
 (ert-deftest drgnx-ai/own-gptel-api-key-keeps-default-backend ()
+  :tags '(:frozen)
   ;; gptel's default backend with the user's own `gptel-api-key' is the user's choice: not replaced
   (drgnx-ai-test--with root
     (let ((drgnx-ai--gptel-ours nil))

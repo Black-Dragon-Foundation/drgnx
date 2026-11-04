@@ -104,6 +104,7 @@ their hooks and timers."
 ;;;; The job window's cases, in the cockpit
 
 (ert-deftest drgnx-cockpit-cards/cards-and-actions-as-the-job-window-had ()
+  :tags '(:frozen)
   (drgnx-cockpit-cards-test--with
     (let ((drgnx-cockpit-cards-test--answer nil))
       (drgnx-cockpit-cards--draw "j1" drgnx-cockpit-cards-test--summary)
@@ -179,6 +180,7 @@ their hooks and timers."
     s))
 
 (ert-deftest drgnx-cockpit-cards/an-access-card-offers-its-four-choices ()
+  :tags '(:frozen)
   (drgnx-cockpit-cards-test--with
     (let ((drgnx-cockpit-cards-test--answer nil)
           (card '(:id 21 :kind "access" :task :null :title "s1 (p) in r1 asks to read r2" :actions :null
@@ -196,6 +198,7 @@ their hooks and timers."
       (should-not (assoc "job/card" drgnx-cockpit-cards-test--calls)))))
 
 (ert-deftest drgnx-cockpit-cards/a-settings-card-offers-once-session-deny ()
+  :tags '(:frozen)
   ;; an agent's settings_change without a grant (Task 32's card, Task 33's variant): its three answers settle it
   (drgnx-cockpit-cards-test--with
     (let ((drgnx-cockpit-cards-test--answer nil)
@@ -217,6 +220,7 @@ their hooks and timers."
                          (list "cards/settle" :card 23 :choice choice))))))))
 
 (ert-deftest drgnx-cockpit-cards/a-close-card-offers-accept-and-reject ()
+  :tags '(:frozen)
   (drgnx-cockpit-cards-test--with
     (let ((drgnx-cockpit-cards-test--answer nil)
           (card '(:id 22 :kind "close" :task :null :title "close task:r1-abcde: the parser?" :actions :null
@@ -238,6 +242,7 @@ their hooks and timers."
                        (drgnx-notices :source 'hub :severity 'warn))))))
 
 (ert-deftest drgnx-cockpit-cards/a-part-redraws-only-when-what-it-shows-changed ()
+  :tags '(:frozen)
   (drgnx-cockpit-cards-test--with
     (drgnx-cockpit-cards--draw "j1" drgnx-cockpit-cards-test--summary)
     (let ((ticks (drgnx-cockpit-cards-test--ticks)))
@@ -255,6 +260,7 @@ their hooks and timers."
                         drawn)))))))
 
 (ert-deftest drgnx-cockpit-cards/events-are-one-refresh-and-only-while-shown ()
+  :tags '(:frozen)
   (drgnx-cockpit-cards-test--with
     (setq drgnx-cockpit-graph-current-filter '(:job "j1"))
     (drgnx-cockpit-cards--draw "j1" drgnx-cockpit-cards-test--summary)
@@ -277,6 +283,7 @@ their hooks and timers."
     (should (assoc "job/status" drgnx-cockpit-cards-test--calls))))
 
 (ert-deftest drgnx-cockpit-cards/a-hidden-pane-keeps-no-timer ()
+  :tags '(:frozen)
   ;; with no part showing, the refresh and the look-again are cancelled: the parts keep no timer, whatever comes
   (drgnx-cockpit-cards-test--with
     (let ((w (drgnx-cockpit-fixture-show-pane 'needs-you (drgnx-cockpit-cards-buffer) 'right)))
@@ -296,6 +303,7 @@ their hooks and timers."
       (should-not (seq-find (lambda (p) (memq (nth 1 p) (drgnx-cockpit-cards--buffers))) (drgnx-timer-pending))))))
 
 (ert-deftest drgnx-cockpit-cards/showing-starts-it-again ()
+  :tags '(:frozen)
   ;; a part that shows again asks the hub, and what changed meanwhile is drawn
   (drgnx-cockpit-cards-test--with
     (setq drgnx-cockpit-graph-current-filter '(:job "j1"))
@@ -310,6 +318,7 @@ their hooks and timers."
       (should (string-search "#3 build" (drgnx-cockpit-cards-test--text 'log))))))
 
 (ert-deftest drgnx-cockpit-cards/without-a-hub-it-says-so-and-looks-again ()
+  :tags '(:frozen)
   (drgnx-cockpit-cards-test--with
     (setq drgnx-cockpit-graph-current-filter '(:job "j1"))
     (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (&rest _) (error "No drgnx hub runs"))))
@@ -322,6 +331,7 @@ their hooks and timers."
     (should (string-search "No drgnx hub" (drgnx-cockpit-cards-test--text 'cards)))))
 
 (ert-deftest drgnx-cockpit-cards/a-deleted-job-shows-every-job-again ()
+  :tags '(:frozen)
   ;; M9b4-9's case: a filter on a job the hub does not know (deleted, or a saved filter outlived it) is dropped, not
   ;; kept with a "No drgnx hub" note that looks again every 10 s.
   (drgnx-cockpit-cards-test--with
@@ -334,6 +344,7 @@ their hooks and timers."
     (should-not (drgnx-timer-active-p 'cockpit-cards-retry))))
 
 (ert-deftest drgnx-cockpit-cards/discuss-looks-once-more-for-a-reviewer-not-mirrored-yet ()
+  :tags '(:frozen)
   (drgnx-test-with-clock ()
     (let ((said nil) (tries 0))
       (cl-letf (((symbol-function 'drgnx-cockpit-cards--transcript) (lambda (_id) (cl-incf tries) (user-error "Agent s-rev is not mirrored here (yet)")))
@@ -351,6 +362,7 @@ their hooks and timers."
         (should (string-search "not mirrored" (car said)))))))
 
 (ert-deftest drgnx-cockpit-cards/a-part-is-drawn-only-where-it-lives ()
+  :tags '(:frozen)
   ;; a refresh draws into the parts that live: it never makes the decision log's buffer when only What needs you shows
   (drgnx-cockpit-cards-test--with
     (kill-buffer drgnx-cockpit-decisions-buffer-name)
@@ -370,6 +382,7 @@ their hooks and timers."
 ;;;; All jobs or one
 
 (ert-deftest drgnx-cockpit-cards/one-pane-for-all-jobs-or-one ()
+  :tags '(:frozen)
   (drgnx-cockpit-cards-test--with
     (let* ((j2 (list :id "j2" :title "Other" :status "paused" :repo "/q/"
                      :cards '((:id 9 :kind "budget" :task :null :title "spent 1.2 of 1.0 USD: paused" :actions (("resume" "Resume…")) :data :null))
@@ -422,6 +435,7 @@ their hooks and timers."
         (should (eq (window-buffer (selected-window)) (drgnx-cockpit-cards-buffer)))))))
 
 (ert-deftest drgnx-cockpit-cards/f-changes-or-clears-the-job ()
+  :tags '(:frozen)
   ;; a job filter set from the graph (opening a job node) is left from the graph: f asks for the job too, and an
   ;; empty answer is every job; the filter line says what holds
   (drgnx-cockpit-cards-test--with
@@ -451,6 +465,7 @@ their hooks and timers."
         (should (string-search "job j2" (drgnx-cockpit--filter-line)))))))
 
 (ert-deftest drgnx-cockpit-cards/the-pane-and-the-notice-model-count-alike ()
+  :tags '(:frozen)
   ;; every job's pane counts with the model's function and tells it: no second count, no second question
   (drgnx-cockpit-cards-test--with
     (drgnx-notice-test-with-model
@@ -471,6 +486,7 @@ their hooks and timers."
         (should (string-search "What needs you: 3" (drgnx-cockpit-cards-test--text 'cards)))))))
 
 (ert-deftest drgnx-cockpit-cards/heads-show-the-one-count ()
+  :tags '(:frozen)
   ;; the heads read the model, which holds more than the jobs set: another source's item scoped to j1 counts in both
   (drgnx-cockpit-cards-test--with
     (drgnx-notice-test-with-model
@@ -493,6 +509,7 @@ their hooks and timers."
 ;;;; A workbench saved before M12f
 
 (ert-deftest drgnx-cockpit-cards/an-old-job-window-state-opens-the-cockpit ()
+  :tags '(:frozen)
   (drgnx-cockpit-cards-test--with
     (let* ((dir (make-temp-file "drgnx-cards-persist" t))
            (drgnx-persist-file (expand-file-name "workbench.eld" dir))
@@ -531,6 +548,7 @@ their hooks and timers."
         (delete-directory dir t)))))
 
 (ert-deftest drgnx-cockpit-cards/the-filter-is-kept-with-the-workbench ()
+  :tags '(:frozen)
   (drgnx-cockpit-cards-test--with
     (let ((extra (frame-parameter nil 'drgnx-persist-extra)))
       (unwind-protect
@@ -554,6 +572,7 @@ their hooks and timers."
         (set-frame-parameter nil 'drgnx-persist-extra extra)))))
 
 (ert-deftest drgnx-cockpit-cards/the-commands-are-registered ()
+  :tags '(:frozen)
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
         (drgnx-pane--kinds nil) (drgnx-cockpit-filter-functions nil)
         (drgnx-persist-state-functions nil) (drgnx-persist-after-restore-functions nil))
@@ -576,6 +595,7 @@ their hooks and timers."
                                   (search-forward (format "(%s " id) nil t)))))))
 
 (ert-deftest drgnx-cockpit-cards/the-module-s-teardown-leaves-nothing ()
+  :tags '(:frozen)
   ;; every global hook the setup adds has an owner: the module's teardown takes them out, kills both parts (their
   ;; hub hooks go with the last) and cancels both timers
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
@@ -607,6 +627,7 @@ their hooks and timers."
   "The names of the Work cockpit's buffers.")
 
 (ert-deftest drgnx-cockpit-cards/turning-the-module-off-leaves-no-timer-subscription-or-buffer ()
+  :tags '(:frozen)
   ;; TL-MB-1: tools/cockpit set up in a module run, its buffers made and shown (their checks running): turned off, it
   ;; leaves no timer, no subscription to the workbench state store, no hook and no buffer behind
   (drgnx-cockpit-fixture-with

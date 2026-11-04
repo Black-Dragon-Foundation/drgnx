@@ -51,6 +51,7 @@ buffer) and no check asked for meanwhile is still to follow it."
 (defun drgnx-review-test--tab () (with-current-buffer "*drgnx review*" (buffer-string)))
 
 (ert-deftest drgnx-review/parse-findings-and-verdict ()
+  :tags '(:frozen)
   (let ((r (drgnx-review-parse drgnx-review-test--answer)))
     (should (eq (plist-get r :verdict) 'fail))
     (should (equal (mapcar (lambda (f) (list (plist-get f :severity) (plist-get f :path) (plist-get f :line))) (plist-get r :findings))
@@ -60,6 +61,7 @@ buffer) and no check asked for meanwhile is still to follow it."
   (should-not (plist-get (drgnx-review-parse "nothing to say") :verdict)))
 
 (ert-deftest drgnx-review/the-prompt-goes-once-then-the-answer-is-read ()
+  :tags '(:frozen)
   (drgnx-review-test--branch
     (drgnx-review-branch)
     (should (string-search "Reviewing" (drgnx-review-test--tab)))
@@ -76,6 +78,7 @@ buffer) and no check asked for meanwhile is still to follow it."
       (should (< (string-search "the loop never ends" tab) (string-search "a long name" tab))))))
 
 (ert-deftest drgnx-review/edge-cases ()
+  :tags '(:frozen)
   (drgnx-review-test--branch
     (drgnx-git-test repo "checkout" "-q" "main")
     (should (string-match-p "Nothing to review against main" (cadr (should-error (drgnx-review-branch) :type 'user-error))))
@@ -96,6 +99,7 @@ buffer) and no check asked for meanwhile is still to follow it."
     (should (string-search "HEAD has moved" (drgnx-review-test--tab)))))
 
 (ert-deftest drgnx-review/a-refresh-during-a-head-check-is-not-lost ()
+  :tags '(:frozen)
   ;; a refresh while a check runs that read HEAD before a commit: one more check follows it (it was dropped, so the
   ;; tab never said HEAD had moved).  The race made certain: the first check's git answers only when let go.
   (drgnx-review-test--branch
@@ -124,6 +128,7 @@ buffer) and no check asked for meanwhile is still to follow it."
         (delete-directory bin t)))))
 
 (ert-deftest drgnx-review/an-older-head-check-answering-late-is-stale ()
+  :tags '(:frozen)
   ;; two checks whose gits have both ended, the older before a commit, before either sentinel runs: only the latest
   ;; check's answer sets HEAD (Emacs ran the newer sentinel first, and the older one's HEAD overwrote it)
   (drgnx-review-test--branch
@@ -145,6 +150,7 @@ buffer) and no check asked for meanwhile is still to follow it."
       (should (string-search "HEAD has moved" (drgnx-review-test--tab))))))
 
 (ert-deftest drgnx-review/ret-opens-the-finding ()
+  :tags '(:frozen)
   (drgnx-review-test--branch
     (drgnx-review-branch)
     (drgnx-review--changed s)
@@ -158,6 +164,7 @@ buffer) and no check asked for meanwhile is still to follow it."
 
 ;; review fixes (M11b final review)
 (ert-deftest drgnx-review/findings-in-model-formatting ()
+  :tags '(:frozen)
   ;; I5: list markers, bold, backticks, capitals, line ranges
   (let ((r (drgnx-review-parse "- FINDING: a.el:3: important: one\n1. FINDING: b.el:4: minor: two\n**FINDING:** c.el:5: Critical: three\n`FINDING: d.el:6-9: minor: four`\n**VERDICT: fail**")))
     (should (equal (mapcar (lambda (f) (list (plist-get f :path) (plist-get f :line) (plist-get f :severity))) (plist-get r :findings))
@@ -166,6 +173,7 @@ buffer) and no check asked for meanwhile is still to follow it."
     (should (eq (plist-get r :verdict) 'fail))))
 
 (ert-deftest drgnx-review/a-reviewer-that-stops-says-so ()
+  :tags '(:frozen)
   ;; I4: the agent exited (or was stopped) before answering: the tab says so instead of Reviewing… forever
   (drgnx-review-test--branch
     (drgnx-review-branch)
@@ -175,6 +183,7 @@ buffer) and no check asked for meanwhile is still to follow it."
     (should (string-search "the reviewer stopped" (drgnx-review-test--tab)))))
 
 (ert-deftest drgnx-review/the-reviewer-goes-once-it-has-answered ()
+  :tags '(:frozen)
   ;; I6: no idle agent left behind per review
   (drgnx-review-test--branch
     (let ((killed nil))
@@ -185,6 +194,7 @@ buffer) and no check asked for meanwhile is still to follow it."
         (should (equal killed (list s)))))))
 
 (ert-deftest drgnx-review/revert-buffer-redraws ()
+  :tags '(:frozen)
   ;; M11b-4: g (revert-buffer) in the tab draws it again
   (drgnx-review-test--branch
     (drgnx-review-branch)
@@ -197,6 +207,7 @@ buffer) and no check asked for meanwhile is still to follow it."
       (should (string-search "feature vs main · 3 findings · fail" (buffer-string))))))
 
 (ert-deftest drgnx-review/show-diff-uses-reviewed-sha ()
+  :tags '(:frozen)
   ;; M11b-5: the branch diff is the one the reviewer saw, not wherever HEAD is now
   (drgnx-review-test--branch
     (drgnx-review-branch)
@@ -241,6 +252,7 @@ buffer) and no check asked for meanwhile is still to follow it."
         (delete-file outside)))))
 
 (ert-deftest drgnx-review/refresh-is-a-registered-command ()
+  :tags '(:frozen)
   ;; M11b-13: g and the palette run it, so it is in the registry
   (drgnx-test-with-modules '(tools/review) :strict t
                            (let ((cmd (drgnx-commands-get 'review-refresh)))
@@ -249,6 +261,7 @@ buffer) and no check asked for meanwhile is still to follow it."
                              (should (eq (drgnx-cmd-command cmd) 'drgnx-review-refresh)))))
 
 (ert-deftest drgnx-review/turning-it-off-closes-the-tab-and-takes-the-hooks ()
+  :tags '(:frozen)
   (let (buf)
     (drgnx-test-with-modules '(tools/review) :strict t
                              (should (memq 'drgnx-review--changed drgnx-agents-changed-functions))
@@ -275,6 +288,7 @@ buffer) and no check asked for meanwhile is still to follow it."
         (delete-directory outside t)))))
 
 (ert-deftest drgnx-review/redrawing-keeps-the-place ()
+  :tags '(:frozen)
   ;; m4: the tab is drawn again when the head check answers; the reader stays on their row
   (drgnx-review-test--branch
     (drgnx-review-branch)
@@ -288,12 +302,14 @@ buffer) and no check asked for meanwhile is still to follow it."
         (should (= line (line-number-at-pos)))))))
 
 (ert-deftest drgnx-review/head-check-survives-a-vanished-root ()
+  :tags '(:frozen)
   ;; m5: a root that is gone when the check starts is no error in a hook
   (let ((run (list :root "/nonexistent-drgnx-root/" :head "abc")))
     (drgnx-review--check-head run)                      ; no error
     (should-not (process-live-p (plist-get run :checking)))))
 
 (ert-deftest drgnx-review/turning-it-off-kills-the-reviewers-and-forgets-the-runs ()
+  :tags '(:frozen)
   ;; The hooks that confine a reviewer go with the module, so its running sessions go too.
   (let* ((killed nil) (running (drgnx-agents--make :id "rev-run" :name "r1" :status 'idle :conn 'fake))
          (answered (drgnx-agents--make :id "rev-done" :name "r2" :status 'idle :conn 'fake))

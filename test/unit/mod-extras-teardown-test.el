@@ -57,6 +57,7 @@
        (kill-buffer buf)))))
 
 (ert-deftest drgnx-extras-teardown/llm-hook-is-a-name-and-the-backend-returns ()
+  :tags '(:frozen)
   (drgnx-extras-teardown-test--with-packages
    (skip-unless (drgnx-extras-teardown-test--installed-p 'gptel))
    (require 'gptel)

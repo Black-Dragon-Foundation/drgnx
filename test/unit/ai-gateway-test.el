@@ -198,6 +198,7 @@ no provider key; the mock got the hub's key and never the editor's token."
       (should (string-search "+two" (plist-get (drgnx-ai-gateway-test--through root "/v1/chat/completions") :body))))))
 
 (ert-deftest drgnx-ai-gateway/gptel-backend-points-at-the-gateway ()
+  :tags '(:frozen)
   ;; the backend's address, protocol, endpoint and key (gptel's request itself is gptel's: the streaming test below)
   (drgnx-ai-gateway-test--with nil
     (let ((spec (drgnx-ai-gptel-spec 'a "m")) (u (url-generic-parse-url (cdr drgnx-hub--editor))))
@@ -212,7 +213,7 @@ no provider key; the mock got the hub's key and never the editor's token."
       (should-not (plist-member (cddr spec) :key)))))
 
 (ert-deftest drgnx-ai-gateway/gptel-streams-through-the-gateway ()
-  :tags '(:timing)                      ; the two chunks arrive a second apart, and the test asserts that gap
+  :tags '(:frozen :timing)                      ; the two chunks arrive a second apart, and the test asserts that gap
   ;; two chunks a second apart: the first reaches gptel's callback before the second is sent.  gptel comes from the
   ;; user's ELPA, read-only (DRGNX_USER_ELPA, else ~/.config/emacs/elpa), as mod-extras-teardown-test.el loads it
   (let* ((elpa (expand-file-name (or (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa")))

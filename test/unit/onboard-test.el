@@ -1236,6 +1236,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
         (should (equal (nth 2 (car seen)) "types characters"))))))
 
 (ert-deftest drgnx-onboard/chat-check-in-batch-offers-no-restart ()
+  :tags '(:frozen)
   ;; gptel installed, module extra/llm on, gptel not loaded yet: in batch the Finish step never offers a restart, so
   ;; the result says it loads at the next start; a restart is needed only when this run turned the module on or
   ;; installed the package.

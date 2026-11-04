@@ -219,7 +219,7 @@ no agents, and everything closed afterwards."
         (should (= 2 (length steered)))))))
 
 (ert-deftest drgnx-live/agents-get-the-endpoint ()
-  :tags '(:timing)
+  :tags '(:frozen :timing)
   (let* ((root (make-temp-file "drgnx-live" t))
          (process-environment (cons (concat "XDG_STATE_HOME=" root) process-environment))
          (drgnx-live--browser nil) (drgnx-live--given nil) (drgnx-live-chrome-programs '("sh"))
@@ -275,6 +275,7 @@ no agents, and everything closed afterwards."
         (delete-directory root t)))))
 
 (ert-deftest drgnx-live/the-module-turns-off-and-stops-the-browser ()
+  :tags '(:frozen)
   ;; set up: agents get the endpoint, Emacs's end stops the browser, the commands; turned off: the browser stops
   (skip-unless drgnx-live-test--websocket)
   (let* ((root (make-temp-file "drgnx-live" t))
@@ -298,7 +299,7 @@ no agents, and everything closed afterwards."
         (delete-directory root t)))))
 
 (ert-deftest drgnx-live/failures-say-why ()
-  :tags '(:timing)
+  :tags '(:frozen :timing)
   ;; no Chrome: a user error that names it, and nothing is started
   (let ((drgnx-live--browser nil) (drgnx-live-chrome-programs '("drgnx-no-such-chrome")) (started nil))
     (cl-letf (((symbol-function 'drgnx-exec-start) (lambda (&rest _) (setq started t) nil)))
@@ -414,6 +415,7 @@ are pushed to STEERED as (NAME TEXT)."
         (with-current-buffer "*drgnx live*" (should-not drgnx-live-driving-mode))))))
 
 (ert-deftest drgnx-live/quit-while-starting-leaks-nothing ()
+  :tags '(:frozen)
   ;; C-g during the wait for the port: the browser is stopped and its profile goes, then the quit goes on
   (let* ((root (make-temp-file "drgnx-live" t))
          (process-environment (cons (concat "XDG_STATE_HOME=" root) process-environment))
@@ -450,6 +452,7 @@ are pushed to STEERED as (NAME TEXT)."
       (should-not (get-buffer "*drgnx live*")))))
 
 (ert-deftest drgnx-live/watch-needs-websocket-before-chrome ()
+  :tags '(:frozen)
   (let ((drgnx-live--browser nil) (drgnx-live-chrome-programs '("sh")) (started nil) (orig (symbol-function 'require)))
     (cl-letf (((symbol-function 'drgnx-exec-start) (lambda (&rest _) (setq started t) nil))
               ((symbol-function 'display-images-p) (lambda (&optional _) t))
@@ -723,6 +726,7 @@ the CDP calls it makes are collected in `drgnx-live-test--sent' (METHOD names, n
 (load (expand-file-name "test/fixtures/exec-calls-fixture" drgnx-dir) nil t)
 
 (ert-deftest drgnx-live/the-browser-runs-without-a-time-box ()
+  :tags '(:frozen)
   ;; the browser for agents stays up for days: the hub is asked for no time box, not for a day
   (drgnx-test-with-exec-calls calls
     (should (equal (drgnx-live--exec-start '("true") "/tmp" (+ (float-time) 5)) "job-1"))

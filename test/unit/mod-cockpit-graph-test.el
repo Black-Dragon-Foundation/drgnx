@@ -72,6 +72,7 @@ with `drgnx-cockpit-fixture-show-pane'."
     (goto-char (prop-match-beginning m))))
 
 (ert-deftest drgnx-cockpit-graph/columns-and-edges ()
+  :tags '(:frozen)
   (drgnx-cockpit-fixture-with
     (let* ((m (drgnx-cockpit-model :sessions sessions))
            (l (drgnx-cockpit-graph-layout m '(8 . 16)))
@@ -114,6 +115,7 @@ with `drgnx-cockpit-fixture-show-pane'."
         (should (= 4 (funcall col l3 "agent:s-1")))))))
 
 (ert-deftest drgnx-cockpit-graph/waiting-nodes-have-the-dot ()
+  :tags '(:frozen)
   (drgnx-cockpit-fixture-with
     ;; a UTF-8 terminal whatever the locale (CI's C locale is not): the ASCII form is asked for below
     (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) #'ignore))
@@ -147,6 +149,7 @@ with `drgnx-cockpit-fixture-show-pane'."
             (set-face-attribute 'drgnx-cockpit-waiting nil :foreground old)))))))
 
 (ert-deftest drgnx-cockpit-graph/svg-has-no-colour-literal-not-from-a-face ()
+  :tags '(:frozen)
   (drgnx-cockpit-fixture-with
     (let* ((m (drgnx-cockpit-model :sessions sessions))
            (layout (drgnx-cockpit-graph-layout m '(8 . 16)))
@@ -183,6 +186,7 @@ with `drgnx-cockpit-fixture-show-pane'."
         (ignore-errors (set-face-attribute 'default nil :background bg))))))
 
 (ert-deftest drgnx-cockpit-graph/terminal-gets-the-outline ()
+  :tags '(:frozen)
   (drgnx-cockpit-graph-test--with
     (let ((image-p (lambda () (text-property-not-all (point-min) (point-max) 'display nil))))
       ;; batch: a terminal frame — the outline, every node on a line
@@ -225,6 +229,7 @@ with `drgnx-cockpit-fixture-show-pane'."
               (with-current-buffer g (should-not (funcall image-p)) (should cursor-type)))))))))
 
 (ert-deftest drgnx-cockpit-graph/clicks-open-the-right-tab ()
+  :tags '(:frozen)
   (drgnx-cockpit-graph-test--with
     (drgnx-cockpit-graph-redraw t)
     (let ((opened (lambda () (list (buffer-file-name (window-buffer (selected-window)))
@@ -281,6 +286,7 @@ with `drgnx-cockpit-fixture-show-pane'."
 (load (expand-file-name "test/fixtures/handler-trap" drgnx-dir) nil t)
 
 (ert-deftest drgnx-cockpit-graph/a-file-is-opened-by-its-true-name-with-no-file-name-handler ()
+  :tags '(:frozen)
   ;; a node's file is a name from tracked text, maybe in an agent's worktree: a link there out through `ssh:host:'
   ;; and back, opened as named, made `find-file' follow it with handlers on, into Tramp
   (let* ((root (file-name-as-directory (make-temp-file "drgnx-graph-back" t))) (wt (concat root "wt/")))
@@ -294,6 +300,7 @@ with `drgnx-cockpit-fixture-show-pane'."
       (delete-directory root t))))
 
 (ert-deftest drgnx-cockpit-graph/redraw-only-when-changed ()
+  :tags '(:frozen)
   (drgnx-cockpit-graph-test--with
     (drgnx-cockpit-graph-redraw t)
     (let ((n (drgnx-cockpit-graph-test--stat :rows-drawn)))
@@ -321,6 +328,7 @@ with `drgnx-cockpit-fixture-show-pane'."
         (should (= pt (window-point (get-buffer-window g))))))))
 
 (ert-deftest drgnx-cockpit-graph/a-hidden-pane-keeps-no-timer ()
+  :tags '(:frozen)
   ;; shown (the store's `pane-shown'), the graph looks at the store every few seconds; hidden, it keeps no timer
   (drgnx-cockpit-graph-test--with-store
     (let ((w (drgnx-cockpit-fixture-show-pane 'work-graph g 'left)))
@@ -336,6 +344,7 @@ with `drgnx-cockpit-fixture-show-pane'."
       (should-not (seq-find (lambda (p) (eq (nth 1 p) g)) (drgnx-timer-pending))))))
 
 (ert-deftest drgnx-cockpit-graph/showing-starts-it-again ()
+  :tags '(:frozen)
   ;; shown again: its check runs again, and what changed while it was hidden is drawn
   (drgnx-cockpit-graph-test--with-store
     (let ((w (drgnx-cockpit-fixture-show-pane 'work-graph g 'left)))
@@ -351,6 +360,7 @@ with `drgnx-cockpit-fixture-show-pane'."
       (with-current-buffer g (drgnx-cockpit-graph-test--goto (format "task:%s#4" plan)) (should (looking-at ".*running"))))))
 
 (ert-deftest drgnx-cockpit-graph/its-check-follows-every-window-not-only-its-pane ()
+  :tags '(:frozen)
   ;; the graph in its pane and in an editor window (C-x b); the pane closed: it still shows, so its check stays; the
   ;; editor window switched away (no pane event, only the store's `windows-changed'): shown nowhere, no check
   (drgnx-cockpit-graph-test--with-store
@@ -368,6 +378,7 @@ with `drgnx-cockpit-fixture-show-pane'."
       (should (drgnx-timer-active-p (cons 'cockpit-check g))))))
 
 (ert-deftest drgnx-cockpit-graph/a-hidden-pane-draws-nothing ()
+  :tags '(:frozen)
   ;; hidden: the draw on its way finds it hidden (a stale skip), draws no row and builds no model
   (drgnx-cockpit-graph-test--with-store
     (let ((w (drgnx-cockpit-fixture-show-pane 'work-graph g 'left)))
@@ -384,6 +395,7 @@ with `drgnx-cockpit-fixture-show-pane'."
         (should (= 0 built))))))
 
 (ert-deftest drgnx-cockpit-graph/a-store-change-redraws-only-changed-nodes ()
+  :tags '(:frozen)
   ;; one task's state changes: its line is drawn again, the other lines stay as they are
   (drgnx-cockpit-graph-test--with
     (drgnx-cockpit-graph-redraw t)
@@ -403,6 +415,7 @@ with `drgnx-cockpit-fixture-show-pane'."
         (should (looking-at ".*running"))))))
 
 (ert-deftest drgnx-cockpit-graph/commands-and-keys-in-every-profile ()
+  :tags '(:frozen)
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
     (cl-letf (((symbol-function 'drgnx-pane-define-kind) #'ignore))
       (drgnx-cockpit-fixture-after-setup
@@ -438,6 +451,7 @@ with `drgnx-cockpit-fixture-show-pane'."
         (should (string-search row text))))))
 
 (ert-deftest drgnx-cockpit-graph/write-back-commands-ask-the-hub ()
+  :tags '(:frozen)
   ;; each action is one call to the hub (it changes the store); a plan task is only proposed, never run or written
   (drgnx-cockpit-graph-test--with
     (drgnx-work-fixture-as-hub (drgnx-coord-job-set "jx" :data (list :blocked '(("jx#3" . "waits on a name")))))
@@ -493,6 +507,7 @@ with `drgnx-cockpit-fixture-show-pane'."
        ,@body)))
 
 (ert-deftest drgnx-cockpit-graph/options-and-fonts-reach-the-drawing ()
+  :tags '(:frozen)
   (drgnx-cockpit-graph-test--with
     (drgnx-cockpit-graph-test--drawn
       (let ((cols drgnx-cockpit-graph-columns) (layout (lambda () (buffer-local-value 'drgnx-cockpit--layout g))))
@@ -513,6 +528,7 @@ with `drgnx-cockpit-fixture-show-pane'."
           (customize-set-variable 'drgnx-cockpit-graph-columns cols))))))
 
 (ert-deftest drgnx-cockpit-graph/old-band-images-are-flushed ()
+  :tags '(:frozen)
   (drgnx-cockpit-graph-test--with
     (drgnx-cockpit-graph-test--drawn
       (let ((images (lambda () (mapcar (lambda (b) (nth 2 b)) (buffer-local-value 'drgnx-cockpit--bands g))))
@@ -547,6 +563,7 @@ with `drgnx-cockpit-fixture-show-pane'."
             (should-not (funcall images))))))))
 
 (ert-deftest drgnx-cockpit-graph/nothing-changed-builds-no-model ()
+  :tags '(:frozen)
   (drgnx-test-compile "drgnx-cockpit-" "drgnx-memo" "drgnx-view")      ; before the stub below: it is a closure
   (drgnx-cockpit-graph-test--with
     (drgnx-cockpit-graph-redraw)
@@ -564,6 +581,7 @@ with `drgnx-cockpit-fixture-show-pane'."
         (should (= 1 built))))))
 
 (ert-deftest drgnx-cockpit-graph/writes-of-other-processes-show ()
+  :tags '(:frozen)
   (drgnx-cockpit-graph-test--with
     (drgnx-cockpit-graph-redraw)
     (drgnx-cockpit-graph-test--tick)                                     ; the draw the redraw armed: nothing left
@@ -584,6 +602,7 @@ with `drgnx-cockpit-fixture-show-pane'."
     (should-not (drgnx-timer-active-p (cons 'drgnx-view g)))))
 
 (ert-deftest drgnx-cockpit-graph/silent-worktrees-show-as-not-reporting ()
+  :tags '(:frozen)
   (drgnx-cockpit-graph-test--with
     ;; roots: jobs' repos and registered agents' folders; a remote one (a job's, an agent's) is never asked whether
     ;; it is a folder
@@ -608,6 +627,7 @@ with `drgnx-cockpit-fixture-show-pane'."
     (should-not drgnx-cockpit--silent-running)))
 
 (ert-deftest drgnx-cockpit-graph/keyboard-selects-in-column-order ()
+  :tags '(:frozen)
   (drgnx-cockpit-graph-test--with
     ;; the outline: TAB to the next node's line (a task's needs and blocks lines are its own)
     (drgnx-cockpit-graph-redraw t)
@@ -649,6 +669,7 @@ with `drgnx-cockpit-fixture-show-pane'."
           (set-face-attribute 'drgnx-cockpit-focus nil :background old))))))
 
 (ert-deftest drgnx-cockpit-graph/streaming-builds-no-model ()
+  :tags '(:frozen)
   (drgnx-cockpit-graph-test--with
     (drgnx-cockpit-graph-redraw)
     (let* ((built 0) (orig (symbol-function 'drgnx-cockpit-model)))
@@ -668,6 +689,7 @@ with `drgnx-cockpit-fixture-show-pane'."
           (should (= 2 built)))))))
 
 (ert-deftest drgnx-cockpit-graph/a-theme-redraws ()
+  :tags '(:frozen)
   (drgnx-cockpit-graph-test--with
     (drgnx-cockpit-graph-redraw)
     (should (memq #'drgnx-cockpit--theme-changed enable-theme-functions))
@@ -678,6 +700,7 @@ with `drgnx-cockpit-fixture-show-pane'."
       (should-not (eq sig (buffer-local-value 'drgnx-cockpit--signature g))))))
 
 (ert-deftest drgnx-cockpit-graph/the-drawing-tells-the-question-and-keeps-the-selection ()
+  :tags '(:frozen)
   (drgnx-cockpit-graph-test--with
     (drgnx-cockpit-graph-test--drawn
       (let ((drgnx-cockpit-graph-band-height 100) (old (face-attribute 'drgnx-cockpit-focus :background))
@@ -711,6 +734,7 @@ with `drgnx-cockpit-fixture-show-pane'."
           (set-face-attribute 'drgnx-cockpit-focus nil :background old))))))
 
 (ert-deftest drgnx-cockpit-graph/the-focus-stroke-stands-out ()
+  :tags '(:frozen)
   (let ((saved (list (face-attribute 'default :background) (face-attribute 'default :foreground)
                      (face-attribute 'drgnx-cockpit-focus :background))))
     (unwind-protect

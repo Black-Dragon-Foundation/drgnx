@@ -97,6 +97,7 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
   (drgnx-cockpit-edits--notified (current-buffer) (list nil (or action 'changed) (expand-file-name file dir))))
 
 (ert-deftest drgnx-cockpit-edits/lists-changed-files-with-counts ()
+  :tags '(:frozen)
   (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
     (should (eq buffer-undo-list t))                                  ; a generated buffer: no undo
     (should (equal drgnx-cockpit-edits--files '("README" "new.txt")))
@@ -145,6 +146,7 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
         (should (null drgnx-cockpit-edits--files))))))
 
 (ert-deftest drgnx-cockpit-edits/a-burst-of-writes-is-one-redraw ()
+  :tags '(:frozen)
   ;; virtual time: the 50 writes take 0.9 virtual seconds, whatever the machine does with them
   (drgnx-test-with-clock ()
     (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
@@ -184,6 +186,7 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
           (should (equal (buffer-substring-no-properties (line-beginning-position) (point)) "+4")))))))
 
 (ert-deftest drgnx-cockpit-edits/a-listing-less-than-a-millisecond-early-is-due ()
+  :tags '(:frozen)
   ;; COCKPIT-BURST-LOAD-1: a turn timer for a wait of microseconds never moves the virtual clock (a delay that short
   ;; is lost in the jitter of when the timer was stamped), so the tick re-armed it 10000 times.  Such a wait is due.
   (drgnx-test-with-clock ()
@@ -197,6 +200,7 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
       (drgnx-cockpit-edits-test--settle e))))
 
 (ert-deftest drgnx-cockpit-edits/accept-marks-and-a-change-unmarks ()
+  :tags '(:frozen)
   (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
     (let ((ext drgnx-cockpit-edits-test--ext))
       (drgnx-cockpit-edits-test--goto "README" "+more")
@@ -222,6 +226,7 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
       (should-error (drgnx-cockpit-edits-accept-file "new.txt") :type 'user-error))))
 
 (ert-deftest drgnx-cockpit-edits/accept-never-merges ()
+  :tags '(:frozen)
   (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
     (let ((heads (list (drgnx-cockpit-fixture-git repo "rev-parse" "main") (drgnx-cockpit-fixture-git wt-a "rev-parse" "HEAD")))
           (status (drgnx-cockpit-fixture-git wt-a "status" "--porcelain")))
@@ -241,6 +246,7 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
       (should (equal (drgnx-cockpit-fixture-git wt-a "show" ":README") "readme")))))
 
 (ert-deftest drgnx-cockpit-edits/comment-queues-a-message ()
+  :tags '(:frozen)
   (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
     (let ((ext drgnx-cockpit-edits-test--ext))
       (cl-letf (((symbol-function 'read-string) (lambda (prompt &rest _) (should (string-match-p "README:2" prompt)) "  name it better "))
@@ -269,6 +275,7 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
         (should (= 3 notified))))))
 
 (ert-deftest drgnx-cockpit-edits/the-pane-is-never-cloned ()
+  :tags '(:frozen)
   ;; a clone would share the pane's timers and watches: killing it would stop the original's updates
   (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
     (let ((n (length (drgnx-test-buffer-list))))
@@ -283,6 +290,7 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
   (drgnx-state-sync) (drgnx-state--deliver-idle))
 
 (ert-deftest drgnx-cockpit-edits/a-hidden-pane-keeps-no-timer ()
+  :tags '(:frozen)
   ;; shown, the pane looks at the store every few seconds; hidden (another buffer in its window), it keeps no timer
   (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
     (should (drgnx-timer-active-p (cons 'cockpit-edits-check e)))
@@ -292,6 +300,7 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
     (should-not (seq-find (lambda (p) (eq (nth 1 p) e)) (drgnx-timer-pending)))))
 
 (ert-deftest drgnx-cockpit-edits/hidden-edits-keep-no-watches ()
+  :tags '(:frozen)
   ;; M12f-C6-1: a hidden pane's file watches go; they come back when it shows
   (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
     (should (gethash wt-a drgnx-cockpit-edits--watches))
@@ -306,6 +315,7 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
     (should (= (hash-table-count watches) (hash-table-count drgnx-cockpit-edits--watches)))))
 
 (ert-deftest drgnx-cockpit-edits/following-walks-only-the-panes ()
+  :tags '(:frozen)
   ;; ST-T24-1: a window change looks at the edits panes the module keeps, never at every buffer
   (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
     (should (memq e drgnx-cockpit-edits--buffers))
@@ -317,6 +327,7 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
     (should (zerop (hash-table-count watches)))))
 
 (ert-deftest drgnx-cockpit-edits/showing-starts-it-again ()
+  :tags '(:frozen)
   ;; hidden while the agent writes a new file and reports it (no watch, no check sees it): shown again as its pane,
   ;; its check runs, the changes are listed again (the new file shows) and their folders watched again
   (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
@@ -337,6 +348,7 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
     (should (zerop (hash-table-count watches)))))
 
 (ert-deftest drgnx-cockpit-edits/a-patch-keeps-each-window-on-its-hunk ()
+  :tags '(:frozen)
   ;; two windows on the pane, one in README's hunk, one in new.txt's; README's grows above new.txt's section: each
   ;; window stays in its hunk at the same offset, and no window is added, closed or selected
   (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
@@ -363,6 +375,7 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
                    (+ 2 (length "@@ -1 +1,2 @@\n readme\n"))))))))
 
 (ert-deftest drgnx-cockpit-edits/a-listing-waiting-for-its-turn-never-holds-a-touch-back ()
+  :tags '(:frozen)
   ;; the turn has a timer of its own, so a tick asked for meanwhile is not behind it; a second ask moves the turn
   (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
     (let ((tick (cons 'cockpit-edits-tick e)) (turn (cons 'cockpit-edits-turn e)))
@@ -377,6 +390,7 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
       (drgnx-timer-cancel tick))))
 
 (ert-deftest drgnx-cockpit-edits/diff-commands-by-name-and-g-change-no-file ()
+  :tags '(:frozen)
   (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
     (let ((status (drgnx-cockpit-fixture-git wt-a "status" "--porcelain"))
           (readme (lambda () (with-temp-buffer (insert-file-contents (concat wt-a "README")) (buffer-string)))))
@@ -401,6 +415,7 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
       (should (equal status (drgnx-cockpit-fixture-git wt-a "status" "--porcelain"))))))
 
 (ert-deftest drgnx-cockpit-edits/the-graph-opens-an-agents-edits ()
+  :tags '(:frozen)
   (drgnx-cockpit-fixture-with
     (let ((drgnx-cockpit-graph-current-filter nil)
           (drgnx-cockpit--silent nil) (drgnx-cockpit--silent-n 0) (drgnx-cockpit--silent-at (float-time))
@@ -423,6 +438,7 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
             (kill-buffer g)))))))
 
 (ert-deftest drgnx-cockpit-edits/keys-in-every-profile ()
+  :tags '(:frozen)
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil) (kinds nil))
     (cl-letf (((symbol-function 'drgnx-pane-define-kind) (lambda (kind &rest props) (push (cons kind props) kinds))))
       (drgnx-cockpit-fixture-after-setup
@@ -639,6 +655,7 @@ NOTIFIED counts the hub told; (INBOX) is s-1's messages; (SLURP FILE) a file's t
     (should-not (drgnx-coord-events :agent "s-1" :kinds '("revert")))))
 
 (ert-deftest drgnx-cockpit-edits/the-pane-is-no-diff-or-patch-buffer ()
+  :tags '(:frozen)
   (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
     (let ((readme (lambda () (with-temp-buffer (insert-file-contents (concat wt-a "README")) (buffer-string))))
           (agent-path-p (lambda (x) (and (stringp x) (string-prefix-p (file-truename wt-a) (file-truename x))))))
@@ -706,6 +723,7 @@ NOTIFIED counts the hub told; (INBOX) is s-1's messages; (SLURP FILE) a file's t
       (should-error (drgnx-cockpit-edits-previous-hunk) :type 'user-error))))
 
 (ert-deftest drgnx-cockpit-edits/a-silent-worktree-takes-no-messages-and-shows-first-writes ()
+  :tags '(:frozen)
   (drgnx-cockpit-edits-test--with (concat "silent:" (directory-file-name wt-b))
     ;; nobody reads messages there: said, nothing queued
     (should-error (drgnx-cockpit-edits-comment "b.txt" 1 "hi") :type 'user-error)

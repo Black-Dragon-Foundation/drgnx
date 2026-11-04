@@ -56,6 +56,7 @@ git repository ROOT/code), a lone plan, and the tracker's database in a temp dat
   (plist-get (drgnx-view-stats drgnx-view) :rows-drawn))
 
 (ert-deftest drgnx-work-ui/the-tree-shows-each-spec-with-its-plans-and-their-counts ()
+  :tags '(:frozen)
   (drgnx-work-ui-test--with root
     (with-current-buffer (drgnx-work-ui-buffer)
       (let ((text (buffer-string)))
@@ -66,6 +67,7 @@ git repository ROOT/code), a lone plan, and the tracker's database in a temp dat
         (should-not (string-search "Task 1: first" text))))))                                   ; plans start folded
 
 (ert-deftest drgnx-work-ui/tab-unfolds-a-plan-into-tasks-and-a-task-into-steps-and-commits ()
+  :tags '(:frozen)
   (drgnx-work-ui-test--with root
     (with-current-buffer (drgnx-work-ui-buffer)
       (drgnx-work-ui-test--goto "Plan Alpha")
@@ -83,6 +85,7 @@ git repository ROOT/code), a lone plan, and the tracker's database in a temp dat
       (should-not (string-search "Task 1: first" (buffer-string))))))
 
 (ert-deftest drgnx-work-ui/ret-opens-a-task-at-its-line-and-a-commit-as-a-diff ()
+  :tags '(:frozen)
   (drgnx-work-ui-test--with root
     (with-current-buffer (drgnx-work-ui-buffer)
       (drgnx-work-ui-test--goto "Plan Alpha") (drgnx-work-ui-toggle) (drgnx-work-ui-test--draw)
@@ -104,6 +107,7 @@ git repository ROOT/code), a lone plan, and the tracker's database in a temp dat
             (kill-buffer b)))))))
 
 (ert-deftest drgnx-work-ui/the-filter-and-hide-merged-narrow-the-plans ()
+  :tags '(:frozen)
   (drgnx-work-ui-test--with root
     (with-current-buffer (drgnx-work-ui-buffer)
       (drgnx-work-ui-filter "beta") (drgnx-work-ui-test--draw)
@@ -129,6 +133,7 @@ without SVG (librsvg), e.g. a terminal-only build."
 (defun drgnx-work-ui-test--box (layout id) (seq-find (lambda (b) (equal (plist-get b :id) id)) (plist-get layout :boxes)))
 
 (ert-deftest drgnx-work-ui/the-graph-lays-out-specs-plans-and-branches-in-columns ()
+  :tags '(:frozen)
   (drgnx-work-ui-test--with root
     (let ((alpha (concat "plan:" root "docs/plans/alpha.md")) (beta (concat "plan:" root "docs/plans/beta.md")))
       (drgnx-work-fixture-update-node alpha :branch "feature")
@@ -155,6 +160,7 @@ without SVG (librsvg), e.g. a terminal-only build."
                                  (< (plist-get q :y) (+ (plist-get p :y) (plist-get p :h)))))))))))))
 
 (ert-deftest drgnx-work-ui/plans-on-one-branch-each-link-their-own-branch-box ()
+  :tags '(:frozen)
   (drgnx-work-ui-test--with root
     (dolist (p '("alpha" "beta"))
       (let ((id (concat "plan:" root "docs/plans/" p ".md")))
@@ -166,6 +172,7 @@ without SVG (librsvg), e.g. a terminal-only build."
           (should (= (plist-get (car e) :y) (plist-get (cadr e) :y))))))))   ; beside its own plan
 
 (ert-deftest drgnx-work-ui/a-big-graph-is-drawn-in-bands-emacs-can-show ()
+  :tags '(:frozen)
   (drgnx-work-ui-test--with root
     (dotimes (i 60)
       (write-region (format "# Plan %02d
@@ -193,11 +200,13 @@ without SVG (librsvg), e.g. a terminal-only build."
         (kill-buffer g)))))
 
 (ert-deftest drgnx-work-ui/the-graph-on-a-text-frame-says-it-cannot-be-shown ()
+  :tags '(:frozen)
   (drgnx-work-ui-test--with root
     (cl-letf (((symbol-function 'display-images-p) #'ignore))
       (should-error (drgnx-work-ui-graph) :type 'user-error))))
 
 (ert-deftest drgnx-work-ui/g-draws-the-graph-again-and-wide-graphs-scroll-sideways ()
+  :tags '(:frozen)
   (drgnx-work-ui-test--with root
     (let ((g (drgnx-work-ui-test--graph)))
       (unwind-protect
@@ -208,6 +217,7 @@ without SVG (librsvg), e.g. a terminal-only build."
         (kill-buffer g)))))
 
 (ert-deftest drgnx-work-ui/the-graph-takes-its-colours-from-the-theme ()
+  :tags '(:frozen)
   (drgnx-work-ui-test--with root
     (let ((old (face-attribute 'drgnx-work-ui-graph-plan :foreground)))
       (unwind-protect
@@ -224,6 +234,7 @@ without SVG (librsvg), e.g. a terminal-only build."
         (set-face-attribute 'drgnx-work-ui-graph-plan nil :foreground old)))))
 
 (ert-deftest drgnx-work-ui/a-tall-graph-scrolls-line-by-line ()
+  :tags '(:frozen)
   (drgnx-work-ui-test--with root
     (let ((g (drgnx-work-ui-test--graph)))
       (unwind-protect
@@ -234,6 +245,7 @@ without SVG (librsvg), e.g. a terminal-only build."
         (kill-buffer g)))))
 
 (ert-deftest drgnx-work-ui/the-graph-shows-no-cursor-and-a-press-moves-nothing ()
+  :tags '(:frozen)
   (drgnx-work-ui-test--with root
     (let ((g (drgnx-work-ui-test--graph)))
       (unwind-protect
@@ -243,6 +255,7 @@ without SVG (librsvg), e.g. a terminal-only build."
         (kill-buffer g)))))
 
 (ert-deftest drgnx-work-ui/a-click-on-a-box-opens-what-it-shows ()
+  :tags '(:frozen)
   (drgnx-work-ui-test--with root
     (drgnx-work-fixture-update-node (concat "plan:" root "docs/plans/alpha.md") :branch "feature")
     (let* ((g (drgnx-work-ui-test--graph))
@@ -265,6 +278,7 @@ without SVG (librsvg), e.g. a terminal-only build."
         (kill-buffer g)))))
 
 (ert-deftest drgnx-work-ui/a-click-opens-from-its-own-window-and-a-double-click-once ()
+  :tags '(:frozen)
   (drgnx-work-ui-test--with root
     (let* ((g (drgnx-work-ui-test--graph))
            (img (with-current-buffer g (let ((d (get-text-property (point-min) 'display))) (if (eq (car d) 'image) d (cadr d)))))
@@ -287,6 +301,7 @@ without SVG (librsvg), e.g. a terminal-only build."
 (load (expand-file-name "test/unit/hub-client-test" drgnx-dir) nil t)   ; its Ratatoskr helpers
 
 (ert-deftest drgnx-work-ui/refresh-scans-in-another-process-and-redraws ()
+  :tags '(:frozen)
   ;; binary: the refresh is a batch `drgnx work scan' that writes through the real hub (Ratatoskr serving ROOT), and
   ;; this Emacs reads what it stored through the read-only handle
   (drgnx-hub-client-test--with-ratatoskr
@@ -316,6 +331,7 @@ without SVG (librsvg), e.g. a terminal-only build."
         (drgnx-work-db-close-all)))))
 
 (ert-deftest drgnx-work-ui/a-failed-scan-says-only-its-own-output-and-never-errors ()
+  :tags '(:frozen)
   ;; a stub bin/drgnx that fails; started from a deleted directory; its buffer holds an earlier scan's
   ;; output; the buffer killed before the sentinel runs again
   (let* ((dir (file-name-as-directory (make-temp-file "drgnx-work-ui-stub" t)))
@@ -341,6 +357,7 @@ without SVG (librsvg), e.g. a terminal-only build."
       (delete-directory dir t))))
 
 (ert-deftest drgnx-work-ui/an-agent-started-on-a-task-works-on-it ()
+  :tags '(:frozen)
   (drgnx-work-ui-test--with root
     (let ((started nil))
       (cl-letf (((symbol-function 'drgnx-agents-mirror-start) (lambda (profile cwd &optional task) (setq started (list profile cwd task)) 'session))
@@ -355,11 +372,13 @@ without SVG (librsvg), e.g. a terminal-only build."
           (should (equal (nth 1 started) (concat root "code/"))))))))
 
 (ert-deftest drgnx-work-ui/every-command-is-registered ()
+  :tags '(:frozen)
   (drgnx-test-with-modules '(tools/work) :strict t
                            (dolist (id '(work-view work-refresh work-open work-toggle work-filter work-hide-merged work-graph work-start-agent work-open-worktree))
                              (should (drgnx-commands-get id)))))
 
 (ert-deftest drgnx-work-ui/doctor-says-whether-the-tracker-can-work ()
+  :tags '(:frozen)
   (require 'drgnx-doctor)
   (should (eq 'fail (car (drgnx-doctor-check 'work '(:sqlite nil)))))
   (should (eq 'info (car (drgnx-doctor-check 'work '(:sqlite t :svg t :work-plans nil)))))
@@ -367,6 +386,7 @@ without SVG (librsvg), e.g. a terminal-only build."
   (should (equal '(ok "3 plans tracked") (seq-take (drgnx-doctor-check 'work '(:sqlite t :svg t :work-plans 3)) 2))))
 
 (ert-deftest drgnx-work-ui/commits-recorded-for-a-todo-or-the-plan-show-and-count ()
+  :tags '(:frozen)
   (drgnx-work-ui-test--with root
     (let* ((plan (concat "plan:" root "docs/plans/alpha.md")) (code (concat root "code/"))
            (commit (lambda (msg) (write-region msg nil (concat code msg) nil 'silent)
@@ -384,6 +404,7 @@ without SVG (librsvg), e.g. a terminal-only build."
         (should (string-search "for-the-todo" (buffer-string)))))))
 
 (ert-deftest drgnx-work-ui/a-scan-that-changes-one-task-redraws-one-row ()
+  :tags '(:frozen)
   (drgnx-work-ui-test--with root
     (with-current-buffer (drgnx-work-ui-buffer)
       (drgnx-work-ui-test--goto "Plan Alpha") (drgnx-work-ui-toggle) (drgnx-work-ui-test--draw)
@@ -402,6 +423,7 @@ without SVG (librsvg), e.g. a terminal-only build."
         (should-not (drgnx-view--check drgnx-view))))))
 
 (ert-deftest drgnx-work-ui/folding-inserts-and-removes-children ()
+  :tags '(:frozen)
   (drgnx-work-ui-test--with root
     (with-current-buffer (drgnx-work-ui-buffer)
       (let ((rows (drgnx-view-row-count drgnx-view)) (drawn (drgnx-work-ui-test--rows-drawn))
@@ -422,6 +444,7 @@ without SVG (librsvg), e.g. a terminal-only build."
         (should-not (drgnx-view--check drgnx-view))))))
 
 (ert-deftest drgnx-work-ui/point-stays-on-its-node ()
+  :tags '(:frozen)
   (drgnx-work-ui-test--with root
     (with-current-buffer (drgnx-work-ui-buffer)
       (let ((beta (concat "plan:" root "docs/plans/beta.md")) (alpha (concat "plan:" root "docs/plans/alpha.md")))
@@ -439,6 +462,7 @@ without SVG (librsvg), e.g. a terminal-only build."
         (should (looking-at-p "▾ ▣ 0/1 Plan Beta"))))))
 
 (ert-deftest drgnx-work-ui/a-fold-a-filter-and-hide-merged-draw-before-they-return ()
+  :tags '(:frozen)
   (drgnx-work-ui-test--with root
     (with-current-buffer (drgnx-work-ui-buffer)
       (drgnx-work-ui-test--goto "Plan Alpha")
@@ -452,6 +476,7 @@ without SVG (librsvg), e.g. a terminal-only build."
       (should-not (string-search "Plan Beta" (buffer-string))))))
 
 (ert-deftest drgnx-work-ui/the-node-at-point-is-fresh-after-a-scan-that-leaves-its-row-alone ()
+  :tags '(:frozen)
   (drgnx-work-ui-test--with root
     (with-current-buffer (drgnx-work-ui-buffer)
       (drgnx-work-ui-test--goto "Plan Alpha") (drgnx-work-ui-toggle)

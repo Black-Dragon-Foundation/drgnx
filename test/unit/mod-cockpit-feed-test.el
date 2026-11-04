@@ -93,6 +93,7 @@ buffers are killed after: they owned their hooks and their timers."
      changes))
 
 (ert-deftest drgnx-cockpit-feed/happened-lines-and-transcript-link ()
+  :tags '(:frozen)
   (drgnx-cockpit-feed-test--with
     (let ((b (drgnx-cockpit-feed-happened-buffer "s-1")) (opened nil) (transcripts nil)
           (mark (alist-get 'waiting (drgnx-cockpit-graph--glyph-table))))
@@ -165,6 +166,7 @@ buffers are killed after: they owned their hooks and their timers."
                      '("carry on"))))))
 
 (ert-deftest drgnx-cockpit-feed/a-silent-worktree-says-how-to-make-it-report ()
+  :tags '(:frozen)
   (drgnx-cockpit-feed-test--with
     (should (eq (drgnx-cockpit-feed--footer-key "silent:/work/wt-b") 'silent))
     (let ((text (drgnx-cockpit-feed--footer-text "silent:/work/wt-b" 'silent)))
@@ -177,6 +179,7 @@ buffers are killed after: they owned their hooks and their timers."
         (should-not (string-match-p "[^[:ascii:]]" text))))))
 
 (ert-deftest drgnx-cockpit-feed/answer-routes-by-kind-of-agent ()
+  :tags '(:frozen)
   (drgnx-cockpit-feed-test--with
     (drgnx-cockpit-fixture-send :sender "ext:claude-code:42" :recipient "user" :text "[escalation] rename it?" :question t)
     (drgnx-cockpit-fixture-send :sender "s-2" :recipient "user" :text "[escalation] tabs or spaces?" :question t)
@@ -223,6 +226,7 @@ buffers are killed after: they owned their hooks and their timers."
         (should (= events (length (drgnx-coord-events))))))))
 
 (ert-deftest drgnx-cockpit-feed/answers-never-interrupt ()
+  :tags '(:frozen)
   (drgnx-cockpit-feed-test--with
     (progn
       (cl-letf (((symbol-function 'drgnx-agents-steer) (lambda (&rest _) (ert-fail "a queued answer steered"))))
@@ -239,6 +243,7 @@ buffers are killed after: they owned their hooks and their timers."
           (should-not (equal (plist-get (cadr c) :op) "cancel")))))))
 
 (ert-deftest drgnx-cockpit-feed/a-second-answer-waits-for-the-first ()
+  :tags '(:frozen)
   (drgnx-cockpit-feed-test--with
     (let ((pending nil))
       ;; a hub that has not answered yet
@@ -288,6 +293,7 @@ setups define them."
   (seq-find (lambda (i) (equal (plist-get i :id) id)) (drgnx-needs-you-items)))
 
 (ert-deftest drgnx-cockpit-feed/the-count-moves-when-another-process-asks ()
+  :tags '(:frozen)
   (drgnx-cockpit-feed-test--with-notices
     (drgnx-cockpit-feed-note-questions)
     (let ((n0 (drgnx-needs-you-count)))
@@ -306,6 +312,7 @@ setups define them."
       (should (= (drgnx-needs-you-count) (+ n0 2))))))
 
 (ert-deftest drgnx-cockpit-feed/questions-are-the-questions-set ()
+  :tags '(:frozen)
   (drgnx-cockpit-feed-test--with-notices
     (drgnx-cockpit-fixture-send :sender "s-2" :recipient "user" :text "[escalation] tabs or spaces?" :question t)
     (drgnx-cockpit-feed-note-questions)
@@ -323,6 +330,7 @@ setups define them."
       (should (< (drgnx-needs-you-count) n)))))
 
 (ert-deftest drgnx-cockpit-feed/an-ask-card-counts-once ()
+  :tags '(:frozen)
   ;; the jobs set and the questions set both hold it: `drgnx-needs-you-count' counts it once
   (drgnx-cockpit-feed-test--with-notices
     (drgnx-cockpit-feed-note-questions)
@@ -337,6 +345,7 @@ setups define them."
       (should (= 1 (seq-count (lambda (i) (equal (plist-get i :id) (cons 'card cid))) (drgnx-needs-you-items)))))))
 
 (ert-deftest drgnx-cockpit-feed/a-job-message-question-counts-once ()
+  :tags '(:frozen)
   (drgnx-cockpit-feed-test--with-notices
     (drgnx-cockpit-feed-note-questions)
     (let* ((n0 (drgnx-needs-you-count))
@@ -348,6 +357,7 @@ setups define them."
       (should (drgnx-cockpit-feed-test--item (cons 'message mid))))))
 
 (ert-deftest drgnx-cockpit-feed/heads-show-the-one-count ()
+  :tags '(:frozen)
   ;; the timeline's head reads the model's count, which holds more than the store's questions
   (drgnx-cockpit-feed-test--with-notices
     (drgnx-notice-define-source 'extra :title "Extra" :command 'cockpit-answer)
@@ -364,6 +374,7 @@ setups define them."
                                 (drgnx-cockpit-feed-test--line "waiting on you")))))))
 
 (ert-deftest drgnx-cockpit-feed/the-status-bar-is-not-called ()
+  :tags '(:frozen)
   (drgnx-cockpit-feed-test--with-notices
     (cl-letf (((symbol-function 'drgnx-statusbar-refresh) (lambda (&rest _) (ert-fail "the cockpit called the status bar"))))
       (drgnx-cockpit-fixture-send :sender "s-2" :recipient "user" :text "[escalation] tabs?" :question t)
@@ -377,6 +388,7 @@ setups define them."
         (should-not (search-forward "drgnx-statusbar" nil t))))))
 
 (ert-deftest drgnx-cockpit-feed/timeline-chips-in-time-order ()
+  :tags '(:frozen)
   (drgnx-cockpit-feed-test--with
     (let ((b (drgnx-cockpit-timeline-buffer)) (opened nil)
           (mark (alist-get 'waiting (drgnx-cockpit-graph--glyph-table))))
@@ -426,6 +438,7 @@ setups define them."
           (should (< (string-search "decision #1" (buffer-string)) (string-search "3/4 ⚠" (buffer-string)))))))))
 
 (ert-deftest drgnx-cockpit-feed/a-held-answer-is-not-said-to-be-queued ()
+  :tags '(:frozen)
   (drgnx-cockpit-feed-test--with
     (drgnx-cockpit-fixture-send :sender "ext:claude-code:42" :recipient "user" :text "[escalation] rename it?" :question t)
     (let ((q (drgnx-cockpit-feed-test--question (lambda (q) (equal (plist-get q :agent) "ext:claude-code:42"))))
@@ -436,6 +449,7 @@ setups define them."
       (should (drgnx-cockpit-feed-test--open-p (plist-get q :id))))))
 
 (ert-deftest drgnx-cockpit-feed/waiting-chips-stay-in-their-row ()
+  :tags '(:frozen)
   (drgnx-cockpit-feed-test--with
     (let ((b (drgnx-cockpit-timeline-buffer))
           (mark (alist-get 'waiting (drgnx-cockpit-graph--glyph-table))))
@@ -475,6 +489,7 @@ setups define them."
             (should (eq (get-text-property (match-beginning 0) 'face s1) 'drgnx-cockpit-waiting))))))))
 
 (ert-deftest drgnx-cockpit-feed/an-old-open-question-stays-in-the-timeline ()
+  :tags '(:frozen)
   (drgnx-cockpit-feed-test--with
     (let ((mark (alist-get 'waiting (drgnx-cockpit-graph--glyph-table))))
       ;; 310 newer events of another agent, and a test that only failed: s-1's question is outside the timeline's
@@ -497,6 +512,7 @@ setups define them."
           (should-not (string-search "s-1 asks you" (drgnx-cockpit-feed-test--line "claude · jx#2"))))))))
 
 (ert-deftest drgnx-cockpit-feed/a-question-shows-in-all-three-places ()
+  :tags '(:frozen)
   (drgnx-cockpit-feed-test--with-notices
     (let* ((b (drgnx-cockpit-timeline-buffer))
            (mark (alist-get 'waiting (drgnx-cockpit-graph--glyph-table)))
@@ -557,6 +573,7 @@ setups define them."
       (should (= (drgnx-needs-you-count) (1- n0))))))            ; s-1's escalation is answered
 
 (ert-deftest drgnx-cockpit-feed/terminals-get-the-same-text-in-ascii ()
+  :tags '(:frozen)
   (drgnx-cockpit-feed-test--with
     (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) #'always))
       (let ((h (drgnx-cockpit-feed-happened-buffer "s-1")) (tl (drgnx-cockpit-timeline-buffer)))
@@ -572,6 +589,7 @@ setups define them."
           (should-not (string-match-p "[^[:ascii:]]" (buffer-string))))))))
 
 (ert-deftest drgnx-cockpit-feed/buffers-own-their-hooks ()
+  :tags '(:frozen)
   (drgnx-cockpit-feed-test--with
     (drgnx-cockpit-timeline-buffer)
     (should (memq #'drgnx-cockpit-feed--hub-event drgnx-hub-event-functions))
@@ -585,6 +603,7 @@ setups define them."
     (should (memq #'drgnx-cockpit-feed--hub-event drgnx-hub-event-functions))))
 
 (ert-deftest drgnx-cockpit-feed/a-hidden-pane-keeps-no-timer ()
+  :tags '(:frozen)
   ;; shown (the store's `pane-shown'), a feed pane looks at the store every few seconds; hidden, it keeps no timer
   (drgnx-cockpit-feed-test--with
     (let* ((b (drgnx-cockpit-timeline-buffer)) (w (drgnx-cockpit-fixture-show-pane 'timeline b 'bottom)))
@@ -600,6 +619,7 @@ setups define them."
       (should-not (seq-find (lambda (p) (eq (nth 1 p) b)) (drgnx-timer-pending))))))
 
 (ert-deftest drgnx-cockpit-feed/showing-starts-it-again ()
+  :tags '(:frozen)
   ;; shown again: its check runs again and what came while it was hidden is drawn; one agent's What happened in place
   ;; of another's in the same pane (no pane event) follows too
   (drgnx-cockpit-feed-test--with
@@ -623,6 +643,7 @@ setups define them."
       (drgnx-cockpit-fixture-hide-pane w))))
 
 (ert-deftest drgnx-cockpit-feed/a-hidden-pane-draws-nothing ()
+  :tags '(:frozen)
   ;; hidden: the draw on its way finds it hidden (a stale skip) and draws no row
   (drgnx-cockpit-feed-test--with
     (let* ((b (drgnx-cockpit-timeline-buffer)) (w (drgnx-cockpit-fixture-show-pane 'timeline b 'bottom))
@@ -637,6 +658,7 @@ setups define them."
         (should (= drawn (plist-get (drgnx-view-stats view) :rows-drawn)))))))
 
 (ert-deftest drgnx-cockpit-feed/a-new-event-draws-one-row ()
+  :tags '(:frozen)
   ;; a new event of one agent: What happened draws its one new line, the timeline that agent's row
   (drgnx-cockpit-feed-test--with
     (let* ((h (drgnx-cockpit-feed-happened-buffer "s-1")) (tl (drgnx-cockpit-timeline-buffer))
@@ -657,6 +679,7 @@ setups define them."
         (with-current-buffer tl (should (string-search "1 file" (drgnx-cockpit-feed-test--line "claude · jx#2"))))))))
 
 (ert-deftest drgnx-cockpit-feed/commands-and-keys-in-every-profile ()
+  :tags '(:frozen)
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil) (kinds nil))
     (cl-letf (((symbol-function 'drgnx-pane-define-kind) (lambda (kind &rest props) (push (cons kind props) kinds))))
       (drgnx-cockpit-fixture-after-setup
@@ -684,6 +707,7 @@ setups define them."
         (should (string-search row text))))))
 
 (ert-deftest drgnx-cockpit-feed/loads-alone-in-a-fresh-emacs ()
+  :tags '(:frozen)
   ;; the modules directory loads cockpit-feed before drgnx-cockpit.el (alphabetical): it must not need the graph's keymap
   ;; or options then (its views are defined at load: core and the workbench are on the path, as when modules load)
   (let* ((emacs (expand-file-name invocation-name invocation-directory))

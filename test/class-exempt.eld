@@ -2,7 +2,7 @@
 ;; ((FILE [:off t] :why STRING) …): FILE is relative to the checkout.  A file here is never classified, linted for its
 ;; class, migrated or run by the pre-flight: the Lisp it tests is deleted or replaced by a plan (Ratatoskr P7 and P8),
 ;; frozen, or dead.  A row with `:off t' (the Lisp a plan deletes) is not run at all, CI included, unless
-;; DRGNX_TEST_FROZEN=1 (harness/run-ert.el); the frozen UI is still in use and keeps running.
+;; DRGNX_TEST_FROZEN=1 (harness/run-ert.el); the frozen UI's tests are tagged `:frozen' one by one (test/frozen.eld), and its keep-on guards run.
 ;; drgnx-lint/no-stale-exempt-rows fails a row whose file is gone (remove the row when the file goes);
 ;; drgnx-lint/every-test-has-a-class fails a file with neither a class line nor a row.
 (

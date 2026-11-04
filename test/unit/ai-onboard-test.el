@@ -65,6 +65,7 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
       (should (string-match-p "no provider" (cadr r))))))
 
 (ert-deftest drgnx-onboard/the-ai-step-checks-chats-module-when-providers-work ()
+  :tags '(:frozen)
   ;; a provider that answers is not Chat yet: the ide preset leaves extra/llm (gptel) off
   (drgnx-ai-onboard-test--with
     (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled '(extra/llm))))
@@ -635,6 +636,7 @@ job stopped at the end."
                                 (cadr (drgnx-onboard--ai-setup 'ollama '(:interactive nil)))))))))
 
 (ert-deftest drgnx-onboard/chat-needs-its-module ()
+  :tags '(:frozen)
   ;; the ide preset leaves extra/llm (gptel) off: a chat model that answers is not Chat yet.  Binary: OpenRouter is
   ;; asked through the hub, which holds the key
   (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--openai-answers
@@ -659,6 +661,7 @@ job stopped at the end."
         (delete-process mock)))))
 
 (ert-deftest drgnx-onboard/chat-turned-on-installs-its-package ()
+  :tags '(:frozen)
   ;; Turning Chat on installs gptel (the Look step's drgnx sync job) when drgnx's packages lack it; installed but
   ;; not loaded in this Emacs, it is on from the next start.  Whether it is installed: drgnx's elpa, not load-path.
   (let* ((root (file-name-as-directory (make-temp-file "drgnx-chat" t)))

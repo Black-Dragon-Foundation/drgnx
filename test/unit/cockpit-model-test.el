@@ -16,6 +16,7 @@
   (seq-find (lambda (a) (equal (plist-get a :id) id)) (plist-get model :agents)))
 
 (ert-deftest drgnx-cockpit-model/spec-plan-task-agent-chain ()
+  :tags '(:frozen)
   (drgnx-cockpit-fixture-with
     (let* ((m (drgnx-cockpit-model :sessions sessions))
            (s (concat "spec:" spec)) (p (concat "plan:" plan)) (t2 (format "task:%s#2" plan)) (t5 (format "task:%s#5" plan)))
@@ -55,6 +56,7 @@
         (should (drgnx-cockpit-model-test--node m (plist-get e :to)))))))
 
 (ert-deftest drgnx-cockpit-model/needs-and-blocks-from-job-deps ()
+  :tags '(:frozen)
   (drgnx-cockpit-fixture-with
     (let ((t2 (format "task:%s#2" plan)) (t3 (format "task:%s#3" plan)) (t4 (format "task:%s#4" plan)))
       (let ((m (drgnx-cockpit-model :sessions sessions)))
@@ -71,6 +73,7 @@
         (should (equal (plist-get (drgnx-cockpit-model-test--node m t3) :state) "ready"))))))
 
 (ert-deftest drgnx-cockpit-model/plan-only-tasks-are-read-only ()
+  :tags '(:frozen)
   (drgnx-cockpit-fixture-with
     (let ((m (drgnx-cockpit-model :sessions sessions)))
       (dolist (n '(1 5 6))
@@ -98,6 +101,7 @@
         (should (equal (file-attribute-modification-time (file-attributes other)) (file-attribute-modification-time attrs)))))))
 
 (ert-deftest drgnx-cockpit-model/the-board-is-one-more-source ()
+  :tags '(:frozen)
   (drgnx-cockpit-fixture-with
     (let ((read nil))
       (cl-letf* ((orig (symbol-function 'insert-file-contents))
@@ -115,6 +119,7 @@
       (should (equal drgnx-projects-board-file board)))))
 
 (ert-deftest drgnx-cockpit-model/waiting-from-questions-and-cards ()
+  :tags '(:frozen)
   (drgnx-cockpit-fixture-with
     (let* ((m (drgnx-cockpit-model :sessions sessions))
            (t3 (format "task:%s#3" plan)) (t4 (format "task:%s#4" plan)))
@@ -142,6 +147,7 @@
         (should-not (plist-get m :questions))))))
 
 (ert-deftest drgnx-cockpit-model/filter-keeps-ancestors ()
+  :tags '(:frozen)
   (drgnx-cockpit-fixture-with
     (let* ((m (drgnx-cockpit-model :sessions sessions))
            (s (concat "spec:" spec)) (p (concat "plan:" plan)) (t2 (format "task:%s#2" plan)) (t3 (format "task:%s#3" plan))
@@ -172,6 +178,7 @@
         (should (drgnx-cockpit-model-test--edge-p m "pr:1" p 'implements))))))
 
 (ert-deftest drgnx-cockpit-model/happened-is-one-line-per-event ()
+  :tags '(:frozen)
   ;; the batch terminal is not UTF-8 in a C locale (CI): the glyphs below are the Unicode ones
   (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (&optional _f) nil)))
     (drgnx-cockpit-fixture-with
@@ -209,6 +216,7 @@
         (should (equal (mapcar (lambda (c) (plist-get c :label)) (drgnx-cockpit-timeline :since last-id)) '("T2 ✓")))))))
 
 (ert-deftest drgnx-cockpit-model/edit-sources-per-kind-of-agent ()
+  :tags '(:frozen)
   (drgnx-cockpit-fixture-with
     ;; a job's agent: its task worktree, the job branch where it forked
     (let ((src (drgnx-cockpit-edit-source "s-1" sessions)))
@@ -249,6 +257,7 @@
     (should-not (drgnx-cockpit-edit-source "nobody"))))
 
 (ert-deftest drgnx-cockpit-model/silent-worktrees-are-found ()
+  :tags '(:frozen)
   (drgnx-cockpit-fixture-with
     (let (got)
       (drgnx-cockpit-silent-worktrees (list repo) (lambda (agents) (setq got (list agents))) sessions)
@@ -309,6 +318,7 @@
         (should (plist-get (car r) :error))))))
 
 (ert-deftest drgnx-cockpit-model/a-deleted-big-file-stops-at-the-cap ()
+  :tags '(:frozen)
   (drgnx-cockpit-fixture-with
     (let ((big (concat wt-a "big.txt")))
       (with-temp-file big (dotimes (i 40000) (insert (format "line %06d of a big file\n" i))))   ; about 1 MB
@@ -325,6 +335,7 @@
           (should (<= n (+ 100000 (max read-process-output-max 65536)))))))))
 
 (ert-deftest drgnx-cockpit-model/many-untracked-files-never-block ()
+  :tags '(:frozen)
   (drgnx-cockpit-fixture-with
     (let ((text (make-string 2047 ?x)) (took nil) files)
       (make-directory (concat wt-a "many") t)
@@ -346,6 +357,7 @@
         (should (< took 0.1))))))
 
 (ert-deftest drgnx-cockpit-model/closed-jobs-only-when-asked ()
+  :tags '(:frozen)
   (drgnx-cockpit-fixture-with
     (drgnx-work-fixture-as-hub
       (drgnx-coord-job-create :id "jold" :title "old" :plan plan :repo repo :tasks '((:n 6 :title "task 6" :role "implement")))
@@ -359,6 +371,7 @@
       (should (equal (plist-get (drgnx-cockpit-model-test--node m (format "task:%s#2" plan)) :job) "jx")))))
 
 (ert-deftest drgnx-cockpit-model/changed-files-and-diff-are-async ()
+  :tags '(:frozen)
   (drgnx-cockpit-fixture-with
     (let ((made 0) files diff remote)
       (cl-letf* ((orig (symbol-function 'make-process))
@@ -423,6 +436,7 @@
         (should (plist-get (car diff) :too-large))))))
 
 (ert-deftest drgnx-cockpit-model/changed-files-checks-at-most-the-cap ()
+  :tags '(:frozen)
   (drgnx-cockpit-fixture-with
     ;; 20 links out of the worktree (never shown) come before a regular file: only the cap's worth is checked
     (drgnx-cockpit-fixture-write (concat root "secret.txt") "secret\n")
@@ -438,6 +452,7 @@
       (should (plist-get (car (last (car files))) :more)))))
 
 (ert-deftest drgnx-cockpit-model/git-answers-once-however-often-its-sentinel-runs ()
+  :tags '(:frozen)
   ;; macOS reports a process ended in its filter twice (the kill, then the exit); the second must say nothing
   (drgnx-cockpit-fixture-with
     (let* ((calls 0)
@@ -448,6 +463,7 @@
       (should (= calls 1)))))
 
 (ert-deftest drgnx-cockpit-model/changed-files-listing-is-capped-and-answers-once ()
+  :tags '(:frozen)
   (drgnx-cockpit-fixture-with
     (dotimes (i 200) (write-region "x\n" nil (format "%suntracked-file-with-a-long-name-%04d.txt" wt-a i) nil 'silent))
     (let ((calls 0) r)
@@ -471,6 +487,7 @@
       (should (= calls 1)))))
 
 (ert-deftest drgnx-cockpit-model/summary-names-are-unquoted ()
+  :tags '(:frozen)
   ;; git C-quotes the names on its --summary lines, even under -z
   (let ((files (drgnx-cockpit--numstat
                 (concat "1\t0\ta\"b\0" "1\t0\tt\tab\0" "1\t0\t\001x\0" "0\t1\tü.txt\0"
@@ -480,6 +497,7 @@
                    '(("a\"b" . new) ("t\tab" . new) ("\001x" . new) ("ü.txt" . deleted))))))
 
 (ert-deftest drgnx-cockpit-model/a-git-that-cannot-start-leaves-no-buffers ()
+  :tags '(:frozen)
   (drgnx-cockpit-fixture-with
     (let ((before (length (drgnx-test-buffer-list))) r)
       (cl-letf (((symbol-function 'make-process) (lambda (&rest _) (error "No git here"))))
@@ -489,6 +507,7 @@
       (should (= (length (drgnx-test-buffer-list)) before)))))
 
 (ert-deftest drgnx-cockpit-model/closed-jobs-deps-are-not-read ()
+  :tags '(:frozen)
   (drgnx-cockpit-fixture-with
     (drgnx-work-fixture-as-hub
       (drgnx-coord-job-create :id "jold" :title "old" :plan plan :repo repo
@@ -501,6 +520,7 @@
       (should (gethash "jold#6" (nth 2 (drgnx-cockpit--jobs)))))))
 
 (ert-deftest drgnx-cockpit-model/paused-and-stopped-jobs-are-shown ()
+  :tags '(:frozen)
   (drgnx-cockpit-fixture-with
     (drgnx-work-fixture-as-hub
       (drgnx-coord-job-create :id "jp" :title "paused one" :plan plan :repo repo :tasks '((:n 5 :title "task 5" :role "implement")))
@@ -513,6 +533,7 @@
       (should (equal (plist-get (drgnx-cockpit-model-test--node m (format "task:%s#6" plan)) :job) "js")))))
 
 (ert-deftest drgnx-cockpit-model/silent-worktrees-three-git-at-a-time ()
+  :tags '(:frozen)
   (drgnx-cockpit-fixture-with
     ;; six more silent worktrees, each with a change
     (dotimes (i 6)
@@ -535,6 +556,7 @@
       (should (= (length (car got)) 7)))))
 
 (ert-deftest drgnx-cockpit-model/plan-cache-is-capped-and-follows-mtime ()
+  :tags '(:frozen)
   (let ((dir (make-temp-file "drgnx-cockpit-plans" t)) (drgnx-cockpit--plan-cache (make-hash-table :test #'equal)))
     (unwind-protect
         (let ((files (mapcar (lambda (i) (let ((f (format "%s/p%02d.md" dir i))) (write-region (format "# Plan %d\n" i) nil f nil 'silent) f))
@@ -552,6 +574,7 @@
       (delete-directory dir t))))
 
 (ert-deftest drgnx-cockpit-model/job-agents-registered-by-the-hub-are-job-agents ()
+  :tags '(:frozen)
   (drgnx-cockpit-fixture-with
     ;; the hub registers each task agent (kind job): an open job's shows as its job's agent, a done job's not at all
     (drgnx-work-fixture-as-hub
@@ -575,6 +598,7 @@
       (should (eq (plist-get (drgnx-cockpit-model-test--agent m "s-old") :reporting) 'job)))))
 
 (ert-deftest drgnx-cockpit-model/turns-are-not-an-agent-s-life ()
+  :tags '(:frozen)
   (drgnx-cockpit-fixture-with
     ;; s-2's session started (the fixture); a turn of it ended: it is not stopped, and the timeline shows no turns
     (drgnx-work-fixture-as-hub
@@ -594,6 +618,7 @@
                    '("started" "stopped")))))
 
 (ert-deftest drgnx-cockpit-model/turns-come-from-the-turn-column ()
+  :tags '(:frozen)
   (drgnx-cockpit-fixture-with
     (drgnx-work-fixture-as-hub (drgnx-coord-agent-register :id "s-2" :name "chat" :cwd repo))
     (let ((a (drgnx-work-fixture-as-hub
