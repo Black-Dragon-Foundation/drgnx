@@ -276,8 +276,10 @@ DRGNX_TEST_GATE_SWAP=3 DRGNX_TEST_ONLY=test/unit/delivery-gate-test.el bin/drgnx
 A gated file is one whose `;; test-pattern:` line (an exact line within the first 15) names `gated`. For each such
 file the command runs the file once with `DRGNX_TEST_GATE_SWAP=0`; each `drgnx-test-gated` run then prints
 `drgnx-gate-swap-pairs: N`, the number of adjacent pairs of released lines from different connections it met, and the
-command goes on with K = 1 to the largest N of the file, one run per K. It stops at the first red, prints the run's
-output and the K, and exits 1. A file that prints no count is red too (a run that swapped nothing proves nothing).
+command goes on with K = 1, 2, … up to the largest N any run of the file printed so far (a swap can meet more pairs
+than the unswapped run did), one run per K. It stops at the first red, prints the run's output and the K, and exits 1.
+A run that prints no count is red too (a run that swapped nothing proves nothing), and so is a run at K ≥ 1 in which a
+test skipped that ran at K = 0 (the runner's `Skipped (N):` list): its swap went unexplored.
 
 K counts the pairs of one `drgnx-test-gated` body, from 0. Lines are paired within one release (one wait's batch, or
 `drgnx-test-deliver-all`): the gate never holds a line past the end of the batch, so a client that waits for it is not

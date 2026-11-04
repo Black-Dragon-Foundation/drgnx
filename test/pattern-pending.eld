@@ -2,7 +2,9 @@
 ;; (FILE …): FILE is relative to the checkout.  A `cond' file needs a `;; test-pattern: P…' line (P one or more of
 ;; `orders', `gated', `handshake') within its first 15 lines; the files here have none yet.  The register only shrinks:
 ;; `drgnx-lint/every-cond-file-has-a-pattern-or-is-pending' fails a `cond' file that has no line and is not listed, and
-;; `drgnx-lint/pending-rows-only-shrink' fails a listed file that has a line or is gone (remove its row).  A row may
+;; `drgnx-lint/pending-rows-only-shrink' fails a listed file that has a line or is gone (remove its row), and
+;; `drgnx-lint/the-registers-equal-their-constants' holds the rows equal to `drgnx-lint-patterns--pending-allowed' in
+;; test/unit/lint-test-patterns-test.el (a removed row leaves the constant too, so no row is added back).  A row may
 ;; also be (FILE :why STRING) for a file that cannot meet a pattern (a compositor, tmux or kitty that cannot park), with
 ;; its reason.  A pure test is not a `cond' one: it is class `det'.
 (

@@ -7,7 +7,8 @@
 ;;   - "not converted": a test over the real hub (or its stand-in) that still waits in its own loops.
 ;; THIS REGISTER ONLY SHRINKS: a converted or deleted test leaves it, and no row is added.
 ;; `drgnx-lint/gate-exempt-rows-name-tests-in-gated-files' fails a row naming a test that is gone or not in a gated file,
-;; `drgnx-lint/gate-exempt-only-shrinks' holds the rows to a constant in test/unit/lint-test-patterns-test.el.
+;; `drgnx-lint/gate-exempt-only-shrinks' holds the rows to a constant in test/unit/lint-test-patterns-test.el, and
+;; `drgnx-lint/the-registers-equal-their-constants' holds them equal to it (a removed row leaves the constant too).
 (
  (drgnx-hub-client/a-current-hello-clears-the-restart-notice :why "fake hub: pure against a lying peer")
  (drgnx-hub-client/a-failing-callback-does-not-drop-the-rest-of-the-chunk :why "pure: a pipe process stands in for the hub's connection")

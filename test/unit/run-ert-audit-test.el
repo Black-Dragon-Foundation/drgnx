@@ -90,7 +90,17 @@
     (let ((j (apply #'drgnx-run-ert-audit-test--run dir (concat "DRGNX_TEST_GATE_EXEMPT=" exempt)
                     drgnx-run-ert-audit-test--on)))
       (should (equal '("x/no-gate" "x/no-gate-line")
-                     (sort (mapcar #'car (drgnx-run-ert-audit-test--failures j)) #'string<))))))
+                     (sort (mapcar #'car (drgnx-run-ert-audit-test--failures j)) #'string<))))
+    ;; a register anywhere but beside the tests it lists is not honoured: no run can swap the checkout's for its own
+    (let* ((elsewhere (make-temp-file "drgnx-audit-other" t)) (other (expand-file-name "gate-exempt.eld" elsewhere)))
+      (unwind-protect
+          (progn
+            (copy-file exempt other)
+            (let ((j (apply #'drgnx-run-ert-audit-test--run dir (concat "DRGNX_TEST_GATE_EXEMPT=" other)
+                            drgnx-run-ert-audit-test--on)))
+              (should (equal '("x/listed" "x/no-gate" "x/no-gate-line")
+                             (sort (mapcar #'car (drgnx-run-ert-audit-test--failures j)) #'string<)))))
+        (delete-directory elsewhere t)))))
 
 (ert-deftest drgnx-run-ert-audit/a-handshake-test-that-signalled-an-unparked-child-fails ()
   (let* ((dir (drgnx-run-ert-audit-test--file

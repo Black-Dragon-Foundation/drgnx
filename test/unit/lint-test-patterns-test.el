@@ -213,6 +213,68 @@ levels that enclose it (a `let' binding, a call's argument); inside a branching 
               nil)))
     (nreverse out)))
 
+;;;; The registers that only shrink
+
+(defconst drgnx-lint-patterns--pending-allowed
+  '("test/live/daemon-test.el" "test/live/dape-live-test.el" "test/live/drgnx-ai-test.el"
+    "test/live/drgnx-compositor-test.el" "test/live/drgnx-frames-test.el" "test/live/drgnx-invariants-test.el"
+    "test/live/drgnx-keys-test.el" "test/live/drgnx-modal-ui-test.el" "test/live/drgnx-onboard-test.el"
+    "test/live/drgnx-popup-test.el" "test/live/drgnx-tiling-test.el" "test/live/drgnx-workbench-test.el"
+    "test/live/drgnx-work-test.el" "test/live/mermaid-live-test.el" "test/live/observer-test.el"
+    "test/live/scenario-runner-test.el" "test/scenario/buffers-test.el" "test/scenario/explorer-test.el"
+    "test/tty/clipboard-test.el" "test/tty/colours-test.el" "test/tty/harness-test.el" "test/tty/keys-test.el"
+    "test/tty/layout-test.el" "test/tty/mixed-test.el" "test/tty/mouse-test.el" "test/tty/popups-test.el"
+    "test/tty/state-test.el" "test/ui/attribution-test.el" "test/ui/capture-test.el"
+    "test/ui/childframe-chrome-test.el" "test/ui/childframe-extra-test.el" "test/ui/code-editing-test.el"
+    "test/ui/editor-m11c2-test.el" "test/ui/git-review-test.el" "test/ui/glitnir-parity-test.el"
+    "test/ui/guard-test.el" "test/ui/input-test.el" "test/ui/live-state-ui-test.el" "test/ui/notices-ui-test.el"
+    "test/ui/quickhelp-test.el" "test/ui/report-test.el" "test/ui/rf2-process-test.el" "test/ui/session-home-test.el"
+    "test/ui/settings-page-ui-test.el" "test/ui/smoke-test.el" "test/ui/state-intent-ui-test.el"
+    "test/ui/state-ui-test.el" "test/ui/statusbar-state-ui-test.el" "test/ui/statusbar-test.el"
+    "test/ui/view-ui-test.el" "test/ui/workbench-pass-a-test.el" "test/unit/agent-check-test.el"
+    "test/unit/agent-config-claude-test.el" "test/unit/agents-matrix-test.el" "test/unit/ai-ask-test.el"
+    "test/unit/ai-edit-test.el" "test/unit/ai-embed-test.el" "test/unit/ai-ghost-test.el" "test/unit/ai-test.el"
+    "test/unit/bin-lease-test.el" "test/unit/bin-test.el" "test/unit/bootstrap-test.el" "test/unit/build-test.el"
+    "test/unit/config-doc-test.el" "test/unit/doctor-security-test.el" "test/unit/doctor-test.el"
+    "test/unit/doctor-wm-test.el" "test/unit/exec-test.el" "test/unit/install-config-test.el"
+    "test/unit/install-test.el" "test/unit/isolated/modal-ai-isolated.el" "test/unit/keys-diff-test.el"
+    "test/unit/lang-servers-test.el" "test/unit/lint-test-classes-test.el" "test/unit/lint-test-patterns-test.el"
+    "test/unit/lisp-index-test.el" "test/unit/mock-llm-test.el" "test/unit/mod-agent-settings-test.el"
+    "test/unit/modal-ai-test.el" "test/unit/modal-report-test.el" "test/unit/mod-amenities-test.el"
+    "test/unit/mod-blame-test.el" "test/unit/mod-clipboard-test.el" "test/unit/mod-diff-test.el"
+    "test/unit/mod-grammars-test.el" "test/unit/mod-live-test.el" "test/unit/mod-remote-test.el"
+    "test/unit/mod-replace-engine-test.el" "test/unit/mod-replace-view-test.el" "test/unit/mod-search-test.el"
+    "test/unit/mod-terminal-test.el" "test/unit/mod-tools-test.el" "test/unit/peer-fixture-test.el"
+    "test/unit/perf-day-test.el" "test/unit/platform-hypr-niri-test.el" "test/unit/platform-kwin-test.el"
+    "test/unit/platform-test.el" "test/unit/platform-wm-test.el" "test/unit/projects-eld-test.el"
+    "test/unit/remote-automatic-test.el" "test/unit/run-ert-audit-test.el" "test/unit/run-ert-test.el"
+    "test/unit/sandbox-vc-test.el" "test/unit/scripted-process-test.el" "test/unit/search-setup-test.el"
+    "test/unit/secrets-test.el" "test/unit/settings-agents-test.el" "test/unit/settings-apply-test.el"
+    "test/unit/settings-child-test.el" "test/unit/settings-compat-custom-test.el"
+    "test/unit/settings-compat-global-test.el" "test/unit/settings-compat-lisp-files-test.el"
+    "test/unit/settings-compat-mode-test.el" "test/unit/settings-compat-modules-test.el"
+    "test/unit/settings-compat-prov-test.el" "test/unit/settings-compat-trust-test.el"
+    "test/unit/settings-compat-workspace-test.el" "test/unit/settings-editors-test.el"
+    "test/unit/settings-lisp-page-test.el" "test/unit/settings-move-test.el" "test/unit/settings-page-test.el"
+    "test/unit/settings-prov-test.el" "test/unit/settings-runtime-dump-test.el" "test/unit/settings-tidy-test.el"
+    "test/unit/shell-files-test.el" "test/unit/shell-rc-test.el" "test/unit/test-order-test.el"
+    "test/unit/trust-test.el" "test/unit/tty-bin-test.el" "test/unit/tty-onboard-test.el"
+    "test/unit/ui-compositor-test.el" "test/unit/update-test.el" "test/unit/user-lisp-test.el"
+    "test/unit/wait-fixture-test.el" "test/unit/wb-git-edge-test.el" "test/unit/wb-git-test.el"
+    "test/unit/wb-guard-test.el" "test/unit/wb-monitors-test.el" "test/unit/work-record-test.el"
+    "test/unit/work-scan-test.el" "test/unit/work-test.el")
+  "The files test/pattern-pending.eld may list: its rows of 2026-11-05, and the register equals it.  The register only
+shrinks: a file that gains a pattern line, or is deleted, leaves both the register and this list; a new `cond' file
+carries a pattern from the start.")
+
+(defun drgnx-lint-patterns--register-drift (rows allowed)
+  "How ROWS (a register's names, strings) differ from ALLOWED (its constant, strings): (:new NAMES :gone NAMES), each
+sorted; nil when they are the same set.  A row not in the constant is new (the register grew); a name of the constant
+with no row left the register, and must leave the constant too, so it cannot come back unseen."
+  (let ((new (sort (cl-set-difference rows allowed :test #'equal) #'string<))
+        (gone (sort (cl-set-difference allowed rows :test #'equal) #'string<)))
+    (and (or new gone) (list :new new :gone gone))))
+
 ;;;; The gate-exempt register
 
 (defconst drgnx-lint-patterns--gate-exempt-allowed
@@ -237,8 +299,9 @@ levels that enclose it (a `let' binding, a call's argument); inside a branching 
     drgnx-hub-client/records-pause-the-mirror
     drgnx-hub-client/the-editor-token-and-held-keys-are-fetched-on-every-connect
     drgnx-hub-client/the-first-hello-carries-the-binary-version)
-  "The tests test/gate-exempt.eld may list: the rows of 2026-11-05.  The register only shrinks (a test that enters the
-gate, or is deleted, leaves it); a new row is a test that skips the gate, which the audit would catch.")
+  "The tests test/gate-exempt.eld may list: the rows of 2026-11-05, and the register equals it.  The register only
+shrinks (a test that enters the gate, or is deleted, leaves it and this list); a new row is a test that skips the gate,
+which the audit would catch.")
 
 (defconst drgnx-lint-patterns--unnamed-ok-allowed
   '("test/unit/agents-mirror-test.el" "test/unit/agents-mirror-permission-test.el")
@@ -276,11 +339,20 @@ its clock.")
   "The files that may bind or set `drgnx-test-gate-waiting-ok': the gate's own test of it.  A file that keeps a hub task
 inside a real wait through a barrier on purpose is added by the owner's decision, with its origins.")
 
-(defun drgnx-lint-patterns--unnamed-ok-p (forms &optional var)
-  "Whether FORMS (top-level forms) use VAR (default `drgnx-test-gate-unnamed-ok') as code: quoted data and strings are
-not code."
+(defconst drgnx-lint-patterns--peer-allowed
+  '("test/unit/delivery-gate-test.el" "test/unit/hub-client-test.el")
+  "The test files that may mark a process `:drgnx-test-peer' themselves: the delivery gate's own tests (of what the
+mark does) and the hub the hub-client tests start.  Every other peer comes from a fixture in test/fixtures/ (the mock
+LLM, a handshake child): the delivery gate never waits on a peer for the code under test.")
+
+(defun drgnx-lint-patterns--unnamed-ok-p (forms)
+  "Whether FORMS (top-level forms) use `drgnx-test-gate-unnamed-ok' as code: quoted data and strings are not code."
+  (drgnx-lint-patterns--uses-p 'drgnx-test-gate-unnamed-ok forms))
+
+(defun drgnx-lint-patterns--uses-p (sym forms)
+  "Whether FORMS (top-level forms) use SYM (a symbol or a keyword) as code: quoted data and strings are not code."
   (cl-labels ((walk (f)
-                (cond ((eq f (or var 'drgnx-test-gate-unnamed-ok)) t)
+                (cond ((eq f sym) t)
                       ((atom f) nil)
                       ((eq (car f) 'quote) nil)
                       (t (let ((hit nil))
@@ -310,6 +382,14 @@ not code."
               ((drgnx-run-ert--file-patterns file) (push rel named)))))
     (should-not (nreverse stale))
     (should-not (nreverse named))))
+
+(ert-deftest drgnx-lint/the-registers-equal-their-constants ()
+  ;; a row added to a register, or one taken out of a register but left in its constant (from where it could come
+  ;; back unseen), fails: a shrink edits both
+  (should-not (drgnx-lint-patterns--register-drift (drgnx-lint-patterns--pending) drgnx-lint-patterns--pending-allowed))
+  (should-not (drgnx-lint-patterns--register-drift
+               (mapcar (lambda (row) (format "%s" (car-safe row))) (drgnx-lint-patterns--gate-exempt-rows))
+               (mapcar #'symbol-name drgnx-lint-patterns--gate-exempt-allowed))))
 
 (ert-deftest drgnx-lint/handshake-tests-signal-through-the-fixture ()
   (should-not (drgnx-lint-patterns--violations 'handshake #'drgnx-lint-patterns--rule-handshake))
@@ -345,8 +425,18 @@ not code."
   (let (bad)
     (dolist (rel (drgnx-lint-classes--files))
       (unless (member rel drgnx-lint-patterns--waiting-ok-allowed)
-        (when (drgnx-lint-patterns--unnamed-ok-p
-               (drgnx-lint-classes--forms (expand-file-name rel drgnx-dir)) 'drgnx-test-gate-waiting-ok)
+        (when (drgnx-lint-patterns--uses-p
+               'drgnx-test-gate-waiting-ok (drgnx-lint-classes--forms (expand-file-name rel drgnx-dir)))
+          (push rel bad))))
+    (should-not (nreverse bad))))
+
+(ert-deftest drgnx-lint/test-peer-only-from-fixtures ()
+  ;; a test file that marks a process a peer takes it out of the gate's real-I/O rule: only fixtures do that
+  (let (bad)
+    (dolist (rel (drgnx-lint-classes--files))
+      (unless (member rel drgnx-lint-patterns--peer-allowed)
+        ;; (quoted here, so this file's own mention is data)
+        (when (drgnx-lint-patterns--uses-p ':drgnx-test-peer (drgnx-lint-classes--forms (expand-file-name rel drgnx-dir)))
           (push rel bad))))
     (should-not (nreverse bad))))
 
@@ -360,6 +450,13 @@ not code."
   (should-not (drgnx-lint-patterns--gate-exempt-new '((a/b :why "x")) '(a/b c/d)))
   (should-not (drgnx-lint-patterns--gate-exempt-new nil nil)))
 
+(ert-deftest drgnx-lint/register-drift-bites ()
+  ;; a grown register, and a row gone from the register but kept in the constant, are both drift
+  (should (equal (drgnx-lint-patterns--register-drift '("a" "c" "b") '("a" "b")) '(:new ("c") :gone nil)))
+  (should (equal (drgnx-lint-patterns--register-drift '("a") '("b" "a")) '(:new nil :gone ("b"))))
+  (should-not (drgnx-lint-patterns--register-drift '("b" "a") '("a" "b")))
+  (should-not (drgnx-lint-patterns--register-drift nil nil)))
+
 (ert-deftest drgnx-lint/gate-unnamed-ok-lint-bites ()
   (dolist (bad '("(let ((drgnx-test-gate-unnamed-ok t)) (f))" "(setq drgnx-test-gate-unnamed-ok t)"
                  "(ert-deftest a/b () (let* ((x 1) (drgnx-test-gate-unnamed-ok t)) (f)))"
@@ -372,9 +469,16 @@ not code."
   (let ((var 'drgnx-test-gate-waiting-ok))
     (dolist (bad '("(let ((drgnx-test-gate-waiting-ok '(\"exec:watch\"))) (f))"
                    "(setq drgnx-test-gate-waiting-ok '(\"exec:watch\"))"))
-      (should (drgnx-lint-patterns--unnamed-ok-p (car (read-from-string (concat "(" bad ")"))) var)))
+      (should (drgnx-lint-patterns--uses-p var (car (read-from-string (concat "(" bad ")"))))))
     (dolist (ok '("(let ((drgnx-test-gate-unnamed-ok t)) (f))" "(message \"drgnx-test-gate-waiting-ok\")"))
-      (should-not (drgnx-lint-patterns--unnamed-ok-p (car (read-from-string (concat "(" ok ")"))) var)))))
+      (should-not (drgnx-lint-patterns--uses-p var (car (read-from-string (concat "(" ok ")"))))))))
+
+(ert-deftest drgnx-lint/test-peer-lint-bites ()
+  (dolist (bad '("(process-put p :drgnx-test-peer t)" "(let ((p (f))) (process-put p :drgnx-test-peer 1) p)"
+                 "(set-process-plist p (list :drgnx-test-peer t))"))
+    (should (drgnx-lint-patterns--uses-p ':drgnx-test-peer (car (read-from-string (concat "(" bad ")"))))))
+  (dolist (ok '("(f)" "(message \":drgnx-test-peer\")" "(ignore '(:drgnx-test-peer))" ";; :drgnx-test-peer\n(f)"))
+    (should-not (drgnx-lint-patterns--uses-p ':drgnx-test-peer (car (read-from-string (concat "(" ok ")")))))))
 
 (ert-deftest drgnx-lint/handshake-lint-bites ()
   (let ((rule #'drgnx-lint-patterns--rule-handshake))
