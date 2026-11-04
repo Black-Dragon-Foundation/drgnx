@@ -65,15 +65,18 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   `--parent-pid` counts). It stops accepting, ends its own sessions, then removes the socket and the cap while the
   lock is still held. It then closes every connection, after what is queued for each is written (at most 1 s for all
   of them), so its clients see the end before the hub waits on anything that can hang. Last, it stops its store
-  threads (runtime.db's and work.db's writer). Each gets at most 5 s; one that does not stop is left to end with the
-  process, and the log names it as an error. Then the hub exits 0. The log is tracing JSON, one object per line, in `<state>/hub/log/hub-YYYY-MM-DD.jsonl` (UTC days, 0600,
+  threads (runtime.db's and work.db's writer). Each writes what is queued to it first: no queued write is dropped,
+  and that wait has no limit. Every 5 s while a thread is still stopping, the log names it as an error, with how many
+  requests it still has queued. A second SIGTERM or SIGINT during that wait ends the hub at once, and the log says
+  which thread's queued writes were abandoned at the user's request. Then the hub exits 0. The log is tracing JSON, one object per line, in `<state>/hub/log/hub-YYYY-MM-DD.jsonl` (UTC days, 0600,
   the newest 7 kept, written by tracing-appender's non-blocking worker). Warnings and errors also go to stderr, behind
   `<4>` / `<3>` when `JOURNAL_STREAM` is set (the journal under systemd). `DRGNX_RATATOSKR_LOG` takes a `Targets`
   string (`info`, the default; `warn,drgnx_ratatoskr::conn=debug`). The cap, keys and params are never logged. The
   cargo feature `test-hooks` (off in the binary install.sh builds) holds the test-only surfaces: the `__test_flood`
   method, `--idle-tick-ms N` (the restart-when-idle tick), `--test-clock`, `__test_advance`, `--test-sequencer` and
-  `__test_barrier` ([Test hooks](#test-hooks)), `--test-hold-store` (runtime.db's thread is given a job that never
-  returns at the hub's end, so a test sees the end not wait on it), and `--agent-socket SID[:JOB]`, which is refused without `--foreground`. `DRGNX_HUB_PARENT_PID` does what `--parent-pid` does when the flag is absent, so a hub a test starts through `ensure` ends with the test.
+  `__test_barrier` ([Test hooks](#test-hooks)), `--test-hold-store` (at the hub's end runtime.db's thread is held by a
+  job until the hub gets SIGUSR1, with one write queued behind it, so a test sees the end close its connections first
+  and then write that queue), and `--agent-socket SID[:JOB]`, which is refused without `--foreground`. `DRGNX_HUB_PARENT_PID` does what `--parent-pid` does when the flag is absent, so a hub a test starts through `ensure` ends with the test.
 - **The gateway** (`drgnx-ratatoskr/src/gateway.rs`, forwarding by `bifrost`) runs inside the hub: never in the
   editing Emacs, so streaming cannot touch the keystroke budget. Besides the 127.0.0.1 port it listens on **per-session
   Unix sockets** (`gateway.sock` in the session's private directory beside `mcp.sock` and `hub.sock`, for agents in a

@@ -41,7 +41,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UnixListener;
-use tokio::signal::unix::{SignalKind, signal};
+use tokio::signal::unix::{Signal, SignalKind, signal};
 
 /// `sqlite3_libversion_number()` Ratatoskr needs: 3.51.3.
 pub const SQLITE_FLOOR: i32 = 3_051_003;
@@ -194,6 +194,8 @@ pub async fn run(args: ServeArgs) -> Exit {
         Ok(Err(e)) => tracing::warn!("cannot move what the Lisp hub left: {e}"),
         Err(e) => tracing::warn!("moving what the Lisp hub left failed: {e}"),
     }
+    // what the hub's end reads of work.db's writer while it stops (its queue)
+    let graph_queue = graph.writer.clone();
     let front = Arc::new(Front::with_graph(
         cap,
         socket.clone(),
@@ -384,11 +386,25 @@ pub async fn run(args: ServeArgs) -> Exit {
     if args.test_hold_store {
         hold_store(&runtime).await;
     }
-    // the store threads stop (their connections close); one that does not within STOP_WITHIN is left, named
-    tokio::join!(
-        stop_thread("runtime.db's thread", move || store.shutdown()),
-        stop_thread("work.db's writer thread", move || graph_writer.shutdown()),
-    );
+    // the store threads stop once what is queued to them is written: no write is dropped, however long it takes
+    let queue = runtime.clone();
+    stop_threads(
+        vec![
+            Stopping::start(
+                "runtime.db's thread",
+                move || queue.queued(),
+                move || store.shutdown(),
+            ),
+            Stopping::start(
+                "work.db's writer thread",
+                move || graph_queue.queued(),
+                move || graph_writer.shutdown(),
+            ),
+        ],
+        &mut term,
+        &mut int,
+    )
+    .await;
     if exit == Exit::Restart && args.supervisor == Supervisor::SelfDetached {
         // nothing supervises this hub, so `main` executes the binary again: the lock stays held until the exec
         // closes it (every descriptor is close-on-exec), and the new image takes it
@@ -467,37 +483,122 @@ async fn reap_recorded(db: &urdr::Handle) -> Result<(), String> {
     Ok(())
 }
 
-/// How long the hub's end waits, in real time, for each store thread to stop.
-const STOP_WITHIN: Duration = Duration::from_secs(5);
+/// How often, in real time, the hub's end says which store thread is still stopping.
+const STOP_NOTE_EVERY: Duration = Duration::from_secs(5);
 
-/// STOP (a blocking join of the thread WHAT names) run off the runtime, waited for at most [`STOP_WITHIN`]: a thread
-/// that does not stop is left to end with the process, and named in the log.
-async fn stop_thread(what: &str, stop: impl FnOnce() + Send + 'static) {
-    if crate::clock::real_timeout(STOP_WITHIN, tokio::task::spawn_blocking(stop))
-        .await
-        .is_err()
-    {
-        tracing::error!("{what} did not stop within 5 s: the hub ends without it");
+/// A store thread being stopped: its name, how much it still has queued, and the blocking join, run off the runtime.
+struct Stopping {
+    what: &'static str,
+    queued: Box<dyn Fn() -> usize + Send>,
+    join: tokio::task::JoinHandle<()>,
+}
+
+impl Stopping {
+    /// STOP (the thread WHAT names stops after its queue, which QUEUED reads) started off the runtime.
+    fn start(
+        what: &'static str,
+        queued: impl Fn() -> usize + Send + 'static,
+        stop: impl FnOnce() + Send + 'static,
+    ) -> Stopping {
+        Stopping {
+            what,
+            queued: Box::new(queued),
+            join: tokio::task::spawn_blocking(stop),
+        }
     }
 }
 
-/// `--test-hold-store` (test-hooks): runtime.db's thread runs a job that never returns, so stopping it hangs; returns
-/// once the job holds the thread.
+/// Wait until every one of THREADS has stopped.  Each writes what is queued to it first, so no queued write is
+/// dropped, and the wait has no limit.  Every [`STOP_NOTE_EVERY`] a thread still stopping is logged as an error,
+/// with its queue.  A SIGTERM or SIGINT (TERM, INT) meanwhile ends the wait: what the threads still stopping hold is
+/// logged as abandoned at the user's request, and the process ends without them.
+async fn stop_threads(mut threads: Vec<Stopping>, term: &mut Signal, int: &mut Signal) {
+    loop {
+        threads.retain(|t| !t.join.is_finished());
+        if threads.is_empty() {
+            return;
+        }
+        let all = async {
+            for t in threads.iter_mut() {
+                let _ = (&mut t.join).await;
+            }
+        };
+        let signal = tokio::select! {
+            r = crate::clock::real_timeout(STOP_NOTE_EVERY, all) => match r {
+                Ok(()) => return,
+                Err(_) => None,
+            },
+            _ = term.recv() => Some("SIGTERM"),
+            _ = int.recv() => Some("SIGINT"),
+        };
+        for t in threads.iter().filter(|t| !t.join.is_finished()) {
+            let queued = (t.queued)();
+            match signal {
+                None => tracing::error!(
+                    thread = t.what,
+                    queued,
+                    "{} is still stopping, {queued} more queued: the hub ends once its queue is written (SIGTERM \
+                     or SIGINT abandons it)",
+                    t.what
+                ),
+                Some(sig) => tracing::error!(
+                    thread = t.what,
+                    queued,
+                    "{sig}: {}'s queued writes were abandoned at the user's request ({queued} more queued)",
+                    t.what
+                ),
+            }
+        }
+        if signal.is_some() {
+            return;
+        }
+    }
+}
+
+/// `--test-hold-store` (test-hooks): runtime.db's thread runs a job that holds it until the hub gets SIGUSR1, and one
+/// write (meta `test-hold-store` = `written`) is queued behind it; returns once both are in place.
 #[cfg(feature = "test-hooks")]
 async fn hold_store(db: &urdr::Handle) {
+    let Ok(mut usr1) = signal(SignalKind::user_defined1()) else {
+        tracing::error!("--test-hold-store: no SIGUSR1 handler, so nothing is held");
+        return;
+    };
     let (held, holding) = tokio::sync::oneshot::channel();
-    let db = db.clone();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let h = db.clone();
     crate::clock::spawn("server:hold-store", async move {
-        let _ = db
-            .read(move |_| -> urdr::Result<()> {
+        let _ = h
+            .read(move |_| {
                 let _ = held.send(());
-                loop {
-                    std::thread::park();
-                }
+                let _ = released.recv();
+                Ok(())
             })
             .await;
     });
     let _ = holding.await;
+    // queued now, behind the job holding the thread: its first poll sends it on the channel
+    let h = db.clone();
+    let mut queued = Box::pin(async move {
+        let _ = h
+            .write(|c| {
+                c.execute(
+                    "insert or replace into meta(key, value) values ('test-hold-store', 'written')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await;
+    });
+    let done =
+        std::future::poll_fn(|cx| std::task::Poll::Ready(queued.as_mut().poll(cx).is_ready()))
+            .await;
+    if !done {
+        crate::clock::spawn("server:hold-store", queued);
+    }
+    crate::clock::spawn("server:hold-store", async move {
+        usr1.recv().await;
+        let _ = release.send(());
+    });
 }
 
 /// Accept on an agent socket for as long as the hub serves.

@@ -406,10 +406,22 @@ fn the_lines_a_client_sent_before_it_left_are_served() {
 
 #[cfg(feature = "test-hooks")]
 #[test]
-fn a_hub_whose_store_hangs_at_its_end_closes_its_connections_and_ends() {
-    // `shutdown`, with runtime.db's thread held by a job that never returns (`--test-hold-store`), so stopping that
-    // thread never ends: each client still reads its end of file, and the hub ends, saying which thread it left
+fn a_hub_whose_store_is_slow_at_its_end_closes_its_connections_then_writes_its_queue() {
+    // `shutdown`, with runtime.db's thread held by a job until SIGUSR1 and a write queued behind it
+    // (`--test-hold-store`): each client still reads its end of file; the hub says the thread is still stopping and
+    // waits for it, however long; released, it writes the queued write and ends
     use std::io::BufRead;
+    let logs = |root: &Root| {
+        let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(root.log_dir())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        files.sort();
+        files
+            .iter()
+            .map(|p| std::fs::read_to_string(p).unwrap())
+            .collect::<String>()
+    };
     let root = Root::new();
     let socket = root.socket();
     let mut hub = Hub::start_with(&root, 1, &["--test-hold-store"]);
@@ -436,24 +448,40 @@ fn a_hub_whose_store_hangs_at_its_end_closes_its_connections_and_ends() {
             }
         }
     }
+    // the hub says nothing else while it waits: the log is looked at again until it names the thread (`FAILED_AFTER`
+    // only bounds a failure)
+    skuld::wait_until(
+        "the hub says runtime.db's thread is still stopping",
+        FAILED_AFTER.as_secs(),
+        || {
+            logs(&root)
+                .contains("runtime.db's thread is still stopping")
+                .then_some(())
+        },
+    );
+    assert!(
+        hub.exited().is_none(),
+        "the hub ended with a write still queued: {}",
+        hub.stderr_text()
+    );
+    let log = logs(&root);
+    let closed = log
+        .find("closed a connection: the hub ends")
+        .expect("the connections' close is logged");
+    let stopping = log.find("runtime.db's thread is still stopping").unwrap();
+    assert!(closed < stopping, "the connections close first: {log}");
+    // released: the queued write is written, then the hub ends as asked
+    unsafe { libc::kill(hub.pid() as i32, libc::SIGUSR1) };
     let status = hub.wait_exit();
     assert_eq!(status.code(), Some(0), "{}", hub.stderr_text());
-    let mut logs: Vec<std::path::PathBuf> = std::fs::read_dir(root.log_dir())
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .collect();
-    logs.sort();
-    let log: String = logs
-        .iter()
-        .map(|p| std::fs::read_to_string(p).unwrap())
-        .collect();
-    let closed = log
-        .find("the hub ends")
-        .expect("the connections' close is logged");
-    let left = log
-        .find("runtime.db's thread did not stop")
-        .unwrap_or_else(|| panic!("the held thread is named: {log}"));
-    assert!(closed < left, "the connections close first: {log}");
+    let db = urdr::open_readonly(&root.dir.path().join("s/drgnx/hub/runtime.db")).unwrap();
+    assert_eq!(
+        urdr::meta(&db, "test-hold-store").unwrap().as_deref(),
+        Some("written"),
+        "the write queued behind the held job: {}",
+        logs(&root)
+    );
+    assert!(!logs(&root).contains("abandoned"), "nothing was abandoned");
 }
 
 #[test]

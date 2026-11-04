@@ -68,6 +68,11 @@ impl Drop for Store {
 }
 
 impl Handle {
+    /// How many requests wait on the channel now (the one running is not counted).
+    pub fn queued(&self) -> usize {
+        self.tx.max_capacity() - self.tx.capacity()
+    }
+
     /// Run `f` on the store thread with the connection.
     pub async fn read<R: Send + 'static>(
         &self,
