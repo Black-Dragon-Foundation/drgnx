@@ -48,9 +48,16 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
        (when mock (delete-process mock))
        (delete-directory root t))))
 
+;; The step's own waits (the probe's, the test calls' budget) wait on curls, real children of this Emacs: inside the
+;; gate no virtual time passes while one lives, so an answer comes within the budget however slow the machine.  No hub
+;; runs here; the gate holds whatever a hub would say.
+
 (ert-deftest drgnx-onboard/the-ai-step-finds-providers-sets-roles-and-tests-them ()
   (drgnx-ai-onboard-test--with
-    (let ((r (drgnx-onboard--ai-step '(:interactive nil))))
+    (let (r)
+      (drgnx-test-gated nil
+        (setq r (drgnx-onboard--ai-step '(:interactive nil)))
+        (drgnx-test-deliver-all))
       (should (eq (car r) 'ok))
       (should (equal (car (drgnx-ai-role 'complete)) '(o . "qwen2.5-coder:1.5b")))   ; a coder model fills the middle
       (should (equal (car (drgnx-ai-role 'chat)) '(o . "llama3:8b")))
@@ -62,8 +69,10 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
 
 (ert-deftest drgnx-onboard/the-ai-step-keeps-roles-that-work ()
   (drgnx-ai-onboard-test--with
-    (drgnx-ai-set-role 'chat '((o . "qwen2.5-coder:1.5b")))
-    (drgnx-onboard--ai-step '(:interactive nil))
+    (drgnx-test-gated nil
+      (drgnx-ai-set-role 'chat '((o . "qwen2.5-coder:1.5b")))  ; the settings go to a hub, if one runs
+      (drgnx-onboard--ai-step '(:interactive nil))
+      (drgnx-test-deliver-all))
     (should (equal (drgnx-ai-role 'chat) '((o . "qwen2.5-coder:1.5b"))))))         ; the user's choice stays
 
 (ert-deftest drgnx-onboard/the-ai-step-with-nothing-running-says-what-to-do ()
@@ -129,13 +138,17 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
     (let ((default-directory (concat root "proj/")))
       ;; the project's route is what the roles use here …
       (should (equal (drgnx-ai-role 'chat) '((theirs . "paid/m"))))
-      (let ((r (drgnx-onboard--ai-found '(:interactive nil))))
+      (let (r chains)
+        (drgnx-test-gated nil
+          (setq r (drgnx-onboard--ai-found '(:interactive nil))
+                chains (mapcar (lambda (role) (drgnx-ai-onboard-test--user-chain root role)) '(complete edit chat)))
+          (drgnx-onboard--put-first 'chat '(o . "llama3:8b"))
+          (drgnx-test-deliver-all))
         (should (memq (car r) '(ok warn)))
         ;; … but what the step wrote into the settings is the found provider on the user's own chain
-        (dolist (role '(complete edit chat))
-          (should-not (assq 'theirs (drgnx-ai-onboard-test--user-chain root role)))
-          (should (assq 'o (drgnx-ai-onboard-test--user-chain root role)))))
-      (drgnx-onboard--put-first 'chat '(o . "llama3:8b"))
+        (dolist (chain chains)
+          (should-not (assq 'theirs chain))
+          (should (assq 'o chain))))
       (should-not (assq 'theirs (drgnx-ai-onboard-test--user-chain root 'chat)))
       (should (equal (car (drgnx-ai-onboard-test--user-chain root 'chat)) '(o . "llama3:8b"))))))
 
@@ -148,15 +161,18 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
 
 (ert-deftest drgnx-ai-onboard/the-role-tests-run-side-by-side ()
   ;; A provider that takes 2.5 s per call answers all three roles within the budget: one wait, not three in a row.
-  ;; FLAKY-2: on the clock fixture the provider's 2.5 s are virtual, and the budget is measured on virtual time (the
-  ;; step's waits move it by the real time they wait), so a loaded machine cannot fail it.
+  ;; FLAKY-2: on the clock fixture the provider's 2.5 s are virtual, and the budget is measured on virtual time.  The
+  ;; probe's curls are real: inside the gate no virtual time passes while they live.
   (drgnx-ai-onboard-test--with
     (drgnx-test-with-clock ()
-      (let ((timers (list nil)) (t0 (drgnx-test-clock-now)) r (drgnx-onboard-ai-test-budget 8))
+      (let ((timers (list nil)) (t0 (drgnx-test-clock-now)) r took (drgnx-onboard-ai-test-budget 8))
         (unwind-protect
             (cl-letf (((symbol-function 'drgnx-ai-request) (drgnx-ai-onboard-test--slow-request 2.5 timers)))
-              (setq r (drgnx-onboard--ai-found '(:interactive nil)))
-              (should (< (- (drgnx-test-clock-now) t0) 5.5))  ; three in a row: 7.5 s
+              (drgnx-test-gated nil
+                (setq r (drgnx-onboard--ai-found '(:interactive nil))
+                      took (- (drgnx-test-clock-now) t0))
+                (drgnx-test-deliver-all))
+              (should (< took 5.5))  ; three in a row: 7.5 s
               (should (= (nth 2 r) 3))
               (should (= (nth 3 r) 0))
               (should (eq (car r) 'ok)))

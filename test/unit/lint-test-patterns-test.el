@@ -219,10 +219,8 @@ levels that enclose it (a `let' binding, a call's argument); inside a branching 
   '(drgnx-ai/a-refused-request-starts-the-runner-at-most-once-a-minute
     drgnx-ai/ensure-local-never-waits-for-the-job
     drgnx-ai/ensure-local-starts-the-runner-when-it-is-down
-    drgnx-ai-onboard/a-projects-route-never-reaches-the-global-roles
     drgnx-ai-onboard/cli-exit-stops-the-job
     drgnx-ai-onboard/pull-has-no-hour-limit
-    drgnx-ai-onboard/the-role-tests-run-side-by-side
     drgnx-ai-onboard/typed-key-cleared-and-env-noted
     drgnx-hub-client/a-current-hello-clears-the-restart-notice
     drgnx-hub-client/a-failing-callback-does-not-drop-the-rest-of-the-chunk
@@ -249,9 +247,7 @@ levels that enclose it (a `let' binding, a call's argument); inside a branching 
     drgnx-onboard/lm-studio-is-set-up-the-same-way
     drgnx-onboard/lm-studio-without-lms-says-what-to-do
     drgnx-onboard/ollama-is-installed-started-pulled-and-tested
-    drgnx-onboard/openrouter-key-goes-to-the-keychain
-    drgnx-onboard/the-ai-step-finds-providers-sets-roles-and-tests-them
-    drgnx-onboard/the-ai-step-keeps-roles-that-work)
+    drgnx-onboard/openrouter-key-goes-to-the-keychain)
   "The tests test/gate-exempt.eld may list: the rows of 2026-11-05.  The register only shrinks (a test that enters the
 gate, or is deleted, leaves it); a new row is a test that skips the gate, which the audit would catch.")
 
