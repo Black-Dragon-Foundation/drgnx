@@ -58,7 +58,8 @@ jobs:
           retention-days: 1
 
   # the files a core each at once, a failed file rerun once, the :timing tests left out by name (docs/develop/ci.md).
-  # Whatever the binaries' job said: without them only the tests that need them fail
+  # Whatever the binaries' job said: without them only the tests that need them fail. The runtime audit is on and
+  # failing: a :det test that really waits or starts a process is red (docs/develop/harness.md, "The audit")
   unit:
     name: Unit suite (Linux, Fedora 45)
     needs: bins-linux
@@ -95,6 +96,8 @@ jobs:
           DRGNX_TEST_RERUN: "1"
           DRGNX_TEST_NO_TIMING: "1"
           DRGNX_TEST_LOCALE: C.UTF-8      # the one job under a UTF-8 locale; the others run with none
+          DRGNX_TEST_AUDIT: "1"
+          DRGNX_TEST_AUDIT_FAIL: "1"
           DRGNX_TEST_SELECTOR: ${{ inputs.selector }}
         run: DRGNX_TEST_JOBS="$(nproc)" bin/drgnx test --container
 
@@ -134,6 +137,8 @@ jobs:
           DRGNX_TEST_RERUN: "1"
           DRGNX_TEST_NO_TIMING: "1"
           DRGNX_WORK_DB_GATE: "1"
+          DRGNX_TEST_AUDIT: "1"
+          DRGNX_TEST_AUDIT_FAIL: "1"
           DRGNX_TEST_SELECTOR: ${{ inputs.selector }}
         run: DRGNX_TEST_JOBS="$(nproc)" bin/drgnx test --container
 

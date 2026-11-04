@@ -106,6 +106,14 @@
     (should-not (string-search "(tag :timing)" tiers))
     (should-not (string-search "emacs-30" tiers))))
 
+(ert-deftest drgnx-ci/linux-unit-jobs-fail-a-det-test-that-uses-real-time ()
+  ;; the runtime audit on and failing (docs/develop/harness.md, "The audit"): with the pre-flight off, CI is where a
+  ;; det test that really sleeps, waits or starts a process turns red
+  (let ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")))
+    (skip-unless tiers)
+    (dolist (job '("unit" "no-lisp-writes"))
+      (drgnx-ci-test--has (drgnx-ci-test--job tiers job) "DRGNX_TEST_AUDIT: \"1\"" "DRGNX_TEST_AUDIT_FAIL: \"1\""))))
+
 (ert-deftest drgnx-ci/macos-has-no-time-factor ()
   (dolist (f '("macos.yml" "drgnx-tiers.yml"))
     (let ((yml (drgnx-ci-test--yml f)))

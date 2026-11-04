@@ -1074,7 +1074,8 @@ wait under `drgnx-test-with-clock` is virtual and does not count; a process or a
 `DRGNX_TEST_AUDIT_FAIL=1` makes each such `:det` test fail the run. All three are off by default. The primitives are
 advised only while an audited test runs, the two fixture test files (`clock-fixture-test`, `wait-fixture-test`) are not
 audited, and the three variables are read once and removed from the environment, so no other test (or a child it starts)
-sees the runner's switches. `bin/drgnx test --preflight` runs its `det` step with the audit on and failing.
+sees the runner's switches. CI's `unit` and `no-lisp-writes` jobs ([ci.md](ci.md)) and `bin/drgnx test --preflight`'s
+`det` step run with the audit on and failing.
 
 ## Virtual time
 

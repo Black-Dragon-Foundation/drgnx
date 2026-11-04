@@ -228,6 +228,11 @@ line, and the summary at the end lists every unexpected result.
 The `unit` job (Linux, Fedora 45) also sets `DRGNX_TEST_LOCALE=C.UTF-8`, which `bin/drgnx test --container` turns into
 `LC_ALL` in the container; the other jobs run with no locale, so both are covered.
 
+The `unit` and `no-lisp-writes` jobs run the runtime audit and fail on it (`DRGNX_TEST_AUDIT=1`,
+`DRGNX_TEST_AUDIT_FAIL=1`; [harness.md](harness.md), "The audit"): a `det` test that really sleeps, waits with a timeout,
+or starts a process or a socket is red there, as it is in the pre-flight. The primitives are advised only around `det`
+tests, so the other tests run as before.
+
 No CI job runs a `:timing` test: a shared runner's clock judges nothing, so a budget in wall time lives where the
 machine is quiet (`bin/drgnx check`'s `unit-timing` job, [check.md](check.md)) and, for the frame and the work in a
 command, in the perf job (allocation, CPU time and counts; [perf.md](perf.md)). `bin/drgnx check` stays as the local
@@ -244,7 +249,7 @@ DEFERRED DET-CI-ENV-1: the step uses `DRGNX_TEST_NO_TIMING=1` rather than `(not 
 The same locally (the Emacs 31.1 job's step, without the container):
 
 ```
-DRGNX_TEST_JOBS=4 DRGNX_TEST_RERUN=1 DRGNX_TEST_NO_TIMING=1 bin/drgnx test
+DRGNX_TEST_JOBS=4 DRGNX_TEST_RERUN=1 DRGNX_TEST_NO_TIMING=1 DRGNX_TEST_AUDIT=1 DRGNX_TEST_AUDIT_FAIL=1 bin/drgnx test
 ```
 
 ## Reproduce a job locally
