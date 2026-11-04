@@ -1,0 +1,12 @@
+{"scenario": "hub/env-set-refuses-path-rule-names", "requires": ["v1"], "doc": "env/set never takes a name the hub's own path rules read (HOME, TMPDIR, XDG_RUNTIME_DIR, DRGNX_DIR, SSH_AUTH_SOCK, the XDG and DRGNX folders, DBUS_SESSION_BUS_ADDRESS): the login shell's overlay reaches only what children inherit, never where the hub puts sockets and scratch folders. A refused name is left out of the answer (not an error) and out of what a job starts with; the name that is not refused is kept."}
+{"do": "root"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "env/set", "params": {"env": [{"name": "HOME", "value": "/canary/home"}, {"name": "TMPDIR", "value": "/canary/tmp"}, {"name": "XDG_RUNTIME_DIR", "value": "/canary/run"}, {"name": "DRGNX_DIR", "value": "/canary/dir"}, {"name": "SSH_AUTH_SOCK", "value": "/canary/ssh"}, {"name": "MISE_ROW_PROBE", "value": "kept"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"applied": ["MISE_ROW_PROBE"]}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "exec/start", "params": {"argv": ["sh", "-c", "case \"$HOME|$TMPDIR|$XDG_RUNTIME_DIR|$DRGNX_DIR|$SSH_AUTH_SOCK\" in *canary*) echo leaked-$MISE_ROW_PROBE;; *) echo clean-$MISE_ROW_PROBE;; esac"], "cwd": "$ROOT"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$capture:job", "text": "$string"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "exec-done", "data": {"id": "$job", "status": "done", "summary": {"exit": 0, "lines": {"$contains": ["clean-kept"]}}}}, "within_ms": 30000}

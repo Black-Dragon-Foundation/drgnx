@@ -9,6 +9,26 @@ use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::sync::{Arc, RwLock};
 
+/// The names the hub's own path rules read (`runstav::paths`, `sandbox::context`: its state, data and config
+/// folders, socket, scratch and session folders, what is closed to a sandbox and what is the user's): `env/set` never
+/// takes them, so the login shell's overlay only reaches what children inherit (their `PATH` and the like), never where
+/// the hub keeps its sockets and scratch folders.  `PATH` is not here: the sandbox's program folders read it, on purpose.
+pub const PATH_RULE_NAMES: [&str; 13] = [
+    "HOME",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "XDG_RUNTIME_DIR",
+    "XDG_DATA_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_STATE_HOME",
+    "DRGNX_DATA_DIR",
+    "DRGNX_CONFIG_DIR",
+    "DRGNX_DIR",
+    "SSH_AUTH_SOCK",
+    "DBUS_SESSION_BUS_ADDRESS",
+];
+
 /// The overlay.  A clone shares it.
 #[derive(Clone, Debug, Default)]
 pub struct ShellEnv {
@@ -16,14 +36,18 @@ pub struct ShellEnv {
 }
 
 impl ShellEnv {
-    /// Apply VARS and answer the names applied.  A name that looks like a secret, or that is a provider's key variable
-    /// (KEY_ENVS), is left out; it is never an error.  A directory list (`PATH`, …) is the shell's directories, then the
+    /// Apply VARS and answer the names applied.  A name that looks like a secret, that one of the hub's path rules
+    /// reads ([`PATH_RULE_NAMES`]), or that is a provider's key variable (KEY_ENVS), is left out; it is never an error.  A directory list (`PATH`, …) is the shell's directories, then the
     /// hub's own that the shell's do not name.
     pub fn set(&self, vars: Vec<(String, String)>, key_envs: &[String]) -> Vec<String> {
         let mut applied = Vec::new();
         let mut overlay = self.overlay.write().expect("shell env");
         for (name, value) in vars {
-            if refused_env_name(&name) || key_envs.contains(&name) || applied.contains(&name) {
+            if refused_env_name(&name)
+                || PATH_RULE_NAMES.contains(&name.as_str())
+                || key_envs.contains(&name)
+                || applied.contains(&name)
+            {
                 continue;
             }
             let value = if DIR_LISTS.contains(&name.as_str()) {
@@ -144,6 +168,42 @@ mod tests {
         }
         assert_eq!(env.var_os("HOME"), std::env::var_os("HOME"));
         assert_eq!(env.var_os("DRGNX_SHELL_ENV_TEST_B").unwrap(), "b");
+    }
+
+    #[test]
+    fn the_names_the_paths_rules_read_are_refused() {
+        let env = ShellEnv::default();
+        let mut vars: Vec<(String, String)> = PATH_RULE_NAMES
+            .iter()
+            .map(|n| pair(n, "/elsewhere"))
+            .collect();
+        for n in [
+            "TMPDIR",
+            "TMP",
+            "TEMP",
+            "XDG_RUNTIME_DIR",
+            "XDG_DATA_HOME",
+            "XDG_CONFIG_HOME",
+            "XDG_STATE_HOME",
+            "DRGNX_DATA_DIR",
+            "DRGNX_CONFIG_DIR",
+            "DRGNX_DIR",
+            "SSH_AUTH_SOCK",
+            "DBUS_SESSION_BUS_ADDRESS",
+            "HOME",
+        ] {
+            assert!(PATH_RULE_NAMES.contains(&n), "{n} is not refused");
+        }
+        vars.push(pair("PATH", "/opt/x/bin"));
+        vars.push(pair("DRGNX_SHELL_ENV_TEST_C", "c"));
+        // left out of the answer, never an error, and never in what the hub computes its own paths from
+        assert_eq!(env.set(vars, &[]), ["PATH", "DRGNX_SHELL_ENV_TEST_C"]);
+        let paths = env.paths_env();
+        for n in PATH_RULE_NAMES {
+            assert_eq!(paths.vars.get(n), std::env::var(n).ok().as_ref(), "{n}");
+            assert_ne!(get(&env, n), Some(OsString::from("/elsewhere")), "{n}");
+        }
+        assert!(paths.vars.get("PATH").unwrap().starts_with("/opt/x/bin"));
     }
 
     #[test]

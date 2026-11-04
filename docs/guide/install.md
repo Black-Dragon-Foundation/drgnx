@@ -451,7 +451,8 @@ restarting drgnx, and nothing you had is lost. At its first start the new hub:
 2. **Moves what the old runtime wrote aside, never deleting it,** into `~/.local/state/drgnx/hub/migrated-p7/` (mode
    0700, the original names kept): the old hub's `registrations.eld`, `sessions.eld`, `port` and
    `hub-timers-report.eld`, its `bodies/` folder, a `hub-*.d/` folder that holds only the backend's socket, the
-   `sandbox/` folder, and the editor's command jobs (`~/.local/state/drgnx/jobs/<id>/`, the logs of tree-sitter
+   `sandbox/` folder's contents (except `folders.eld`, the folder list of the editor's git guard, which stays
+   where it is), and the editor's command jobs (`~/.local/state/drgnx/jobs/<id>/`, the logs of tree-sitter
    grammar builds, installs and the like). `migrated-p7/done` records what moved. Later starts move nothing from
    `hub/` or `sandbox/`.
 3. **Leaves a job that is still running where it is.** A command job whose process is alive keeps its folder and its

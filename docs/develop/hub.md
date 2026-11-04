@@ -24,8 +24,12 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   are an overlay in the hub's memory (`ShellEnv`), and every process the hub starts next (agent sessions, jobs, podman,
   git for plan runs) takes its environment from the process's with the overlay applied, so `PATH` is the login
   shell's directories, then the hub's own that the shell's do not name. The hub's own environment is never changed.
-  A name that looks like a secret (`KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PASSPHRASE`, `CREDENTIAL`) or is a
-  provider's key variable is left out of the answer's `applied` list; it is not an error. The overlay is in memory only,
+  A name that looks like a secret (`KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PASSPHRASE`, `CREDENTIAL`), is a
+  provider's key variable, or is one the hub's own path rules read (`PATH_RULE_NAMES`: `HOME`, `TMPDIR`, `TMP`,
+  `TEMP`, `XDG_RUNTIME_DIR`, `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `DRGNX_DATA_DIR`,
+  `DRGNX_CONFIG_DIR`, `DRGNX_DIR`, `SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`; the sockets, scratch folders and
+  sandbox context are computed from them, so a shell's value must not move them) is left out of the answer's `applied`
+  list; it is not an error. The editor does not send them either (`drgnx-shell-env-refused-p`). The overlay is in memory only,
   so the editor sends it again at every connect (`drgnx-hub-connected-functions`, run once the subscription has
   proved itself), also to a hub that restarted. The hub is never restarted for that: a restart would end its durable
   sessions. Rust ignores SIGPIPE in its own processes, so a write to a connection an agent closed is an error and never
@@ -439,19 +443,26 @@ pid went to another process's group before the next start.
 `legacy::migrate` (`src/legacy.rs`) runs once per start, after the reaper and before anything is served. It moves, each
 only when present, into `<state>/hub/migrated-p7/` (0700, original names): from `<state>/hub/` the files
 `registrations.eld`, `sessions.eld`, `port` and `hub-timers-report.eld`, the folder `bodies/` and every `hub-*.d/` that
-holds only `backend.sock`; then `<state>/sandbox/`; and each `<state>/jobs/<id>/` of the editor's old command jobs
+holds only `backend.sock`; then each entry of `<state>/sandbox/` except `folders.eld` (the editor's VC guard,
+`core/drgnx-sandbox-vc.el`, still reads that list, so it stays; it is written by nothing now); and each `<state>/jobs/<id>/` of the editor's old command jobs
 (the Lisp runtime's, before the hub ran them as `exec/*`) that has ended (an `exit` file, or a `pid` file naming a process that is gone; a job with neither
 counts as ended once its folder has been quiet for a minute). A live job's folder stays and is listed in `left`.
 
 A move is a `rename`; across filesystems (`EXDEV`) it copies into a temporary name beside the target, syncs every file
 and folder, renames it into place and only then removes the source. A copy that fails (a socket in the tree cannot be
-copied) leaves the source untouched and the name in `left`. Nothing is deleted otherwise. `migrated-p7/done` is the
-JSON `Moved` `{at, moved, left}` (names relative to `<state>`); once it exists later starts skip the `hub/` and
+copied) leaves the source untouched and the name in `left`. Once the copy is in place the name is `moved`: if syncing
+its folder or removing the source then fails, the name also goes in `source_left`, and the next start removes the
+source, but only while the copy is there and holds all of it (a source that changed since stays). Nothing is deleted
+otherwise. `migrated-p7/done` is the JSON `Moved` `{at, moved, left, source_left}` (names relative to `<state>`;
+`source_left` is absent when empty); once it exists later starts skip the `hub/` and
 `sandbox/` items and only move the jobs that have ended since, shrinking `left`. A fresh install (nothing to move,
 nothing left) writes nothing.
 
 `doctor --json` has `legacy: {moved, left, at, lisp_processes: [{pid, what}]}`: `moved` and `at` from `done`, `left`
-read afresh (a job may have ended since), and the user's processes whose command line has the Lisp hub's or the Lisp coordination server's entry function (`MARKERS` in `legacy.rs`; from `/proc/*/cmdline` on Linux; `ps -x -o pid=,command=` with a 2 s deadline on macOS).
+read afresh (a job may have ended since), and the user's Emacs processes started with the Lisp hub's or the Lisp
+coordination server's entry function (`MARKERS` in `legacy.rs`: `drgnx-hub-main`, `drgnx-coord-mcp-main`) as an
+`-f`/`--funcall`, `-l`/`--load` or `--eval` argument (a command that only names them, such as `rg drgnx-hub-main`, does
+not count; from `/proc/*/cmdline` on Linux; `ps -x -o pid=,command=` with a 2 s deadline on macOS).
 Rows: `lifecycle/{an-old-backend-is-reaped-at-start,lisp-state-is-moved-once,a-second-start-moves-nothing,a-running-lisp-job-is-left-in-place}`.
 
 ## The client

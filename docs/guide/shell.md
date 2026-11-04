@@ -135,7 +135,10 @@ them is ignored). From that it takes:
 
 **Never a key.** A provider's key variable (`OPENROUTER_API_KEY`, …) and any name with `KEY`, `TOKEN`, `SECRET`,
 `PASSWORD`, `PASSPHRASE` or `CREDENTIAL` in it is not taken, also when you list it: keys come from the keyring (see
-[AI](ai.md)).
+[AI](ai.md)). Nor are `HOME`, `TMPDIR` (`TMP`, `TEMP`), `XDG_RUNTIME_DIR`, `XDG_DATA_HOME`, `XDG_CONFIG_HOME`,
+`XDG_STATE_HOME`, `DRGNX_DATA_DIR`, `DRGNX_CONFIG_DIR`, `DRGNX_DIR`, `SSH_AUTH_SOCK` and `DBUS_SESSION_BUS_ADDRESS`:
+the background service decides from them where its sockets and scratch folders go, and your shell's values must not
+move those.
 
 **It never waits on your shell.** The shell's input is closed at once (an rc file that reads input gets nothing),
 and a shell that has not answered after `drgnx-shell-env-timeout` (5 s) is stopped; drgnx then keeps the environment
