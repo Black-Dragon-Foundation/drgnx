@@ -1136,17 +1136,54 @@ the command it names (Hub: Restart Now).  A condition: the hub, or the next hell
                       :command (let ((sym (and (stringp command) (intern-soft command))))
                                  (and sym (fboundp 'drgnx-commands-get) (drgnx-commands-get sym) sym)))))))
 
+(defvar drgnx-hub--card-choices nil
+  "The matrix cards that list their answers, newest first: (ID :title TITLE :body BODY :choices ((CHOICE . LABEL)…)),
+as their `card' events said.  At most `drgnx-hub--card-choices-cap' entries; an entry goes once its card's notice is
+gone (`drgnx-hub--card-choices-live').")
+
+(defconst drgnx-hub--card-choices-cap 64 "How many cards' choices `drgnx-hub--card-choices' keeps.")
+
+(defun drgnx-hub--card-notice-id (id)
+  "The notice id of matrix card ID."
+  (intern (format "matrix-card-%d" id)))
+
+(defun drgnx-hub--card-choices-live ()
+  "`drgnx-hub--card-choices' without the cards whose notice is gone (answered, or cleared with the hub)."
+  (when drgnx-hub--card-choices
+    (let ((live (mapcar (lambda (n) (plist-get n :id)) (drgnx-notices :source 'hub :life 'condition))))
+      (setq drgnx-hub--card-choices
+            (cl-remove-if-not (lambda (e) (memq (drgnx-hub--card-notice-id (car e)) live)) drgnx-hub--card-choices))))
+  drgnx-hub--card-choices)
+
+(defun drgnx-hub--card-choices-of (data)
+  "The choices a `card' event's DATA lists, as ((CHOICE . LABEL)…); nil when it lists none."
+  (let (out)
+    (dolist (c (plist-get data :choices))
+      (let ((id (plist-get c :id)) (label (plist-get c :label)))
+        (when (and (stringp id) (stringp label)) (push (cons id label) out))))
+    (nreverse out)))
+
+(defun drgnx-hub--card-choices-put (id data choices)
+  "Keep CHOICES of card ID with its DATA's title and body, newest first, within the cap."
+  (let ((entry (list id :title (plist-get data :title) :body (plist-get data :body) :choices choices))
+        (rest (assq-delete-all id (drgnx-hub--card-choices-live))))
+    (setq drgnx-hub--card-choices (seq-take (cons entry rest) drgnx-hub--card-choices-cap))))
+
 (defun drgnx-hub--note-card (event data)
   "In an editor: a `matrix' card (the permission matrix asks) or a `supervisor' pause from a hub that proved itself is
-a notice.  Nothing asks and nothing waits: the cockpit's cards answer.  `agent-step' is not handled here: it matters
-only to a subscriber that asked for it."
+a notice.  Nothing asks and nothing waits: a card that lists its answers (a browser row's) keeps them here and its
+notice carries Agents: Answer Permission Card with the card's id; the cockpit's cards answer the others.
+`agent-step' is not handled here: it matters only to a subscriber that asked for it."
   (when (and (processp (bound-and-true-p drgnx-hub--event-conn)) (process-get drgnx-hub--event-conn :drgnx-proven))
     (cond
      ((and (equal event "card") (equal (plist-get data :kind) "matrix") (numberp (plist-get data :id)))
-      (drgnx-notify 'hub 'info
-                    (format "The permission matrix asks: %s" (or (plist-get data :title) "a question is waiting"))
-                    :id (intern (format "matrix-card-%d" (plist-get data :id))) :life 'condition
-                    :scope (plist-get data :job)))
+      (let* ((id (plist-get data :id)) (choices (drgnx-hub--card-choices-of data)))
+        (drgnx-notify 'hub 'info
+                      (format "The permission matrix asks: %s" (or (plist-get data :title) "a question is waiting"))
+                      :id (drgnx-hub--card-notice-id id) :life 'condition
+                      :scope (plist-get data :job)
+                      :command (and choices (list 'drgnx-agents-answer-card id)))
+        (when choices (drgnx-hub--card-choices-put id data choices))))
      ((and (equal event "supervisor") (stringp (plist-get data :text)))
       (drgnx-notify 'hub 'warn (format "An agent was paused: %s" (plist-get data :text))
                     :id (intern (format "supervisor-%s" (or (plist-get data :card) (plist-get data :session) "rule")))

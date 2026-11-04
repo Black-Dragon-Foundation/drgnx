@@ -1299,4 +1299,33 @@ token and the held keys at the end, and whether the token reached `drgnx-hub-edi
             (should (= (length (drgnx-notices :source 'hub)) 2)))
         (delete-process conn)))))
 
+(ert-deftest drgnx-hub-client/matrix-notice-carries-the-command ()
+  ;; a matrix card that lists its answers: its notice runs Agents: Answer Permission Card on that card, and its choices
+  ;; are kept (at most 64 cards, gone with their notice); a card with no choices gets no command
+  (drgnx-notice-test-with-model
+    (let ((conn (make-pipe-process :name "matrix-notice-test" :noquery t))
+          (drgnx-hub--card-choices nil))
+      (unwind-protect
+          (let ((drgnx-hub--event-conn conn)
+                (choices '((:id "once" :label "Allow once (10 minutes)") (:id "refuse" :label "Refuse"))))
+            (process-put conn :drgnx-proven t)
+            (drgnx-hub--note-card "card" (list :id 7 :kind "matrix" :title "s1 wants a browser in its sandbox"
+                                               :choices choices))
+            (drgnx-hub--note-card "card" '(:id 8 :kind "matrix" :title "commit: git commit"))
+            (let ((notice (lambda (id) (cl-find id (drgnx-notices :source 'hub) :key (lambda (n) (plist-get n :id))))))
+              (should (equal (plist-get (funcall notice 'matrix-card-7) :command) '(drgnx-agents-answer-card 7)))
+              (should-not (plist-get (funcall notice 'matrix-card-8) :command)))
+            (should (equal (drgnx-hub--card-choices-live)
+                           '((7 :title "s1 wants a browser in its sandbox" :body nil
+                                :choices (("once" . "Allow once (10 minutes)") ("refuse" . "Refuse"))))))
+            ;; the cap: the newest 64
+            (dotimes (i 70)
+              (drgnx-hub--note-card "card" (list :id (+ 100 i) :kind "matrix" :title "t" :choices choices)))
+            (should (= (length drgnx-hub--card-choices) 64))
+            (should (equal (caar drgnx-hub--card-choices) 169))
+            ;; a cleared notice takes its card's choices with it
+            (drgnx-notice-clear 'hub 'matrix-card-169)
+            (should-not (assq 169 (drgnx-hub--card-choices-live))))
+        (delete-process conn)))))
+
 ;;; hub-client-test.el ends here

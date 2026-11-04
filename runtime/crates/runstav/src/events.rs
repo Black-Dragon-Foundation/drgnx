@@ -83,6 +83,20 @@ pub struct Card {
     pub kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// A card that lists its answers (a browser row's matrix card): the ids `cards/settle` takes, with their labels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choices: Option<Vec<CardChoice>>,
+    /// What the user should know before answering, in one line (the hub's text).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+}
+
+/// One answer a card lists.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CardChoice {
+    pub id: String,
+    pub label: String,
 }
 
 /// A job's status, tasks or open cards changed.

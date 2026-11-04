@@ -465,6 +465,33 @@ project).
   mount, no network of its own (a granted network is the job's allow-list proxy through a mounted socket and a copied forwarder, `drgnx-fwd`, nothing else; the list is the setting `agents-net-hosts`, by default the package hosts of crates.io, npm and PyPI, port 443), limits from `agents-job-memory` and `agents-job-cpus`. An agent chooses an image name and a
   command and nothing else (`exec/start` refuses any other field); the command is never read as a podman option. The hub pulls the image itself (600 s at most) and names the container `drgnx-job-<id>`, removing leftovers at start.
 
+### Answering a browser card
+
+A card of the three browser rows lists its own answers, and your answer becomes a grant the hub checks before it asks
+again, so the agent's retry goes through without a second card.
+
+- **The card** is written from what the hub saw, never from the agent's words:
+  - `browser`: "*session* wants a browser in its sandbox";
+  - `browser.web`: "*session* wants to open web sites (first: *host:port*)", with the line "The agent's browser and its
+    own tools could then reach any public site; pages can send what the agent gives them";
+  - `browser.private`: "*session* wants to open *target* → *address* (*class*)", where the class is your LAN, your
+    network (IPv6), link-local, your tailnet (CGNAT) or this computer, with the line "Any page the agent opens could
+    then send requests to it, including ones that change things".
+- **The answers:**
+  - **Allow once**: for `agents-browser-once-window` (10 minutes by default), and only what the card named (the web
+    card's first host, the private card's target);
+  - **Allow for this session**, and **Allow for this plan** when the session works for a plan (every session of the
+    plan then has it);
+  - for a LAN or IPv6 ULA address written as a number, also its **/24** (IPv4) or **/64** (IPv6) on the same port,
+    and **every LAN and ULA address** on any port, each for the session or the plan. A name (`printer.local`), this
+    computer (`host.drgnx.internal:PORT`), your tailnet and link-local addresses are offered one target at a time;
+  - **Refuse**: nothing is granted, and the session's browser is not asked about again.
+- **Where you answer:** the card's notice runs **Agents: Answer Permission Card** (also in the palette, where it asks
+  which card when several wait). It shows the card's line and its answers; the one you pick goes to the hub, which
+  settles the card and writes the grant. Nothing ever asks you from the background. In the Work cockpit, Allow is
+  the narrowest answer (once) and Deny is Refuse.
+- A grant is yours alone (an agent cannot write one), and switching the row to Never ends it at once.
+
 ## Checking it
 
 `drgnx doctor` has a `security` line. It names the Emacs security issues that apply to your version (CVE numbers)

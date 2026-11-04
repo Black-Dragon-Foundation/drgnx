@@ -1125,3 +1125,243 @@ async fn web_once_covers_only_its_host() {
         }
     }
 }
+
+/// The card of A for session s1 (in PLAN) with FACTS, asked of a chat under Balanced: its title and data.
+async fn browser_card(a: Action, plan: Option<&'static str>, facts: Value) -> (String, Value) {
+    let (_d, db) = db();
+    let g = MatrixGate::default();
+    g.apply_setting(&json!({"preset": "balanced"})).unwrap();
+    db.write(meta(Class::System), move |tx| {
+        let c = browser_ctx("s1", plan, facts);
+        let Gate::Ask(card) = g.check(tx, &who(Role::Chat), a, &c, 1.0)? else {
+            panic!("asked");
+        };
+        let (t, d): (String, String) =
+            tx.sql()
+                .query_row("select title, data from card where id = ?1", [card], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })?;
+        Ok((t, serde_json::from_str(&d).unwrap()))
+    })
+    .await
+    .unwrap()
+}
+
+fn ids(d: &Value) -> Vec<&str> {
+    d["choices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["id"].as_str().unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_browser_card_lists_its_scopes_and_says_what_it_opens() {
+    let (title, d) = browser_card(Action::Browser, None, json!({})).await;
+    assert_eq!(title, "s1 wants a browser in its sandbox");
+    assert_eq!(ids(&d), ["once", "session", "refuse"]);
+    assert_eq!(d["choices"][0]["label"], "Allow once (10 minutes)");
+    assert_eq!(d["once_window"], 600);
+    assert!(d.get("body").is_none());
+    let (title, d) = browser_card(
+        Action::BrowserWeb,
+        Some("plan:p"),
+        json!({"host": "example.com:443"}),
+    )
+    .await;
+    assert_eq!(title, "s1 wants to open web sites (first: example.com:443)");
+    assert_eq!(ids(&d), ["once", "session", "plan", "refuse"]);
+    assert_eq!(
+        d["choices"][0]["label"],
+        "Allow example.com:443 only, for 10 minutes"
+    );
+    assert_eq!(d["body"], WEB_BODY);
+    // the other rows' cards are as they were: no choices
+    let (_, d) = {
+        let (_d, db) = db();
+        let g = MatrixGate::default();
+        g.apply_setting(&ask_commit("cautious", "ask")).unwrap();
+        db.write(meta(Class::System), move |tx| {
+            g.check(
+                tx,
+                &who(Role::Worker),
+                Action::Commit,
+                &ctx("git commit"),
+                1.0,
+            )?;
+            let d: String = tx
+                .sql()
+                .query_row("select data from card", [], |r| r.get(0))?;
+            Ok(((), serde_json::from_str::<Value>(&d).unwrap()))
+        })
+        .await
+        .unwrap()
+    };
+    assert!(d.get("choices").is_none(), "{d}");
+}
+
+#[tokio::test]
+async fn a_private_card_offers_widths_for_a_lan_or_ula_literal_only() {
+    let private = |t: &str, addr: &str, class: &str| json!({"target": {"host_port": t}, "addr": addr, "class": class});
+    let (title, d) = browser_card(
+        Action::BrowserPrivate,
+        Some("plan:p"),
+        private("192.168.1.20:8080", "192.168.1.20:8080", "lan"),
+    )
+    .await;
+    assert_eq!(
+        title,
+        "s1 wants to open 192.168.1.20:8080 → 192.168.1.20:8080 (your LAN)"
+    );
+    assert_eq!(
+        ids(&d),
+        [
+            "once",
+            "session",
+            "plan",
+            "session/cidr",
+            "plan/cidr",
+            "session/all-private",
+            "plan/all-private",
+            "refuse"
+        ]
+    );
+    assert_eq!(
+        d["choices"][3]["label"],
+        "Allow 192.168.1.0/24 on port 8080 for this session"
+    );
+    assert_eq!(d["body"], PRIVATE_BODY);
+    let (_, d) = browser_card(
+        Action::BrowserPrivate,
+        None,
+        private(
+            "[fd12:3456:789a:1::5]:80",
+            "[fd12:3456:789a:1::5]:80",
+            "ula",
+        ),
+    )
+    .await;
+    assert_eq!(
+        ids(&d),
+        [
+            "once",
+            "session",
+            "session/cidr",
+            "session/all-private",
+            "refuse"
+        ]
+    );
+    assert_eq!(
+        d["choices"][2]["label"],
+        "Allow fd12:3456:789a:1::/64 on port 80 for this session"
+    );
+    // a name, the reserved name, a tailnet or link-local literal: one target only
+    for (t, addr, class, shown) in [
+        ("printer.local:631", "192.168.1.20:631", "lan", "your LAN"),
+        (
+            "host.drgnx.internal:5173",
+            "127.0.0.1:5173",
+            "loopback",
+            "this computer",
+        ),
+        (
+            "100.64.0.7:22",
+            "100.64.0.7:22",
+            "cgnat",
+            "your tailnet (CGNAT)",
+        ),
+        (
+            "169.254.1.2:80",
+            "169.254.1.2:80",
+            "link_local",
+            "link-local",
+        ),
+    ] {
+        let (title, d) = browser_card(Action::BrowserPrivate, None, private(t, addr, class)).await;
+        assert_eq!(ids(&d), ["once", "session", "refuse"], "{t}");
+        assert_eq!(title, format!("s1 wants to open {t} → {addr} ({shown})"));
+    }
+}
+
+#[tokio::test]
+async fn recheck_follows_the_grant_a_browser_card_wrote() {
+    // a width's yes allows while its grant lives; a once's yes ends with its window
+    let (_d, db) = db();
+    let g = MatrixGate::default();
+    g.apply_setting(&json!({"preset": "balanced"})).unwrap();
+    let g1 = g.clone();
+    let (cidr, web) = db
+        .write(meta(Class::System), move |tx| {
+            let w = who(Role::Chat);
+            let lan = json!({"target": {"host_port": "192.168.1.20:80"}, "addr": "192.168.1.20:80",
+                             "class": "lan"});
+            let Gate::Ask(cidr) = g1.check(
+                tx,
+                &w,
+                Action::BrowserPrivate,
+                &browser_ctx("s1", None, lan),
+                1.0,
+            )?
+            else {
+                panic!("asked");
+            };
+            let Gate::Ask(web) = g1.check(
+                tx,
+                &w,
+                Action::BrowserWeb,
+                &browser_ctx("s1", None, json!({"host": "example.com:443"})),
+                1.0,
+            )?
+            else {
+                panic!("asked");
+            };
+            Ok((cidr, web))
+        })
+        .await
+        .unwrap();
+    let at = db
+        .write(meta(Class::User), move |tx| {
+            let at = tx.at();
+            card_settle(tx, cidr, "session/cidr", at)?;
+            grants::create_matrix(
+                tx,
+                grants::Who::Session("s1".into()),
+                "browser.private",
+                Some(json!({"cidr": "192.168.1.0/24", "ports": "80"})),
+                None,
+                None,
+                cidr,
+            )?;
+            card_settle(tx, web, "once", at)?;
+            grants::create_matrix(
+                tx,
+                grants::Who::Session("s1".into()),
+                "browser.web",
+                None,
+                Some("example.com:443".into()),
+                Some(at + 600.0),
+                web,
+            )?;
+            Ok(at)
+        })
+        .await
+        .unwrap();
+    let r = db
+        .read(move |c| {
+            Ok([
+                g.recheck(c, cidr, at + 1.0),
+                g.recheck(c, web, at + 1.0),
+                g.recheck(c, web, at + 601.0),
+            ])
+        })
+        .await
+        .unwrap();
+    assert_eq!(r[0], Gate::Allow);
+    assert_eq!(r[1], Gate::Allow);
+    assert!(
+        matches!(&r[2], Gate::Never(w) if w.contains("ended")),
+        "{:?}",
+        r[2]
+    );
+}

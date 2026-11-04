@@ -75,7 +75,9 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   `<4>` / `<3>` when `JOURNAL_STREAM` is set (the journal under systemd). `DRGNX_RATATOSKR_LOG` takes a `Targets`
   string (`info`, the default; `warn,drgnx_ratatoskr::conn=debug`). The cap, keys and params are never logged. The
   cargo feature `test-hooks` (off in the binary install.sh builds) holds the test-only surfaces: the `__test_flood`
-  method, `--idle-tick-ms N` (the restart-when-idle tick), `--test-clock`, `__test_advance`, `--test-sequencer` and
+  method, `__test_matrix_ask {action, who, session?, plan?, facts?}` (the matrix gate asked as the hub's own callers
+  ask it, answered `{gate, card?, why?}`: the browser card rows raise their cards with it), `--idle-tick-ms N` (the
+  restart-when-idle tick), `--test-clock`, `__test_advance`, `--test-sequencer` and
   `__test_barrier` ([Test hooks](#test-hooks)), `--test-hold-store` (at the hub's end runtime.db's thread is held by a
   job until the hub gets SIGUSR1, with one write queued behind it, so a test sees the end close its connections first
   and then write that queue, or a second SIGTERM abandon it; only SIGUSR1 releases the job, never the runtime's end),

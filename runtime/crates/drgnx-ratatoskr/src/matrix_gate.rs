@@ -16,6 +16,8 @@ use crate::backup_timer::local;
 use crate::dispatch::Caller;
 use crate::front::Front;
 use crate::settings::matrix as decode;
+use gleipnir::net::host::Host;
+use gleipnir::net::policy::PrivateTarget;
 use norn::grants;
 use norn::matrix::{
     Action, Cell, Column, Effective, Matrix, Preset, TimePreset, Verdict, Who, Widening, active,
@@ -23,6 +25,7 @@ use norn::matrix::{
 };
 use norn::store::{CoordError, WTx};
 use norn::write::cards::{MatrixAsk, matrix_card, matrix_card_get};
+use runstav::events::CardChoice;
 use runstav::methods::matrix::{
     CellRow, CheckAnswer, CheckParams, EffectiveRow, Facts, GetParams, MatrixView, PresenceParams,
     WhoParam,
@@ -31,6 +34,7 @@ use runstav::types::Bounded;
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::{Arc, Mutex};
 
 /// What the gate decides for one action: allowed, asked through a card (its id), or refused (why).
@@ -91,6 +95,8 @@ struct State {
     delegated: BTreeMap<String, Delegation>,
     /// Who hears of a new matrix card (none in unit tests).
     editors: Option<Arc<crate::settings::agents::Editors>>,
+    /// `agents-browser-once-window` as last read (none: [`DEFAULT_ONCE_WINDOW`]).
+    once_window: Option<u64>,
 }
 
 /// The gate's state: the setting as last read, the away flag, the managers' grants.
@@ -167,7 +173,150 @@ fn granted(conn: &urdr::Connection, a: Action, ctx: &ActionCtx, now: f64) -> boo
     })
 }
 
-fn card_title(a: Action, f: &Facts) -> String {
+/// Whether A is a browser row: its cards list their answers (scopes, and widths for a private literal) and settle
+/// into grants (`crate::graph::settle_browser`).
+pub(crate) fn is_browser(a: Action) -> bool {
+    matches!(
+        a,
+        Action::Browser | Action::BrowserWeb | Action::BrowserPrivate
+    )
+}
+
+/// How long a "once" lasts when the setting was never read (`agents-browser-once-window`'s default).
+pub(crate) const DEFAULT_ONCE_WINDOW: u64 = 600;
+
+const WEB_BODY: &str = "The agent's browser and its own tools could then reach any public site; pages can send what the \
+                        agent gives them";
+const PRIVATE_BODY: &str =
+    "Any page the agent opens could then send requests to it, including ones that change things";
+
+/// How a private address's class (the web policy's name) reads on a card.
+fn class_label(class: &str) -> &str {
+    match class {
+        "lan" => "your LAN",
+        "ula" => "your network (IPv6)",
+        "link_local" => "link-local",
+        "cgnat" => "your tailnet (CGNAT)",
+        "loopback" | "host_own" => "this computer",
+        other => other,
+    }
+}
+
+/// The wider target a LAN or ULA literal may be granted as: its /24 (IPv4) or /64 (IPv6), on its own port.  None for
+/// a name, the reserved name, or any other class (those are granted one host:port at a time).
+pub(crate) fn cidr_of(f: &Facts) -> Option<PrivateTarget> {
+    if !matches!(f.class.as_ref()?.as_str(), "lan" | "ula") {
+        return None;
+    }
+    let PrivateTarget::HostPort(t) =
+        serde_json::from_value::<PrivateTarget>(f.target.clone()?).ok()?
+    else {
+        return None;
+    };
+    let (net, prefix) = match t.host {
+        Host::V4(a) => (IpAddr::V4(Ipv4Addr::from(u32::from(a) & 0xffff_ff00)), 24),
+        Host::V6(a) => (
+            IpAddr::V6(Ipv6Addr::from(u128::from(a) & !(u128::MAX >> 64))),
+            64,
+        ),
+        Host::Name(_) => return None,
+    };
+    Some(PrivateTarget::Cidr {
+        net,
+        prefix,
+        ports: (t.port, t.port),
+    })
+}
+
+/// SECS as a card says it ("10 minutes").
+fn span(secs: u64) -> String {
+    match secs {
+        60 => "1 minute".into(),
+        s if s % 60 == 0 => format!("{} minutes", s / 60),
+        1 => "1 second".into(),
+        s => format!("{s} seconds"),
+    }
+}
+
+/// The answers a browser row's card lists (call 5): once (ONCE seconds), this session, this plan (when the session
+/// has one), the widths of a LAN or ULA literal, and refuse.
+pub(crate) fn browser_choices(a: Action, ctx: &ActionCtx, once: u64) -> Vec<CardChoice> {
+    let c = |id: &str, label: String| CardChoice {
+        id: id.into(),
+        label,
+    };
+    let host = ctx.facts.host.as_ref().map(|h| h.as_str());
+    let mut out = vec![match (a, host) {
+        (Action::BrowserWeb, Some(h)) => c("once", format!("Allow {h} only, for {}", span(once))),
+        _ => c("once", format!("Allow once ({})", span(once))),
+    }];
+    out.push(c("session", "Allow for this session".into()));
+    let plan = ctx.plan.is_some();
+    if plan {
+        out.push(c("plan", "Allow for this plan".into()));
+    }
+    if a == Action::BrowserPrivate
+        && let Some(PrivateTarget::Cidr { net, prefix, ports }) = cidr_of(&ctx.facts)
+    {
+        let range = format!("{net}/{prefix} on port {}", ports.0);
+        out.push(c("session/cidr", format!("Allow {range} for this session")));
+        if plan {
+            out.push(c("plan/cidr", format!("Allow {range} for this plan")));
+        }
+        let all = "Allow every LAN and IPv6 ULA address, any port";
+        out.push(c("session/all-private", format!("{all}, for this session")));
+        if plan {
+            out.push(c("plan/all-private", format!("{all}, for this plan")));
+        }
+    }
+    out.push(c("refuse", "Refuse".into()));
+    out
+}
+
+/// What the user should know before answering a browser row's card.
+pub(crate) fn card_body(a: Action) -> Option<&'static str> {
+    match a {
+        Action::BrowserWeb => Some(WEB_BODY),
+        Action::BrowserPrivate => Some(PRIVATE_BODY),
+        _ => None,
+    }
+}
+
+/// A card's title, from the hub's facts only (never an agent's words).  A browser row's names the session.
+fn card_title(a: Action, who: &Who, ctx: &ActionCtx) -> String {
+    let f = &ctx.facts;
+    let name = || {
+        ctx.session
+            .clone()
+            .or_else(|| who.agent.clone())
+            .unwrap_or_else(|| "an agent".into())
+    };
+    match a {
+        Action::Browser => return format!("{} wants a browser in its sandbox", name()),
+        Action::BrowserWeb => {
+            return match &f.host {
+                Some(h) => format!("{} wants to open web sites (first: {})", name(), h.as_str()),
+                None => format!("{} wants to open web sites", name()),
+            };
+        }
+        Action::BrowserPrivate => {
+            let target = f
+                .target
+                .as_ref()
+                .and_then(|t| t.get("host_port"))
+                .and_then(Value::as_str)
+                .unwrap_or("a private address");
+            let mut t = format!("{} wants to open {target}", name());
+            if let Some(addr) = &f.addr {
+                t.push_str(&format!(" → {}", addr.as_str()));
+            }
+            if let Some(class) = &f.class {
+                t.push_str(&format!(" ({})", class_label(class.as_str())));
+            }
+            return t;
+        }
+        _ => {}
+    }
     let plain = |v: Value| v.as_str().unwrap_or_default().to_string();
     let what = match (&f.command, f.paths.0.first(), &f.diff_hash) {
         (Some(c), _, _) => plain(json!(c)),
@@ -176,6 +325,18 @@ fn card_title(a: Action, f: &Facts) -> String {
         _ => String::new(),
     };
     format!("{}: {}", a.id(), what)
+}
+
+/// Whether the grant card CARD wrote for A is live for CTX's session or plan at NOW (a once ends with its window).
+fn card_granted(conn: &urdr::Connection, a: Action, ctx: &ActionCtx, card: i64, now: f64) -> bool {
+    grants::matrix_grants_for(
+        conn,
+        a.id(),
+        ctx.session.as_deref(),
+        ctx.plan.as_deref(),
+        now,
+    )
+    .is_ok_and(|gs| gs.iter().any(|g| g.card == Some(card)))
 }
 
 impl MatrixGate {
@@ -192,6 +353,15 @@ impl MatrixGate {
     /// `presence/set`: from the next action the time presets follow.
     pub fn set_away(&self, away: bool) {
         self.st.lock().expect("matrix gate").away = away;
+    }
+
+    /// How long a browser card's "once" lasts, in seconds (`agents-browser-once-window` as last read).
+    pub fn once_window(&self) -> u64 {
+        self.st
+            .lock()
+            .expect("matrix gate")
+            .once_window
+            .unwrap_or(DEFAULT_ONCE_WINDOW)
     }
 
     fn preset_now(&self, now: f64) -> (Preset, Preset, bool) {
@@ -299,7 +469,7 @@ impl MatrixGate {
             Verdict::Never => Gate::Never(why),
             Verdict::Ask if granted(tx.sql(), a, ctx, now) => Gate::Allow,
             Verdict::Ask => {
-                let data = json!({
+                let mut data = json!({
                     "action": a.id(),
                     "who": who_json(who),
                     "session": ctx.session,
@@ -308,8 +478,17 @@ impl MatrixGate {
                     "amount": ctx.amount,
                     "facts": ctx.facts,
                 });
+                if is_browser(a) {
+                    // what the card offers, and how long its once lasts (the settle reads both back)
+                    let once = self.once_window();
+                    data["choices"] = json!(browser_choices(a, ctx, once));
+                    data["once_window"] = json!(once);
+                    if let Some(b) = card_body(a) {
+                        data["body"] = json!(b);
+                    }
+                }
                 let ask = MatrixAsk {
-                    title: card_title(a, &ctx.facts),
+                    title: card_title(a, who, ctx),
                     data,
                     job: None,
                 };
@@ -320,7 +499,8 @@ impl MatrixGate {
 
     /// At execution: the card's answer under the matrix as it is now.  A switch that made the action Never refuses
     /// it whatever the user said; a grant that covers the card's facts allows it; an open card is still a question;
-    /// a declined one is a refusal.
+    /// a declined one is a refusal.  A browser card's yes (once, session, plan, a width) holds while the grant it
+    /// wrote is live.
     pub fn recheck(&self, conn: &urdr::Connection, card: i64, now: f64) -> Gate {
         let Ok(Some(c)) = matrix_card_get(conn, card) else {
             return Gate::Never("no such matrix card".into());
@@ -355,6 +535,13 @@ impl MatrixGate {
         }
         match (c.state.as_str(), c.choice.as_deref()) {
             ("settled", Some("allow")) => Gate::Allow,
+            ("settled", Some(ch)) if is_browser(a) && ch != "refuse" => {
+                if card_granted(conn, a, &ctx, card, now) {
+                    Gate::Allow
+                } else {
+                    Gate::Never("the user's yes on this card has ended".into())
+                }
+            }
             ("settled", _) => Gate::Never("the user declined".into()),
             _ if v == Verdict::Allow => Gate::Allow,
             _ => Gate::Ask(card),
@@ -469,6 +656,8 @@ impl MatrixGate {
         if let Some((v, _)) = settings.effective("drgnx-agents-matrix", None) {
             let _ = self.apply_setting(&v);
         }
+        let once = settings.current().loaded.values.agents_browser_once_window;
+        self.st.lock().expect("matrix gate").once_window = Some(once);
     }
 
     /// The preset in force now (the time presets and the away flag applied).
@@ -510,7 +699,14 @@ impl MatrixGate {
             job: None,
             conn_id: 0,
         };
-        let title = card_title(a, &ctx.facts);
+        let title = card_title(a, &who, &ctx);
+        let mut event = json!({"job": null, "task": null, "kind": "matrix", "title": title});
+        if is_browser(a) {
+            event["choices"] = json!(browser_choices(a, &ctx, self.once_window()));
+            if let Some(b) = card_body(a) {
+                event["body"] = json!(b);
+            }
+        }
         let gate = writer
             .write(&system, "coord/matrix-check", move |tx| {
                 g.check(tx, &who, a, &ctx, now)
@@ -523,10 +719,8 @@ impl MatrixGate {
             && id > 0
             && let Some(e) = editors
         {
-            e.broadcast(
-                "card",
-                json!({"id": id, "job": null, "task": null, "kind": "matrix", "title": title}),
-            );
+            event["id"] = json!(id);
+            e.broadcast("card", event);
         }
         gate
     }
