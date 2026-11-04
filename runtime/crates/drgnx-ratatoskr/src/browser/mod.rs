@@ -104,10 +104,23 @@ pub async fn memory_watch(unit: String, cap: u64, high: u32, stop: impl Fn() -> 
     let file = std::path::Path::new("/sys/fs/cgroup")
         .join(cg.trim_start_matches('/'))
         .join("memory.current");
+    watch_memory_file(&file, cap, high, std::time::Duration::from_secs(1), stop).await;
+}
+
+/// The watch's loop on FILE (a cgroup's `memory.current`), read every EVERY: STOP each time the value rises above
+/// HIGH percent of CAP (once per rise: it must fall back below first). It ends when FILE cannot be read (the cgroup
+/// went) or STOP says false.
+pub async fn watch_memory_file(
+    file: &std::path::Path,
+    cap: u64,
+    high: u32,
+    every: std::time::Duration,
+    stop: impl Fn() -> bool,
+) {
     let mut above = false;
     loop {
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        let Some(current) = tokio::fs::read_to_string(&file)
+        tokio::time::sleep(every).await;
+        let Some(current) = tokio::fs::read_to_string(file)
             .await
             .ok()
             .and_then(|t| t.trim().parse::<u64>().ok())
@@ -354,5 +367,63 @@ mod tests {
         let cap = 4 << 30;
         assert!(!over_high(cap / 4 * 3, cap, 75));
         assert!(over_high(cap / 4 * 3 + 1, cap, 75));
+    }
+
+    /// The watch stops the browser once per rise above the mark, and ends with its cgroup.
+    #[tokio::test]
+    async fn the_memory_watch_stops_once_per_rise_and_ends_with_its_cgroup() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("memory.current");
+        // whole values only, as the kernel's file gives them
+        let set = |v: &str| {
+            let tmp = dir.path().join("memory.tmp");
+            std::fs::write(&tmp, v).unwrap();
+            std::fs::rename(&tmp, dir.path().join("memory.current")).unwrap();
+        };
+        set("10\n");
+        let stops = Arc::new(AtomicUsize::new(0));
+        let seen = stops.clone();
+        let watch = tokio::spawn({
+            let file = file.clone();
+            async move {
+                watch_memory_file(&file, 100, 75, Duration::from_millis(5), move || {
+                    seen.fetch_add(1, Ordering::SeqCst);
+                    true
+                })
+                .await;
+            }
+        });
+        // a failure guard only: each wait ends once the watch did what it waits for
+        let until = |n: usize| {
+            let stops = stops.clone();
+            async move {
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    while stops.load(Ordering::SeqCst) < n {
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                })
+                .await
+                .expect("the watch stopped the browser")
+            }
+        };
+        set("80\n");
+        until(1).await;
+        // still above: no second stop; below, then above again: the second
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(stops.load(Ordering::SeqCst), 1);
+        set("20\n");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        set("90\n");
+        until(2).await;
+        // the cgroup goes: the watch ends
+        std::fs::remove_file(&file).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), watch)
+            .await
+            .expect("the watch ended")
+            .unwrap();
+        assert_eq!(stops.load(Ordering::SeqCst), 2);
     }
 }

@@ -150,9 +150,37 @@ fn probe(name: &str, a: &[String]) -> Full {
         "kill" => kill(&need(name, a, 2)[0], &a[1]),
         "http-connect" => http_connect(&need(name, a, 1)[0]),
         "landlock-abi" => landlock_abi(),
+        "serve-http" => serve_http(need(name, a, 3)),
         other => usage(&format!("unknown probe {other:?}")),
     };
     r.map(|d| (d, None))
+}
+
+/// `serve-http PORT N TEXT`: a dev server stand-in on `127.0.0.1:PORT` that answers N requests, each `200` with TEXT
+/// as its body, then ends; `reached` says how many it served.
+fn serve_http(a: &[String]) -> Res {
+    let port: u16 = a[0].parse().map_err(|_| (libc::EINVAL, None))?;
+    let n: usize = a[1].parse().map_err(|_| (libc::EINVAL, None))?;
+    let listener = std::net::TcpListener::bind(("127.0.0.1", port)).map_err(os)?;
+    for _ in 0..n {
+        let (mut c, _) = listener.accept().map_err(os)?;
+        let mut head = Vec::new();
+        let mut b = [0u8; 1024];
+        while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+            match c.read(&mut b) {
+                Ok(0) | Err(_) => break,
+                Ok(k) => head.extend_from_slice(&b[..k]),
+            }
+        }
+        let body = a[2].as_bytes();
+        let _ = write!(
+            c,
+            "HTTP/1.0 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let _ = c.write_all(body);
+    }
+    Ok(Some(format!("served {n}")))
 }
 
 fn read(path: &str) -> Res {

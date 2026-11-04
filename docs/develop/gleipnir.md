@@ -1225,7 +1225,7 @@ size.
 | environment | `env-has NAME…`: reached when any is set, the detail names which (never a value) |
 | syscalls | `syscall NAME` for `unshare-user io-uring keyctl add-key vsock clone3 clone-newuser mount-missing tiocsti-own-pty tiocsti-high-own-pty ptrace-own-child x32-getpid i386-int80`. Each runs in a forked child, so a kill by the filter is a result: blocked, no errno, detail `killed by SIGSYS`. `x32-getpid` and `i386-int80` are x86_64 only (elsewhere ENOSYS) |
 | process | `status-field NAME` (from `/proc/self/status`), `fds` (the open descriptors below 1024, `0,1,2`), `proc-read PID FILE` (size), `spawn-sleep N` (a child that sleeps N seconds without exec and without the probe's pipes; the detail is its pid), `kill PID SIG` |
-| other | `run CMD…` (a child; reached when it exits 0, the detail is the exit code, `out_bytes` counts what it wrote and nothing is printed), `http-connect TARGET` (CONNECT through `$HTTPS_PROXY`; the detail is the status code, reached only for 200), `landlock-abi` (the detail is the version) |
+| other | `run CMD…` (a child; reached when it exits 0, the detail is the exit code, `out_bytes` counts what it wrote and nothing is printed), `http-connect TARGET` (CONNECT through `$HTTPS_PROXY`; the detail is the status code, reached only for 200), `landlock-abi` (the detail is the version), `serve-http PORT N TEXT` (a dev server stand-in on `127.0.0.1:PORT`: N requests answered `200` with TEXT, then reached with `served N`) |
 
 Each `syscall` is chosen so that its unfiltered result differs from the filter's: `mount-missing` mounts on a path
 that does not exist (ENOENT unfiltered, EPERM filtered), `clone3` gets a null argument block (EINVAL, ENOSYS),
