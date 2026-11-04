@@ -17,7 +17,7 @@ Using drgnx.
 - [AI](guide/ai.md): one provider registry (OpenRouter and local runners), roles with fallback, keys read from the environment or auth-source, stored only in your Keychain or keyring when you ask, agent profiles.
 - [Runners](guide/runners.md): your other machines run jobs; how drgnx reaches them through your own ssh (the options it always sets, one connection per runner, a lost link never a result), logins it never answers, host keys it never accepts.
 - [Jobs](guide/jobs.md): agents through a plan — proposal, approval, worktrees, a policy, review and merge (with an optional accept gate: every file accepted), budget, fallback; `drgnx job`.
-- [Agent browser](guide/agent-browser.md): the browser a sandboxed agent session drives — which one drgnx finds, `drgnx browser install` (a pinned, checksum-verified download you run yourself), `drgnx browser list`.
+- [Agent browser](guide/agent-browser.md): the browser a sandboxed agent session drives — which one drgnx finds, what it can reach and how to answer its cards, `drgnx browser install` (a pinned, checksum-verified download you run yourself), `drgnx browser list`, the doctor's line.
 - [Semantic Search](guide/search.md): find code by meaning — `#` in the palette, the index, what is never indexed, `.drgnx/search.eld`, privacy.
 - [Editing](guide/editing.md): language support (tree-sitter grammars), and the editor's amenities.
 - [Large files](guide/large-files.md): above 50 MiB a file opens in chunks, lean or raw — a file you open asks once, `drgnx open` and everything automatic never ask; the header line and the status bar say which, and switch; long lines turn on so-long.

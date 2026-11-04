@@ -410,7 +410,7 @@ edit code, commit, push, change settings), columns are its role (manager, worker
 provider. Each cell is Allow, Ask or Never, sometimes with a limit. Three presets ship: Cautious, Balanced and
 Autonomous. Your own cells, a project's and a plan's refine the preset; where several columns apply the most
 restrictive wins, and a more specific column never widens. `unsandboxed` and `user.private` are never allowed.
-Three rows are about the agent's own browser, which runs inside its sandbox:
+Three rows are about the agent's own browser, which runs inside its sandbox ([agent-browser.md](agent-browser.md)):
 
 - **`browser`**: the session gets a browser of its own, which can reach only the agent's local servers. Cautious
   asks; Balanced allows it for managers and workers and asks for chats; Autonomous allows it.

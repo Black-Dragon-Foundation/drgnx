@@ -143,7 +143,7 @@ raw, is not served, and the file on disk is read instead, under the same limit.
 ## Durable jobs
 
 Background work that must survive a closed frame, a restart of Emacs or an interrupted chat runs as a **job of the
-hub**: tree-sitter grammars, Mermaid diagrams, the Playwright server of Test Report, the browser for agents, local AI
+hub**: tree-sitter grammars, Mermaid diagrams, the Playwright server of Test Report, local AI
 servers, and the installs of onboarding all start with `drgnx-exec-start`
 (`docs/guide/jobs.md`, "The editor's jobs"). The hub runs each in a unit of its own and keeps its log and exit code, so
 any Emacs lists it in the Agents tab (running, done, failed, stopped, gone), shows its log (Show Job Log) and stops it
@@ -151,7 +151,7 @@ any Emacs lists it in the Agents tab (running, done, failed, stopped, gone), sho
 `memory_max` or `nice` it does not accept) is a message. A job can be memory-capped (`:memory-max "1G"`: the unit's
 `MemoryMax` on Linux; macOS has no cap for jobs, so drgnx asks for none there) and made nicer (`:nice 10`). A job's
 time box is an hour unless the caller asks for more: the servers drgnx keeps (the local AI runner, the Playwright
-server, the browser for agents) run with no time box, so a daemon left up for days keeps them, and the runner is started
+server) run with no time box, so a daemon left up for days keeps them, and the runner is started
 again when it is down. Commits a job makes while it works on a task are recorded for that task ([Work tracker](work.md)).
 
 ## The job sandbox

@@ -1,7 +1,65 @@
 # The agent browser
 
-A sandboxed agent session can drive a headless Chromium that runs inside its own sandbox. This page covers the
-first step: which browser drgnx uses, and how to get one.
+A sandboxed agent session can drive a headless Chromium that runs inside its own sandbox. The agent tests its web app,
+reads a page or takes a screenshot, and the browser can reach only what you allowed. This page covers what a session
+gets, what it can and cannot reach, how to answer its cards, how to get a browser and what the doctor says.
+
+**Not there yet.** You cannot watch the agent's browser: the [Live view](live.md) only says that watching arrives
+later, and the browser has no window of its own. Your own browser (with your sign-ins) is not offered to agents, the
+reduced sandbox tier (no bubblewrap) gives no browser, and macOS gives none. Each of these says so in the doctor or in
+a notice instead of failing quietly.
+
+## What a session gets
+
+When the `browser` row of the [permissions matrix](security.md#the-permissions-matrix) allows it (Balanced: managers and
+workers; a chat asks), a session starts with a headless browser inside its own sandbox, next to the agent and under the
+same limits. The agent finds it at `PLAYWRIGHT_MCP_CDP_ENDPOINT` (and `DRGNX_BROWSER_CDP`), a
+`ws://127.0.0.1:9222/devtools/browser/…` address with a secret of its own that only that session's environment holds.
+Playwright MCP and other CDP clients connect there with no setup ([agents.md](agents.md#what-a-session-gets-with-the-browser)).
+
+With no card and no grant the browser reaches only the agent's own local servers (see below). A host that cannot give
+a browser starts the session without one, says why in `agents/get` and shows one notice with the fix: no full
+sandbox tier, a kernel below Landlock ABI 9, or no browser found.
+
+## What it can reach, and what a grant really gives
+
+| Target | Needs | Notes |
+|---|---|---|
+| Servers the agent started inside its sandbox | nothing | `http://127.0.0.1:PORT` |
+| Servers on this computer | a `browser.private` grant | as `host.drgnx.internal:PORT`, only for the ports in `drgnx-agents-browser-local-ports` (3000, 3001, 4173, 4200, 5000, 5173, 8000, 8080, 8888) |
+| Your LAN, tailnet, other private addresses | a `browser.private` grant | one target at a time, or a /24 or /64 for numbers on your LAN |
+| Public web sites | the `browser.web` row | HTTPS and plain HTTP on ports 80 and 443, through the session's web proxy |
+
+Be clear about the web grant. It lets the agent's browser open any public site, and a page can send out whatever the
+agent types into it or reads from your allowed servers. drgnx checks each connection (where it leads, not only the
+name), but it cannot judge what the agent chooses to send. That is why only Autonomous allows the web without asking.
+
+**Never reachable, whatever you grant:** the hub's own ports, an Emacs server port, any address of this computer outside
+the ports you listed, link-local metadata addresses such as `169.254.169.254`, non-web ports on the public web, and the
+hosts in `drgnx-agents-browser-deny-hosts`. A name that resolves to a different address than the one checked (DNS
+rebinding) is refused.
+
+## Answering a card
+
+Three rows ask: `browser`, `browser.web` and `browser.private`. Each card says what the session wants, written from what
+the hub saw and never from the agent's words, with the answers **Allow once** (ten minutes by default, for the one
+target named), **Allow for this session**, **Allow for this plan**, **Refuse**, and for a numeric LAN address its /24
+or /64, or every LAN address. `browser.private` asks in every preset, Autonomous included; `host.drgnx.internal` and
+tailnet or link-local addresses are offered one target at a time. A refused target is not asked about again by that
+session. The full list of answers is in [security.md](security.md#answering-a-browser-card).
+
+## Downloads
+
+A download the page makes lands in the browser's downloads folder (`/tmp/drgnx-browser/downloads` in the sandbox), not
+in the folder Playwright asked for, because the browser cannot write there. Playwright's `download.path()` therefore
+does not find the file; the agent reads it from that folder.
+
+## Memory and idle
+
+A session and its browser share one memory cap, `drgnx-agents-session-memory` (4G by default), enforced with a user
+systemd scope. At `drgnx-agents-browser-memory-high` (75% by default) the browser is stopped and starts again at the
+agent's next command. A browser that gets no command for `drgnx-agents-browser-idle` seconds (600) is stopped the same
+way. Without a user systemd the session has no cap and the doctor warns.
 
 ## Which browser
 

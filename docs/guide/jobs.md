@@ -52,7 +52,7 @@ it does not depend on the agent that started it or on the editor, and it survive
 
 ### The editor's jobs
 
-The editor's own background work (tree-sitter grammars, mermaid, the browser for agents, local AI servers, onboarding
+The editor's own background work (tree-sitter grammars, mermaid, local AI servers, onboarding
 installs, the search indexer) is a job of the same list: you see it beside the agents' jobs, and it keeps running when
 Emacs closes. A job you start (through the editor or `exec/start`) may carry four things an agent's job never does; an
 agent that sends any of them is refused with `invalid-params`:
@@ -75,7 +75,7 @@ and never call the hub, so timers and redisplay may use them; `drgnx-exec-log` a
 (one call, `tail_bytes`; waiting up to 5 s: for commands only) and end it. A job's status there is `running`, `done`, `failed` (a non-zero exit
 or the time box), `stopped` or `gone` (lost). A job's time box is an hour unless the caller passes `:timebox` (up to 24
 hours) or `:no-timebox`. The servers the editor starts and leaves up (the local AI runner, the Playwright server of Test
-Report, the browser for agents) run without a time box, so a daemon that stays up for days never loses them: they end
+Report) run without a time box, so a daemon that stays up for days never loses them: they end
 when you stop them, when the editor's teardown does, or when the hub stops. The search indexer is a batch job (it exits
 when the index is built) and has the longest time box, 24 hours; tree-sitter grammar builds and mermaid drawings keep the
 hour. Onboarding runs its installs and downloads as jobs too and waits for
