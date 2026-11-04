@@ -100,6 +100,12 @@ this returns.
   - network from the matrix's Network cell: `ProviderOnly` and `ProviderAndPackages` are isolated with the relay to
     `<session dir>/proxy.sock` and `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` set (the proxy's allowlist is what differs);
     `Open` shares the host network. A chat is always provider-only;
+  - the session dir (`run`, read-only) is made by the spec itself (`paths::make_session_dir`, which leaves one that
+    is there alone), since validation requires `run`'s source to exist and a new session has none yet: `agents/start`
+    and `agents/probe` build the spec before anything else uses the id (the hub opens the session's MCP socket,
+    `mcp.sock`, after the launch is prepared and before the spawn). The sockets the spec names (`hub.sock`,
+    `proxy.sock`) need not exist at the start: the dir is bound, not each socket, and the relay connects per
+    connection. A launch that is refused removes a session dir it made; the probe removes its own when it is done;
   - the full tier when bwrap is usable, else the reduced tier; neither: refused.
 - `ratatoskr relay --parent-pid PID [--ready-fd N] PORT=SOCKET…` runs [the relay](#the-relay-task-11).
 - `ratatoskr sandbox check` and the doctor's `sandbox` section run [the check](#the-check); `sandbox::run_probe`

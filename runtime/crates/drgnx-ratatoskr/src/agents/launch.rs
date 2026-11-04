@@ -202,7 +202,8 @@ pub fn launch(env: &Env, plan: &LaunchPlan, shape: &SessionShape) -> Result<Laun
     launch_on(env, &sb, plan, shape)
 }
 
-/// [`launch`] on a chosen sandbox.
+/// [`launch`] on a chosen sandbox.  The spec makes the session dir (`sandbox::session_spec`): a launch that is refused
+/// removes it again when it was not there before.
 pub fn launch_on(
     env: &Env,
     sb: &Sandbox,
@@ -212,6 +213,26 @@ pub fn launch_on(
     let target = sb
         .target()
         .ok_or_else(|| refusal("no sandbox backend here"))?;
+    let new_dir = paths::session_dir(env, &paths::socket_path(env), &shape.sid)
+        .ok()
+        .filter(|d| std::fs::symlink_metadata(d).is_err());
+    let launched = launch_in(env, sb, target, plan, shape);
+    if launched.is_err()
+        && let Some(d) = new_dir
+    {
+        // empty, as it was just made; one that something filled since is left
+        let _ = std::fs::remove_dir(d);
+    }
+    launched
+}
+
+fn launch_in(
+    env: &Env,
+    sb: &Sandbox,
+    target: gleipnir::Target,
+    plan: &LaunchPlan,
+    shape: &SessionShape,
+) -> Result<Launch, Refusal> {
     let ctx = sandbox::context(env);
     let scratch = scratch_dir(env, &shape.sid)?;
     let spec = sandbox::session_spec(env, &ctx, plan, shape, &scratch, sb.tier(), target)?;

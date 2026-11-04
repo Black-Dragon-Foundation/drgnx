@@ -778,7 +778,8 @@ pub fn tmp_dir(env: &Env) -> PathBuf {
 /// the system readable, the lock's `protected_ro` pinned read-only, its session dir (`hub.sock`, and `proxy.sock`
 /// unless the network is open) read-only, the network the cell's: the proxy through the relay, or the host's.  The
 /// program's environment is a short base, the proxy's variables, and the lock's `env` last.  `scratch` is the
-/// session's private temp parent.  There is no unsandboxed spec: nothing here builds one.
+/// session's private temp parent.  The session dir is made here (`paths::make_session_dir`, which does nothing to one
+/// that is there); the sockets in it need not exist yet.  There is no unsandboxed spec: nothing here builds one.
 pub fn session_spec(
     env: &Env,
     ctx: &Context,
@@ -795,8 +796,9 @@ pub fn session_spec(
         path: None,
         message,
     };
-    let run = paths::session_dir(env, &paths::socket_path(env), &shape.sid)
-        .map_err(|e| malformed(format!("session id: {e}")))?;
+    // made here: a new session's id has no MCP session or agent socket yet, and `run`'s source must exist
+    let run = paths::make_session_dir(env, &paths::socket_path(env), &shape.sid)
+        .map_err(|e| malformed(format!("session dir: {e}")))?;
     let tmp = scratch.join("tmp");
     paths::private_dir(&tmp).map_err(|e| malformed(format!("{}: {e}", tmp.display())))?;
     let mut write = shape.write.clone();

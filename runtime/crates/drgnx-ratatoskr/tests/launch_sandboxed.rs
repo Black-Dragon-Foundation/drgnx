@@ -72,11 +72,22 @@ impl Fx {
 
     /// Run the plan in `shape` on `tier`; its exit code.  A tier that is not usable here fails the test.
     fn run(&self, tier: Tier, plan: &LaunchPlan, shape: &SessionShape) -> i32 {
-        let sb = Sandbox::detect(tier, helper_at(Path::new(RATATOSKR)), None)
-            .unwrap_or_else(|r| panic!("the {tier:?} tier is not usable here: {r}"));
+        self.run_with(tier, plan, shape, || ())
+    }
+
+    /// [`Fx::run`] in the hub's order: nothing has made the session dir before the launch, and `between` runs after the
+    /// launch and before the spawn (where `agents/start` binds the session's `mcp.sock`).
+    fn run_with(
+        &self,
+        tier: Tier,
+        plan: &LaunchPlan,
+        shape: &SessionShape,
+        between: impl FnOnce(),
+    ) -> i32 {
+        let sb = sandbox(tier);
         let env = self.env();
-        paths::make_session_dir(&env, &paths::socket_path(&env), &shape.sid).unwrap();
         let launch = launch_on(&env, &sb, plan, shape).unwrap_or_else(|r| panic!("refused: {r}"));
+        between();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -104,6 +115,12 @@ impl Fx {
     }
 }
 
+/// The sandbox of `tier` here; a tier that is not usable fails the test.
+fn sandbox(tier: Tier) -> Sandbox {
+    Sandbox::detect(tier, helper_at(Path::new(RATATOSKR)), None)
+        .unwrap_or_else(|r| panic!("the {tier:?} tier is not usable here: {r}"))
+}
+
 /// The reduced tier where the kernel has Landlock ABI 9, else the full tier: the row's check runs under a real
 /// sandbox either way (no CI runner's kernel has ABI 9 yet; the escape suite's reduced rows list that).
 fn reduced() -> Tier {
@@ -117,6 +134,43 @@ fn reduced() -> Tier {
         Tier::Full
     }
 }
+/// `agents/start`'s order: the launch of a new session id makes its session dir (no MCP session or agent socket has),
+/// the hub binds the session's `mcp.sock` in it before the spawn, and the agent inside finds that socket.  A launch
+/// that is refused leaves no session dir behind.
+#[test]
+#[ignore = "needs the real sandbox (bwrap with user namespaces): the sandbox lane"]
+fn a_new_sessions_launch_makes_its_dir_and_a_refused_one_leaves_none() {
+    let fx = Fx::new();
+    let env = fx.env();
+    let socket = paths::socket_path(&env);
+    let dir = paths::session_dir(&env, &socket, "S1").unwrap();
+    assert!(std::fs::symlink_metadata(&dir).is_err());
+    let mcp = dir.join(paths::SESSION_MCP_SOCKET);
+    let script = format!("[ -S {m} ] || exit 11; exit 0", m = mcp.display());
+    let mut bound = None;
+    let code = fx.run_with(
+        reduced(),
+        &fx.plan(&script),
+        &fx.shape(NetCell::ProviderOnly),
+        || bound = Some(std::os::unix::net::UnixListener::bind(&mcp).unwrap()),
+    );
+    assert_eq!(code, 0, "the agent did not find mcp.sock");
+    drop(bound);
+
+    let gone = paths::session_dir(&env, &socket, "S2").unwrap();
+    let mut shape = fx.shape(NetCell::ProviderOnly);
+    shape.sid = "S2".into();
+    shape.write = vec![fx.p("home")];
+    let refused = launch_on(&env, &sandbox(reduced()), &fx.plan("exit 0"), &shape)
+        .expect_err("a writable home is refused");
+    assert_eq!(refused.rule, gleipnir::Rule::ExposesUser, "{refused}");
+    assert!(
+        std::fs::symlink_metadata(&gone).is_err(),
+        "{} was left",
+        gone.display()
+    );
+}
+
 #[test]
 #[ignore = "needs the real sandbox (bwrap with user namespaces): the sandbox lane"]
 fn worker_writes_only_its_worktree() {
