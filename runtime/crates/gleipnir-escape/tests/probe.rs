@@ -227,6 +227,8 @@ fn every_syscall_name_runs_to_a_result() {
         "ptrace-own-child",
         "x32-getpid",
         "i386-int80",
+        "pidfd-getfd",
+        "process-vm-readv",
     ] {
         let (l, code) = probe(&["syscall", name]);
         assert_eq!(code, 0, "{name}");
@@ -306,6 +308,9 @@ fn bad_usage_exits_2() {
         &["read"],
         &["read", "/x", "--and"],
         &["syscall", "nope"],
+        &["--as-browser"],
+        &["--stand-in", "/d", "@x"],
+        &["--stand-in", "/d", "@x", "port"],
     ] {
         let out = Command::new(PROBE).args(args).output().unwrap();
         assert_eq!(out.status.code(), Some(2), "{args:?}");

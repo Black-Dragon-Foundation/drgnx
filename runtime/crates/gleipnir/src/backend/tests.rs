@@ -551,6 +551,7 @@ fn test_hooks_reach_the_inner_spec() {
     let hooks = TestHooks {
         landlock_omit: vec![fx.p("w")],
         abi_cap: Some(8),
+        browser_argv: vec![],
     };
     for (kind, target) in [
         (BackendKind::Bwrap, Target::LinuxBwrap),
@@ -569,4 +570,20 @@ fn test_hooks_reach_the_inner_spec() {
         assert_eq!(inner.landlock_omit, hooks.landlock_omit, "{kind:?}");
         assert_eq!(inner.abi_cap, Some(8), "{kind:?}");
     }
+    // The browser host's argv in place of the plan's (the escape probe); the rest of the plan stays.
+    let probe = vec!["/opt/probe".to_string(), "--as-browser".into()];
+    let p = fx
+        .sandbox(BackendKind::Bwrap)
+        .prepare(
+            fx.browser_spec(Target::LinuxBwrap),
+            vec!["/bin/true".into()],
+            Some(hub_end().1),
+            TestHooks {
+                browser_argv: probe.clone(),
+                ..hooks
+            },
+        )
+        .unwrap();
+    let b = inner_spec(&p.invocation).browser.expect("the browser plan");
+    assert_eq!((b.argv, b.hub_fd, b.landlock.min_abi), (probe, 5, 9));
 }

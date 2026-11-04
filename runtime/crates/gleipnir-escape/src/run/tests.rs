@@ -606,3 +606,134 @@ fn macos_row_specs_validate_and_make_a_profile() {
         }
     }
 }
+
+fn browser_rows() -> Vec<Row> {
+    let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("rows/linux/browser.jsonl");
+    crate::row::parse_file(&file, Platform::Linux).unwrap()
+}
+
+/// The browser layer's rows: the plan's table, each `blocked` one with its control; a host below ABI 9 skips the
+/// layer's rows but runs the refusal row and the agent's two seccomp rows.
+#[test]
+fn browser_rows_cover_the_table_and_skip_below_abi_9() {
+    let rows = browser_rows();
+    let names: Vec<&str> = rows.iter().map(|r| r.row.as_str()).collect();
+    for want in [
+        "browser-cannot-read-worktree",
+        "browser-cannot-read-login-dir",
+        "browser-cannot-read-agent-tmp",
+        "browser-cannot-read-agent-environ",
+        "browser-cannot-connect-hub-sock",
+        "browser-cannot-connect-mcp-sock",
+        "browser-cannot-connect-provider-port",
+        "browser-cannot-connect-cdp-port",
+        "browser-reaches-web-port-and-a-local-port",
+        "browser-cannot-bind-tcp",
+        "browser-cannot-signal-agent",
+        "browser-cannot-reach-agent-abstract",
+        "browser-writes-own-dir-only",
+        "browser-below-abi9-refused",
+        "agent-pidfd-getfd-refused",
+        "agent-process-vm-readv-refused",
+    ] {
+        assert!(names.contains(&want), "no row {want}");
+    }
+    let host = Host {
+        in_container: false,
+        root: false,
+        landlock_abi: 8,
+        x32: false,
+    };
+    for r in &rows {
+        let skip = skip_reason(r, &host);
+        if !cfg!(target_os = "linux") {
+            assert_eq!(skip, Some(Skip::NeedsLinux), "{}", r.row);
+        } else if r.needs.contains(&Need::Browser) {
+            assert_eq!(
+                skip,
+                Some(Skip::LandlockBelow { have: 8, need: 9 }),
+                "{}",
+                r.row
+            );
+        } else {
+            assert_eq!(skip, None, "{}", r.row);
+        }
+    }
+}
+
+/// A browser-layer row's spec is a browser session's (the web, CDP and provider relays, the session's sockets, the
+/// local port, the probe as the browser's program), and gleipnir accepts it for the full tier with its floor at 9.
+#[test]
+fn browser_row_specs_validate_for_the_full_tier() {
+    for r in browser_rows().iter().filter(|r| r.layer.is_some()) {
+        let mut fx = Fixture::new().unwrap();
+        fx.session_sockets().unwrap();
+        setup(&mut fx, r, false).unwrap();
+        let bin = fx.path("bin");
+        std::fs::write(bin.join("gleipnir-probe"), "x").unwrap();
+        let spec = build_spec_for(&fx, r, &bin, true).unwrap();
+        let run = |s: &str| fx.path("run/drgnx/s/S1").join(s);
+        let ports: Vec<u64> = spec["net"]["isolated"]["relay"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["port"].as_u64().unwrap())
+            .collect();
+        assert_eq!(ports, [3128, 3130, 9222], "{}", r.row);
+        assert_eq!(spec["sockets"].as_array().unwrap().len(), 5, "{}", r.row);
+        assert_eq!(spec["extra_tcp_ports"], json!([5173]), "{}", r.row);
+        assert_eq!(
+            spec["browser"]["program"],
+            bin.join("gleipnir-probe").to_string_lossy().as_ref()
+        );
+        let spec: gleipnir::Spec =
+            serde_json::from_value(spec).unwrap_or_else(|e| panic!("{}: {e}", r.row));
+        let p = |rel: &str| fx.path(rel);
+        let ctx = gleipnir::Context {
+            home: p("home"),
+            closed: vec![p("data"), p("config")],
+            user_sockets: vec![p("run/drgnx/hub-0000.sock"), p("run/bus")],
+            run_parents: vec![p("run/drgnx/s")],
+            program_dirs: vec!["/usr/bin".into()],
+            ..gleipnir::Context::default()
+        };
+        let valid = gleipnir::validate(spec, &ctx, gleipnir::Target::LinuxBwrap)
+            .unwrap_or_else(|e| panic!("{}: {e}", r.row));
+        assert_eq!(valid.spec().layers.landlock_min_abi, 9, "{}", r.row);
+        assert!(valid.spec().sockets.contains(&run("cdp.sock")), "{}", r.row);
+    }
+}
+
+/// The browser run's two argvs: the probes run in the browser host, or in the stand-in agent for the control.
+#[test]
+fn browser_layer_argv_puts_the_probes_in_the_browser_or_the_agent() {
+    let fx = Fixture::new().unwrap();
+    let probe = Path::new("/p/gleipnir-probe");
+    let probes = vec!["fds".to_string(), "--and".into(), "fds".into()];
+    let abs = fx.value("ABSTRACT").unwrap();
+    let (b, a) = browser_layer_argv(&fx, probe, probes.clone(), false).unwrap();
+    assert_eq!(
+        b,
+        [
+            "/p/gleipnir-probe",
+            "--as-browser",
+            "/tmp/drgnx-browser",
+            "fds",
+            "--and",
+            "fds"
+        ]
+    );
+    assert_eq!(
+        a,
+        [
+            "/p/gleipnir-probe",
+            "--stand-in",
+            "/tmp/drgnx-browser",
+            abs.as_str(),
+            "5173"
+        ]
+    );
+    let (b, a) = browser_layer_argv(&fx, probe, probes, true).unwrap();
+    assert_eq!(b.len(), 3);
+    assert_eq!(&a[5..], ["fds", "--and", "fds"]);
+}

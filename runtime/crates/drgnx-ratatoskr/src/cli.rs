@@ -38,7 +38,7 @@ pub const USAGE: &str = "usage: ratatoskr serve [--foreground] [--parent-pid PID
     \x20          (Hrafn's embed worker; run by the hub only)\n\
     \x20      ratatoskr sandbox run --spec FILE --result FILE [--tier full|reduced] [--bwrap PATH]\n\
     \x20          [--pause-before-spawn FIFO] [--landlock-omit PATH]... [--landlock-abi-cap N] [--settings-guards]\n\
-    \x20          -- CMD...   (test builds only)";
+    \x20          [--browser-probe ARG]... -- CMD...   (test builds only)";
 
 /// How long `ensure` waits for the hub to answer `ping`.
 pub const ENSURE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -170,6 +170,9 @@ pub struct SandboxRunArgs {
     /// `--settings-guards`: close your config files and pin the write roots' settings files, as a job will
     /// (`crate::sandbox_settings`).
     pub settings_guards: bool,
+    /// `--browser-probe ARG`, one per argument: the browser host's argv in place of the plan's, so the escape probe
+    /// runs under the browser layer (the spec has a `browser`; the run makes the socketpair and holds the hub's end).
+    pub browser_probe: Vec<String>,
     pub command: Vec<String>,
 }
 
@@ -543,6 +546,7 @@ fn sandbox_run(p: &mut lexopt::Parser) -> Result<SandboxRunArgs, String> {
     let (mut spec, mut result, mut tier) = (None, None, gleipnir::Tier::Full);
     let (mut bwrap, mut pause, mut omit, mut cap) = (None, None, Vec::new(), None);
     let mut settings_guards = false;
+    let mut browser_probe = Vec::new();
     let mut command: Vec<OsString> = Vec::new();
     while let Some(arg) = p.next().map_err(e)? {
         match arg {
@@ -560,6 +564,8 @@ fn sandbox_run(p: &mut lexopt::Parser) -> Result<SandboxRunArgs, String> {
             Long("landlock-omit") => omit.push(PathBuf::from(p.value().map_err(e)?)),
             Long("landlock-abi-cap") => cap = Some(p.value().map_err(e)?.parse().map_err(e)?),
             Long("settings-guards") => settings_guards = true,
+            // Taken as it is, even when it starts with `-` (a probe's own flags).
+            Long("browser-probe") => browser_probe.push(p.value().map_err(e)?.string().map_err(e)?),
             Value(first) => {
                 command.push(first);
                 command.extend(p.raw_args().map_err(e)?);
@@ -584,6 +590,7 @@ fn sandbox_run(p: &mut lexopt::Parser) -> Result<SandboxRunArgs, String> {
         landlock_omit: omit,
         landlock_abi_cap: cap,
         settings_guards,
+        browser_probe,
         command: (!command.is_empty())
             .then_some(command)
             .ok_or("sandbox run needs a command after --")?,
@@ -958,6 +965,10 @@ mod tests {
                 "--landlock-abi-cap",
                 "8",
                 "--settings-guards",
+                "--browser-probe",
+                "/p",
+                "--browser-probe",
+                "--as-browser",
                 "--",
                 "/bin/sh",
                 "-c",
@@ -972,6 +983,7 @@ mod tests {
                 landlock_omit: vec!["/a".into(), "/b".into()],
                 landlock_abi_cap: Some(8),
                 settings_guards: true,
+                browser_probe: vec!["/p".into(), "--as-browser".into()],
                 command: vec!["/bin/sh".into(), "-c".into(), "echo --spec".into()],
             }))
         );

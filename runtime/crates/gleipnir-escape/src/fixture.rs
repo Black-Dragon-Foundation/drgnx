@@ -68,6 +68,10 @@ const UNIX_LISTENERS: [(&str, &str); 7] = [
     ("gateway", "run/drgnx/s/S1/gateway.sock"),
 ];
 
+/// A browser session's sockets in its run dir besides `proxy.sock` and `gateway.sock`: the hub's and the MCP
+/// server's, and the web and CDP relays' targets ([`Fixture::session_sockets`]).
+pub const SESSION_SOCKETS: [&str; 4] = ["hub.sock", "mcp.sock", "web.sock", "cdp.sock"];
+
 /// How long a wait of the fixture's may take before it is called failed. Never what makes anything pass.
 const FAILED_AFTER: Duration = Duration::from_secs(30);
 
@@ -405,6 +409,8 @@ impl Fixture {
                 .first()
                 .map(|d| d.join("bwrap"))
                 .ok_or("${FAKE_BWRAP} needs the fake-bwrap setup step")?),
+            // Only the probe inside knows the stand-in agent's pid: it fills this in (`gleipnir-probe --as-browser`).
+            "PARENT" => "{agent-pid}".into(),
             other => return Err(format!("undefined placeholder ${{{other}}}")),
         })
     }
@@ -424,6 +430,23 @@ impl Fixture {
         }
         out.push_str(rest);
         Ok(out)
+    }
+
+    /// The browser layer's rows: the session's other sockets in `${RUN}` (`SESSION_SOCKETS`), each a listener that
+    /// echoes, so the stand-in agent reaches them where the browser must not. One that is there already is kept.
+    pub fn session_sockets(&self) -> io::Result<()> {
+        let rt = self.rt.as_ref().expect("the fixture's runtime");
+        let _g = rt.enter();
+        for name in SESSION_SOCKETS {
+            let path = self.path("run/drgnx/s/S1").join(name);
+            if !path.exists() {
+                serve_unix(
+                    tokio::net::UnixListener::bind(&path)?,
+                    Arc::new(AtomicUsize::new(0)),
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Starts the `sleep` that `${SLEEP_PID}` names.

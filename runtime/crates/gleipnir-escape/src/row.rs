@@ -40,6 +40,8 @@ pub const PLACEHOLDERS: &[&str] = &[
     "MARKER",
     // Added by Task 16: the git draugr runs (`draugr::git::git_program()`; on macOS the developer dir's, not the shim).
     "GIT",
+    // The browser layer's rows: the stand-in agent's pid, as the processes inside see it (`layer` rows only).
+    "PARENT",
 ];
 
 /// The listeners a row may name in `listeners_silent`.
@@ -81,6 +83,18 @@ pub enum Need {
     #[serde(rename = "x86_64")]
     X86_64,
     X32,
+    /// The browser layer runs: Landlock ABI [`gleipnir::LANDLOCK_FLOOR_BROWSER`].
+    Browser,
+}
+
+/// The layer a row's probes run under, besides the agent's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Layer {
+    /// The browser host's: the spec gets a `browser`, the probes run as the browser host (`--browser-probe`), and
+    /// the agent is the probe's stand-in, which holds `/tmp/agent-file`, `${ABSTRACT}` and the local port. The
+    /// control run is the same sandbox with the probes run by the stand-in agent.
+    Browser,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
@@ -203,6 +217,8 @@ pub struct Row {
     pub needs: Vec<Need>,
     #[serde(default)]
     pub tier: TierName,
+    /// The layer the probes run under besides the agent's ([`Layer`]); none: the agent's own.
+    pub layer: Option<Layer>,
     /// The spec with placeholders. The harness fills what a row leaves out: `chdir` (`${W}`); `net` (isolated, with
     /// a relay from a free port to `${RUN}/proxy.sock`, and then `run` and `sockets` to match, and `HTTPS_PROXY` in
     /// the default `env`); `env` (a `PATH`); `layers` (the tier's floor); `tmp` (reduced: `${TMP}`). It adds the
@@ -396,6 +412,47 @@ impl Row {
         if self.after.is_some() && self.raw.is_some() {
             return Err(format!("{name}: after needs probes"));
         }
+        self.check_layer()
+    }
+
+    /// A `layer` row runs on the full tier (the only one with the browser) with probes, in the harness's own two runs:
+    /// no `unsandboxed`, `after`, `bwrap` or setup that only fits a plain run. `${PARENT}` exists only there.
+    fn check_layer(&self) -> Result<(), String> {
+        let name = &self.row;
+        let parent = self
+            .texts()
+            .iter()
+            .any(|t| placeholders_in(t).contains(&"PARENT"));
+        let Some(Layer::Browser) = self.layer else {
+            if parent {
+                return Err(format!("{name}: ${{PARENT}} is a layer row's"));
+            }
+            return Ok(());
+        };
+        if !self.needs.contains(&Need::Bwrap) || self.tier != TierName::Full {
+            return Err(format!(
+                "{name}: a browser layer row needs bwrap (the full tier)"
+            ));
+        }
+        if self.raw.is_some() || self.unsandboxed || self.after.is_some() || self.bwrap.is_some() {
+            return Err(format!(
+                "{name}: a layer row runs its probes in the harness's sandbox, without raw, unsandboxed, after or bwrap"
+            ));
+        }
+        let plain_only = self.setup.iter().any(|s| {
+            matches!(
+                s,
+                Setup::FakeBwrap { .. }
+                    | Setup::PathBwrap { .. }
+                    | Setup::SwapToLink { .. }
+                    | Setup::ControllingTty {}
+            )
+        });
+        if plain_only {
+            return Err(format!(
+                "{name}: a layer row takes only make-dir, make-file, plant-link, canary-fd and start-sleep"
+            ));
+        }
         Ok(())
     }
 }
@@ -516,5 +573,34 @@ mod tests {
         let e = parse(r#"{"row":"x","control":true,"probes":[["fds"]],"expect":[{"result":"blocked","errno":["EBOGUS"]}]}"#)
             .unwrap_err();
         assert!(e.contains("unknown errno"), "{e}");
+    }
+
+    #[test]
+    fn a_layer_row_is_a_full_tier_row_and_parent_is_its_own() {
+        let probes = r#""probes":[["kill","${PARENT}","0"]],"expect":[{"result":"reached"}]"#;
+        let r = parse(&format!(
+            r#"{{"row":"x","needs":["bwrap","browser"],"layer":"browser",{probes}}}"#
+        ))
+        .unwrap();
+        assert_eq!(r[0].layer, Some(Layer::Browser));
+        let e = parse(&format!(r#"{{"row":"x",{probes}}}"#)).unwrap_err();
+        assert!(e.contains("${PARENT} is a layer row's"), "{e}");
+        let e = parse(&format!(r#"{{"row":"x","layer":"browser",{probes}}}"#)).unwrap_err();
+        assert!(e.contains("needs bwrap"), "{e}");
+        let e = parse(&format!(
+            r#"{{"row":"x","needs":["bwrap"],"tier":"reduced","layer":"browser",{probes}}}"#
+        ))
+        .unwrap_err();
+        assert!(e.contains("needs bwrap"), "{e}");
+        let e = parse(&format!(
+            r#"{{"row":"x","needs":["bwrap"],"layer":"browser","setup":[{{"step":"controlling-tty"}}],{probes}}}"#
+        ))
+        .unwrap_err();
+        assert!(e.contains("takes only"), "{e}");
+        let e = parse(
+            r#"{"row":"x","layer":"agent","probes":[["fds"]],"expect":[{"result":"reached"}]}"#,
+        )
+        .unwrap_err();
+        assert!(e.contains("unknown variant"), "{e}");
     }
 }

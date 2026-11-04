@@ -186,8 +186,11 @@ this returns.
     missing file, stays replaceable. The reduced tier has no mount namespace and Landlock only adds rights, so a pin
     there does nothing: the review gate (workspace trust) guards those files, and the check says so.
 - `ratatoskr sandbox run --spec FILE --result FILE [--tier full|reduced] [--bwrap PATH] [--pause-before-spawn FIFO]
-  [--landlock-omit PATH]… [--landlock-abi-cap N] [--settings-guards] -- CMD…` exists only with `test-hooks`, for the
-  escape rows. `--settings-guards` applies both settings guards above, as a job will. It
+  [--landlock-omit PATH]… [--landlock-abi-cap N] [--settings-guards] [--browser-probe ARG]… -- CMD…` exists only with
+  `test-hooks`, for the escape rows. `--settings-guards` applies both settings guards above, as a job will.
+  `--browser-probe`, one per argument, puts the probe in the browser host's place (the `TestHooks::browser_argv` hook:
+  the rest of the browser plan, its layer and filter, stays): the spec must have a `browser`, and the run makes the
+  socketpair, passes the host's end and holds the hub's end until it is over. It
   detects, validates the spec against `context`, prepares, and with `--pause-before-spawn` writes `opened` to the
   FIFO once the sources are open and waits for a line back. It spawns through `draugr::spawn_pinned` (stdin
   `/dev/null`, the child's stdout passed through, its stderr's tail written once it has exited), reads the status
@@ -1223,7 +1226,7 @@ size.
 | files | `read PATH` (size), `write PATH` (opens for writing, writes nothing), `create PATH`, `list DIR` (names, sorted), `stat PATH`, `rename A B`, `link A B` (hard link), `clone A B` (macOS `clonefile`, a directory too; elsewhere blocked `EOPNOTSUPP`), `mkdir PATH`, `unlink PATH`, `swap A B` (exchange two paths in one step: macOS `renamex_np(RENAME_SWAP)`, Linux `renameat2(RENAME_EXCHANGE)`) |
 | sockets | `connect-unix PATH`, `connect-abstract NAME` (Linux), `connect-tcp HOST:PORT`, `tfo HOST:PORT` (`sendto(MSG_FASTOPEN)`, Linux), `udp HOST:PORT` (sends, waits 500 ms for the echo; no echo is blocked with no errno), `unix-self PATH` (listens there, then connects; the detail says which step failed), `bind-tcp HOST:PORT` (bind only), `socket DOMAIN TYPE [PROTO]` (Linux: `socket(2)` alone; DOMAIN `unix inet inet6 netlink packet vsock`, TYPE `stream dgram raw seqpacket`, PROTO a number or `tcp udp icmp icmpv6 sctp mptcp`) |
 | environment | `env-has NAME…`: reached when any is set, the detail names which (never a value) |
-| syscalls | `syscall NAME` for `unshare-user io-uring keyctl add-key vsock clone3 clone-newuser mount-missing tiocsti-own-pty tiocsti-high-own-pty ptrace-own-child x32-getpid i386-int80`. Each runs in a forked child, so a kill by the filter is a result: blocked, no errno, detail `killed by SIGSYS`. `x32-getpid` and `i386-int80` are x86_64 only (elsewhere ENOSYS) |
+| syscalls | `syscall NAME` for `unshare-user io-uring keyctl add-key vsock clone3 clone-newuser mount-missing tiocsti-own-pty tiocsti-high-own-pty ptrace-own-child x32-getpid i386-int80 pidfd-getfd process-vm-readv` (the last two on the probe's own process: its stdin through a pidfd of itself, four bytes of its own memory). Each runs in a forked child, so a kill by the filter is a result: blocked, no errno, detail `killed by SIGSYS`. `x32-getpid` and `i386-int80` are x86_64 only (elsewhere ENOSYS) |
 | process | `status-field NAME` (from `/proc/self/status`), `fds` (the open descriptors below 1024, `0,1,2`), `proc-read PID FILE` (size), `spawn-sleep N` (a child that sleeps N seconds without exec and without the probe's pipes; the detail is its pid), `kill PID SIG` |
 | other | `run CMD…` (a child; reached when it exits 0, the detail is the exit code, `out_bytes` counts what it wrote and nothing is printed), `http-connect TARGET` (CONNECT through `$HTTPS_PROXY`; the detail is the status code, reached only for 200), `landlock-abi` (the detail is the version), `serve-http PORT N TEXT` (a dev server stand-in on `127.0.0.1:PORT`: N requests answered `200` with TEXT, then reached with `served N`) |
 
@@ -1232,6 +1235,9 @@ that does not exist (ENOENT unfiltered, EPERM filtered), `clone3` gets a null ar
 `tiocsti-*` use a pty the probe opens itself (the unfiltered kernel says EIO or works; the filter says EPERM), and
 `tiocsti-high-own-pty` sets bit 32 of the request register, which the kernel ignores and a 64-bit compare would not.
 
+Two modes serve the browser layer's rows (below): `--as-browser DIR [PROBES]` is the browser host, and `--stand-in DIR
+ABSTRACT PORT [PROBES]` its agent. In both, `{agent-pid}` in a probe's argument is the stand-in agent's pid.
+
 ### Rows
 
 One JSON object per line; unknown keys are a parse error.
@@ -1239,8 +1245,9 @@ One JSON object per line; unknown keys are a parse error.
 | Key | Meaning |
 |---|---|
 | `row` | the name (unique across all files) |
-| `needs` | `bwrap reduced landlock seccomp netns root macos linux x86_64 x32` |
+| `needs` | `bwrap reduced landlock seccomp netns root macos linux x86_64 x32 browser` (`browser`: Landlock ABI 9, the browser layer's floor) |
 | `tier` | `full` (default) or `reduced` |
+| `layer` | `browser`: the probes run as the browser host, under the browser layer (see "The browser layer's rows") |
 | `spec` | the spec, with placeholders. The harness fills what is left out: `chdir` (`${W}`); `net` (Linux: isolated, with a relay from a free port to `${RUN}/proxy.sock`, and then `run`, `sockets` and an `HTTPS_PROXY` in the default `env` to match; macOS: isolated with `mac_tcp_ports` the proxy's TCP port, and the same `HTTPS_PROXY`); `env` (a `PATH`); `layers` (the tier's floor; on macOS 0, since a macOS spec may not ask for Landlock); `tmp` (reduced: `${TMP}`). The probe's directory is added to `read` |
 | `setup` | steps: `fake-bwrap {version}`, `path-bwrap {name?}`, `swap-to-link {path, target}` (done while `ratatoskr` waits at `--pause-before-spawn`), `plant-link {path, target}`, `canary-fd {n}`, `start-sleep`, `make-dir {path}`, `make-file {path, text?}` (the last two, like `plant-link`, run in the control run's fixture too) |
 | `probes`, `expect` | one argument list per probe; one `{result, errno?: [names], detail?}` per probe. `errno` is a list so the layer that blocked is visible |
@@ -1260,7 +1267,9 @@ ${TASK2} ${W} ${DATA} ${CANARY_DIR} ${FIXTURE} ${TMP} ${MARKER}`, and on macOS `
 `${ABSTRACT}` (`@glp-…`), `${TCP_LO} ${TCP_NL} ${UDP_LO} ${UDP_NL}` (`host:port`; the `_NL` ones are the first
 non-loopback address), `${UPSTREAM}` (`upstream.test:PORT`, pinned in the proxy), `${PROXY_TCP}`. Others:
 `${HARNESS_PID}`, `${SLEEP_PID}` (the `start-sleep` step), `${FAKE_BWRAP}` (the `fake-bwrap` step), `${GIT}` (the
-git draugr runs: `draugr::git::git_program()`, so on macOS the developer dir's, not the `/usr/bin/git` shim).
+git draugr runs: `draugr::git::git_program()`, so on macOS the developer dir's, not the `/usr/bin/git` shim), and in
+`layer` rows only `${PARENT}` (the stand-in agent's pid, which only the processes inside know: the fixture writes
+`{agent-pid}` and the probe fills it in).
 
 **`control: true` is mandatory for every expectation that says `blocked`** (the parse fails otherwise). The control
 run executes the same probes with no sandbox, in a fixture of its own, and each must give its unfiltered result:
@@ -1401,6 +1410,43 @@ Not covered by a row: the reduced tier's second Landlock layer (`forbid_tcp_bind
 signal scope over the relay, which no placeholder names (the unit test `reduced_tcp_relay_ports_only_then_no_bind`
 holds both, against controls), and raw sockets, which an unprivileged control cannot open either (the BPF
 interpreter's table holds them).
+
+### The browser layer's rows
+
+`rows/linux/browser.jsonl` proves the browser layer: what the browser host cannot do that its agent can. A row with
+`"layer": "browser"` needs `bwrap` (the full tier, the only one with a browser) and, unless it is the refusal row,
+`browser` (Landlock ABI 9; a lower kernel skips them, as the desktop's ABI 8 does). The harness gives it a browser
+session's sandbox: relays from 3128 to `${RUN}/proxy.sock`, 3130 to `web.sock` and 9222 to `cdp.sock`; the sockets
+`proxy.sock`, `hub.sock`, `mcp.sock`, `web.sock` and `cdp.sock` in `${RUN}` (the fixture serves the last four for these
+rows, keeping one already there); the local port 5173 as `extra_tcp_ports`; and a `browser` whose program is the probe
+copy (its directory an `extra_read`), with its own dir `/tmp/drgnx-browser`. What the row's spec says itself is kept.
+
+The run is `ratatoskr sandbox run --browser-probe …`, so the inner helper forks the probe under the browser layer and
+filter in the browser host's place, and then becomes the agent, which is the probe's stand-in:
+
+1. the browser probe (`--as-browser`) writes its pid to `/tmp/drgnx-browser/browser.pid` and says `ready` on fd 4;
+2. the stand-in (`--stand-in`, the agent's command) writes `/tmp/agent-file`, listens on the abstract `${ABSTRACT}`
+   (in the session's network namespace) and on `127.0.0.1:5173`, then writes `/tmp/drgnx-browser/go`;
+3. the browser probe runs the probes, with `${PARENT}` its parent's pid (the helper forked it and became the agent),
+   and writes its lines to `/tmp/drgnx-browser/lines` (its stdout is `/dev/null`);
+4. the stand-in waits for it to exit (at most 40 s) and prints the lines, which the harness judges as any row's.
+
+**The control run** is the same sandbox with the probes run by the stand-in agent itself (`${PARENT}` its own pid),
+the browser probe only saying `ready` and waiting: the control proves the agent reaches each target, so a blocked line
+is the browser layer's alone.
+
+| Row | What it proves |
+|---|---|
+| `browser-cannot-read-worktree`, `-login-dir`, `-agent-tmp` | the browser reads none of the agent's write root, the login dir it was given (`${HOME}/.claude`) or its `/tmp` (EACCES) |
+| `browser-cannot-read-agent-environ` | `/proc/<agent>/environ` and `mem` are refused (Landlock refuses a ptrace-mode access from a sub-domain to its parent's): the CDP secret and the gateway token in the agent's environment stay there |
+| `browser-cannot-connect-hub-sock`, `-mcp-sock` | no Unix connect at all (ABI 9: EACCES), so not the session's hub or MCP socket |
+| `browser-cannot-connect-provider-port`, `-cdp-port` | neither the provider relay (3128) nor the CDP relay (9222), by `connect` (Landlock's TCP rule, EACCES) or a Fast Open send (the browser filter, EPERM) |
+| `browser-reaches-web-port-and-a-local-port` | the web relay (3130) and the agent's local server (5173) are reached |
+| `browser-cannot-bind-tcp` | no TCP bind (Landlock, EACCES) |
+| `browser-cannot-signal-agent`, `browser-cannot-reach-agent-abstract` | Landlock's scopes: no signal to the agent and no connect to its abstract socket (EPERM) |
+| `browser-writes-own-dir-only` | the browser writes `/tmp/drgnx-browser` and nothing else of `/tmp` |
+| `browser-below-abi9-refused` | at Landlock ABI 8 (`landlock_abi_cap`) a spec with a browser is refused before anything runs: validation raised its floor to 9 |
+| `agent-pidfd-getfd-refused`, `agent-process-vm-readv-refused` | every session refuses `pidfd_getfd` and `process_vm_readv` (seccomp, EPERM), the cheap ways to take another process's descriptor or memory (the browser host's socketpair end among them) |
 
 ### The macOS rows (Task 16)
 

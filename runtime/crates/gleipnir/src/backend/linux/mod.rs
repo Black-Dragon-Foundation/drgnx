@@ -71,6 +71,11 @@ fn apply(inner: &mut InnerSpec, hooks: Hooks) {
     {
         inner.landlock_omit = hooks.landlock_omit;
         inner.abi_cap = hooks.abi_cap;
+        if let Some(b) = inner.browser.as_mut()
+            && !hooks.browser_argv.is_empty()
+        {
+            b.argv = hooks.browser_argv;
+        }
     }
     #[cfg(not(feature = "test-hooks"))]
     let _ = (inner, hooks);

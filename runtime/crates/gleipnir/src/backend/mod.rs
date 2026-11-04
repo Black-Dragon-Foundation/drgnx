@@ -78,13 +78,15 @@ impl BackendKind {
     }
 }
 
-/// The escape rows' hooks (Task 15): write roots Landlock leaves out, and a cap on the kernel's Landlock ABI. They
-/// exist only with the `test-hooks` feature, which only Ratatoskr's own `test-hooks` turns on.
+/// The escape rows' hooks (Task 15): write roots Landlock leaves out, a cap on the kernel's Landlock ABI, and the
+/// browser host's argv in place of the plan's (the escape probe, run under the browser layer; empty: the plan's).
+/// They exist only with the `test-hooks` feature, which only Ratatoskr's own `test-hooks` turns on.
 #[cfg(feature = "test-hooks")]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TestHooks {
     pub landlock_omit: Vec<PathBuf>,
     pub abi_cap: Option<u8>,
+    pub browser_argv: Vec<String>,
 }
 
 /// What the backends take for the hooks: [`TestHooks`] with the feature, nothing without.

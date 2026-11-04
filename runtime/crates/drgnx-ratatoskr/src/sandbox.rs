@@ -426,7 +426,8 @@ mod run {
     }
 
     async fn run_in(a: &SandboxRunArgs) -> Outcome {
-        let prepared = match prepare(a) {
+        // `_hub`: the hub's end of a `--browser-probe` run's socketpair, held until the run is over.
+        let (prepared, _hub) = match prepare(a) {
             Ok(p) => p,
             Err(r) => {
                 return Outcome {
@@ -513,8 +514,12 @@ mod run {
         out
     }
 
-    /// Detect the backend, read and validate the spec for it, and prepare the run (every source opened).
-    fn prepare(a: &SandboxRunArgs) -> Result<Prepared, Refusal> {
+    /// Detect the backend, read and validate the spec for it, and prepare the run (every source opened). With
+    /// `--browser-probe`, the browser host's argv is the probe's and the run makes the socketpair: the host's end goes
+    /// to the sandbox, the hub's end is returned.
+    fn prepare(
+        a: &SandboxRunArgs,
+    ) -> Result<(Prepared, Option<std::os::unix::net::UnixStream>), Refusal> {
         let helper = helper().map_err(|e| setup(format!("the helper's own path: {e}")))?;
         let sandbox = Sandbox::detect(a.tier, helper, a.bwrap.clone())?;
         #[cfg(target_os = "macos")]
@@ -549,8 +554,17 @@ mod run {
         let hooks = TestHooks {
             landlock_omit: a.landlock_omit.clone(),
             abi_cap: a.landlock_abi_cap,
+            browser_argv: a.browser_probe.clone(),
         };
-        sandbox.prepare(valid, a.command.clone(), None, hooks)
+        let (hub, host) = if a.browser_probe.is_empty() {
+            (None, None)
+        } else {
+            let (hub, host) = std::os::unix::net::UnixStream::pair()
+                .map_err(|e| setup(format!("the browser's socketpair: {e}")))?;
+            (Some(hub), Some(std::os::fd::OwnedFd::from(host)))
+        };
+        let prepared = sandbox.prepare(valid, a.command.clone(), host, hooks)?;
+        Ok((prepared, hub))
     }
 
     /// Say `opened` on `fifo`, then wait for one line back.
