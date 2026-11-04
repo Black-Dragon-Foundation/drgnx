@@ -195,10 +195,10 @@ fn sources(pushes: usize, writes: usize, reads: u8) -> Partial<Ev> {
 
 #[test]
 fn every_order_serves_what_the_client_sent_unless_closed() {
-    // 33,605 orders: above the bound, so every order within two delays of the natural one
-    let r = every_order(&sources(4, 3, 3), Bound::default(), Conn::default, check);
-    assert_eq!(r.mode, skuld::Mode::DelayBounded(2));
-    assert!(r.orders > 100, "{} orders", r.orders);
+    // every order: 16 of hub and writer (push i before write i) times C(11, 4) places for the client's four
+    let r = every_order(&sources(3, 2, 3), Bound::default(), Conn::default, check);
+    assert_eq!(r.mode, skuld::Mode::Exhaustive);
+    assert_eq!(r.orders, 5280);
 }
 
 /// The hub pushes past the limit while the writer has written at most the first line.
