@@ -1,10 +1,12 @@
 ;;; lsp-replay.el --- a language server that replays a recording: batch Nidhogg, stdio, no network -*- lexical-binding: t -*-
-;; emacs --batch -Q -l lsp-replay.el
+;; emacs --batch -Q -l lsp-replay.el                               (Linux)
+;; sh mock-acp-stdin.sh emacs --batch -Q -l lsp-replay.el          (any POSIX system: macOS too)
 ;; Reads LSP messages (Content-Length framing) from stdin and answers each request from the recorded exchange
 ;; ($LSP_REPLAY_EXCHANGE, default day/lsp-exchange.eld next to this file): the RESULT recorded for its METHOD, null for
 ;; any other.  Notifications are not answered; "exit" or the end of stdin ends it.  Used by the synthetic day
-;; (`drgnx-perf-day'), so eglot has a server in a container that has none.  Linux only: batch Emacs cannot read its
-;; stdin while timers run, so a `cat' of /proc/PID/fd/0 reads it (as mock-acp.el does).
+;; (`drgnx-perf-day'), so eglot has a server in a container that has none.  Batch Emacs cannot read its stdin while
+;; timers run, so a `cat' reads it, as in mock-acp.el: of the FIFO in MOCK_ACP_IN (made by mock-acp-stdin.sh, which
+;; copies stdin into it), else of /proc/PID/fd/0, which only Linux has.
 
 ;;; Code:
 (defvar lsp-replay--exchange
@@ -39,7 +41,7 @@
         (setq lsp-replay--pending (substring lsp-replay--pending end))
         (lsp-replay--answer body)))))
 
-(make-process :name "lsp-replay-in" :command (list "cat" (format "/proc/%d/fd/0" (emacs-pid)))
+(make-process :name "lsp-replay-in" :command (list "cat" (or (getenv "MOCK_ACP_IN") (format "/proc/%d/fd/0" (emacs-pid))))
               :connection-type 'pipe :noquery t :coding 'utf-8-unix
               :filter (lambda (_p s) (lsp-replay--input s))
               :sentinel (lambda (_p _e) (kill-emacs 0)))

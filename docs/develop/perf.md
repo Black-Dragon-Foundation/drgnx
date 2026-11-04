@@ -346,7 +346,8 @@ every line, with the machine: `(:synthetic t :composition SHA :machine HOST)`).
 
 - **Build-up**, once: the project's files and two Org trees open; eglot starts on the project against
   `test/fixtures/lsp-replay.el` (a batch Emacs on stdio that answers each request from the recorded exchange
-  `lsp-exchange.eld`: no network, no language server); `vc-git` reads the status and the log of the fixture repository
+  `lsp-exchange.eld`: no network, no language server; it reads its stdin through `/proc/PID/fd/0` on Linux, and on
+  any POSIX system through the FIFO of `test/fixtures/mock-acp-stdin.sh` when started under it); `vc-git` reads the status and the log of the fixture repository
   (made in a temporary directory, two commits at fixed dates and an uncommitted change); two `transcript-replay`
   streams start. Each step prints its time, RSS and live Lisp heap.
 - **Steady**, until MIN minutes (default 30) have passed: rounds of `drgnx-perf-day-workloads` (`typing`, `scrolling`,

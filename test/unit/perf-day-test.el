@@ -61,11 +61,13 @@
 
 (ert-deftest drgnx-perf-day/lsp-replay-answers-initialize ()
   ;; the stub, a batch Emacs on stdio, answers `initialize' from the recording and `shutdown' with null, and
-  ;; leaves a notification unanswered
+  ;; leaves a notification unanswered.  It reads its stdin through the FIFO of mock-acp-stdin.sh, the way that works on
+  ;; every POSIX system (/proc/PID/fd/0 is Linux only: on macOS the stub's `cat' failed and it ended without a word).
   (let* ((out "") (stub (expand-file-name "test/fixtures/lsp-replay.el" perf-day-test--dir))
          (frame (lambda (json) (format "Content-Length: %d\r\n\r\n%s" (string-bytes json) json)))
          (proc (make-process :name "lsp-replay-test" :connection-type 'pipe :noquery t
-                             :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "-l" stub)
+                             :command (list "sh" (expand-file-name "test/fixtures/mock-acp-stdin.sh" perf-day-test--dir)
+                                            (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "-l" stub)
                              :filter (lambda (_p s) (setq out (concat out s))))))
     (unwind-protect
         (let ((wait (lambda (re) (let ((d (+ (float-time) 30)))
@@ -79,6 +81,23 @@
           (should (string-match-p "\"id\":2,\"result\":null" out))
           (should (= 2 (with-temp-buffer (insert out) (how-many "Content-Length:" (point-min))))))   ; one answer each, none for the notification
       (when (process-live-p proc) (delete-process proc)))))
+
+(ert-deftest drgnx-perf-day/lsp-replay-reads-the-input-it-is-given ()
+  ;; given MOCK_ACP_IN (on macOS the FIFO of mock-acp-stdin.sh) the stub reads that, not /proc/PID/fd/0: here its stdin
+  ;; is /dev/null and the request is in the file it is given
+  (let* ((stub (expand-file-name "test/fixtures/lsp-replay.el" perf-day-test--dir))
+         (in (make-temp-file "lsp-replay-in"))
+         (json "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"shutdown\"}")
+         (process-environment (cons (concat "MOCK_ACP_IN=" in) process-environment)))
+    (unwind-protect
+        (progn
+          (with-temp-file in (insert (format "Content-Length: %d\r\n\r\n%s" (string-bytes json) json)))
+          (should (string-match-p "\"id\":7,\"result\":null"
+                                  (with-temp-buffer
+                                    (call-process (expand-file-name invocation-name invocation-directory) nil '(t nil) nil
+                                                  "--batch" "-Q" "-l" stub)
+                                    (buffer-string)))))
+      (delete-file in))))
 
 (ert-deftest drgnx-perf-day/no-400mb-rule ()
   ;; the soak's 400 MB cap is not the day's: a flat 1 GB passes, 25 % growth across the steady rounds fails, and so
