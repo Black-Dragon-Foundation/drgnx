@@ -2897,12 +2897,10 @@ impl Session {
     }
 
     /// Cancel the turn and end the process group.
-    pub(crate) async fn end(&self, kill: bool) {
+    pub(crate) async fn end(self: &Arc<Self>, kill: bool) {
         // no turn starts now, and nobody answers what it asked
         let stepped = lock(&self.state).turn_step(TurnEvent::Kill { why: KillWhy::User });
-        for p in stepped.cancelled {
-            reply(p.resp, None);
-        }
+        self.reply_cancelled(stepped);
         let _ = self.conn.cancel(&self.acp);
         let grace = if kill { Duration::ZERO } else { STOP_GRACE };
         draugr::kill_group(self.conn.pid(), grace, &draugr::RealSignaller).await;
@@ -2990,7 +2988,8 @@ impl Session {
         let out = end.0;
         let mut message: Option<String> = None;
         let jobs = self.has_jobs();
-        let stepped = {
+        // ENDING as the step saw it, under its lock: a hub that begins ending after the step ends what it started
+        let (stepped, ending) = {
             let mut st = lock(&self.state);
             st.open = None;
             let mut rest = Map::new();
@@ -3037,7 +3036,8 @@ impl Session {
             };
             st.stash = None;
             st.step_close(now(), Some(used));
-            st.turn_step(ev)
+            let stepped = st.turn_step(ev);
+            (stepped, st.core.ending())
         };
         if let Some(m) = message.filter(|m| m.contains("drgnx-report") && self.task.is_some()) {
             let (w, sid, task, job) = (
@@ -3060,7 +3060,7 @@ impl Session {
                 }
             });
         }
-        if lock(&self.state).core.ending() {
+        if ending {
             self.perform(stepped);
             self.drain_steps();
             self.flush_transcript();
@@ -3071,15 +3071,25 @@ impl Session {
         self.perform(stepped);
     }
 
-    /// The hub ends: the transcript written, the agent's process group ended, the queue left as it is on disk for
-    /// the next start.
-    pub(crate) async fn shutdown(&self) {
-        let stepped = lock(&self.state).turn_step(TurnEvent::Kill {
-            why: KillWhy::HubEnding,
-        });
+    /// A kill's step: the requests it took answered cancelled, and their cards gone from the snapshot at once (not at
+    /// the exit).
+    fn reply_cancelled(self: &Arc<Self>, stepped: Stepped) {
+        if stepped.cancelled.is_empty() {
+            return;
+        }
         for p in stepped.cancelled {
             reply(p.resp, None);
         }
+        self.changed();
+    }
+
+    /// The hub ends: the transcript written, the agent's process group ended, the queue left as it is on disk for
+    /// the next start.
+    pub(crate) async fn shutdown(self: &Arc<Self>) {
+        let stepped = lock(&self.state).turn_step(TurnEvent::Kill {
+            why: KillWhy::HubEnding,
+        });
+        self.reply_cancelled(stepped);
         self.flush_transcript();
         draugr::kill_group(
             self.conn.pid(),
