@@ -82,7 +82,11 @@ fn the_path_is_statted_not_proc_self_exe() {
     std::os::unix::fs::symlink(sleep, &live).unwrap();
     std::fs::copy(sleep, &other).unwrap();
     // a running process whose image is what `live` points to
-    let mut child = Command::new(&live).arg("60").spawn().unwrap();
+    // `spawn` can return before the exec, while /proc/PID/exe still names this test binary: wait for the exec
+    let mut cmd = Command::new(&live);
+    cmd.arg("60");
+    let (mut child, exec) = support::ExecHandshake::spawn(&mut cmd).unwrap();
+    exec.wait();
     let by_path = ExeWatch::new(&live).unwrap();
     #[cfg(target_os = "linux")]
     let by_link = ExeWatch::new(Path::new(&format!("/proc/{}/exe", child.id()))).unwrap();
@@ -398,4 +402,33 @@ fn the_lines_a_client_sent_before_it_left_are_served() {
             || (refusals(&socket) >= i).then_some(()),
         );
     }
+}
+
+#[test]
+fn a_child_is_its_image_once_the_exec_handshake_ends() {
+    use support::ExecHandshake;
+    // many spawns at once: `Command::spawn` can return before the exec, and the more threads fork, the likelier
+    let threads: Vec<_> = (0..8)
+        .map(|_| {
+            std::thread::spawn(|| {
+                let mut early = 0;
+                for _ in 0..100 {
+                    let mut cmd = Command::new("/bin/sleep");
+                    cmd.arg("60");
+                    let (mut child, exec) = ExecHandshake::spawn(&mut cmd).unwrap();
+                    exec.wait();
+                    let exe = std::fs::read_link(format!("/proc/{}/exe", child.id())).unwrap();
+                    early += usize::from(exe.file_name().unwrap() != "sleep");
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+                early
+            })
+        })
+        .collect();
+    let early: usize = threads.into_iter().map(|t| t.join().unwrap()).sum();
+    assert_eq!(
+        early, 0,
+        "children still the test binary after the exec handshake"
+    );
 }
