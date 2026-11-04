@@ -471,28 +471,41 @@ pub fn build_spec_for(fx: &Fixture, row: &Row, bin: &Path, linux: bool) -> Resul
         }
         if !m.contains_key("net") {
             // The session's own network: isolated, with the relay to the fixture's proxy (Linux needs one). The
-            // full tier uses 3128; the reduced tier's relay shares the host's loopback, so it gets a free port.
+            // full tier uses 3128; the reduced tier's relay shares the host's loopback, so it gets a free port. A
+            // `web` row's relay goes to the web proxy instead, on the web relay's port (3130).
             let tier = if reduced {
                 gleipnir::Tier::Reduced
             } else {
                 gleipnir::Tier::Full
             };
+            let (wanted, socket) = if row.web.is_some() {
+                (3130, "${RUN}/web.sock")
+            } else {
+                (3128, "${RUN}/proxy.sock")
+            };
             if linux {
-                let port = gleipnir::backend::relay_ports(tier, &[3128])
+                let port = gleipnir::backend::relay_ports(tier, &[wanted])
                     .map_err(|e| format!("relay port: {e}"))?[0];
-                m.insert("net".into(), serde_json::json!({"isolated": {"relay": [{"port": port, "socket": "${RUN}/proxy.sock"}]}}));
+                m.insert(
+                    "net".into(),
+                    serde_json::json!({"isolated": {"relay": [{"port": port, "socket": socket}]}}),
+                );
                 m.entry("run").or_insert_with(
                     || serde_json::json!({"mode": "ro", "source": "${RUN}", "dest": "${RUN}"}),
                 );
                 m.entry("sockets")
-                    .or_insert_with(|| serde_json::json!(["${RUN}/proxy.sock"]));
+                    .or_insert_with(|| serde_json::json!([socket]));
                 env.as_array_mut().expect("array").push(serde_json::json!([
                     "HTTPS_PROXY",
                     format!("http://127.0.0.1:{port}")
                 ]));
             } else {
                 // macOS: no relay and no namespace; Seatbelt lists the one loopback port the proxy listens on.
-                let port = fx.addrs.proxy_tcp.port();
+                let port = if row.web.is_some() {
+                    fx.addrs.web_tcp.port()
+                } else {
+                    fx.addrs.proxy_tcp.port()
+                };
                 m.insert(
                     "net".into(),
                     serde_json::json!({"isolated": {"mac_tcp_ports": [port]}}),
@@ -860,6 +873,17 @@ fn sudo(args: &[&str]) -> Result<(), String> {
 
 fn setup(fx: &mut Fixture, row: &Row, control: bool) -> Result<Prepared, String> {
     let mut p = Prepared::default();
+    if let Some(web) = row.web {
+        let grants = row
+            .grants
+            .iter()
+            .map(|g| {
+                let g = expand_all(fx, g)?;
+                serde_json::from_value(g.clone()).map_err(|e| format!("grant {g}: {e}"))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        fx.use_web_proxy(web, grants, &row.dns)?;
+    }
     for step in &row.setup {
         match step {
             Setup::StartSleep {} => fx.start_sleep().map_err(|e| format!("start-sleep: {e}"))?,
@@ -1045,7 +1069,7 @@ fn run_direct(opts: &Opts, row: &Row) -> Result<(Fixture, RunData), String> {
     let d = drive(cmd, None, None)?;
     drop(tty);
     let (lines, bad) = parse_lines(&d.stdout_lines);
-    let data = RunData {
+    let mut data = RunData {
         direct: true,
         lines,
         bad_lines: bad,
@@ -1054,6 +1078,20 @@ fn run_direct(opts: &Opts, row: &Row) -> Result<(Fixture, RunData), String> {
         exit: d.exit,
         ..RunData::default()
     };
+    // An unsandboxed row is judged on this run: its listeners and the proxies' events too.
+    if row.unsandboxed {
+        data.silent = row
+            .listeners_silent
+            .iter()
+            .map(|n| (n.clone(), fx.seen(n)))
+            .collect();
+        data.events = fx.proxy_events();
+        data.events_wanted = row
+            .proxy_events
+            .as_ref()
+            .map(|w| expand_list(&fx, w))
+            .transpose()?;
+    }
     Ok((fx, data))
 }
 

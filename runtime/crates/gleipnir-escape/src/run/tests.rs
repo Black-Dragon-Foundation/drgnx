@@ -436,6 +436,41 @@ fn spec_defaults_and_the_probe_dir() {
 }
 
 #[test]
+fn a_web_rows_relay_goes_to_the_web_proxy() {
+    let mut fx = Fixture::new().unwrap();
+    let r = row(
+        json!({"row": "r", "web": true, "grants": [{"target": {"host_port": "host.drgnx.internal:${TCP_LO_PORT}"}}], "dns": {"a.test": ["${HOST_LAN}"]}, "probes": [["fds"]], "expect": [{"result": "reached"}]}),
+    );
+    let bin = fx.path("bin");
+    let spec = build_spec_for(&fx, &r, &bin, true).unwrap();
+    let web = fx.path("run/drgnx/s/S1/web.sock");
+    let web = web.to_string_lossy();
+    assert_eq!(
+        spec["net"]["isolated"]["relay"],
+        json!([{"port": 3130, "socket": web}])
+    );
+    assert_eq!(spec["sockets"], json!([web]));
+    assert!(
+        spec["env"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(["HTTPS_PROXY", "http://127.0.0.1:3130"]))
+    );
+    serde_json::from_value::<gleipnir::Spec>(spec).unwrap();
+    // The row's grants (placeholders filled) and names reach the web proxy; a bad grant fails the row.
+    setup(&mut fx, &r, true).unwrap();
+    assert!(
+        fx.env("/usr/bin")
+            .contains(&("HTTPS_PROXY".into(), format!("http://{}", fx.addrs.web_tcp)))
+    );
+    let bad = row(
+        json!({"row": "r", "web": true, "grants": [{"target": {"host_port": "[::ffff:10.0.0.1]:80"}}], "probes": [["fds"]], "expect": [{"result": "reached"}]}),
+    );
+    let e = setup(&mut fx, &bad, true).err().unwrap();
+    assert!(e.contains("plain IPv4"), "{e}");
+}
+
+#[test]
 fn the_pause_dance_swaps_a_path_for_a_link() {
     let dir = tempfile::tempdir().unwrap();
     let fifo = dir.path().join("f");

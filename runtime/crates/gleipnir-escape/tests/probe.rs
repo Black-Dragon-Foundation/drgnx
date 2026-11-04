@@ -212,6 +212,67 @@ fn http_connect_reads_the_status_code() {
 }
 
 #[test]
+fn http_get_sends_absolute_form_and_reads_the_answer() {
+    use std::io::{Read, Write};
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = l.local_addr().unwrap();
+    let t = std::thread::spawn(move || {
+        let mut heads = Vec::new();
+        for answer in [
+            "200 OK\r\nX-Glp-Host: a.test\r\nOther: x",
+            "400 Bad Request",
+        ] {
+            let (mut s, _) = l.accept().unwrap();
+            let (mut head, mut b) = (Vec::new(), [0u8; 1]);
+            while !head.ends_with(b"\r\n\r\n") && s.read(&mut b).unwrap() == 1 {
+                head.push(b[0]);
+            }
+            heads.push(String::from_utf8(head).unwrap());
+            write!(s, "HTTP/1.1 {answer}\r\n\r\n").unwrap();
+        }
+        heads
+    });
+    let run = |url: &str| {
+        let out = Command::new(PROBE)
+            .args(["http-get", url])
+            .env("HTTPS_PROXY", format!("http://{addr}"))
+            .output()
+            .unwrap();
+        serde_json::from_slice::<ProbeLine>(&out.stdout).unwrap()
+    };
+    let (ok, no) = (run("http://a.test/x?q=1"), run("http://u:p@b.test:8080/"));
+    assert_eq!(
+        (ok.result.as_str(), ok.detail.as_deref()),
+        ("reached", Some("200 host=a.test"))
+    );
+    assert_eq!(
+        (no.result.as_str(), no.detail.as_deref()),
+        ("blocked", Some("400"))
+    );
+    let heads = t.join().unwrap();
+    assert!(
+        heads[0].starts_with("GET http://a.test/x?q=1 HTTP/1.1\r\nHost: a.test\r\n"),
+        "{:?}",
+        heads[0]
+    );
+    for h in [
+        "Proxy-Authorization:",
+        "Keep-Alive:",
+        "TE:",
+        "Upgrade:",
+        "X-Glp-Hop:",
+        "X-Glp-End:",
+    ] {
+        assert!(heads[0].contains(h), "{h} is not sent: {:?}", heads[0]);
+    }
+    assert!(
+        heads[1].contains("\r\nHost: b.test:8080\r\n"),
+        "{:?}",
+        heads[1]
+    );
+}
+
+#[test]
 fn every_syscall_name_runs_to_a_result() {
     for name in [
         "unshare-user",

@@ -1002,8 +1002,8 @@ policy, `ProxyConfig::policy`:
   request reads the state as it is then.
 
 `close(tag)` drops a session's listener and every connection it accepted; `shutdown()` (or dropping the handle) ends
-them all. `start_for_tests` (feature `test-hooks`) takes the upstream connector too, so the escape fixture can send
-"public" addresses to a local server.
+them all. `start_for_tests` (feature `test-hooks`, or `escape-fixture`, which exposes nothing else and changes no
+spec or sandbox) takes the upstream connector too, so the escape fixture can send "public" addresses to a local server.
 
 **The answers.** The proxy reads the request head (the line and headers up to the blank line). Under the allowlist
 it looks only at the request line, never at `Host:`:
@@ -1194,7 +1194,8 @@ is not blamed on AppArmor.
 ## Proving it (Tasks 14, 15 and 16)
 
 The escape suite is the crate `gleipnir-escape` (test tooling: never shipped, never installed, and it never turns on
-gleipnir's `test-hooks`). It has two binaries and a directory of rows:
+gleipnir's `test-hooks`; it turns on `escape-fixture`, which only exposes the proxy's upstream connector, so a
+workspace build that unifies it into `ratatoskr` changes nothing there). It has two binaries and a directory of rows:
 
 - `gleipnir-probe` tries one channel per probe from inside the sandbox;
 - `gleipnir-escape` runs each row: it builds a fixture, runs `ratatoskr sandbox run` with the probe as the program,
@@ -1207,13 +1208,16 @@ and `libc` only and needs glibc 2.39 at most, so a binary built in the Fedora 45
 glibc; there is no toolchain on the VM.
 
 ```
-gleipnir-escape --ratatoskr BIN --probe BIN --rows DIR… [--only GLOB] [--require-all] --report FILE
+gleipnir-escape --ratatoskr BIN --probe BIN --rows DIR… [--only GLOB]… [--require-all] [--bwrap-in-container]
+                --report FILE
 ```
 
 `--rows` takes a directory of `.jsonl` files, or a directory holding `any/`, `linux/` and `macos/`. `--only` is a
-glob on row names (`*` and `?`). The report is `[{row, status: pass|fail|skip, reason}]`; the exit is 1 on a fail,
-and with `--require-all` on a skip too. The VM script copies the three binaries and the rows over and runs this
-there (`gleipnir-vm.sh run`).
+glob on row names (`*` and `?`); given more than once, a row matching any of them runs. The report is `[{row, status:
+pass|fail|skip, reason}]`; the exit is 1 on a fail, and with `--require-all` on a skip too. The VM script copies the
+three binaries and the rows over and runs this there (`gleipnir-vm.sh run`). `--bwrap-in-container` says the container
+lets bwrap run (`ctr.sh --sandbox`, which unmasks `/proc`), so rows that need `bwrap` or `netns` run instead of
+skipping "inside a container".
 
 ### The probe
 
@@ -1228,7 +1232,7 @@ size.
 | environment | `env-has NAME…`: reached when any is set, the detail names which (never a value) |
 | syscalls | `syscall NAME` for `unshare-user io-uring keyctl add-key vsock clone3 clone-newuser mount-missing tiocsti-own-pty tiocsti-high-own-pty ptrace-own-child x32-getpid i386-int80 pidfd-getfd process-vm-readv` (the last two on the probe's own process: its stdin through a pidfd of itself, four bytes of its own memory). Each runs in a forked child, so a kill by the filter is a result: blocked, no errno, detail `killed by SIGSYS`. `x32-getpid` and `i386-int80` are x86_64 only (elsewhere ENOSYS) |
 | process | `status-field NAME` (from `/proc/self/status`), `fds` (the open descriptors below 1024, `0,1,2`), `proc-read PID FILE` (size), `spawn-sleep N` (a child that sleeps N seconds without exec and without the probe's pipes; the detail is its pid), `kill PID SIG` |
-| other | `run CMD…` (a child; reached when it exits 0, the detail is the exit code, `out_bytes` counts what it wrote and nothing is printed), `http-connect TARGET` (CONNECT through `$HTTPS_PROXY`; the detail is the status code, reached only for 200), `landlock-abi` (the detail is the version), `serve-http PORT N TEXT` (a dev server stand-in on `127.0.0.1:PORT`: N requests answered `200` with TEXT, then reached with `served N`) |
+| other | `run CMD…` (a child; reached when it exits 0, the detail is the exit code, `out_bytes` counts what it wrote and nothing is printed), `http-connect TARGET` (CONNECT through `$HTTPS_PROXY`; the detail is the status code, reached only for 200), `http-get URL` (a plain-HTTP `GET URL` in absolute-form through `$HTTPS_PROXY`, as a browser sends one, with hop-by-hop headers a proxy must drop: `Proxy-Connection`, `Proxy-Authorization`, `Keep-Alive`, `TE`, `Upgrade`, and `X-Glp-Hop`, which its `Connection` lists; and `X-Glp-End`, which it must keep. Reached only for 200; the detail is the status code, then each `X-Glp-NAME` header of the answer as ` name=VALUE`), `landlock-abi` (the detail is the version), `serve-http PORT N TEXT` (a dev server stand-in on `127.0.0.1:PORT`: N requests answered `200` with TEXT, then reached with `served N`) |
 
 Each `syscall` is chosen so that its unfiltered result differs from the filter's: `mount-missing` mounts on a path
 that does not exist (ENOENT unfiltered, EPERM filtered), `clone3` gets a null argument block (EINVAL, ENOSYS),
@@ -1252,20 +1256,25 @@ One JSON object per line; unknown keys are a parse error.
 | `setup` | steps: `fake-bwrap {version}`, `path-bwrap {name?}`, `swap-to-link {path, target}` (done while `ratatoskr` waits at `--pause-before-spawn`), `plant-link {path, target}`, `canary-fd {n}`, `start-sleep`, `make-dir {path}`, `make-file {path, text?}` (the last two, like `plant-link`, run in the control run's fixture too) |
 | `probes`, `expect` | one argument list per probe; one `{result, errno?: [names], detail?}` per probe. `errno` is a list so the layer that blocked is visible |
 | `control`, `control_expect` | see below |
-| `listeners_silent` | listeners that must have seen no connection: `hub backend session2 emacs bus ssh-agent abstract tcp-lo tcp-nl udp-lo udp-nl upstream gateway` |
+| `listeners_silent` | listeners that must have seen no connection: `hub backend session2 emacs bus ssh-agent abstract tcp-lo tcp-nl udp-lo udp-nl upstream gateway gateway-tcp web-upstream` |
 | `result` | a subset of the result file `{refused, layers, exit}` (`NAME_contains` asks for a part of a string). Without it the run itself is asserted: not refused, exit 0, one line per probe |
-| `unsandboxed` | run the probes with no sandbox and judge `expect` on them: the probes are real |
+| `unsandboxed` | run the probes with no sandbox and judge `expect`, `listeners_silent` and `proxy_events` on them: the probes are real |
 | `bwrap`, `landlock_omit`, `landlock_abi_cap` | `--bwrap`, `--landlock-omit`, `--landlock-abi-cap` |
 | `settings_guards` | `--settings-guards`: your config files closed, the write roots' settings files pinned (`settings-*` rows) |
 | `files_absent` | paths that must not exist after the run (a marker a refused run must not write) |
-| `proxy_events` | the proxy's events, exactly (placeholders filled): `Denied host:port`, `Refused <Why> target` |
+| `proxy_events` | the proxies' events, exactly (placeholders filled): `Denied host:port`, `Refused <Why> target` (`Refused <Why>` when the request had none), and the web proxy's `WebOff host:port`, `Private <asked> <addr> <Class>`, `Reached host` |
+| `web` | the probes' proxy is the fixture's web proxy (`Policy::Web` on `${RUN}/web.sock`), with `browser.web` granted when `true`: the default `net` relays the web relay's port (3130 in the full tier) to `web.sock`, and a control run's `HTTPS_PROXY` is the web proxy's TCP listener |
+| `grants` | the web proxy's `browser.private` grants, as `PrivateGrant`s (`{"target": {"host_port": …} \| {"cidr": …, "ports": …} \| "all_private", "expires"?}`, placeholders filled). A grant the policy refuses fails the row |
+| `dns` | the web proxy's resolver: `{"name": ["addr", …]}`. No other name resolves (a 502), and nothing asks real DNS |
 | `after` | `{after_lines, kill: run\|group, signal?, gone?: {match, within_ms}}`: once N lines are read, kill the `sandbox run` process or the sandbox's process group, and require that no process whose command line contains `match` is left within the time. A killed `sandbox run` writes no result file, so `kill: run` judges the lines and `gone` alone |
 | `raw` | `{args, exit?, json?, stdout_contains?}`: run `ratatoskr` with these arguments and no probe (`sandbox check`) |
 
 **Placeholders** are a closed list; an undefined one fails the parse. Paths: `${HOME} ${RUNTIME} ${RUN} ${TASK}
 ${TASK2} ${W} ${DATA} ${CANARY_DIR} ${FIXTURE} ${TMP} ${MARKER}`, and on macOS `${USERS_SHARED}`. Addresses:
 `${ABSTRACT}` (`@glp-…`), `${TCP_LO} ${TCP_NL} ${UDP_LO} ${UDP_NL}` (`host:port`; the `_NL` ones are the first
-non-loopback address), `${UPSTREAM}` (`upstream.test:PORT`, pinned in the proxy), `${PROXY_TCP}`. Others:
+non-loopback address), `${UPSTREAM}` (`upstream.test:PORT`, pinned in the proxy), `${PROXY_TCP}`; for the web proxy
+`${HOST_LAN}` (an address alone, `192.168.77.7`, which its policy counts as the host's own), `${GATEWAY_PORT}` (a hub
+TCP port on the loopback, in its `NeverSet`) and `${TCP_LO_PORT}` (`${TCP_LO}`'s port alone). Others:
 `${HARNESS_PID}`, `${SLEEP_PID}` (the `start-sleep` step), `${FAKE_BWRAP}` (the `fake-bwrap` step), `${GIT}` (the
 git draugr runs: `draugr::git::git_program()`, so on macOS the developer dir's, not the `/usr/bin/git` shim), and in
 `layer` rows only `${PARENT}` (the stand-in agent's pid, which only the processes inside know: the fixture writes
@@ -1276,7 +1285,8 @@ run executes the same probes with no sandbox, in a fixture of its own, and each 
 `reached`, or what `control_expect` says (`mount-missing` gives ENOENT). So a typo or a wrong path can never pass as
 ENOENT. Steps that belong to the sandboxed run (`swap-to-link`, `canary-fd`, the bwrap fakes) are not run in it.
 
-**Skips.** Only these reasons skip a row: "inside a container" (`/run/.containerenv`; for `bwrap` and `netns`),
+**Skips.** Only these reasons skip a row: "inside a container" (`/run/.containerenv`; for `bwrap` and `netns`; not
+with `--bwrap-in-container`),
 "needs macos", "needs linux", "needs x86_64", "x32 is off", "needs root" (uid 0 or `sudo -n true`), and "Landlock ABI
 N below M" (from the probe's `landlock-abi`). Any other cause is a **fail**, a sandbox refusal among them, so a
 regression that refuses every spec cannot look green.
@@ -1299,7 +1309,7 @@ sandbox like the `canary-fd` ones.
 | Path | Holds |
 |---|---|
 | `home/` | `.ssh/id_canary`, `other-repo/secret`, `canary-dir/canary.txt`, each random text |
-| `run/` | listeners that count connections: `drgnx/hub-0000.sock`, the backend's `drgnx/hub-0000.d/backend.sock`, `emacs/server`, `bus`, `ssh-agent.sock`; `drgnx/s/S1` (`${RUN}`) with `proxy.sock` (served by `gleipnir::net::proxy`, allowing `upstream.test:PORT`) and `gateway.sock` (an echo); another session's `drgnx/s/S2/hub.sock` (the layout of [hub.md](hub.md)) |
+| `run/` | listeners that count connections: `drgnx/hub-0000.sock`, the backend's `drgnx/hub-0000.d/backend.sock`, `emacs/server`, `bus`, `ssh-agent.sock`; `drgnx/s/S1` (`${RUN}`) with `proxy.sock` (served by `gleipnir::net::proxy`, allowing `upstream.test:PORT`), `web.sock` (the web proxy, below) and `gateway.sock` (an echo); another session's `drgnx/s/S2/hub.sock` (the layout of [hub.md](hub.md)) |
 | `data/` | `work.db` (a canary) |
 | `tasks/t1`, `tasks/t2`, `w/`, `t/` | `${TASK}`, `${TASK2}` (holds a canary), `${W}`, `${TMP}` |
 | `bin/` | a copy of the probe, bound read-only into the sandbox (the helper's own directory is closed, so the probe cannot run from beside `ratatoskr`) |
@@ -1307,6 +1317,16 @@ sandbox like the `canary-fd` ones.
 Besides the files: an abstract listener, TCP and UDP listeners on `127.0.0.1` and on the first non-loopback address,
 and an upstream, all of which echo. Setup that needs root (`fake-bwrap`: a script in a root-owned `/var/lib/glp-…/`
 that prints `bubblewrap VERSION` for `--version` and writes `${MARKER}` for any other argv) runs through `sudo -n`.
+
+**The web proxy.** `web.sock` and a TCP listener on `127.0.0.1` serve a second proxy under `Policy::Web`, started with
+`start_for_tests`. Its state is the row's (`web`, `grants`, `dns`); its `HostAddrs` hold `${HOST_LAN}`, and its
+`NeverSet` the ports of `gateway-tcp` (`${GATEWAY_PORT}`, an echo) and of both proxies' TCP listeners. Its resolver
+answers only the row's `dns`. Its upstream connector opens loopback addresses as they are (only `host.drgnx.internal`
+leads there) and sends every other address to `web-upstream`, so a "public" or LAN target has a server and no row
+reaches a real network. `web-upstream` checks a forwarded plain-HTTP head as the proxy must rewrite it (origin-form,
+one `Host`, no hop-by-hop header, exactly `Connection: close`, `X-Glp-End` kept) and answers 200 with `X-Glp-Host: <the
+Host it got>`, or 412 with `X-Glp-Why`; other bytes it echoes. Both proxies send their events down one channel, so the
+provider proxy's sentinel request (`proxy_events`) still comes after every web event.
 
 ### The rows shipped with the harness
 
@@ -1447,6 +1467,29 @@ is the browser layer's alone.
 | `browser-writes-own-dir-only` | the browser writes `/tmp/drgnx-browser` and nothing else of `/tmp` |
 | `browser-below-abi9-refused` | at Landlock ABI 8 (`landlock_abi_cap`) a spec with a browser is refused before anything runs: validation raised its floor to 9 |
 | `agent-pidfd-getfd-refused`, `agent-process-vm-readv-refused` | every session refuses `pidfd_getfd` and `process_vm_readv` (seccomp, EPERM), the cheap ways to take another process's descriptor or memory (the browser host's socketpair end among them) |
+
+### The web proxy's rows
+
+`rows/linux/web-proxy.jsonl` holds the browser session's web proxy (`Policy::Web`, "The web policy") to its
+hardening: every probe goes through the full tier's relay on 3130 to `${RUN}/web.sock` (`web`), and
+each row names its grants and its DNS answers. Each row needs `bwrap`; its control run reaches the same proxy over TCP,
+so the control gives the same lines, and the test `web_proxy_rows_hold_without_the_sandbox` runs every row unsandboxed
+(lines, events and silent listeners) in any container. Every refusal is a 403 and its event, so nothing was connected.
+
+| Row | What it proves |
+|---|---|
+| `private-without-grant-refused` | LAN, ULA, link-local and CGNAT literals, names that resolve to LAN (`printer.local` too) and a plain-HTTP request to a LAN literal are `Private` (the card's question), never reached, with `browser.web` granted |
+| `granted-target-only` | a host:port grant opens that literal, and a name grant that name, and nothing beside them: the neighbour port, the neighbour address, the name's address as a literal, the name on another port; an expired grant opens nothing |
+| `rebinding-name-onto-grant-refused`, `rebinding-name-onto-all-private-refused` | a name whose answer is a granted host:port, a granted CIDR or (under `all_private`) any LAN or ULA address is `Refused Rebound`, while the literals themselves connect; `all_private` leaves link-local and CGNAT `Private` |
+| `loopback-every-spelling-refused` | `127.0.0.2`, `127.0.0.1`, `[::1]`, `[::ffff:127.0.0.1]` (`Embedded`), `localhost`, a name pinned to `127.0.1.1`, `${HOST_LAN}` and a name resolving to it are refused, under grants that name each of them and `all_private`; `host.drgnx.internal:PORT` reaches the host's loopback under its grant |
+| `nevers-under-any-grant` | the seven metadata addresses, `0.0.0.0` and `[::]` (`Never`), each IPv4 one IPv4-mapped, NAT64 and 6to4 (`Embedded`), a name resolving to a metadata address, the two metadata names, and the gateway's port as `host.drgnx.internal` (`Never`) and as `127.0.0.1` (`Loopback`), under `all_private`, `0.0.0.0/0`, `::/0` and a host:port grant for each; nothing reaches `web-upstream` or the gateway |
+| `plain-http-forwarded` | an absolute-form `GET` reaches its target in origin-form with `Host` from the target (`web.test`, `web.test:443` from `WEB.Test:443`, a granted LAN `host:port`), no hop-by-hop header and `Connection: close` (the upstream checks the head); a CONNECT to port 80 (WebSockets) connects |
+| `https-absolute-and-userinfo-refused` | `https://` absolute-form, userinfo and a fragment are 400 (`Refused BadRequest`) |
+| `public-80-443-only` | a public name and literal connect on 80 and 443 only (`Refused Port` on 8443, 22, 8080, plain HTTP on 8080 too); a mixed answer connects to its public part |
+| `public-without-browser-web-asks` | without `browser.web` a public target is `WebOff` (CONNECT and plain HTTP), while a never is still `Refused` and a LAN literal still `Private` |
+
+The policy decides before the relay matters, so these rows hold on any kernel the full tier runs on. One point they
+lean on: a `.local` name is resolved like any other (`printer.local` above); only its answer is judged.
 
 ### The macOS rows (Task 16)
 

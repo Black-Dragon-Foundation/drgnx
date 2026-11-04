@@ -294,6 +294,7 @@ fn probe(name: &str, a: &[String]) -> Full {
         "spawn-sleep-setsid" => spawn_sleep(&need(name, a, 1)[0], true),
         "kill" => kill(&need(name, a, 2)[0], &a[1]),
         "http-connect" => http_connect(&need(name, a, 1)[0]),
+        "http-get" => http_get(&need(name, a, 1)[0]),
         "landlock-abi" => landlock_abi(),
         "serve-http" => serve_http(need(name, a, 3)),
         other => usage(&format!("unknown probe {other:?}")),
@@ -729,8 +730,8 @@ fn run(cmd: &[String]) -> Full {
     }
 }
 
-/// A CONNECT through `$HTTPS_PROXY`; the detail is the status code.
-fn http_connect(target: &str) -> Res {
+/// A connection to `$HTTPS_PROXY`.
+fn to_proxy() -> Result<TcpStream, (i32, Option<String>)> {
     let proxy = std::env::var("HTTPS_PROXY")
         .or_else(|_| std::env::var("https_proxy"))
         .map_err(|_| (libc::ENOENT, Some("HTTPS_PROXY is not set".into())))?;
@@ -739,9 +740,61 @@ fn http_connect(target: &str) -> Res {
         .map_or(proxy.as_str(), |(_, rest)| rest)
         .trim_end_matches('/');
     let addr = resolve(hostport)?;
-    let mut s = TcpStream::connect_timeout(&addr, TIMEOUT).map_err(os)?;
+    let s = TcpStream::connect_timeout(&addr, TIMEOUT).map_err(os)?;
     s.set_read_timeout(Some(Duration::from_secs(3)))
         .map_err(os)?;
+    Ok(s)
+}
+
+/// A plain-HTTP `GET URL` in absolute-form through `$HTTPS_PROXY`, as a browser sends one to its proxy, with the
+/// hop-by-hop headers a proxy must drop (`Proxy-*`, `Keep-Alive`, `TE`, `Upgrade`, and `X-Glp-Hop`, which
+/// `Connection` lists) and one it must keep (`X-Glp-End`). Reached on a 200. The detail is the status code, then
+/// each `X-Glp-NAME: VALUE` header of the answer as ` name=VALUE` (the escape fixture's upstream says what it got).
+fn http_get(url: &str) -> Res {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let mut s = to_proxy()?;
+    write!(
+        s,
+        "GET {url} HTTP/1.1\r\nHost: {host}\r\nProxy-Connection: keep-alive\r\n\
+         Proxy-Authorization: Basic Z2xwOmdscA==\r\nKeep-Alive: timeout=5\r\nTE: trailers\r\nUpgrade: websocket\r\n\
+         Connection: keep-alive, X-Glp-Hop\r\nX-Glp-Hop: 1\r\nX-Glp-End: 1\r\n\r\n"
+    )
+    .map_err(os)?;
+    let mut head = Vec::new();
+    let mut b = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") && head.len() < 4096 {
+        if s.read(&mut b).map_err(os)? == 0 {
+            break;
+        }
+        head.push(b[0]);
+    }
+    let text = String::from_utf8_lossy(&head);
+    let mut lines = text.split("\r\n");
+    let code = lines
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .filter(|c| c.len() == 3 && c.bytes().all(|b| b.is_ascii_digit()))
+        .ok_or((libc::EPROTONOSUPPORT, Some("no status line".into())))?;
+    let mut detail = code.to_string();
+    for l in lines {
+        if let Some((name, value)) = l.split_once(':')
+            && let Some(n) = name.to_ascii_lowercase().strip_prefix("x-glp-")
+        {
+            detail.push_str(&format!(" {n}={}", value.trim()));
+        }
+    }
+    if code == "200" {
+        Ok(Some(detail))
+    } else {
+        Err((0, Some(detail)))
+    }
+}
+
+/// A CONNECT through `$HTTPS_PROXY`; the detail is the status code.
+fn http_connect(target: &str) -> Res {
+    let mut s = to_proxy()?;
     write!(s, "CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n").map_err(os)?;
     let mut head = Vec::new();
     let mut b = [0u8; 1];

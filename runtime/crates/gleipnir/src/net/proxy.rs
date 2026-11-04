@@ -293,7 +293,7 @@ pub fn start(
 }
 
 /// [`start`] with the upstream connections opened by `connect` (the escape fixture redirects "public" addresses).
-#[cfg(feature = "test-hooks")]
+#[cfg(any(feature = "test-hooks", feature = "escape-fixture"))]
 pub fn start_for_tests(
     cfg: ProxyConfig,
     resolver: Arc<dyn Resolver>,

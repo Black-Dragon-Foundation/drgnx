@@ -10,6 +10,9 @@ publish = false
 [features]
 # InnerSpec's `landlock_omit` and `abi_cap` (the escape rows); turned on only by drgnx-ratatoskr's own `test-hooks`.
 test-hooks = []
+# Exposes `net::proxy::start_for_tests` (the upstream connector) to the escape fixture, and nothing else: unlike
+# `test-hooks` it changes no spec or sandbox, so feature unification with a release `ratatoskr` costs nothing.
+escape-fixture = []
 # Exposes `sbpl::sexp` to the fuzz crate.
 fuzzing = []
 
