@@ -15,6 +15,12 @@
 //! `warnings` are its clear-text providers (the settings' provider table), and `keys_refused` (only when there is one) says why
 //! the hub takes no key: it could not keep other processes out of its memory (on macOS, started under a debugger). `sandbox` is the job sandbox's check
 //! (`gleipnir::check`), `in_use` true (every session starts in it).
+//! `browser` is what an agent session's browser would get here: `{found, fix, tier, landlock_abi, verdict, modes, cap,
+//! proxy_refusals: [{target, refused}], last_check, age_warning}`.  `found` is the program `browser::resolve` finds (or
+//! null, with `fix`), `verdict` says whether Mode A runs on this tier and ABI, `cap` is `systemd` where a memory cap
+//! can be set, `proxy_refusals` are the web policy's hard refusals judged in-process (a `refused: false` is a failure),
+//! `last_check` is the cached `browser/check` result (`browser::check`) and `age_warning` a downloaded browser more
+//! than 28 days old.
 //! `socket_dir.ok` is true when the directory is the user's own with mode 0700, and also while it does not exist yet
 //! (the hub makes it private at its first start); `mode` is then null.
 
@@ -156,7 +162,136 @@ pub fn report(env: &Env, binary: &Path, running: Option<Running>, sandbox: &Chec
         }
     }
     store_files(env, &mut v, now_secs());
+    let values =
+        crate::settings::Settings::load(&paths::config_dir(env), &crate::settings::Kv::default())
+            .values;
+    v["browser"] = browser_section(
+        &crate::browser::resolve::resolve(&values, &paths::data_dir(env)),
+        sandbox,
+        v["gateway"]["port"]
+            .as_u64()
+            .and_then(|p| u16::try_from(p).ok()),
+        crate::browser::check::read(env),
+        crate::exec::unit::systemd_user(),
+        now_secs(),
+    );
     v
+}
+
+/// A downloaded browser older than this many days warns.
+const BROWSER_AGE_WARN_DAYS: u64 = crate::browser::check::AGE_WARN_DAYS;
+
+/// `browser`: what an agent session would get, the tier and the kernel's Landlock ABI, the proxy's refusals (judged
+/// here, in-process), whether a memory cap can be set (SYSTEMD: a user systemd answers), the last cached smoke check
+/// and the age warning.  `gateway_port` is the running hub's gateway; a stand-in port is judged without one.
+pub fn browser_section(
+    found: &Result<crate::browser::resolve::Found, crate::browser::resolve::NotFound>,
+    c: &Check,
+    gateway_port: Option<u16>,
+    last_check: Option<crate::browser::check::CheckResult>,
+    systemd: bool,
+    now: u64,
+) -> Value {
+    use gleipnir::BackendKind;
+    let abi = c.landlock_abi;
+    let floor = gleipnir::LANDLOCK_FLOOR_BROWSER;
+    let (tier, verdict, modes) = match c.backend {
+        BackendKind::Bwrap if abi >= floor => ("full", "full tier: Mode A".to_owned(), vec!["A"]),
+        BackendKind::Bwrap => (
+            "full",
+            format!(
+                "refused: Landlock ABI {abi} < {floor} (fix: run a newer kernel, one with Landlock ABI {floor} or later)"
+            ),
+            vec![],
+        ),
+        BackendKind::Reduced => (
+            "reduced",
+            "reduced tier: not yet (phase 2)".to_owned(),
+            vec![],
+        ),
+        BackendKind::Seatbelt => ("macos", "macOS: not yet".to_owned(), vec![]),
+        BackendKind::None => ("none", "none: no sandbox".to_owned(), vec![]),
+    };
+    let age_warning = match found {
+        Ok(f) => match &f.source {
+            crate::browser::resolve::Source::Downloaded { released } => {
+                let day = format!("{released}T00:00:00Z");
+                parse_rfc3339(&day)
+                    .is_some_and(|t| now.saturating_sub(t) > BROWSER_AGE_WARN_DAYS * 86_400)
+            }
+            _ => false,
+        },
+        Err(_) => false,
+    };
+    json!({
+        "found": found.as_ref().ok(),
+        "fix": found.as_ref().err().map(|n| n.fix.clone()),
+        "tier": tier,
+        "landlock_abi": abi,
+        "verdict": verdict,
+        "modes": modes,
+        "cap": if systemd { "systemd" } else { "none" },
+        "proxy_refusals": proxy_refusals(gateway_port.unwrap_or(4100)),
+        "last_check": last_check,
+        "age_warning": age_warning,
+    })
+}
+
+/// The web policy's hard refusals, judged in-process (`gleipnir::net::policy::judge`): each target below must be
+/// refused, and `refused: false` is a doctor `fail`.
+pub fn proxy_refusals(gateway_port: u16) -> Vec<Value> {
+    use gleipnir::net::host::parse_target;
+    use gleipnir::net::policy::{
+        HostAddrs, Judgement, NeverSet, Pre, PrivateGrant, PrivateTarget, WebCtx, judge,
+        pre_resolve,
+    };
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    let host_addrs = HostAddrs::default();
+    let never = NeverSet {
+        loopback_ports: [gateway_port].into_iter().collect(),
+    };
+    let gateway = format!("host.drgnx.internal:{gateway_port}");
+    let test_grant = |t: &str| PrivateGrant {
+        target: PrivateTarget::HostPort(parse_target(t).expect("a target")),
+        expires: None,
+    };
+    let both = [
+        PrivateGrant {
+            target: PrivateTarget::AllPrivate,
+            expires: None,
+        },
+        test_grant("10.0.0.1:80"),
+    ];
+    let gateway_grant = [test_grant(&gateway)];
+    let public = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34)), 22);
+    let cases: [(&str, &[PrivateGrant], &[SocketAddr]); 4] = [
+        ("host.drgnx.internal:1", &[], &[]),
+        ("example.com:22", &[], &[public]),
+        ("169.254.169.254:80", &both, &[]),
+        (&gateway, &gateway_grant, &[]),
+    ];
+    cases
+        .iter()
+        .map(|(target, grants, answer)| {
+            let ctx = WebCtx {
+                web: true,
+                deny_hosts: &[],
+                grants,
+                now: now_secs() as f64,
+                host_addrs: &host_addrs,
+                never: &never,
+            };
+            let refused = parse_target(target).is_ok_and(|t| {
+                let answer: Vec<SocketAddr> = match pre_resolve(&t, &ctx) {
+                    Pre::Refuse(_) => return true,
+                    Pre::Fixed(a) => a,
+                    Pre::Resolve => answer.to_vec(),
+                };
+                !matches!(judge(&t, &answer, &ctx), Judgement::Connect(_))
+            });
+            json!({"target": target, "refused": refused})
+        })
+        .collect()
 }
 
 /// work.db's WAL above this size warns: an editor that keeps a read open stops it being checkpointed.
@@ -460,6 +595,7 @@ fn text(v: &Value, sandbox: &Check) -> String {
     ));
     out.push_str(&format!("\njob agents: {}", t(&v["job_agents"])));
     out.push_str(&format!("\n{}", sandbox_line(sandbox)));
+    out.push_str(&format!("\nagent browser: {}", t(&v["browser"]["verdict"])));
     out.push_str(&legacy_lines(&v["legacy"]));
     out
 }
@@ -709,6 +845,113 @@ mod tests {
     fn report_of(c: &Check) -> Value {
         let env = Env::new(&[("HOME", "/nonexistent/h")], 1000);
         report(&env, Path::new("/b"), None, c)
+    }
+
+    fn found(source: crate::browser::resolve::Source) -> crate::browser::resolve::Found {
+        crate::browser::resolve::Found {
+            path: "/usr/bin/chrome-headless-shell".into(),
+            kind: crate::browser::resolve::Kind::HeadlessShell,
+            version: Some("157.0.8103.38".into()),
+            source,
+        }
+    }
+
+    #[test]
+    fn browser_section_shape() {
+        use crate::browser::resolve::{NotFound, Source};
+        let now = parse_rfc3339("2026-11-04T00:00:00Z").unwrap();
+        let ok = browser_section(
+            &Ok(found(Source::System)),
+            &working(),
+            Some(4100),
+            None,
+            true,
+            now,
+        );
+        assert_eq!(ok["tier"], "full");
+        assert_eq!(ok["verdict"], "full tier: Mode A");
+        assert_eq!(ok["modes"], json!(["A"]));
+        assert_eq!(ok["cap"], "systemd");
+        assert_eq!(ok["landlock_abi"], 10);
+        assert_eq!(ok["found"]["kind"], "headless-shell");
+        assert!(ok["last_check"].is_null());
+        assert_eq!(ok["age_warning"], false);
+        assert_eq!(ok["proxy_refusals"].as_array().unwrap().len(), 4);
+        // ABI 8: refused, with the fix, and no mode
+        let old = Check {
+            landlock_abi: 8,
+            ..working()
+        };
+        let v = browser_section(
+            &Err(NotFound {
+                fix: "install one".into(),
+            }),
+            &old,
+            None,
+            None,
+            false,
+            now,
+        );
+        assert!(
+            v["verdict"]
+                .as_str()
+                .unwrap()
+                .starts_with("refused: Landlock ABI 8 < 9 (fix")
+        );
+        assert_eq!(v["modes"], json!([]));
+        assert!(v["found"].is_null());
+        assert_eq!(v["fix"], "install one");
+        assert_eq!(v["cap"], "none");
+        // the other tiers
+        let tier = |backend| {
+            let c = Check {
+                backend,
+                ..working()
+            };
+            let v = browser_section(&Ok(found(Source::System)), &c, None, None, true, now);
+            (
+                v["tier"].as_str().unwrap().to_owned(),
+                v["verdict"].as_str().unwrap().to_owned(),
+            )
+        };
+        assert_eq!(
+            tier(gleipnir::BackendKind::Reduced),
+            ("reduced".into(), "reduced tier: not yet (phase 2)".into())
+        );
+        assert_eq!(
+            tier(gleipnir::BackendKind::Seatbelt),
+            ("macos".into(), "macOS: not yet".into())
+        );
+        assert_eq!(
+            tier(gleipnir::BackendKind::None),
+            ("none".into(), "none: no sandbox".into())
+        );
+        // a download more than 28 days old warns, 28 days exactly does not
+        let released = |d: &str| Source::Downloaded { released: d.into() };
+        let age = |d: &str| {
+            browser_section(&Ok(found(released(d))), &working(), None, None, true, now)["age_warning"].clone()
+        };
+        assert_eq!(age("2026-10-07"), false);
+        assert_eq!(age("2026-10-06"), true);
+        assert_eq!(age("2026-11-03"), false);
+    }
+
+    #[test]
+    fn proxy_refusals_all_hold() {
+        let all = proxy_refusals(4100);
+        let targets: Vec<&str> = all.iter().map(|r| r["target"].as_str().unwrap()).collect();
+        assert_eq!(
+            targets,
+            [
+                "host.drgnx.internal:1",
+                "example.com:22",
+                "169.254.169.254:80",
+                "host.drgnx.internal:4100"
+            ]
+        );
+        for r in &all {
+            assert_eq!(r["refused"], true, "{r}");
+        }
     }
 
     #[test]

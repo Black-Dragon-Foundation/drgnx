@@ -113,6 +113,65 @@
                (plist-put (copy-sequence (plist-get f :ratatoskr)) :report
                           (append report (plist-get (plist-get f :ratatoskr) :report))))))
 
+(defun drgnx-doctor-test--browser (&rest overrides)
+  "Facts whose `browser' section is a healthy one with OVERRIDES (plist keys) applied."
+  (let ((b (list :found '(:path "/usr/bin/chrome-headless-shell" :version "157.0.8103.38" :kind "headless-shell")
+                 :fix nil :tier "full" :landlock_abi 10 :verdict "full tier: Mode A" :modes ["A"] :cap "systemd"
+                 :proxy_refusals [(:target "example.com:22" :refused t) (:target "host.drgnx.internal:1" :refused t)]
+                 :last_check '(:ok t :start_ms 812 :peak_bytes 314572800) :age_warning nil)))
+    (while overrides (setq b (plist-put b (pop overrides) (pop overrides))))
+    (drgnx-doctor-test--report :browser b)))
+
+(ert-deftest drgnx-doctor/agent-browser-ok ()
+  (should (equal (plist-get (alist-get 'agent-browser drgnx-doctor--checks) :group) "Agents"))
+  (let ((r (drgnx-doctor-check 'agent-browser (drgnx-doctor-test--browser))))
+    (should (eq (car r) 'ok))
+    (should (string-search "full tier: Mode A" (nth 1 r)))
+    (should (string-search "started in 812 ms, peak memory 300 MiB" (nth 1 r))))
+  (should (string-search "no check run yet"
+                         (nth 1 (drgnx-doctor-check 'agent-browser (drgnx-doctor-test--browser :last_check nil)))))
+  ;; no section (an older binary) or no answer at all
+  (should (eq (drgnx-doctor-test--status 'agent-browser (drgnx-doctor-test--facts)) 'info))
+  (should (eq (drgnx-doctor-test--status 'agent-browser (drgnx-doctor-test--facts :ratatoskr nil)) 'info)))
+
+(ert-deftest drgnx-doctor/agent-browser-no-browser ()
+  (let ((r (drgnx-doctor-check 'agent-browser (drgnx-doctor-test--browser :found nil :fix "install chromium-headless"))))
+    (should (eq (car r) 'warn))
+    (should (string-search "without a browser" (nth 1 r)))
+    (should (equal (nth 2 r) "install chromium-headless")))
+  (let ((r (drgnx-doctor-check 'agent-browser (drgnx-doctor-test--browser :age_warning t))))
+    (should (eq (car r) 'warn))
+    (should (string-search "28 days" (nth 1 r))))
+  (let ((r (drgnx-doctor-check 'agent-browser (drgnx-doctor-test--browser :last_check '(:ok nil :why "no screenshot")))))
+    (should (eq (car r) 'warn))
+    (should (string-search "no screenshot" (nth 1 r)))
+    (should (string-search "Check the Agent Browser" (nth 2 r)))))
+
+(ert-deftest drgnx-doctor/agent-browser-abi-below-9 ()
+  (let ((r (drgnx-doctor-check 'agent-browser
+                               (drgnx-doctor-test--browser :landlock_abi 8 :modes [] :found nil
+                                                           :verdict "refused: Landlock ABI 8 < 9 (fix: run a newer kernel)"))))
+    (should (eq (car r) 'info))
+    (should (string-search "Landlock ABI 8 < 9" (nth 1 r))))
+  (should (eq (drgnx-doctor-test--status 'agent-browser
+                                         (drgnx-doctor-test--browser :tier "reduced" :modes []
+                                                                     :verdict "reduced tier: not yet (phase 2)"))
+              'info)))
+
+(ert-deftest drgnx-doctor/agent-browser-refusal-failed ()
+  (let ((r (drgnx-doctor-check 'agent-browser
+                               (drgnx-doctor-test--browser
+                                :proxy_refusals [(:target "example.com:22" :refused t)
+                                                 (:target "169.254.169.254:80" :refused nil)]))))
+    (should (eq (car r) 'fail))
+    (should (string-search "169.254.169.254:80" (nth 1 r)))
+    (should-not (string-search "example.com" (nth 1 r)))))
+
+(ert-deftest drgnx-doctor/agent-browser-no-cap ()
+  (let ((r (drgnx-doctor-check 'agent-browser (drgnx-doctor-test--browser :cap "none"))))
+    (should (eq (car r) 'warn))
+    (should (string-search "memory cap" (nth 1 r)))))
+
 (ert-deftest drgnx-doctor/job-sandbox-from-ratatoskr ()
   "In the Agents group, from Ratatoskr's `sandbox' section: the back end and version, or the reason and fix."
   (should (equal (plist-get (alist-get 'job-sandbox drgnx-doctor--checks) :group) "Agents"))

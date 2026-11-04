@@ -196,6 +196,25 @@ pub(crate) async fn start_browser(
     who: norn::matrix::Who,
     b: BrowserHub,
 ) -> io::Result<()> {
+    start_browser_with(front, net, sid, who, b, None).await
+}
+
+/// What the doctor's check changes in a browser session's start: a gate of its own (the throwaway session asks no
+/// card) and a channel for the browser's stderr lines.
+pub(crate) struct CheckHooks {
+    pub gate: crate::browser::broker::GateFn,
+    pub stderr: mpsc::UnboundedSender<String>,
+}
+
+/// [`start_browser`], with the check's hooks when it is the doctor's throwaway session.
+pub(crate) async fn start_browser_with(
+    front: &crate::front::Front,
+    net: &mut SessionNet,
+    sid: &str,
+    who: norn::matrix::Who,
+    b: BrowserHub,
+    check: Option<CheckHooks>,
+) -> io::Result<()> {
     use crate::browser::broker::{self, BrokerCfg, GateFn};
     let dir = net
         .socket
@@ -230,6 +249,10 @@ pub(crate) async fn start_browser(
                 .await
         }) as mimir::BoxFuture<'static, crate::matrix_gate::Gate>
     });
+    let (ask, stderr) = match check {
+        Some(c) => (c.gate, Some(c.stderr)),
+        None => (ask, None),
+    };
     let (events, rx) = mpsc::channel(16);
     let broker = Arc::new(broker::start(
         BrokerCfg {
@@ -239,6 +262,7 @@ pub(crate) async fn start_browser(
             idle: std::time::Duration::from_secs(v.agents_browser_idle),
             gate: ask,
             events,
+            stderr,
         },
         listener,
         host,

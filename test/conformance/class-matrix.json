@@ -18,6 +18,7 @@
   "agents/stop": ["user"],
   "agents/tool-input": ["user"],
   "brief/build": ["user"],
+  "browser/check": ["user"],
   "brief/set": ["user"],
   "budget/get": ["user"],
   "budget/set": ["user"],

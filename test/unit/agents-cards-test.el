@@ -74,4 +74,17 @@ pushes each call's (METHOD . PARAMS) onto CALLS and answers it settled."
     (should (assq 9 drgnx-hub--card-choices))
     (should (equal (plist-get (car (drgnx-notices :source 'hub)) :command) '(drgnx-agents-answer-card 9)))))
 
+(ert-deftest drgnx-agents-cards/browser-check-asks-the-hub-and-says-the-result ()
+  (let (call said)
+    (cl-letf (((symbol-function 'drgnx-hub-call)
+               (lambda (method params cb &rest kw)
+                 (setq call (list method params kw))
+                 (funcall cb '(:ok t :start_ms 812 :screenshot_bytes 2048 :peak_bytes 314572800) nil)))
+              ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+      (drgnx-agents-browser-check))
+    (should (equal (car call) "browser/check"))
+    (should (string-search "started in 812 ms, a screenshot of 2048 bytes, peak memory 300 MiB" (car said))))
+  (should (equal (drgnx-agents-browser-check--summary '(:ok nil :why "the sandbox did not start"))
+                 "failed: the sandbox did not start")))
+
 ;;; agents-cards-test.el ends here

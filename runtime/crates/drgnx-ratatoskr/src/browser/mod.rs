@@ -11,6 +11,7 @@
 //! session's `cdp.sock`, brokered to that host.
 
 pub mod broker;
+pub mod check;
 #[cfg(target_os = "linux")]
 pub mod host;
 pub mod install;

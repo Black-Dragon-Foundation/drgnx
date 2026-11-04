@@ -41,6 +41,7 @@
         (records-accept-proposal :none "C-c C-a in the proposal's diff buffer; the palette")
         (records-reject-proposal :none "C-c C-r in the proposal's diff buffer; the palette")
         (agents-answer-card :none "the notice of a permission card; the palette")
+        (agents-browser-check :none "the palette")
         (jobs-log :none "the Agents tab and transcripts; the palette")
         (jobs-stop :none "the Agents tab and transcripts; the palette")
         (job-start :none "the palette")

@@ -514,6 +514,10 @@ impl Front {
                 stop = !self.ignore_shutdown.load(Ordering::Relaxed);
                 Ok(json!(true))
             }
+            Params::BrowserCheck(_) => {
+                self.refresh_settings().await;
+                Ok(json!(crate::browser::check::run(self).await))
+            }
             Params::Restart(_) => {
                 restart = true;
                 Ok(json!(true))

@@ -450,3 +450,87 @@ fn there_is_no_listening_cdp_port_inside() {
         let _ = child.wait().await;
     });
 }
+
+/// The doctor's check, for real: a hub in a fixture environment runs `browser/check` with the stand-in that returns a
+/// fixed PNG as the browser. The throwaway session starts under the real sandbox, the hub connects to its own broker,
+/// opens the page and takes the screenshot; the result is kept in `<state>/hub/browser-check.json`.
+#[test]
+#[ignore = "needs bwrap, user namespaces and Landlock ABI 9 (the VM)"]
+fn the_check_takes_a_screenshot() {
+    use drgnx_ratatoskr::client::Client;
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::Builder::new()
+        .prefix("glp-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let b = std::fs::canonicalize(dir.path()).unwrap();
+    for d in ["home", "run", "t"] {
+        std::fs::create_dir_all(b.join(d)).unwrap();
+    }
+    std::fs::set_permissions(b.join("run"), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let env = Env::new(
+        &[
+            ("HOME", b.join("home").to_str().unwrap()),
+            ("XDG_RUNTIME_DIR", b.join("run").to_str().unwrap()),
+            ("TMPDIR", b.join("t").to_str().unwrap()),
+            ("PATH", "/usr/bin:/bin"),
+        ],
+        rustix::process::geteuid().as_raw(),
+    );
+    let me = std::process::id();
+    let mut hub = std::process::Command::new(RATATOSKR)
+        .args(["serve", "--foreground", "--parent-pid", &me.to_string()])
+        .env_clear()
+        .envs([
+            ("HOME", b.join("home")),
+            ("XDG_RUNTIME_DIR", b.join("run")),
+            ("TMPDIR", b.join("t")),
+            ("PATH", PathBuf::from("/usr/bin:/bin")),
+            ("RATATOSKR_SUPERVISOR", PathBuf::from("none")),
+        ])
+        .current_dir(&b)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::fs::File::create(b.join("hub.err")).unwrap())
+        .spawn()
+        .expect("the hub");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut c = loop {
+        match Client::user(&env, Duration::from_secs(2)) {
+            Ok(c) => break c,
+            Err(e) if Instant::now() > deadline => panic!(
+                "no hub: {e}: {}",
+                std::fs::read_to_string(b.join("hub.err")).unwrap_or_default()
+            ),
+            Err(_) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    };
+    let program = data_dir().join("fake-chromium-png.sh");
+    c.call(
+        "config/settings",
+        json!({"overrides": [{"name": "drgnx-agents-browser-program", "source": "row",
+                              "value": program.to_str().unwrap()}]}),
+        Duration::from_secs(10),
+    )
+    .expect("the browser program setting");
+    let r = c.call("browser/check", json!({}), Duration::from_secs(60));
+    let kept =
+        std::fs::read_to_string(runstav::paths::state_dir(&env).join("hub/browser-check.json"));
+    drop(c);
+    let _ = hub.kill();
+    let _ = hub.wait();
+    let r = r.unwrap_or_else(|e| {
+        panic!(
+            "browser/check: {e}: {}",
+            std::fs::read_to_string(b.join("hub.err")).unwrap_or_default()
+        )
+    });
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(r["screenshot_bytes"], 70, "{r}");
+    assert_eq!(r["sys_missed"], false, "{r}");
+    assert!(r["start_ms"].as_u64().is_some_and(|ms| ms > 0), "{r}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&kept.expect("the result is kept")).unwrap(),
+        r
+    );
+}

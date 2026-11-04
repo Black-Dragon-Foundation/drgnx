@@ -89,6 +89,8 @@ pub struct BrokerCfg {
     pub gate: GateFn,
     /// Downloads, a missing browser session and stops. Sent with `try_send`: a full channel loses the event (logged).
     pub events: mpsc::Sender<BrokerEvent>,
+    /// The browser's own stderr lines (at most one a second), for the one caller that reads them: the doctor's check.
+    pub stderr: Option<mpsc::UnboundedSender<String>>,
 }
 
 /// The running broker. Dropping it closes it ([`BrokerHandle::close`]).
@@ -218,6 +220,7 @@ fn spawn(cfg: BrokerCfg, listener: UnixListener, host: Option<UnixStream>) -> Br
         max: cfg.max_message,
         idle: cfg.idle,
         events: cfg.events,
+        stderr: cfg.stderr,
         connected: connected.clone(),
         host_tx,
         state,
@@ -293,6 +296,7 @@ struct Actor {
     max: usize,
     idle: Duration,
     events: mpsc::Sender<BrokerEvent>,
+    stderr: Option<mpsc::UnboundedSender<String>>,
     connected: Arc<AtomicBool>,
     host_tx: Option<mpsc::Sender<Vec<u8>>>,
     state: State,
@@ -542,6 +546,9 @@ impl Actor {
                 }
                 Some("exited") => self.exited(&v).await,
                 Some("stderr") => {
+                    if let Some(tx) = &self.stderr {
+                        let _ = tx.send(v["line"].as_str().unwrap_or("").to_owned());
+                    }
                     tracing::debug!(
                         "cdp://{}: browser: {}",
                         self.sid,
@@ -861,6 +868,7 @@ pub fn test_endpoint(socket: &std::path::Path) -> Result<String, String> {
         idle: Duration::from_secs(600),
         gate: Arc::new(|| Box::pin(async { Gate::Allow }) as BoxFuture<'static, Gate>),
         events,
+        stderr: None,
     };
     let handle = start(cfg, listener, ours);
     KEPT.lock()

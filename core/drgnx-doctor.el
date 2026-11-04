@@ -1016,6 +1016,51 @@ server, as abbreviated names (the readers of `drgnx-agent-config-read'; a kind t
                      :doc "The work store (work.db): its schema, WAL size, nightly backups, opt-in file and old copies"
                      :check (lambda (f) (drgnx-doctor--store-check f)))
 
+;; The agent browser: the `browser' section of `ratatoskr doctor --json' (what a session would get, the tier and Landlock
+;; ABI, the web proxy's refusals judged in-process, the memory cap, the last cached smoke check).
+(defun drgnx-doctor--agent-browser-check (f)
+  "The `agent-browser' check of the fact F (`drgnx-doctor--ratatoskr').
+Fails when a refusal of the web proxy did not hold; is `info' where no session can have a browser (the kernel's
+Landlock ABI below 9, the reduced tier, macOS); warns on no browser, no memory cap, a download more than 28 days old or
+a last check that failed; otherwise `ok', with the last check's start time and peak memory."
+  (let* ((b (plist-get (plist-get (plist-get f :ratatoskr) :report) :browser))
+         (broken (seq-filter (lambda (r) (not (plist-get r :refused))) (append (plist-get b :proxy_refusals) nil)))
+         (found (plist-get b :found))
+         (last (plist-get b :last_check))
+         (check "Agents: Check the Agent Browser"))
+    (cond
+     ((null b) (list 'info "not checked: no answer from Ratatoskr" nil))
+     (broken
+      (list 'fail (format "the agent browser's web proxy would let through: %s"
+                          (mapconcat (lambda (r) (plist-get r :target)) broken ", "))
+            "do not give agents a browser; report it (docs/guide/agent-browser.md)"))
+     ((not (member "A" (append (plist-get b :modes) nil)))
+      (list 'info (format "no agent browser here: %s" (plist-get b :verdict)) nil))
+     ((null found)
+      (list 'warn "sessions start without a browser: none was found"
+            (or (plist-get b :fix) "install chromium-headless or run `drgnx browser install'")))
+     ((not (equal (plist-get b :cap) "systemd"))
+      (list 'warn "the browser's session has no memory cap: no user systemd answers"
+            "start drgnx from a systemd user session (systemd-run --user must work)"))
+     ((plist-get b :age_warning)
+      (list 'warn (format "the downloaded browser %s is more than 28 days old" (or (plist-get found :version) ""))
+            "`drgnx browser install' fetches the pinned one (update drgnx first for a newer pin)"))
+     ((and last (not (plist-get last :ok)))
+      (list 'warn (format "the last browser check failed: %s" (or (plist-get last :why) "unknown")) check))
+     (t (list 'ok (format "%s; %s; %s"
+                          (plist-get b :verdict)
+                          (or (plist-get found :version) (abbreviate-file-name (plist-get found :path)))
+                          (if last
+                              (format "last check: started in %d ms%s" (or (plist-get last :start_ms) 0)
+                                      (if-let* ((peak (plist-get last :peak_bytes)))
+                                          (format ", peak memory %d MiB" (/ peak 1048576)) ""))
+                            (format "no check run yet (%s)" check)))
+              nil)))))
+
+(drgnx-doctor-define 'agent-browser :group "Agents"
+                     :doc "The agent browser: what sessions would get, the tier and Landlock ABI, the web proxy's refusals, the memory cap, a cached smoke check"
+                     :check #'drgnx-doctor--agent-browser-check)
+
 (drgnx-doctor-define 'packages :group "drgnx" :doc "The packages drgnx needs are installed (drgnx sync), with a lock"
                      :check (lambda (f)
                               (let* ((p (plist-get f :packages))

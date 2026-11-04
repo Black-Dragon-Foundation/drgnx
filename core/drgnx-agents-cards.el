@@ -62,8 +62,33 @@ is said and the card stays."
         (message "Card %d: %s" card label)
       (message "Card %d had been answered already" card))))
 
+(defun drgnx-agents-browser-check--summary (result)
+  "One line for RESULT, the hub's answer to `browser/check'."
+  (if (plist-get result :ok)
+      (format "ok: the browser started in %d ms, a screenshot of %d bytes%s"
+              (or (plist-get result :start_ms) 0) (or (plist-get result :screenshot_bytes) 0)
+              (if-let* ((peak (plist-get result :peak_bytes)))
+                  (format ", peak memory %d MiB" (/ peak 1048576))
+                ""))
+    (format "failed: %s" (or (plist-get result :why) "unknown"))))
+
+(defun drgnx-agents-browser-check ()
+  "Start a throwaway session with the agent browser, take a screenshot in it and say how it went.  The hub keeps the
+result, which `drgnx doctor' shows on its agent-browser line.  It takes a few seconds, up to 45; the call does not wait."
+  (interactive)
+  (message "Checking the agent browser (up to 45 s)...")
+  (drgnx-hub-call "browser/check" nil
+                  (lambda (result err)
+                    (if err
+                        (message "Agent browser check: the hub gave no answer: %s" err)
+                      (message "Agent browser check %s" (drgnx-agents-browser-check--summary result))))
+                  :deadline 50))
+
 (defun drgnx-agents-cards-register-commands ()
   "The permission card commands (`drgnx--core-commands' calls this)."
+  (drgnx-command-define 'agents-browser-check :category "Agents" :title "Agents: Check the Agent Browser"
+                        :command #'drgnx-agents-browser-check
+                        :doc "Run a throwaway browser session and take a screenshot in it; the doctor's agent-browser line shows the result")
   (drgnx-command-define 'agents-answer-card :category "Agents" :title "Agents: Answer Permission Card"
                         :command #'drgnx-agents-answer-card
                         :doc "Answer a permission card that lists its answers (the agent browser's): once, this session, this plan, a wider target, or refuse"))

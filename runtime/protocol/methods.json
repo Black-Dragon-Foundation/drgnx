@@ -4481,6 +4481,70 @@
       "classes": [
         "user"
       ],
+      "doc": "runs a throwaway browser session (a screenshot of a data: page) and caches the result for the doctor",
+      "name": "browser/check",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`browser/check`: what a throwaway browser session did (the doctor's smoke run).  `browser` is the program found\n(`{path, kind, version, source}`); `start_ms` the time from the start to the first answer; `peak_bytes` the\nscope's peak memory where a user systemd answers; `sys_missed` that the browser's stderr named a `/sys/` path (a\nread the layer does not allow); `why` what stopped it, and `at` when it ran (RFC 3339, UTC).",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "browser": true,
+          "ok": {
+            "type": "boolean"
+          },
+          "peak_bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "screenshot_bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sys_missed": {
+            "type": "boolean"
+          },
+          "why": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "start_ms",
+          "sys_missed",
+          "screenshot_bytes",
+          "at"
+        ],
+        "title": "BrowserCheckResult",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a scope's budget: its limits, spend and what remains (the least over its ancestors), by unit",
       "name": "budget/get",
       "params": {

@@ -76,6 +76,7 @@ impl Fx {
             idle,
             gate: gate_fn,
             events: events_tx,
+            stderr: None,
         };
         let handle = match hub {
             Some(h) => start(cfg, listener, h),

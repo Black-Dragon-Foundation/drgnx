@@ -62,3 +62,26 @@ Exit code 0 when it installed (or it was there), 1 when it could not, 2 for argu
 
 The other `drgnx-agents-browser-*` settings and `drgnx-agents-session-memory` are in the
 [settings reference](../reference/settings.md).
+
+## The doctor's lines
+
+`drgnx doctor` has an `agent-browser` line in the Agents group. It reads the `browser` section of `ratatoskr doctor
+--json`, which says what a session would get here:
+
+| Line | When |
+|---|---|
+| `ok` | The full tier and Landlock ABI 9 or later (Mode A), a browser found, a user systemd for the memory cap. It also gives the last check's start time and peak memory, or says that no check has run yet. |
+| `info` | No session can have a browser here: the kernel's Landlock ABI is below 9 (the line says "refused: Landlock ABI N < 9" and what fixes it), only the reduced tier runs ("not yet, phase 2"), or this is a Mac ("not yet"). |
+| `warn` | No browser was found (install a distro package such as `chromium-headless`, or run `drgnx browser install`), no user systemd answers so the session has no memory cap, a downloaded browser is more than 28 days old, or the last check failed. |
+| `fail` | A refusal of the web proxy did not hold. The doctor judges four targets in-process, each of which must be refused: `host.drgnx.internal:1` with no grant, `example.com:22`, `169.254.169.254:80` under a private grant, and the hub's own gateway port under a grant for it. |
+
+Sessions that start without a browser because of the first three reasons say so once per reason in a notice, with the
+same fix.
+
+**The check.** `Agents: Check the Agent Browser` (in the palette) runs a throwaway session in the real sandbox, with the
+same browser, tier and ABI a session would get, but no card: the hub opens a page (`data:text/html,<p>drgnx`), takes a
+screenshot and stops. It takes a few seconds and gives up after 45. Its result (whether it worked, the time to the
+first answer, the screenshot's size, the scope's peak memory, and the reason when it failed) is kept in
+`hub/browser-check.json` in the state folder, and the doctor shows it. The check also reports when the browser's
+standard error names a path under `/sys/`, a read the sandbox does not allow. The doctor itself never starts a browser:
+it has two seconds, so it only reads the last result.

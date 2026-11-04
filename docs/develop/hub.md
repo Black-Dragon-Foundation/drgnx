@@ -1021,6 +1021,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `agents/tool-input` | user | `{session: Id, tool_call: string}` | `{raw_input: any, truncated: boolean}` | no |
 | `brief/build` | user | `{task: string}` | `{cut: boolean, edited: boolean, parts?: [BriefPartText], task: string, text: string}` | no |
 | `brief/set` | user | `{task: string, text: string}` | `{note: string}` | yes |
+| `browser/check` | user | `{}` | `BrowserCheckResult` | no |
 | `budget/get` | user | `{scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | no |
 | `budget/set` | user | `{limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | yes |
 | `cards/settle` | user | `{card: natnum, choice: Text}` | `{settled: boolean}` | yes |
@@ -1151,7 +1152,7 @@ method from every class).
 | Classes | Methods |
 |---|---|
 | user, agent, service | `hello`, `ping`, `status`, `coord/notify` (users too: SB-T12-4), `agents/list`, `spend` |
-| user | `restart`, `shutdown`, `subscribe`, `events/since`, `env/set`, `config/settings`, `config/changed`, `gateway/register`, `gateway/unregister`, `gateway/keys`, `gateway/set-budget`, `gateway/editor-token`, `gateway/keys-held`, `agents/{start,get,send,stop,kill,permission,do}`, `job/{propose,start-task,reassign,block,unblock,order,approve,stop,resume,card,reply,dismiss,status}`, the editor's writes `cards/settle`, `messages/{send,mark}`, `events/add`, `review/mark`, the seam's `coord/{job-create,job-set,task-status,leases,decide,agent,card-create,card-set,held,prune}`, and `mcp/{session,session-close}` |
+| user | `browser/check`, `restart`, `shutdown`, `subscribe`, `events/since`, `env/set`, `config/settings`, `config/changed`, `gateway/register`, `gateway/unregister`, `gateway/keys`, `gateway/set-budget`, `gateway/editor-token`, `gateway/keys-held`, `agents/{start,get,send,stop,kill,permission,do}`, `job/{propose,start-task,reassign,block,unblock,order,approve,stop,resume,card,reply,dismiss,status}`, the editor's writes `cards/settle`, `messages/{send,mark}`, `events/add`, `review/mark`, the seam's `coord/{job-create,job-set,task-status,leases,decide,agent,card-create,card-set,held,prune}`, and `mcp/{session,session-close}` |
 | service | `mcp/attach` (an outside agent's bridge: [Sessions and their sockets](#sessions-and-their-sockets)) |
 
 Everything that answers, approves, starts, stops, configures or reads a transcript is `user` only. What the other
@@ -2291,6 +2292,32 @@ Chromium), with a websocket client of their own: the 404s, 403s, 409, 503, the r
 crash (Review Focus 3), a reconnect while the router detaches, and a log with no secret in it. The row
 `browser/the-endpoint-refuses-a-wrong-secret` (test-hooks) checks the endpoint through a hub: `__test_browser_endpoint
 {socket}` starts a broker with no browser behind it and answers its secret.
+
+## The browser check
+
+`browser/check` (user class, `writes: false`) is the doctor's smoke run (`browser::check`). `ratatoskr doctor --json`
+has two seconds, so the doctor only reads `<state>/hub/browser-check.json`, which this method writes. The method runs a
+throwaway session of the real shape: sid `check-<8 hex>`, command `sleep 60`, the browser on, made by
+`sandbox::browser_for` (so the reasons are a session's: `tier`, `landlock`, `program`), launched by `launch::spawn_plain`
+and, where a user systemd answers, in a scope. Its broker is `start_browser_with` with two hooks (`CheckHooks`): a gate
+that allows, so no card is raised, and a channel for the host's `stderr` events (`BrokerCfg::stderr`; only the check
+sets it). The hub then connects to its own `cdp.sock` with the secret as a websocket client, sends
+`Target.createTarget data:text/html,<p>drgnx`, `Target.attachToTarget` (flat) and `Page.captureScreenshot`, and tears
+the session down. The whole run has a 45 s deadline; the sandbox's process group is killed after it, and the session
+dir and scratch dir are removed.
+
+The answer is `{ok, browser, start_ms, peak_bytes, sys_missed, screenshot_bytes, why, at}`: `start_ms` runs from the
+connect to the page's target, `peak_bytes` is the scope's `MemoryPeak`, and `sys_missed` is true when a stderr line
+names `/sys/`. A check that could not run is `ok: false` with `why`. Under `test-hooks`,
+`DRGNX_TEST_BROWSER_CHECK_ABI=N` replaces the kernel's Landlock ABI, so the `landlock` reason can be tested on any host.
+
+The doctor's `browser` section (`doctor::browser_section`) is
+`{found, fix, tier, landlock_abi, verdict, modes, cap, proxy_refusals, last_check, age_warning}`. `proxy_refusals` are
+four `gleipnir::net::policy` judgements made in the doctor, no I/O: each must not be `Connect`.
+
+Tests: `browser::check` (the file round trip, the PNG size, the `/sys/` test), `doctor::tests::browser_section_shape`
+and `proxy_refusals_all_hold`, and the `#[ignore]` `browser_sandboxed::the_check_takes_a_screenshot` (a hub, the stand-in
+`tests/data/fake-chromium-png.sh` as the browser program, the real sandbox).
 
 ## The browser host
 
