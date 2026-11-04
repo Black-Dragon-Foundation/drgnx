@@ -85,7 +85,6 @@
  "test/unit/ai-gateway-test.el"
  "test/unit/ai-ghost-test.el"
  "test/unit/ai-keys-test.el"
- "test/unit/ai-onboard-test.el"
  "test/unit/ai-test.el"
  "test/unit/bin-lease-test.el"
  "test/unit/bin-test.el"
