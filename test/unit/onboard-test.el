@@ -454,6 +454,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
       (drgnx-onboard-test--repo (concat ws "alpha") '("TODO.md" . "- [ ] one\n"))
       (make-directory (file-name-directory board) t)
       (write-region existing nil board nil 'silent)
+      (require 'crm)                    ; the step requires it: loaded first, its `defun' never replaces the stub
       (cl-letf (((symbol-function 'completing-read-multiple)
                  (lambda (prompt _choices &rest _) (if (string-match-p "TODOs" prompt) (list (concat ws "alpha")) nil)))
                 ((symbol-function 'y-or-n-p) (lambda (p) (push p asked) answer)))
