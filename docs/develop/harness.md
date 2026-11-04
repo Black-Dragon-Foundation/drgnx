@@ -1110,6 +1110,20 @@ audited, and the three variables are read once and removed from the environment,
 sees the runner's switches. CI's `unit` and `no-lisp-writes` jobs ([ci.md](ci.md)) and `bin/drgnx test --preflight`'s
 `det` step run with the audit on and failing.
 
+The audit also holds the patterns to their tools (`test/unit/run-ert-audit-test.el` has a row for each). With the audit
+on, the tests tagged `:gated` and `:handshake` ([Test patterns](#test-patterns)) run with these advised, again only
+while they run, and each failure names the test and carries one of these messages:
+
+- `gated test saw a hub line the gate did not release`: a line reached `drgnx-hub--client-filter` while
+  `drgnx-test-gate--releasing` was nil. The gate's own connection (the barrier and the clock) has its own filter, and a
+  line the gate delivers runs with the flag bound, so neither counts.
+- `gated test opened a hub connection outside the gate`: `drgnx-hub--open` ran while `drgnx-test-gate--active` was nil.
+- `handshake test signalled a child that was not parked`: `signal-process`, `interrupt-process`, `kill-process`,
+  `quit-process`, `stop-process` or `continue-process` took a process for which `drgnx-test-child-parked-p` is nil (or
+  a pid). `drgnx-test-child-signal` signals only a parked child, so a test that goes through it passes.
+
+Without `DRGNX_TEST_AUDIT_FAIL=1` they are only reported as `drgnx-audit:` lines.
+
 ### Test patterns
 
 A `cond` test file names how its tests keep a race out, on a `;; test-pattern: P…` line within its first 15 lines,

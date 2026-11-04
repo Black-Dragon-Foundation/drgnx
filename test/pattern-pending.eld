@@ -107,6 +107,7 @@
  "test/unit/platform-wm-test.el"
  "test/unit/projects-eld-test.el"
  "test/unit/remote-automatic-test.el"
+ "test/unit/run-ert-audit-test.el"
  "test/unit/run-ert-test.el"
  "test/unit/sandbox-vc-test.el"
  "test/unit/scripted-process-test.el"

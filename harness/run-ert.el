@@ -422,18 +422,86 @@ is virtual and not recorded; a process or a socket is real work under the fixtur
   "Remove the primitives' advice."
   (dolist (p drgnx-run-ert--audit-primitives) (advice-remove p 'drgnx-run-ert-audit)))
 
+;; The pattern checks: a :gated test must see hub lines only through the delivery gate and open hub connections only
+;; inside it; a :handshake test may signal only a parked handshake child.  The gate's own connection (the barrier and
+;; the clock) has its own filter, and a line the gate delivers runs with `drgnx-test-gate--releasing' bound, so
+;; neither is flagged.
+
+(defvar drgnx-run-ert--audit-pattern-current nil "The name of the :gated or :handshake test that runs now, or nil.")
+(defvar drgnx-run-ert--audit-pattern-seen nil "The (TEST . MESSAGE) pairs the pattern checks recorded, newest first.")
+(defvar drgnx-test-gate--active)
+(defvar drgnx-test-gate--releasing)
+(declare-function drgnx-test-child-parked-p "handshake-fixture")
+
+(defconst drgnx-run-ert--audit-signals
+  '(signal-process interrupt-process kill-process quit-process stop-process continue-process)
+  "The calls that send a signal to a process.")
+
+(defun drgnx-run-ert--audit-pattern-record (message)
+  "Record MESSAGE against the :gated or :handshake test that runs now, once."
+  (when drgnx-run-ert--audit-pattern-current
+    (let ((key (cons drgnx-run-ert--audit-pattern-current message)))
+      (unless (member key drgnx-run-ert--audit-pattern-seen)
+        (push key drgnx-run-ert--audit-pattern-seen)
+        (let ((row (format "%s %s" (car key) message)))
+          (message "drgnx-audit: %s" row)
+          (when drgnx-run-ert--audit-file
+            (ignore-errors (write-region (concat row "\n") nil drgnx-run-ert--audit-file t 'silent))))))))
+
+(defun drgnx-run-ert--audit-filter-around (fn conn chunk)
+  "Around `drgnx-hub--client-filter': a line that arrives while the gate is not releasing is recorded."
+  (unless (and (boundp 'drgnx-test-gate--releasing) drgnx-test-gate--releasing)
+    (drgnx-run-ert--audit-pattern-record "gated test saw a hub line the gate did not release"))
+  (funcall fn conn chunk))
+
+(defun drgnx-run-ert--audit-open-around (fn &rest args)
+  "Around `drgnx-hub--open': a connection opened outside `drgnx-test-gated' is recorded."
+  (unless (and (boundp 'drgnx-test-gate--active) drgnx-test-gate--active)
+    (drgnx-run-ert--audit-pattern-record "gated test opened a hub connection outside the gate"))
+  (apply fn args))
+
+(defun drgnx-run-ert--audit-signal-around (fn &optional process &rest args)
+  "Around a signalling call: a target that is not a parked handshake child is recorded."
+  (let ((p (cond ((processp process) process)
+                 ((null process) (get-buffer-process (current-buffer)))
+                 ((bufferp process) (get-buffer-process process))
+                 ((stringp process) (or (get-process process) (get-buffer-process process))))))
+    (unless (and p (fboundp 'drgnx-test-child-parked-p) (drgnx-test-child-parked-p p))
+      (drgnx-run-ert--audit-pattern-record "handshake test signalled a child that was not parked")))
+  (apply fn process args))
+
+(defun drgnx-run-ert--audit-pattern-advise (tags)
+  "Advise what the pattern checks of TAGS (`:gated', `:handshake') watch."
+  (when (memq :gated tags)
+    (advice-add 'drgnx-hub--client-filter :around #'drgnx-run-ert--audit-filter-around '((name . drgnx-run-ert-audit)))
+    (advice-add 'drgnx-hub--open :around #'drgnx-run-ert--audit-open-around '((name . drgnx-run-ert-audit))))
+  (when (memq :handshake tags)
+    (dolist (s drgnx-run-ert--audit-signals)
+      (advice-add s :around #'drgnx-run-ert--audit-signal-around '((name . drgnx-run-ert-audit))))))
+
+(defun drgnx-run-ert--audit-pattern-unadvise ()
+  "Remove the pattern checks' advice."
+  (dolist (s (append '(drgnx-hub--client-filter drgnx-hub--open) drgnx-run-ert--audit-signals))
+    (advice-remove s 'drgnx-run-ert-audit)))
+
 (defun drgnx-run-ert--audit-test (fn test &rest args)
-  "Around `ert-run-test': a :det test (every test with DRGNX_TEST_AUDIT_ALL=1) runs with the primitives advised, and only
-while it runs, so no other test sees the advice; the fixtures' own tests (`drgnx-run-ert--audit-skip-files') are not audited."
+  "Around `ert-run-test': a :det test (every test with DRGNX_TEST_AUDIT_ALL=1) runs with the primitives advised, and a
+:gated or :handshake test with its pattern checks advised, and only while it runs, so no other test sees the advice; the
+fixtures' own tests (`drgnx-run-ert--audit-skip-files') are not audited."
   (let* ((file (ignore-errors (ert-test-file-name test)))
-         (audited (and (or (memq :det (ert-test-tags test)) drgnx-run-ert--audit-all)
-                       (not (and file (member (file-name-nondirectory file) drgnx-run-ert--audit-skip-files)))))
-         (drgnx-run-ert--audit-current (and audited (symbol-name (ert-test-name test)))))
-    (if (not audited)
+         (skip (and file (member (file-name-nondirectory file) drgnx-run-ert--audit-skip-files)))
+         (audited (and (or (memq :det (ert-test-tags test)) drgnx-run-ert--audit-all) (not skip)))
+         (ptags (and (not skip) (seq-filter (lambda (tag) (memq tag (ert-test-tags test))) '(:gated :handshake))))
+         (name (symbol-name (ert-test-name test)))
+         (drgnx-run-ert--audit-current (and audited name))
+         (drgnx-run-ert--audit-pattern-current (and ptags name)))
+    (if (not (or audited ptags))
         (apply fn test args)
-      (drgnx-run-ert--audit-advise)
+      (when audited (drgnx-run-ert--audit-advise))
+      (when ptags (drgnx-run-ert--audit-pattern-advise ptags))
       (unwind-protect (apply fn test args)
-        (drgnx-run-ert--audit-unadvise)))))
+        (when audited (drgnx-run-ert--audit-unadvise))
+        (when ptags (drgnx-run-ert--audit-pattern-unadvise))))))
 
 (defun drgnx-run-ert--audit-install (&optional file)
   "Turn the audit on; rows are also appended to FILE when given.  The audit's three variables are read once and removed
@@ -447,10 +515,12 @@ from the environment, so a test about the environment (or a child it starts) nev
 (defun drgnx-run-ert--audit-uninstall ()
   "Turn the audit off."
   (drgnx-run-ert--audit-unadvise)
+  (drgnx-run-ert--audit-pattern-unadvise)
   (advice-remove 'ert-run-test 'drgnx-run-ert-audit))
 
 (defun drgnx-run-ert--audit-failures ()
-  "With the fail switch, one failure (:name :condition) per :det test the audit saw use real time."
+  "With the fail switch, one failure (:name :condition) per :det test the audit saw use real time, and one per message
+the pattern checks recorded against a :gated or :handshake test."
   (when drgnx-run-ert--audit-fail
     (let (by-test out)
       (dolist (k (reverse drgnx-run-ert--audit-seen))
@@ -460,6 +530,8 @@ from the environment, so a test about the environment (or a child it starts) nev
                     :condition (format "deterministic test ran real time: %s"
                                        (mapconcat #'symbol-name (reverse (cdr e)) ", ")))
               out))
+      (dolist (k (reverse drgnx-run-ert--audit-pattern-seen))
+        (push (list :name (car k) :condition (cdr k)) out))
       (nreverse out))))
 
 ;;;; Test classes: a file's `;; test-class: det|cond|timing' line becomes a tag on its tests
