@@ -718,38 +718,52 @@ connects inside `drgnx-test-gated'.  `hub' is the hub's process; the fixture dis
                   (should (eq (plist-get n :life) 'condition))))
             (drgnx-notice-clear 'hub 'restart-when-idle)))))))
 
+(defmacro drgnx-hub-client-test--restart-and-redial ()
+  "Inside `drgnx-test-gated', after the hand-over, in a body that has the fixture's `hub': Hub: Restart Now (the schedule
+answers its ping and restart, then pauses as \"restarted\"); the foreground hub ends, as it does without a supervisor, and
+its connections end (held); the test starts the hub again (`hub' is the new process), the pause is lifted and the
+client's clock reaches the redial."
+  `(let ((old drgnx-hub--events))
+     (drgnx-hub-restart-now)
+     (drgnx-hub-client-test--wait (lambda () (and (memq :eof (drgnx-test-gate-held 'sub-1))
+                                                  (memq :eof (drgnx-test-gate-held 'call-1))))
+                                  "the old hub's connections end, held")
+     (drgnx-hub-client-test--wait (lambda () (process-get hub :done)) "the hub ends")
+     (setq hub (drgnx-hub-client-test--serve))
+     (drgnx-hub-client-test--wait #'drgnx-hub-client-test--hub-listens-p "the new hub listens")
+     (drgnx-test-gate-continue "restarted")
+     ;; the sentinel's own mark: it lets go of the subscription when it ran
+     (drgnx-hub-client-test--wait (lambda () (not (eq drgnx-hub--events old))) "the subscription's sentinel ran")
+     (drgnx-test-advance 1)))               ; the redial's delay
+
 (ert-deftest drgnx-hub-client/restart-now-over-ratatoskr ()
-  ;; binary + the Lisp backend (R-T17-3): ensure starts Ratatoskr, the editor's key reaches it, Hub: Restart Now
-  ;; restarts it (self-supervised: it executes itself again), and the editor's next subscription gives the key again
-  (skip-unless (drgnx-hub-client-test--bin))
-  (require 'drgnx-ai)
-  (drgnx-hub-client-test--with
-    (let* ((bin (drgnx-hub-client-test--bin))
-           (process-environment (append (list (concat "DRGNX_RATATOSKR_BIN=" bin) "RATATOSKR_SUPERVISOR=none"
-                                              "OPENROUTER_API_KEY=sk-test-restart")
-                                        process-environment))
-           (drgnx-hub-client-test--traffic nil))
+  ;; binary + the Lisp backend (R-T17-3): the editor's key reaches the hub, Hub: Restart Now restarts it
+  ;; (self-supervised: it executes itself again), and the editor's next subscription gives the key again; the old
+  ;; hub's connections end behind the gate, and the client's clock reaches the redial
+  (drgnx-hub-client-test--with-hub
+    (let* ((process-environment (cons "OPENROUTER_API_KEY=sk-test-restart" process-environment))
+           (drgnx-hub-client-test--traffic nil) before
+           (given (lambda () (seq-count (lambda (c) (and (equal (car c) "gateway/keys") (null (nth 2 c))))
+                                        drgnx-hub-client-test--traffic))))
       (advice-add 'drgnx-hub-call :around #'drgnx-hub-client-test--record)
       (unwind-protect
-          (progn
-            (should (drgnx-hub-ensure))
-            (should (drgnx-hub-running-p))
+          (drgnx-test-gated '((sub-1 :answer "subscribe") (call-1 :answer "gateway/keys-held")
+                              (call-1 :answer "ping") (call-1 :answer "restart") (:pause "restarted")
+                              (sub-1 :eof) (call-1 :eof)
+                              (sub-2 :answer "subscribe") (call-2 :answer "gateway/keys-held"))
             (drgnx-hub-connect)
-            (drgnx-hub-client-test--wait (lambda () (process-live-p drgnx-hub--events)) "the subscription")
-            (let ((first drgnx-hub--events)
-                  (given (lambda () (seq-count (lambda (c) (and (equal (car c) "gateway/keys") (null (nth 2 c))))
-                                               drgnx-hub-client-test--traffic))))
-              (drgnx-hub-client-test--wait (lambda () (>= (funcall given) 1)) "the key reaches the hub")
-              (drgnx-hub-restart-now)
-              ;; the sentinel's own mark: it lets go of the subscription when it ran
-              (drgnx-hub-client-test--wait (lambda () (not (eq drgnx-hub--events first))) "the hub restarts")
-              (let ((before (funcall given)))
-                (drgnx-hub-client-test--wait (lambda () (ignore-errors (drgnx-hub-connect) (process-live-p drgnx-hub--events)))
-                                             "the editor subscribes again")
-                (drgnx-hub-client-test--wait (lambda () (> (funcall given) before)) "the key goes again"))))
-        (advice-remove 'drgnx-hub-call #'drgnx-hub-client-test--record)
-        (drgnx-hub-disconnect)
-        (call-process bin nil nil nil "stop" "--timeout" "10")))))
+            (drgnx-hub-client-test--wait (lambda () (and (process-live-p drgnx-hub--events) (listp drgnx-hub--keys-held)))
+                                         "the subscription and the hand-over's answers")
+            (setq before (funcall given))
+            (let ((first drgnx-hub--events))
+              (drgnx-hub-client-test--restart-and-redial)
+              (drgnx-hub-client-test--wait (lambda () (and (process-live-p drgnx-hub--events) (not (eq drgnx-hub--events first))
+                                                           (listp drgnx-hub--keys-held)))
+                                           "the editor subscribes again and the hand-over is answered"))
+            (drgnx-test-deliver-all))
+        (advice-remove 'drgnx-hub-call #'drgnx-hub-client-test--record))
+      (should (>= before 1))
+      (should (> (funcall given) before)))))
 
 ;;;; MCP sessions (Task 14)
 
@@ -917,49 +931,44 @@ connects inside `drgnx-test-gated'.  `hub' is the hub's process; the fixture dis
   ;; binary + the Lisp backend (R-T17-3): the editor's key reaches the hub, and a registration needs it; the hub restarts
   ;; (keys live in its memory only); its need-keys reaches the editor's new subscription, which reads the environment
   ;; again and hands the key over; a registration that needs the key then succeeds
-  (skip-unless (drgnx-hub-client-test--bin))
-  (drgnx-hub-client-test--with
-    (let* ((bin (drgnx-hub-client-test--bin))
-           (process-environment (append (list (concat "DRGNX_RATATOSKR_BIN=" bin) "RATATOSKR_SUPERVISOR=none"
-                                              "OPENROUTER_API_KEY=sk-test-need-keys")
-                                        process-environment))
-           (drgnx-hub-client-test--traffic nil) (asked nil)
+  (drgnx-hub-client-test--with-hub
+    (let* ((process-environment (cons "OPENROUTER_API_KEY=sk-test-need-keys" process-environment))
+           (drgnx-hub-client-test--traffic nil) (asked nil) before token-1 token-2
            (given (lambda () (seq-count (lambda (c) (and (equal (car c) "gateway/keys") (null (nth 2 c))))
                                         drgnx-hub-client-test--traffic))))
       (advice-add 'drgnx-hub-call :around #'drgnx-hub-client-test--record)
       (unwind-protect
-          (progn
-            (should (drgnx-hub-ensure))                 ; the table and the key, waited for
-            (should (stringp (plist-get (drgnx-hub-call-sync "gateway/register" (list :chain [["openrouter" nil]]) 10) :token)))
-            (drgnx-hub-connect)
+          (drgnx-test-gated '((sub-1 :answer "subscribe") (call-1 :answer "gateway/keys-held")
+                              (call-1 :answer "gateway/register")
+                              (call-1 :answer "ping") (call-1 :answer "restart") (:pause "restarted")
+                              (sub-1 :eof) (call-1 :eof)
+                              (sub-2 :answer "subscribe") (call-2 :answer "gateway/keys-held")
+                              (sub-2 :event "gateway/need-keys") (call-2 :answer "gateway/register"))
             (add-hook 'drgnx-hub-event-functions (lambda (event data) (when (equal event "gateway/need-keys") (push data asked))))
-            (drgnx-hub-client-test--wait (lambda () (process-live-p drgnx-hub--events)) "the subscription")
-            (let ((first drgnx-hub--events))
-              (drgnx-hub-restart-now)
-              ;; the sentinel's own mark: it lets go of the subscription when it ran
-              (drgnx-hub-client-test--wait (lambda () (not (eq drgnx-hub--events first))) "the hub restarts"))
-            (let ((before (funcall given)))
-              (drgnx-hub-client-test--wait (lambda () (ignore-errors (drgnx-hub-connect) (process-live-p drgnx-hub--events)))
-                                           "the editor subscribes again")
-              (drgnx-hub-client-test--wait (lambda () asked) "the hub asks for the keys")
-              (should (member "openrouter" (plist-get (car asked) :providers)))
-              ;; the subscription's own hand-over, and the answer to need-keys
-              (drgnx-hub-client-test--wait (lambda () (>= (funcall given) (+ before 2))) "the key goes again"))
-            (should (stringp (plist-get (drgnx-hub-call-sync "gateway/register" (list :chain [["openrouter" nil]]) 10) :token))))
-        (advice-remove 'drgnx-hub-call #'drgnx-hub-client-test--record)
-        (drgnx-hub-disconnect)
-        (call-process bin nil nil nil "stop" "--timeout" "10")))))
+            (drgnx-hub-connect)
+            ;; the hand-over's key reaches the hub before the registration that needs it
+            (drgnx-hub-client-test--wait (lambda () (and (process-live-p drgnx-hub--events) (listp drgnx-hub--keys-held)))
+                                         "the subscription and the hand-over's answers")
+            (setq token-1 (plist-get (drgnx-hub-call-sync "gateway/register" (list :chain [["openrouter" nil]]) 10) :token))
+            (setq before (funcall given))
+            (drgnx-hub-client-test--restart-and-redial)
+            (drgnx-hub-client-test--wait (lambda () asked) "the hub asks for the keys")
+            ;; the keys went (the subscription's own hand-over, and the answer to need-keys) before this registration
+            (setq token-2 (plist-get (drgnx-hub-call-sync "gateway/register" (list :chain [["openrouter" nil]]) 10) :token))
+            (drgnx-test-deliver-all))
+        (advice-remove 'drgnx-hub-call #'drgnx-hub-client-test--record))
+      (should (stringp token-1))
+      (should (member "openrouter" (plist-get (car asked) :providers)))
+      (should (>= (funcall given) (+ before 2)))
+      (should (stringp token-2)))))
 
 (ert-deftest drgnx-hub-client/a-netrc-key-goes-again-after-a-restart ()
   ;; binary (review M3): openrouter's key lives only in a plain netrc, not the environment; the hub restarts (keys live
   ;; in its memory only); the reconnect's hand-over reads the file again, without asking, and the hub holds the key
   ;; again — while this Emacs keeps neither the key nor auth-source's copy of the file
-  (skip-unless (drgnx-hub-client-test--bin))
-  (drgnx-hub-client-test--with
-    (let* ((bin (drgnx-hub-client-test--bin))
-           (process-environment (append (list (concat "DRGNX_RATATOSKR_BIN=" bin) "RATATOSKR_SUPERVISOR=none")
-                                        (drgnx-hub-client-test--no-keys-env)))
-           (netrc (concat root "netrc"))
+  (drgnx-hub-client-test--with-hub
+    (let* ((process-environment (drgnx-hub-client-test--no-keys-env))
+           (netrc (concat root "netrc")) held-again
            (auth-sources (list netrc)) (auth-source-netrc-cache nil) (password-data (make-hash-table :test #'equal))
            (drgnx-ai--keys (make-hash-table :test #'eq)) (drgnx-hub--keys-held :unknown) (drgnx-hub--editor nil)
            (cached (lambda () (or auth-source-netrc-cache
@@ -968,36 +977,26 @@ connects inside `drgnx-test-gated'.  `hub' is the hub's process; the fixture dis
                                        found)))))
       (with-temp-file netrc (insert "machine openrouter.ai login drgnx password sk-or-netrc-m3\n"))
       (set-file-modes netrc #o600)
-      (unwind-protect
-          (progn
-            (should (drgnx-hub-ensure))
-            (drgnx-hub-connect)
-            ;; subscribed too: the ensure's own hand-over fills the list first, and a restart asked before the
-            ;; subscription would leave nothing for the waits below to wait for
-            (drgnx-hub-client-test--wait (lambda () (and (process-live-p drgnx-hub--events)
-                                                         (member "openrouter" (and (listp drgnx-hub--keys-held) drgnx-hub--keys-held))))
-                                         "the editor subscribed, and the hub holds the key")
-            (let ((first drgnx-hub--events))
-              (drgnx-hub-restart-now)
-              ;; the old hub gone: its subscription and the connection the restart went on (one it still answers proves
-              ;; nothing about the new hub)
-              (let ((old drgnx-hub--client))
-                (drgnx-hub-client-test--wait (lambda () (not (or (process-live-p first) (process-live-p old)))) "the hub restarts"))
-              (drgnx-hub-client-test--wait (lambda () (ignore-errors (drgnx-hub-connect)
-                                                                     (and (process-live-p drgnx-hub--events)
-                                                                          (not (eq drgnx-hub--events first)))))
-                                           "the editor subscribes again"))
-            ;; the new hub's own answer, not the list this Emacs kept from before
-            (drgnx-hub-client-test--wait
-             (lambda () (member "openrouter" (append (plist-get (ignore-errors (drgnx-hub-call-sync "gateway/keys-held" nil 5))
-                                                                :providers)
-                                                     nil)))
-             "the hub holds the key again")
-            (should (zerop (hash-table-count drgnx-ai--keys)))
-            (should-not (funcall cached))
-            (should-not (gethash '(hub . key-lost-openrouter) drgnx-notice--table)))
-        (drgnx-hub-disconnect)
-        (call-process bin nil nil nil "stop" "--timeout" "10")))))
+      (drgnx-test-gated '((sub-1 :answer "subscribe") (call-1 :answer "gateway/keys-held")
+                          (call-1 :answer "ping") (call-1 :answer "restart") (:pause "restarted")
+                          (sub-1 :eof) (call-1 :eof)
+                          (sub-2 :answer "subscribe") (call-2 :answer "gateway/keys-held"))
+        (drgnx-hub-connect)
+        (drgnx-hub-client-test--wait (lambda () (and (process-live-p drgnx-hub--events)
+                                                     (member "openrouter" (and (listp drgnx-hub--keys-held) drgnx-hub--keys-held))))
+                                     "the editor subscribed, and the hub holds the key")
+        (let ((first drgnx-hub--events))
+          (drgnx-hub-client-test--restart-and-redial)
+          ;; the new hub's own answer, not the list this Emacs kept from before (the old subscription's end forgot it)
+          (drgnx-hub-client-test--wait (lambda () (and (not (eq drgnx-hub--events first)) (process-live-p drgnx-hub--events)
+                                                       (listp drgnx-hub--keys-held)))
+                                       "the new hub's answer"))
+        (drgnx-test-deliver-all)
+        (setq held-again drgnx-hub--keys-held))
+      (should (member "openrouter" held-again))
+      (should (zerop (hash-table-count drgnx-ai--keys)))
+      (should-not (funcall cached))
+      (should-not (gethash '(hub . key-lost-openrouter) drgnx-notice--table)))))
 
 (ert-deftest drgnx-hub-client/the-editor-token-and-held-keys-are-fetched-on-every-connect ()
   ;; the hand-over also asks gateway/editor-token and gateway/keys-held; a proven reconnect asks again; keys-changed

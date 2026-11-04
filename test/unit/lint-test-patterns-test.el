@@ -233,19 +233,16 @@ levels that enclose it (a `let' binding, a call's argument); inside a branching 
     drgnx-hub-client/a-legacy-hub-gets-no-keys
     drgnx-hub-client/a-legacy-hub-offers-restart-now
     drgnx-hub-client/an-answer-read-after-the-subscription-ended-is-dropped
-    drgnx-hub-client/a-netrc-key-goes-again-after-a-restart
     drgnx-hub-client/a-wrong-hub-proof-gets-no-keys
     drgnx-hub-client/calls-wait-for-hello
     drgnx-hub-client/deadline-and-disconnect-fire-once
     drgnx-hub-client/env-resent-on-reconnect
-    drgnx-hub-client/keys-again-after-a-restart
     drgnx-hub-client/need-keys-on-an-unproven-connection-is-ignored
     drgnx-hub-client/need-keys-re-reads-the-environment
     drgnx-hub-client/need-keys-without-a-key-raises-a-notice-never-prompts
     drgnx-hub-client/providers-carry-no-key
     drgnx-hub-client/providers-sent-on-connect-and-on-change
     drgnx-hub-client/records-pause-the-mirror
-    drgnx-hub-client/restart-now-over-ratatoskr
     drgnx-hub-client/the-editor-token-and-held-keys-are-fetched-on-every-connect
     drgnx-hub-client/the-first-hello-carries-the-binary-version
     drgnx-hub-client/the-update-notice-offers-restart-now
