@@ -50,6 +50,16 @@ pub const SQLITE_FLOOR: i32 = 3_051_003;
 pub const SCHEMA_TICK: Duration = Duration::from_secs(2);
 
 pub async fn run(args: ServeArgs) -> Exit {
+    // `--test-clock`: every timer of the hub's reads the virtual clock, so it is in place before any task starts
+    #[cfg(feature = "test-hooks")]
+    if args.test_clock {
+        crate::clock::install_virtual();
+    }
+    // `--test-sequencer`: before any connection, so every one is known to it
+    #[cfg(feature = "test-hooks")]
+    if args.test_sequencer {
+        crate::sequencer::install();
+    }
     // the executable's path, once, while it still names the file on disk (restart-when-idle, re-exec)
     if let Err(e) = idle::resolve_exe() {
         eprintln!("ratatoskr: cannot resolve its own path ({e}): restart-when-idle is off");

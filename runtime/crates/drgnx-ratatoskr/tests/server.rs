@@ -1,236 +1,19 @@
-//! The server core against the real binary, each hub in its own temporary root (`$TMPDIR`, short names so the socket
-//! path stays under 103 bytes) with a clean environment: nothing reaches `~` or the user's runtime dir.
+//! The server core against the real binary, each hub in its own temporary root with a clean environment (`support`):
+//! nothing reaches `~` or the user's runtime dir.
 
-use runstav::paths::{self, Env};
-use serde_json::{Value, json};
-use std::io::{BufRead, BufReader, Write};
+mod support;
+
+use runstav::paths;
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
-use std::time::{Duration, Instant};
-
-const BIN: &str = env!("CARGO_BIN_EXE_ratatoskr");
-
-struct Root {
-    dir: tempfile::TempDir,
-}
-
-impl Root {
-    fn new() -> Root {
-        let dir = tempfile::Builder::new().prefix("r").tempdir().unwrap();
-        for sub in ["h", "r", "s", "d", "t"] {
-            std::fs::create_dir(dir.path().join(sub)).unwrap();
-        }
-        std::fs::set_permissions(dir.path().join("r"), std::fs::Permissions::from_mode(0o700))
-            .unwrap();
-        Root { dir }
-    }
-
-    fn vars(&self) -> Vec<(String, String)> {
-        let p = |s: &str| self.dir.path().join(s).to_string_lossy().into_owned();
-        let mut v = vec![
-            ("HOME".to_string(), p("h")),
-            ("XDG_RUNTIME_DIR".into(), p("r")),
-            ("XDG_STATE_HOME".into(), p("s")),
-            ("XDG_DATA_HOME".into(), p("h/xd")),
-            ("XDG_CONFIG_HOME".into(), p("h/xc")),
-            ("XDG_CACHE_HOME".into(), p("h/xk")),
-            ("DRGNX_DATA_DIR".into(), p("d")),
-            ("DRGNX_CONFIG_DIR".into(), p("h/c")),
-            ("TMPDIR".into(), p("t")),
-            ("RATATOSKR_SUPERVISOR".into(), "none".into()),
-        ];
-        if let Ok(path) = std::env::var("PATH") {
-            v.push(("PATH".into(), path));
-        }
-        v
-    }
-
-    fn socket(&self) -> PathBuf {
-        let vars = self.vars();
-        let pairs: Vec<(&str, &str)> = vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-        paths::socket_path(&Env::new(&pairs, unsafe { libc::geteuid() }))
-    }
-
-    fn log_dir(&self) -> PathBuf {
-        self.dir.path().join("s/drgnx/hub/log")
-    }
-}
-
-/// How long a wait for the hub may take before it is called failed. Never what makes anything pass.
-const FAILED_AFTER: Duration = Duration::from_secs(30);
-
-struct Hub {
-    pid: u32,
-    /// The hub's exit status, sent by a thread that waits for the process (the one place that reaps it).
-    ended: std::sync::mpsc::Receiver<ExitStatus>,
-    stderr: PathBuf,
-    status: Option<ExitStatus>,
-}
-
-impl Hub {
-    fn start(root: &Root, n: usize) -> Hub {
-        Hub::start_with(root, n, &[])
-    }
-
-    fn start_with(root: &Root, n: usize, extra: &[&str]) -> Hub {
-        let stderr = root.dir.path().join(format!("hub-{n}.err"));
-        let mut child = Command::new(BIN)
-            .args([
-                "serve",
-                "--foreground",
-                "--parent-pid",
-                &std::process::id().to_string(),
-            ])
-            .args(extra)
-            .env_clear()
-            .envs(root.vars())
-            .current_dir(root.dir.path())
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(std::fs::File::create(&stderr).unwrap())
-            .spawn()
-            .unwrap();
-        let pid = child.id();
-        let (tx, ended) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(child.wait().unwrap());
-        });
-        Hub {
-            pid,
-            ended,
-            stderr,
-            status: None,
-        }
-    }
-
-    fn pid(&self) -> u32 {
-        self.pid
-    }
-
-    fn exited(&mut self) -> Option<ExitStatus> {
-        if self.status.is_none() {
-            self.status = self.ended.try_recv().ok();
-        }
-        self.status
-    }
-
-    /// The hub's exit status, when it has ended: waited for, not looked for.
-    fn wait_exit(&mut self) -> ExitStatus {
-        if self.status.is_none() {
-            self.status = Some(
-                self.ended
-                    .recv_timeout(FAILED_AFTER)
-                    .expect("the hub is still running"),
-            );
-        }
-        self.status.unwrap()
-    }
-
-    /// Returns when the hub answers a ping. This one is a look repeated (the hub says nothing when it is ready); it
-    /// ends at once, with the hub's stderr, when the hub ended, and `FAILED_AFTER` only bounds a failure.
-    fn wait_ready(&mut self, socket: &Path) {
-        let deadline = Instant::now() + FAILED_AFTER;
-        while !ping(socket) {
-            if let Some(s) = self.exited() {
-                panic!("the hub ended with {s}: {}", self.stderr_text());
-            }
-            assert!(
-                Instant::now() < deadline,
-                "no ping answer: {}",
-                self.stderr_text()
-            );
-            std::thread::sleep(Duration::from_millis(30));
-        }
-    }
-
-    fn stderr_text(&self) -> String {
-        std::fs::read_to_string(&self.stderr).unwrap_or_default()
-    }
-
-    fn term(&mut self) {
-        if self.exited().is_none() {
-            unsafe { libc::kill(self.pid() as i32, libc::SIGTERM) };
-        }
-    }
-}
-
-impl Drop for Hub {
-    fn drop(&mut self) {
-        self.term();
-        if self.status.is_none() && self.ended.recv_timeout(FAILED_AFTER).is_err() {
-            // it ignored SIGTERM: a failure of its own, and no process is left behind
-            unsafe { libc::kill(self.pid() as i32, libc::SIGKILL) };
-            let _ = self.ended.recv_timeout(FAILED_AFTER);
-        }
-    }
-}
-
-/// A connection, its lines read in order (the challenge first).
-struct Client {
-    stream: UnixStream,
-    reader: BufReader<UnixStream>,
-}
-
-// open, send and answer serve the flood test (test-hooks only)
-#[cfg_attr(not(feature = "test-hooks"), allow(dead_code))]
-impl Client {
-    fn open(socket: &Path) -> Client {
-        let stream = UnixStream::connect(socket).unwrap();
-        stream.set_read_timeout(Some(FAILED_AFTER)).unwrap();
-        let reader = BufReader::new(stream.try_clone().unwrap());
-        Client { stream, reader }
-    }
-
-    fn send(&mut self, v: Value) {
-        writeln!(self.stream, "{v}").unwrap();
-    }
-
-    fn line(&mut self) -> Option<Value> {
-        let mut s = String::new();
-        match self.reader.read_line(&mut s) {
-            Ok(0) | Err(_) => None,
-            Ok(_) => Some(serde_json::from_str(&s).unwrap()),
-        }
-    }
-
-    /// The answer with ID; the lines before it are returned too.
-    fn answer(&mut self, id: u64) -> (Value, Vec<Value>) {
-        let mut before = vec![];
-        loop {
-            let v = self
-                .line()
-                .expect("the connection closed before the answer");
-            if v["id"] == json!(id) {
-                return (v, before);
-            }
-            before.push(v);
-        }
-    }
-}
-
-fn ping(socket: &Path) -> bool {
-    let Ok(stream) = UnixStream::connect(socket) else {
-        return false;
-    };
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
-    let mut c = Client {
-        reader: BufReader::new(stream.try_clone().unwrap()),
-        stream,
-    };
-    if writeln!(c.stream, "{}", json!({"id": 0, "method": "ping"})).is_err() {
-        return false;
-    }
-    for _ in 0..3 {
-        match c.line() {
-            Some(v) if v["id"] == 0 => return v["result"]["pid"].is_number(),
-            Some(_) => {}
-            None => return false,
-        }
-    }
-    false
-}
+use std::path::Path;
+use std::process::Command;
+use support::{BIN, Hub, Root, ping};
+#[cfg(feature = "test-hooks")]
+use {
+    serde_json::{Value, json},
+    std::time::{Duration, Instant},
+    support::{Client, FAILED_AFTER, mock_binary},
+};
 
 fn mode(p: &Path) -> u32 {
     std::fs::symlink_metadata(p).unwrap().permissions().mode() & 0o7777
@@ -513,6 +296,74 @@ fn a_stopped_reader_is_dropped_after_16_mib_while_another_keeps_reading() {
         assert!(Instant::now() < deadline, "no drop in the log: {log}");
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+#[cfg(feature = "test-hooks")]
+#[test]
+fn test_clock_emits_on_advance_only() {
+    // A session's update goes out at most every 50 ms, on the hub's clock: under `--test-clock` the start's update
+    // waits for `__test_advance` to reach its deadline, however much real time passes.
+    let root = Root::new();
+    let socket = root.socket();
+    let config = root.dir.path().join("h/c");
+    std::fs::create_dir_all(&config).unwrap();
+    let settings = config.join("settings.el");
+    std::fs::write(
+        &settings,
+        format!(
+            "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock\" :command ({:?} \"acp\" \"--as\" \"claude\")))))\n",
+            mock_binary().display().to_string()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&settings, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let mut hub = Hub::start_with(&root, 1, &["--test-clock"]);
+    hub.wait_ready(&socket);
+    let mut editor = Client::open(&socket);
+    editor.hello(&socket);
+    editor.send(json!({"id": 1, "method": "subscribe"}));
+    assert_eq!(editor.answer(1).0["result"], json!(true));
+    let mut c = Client::open(&socket);
+    c.hello(&socket);
+    c.send(json!({"id": 1, "method": "agents/start",
+        "params": {"profile": "mock", "cwd": root.dir.path().join("h")}}));
+    let (started, _) = c.answer(1);
+    let sid = started["result"]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{started}: {}", hub.stderr_text()))
+        .to_string();
+    let is_update = |v: &Value| v["event"] == "agent" && v["data"]["id"] == sid.as_str();
+    let mut advance = |id: u64, ms: u64| {
+        c.send(json!({"id": id, "method": "__test_advance", "params": {"ms": ms}}));
+        c.answer(id).0["result"].clone()
+    };
+    // An advance returns once what it woke has run: an update it caused is queued on the editor's connection before
+    // the advance is answered, so a ping sent after the answer comes back behind it.
+    let a = advance(2, 49);
+    assert_eq!(
+        (a["now_ms"].clone(), a["busy"].clone()),
+        (json!(49), json!([])),
+        "{a}"
+    );
+    editor.send(json!({"id": 2, "method": "ping"}));
+    let (_, before) = editor.answer(2);
+    assert!(
+        !before.iter().any(is_update),
+        "an update before 50 ms: {before:?}"
+    );
+    let a = advance(3, 1);
+    assert_eq!(
+        (a["now_ms"].clone(), a["busy"].clone()),
+        (json!(50), json!([])),
+        "{a}"
+    );
+    assert!(a["woken"].as_u64().unwrap() >= 1, "{a}");
+    editor.send(json!({"id": 3, "method": "ping"}));
+    let (_, before) = editor.answer(3);
+    assert!(
+        before.iter().any(is_update),
+        "no update at 50 ms: {before:?}"
+    );
 }
 
 #[cfg(feature = "test-hooks")]

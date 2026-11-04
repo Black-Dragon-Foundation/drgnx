@@ -68,8 +68,8 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   `<4>` / `<3>` when `JOURNAL_STREAM` is set (the journal under systemd). `DRGNX_RATATOSKR_LOG` takes a `Targets`
   string (`info`, the default; `warn,drgnx_ratatoskr::conn=debug`). The cap, keys and params are never logged. The
   cargo feature `test-hooks` (off in the binary install.sh builds) holds the test-only surfaces: the `__test_flood`
-  method, `--idle-tick-ms N` (the restart-when-idle tick), and `--agent-socket SID[:JOB]`, which is refused without
-  `--foreground`. `DRGNX_HUB_PARENT_PID` does what `--parent-pid` does when the flag is absent, so a hub a test starts through `ensure` ends with the test.
+  method, `--idle-tick-ms N` (the restart-when-idle tick), `--test-clock`, `__test_advance`, `--test-sequencer` and
+  `__test_barrier` ([Test hooks](#test-hooks)), and `--agent-socket SID[:JOB]`, which is refused without `--foreground`. `DRGNX_HUB_PARENT_PID` does what `--parent-pid` does when the flag is absent, so a hub a test starts through `ensure` ends with the test.
 - **The gateway** (`drgnx-ratatoskr/src/gateway.rs`, forwarding by `bifrost`) runs inside the hub: never in the
   editing Emacs, so streaming cannot touch the keystroke budget. Besides the 127.0.0.1 port it listens on **per-session
   Unix sockets** (`gateway.sock` in the session's private directory beside `mcp.sock` and `hub.sock`, for agents in a
@@ -209,6 +209,78 @@ not count), so a busy hub is never restarted.
   own group (pgid = that pid) and exited while members of its group lived on, all between the crash and the next
   start. Rule 6 would then kill that unrelated group. It needs a pid reuse plus a leader that exits before its
   children within that interval; a start-time check cannot catch it, because the group's leader is gone.
+
+## Test hooks
+
+Built only with the `test-hooks` feature; a release build has none of them.
+
+### The hub clock
+
+Every timer of the hub and every reading of its time go through `drgnx-ratatoskr/src/clock.rs`: `clock::now()` (a
+`tokio::time::Instant`), `wall()` and `wall_secs()` (the time of day), `sleep`, `timeout`, `interval` (a late tick
+moves the next ones), and `spawn(origin, future)`, which names a task (`"module:what"`). In a release build each is
+tokio's or std's, inlined. `real_now()` is real time on every clock, for a blocking thread's limit on something outside
+the hub (a podman pull). The session's update throttle (`EMIT_EVERY`, 50 ms), its Stop timers (`STOP_ANSWER`, the
+close when idle), a move's wait, a connection's `STUCK_AFTER` and flush, and a job's time box and stop all read it.
+
+**`serve --test-clock`** installs a virtual clock before any task starts. It stands still, whatever real time passes,
+until a client sends **`__test_advance {"ms": N}`**, answered with `{"now_ms", "woken", "busy", "unnamed"}`; a hub on
+the real clock refuses it (`not-allowed`, "the hub runs on the real clock"). tokio's own clock is never paused: the
+runtime stays multi-thread, and a paused tokio clock jumps ahead whenever the runtime is idle.
+
+An advance moves the clock to each due deadline in order. Sleepers due at one instant wake in the order they began to
+wait, one at a time. After each wake it waits until the woken task, and every task that one spawned, waits on the
+clock again or has ended. Before moving the clock it waits until every task spawned since has run once, so a timer it
+started is in the queue. It then answers:
+
+- `woken`: the sleepers it woke.
+- `busy`: the origins of tasks still running after 5 s of real time. The advance names them and goes on, never hangs.
+  A task woken from the clock that then waits on something else (a channel, a child's I/O) is busy.
+- `unnamed`: woken sleepers in a task not started by `clock::spawn`. The advance cannot wait for those, so a test
+  that sees `unnamed > 0` is not deterministic there.
+
+**Its limit:** the clock covers this crate only. The timers inside `draugr` (a kill's grace, `STOP_GRACE`), `hermod`
+(the ACP timeouts), `bifrost` and `urdr` run on real time. A path through one of them (a Stop that ends the agent's
+process, for one) is not decided by the test's advances: it needs a pure core tested in every order, or a test that
+waits for the child's own announcement.
+
+### The sequencer and the barrier
+
+**`serve --test-sequencer`** (it means `--test-clock` too) serves requests from every connection one at a time, in
+the order of the top-level **`"__seq": N`** the client stamped on each line (the delivery gate stamps every line it
+sends, counting across its connections in the order it wrote them). The stamp is taken off before the line is served.
+
+- Before it serves, the sequencer reads every connection's socket to `WouldBlock`. A Unix-socket write is in the
+  peer's queue when it returns, so a lower N the client wrote earlier has been read by then. A connection is known to
+  the sequencer before its challenge is written, so no line can come from one it does not know.
+- The lowest N is served when it follows the last N served. Above a gap it waits while some connection holds part of
+  a line, where the missing N may be. Once none does (the missing N went to a connection that read EOF or failed), it
+  is served: a lost N never stalls the others.
+- Lines without `__seq` (another process's) are served after the stamped ones, in the order they were read.
+- A connection's own task serves its lines when the sequencer hands them over, so its session stays its own. Its
+  writes are serving steps: its challenge, its answers and what its requests broadcast go out at once.
+- **Every other write is held:** a turn's events, a timer's, a background loop's. It is keyed by (virtual ms, the
+  task's origin from `clock::spawn`, the origin's own count) and released in key order at `__test_advance` (once the
+  woken tasks have parked, before its answer) and at `__test_barrier`. A write from a task without an origin is held
+  too, and counted.
+- `mcp/attach` works: nothing after it is read as lines until it is served.
+
+**`__test_barrier {}`**, which the sequencer serves itself when it is the lowest pending line:
+
+1. Every connection's socket is read to `WouldBlock` or EOF, and every line read is served.
+2. The tasks spawned since then are run once (an advance of 0 ms), and the held writes are released.
+3. `{"event": "__test_marker", "data": {"marker": M}}` is written on every live connection. M counts from 1 per hub.
+4. The answer: `{"marker": M, "unnamed": n, "busy": [origins]}`. `n` counts the writes from tasks without an origin
+   since the last barrier. The gate fails a test when n > 0, since such writes are released here and not by the
+   test's own advance. `busy` names tasks still running after 5 s.
+
+A hub without the sequencer refuses `__test_barrier` (`not-allowed`). A release build has none of these: `__test_advance`
+and `__test_barrier` are unknown methods (`no-method`), `__seq` is dropped and listed in the answer's `ignored`, and
+`serve --test-clock` or `--test-sequencer` is a usage error (exit 2).
+
+**Its limit:** a run is deterministic only where the hub's output follows from the order of its input and its clock.
+Two tasks racing inside one handler, or a turn driven by an agent's real I/O, are not ordered by it. Those need a
+pure core tested in every order.
 
 ## The control socket
 
@@ -373,7 +445,7 @@ An error is `{"id", "error": {"code", "message", "path"?}}`. Every line goes thr
 | 1 | `no-method` | the method is not in the registry |
 | 2 | `not-allowed` | the connection's class may not call it. A `service` connection calling a `user` method gets "METHOD needs the user's capability (an editor or CLI of an older drgnx: update it)" |
 | 3 | `proto` | a call (not `hello`) on a user connection whose hello said a newer protocol |
-| 4 | `invalid-params` with `path` | the typed decode failed. Keys the method does not know are dropped and listed in the answer's `ignored` |
+| 4 | `invalid-params` with `path` | the typed decode failed. Keys the method does not know are dropped and listed in the answer's `ignored`, and so is a top-level key besides `id`, `method` and `params` (by its name) |
 | 5 | `schema` | the method writes while the hub is read-only: "work.db is schema N, newer than this hub's 7: update drgnx" |
 | 6 | `internal` | the handler failed |
 

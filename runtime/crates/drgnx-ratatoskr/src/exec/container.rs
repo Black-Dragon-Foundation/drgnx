@@ -12,7 +12,7 @@ use crate::shell_env::ShellEnv;
 use gleipnir::{Refusal, Rule};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Where the worktree appears inside the container.
 pub const WORK: &str = "/work";
@@ -353,7 +353,8 @@ fn run_limited(
         .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| setup(format!("podman: {e}")))?;
-    let start = Instant::now();
+    // real time: podman runs outside the hub's clock, and this thread blocks
+    let start = crate::clock::real_now();
     loop {
         match child.try_wait() {
             Ok(Some(_)) => {
@@ -875,6 +876,7 @@ mod tests {
 mod name_and_pull_tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+    use std::time::Instant;
 
     fn script(dir: &Path, body: &str) -> PathBuf {
         let p = dir.join("podman");

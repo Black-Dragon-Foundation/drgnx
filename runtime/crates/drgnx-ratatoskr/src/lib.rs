@@ -11,6 +11,8 @@
 //! - [`legacy`]: what the Lisp runtime left, moved aside at the first start (never deleted), and the doctor's `legacy` section.
 //! - [`lock`]: one hub per data dir (an exclusive `flock`; a Lisp hub's lock directory respected).
 //! - [`server`]: the start order (the store opened, or made, or migrated, before anything is served), the accept loops, signals, the parent watch, the schema tick and the stop.
+//! - [`clock`]: the hub's timers and time readings; with `test-hooks`, the virtual clock `__test_advance` moves.
+//! - `sequencer` (test-hooks): requests served one at a time in the client's `__seq` order, `__test_barrier`.
 //! - [`conn`]: one connection: the peer-uid check, the challenge, lines, the writer queue that drops a stopped reader.
 //! - [`hello`]: a connection's class and `hello` v1 (the challenge, the proofs both ways, at most once).
 //! - [`dispatch`]: the contract's checks before any method runs, and the refusals.
@@ -63,6 +65,7 @@ pub mod brief;
 pub mod budget;
 pub mod cli;
 pub mod client;
+pub mod clock;
 pub mod conn;
 pub mod coord;
 pub mod dispatch;
@@ -87,6 +90,8 @@ pub mod runner;
 pub mod runtime_db;
 pub mod sandbox;
 pub mod sandbox_settings;
+#[cfg(feature = "test-hooks")]
+pub mod sequencer;
 pub mod server;
 pub mod sessions;
 pub mod settings;
