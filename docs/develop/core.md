@@ -2984,8 +2984,12 @@ what differs.
 - `sleep-for` and `sit-for` move it by their argument and run the timers that come due; process output is then looked
   at once with a zero wait. `sit-for` returns nil only when simulated input is pending, and simulated input ends it
   early;
-- a timed `accept-process-output` moves it by the real time it waited (`drgnx-test-real-time`), then the due timers run.
-  A test that must wait for a real process (a killed one to be reaped) while the clock stays put polls with the
+- a timed `accept-process-output` (SECONDS or MILLISEC above 0) moves it by its timeout, never by how long a real
+  wait took: output already there is taken with a zero-length look and time stays put; else time moves by the whole
+  timeout, the due timers run, and output is looked at again. Only a wait on a real child (a live process of type
+  `real`: the process waited on, or any one when none is named) waits for real, up to the timeout, and then moves time
+  by the timeout when nothing came. A pipe or a socket (a scripted peer) is no real child. With no timeout, or one of
+  0, the call is Emacs's own and time does not move. A test that must wait for a real process (a killed one to be reaped) while the clock stays put polls with the
   original, `(funcall drgnx-test--accept nil 0.02)`: on a loaded runner the advised wait would run the timers the
   test means to step through itself (`test/unit/acp-test.el`).
 
@@ -3056,7 +3060,8 @@ timer; when nothing can run and nothing is left to wait for it fails at once, wi
   `(lambda () nil)` or `#'ignore` for a pause, since that now fails at the deadline. In `test/ui` it says what may not
   happen, `(drgnx-test-pause SECS "WHY")`, checked by `drgnx-lint/cond-tests-have-no-fixed-pause`.
 - **Inside the clock fixture** (`drgnx-test-with-clock`) it works unchanged: the deadline is read through
-  `drgnx-test-real-time`, and each timed `accept-process-output` advances virtual time by the real wait.
+  `drgnx-test-real-time`, and each of its timed `accept-process-output` calls moves virtual time by 0.02 s (a
+  zero-length look; a real wait only while a real child is live), so the wait steps through the timers.
 - **A GUI test that makes a frame waits for it to be mapped**: `(drgnx-test-wait (lambda () (eq (frame-visible-p F)
   t)) :what "…")` before it redisplays. The compositor maps a new frame when it gets to it (pgtk under mutter:
   after `make-frame` has returned), and redisplay skips a frame that is not mapped, so its mode lines are never

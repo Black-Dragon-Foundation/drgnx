@@ -1067,10 +1067,10 @@ told. A child that never reaches its gate fails the test with the processes' sta
 ### The audit: what a deterministic test really runs
 
 A static lint cannot see through macros and fixtures. `DRGNX_TEST_AUDIT=1` records, for each `:det` test, the real-time
-primitives that execute while it runs (`sleep-for` and `sit-for` above 0, `accept-process-output` with a wait or a live
-process, `make-process`, `start-process`, network, pipe and serial processes) as `drgnx-audit: TEST PRIMITIVE` lines in
-the output; a value other than `1` is a file the rows are also appended to. What runs under `drgnx-test-with-clock` is
-virtual and does not count. `DRGNX_TEST_AUDIT_ALL=1` audits every test (for a run before files carry a class).
+primitives that execute while it runs (`sleep-for` and `sit-for` above 0, `accept-process-output` with a timeout above
+0, or with none on a live process, `make-process`, `start-process`, network, pipe and serial processes) as
+`drgnx-audit: TEST PRIMITIVE` lines in the output; a value other than `1` is a file the rows are also appended to. A
+wait under `drgnx-test-with-clock` is virtual and does not count; a process or a socket started there does. `DRGNX_TEST_AUDIT_ALL=1` audits every test (for a run before files carry a class).
 `DRGNX_TEST_AUDIT_FAIL=1` makes each such `:det` test fail the run. All three are off by default. The primitives are
 advised only while an audited test runs, the two fixture test files (`clock-fixture-test`, `wait-fixture-test`) are not
 audited, and the three variables are read once and removed from the environment, so no other test (or a child it starts)
@@ -1147,8 +1147,9 @@ for a timer. Load it with `(load (expand-file-name "test/fixtures/clock-fixture"
 - **What stays real on the advice:** `time-since`, `(time-subtract nil ...)` and `format-time-string` with no time read
   the real clock; a test of code that uses them uses real time. `drgnx-test-real-time` is the real time as a float, for
   waits and reports, on both clocks. `sleep-for` and `sit-for` move virtual time by their argument and a timed
-  `accept-process-output` by the real time it waited, each running the timers that come due ([core.md](core.md),
-  "Testing: time, waits and processes").
+  `accept-process-output` that finds no output by its timeout (a zero-length look; a real wait only on a real child),
+  each running the timers that come due, so no wait moves virtual time by how long the machine took
+  ([core.md](core.md), "Testing: time, waits and processes").
 - **The contract with the timer layer** ([core.md](core.md), Timers): the layer's three seams follow the virtual
   clock; a delay counts from the virtual start; one `drgnx-test-idle` call is one pause; pending layer timers are named
   and cleared at the end.

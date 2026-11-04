@@ -348,7 +348,8 @@ is a failure.  Prints the flakes."
 ;;;; The audit: what a deterministic test really runs
 ;; DRGNX_TEST_AUDIT=1 (or a report file) records, for each test tagged :det, the real-time primitives that actually
 ;; execute while it runs, as `drgnx-audit: TEST PRIMITIVE' lines in the run's output (and in the file, when the value is
-;; a path); DRGNX_TEST_AUDIT_ALL=1 audits every test, not only :det ones.  What `drgnx-test-with-clock' runs is virtual and does not count.  DRGNX_TEST_AUDIT_FAIL=1 (with the audit
+;; a path); DRGNX_TEST_AUDIT_ALL=1 audits every test, not only :det ones.  A wait that `drgnx-test-with-clock' runs is
+;; virtual and does not count; a process or a socket it starts does.  DRGNX_TEST_AUDIT_FAIL=1 (with the audit
 ;; on) makes such a test fail the run.  Off by default.
 
 (defvar drgnx-run-ert--audit-current nil "The name of the :det test that runs now (a string), while the audit is on.")
@@ -356,10 +357,15 @@ is a failure.  Prints the flakes."
 (defvar drgnx-run-ert--audit-file nil "A file the rows are appended to, or nil.")
 (defvar drgnx-test--active)
 
+(defconst drgnx-run-ert--audit-waits '(sleep-for sit-for accept-process-output)
+  "The watched waits: under the clock fixture they move virtual time, so they are not recorded there.")
+
 (defun drgnx-run-ert--audit-record (prim)
-  "Record PRIM as used by the :det test that runs now, once per test and primitive; not under the clock fixture."
+  "Record PRIM as used by the :det test that runs now, once per test and primitive.  A wait under the clock fixture
+is virtual and not recorded; a process or a socket is real work under the fixture too."
   (when (and drgnx-run-ert--audit-current
-             (not (and (boundp 'drgnx-test--active) drgnx-test--active)))
+             (not (and (memq prim drgnx-run-ert--audit-waits)
+                       (boundp 'drgnx-test--active) drgnx-test--active)))
     (let ((key (cons drgnx-run-ert--audit-current prim)))
       (unless (member key drgnx-run-ert--audit-seen)
         (push key drgnx-run-ert--audit-seen)
@@ -373,9 +379,13 @@ is a failure.  Prints the flakes."
   (pcase prim
     ('sleep-for (let ((s (car args))) (or (not (numberp s)) (> s 0))))
     ('sit-for (let ((s (car args))) (or (not (numberp s)) (> s 0))))
+    ;; a timeout (SECONDS plus MILLISEC) waits when it is over 0, and 0 is a look; with neither, a call on a live
+    ;; process waits for its output, and one on no process is a look
     ('accept-process-output
      (let ((p (car args)) (s (nth 1 args)) (ms (nth 2 args)))
-       (or (and (numberp s) (> s 0)) (and (numberp ms) (> ms 0)) (and (processp p) (process-live-p p)))))
+       (if (or s ms)
+           (> (+ (if (numberp s) s 0) (if (numberp ms) ms 0)) 0)
+         (and (processp p) (process-live-p p)))))
     (_ t)))
 
 (defconst drgnx-run-ert--audit-primitives

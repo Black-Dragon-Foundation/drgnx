@@ -407,8 +407,15 @@ a test reaches by a call: a command a test binds to a key is named by `function'
             (should (equal drgnx-run-ert--audit-seen '(("x/det" . accept-process-output))))
             (setq drgnx-run-ert--audit-seen nil)
             (accept-process-output nil 0)  ; no wait: not a use of real time
-            (drgnx-test-with-clock () (sleep-for 5) (sit-for 1))
-            (should-not drgnx-run-ert--audit-seen)))
+            (let ((pipe (make-pipe-process :name "drgnx-audit-pipe" :noquery t)))
+              (setq drgnx-run-ert--audit-seen nil)
+              (unwind-protect (accept-process-output pipe 0) ; a timeout of 0 on a live process is a look too
+                (delete-process pipe)))
+            (drgnx-test-with-clock () (sleep-for 5) (sit-for 1) (accept-process-output nil 1))
+            (should-not drgnx-run-ert--audit-seen)
+            ;; a process or a socket under the fixture is real work: recorded
+            (drgnx-test-with-clock () (drgnx-run-ert--audit-record 'make-process))
+            (should (equal drgnx-run-ert--audit-seen '(("x/det" . make-process))))))
       (drgnx-run-ert--audit-unadvise))))
 
 (ert-deftest drgnx-run-ert/the-audit-leaves-the-environment-and-the-primitives-alone ()

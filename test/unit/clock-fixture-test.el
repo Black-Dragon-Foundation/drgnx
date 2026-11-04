@@ -110,17 +110,40 @@
      (should (drgnx-clock-test--close (drgnx-test-clock-now) 2.0))
      (should-not (input-pending-p)))))
 
-(ert-deftest drgnx-test-clock/a-timed-accept-advances-by-the-real-wait ()
-  ;; The real clock the wait is measured by is scripted (the wait itself stays real): a loaded machine cannot move
-  ;; virtual time by anything but the 0.25 s the wait reads.
+(ert-deftest drgnx-test-clock/a-timed-accept-moves-time-by-its-timeout ()
+  ;; With no real child, a timed wait is a zero-length look and a move of the whole timeout: the real clock is never
+  ;; read, so a loaded machine cannot move virtual time.  MILLISEC counts; a timeout of 0 is a look and moves nothing.
   (drgnx-clock-test--with
-   (let ((reads (list 100.0 100.25)))
-     (run-at-time 0.1 nil #'drgnx-clock-test--note)
-     (cl-letf (((symbol-function 'drgnx-test-real-time) (lambda () (or (pop reads) (error "Read the real clock again")))))
-       (accept-process-output nil 0.2))
-     (should-not reads)
-     (should (= 0.25 (drgnx-test-clock-now)))
-     (should (= 1 (length drgnx-clock-test--runs))))))      ; the 0.1 s timer came due in it
+   (run-at-time 0.1 nil #'drgnx-clock-test--note)
+   (cl-letf (((symbol-function 'drgnx-test-real-time) (lambda () (error "Read the real clock"))))
+     (should-not (accept-process-output nil 0.2))
+     (should (= 0.2 (drgnx-test-clock-now)))
+     (should (= 1 (length drgnx-clock-test--runs)))         ; the 0.1 s timer came due in it
+     (accept-process-output nil 0 300)
+     (should (= 0.5 (drgnx-test-clock-now)))
+     (accept-process-output nil 0)
+     (accept-process-output nil nil 0)
+     (should (= 0.5 (drgnx-test-clock-now))))))
+
+(ert-deftest drgnx-test-clock/a-timed-accept-takes-output-at-once-and-waits-only-on-a-real-child ()
+  ;; The two ways of the wait, with Emacs's own call scripted: output already there is taken without moving time; a
+  ;; wait on a real child is the real call with its timeout, then (nothing came) a move of the whole timeout.
+  (drgnx-clock-test--with
+   (let* ((calls nil) (answer t)
+          (orig (lambda (&rest args) (push args calls) answer)))
+     (should (drgnx-test--accept-process-output orig nil 5))
+     (should (equal calls '((nil 0 nil nil))))
+     (should (= 0.0 (drgnx-test-clock-now)))
+     (setq calls nil answer nil)
+     (cl-letf (((symbol-function 'drgnx-test--real-child-p) (lambda (_) t)))
+       (should-not (drgnx-test--accept-process-output orig nil 0.5 nil t)))
+     (should (equal (reverse calls) '((nil 0.5 nil t) (nil 0 nil t))))
+     (should (= 0.5 (drgnx-test-clock-now))))))
+
+(ert-deftest drgnx-test-clock/a-pipe-is-no-real-child ()
+  (let ((pipe (make-pipe-process :name "drgnx-clock-pipe" :noquery t)))
+    (unwind-protect (should-not (drgnx-test--real-child-p pipe))
+      (delete-process pipe))))
 
 (ert-deftest drgnx-test-clock/a-polling-loop-with-a-float-time-deadline-ends ()
   :tags '(:timing)                      ; asserts the real time spent stayed under a bound

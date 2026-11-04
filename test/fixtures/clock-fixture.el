@@ -135,11 +135,31 @@ real stamp: give timers delays, not absolute times."
              (funcall drgnx-test--accept nil 0)
              t))))
 
-(defun drgnx-test--accept-process-output (orig &rest args)
-  "`accept-process-output': the real wait, then virtual time moves by the real time it took."
-  (let* ((began (drgnx-test-real-time)) (result (apply orig args)))
-    (drgnx-test-advance (- (drgnx-test-real-time) began))
-    result))
+(defun drgnx-test--wait-secs (seconds millisec)
+  "The timeout of `accept-process-output' with SECONDS and MILLISEC, in seconds; nil when neither is given."
+  (when (or seconds millisec)
+    (+ (if (numberp seconds) seconds 0) (if (numberp millisec) (/ millisec 1000.0) 0))))
+
+(defun drgnx-test--real-child-p (process)
+  "Non-nil when a wait on PROCESS (nil: on any) waits for a real child: PROCESS is a live one of type `real', or with
+PROCESS nil, any live one is.  A pipe process is a scripted peer and a socket's other end runs in this Emacs or in a
+child: neither has work of its own to wait for."
+  (cl-some (lambda (p) (and (eq (process-type p) 'real) (process-live-p p)))
+           (if process (list process) (process-list))))
+
+(defun drgnx-test--accept-process-output (orig &optional process seconds millisec just-this-one)
+  "`accept-process-output' with a timeout: virtual time moves by that timeout, never by how long a real wait took.
+Output already there is taken at once (a zero-length look) and time does not move; else time moves by the timeout,
+due timers running, and output is looked at again.  A wait on a real child (`drgnx-test--real-child-p': a C test)
+waits for real, up to the timeout, then moves time by the whole timeout when nothing came.  No timeout, or one of 0:
+the call as it is (a look, or a wait for PROCESS's output with no time limit), and time does not move."
+  (let ((secs (drgnx-test--wait-secs seconds millisec)))
+    (cond ((not (and secs (> secs 0))) (funcall orig process seconds millisec just-this-one))
+          ((drgnx-test--real-child-p process)
+           (or (funcall orig process seconds millisec just-this-one)
+               (progn (drgnx-test-advance secs) (funcall orig process 0 nil just-this-one))))
+          (t (or (funcall orig process 0 nil just-this-one)
+                 (progn (drgnx-test-advance secs) (funcall orig process 0 nil just-this-one)))))))
 
 (defconst drgnx-test--seams
   '((drgnx-timer--now . drgnx-test--seam-now)
@@ -311,7 +331,8 @@ The whole list on every clock, so what a run leaves in its eln directory does no
   "Run BODY on a virtual clock.
 BODY sees fresh `timer-list' and `timer-idle-list'.  `float-time' and `current-time' without an argument return
 the real time at entry plus the virtual seconds so far, moved only by `drgnx-test-advance', `drgnx-test-idle',
-`sleep-for', `sit-for' and a timed `accept-process-output' (by the real time it waited); due timers run right after.
+`sleep-for', `sit-for' and a timed `accept-process-output' that finds no output (by its timeout: a zero-length look,
+or a real wait on a real child, `drgnx-test--accept-process-output'); due timers run right after.
 `current-idle-time' and `input-pending-p' follow `drgnx-test-idle'.  On the advice, timers made by `run-at-time' are
 moved onto the virtual clock plus `drgnx-test-clock-horizon' when activated, so a real wait never finds one ripe.  At
 the end a pending timer fails the test (naming the layer's keys and owners, then raw functions) unless
