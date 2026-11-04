@@ -82,10 +82,14 @@
       (should (string-match-p "Heap Audit (Help → Heap Audit) — live heap 700.0 MB, budget 600 MB" (nth 2 r))))))
 
 (ert-deftest drgnx-watchdog/doctor-without-the-flag ()
-  (let ((r (drgnx-doctor-check 'freezes (list :watchdog nil))))
-    (should (eq (car r) 'info))
-    (should (string-match-p "needs Nidhogg 31.1-nidhogg.N or newer" (nth 1 r)))
-    (should (string-match-p "drgnx update" (nth 2 r))))
+  ;; both checks name the one minimum, a real release: the first tag with the watchdog
+  (should (equal drgnx-watchdog-doctor-min-nidhogg "31.1-nidhogg.3"))
+  (dolist (check '(freezes gc))
+    (let ((r (drgnx-doctor-check check (list :watchdog nil))))
+      (should (eq (car r) 'info))
+      (should (string-match-p "needs Nidhogg 31\\.1-nidhogg\\.[0-9]+ or newer\\'" (nth 1 r)))
+      (should (string-search drgnx-watchdog-doctor-min-nidhogg (nth 1 r)))
+      (should (string-match-p "drgnx update" (nth 2 r)))))
   (let ((r (drgnx-doctor-check 'freezes (list :watchdog '(:running nil)))))
     (should (eq (car r) 'info))
     (should (string-match-p "off" (nth 1 r)))))

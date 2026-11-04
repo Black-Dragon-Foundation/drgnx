@@ -38,6 +38,11 @@
 (defconst drgnx-watchdog-doctor-update-fix
   "run `drgnx update': it builds the newest Nidhogg (docs/guide/speed.md, \"The watchdog\")"
   "What to do when this Emacs has no watchdog.")
+(defconst drgnx-watchdog-doctor-min-nidhogg "31.1-nidhogg.3" "The first Nidhogg release with the stall watchdog.")
+
+(defun drgnx-watchdog-doctor--needs-nidhogg ()
+  "The checks' detail when this Emacs has no watchdog."
+  (format "the watchdog needs Nidhogg %s or newer" drgnx-watchdog-doctor-min-nidhogg))
 
 ;;;; Reading the day
 
@@ -170,7 +175,7 @@ watchdog's session recorded.  Never signals."
   "The `freezes' check on FACTS: (STATUS DETAIL FIX)."
   (let ((w (plist-get facts :watchdog)))
     (cond
-     ((null w) (list 'info "the watchdog needs Nidhogg 31.1-nidhogg.N or newer" drgnx-watchdog-doctor-update-fix))
+     ((null w) (list 'info (drgnx-watchdog-doctor--needs-nidhogg) drgnx-watchdog-doctor-update-fix))
      ((plist-get w :error) (list 'info (format "the watchdog's day could not be read: %s" (plist-get w :error)) nil))
      ((and (not (plist-get w :running)) (plist-get w :start-error))
       (list 'info (format "off: could not start: %s" (plist-get w :start-error))
@@ -224,7 +229,7 @@ watchdog's session recorded.  Never signals."
          (over-max (and (numberp max-ms) (numberp gc-max) (>= max-ms gc-max)))
          (over-heap (plist-get heap :over)) (largest (plist-get w :largest)))
     (cond
-     ((null w) (list 'info "the watchdog needs Nidhogg 31.1-nidhogg.N or newer" drgnx-watchdog-doctor-update-fix))
+     ((null w) (list 'info (drgnx-watchdog-doctor--needs-nidhogg) drgnx-watchdog-doctor-update-fix))
      ((plist-get w :error) (list 'info (format "the GC row could not be read: %s" (plist-get w :error)) nil))
      ((and (null day) (not over-heap)) (list 'info "no collection recorded yet" nil))
      ((or over-max over-heap)

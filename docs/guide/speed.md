@@ -63,7 +63,7 @@ contains, and only you can read it (mode 0600). Audits on different days can be 
 
 ## The watchdog
 
-When drgnx runs on a Nidhogg built with the stall watchdog, it turns the watchdog on at every start; there is
+When drgnx runs on a Nidhogg built with the stall watchdog (31.1-nidhogg.3 or newer), it turns the watchdog on at every start; there is
 nothing to install and nothing to switch on. The watchdog times every busy span of Emacs and, when one lasts 100 ms or
 more, notes what it was doing: the command, the sampled stack, and the culprit: the innermost frame that is not Emacs's own
 code and was present in at least half of the samples taken outside garbage collection, with the package that owns it. It writes one line per stall into the same `watchdog/` folder of drgnx's state folder as the census
