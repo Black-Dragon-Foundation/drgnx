@@ -55,20 +55,26 @@ pub struct Conn {
     shared: Arc<Shared>,
     opts: ConnOpts,
     pid: i32,
+    stderr: draugr::StderrTail,
 }
 
 impl Conn {
     /// Start the agent.  Dropping every clone of the `Conn` closes the child's stdin; the watchdog reports the exit
     /// whenever it comes.  The receiver must be drained: the reader waits when its queue (1024 events) is full.
+    ///
+    /// The child is forked from draugr's pinned thread (`draugr::spawn_pinned`): an agent runs in a sandbox, whose
+    /// `--die-with-parent` (and the helper's `PR_SET_PDEATHSIG`) fires when the forking thread exits, and a runtime's
+    /// pool threads come and go.
     pub async fn spawn(
         spec: draugr::Spec,
         opts: ConnOpts,
     ) -> Result<(Conn, mpsc::Receiver<Event>), Error> {
-        let mut child = draugr::spawn(spec).await.map_err(Error::Spawn)?;
+        let mut child = draugr::spawn_pinned(spec).await.map_err(Error::Spawn)?;
         let (Some(mut stdin), Some(stdout)) = (child.take_stdin(), child.take_stdout()) else {
             return Err(Error::Closed);
         };
         let pid = child.id();
+        let stderr = child.stderr();
         let shared = Arc::new(Shared {
             pending: Mutex::new(HashMap::new()),
             closed: watch::channel(false).0,
@@ -128,6 +134,7 @@ impl Conn {
                 shared,
                 opts,
                 pid,
+                stderr,
             },
             erx,
         ))
@@ -136,6 +143,12 @@ impl Conn {
     /// The child's pid (also its process group).
     pub fn pid(&self) -> i32 {
         self.pid
+    }
+
+    /// The child's stderr tail as it is now (a sandbox's own complaint, before the agent ever speaks), as a handle
+    /// that can be read from another thread.
+    pub fn stderr(&self) -> draugr::StderrTail {
+        self.stderr.clone()
     }
 
     async fn call(&self, method: &str, params: Value, deadline: Option<Duration>) -> Answer {
