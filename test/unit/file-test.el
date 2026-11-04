@@ -548,8 +548,8 @@
       (encode-coding-string text 'utf-8-unix))))
 
 (defun drgnx-file-test--float-text (f)
-  "The float F's text in a dump: Emacs's `prin1' text, any NaN \"NaN\"."
-  (if (isnan f) "NaN" (let ((float-output-format nil)) (prin1-to-string f))))
+  "The float F's text in a dump: Emacs's `prin1' text (a NaN's sign and payload too)."
+  (let ((float-output-format nil)) (prin1-to-string f)))
 
 (defun drgnx-file-test--dump (x)
   "The datum X in the shared table's dump format (test/fixtures/huginn/README.md), as lists."

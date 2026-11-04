@@ -947,10 +947,12 @@ fn decimal(token: &str) -> Option<Number> {
     let mut i = usize::from(matches!(at(0), b'-' | b'+'));
     let digits_start = i;
     let mut magnitude: u128 = 0;
+    // the leading integer as lread.c's `uintmax_t n` holds it (mod 2^64): a NaN's payload
+    let mut wrapped: u64 = 0;
     while at(i).is_ascii_digit() {
-        magnitude = magnitude
-            .saturating_mul(10)
-            .saturating_add(u128::from(at(i) - b'0'));
+        let d = at(i) - b'0';
+        magnitude = magnitude.saturating_mul(10).saturating_add(u128::from(d));
+        wrapped = wrapped.wrapping_mul(10).wrapping_add(u64::from(d));
         i += 1;
     }
     let leading = i > digits_start;
@@ -982,8 +984,8 @@ fn decimal(token: &str) -> Option<Number> {
         } else if at(i - 1) == b'+' && b[i..].starts_with(b"NaN") {
             exponent = true;
             i += 3;
-            // Emacs puts the leading integer into the NaN's payload.
-            let payload = (magnitude as u64) & 0x0007_FFFF_FFFF_FFFF;
+            // Emacs puts the leading integer, wrapped mod 2^64, into the NaN's payload.
+            let payload = wrapped & 0x0007_FFFF_FFFF_FFFF;
             special = Some(f64::from_bits(0x7FF8_0000_0000_0000 | payload));
         } else {
             i = e;
@@ -1032,10 +1034,13 @@ mod tests {
         Value::Array(nodes.iter().map(dump).collect())
     }
 
+    /// A NaN's payload: the bits Emacs prints as its leading integer.
+    const NAN_PAYLOAD: u64 = 0x0007_FFFF_FFFF_FFFF;
+
     fn float_text(f: f64) -> String {
         let sign = if f.is_sign_negative() { "-" } else { "" };
         if f.is_nan() {
-            format!("{sign}0.0e+NaN")
+            format!("{sign}{}.0e+NaN", f.to_bits() & NAN_PAYLOAD)
         } else if f.is_infinite() {
             format!("{sign}1.0e+INF")
         } else {
@@ -1043,9 +1048,18 @@ mod tests {
         }
     }
 
+    /// The float a dump's TEXT names; a NaN with its sign and payload, as Emacs prints them (`-5.0e+NaN`).
     fn float_value(text: &str) -> f64 {
-        if text.ends_with("e+NaN") {
-            f64::NAN
+        if let Some(lead) = text.strip_suffix(".0e+NaN") {
+            let (negative, digits) = match lead.strip_prefix('-') {
+                Some(d) => (true, d),
+                None => (false, lead),
+            };
+            let payload: u64 = digits
+                .parse()
+                .unwrap_or_else(|_| panic!("not a NaN's text: {text}"));
+            let bits = 0x7FF8_0000_0000_0000 | (payload & NAN_PAYLOAD);
+            f64::from_bits(bits | if negative { 1 << 63 } else { 0 })
         } else if text.ends_with("e+INF") {
             if text.starts_with('-') {
                 f64::NEG_INFINITY
@@ -1058,7 +1072,7 @@ mod tests {
         }
     }
 
-    /// Equal dumps; floats by value (any NaN equals any NaN, -0.0 is not 0.0).
+    /// Equal dumps; floats by value and sign (a NaN's payload too, -0.0 is not 0.0).
     fn same(expected: &Value, actual: &Value) -> bool {
         match (expected, actual) {
             (Value::Array(e), Value::Array(a)) if e.len() == a.len() => {
@@ -1067,7 +1081,7 @@ mod tests {
                         float_value(e[1].as_str().unwrap_or_default()),
                         float_value(a[1].as_str().unwrap_or_default()),
                     );
-                    return (x.is_nan() && y.is_nan()) || x.to_bits() == y.to_bits();
+                    return x.to_bits() == y.to_bits();
                 }
                 e.iter().zip(a).all(|(x, y)| same(x, y))
             }

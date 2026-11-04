@@ -26,7 +26,7 @@ One JSON value per datum:
 | Datum | Dump |
 |---|---|
 | integer (a character literal too) | `["int", "<decimal>"]` |
-| float | `["float", "<Emacs's prin1 text>"]`, compared by value: `1.0e+INF`, `-1.0e+INF`, any NaN equals any NaN, `-0.0` is not `0.0` |
+| float | `["float", "<Emacs's prin1 text>"]`, compared by value: `1.0e+INF`, `-1.0e+INF`, `-0.0` is not `0.0`; in `cases.json` a NaN by its sign and payload (`-5.0e+NaN`: Emacs keeps the leading integer, mod 2^64, as the payload), in the random and corpus dumps any NaN equals any NaN |
 | string | `["str", "<text>"]` |
 | symbol (`nil` and `t` too; a keyword keeps its colon) | `["sym", "<name>"]` |
 | proper list | `["list", [ … ]]` |
