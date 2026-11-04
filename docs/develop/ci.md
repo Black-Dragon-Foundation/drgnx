@@ -291,7 +291,7 @@ DRGNX_TEST_JOBS=4 DRGNX_TEST_RERUN=1 DRGNX_TEST_NO_TIMING=1 DRGNX_TEST_AUDIT=1 D
 bin/drgnx test --container          # the Emacs 31.1 job in one step (podman, docker or nerdctl; see "Parallel files")
 bin/drgnx test --container --ui     # the GUI tier's ui job (--scenario, --perf: its other two)
 bin/drgnx test --container --tty                # the nightly terminal tier (Fedora 45, Emacs 31.1)
-bin/drgnx test --bootstrap          # the weekly second-machine exit test (fedora:45; --fedora 44 for the other release)
+bin/drgnx test --bootstrap          # the weekly second-machine exit test (fedora:45)
 .githooks/pre-commit --all          # the leak scan over every tracked file
 ```
 

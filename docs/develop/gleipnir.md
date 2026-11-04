@@ -981,8 +981,8 @@ gleipnir's `test-hooks`). It has two binaries and a directory of rows:
   container (`check-in-a-container`), which only the container run passes (`--rows rows/container`).
 
 Build both with `cargo build -p gleipnir-escape`, and `ratatoskr` with `--features test-hooks`. The probe uses `std`
-and `libc` only and needs glibc 2.39 at most, so a binary built in the Fedora 45 dev container runs on the Fedora 44
-VM; there is no toolchain on the VM.
+and `libc` only and needs glibc 2.39 at most, so a binary built in the Fedora 45 dev container runs on a VM with an older
+glibc; there is no toolchain on the VM.
 
 ```
 gleipnir-escape --ratatoskr BIN --probe BIN --rows DIR… [--only GLOB] [--require-all] --report FILE

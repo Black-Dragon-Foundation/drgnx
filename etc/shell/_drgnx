@@ -70,8 +70,8 @@ case $cmd in
       '--preflight[the ordering-bug pre-flight]' '--out[with --preflight: the report file]:report:_files' \
       '--seeds[with --preflight: shuffle seeds]:seeds' '--nidhogg-tarball[with --preflight: the Nidhogg tarball]:tarball:_files' \
       '--container[inside a container]' '--install[install.sh in fresh distribution containers]' \
-      '--bootstrap[drgnx bootstrap on a fresh Fedora container]' '--fedora[Fedora release for --bootstrap]:release:(44 45)' \
-      '*:image:(fedora-44 debian-trixie ubuntu-26.04 fedora-45 archlinux)' ;;
+      '--bootstrap[drgnx bootstrap on a fresh Fedora container]' '--fedora[Fedora release for --bootstrap]:release:(45)' \
+      '*:image:(debian-trixie ubuntu-26.04 fedora-45 archlinux)' ;;
   sync)
     _arguments '--offline[from the lock and the cache]' '--seed[copy another elpa first]:directory:_files -/' '--prune[remove packages the manifest no longer needs]' '--dry-run[with --prune: only list them]' ;;
   lease)

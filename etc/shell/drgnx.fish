@@ -93,7 +93,7 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l nidhogg-tarball -r -F -d 'With --preflight: the Nidhogg tarball'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l tty -d 'Terminal tests: Emacs in private tmux servers'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l compositor -x -a 'mutter sway x11 i3 kwin niri' -d 'Compositor of the GUI session'
-    complete -c drgnx -n '__fish_seen_subcommand_from test; and __fish_seen_argument -l install' -a 'fedora-44 debian-trixie ubuntu-26.04 fedora-45 archlinux' -d 'Distribution image'
+    complete -c drgnx -n '__fish_seen_subcommand_from test; and __fish_seen_argument -l install' -a 'debian-trixie ubuntu-26.04 fedora-45 archlinux' -d 'Distribution image'
     complete -c drgnx -n '__fish_seen_subcommand_from sync' -l offline -d 'From the lock and the cache'
     complete -c drgnx -n '__fish_seen_subcommand_from sync' -l seed -r -d 'Copy another elpa first'
     complete -c drgnx -n '__fish_seen_subcommand_from sync' -l prune -d 'Remove packages the manifest no longer needs'

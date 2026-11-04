@@ -17,7 +17,7 @@ case "$ID" in
   *) fail "no preparation recipe for $ID" ;;
 esac
 case "$ID:$VERSION_ID" in
-  fedora:44|fedora:45|ubuntu:26.04)
+  fedora:45|ubuntu:26.04)
     # The Nidhogg a user who installed the release has: install.sh keeps it (a build from source takes 30-60 minutes);
     # this test is about the Ratatoskr build step.  Fedora's updates-testing is off: a metalink flake once broke dnf there.
     for f in /etc/yum.repos.d/*testing*.repo; do [[ -e "$f" ]] && sed -i 's/^enabled=1/enabled=0/' "$f"; done
@@ -38,7 +38,7 @@ as_tester() { sudo -u tester -H env PATH="$home/.local/bin:/usr/local/bin:/usr/b
 printf '[safe]\n\tdirectory = *\n' >"$home/.gitconfig" && chown tester "$home/.gitconfig"
 
 case "$ID:$VERSION_ID" in
-  fedora:44|fedora:45|ubuntu:26.04) ;;   # Nidhogg's recipes (nidhogg/deps): the rest of this script
+  fedora:45|ubuntu:26.04) ;;   # Nidhogg's recipes (nidhogg/deps): the rest of this script
   *)   # no recipe yet (NIDHOGG-DISTROS-1): the installer stops and installs no stock Emacs; the doctor fails on one
     step "install.sh --yes: no Nidhogg recipe, exit 1, nothing installed"
     rc=0; out="$(as_tester bash /src/install.sh --yes 2>&1)" || rc=$?

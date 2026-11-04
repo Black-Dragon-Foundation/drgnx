@@ -2293,6 +2293,7 @@ machine is ready, and gives a fix for anything that is not:
 
 ```
 OK    emacs-version        Nidhogg 31.1-nidhogg.1 (GNU Emacs 31.1)   (stock GNU Emacs, or older than 31.1: FAIL; older than install.sh's NIDHOGG_VERSION: WARN)
+OK    fedora-release       Fedora 45   (Fedora 44 or older: FAIL, upgrade to 45; other systems: no row)
 OK    native-compilation   native compilation works   (built without it, or libgccjit broken: FAIL)
 OK    tree-sitter          tree-sitter available
 OK    gui                  graphical build (pgtk)     (terminal-only: OK, with a note)

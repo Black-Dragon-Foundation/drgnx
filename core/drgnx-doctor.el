@@ -89,6 +89,18 @@ PLATFORM (`linux' or `macos'): only run on that platform, as `drgnx-platform' sa
               (_ (list :file file :emacs nil :drgnx nil))))))
     (error (list :error (error-message-string err)))))
 
+(defun drgnx-doctor--fedora-release ()
+  "The Fedora release this machine runs (an integer), or nil when it is not Fedora (or not Linux)."
+  (when-let* (((eq (drgnx-platform) 'linux))
+              (file (seq-find #'file-readable-p '("/etc/os-release" "/usr/lib/os-release"))))
+    (with-temp-buffer
+      (insert-file-contents file nil 0 8192)
+      (goto-char (point-min))
+      (and (re-search-forward "^ID=[\"']?fedora[\"']?$" nil t)
+           (progn (goto-char (point-min))
+                  (re-search-forward "^PLATFORM_ID=[\"']?platform:f\\([0-9]+\\)" nil t))
+           (string-to-number (match-string 1))))))
+
 (declare-function drgnx-work-db-file "drgnx-work-db")
 (declare-function drgnx-work-nodes "drgnx-work-db")
 
@@ -436,6 +448,7 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :nidhogg-pin (drgnx-doctor--nidhogg-pin)
            :running-emacs (expand-file-name invocation-name invocation-directory)
            :service-unit (drgnx-doctor--service-unit)
+           :fedora-release (drgnx-doctor--fedora-release)
            :native-available native
            :native-compiles (if native (drgnx-doctor--native-compiles) "not built with native compilation")
            :treesit (and (fboundp 'treesit-available-p) (treesit-available-p))
@@ -621,6 +634,15 @@ severity, the fix the first `:fix'."
                                       (n (list 'ok (format "Nidhogg %s (GNU Emacs %s)" n v) nil))
                                       (t (list 'fail (format "GNU Emacs %s is not Nidhogg, drgnx's own Emacs build" v)
                                                drgnx-doctor-nidhogg-hint))))))
+
+(drgnx-doctor-define 'fedora-release :group "Emacs" :platform 'linux
+                     :doc "On Fedora: release 45 or newer (older releases are not supported)"
+                     :check (lambda (f)
+                              (let ((r (plist-get f :fedora-release)))
+                                (cond ((null r) nil)
+                                      ((< r 45) (list 'fail (format "Fedora %d is no longer supported: drgnx and Nidhogg support Fedora 45" r)
+                                                      "upgrade to Fedora 45 (sudo dnf system-upgrade), then run the installer again"))
+                                      (t (list 'ok (format "Fedora %d" r) nil))))))
 
 (drgnx-doctor-define 'native-compilation :group "Emacs" :doc "Native compilation works (drgnx's speed depends on it)"
                      :check (lambda (f)

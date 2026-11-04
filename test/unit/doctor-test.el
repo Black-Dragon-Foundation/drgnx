@@ -52,6 +52,14 @@
 (ert-deftest drgnx-doctor/facts-name-nidhogg ()
   (should (equal (plist-get (drgnx-doctor-facts) :nidhogg) (bound-and-true-p nidhogg-version))))
 
+(ert-deftest drgnx-doctor/fedora-release ()
+  (should-not (drgnx-doctor-check 'fedora-release (drgnx-doctor-test--facts :fedora-release nil)))
+  (should (eq 'ok (drgnx-doctor-test--status 'fedora-release (drgnx-doctor-test--facts :fedora-release 45))))
+  (let ((r (drgnx-doctor-check 'fedora-release (drgnx-doctor-test--facts :fedora-release 44))))
+    (should (eq 'fail (car r)))
+    (should (string-search "Fedora 44 is no longer supported" (nth 1 r)))
+    (should (string-search "upgrade to Fedora 45" (nth 2 r)))))
+
 (ert-deftest drgnx-doctor/service-unit ()
   (should-not (drgnx-doctor-check 'service-unit (drgnx-doctor-test--facts :service-unit nil)))
   (should (eq 'warn (drgnx-doctor-test--status 'service-unit (drgnx-doctor-test--facts

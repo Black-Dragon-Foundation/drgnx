@@ -428,7 +428,7 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
           (write-region "#!/bin/sh\necho '31.1 t pgtk'\n" nil fake)
           (set-file-modes fake #o755)
           (drgnx-install-test--expect
-           (drgnx-install-test--plan "fedora-44" (concat "DRGNX_INSTALL_EMACS=" fake) "--method" "keep")
+           (drgnx-install-test--plan "fedora-45" (concat "DRGNX_INSTALL_EMACS=" fake) "--method" "keep")
            "keep the installed Emacs 31.1"))
       (delete-file fake))))
 
@@ -484,7 +484,7 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
   (let ((booted (make-temp-file "ostree-booted")) (fake (make-temp-file "fake-emacs")))
     (unwind-protect
         (progn
-          (dolist (os '("fedora-45" "fedora-44"))
+          (dolist (os '("fedora-45"))
             (let ((r (drgnx-install-test--plan os (concat "DRGNX_INSTALL_OSTREE_BOOTED=" booted))))
               (should (= (car r) 2))
               (should (string-search "toolbox" (cdr r)))
@@ -550,7 +550,7 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
   (with-temp-buffer
     (let ((default-directory drgnx-install-test--root))
       (should (= 2 (call-process (expand-file-name "bin/drgnx" drgnx-install-test--root) nil t nil "test" "--install" "plan9")))
-      (dolist (name '("fedora-44" "fedora-45" "debian-trixie" "ubuntu-26.04" "archlinux"))
+      (dolist (name '("fedora-45" "debian-trixie" "ubuntu-26.04" "archlinux"))
         (should (string-search name (buffer-string)))))))
 
 (ert-deftest drgnx-install/git-is-installed-when-missing ()
@@ -583,7 +583,7 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
 
 (ert-deftest drgnx-install/fedora-family-is-fedora-itself ()
   ;; RHEL clones and Amazon Linux carry `fedora' in ID_LIKE but have no Fedora packages: no recipe.
-  ;; Fedora remixes (Nobara) have a Fedora PLATFORM_ID (42 here, which has no recipe either; 44 and 45 do).
+  ;; Fedora remixes (Nobara) have a Fedora PLATFORM_ID (42 here, which has no recipe either; Fedora 45 does).
   (dolist (os '("rocky-9" "amazon-2023" "nobara-42"))
     (let ((r (drgnx-install-test--plan os)))
       (should (= (car r) 1))
@@ -602,7 +602,7 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
   ;; Native compilation runs one Emacs per make job: one job per CPU on a big machine starved the host of
   ;; memory (systemd-oomd killed the desktop session).  At most one job per 1.5 GiB of available memory.
   (cl-flet ((plan (cpus mem-kb)
-              (drgnx-install-test--plan "fedora-44" (format "DRGNX_INSTALL_NPROC=%d" cpus)
+              (drgnx-install-test--plan "fedora-45" (format "DRGNX_INSTALL_NPROC=%d" cpus)
                                         (format "DRGNX_INSTALL_MEMORY_KB=%d" mem-kb))))
     (drgnx-install-test--expect (plan 16 (* 6 1024 1024)) "make -j4 ")
     (drgnx-install-test--expect (plan 16 (* 64 1024 1024)) "make -j16 ")
@@ -627,33 +627,43 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
   (list "DRGNX_INSTALL_NPROC=16" (format "DRGNX_INSTALL_MEMORY_KB=%d" (* 16 1024 1024)))
   "16 CPUs and 16 GiB available.")
 
-(ert-deftest drgnx-install/fedora-44-builds-nidhogg-in-a-container ()
+(ert-deftest drgnx-install/fedora-44-is-refused-with-the-way-forward ()
+  ;; Fedora 44 and older are no longer supported: exit 1 before any plan, no other path chosen
+  (drgnx-install-test--with-tmp tmp
+    (let ((r (apply #'drgnx-install-test--plan "fedora-44"
+                    (concat "DRGNX_INSTALL_PODMAN=" (drgnx-install-test--podman tmp 0)) drgnx-install-test--roomy)))
+      (should (= 1 (car r)))
+      (should (string-search "Fedora 44 is no longer supported" (cdr r)))
+      (should (string-search "Upgrade to Fedora 45" (cdr r)))
+      (should-not (string-search "build Nidhogg" (cdr r))))))
+
+(ert-deftest drgnx-install/fedora-45-builds-nidhogg-in-a-container ()
   (drgnx-install-test--with-tmp tmp
     (drgnx-install-test--expect
-     (apply #'drgnx-install-test--plan "fedora-44"
+     (apply #'drgnx-install-test--plan "fedora-45"
             (concat "DRGNX_INSTALL_PODMAN=" (drgnx-install-test--podman tmp 0)) drgnx-install-test--roomy)
-     "build Nidhogg 31.1-nidhogg.5" "podman container (registry.fedoraproject.org/fedora:44)" "capped at 6g"
-     "make -j4" "/.local/opt/nidhogg/31.1-nidhogg.5" "nidhogg/deps/fedora-44.runtime"
+     "build Nidhogg 31.1-nidhogg.5" "podman container (registry.fedoraproject.org/fedora:45)" "capped at 6g"
+     "make -j4" "/.local/opt/nidhogg/31.1-nidhogg.5" "nidhogg/deps/fedora-45.runtime"
      "Remember Emacs: " "/.local/opt/nidhogg/31.1-nidhogg.5/bin/nidhogg"
      "check that it is commit " "link " "/bin/nidhogg and " "refresh drgnx.service's Emacs if it is installed")))
 
 (ert-deftest drgnx-install/without-podman-nidhogg-builds-on-the-host ()
-  (let ((out (cdr (apply #'drgnx-install-test--plan "fedora-44" "DRGNX_INSTALL_PODMAN=none" drgnx-install-test--roomy))))
+  (let ((out (cdr (apply #'drgnx-install-test--plan "fedora-45" "DRGNX_INSTALL_PODMAN=none" drgnx-install-test--roomy))))
     (dolist (s '("build Nidhogg 31.1-nidhogg.5" "build on this machine (podman is not installed): make -j10"
-                 "nidhogg/deps/fedora-44.build"))
+                 "nidhogg/deps/fedora-45.build"))
       (should (string-search s out)))
     (should-not (string-search "podman container" out))))
 
 (ert-deftest drgnx-install/inside-a-container-builds-on-the-host ()
   (drgnx-install-test--with-tmp tmp
     (drgnx-install-test--expect
-     (drgnx-install-test--plan "fedora-44" (concat "DRGNX_INSTALL_PODMAN=" (drgnx-install-test--podman tmp 0))
+     (drgnx-install-test--plan "fedora-45" (concat "DRGNX_INSTALL_PODMAN=" (drgnx-install-test--podman tmp 0))
                                "DRGNX_INSTALL_IN_CONTAINER=yes")
-     "build on this machine (you are inside a container)" "nidhogg/deps/fedora-44.build")))
+     "build on this machine (you are inside a container)" "nidhogg/deps/fedora-45.build")))
 
 (ert-deftest drgnx-install/podman-that-cannot-run-falls-back ()
   (drgnx-install-test--with-tmp tmp
-    (let ((out (cdr (drgnx-install-test--plan "fedora-44" (concat "DRGNX_INSTALL_PODMAN=" (drgnx-install-test--podman tmp 125))))))
+    (let ((out (cdr (drgnx-install-test--plan "fedora-45" (concat "DRGNX_INSTALL_PODMAN=" (drgnx-install-test--podman tmp 125))))))
       (should (string-search "build on this machine (podman cannot run containers here)" out))
       (should-not (string-search "podman container" out)))))
 
@@ -679,7 +689,7 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
 
 (ert-deftest drgnx-install/a-current-nidhogg-is-kept ()
   (drgnx-install-test--with-tmp tmp
-    (let ((r (drgnx-install-test--plan "fedora-44" (concat "DRGNX_INSTALL_EMACS=" (drgnx-install-test--fake-emacs tmp "31.1 t pgtk 31.1-nidhogg.5")))))
+    (let ((r (drgnx-install-test--plan "fedora-45" (concat "DRGNX_INSTALL_EMACS=" (drgnx-install-test--fake-emacs tmp "31.1 t pgtk 31.1-nidhogg.5")))))
       (should (= (car r) 0))
       (should (string-search "keep the installed Nidhogg 31.1-nidhogg.5 (" (cdr r)))
       (should-not (string-search "build Nidhogg" (cdr r)))
@@ -688,14 +698,14 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
 (ert-deftest drgnx-install/an-older-nidhogg-is-rebuilt ()
   (drgnx-install-test--with-tmp tmp
     (drgnx-install-test--expect
-     (drgnx-install-test--plan "fedora-44" (concat "DRGNX_INSTALL_EMACS=" (drgnx-install-test--fake-emacs tmp "31.1 t pgtk 31.1-nidhogg.0")))
+     (drgnx-install-test--plan "fedora-45" (concat "DRGNX_INSTALL_EMACS=" (drgnx-install-test--fake-emacs tmp "31.1 t pgtk 31.1-nidhogg.0")))
      "build Nidhogg 31.1-nidhogg.5")))
 
 (ert-deftest drgnx-install/a-stock-emacs-gets-nidhogg-unless-kept ()
   (drgnx-install-test--with-tmp tmp
     (let ((emacs (concat "DRGNX_INSTALL_EMACS=" (drgnx-install-test--fake-emacs tmp "31.1 t pgtk"))))
-      (drgnx-install-test--expect (drgnx-install-test--plan "fedora-44" emacs) "build Nidhogg 31.1-nidhogg.5")
-      (let ((out (cdr (drgnx-install-test--plan "fedora-44" emacs "--method" "keep"))))
+      (drgnx-install-test--expect (drgnx-install-test--plan "fedora-45" emacs) "build Nidhogg 31.1-nidhogg.5")
+      (let ((out (cdr (drgnx-install-test--plan "fedora-45" emacs "--method" "keep"))))
         (should (string-search "keep the installed Emacs 31.1" out))
         (should-not (string-search "build Nidhogg" out)))
       ;; no recipe: a stock Emacs is not a reason to go on, only --method keep does
@@ -706,9 +716,9 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
   (drgnx-install-test--with-tmp tmp
     (let ((podman (concat "DRGNX_INSTALL_PODMAN=" (drgnx-install-test--podman tmp 0))))
       (drgnx-install-test--expect
-       (drgnx-install-test--plan "fedora-44" podman "DRGNX_INSTALL_NPROC=16" (format "DRGNX_INSTALL_MEMORY_KB=%d" (* 5 1024 1024)))
+       (drgnx-install-test--plan "fedora-45" podman "DRGNX_INSTALL_NPROC=16" (format "DRGNX_INSTALL_MEMORY_KB=%d" (* 5 1024 1024)))
        "capped at 4g" "make -j2")
-      (let ((r (drgnx-install-test--plan "fedora-44" podman "DRGNX_INSTALL_NPROC=16" (format "DRGNX_INSTALL_MEMORY_KB=%d" (* 3 1024 1024)))))
+      (let ((r (drgnx-install-test--plan "fedora-45" podman "DRGNX_INSTALL_NPROC=16" (format "DRGNX_INSTALL_MEMORY_KB=%d" (* 3 1024 1024)))))
         (should (= (car r) 1))
         (should (string-search "needs 3 GiB of free memory" (cdr r)))
         (should-not (string-search "1. Emacs" (cdr r)))))))
@@ -723,7 +733,7 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
   "In TMP: a git repo `nidhogg' (tag v31.1-nidhogg.5) with a stub nidhogg/build.sh that logs its arguments to $NH_LOG
 and writes PREFIX/bin/{nidhogg,emacs,nidhoggclient} answering the probe (NH_FAIL=1: exits 1; NH_BROKEN=1: binaries that do
 not start) and deps lists; `bin' with a sudo and an rpm stub (RPM_ALL=1: everything installed); `drgnx', a checkout whose
-bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real run on Fedora 44."
+bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real run on Fedora 45."
   (let* ((repo (expand-file-name "nidhogg" tmp)) (bin (expand-file-name "bin" tmp))
          (checkout (expand-file-name "drgnx" tmp)) (home (expand-file-name "home" tmp))
          (git (lambda (&rest args)
@@ -743,7 +753,7 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
              "A=\"$P/Nidhogg.app/Contents/MacOS\"; mkdir -p \"$A/bin\"\n"
              "printf '#!/bin/sh\\necho \"31.1 t ns 31.1-nidhogg.5\"\\n' > \"$A/Emacs\"; chmod +x \"$A/Emacs\"\n"
              "cp \"$A/Emacs\" \"$A/bin/emacsclient\"\n"))
-    (dolist (f '(("fedora-44.runtime" . "# runtime\nlibfoo\nlibbar\n") ("fedora-44.build" . "# build\n\nlibbuildfoo\nlibbuildbar\n")
+    (dolist (f '(("fedora-45.runtime" . "# runtime\nlibfoo\nlibbar\n") ("fedora-45.build" . "# build\n\nlibbuildfoo\nlibbuildbar\n")
                  ("macos.build" . "# build\nlibmacfoo\n")))
       (write-region (cdr f) nil (expand-file-name (concat "nidhogg/deps/" (car f)) repo)))
     (funcall git "init" "-q")
@@ -754,7 +764,7 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
     (drgnx-install-test--script (expand-file-name "rpm" bin) "#!/bin/sh\n[ -n \"$RPM_ALL\" ]\n")
     (drgnx-install-test--script (expand-file-name "bin/drgnx" checkout)
                                 "#!/bin/sh\necho \"drgnx $* [DRGNX_EMACS=$DRGNX_EMACS]\" >> \"$NH_LOG\"\n")
-    (cons (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "fedora-44")) "DRGNX_INSTALL_UNAME=Linux"
+    (cons (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "fedora-45")) "DRGNX_INSTALL_UNAME=Linux"
                 (concat "DRGNX_INSTALL_NIDHOGG_REPO=" repo)
                 (concat "NH_LOG=" tmp "/log") (concat "HOME=" home)
                 (concat "DRGNX_DATA_DIR=" home "/.local/share/drgnx") (concat "DRGNX_CONFIG_DIR=" home "/.config/drgnx")
@@ -762,7 +772,7 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
           (with-temp-buffer (call-process "git" nil t nil "-C" repo "rev-parse" "HEAD") (string-trim (buffer-string))))))
 
 (defun drgnx-install-test--macos-env (fixture)
-  "The environment of FIXTURE for a run on macOS 15.4 instead of Fedora 44 (the first entry of a name wins)."
+  "The environment of FIXTURE for a run on macOS 15.4 instead of Fedora 45 (the first entry of a name wins)."
   (append drgnx-install-test--macos (list (concat "DRGNX_INSTALL_NIDHOGG_COMMIT=" (cdr fixture))) (car fixture)))
 
 (defun drgnx-install-test--nidhogg-run (tmp fixture &optional env commit)
@@ -796,7 +806,7 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
            (log (drgnx-install-test--file (expand-file-name "log" tmp)))
            (prefix (concat home "/.local/opt/nidhogg/31.1-nidhogg.5")))
       (should (= (car r) 0))
-      (should (string-search (concat "build.sh --container fedora-44 --memory 6g --jobs 4 --prefix " prefix) log))
+      (should (string-search (concat "build.sh --container fedora-45--memory 6g --jobs 4 --prefix " prefix) log))
       (should (string-search "--build-dir " log))
       (should (string-search "sudo dnf install -y libfoo libbar" log))
       (should-not (string-search "libbuildfoo" log))
@@ -917,20 +927,20 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
     (let ((podman (concat "DRGNX_INSTALL_PODMAN=" (drgnx-install-test--podman tmp 0))))
       ;; the environment
       (drgnx-install-test--expect
-       (drgnx-install-test--plan "fedora-44" podman "DRGNX_INSTALL_JOBS=3" "DRGNX_INSTALL_MEMORY=5" "DRGNX_INSTALL_NPROC=16"
+       (drgnx-install-test--plan "fedora-45" podman "DRGNX_INSTALL_JOBS=3" "DRGNX_INSTALL_MEMORY=5" "DRGNX_INSTALL_NPROC=16"
                                  (format "DRGNX_INSTALL_MEMORY_KB=%d" (* 64 1024 1024)))
        "capped at 5g" "make -j3")
       ;; the flags win over the environment
       (drgnx-install-test--expect
-       (drgnx-install-test--plan "fedora-44" podman "DRGNX_INSTALL_JOBS=3" "--jobs" "2" "--memory" "4" "DRGNX_INSTALL_NPROC=16"
+       (drgnx-install-test--plan "fedora-45" podman "DRGNX_INSTALL_JOBS=3" "--jobs" "2" "--memory" "4" "DRGNX_INSTALL_NPROC=16"
                                  (format "DRGNX_INSTALL_MEMORY_KB=%d" (* 64 1024 1024)))
        "capped at 4g" "make -j2")
       ;; nothing given: the installer's own sizing
       (drgnx-install-test--expect
-       (drgnx-install-test--plan "fedora-44" podman "DRGNX_INSTALL_NPROC=16" (format "DRGNX_INSTALL_MEMORY_KB=%d" (* 64 1024 1024)))
+       (drgnx-install-test--plan "fedora-45" podman "DRGNX_INSTALL_NPROC=16" (format "DRGNX_INSTALL_MEMORY_KB=%d" (* 64 1024 1024)))
        "capped at 6g" "make -j4")
-      (should (= 2 (car (drgnx-install-test--plan "fedora-44" "--jobs" "0"))))
-      (should (= 2 (car (drgnx-install-test--plan "fedora-44" podman "--memory" "2")))))))
+      (should (= 2 (car (drgnx-install-test--plan "fedora-45" "--jobs" "0"))))
+      (should (= 2 (car (drgnx-install-test--plan "fedora-45" podman "--memory" "2")))))))
 
 (ert-deftest drgnx-install/the-build-gets-the-jobs-and-memory-asked-for ()
   (skip-unless (/= 0 (user-uid)))
@@ -942,10 +952,10 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
                               drgnx-install-test--roomy)))
            (log (drgnx-install-test--file (expand-file-name "log" tmp))))
       (should (= (car r) 0))
-      (should (string-search "build.sh --container fedora-44 --memory 5g --jobs 2 --prefix " log)))))
+      (should (string-search "build.sh --container fedora-45--memory 5g --jobs 2 --prefix " log)))))
 
 (ert-deftest drgnx-install/the-pin-is-the-published-series-head ()
-  (drgnx-install-test--expect (drgnx-install-test--plan "fedora-44" "--method" "nidhogg")
+  (drgnx-install-test--expect (drgnx-install-test--plan "fedora-45" "--method" "nidhogg")
                               "at v31.1-nidhogg.5" "commit a19d0e7a58c7"))
 
 ;;; Ratatoskr: the Rust toolchain and the build (Task 19)

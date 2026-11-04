@@ -82,7 +82,7 @@ usage: install.sh [options]
   --prefix DIR       where Nidhogg's links and the drgnx command go (default ~/.local)
   --dir DIR          where drgnx is checked out (default ~/.local/share/drgnx/drgnx)
   --source-dir DIR   use this existing drgnx checkout instead of cloning
-  --method M         auto (default) | nidhogg (drgnx's own Emacs, built from source: Fedora 44/45,
+  --method M         auto (default) | nidhogg (drgnx's own Emacs, built from source: Fedora 45,
                      Ubuntu 26.04, Debian 13, Arch Linux, macOS) | keep (do not install Emacs; drgnx doctor fails on
                      anything but Nidhogg)
   --jobs N           parallel make jobs for the build (default: by CPUs and memory; or DRGNX_INSTALL_JOBS)
@@ -265,7 +265,7 @@ nidhogg_distro() { # NIDHOGG_DISTRO: the build recipe this system has (nidhogg/d
   NIDHOGG_DISTRO=""
   case "$FAMILY" in
     macos) NIDHOGG_DISTRO=macos ;;
-    fedora) if ((!OSTREE)) && [[ "$FEDORA_VERSION" == 44 || "$FEDORA_VERSION" == 45 ]]; then NIDHOGG_DISTRO="fedora-$FEDORA_VERSION"; fi ;;
+    fedora) if ((!OSTREE)) && [[ "$FEDORA_VERSION" == 45 ]]; then NIDHOGG_DISTRO="fedora-$FEDORA_VERSION"; fi ;;
     debian)   # Ubuntu 26.04 (codename resolute) and Debian 13 (trixie); Linux Mint and LMDE count by the base they name
       if [[ "$ID" == ubuntu && "$VERSION_ID" == 26.04 ]] || [[ "$ID" == linuxmint && "$UBUNTU_CODENAME" == resolute ]]; then NIDHOGG_DISTRO=ubuntu-26.04
       elif [[ "$ID" == debian && "$VERSION_ID" == 13 ]] || [[ "$ID" == linuxmint && "$DEBIAN_CODENAME" == trixie ]]; then NIDHOGG_DISTRO=debian-13; fi ;;
@@ -339,10 +339,13 @@ choose_method() {
   else CHOSEN=nidhogg
   fi
   if [[ "$CHOSEN" == nidhogg && -z "$NIDHOGG_DISTRO" ]]; then
-    if ((OSTREE)) && [[ "$FAMILY" == fedora ]]; then   # Fedora 44/45 have a recipe, but dnf cannot install on the image
+    if [[ "$FAMILY" == fedora && "$ID" == fedora && "$FEDORA_VERSION" =~ ^[0-9]+$ ]] && ((FEDORA_VERSION < 45)); then
+      die 1 "Fedora $FEDORA_VERSION is no longer supported: drgnx and Nidhogg support Fedora 45 only. Upgrade to Fedora 45 (sudo dnf system-upgrade), then run this again — see $DOCS_URL"
+    fi
+    if ((OSTREE)) && [[ "$FAMILY" == fedora ]]; then   # Fedora 45 has a recipe, but dnf cannot install on the image
       die 2 "${PRETTY:-this system} is image-based (rpm-ostree): dnf cannot install here. Run this installer inside a toolbox (toolbox create, toolbox enter, then bash install.sh) — see $DOCS_URL"
     fi
-    die 1 "no Nidhogg recipe for ${PRETTY:-this system} yet (NIDHOGG-DISTROS-1): Nidhogg builds on Fedora 44/45, Ubuntu 26.04, Debian 13, Arch Linux and macOS — see $DOCS_URL"
+    die 1 "no Nidhogg recipe for ${PRETTY:-this system} yet (NIDHOGG-DISTROS-1): Nidhogg builds on Fedora 45, Ubuntu 26.04, Debian 13, Arch Linux and macOS — see $DOCS_URL"
   fi
   BUILD_DIR="$(drgnx_dir cache)/build"
   JOBS="$(build_jobs)"

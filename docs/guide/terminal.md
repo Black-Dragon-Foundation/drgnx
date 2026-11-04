@@ -57,7 +57,7 @@ checks that this column says "verified" exactly for the rows the table's data ma
   there are 16777216 colours, and `C-g` stops a program Emacs waits for. Still unconfirmed: the mouse reports kitty
   itself sends (the test sends them as bytes, and Emacs handles them) and the shortcuts kitty keeps (the test's keys
   bypass them).
-- **tmux, verified:** the tty tier (`bin/drgnx test --tty`, and in the Fedora 44 and 45 containers) runs drgnx inside
+- **tmux, verified:** the tty tier (`bin/drgnx test --tty`, and in the Fedora 45 container) runs drgnx inside
   a private tmux server, a new one for every test, with the tmux settings of [drgnx inside tmux](#drgnx-inside-tmux)
   off and on in turn. It checks that drgnx identifies tmux, asks it for modifyOtherKeys (level 1 and 2, and the `csi-u`
   format), sends a copy as OSC 52 through `set-clipboard on` or through `allow-passthrough on` and keeps it in drgnx
