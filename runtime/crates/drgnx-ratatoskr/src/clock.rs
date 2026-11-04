@@ -237,6 +237,30 @@ pub(crate) fn virtual_ms() -> u64 {
     })
 }
 
+/// F on a two-worker runtime whose threads (and this one) read a fresh virtual clock (unit tests).
+#[cfg(all(test, feature = "test-hooks"))]
+pub(crate) fn on_virtual<F: Future>(f: F) -> F::Output {
+    let clock = std::sync::Arc::new(virt::Virtual::new());
+    let theirs = clock.clone();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .on_thread_start(move || virt::LOCAL.with(|l| *l.borrow_mut() = Some(theirs.clone())))
+        .build()
+        .unwrap();
+    virt::LOCAL.with(|l| *l.borrow_mut() = Some(clock));
+    let out = rt.block_on(f);
+    virt::LOCAL.with(|l| *l.borrow_mut() = None);
+    rt.shutdown_background();
+    out
+}
+
+/// How many sleepers wait on the virtual clock now; 0 on the real clock (unit tests).
+#[cfg(all(test, feature = "test-hooks"))]
+pub(crate) fn sleepers() -> usize {
+    virt::current().map_or(0, |v| v.sleepers())
+}
+
 #[cfg(feature = "test-hooks")]
 mod virt {
     use super::{Advanced, BUSY_AFTER, Elapsed, Origin};
@@ -373,6 +397,11 @@ mod virt {
 
         pub(super) fn elapsed(&self) -> Duration {
             self.state().elapsed
+        }
+
+        #[cfg(test)]
+        pub(super) fn sleepers(&self) -> usize {
+            self.state().queue.len()
         }
 
         pub(super) fn at(&self, elapsed: Duration) -> tokio::time::Instant {

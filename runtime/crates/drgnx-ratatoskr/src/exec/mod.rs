@@ -1076,18 +1076,25 @@ impl Inner {
             return self.row(id);
         }
         if self.end(id).is_none() {
+            // subscribed before the first look, so an end after it is an event this receiver holds
+            let mut events = self.events.subscribe();
             let _ = std::fs::write(self.dir(id).join("why"), "stopped");
             if let (Some(p), Some(t)) = (meta.pid, meta.start_time)
                 && unit::same_process(p, t)
             {
                 let _ = draugr::kill_group(p, Duration::from_secs(2), &draugr::RealSignaller).await;
             }
-            for _ in 0..100 {
-                if self.end(id).is_some() {
-                    break;
+            // the watcher records the end, then says so: wait for that, at most 5 s on the hub's clock
+            let _ = crate::clock::timeout(Duration::from_secs(5), async {
+                while self.end(id).is_none() {
+                    if let Err(tokio::sync::broadcast::error::RecvError::Closed) =
+                        events.recv().await
+                    {
+                        break;
+                    }
                 }
-                crate::clock::sleep(Duration::from_millis(50)).await;
-            }
+            })
+            .await;
         }
         self.row(id)
     }

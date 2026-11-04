@@ -224,7 +224,9 @@ the hub (a podman pull). The session's update throttle (`EMIT_EVERY`, 50 ms), it
 close when idle), a move's wait, a connection's `STUCK_AFTER` and flush, and a job's time box and stop all read it,
 and so does every other timer: the hub's tick loops (sessions, delivery, schema, runner, supervisor, manager, idle),
 the debounces, the paced reads, the accept back-off, the sandbox probe's limits and the stored timestamps. A `Delay`
-interval is the only kind (a late tick moves the next ones). A task that sleeps on the clock, or writes to a client
+interval is the only kind (a late tick moves the next ones). A wait for something another of the hub's tasks reports
+waits for that report, never polls the clock: `exec/stop` waits for the job's end event (at most 5 s on the clock), so
+on the test clock it answers once the end is recorded, with no advance. A task that sleeps on the clock, or writes to a client
 (the gateway's events, `request` and `gateway/need-keys`, for one), is started with `clock::spawn`, so its origin is
 named.
 

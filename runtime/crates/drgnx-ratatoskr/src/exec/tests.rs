@@ -116,6 +116,40 @@ async fn stop_ends_a_running_job() {
     assert!(r.stop("nope").await.is_none());
 }
 
+/// On the test clock a stop whose first look finds no end still answers once the end is recorded, with no advance:
+/// it waits for the job's end, never on the clock, which stands still inside a serving step. The watcher's end is held
+/// (its id marked finishing) until the stop has looked and waits, then the test records it.
+#[cfg(feature = "test-hooks")]
+#[test]
+fn a_stop_on_the_test_clock_answers_an_end_recorded_after_its_first_look() {
+    crate::clock::on_virtual(async {
+        let d = tempfile::tempdir().unwrap();
+        let r = open(d.path());
+        // no time box: the watcher registers no sleeper, so the first one is the stop's wait
+        let mut s = spec(Starter::User, d.path(), "sleep 60", Duration::from_secs(60));
+        s.user.no_timebox = true;
+        let id = r.start(s).await.unwrap();
+        let inner = r.inner.get().unwrap().clone();
+        inner.finishing.lock().unwrap().insert(id.clone());
+        let stop = tokio::spawn({
+            let (inner, id) = (inner.clone(), id.clone());
+            async move { inner.stop(&id).await }
+        });
+        skuld::wait_until_async("the stop looked and waits", 30, || async {
+            (crate::clock::sleepers() > 0).then_some(())
+        })
+        .await;
+        inner.finishing.lock().unwrap().remove(&id);
+        inner.finish(&id).await;
+        let row = tokio::time::timeout(Duration::from_secs(10), stop)
+            .await
+            .expect("the stop answers without an advance")
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.status, ExecStatus::Stopped);
+    });
+}
+
 #[tokio::test]
 async fn bad_jobs_are_refused() {
     let d = tempfile::tempdir().unwrap();

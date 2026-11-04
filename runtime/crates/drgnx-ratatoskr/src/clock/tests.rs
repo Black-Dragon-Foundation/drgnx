@@ -7,23 +7,6 @@ fn ms(n: u64) -> Duration {
     Duration::from_millis(n)
 }
 
-/// F on a two-worker runtime whose threads (and this one) read a fresh virtual clock.
-fn on_virtual<F: Future>(f: F) -> F::Output {
-    let clock = Arc::new(virt::Virtual::new());
-    let theirs = clock.clone();
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .on_thread_start(move || virt::LOCAL.with(|l| *l.borrow_mut() = Some(theirs.clone())))
-        .build()
-        .unwrap();
-    virt::LOCAL.with(|l| *l.borrow_mut() = Some(clock));
-    let out = rt.block_on(f);
-    virt::LOCAL.with(|l| *l.borrow_mut() = None);
-    rt.shutdown_background();
-    out
-}
-
 type Log = Arc<Mutex<Vec<&'static str>>>;
 
 fn log() -> Log {
