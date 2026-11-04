@@ -9,9 +9,11 @@
 //! design document).  Changes reach the editors as `agent` and `agent-entries` events, at most one pair per session
 //! per 50 ms.
 
+mod turn_core;
+
 use super::launch;
 use super::lock as plock;
-use super::queue::{Origin, Queue, Queued};
+use super::queue::{Origin, Queued};
 use super::transcript;
 use crate::dispatch::Caller;
 use crate::front::Front;
@@ -38,6 +40,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
+use turn_core::{KillWhy, QueueEdit, TurnCore, TurnEffect, TurnEvent};
 
 /// Events about one session come at most this often.
 const EMIT_EVERY: Duration = Duration::from_millis(50);
@@ -127,7 +130,8 @@ impl Pending {
 }
 
 struct State {
-    status: runstav::methods::agents::SessionStatus,
+    /// The turn, the queue, the Stop and the permission requests' choices (`turn_core.rs`).
+    core: TurnCore,
     seq: u64,
     entries: Vec<Entry>,
     /// Tool call id → index in `entries`.
@@ -141,20 +145,10 @@ struct State {
     commands: Vec<Value>,
     exit: Option<i64>,
     stderr: Option<String>,
-    /// Prompts waiting for the turn to end (or held after a Stop).
-    queue: Queue,
-    /// The queue is held (a Stop, or the pause after a tool call) until delivered or something new is sent.
-    paused: bool,
-    /// Cancel once the running tool call completes (`Hub::cancel_after_tool`).
-    hold: bool,
-    /// The reader should cancel the turn now (a hold met its tool call's end).
-    cancel_wanted: bool,
+    /// A tool call completed or failed in the last update: the reader tells the core.
+    tool_ended: bool,
     /// Entries before this index are in the transcript file.
     flushed: usize,
-    /// The turn running (counts from 1), so a late timer knows it is the same one.
-    turn: u64,
-    /// The hub is ending: the turn's end is not the user's Stop, and nothing is held for it.
-    ending: bool,
     /// The step running, and the steps closed since the last drain.
     cur: Option<OpenStep>,
     stash: Option<OpenStep>,
@@ -168,6 +162,16 @@ struct State {
     max_repeat: u32,
     /// Tokens the finished turns used.
     tokens: u64,
+}
+
+/// What a turn core step decided, with the permission requests it took out of the snapshot.
+#[derive(Default)]
+struct Stepped {
+    fx: Vec<TurnEffect>,
+    /// To answer with the user's choice.
+    answered: Vec<Pending>,
+    /// To answer cancelled.
+    cancelled: Vec<Pending>,
 }
 
 /// A step that has begun.
@@ -207,21 +211,11 @@ struct TurnUse {
 }
 
 impl State {
-    /// Can a new turn start now without joining anything: idle (not busy, not waiting on a job), not paused by a
-    /// Stop, nothing queued.
-    fn is_free(&self) -> bool {
-        self.status == SessionStatus::Idle && !self.paused && self.queue.is_empty()
-    }
-
     fn new() -> State {
         State {
-            queue: Queue::default(),
-            paused: false,
-            hold: false,
-            cancel_wanted: false,
+            core: TurnCore::new(),
+            tool_ended: false,
             flushed: 0,
-            turn: 0,
-            ending: false,
             cur: None,
             stash: None,
             last_mid: None,
@@ -230,7 +224,6 @@ impl State {
             max_repeat: 0,
             tokens: 0,
             closed: Vec::new(),
-            status: runstav::methods::agents::SessionStatus::Starting,
             seq: 0,
             entries: Vec::new(),
             tools: HashMap::new(),
@@ -311,6 +304,77 @@ impl State {
             prev.start = at;
             self.cur = Some(prev);
         }
+    }
+
+    /// EV through the turn core.  The requests it answers or cancels leave the snapshot here, under the same lock,
+    /// and the step the user waited in ends; the shell replies to them ([`Session::perform`]).  A turn that starts
+    /// gets its entry and its first step here too.
+    fn turn_step(&mut self, ev: TurnEvent) -> Stepped {
+        let fx = self.core.step(ev);
+        self.stepped(fx)
+    }
+
+    /// The next queued prompt's turn, if one can start ([`TurnCore::next`]).
+    fn turn_step_next(&mut self) -> Stepped {
+        let fx = self.core.next();
+        self.stepped(fx)
+    }
+
+    fn stepped(&mut self, fx: Vec<TurnEffect>) -> Stepped {
+        let mut out = Stepped::default();
+        for e in &fx {
+            let (request, answered) = match e {
+                TurnEffect::Answer { request } => (*request, true),
+                TurnEffect::Cancel { request } => (*request, false),
+                // no model request until the wake: the step is the wait
+                TurnEffect::EndTurn { waiting: true, .. } => {
+                    self.step_begin(StepClass::JobWait, None);
+                    continue;
+                }
+                TurnEffect::EndTurn { paused: true, .. } => {
+                    self.step_begin(StepClass::Paused, None);
+                    continue;
+                }
+                TurnEffect::StartTurn { item, .. } => {
+                    self.begin_turn(item);
+                    continue;
+                }
+                _ => continue,
+            };
+            if let Some(at) = self.permissions.iter().position(|p| p.request == request) {
+                let p = self.permissions.remove(at);
+                if answered {
+                    out.answered.push(p);
+                } else {
+                    out.cancelled.push(p);
+                }
+                self.wait_end();
+            }
+        }
+        out.fx = fx;
+        out
+    }
+
+    /// A turn of ITEM began: its user entry, and a step of thinking.
+    fn begin_turn(&mut self, item: &Queued) {
+        self.last_update = now();
+        self.cmd_counts.clear();
+        self.max_repeat = 0;
+        self.open = None;
+        self.text(EntryType::User, &item.text, None);
+        if let Some(e) = self.entries.last_mut() {
+            if let Some(tag) = item.origin.tag() {
+                e.rest.insert("origin".into(), json!(tag));
+            }
+            if item.steer {
+                e.rest.insert("steer".into(), json!(true));
+            }
+            if let Some(key) = &item.key {
+                e.rest.insert("key".into(), json!(key));
+            }
+        }
+        self.open = None;
+        self.step_begin(StepClass::Think, None);
     }
 
     fn push(&mut self, kind: EntryType, rest: Map<String, Value>) -> usize {
@@ -432,11 +496,7 @@ impl State {
                     if self.cur.as_ref().and_then(|c| c.tool_id.as_deref()) == Some(id) {
                         self.step_begin(StepClass::Think, None);
                     }
-                    if self.hold {
-                        self.hold = false;
-                        self.paused = true;
-                        self.cancel_wanted = true;
-                    }
+                    self.tool_ended = true;
                 }
             }
             "plan" => {
@@ -515,7 +575,6 @@ pub struct Session {
     gateway: Mutex<Option<String>>,
     /// Its provider proxy on `proxy.sock`: dropped when its agent's process ends.
     net: Mutex<Option<super::net::SessionNet>>,
-    scheduled: AtomicBool,
     next_request: AtomicU64,
     /// The hub's running jobs: a session whose turn ends while one of its own runs waits for it.
     live: Arc<crate::exec::Live>,
@@ -1130,7 +1189,7 @@ pub(crate) async fn open_as(
     if let Some(store) = &s.store {
         store.save_meta(&s.id, &json!({"about": s.about, "document": s.document}));
     }
-    lock(&s.state).status = SessionStatus::Idle;
+    lock(&s.state).core.ready(false);
     hub.insert(s.clone());
     tokio::spawn(s.clone().run(rx, done));
     if let Some(db) = hub.db() {
@@ -1383,7 +1442,6 @@ fn assemble(
         budgets: front.core.budgets.clone(),
         gateway: Mutex::new(l.gateway.clone()),
         net: Mutex::new(l.net),
-        scheduled: AtomicBool::new(false),
         next_request: AtomicU64::new(1),
         live: front.core.exec.live(),
         wait_refusals: AtomicU32::new(0),
@@ -1645,7 +1703,10 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
             (None, Some(h)) => format!("{RESTART_NOTICE}\n\n{h}"),
             (None, None) => RESTART_NOTICE.to_string(),
         };
-        lock(&s.state).queue.push(told, Origin::Hub, false);
+        lock(&s.state)
+            .core
+            .queue_mut()
+            .push(told, Origin::Hub, false);
         if let Some(db) = hub.db() {
             insert_row(db, &s).await;
         }
@@ -1656,18 +1717,15 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
         let mut st = lock(&s.state);
         st.flushed = entries.len();
         st.entries = entries;
-        st.queue = queue;
-        st.paused = paused;
+        st.core.restore(queue, paused);
     }
     // a job it started still runs (re-attached before the sessions): it waits for it as before the restart
     let waiting = s.has_jobs();
     {
         let mut st = lock(&s.state);
+        st.core.ready(waiting);
         if waiting {
-            st.status = SessionStatus::Waiting;
             st.step_begin(StepClass::JobWait, None);
-        } else {
-            st.status = SessionStatus::Idle;
         }
     }
     hub.insert(s.clone());
@@ -2092,7 +2150,7 @@ impl Session {
         let Some(store) = &self.store else { return };
         let (q, paused) = {
             let st = lock(&self.state);
-            (st.queue.clone(), st.paused)
+            (st.core.queue().clone(), st.core.paused())
         };
         if let Err(e) = store.save_queue(&self.id, &q, paused) {
             tracing::warn!(sid = self.id, "queue not kept: {e}");
@@ -2100,15 +2158,40 @@ impl Session {
     }
 
     fn schedule(self: &Arc<Self>) {
-        if self.scheduled.swap(true, Ordering::AcqRel) {
+        let fx = lock(&self.state).core.step(TurnEvent::Changed);
+        if !fx.contains(&TurnEffect::ArmEmit) {
             return;
         }
         let me = self.clone();
         crate::clock::spawn("session:emit", async move {
             crate::clock::sleep(EMIT_EVERY).await;
-            me.scheduled.store(false, Ordering::Release);
-            me.emit();
+            let fx = lock(&me.state).core.step(TurnEvent::EmitTick);
+            if fx.contains(&TurnEffect::Emit) {
+                me.emit();
+            }
         });
+    }
+
+    /// What a turn core step decided, done: the requests it took answered cancelled, then each effect the shell
+    /// performs the same way wherever it comes from.  The rest (refusals, holds, the user's answers) are the
+    /// caller's.
+    fn perform(self: &Arc<Self>, s: Stepped) {
+        for p in s.cancelled {
+            reply(p.resp, None);
+        }
+        for e in s.fx {
+            match e {
+                TurnEffect::StartTurn { item, .. } => self.start_turn(item),
+                TurnEffect::CancelTurn => {
+                    let _ = self.conn.cancel(&self.acp);
+                }
+                TurnEffect::ArmStopDeadline { turn } => self.stop_deadline(turn),
+                TurnEffect::EndTurn { waiting: true, .. } => self.close_when_idle(),
+                TurnEffect::Persist => self.persist_queue(),
+                TurnEffect::Announce => self.changed(),
+                _ => {}
+            }
+        }
     }
 
     fn emit(&self) {
@@ -2142,11 +2225,11 @@ impl Session {
             cwd: Some(self.cwd.to_string_lossy().into_owned()),
             task: self.task.clone(),
             job: self.job.clone(),
-            status: Some(st.status),
+            status: Some(st.core.status()),
             via: Some(self.via),
             mode: self.mode,
-            queue: st.queue.texts(),
-            paused: st.paused.then_some(true),
+            queue: st.core.queue().texts(),
+            paused: st.core.paused().then_some(true),
             permissions: st.permissions.iter().map(|p| p.public.clone()).collect(),
             reviews: Vec::new(),
             usage: st.usage.clone(),
@@ -2165,7 +2248,7 @@ impl Session {
                 Some("machine".to_string())
             } else {
                 Some(self.live.ids(&self.id).join(","))
-                    .filter(|j| st.status == SessionStatus::Waiting && !j.is_empty())
+                    .filter(|j| st.core.status() == SessionStatus::Waiting && !j.is_empty())
             },
         }
     }
@@ -2241,22 +2324,27 @@ impl Session {
                             );
                             self.budgets.notify(hits);
                         }
-                        let cancel = {
+                        let stepped = {
                             let mut st = lock(&self.state);
                             st.apply(&v);
-                            std::mem::take(&mut st.cancel_wanted)
+                            std::mem::take(&mut st.tool_ended)
+                                .then(|| st.turn_step(TurnEvent::ToolCompleted))
                         };
                         self.drain_steps();
-                        if cancel {
+                        if let Some(s) = stepped {
                             // the pause after a tool call: the turn ends here, the queue waits
-                            let _ = self.conn.cancel(&self.acp);
-                            self.persist_queue();
+                            self.perform(s);
                         }
                         self.schedule();
                     }
                 }
                 Event::Request(Incoming::Permission(req, resp)) => {
-                    self.permission_request(serde_json::to_value(&req).unwrap_or_default(), resp);
+                    let turn = lock(&self.state).core.turn();
+                    self.permission_request(
+                        serde_json::to_value(&req).unwrap_or_default(),
+                        resp,
+                        turn,
+                    );
                 }
                 Event::Request(Incoming::ReadFile(req, resp)) => {
                     let v = serde_json::to_value(&req).unwrap_or_default();
@@ -2309,20 +2397,21 @@ impl Session {
                         self.schedule();
                         return;
                     }
-                    {
+                    let stepped = {
                         let mut st = lock(&self.state);
-                        st.status = runstav::methods::agents::SessionStatus::Exited;
                         st.exit =
                             Some(code.map_or_else(
                                 || signal.map_or(-1, |s| 128 + i64::from(s)),
                                 i64::from,
                             ));
                         st.stderr = Some(stderr).filter(|s| !s.is_empty());
-                        st.permissions.clear();
                         st.stash = None;
+                        let stepped = st.turn_step(TurnEvent::Exited);
                         st.step_close(now(), None);
                         st.seq += 1;
-                    }
+                        stepped
+                    };
+                    self.perform(stepped);
                     self.drain_steps();
                     self.flush_transcript();
                     self.schedule();
@@ -2331,10 +2420,12 @@ impl Session {
         }
     }
 
+    /// The agent's permission request, received during TURN.
     fn permission_request(
         self: &Arc<Self>,
         req: Value,
         resp: hermod::Responder<RequestPermissionResponse>,
+        turn: u64,
     ) {
         let options: Vec<(String, String)> = req
             .get("options")
@@ -2385,19 +2476,23 @@ impl Session {
             match gate {
                 Gate::Never(_) => reply(resp, pick_reject(&options)),
                 Gate::Allow if pick_allow(&options).is_some() => reply(resp, pick_allow(&options)),
-                Gate::Ask(card) if card > 0 => s.hold_permission(&req, options, resp, Some(card)),
-                _ => s.hold_permission(&req, options, resp, None),
+                Gate::Ask(card) if card > 0 => {
+                    s.hold_permission(&req, options, resp, Some(card), turn)
+                }
+                _ => s.hold_permission(&req, options, resp, None, turn),
             }
         });
     }
 
-    /// A request the user answers: it waits in the snapshot, under CARD's id when the matrix asked through one.
+    /// A request the user answers: it waits in the snapshot, under CARD's id when the matrix asked through one.  When
+    /// TURN, the turn it came in, was cancelled or is over by now, nobody would answer it: it is answered cancelled.
     fn hold_permission(
         self: &Arc<Self>,
         req: &Value,
         options: Vec<(String, String)>,
         resp: hermod::Responder<RequestPermissionResponse>,
         card: Option<i64>,
+        turn: u64,
     ) {
         let tool = req.get("toolCall").cloned();
         let request = self.next_request.fetch_add(1, Ordering::Relaxed);
@@ -2418,15 +2513,22 @@ impl Session {
                 .cloned()
                 .unwrap_or_default(),
         };
+        let pending = Pending {
+            request,
+            card,
+            public,
+            options,
+            resp,
+        };
         {
             let mut st = lock(&self.state);
-            st.permissions.push(Pending {
-                request,
-                card,
-                public,
-                options,
-                resp,
-            });
+            let fx = st.core.step(TurnEvent::PermissionAsked { request, turn });
+            if !fx.contains(&TurnEffect::Hold { request }) {
+                drop(st);
+                reply(pending.resp, None);
+                return;
+            }
+            st.permissions.push(pending);
             st.wait_begin();
         }
         self.changed();
@@ -2467,11 +2569,14 @@ impl Session {
                 Some(c) => (c, allow),
                 None => {
                     // no card to answer (the store made none): the answer goes as it is
-                    let p = st.permissions.remove(at);
-                    st.wait_end();
+                    let request = p.request;
+                    let mut stepped = st.turn_step(TurnEvent::PermissionAnswered { request });
                     drop(st);
-                    let answer = p.option(allow, option);
-                    reply(p.resp, answer);
+                    for p in std::mem::take(&mut stepped.answered) {
+                        let answer = p.option(allow, option);
+                        reply(p.resp, answer);
+                    }
+                    self.perform(stepped);
                     self.changed();
                     return Ok(true);
                 }
@@ -2497,15 +2602,23 @@ impl Session {
     pub(crate) async fn release_card(self: &Arc<Self>, card: i64, chosen: Option<&str>) {
         let waiting: Vec<Pending> = {
             let mut st = lock(&self.state);
-            if !st.permissions.iter().any(|p| p.card == Some(card)) {
+            let mine: Vec<u64> = st
+                .permissions
+                .iter()
+                .filter(|p| p.card == Some(card))
+                .map(|p| p.request)
+                .collect();
+            if mine.is_empty() {
                 return;
             }
-            let (mine, rest) = std::mem::take(&mut st.permissions)
-                .into_iter()
-                .partition(|p| p.card == Some(card));
-            st.permissions = rest;
-            st.wait_end();
-            mine
+            let mut taken = Vec::new();
+            for request in mine {
+                taken.extend(
+                    st.turn_step(TurnEvent::PermissionAnswered { request })
+                        .answered,
+                );
+            }
+            taken
         };
         self.gate.refresh_from(&self.settings);
         let (g, at) = (self.gate.clone(), now());
@@ -2533,88 +2646,71 @@ impl Session {
                 "no such review (no write is held for review)",
             )),
             AgentOp::DeliverQueue => {
-                lock(&self.state).paused = false;
-                self.persist_queue();
-                self.next();
-                self.changed();
+                self.turn_event(TurnEvent::QueueEdited(QueueEdit::Deliver));
                 Ok(true)
             }
             AgentOp::Unqueue => {
                 let n = nth("unqueue")?;
-                let gone = lock(&self.state).queue.remove(n as usize);
-                self.queue_edited(gone.is_some(), n)
+                self.queue_edited(QueueEdit::Unqueue(n as usize), n)
             }
             AgentOp::Requeue => {
                 let n = nth("requeue")?;
                 let text = p.text.as_ref().map_or("", |t| t.as_str());
-                let done = if text.trim().is_empty() {
-                    lock(&self.state).queue.remove(n as usize).is_some()
-                } else {
-                    lock(&self.state)
-                        .queue
-                        .replace(n as usize, text.to_string())
-                };
-                self.queue_edited(done, n)
+                self.queue_edited(QueueEdit::Requeue(n as usize, text.to_string()), n)
             }
         }
     }
 
-    fn queue_edited(self: &Arc<Self>, done: bool, n: u64) -> Result<bool, Error> {
-        if !done {
+    fn queue_edited(self: &Arc<Self>, edit: QueueEdit, n: u64) -> Result<bool, Error> {
+        if self
+            .turn_event(TurnEvent::QueueEdited(edit))
+            .contains(&TurnEffect::NoSuchItem)
+        {
             return Err(invalid("n", format!("no queued message {n}")));
         }
-        self.persist_queue();
-        self.changed();
         Ok(true)
     }
 
+    /// EV through the turn core, and what it decided done ([`Session::perform`]); its effects, for the caller's own.
+    fn turn_event(self: &Arc<Self>, ev: TurnEvent) -> Vec<TurnEffect> {
+        let stepped = lock(&self.state).turn_step(ev);
+        let fx = stepped.fx.clone();
+        self.perform(stepped);
+        fx
+    }
+
     /// The running turn, if any, is the only thing Stop cancels: the permission requests it waits on are answered
-    /// cancelled, the queue is held, and an agent that has not ended the turn after STOP_ANSWER loses its process.
+    /// cancelled, the queue is held, and an agent that has not ended the turn after STOP_ANSWER loses its process.  A
+    /// second Stop of the same turn changes nothing.
     pub(crate) fn stop_turn(self: &Arc<Self>) -> bool {
-        let (turn, pending) = {
-            let mut st = lock(&self.state);
-            if st.status != SessionStatus::Busy {
-                return false;
-            }
-            st.paused = true;
-            st.hold = false;
-            let pending: Vec<Pending> = std::mem::take(&mut st.permissions);
-            st.wait_end();
-            (st.turn, pending)
-        };
-        for p in pending {
-            reply(p.resp, None);
-        }
-        let _ = self.conn.cancel(&self.acp);
-        self.persist_queue();
-        self.changed();
+        !self
+            .turn_event(TurnEvent::Stop { after_tool: false })
+            .contains(&TurnEffect::NotRunning)
+    }
+
+    /// The Stop's deadline for TURN: its process group ends if that turn still runs then.
+    fn stop_deadline(self: &Arc<Self>, turn: u64) {
         let me = self.clone();
         crate::clock::spawn("session:stop-answer", async move {
             crate::clock::sleep(STOP_ANSWER).await;
-            let same = {
-                let st = lock(&me.state);
-                st.status == SessionStatus::Busy && st.turn == turn
-            };
-            if same {
+            let fx = lock(&me.state).core.step(TurnEvent::Kill {
+                why: KillWhy::StopDue { turn },
+            });
+            if fx.contains(&TurnEffect::KillProcess) {
                 draugr::kill_group(me.conn.pid(), STOP_GRACE, &draugr::RealSignaller).await;
             }
         });
-        true
     }
 
     /// Pause: cancel once the tool call running now completes and hold the queue; with no turn running, hold the
     /// queue.
     pub(crate) fn pause_after_tool(self: &Arc<Self>) -> Result<(), Error> {
+        if self
+            .turn_event(TurnEvent::Stop { after_tool: true })
+            .contains(&TurnEffect::Exited)
         {
-            let mut st = lock(&self.state);
-            match st.status {
-                SessionStatus::Exited => return Err(invalid("id", "the session has exited")),
-                SessionStatus::Busy => st.hold = true,
-                _ => st.paused = true,
-            }
+            return Err(invalid("id", "the session has exited"));
         }
-        self.persist_queue();
-        self.changed();
         Ok(())
     }
 
@@ -2626,7 +2722,7 @@ impl Session {
             task: self.task.clone(),
             role: self.role,
             cwd: self.cwd.clone(),
-            status: st.status,
+            status: st.core.status(),
             last_update: st.last_update,
             busy_elsewhere: !st.permissions.is_empty()
                 || st.cur.as_ref().map(|c| c.class) == Some(StepClass::MachineQueue),
@@ -2645,7 +2741,7 @@ impl Session {
     pub(crate) fn mark_stalled(self: &Arc<Self>) {
         {
             let mut st = lock(&self.state);
-            if st.status != SessionStatus::Busy
+            if st.core.status() != SessionStatus::Busy
                 || st.cur.as_ref().map(|c| c.class) == Some(StepClass::Stalled)
             {
                 return;
@@ -2656,7 +2752,7 @@ impl Session {
     }
 
     pub(crate) fn status(&self) -> SessionStatus {
-        lock(&self.state).status
+        lock(&self.state).core.status()
     }
 
     /// The job this session works for.
@@ -2677,11 +2773,7 @@ impl Session {
     /// Free for a delivery: idle, not held by a Stop, nothing waiting (`drgnx-agents-free-p`).  A delivery is a new
     /// turn, never an interruption.
     pub(crate) fn is_free(&self) -> bool {
-        let st = lock(&self.state);
-        st.status == SessionStatus::Idle
-            && !st.paused
-            && st.queue.is_empty()
-            && !self.closed.load(Ordering::SeqCst)
+        lock(&self.state).core.is_free() && !self.closed.load(Ordering::SeqCst)
     }
 
     /// Does the prompt the hub keyed KEY (`message:ID`, `wake:JOB`) wait in the queue or stand in the transcript?  (A
@@ -2689,7 +2781,7 @@ impl Session {
     /// the prompt, so a peer's message that quotes a header never matches.
     pub(crate) fn holds_key(&self, key: &str) -> bool {
         let st = lock(&self.state);
-        st.queue.has_key(key)
+        st.core.queue().has_key(key)
             || st.entries.iter().any(|e| {
                 e.kind == EntryType::User && e.rest.get("key").and_then(Value::as_str) == Some(key)
             })
@@ -2698,9 +2790,7 @@ impl Session {
     /// TEXT goes ahead of the ordinary queued prompts (the freshness gate's notice: the agent reads it at its next
     /// turn; hermod cannot inject into a running one).
     pub(crate) fn steer_in(self: &Arc<Self>, text: String) {
-        lock(&self.state).queue.push(text, Origin::Hub, true);
-        self.persist_queue();
-        self.changed();
+        self.turn_event(TurnEvent::QueueEdited(QueueEdit::SteerIn(text)));
     }
 
     /// First call for decision-log version V: true (the gate tells the agent once per version).
@@ -2740,7 +2830,7 @@ impl Session {
         {
             let mut st = lock(&self.state);
             if on {
-                if st.status == SessionStatus::Busy {
+                if st.core.status() == SessionStatus::Busy {
                     st.stash_begin(StepClass::MachineQueue);
                 }
             } else if st.cur.as_ref().map(|c| c.class) == Some(StepClass::MachineQueue) {
@@ -2758,12 +2848,12 @@ impl Session {
             return;
         }
         let me = self.clone();
-        let turn = lock(&self.state).turn;
+        let turn = lock(&self.state).core.turn();
         crate::clock::spawn("session:close-idle", async move {
             crate::clock::sleep(Duration::from_secs(after)).await;
             let still = {
                 let st = lock(&me.state);
-                st.status == SessionStatus::Waiting && st.turn == turn
+                st.core.status() == SessionStatus::Waiting && st.core.turn() == turn
             };
             if still && me.has_jobs() {
                 me.close_now().await;
@@ -2808,6 +2898,11 @@ impl Session {
 
     /// Cancel the turn and end the process group.
     pub(crate) async fn end(&self, kill: bool) {
+        // no turn starts now, and nobody answers what it asked
+        let stepped = lock(&self.state).turn_step(TurnEvent::Kill { why: KillWhy::User });
+        for p in stepped.cancelled {
+            reply(p.resp, None);
+        }
         let _ = self.conn.cancel(&self.acp);
         let grace = if kill { Duration::ZERO } else { STOP_GRACE };
         draugr::kill_group(self.conn.pid(), grace, &draugr::RealSignaller).await;
@@ -2832,7 +2927,7 @@ impl Session {
         self.prompt_with(text, origin, key, false).map(|_| ())
     }
 
-    /// [`Session::prompt`] only when the session is free ([`State::is_free`]): `false`, and nothing queued, steered or
+    /// [`Session::prompt`] only when the session is free ([`TurnCore::is_free`]): `false`, and nothing queued, steered or
     /// sent, when it is not.  Checked and taken under one lock, so a turn cannot start in between.
     pub(crate) fn prompt_if_free(
         self: &Arc<Self>,
@@ -2849,61 +2944,32 @@ impl Session {
         key: Option<String>,
         only_free: bool,
     ) -> Result<bool, Error> {
-        let idle = {
-            let mut st = lock(&self.state);
-            if st.status == SessionStatus::Exited {
-                return Err(invalid("id", "the session has exited"));
-            }
-            if only_free && !st.is_free() {
-                return Ok(false);
-            }
-            let idle = matches!(st.status, SessionStatus::Idle | SessionStatus::Waiting);
-            let steer = !idle && self.mode == Some(Mode::Steer);
-            st.queue.push_keyed(text, origin, steer, key);
-            if idle {
-                st.paused = false;
-            }
-            idle
-        };
-        self.persist_queue();
-        if idle {
-            self.next();
+        let fx = self.turn_event(TurnEvent::Send {
+            item: Queued {
+                text,
+                origin,
+                steer: false,
+                key,
+            },
+            steer_mode: self.mode == Some(Mode::Steer),
+            if_free: only_free,
+        });
+        match fx.first() {
+            Some(TurnEffect::Exited) => Err(invalid("id", "the session has exited")),
+            Some(TurnEffect::NotFree) => Ok(false),
+            _ => Ok(true),
         }
-        self.changed();
-        Ok(true)
     }
 
     /// Start the next queued prompt when the session is idle and the queue is not held.
     fn next(self: &Arc<Self>) {
-        let item = {
-            let mut st = lock(&self.state);
-            if !matches!(st.status, SessionStatus::Idle | SessionStatus::Waiting) || st.paused {
-                return;
-            }
-            let Some(item) = st.queue.pop() else { return };
-            self.wait_refusals.store(0, Ordering::Relaxed);
-            st.status = SessionStatus::Busy;
-            st.turn += 1;
-            st.last_update = now();
-            st.cmd_counts.clear();
-            st.max_repeat = 0;
-            st.open = None;
-            st.text(EntryType::User, &item.text, None);
-            if let Some(e) = st.entries.last_mut() {
-                if let Some(tag) = item.origin.tag() {
-                    e.rest.insert("origin".into(), json!(tag));
-                }
-                if item.steer {
-                    e.rest.insert("steer".into(), json!(true));
-                }
-                if let Some(key) = &item.key {
-                    e.rest.insert("key".into(), json!(key));
-                }
-            }
-            st.open = None;
-            st.step_begin(StepClass::Think, None);
-            item
-        };
+        let fx = lock(&self.state).turn_step_next();
+        self.perform(fx);
+    }
+
+    /// Turn ITEM began (its entry and step are in the state): its prompt goes to the agent.
+    fn start_turn(self: &Arc<Self>, item: Queued) {
+        self.wait_refusals.store(0, Ordering::Relaxed);
         self.persist_queue();
         self.flush_transcript();
         self.changed();
@@ -2922,16 +2988,11 @@ impl Session {
 
     fn finish_turn(self: &Arc<Self>, end: TurnEnd) {
         let out = end.0;
-        let mut waiting = false;
         let mut message: Option<String> = None;
-        {
+        let jobs = self.has_jobs();
+        let stepped = {
             let mut st = lock(&self.state);
             st.open = None;
-            // a pause asked for during the turn (a budget limit) holds the queue though no tool call ended it
-            if st.hold && !st.ending {
-                st.paused = true;
-            }
-            st.hold = false;
             let mut rest = Map::new();
             let mut used = TurnUse::default();
             // the turn's last message: an agent without drgnx's tools ends with a `drgnx-report` block in it
@@ -2949,50 +3010,35 @@ impl Session {
                     _ => {}
                 }
             }
-            match &out {
+            let ev = match &out {
                 Ok(o) => {
                     rest.insert("stop".into(), json!(format!("{:?}", o.stop)));
                     st.push(EntryType::Stop, rest);
-                    if serde_json::to_value(o.stop).ok() == Some(json!("cancelled")) && !st.ending {
-                        st.paused = true;
-                    }
                     used = turn_use(o);
                     let tokens = (used.tokens_in + used.tokens_out) as f64;
                     st.tokens += tokens as u64;
                     self.spend(vec![(Unit::Tokens, tokens)]);
+                    TurnEvent::PromptDone {
+                        cancelled: serde_json::to_value(o.stop).ok() == Some(json!("cancelled")),
+                        jobs,
+                    }
                 }
-                Err(hermod::Error::Closed) => {}
+                Err(hermod::Error::Closed) => TurnEvent::PromptFailed { closed: true, jobs },
                 Err(e) => {
                     rest.insert("text".into(), json!(e.to_string()));
                     // the editor tells this error, which ends the turn, from one inside a turn (a refused wait)
                     rest.insert("stop".into(), json!("Error"));
                     st.push(EntryType::Error, rest);
-                    st.paused = !st.ending;
+                    TurnEvent::PromptFailed {
+                        closed: false,
+                        jobs,
+                    }
                 }
-            }
+            };
             st.stash = None;
             st.step_close(now(), Some(used));
-            if st.status == SessionStatus::Busy {
-                if !self.has_jobs() {
-                    st.status = SessionStatus::Idle;
-                    if st.paused {
-                        st.step_begin(StepClass::Paused, None);
-                    }
-                } else {
-                    // no model request until the wake: the step is the wait
-                    st.status = SessionStatus::Waiting;
-                    st.step_begin(StepClass::JobWait, None);
-                    waiting = true;
-                }
-            }
-            // a job's result is for the model even after a Stop or the refused waits
-            if st.queue.has_hub() {
-                st.paused = false;
-            }
-        }
-        if waiting {
-            self.close_when_idle();
-        }
+            st.turn_step(ev)
+        };
         if let Some(m) = message.filter(|m| m.contains("drgnx-report") && self.task.is_some()) {
             let (w, sid, task, job) = (
                 self.writer.clone(),
@@ -3014,21 +3060,26 @@ impl Session {
                 }
             });
         }
-        if lock(&self.state).ending {
+        if lock(&self.state).core.ending() {
+            self.perform(stepped);
             self.drain_steps();
             self.flush_transcript();
             return;
         }
-        self.persist_queue();
+        // the transcript, then the queue kept, the event pair, and the next prompt
         self.flush_transcript();
-        self.changed();
-        self.next();
+        self.perform(stepped);
     }
 
     /// The hub ends: the transcript written, the agent's process group ended, the queue left as it is on disk for
     /// the next start.
     pub(crate) async fn shutdown(&self) {
-        lock(&self.state).ending = true;
+        let stepped = lock(&self.state).turn_step(TurnEvent::Kill {
+            why: KillWhy::HubEnding,
+        });
+        for p in stepped.cancelled {
+            reply(p.resp, None);
+        }
         self.flush_transcript();
         draugr::kill_group(
             self.conn.pid(),
@@ -3774,34 +3825,32 @@ mod tests {
     #[test]
     fn a_hold_cancels_when_the_tool_call_completes_and_holds_the_queue() {
         let mut st = State::new();
-        st.hold = true;
+        st.core.ready(false);
+        st.turn_step(TurnEvent::Send {
+            item: Queued {
+                text: "go".into(),
+                origin: Origin::User,
+                steer: false,
+                key: None,
+            },
+            steer_mode: false,
+            if_free: false,
+        });
+        st.turn_step(TurnEvent::Stop { after_tool: true });
         st.apply(&upd(
             json!({"sessionUpdate": "tool_call", "toolCallId": "t1",
             "title": "Run", "kind": "execute", "status": "in_progress"}),
         ));
-        assert!(!st.cancel_wanted && st.hold);
+        assert!(!st.tool_ended && !st.core.paused());
         st.apply(&upd(
             json!({"sessionUpdate": "tool_call_update", "toolCallId": "t1",
             "status": "completed"}),
         ));
-        assert!(st.cancel_wanted && st.paused && !st.hold);
-    }
-
-    #[test]
-    fn only_an_idle_unpaused_session_with_nothing_queued_is_free() {
-        let mut st = State::new();
-        st.status = SessionStatus::Idle;
-        assert!(st.is_free());
-        st.status = SessionStatus::Busy;
-        assert!(!st.is_free(), "a turn runs");
-        st.status = SessionStatus::Waiting;
-        assert!(!st.is_free(), "a job's result is awaited");
-        st.status = SessionStatus::Idle;
-        st.paused = true;
-        assert!(!st.is_free(), "a Stop holds it");
-        st.paused = false;
-        st.queue.push("waiting".into(), Origin::User, false);
-        assert!(!st.is_free(), "a message is queued");
+        assert!(std::mem::take(&mut st.tool_ended));
+        let s = st.turn_step(TurnEvent::ToolCompleted);
+        assert!(s.fx.contains(&TurnEffect::CancelTurn) && st.core.paused());
+        let again = st.turn_step(TurnEvent::ToolCompleted);
+        assert!(again.fx.is_empty(), "the hold cancels once");
     }
 
     #[test]
@@ -3828,7 +3877,7 @@ mod tests {
         assert!(st.entries.is_empty());
         assert_eq!(st.commands.len(), 1);
         assert_eq!(st.usage.as_ref().unwrap().used, Some(10.0));
-        assert_eq!(st.status, SessionStatus::Starting);
+        assert_eq!(st.core.status(), SessionStatus::Starting);
     }
 
     #[test]
