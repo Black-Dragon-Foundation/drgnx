@@ -96,7 +96,6 @@
  "test/unit/doctor-test.el"
  "test/unit/doctor-wm-test.el"
  "test/unit/exec-test.el"
- "test/unit/hub-client-test.el"
  "test/unit/install-config-test.el"
  "test/unit/install-test.el"
  "test/unit/isolated/modal-ai-isolated.el"
