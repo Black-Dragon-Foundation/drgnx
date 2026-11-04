@@ -50,16 +50,15 @@
 (ert-deftest drgnx-perf-modal/session-sees-the-elpa ()
   (should (member "DRGNX_MODAL_ELPA" drgnx-ui-keep-env)))
 
-(ert-deftest drgnx-perf-modal/only-filters-workloads-by-name ()
+;; One workload filter: DRGNX_PERF_WORKLOADS.  The old regexp filter is gone, and must not silently pass for a run of all.
+(ert-deftest drgnx-perf-modal/one-workload-filter-by-name ()
   (let ((ws '((typing) (typing-evil) (explorer) (explorer-evil))))
-    (drgnx-perf-modal-test--env "DRGNX_PERF_ONLY" nil
-      (should (= (length (drgnx-perf-run--only ws)) 4)))
-    (drgnx-perf-modal-test--env "DRGNX_PERF_ONLY" ""
-      (should (= (length (drgnx-perf-run--only ws)) 4)))
-    (drgnx-perf-modal-test--env "DRGNX_PERF_ONLY" "-evil\\'"
-      (should (equal (mapcar #'car (drgnx-perf-run--only ws)) '(typing-evil explorer-evil))))
-    (drgnx-perf-modal-test--env "DRGNX_PERF_ONLY" "\\`typing\\'"
-      (should (equal (mapcar #'car (drgnx-perf-run--only ws)) '(typing))))))
+    (drgnx-perf-modal-test--env "DRGNX_PERF_WORKLOADS" "typing-evil explorer-evil"
+      (should (equal (mapcar #'car (drgnx-perf-run--select ws)) '(typing-evil explorer-evil))))
+    (drgnx-perf-modal-test--env "DRGNX_PERF_WORKLOADS" "nonesuch"
+      (should-error (drgnx-perf-run--select ws)))
+    (should-not (fboundp 'drgnx-perf-run--only))
+    (should-not (fboundp 'drgnx-perf-run--only-regexp))))
 
 ;; A fake run: WORKLOADS (stubbed) measured in a fake session, judged against BUDGETS; OUT the printed text, CODE the exit code.
 (defmacro drgnx-perf-modal-test--run (env workloads budgets &rest body)
@@ -83,7 +82,7 @@
        (delete-directory dir t))))
 
 (ert-deftest drgnx-perf-modal/a-filtered-run-judges-only-what-ran-and-keeps-no-history ()
-  (drgnx-perf-modal-test--run '("DRGNX_PERF_ONLY=\\`frames\\'" "DRGNX_MODAL_ELPA=/x")
+  (drgnx-perf-modal-test--run '("DRGNX_PERF_WORKLOADS=frames" "DRGNX_MODAL_ELPA=/x")
       '((frames :measure "m") (memory :measure "m"))
       '((frames (:frame :p95) 500) (memory (:rss_kb) 409600))
     (should (eql code 0))
@@ -93,14 +92,14 @@
 
 (ert-deftest drgnx-perf-modal/an-unfiltered-run-reports-a-budget-whose-workload-did-not-run ()
   ;; a renamed or misspelled workload must not make its budget vanish
-  (drgnx-perf-modal-test--run '("DRGNX_PERF_ONLY" "DRGNX_MODAL_ELPA=/x")
+  (drgnx-perf-modal-test--run '("DRGNX_PERF_WORKLOADS" "DRGNX_MODAL_ELPA=/x")
       '((frames :measure "m"))
       '((frames (:frame :p95) 500) (scrolling (:rows) 0))
     (should (eql code 1))
     (should (string-search "scrolling: not measured" out))))
 
 (ert-deftest drgnx-perf-modal/without-the-elpa-the-evil-budgets-are-left-out-and-the-skip-is-said ()
-  (drgnx-perf-modal-test--run '("DRGNX_PERF_ONLY" "DRGNX_MODAL_ELPA")
+  (drgnx-perf-modal-test--run '("DRGNX_PERF_WORKLOADS" "DRGNX_MODAL_ELPA")
       '((frames :measure "m"))
       '((frames (:frame :p95) 500) (typing-evil (:input :p95) 16) (explorer-evil (:input :p95) 8))
     (should (eql code 0))
@@ -108,28 +107,12 @@
     (should-not (string-search "not measured" out))))
 
 (ert-deftest drgnx-perf-modal/with-the-elpa-a-missing-evil-budget-is-reported ()
-  (drgnx-perf-modal-test--run '("DRGNX_PERF_ONLY" "DRGNX_MODAL_ELPA=/x")
+  (drgnx-perf-modal-test--run '("DRGNX_PERF_WORKLOADS" "DRGNX_MODAL_ELPA=/x")
       '((frames :measure "m"))
       '((frames (:frame :p95) 500) (typing-evil (:rows) 0))
     (should (eql code 1))
     (should (string-search "typing-evil: not measured" out))
     (should-not (string-search drgnx-perf-run-modal-skipped out))))
-
-(ert-deftest drgnx-perf-modal/a-filter-matching-nothing-exits-1-before-a-session ()
-  (let ((started nil))
-    (cl-letf (((symbol-function 'drgnx-ui-start) (lambda (&rest _) (setq started t) '(:name "fake")))
-              ((symbol-function 'drgnx-perf-run--workloads) (lambda () '((frames :measure "m")))))
-      (drgnx-perf-modal-test--env "DRGNX_PERF_ONLY" "nonesuch"
-        (let* (code (out (with-output-to-string (setq code (drgnx-perf-run)))))
-          (should (eql code 1))
-          (should (string-search "matches no workload" out))
-          (should-not started))))))
-
-(ert-deftest drgnx-perf-modal/an-invalid-filter-regexp-is-a-clear-error ()
-  (drgnx-perf-modal-test--env "DRGNX_PERF_ONLY" "\\(typing"
-    (let ((err (should-error (drgnx-perf-run--only '((typing))))))
-      (should (string-search "DRGNX_PERF_ONLY" (error-message-string err)))
-      (should (string-search "not a valid regexp" (error-message-string err))))))
 
 (ert-deftest drgnx-perf-modal/the-relative-rule-says-when-it-could-not-run ()
   (should (string-search "typing" (drgnx-perf-run--relative-note '((typing-evil :input (:p95 3.0))))))

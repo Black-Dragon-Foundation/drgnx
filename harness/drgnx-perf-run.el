@@ -929,31 +929,17 @@ under :compose (the compose probe)."
   "A line saying the 1 ms rule was not judged, when `typing-evil' was measured without `typing' in RESULTS; else nil."
   (when (and (numberp (drgnx-perf--get results 'typing-evil '(:input :p95)))
              (not (numberp (drgnx-perf--get results 'typing '(:input :p95)))))
-    "perf: typing-evil's 1 ms rule not judged: typing was not measured in this run (add it to DRGNX_PERF_ONLY)"))
-
-(defun drgnx-perf-run--only-regexp ()
-  "The regexp $DRGNX_PERF_ONLY (workload names to run), or nil when it is unset or empty.  An invalid one is an error."
-  (let ((re (getenv "DRGNX_PERF_ONLY")))
-    (when (and re (not (string-empty-p re)))
-      (condition-case nil (string-match-p re "")
-        (invalid-regexp (error "perf: DRGNX_PERF_ONLY %S is not a valid regexp (an Emacs regexp: \\| for alternation)" re)))
-      re)))
+    "perf: typing-evil's 1 ms rule not judged: typing was not measured in this run (add it to DRGNX_PERF_WORKLOADS)"))
 
 (defun drgnx-perf-run--budgets-judged (results)
-  "The budgets to judge RESULTS against: all of them, but with $DRGNX_PERF_ONLY set those of workloads that did
-not run, and without $DRGNX_MODAL_ELPA those of the evil workloads.  Any other budget of a missing workload stays,
-so the verdict says \"not measured\" (a renamed or misspelled workload is not lost)."
-  (let ((only (drgnx-perf-run--only-regexp)) (no-evil (not (drgnx-perf-run--modal-elpa))))
+  "The budgets to judge RESULTS against: all of them, but without $DRGNX_MODAL_ELPA those of the evil workloads
+that did not run.  Any other budget of a missing workload stays, so the verdict says \"not measured\" (a renamed
+or misspelled workload is not lost); a run limited by $DRGNX_PERF_WORKLOADS drops them where it judges."
+  (let ((no-evil (not (drgnx-perf-run--modal-elpa))))
     (seq-remove (lambda (b)
                   (and (not (assq (car b) results))
-                       (or only (and no-evil (memq (car b) '(typing-evil motions-evil explorer-evil))))))
+                       no-evil (memq (car b) '(typing-evil motions-evil explorer-evil))))
                 (drgnx-perf-run--budgets))))
-
-(defun drgnx-perf-run--only (workloads)
-  "WORKLOADS whose name matches $DRGNX_PERF_ONLY (all of them when it is unset)."
-  (if-let* ((re (drgnx-perf-run--only-regexp)))
-      (seq-filter (lambda (w) (string-match-p re (symbol-name (car w)))) workloads)
-    workloads))
 
 (defun drgnx-perf-run--daemon-env (tmp)
   "The environment of a measured daemon: the harness's allowlist (never tokens, never a trace or safe
@@ -1167,9 +1153,7 @@ docs/develop/perf.md).  AUDIT (`--audit'): the hook audit on — judged on the h
 its own cost to the other numbers)."
   (unless (drgnx-perf-run--modal-elpa) (princ (concat drgnx-perf-run-modal-skipped "\n")))
   (unless (drgnx-perf-run--childframe-elpa) (princ (concat drgnx-perf-run-childframe-skipped "\n")))
-  (if (null (drgnx-perf-run--only (drgnx-perf-run--workloads)))
-      (progn (princ (format "perf: DRGNX_PERF_ONLY %S matches no workload\n" (drgnx-perf-run--only-regexp))) 1)
-    (drgnx-perf-run--judged audit)))
+  (drgnx-perf-run--judged audit))
 
 (defun drgnx-perf-run--judged (audit)
   "The run of `drgnx-perf-run'."
@@ -1180,7 +1164,7 @@ its own cost to the other numbers)."
     (unwind-protect
         (progn
           (drgnx-perf-run--check-gc sess)
-          (dolist (w (drgnx-perf-run--only selected))
+          (dolist (w selected)
             (if-let* ((why (and (drgnx-env-container) (cdr (assq (car w) drgnx-perf-run-container-skipped)))))
                 (princ (format "perf: %s skipped in the container — %s\n" (car w) why))
               (message "perf: %s…" (car w))
@@ -1211,7 +1195,6 @@ its own cost to the other numbers)."
             (if (or fails errors) 1 (princ "perf audit: every hook function within its budget\n") 0))))
        (t
         (let* ((history (expand-file-name "perf-history.jsonl" (drgnx-ui-state-root)))
-               (only (drgnx-perf-run--only-regexp))
                (partial (/= (length selected) (length all)))   ; DRGNX_PERF_WORKLOADS: judge those, keep no history
                (judged (let ((all (drgnx-perf-run--budgets-judged results)))
                          (if partial (seq-filter (lambda (b) (assq (car b) results)) all) all)))
@@ -1223,10 +1206,8 @@ its own cost to the other numbers)."
             (princ (format "report %s\n" l)))
           (dolist (r worse) (princ (format "regression (reported, local history): %s\n" r)))
           (when-let* ((note (drgnx-perf-run--relative-note results))) (princ (concat note "\n")))
-          (unless (or errors only partial) (drgnx-perf-history-append history (drgnx-perf-run--commit) results (seq-max (cons 0 (delq nil loads)))))
-          (princ (format "history: %s%s\n" history (cond (errors " (not written: a workload failed)")
-                                                         (only " (not written: DRGNX_PERF_ONLY ran some of the workloads)")
-                                                         (partial " (not written: only some workloads ran)")
+          (unless (or errors partial) (drgnx-perf-history-append history (drgnx-perf-run--commit) results (seq-max (cons 0 (delq nil loads)))))
+          (princ (format "history: %s%s\n" history (cond (errors " (not written: a workload failed)")                                                         (partial " (not written: only some workloads ran)")
                                                          (t ""))))
           (if (or fails errors) 1
             (princ "perf: every gated budget holds\n") 0)))))))
@@ -1800,7 +1781,7 @@ the work-tree side (the judged one) runs with VAR=JUDGED, the REF side with VAR=
     (let* ((own-tmp (unless (getenv "DRGNX_RUN_TMP") (make-temp-file "drgnx-ab" t)))
            (tmp (or (getenv "DRGNX_RUN_TMP") own-tmp)) (ref-tree (expand-file-name "ab-ref" tmp))
            (drgnx-perf-run--fixture (drgnx-perf-run--make-fixture))
-           (workloads (drgnx-perf-run--select (drgnx-perf-run--only (drgnx-perf-run--workloads))))
+           (workloads (drgnx-perf-run--select (drgnx-perf-run--workloads)))
            ;; the two sessions serve every workload: a full tier outlives a session's default 30 min cap
            (process-environment (if (getenv "DRGNX_UI_MAX_RUNTIME") process-environment
                                   (cons (format "DRGNX_UI_MAX_RUNTIME=%d" drgnx-perf-ab-session-runtime)
