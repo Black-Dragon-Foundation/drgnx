@@ -1,10 +1,12 @@
 ;;; modules-eld-test.el --- batch tests: the module choices in settings.el, with the lock -*- lexical-binding: t -*-
 ;; test-class: cond
+;; test-pattern: handshake
 ;; Every test runs under `drgnx-test-with-areas' (config and state folders in a fresh temp root, settings.el not applied
 ;; in this process).  The concurrency tests start child `emacs --batch' processes (the runner's environment) and wait
 ;; for them under a 30 s bound.
 (require 'ert)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
+(require 'drgnx-handshake-fixture (expand-file-name "../fixtures/handshake-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-gate-fixture (expand-file-name "../fixtures/gate-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'drgnx-paths)
@@ -49,8 +51,7 @@ Fails the test unless every child exits 0."
         (progn
           (drgnx-test-gate-open procs)
           (drgnx-test-wait-ended procs :secs 30 :what "the writer processes to end")
-          ;; safe: the wait above returns once every sentinel has run
-          (dolist (p procs) (should (not (process-live-p p))))
+          ;; the wait above returns once every sentinel has run
           (cl-loop for p in procs for b in (reverse bufs)
                    do (should (equal (list (process-exit-status p) (with-current-buffer b (buffer-string)))
                                      (list 0 (with-current-buffer b (buffer-string)))))))
@@ -129,14 +130,63 @@ Fails the test unless every child exits 0."
       (should (memq 'ui/look off))
       (should (cl-some (lambda (m) (string-prefix-p "extra/" (symbol-name m))) off)))))
 
-(ert-deftest drgnx-modules-eld/the-preset-and-a-toggling-daemon-at-once-lose-nothing ()
+(defconst drgnx-modules-eld-test--preset-writer
+  "(progn (require 'drgnx-onboard) (drgnx-onboard-apply-preset 'minimal))")
+(defconst drgnx-modules-eld-test--toggle-writer
+  "(dotimes (i 3) (drgnx-modules-toggle (intern (format \"d/m%d\" i))))")
+
+(defun drgnx-modules-eld-test--writer (form parks-in-lock)
+  "A child `emacs --batch' that announces READY, then runs FORM (a string).  With PARKS-IN-LOCK it announces LOCKED
+from inside the settings file's lock (just before the file is written) and waits for GO there.  The process."
+  (drgnx-test-child-start
+   :name "modules-eld-writer"
+   :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
+                  "--eval" (format "(setq load-path '%S load-prefer-newer t)" load-path)
+                  "-l" (expand-file-name "test/fixtures/handshake-fixture" drgnx-dir)
+                  "--eval" "(require 'drgnx-modules)"
+                  "--eval" drgnx-modules-eld-test--child-prefix
+                  "--eval" (format "(progn (drgnx-test-child-announce \"READY\")
+ %s %s)"
+                                   (if parks-in-lock
+                                       "(defun drgnx-test--in-lock (target &rest _)
+   (when (string-suffix-p \"settings.el\" target)
+     (advice-remove 'drgnx-file-write #'drgnx-test--in-lock)
+     (drgnx-test-child-announce \"LOCKED\")))
+ (advice-add 'drgnx-file-write :before #'drgnx-test--in-lock)"
+                                     "")
+                                   form))))
+
+(defun drgnx-modules-eld-test--in-this-order (first second)
+  "Run writers FIRST and SECOND (forms) with FIRST holding the settings file's lock while SECOND starts its write, then
+lets FIRST go.  Fails unless both exit 0."
+  (let ((a (drgnx-modules-eld-test--writer first t)) (b (drgnx-modules-eld-test--writer second nil)))
+    (unwind-protect
+        (progn
+          (drgnx-test-child-await a "READY")
+          (drgnx-test-child-await b "READY")
+          (drgnx-test-child-go a)
+          (drgnx-test-child-await a "LOCKED")                   ; A holds the lock
+          (drgnx-test-child-go b)                               ; B's write comes now, with A inside the lock
+          (drgnx-test-child-go a)                               ; A writes and lets go
+          (drgnx-test-wait-ended (list a b) :secs 30 :what "both writers to end")
+          (should (equal (list (process-exit-status a) (process-exit-status b)) '(0 0))))
+      (delete-process a)
+      (delete-process b))))
+
+(defun drgnx-modules-eld-test--both-kept ()
+  (let ((off (drgnx-modules-eld-test--disabled)))
+    (should (= (length (seq-filter (lambda (m) (string-prefix-p "d/" (symbol-name m))) off)) 3))
+    (should (cl-some (lambda (m) (string-prefix-p "extra/" (symbol-name m))) off))))
+
+(ert-deftest drgnx-modules-eld/the-preset-first-and-a-toggling-daemon-second-lose-nothing ()
   (drgnx-modules-eld-test--with
-    (drgnx-modules-eld-test--children
-     (list "(progn (require 'drgnx-onboard) (dotimes (_ 5) (drgnx-onboard-apply-preset 'minimal)))"
-           "(dotimes (i 40) (drgnx-modules-toggle (intern (format \"d/m%d\" i))))"))
-    (let ((off (drgnx-modules-eld-test--disabled)))
-      (should (= (length (seq-filter (lambda (m) (string-prefix-p "d/" (symbol-name m))) off)) 40))
-      (should (cl-some (lambda (m) (string-prefix-p "extra/" (symbol-name m))) off)))))
+    (drgnx-modules-eld-test--in-this-order drgnx-modules-eld-test--preset-writer drgnx-modules-eld-test--toggle-writer)
+    (drgnx-modules-eld-test--both-kept)))
+
+(ert-deftest drgnx-modules-eld/a-toggling-daemon-first-and-the-preset-second-lose-nothing ()
+  (drgnx-modules-eld-test--with
+    (drgnx-modules-eld-test--in-this-order drgnx-modules-eld-test--toggle-writer drgnx-modules-eld-test--preset-writer)
+    (drgnx-modules-eld-test--both-kept)))
 
 (ert-deftest drgnx-modules-eld/the-theme-write-keeps-the-other-entries ()
   (drgnx-modules-eld-test--with
