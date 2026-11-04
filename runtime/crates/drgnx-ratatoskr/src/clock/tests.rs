@@ -141,3 +141,30 @@ fn timeouts_and_intervals_follow_virtual_time() {
         assert_eq!(seen(&l), ["tick", "tick", "tick", "elapsed"]);
     });
 }
+
+#[test]
+fn a_real_wait_is_waited_for_and_one_that_lasts_is_named() {
+    on_virtual(async {
+        let l = log();
+        let (go, rx) = tokio::sync::oneshot::channel::<()>();
+        let mine = l.clone();
+        // the clock's timeout around it: the task counts as parked, but it waits on the channel
+        spawn("job:watch", async move {
+            let _ = timeout(ms(5000), real(rx)).await;
+            mine.lock().unwrap().push("after");
+        });
+        advance(Duration::ZERO).await;
+        assert_eq!(settle_real(ms(100), &[]).await, ["job:watch"]);
+        // an allowed origin is not waited for (the bound would fail the test's own), and is still named
+        let allowed = tokio::time::timeout(
+            Duration::from_secs(10),
+            settle_real(Duration::from_secs(60), &["job:watch".into()]),
+        )
+        .await;
+        assert_eq!(allowed.as_deref(), Ok(&["job:watch".to_string()][..]));
+        // the wait ends: the settle returns once the poll that left it is done
+        go.send(()).unwrap();
+        assert!(settle_real(Duration::from_secs(30), &[]).await.is_empty());
+        assert_eq!(seen(&l), ["after"]);
+    });
+}

@@ -113,7 +113,7 @@ async fn stop_ends_a_running_job() {
     assert_eq!(row.status, ExecStatus::Stopped);
     // A second stop changes nothing.
     assert_eq!(r.stop(&id).await.unwrap().status, ExecStatus::Stopped);
-    assert!(r.stop("nope").await.is_none());
+    assert!(r.stop("nope").await.is_err());
 }
 
 /// On the test clock a stop whose first look finds no end still answers once the end is recorded, with no advance:
@@ -147,6 +147,27 @@ fn a_stop_on_the_test_clock_answers_an_end_recorded_after_its_first_look() {
             .unwrap()
             .unwrap();
         assert_eq!(row.status, ExecStatus::Stopped);
+    });
+}
+
+/// On the test clock, a stop whose end never comes (the watcher's end held for good) does not wait on the clock, which
+/// stands still behind it: a real-time bound ends it, and its answer names the job.
+#[cfg(feature = "test-hooks")]
+#[test]
+fn a_stop_on_the_test_clock_whose_end_never_comes_fails_naming_the_job() {
+    crate::clock::on_virtual(async {
+        let d = tempfile::tempdir().unwrap();
+        let r = open(d.path());
+        let mut s = spec(Starter::User, d.path(), "sleep 60", Duration::from_secs(60));
+        s.user.no_timebox = true;
+        let id = r.start(s).await.unwrap();
+        let inner = r.inner.get().unwrap().clone();
+        inner.finishing.lock().unwrap().insert(id.clone());
+        let answer = tokio::time::timeout(Duration::from_secs(20), inner.clone().stop(&id))
+            .await
+            .expect("the stop answers once its real-time bound runs out");
+        let e = answer.expect_err("no end came, so no row");
+        assert!(e.message.contains(&format!("job {id}:")), "{e:?}");
     });
 }
 

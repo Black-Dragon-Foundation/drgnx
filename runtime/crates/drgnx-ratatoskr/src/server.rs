@@ -511,8 +511,16 @@ impl Stopping {
 /// Wait until every one of THREADS has stopped.  Each writes what is queued to it first, so no queued write is
 /// dropped, and the wait has no limit.  Every [`STOP_NOTE_EVERY`] a thread still stopping is logged as an error,
 /// with its queue.  A SIGTERM or SIGINT (TERM, INT) meanwhile ends the wait: what the threads still stopping hold is
-/// logged as abandoned at the user's request, and the process ends without them.
+/// logged as abandoned at the user's request, and the process ends without them.  One that came before the wait began
+/// (tokio holds it for the next look) does not.
 async fn stop_threads(mut threads: Vec<Stopping>, term: &mut Signal, int: &mut Signal) {
+    for s in [&mut *term, &mut *int] {
+        std::future::poll_fn(|cx| {
+            while let std::task::Poll::Ready(Some(())) = s.poll_recv(cx) {}
+            std::task::Poll::Ready(())
+        })
+        .await;
+    }
     loop {
         threads.retain(|t| !t.join.is_finished());
         if threads.is_empty() {
@@ -1017,5 +1025,50 @@ mod tests {
             .await
             .unwrap();
         assert!(cloexec(tcp.as_fd()), "the gateway's listener");
+    }
+
+    /// A signal tokio buffered before the wait for the store threads began (a second SIGTERM during the hub's first
+    /// steps of ending) does not abandon their queues; one that comes during the wait does.  SIGUSR2 stands in for
+    /// SIGTERM and SIGINT: this test process handles it, through tokio, from the first `signal` on.
+    #[tokio::test]
+    async fn only_a_signal_during_the_wait_abandons_the_store_threads() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let kind = SignalKind::user_defined2();
+        let (mut term, mut int, mut seen) = (
+            signal(kind).unwrap(),
+            signal(kind).unwrap(),
+            signal(kind).unwrap(),
+        );
+        // raised, and handed to every listener (SEEN's recv returns once tokio has dispatched it)
+        let raise = || {
+            // SAFETY: raise(3) of a signal this process handles from the `signal` calls above on.
+            assert_eq!(unsafe { libc::raise(libc::SIGUSR2) }, 0);
+        };
+        raise();
+        seen.recv().await;
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let done = Arc::new(AtomicBool::new(false));
+        let d = done.clone();
+        let threads = vec![Stopping::start(
+            "a test thread",
+            || 1,
+            move || {
+                let _ = released.recv();
+                d.store(true, Ordering::SeqCst);
+            },
+        )];
+        let mut wait = Box::pin(stop_threads(threads, &mut term, &mut int));
+        let ended =
+            std::future::poll_fn(|cx| std::task::Poll::Ready(wait.as_mut().poll(cx).is_ready()))
+                .await;
+        assert!(!ended, "a signal from before the wait abandoned the queue");
+        raise();
+        seen.recv().await;
+        wait.await;
+        assert!(
+            !done.load(Ordering::SeqCst),
+            "the signal during the wait abandoned it"
+        );
+        release.send(()).unwrap();
     }
 }

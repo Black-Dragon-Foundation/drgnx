@@ -271,10 +271,16 @@ its clock.")
   (cl-loop for row in rows
            unless (memq (car-safe row) allowed) collect (format "%s" (car-safe row))))
 
-(defun drgnx-lint-patterns--unnamed-ok-p (forms)
-  "Whether FORMS (top-level forms) use `drgnx-test-gate-unnamed-ok' as code: quoted data and strings are not code."
+(defconst drgnx-lint-patterns--waiting-ok-allowed
+  '("test/unit/delivery-gate-test.el")
+  "The files that may bind or set `drgnx-test-gate-waiting-ok': the gate's own test of it.  A file that keeps a hub task
+inside a real wait through a barrier on purpose is added by the owner's decision, with its origins.")
+
+(defun drgnx-lint-patterns--unnamed-ok-p (forms &optional var)
+  "Whether FORMS (top-level forms) use VAR (default `drgnx-test-gate-unnamed-ok') as code: quoted data and strings are
+not code."
   (cl-labels ((walk (f)
-                (cond ((eq f 'drgnx-test-gate-unnamed-ok) t)
+                (cond ((eq f (or var 'drgnx-test-gate-unnamed-ok)) t)
                       ((atom f) nil)
                       ((eq (car f) 'quote) nil)
                       (t (let ((hit nil))
@@ -335,6 +341,15 @@ its clock.")
           (push rel bad))))
     (should-not (nreverse bad))))
 
+(ert-deftest drgnx-lint/gate-waiting-ok-only-where-listed ()
+  (let (bad)
+    (dolist (rel (drgnx-lint-classes--files))
+      (unless (member rel drgnx-lint-patterns--waiting-ok-allowed)
+        (when (drgnx-lint-patterns--unnamed-ok-p
+               (drgnx-lint-classes--forms (expand-file-name rel drgnx-dir)) 'drgnx-test-gate-waiting-ok)
+          (push rel bad))))
+    (should-not (nreverse bad))))
+
 ;;;; The lints bite
 
 (ert-deftest drgnx-lint/gate-exempt-lints-bite ()
@@ -352,7 +367,14 @@ its clock.")
     (should (drgnx-lint-patterns--unnamed-ok-p (car (read-from-string (concat "(" bad ")"))))))
   (dolist (ok '("(f)" "(defvar x 'drgnx-test-gate-unnamed-ok)" "(message \"drgnx-test-gate-unnamed-ok\")"
                 ";; drgnx-test-gate-unnamed-ok\n(f)" "(let ((x 1)) (f x))"))
-    (should-not (drgnx-lint-patterns--unnamed-ok-p (car (read-from-string (concat "(" ok ")")))))))
+    (should-not (drgnx-lint-patterns--unnamed-ok-p (car (read-from-string (concat "(" ok ")"))))))
+  ;; the same walk fences `drgnx-test-gate-waiting-ok'
+  (let ((var 'drgnx-test-gate-waiting-ok))
+    (dolist (bad '("(let ((drgnx-test-gate-waiting-ok '(\"exec:watch\"))) (f))"
+                   "(setq drgnx-test-gate-waiting-ok '(\"exec:watch\"))"))
+      (should (drgnx-lint-patterns--unnamed-ok-p (car (read-from-string (concat "(" bad ")"))) var)))
+    (dolist (ok '("(let ((drgnx-test-gate-unnamed-ok t)) (f))" "(message \"drgnx-test-gate-waiting-ok\")"))
+      (should-not (drgnx-lint-patterns--unnamed-ok-p (car (read-from-string (concat "(" ok ")"))) var)))))
 
 (ert-deftest drgnx-lint/handshake-lint-bites ()
   (let ((rule #'drgnx-lint-patterns--rule-handshake))

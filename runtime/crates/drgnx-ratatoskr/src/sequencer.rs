@@ -1,13 +1,14 @@
 //! The sequencer (test-hooks, `serve --test-sequencer`; docs/develop/hub.md, "Test hooks").  Requests from every
 //! connection are served one at a time, in the order of the top-level `"__seq": N` the client stamped on each line.
 //! Before it serves, the sequencer reads every connection's socket to `WouldBlock`: a Unix-socket write is in the
-//! peer's queue when it returns, so a lower N the client wrote earlier has been read.  Lines without `__seq` (another
-//! process's) are served after the sequenced ones, in read order.
+//! peer's queue when it returns, so a lower N the client wrote earlier has been read.  The sockets are read one after
+//! another, so a line above a gap waits for one more full drain, begun after it was read.  Lines without `__seq`
+//! (another process's) are served after the sequenced ones, in read order.
 //!
 //! A connection's own task serves its lines (its session stays its own) when the sequencer hands them over, and its
 //! writes are serving steps.  A write from any other task (a turn, a timer) is held, keyed by (virtual ms, origin,
-//! the origin's count), and released in key order at `__test_advance` and `__test_barrier`; a write from a task
-//! without an origin is counted (`unnamed`).
+//! the task's spawn ordinal, the task's own count), and released in key order at `__test_advance` and
+//! `__test_barrier`; a write from a task without an origin is counted (`unnamed`).
 //!
 //! When the hub ends ([`Sequencer::end`]), the step being served finishes, nothing more is served, and what is still
 //! held is released in key order and written before the connections close: an end never drops a held write, and the
@@ -111,16 +112,23 @@ enum Key {
     Read(u64),
 }
 
+/// A held write's place: (virtual ms, origin, the task's spawn ordinal, the task's own count).
+type HeldKey = (u64, String, u64, u64);
+
 /// The order, without I/O: the lines read and not served, which one is next, and the held writes.
 pub(crate) struct Order<L> {
-    pending: BTreeMap<Key, (u64, L)>,
+    /// Each with its connection and the drain that read it.
+    pending: BTreeMap<Key, (u64, u64, L)>,
     reads: u64,
     /// The N after the highest served.
     next: u64,
     /// Connections whose socket held part of a line at the last read.
     partial: BTreeSet<u64>,
-    held: BTreeMap<(u64, String, u64), (u64, Arc<str>)>,
-    origin_counts: HashMap<String, u64>,
+    /// The full drain under way (or the last one begun), and the last one that ended.
+    round: u64,
+    drained: u64,
+    held: BTreeMap<HeldKey, (u64, Arc<str>)>,
+    origin_counts: HashMap<(String, u64), u64>,
     unnamed: u32,
 }
 
@@ -137,6 +145,8 @@ impl<L> Order<L> {
             reads: 0,
             next: 1,
             partial: BTreeSet::new(),
+            round: 0,
+            drained: 0,
             held: BTreeMap::new(),
             origin_counts: HashMap::new(),
             unnamed: 0,
@@ -150,7 +160,7 @@ impl<L> Order<L> {
             Some(n) => Key::Seq(n, self.reads),
             None => Key::Read(self.reads),
         };
-        self.pending.insert(key, (conn, line));
+        self.pending.insert(key, (conn, self.round, line));
     }
 
     /// Whether CONN's socket held part of a line at its last read.
@@ -170,36 +180,65 @@ impl<L> Order<L> {
     /// CONN closed: its lines are not served.
     pub(crate) fn drop_conn(&mut self, conn: u64) {
         self.partial.remove(&conn);
-        self.pending.retain(|_, (c, _)| *c != conn);
+        self.pending.retain(|_, (c, _, _)| *c != conn);
     }
 
     pub(crate) fn holds(&self, conn: u64) -> bool {
-        self.pending.values().any(|(c, _)| *c == conn)
+        self.pending.values().any(|(c, _, _)| *c == conn)
     }
 
-    /// The line to serve now, with its connection.  The lowest N is served at once when it follows the last one served;
-    /// above a gap it waits while some connection holds part of a line (the missing N may be in it), and is served
-    /// once none does (the missing N went to a connection that closed).
+    /// A read of every connection begins: the lines read until [`Order::end_drain`] are this drain's.
+    pub(crate) fn begin_drain(&mut self) {
+        self.round += 1;
+    }
+
+    pub(crate) fn end_drain(&mut self) {
+        self.drained = self.round;
+    }
+
+    /// Whether the next line waits above a gap for one more full drain only (no socket holds part of a line): the
+    /// sequencer drains again at once rather than waiting for a socket to become readable.
+    pub(crate) fn wants_drain(&self) -> bool {
+        match self.pending.first_key_value() {
+            Some((Key::Seq(n, _), (_, round, _))) => {
+                *n > self.next && self.partial.is_empty() && self.drained <= *round
+            }
+            _ => false,
+        }
+    }
+
+    /// The line to serve now, with its connection.  The lowest N is served at once when it follows the last one served.
+    /// Above a gap it waits while some connection holds part of a line (the missing N may be in it), and until a full
+    /// drain begun after it was read has ended: the connections are read one after another, so a lower N the client
+    /// wrote just before it may be in a socket this drain read earlier.  Then it is served (the missing N went to a
+    /// connection that closed).
     pub(crate) fn next(&mut self) -> Option<(u64, L)> {
-        let (&key, _) = self.pending.first_key_value()?;
+        let (&key, &(_, round, _)) = self.pending.first_key_value()?;
         if let Key::Seq(n, _) = key {
-            if n > self.next && !self.partial.is_empty() {
+            if n > self.next && (!self.partial.is_empty() || self.drained <= round) {
                 return None;
             }
             self.next = self.next.max(n + 1);
         }
-        self.pending.remove(&key)
+        self.pending.remove(&key).map(|(c, _, l)| (c, l))
     }
 
-    /// A write to CONN outside a serving step, at virtual MS, from ORIGIN (none: a task without one, counted).
-    pub(crate) fn hold(&mut self, ms: u64, origin: Option<String>, conn: u64, line: Arc<str>) {
+    /// A write to CONN outside a serving step, at virtual MS, from ORIGIN (the task's name and spawn ordinal; none: a
+    /// task without one, counted).
+    pub(crate) fn hold(
+        &mut self,
+        ms: u64,
+        origin: Option<(String, u64)>,
+        conn: u64,
+        line: Arc<str>,
+    ) {
         if origin.is_none() {
             self.unnamed += 1;
         }
-        let name = origin.unwrap_or_default();
-        let count = self.origin_counts.entry(name.clone()).or_insert(0);
+        let (name, task) = origin.unwrap_or_default();
+        let count = self.origin_counts.entry((name.clone(), task)).or_insert(0);
         *count += 1;
-        self.held.insert((ms, name, *count), (conn, line));
+        self.held.insert((ms, name, task, *count), (conn, line));
     }
 
     /// The held writes, in key order, taken.
@@ -295,7 +334,7 @@ impl Sequencer {
 
     /// A write to CONN outside a serving step: held.
     pub(crate) fn hold(&self, conn: u64, line: Arc<str>) {
-        let (ms, origin) = (clock::virtual_ms(), clock::origin_name());
+        let (ms, origin) = (clock::virtual_ms(), clock::origin());
         self.order().hold(ms, origin, conn, line);
     }
 
@@ -343,7 +382,7 @@ impl Sequencer {
                 self.drain_all().await;
                 let served = self.serve_pending().await;
                 self.finish_ended();
-                if !served {
+                if !served && !self.order().wants_drain() {
                     break;
                 }
             }
@@ -356,6 +395,7 @@ impl Sequencer {
             .iter()
             .map(|(c, h)| (*c, h.mail.clone()))
             .collect();
+        self.order().begin_drain();
         for (conn, mail) in conns {
             if lock(&self.eof).contains(&conn) {
                 continue;
@@ -386,6 +426,7 @@ impl Sequencer {
                 lock(&self.eof).insert(conn);
             }
         }
+        self.order().end_drain();
     }
 
     /// Serve what the order allows, one line at a time; whether any was.
@@ -429,8 +470,9 @@ impl Sequencer {
         }
     }
 
-    /// `__test_barrier` on CONN: every socket read and what it held served; the woken and spawned tasks settled and the
-    /// held writes released; a numbered marker on every connection; then the answer `{marker, unnamed, busy}`.
+    /// `__test_barrier` on CONN: every socket read and what it held served; the tasks inside a real wait waited for
+    /// (those its `waiting_ok` origins name excepted); the woken and spawned tasks settled and the held writes
+    /// released; a numbered marker on every connection; then the answer `{marker, unnamed, busy, waiting}`.
     async fn barrier(&self, conn: u64, line: Line) {
         let mut barriers = vec![(conn, line)];
         loop {
@@ -446,10 +488,15 @@ impl Sequencer {
                     self.serve(c, l.text).await;
                 }
             }
-            if !any {
+            if !any && !self.order().wants_drain() {
                 break;
             }
         }
+        let ok: Vec<String> = barriers
+            .iter()
+            .flat_map(|(_, l)| waiting_ok(&l.text))
+            .collect();
+        let waiting = clock::settle_real(clock::BUSY_AFTER, &ok).await;
         let settled = clock::advance(Duration::ZERO).await;
         self.release();
         let unnamed = self.order().take_unnamed() + settled.unnamed;
@@ -476,13 +523,33 @@ impl Sequencer {
             };
             let answer = serde_json::to_string(&Answer {
                 id,
-                result: json!({"marker": marker, "unnamed": unnamed, "busy": settled.busy}),
+                result: json!({
+                    "marker": marker,
+                    "unnamed": unnamed,
+                    "busy": settled.busy,
+                    "waiting": waiting
+                }),
                 ignored: vec![],
             })
             .expect("an answer serializes");
             out.push_now(format!("{answer}\n").into());
         }
     }
+}
+
+/// The origins a barrier's `params.waiting_ok` lists (TEXT: its line).
+fn waiting_ok(text: &str) -> Vec<String> {
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .and_then(|v| {
+            v.pointer("/params/waiting_ok")
+                .and_then(Value::as_array)
+                .cloned()
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|o| o.as_str().map(str::to_string))
+        .collect()
 }
 
 #[cfg(test)]

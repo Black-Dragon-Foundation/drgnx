@@ -68,7 +68,8 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   threads (runtime.db's and work.db's writer). Each writes what is queued to it first: no queued write is dropped,
   and that wait has no limit. Every 5 s while a thread is still stopping, the log names it as an error, with how many
   requests it still has queued. A second SIGTERM or SIGINT during that wait ends the hub at once, and the log says
-  which thread's queued writes were abandoned at the user's request. Then the hub exits 0. The log is tracing JSON, one object per line, in `<state>/hub/log/hub-YYYY-MM-DD.jsonl` (UTC days, 0600,
+  which thread's queued writes were abandoned at the user's request; one that came before the wait began (while the
+  hub ended its sessions or closed its connections) does not. Then the hub exits 0. The log is tracing JSON, one object per line, in `<state>/hub/log/hub-YYYY-MM-DD.jsonl` (UTC days, 0600,
   the newest 7 kept, written by tracing-appender's non-blocking worker). Warnings and errors also go to stderr, behind
   `<4>` / `<3>` when `JOURNAL_STREAM` is set (the journal under systemd). `DRGNX_RATATOSKR_LOG` takes a `Targets`
   string (`info`, the default; `warn,drgnx_ratatoskr::conn=debug`). The cap, keys and params are never logged. The
@@ -278,13 +279,16 @@ sends, counting across its connections in the order it wrote them). The stamp is
   peer's queue when it returns, so a lower N the client wrote earlier has been read by then. A connection is known to
   the sequencer before its challenge is written, so no line can come from one it does not know.
 - The lowest N is served when it follows the last N served. Above a gap it waits while some connection holds part of
-  a line, where the missing N may be. Once none does (the missing N went to a connection that read EOF or failed), it
-  is served: a lost N never stalls the others.
+  a line, where the missing N may be, and until one more full drain, begun after it was read, has ended: the sockets
+  are read one after another, so a lower N the client wrote just before it may sit in a socket read earlier in the
+  same drain. The sequencer drains again at once for that. Once neither holds (the missing N went to a connection
+  that read EOF or failed), it is served: a lost N never stalls the others.
 - Lines without `__seq` (another process's) are served after the stamped ones, in the order they were read.
 - A connection's own task serves its lines when the sequencer hands them over, so its session stays its own. Its
   writes are serving steps: its challenge, its answers and what its requests broadcast go out at once.
 - **Every other write is held:** a turn's events, a timer's, a background loop's. It is keyed by (virtual ms, the
-  task's origin from `clock::spawn`, the origin's own count) and released in key order at `__test_advance` (once the
+  task's origin from `clock::spawn`, the task's spawn ordinal, the task's own count), so two tasks of one origin (two
+  jobs' watchers) release in the order they were spawned, and released in key order at `__test_advance` (once the
   woken tasks have parked, before its answer) and at `__test_barrier`. A write from a task without an origin is held
   too, and counted.
 - `mcp/attach` works: nothing after it is read as lines until it is served.
@@ -294,15 +298,30 @@ sends, counting across its connections in the order it wrote them). The stamp is
   tick sends the update notice (held) and, with nothing busy, ends the hub. The client's delivery gate still holds the
   lines and the end behind them, so the test still decides when its client sees them. Each of these waits is bounded
   by 5 s of real time, since the virtual clock stands still; one that runs out is logged.
+- **A stop whose end never comes fails loudly.** `exec/stop` waits up to 5 s on the hub's clock for the job's end to
+  be recorded. On the virtual clock that wait could never end (the clock stands still while the stop is served, and the
+  advance that would move it is queued behind it), so it is bounded by 5 s of real time as well, and one that runs out
+  answers `internal` "job ID: its end did not come within 5 s of real time of the stop".
 
-**`__test_barrier {}`**, which the sequencer serves itself when it is the lowest pending line:
+**`__test_barrier {"waiting_ok": [origins]}`** (the list is optional), which the sequencer serves itself when it is the
+lowest pending line:
 
 1. Every connection's socket is read to `WouldBlock` or EOF, and every line read is served.
-2. The tasks spawned since then are run once (an advance of 0 ms), and the held writes are released.
-3. `{"event": "__test_marker", "data": {"marker": M}}` is written on every live connection. M counts from 1 per hub.
-4. The answer: `{"marker": M, "unnamed": n, "busy": [origins]}`. `n` counts the writes from tasks without an origin
-   since the last barrier. The gate fails a test when n > 0, since such writes are released here and not by the
-   test's own advance. `busy` names tasks still running after 5 s.
+2. The tasks inside a **real wait** are waited for, up to 5 s of real time, until each has left it and finished the
+   poll that left it; those whose origin `waiting_ok` lists are not waited for. A real wait is one the hub's code marks
+   with `clock::real`: a wait on something outside the clock that ends by itself. Marked today: a job's watcher
+   (`exec:watch`), from the child's start to its recorded end.
+3. The tasks spawned since then are run once (an advance of 0 ms), and the held writes are released.
+4. `{"event": "__test_marker", "data": {"marker": M}}` is written on every live connection. M counts from 1 per hub.
+5. The answer: `{"marker": M, "unnamed": n, "busy": [origins], "waiting": [origins]}`. `n` counts the writes from
+   tasks without an origin since the last barrier. The gate fails a test when n > 0, since such writes are released
+   here and not by the test's own advance. `busy` names tasks still running after 5 s. `waiting` names the tasks
+   still inside a real wait: the allowed ones, and those still inside after the 5 s. The gate fails a test on any its
+   `drgnx-test-gate-waiting-ok` does not list, since what they write later is not ordered by the test.
+
+A real wait the code does not mark is not seen: a clock task waiting on a store thread's answer, on bifrost's events
+channel (`gateway:events`), or on a channel another task fills after its own real wait. A barrier there answers as if
+the task were parked.
 
 A hub without the sequencer refuses `__test_barrier` (`not-allowed`). A release build has none of these: `__test_advance`
 and `__test_barrier` are unknown methods (`no-method`), `__seq` is dropped and listed in the answer's `ignored`, and

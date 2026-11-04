@@ -1163,6 +1163,9 @@ peer and stay; the others say "not converted". The audit holds every other test 
 file, and `drgnx-lint/gate-exempt-only-shrinks` holds the rows to a constant in `lint-test-patterns-test.el` that
 only loses entries. `drgnx-test-gate-unnamed-ok` is a stopgap until the hub's agent-session tasks run on its clock:
 `drgnx-lint/gate-unnamed-ok-only-where-listed` lets only the two agents-mirror test files bind or set it.
+`drgnx-test-gate-waiting-ok` (origins a barrier may find inside a real wait) is fenced the same way by
+`drgnx-lint/gate-waiting-ok-only-where-listed`: only the gate's own test binds it; a file that keeps a job running
+through a barrier on purpose is added by the owner's decision.
 
 **The rules.** `test/unit/lint-test-patterns-test.el` reads the files that name a pattern (it never loads them) with
 the class lints' reader: test-defining macros are expanded and the file's own helpers are followed; a fixture macro
@@ -1274,7 +1277,10 @@ the client half of the `gated` pattern; the hub half is Ratatoskr's test clock a
   writes on each open connection, so everything the hub wrote by then is held; then it releases the remaining steps
   (pauses skipped) and every held line in connection open order, and repeats while the client sent more. It returns
   the marker, or nil once no hub answers (a test that stopped the hub). A barrier answer with `unnamed` > 0 (the hub
-  wrote from a task without an origin) or a step that cannot be met fails the test. Assertions come after it (the
+  wrote from a task without an origin), one whose `waiting` names an origin `drgnx-test-gate-waiting-ok` does not
+  list (a hub task, a job's watcher, still inside a real wait after the barrier waited 5 s for it:
+  docs/develop/hub.md, "The sequencer and the barrier"), or a step that cannot be met fails the test.
+  Assertions come after it (the
   lint `drgnx-lint/gated-asserts-follow-deliver-all`). `(drgnx-test-hub-advance MS)` moves the hub's clock
   (`__test_advance`), then delivers all; `(drgnx-test-hub-advance MS t)` only moves it, for a test that lets the hub
   end first (restart-when-idle: what the hub held is written before its connections close, and the gate holds it). A
