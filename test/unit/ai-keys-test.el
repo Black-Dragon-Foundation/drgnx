@@ -4,6 +4,7 @@
 ;; the one `gateway/keys'.  Keys in the environment are the user's and stay.  `ratatoskr-mock llm' is the provider.
 ;; Without the binary (or the mock beside it) these skip; test/no-skip.eld lists them.
 ;; test-class: cond
+;; test-pattern: gated
 (require 'ert)
 (require 'cl-lib)
 (require 'auth-source)
@@ -45,12 +46,17 @@ not in `drgnx-ai--keys', not in auth-source's netrc cache, no entry at all in `p
       (advice-add 'drgnx-hub--send-line :before #'drgnx-ai-keys-test--record)
       (unwind-protect
           (progn
-            (should (memq 'openrouter (drgnx-ai-load-keys)))      ; the edit and agent roles name OpenRouter
-            ;; found and on its way: until the hub answers, it waits here
-            (should (equal (gethash 'openrouter drgnx-ai--keys) canary))
-            (should (drgnx-ai-keys-test--auth-source-cached-p))
-            (drgnx-test-wait (lambda () (zerop (hash-table-count drgnx-ai--keys))) :secs 20 :what "the hub took the key")
-            (drgnx-test-wait (lambda () (member "openrouter" (drgnx-hub-keys-held))) :secs 20 :what "keys-changed")
+            ;; found and on its way: the gate holds the hub's answer, so until it is delivered the key waits here
+            (let* ((loaded (drgnx-ai-load-keys))                  ; the edit and agent roles name OpenRouter
+                   (waiting (gethash 'openrouter drgnx-ai--keys))
+                   (cached (drgnx-ai-keys-test--auth-source-cached-p)))
+              (drgnx-test-deliver-all)
+              (drgnx-test-wait #'drgnx-hub-settled-p :what "the hub's answers")
+              (should (memq 'openrouter loaded))
+              (should (equal waiting canary))
+              (should cached))
+            (should (zerop (hash-table-count drgnx-ai--keys)))    ; the hub took the key
+            (should (member "openrouter" (drgnx-hub-keys-held)))  ; keys-changed
             ;; nowhere in this Emacs: its key table, auth-source's cache (a later hand-over reads a quiet store again,
             ;; keeping nothing: review M3)
             (should-not (drgnx-ai-keys-test--auth-source-cached-p))
@@ -87,8 +93,11 @@ not in `drgnx-ai--keys', not in auth-source's netrc cache, no entry at all in `p
   (drgnx-ai-gateway-test--with nil
     (let* ((process-environment (cons "OPENROUTER_API_KEY=sk-env-canary-23c" process-environment))
            (before (copy-sequence process-environment)))
-      (should (memq 'openrouter (drgnx-ai-load-keys)))
-      (drgnx-test-wait (lambda () (member "openrouter" (drgnx-hub-keys-held))) :secs 20 :what "the hub took the key")
+      (let ((loaded (drgnx-ai-load-keys)))
+        (drgnx-test-deliver-all)
+        (drgnx-test-wait #'drgnx-hub-settled-p :what "the hub's answers")
+        (should (memq 'openrouter loaded)))
+      (should (member "openrouter" (drgnx-hub-keys-held)))
       (should (equal process-environment before))
       (should (equal (getenv "OPENROUTER_API_KEY") "sk-env-canary-23c"))
       (should (equal (getenv "A_KEY") drgnx-ai-gateway-test--key))      ; handed over when the macro connected
@@ -103,8 +112,11 @@ not in `drgnx-ai--keys', not in auth-source's netrc cache, no entry at all in `p
     (let ((process-environment (append '("A_KEY" "ANTHROPIC_API_KEY" "MOONSHOT_API_KEY" "DEEPSEEK_API_KEY") process-environment))
           (auth-sources (list (drgnx-ai-keys-test--netrc root "127.0.0.1" drgnx-ai-gateway-test--key)))
           (auth-source-netrc-cache nil) (password-data (make-hash-table :test #'equal)))
-      (should (memq 'a (drgnx-ai-load-keys)))
-      (drgnx-test-wait (lambda () (zerop (hash-table-count drgnx-ai--keys))) :secs 20 :what "the hub took the key")
+      (let ((loaded (drgnx-ai-load-keys)))
+        (drgnx-test-deliver-all)
+        (drgnx-test-wait #'drgnx-hub-settled-p :what "the hub's answers")
+        (should (memq 'a loaded)))
+      (should (zerop (hash-table-count drgnx-ai--keys)))        ; the hub took the key
       (should-not (drgnx-ai-keys-test--auth-source-cached-p))
       (drgnx-ai-keys-test--a-hand-over-read-keeps-nothing)
       (setq drgnx-ai-gateway-test--sent nil)
