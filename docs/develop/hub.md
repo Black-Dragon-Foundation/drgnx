@@ -1604,10 +1604,17 @@ own.
   - **`Refused`** (a hard never, a port, a rebinding, a malformed request) is logged only; **`Reached`** is a store
     event, once per host per session: kind `status`, the session as `agent`, data
     `{"browser-host": true, "session": SID, "host": HOST}`.
-- **Changes reach it live.** Each write of `cards/settle` or `graph/grants` bumps `coord::Signals::grants`; every web
-  proxy then reads its state and cards again and lets the proxy ask its questions anew
-  (`ProxyHandle::forget_questions`), so the target refused while another card was open asks on its retry. The proxy
-  also reads again when the earliest grant in force expires.
+- **Changes reach it at once.** `coord::Signals::answers_changed` is called for every write of the user's (a settled
+  card, `graph/grants`, a plan's or a project's matrix override), every `config/settings`, every settings refresh that
+  changed what is in effect, and `presence/set`. Every web proxy then reads its cells, grants and cards again, so a
+  narrowed `browser.web` cell refuses the very next request. The proxy also reads again when the earliest grant in
+  force expires and, while the matrix setting has time presets, at each minute's turn.
+  - When what the session's browser may reach changed (the start included, when it is not nothing), a store event
+    says so: kind `status`, the session as `agent`, data `{"browser-net": true, "session": SID, "web": BOOL,
+    "hosts": ["H:P", …], "private": [TARGET, …]}` (the once-opened hosts, the private grants' targets in their wire
+    form). Rows wait on it after a settle.
+  - When the state changed or a card it asked settled, the proxy may ask its questions anew
+    (`ProxyHandle::forget_questions`), so the target refused while another card was open asks on its retry.
 - **What no grant opens** (`browser/nevers.rs`, shared by every session's proxy, started with the hub):
   - `HostAddrsWatch`: every interface address of the host (`getifaddrs`, every 5 s), which the policy treats as
     loopback;

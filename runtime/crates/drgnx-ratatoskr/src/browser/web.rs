@@ -11,8 +11,11 @@
 //!   on without a card.
 //! - **`Private`** (a private target no grant opens): one card per target, with the target as a grant names it
 //!   (`{"host_port": "H:P"}`, what was asked), the address it led to and its class.  None for a refused target.
-//! - **A settled card or a changed grant** (`cards/settle`, `graph/grants`) and **a grant's expiry**: the state is
-//!   read again, and the proxy may ask its questions anew.
+//! - **Any change to an answer** (`coord::Signals::answers_changed`: a user's write such as a settled card or a grant,
+//!   the settings in effect, the away flag), **a grant's expiry** and, with time presets, **each minute's turn**: the
+//!   state is read again at once, so a narrowed cell refuses the next request.  When the state changed, a store
+//!   event `browser-net` `{session, web, hosts, private}` says what the browser may now reach, and the proxy asks its
+//!   questions anew (so does a settled card).
 //! - **`Reached`**: a store event `browser-host` `{session, host}`, once per host.  **`Refused`**: the log only.
 //!
 //! Each session has its own proxy, so its own connection cap, and its own loop: one session's flood never waits on
@@ -142,8 +145,8 @@ async fn start(
     let listener = crate::sessions::bind_socket(&socket)?;
     let m = std::fs::symlink_metadata(&socket)?;
     let (step_tx, steps) = watch::channel(0);
-    // a new receiver has seen the count as it is: a later settle or grant wakes the loop
-    let grants = hub.writer.signals.grants.subscribe();
+    // a new receiver has seen the count as it is: a later change wakes the loop
+    let answers = hub.writer.signals.answers.subscribe();
     let mut asker = Asker {
         sid: sid.to_string(),
         ctx,
@@ -153,6 +156,7 @@ async fn start(
         handle: handle.clone(),
         web_on: false,
         web_hosts: Vec::new(),
+        private: Vec::new(),
         web_card: None,
         private_cards: BTreeMap::new(),
         web_refused: false,
@@ -164,7 +168,7 @@ async fn start(
     // listening only once the state is read: no request is judged on an empty state
     handle.listen(proxy::Listener::Unix(listener), TAG);
     let mut tasks = JoinSet::new();
-    tasks.spawn(run(asker, rx, grants));
+    tasks.spawn(run(asker, rx, answers));
     Ok(WebProxy {
         handle,
         socket,
@@ -238,6 +242,8 @@ struct Asker {
     web_on: bool,
     /// The once-granted `host:port`s, as last set, with their expiry.
     web_hosts: Vec<(Target, Option<f64>)>,
+    /// The private grants, as last set.
+    private: Vec<PrivateGrant>,
     /// The open `browser.web` card: at most one per session.
     web_card: Option<i64>,
     /// The open `browser.private` cards, each with its target's JSON text.
@@ -263,11 +269,20 @@ struct Read {
     settled: Vec<i64>,
 }
 
-async fn run(mut a: Asker, mut rx: mpsc::Receiver<ProxyEvent>, mut grants: watch::Receiver<u64>) {
+async fn run(mut a: Asker, mut rx: mpsc::Receiver<ProxyEvent>, mut answers: watch::Receiver<u64>) {
     loop {
-        let wake = a
-            .next_expiry
-            .map(|e| Duration::from_secs_f64((e - now_secs()).clamp(0.0, 86_400.0) + 0.05));
+        // a grant's expiry, and with time presets the minute's turn, when the preset in force may change
+        let now = now_secs();
+        let minute = a
+            .hub
+            .gate
+            .has_time_presets()
+            .then(|| (now / 60.0).floor() * 60.0 + 60.0);
+        let wake = [a.next_expiry, minute]
+            .into_iter()
+            .flatten()
+            .reduce(f64::min)
+            .map(|e| Duration::from_secs_f64((e - now).clamp(0.0, 86_400.0) + 0.05));
         let expired = async {
             match wake {
                 Some(d) => tokio::time::sleep(d).await,
@@ -279,7 +294,7 @@ async fn run(mut a: Asker, mut rx: mpsc::Receiver<ProxyEvent>, mut grants: watch
                 Some(ev) => a.on_event(ev).await,
                 None => return,
             },
-            changed = grants.changed() => {
+            changed = answers.changed() => {
                 if changed.is_err() {
                     return;
                 }
@@ -329,7 +344,9 @@ impl Asker {
         }
         let facts = facts(json!({"host": target.to_string()}));
         match self.decide(Action::BrowserWeb, facts).await {
-            Gate::Allow => self.reload().await,
+            Gate::Allow => {
+                self.reload().await;
+            }
             Gate::Ask(id) if id > 0 => self.web_card = Some(id),
             Gate::Ask(_) => {
                 tracing::warn!(sid = %self.sid, "no browser.web card: the store did not take it");
@@ -348,7 +365,9 @@ impl Asker {
         }
         let facts = facts(json!({"target": target, "addr": addr.to_string(), "class": class}));
         match self.decide(Action::BrowserPrivate, facts).await {
-            Gate::Allow => self.reload().await,
+            Gate::Allow => {
+                self.reload().await;
+            }
             Gate::Ask(id) if id > 0 => {
                 self.private_cards.insert(id, key);
             }
@@ -378,15 +397,18 @@ impl Asker {
             .await
     }
 
-    /// A card may have settled, a grant changed or ended: the state again, and the proxy's questions asked anew.
+    /// A card may have settled, a grant, a cell or a setting changed, a grant ended: the state again, and when it
+    /// changed or a card settled, the proxy's questions asked anew.
     async fn on_change(&mut self) {
-        self.reload().await;
-        self.handle.forget_questions(TAG);
+        if self.reload().await {
+            self.handle.forget_questions(TAG);
+        }
     }
 
-    /// Reads the cells, the grants, the refusals and the open cards, and sets the proxy's state from them.  A store
-    /// that cannot be read keeps the state as it is.
-    async fn reload(&mut self) {
+    /// Reads the cells, the grants, the refusals and the open cards, and sets the proxy's state from them: whether
+    /// the state changed (then a `browser-net` event says so) or a card it asked settled.  A store that cannot be
+    /// read keeps the state as it is.
+    async fn reload(&mut self) -> bool {
         self.hub.gate.refresh_from(&self.hub.settings);
         let (g, who, ctx, now) = (
             self.hub.gate.clone(),
@@ -434,7 +456,7 @@ impl Asker {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!(sid = %self.sid, "the web proxy's grants were not read: {e}");
-                return;
+                return false;
             }
         };
         for id in &r.settled {
@@ -455,7 +477,7 @@ impl Asker {
             .reduce(f64::min);
         self.state.set_web(web_on);
         self.state.set_web_hosts(web_hosts.clone());
-        self.state.set_grants(private);
+        self.state.set_grants(private.clone());
         let deny = self
             .hub
             .settings
@@ -465,8 +487,22 @@ impl Asker {
             .agents_browser_deny_hosts
             .clone();
         self.state.set_deny_hosts(deny);
+        let changed =
+            (web_on, &web_hosts, &private) != (self.web_on, &self.web_hosts, &self.private);
         self.web_on = web_on;
         self.web_hosts = web_hosts;
+        self.private = private;
+        if changed {
+            net_event(
+                &self.hub.writer,
+                &self.sid,
+                self.web_on,
+                &self.web_hosts,
+                &self.private,
+            )
+            .await;
+        }
+        changed || !r.settled.is_empty()
     }
 }
 
@@ -555,21 +591,49 @@ fn facts(v: Value) -> Facts {
 
 /// The `browser-host` event: kind `status`, the session as its agent, data `{"browser-host": true, session, host}`.
 async fn host_event(w: &Writer, sid: &str, host: String) {
+    let summary = format!("the session's browser reached {host}");
+    let data = json!({"browser-host": true, "session": sid, "host": host});
+    status_event(w, sid, "agents/browser-host", summary, data).await;
+}
+
+/// The `browser-net` event, when what session SID's browser may reach changed: kind `status`, the session as its
+/// agent, data `{"browser-net": true, session, web, hosts: ["H:P", …], private: [TARGET, …]}` (the targets in their
+/// wire form).
+async fn net_event(
+    w: &Writer,
+    sid: &str,
+    web: bool,
+    hosts: &[(Target, Option<f64>)],
+    private: &[PrivateGrant],
+) {
+    let hosts: Vec<String> = hosts.iter().map(|(t, _)| t.to_string()).collect();
+    let private: Vec<&PrivateTarget> = private.iter().map(|g| &g.target).collect();
+    let summary = format!(
+        "the session's browser: the web {}, {} host(s) once, {} private target(s)",
+        if web { "on" } else { "off" },
+        hosts.len(),
+        private.len()
+    );
+    let data = json!({"browser-net": true, "session": sid, "web": web, "hosts": hosts, "private": private});
+    status_event(w, sid, "agents/browser-net", summary, data).await;
+}
+
+async fn status_event(w: &Writer, sid: &str, method: &'static str, summary: String, data: Value) {
     use norn::write::event::{Event, EventKind, event};
     let sid = sid.to_string();
     let caller = crate::runner::service();
     let r = w
-        .write(&caller, "agents/browser-host", move |tx| {
+        .write(&caller, method, move |tx| {
             event(
                 tx,
                 Event {
                     at: now_secs(),
-                    agent: Some(sid.clone()),
+                    agent: Some(sid),
                     job: None,
                     task: None,
                     kind: EventKind::Status,
-                    summary: format!("the session's browser reached {host}"),
-                    data: Some(json!({"browser-host": true, "session": sid, "host": host})),
+                    summary,
+                    data: Some(data),
                     turn: false,
                 },
             )
@@ -577,7 +641,7 @@ async fn host_event(w: &Writer, sid: &str, host: String) {
         })
         .await;
     if let Err(e) = r {
-        tracing::debug!("the browser-host event was not written: {e:?}");
+        tracing::debug!("the {method} event was not written: {e:?}");
     }
 }
 

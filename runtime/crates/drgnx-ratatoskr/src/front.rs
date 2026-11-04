@@ -343,12 +343,17 @@ impl Front {
     /// `settings.el` read again when its stamp changed (at start, and when a session starts); the problems the last
     /// read did not have go to the subscribers as notices.
     pub async fn refresh_settings(&self) {
+        let before = self.settings.current();
         for n in self.settings.refresh().await {
             self.broadcast("notice", n);
         }
         // a front with no config folder (a test's) keeps the table it was given
         if self.settings.is_open() {
             self.apply_settings();
+        }
+        // the matrix or the deny list may have changed: the browser sessions' web proxies read them again at once
+        if self.settings.current().loaded != before.loaded {
+            self.writer.signals.answers_changed();
         }
     }
 
@@ -373,7 +378,7 @@ impl Front {
     }
 
     /// `config/settings`: the editor's values of PROJECT (none: global) kept as last good and put to work.
-    async fn config_settings(
+    pub(crate) async fn config_settings(
         &self,
         p: runstav::methods::config::SettingsParams,
     ) -> Result<runstav::methods::config::SettingsApplied, Error> {
@@ -393,6 +398,7 @@ impl Front {
             .set_overrides(project.as_deref(), list)
             .await?;
         self.apply_settings();
+        self.writer.signals.answers_changed();
         Ok(runstav::methods::config::SettingsApplied { applied })
     }
 

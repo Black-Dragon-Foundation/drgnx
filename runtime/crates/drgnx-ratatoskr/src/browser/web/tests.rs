@@ -362,6 +362,63 @@ async fn private_card_then_grant_reaches_the_target() {
     assert_eq!(cards(&f, "browser.private").await.len(), 2);
 }
 
+/// The `browser-net` events of session SID, oldest first: (web, hosts, private).
+async fn net_events(f: &Front, sid: &'static str) -> Vec<(bool, Value, Value)> {
+    f.writer
+        .db
+        .read(move |c| {
+            let mut st = c.prepare(
+                "select data from event where json_extract(data, '$.\"browser-net\"') = 1 \
+                 and agent = ?1 order by id",
+            )?;
+            let rows = st.query_map([sid], |r| r.get::<_, String>(0))?;
+            let mut out = Vec::new();
+            for row in rows {
+                let d: Value = serde_json::from_str(&row?).unwrap();
+                out.push((
+                    d["web"].as_bool().unwrap(),
+                    d["hosts"].clone(),
+                    d["private"].clone(),
+                ));
+            }
+            Ok(out)
+        })
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_narrowed_cell_refuses_the_next_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = front(dir.path());
+    preset(&f, "autonomous").await;
+    let mut w = web(&f, dir.path(), "s1", None).await;
+    // Autonomous allows the web: on from the start, and said
+    assert_eq!(net_events(&f, "s1").await, [(true, json!([]), json!([]))]);
+    // the user narrows the matrix (`config/settings`): the proxy reads it at once, with no request in between
+    let p = serde_json::from_value(json!({"overrides": [
+        {"name": "drgnx-agents-matrix", "source": "test", "value": {"preset": "balanced"}}]}))
+    .unwrap();
+    f.config_settings(p).await.unwrap();
+    steps(&mut w, 1).await;
+    assert_eq!(
+        net_events(&f, "s1").await,
+        [(true, json!([]), json!([])), (false, json!([]), json!([]))]
+    );
+    // so the next request is refused and asks
+    let (_s, code) = connect_to(w.socket(), "93.184.215.1:443").await;
+    assert_eq!(code, 403);
+    steps(&mut w, 2).await;
+    assert_eq!(cards(&f, "browser.web").await.len(), 1);
+    // and a settings change that leaves the cells as they are changes nothing and says nothing
+    let p = serde_json::from_value(json!({"overrides": [
+        {"name": "drgnx-agents-matrix", "source": "test", "value": {"preset": "balanced"}}]}))
+    .unwrap();
+    f.config_settings(p).await.unwrap();
+    steps(&mut w, 3).await;
+    assert_eq!(net_events(&f, "s1").await.len(), 2);
+}
+
 #[tokio::test]
 async fn one_sessions_flood_does_not_block_another() {
     let dir = tempfile::tempdir().unwrap();

@@ -18,7 +18,7 @@
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "cards/settle", "params": {"card": "$card", "choice": "session"}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"settled": true}}}
 {"do": "sql_expect", "sql": "select json_extract(data, '$.what.target.host_port') from entity where kind = 'grant' and json_extract(data, '$.what.matrix') = 'browser.private'", "rows": [["nas.test:8080"]]}
-{"do": "run", "bin": "/bin/sh", "args": ["-c", "sleep 1"], "expect_code": 0}
+{"do": "expect", "conn": "e", "json": {"event": "events", "data": {"since": "$number", "last": "$number", "events": {"$contains": [{"kind": "status", "agent": "$agent", "data": {"browser-net": true, "session": "$agent", "web": false, "hosts": [], "private": [{"host_port": "nas.test:8080"}]}}]}}}, "within_ms": 10000}
 {"do": "http", "conn": "p2", "to": "unix:$SOCKET_DIR/s/$agent/web.sock", "method": "CONNECT", "path": "nas.test:8080", "headers": {"Host": "nas.test:8080"}, "read": "head"}
 {"do": "expect_http", "conn": "p2", "status": 200}
 {"do": "http", "conn": "p2", "method": "POST", "path": "/v1/messages", "headers": {"Host": "nas.test", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}"}

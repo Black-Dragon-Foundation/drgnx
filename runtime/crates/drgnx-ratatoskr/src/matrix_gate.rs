@@ -355,6 +355,11 @@ impl MatrixGate {
         self.st.lock().expect("matrix gate").away = away;
     }
 
+    /// Whether the setting has time presets, so the preset in force may change at a minute's turn with no write.
+    pub fn has_time_presets(&self) -> bool {
+        !self.st.lock().expect("matrix gate").time.is_empty()
+    }
+
     /// How long a browser card's "once" lasts, in seconds (`agents-browser-once-window` as last read).
     pub fn once_window(&self) -> u64 {
         self.st
@@ -775,6 +780,8 @@ pub async fn check_method(f: &Front, _: &Caller, p: CheckParams) -> Result<Check
 
 pub async fn presence(f: &Front, _: &Caller, p: PresenceParams) -> Result<bool, Error> {
     f.core.matrix.set_away(p.away);
+    // the away flag picks the time presets: the browser sessions' web proxies read their cells again
+    f.writer.signals.answers_changed();
     Ok(p.away)
 }
 

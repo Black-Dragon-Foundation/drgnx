@@ -17,7 +17,7 @@
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "cards/settle", "params": {"card": "$card", "choice": "session"}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"settled": true}}}
 {"do": "sql_expect", "sql": "select count(*) from entity where kind = 'grant' and json_extract(data, '$.what.matrix') = 'browser.web' and json_extract(data, '$.who.session') = '$agent'", "rows": [[1]]}
-{"do": "run", "bin": "/bin/sh", "args": ["-c", "sleep 1"], "expect_code": 0}
+{"do": "expect", "conn": "e", "json": {"event": "events", "data": {"since": "$number", "last": "$number", "events": {"$contains": [{"kind": "status", "agent": "$agent", "data": {"browser-net": true, "session": "$agent", "web": true, "hosts": [], "private": []}}]}}}, "within_ms": 10000}
 {"do": "http", "conn": "p2", "to": "unix:$SOCKET_DIR/s/$agent/web.sock", "method": "CONNECT", "path": "93.184.215.14:443", "headers": {"Host": "93.184.215.14:443"}, "read": "head"}
 {"do": "expect_http", "conn": "p2", "status": 200}
 {"do": "http", "conn": "p2", "method": "POST", "path": "/v1/messages", "headers": {"Host": "93.184.215.14", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}"}

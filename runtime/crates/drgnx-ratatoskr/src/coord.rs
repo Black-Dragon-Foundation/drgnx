@@ -49,9 +49,9 @@ pub struct Signals {
     pub map: Notify,
     /// What the proposal tools ask of the records (set once the hub's front is built).
     pub records_tool: std::sync::OnceLock<RecordsTool>,
-    /// Counts the writes that may have settled a card or made or revoked a grant (`cards/settle`, `graph/grants`):
-    /// each browser session's web proxy reads its grants and cards again ([`crate::browser::web`]).
-    pub grants: tokio::sync::watch::Sender<u64>,
+    /// Counts the changes that may change what a browser session may reach ([`Signals::answers_changed`]): each
+    /// session's web proxy reads its cells, grants and cards again at once ([`crate::browser::web`]).
+    pub answers: tokio::sync::watch::Sender<u64>,
 }
 
 /// The proposal tools' door into the records: the proposal ID, `None` to read it or `Some(accept)` to decide it,
@@ -80,6 +80,12 @@ impl Signals {
     /// A message may be waiting for a hub session: the delivery looks (coalesced).
     pub fn notify_soon(&self) {
         self.deliver.notify_one();
+    }
+
+    /// What the user answered may have changed: a write of theirs (a card settled, a grant made or revoked, a plan's or
+    /// a project's matrix override), the settings in effect, or the away flag.  Every web proxy reads again.
+    pub fn answers_changed(&self) {
+        self.answers.send_modify(|n| *n += 1);
     }
 
     /// The transactions the front's methods committed since the hub started.
@@ -112,8 +118,8 @@ impl Writer {
         let r = self.db.write(tx_meta(caller, method), f).await;
         if r.is_ok() {
             self.signals.wrote();
-            if matches!(method, "cards/settle" | "graph/grants") {
-                self.signals.grants.send_modify(|n| *n += 1);
+            if caller.class == Class::User || matches!(method, "cards/settle" | "graph/grants") {
+                self.signals.answers_changed();
             }
         }
         r
