@@ -214,6 +214,11 @@ DRGNX_TEST_HUB_CHAOS=2 DRGNX_TEST_SELECTOR='"^drgnx-\\(hub-client\\|ai-gateway\\
 A seed is the two files at once, 62 tests in about 20 s on a desktop (the `:timing` ones left out), so the job is a
 few minutes after `bins-linux`, the image pull and the binaries' download.
 
+After the seeds the job's last step runs `bin/drgnx test --orders --container`, whatever the seeds said and with no
+rerun: every file whose `;; test-pattern:` line names `gated` once per swapped pair of lines across connections
+([Orders](check.md#orders-bindrgnx-test---orders)). A red names the file and its K, and
+`DRGNX_TEST_GATE_SWAP=K DRGNX_TEST_ONLY=FILE bin/drgnx test --container` replays it.
+
 ## The timing lane and the pre-flight
 
 Every tier sets `DRGNX_TEST_NO_TIMING=1`, so the tests tagged `:timing` (wall-clock assertions) run in one place only:

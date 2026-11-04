@@ -1252,6 +1252,9 @@ the client half of the `gated` pattern; the hub half is Ratatoskr's test clock a
 - `(drgnx-test-gate-transcript)` lists the deliveries so far, `(NAME . LINE)` or `(NAME . :eof)`, and
   `drgnx-test-gate--releasing` names the connection while the gate hands a line over. Hub chaos (`DRGNX_TEST_HUB_CHAOS`)
   leaves gated connections alone.
+- **Swap.** `DRGNX_TEST_GATE_SWAP=K` hands the K-th adjacent pair of lines released together from different connections
+  over the other way round, and each gated run prints `drgnx-gate-swap-pairs: N` (`drgnx-test-gate-swap-pairs` in the
+  body); `bin/drgnx test --orders` runs a file for every K ([check.md](check.md#orders-bindrgnx-test---orders)).
 
 `test/unit/delivery-gate-test.el` checks the gate against the real hub, among others that a connection's answer can be
 held past another connection's end (the forget-on-disconnect order) and that one schedule gives one transcript in
