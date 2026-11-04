@@ -85,7 +85,8 @@ impl Fx {
             Tier::Reduced,
             Target::LinuxReduced,
         )
-        .unwrap();
+        .unwrap()
+        .spec;
         let valid = gleipnir::validate(spec, &ctx, Target::LinuxReduced).unwrap();
         valid.spec().clone()
     }
@@ -363,7 +364,8 @@ fn a_worktree_under_the_hub_run_root_launches_with_only_the_run_root_opened() {
             Tier::Reduced,
             Target::LinuxReduced,
         )
-        .unwrap();
+        .unwrap()
+        .spec;
         gleipnir::validate(spec, ctx, Target::LinuxReduced)
     };
     let ctx = context_for(&env, None);
@@ -391,7 +393,7 @@ fn a_worktree_under_the_hub_run_root_launches_with_only_the_run_root_opened() {
             Tier::Reduced,
             Target::LinuxReduced
         )
-        .and_then(|s| gleipnir::validate(s, &ctx, Target::LinuxReduced))
+        .and_then(|s| gleipnir::validate(s.spec, &ctx, Target::LinuxReduced))
         .is_err()
     );
 }
@@ -483,4 +485,227 @@ fn a_snapshot_workers_git_folder_is_its_own_and_the_source_repo_is_not_given() {
     crate::sandbox::remove_stubs(&scratch_path(&env, "S1"), &wt);
     assert!(!wt.join(".envrc").exists(), "an empty stub is removed");
     assert!(wt.join("mise.toml").exists(), "a file with content stays");
+}
+
+/// A home with the usual toolchain layouts: `~/.local/bin/claude` a link into Claude's versioned install, a mise
+/// install with an npm credential beside it, mise's shims (links to the mise binary), and cargo's bin dir with the
+/// credentials file next to it (not in it).  ENV's `PATH` is `path`, its entries relative to the fixture.
+struct Tools {
+    fx: Fx,
+}
+
+impl Tools {
+    fn new() -> Tools {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let fx = Fx::new();
+        let file = |rel: &str, mode: u32| {
+            let p = fx.p(rel);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(&p, "x").unwrap();
+            fs::set_permissions(&p, fs::Permissions::from_mode(mode)).unwrap();
+            p
+        };
+        let link = |rel: &str, to: &Path| {
+            let p = fx.p(rel);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            symlink(to, p).unwrap();
+        };
+        let claude = file("home/.local/share/claude/versions/2.1.0/claude", 0o755);
+        link("home/.local/bin/claude", &claude);
+        let mise = file("home/.local/bin/mise", 0o755);
+        file("home/.local/share/mise/installs/node/22.1/bin/node", 0o755);
+        file("home/.local/share/mise/installs/node/22.1/etc/npmrc", 0o600);
+        link("home/.local/share/mise/shims/node", &mise);
+        file("home/.cargo/bin/cargo", 0o755);
+        file("home/.cargo/credentials.toml", 0o600);
+        file("home/.cache/agent/run", 0o755);
+        Tools { fx }
+    }
+
+    fn env(&self, path: &[&str]) -> Env {
+        let s = |rel: &str| self.fx.p(rel).to_str().unwrap().to_owned();
+        let mut dirs: Vec<String> = path
+            .iter()
+            .map(|d| if d.starts_with('/') { d.to_string() } else { s(d) })
+            .collect();
+        dirs.extend(["/usr/bin".to_string(), "/bin".to_string()]);
+        Env::new(
+            &[
+                ("HOME", &s("home")),
+                ("XDG_RUNTIME_DIR", &s("run")),
+                ("TMPDIR", &s("t")),
+                ("PATH", &dirs.join(":")),
+            ],
+            1000,
+        )
+    }
+
+    /// The session spec for a worker running ARGV under ENV, built and validated for TIER.
+    fn spec(
+        &self,
+        env: &Env,
+        argv: &[&str],
+        tier: Tier,
+    ) -> Result<crate::sandbox::SessionSpec, gleipnir::Refusal> {
+        let target = match tier {
+            Tier::Full => Target::LinuxBwrap,
+            Tier::Reduced => Target::LinuxReduced,
+        };
+        let ctx = context_for(env, None);
+        let mut plan = self.fx.plan(".claude");
+        plan.argv = argv.iter().map(Into::into).collect();
+        let shape = self.fx.shape(NetCell::ProviderOnly);
+        let scratch = scratch_dir(env, &shape.sid).unwrap();
+        let built = session_spec(env, &ctx, &plan, &shape, &scratch, tier, target)?;
+        let valid = gleipnir::validate(built.spec, &ctx, target)?;
+        Ok(crate::sandbox::SessionSpec {
+            spec: valid.spec().clone(),
+            program: built.program,
+        })
+    }
+}
+
+const TOOL_PATH: [&str; 4] = [
+    "home/.local/bin",
+    "home/.local/share/mise/shims",
+    "home/.local/share/mise/installs/node/22.1/bin",
+    "home/.cargo/bin",
+];
+
+/// The toolchain roots of PATH are read-only: the bin dirs and install roots (Claude's versions behind its link, the
+/// mise install), never a tool home or the shims folder; the credential file inside a root is hidden, and the one
+/// beside cargo's bin dir is not in any root.  The program is its PATH hit, which the sandbox shows.
+#[test]
+fn the_toolchain_roots_are_read_only_and_their_credentials_hidden() {
+    let t = Tools::new();
+    let p = |rel: &str| t.fx.p(rel);
+    let built = t
+        .spec(&t.env(&TOOL_PATH), &["claude", "--acp"], Tier::Full)
+        .unwrap_or_else(|r| panic!("refused: {r}"));
+    let spec = &built.spec;
+    for root in [
+        "home/.local/bin",
+        "home/.local/share/claude/versions",
+        "home/.local/share/mise/installs/node/22.1",
+        "home/.cargo/bin",
+    ] {
+        assert!(spec.read.contains(&p(root)), "{root}: {:?}", spec.read);
+    }
+    for never in [
+        "home",
+        "home/.local",
+        "home/.local/share",
+        "home/.local/share/mise",
+        "home/.local/share/mise/shims",
+        "home/.cargo",
+    ] {
+        assert!(!spec.read.contains(&p(never)), "{never} is bound");
+    }
+    assert!(spec.write.iter().all(|w| !w.starts_with(p("home/.local"))));
+    assert_eq!(
+        spec.hide,
+        vec![p("home/.local/share/mise/installs/node/22.1/etc/npmrc")]
+    );
+    assert!(
+        spec.read
+            .iter()
+            .all(|r| !p("home/.cargo/credentials.toml").starts_with(r))
+    );
+    assert_eq!(built.program, p("home/.local/bin/claude"));
+}
+
+/// The reduced tier cannot hide a file inside a root it grants, so a root that holds a credential file is left out
+/// rather than shown with it.
+#[test]
+fn the_reduced_tier_leaves_out_a_root_with_a_credential_file() {
+    let t = Tools::new();
+    let p = |rel: &str| t.fx.p(rel);
+    let spec = t
+        .spec(&t.env(&TOOL_PATH), &["claude"], Tier::Reduced)
+        .unwrap_or_else(|r| panic!("refused: {r}"))
+        .spec;
+    assert!(spec.hide.is_empty(), "{:?}", spec.hide);
+    assert!(!spec.read.contains(&p("home/.local/share/mise/installs/node/22.1")));
+    assert!(spec.read.contains(&p("home/.local/share/claude/versions")));
+    assert!(spec.read.contains(&p("home/.cargo/bin")));
+}
+
+/// A program the sandbox would not show is refused before anything starts, and the refusal names its path: a mise
+/// shim (it runs mise, whose folder of shims is not bound), a program in a cache folder, one not on PATH, and a
+/// relative path.  A program on PATH outside the home is the system's; one under a bound root is fine by full path.
+#[test]
+fn a_program_the_sandbox_does_not_show_is_refused_by_its_path() {
+    let t = Tools::new();
+    let p = |rel: &str| t.fx.p(rel);
+    let shims_first = t.env(&[
+        "home/.local/share/mise/shims",
+        "home/.local/share/mise/installs/node/22.1/bin",
+    ]);
+    let r = t.spec(&shims_first, &["node"], Tier::Full).unwrap_err();
+    assert_eq!(r.rule, gleipnir::Rule::Setup, "{r}");
+    assert_eq!(r.path, Some(p("home/.local/share/mise/shims/node")), "{r}");
+    assert!(r.message.contains("shim"), "{r}");
+    let env = t.env(&TOOL_PATH);
+    let cache = p("home/.cache/agent/run");
+    let r = t
+        .spec(&env, &[cache.to_str().unwrap()], Tier::Full)
+        .unwrap_err();
+    assert_eq!(r.path, Some(cache), "{r}");
+    let r = t.spec(&env, &["no-such-agent"], Tier::Full).unwrap_err();
+    assert!(r.message.contains("not found on PATH"), "{r}");
+    let r = t.spec(&env, &["./claude"], Tier::Full).unwrap_err();
+    assert!(r.message.contains("absolute"), "{r}");
+    // a link by its full path leads to its install too; a system program is the system's
+    let full = p("home/.local/bin/claude");
+    let ok = t
+        .spec(&env, &[full.to_str().unwrap()], Tier::Full)
+        .unwrap_or_else(|r| panic!("refused: {r}"));
+    assert_eq!(ok.program, full);
+    assert_eq!(
+        t.spec(&env, &["sh"], Tier::Full).unwrap().program,
+        sandbox::true_name(Path::new("/usr/bin")).unwrap().join("sh")
+    );
+}
+
+/// The launch's sandbox is the one whose check passes (the doctor's check, not bwrap's presence): the full tier, else
+/// the reduced tier, else a refusal that says the full tier's reason and fix (a container's bwrap that cannot run).
+#[test]
+fn the_launch_takes_the_tier_whose_check_passes() {
+    use gleipnir::check::Check;
+    let ok = || Check {
+        ok: true,
+        reason: None,
+        fix: None,
+        ..Check::failed(String::new(), None)
+    };
+    let container = || {
+        Check::failed(
+            "inside a container: bubblewrap needs user namespaces the container does not give".into(),
+            Some("run it on the host".into()),
+        )
+    };
+    let block = |f: &dyn Fn(Tier) -> Check| {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(pick(|t| std::future::ready(f(t))))
+    };
+    assert_eq!(block(&|_| ok()), Ok(Tier::Full));
+    assert_eq!(
+        block(&|t| if t == Tier::Full { container() } else { ok() }),
+        Ok(Tier::Reduced)
+    );
+    let refused = block(&|t| {
+        if t == Tier::Full {
+            container()
+        } else {
+            Check::failed("Landlock is off".into(), None)
+        }
+    })
+    .unwrap_err();
+    assert_eq!(refused.rule, gleipnir::Rule::Setup);
+    assert!(
+        refused.message.contains("inside a container") && refused.message.contains("run it on the host"),
+        "{refused}"
+    );
 }

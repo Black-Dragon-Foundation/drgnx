@@ -108,7 +108,20 @@ this returns.
     `mcp.sock`, after the launch is prepared and before the spawn). The sockets the spec names (`hub.sock`,
     `proxy.sock`) need not exist at the start: the dir is bound, not each socket, and the relay connects per
     connection. A launch that is refused removes a session dir it made; the probe removes its own when it is done;
-  - the full tier when bwrap is usable, else the reduced tier; neither: refused.
+  - the user's toolchains read-only (`sandbox::toolchain`, [Toolchain roots](#toolchain-roots)): the roots the
+    `PATH` entries lead into, with the program's own folder counted as one (a link there leads to its install:
+    `~/.local/bin/claude` → `~/.local/share/claude/versions`), each passed through `readable`, drgnx's data dir and
+    checkout excluded, and `hide_list`'s credential files hidden (the reduced tier leaves a root holding one out
+    instead). The program is the profile's command looked up on `PATH` (or its absolute path), its folder taken to its
+    true name and its file name kept, and the launch runs it by that path. It is refused, naming the path, when it is
+    not found or the sandbox would not show it or its link's target: outside every root, the session's own reads and
+    writes and the system's trees (`/usr` and bwrap's `SYSTEM_READS`; the reduced tier's `REDUCED_SYSTEM_ROOTS`). A
+    mise shim is refused so: it runs mise, which needs its config, and the shims folder is no root. `session_spec`
+    returns a `SessionSpec { spec, program }`;
+  - the tier whose check passes (`launch::detect`: [the check](#the-check), the doctor's, run once per hub while it
+    passes): the full tier, else the reduced tier; neither: refused with the full tier's reason and fix (so a bwrap that
+    is installed but cannot run, as in a container without `unmask=ALL`, never gets picked). `launch::launch` and the
+    `spawn*` functions are async for it; the check runs on a blocking thread with a runtime of its own.
 - `ratatoskr relay --parent-pid PID [--ready-fd N] PORT=SOCKET…` runs [the relay](#the-relay-task-11).
 - `ratatoskr sandbox check` and the doctor's `sandbox` section run [the check](#the-check); `sandbox::run_probe`
   spawns its probe, and `sandbox::check_blocking` gives it a runtime of its own. On the reduced tier both add
@@ -293,8 +306,8 @@ The module reads paths and metadata only and has no `cfg` gate: it builds the sa
 included (which has no backend to use it). `readable(roots, &ctx, target)` runs every root through `validate`'s
 `read` rules, as a spec's lone `read` entry, and drops each one refused or gone (GL-T3-1); the caller passes the
 roots it returns. In the reduced tier a hide cannot be honoured inside a granted root ([Using it](#using-it)), so
-there a root holding a credential file is refused at `prepare`; phase 6 leaves such a root out of a reduced-tier
-spec.
+there a root holding a credential file is refused at `prepare`; an agent session's spec leaves such a root out of a
+reduced-tier spec ([Ratatoskr's side](#ratatoskrs-side)), and phase 6's job spec will do the same.
 
 ## The bubblewrap argv
 
