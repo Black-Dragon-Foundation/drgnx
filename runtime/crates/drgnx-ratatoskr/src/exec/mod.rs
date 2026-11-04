@@ -305,9 +305,7 @@ impl Default for Runner {
 }
 
 fn now() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0.0, |d| d.as_secs_f64())
+    crate::clock::wall_secs()
 }
 
 fn refusal(message: impl Into<String>) -> Refusal {
@@ -890,7 +888,7 @@ impl Inner {
         let id = id.to_string();
         // counted as running before the starter hears of its id
         self.live.add(&id, meta.session.clone());
-        tokio::spawn(async move {
+        crate::clock::spawn("exec:watch", async move {
             // a container job's proxy answers for as long as the job runs
             let _proxy = proxy;
             me.clone().watch(&id, Some(child)).await;
@@ -935,7 +933,7 @@ impl Inner {
         // a job without a time box has no timer arm: it ends only by itself or by a stop
         let time_up = async {
             match meta.time_left() {
-                Some(left) => tokio::time::sleep(left).await,
+                Some(left) => crate::clock::sleep(left).await,
                 None => std::future::pending().await,
             }
         };
@@ -1088,7 +1086,7 @@ impl Inner {
                 if self.end(id).is_some() {
                     break;
                 }
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                crate::clock::sleep(Duration::from_millis(50)).await;
             }
         }
         self.row(id)
@@ -1113,7 +1111,7 @@ impl Inner {
                 }
                 running.insert(id.clone());
                 let me = self.clone();
-                tokio::spawn(async move { me.watch(&id, None).await });
+                crate::clock::spawn("exec:watch", async move { me.watch(&id, None).await });
             }
         }
         // jobs that waited for a slot when the last hub ended wait again, oldest first
@@ -1155,7 +1153,7 @@ async fn wait_gone(pid: i32, start_time: u64) {
         }
     }
     while unit::same_process(pid, start_time) {
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        crate::clock::sleep(Duration::from_millis(100)).await;
     }
 }
 

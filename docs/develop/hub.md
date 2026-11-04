@@ -68,8 +68,8 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   `<4>` / `<3>` when `JOURNAL_STREAM` is set (the journal under systemd). `DRGNX_RATATOSKR_LOG` takes a `Targets`
   string (`info`, the default; `warn,drgnx_ratatoskr::conn=debug`). The cap, keys and params are never logged. The
   cargo feature `test-hooks` (off in the binary install.sh builds) holds the test-only surfaces: the `__test_flood`
-  method, `--idle-tick-ms N` (the restart-when-idle tick), and `--agent-socket SID[:JOB]`, which is refused without
-  `--foreground`. `DRGNX_HUB_PARENT_PID` does what `--parent-pid` does when the flag is absent, so a hub a test starts through `ensure` ends with the test.
+  method, `--idle-tick-ms N` (the restart-when-idle tick), `--test-clock` and `__test_advance`
+  ([Test hooks](#test-hooks)), and `--agent-socket SID[:JOB]`, which is refused without `--foreground`. `DRGNX_HUB_PARENT_PID` does what `--parent-pid` does when the flag is absent, so a hub a test starts through `ensure` ends with the test.
 - **The gateway** (`drgnx-ratatoskr/src/gateway.rs`, forwarding by `bifrost`) runs inside the hub: never in the
   editing Emacs, so streaming cannot touch the keystroke budget. Besides the 127.0.0.1 port it listens on **per-session
   Unix sockets** (`gateway.sock` in the session's private directory beside `mcp.sock` and `hub.sock`, for agents in a
@@ -209,6 +209,40 @@ not count), so a busy hub is never restarted.
   own group (pgid = that pid) and exited while members of its group lived on, all between the crash and the next
   start. Rule 6 would then kill that unrelated group. It needs a pid reuse plus a leader that exits before its
   children within that interval; a start-time check cannot catch it, because the group's leader is gone.
+
+## Test hooks
+
+Built only with the `test-hooks` feature; a release build has none of them.
+
+### The hub clock
+
+Every timer of the hub and every reading of its time go through `drgnx-ratatoskr/src/clock.rs`: `clock::now()` (a
+`tokio::time::Instant`), `wall()` and `wall_secs()` (the time of day), `sleep`, `timeout`, `interval` (a late tick
+moves the next ones), and `spawn(origin, future)`, which names a task (`"module:what"`). In a release build each is
+tokio's or std's, inlined. `real_now()` is real time on every clock, for a blocking thread's limit on something outside
+the hub (a podman pull). The session's update throttle (`EMIT_EVERY`, 50 ms), its Stop timers (`STOP_ANSWER`, the
+close when idle), a move's wait, a connection's `STUCK_AFTER` and flush, and a job's time box and stop all read it.
+
+**`serve --test-clock`** installs a virtual clock before any task starts. It stands still, whatever real time passes,
+until a client sends **`__test_advance {"ms": N}`**, answered with `{"now_ms", "woken", "busy", "unnamed"}`; a hub on
+the real clock refuses it (`not-allowed`, "the hub runs on the real clock"). tokio's own clock is never paused: the
+runtime stays multi-thread, and a paused tokio clock jumps ahead whenever the runtime is idle.
+
+An advance moves the clock to each due deadline in order. Sleepers due at one instant wake in the order they began to
+wait, one at a time. After each wake it waits until the woken task, and every task that one spawned, waits on the
+clock again or has ended. Before moving the clock it waits until every task spawned since has run once, so a timer it
+started is in the queue. It then answers:
+
+- `woken`: the sleepers it woke.
+- `busy`: the origins of tasks still running after 5 s of real time. The advance names them and goes on, never hangs.
+  A task woken from the clock that then waits on something else (a channel, a child's I/O) is busy.
+- `unnamed`: woken sleepers in a task not started by `clock::spawn`. The advance cannot wait for those, so a test
+  that sees `unnamed > 0` is not deterministic there.
+
+**Its limit:** the clock covers this crate only. The timers inside `draugr` (a kill's grace, `STOP_GRACE`), `hermod`
+(the ACP timeouts), `bifrost` and `urdr` run on real time. A path through one of them (a Stop that ends the agent's
+process, for one) is not decided by the test's advances: it needs a pure core tested in every order, or a test that
+waits for the child's own announcement.
 
 ## The control socket
 

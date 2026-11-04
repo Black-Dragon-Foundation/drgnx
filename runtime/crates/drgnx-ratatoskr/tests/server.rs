@@ -208,6 +208,50 @@ impl Client {
             before.push(v);
         }
     }
+
+    /// `hello` with a valid proof, as id 0: a user connection.
+    #[cfg(feature = "test-hooks")]
+    fn hello(&mut self, socket: &Path) {
+        use runstav::proof;
+        let challenge = self.line().expect("the challenge");
+        let hub_nonce = challenge["data"]["nonce"].as_str().expect("a nonce");
+        let cap = proof::Cap::read(&paths::cap_path(socket)).unwrap();
+        let mine = proof::nonce().unwrap();
+        self.send(json!({"id": 0, "method": "hello", "params": {
+            "proto": 1, "nonce": mine, "proof": proof::client_proof(&cap, hub_nonce, &mine)}}));
+        let (a, _) = self.answer(0);
+        assert_eq!(a["result"]["class"], "user", "{a}");
+    }
+}
+
+/// `ratatoskr-mock`, beside this test's own directory (`<target dir>/<profile dir>`); built once when it is not there.
+#[cfg(feature = "test-hooks")]
+fn mock_binary() -> PathBuf {
+    let exe = std::env::current_exe().unwrap();
+    let dir = exe.parent().unwrap().parent().unwrap();
+    let bin = dir.join("ratatoskr-mock");
+    if !bin.exists() {
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let profile = dir.file_name().unwrap().to_str().unwrap();
+        let profile = if profile == "debug" { "dev" } else { profile };
+        let ok = Command::new(cargo)
+            .args([
+                "build",
+                "-p",
+                "domr",
+                "--bin",
+                "ratatoskr-mock",
+                "--profile",
+                profile,
+            ])
+            .arg("--target-dir")
+            .arg(dir.parent().unwrap())
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok && bin.exists(), "ratatoskr-mock is not built");
+    }
+    bin
 }
 
 fn ping(socket: &Path) -> bool {
@@ -513,6 +557,74 @@ fn a_stopped_reader_is_dropped_after_16_mib_while_another_keeps_reading() {
         assert!(Instant::now() < deadline, "no drop in the log: {log}");
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+#[cfg(feature = "test-hooks")]
+#[test]
+fn test_clock_emits_on_advance_only() {
+    // A session's update goes out at most every 50 ms, on the hub's clock: under `--test-clock` the start's update
+    // waits for `__test_advance` to reach its deadline, however much real time passes.
+    let root = Root::new();
+    let socket = root.socket();
+    let config = root.dir.path().join("h/c");
+    std::fs::create_dir_all(&config).unwrap();
+    let settings = config.join("settings.el");
+    std::fs::write(
+        &settings,
+        format!(
+            "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock\" :command ({:?} \"acp\" \"--as\" \"claude\")))))\n",
+            mock_binary().display().to_string()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&settings, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let mut hub = Hub::start_with(&root, 1, &["--test-clock"]);
+    hub.wait_ready(&socket);
+    let mut editor = Client::open(&socket);
+    editor.hello(&socket);
+    editor.send(json!({"id": 1, "method": "subscribe"}));
+    assert_eq!(editor.answer(1).0["result"], json!(true));
+    let mut c = Client::open(&socket);
+    c.hello(&socket);
+    c.send(json!({"id": 1, "method": "agents/start",
+        "params": {"profile": "mock", "cwd": root.dir.path().join("h")}}));
+    let (started, _) = c.answer(1);
+    let sid = started["result"]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{started}: {}", hub.stderr_text()))
+        .to_string();
+    let is_update = |v: &Value| v["event"] == "agent" && v["data"]["id"] == sid.as_str();
+    let mut advance = |id: u64, ms: u64| {
+        c.send(json!({"id": id, "method": "__test_advance", "params": {"ms": ms}}));
+        c.answer(id).0["result"].clone()
+    };
+    // An advance returns once what it woke has run: an update it caused is queued on the editor's connection before
+    // the advance is answered, so a ping sent after the answer comes back behind it.
+    let a = advance(2, 49);
+    assert_eq!(
+        (a["now_ms"].clone(), a["busy"].clone()),
+        (json!(49), json!([])),
+        "{a}"
+    );
+    editor.send(json!({"id": 2, "method": "ping"}));
+    let (_, before) = editor.answer(2);
+    assert!(
+        !before.iter().any(is_update),
+        "an update before 50 ms: {before:?}"
+    );
+    let a = advance(3, 1);
+    assert_eq!(
+        (a["now_ms"].clone(), a["busy"].clone()),
+        (json!(50), json!([])),
+        "{a}"
+    );
+    assert!(a["woken"].as_u64().unwrap() >= 1, "{a}");
+    editor.send(json!({"id": 3, "method": "ping"}));
+    let (_, before) = editor.answer(3);
+    assert!(
+        before.iter().any(is_update),
+        "no update at 50 ms: {before:?}"
+    );
 }
 
 #[cfg(feature = "test-hooks")]

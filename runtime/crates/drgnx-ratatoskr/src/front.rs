@@ -689,9 +689,9 @@ pub(crate) fn event_line(event: &str, data: Value) -> Option<Arc<str>> {
     Some(format!("{text}\n").into())
 }
 
-/// Seconds since the epoch.
+/// Seconds since the epoch, on the hub's clock.
 fn now() -> u64 {
-    std::time::SystemTime::now()
+    crate::clock::wall()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
 }

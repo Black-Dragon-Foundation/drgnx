@@ -53,9 +53,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 fn now() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0.0, |d| d.as_secs_f64())
+    crate::clock::wall_secs()
 }
 
 pub(crate) fn refuse(message: &str) -> Error {
@@ -2106,8 +2104,8 @@ impl Session {
             return;
         }
         let me = self.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(EMIT_EVERY).await;
+        crate::clock::spawn("session:emit", async move {
+            crate::clock::sleep(EMIT_EVERY).await;
             me.scheduled.store(false, Ordering::Release);
             me.emit();
         });
@@ -2591,8 +2589,8 @@ impl Session {
         self.persist_queue();
         self.changed();
         let me = self.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(STOP_ANSWER).await;
+        crate::clock::spawn("session:stop-answer", async move {
+            crate::clock::sleep(STOP_ANSWER).await;
             let same = {
                 let st = lock(&me.state);
                 st.status == SessionStatus::Busy && st.turn == turn
@@ -2761,8 +2759,8 @@ impl Session {
         }
         let me = self.clone();
         let turn = lock(&self.state).turn;
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(after)).await;
+        crate::clock::spawn("session:close-idle", async move {
+            crate::clock::sleep(Duration::from_secs(after)).await;
             let still = {
                 let st = lock(&me.state);
                 st.status == SessionStatus::Waiting && st.turn == turn
@@ -3323,14 +3321,14 @@ pub async fn move_session(
     }
     // stop after the current tool, then wait for the turn to end (a turn that will not is cancelled)
     hub.cancel_after_tool(id)?;
-    let end = tokio::time::Instant::now() + MOVE_WAIT;
+    let end = crate::clock::now() + MOVE_WAIT;
     while old.status() == SessionStatus::Busy {
-        if tokio::time::Instant::now() >= end {
+        if crate::clock::now() >= end {
             old.stop_turn();
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            crate::clock::sleep(Duration::from_millis(500)).await;
             break;
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        crate::clock::sleep(Duration::from_millis(50)).await;
     }
     let text = super::handoff::summary(front, id, &old.cwd, old.task.as_deref()).await;
     let start: StartParams = serde_json::from_value(json!({

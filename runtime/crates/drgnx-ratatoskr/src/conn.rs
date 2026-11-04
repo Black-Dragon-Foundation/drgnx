@@ -2,11 +2,13 @@
 //! 1 MiB codec to [`Front::line`], and lines out through a writer task
 //! of its own with a queue that drops a client that stopped reading (16 MiB queued, or 10 s without the write making
 //! progress), so one stopped client never stalls another.  With the `test-hooks` feature a line calling
-//! `__test_flood` or `__test_owner_gone` is served here, before the dispatcher (neither is a method of the registry).
+//! `__test_flood`, `__test_owner_gone` or `__test_advance` is served here, before the dispatcher (none is a method of
+//! the registry).
 //!
 //! After `mcp/attach` is answered (an outside agent's bridge), the connection is MCP's: the answer and any call in
 //! flight are written, and the bytes after the attach line go to [`crate::sessions::Sessions::serve_outside`].
 
+use crate::clock;
 use crate::front::Front;
 use crate::hello::{Session, Socket};
 use bytes::BytesMut;
@@ -41,6 +43,8 @@ pub struct Outbox {
     conn: u64,
     queue: Mutex<Queue>,
     wake: Notify,
+    /// A line was written, or the queue dropped: what [`Outbox::flushed`] waits on.
+    drained: Notify,
     closed: watch::Sender<bool>,
 }
 
@@ -63,6 +67,7 @@ impl Outbox {
                 closed: false,
             }),
             wake: Notify::new(),
+            drained: Notify::new(),
             closed: watch::channel(false).0,
         }
     }
@@ -110,24 +115,28 @@ impl Outbox {
         q.lines.clear();
         q.bytes = 0;
         drop(q);
+        self.drained.notify_waiters();
         tracing::info!(conn = self.conn, "{why}");
     }
 
-    /// Wait until everything queued so far is written (or the connection closed), at most WITHIN.
+    /// Wait until everything queued so far is written (or the connection closed), at most WITHIN on the hub's clock.
+    /// Woken by each write, never by polling: on the virtual clock a poll's sleep would wait for an advance.
     pub async fn flushed(&self, within: Duration) {
-        let deadline = tokio::time::Instant::now() + within;
-        loop {
-            {
-                let q = self.queue.lock().expect("the queue lock");
-                if q.closed || q.lines.is_empty() {
-                    return;
+        let _ = clock::timeout(within, async {
+            loop {
+                let note = self.drained.notified();
+                let mut note = std::pin::pin!(note);
+                note.as_mut().enable();
+                {
+                    let q = self.queue.lock().expect("the queue lock");
+                    if q.closed || q.lines.is_empty() {
+                        return;
+                    }
                 }
+                note.await;
             }
-            if tokio::time::Instant::now() >= deadline {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+        })
+        .await;
     }
 
     /// What is queued, taken (tests: an outbox without a writer).
@@ -174,6 +183,8 @@ impl Outbox {
             q.lines.pop_front();
             q.bytes -= len;
         }
+        drop(q);
+        self.drained.notify_waiters();
     }
 
     /// EVENT with DATA on this connection only; an event over 16 MiB is not sent (logged).
@@ -196,14 +207,15 @@ impl Outbox {
     }
 }
 
-/// The writer task: lines in order, each write given [`STUCK_AFTER`] to make progress.  When the queue was finished
+/// The writer task: lines in order, each write given [`STUCK_AFTER`] on the hub's clock to make progress.  When the
+/// queue was finished
 /// and written whole (never closed), the write half comes back: `mcp/attach` hands it on.
 async fn write_loop(mut w: OwnedWriteHalf, out: Arc<Outbox>) -> Option<OwnedWriteHalf> {
     while let Some(line) = out.next().await {
         let mut rest = line.as_bytes();
         while !rest.is_empty() {
             let step = tokio::select! {
-                r = tokio::time::timeout(STUCK_AFTER, w.write(rest)) => r,
+                r = clock::timeout(STUCK_AFTER, w.write(rest)) => r,
                 () = out.closed() => return None,
             };
             match step {
@@ -250,7 +262,7 @@ pub async fn serve(stream: UnixStream, front: Arc<Front>, socket: Socket) {
     tracing::debug!(conn = id, peer_pid = cred.pid(), "accepted a connection");
     let (mut r, w) = stream.into_split();
     let out = Arc::new(Outbox::new(id));
-    let writer = tokio::spawn(write_loop(w, out.clone()));
+    let writer = clock::spawn("conn:write", write_loop(w, out.clone()));
     let mut session = Session::new(id, socket);
     session.peer_pid = cred.pid();
     // the hub's challenge, the first line on every connection (design 4.2)
@@ -270,7 +282,10 @@ pub async fn serve(stream: UnixStream, front: Arc<Front>, socket: Socket) {
             match codec.decode(&mut buf) {
                 Ok(Some(l)) => {
                     #[cfg(feature = "test-hooks")]
-                    if flood::serve(&out, &l).await || owner_gone::serve(&front, &out, &l).await {
+                    if flood::serve(&out, &l).await
+                        || owner_gone::serve(&front, &out, &l).await
+                        || advance::serve(&out, &l).await
+                    {
                         continue;
                     }
                     front.line(&mut session, &out, &l).await;
@@ -353,6 +368,53 @@ mod owner_gone {
     }
 }
 
+/// `__test_advance {ms}` (test-hooks): the virtual clock moved by MS ([`clock::advance`]); answered with
+/// `{now_ms, woken, busy, unnamed}`, or refused when the hub runs on the real clock (no `serve --test-clock`).
+#[cfg(feature = "test-hooks")]
+mod advance {
+    use super::Outbox;
+    use crate::clock;
+    use runstav::wire::{Answer, Error, ErrorAnswer, ErrorCode, Request};
+    use serde_json::json;
+    use std::time::Duration;
+
+    /// Serve LINE when it is a `__test_advance` request (true), else leave it to the dispatcher.
+    pub(super) async fn serve(out: &Outbox, line: &str) -> bool {
+        let Ok(req) = serde_json::from_str::<Request>(line) else {
+            return false;
+        };
+        if req.method != "__test_advance" {
+            return false;
+        }
+        let text = if !clock::is_virtual() {
+            req.id.map(|id| {
+                serde_json::to_string(&ErrorAnswer {
+                    id,
+                    error: Error {
+                        code: ErrorCode::NotAllowed,
+                        message: "the hub runs on the real clock".into(),
+                        path: None,
+                    },
+                })
+            })
+        } else {
+            let ms = req.params["ms"].as_u64().unwrap_or(0);
+            let a = clock::advance(Duration::from_millis(ms)).await;
+            req.id.map(|id| {
+                serde_json::to_string(&Answer {
+                    id,
+                    result: json!({"now_ms": a.now_ms, "woken": a.woken, "busy": a.busy, "unnamed": a.unnamed}),
+                    ignored: vec![],
+                })
+            })
+        };
+        if let Some(text) = text {
+            out.push(format!("{}\n", text.expect("an answer serializes")).into());
+        }
+        true
+    }
+}
+
 /// `__test_flood {lines, size}` (test-hooks): LINES `flood` events of SIZE bytes of data, one per millisecond, on
 /// this connection; answered with how many were queued before the connection was dropped.
 #[cfg(feature = "test-hooks")]
@@ -386,7 +448,7 @@ mod flood {
         let mut queued = 0u64;
         while queued < lines && out.push(event.clone()) {
             queued += 1;
-            tokio::time::sleep(Duration::from_millis(1)).await;
+            crate::clock::sleep(Duration::from_millis(1)).await;
         }
         if let Some(id) = req.id {
             let a = serde_json::to_string(&Answer {
