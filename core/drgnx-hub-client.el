@@ -345,7 +345,8 @@ the CLI proves it read in its hello."
       (drgnx-hub--version-read-ended p))))
 
 (defun drgnx-hub--version-read-ended (p)
-  "The read P ended (or ran too long): the functions waiting for its answer (`drgnx-hub--with-binary-version') run once."
+  "The read P ended (or ran too long): the functions waiting for its answer
+\(`drgnx-hub--with-binary-version') run once."
   (drgnx-timer-cancel (cons 'hub-binary-version p))
   (let ((fns (nreverse (process-get p :then))))
     (process-put p :then nil)
@@ -738,8 +739,8 @@ replace a good one in the hub."
 
 (defun drgnx-hub--send-keys ()
   "Hand the hub the keys this Emacs holds (`drgnx-hub--held-keys'), over the socket: never in an environment, an
-argument or a file, and only to a hub that proved itself (`drgnx-hub-core--transmit').  Once the hub took them this Emacs
-drops them (`drgnx-hub--keys-taken'): the hub alone holds them, in memory, and those in the environment go again on
+argument or a file, and only to a hub that proved itself (`drgnx-hub-core--transmit').  Once the hub took them this
+Emacs drops them (`drgnx-hub--keys-taken'): the hub alone holds them, in memory, and those in the environment go again on
 each start and each (re)connect.  The call's id."
   (when-let* ((keys (drgnx-hub--held-keys)))
     (drgnx-hub-call "gateway/keys" (list :keys keys) (lambda (_result err) (drgnx-hub--keys-taken keys err)))))
@@ -998,8 +999,8 @@ Ratatoskr is not built, or starting is off (DRGNX_NO_HUB_START)."
            p))))
 
 (defun drgnx-hub--restart-legacy ()
-  "End the Lisp hub of before this update (protocol 0 has `shutdown', not `restart'), wait up to 5 s for its lock directory
-to go, then start Ratatoskr."
+  "End the Lisp hub of before this update (protocol 0 has `shutdown', not `restart'), wait up to 5 s for its lock
+directory to go, then start Ratatoskr."
   (let ((lock (concat (drgnx-hub-socket) ".lock")) (limit (+ (float-time) 5)))
     (ignore-errors (drgnx-hub-call-sync "shutdown" nil 5))
     (while (and (file-exists-p lock) (< (float-time) limit)) (accept-process-output nil 0.05))
@@ -1046,8 +1047,8 @@ Sent to the hub when this editor connects and when you change it."
   :type 'boolean :group 'drgnx :set #'drgnx-hub--only-closes-set)
 
 (defun drgnx-hub-connect ()
-  "Subscribe to the hub's events (`drgnx-hub-event-functions') and, once the hub answered, hand it the provider table and
-the keys this Emacs holds (`drgnx-hub--hand-over'); answer its `gateway/need-keys' (`drgnx-hub--need-keys').
+  "Subscribe to the hub's events (`drgnx-hub-event-functions') and, once the hub answered, hand it the provider table
+and the keys this Emacs holds (`drgnx-hub--hand-over'); answer its `gateway/need-keys' (`drgnx-hub--need-keys').
 Asynchronous; safe to call again, also before the hub has answered (one subscription: the core decides whether to
 dial, and gives up a `subscribe' left unanswered past `drgnx-hub-subscribe-deadline').  When the hub answers the
 subscription, the core runs the hand-over (`drgnx-hub-core--subscribed')."
