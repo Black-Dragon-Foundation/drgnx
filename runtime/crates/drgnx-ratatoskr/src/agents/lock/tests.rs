@@ -150,7 +150,11 @@ fn gateway_profiles_get_claudes_lock_and_ttl_1h() {
         assert_eq!(env["CLAUDE_CODE_PROMPT_CACHE_TTL"], "1h");
     }
     // Chats keep 5 m; a subscription profile has no TTL variable.
-    let ttl = |p: &LaunchPlan| p.env.iter().any(|(k, _)| k == "CLAUDE_CODE_PROMPT_CACHE_TTL");
+    let ttl = |p: &LaunchPlan| {
+        p.env
+            .iter()
+            .any(|(k, _)| k == "CLAUDE_CODE_PROMPT_CACHE_TTL")
+    };
     assert!(!ttl(&plan(&gw, Role::Chat, &Effective::default())));
     let sub = profile(&["claude-agent-acp"], None, &[], None);
     let plan = plan(&sub, Role::Worker, &Effective::default());
@@ -161,12 +165,17 @@ fn gateway_profiles_get_claudes_lock_and_ttl_1h() {
 /// those hosts.  Another CLI's plan does not get the variable.
 #[test]
 fn claude_sends_no_nonessential_traffic() {
-    for (cmd, ai) in [("claude-agent-acp", None), ("claude-agent-acp", Some("claude-openrouter"))] {
+    for (cmd, ai) in [
+        ("claude-agent-acp", None),
+        ("claude-agent-acp", Some("claude-openrouter")),
+    ] {
         for role in [Role::Chat, Role::Worker, Role::Manager] {
             let plan = plan(&profile(&[cmd], ai, &[], None), role, &Effective::default());
             assert!(
-                plan.env
-                    .contains(&("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".into(), "1".into())),
+                plan.env.contains(&(
+                    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".into(),
+                    "1".into()
+                )),
                 "{ai:?} {role:?}"
             );
             let env = &plan.session_meta.unwrap()["claudeCode"]["options"]["env"];
@@ -174,7 +183,11 @@ fn claude_sends_no_nonessential_traffic() {
         }
     }
     for cmd in ["codex-acp", "gemini"] {
-        let plan = plan(&profile(&[cmd], None, &[], None), Role::Worker, &Effective::default());
+        let plan = plan(
+            &profile(&[cmd], None, &[], None),
+            Role::Worker,
+            &Effective::default(),
+        );
         assert!(plan.env.is_empty(), "{cmd}");
     }
 }

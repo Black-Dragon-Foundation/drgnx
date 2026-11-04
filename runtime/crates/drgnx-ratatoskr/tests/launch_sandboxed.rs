@@ -316,7 +316,10 @@ fn a_gateway_session_reaches_the_hubs_gateway_through_its_relay() {
         )
         .expect("the session's registration");
     let token = r["token"].as_str().expect("a token").to_string();
-    assert!(r["socket"].is_string() && r.get("url").is_none_or(|u| u.is_null()), "{r}");
+    assert!(
+        r["socket"].is_string() && r.get("url").is_none_or(|u| u.is_null()),
+        "{r}"
+    );
 
     let mut plan = fx.plan(&format!(
         "out=$(curl -sS -H \"Authorization: Bearer $ANTHROPIC_AUTH_TOKEN\" -H 'content-type: application/json' \

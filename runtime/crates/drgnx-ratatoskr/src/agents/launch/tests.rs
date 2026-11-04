@@ -185,7 +185,10 @@ fn a_gateway_session_gets_a_second_relay_to_its_gateway_socket() {
         gw.env
             .contains(&("NO_PROXY".into(), "127.0.0.1,localhost".into()))
     );
-    assert!(gw.env.contains(&("ANTHROPIC_AUTH_TOKEN".into(), "tok".into())));
+    assert!(
+        gw.env
+            .contains(&("ANTHROPIC_AUTH_TOKEN".into(), "tok".into()))
+    );
     assert!(gw.env.contains(&(
         "HTTPS_PROXY".into(),
         format!("http://127.0.0.1:{}", relay[0].port)
