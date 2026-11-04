@@ -6,13 +6,21 @@
 //! the registry), and under `serve --test-sequencer` lines are read and served in the order
 //! the `sequencer` gives (`__test_barrier` is its own).
 //!
+//! The queue and the choice between reading and stopping are a pure core (`pure`, tested in every order); this file is
+//! the shell that does the I/O and feeds the core every event.
+//!
 //! After `mcp/attach` is answered (an outside agent's bridge), the connection is MCP's: the answer and any call in
 //! flight are written, and the bytes after the attach line go to [`crate::sessions::Sessions::serve_outside`].
+
+mod pure;
+#[cfg(test)]
+mod tests;
 
 use crate::clock;
 use crate::front::Front;
 use crate::hello::{Session, Socket};
 use bytes::BytesMut;
+use pure::{ConnCore, ConnEffect, ConnEvent};
 use runstav::line;
 use runstav::proof;
 use runstav::wire::Event;
@@ -22,7 +30,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
-use tokio::net::unix::OwnedWriteHalf;
+use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::{Notify, watch};
 use tokio_util::codec::Decoder;
 
@@ -49,12 +57,33 @@ pub struct Outbox {
     closed: watch::Sender<bool>,
 }
 
+/// The core, and the lines its queue counts.
 struct Queue {
+    core: ConnCore,
     lines: VecDeque<Arc<str>>,
-    bytes: usize,
-    /// Nothing more is queued: the writer ends once the queue is written (the client sent EOF).
-    finishing: bool,
-    closed: bool,
+    /// Every event fed to the core, in order (tests: the shell's edges).
+    #[cfg(test)]
+    events: Vec<ConnEvent>,
+}
+
+impl Queue {
+    /// EV through the core; LINE, if the core queues it, joins the lines, which follow its effects.
+    fn step(&mut self, ev: ConnEvent, line: Option<Arc<str>>) -> Vec<ConnEffect> {
+        #[cfg(test)]
+        self.events.push(ev);
+        let effects = self.core.step(ev);
+        for e in &effects {
+            match e {
+                ConnEffect::Queue => self.lines.extend(line.clone()),
+                ConnEffect::Drop => self.lines.clear(),
+                ConnEffect::Pop => {
+                    self.lines.pop_front();
+                }
+                ConnEffect::Refuse | ConnEffect::Log | ConnEffect::Serve | ConnEffect::Skip => {}
+            }
+        }
+        effects
+    }
 }
 
 impl Outbox {
@@ -62,10 +91,10 @@ impl Outbox {
         Outbox {
             conn,
             queue: Mutex::new(Queue {
+                core: ConnCore::new(),
                 lines: VecDeque::new(),
-                bytes: 0,
-                finishing: false,
-                closed: false,
+                #[cfg(test)]
+                events: Vec::new(),
             }),
             wake: Notify::new(),
             drained: Notify::new(),
@@ -88,49 +117,85 @@ impl Outbox {
 
     /// [`Outbox::push`] at once, whatever step this is.
     pub(crate) fn push_now(&self, line: Arc<str>) -> bool {
-        let mut q = self.queue.lock().expect("the queue lock");
-        if q.closed || q.finishing {
-            return false;
-        }
-        if q.bytes + line.len() > MAX_QUEUED {
-            drop(q);
-            self.close("dropped a client that stopped reading: queued over 16 MiB");
-            return false;
-        }
-        q.bytes += line.len();
-        q.lines.push_back(line);
-        drop(q);
-        self.wake.notify_one();
-        true
+        let len = line.len();
+        self.step_with(
+            ConnEvent::Push { len },
+            "dropped a client that stopped reading: queued over 16 MiB",
+            Some(line),
+        )
+        .contains(&ConnEffect::Queue)
     }
 
     /// Close the connection now (logged once, with WHY): nothing more is written, and its lines are no longer read.
     pub fn close(&self, why: &str) {
-        self.discard(why);
-        self.closed.send_replace(true);
-        self.wake.notify_one();
+        self.step(ConnEvent::Close, why);
     }
 
     /// The client left (its socket refused a write): nothing more is written, but the lines it sent before it left are
     /// still read and served, to its end of file: a CLI that sends `exec/stop` as it exits, behind calls whose answers
     /// it no longer reads, still has its job stopped.  Logged once, with WHY.
     fn gone(&self, why: &str) {
-        self.discard(why);
-        self.wake.notify_one();
+        self.step(ConnEvent::WriteRefused, why);
     }
 
-    /// Drop what is queued and take no more (logged with WHY the first time).
-    fn discard(&self, why: &str) {
-        let mut q = self.queue.lock().expect("the queue lock");
-        if q.closed {
-            return;
-        }
-        q.closed = true;
-        q.lines.clear();
-        q.bytes = 0;
+    fn lock(&self) -> std::sync::MutexGuard<'_, Queue> {
+        self.queue.lock().expect("the queue lock")
+    }
+
+    /// EV through the core (WHY logged if it is the connection's first close).
+    fn step(&self, ev: ConnEvent, why: &str) -> Vec<ConnEffect> {
+        self.step_with(ev, why, None)
+    }
+
+    fn step_with(&self, ev: ConnEvent, why: &str, line: Option<Arc<str>>) -> Vec<ConnEffect> {
+        let mut q = self.lock();
+        let effects = q.step(ev, line);
+        let closed = q.core.closed();
         drop(q);
-        self.drained.notify_waiters();
-        tracing::info!(conn = self.conn, "{why}");
+        if effects.contains(&ConnEffect::Log) {
+            tracing::info!(conn = self.conn, "{why}");
+        }
+        if effects.contains(&ConnEffect::Drop) || effects.contains(&ConnEffect::Pop) {
+            self.drained.notify_waiters();
+        }
+        // the reader's choice: its socket, or this close
+        if closed {
+            self.closed
+                .send_if_modified(|c| !std::mem::replace(c, true));
+        }
+        self.wake.notify_one();
+        effects
+    }
+
+    /// Is the line just read served (true), or has reading stopped?
+    fn line_read(&self) -> bool {
+        self.step(ConnEvent::LineRead, "") == [ConnEffect::Serve]
+    }
+
+    /// Are the client's lines still read?
+    fn reading(&self) -> bool {
+        self.lock().core.reading()
+    }
+
+    /// Reading the client's socket failed (logged once, with WHY).
+    fn read_error(&self, why: &str) {
+        self.step(ConnEvent::ReadError, why);
+    }
+
+    /// A write made no progress for [`STUCK_AFTER`] (logged once, with WHY).
+    fn stuck(&self, why: &str) {
+        self.step(ConnEvent::WriteStuck, why);
+    }
+
+    /// The connection is MCP's from its next byte: no more lines are read; the writer ends after what is queued.
+    fn attached(&self) {
+        self.step(ConnEvent::Attach, "");
+    }
+
+    /// Every event fed to the core so far (tests).
+    #[cfg(test)]
+    fn events(&self) -> Vec<ConnEvent> {
+        self.lock().events.clone()
     }
 
     /// Wait until everything queued so far is written (or the connection closed), at most WITHIN on the hub's clock.
@@ -141,11 +206,8 @@ impl Outbox {
                 let note = self.drained.notified();
                 let mut note = std::pin::pin!(note);
                 note.as_mut().enable();
-                {
-                    let q = self.queue.lock().expect("the queue lock");
-                    if q.closed || q.lines.is_empty() {
-                        return;
-                    }
+                if self.lock().core.queued_bytes() == 0 {
+                    return;
                 }
                 note.await;
             }
@@ -156,15 +218,18 @@ impl Outbox {
     /// What is queued, taken (tests: an outbox without a writer).
     #[cfg(test)]
     pub(crate) fn take_lines(&self) -> Vec<Arc<str>> {
-        let mut q = self.queue.lock().expect("the queue lock");
-        q.bytes = 0;
-        q.lines.drain(..).collect()
+        let mut q = self.lock();
+        let mut taken = Vec::new();
+        while let Some(l) = q.lines.front().cloned() {
+            q.step(ConnEvent::Written { len: l.len() }, None);
+            taken.push(l);
+        }
+        taken
     }
 
-    /// No more lines: the writer ends after what is queued.
+    /// The client's end of file: no more lines; the writer ends after what is queued.
     fn finish(&self) {
-        self.queue.lock().expect("the queue lock").finishing = true;
-        self.wake.notify_one();
+        self.step(ConnEvent::ClientEof, "");
     }
 
     async fn closed(&self) {
@@ -176,15 +241,12 @@ impl Outbox {
     async fn next(&self) -> Option<Arc<str>> {
         loop {
             {
-                let q = self.queue.lock().expect("the queue lock");
-                if q.closed {
+                let q = self.lock();
+                if !q.core.writing() {
                     return None;
                 }
                 if let Some(l) = q.lines.front() {
                     return Some(l.clone());
-                }
-                if q.finishing {
-                    return None;
                 }
             }
             self.wake.notified().await;
@@ -192,13 +254,7 @@ impl Outbox {
     }
 
     fn written(&self, len: usize) {
-        let mut q = self.queue.lock().expect("the queue lock");
-        if !q.closed {
-            q.lines.pop_front();
-            q.bytes -= len;
-        }
-        drop(q);
-        self.drained.notify_waiters();
+        self.step(ConnEvent::Written { len }, "");
     }
 
     /// EVENT with DATA on this connection only; an event over 16 MiB is not sent (logged).
@@ -221,9 +277,10 @@ impl Outbox {
     }
 }
 
-/// The writer task: lines in order, each write given [`STUCK_AFTER`] on the hub's clock to make progress.  When the
-/// queue was finished
-/// and written whole (never closed), the write half comes back: `mcp/attach` hands it on.
+/// The writer task: lines in order, each write given [`STUCK_AFTER`] on the hub's clock to make progress.  It reports
+/// a line written only after writing it all (a `Written` follows its `Push`), and at most one of a refused and a stuck
+/// write, then ends.  When the queue was finished and written whole (never closed), the write half comes back:
+/// `mcp/attach` hands it on.
 async fn write_loop(mut w: OwnedWriteHalf, out: Arc<Outbox>) -> Option<OwnedWriteHalf> {
     while let Some(line) = out.next().await {
         let mut rest = line.as_bytes();
@@ -239,16 +296,65 @@ async fn write_loop(mut w: OwnedWriteHalf, out: Arc<Outbox>) -> Option<OwnedWrit
                     return None;
                 }
                 Err(_) => {
-                    out.close("dropped a client that stopped reading: no progress for 10 s");
+                    out.stuck("dropped a client that stopped reading: no progress for 10 s");
                     return None;
                 }
             }
         }
         out.written(line.len());
     }
-    let whole = !out.queue.lock().expect("the queue lock").closed;
+    let whole = out.lock().core.whole();
     out.close("closed a connection");
     whole.then_some(w)
+}
+
+/// A connection's reading side: its socket's bytes, decoded into lines.
+struct Reader {
+    codec: tokio_util::codec::LinesCodec,
+    buf: BytesMut,
+}
+
+impl Reader {
+    fn new() -> Reader {
+        Reader {
+            codec: line::codec(),
+            buf: BytesMut::with_capacity(8192),
+        }
+    }
+
+    /// The next line to serve, read from R: none once reading stops (the client's EOF, which is the last read event, a
+    /// read error, a malformed line, or a close).  Whether a line read is served is the core's choice.
+    async fn next(&mut self, r: &mut OwnedReadHalf, out: &Outbox) -> Option<String> {
+        loop {
+            match self.codec.decode(&mut self.buf) {
+                Ok(Some(l)) => return out.line_read().then_some(l),
+                Ok(None) => {}
+                Err(e) => {
+                    out.close(&format!("closed a connection: {e}"));
+                    return None;
+                }
+            }
+            if !out.reading() {
+                return None;
+            }
+            let n = tokio::select! {
+                n = r.read_buf(&mut self.buf) => n,
+                () = out.closed() => return None,
+            };
+            match n {
+                // EOF: a partial line is dropped with the connection; what is queued is still written
+                Ok(0) => {
+                    out.finish();
+                    return None;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    out.read_error(&format!("closed a connection: {e}"));
+                    return None;
+                }
+            }
+        }
+    }
 }
 
 /// Serve one connection accepted on SOCKET until it closes.
@@ -303,8 +409,7 @@ async fn serve_conn(stream: UnixStream, front: Arc<Front>, socket: Socket) {
         }
         Err(e) => out.close(&format!("closed a connection: {e}")),
     }
-    let mut codec = line::codec();
-    let mut buf = BytesMut::with_capacity(8192);
+    let mut reader = Reader::new();
     // `mcp/attach` answered: the identity the rest of the connection's bytes are MCP for
     let mut attached = None;
     #[cfg(feature = "test-hooks")]
@@ -314,7 +419,7 @@ async fn serve_conn(stream: UnixStream, front: Arc<Front>, socket: Socket) {
                 &seq,
                 mail,
                 &r,
-                (&mut codec, &mut buf),
+                (&mut reader.codec, &mut reader.buf),
                 &front,
                 &out,
                 &mut session,
@@ -327,48 +432,20 @@ async fn serve_conn(stream: UnixStream, front: Arc<Front>, socket: Socket) {
     };
     #[cfg(not(feature = "test-hooks"))]
     let sequenced = false;
-    'read: loop {
-        if sequenced {
-            break;
-        }
-        loop {
-            match codec.decode(&mut buf) {
-                Ok(Some(l)) => {
-                    #[cfg(feature = "test-hooks")]
-                    if flood::serve(&out, &l).await
-                        || owner_gone::serve(&front, &out, &l).await
-                        || advance::serve(&out, &l).await
-                        || barrier_refused(&out, &l)
-                    {
-                        continue;
-                    }
-                    front.line(&mut session, &out, &l).await;
-                    if let Some(who) = session.attach.take() {
-                        // what follows the line in BUF is the first MCP bytes, never a hub line
-                        attached = Some(who);
-                        break 'read;
-                    }
-                }
-                Ok(None) => break,
-                Err(e) => {
-                    out.close(&format!("closed a connection: {e}"));
-                    break 'read;
-                }
+    if !sequenced {
+        while let Some(l) = reader.next(&mut r, &out).await {
+            #[cfg(feature = "test-hooks")]
+            if flood::serve(&out, &l).await
+                || owner_gone::serve(&front, &out, &l).await
+                || advance::serve(&out, &l).await
+                || barrier_refused(&out, &l)
+            {
+                continue;
             }
-        }
-        let n = tokio::select! {
-            n = r.read_buf(&mut buf) => n,
-            () = out.closed() => break,
-        };
-        match n {
-            // EOF: a partial line is dropped with the connection; what is queued is still written
-            Ok(0) => {
-                out.finish();
-                break;
-            }
-            Ok(_) => {}
-            Err(e) => {
-                out.close(&format!("closed a connection: {e}"));
+            front.line(&mut session, &out, &l).await;
+            if let Some(who) = session.attach.take() {
+                // what follows the line in the reader's buffer is the first MCP bytes, never a hub line
+                attached = Some(who);
                 break;
             }
         }
@@ -379,11 +456,11 @@ async fn serve_conn(stream: UnixStream, front: Arc<Front>, socket: Socket) {
         return;
     };
     // the answer written first, then the connection is MCP's from its next byte
-    out.finish();
+    out.attached();
     let Ok(Some(w)) = writer.await else {
         return;
     };
-    let rest = std::io::Cursor::new(buf.to_vec());
+    let rest = std::io::Cursor::new(reader.buf.to_vec());
     front.mcp.serve_outside(who, rest.chain(r), w).await;
 }
 
@@ -419,9 +496,10 @@ async fn sequenced(
                     }
                 }
                 Some(Msg::Serve(l, done)) => {
-                    if !(flood::serve(out, &l).await
-                        || owner_gone::serve(front, out, &l).await
-                        || advance::serve(out, &l).await)
+                    if out.line_read()
+                        && !(flood::serve(out, &l).await
+                            || owner_gone::serve(front, out, &l).await
+                            || advance::serve(out, &l).await)
                     {
                         front.line(session, out, &l).await;
                     }

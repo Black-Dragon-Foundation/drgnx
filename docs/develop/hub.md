@@ -391,6 +391,33 @@ lines and limits, with these differences:
   gets nothing more written, but the lines it sent before it left are still read and served, up to its end of file: a
   CLI that sends `exec/stop` as it exits, behind calls whose answers it no longer reads, still has its job stopped.
 
+### One connection
+
+The queue and the choice between reading and stopping are a pure core, `conn/pure.rs` (`ConnCore`). It has no I/O,
+clock or threads. The shell (`conn.rs`: `Outbox`, the writer task, the reader, the sequencer's path) does the I/O and
+feeds every event through `ConnCore::step`:
+
+- `Push {len}`, `Close`, `ClientEof`, `ReadError`, `LineRead`, `Written {len}`, `WriteRefused`, `WriteStuck`,
+  `Attach`.
+- The core answers with effects: queue or refuse the line, drop the queue, log the first close, serve or skip the
+  line read, pop the line written.
+- The shell asks it `reading()` (read the socket, or stop: the reader's `select!` is this choice), `closed()`,
+  `writing()` (the writer goes on, or ends), `queued_bytes()` and `whole()` (the write half is handed on to
+  `mcp/attach`).
+
+A refused write (the client left) drops the queue, but reading goes on to the client's end of file. A close, a read
+error, a malformed line, a stuck write or a queue over 16 MiB stops both.
+
+`conn/pure/tests.rs` runs the core in every order of the hub `[Push×3, Close]`, the writer `[Written×2,
+WriteRefused]` and a client `[LineRead×3, ClientEof]` (skuld, exhaustive: 5,280 orders). The third push leaves a line
+for the refused write to be writing. It also runs the over-limit close in every order, and 500 random orders of four
+sources of six. The edges those orders take as given are the shell's, each
+tested over a socket pair in `conn/tests.rs`:
+
+- a line is reported written only after its push, in order;
+- the client's EOF is the last read event;
+- the writer reports at most one of a refused and a stuck write, then ends.
+
 ### hello and versions
 
 Ratatoskr's `hello` (protocol v1, `runtime/crates/drgnx-ratatoskr/src/hello.rs`) closes SB-T12-6: a hello line is
