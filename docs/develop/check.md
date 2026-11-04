@@ -125,8 +125,9 @@ skips is not a pass nobody sees.
   bound and carry the tag; a give-up that is a `drgnx-timer-*` timer is tested on virtual time instead
   (`drgnx-test-with-clock`) and needs no tag.
 - **`test/no-skip.eld`**, `((PLATFORM NAME…)…)` with PLATFORM a `system-type` (`gnu/linux`, `darwin`), lists tests that
-  must run on that platform because the CI image installs what they need. In a run **without a selector**, a listed
-  test that skipped fails the run: `NAME must run on PLATFORM but skipped: REASON`. With a selector it is ignored (a
+  must run on that platform because the CI image installs what they need. In a run **without a selector**, or one that
+  selects a class alone (`(tag :det)`, `(tag :cond)`, `(tag :timing)`: the pre-flight's runs), a listed test that
+  skipped fails the run: `NAME must run on PLATFORM but skipped: REASON`. With any other selector it is ignored (a
   narrow run may not have the tool). `DRGNX_TEST_NO_SKIP=FILE` names another list (the runner's own tests).
 
 ## A flake is a result (`DRGNX_TEST_RERUN`)

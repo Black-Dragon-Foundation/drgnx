@@ -1,6 +1,6 @@
 ;;; no-skip.eld --- tests that must run, not skip, on a platform  -*- mode: lisp-data -*-
-;; ((PLATFORM NAME…)…): PLATFORM is a `system-type' (gnu/linux, darwin).  In a run without a selector, a test
-;; listed for the platform it runs on that skips fails the run (harness/run-ert.el).  Seeded for gnu/linux with
+;; ((PLATFORM NAME…)…): PLATFORM is a `system-type' (gnu/linux, darwin).  In a run without a selector, or of one
+;; class alone (`(tag :cond)'), a test listed for the platform it runs on that skips fails the run (harness/run-ert.el).  Seeded for gnu/linux with
 ;; the tests that skip unless a tool is on PATH that the CI images install (test/container/Containerfile*:
 ;; git, zsh, coreutils, bash).  Never a test tagged :timing: CI leaves those out on purpose.  Task 26 adds darwin from CI's first summaries.
 ((gnu/linux

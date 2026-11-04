@@ -291,6 +291,12 @@ as skipped (CI's shared runners)."
     (if given (expand-file-name given)
       (expand-file-name "../test/no-skip.eld" (file-name-directory drgnx-run-ert--self)))))
 
+(defun drgnx-run-ert--must-run-p (selector)
+  "Whether a run of SELECTOR (the raw one, nil for every test) holds the must-run list: a full run, or a run of one
+class, `(tag :det)', `(tag :cond)' or `(tag :timing)' (the pre-flight's runs), whose skipped tests are that class's."
+  (or (null selector)
+      (and (eq (car-safe selector) 'tag) (memq (cadr selector) '(:det :cond :timing)) (null (cddr selector)))))
+
 (defun drgnx-run-ert--no-skip-failures (skipped)
   "Failures (:name :condition), one for each of SKIPPED (entries :name :reason) that the must-run list names for
 this `system-type'.  The list is `((PLATFORM NAME…)…)'; a file that is missing names nothing."
@@ -616,8 +622,8 @@ summary to RESULTS-FILE.  Return t if every test passed."
           (t (push (list :name name :condition (format "known red, but it errored: %s" (drgnx-run-ert--condition-text condition)))
                    failures)))))))
     (setq skipped (nreverse skipped))
-    ;; a test the must-run list names that skipped: a full run only (a per-file Emacs leaves it to its parent)
-    (when (and (null selector) (not drgnx-run-ert--order-in) (not drgnx-run-ert--file-child))
+    ;; a test the must-run list names that skipped: a full or a class run (a per-file Emacs leaves it to its parent)
+    (when (and (drgnx-run-ert--must-run-p selector) (not drgnx-run-ert--order-in) (not drgnx-run-ert--file-child))
       (setq load-failures (append load-failures (drgnx-run-ert--no-skip-failures skipped))))
     (setq skipped (append skipped (drgnx-run-ert--timing-skipped selector) (drgnx-run-ert--gate-skipped selector)))
     (unless drgnx-run-ert--file-child (drgnx-run-ert--say-skipped skipped))
@@ -1016,8 +1022,8 @@ file passed."
                                               :failures (vector f))
                                    :passed 0))))
       (setq summary (drgnx-run-ert--judge-flaky summary))
-      ;; a must-run test that skipped, in a full run (the files' own Emacsen leave it to this one)
-      (when (and (null selector) (not drgnx-run-ert--order-in))
+      ;; a must-run test that skipped, in a full or a class run (the files' own Emacsen leave it to this one)
+      (when (and (drgnx-run-ert--must-run-p selector) (not drgnx-run-ert--order-in))
         (when-let* ((more (drgnx-run-ert--no-skip-failures (append (plist-get summary :skipped) nil))))
           (setq summary (plist-put (plist-put (plist-put summary :total (+ (plist-get summary :total) (length more)))
                                               :failed (+ (plist-get summary :failed) (length more)))
