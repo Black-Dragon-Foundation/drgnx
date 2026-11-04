@@ -252,6 +252,26 @@ of it.  A wrapper's wait for a process to start (`(process-live-p P)') is no rac
                            unless (and (stringp v) (not (string-empty-p (string-trim v))))
                            collect (format "%s: no %s" name key))))
 
+(defconst drgnx-lint--flaky-allowed '(drgnx-remote/a-second-file-of-the-project-joins-the-running-server)
+  "The tests `test/flaky.eld' may list: the one row of 2026-11-04.  The list is read-only, so this only shrinks: a flaky
+test is made deterministic (orders, gated, handshake), not listed.")
+
+(defun drgnx-lint--flaky-new-rows (entries)
+  "The names of ENTRIES (`(NAME …)') that `drgnx-lint--flaky-allowed' does not hold, as strings."
+  (cl-loop for e in entries
+           unless (memq (car-safe e) drgnx-lint--flaky-allowed)
+           collect (format "%s" (car-safe e))))
+
+(ert-deftest drgnx-lint/flaky-list-takes-no-new-rows ()
+  (let ((entries (with-temp-buffer
+                   (insert-file-contents (expand-file-name "test/flaky.eld" drgnx-dir))
+                   (read (current-buffer)))))
+    (should (equal (drgnx-lint--flaky-new-rows entries) nil)))
+  (should (equal (drgnx-lint--flaky-new-rows
+                  '((drgnx-remote/a-second-file-of-the-project-joins-the-running-server :reason "x") (a/b :reason "y")))
+                 '("a/b")))
+  (should (equal (drgnx-lint--flaky-new-rows nil) nil)))
+
 (ert-deftest drgnx-lint/flaky-entries-have-a-reason-and-a-stress-run ()
   ;; test/flaky.eld: a flake the CI tolerates is a decision with a cause and a measured stress run (bin/drgnx test --stress)
   (let ((entries (with-temp-buffer
