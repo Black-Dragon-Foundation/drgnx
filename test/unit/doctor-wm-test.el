@@ -9,6 +9,7 @@
 (require 'drgnx-doctor)
 (require 'drgnx-platform)
 (require 'drgnx-tty-recommend)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-doctor-wm-test--vars
   '("SWAYSOCK" "I3SOCK" "HYPRLAND_INSTANCE_SIGNATURE" "NIRI_SOCKET" "WAYLAND_DISPLAY" "DISPLAY" "XAUTHORITY"
@@ -116,17 +117,20 @@ and `exec-path' (`drgnx-doctor-wm-test--tool' adds to it), a dead session bus an
     (should (equal (nth 2 (drgnx-doctor-wm-test--row "fedora-45")) "sudo dnf install i3"))))
 
 (ert-deftest drgnx-doctor-wm/a-silent-wm-warns-within-a-second ()
-  (drgnx-doctor-wm-test--with (append '("DRGNX_FAKE_WM_DELAY=5" "DRGNX_FAKE_WM_MAP=get_outputs sway/get_outputs")
+  ;; The fake never answers in the test's time (600 s).  On the virtual clock the wait gives up at its own cut-off:
+  ;; virtual time stands at the 1 s limit (plus one poll tick), not at 0 (no wait) and not at a longer block.
+  (drgnx-doctor-wm-test--with (append '("DRGNX_FAKE_WM_DELAY=600" "DRGNX_FAKE_WM_MAP=get_outputs sway/get_outputs")
                                       drgnx-doctor-wm-test--sway)
     (let ((done (expand-file-name "done" drgnx-doctor-wm-test--bin)))
       (setq process-environment (cons (concat "DRGNX_FAKE_WM_DONE=" done) process-environment))
       (drgnx-doctor-wm-test--fake "swaymsg")
       (drgnx-doctor-wm-test--script "sway" "sway version 1.10")
-      (let ((row (drgnx-doctor-wm-test--row)))              ; the fake answers after 5 s: the row is the 1 s cut-off's
-        (should (equal row '(warn "sway did not answer within 1 s" "run drgnx doctor from a terminal inside your sway session")))
-        ;; ordering, not a clock: the fake was asked, and had not finished its delay when the row came back
-        (should (member "swaymsg -t get_outputs" (drgnx-doctor-wm-test--calls)))
-        (should-not (file-exists-p done))))))
+      (drgnx-test-with-clock ()
+        (let ((row (drgnx-doctor-wm-test--row)))
+          (should (equal row '(warn "sway did not answer within 1 s" "run drgnx doctor from a terminal inside your sway session")))
+          (should (member "swaymsg -t get_outputs" (drgnx-doctor-wm-test--calls)))
+          (should-not (file-exists-p done))
+          (should (<= 1.0 (drgnx-test-clock-now) 1.1)))))))
 
 (ert-deftest drgnx-doctor-wm/over-ssh-it-is-info ()
   (let ((info '(info "no graphical session here: run drgnx doctor in your desktop's terminal to check its window manager" nil)))
