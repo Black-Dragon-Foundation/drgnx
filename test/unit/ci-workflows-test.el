@@ -20,7 +20,7 @@
   "The text of .github/actions/NAME/action.yml, or nil outside a checkout that has it."
   (drgnx-ci-test--file (concat ".github/actions/" name "/action.yml")))
 
-(defconst drgnx-ci-test--actions '("build-test-bins" "fetch-test-bins" "test-image" "gate"))
+(defconst drgnx-ci-test--actions '("build-test-bins" "fetch-test-bins" "test-image" "gate" "test-elpa"))
 
 (defun drgnx-ci-test--has (text &rest needles)
   (dolist (n needles) (should (string-search n text))))
@@ -105,6 +105,15 @@
       (drgnx-ci-test--has (drgnx-ci-test--job tiers job) "DRGNX_TEST_RERUN: \"1\"" "DRGNX_TEST_NO_TIMING: \"1\"" "DRGNX_TEST_JOBS="))
     (should-not (string-search "(tag :timing)" tiers))
     (should-not (string-search "emacs-30" tiers))))
+
+(ert-deftest drgnx-ci/the-modal-and-kitty-tiers-get-the-pinned-evil-and-kkp ()
+  ;; without DRGNX_MODAL_ELPA / DRGNX_USER_ELPA the evil teardown, the modal isolation test and kitty's kkp tests skip
+  (let ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")) (action (drgnx-ci-test--action "test-elpa")))
+    (skip-unless (and tiers action))
+    (drgnx-ci-test--has action "test/container/modal-elpa.sh" "echo \"DRGNX_MODAL_ELPA=" "echo \"DRGNX_USER_ELPA="
+                        "etc/drgnx.lock.eld")
+    (dolist (job '("unit" "ui" "tty"))
+      (drgnx-ci-test--has (drgnx-ci-test--job tiers job) "uses: ./drgnx/.github/actions/test-elpa"))))
 
 (ert-deftest drgnx-ci/the-timing-lane-judges-and-calibrates-in-the-image ()
   ;; the lane's own self-test: the verdict rules, and a calibration run in the tests' image (a CI runner has no Emacs)
