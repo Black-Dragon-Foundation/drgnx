@@ -85,8 +85,23 @@ impl Outbox {
         true
     }
 
-    /// Close the connection now (logged once, with WHY).
+    /// Close the connection now (logged once, with WHY): nothing more is written, and its lines are no longer read.
     pub fn close(&self, why: &str) {
+        self.discard(why);
+        self.closed.send_replace(true);
+        self.wake.notify_one();
+    }
+
+    /// The client left (its socket refused a write): nothing more is written, but the lines it sent before it left are
+    /// still read and served, to its end of file: a CLI that sends `exec/stop` as it exits, behind calls whose answers
+    /// it no longer reads, still has its job stopped.  Logged once, with WHY.
+    fn gone(&self, why: &str) {
+        self.discard(why);
+        self.wake.notify_one();
+    }
+
+    /// Drop what is queued and take no more (logged with WHY the first time).
+    fn discard(&self, why: &str) {
         let mut q = self.queue.lock().expect("the queue lock");
         if q.closed {
             return;
@@ -96,8 +111,6 @@ impl Outbox {
         q.bytes = 0;
         drop(q);
         tracing::info!(conn = self.conn, "{why}");
-        self.closed.send_replace(true);
-        self.wake.notify_one();
     }
 
     /// Wait until everything queued so far is written (or the connection closed), at most WITHIN.
@@ -196,7 +209,7 @@ async fn write_loop(mut w: OwnedWriteHalf, out: Arc<Outbox>) -> Option<OwnedWrit
             match step {
                 Ok(Ok(n)) if n > 0 => rest = &rest[n..],
                 Ok(Ok(_)) | Ok(Err(_)) => {
-                    out.close("closed a client whose socket refused a write");
+                    out.gone("closed a client whose socket refused a write");
                     return None;
                 }
                 Err(_) => {

@@ -514,3 +514,42 @@ fn a_stopped_reader_is_dropped_after_16_mib_while_another_keeps_reading() {
         std::thread::sleep(Duration::from_millis(50));
     }
 }
+
+#[cfg(feature = "test-hooks")]
+#[test]
+fn the_lines_a_client_sent_before_it_left_are_served() {
+    // A client asks for a flood, sends one more line once the hub is busy with it, and leaves without reading: the
+    // flood's writes to it fail, and the line it sent is served all the same (a CLI's `exec/stop` as it exits, behind
+    // answers it no longer reads).  The line is a refusal (a user method on a service connection), which `status`
+    // counts.  The hub picks between a closed connection and its next line at random, so it is tried 20 times.
+    let root = Root::new();
+    let socket = root.socket();
+    let mut hub = Hub::start(&root, 1);
+    hub.wait_ready(&socket);
+    let refusals = |socket: &Path| {
+        let mut c = Client::open(socket);
+        c.send(json!({"id": 1, "method": "status"}));
+        c.answer(1).0["result"]["refusals"]["count"]
+            .as_u64()
+            .unwrap()
+    };
+    for i in 1..=20u64 {
+        let mut c = Client::open(&socket);
+        assert_eq!(c.line().unwrap()["event"], "challenge");
+        c.send(json!({"id": 1, "method": "__test_flood", "params": {"lines": 200, "size": 64}}));
+        // the flood is under way, so the next line waits in the socket while the hub writes to a client that left
+        assert_eq!(c.line().unwrap()["event"], "flood");
+        c.send(json!({"id": 2, "method": "gateway/keys-held"}));
+        drop(c);
+        // the hub says nothing when it served the line: `status` is asked again until it counts it (`FAILED_AFTER`
+        // only bounds a failure)
+        let deadline = Instant::now() + FAILED_AFTER;
+        while refusals(&socket) < i {
+            assert!(
+                Instant::now() < deadline,
+                "run {i}: the line sent before leaving was not served"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}

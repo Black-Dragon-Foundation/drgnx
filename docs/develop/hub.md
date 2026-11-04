@@ -305,7 +305,9 @@ lines and limits, with these differences:
 - **Lines out** go through a writer task per connection with its own queue. Queueing never waits. A client is dropped
   (logged) when more than 16 MiB is queued for it (the line being written included), or when one write makes no
   progress for 10 s, so a stopped reader never stalls another client. An answer over 16 MiB is replaced by `internal`
-  "answer over 16 MiB", and an event over 16 MiB is not sent (logged).
+  "answer over 16 MiB", and an event over 16 MiB is not sent (logged). A client that left (its socket refuses a write)
+  gets nothing more written, but the lines it sent before it left are still read and served, up to its end of file: a
+  CLI that sends `exec/stop` as it exits, behind calls whose answers it no longer reads, still has its job stopped.
 
 ### hello and versions
 
