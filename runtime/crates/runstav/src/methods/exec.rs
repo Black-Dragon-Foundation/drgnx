@@ -193,14 +193,23 @@ pub struct LogParams {
     /// At most 1000 lines (default 200).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub n: Option<u64>,
+    /// The end of the log instead of a slice: its last bytes, at most this many (1 to 1048576), as lines (the first may
+    /// be cut).  Read from the file's end, never the whole file.  Not with `from` or `n`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tail_bytes: Option<u64>,
 }
 
-/// A slice of a job's log.
+/// The most bytes of a log's end one `exec/log` call answers.
+pub const LOG_TAIL_MAX: u64 = 1 << 20;
+
+/// A slice of a job's log (bytes that are not UTF-8 replaced).
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LogSlice {
     pub id: String,
-    pub from: u64,
+    /// The slice's first line; absent for the end of the log (`tail_bytes`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<u64>,
     #[serde(default, deserialize_with = "null_as_empty")]
     pub lines: Vec<String>,
     /// The line after the slice, when there is more.
@@ -270,6 +279,17 @@ fn check_start(p: &StartParams) -> Result<(), Error> {
 }
 
 fn check_log(p: &LogParams) -> Result<(), Error> {
+    if let Some(t) = p.tail_bytes {
+        if !(1..=LOG_TAIL_MAX).contains(&t) {
+            return Err(invalid("tail_bytes", "1 to 1048576 bytes"));
+        }
+        if p.from.is_some() || p.n.is_some() {
+            return Err(invalid(
+                "tail_bytes",
+                "either the end of the log (tail_bytes) or a slice (from, n), not both",
+            ));
+        }
+    }
     match p.n {
         Some(n) if !(1..=1000).contains(&n) => Err(invalid("n", "1 to 1000 lines")),
         _ => Ok(()),
@@ -302,7 +322,7 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "exec/log", ExecLog(LogParams) -> LogSlice,
             classes: [User], writes: false,
-            doc: "lines of a job's log (at most 1000 a call)",
+            doc: "lines of a job's log (at most 1000 a call), or its end (tail_bytes)",
             check: check_log,
         ),
     ]

@@ -36,8 +36,9 @@ it does not depend on the agent that started it or on the editor, and it survive
   `cargo test`, ERT and domr output, by the job's kind: `cargo`, `ert`, `domr`, `other`) and at most 20 lines of the log
   (failure lines first, then the end of the log), plus the log's path. Nothing is polled: the agent that started the job
   waits at no cost and is woken by the end.
-- **Methods.** `exec/start`, `exec/get`, `exec/list`, `exec/stop`, `exec/log` (at most 1000 lines a call); agents use
-  the `job_*` tools.
+- **Methods.** `exec/start`, `exec/get`, `exec/list`, `exec/stop`, `exec/log` (at most 1000 lines a call from line
+  `from`, or with `tail_bytes` the log's last bytes, up to 1 MiB, read from the file's end; bytes that are not UTF-8
+  come back replaced); agents use the `job_*` tools.
 
 ### The editor's jobs
 
@@ -48,16 +49,20 @@ agent that sends any of them is refused with `invalid-params`:
 
 - **`name`**: what the job is called in lists (`exec/get` and `exec/list` return it as `name`).
 - **`env`**: variables added to the job's environment (at most 16). A name that contains `KEY`, `TOKEN`, `SECRET`,
-  `PASSWORD`, `PASSPHRASE` or `CREDENTIAL` is refused, so a key never travels in a job. A queued job keeps its
-  variables in its `pending.json` until it starts. A container job takes none.
+  `PASSWORD`, `PASSPHRASE` or `CREDENTIAL` is refused, so a key never travels in a job. A container job takes none.
 - **`memory_max`**: the unit's memory cap, in systemd's syntax (`512M`, `2G`), instead of `agents-job-memory`. Without
   a user systemd on Linux it changes nothing; macOS has no memory cap for jobs, and refuses it.
 - **`nice`**: 0 to 19, how much nicer than the hub the job runs (`nice -n`, so the same with and without a unit).
 
+Your job starts from the hub's environment with what the editor read from your login shell (`env/set`), so variables
+such as `OLLAMA_MODELS`, `HTTPS_PROXY` or `CUDA_VISIBLE_DEVICES` reach local AI servers, installs and mermaid as they
+did when Emacs started them; `env` comes on top. Every name that looks like a key and every provider's `key_env` is
+left out. An agent's job gets only the tool paths.
+
 In Lisp, `core/drgnx-exec.el` is the client. `drgnx-exec-start` is asynchronous (its callback gets the job's id, or the
 reason it did not start); `drgnx-exec-get` and `drgnx-exec-list` read a cache that follows the hub's `exec-done` events
-and never call the hub, so timers and redisplay may use them; `drgnx-exec-log` and `drgnx-exec-stop` read a job's log
-(waiting up to 5 s: for commands only) and end it. A job's status there is `running`, `done`, `failed` (a non-zero exit
+and never call the hub, so timers and redisplay may use them; `drgnx-exec-log` and `drgnx-exec-stop` read the end of a job's log
+(one call, `tail_bytes`; waiting up to 5 s: for commands only) and end it. A job's status there is `running`, `done`, `failed` (a non-zero exit
 or the time box), `stopped` or `gone` (lost). A job's time box is an hour unless the caller passes `:timebox` (up to 24
 hours) or `:no-timebox`. The servers the editor starts and leaves up (the local AI runner, the Playwright server of Test
 Report, the browser for agents) run without a time box, so a daemon that stays up for days never loses them: they end
@@ -109,13 +114,17 @@ cache for this).
 
 - **No waiting.** While one of its own jobs runs, an agent's `job_result` and `job_log` of it, and shell loops that wait
   (`sleep`, `pgrep`, `watch`, `until`, `tail -f`), are refused with the text above. After `agents-wait-refusals`
-  refusals (default 3) in one turn the hub cancels the turn; the wake prompts the agent again. A finished job, and a
-  job of someone else, can be read at any time.
+  refusals (default 3) in one turn the hub cancels the turn; the wake prompts the agent again. A finished job of its own
+  can be read at any time. A job the agent did not start (another session's, or yours) is not its to read or stop:
+  `job_result`, `job_log` and `job_stop` refuse it ("not yours"), as do `exec/get`, `exec/log` and `exec/stop` for an
+  agent caller; you and services read every job.
 - **Idle on a job.** A session waiting longer than `agents-close-idle-after` seconds (default 1800; 0 never) is closed:
   the agent's process ends (`session/close` first, for the CLIs that have it). The job's end, or your next message,
   resumes it on the same session (`session/resume`; Gemini, which can only load a session, reloads it with
   `session/load`).
-- **Machine slots.** This machine runs four jobs at once. A fifth is recorded as queued and `job_start` answers at once
+- **Machine slots.** This machine runs four agents' jobs at once (your own jobs, the editor's servers and one-shot work
+  among them, take no slot: they never hold an agent's job up, nor wait behind one, as the editor's jobs never had a
+  limit). A fifth agent's job is recorded as queued and `job_start` answers at once
   ("queued ... you will be woken"): the agent ends its turn like for any job. The queued job (its row says `queued`,
   with no unit yet) starts when a slot frees, oldest first, and also after a hub restart; `exec/stop` ends it without
   it ever starting. A queued job that cannot start (its request is gone, the sandbox refuses) ends as `lost` with the

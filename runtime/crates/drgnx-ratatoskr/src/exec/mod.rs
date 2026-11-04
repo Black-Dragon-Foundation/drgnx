@@ -181,10 +181,16 @@ pub struct Hooks {
     pub podman: Option<PathBuf>,
     /// `drgnx-fwd` (next to the hub, else on the PATH): the forwarder a container job granted network runs.
     pub forwarder: Option<PathBuf>,
-    /// Jobs running at once on this machine; the next waits for a slot (the session's step is a machine-queue wait).
+    /// Agents' jobs running at once on this machine; the next waits for a slot (the session's step is a machine-queue
+    /// wait).  The user's jobs take no slot.
     pub slots: usize,
     /// The login shell's variables (`env/set`): the base environment of every job and podman the hub starts.
     pub shell_env: crate::shell_env::ShellEnv,
+    /// The providers' key variables (`key_env`) as the settings say now: never in a user's job's environment.
+    pub key_envs: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
+    /// Unit tests: a session's job runs as the user's do (they have no sandbox helper).
+    #[cfg(test)]
+    pub plain_sessions: bool,
 }
 
 impl Default for Hooks {
@@ -202,6 +208,9 @@ impl Default for Hooks {
                 .or_else(|| unit::find_on_path("drgnx-fwd")),
             slots: 4,
             shell_env: crate::shell_env::ShellEnv::default(),
+            key_envs: Arc::new(Vec::new),
+            #[cfg(test)]
+            plain_sessions: false,
         }
     }
 }
@@ -358,7 +367,8 @@ impl Runner {
 
     /// Start a job; answers its id.  A session's job runs in that session's sandbox (its worktree, writable, is the
     /// only folder it writes; its CWD must be the worktree or inside it; no sandbox here is a refusal); the user's
-    /// runs with the user's rights.  On a full machine the job is recorded as queued and the id answered at once.
+    /// runs with the user's rights.  A session's job on a full machine is recorded as queued and the id answered at
+    /// once; the user's take no machine slot.
     pub async fn start(&self, spec: ExecSpec) -> Result<String, Refusal> {
         self.inner()?.clone().start(spec).await
     }
@@ -415,14 +425,43 @@ impl Runner {
         self.inner.get()?.clone().stop(id).await
     }
 
-    /// N lines of the job's log from line FROM (0-based).
+    /// N lines of the job's log from line FROM (0-based), read up to the last of them only; bytes that are not UTF-8
+    /// are replaced.
     pub fn log_slice(&self, id: &str, from: usize, n: usize) -> Vec<String> {
+        use std::io::BufRead;
+        let Some(f) = self
+            .inner
+            .get()
+            .and_then(|i| std::fs::File::open(i.dir(id).join("log")).ok())
+        else {
+            return vec![];
+        };
+        std::io::BufReader::new(f)
+            .split(b'\n')
+            .skip(from)
+            .take(n)
+            .map_while(Result::ok)
+            .map(|l| String::from_utf8_lossy(l.strip_suffix(b"\r").unwrap_or(&l)).into_owned())
+            .collect()
+    }
+
+    /// The end of the job's log, at most BYTES of it, as lines (the first may be cut); read from the file's end, a
+    /// character cut at the start dropped and bytes that are not UTF-8 replaced.
+    pub fn log_tail(&self, id: &str, bytes: u64) -> Vec<String> {
         let Some(i) = self.inner.get() else {
             return vec![];
         };
-        std::fs::read_to_string(i.dir(id).join("log"))
-            .map(|t| t.lines().skip(from).take(n).map(String::from).collect())
-            .unwrap_or_default()
+        let buf = tail_bytes(&i.dir(id).join("log"), bytes);
+        // the rest of a character the cut began inside (continuation bytes, at most 3)
+        let skip = buf
+            .iter()
+            .take(3)
+            .take_while(|b| (0x80..0xc0).contains(*b))
+            .count();
+        String::from_utf8_lossy(&buf[skip..])
+            .lines()
+            .map(String::from)
+            .collect()
     }
 }
 
@@ -540,14 +579,22 @@ impl Inner {
         let id = self.new_id();
         let dir = self.dir(&id);
         std::fs::create_dir_all(&dir).map_err(|e| setup(format!("{}: {e}", dir.display())))?;
-        let Ok(permit) = self.slots.clone().try_acquire_owned() else {
-            if let Err(e) = self.enqueue(&id, &dir, &spec) {
-                let _ = std::fs::remove_dir_all(&dir);
-                return Err(e);
-            }
-            // a slot may have freed between the failed try and the queue entry
-            self.pump();
-            return Ok(id);
+        // The slots are the agents': the user's jobs (the editor's servers, which run for days, and its one-shot work)
+        // take none, so they never queue an agent's job, nor wait behind one.
+        let permit = match spec.starter {
+            Starter::User => None,
+            Starter::Session(_) => match self.slots.clone().try_acquire_owned() {
+                Ok(p) => Some(p),
+                Err(_) => {
+                    if let Err(e) = self.enqueue(&id, &dir, &spec) {
+                        let _ = std::fs::remove_dir_all(&dir);
+                        return Err(e);
+                    }
+                    // a slot may have freed between the failed try and the queue entry
+                    self.pump();
+                    return Ok(id);
+                }
+            },
         };
         let r = self.clone().launch(&id, &dir, spec, permit).await;
         if r.is_err() {
@@ -625,7 +672,11 @@ impl Inner {
                 None => Some("its start request is gone".to_string()),
                 Some(p) => {
                     let slot = permit.take().expect("the slot");
-                    match self.clone().launch(&id, &dir, p.into_spec(), slot).await {
+                    match self
+                        .clone()
+                        .launch(&id, &dir, p.into_spec(), Some(slot))
+                        .await
+                    {
                         Ok(()) => return,
                         Err(e) => Some(e.message),
                     }
@@ -717,7 +768,7 @@ impl Inner {
         id: &str,
         dir: &Path,
         spec: ExecSpec,
-        permit: tokio::sync::OwnedSemaphorePermit,
+        permit: Option<tokio::sync::OwnedSemaphorePermit>,
     ) -> Result<(), Refusal> {
         let name = self.hooks.systemd.then(|| unit::unit_name(id));
         let mut proxy = None;
@@ -728,9 +779,10 @@ impl Inner {
                 (s, None)
             }
             // the conformance lane has no sandbox for a job: its jobs run as the user's do
-            Starter::Session(_) if unsandboxed_for_tests() => {
-                (plain_spec(&spec, &self.hooks.shell_env), None)
-            }
+            Starter::Session(_) if unsandboxed_for_tests(&self.hooks) => (
+                plain_spec(&spec, agent_plain_env(&self.hooks.shell_env)),
+                None,
+            ),
             Starter::Session(sid) => {
                 let worktree = spec
                     .worktree
@@ -758,7 +810,13 @@ impl Inner {
                 let l = launch::launch(&self.hooks.shell_env.paths_env(), &plan, &shape)?;
                 (l.spec, l.status)
             }
-            Starter::User => (plain_spec(&spec, &self.hooks.shell_env), None),
+            Starter::User => (
+                plain_spec(
+                    &spec,
+                    user_env(self.hooks.shell_env.vars_os(), &(self.hooks.key_envs)()),
+                ),
+                None,
+            ),
         };
         let mut inner = inner;
         for (k, v) in &spec.user.env {
@@ -1100,18 +1158,12 @@ async fn wait_gone(pid: i32, start_time: u64) {
     }
 }
 
-/// A job run with the user's rights: the same for a user's job and (in the conformance lane) a session's.
-fn plain_spec(spec: &ExecSpec, shell: &crate::shell_env::ShellEnv) -> draugr::Spec {
+/// A job run with the user's rights in ENV: a user's job and (in the conformance lane) a session's.
+fn plain_spec(spec: &ExecSpec, env: Vec<(OsString, OsString)>) -> draugr::Spec {
     draugr::Spec {
         program: PathBuf::from(&spec.argv[0]),
         args: spec.argv[1..].iter().map(OsString::from).collect(),
-        env: shell.build(
-            &[
-                "PATH", "HOME", "USER", "LOGNAME", "LANG", "TERM", "TMPDIR", "SHELL",
-            ],
-            &["LC_", "CARGO", "RUST", "MISE_"],
-            &[],
-        ),
+        env,
         cwd: Some(spec.cwd.clone()),
         stdin_null: true,
         pass_fds: vec![],
@@ -1119,25 +1171,60 @@ fn plain_spec(spec: &ExecSpec, shell: &crate::shell_env::ShellEnv) -> draugr::Sp
     }
 }
 
-/// Tests and `test-hooks` builds with `DRGNX_TEST_PLAIN_JOBS` set: the conformance container has no sandbox helper.
-fn unsandboxed_for_tests() -> bool {
+/// The base environment of a session's job run unsandboxed (the conformance lane): a short list of the hub's.
+fn agent_plain_env(shell: &crate::shell_env::ShellEnv) -> Vec<(OsString, OsString)> {
+    shell.build(
+        &[
+            "PATH", "HOME", "USER", "LOGNAME", "LANG", "TERM", "TMPDIR", "SHELL",
+        ],
+        &["LC_", "CARGO", "RUST", "MISE_"],
+        &[],
+    )
+}
+
+/// The base environment of a user's job: SOURCE (the hub's environment with the login shell's overlay, as the editor's
+/// jobs had the user manager's or Emacs's whole environment), less every name that looks like a key
+/// (`refused_env_name`) and every provider's key variable (KEY_ENVS).
+fn user_env(source: Vec<(OsString, OsString)>, key_envs: &[String]) -> Vec<(OsString, OsString)> {
+    source
+        .into_iter()
+        .filter(|(k, _)| {
+            k.to_str().is_some_and(|k| {
+                !runstav::methods::hub::refused_env_name(k) && !key_envs.iter().any(|e| e == k)
+            })
+        })
+        .collect()
+}
+
+/// Tests and `test-hooks` builds with `DRGNX_TEST_PLAIN_JOBS` set: the conformance container has no sandbox helper;
+/// unit tests ask for it in their `Hooks`.
+fn unsandboxed_for_tests(_hooks: &Hooks) -> bool {
+    #[cfg(test)]
+    if _hooks.plain_sessions {
+        return true;
+    }
     cfg!(any(test, feature = "test-hooks")) && std::env::var_os("DRGNX_TEST_PLAIN_JOBS").is_some()
 }
 
 /// The last megabyte of a log, as text.
 fn tail_of(path: &Path) -> String {
+    String::from_utf8_lossy(&tail_bytes(path, 1 << 20)).into_owned()
+}
+
+/// The last MAX bytes of the file at PATH (seeking from its end; nothing when it cannot be read).
+fn tail_bytes(path: &Path, max: u64) -> Vec<u8> {
     use std::io::{Read, Seek, SeekFrom};
-    const MAX: u64 = 1 << 20;
     let Ok(mut f) = std::fs::File::open(path) else {
-        return String::new();
+        return Vec::new();
     };
     let len = f.metadata().map_or(0, |m| m.len());
     let mut buf = Vec::new();
-    if f.seek(SeekFrom::Start(len.saturating_sub(MAX))).is_err() || f.read_to_end(&mut buf).is_err()
+    if f.seek(SeekFrom::Start(len.saturating_sub(max))).is_err()
+        || f.take(max).read_to_end(&mut buf).is_err()
     {
-        return String::new();
+        return Vec::new();
     }
-    String::from_utf8_lossy(&buf).into_owned()
+    buf
 }
 
 /// The environment a session's job gets inside its sandbox: the tool paths, nothing else of the hub's.
@@ -1177,10 +1264,21 @@ fn runner(f: &Front) -> Result<&Runner, Error> {
             .dirs
             .get()
             .ok_or_else(|| error(ErrorCode::Internal, "exec: the store is not open yet"))?;
+        let settings = f.settings.clone();
         let mut hooks = Hooks {
             writer: Some(f.writer.clone()),
             editors: Some(f.editors.clone()),
             shell_env: f.shell_env.clone(),
+            // read at each start, so a provider added since is left out too (as `Front::provider_key_envs`)
+            key_envs: Arc::new(move || {
+                crate::settings::providers::effective(
+                    &crate::settings::defaults().presets,
+                    &settings.current().loaded.values.ai_providers,
+                )
+                .into_iter()
+                .filter_map(|p| p.key_env.clone())
+                .collect()
+            }),
             ..Hooks::default()
         };
         if let Some((serde_json::Value::String(m), _)) =
@@ -1441,10 +1539,23 @@ fn no_job(id: &str) -> Error {
     error(ErrorCode::InvalidParams, format!("no job {id}"))
 }
 
-pub async fn get(f: &Front, _: &Caller, p: ById) -> Result<ExecRow, Error> {
-    runner(f)?
-        .get(p.id.as_str())
-        .ok_or_else(|| no_job(p.id.as_str()))
+/// Job ID's row, when CALLER may see it: an agent only its own session's jobs (the user's hold the editor's argv, folders
+/// and logs, and ids are easy to guess); the user and services every job.
+fn visible(r: &Runner, c: &Caller, id: &str) -> Result<ExecRow, Error> {
+    let row = r.get(id).ok_or_else(|| no_job(id))?;
+    if matches!(c.class, runstav::registry::Class::Agent)
+        && (c.sid.is_none() || row.session != c.sid)
+    {
+        return Err(error(
+            ErrorCode::NotAllowed,
+            format!("job {id} is not yours"),
+        ));
+    }
+    Ok(row)
+}
+
+pub async fn get(f: &Front, c: &Caller, p: ById) -> Result<ExecRow, Error> {
+    visible(runner(f)?, c, p.id.as_str())
 }
 
 pub async fn list(f: &Front, _: &Caller, p: ListParams) -> Result<Jobs, Error> {
@@ -1456,16 +1567,27 @@ pub async fn list(f: &Front, _: &Caller, p: ListParams) -> Result<Jobs, Error> {
     })
 }
 
-pub async fn stop(f: &Front, _: &Caller, p: ById) -> Result<ExecRow, Error> {
-    runner(f)?
-        .stop(p.id.as_str())
+pub async fn stop(f: &Front, c: &Caller, p: ById) -> Result<ExecRow, Error> {
+    let r = runner(f)?;
+    visible(r, c, p.id.as_str())?;
+    r.stop(p.id.as_str())
         .await
         .ok_or_else(|| no_job(p.id.as_str()))
 }
 
-pub async fn log(f: &Front, _: &Caller, p: LogParams) -> Result<LogSlice, Error> {
+pub async fn log(f: &Front, c: &Caller, p: LogParams) -> Result<LogSlice, Error> {
     let r = runner(f)?;
-    let row = r.get(p.id.as_str()).ok_or_else(|| no_job(p.id.as_str()))?;
+    let row = visible(r, c, p.id.as_str())?;
+    let running = matches!(row.status, ExecStatus::Running | ExecStatus::Queued);
+    if let Some(bytes) = p.tail_bytes {
+        return Ok(LogSlice {
+            lines: r.log_tail(p.id.as_str(), bytes),
+            id: row.id,
+            from: None,
+            next: None,
+            running,
+        });
+    }
     let from = p.from.unwrap_or(0);
     let n = p.n.unwrap_or(200) as usize;
     let mut lines = r.log_slice(p.id.as_str(), from as usize, n + 1);
@@ -1473,10 +1595,10 @@ pub async fn log(f: &Front, _: &Caller, p: LogParams) -> Result<LogSlice, Error>
     lines.truncate(n);
     Ok(LogSlice {
         id: row.id,
-        from,
+        from: Some(from),
         next: more.then(|| from + n as u64),
         lines,
-        running: matches!(row.status, ExecStatus::Running | ExecStatus::Queued),
+        running,
     })
 }
 

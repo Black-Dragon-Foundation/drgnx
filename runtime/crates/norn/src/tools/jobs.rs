@@ -1,6 +1,8 @@
 //! The job tools (agent system part 1, Task 15; `docs/guide/jobs.md`): an agent starts a job and ends its turn; the
 //! hub wakes it with the result.  No blocking wait: `job_result` and `job_log` are refused for a job's own starter
-//! while it runs (Calls made 9), and after `agents-wait-refusals` refusals in one turn the hub cancels the turn.  Their
+//! while it runs (Calls made 9), and after `agents-wait-refusals` refusals in one turn the hub cancels the turn.  A job
+//! the session did not start (another session's, the user's) is refused to `job_result`, `job_log` and `job_stop`, here
+//! and by the hub's `exec/*` for an agent caller.  Their
 //! answers are `runstav::methods::exec`'s shapes; the jobs themselves are the hub's (`exec/*`, reached through
 //! [`super::Hub::exec`] as the calling session).
 
@@ -23,15 +25,18 @@ fn session(who: &Identity) -> Result<(&str, &std::path::Path), String> {
     }
 }
 
-/// The row of job ID and whether it runs for SID (its starter): the wait refusal's case.
+/// The row of job ID, refused unless SID started it (another session's or the user's job is not the agent's to read
+/// or stop), and whether it runs: the wait refusal's case.
 async fn row(coord: &Coord, sid: &str, id: &str) -> Result<(Value, bool), String> {
     let row = coord.hub().exec(sid, "exec/get", json!({"id": id})).await?;
-    let own = row.get("session").and_then(Value::as_str) == Some(sid);
+    if row.get("session").and_then(Value::as_str) != Some(sid) {
+        return Err(format!("job {id} is not yours"));
+    }
     let running = matches!(
         row.get("status").and_then(Value::as_str),
         Some("running" | "queued")
     );
-    Ok((row, own && running))
+    Ok((row, running))
 }
 
 /// The refusal of a wait on a job that runs: counted by the hub.
@@ -138,10 +143,7 @@ impl CoordTool for JobStop {
         Box::pin(async move {
             let (sid, _) = session(who)?;
             let id = args.id.as_str();
-            let (row, _) = row(coord, sid, id).await?;
-            if row.get("session").and_then(Value::as_str) != Some(sid) {
-                return Err(format!("job {id} is not yours"));
-            }
+            row(coord, sid, id).await?;
             Ok(coord
                 .hub()
                 .exec(sid, "exec/stop", json!({"id": id}))
@@ -193,7 +195,9 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((format!("{sid} {method}"), params.clone()));
-            let row = json!({"id": "x1", "session": self.owner, "status": self.status});
+            // an empty owner: the user's job (no session)
+            let owner = (!self.owner.is_empty()).then_some(self.owner);
+            let row = json!({"id": "x1", "session": owner, "status": self.status});
             Box::pin(async move {
                 Ok(match method {
                     "exec/start" => json!({"id": "x1", "text": "runs"}),
@@ -263,12 +267,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_finished_job_or_anothers_is_read() {
-        for (status, owner) in [("done", "s1"), ("running", "s2")] {
-            let h = hub(status, owner);
-            let (err, text) = call(h.clone(), "job_result", json!({"id": "x1"})).await;
-            assert!(!err, "{text}");
-            assert_eq!(*h.refused.lock().unwrap(), 0);
+    async fn a_finished_job_of_its_own_is_read() {
+        let h = hub("done", "s1");
+        let (err, text) = call(h.clone(), "job_result", json!({"id": "x1"})).await;
+        assert!(!err, "{text}");
+        assert_eq!(*h.refused.lock().unwrap(), 0);
+    }
+
+    /// Another session's job, or the user's (no session), is not the agent's to read: its argv, folder and log stay
+    /// its starter's.  Not a wait, so not counted.
+    #[tokio::test]
+    async fn anothers_job_is_not_read() {
+        for (status, owner) in [("running", "s2"), ("done", "s2"), ("done", "")] {
+            for (tool, args) in [
+                ("job_result", json!({"id": "x1"})),
+                ("job_log", json!({"id": "x1"})),
+            ] {
+                let h = hub(status, owner);
+                let (err, text) = call(h.clone(), tool, args).await;
+                assert!(err && text.contains("not yours"), "{tool} {owner}: {text}");
+                assert_eq!(*h.refused.lock().unwrap(), 0);
+                let calls = h.calls.lock().unwrap();
+                assert!(
+                    !calls.iter().any(|(c, _)| c.ends_with("exec/log")),
+                    "{tool}: the log was read"
+                );
+            }
         }
     }
 

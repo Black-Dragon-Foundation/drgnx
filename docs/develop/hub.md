@@ -782,7 +782,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `events/since` | user | `{limit?: natnum, since?: natnum}` | `{events?: [EventRow], last: natnum, since: natnum}` | no |
 | `exec/get` | user | `{id: Id}` | `ExecRow` | no |
 | `exec/list` | user | `{running?: boolean, session?: Id}` | `{jobs?: [ExecRow]}` | no |
-| `exec/log` | user | `{from?: natnum, id: Id, n?: natnum}` | `{from: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no |
+| `exec/log` | user | `{from?: natnum, id: Id, n?: natnum, tail_bytes?: natnum}` | `{from?: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no |
 | `exec/start` | user | `{argv: [string], cwd?: AbsPath, env?: [{name: EnvName, value: string}], image?: string, kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, timebox_s?: natnum}` | `{id: string, text: string}` | yes |
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
 | `gateway/editor-token` | user | `{}` | `{token: string, url: string}` | no |
@@ -1322,13 +1322,20 @@ reading and fallbacks; `profiles.rs`, `providers.rs`: the types).
 
 ## Jobs (`exec/*`)
 
-`drgnx-ratatoskr/src/exec/` (Task 11): `Runner::{start, get, list, stop, log_slice}`. A job's folder
+`drgnx-ratatoskr/src/exec/` (Task 11): `Runner::{start, get, list, stop, log_slice, log_tail}` (`exec/log`'s slice
+reads lines only up to the last it answers; its `tail_bytes` form seeks to the file's end; both replace bytes that are
+not UTF-8). A job's folder
 `<state>/hub/exec/<id>/` holds `meta.json`, `log`, `exit` (written by the wrapper shell through a rename), `why`
 (`stopped` or `timed-out`, written before the hub kills the group) and, once ended, `result.json`; a folder without
 `result.json` is running. A session's job is launched with `launch::launch` (its sandbox spec) and the status pipe is
 read with `gleipnir::read_status`; the user's runs with the user's rights. The command is wrapped by a shell that logs
 and records the exit, and (Linux with a user systemd) by `systemd-run --user --scope -p MemoryMax=…`, a scope so the
-command stays the hub's child. `Runner::open` re-attaches every folder without a result. The graph record is
+command stays the hub's child. `Runner::open` re-attaches every folder without a result. The machine's slots
+(`Hooks::slots`, 4) are the sessions' jobs': `Inner::start` gives a `Starter::User` job no permit, so the editor's
+servers (`no_timebox`, up for days) never fill them and a user's job never queues. `exec/get`, `exec/log` and
+`exec/stop` answer an agent caller (`Class::Agent`, the job tools through `Coord::exec`) only for its own session's
+jobs (`exec::visible`: "not yours", `not-allowed`); the norn tools refuse the same (row
+`exec/an-agent-cannot-read-another-callers-job`). The graph record is
 `norn::write::exec`. The `exec/runs-in-the-starters-sandbox` row (`exec::tests::exec_runs_in_the_starters_sandbox`) is
 `#[ignore]`d where bwrap is missing (build containers): run it on a host with bwrap or in CI with `-- --ignored`. So are
 the `launch-sandboxed/*` rows (`tests/launch_sandboxed.rs`, a session's launch spec run in a real sandbox): a
@@ -1340,7 +1347,11 @@ The editor's own jobs are the user's `exec/start` with four more fields (`StartP
 (`user_job`: `invalid-params`), `env` and `memory_max` from a container job, and `memory_max` on macOS; the decode check
 (`check_start`) refuses a malformed size, a `nice` outside 0 to 19 and a key-like variable name
 (`runstav::methods::hub::refused_env_name`, `env/set`'s check), and `exec::start` a provider's `key_env`. The job's base
-environment is `env/set`'s overlay (`plain_spec` builds it from `ShellEnv`). They travel in `ExecSpec.user` (`UserJob`, also in a queued job's
+environment is the hub's whole environment with `env/set`'s overlay (`ShellEnv::vars_os`) less every key-like name and
+every provider's `key_env` (`user_env`; `Hooks::key_envs` reads the providers from the settings at each start); a
+session's job run unsandboxed (the conformance lane) keeps a short list (`agent_plain_env`), and a sandboxed one the
+tool paths (`tool_env`). `unit::wrap` hands the spec's environment to `systemd-run --scope` (the scope's command gets
+the caller's environment) or to the plain shell (macOS, no user systemd). They travel in `ExecSpec.user` (`UserJob`, also in a queued job's
 `pending.json`); the name is in `meta.json` and on the `ExecRow`. The unit takes `memory_max` as its `MemoryMax=`;
 `nice` is `nice -n N` in front of the command inside the logging shell (a scope takes no `Nice=`), the same line with
 and without a unit.

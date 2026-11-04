@@ -430,6 +430,73 @@ async fn a_user_job_gets_its_name_env_and_nice() {
     assert_eq!(r.list(None, false)[0].name.as_deref(), Some("grammars"));
 }
 
+/// A user's job starts from the hub's whole environment with the login shell's overlay (a variable outside the agents'
+/// list reaches it), less a provider's key variable; an agent's job keeps the short list.
+#[tokio::test]
+async fn a_user_job_gets_the_shells_environment_and_an_agents_the_list() {
+    let d = tempfile::tempdir().unwrap();
+    let shell = crate::shell_env::ShellEnv::default();
+    shell.set(
+        vec![
+            ("OLLAMA_MODELS".into(), "/models/here".into()),
+            ("ACME_ACCESS".into(), "leak".into()),
+        ],
+        &[],
+    );
+    let r = Runner::default();
+    r.open(
+        d.path().join("exec"),
+        Hooks {
+            shell_env: shell,
+            key_envs: Arc::new(|| vec!["ACME_ACCESS".to_string()]),
+            plain_sessions: true,
+            ..hooks()
+        },
+    );
+    let script = "echo \"models=${OLLAMA_MODELS-unset} access=${ACME_ACCESS-unset}\"";
+    let user = r
+        .start(spec(
+            Starter::User,
+            d.path(),
+            script,
+            Duration::from_secs(30),
+        ))
+        .await
+        .unwrap();
+    let agent = r.start(agents(d.path(), script)).await.unwrap();
+    let lines = |row: ExecRow| row.summary.unwrap().lines;
+    assert_eq!(
+        lines(ended(&r, &user).await),
+        ["models=/models/here access=unset"]
+    );
+    assert_eq!(
+        lines(ended(&r, &agent).await),
+        ["models=unset access=unset"]
+    );
+}
+
+/// The user's base environment drops what looks like a key, a provider's key variable and a name that is not text.
+#[test]
+fn a_user_jobs_base_environment_has_no_keys() {
+    use std::os::unix::ffi::OsStringExt;
+    let source: Vec<(OsString, OsString)> = [
+        ("OLLAMA_MODELS", "m"),
+        ("HTTPS_PROXY", "p"),
+        ("GH_TOKEN", "t"),
+        ("ANTHROPIC_API_KEY", "k"),
+        ("ACME_ACCESS", "a"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.into(), v.into()))
+    .chain([(OsString::from_vec(vec![0xff, b'X']), "x".into())])
+    .collect();
+    let names: Vec<OsString> = user_env(source, &["ACME_ACCESS".to_string()])
+        .into_iter()
+        .map(|(k, _)| k)
+        .collect();
+    assert_eq!(names, ["OLLAMA_MODELS", "HTTPS_PROXY"]);
+}
+
 /// The row `exec/runs-in-the-starters-sandbox`: needs the real sandbox's bwrap tier, which the build container lacks
 /// (run it on a host with bwrap or in GitHub CI: `cargo test -p drgnx-ratatoskr exec::tests -- --ignored`).
 #[tokio::test]
@@ -587,16 +654,73 @@ async fn a_container_job_runs_the_fixed_podman_line() {
     assert_eq!(&log[log.len() - 3..], [REF, "make", "test"]);
 }
 
-fn one_slot(root: &Path) -> Runner {
+/// A runner whose sessions' jobs run unsandboxed (as the conformance lane's do).
+fn plain(root: &Path, slots: usize) -> Runner {
     let r = Runner::default();
     r.open(
         root.join("exec"),
         Hooks {
-            slots: 1,
+            slots,
+            plain_sessions: true,
             ..hooks()
         },
     );
     r
+}
+
+fn one_slot(root: &Path) -> Runner {
+    plain(root, 1)
+}
+
+/// An agent's job, in the folder D.
+fn agents(d: &Path, script: &str) -> ExecSpec {
+    spec(
+        Starter::Session("S1".into()),
+        d,
+        script,
+        Duration::from_secs(30),
+    )
+}
+
+/// The machine's slots are the agents': four of the editor's servers (no time box) run, and an agent's job still starts
+/// at once, as does a fifth job of the user's.
+#[tokio::test]
+async fn the_users_servers_leave_the_agents_slots_free() {
+    let d = tempfile::tempdir().unwrap();
+    let r = plain(d.path(), 4);
+    let mut servers = Vec::new();
+    for _ in 0..4 {
+        let mut s = spec(
+            Starter::User,
+            d.path(),
+            "exec sleep 600",
+            Duration::from_secs(30),
+        );
+        s.user.no_timebox = true;
+        let id = r.start(s).await.unwrap();
+        assert!(!r.is_queued(&id));
+        servers.push(id);
+    }
+    let agent = r.start(agents(d.path(), "echo agent")).await.unwrap();
+    assert!(
+        !r.is_queued(&agent),
+        "the agent's job waits behind the user's servers"
+    );
+    let fifth = r
+        .start(spec(
+            Starter::User,
+            d.path(),
+            "echo fifth",
+            Duration::from_secs(30),
+        ))
+        .await
+        .unwrap();
+    assert!(!r.is_queued(&fifth));
+    assert_eq!(ended(&r, &agent).await.status, ExecStatus::Done);
+    assert_eq!(ended(&r, &fifth).await.status, ExecStatus::Done);
+    for id in servers {
+        assert_eq!(r.stop(&id).await.unwrap().status, ExecStatus::Stopped);
+    }
 }
 
 /// B1: a session's job runs in its worktree or inside it; any other folder is refused before anything starts.
@@ -701,18 +825,17 @@ fn a_container_job_in_a_subfolder_mounts_the_worktree() {
     assert!(container::argv(&req, &caps).is_ok());
 }
 
-/// S6: a job that finds the machine full is recorded as queued and answered at once; it starts when the slot frees.
+/// S6: an agent's job that finds the machine full is recorded as queued and answered at once; it starts when the slot
+/// frees.
 #[tokio::test]
 async fn a_job_on_a_full_machine_is_queued_and_starts_when_a_slot_frees() {
     let d = tempfile::tempdir().unwrap();
     let r = one_slot(d.path());
     let gate = d.path().join("gate");
     let first = r
-        .start(spec(
-            Starter::User,
+        .start(agents(
             d.path(),
             &format!("while [ ! -e {} ]; do sleep 0.05; done", gate.display()),
-            Duration::from_secs(30),
         ))
         .await
         .unwrap();
@@ -720,12 +843,7 @@ async fn a_job_on_a_full_machine_is_queued_and_starts_when_a_slot_frees() {
     // for ever (the deadline only bounds that failure)
     let second = tokio::time::timeout(
         Duration::from_secs(30),
-        r.start(spec(
-            Starter::User,
-            d.path(),
-            "echo second",
-            Duration::from_secs(30),
-        )),
+        r.start(agents(d.path(), "echo second")),
     )
     .await
     .expect("the start blocked")
@@ -734,7 +852,7 @@ async fn a_job_on_a_full_machine_is_queued_and_starts_when_a_slot_frees() {
     assert_eq!(r.get(&second).unwrap().status, ExecStatus::Queued);
     assert_eq!(r.get(&first).unwrap().status, ExecStatus::Running);
     assert_eq!(r.list(None, true).len(), 2, "queued counts as live");
-    assert!(r.live().ids("nobody").is_empty());
+    assert_eq!(r.live().ids("S1").len(), 2);
     std::fs::write(&gate, "").unwrap();
     assert_eq!(ended(&r, &first).await.status, ExecStatus::Done);
     let row = ended(&r, &second).await;
@@ -750,32 +868,17 @@ async fn a_queued_job_can_be_stopped_and_survives_a_restart() {
     let r = one_slot(d.path());
     let gate = d.path().join("gate");
     let first = r
-        .start(spec(
-            Starter::User,
+        .start(agents(
             d.path(),
             &format!("while [ ! -e {} ]; do sleep 0.05; done", gate.display()),
-            Duration::from_secs(30),
         ))
         .await
         .unwrap();
     let stopped = r
-        .start(spec(
-            Starter::User,
-            d.path(),
-            "touch ran-stopped",
-            Duration::from_secs(30),
-        ))
+        .start(agents(d.path(), "touch ran-stopped"))
         .await
         .unwrap();
-    let kept = r
-        .start(spec(
-            Starter::User,
-            d.path(),
-            "echo kept",
-            Duration::from_secs(30),
-        ))
-        .await
-        .unwrap();
+    let kept = r.start(agents(d.path(), "echo kept")).await.unwrap();
     assert_eq!(r.stop(&stopped).await.unwrap().status, ExecStatus::Stopped);
     // the next hub: its own runner on the same folder, the first job's slot free again
     std::fs::write(&gate, "").unwrap();
@@ -851,6 +954,54 @@ async fn finished_job_folders_past_the_retention_are_pruned() {
     assert!(!left.contains(&"xancient".to_string()));
     assert!(!left.contains(&format!("xold{:03}", KEEP_JOBS + 4)));
     assert!(left.contains(&"xold000".to_string()));
+}
+
+/// A log with bytes that are not UTF-8 is read with replacement characters, never as nothing.
+#[tokio::test]
+async fn a_log_that_is_not_text_is_read_with_replacements() {
+    let d = tempfile::tempdir().unwrap();
+    let r = open(d.path());
+    let dir = d.path().join("exec/xbytes");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("log"), b"one\n\xff two\nthree\n").unwrap();
+    assert_eq!(r.log_slice("xbytes", 1, 5), ["\u{fffd} two", "three"]);
+    assert_eq!(r.log_slice("xbytes", 0, 1), ["one"]);
+    // its end too
+    assert_eq!(r.log_tail("xbytes", 100), ["one", "\u{fffd} two", "three"]);
+}
+
+/// The end of a log: its last bytes as lines, a character the cut began inside dropped, the whole log when it is
+/// shorter, nothing for a job without a log.
+#[tokio::test]
+async fn the_end_of_a_log_is_its_last_bytes() {
+    let d = tempfile::tempdir().unwrap();
+    let r = open(d.path());
+    let dir = d.path().join("exec/xtail");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("log"), "one\ntwo\nthree\nh\u{e9}llo\n").unwrap();
+    assert_eq!(
+        r.log_tail("xtail", 1000),
+        ["one", "two", "three", "h\u{e9}llo"]
+    );
+    assert_eq!(r.log_tail("xtail", 13), ["three", "h\u{e9}llo"]);
+    assert_eq!(r.log_tail("xtail", 12), ["hree", "h\u{e9}llo"]);
+    // "\u{e9}" is two bytes: a cut after its first leaves its second, which is dropped
+    assert_eq!(r.log_tail("xtail", 5), ["llo"]);
+    assert!(r.log_tail("xnone", 100).is_empty());
+}
+
+#[test]
+fn a_tail_takes_no_slice_and_a_bounded_size() {
+    let m = runstav::registry::find("exec/log").expect("exec/log");
+    assert!((m.decode)(&json!({"id": "x1", "tail_bytes": 4096})).is_ok());
+    for bad in [
+        json!({"id": "x1", "tail_bytes": 0}),
+        json!({"id": "x1", "tail_bytes": 1_048_577}),
+        json!({"id": "x1", "tail_bytes": 10, "from": 0}),
+        json!({"id": "x1", "tail_bytes": 10, "n": 5}),
+    ] {
+        assert!((m.decode)(&bad).is_err(), "{bad}");
+    }
 }
 
 /// N7: a re-attached job is waited on by the process's end, not by polling for it.
