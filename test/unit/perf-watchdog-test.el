@@ -1,4 +1,5 @@
 ;;; perf-watchdog-test.el --- batch tests: the perf lab's stall-watchdog rows (env switch, stalls probe, GC and budget rows) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-perf)
@@ -64,13 +65,18 @@ stubbed the way the real one acts: it carries Nidhogg's mode with it."
 (defun perf-watchdog-test--stats (spans missed cpu drain)
   (list :spans spans :missed missed :stale 0 :stalls 0 :monitor-cpu-ms cpu :drain drain))
 
+(defvar nidhogg-watchdog--drain-edges)
+
 (ert-deftest drgnx-perf/stalls-probe-shape ()
   ;; the probe subtracts a snapshot; it never resets the counters (the watchdog's own summary lines and the day-wide
-  ;; totals read them), and the record it keeps carries the signature
+  ;; totals read them), and the record it keeps carries the signature.  A build without Nidhogg's own drain edges and
+  ;; stats delta: the C bucket edges and drgnx's subtraction, whatever the running Nidhogg has.
   (perf-watchdog-test--with-feature
-   (let ((drains 0) (resets nil) (calls 0) (drgnx-perf--stalls nil) (nidhogg-watchdog-record-functions nil))
+   (let ((drains 0) (resets nil) (calls 0) (drgnx-perf--stalls nil) (nidhogg-watchdog-record-functions nil)
+         (nidhogg-watchdog--drain-edges [4 8 16 33 50 100 250 1000]))
      (setq nidhogg-watchdog-mode t)
-     (cl-letf (((symbol-function 'nidhogg-watchdog-drain-now) (lambda () (cl-incf drains)))
+     (cl-letf (((symbol-function 'nidhogg-watchdog--stats-delta) nil)
+               ((symbol-function 'nidhogg-watchdog-drain-now) (lambda () (cl-incf drains)))
                ((symbol-function 'nidhogg-watchdog-stats)
                 (lambda (&optional reset)
                   (when reset (push t resets))
@@ -97,8 +103,6 @@ stubbed the way the real one acts: it carries Nidhogg's mode with it."
            (should (= (plist-get w :drain-max-ms) 1000.0))))))
    (should (equal (drgnx-perf--gc-row '(10.0 30.0 20.0)) '(:count 3 :max 30.0 :p95 30.0)))
    (should (equal (plist-get (drgnx-perf--typing-row '(5 10 20 30)) :ge16) 50.0))))
-
-(defvar nidhogg-watchdog--drain-edges)
 
 (defun perf-watchdog-test--probe (stats-fn)
   "Run the stalls probe over two `nidhogg-watchdog-stats' values (STATS-FN gets the call number); the :watchdog plist."
