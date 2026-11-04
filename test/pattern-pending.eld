@@ -82,7 +82,6 @@
  "test/unit/ai-client-test.el"
  "test/unit/ai-edit-test.el"
  "test/unit/ai-embed-test.el"
- "test/unit/ai-gateway-test.el"
  "test/unit/ai-ghost-test.el"
  "test/unit/ai-keys-test.el"
  "test/unit/ai-test.el"

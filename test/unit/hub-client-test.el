@@ -78,12 +78,27 @@ disconnected at the end."
     (and b (file-name-absolute-p b) (file-executable-p b) (not (file-directory-p b)) b)))
 
 (defmacro drgnx-hub-client-test--with-ratatoskr (&rest body)
-  "BODY with Ratatoskr serving ROOT (`drgnx-hub-client-test--with') and this Emacs connected to it, through the shared
-fixture; skipped without the binary.  For a test with no order to choose (a hub the code under test starts, a frozen
-test)."
+  "BODY with Ratatoskr serving ROOT (`drgnx-hub-client-test--with'), this Emacs not yet connected; skipped without the
+binary.  For the tests of other files that drive a real agent through the hub and wait on conditions of their own (the
+agents mirror's): their order is the agent's, not the gate's."
   (declare (indent 0))
   `(drgnx-hub-client-test--with
-     (drgnx-test-with-ratatoskr root ,@body)))
+     (skip-unless (drgnx-hub-client-test--bin))
+     (let* ((process-environment (append (list (concat "DRGNX_DIR=" (directory-file-name drgnx-dir)) "RATATOSKR_SUPERVISOR=none"
+                                               (concat "DRGNX_EMACS=" (expand-file-name invocation-name invocation-directory)))
+                                         process-environment))
+            (hub (make-process :name "ratatoskr" :noquery t :connection-type 'pipe :buffer (generate-new-buffer " *ratatoskr*")
+                               :sentinel (lambda (p _event) (unless (process-live-p p) (process-put p :done t)))
+                               :command (list (drgnx-hub-client-test--bin) "serve" "--foreground"
+                                              "--parent-pid" (number-to-string (emacs-pid))))))
+       (unwind-protect
+           (progn (drgnx-hub-client-test--wait #'drgnx-hub-running-p "Ratatoskr answers a ping")
+                  ,@body)
+         (drgnx-hub-disconnect)
+         (when (process-live-p hub) (signal-process hub 'term))
+         (ignore-errors (drgnx-test-wait (lambda () (process-get hub :done)) :secs 10 :what "Ratatoskr ends"))
+         (when (process-live-p hub) (signal-process hub 'kill))
+         (kill-buffer (process-buffer hub))))))
 
 (defmacro drgnx-hub-client-test--with-hub (&rest body)
   "BODY with a gated Ratatoskr serving ROOT (`drgnx-hub-client-test--in-root'), this Emacs not connected: BODY
