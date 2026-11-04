@@ -727,55 +727,64 @@ area.  Never asks anything (the progress timer calls it too)."
 `drgnx-onboard--last-line'): from the command that waits, at most once a second."
   (drgnx-onboard--say (string-trim-right (format "%s… %s" what (or (drgnx-onboard--last-line id) ""))) step))
 
-(defun drgnx-onboard--exec-start (name command &optional timebox)
+(defun drgnx-onboard--exec-start (name command &optional timebox start)
   "Start COMMAND (a list) as the hub's job NAME in the state folder and wait (30 s at most) for the hub to take it:
 \(ID) or (nil WHY).  Follows the hub's job events from then on (`drgnx-exec-sync'), also in the CLI's batch Emacs.
-TIMEBOX: the job's seconds."
+TIMEBOX: the job's seconds.  START, a cons, is set to (ID . t) when the hub answers (`drgnx-onboard--stop-at-exit')."
   (require 'drgnx-exec)
   (make-directory (drgnx-state-dir) t)
-  (let (id why done)
+  (let ((start (or start (cons nil nil))) why)
     (drgnx-exec-start name command :cwd (drgnx-state-dir) :timebox timebox
-                      :callback (lambda (i w) (setq id i why w done t)))
+                      :callback (lambda (i w) (setq why w) (setcar start i) (setcdr start t)))
     (let ((deadline (+ (float-time) 30)))
-      (while (and (not done) (< (float-time) deadline)) (accept-process-output nil 0.1)))
-    (when id (drgnx-exec-sync))
-    (list id (or why (and (not done) "the hub did not answer")))))
+      (while (and (not (cdr start)) (< (float-time) deadline)) (accept-process-output nil 0.1)))
+    (when (car start) (drgnx-exec-sync))
+    (list (car start) (or why (and (not (cdr start)) "the hub did not answer")))))
+
+(defun drgnx-onboard--stop-at-exit (start)
+  "`kill-emacs-hook' of the CLI waiting on a job: stop the job START names, (ID . ANSWERED).  A start the hub has not
+answered yet is waited for, 5 s at most: the hub may run the job already, and its id comes with the answer."
+  (let ((limit (+ (float-time) 5)))
+    (while (and (not (cdr start)) (< (float-time) limit)) (accept-process-output nil 0.05)))
+  (when (car start) (drgnx-exec-stop (car start))))
 
 (defun drgnx-onboard--job (what command &optional secs)
   "Run COMMAND (a list) as a drgnx job for WHAT and wait for it to end, at most SECS (default an hour; `:none': as
 long as it takes — a model download or a package sync, which C-g still stops); meanwhile the Welcome shows its last
 log line.  `ok', or (fail REASON LOG): REASON ends with the log's last line.  C-g stops the
 job, then quits."
-  (let* ((started (drgnx-onboard--exec-start (concat "Onboarding: " what) command
-                                             (if (eq secs :none) 86400 (ceiling (+ (or secs 3600) 30)))))
-         (id (car started)))
-    (if (not id)
-        (list 'fail (format "%s did not start: %s" what (cadr started)) nil)
-      (let* ((log (drgnx-onboard--log-file id)) (job nil) (shown 0)
-             ;; the CLI (batch) ends on Ctrl-C without unwinding: the exit stops the job
-             (stop (lambda () (drgnx-exec-stop id))))
-        (when noninteractive (add-hook 'kill-emacs-hook stop))
-        (unwind-protect
-            (condition-case nil
-                (progn
-                  (drgnx-onboard--until (lambda ()
-                                          (setq job (drgnx-exec-get id))
-                                          (when (>= (- (float-time) shown) 1)
-                                            (setq shown (float-time))
-                                            (drgnx-onboard--show-progress drgnx-onboard--current what id))
-                                          ;; no row: the hub forgot it (it ended)
-                                          (or (null job) (not (eq (plist-get job :status) 'running))))
-                                        (if (eq secs :none) nil (or secs 3600)))
-                  (if (eql (plist-get job :exit) 0) 'ok
-                    (when (eq (plist-get job :status) 'running) (drgnx-exec-stop id))
-                    (list 'fail (format "%s failed (%s)%s" what
-                                        (cond ((plist-get job :exit) (format "exit %d" (plist-get job :exit)))
-                                              ((eq (plist-get job :status) 'running) "it took too long and was stopped")
-                                              (t "it ended without an exit status"))
-                                        (if-let* ((line (drgnx-onboard--last-line id))) (concat ": " line) ""))
-                          log)))
-              (quit (drgnx-exec-stop id) (signal 'quit nil)))
-          (remove-hook 'kill-emacs-hook stop))))))
+  (let* ((start (cons nil nil))
+         ;; the CLI (batch) ends on Ctrl-C without unwinding: the exit stops the job.  In before the start: the hub
+         ;; may run the job before its answer (the id) comes
+         (stop (lambda () (drgnx-onboard--stop-at-exit start))))
+    (when noninteractive (add-hook 'kill-emacs-hook stop))
+    (unwind-protect
+        (let* ((started (drgnx-onboard--exec-start (concat "Onboarding: " what) command
+                                                   (if (eq secs :none) 86400 (ceiling (+ (or secs 3600) 30))) start))
+               (id (car started)))
+          (if (not id)
+              (list 'fail (format "%s did not start: %s" what (cadr started)) nil)
+            (let* ((log (drgnx-onboard--log-file id)) (job nil) (shown 0))
+              (condition-case nil
+                  (progn
+                    (drgnx-onboard--until (lambda ()
+                                            (setq job (drgnx-exec-get id))
+                                            (when (>= (- (float-time) shown) 1)
+                                              (setq shown (float-time))
+                                              (drgnx-onboard--show-progress drgnx-onboard--current what id))
+                                            ;; no row: the hub forgot it (it ended)
+                                            (or (null job) (not (eq (plist-get job :status) 'running))))
+                                          (if (eq secs :none) nil (or secs 3600)))
+                    (if (eql (plist-get job :exit) 0) 'ok
+                      (when (eq (plist-get job :status) 'running) (drgnx-exec-stop id))
+                      (list 'fail (format "%s failed (%s)%s" what
+                                          (cond ((plist-get job :exit) (format "exit %d" (plist-get job :exit)))
+                                                ((eq (plist-get job :status) 'running) "it took too long and was stopped")
+                                                (t "it ended without an exit status"))
+                                          (if-let* ((line (drgnx-onboard--last-line id))) (concat ": " line) ""))
+                            log)))
+                (quit (drgnx-exec-stop id) (signal 'quit nil))))))
+      (remove-hook 'kill-emacs-hook stop))))
 
 (declare-function browse-url "browse-url")
 

@@ -480,7 +480,9 @@ job stopped at the end."
 
 (ert-deftest drgnx-ai-onboard/a-real-ctrl-c-stops-the-job ()
   ;; The same with a real SIGINT: a batch Emacs waiting on a job ends on it without unwinding, and its
-  ;; `kill-emacs-hook' entry stops the job.  (`env --default-signal=INT': a background job ignores SIGINT.)
+  ;; `kill-emacs-hook' entry stops the job.  (`env --default-signal=INT': a background job ignores SIGINT.)  The signal
+  ;; goes as soon as the hub runs the job: the entry is in before the start, and a start not answered yet is waited
+  ;; for; the hub serves the stop although the child left without reading the answers before it.
   (skip-unless (eql 0 (call-process "env" nil nil nil "--default-signal=INT" "true")))
   (let* ((root (file-name-as-directory (make-temp-file "drgnx-sigint" t)))
          (process-environment (append (list (concat "HOME=" root "home") (concat "DRGNX_CONFIG_DIR=" root "config")
@@ -495,14 +497,9 @@ job stopped at the end."
           (setq child (make-process :name "drgnx-sigint" :connection-type 'pipe :noquery t :buffer nil
                                     :command (list "env" "--default-signal=INT" (expand-file-name invocation-name invocation-directory)
                                                    "--batch" "-Q" "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-onboard"
-                                                   ;; the marker is written as the job's wait starts, after the hook went in.  Not from a
-                                                   ;; timer: one fires inside the start's own wait too, while the job already runs in
-                                                   ;; the hub and the hook is not in yet, and a SIGINT then leaves the job running
-                                                   "--eval" (format "(progn (advice-add 'drgnx-onboard--until :before (lambda (&rest _) (write-region \"\" nil %S nil 'silent))) (drgnx-onboard--job \"Sleeping\" (list \"sleep\" \"3600\")))"
-                                                                    (concat root "hooked")))
+                                                   "--eval" "(drgnx-onboard--job \"Sleeping\" (list \"sleep\" \"3600\"))")
                                     :sentinel (lambda (p _e) (process-put p :done t))))
           (should (drgnx-test-wait #'drgnx-ai-onboard-test--hub-running :what "the child's job running"))
-          (should (drgnx-test-wait (lambda () (file-exists-p (concat root "hooked"))) :what "the child's hook in"))
           (signal-process child 'SIGINT)
           (should (drgnx-test-wait (lambda () (process-get child :done)) :what "the child's exit"))
           (should (drgnx-test-wait (lambda () (not (drgnx-ai-onboard-test--hub-running))) :what "the job stopped")))

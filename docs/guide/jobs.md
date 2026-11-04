@@ -70,7 +70,7 @@ when you stop them, when the editor's teardown does, or when the hub stops. The 
 when the index is built) and has the longest time box, 24 hours; tree-sitter grammar builds and mermaid drawings keep the
 hour. Onboarding runs its installs and downloads as jobs too and waits for
 each in its command (the progress line is the end of the job's log, asked once a second); `drgnx onboard` in a terminal
-does the same, and C-g, or Ctrl-C there, stops the job.
+does the same, and C-g, or Ctrl-C there, stops the job (Ctrl-C also while the job is still starting).
 
 ### Container jobs
 
