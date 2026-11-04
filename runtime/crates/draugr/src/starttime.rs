@@ -106,11 +106,12 @@ mod os {
         let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
         let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
         // SAFETY: the buffer is a proc_bsdinfo of `size` bytes, as PROC_PIDTBSDINFO expects.
+        // arg 1 finds a zombie too (with 0 one is ESRCH), as `/proc/PID/stat` shows one on Linux
         let n = unsafe {
             libc::proc_pidinfo(
                 pid,
                 libc::PROC_PIDTBSDINFO,
-                0,
+                1,
                 info.as_mut_ptr().cast(),
                 size,
             )

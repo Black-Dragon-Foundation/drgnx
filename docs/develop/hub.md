@@ -185,7 +185,8 @@ not count), so a busy hub is never restarted.
   retires. hermod's `Conn::spawn` (every agent session and `agents/probe`) always uses it, and `Conn::stderr` gives the
   hub the agent's stderr before the agent speaks, for `gleipnir::read_status`.
 - **Start times:** `start_time(pid)` is field 22 of `/proc/PID/stat` on Linux (clock ticks since boot, read after
-  the last `)` of the command name) and `proc_pidinfo`'s start in microseconds on macOS. `boot_id()` is Linux's
+  the last `)` of the command name) and `proc_pidinfo`'s start in microseconds on macOS (asked with arg 1, so a zombie
+  is found and reads as one, as `/proc` shows it on Linux; with 0 it is ESRCH). `boot_id()` is Linux's
   `/proc/sys/kernel/random/boot_id` and macOS's `kern.bootsessionuuid` (the pid of a job is checked against the boot it started in).
 - **The orphan reaper:** at start Ratatoskr reaps the process rows (pid, start time, pgid, boot id) a crashed run
   left in `runtime.db`. For each row, in this order:
