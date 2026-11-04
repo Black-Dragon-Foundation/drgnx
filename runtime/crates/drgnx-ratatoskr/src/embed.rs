@@ -905,7 +905,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_round_starts_after_a_quiet_minute_and_probes_after_a_stop() {
-        let t0 = skuld::origin();
+        let t0 = Instant::from_std(skuld::origin());
         let mut t = Timer::new(t0);
         assert!(!t.due(0, t0 + IDLE / 2));
         assert!(t.due(0, t0 + IDLE));
@@ -1001,7 +1001,7 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = CoordDb::spawn(dir.path().join("work.db"));
         claimed_job(&db).await;
-        let t0 = skuld::origin();
+        let t0 = Instant::from_std(skuld::origin());
         let mut t = Timer::new(t0);
         let mut by_writes = Timer::new(t0);
         let (w0, x0) = counts(&db);
@@ -1041,7 +1041,7 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = CoordDb::spawn(dir.path().join("work.db"));
         claimed_job(&db).await;
-        let t0 = skuld::origin();
+        let t0 = Instant::from_std(skuld::origin());
         let mut t = Timer::new(t0);
         let (_, x0) = counts(&db);
         assert!(!t.due(x0, t0));
