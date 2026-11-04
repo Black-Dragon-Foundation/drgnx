@@ -147,8 +147,58 @@ pub struct Sessions {
     manager_list: OnceLock<ToolList>,
     /// Outside bridges connected now.
     outside: Arc<AtomicUsize>,
+    /// The hub ends: every outside bridge's connection closes ([`Sessions::end_outside`]).
+    outside_end: CancellationToken,
     /// One open or close at a time: a row and its socket change together.
     serial: tokio::sync::Mutex<()>,
+}
+
+/// An `mcp/session` (or the front's work before it) slower than this, in real time, logs how long each stage took.
+pub const SLOW_OPEN: Duration = Duration::from_secs(1);
+
+/// The stages of one `mcp/session`, timed in real time; logged (a warning) when it ends, by any path, after more than
+/// [`SLOW_OPEN`]: where a late answer spent its time is then in the hub's log.
+struct Stages {
+    start: std::time::Instant,
+    last: std::time::Instant,
+    done: Vec<(&'static str, u128)>,
+}
+
+impl Stages {
+    fn new() -> Stages {
+        let now = crate::clock::real_now();
+        Stages {
+            start: now,
+            last: now,
+            done: Vec::new(),
+        }
+    }
+
+    /// Stage WHAT ended now.
+    fn mark(&mut self, what: &'static str) {
+        let now = crate::clock::real_now();
+        self.done.push((what, (now - self.last).as_millis()));
+        self.last = now;
+    }
+}
+
+impl Drop for Stages {
+    fn drop(&mut self) {
+        let total = self.start.elapsed();
+        if total > SLOW_OPEN {
+            let stages: Vec<String> = self
+                .done
+                .iter()
+                .map(|(w, ms)| format!("{w} {ms} ms"))
+                .collect();
+            tracing::warn!(
+                ms = total.as_millis() as u64,
+                "mcp/session took {} ms: {}",
+                total.as_millis(),
+                stages.join(", ")
+            );
+        }
+    }
 }
 
 /// Counts one connection while it lives.
@@ -372,6 +422,7 @@ impl Sessions {
             store: OnceLock::new(),
             live: Mutex::new(BTreeMap::new()),
             outside: Arc::new(AtomicUsize::new(0)),
+            outside_end: CancellationToken::new(),
             serial: tokio::sync::Mutex::new(()),
             managers: Mutex::new(BTreeSet::new()),
             manager_list: OnceLock::new(),
@@ -432,9 +483,12 @@ impl Sessions {
             .ok()
             .filter(|o| *o > 0)
             .ok_or_else(|| invalid("owner", "not a process id"))?;
+        let mut stages = Stages::new();
         let owner_start = owner_start(owner)
             .ok_or_else(|| invalid("owner", format!("process {owner} is not running")))?;
+        stages.mark("owner");
         let _one = self.serial.lock().await;
+        stages.mark("serial lock");
         let sid = match &p.sid {
             Some(s) => s.as_str().to_owned(),
             None => runstav::proof::nonce().map_err(|e| internal(format!("no session id: {e}")))?
@@ -450,6 +504,7 @@ impl Sessions {
         }
         let dir = paths::make_session_dir(&store.env, &store.socket, &sid)
             .map_err(|e| internal(format!("session {sid}'s directory: {e}")))?;
+        stages.mark("directory");
         let row = Row {
             sid: sid.clone(),
             agent,
@@ -466,6 +521,7 @@ impl Sessions {
         insert(&store.db, &row)
             .await
             .map_err(|e| internal(format!("cannot record session {sid} in runtime.db: {e}")))?;
+        stages.mark("runtime.db");
         let path = dir.join(paths::SESSION_MCP_SOCKET);
         let listener = match bind(&path) {
             Ok(l) => l,
@@ -477,8 +533,11 @@ impl Sessions {
                 return Err(internal(format!("cannot bind {}: {e}", path.display())));
             }
         };
+        stages.mark("bind");
         let list = self.list_for(&row).await;
+        stages.mark("tools");
         self.listen(row, dir, path.clone(), listener, list);
+        stages.mark("listen");
         Ok(SessionAnswer {
             sid,
             socket: path.to_string_lossy().into_owned(),
@@ -707,7 +766,8 @@ impl Sessions {
         }
     }
 
-    /// An outside bridge's connection, after `mcp/attach`'s answer: the tools as WHO until it closes.
+    /// An outside bridge's connection, after `mcp/attach`'s answer: the tools as WHO until it closes, or until the
+    /// hub ends ([`Sessions::end_outside`]): then R and W are dropped, so the bridge reads its end of file.
     pub async fn serve_outside<R, W>(&self, who: Identity, r: R, w: W)
     where
         R: AsyncRead + Unpin,
@@ -717,16 +777,25 @@ impl Sessions {
         let id = who.id().unwrap_or_default().to_owned();
         tracing::info!(identity = id, "an outside agent's bridge attached");
         let ctx: Arc<Ctx> = Arc::new((self.tools.clone(), who));
-        let end = mimir::serve(
+        let serve = mimir::serve(
             ctx,
             self.list.clone(),
             ServerInfo::default(),
             r,
             w,
             Limits::default(),
-        )
-        .await;
-        tracing::info!(identity = id, ?end, "an outside agent's bridge ended");
+        );
+        tokio::select! {
+            end = serve => tracing::info!(identity = id, ?end, "an outside agent's bridge ended"),
+            () = self.outside_end.cancelled() => {
+                tracing::info!(identity = id, "closed an outside agent's bridge: the hub ends");
+            }
+        }
+    }
+
+    /// The hub ends: every outside bridge's connection is closed, now and whenever one is handed on later.
+    pub fn end_outside(&self) {
+        self.outside_end.cancel();
     }
 }
 

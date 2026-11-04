@@ -484,6 +484,61 @@ fn a_hub_whose_store_is_slow_at_its_end_closes_its_connections_then_writes_its_q
     assert!(!logs(&root).contains("abandoned"), "nothing was abandoned");
 }
 
+#[cfg(feature = "test-hooks")]
+#[test]
+fn a_second_sigterm_during_the_store_wait_abandons_it() {
+    // SIGTERM ends the serving, with runtime.db's thread held by a job and a write queued behind it
+    // (`--test-hold-store`); a second SIGTERM while the hub waits for that thread ends the wait: the hub says which
+    // queue it abandoned and exits without it
+    let logs = |root: &Root| {
+        let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(root.log_dir())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        files.sort();
+        files
+            .iter()
+            .map(|p| std::fs::read_to_string(p).unwrap())
+            .collect::<String>()
+    };
+    let root = Root::new();
+    let socket = root.socket();
+    let mut hub = Hub::start_with(&root, 1, &["--test-hold-store"]);
+    hub.wait_ready(&socket);
+    unsafe { libc::kill(hub.pid() as i32, libc::SIGTERM) };
+    // the log is looked at again until it names the thread (`FAILED_AFTER` only bounds a failure)
+    skuld::wait_until(
+        "the hub says runtime.db's thread is still stopping",
+        FAILED_AFTER.as_secs(),
+        || {
+            logs(&root)
+                .contains("runtime.db's thread is still stopping")
+                .then_some(())
+        },
+    );
+    assert!(
+        hub.exited().is_none(),
+        "the hub ended with a write still queued: {}",
+        hub.stderr_text()
+    );
+    unsafe { libc::kill(hub.pid() as i32, libc::SIGTERM) };
+    let status = hub.wait_exit();
+    assert_eq!(status.code(), Some(0), "{}", hub.stderr_text());
+    let log = logs(&root);
+    assert!(
+        log.contains(
+            "SIGTERM: runtime.db's thread's queued writes were abandoned at the user's request"
+        ),
+        "{log}"
+    );
+    let db = urdr::open_readonly(&root.dir.path().join("s/drgnx/hub/runtime.db")).unwrap();
+    assert_eq!(
+        urdr::meta(&db, "test-hold-store").unwrap(),
+        None,
+        "the write queued behind the held job was abandoned: {log}"
+    );
+}
+
 #[test]
 fn a_child_is_its_image_once_the_exec_handshake_ends() {
     use support::ExecHandshake;

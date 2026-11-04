@@ -570,7 +570,12 @@ async fn hold_store(db: &urdr::Handle) {
         let _ = h
             .read(move |_| {
                 let _ = held.send(());
-                let _ = released.recv();
+                // only SIGUSR1 releases it: a runtime that ends (the sender dropped) leaves it held, as a hung job
+                if released.recv().is_err() {
+                    loop {
+                        std::thread::park();
+                    }
+                }
                 Ok(())
             })
             .await;

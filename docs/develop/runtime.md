@@ -571,7 +571,9 @@ domr connect-as --socket PATH
   row that needs a second process (an agent, a provider, a proxy) starts one of `ratatoskr-mock`'s.
 - `--only GLOB` matches the scenario name (`*` and `?`); `--only-tag TAG` the rows that require the tag.
 - Output: one `PASS name`, `SKIP name (reason)` or `FAIL name: step N (VERB): what` line per scenario, then
-  `N passed, N skipped, N failed`. Exit 0 only with no FAIL. With `--require-all` a SKIP fails too, except `linux` /
+  `N passed, N skipped, N failed`. A FAIL of a row that is not `pending` goes on with when each step ran and how long
+  it took, and the last 60 lines of each hub's stderr and of its own log, kept before the root is removed: a red that
+  does not come again still says where its time went. Exit 0 only with no FAIL. With `--require-all` a SKIP fails too, except `linux` /
   `macos` skips on the other host, `sudo` skips where neither root nor passwordless sudo exists, `perf` rows
   without `--perf`, and rows with a `drop_ptrace` step where the harness has `CAP_SYS_PTRACE` and no `setpriv`.
 - `--perf OUT.json` runs the `perf` rows and writes every `measure` step's timings to the file.

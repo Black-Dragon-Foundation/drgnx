@@ -52,7 +52,9 @@ const VAR_NAMES: [&str; 14] = [
     "RUN",
 ];
 
-/// Run `scenario`; the error says which step failed and why.  Every hub, helper and root is gone afterwards.
+/// Run `scenario`; the error says which step failed and why, and (a row not `pending`) when each step ran and how
+/// long it took, with the end of each hub's logs: what a red that will not come again needs, kept before every hub,
+/// helper and root is gone.
 pub fn run_scenario(cfg: &Config, s: &Scenario, perf: &mut Vec<(String, Vec<f64>)>) -> R {
     let mut r = Runner {
         cfg,
@@ -65,11 +67,50 @@ pub fn run_scenario(cfg: &Config, s: &Scenario, perf: &mut Vec<(String, Vec<f64>
         started: 0,
         active_root: None,
     };
+    let start = Instant::now();
+    let mut timing = Vec::new();
     for (i, step) in s.steps.iter().enumerate() {
-        r.step(step)
-            .map_err(|e| format!("step {} ({}): {e}", i + 1, step.verb))?;
+        let at = start.elapsed();
+        let ran = r.step(step);
+        timing.push(format!(
+            "  {:>3} {:<16} at {:>7} ms, took {:>6} ms",
+            i + 1,
+            step.verb,
+            at.as_millis(),
+            (start.elapsed() - at).as_millis()
+        ));
+        if let Err(e) = ran {
+            let mut why = format!("step {} ({}): {e}", i + 1, step.verb);
+            if s.pending.is_none() {
+                why.push_str(&r.failure_notes(&timing));
+            }
+            return Err(why);
+        }
     }
     Ok(())
+}
+
+/// How many lines of each hub's logs a failure keeps.
+const FAILURE_LOG_LINES: usize = 60;
+
+impl Runner<'_> {
+    /// The steps' TIMING and the end of each hub's logs (its stderr and its own `hub-*.jsonl`), for a failure.
+    fn failure_notes(&self, timing: &[String]) -> String {
+        let mut notes = format!(
+            "\nthe steps (from the scenario's start):\n{}",
+            timing.join("\n")
+        );
+        for h in &self.hubs {
+            notes.push_str(&format!(
+                "\nhub {} (pid {}), its stderr's last lines:\n{}\nits log's last lines:\n{}",
+                h.name,
+                h.pid,
+                h.log_tail_n(FAILURE_LOG_LINES),
+                h.jsonl_tail_n(FAILURE_LOG_LINES)
+            ));
+        }
+        notes
+    }
 }
 
 impl Drop for Runner<'_> {
