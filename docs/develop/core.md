@@ -3062,8 +3062,10 @@ timer; when nothing can run and nothing is left to wait for it fails at once, wi
   `(drgnx-test-pause SECS "WHY")`, in every tier, checked by `drgnx-lint/cond-tests-have-no-fixed-pause`: a pause
   with no reason is a settle, and a settle waits for its condition.
 - **Inside the clock fixture** (`drgnx-test-with-clock`) it works unchanged: the deadline is read through
-  `drgnx-test-real-time`, and each of its timed `accept-process-output` calls moves virtual time by 0.02 s (a
-  zero-length look; a real wait only while a real child is live), so the wait steps through the timers.
+  `drgnx-test-real-time`. On a manual clock it polls with Emacs's own `accept-process-output` (`drgnx-test--accept`)
+  and moves virtual time by the real time each poll took, so virtual time keeps step with these real-time waits; so
+  does `drgnx-test-pause`. The fixture's advised wait moves virtual time by its whole timeout at once, so a real-time
+  loop of it would race virtual time ahead (and run timers due minutes later inside a 0.2 s window).
 - **A GUI test that makes a frame waits for it to be mapped**: `(drgnx-test-wait (lambda () (eq (frame-visible-p F)
   t)) :what "…")` before it redisplays. The compositor maps a new frame when it gets to it (pgtk under mutter:
   after `make-frame` has returned), and redisplay skips a frame that is not mapped, so its mode lines are never

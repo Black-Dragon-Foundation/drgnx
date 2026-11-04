@@ -153,10 +153,21 @@ is signalled) and the root frame stubbed; the variable `calls' counts the sample
     (should (>= now 4))))
 
 (ert-deftest drgnx-test-wait/works-inside-the-clock-fixture ()
-  ;; Each timed `accept-process-output' advances virtual time by the real wait, so a virtual-time PRED comes true.
+  ;; On the manual clock a wait polls with Emacs's own call and virtual time keeps step with the real, so a
+  ;; virtual-time PRED comes true
   (drgnx-test-with-clock ()
     (let ((start (float-time)))
       (should (drgnx-test-wait (lambda () (> (float-time) (+ start 0.05))) :secs 5)))))
+
+(ert-deftest drgnx-test-pause/on-the-manual-clock-keeps-step-with-the-real-clock ()
+  ;; the clock's own timed waits move virtual time by their timeouts at once: a pause polling with them raced
+  ;; virtual time far ahead (0.2 s of real time was minutes, and timers due then ran in the window)
+  (drgnx-test-with-clock (:allow-pending t)
+    (let (ran)
+      (run-at-time 60 nil (lambda () (setq ran t)))
+      (drgnx-test-pause 0.2 "the 60 s timer may not run")
+      (should-not ran)
+      (should (< (drgnx-test-clock-now) 30)))))
 
 (ert-deftest drgnx-test-wait/on-the-auto-clock-it-stops-at-the-timer-that-made-pred-true ()
   (skip-unless (drgnx-test--core-p))
