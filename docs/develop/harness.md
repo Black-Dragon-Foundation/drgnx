@@ -1141,7 +1141,8 @@ is a plain form.
   `kill-process`, `quit-process`, `stop-process` or `continue-process` (the fixture signals a parked child through
   `drgnx-test-child-signal`); no `process-live-p`; no `sleep-for`, positive `sit-for` or timer as a marker; no timed
   `accept-process-output` outside `drgnx-test-wait`. A `drgnx-test-child-signal` comes after a
-  `drgnx-test-child-await` in body order (an argument counts before its call, a helper where it is called).
+  `drgnx-test-child-await` in body order (an argument counts before its call, a helper where it is called); a call
+  inside `should-error`, which the test expects the fixture to refuse, counts as neither.
 - **gated** (`drgnx-lint/gated-tests-call-the-hub-inside-the-gate`): in a test that calls `drgnx-test-gated`, no
   `drgnx-hub-call`, `drgnx-hub-call-sync`, `drgnx-hub-connect` or `drgnx-hub-disconnect` outside its body, in the test
   or a helper it calls from there.

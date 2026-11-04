@@ -129,9 +129,11 @@ their call."
     (nreverse out)))
 
 (defun drgnx-lint-patterns--rule-handshake-order (test helpers)
-  "A `drgnx-test-child-signal' before any `drgnx-test-child-await' signals a child that has not announced."
+  "A `drgnx-test-child-signal' before any `drgnx-test-child-await' signals a child that has not announced.
+A call inside `should-error' is one the test expects the fixture to refuse: it neither signals nor awaits."
   (let ((awaited nil) out)
-    (dolist (c (drgnx-lint-patterns--ordered-calls test helpers))
+    (dolist (c (drgnx-lint-patterns--ordered-calls (drgnx-lint-patterns--without '(should-error) test)
+                                                   (drgnx-lint-patterns--helpers-without '(should-error) helpers)))
       (cond ((eq c 'drgnx-test-child-await) (setq awaited t))
             ((and (eq c 'drgnx-test-child-signal) (not awaited))
              (cl-pushnew "drgnx-test-child-signal before any drgnx-test-child-await" out :test #'equal))))
@@ -273,7 +275,12 @@ levels that enclose it (a `let' binding, a call's argument); inside a branching 
     (should-not (drgnx-lint-patterns--check
                  rule "(defun h (p) (drgnx-test-child-await p \"x\")) (ert-deftest a/b () (h p) (drgnx-test-child-signal p 1))"))
     (should (drgnx-lint-patterns--check
-             rule "(defun h (p) (drgnx-test-child-await p \"x\")) (ert-deftest a/b () (drgnx-test-child-signal p 1) (h p))"))))
+             rule "(defun h (p) (drgnx-test-child-await p \"x\")) (ert-deftest a/b () (drgnx-test-child-signal p 1) (h p))"))
+    ;; a refusal the test expects signals nothing, and an await that errors announces nothing
+    (should-not (drgnx-lint-patterns--check
+                 rule "(ert-deftest a/b () (should-error (drgnx-test-child-signal p 1)) (drgnx-test-child-await p \"x\"))"))
+    (should (drgnx-lint-patterns--check
+             rule "(ert-deftest a/b () (should-error (drgnx-test-child-await p \"x\")) (drgnx-test-child-signal p 1))"))))
 
 (ert-deftest drgnx-lint/gated-calls-lint-bites ()
   (let ((rule #'drgnx-lint-patterns--rule-gated-calls))
