@@ -245,7 +245,11 @@ fn agent_cannot_set_memory_max() {
         if cfg!(target_os = "macos") && p.memory_max.is_some() {
             let e = user.unwrap_err();
             assert_eq!(e.code, ErrorCode::InvalidParams);
-            assert!(e.message.contains("macOS has no memory cap"), "{}", e.message);
+            assert!(
+                e.message.contains("macOS has no memory cap"),
+                "{}",
+                e.message
+            );
         } else {
             assert!(user.is_ok());
         }

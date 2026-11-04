@@ -915,7 +915,11 @@ fn system_reads(target: gleipnir::Target) -> Vec<PathBuf> {
         gleipnir::Target::LinuxBwrap => {
             let mut v = all(&["/usr"]);
             v.extend(all(gleipnir::bwrap::SYSTEM_READS));
-            v.extend(gleipnir::bwrap::USR_MERGED.iter().map(|d| Path::new("/").join(d)));
+            v.extend(
+                gleipnir::bwrap::USR_MERGED
+                    .iter()
+                    .map(|d| Path::new("/").join(d)),
+            );
             v
         }
         gleipnir::Target::LinuxReduced => all(gleipnir::landlock::REDUCED_SYSTEM_ROOTS),
