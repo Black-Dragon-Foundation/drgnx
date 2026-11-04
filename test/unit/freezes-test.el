@@ -1,4 +1,5 @@
 ;;; freezes-test.el --- batch tests: Show Freezes -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)

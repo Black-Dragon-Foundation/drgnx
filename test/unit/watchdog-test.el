@@ -1,4 +1,5 @@
 ;;; watchdog-test.el --- batch tests: drgnx's side of the stall watchdog -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-paths)
 (require 'drgnx-watchdog)

@@ -1,4 +1,5 @@
 ;;; watchdog-doctor-test.el --- batch tests: the doctor's freezes and gc checks, the watchdog's notices -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)

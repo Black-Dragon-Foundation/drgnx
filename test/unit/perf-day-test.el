@@ -1,4 +1,5 @@
 ;;; perf-day-test.el --- batch tests: the synthetic day (composition, transcript replay, LSP replay, rules) -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-perf-run)
