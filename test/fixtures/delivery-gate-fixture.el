@@ -54,6 +54,11 @@ the gate's is whether a write has happened yet, so a test that sets this waits f
 (defvar drgnx-test-gate--swap-pairs 0 "The pairs of lines from different connections met so far (only counted with a swap).")
 (defvar drgnx-test-gate--lag nil "The released line the swap holds back: (CONN . LINE), or nil.")
 (defvar drgnx-test-gate--before nil "The processes there when the body began: none of them is the body's child.")
+(defvar drgnx-test-gate--answers nil
+  "The schedule's (:answers ...): t (every answer) or the methods whose answers are released like handshake lines.")
+(defvar drgnx-test-gate--awaiting nil
+  "(STEP . REAL-TIME): the due step whose line the hub may still hold, and since when; nil when none.")
+(defvar drgnx-test-gate--poked nil "The real time of the gate's last barrier while it awaits a step's line.")
 (defvar drgnx-test-gate--progress nil
   "The real time the code under test last saw output, or a child end, while it waited on its children; nil between
 such waits.")
@@ -206,9 +211,10 @@ an end from the hub is held after that connection's lines."
        (:eof (eq (car item) :eof))))
    (drgnx-test-gate--conn-queue c)))
 
-(defun drgnx-test-gate--block (c key what)
+(defun drgnx-test-gate--block (c key what &optional poke)
   "Wait, for real, until C holds the item KEY names; its position.  Its end, its delete or
-`drgnx-test-gate-block-secs' first fails the test naming WHAT.  Only C is read, and no timer runs meanwhile."
+`drgnx-test-gate-block-secs' first fails the test naming WHAT.  Only C is read, and no timer runs meanwhile.  POKE:
+the hub is asked for barriers meanwhile (`drgnx-test-gate--poke'), for an item its sequencer may hold."
   (let ((deadline (+ (drgnx-test-real-time) drgnx-test-gate-block-secs)) at)
     (while (not (setq at (drgnx-test-gate--match c key)))
       (drgnx-test-gate--note-ended c)
@@ -222,7 +228,8 @@ an end from the hub is held after that connection's lines."
             ((> (drgnx-test-real-time) deadline)
              (drgnx-test-gate--fail "drgnx-test-gated: the line a step waits for did not come"
                                     :conn (drgnx-test-gate--conn-name c) :step what :secs drgnx-test-gate-block-secs))
-            (t (funcall drgnx-test-gate--raw (drgnx-test-gate--conn-proc c) 0.05 nil 0))))
+            (t (when poke (drgnx-test-gate--poke))
+               (funcall drgnx-test-gate--raw (drgnx-test-gate--conn-proc c) 0.05 nil 0))))
     at))
 
 ;;;; Delivery
@@ -334,9 +341,36 @@ An end that comes first leaves the lines before it delivered and the end held."
 (defun drgnx-test-gate--paused-p ()
   (eq (car (car drgnx-test-gate--steps)) :pause))
 
+(defun drgnx-test-gate--poke ()
+  "Ask the hub for a barrier (`drgnx-test-gate--barrier'), at most every 0.2 s of real time: the writes its sequencer
+holds (a job's end, a timer's event) are written then, into the gate's queues, never to the client."
+  (let ((now (drgnx-test-real-time)))
+    (when (or (null drgnx-test-gate--poked) (>= (- now drgnx-test-gate--poked) 0.2))
+      (setq drgnx-test-gate--poked now)
+      (drgnx-test-gate--barrier))))
+
+(defun drgnx-test-gate--await (c key step)
+  "STEP (an event, a line or an end) is due and C does not hold its item KEY yet: the hub is poked, and the item's
+position is returned if it came.  Else nil, and STEP is what the waits now wait on (`drgnx-test-gate--awaiting'): they
+look for real and move no virtual time.  C's end first, or `drgnx-test-gate-block-secs' of real time since STEP fell
+due, fails the test."
+  (unless (eq (car drgnx-test-gate--awaiting) step)
+    (setq drgnx-test-gate--awaiting (cons step (drgnx-test-real-time))))
+  (drgnx-test-gate--poke)
+  (funcall drgnx-test-gate--raw (drgnx-test-gate--conn-proc c) 0 nil 0)
+  (drgnx-test-gate--note-ended c)
+  (or (drgnx-test-gate--match c key)
+      (cond ((drgnx-test-gate--conn-eof c)
+             (drgnx-test-gate--fail "drgnx-test-gated: the connection ended before the line a step waits for"
+                                    :conn (drgnx-test-gate--conn-name c) :step step))
+            ((> (- (drgnx-test-real-time) (cdr drgnx-test-gate--awaiting)) drgnx-test-gate-block-secs)
+             (drgnx-test-gate--fail "drgnx-test-gated: the line a step waits for did not come"
+                                    :conn (drgnx-test-gate--conn-name c) :step step :secs drgnx-test-gate-block-secs)))))
+
 (defun drgnx-test-gate--release-step ()
   "Release the next step of the schedule if it is due; whether it was.  A step is due once its connection is open, and
-an answer once its call has gone out; the gate then waits for its line."
+an answer once its call has gone out.  The gate then waits for an answer's line; an event, a line or an end the hub may
+hold (a job's end) is awaited without blocking the code under test (`drgnx-test-gate--await')."
   (let* ((step (car drgnx-test-gate--steps))
          (c (and step (not (eq (car step) :pause)) (drgnx-test-gate--find (car step))))
          (key (and c (drgnx-test-gate--step-key c step))))
@@ -345,9 +379,16 @@ an answer once its call has gone out; the gate then waits for its line."
           ((drgnx-test-gate--conn-deleted c)
            (drgnx-test-gate--fail "drgnx-test-gated: a step names a connection the client deleted" :step step))
           ((null key) nil)
-          (t (pop drgnx-test-gate--steps)
-             (drgnx-test-gate--deliver c (drgnx-test-gate--block c key step))
-             t))))
+          ((eq (nth 1 step) :answer)
+           (pop drgnx-test-gate--steps)
+           (drgnx-test-gate--deliver c (drgnx-test-gate--block c key step))
+           t)
+          (t (let ((at (or (drgnx-test-gate--match c key) (drgnx-test-gate--await c key step))))
+               (when at
+                 (setq drgnx-test-gate--awaiting nil)
+                 (pop drgnx-test-gate--steps)
+                 (drgnx-test-gate--deliver c at)
+                 t))))))
 
 (defun drgnx-test-gate--release ()
   "Release what is due, in order, up to the next pause: the handshake lines first each time, then the next step.
@@ -405,14 +446,20 @@ its timeout (its timers running), and a look again.  Nil: nothing was delivered.
       (funcall orig process seconds millisec just-this-one)
     (let* ((secs (drgnx-test--wait-secs seconds millisec))
            (children (and secs (> secs 0) (drgnx-test-gate--children))))
-      (if children
-          (drgnx-test-gate--on-children children)
+      (cond
+       ;; a step waits on a line the hub may still hold: a real look, no virtual time (the step's own bound)
+       ((and secs (> secs 0) drgnx-test-gate--awaiting)
+        (funcall drgnx-test-gate--raw nil (min secs 0.05))
+        nil)
+       (children
+        (drgnx-test-gate--on-children children))
+       (t
         (setq drgnx-test-gate--progress nil)
         (funcall drgnx-test-gate--raw process 0 nil just-this-one)
         (when (and secs (> secs 0))
           (drgnx-test-advance secs)
           (funcall drgnx-test-gate--raw process 0 nil just-this-one))
-        nil))))
+        nil)))))
 
 (defun drgnx-test-gate--accept (orig &optional process seconds millisec just-this-one)
   "`accept-process-output' inside the gate (also deep inside the code under test): what the schedule has due is
@@ -449,13 +496,15 @@ knows the connection before any later stamped line is written."
     proc))
 
 (defun drgnx-test-gate--note-sent (c line)
-  "LINE, a request C sends: its id and method, a handshake one (the first ping, the hello) due as a handshake line."
+  "LINE, a request C sends: its id and method.  A handshake one (the first ping, the hello), or one the schedule's
+\(:answers ...) names, is due as a handshake line."
   (let* ((json (ignore-errors (json-parse-string line :object-type 'plist :null-object nil :false-object nil)))
          (id (plist-get json :id)) (method (plist-get json :method)))
     (when (and id (stringp method))
-      (let ((implicit (and (member method '("ping" "hello")) (not (member method (drgnx-test-gate--conn-handshake c))))))
+      (let* ((handshake (and (member method '("ping" "hello")) (not (member method (drgnx-test-gate--conn-handshake c)))))
+             (implicit (or handshake (eq drgnx-test-gate--answers t) (member method drgnx-test-gate--answers))))
+        (when handshake (push method (drgnx-test-gate--conn-handshake c)))
         (when implicit
-          (push method (drgnx-test-gate--conn-handshake c))
           (setq drgnx-test-gate--implicit (append drgnx-test-gate--implicit (list (cons c (cons :id id))))))
         (setf (drgnx-test-gate--conn-sent c) (append (drgnx-test-gate--conn-sent c) (list (list id method implicit))))))))
 
@@ -605,7 +654,12 @@ barrier (another barrier is needed), else t.  A step that cannot be met fails th
                  (pop drgnx-test-gate--steps)
                  (drgnx-test-gate--deliver c (drgnx-test-gate--match c key)))
                 ((and alive moved) (setq result 'again))
-                (alive (drgnx-test-gate--fail "drgnx-test-gated: a step's line had not come by the barrier" :step step))
+                ((and alive (eq (nth 1 step) :answer))
+                 (drgnx-test-gate--fail "drgnx-test-gated: a step's line had not come by the barrier" :step step))
+                ;; an event, a line or an end the hub writes later (a job that has not ended yet): waited for, with
+                ;; barriers, up to the gate's bound
+                (alive (pop drgnx-test-gate--steps)
+                       (drgnx-test-gate--deliver c (drgnx-test-gate--block c key step t)))
                 (t (pop drgnx-test-gate--steps)
                    (drgnx-test-gate--deliver c (drgnx-test-gate--block c key step)))))))
     result))
@@ -714,6 +768,7 @@ advance's result."
         (drgnx-test-gate--opening nil) (drgnx-test-gate--control nil) (drgnx-test-gate--releasing nil)
         (drgnx-test-gate--swap (drgnx-test-gate--swap-env)) (drgnx-test-gate--swap-pairs 0) (drgnx-test-gate--lag nil)
         (drgnx-test-gate--before (process-list)) (drgnx-test-gate--progress nil)
+        (drgnx-test-gate--awaiting nil) (drgnx-test-gate--poked nil)
         (ok nil))
     (unwind-protect
         (progn (dolist (a drgnx-test-gate--advice) (advice-add (nth 0 a) (nth 1 a) (nth 2 a)))
@@ -731,7 +786,13 @@ advance's result."
 (defun drgnx-test-gate--call (schedule body)
   "Run BODY (a function) gated by SCHEDULE; see `drgnx-test-gated'."
   (when drgnx-test-gate--active (error "drgnx-test-gated: already inside one"))
-  (let ((schedule (drgnx-test-gate--normalize schedule)))
+  (let* ((answers (cl-find :answers schedule :key #'car-safe))
+         (drgnx-test-gate--answers
+          (cond ((null answers) nil)
+                ((equal answers '(:answers t)) t)
+                ((and (cdr answers) (cl-every #'stringp (cdr answers))) (cdr answers))
+                (t (error "drgnx-test-gated: (:answers t) or (:answers METHOD...): %S" answers))))
+         (schedule (drgnx-test-gate--normalize (remove answers schedule))))
     (drgnx-test-gate--warm)
     (if (bound-and-true-p drgnx-test--active)
         (progn (when (eq drgnx-test--core 'auto) (error "drgnx-test-gated: it runs on the manual clock, not :auto"))
@@ -748,6 +809,8 @@ list of steps:
   (CONN :line)           CONN's next line
   (CONN :eof)            CONN's end
   (:pause LABEL)         nothing more until `drgnx-test-gate-continue' LABEL
+  (:answers t)           (anywhere, not a step) every answer is released like a handshake line, as its call is due;
+  (:answers METHOD...)   only the answers to those methods.  Steps then order the events, lines and ends
 
 CONN is `call-N' or `sub-N' (`sub' when opened with EVENTS non-nil), numbered in open order within BODY.  A step
 releases its connection's held lines up to its own, in their order: the gate reorders across connections, never within
@@ -756,10 +819,13 @@ the first wait after they fall due, in the order the client caused them.
 
 Every wait inside BODY (`accept-process-output', also deep inside the code under test, and `drgnx-test-wait')
 releases what is due up to the next pause: a step is due once its connection is open, and an answer once its call has
-gone out; the gate then waits, for real, for its line.  A timed wait with nothing to release is a zero-length look and
-a virtual advance by its timeout; while a real child BODY started lives (not a peer, `:drgnx-test-peer'), it is a real
-look instead and no virtual time moves (`drgnx-test-gate--on-children').  While paused, a wait in the code under test with a line held or a call out fails the
-test at once, naming the pause and the caller; the test's own `drgnx-test-wait' just looks.  Lines the schedule does
+gone out; the gate then waits, for real, for an answer's line.  An event, a line or an end the hub may still hold (a
+job's end) is not waited for inside the gate: the gate asks the hub for a barrier, and until the line comes each timed
+wait is a real look that moves no virtual time (`drgnx-test-gate--await').  A timed wait with nothing to release is a
+zero-length look and a virtual advance by its timeout; while a real child BODY started lives (not a peer,
+`:drgnx-test-peer'), it is a real look instead and no virtual time moves (`drgnx-test-gate--on-children').  While
+paused, a wait in the code under test with a line held or a call out fails the test at once, naming the pause and the
+caller; the test's own `drgnx-test-wait' just looks.  Lines the schedule does
 not name stay held until `drgnx-test-deliver-all'.  Each line the client sends on a gated connection is stamped with
 `__seq'."
   (declare (indent 1))

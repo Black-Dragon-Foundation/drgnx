@@ -176,6 +176,43 @@ naming the pause, the next step and the caller."
       ;; at its first wait: not one virtual tick toward the call's deadline went by
       (should (equal (plist-get data :virtual-secs) 0.0)))))
 
+;;;; A line the hub holds
+
+(ert-deftest drgnx-delivery-gate/a-step-for-a-held-write-gets-it-from-the-hub ()
+  "A job's end (`exec-done') is written by the hub's job task, which the sequencer holds until a barrier: a step that
+names it gets it, because the gate asks the hub for barriers while the step waits; the barriers write into the gate's
+queues, and no virtual time passes meanwhile."
+  (drgnx-delivery-gate-test--with-hub
+    (let ((drgnx-test-gate-block-secs 10) (ended nil) started then now)
+      (drgnx-test-gated '((sub-1 :answer "subscribe") (call-1 :answer "exec/start") (call-1 :answer "exec/get")
+                          (sub-1 :event "exec-done"))
+        (add-hook 'drgnx-hub-event-functions (lambda (e _d) (when (equal e "exec-done") (setq ended t))))
+        (drgnx-hub-connect)
+        (drgnx-test-wait (lambda () drgnx-hub--events) :what "the subscription")
+        ;; (the start's look for a running hub is a wait of its own, on the clock: `then' is after it)
+        (drgnx-exec-start "gate-job" (list "true") :cwd root :callback (lambda (id _why) (setq started id)))
+        (setq then (drgnx-test-clock-now))
+        (drgnx-test-wait (lambda () ended) :what "the job's end, through its step")
+        (setq now (drgnx-test-clock-now))
+        (drgnx-test-deliver-all))
+      (should started)
+      (should ended)
+      (should (= now then)))))
+
+(ert-deftest drgnx-delivery-gate/answers-t-releases-every-answer-as-it-is-due ()
+  "With (:answers t) every answer is released like a handshake line, so a call the code under test waits on returns
+with no step of its own; the events stay held until a step or `drgnx-test-deliver-all'."
+  (drgnx-delivery-gate-test--with-hub
+    (let (pid now)
+      (drgnx-test-gated '((:answers t))
+        ;; the first ping's answer is a handshake line anyway; the second's is released by (:answers t)
+        (drgnx-hub-call-sync "ping" nil 10)
+        (setq pid (plist-get (drgnx-hub-call-sync "ping" nil 10) :pid)
+              now (drgnx-test-clock-now))
+        (drgnx-test-deliver-all))
+      (should (natnump pid))
+      (should (= now 0)))))
+
 ;;;; Real children of the code under test
 
 (defun drgnx-delivery-gate-test--child (command said)

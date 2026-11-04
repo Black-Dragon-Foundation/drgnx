@@ -1297,9 +1297,21 @@ the client half of the `gated` pattern; the hub half is Ratatoskr's test clock a
     (`drgnx-ai-test-mock-llm`), a handshake child), are never waited on. Their timed waits stay virtual.
   - **The hub, and the jobs it runs**, write hub lines (`exec/start`'s answer, `exec-done`, a notice). These come
     through the schedule or `drgnx-test-deliver-all`, never through real time, and a real look never releases one.
-    A job's end is written by the hub's job task, so it is held at the hub until a barrier. A product loop that waits
-    for a job's end (onboarding's `drgnx-onboard--until`) can only be gated by a test that names a step for every
-    answer the loop waits on, and that lets the loop return before it delivers the end.
+    A job's end is written by the hub's job task, so the hub's sequencer holds it until a barrier. A step that names
+    such a line (`(sub-1 :event "exec-done")`) does not block inside the code under test: once the step is due and
+    its line is not there, the gate asks the hub for a barrier (at most every 0.2 s), and until the line comes each
+    timed wait is a real look that moves no virtual time (`drgnx-test-gate--await`). So a product loop that polls
+    for a job's end (onboarding's `drgnx-onboard--until`) goes on running its own timers and calls, but its
+    deadline does not pass. The barrier writes into the gate's queues, never to the client, and the step still
+    decides when the client sees the line. The step's line not there after 30 s of real time since it fell due fails
+    the test. In `drgnx-test-deliver-all` such a step is waited for the same way.
+  - **`(:answers t)`** (or `(:answers METHOD…)`), anywhere in the schedule, releases every answer (or those
+    methods') like a handshake line: at the first wait after its call goes out, in the order the client sent them.
+    Answers are written in the serving step, in `__seq` order, so this keeps the run deterministic, and the steps then
+    order only the events, lines and ends. A flow that makes many calls (onboarding: `exec/start`, `exec/get`,
+    `exec/log` each virtual second, `exec/stop`) uses it, plus one `(sub-1 :event "exec-done")` per job that ends
+    while the code waits, in the order the jobs end. Such a test subscribes before anything starts a job, so every
+    job's end reaches it (`drgnx-ai-onboard-test--subscribe`).
   - **A child whose order matters** against the hub, or against the test, announces and parks
     ([Announce and park](#announce-and-park)).
 
