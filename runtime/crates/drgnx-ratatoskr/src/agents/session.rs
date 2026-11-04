@@ -45,6 +45,8 @@ const EMIT_EVERY: Duration = Duration::from_millis(50);
 const STOP_GRACE: Duration = Duration::from_secs(3);
 /// A Stop that the agent has not answered by then ends its process.
 const STOP_ANSWER: Duration = Duration::from_secs(2);
+/// A session's network: the provider's alone, through its proxy (`super::net`); `Open` is never granted here.
+const SESSION_NET: launch::NetCell = launch::NetCell::ProviderOnly;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -513,6 +515,8 @@ pub struct Session {
     budgets: crate::budget::Budgets,
     /// The token of the session's gateway registration (a gateway profile).
     gateway: Mutex<Option<String>>,
+    /// Its provider proxy on `proxy.sock`: dropped when its agent's process ends.
+    net: Mutex<Option<super::net::SessionNet>>,
     scheduled: AtomicBool,
     next_request: AtomicU64,
     /// The hub's running jobs: a session whose turn ends while one of its own runs waits for it.
@@ -570,6 +574,8 @@ struct Launched {
     enforced_why: Option<String>,
     /// The token of the gateway registration this launch made (a gateway profile).
     gateway: Option<String>,
+    /// Its provider proxy, bound before the spawn.
+    net: Option<super::net::SessionNet>,
 }
 
 /// Where a path may be read or written: inside the session's directory; a brainstorm writes its document only, and a
@@ -789,7 +795,7 @@ fn spawn_spec(
                 sid: sid.to_string(),
                 worktree: cwd.to_path_buf(),
                 read: Vec::new(),
-                net: launch::NetCell::ProviderOnly,
+                net: SESSION_NET,
                 role,
             },
         ),
@@ -846,13 +852,13 @@ pub(super) async fn prepare(
     module_env: &[(String, String)],
 ) -> Result<Prepared, Error> {
     // a gateway profile's agent reaches its provider only through the hub's gateway, with a token of its own
-    let (profile, gateway) = match gateway_env(front, profile, role, sid, job).await? {
-        Some((env, token)) => {
+    let (profile, gateway, relayed) = match gateway_env(front, profile, role, sid, job).await? {
+        Some((env, token, relayed)) => {
             let mut p = profile.clone();
             p.env.extend(env);
-            (p, Some(token))
+            (p, Some(token), relayed)
         }
-        None => (profile.clone(), None),
+        None => (profile.clone(), None, false),
     };
     let profile = &profile;
     let who = who_of(role, profile);
@@ -888,6 +894,8 @@ pub(super) async fn prepare(
             .collect();
         plan.env.extend(extra);
     }
+    // the spec relays a port to the session's gateway.sock and points ANTHROPIC_BASE_URL at it
+    plan.gateway = relayed;
     // what an editor module added comes last, so it wins over the profile's and the lock's
     plan.env.extend(module_env.iter().cloned());
     let why = match plan.enforced {
@@ -948,15 +956,21 @@ pub(crate) fn gateway_chain(front: &Front, p: &AgentProfile) -> Vec<(String, Opt
     }
 }
 
-/// A gateway profile's environment: the gateway's URL and a token registered for this session (booked under JOB, else
-/// the session id), never a key.  None for a profile with no gateway.
+/// Whether a session's launch is sandboxed: always in a shipped build; a test build's launch is the unsandboxed
+/// test one (the test `spawn_spec`), which reaches the gateway on its loopback port.
+const SANDBOXED_LAUNCH: bool = cfg!(not(any(test, feature = "test-hooks")));
+
+/// A gateway profile's environment and its token, registered for this session (booked under JOB, else the session
+/// id), never a key; and whether the token is good on the session's `gateway.sock` (a sandboxed launch: the spec
+/// relays a port to it and sets `ANTHROPIC_BASE_URL` there, `LaunchPlan::gateway`) rather than on the loopback
+/// port (the URL is in the environment then).  None for a profile with no gateway.
 async fn gateway_env(
     front: &Front,
     profile: &AgentProfile,
     role: Role,
     sid: &str,
     job: Option<&str>,
-) -> Result<Option<(Vec<String>, String)>, Error> {
+) -> Result<Option<(Vec<String>, String, bool)>, Error> {
     if profile.ai.is_none() {
         return Ok(None);
     }
@@ -967,16 +981,28 @@ async fn gateway_env(
     let scope = scope_of(role, sid);
     let r = front
         .gate
-        .register_session(chain, job.unwrap_or(sid), &profile.name, &scope, &front.mcp)
+        .register_session(
+            chain,
+            job.unwrap_or(sid),
+            &profile.name,
+            &scope,
+            &front.mcp,
+            SANDBOXED_LAUNCH.then_some(sid),
+        )
         .await?;
-    let url = r
-        .url
-        .ok_or_else(|| internal("the gateway gave no loopback URL"))?;
-    let mut env = vec![
-        format!("ANTHROPIC_BASE_URL={url}"),
+    let mut env = Vec::new();
+    let relayed = match (&r.url, &r.socket) {
+        (_, Some(_)) => true,
+        (Some(url), None) => {
+            env.push(format!("ANTHROPIC_BASE_URL={url}"));
+            false
+        }
+        (None, None) => return Err(internal("the gateway gave neither a URL nor a socket")),
+    };
+    env.extend([
         format!("ANTHROPIC_AUTH_TOKEN={}", r.token),
         "ANTHROPIC_API_KEY=".to_string(),
-    ];
+    ]);
     if let Some(m) = &profile.model {
         env.extend(
             [
@@ -989,7 +1015,7 @@ async fn gateway_env(
             .map(|n| format!("{n}={m}")),
         );
     }
-    Ok(Some((env, r.token)))
+    Ok(Some((env, r.token, relayed)))
 }
 
 /// The budget scope of a session.
@@ -1179,8 +1205,23 @@ async fn launch(
     existing: Option<&str>,
     (task, job, module_env): (Option<&str>, Option<&str>, &[(String, String)]),
 ) -> Result<(Launched, tokio::sync::mpsc::Receiver<Event>), Error> {
-    let prep = prepare(front, profile, role, sid, cwd, job, module_env).await?;
+    // the session's MCP session first: a sandboxed gateway profile's token is registered on its gateway.sock, which
+    // needs it.  A launch refused before the spawn closes the one it opened (its socket and dir go with it)
+    let opened = front.mcp.socket_of(sid).is_none();
     let mcp = bridge(front, profile, sid, cwd, task, job).await;
+    let prep = match prepare(front, profile, role, sid, cwd, job, module_env).await {
+        Ok(p) => p,
+        Err(e) => {
+            if opened && !mcp.is_empty() {
+                let _ = front.mcp.close(sid).await;
+            }
+            return Err(e);
+        }
+    };
+    // the provider proxy the spec's relay reaches, bound before the spawn; a start that fails below drops it, and its
+    // socket with it
+    let net = super::net::start_session(front, profile, sid, SESSION_NET)
+        .map_err(|e| internal(format!("the session's provider proxy: {e}")))?;
     let (conn, rx) = Conn::spawn(prep.spec, ConnOpts::default())
         .await
         .map_err(|e| internal(e.to_string()))?;
@@ -1256,6 +1297,7 @@ async fn launch(
             enforced: prep.enforced,
             enforced_why: prep.enforced_why,
             gateway: prep.gateway,
+            net,
         },
         rx,
     ))
@@ -1329,6 +1371,7 @@ fn assemble(
         scopes: front.core.runs.scopes(),
         budgets: front.core.budgets.clone(),
         gateway: Mutex::new(l.gateway.clone()),
+        net: Mutex::new(l.net),
         scheduled: AtomicBool::new(false),
         next_request: AtomicU64::new(1),
         live: front.core.exec.live(),
@@ -2240,6 +2283,8 @@ impl Session {
                     stderr,
                 } => {
                     self.remove_stubs();
+                    // its process is gone, and its provider proxy with it (a resume binds a new one)
+                    drop(lock(&self.net).take());
                     if self.closed.load(Ordering::SeqCst) {
                         // closed on purpose while it waited on a job: still waiting; the wake resumes it
                         {

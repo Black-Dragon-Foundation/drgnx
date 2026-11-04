@@ -1,0 +1,21 @@
+{"scenario": "sandbox-net/provider-proxy-denial-is-an-event", "requires": ["v1", "test-hooks"], "doc": "A host not on a session's provider allowlist is refused (403) by its proxy and becomes one store event (kind status, the session as its agent, data proxy-denied with the session and the host:port), once per host per session however often it is tried, and never a card."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:agent", "name": "$string"}}, "within_ms": 30000}
+{"do": "http", "conn": "p", "to": "unix:$SOCKET_DIR/s/$agent/proxy.sock", "method": "CONNECT", "path": "denied.test:443", "headers": {"Host": "denied.test:443"}, "read": "head"}
+{"do": "expect_http", "conn": "p", "status": 403}
+{"do": "expect", "conn": "c", "json": {"event": "events", "data": {"since": "$number", "last": "$number", "events": {"$contains": [{"kind": "status", "agent": "$agent", "data": {"proxy-denied": true, "session": "$agent", "host": "denied.test:443"}}]}}}, "within_ms": 10000}
+{"do": "http", "conn": "q", "to": "unix:$SOCKET_DIR/s/$agent/proxy.sock", "method": "CONNECT", "path": "denied.test:443", "headers": {"Host": "denied.test:443"}, "read": "head"}
+{"do": "expect_http", "conn": "q", "status": 403}
+{"do": "http", "conn": "r", "to": "unix:$SOCKET_DIR/s/$agent/proxy.sock", "method": "CONNECT", "path": "other.test:443", "headers": {"Host": "other.test:443"}, "read": "head"}
+{"do": "expect_http", "conn": "r", "status": 403}
+{"do": "expect", "conn": "c", "json": {"event": "events", "data": {"since": "$number", "last": "$number", "events": {"$contains": [{"kind": "status", "agent": "$agent", "data": {"proxy-denied": true, "session": "$agent", "host": "other.test:443"}}]}}}, "within_ms": 10000}
+{"do": "sql_expect", "sql": "select agent, json_extract(data, '$.host') from event where data like '%proxy-denied%' order by id", "rows": [["$agent", "denied.test:443"], ["$agent", "other.test:443"]]}
+{"do": "sql_expect", "sql": "select count(*) from card", "rows": [[0]]}

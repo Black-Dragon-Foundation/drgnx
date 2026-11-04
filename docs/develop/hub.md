@@ -1094,6 +1094,41 @@ an identity from the agent: not from a tool's arguments, and never from `DRGNX_A
 
 Rows: `test/conformance/mcp/`.
 
+### The session's provider proxy (`proxy.sock`)
+
+A sandboxed session whose network cell is provider-only or provider-and-packages (every session `agents/start`
+makes: the hub never grants `Open`) has no network but its sandbox's relay port, 3128, whose other end is
+`proxy.sock` in its session directory (`runstav::paths::SESSION_PROXY_SOCKET`; the spec sets
+`HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` to it, [gleipnir.md](gleipnir.md)). The hub serves that socket
+(`runtime/crates/drgnx-ratatoskr/src/agents/net.rs`):
+
+- **One proxy per session**, Gleipnir's CONNECT-only allowlist proxy (`gleipnir::net::proxy`, as a container job's),
+  held in `agents::net::SessionNet`. `launch()` binds it after the session's MCP bridge and the prepared sandbox spec
+  (either makes the session directory), and before the spawn: a stale file at the path is replaced, the socket is
+  0600 (`sessions::bind_socket`).
+- **What it allows** (`net::provider_hosts`), each an exact `host:port`, in this order:
+  - the base host and port of each provider the profile's gateway chain names in the provider table in effect (none
+    for a profile without `:ai`);
+  - the hosts of the CLI it starts (`net::CLI_HOSTS`): claude → `api.anthropic.com:443`, `platform.claude.com:443`
+    (the OAuth token refresh); codex → `api.openai.com:443`, `chatgpt.com:443`, `auth.openai.com:443` (the ChatGPT
+    login's token refresh); gemini → `generativelanguage.googleapis.com:443`, `oauth2.googleapis.com:443`,
+    `cloudcode-pa.googleapis.com:443` (the Code Assist API of a Google login);
+  - the `agents-net-hosts` tier of the cell (`provider-only`, or `packages` for provider-and-packages).
+- **A denied host is an event, never a card.** The proxy says each denied `host:port` once per session; the hub writes
+  it to work.db's `event` table: kind `status`, the session as `agent`, data
+  `{"proxy-denied": true, "session": SID, "host": "HOST:PORT"}`. A refusal (a private address, a wildcard, a malformed
+  request) is only logged. Claude's lock sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (`agents::lock::plan`), so
+  its telemetry, error reports and update checks are not even tried (code.claude.com/docs/en/env-vars).
+- **It goes with the session.** When the agent's process ends (a stop, a kill, a crash, a close while it waits on a
+  job) the proxy closes its listener and every tunnel and removes the socket; a resume binds a new one. A start that
+  fails after the bind drops it the same way. The removal checks the socket's inode, so an old session's end never
+  removes a newer socket at the same path.
+- **Test hook.** A `test-hooks` build reads `DRGNX_TEST_PROXY_PINS` (`NAME=ADDR,…`): names the proxy resolves to a
+  fixed address, so a row reaches the mock LLM on loopback under a name. A shipped build pins nothing.
+
+Rows: `test/conformance/sandbox-net/`. The real launch: `tests/launch_sandboxed.rs`
+(`a_session_reaches_its_provider_through_the_proxy`, the sandbox lane).
+
 ## The MCP bridge
 
 An agent speaks MCP over stdio; `ratatoskr mcp-bridge` is that stdio server, and it copies lines to the hub
@@ -1139,6 +1174,15 @@ itself; nothing is forwarded.
 socket?, openrouter?}`: a token of 64 hex digits (32 random bytes) and, without `sid`, the loopback URL
 `http://127.0.0.1:PORT`; with `sid`, the session's `gateway.sock` (`SDIR/gateway.sock`, 0600, bound once per session
 and served until the session closes) instead, for an agent in a sandbox without the host's loopback.
+
+A session `agents/start` makes on a gateway profile is registered by the hub itself (`Gate::register_session`). Its
+launch is sandboxed, so the token is registered with the session's `sid`, on its `gateway.sock`: the hub opens the
+session's MCP session (which `gateway.sock` needs) before it prepares the launch, and closes it again when the launch
+is refused before the spawn. The spec relays a second port, 3129 on the full tier (`sandbox::GATEWAY_PORT`; any free
+one on the reduced tier), to that socket and sets `ANTHROPIC_BASE_URL=http://127.0.0.1:PORT` and
+`NO_PROXY=127.0.0.1,localhost` (and `no_proxy`), so the agent's requests go to the gateway straight, never through
+its provider proxy; the Claude options carry no base URL, so the process's is the one Claude uses. A session on any
+other profile gets no gateway relay. A test build's launch is the unsandboxed test one and keeps the loopback URL.
 
 - **The chain is judged first.** A step whose provider is not in the table ("not configured"), does not speak
   Messages ("the gateway cannot carry it") or has no key ("no key") cannot be used; with none usable the registration

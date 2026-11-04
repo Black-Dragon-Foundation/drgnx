@@ -1,0 +1,22 @@
+{"scenario": "sandbox-net/provider-proxy-serves-a-started-session", "requires": ["v1", "test-hooks"], "doc": "A started session's provider proxy: agents/start binds SDIR/proxy.sock (0600) before the agent runs, and a CONNECT through it to a host on the session's allowlist (the agents-net-hosts provider-only tier; the name pinned to the mock LLM's loopback address by the test hook) is tunnelled to the mock LLM, which answers the request sent inside. When the agent's process ends the socket goes."}
+{"do": "root"}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$SCENARIOS/fixtures/llm-messages.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "env": {"DRGNX_TEST_PROXY_PINS": "llm.test=127.0.0.1"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-agents-net-hosts", "source": "row", "value": {"provider-only": ["llm.test:$port"]}}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:agent", "name": "$string"}}, "within_ms": 30000}
+{"do": "file", "path": "$SOCKET_DIR/s/$agent/proxy.sock", "mode": "600"}
+{"do": "http", "conn": "p", "to": "unix:$SOCKET_DIR/s/$agent/proxy.sock", "method": "CONNECT", "path": "llm.test:$port", "headers": {"Host": "llm.test:$port"}, "read": "head"}
+{"do": "expect_http", "conn": "p", "status": 200}
+{"do": "http", "conn": "p", "method": "POST", "path": "/v1/messages", "headers": {"Host": "llm.test", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}"}
+{"do": "expect_http", "conn": "p", "status": 200, "body_json": {"id": "msg-1"}}
+{"do": "file", "path": "$ROOT/llm.log", "contains": "\"request\"", "count": 1, "at_most": 1}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/kill", "params": {"id": "$agent"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": "$any"}, "within_ms": 10000}
+{"do": "poll", "conn": "c", "json": {"id": 4, "method": "agents/list"}, "expect": {"id": 4, "result": {"sessions": {"$contains": [{"id": "$agent", "status": "exited"}]}}}, "within_ms": 10000}
+{"do": "file", "path": "$SOCKET_DIR/s/$agent/proxy.sock", "exists": false}

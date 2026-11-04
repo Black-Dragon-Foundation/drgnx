@@ -562,8 +562,11 @@ mod run {
 /// The proxy port inside a session whose network is the provider's only.
 pub const PROXY_PORT: u16 = 3128;
 
-/// The one allow-list of a job's proxy by its network cell (exact `host:port`): the hub starts no other proxy.  The
-/// lists are the setting `agents-net-hosts` (HOSTS: tier name to hosts; shipped default: the package registries of
+/// The gateway port inside a session on a gateway profile: relayed to its `gateway.sock`.
+pub const GATEWAY_PORT: u16 = 3129;
+
+/// The allow-list of a job's proxy by its network cell (exact `host:port`), and the tier part of a session's
+/// (`agents::net::provider_hosts`).  The lists are the setting `agents-net-hosts` (HOSTS: tier name to hosts; shipped default: the package registries of
 /// crates.io, npm and PyPI under `packages`).  Provider-only has the `provider-only` list (shipped: none; a job has no
 /// provider); the packages cell reaches the `packages` list.  `Open` shares the host's network for a session and gets
 /// the packages list here.  A tier the setting does not name reaches nothing.
@@ -776,9 +779,13 @@ pub fn tmp_dir(env: &Env) -> PathBuf {
 
 /// The Gleipnir spec of one agent session: only `shape.write` (and the CLI's login dir) writable, `shape.read` and
 /// the system readable, the lock's `protected_ro` pinned read-only, its session dir (`hub.sock`, and `proxy.sock`
-/// unless the network is open) read-only, the network the cell's: the proxy through the relay, or the host's.  The
-/// program's environment is a short base, the proxy's variables, and the lock's `env` last.  `scratch` is the
-/// session's private temp parent.  There is no unsandboxed spec: nothing here builds one.
+/// unless the network is open) read-only, the network the cell's: the proxy through the relay, or the host's.  A plan
+/// on the gateway's socket (`LaunchPlan::gateway`) gets a second relay port, to `gateway.sock`, with
+/// `ANTHROPIC_BASE_URL` on it and loopback in `NO_PROXY`; it needs an isolated network.  The program's environment is
+/// a short base, the proxy's (and the gateway's) variables, and the lock's `env` last (but its `ANTHROPIC_BASE_URL`
+/// on a gateway plan).  `scratch` is the
+/// session's private temp parent.  The session dir is made here (`paths::make_session_dir`, which does nothing to one
+/// that is there); the sockets in it need not exist yet.  There is no unsandboxed spec: nothing here builds one.
 pub fn session_spec(
     env: &Env,
     ctx: &Context,
@@ -795,8 +802,9 @@ pub fn session_spec(
         path: None,
         message,
     };
-    let run = paths::session_dir(env, &paths::socket_path(env), &shape.sid)
-        .map_err(|e| malformed(format!("session id: {e}")))?;
+    // made here: a new session's id has no MCP session or agent socket yet, and `run`'s source must exist
+    let run = paths::make_session_dir(env, &paths::socket_path(env), &shape.sid)
+        .map_err(|e| malformed(format!("session dir: {e}")))?;
     let tmp = scratch.join("tmp");
     paths::private_dir(&tmp).map_err(|e| malformed(format!("{}: {e}", tmp.display())))?;
     let mut write = shape.write.clone();
@@ -827,7 +835,8 @@ pub fn session_spec(
         })
         .collect();
     let hub = run.join("hub.sock");
-    let proxy = run.join("proxy.sock");
+    // served by the session's provider proxy (`agents::net`), bound before the spawn
+    let proxy = run.join(paths::SESSION_PROXY_SOCKET);
     let mut sockets = vec![hub];
     let mut vars: Vec<(String, String)> = vec![
         (
@@ -841,29 +850,62 @@ pub fn session_spec(
         ("TMPDIR".into(), tmp.to_string_lossy().into_owned()),
     ];
     let net = match shape.net {
+        NetCell::Open if plan.gateway => {
+            return Err(malformed(
+                "a session on the gateway's socket needs an isolated network with its relay".into(),
+            ));
+        }
         NetCell::Open => Net::Shared,
         NetCell::ProviderOnly | NetCell::ProviderAndPackages => {
-            let port = gleipnir::backend::relay_ports(tier, &[PROXY_PORT])
-                .map_err(|e| malformed(format!("no relay port: {e}")))?[0];
+            let wanted: &[u16] = if plan.gateway {
+                &[PROXY_PORT, GATEWAY_PORT]
+            } else {
+                &[PROXY_PORT]
+            };
+            let ports = gleipnir::backend::relay_ports(tier, wanted)
+                .map_err(|e| malformed(format!("no relay port: {e}")))?;
             sockets.push(proxy.clone());
-            let url = format!("http://127.0.0.1:{port}");
+            let url = format!("http://127.0.0.1:{}", ports[0]);
             for k in ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"] {
                 vars.push((k.into(), url.clone()));
             }
-            Net::Isolated {
-                relay: vec![RelayPort {
+            let mut relay = vec![RelayPort {
+                port: ports[0],
+                socket: proxy,
+            }];
+            if let Some(&port) = ports.get(1) {
+                // the gateway, straight to the session's gateway.sock (never through the proxy)
+                let gateway = run.join(paths::SESSION_GATEWAY_SOCKET);
+                sockets.push(gateway.clone());
+                relay.push(RelayPort {
                     port,
-                    socket: proxy,
-                }],
+                    socket: gateway,
+                });
+                vars.push((
+                    "ANTHROPIC_BASE_URL".into(),
+                    format!("http://127.0.0.1:{port}"),
+                ));
+                for k in ["NO_PROXY", "no_proxy"] {
+                    vars.push((k.into(), "127.0.0.1,localhost".into()));
+                }
+            }
+            Net::Isolated {
                 mac_tcp_ports: if target == gleipnir::Target::Macos {
-                    vec![port]
+                    relay.iter().map(|r| r.port).collect()
                 } else {
                     vec![]
                 },
+                relay,
             }
         }
     };
-    vars.extend(plan.env.iter().cloned());
+    // a gateway session's base URL is its relay's, whatever else set one
+    vars.extend(
+        plan.env
+            .iter()
+            .filter(|(k, _)| !(plan.gateway && k == "ANTHROPIC_BASE_URL"))
+            .cloned(),
+    );
     Ok(Spec {
         read,
         write,

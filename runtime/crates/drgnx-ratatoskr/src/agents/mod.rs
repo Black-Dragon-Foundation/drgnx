@@ -9,12 +9,14 @@
 //! - [`deliver`]: delivery and take-back (`messages/retract`) (Task 24).
 //! - [`lock`]: a provider's launch options that make its CLI obey the hub (Task 9).
 //! - [`launch`]: the session's Gleipnir spec (Task 10).
+//! - [`net`]: the session's provider proxy on `proxy.sock`, which the spec's relay port reaches.
 //! - [`wake`]: a job's end prompts the session that started it; a queue wait is a step (Task 15).
 
 pub mod deliver;
 pub mod handoff;
 pub mod launch;
 pub mod lock;
+pub mod net;
 pub mod probe;
 pub mod queue;
 pub mod session;

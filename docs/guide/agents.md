@@ -269,7 +269,8 @@ billed):
 Like the other provider profiles they go through the gateway when a hub is available: the agent holds a token, never
 the key. Without a key the session does not start and the message names the variable and the keyring host to put it
 under. Each session gets its route in its own environment (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, the model
-names); drgnx writes nothing to `~/.claude/settings.json`, so the plain `claude` profile keeps using your login. No
+names); inside the sandbox the base URL is a local port that leads to the hub's gateway only, and the token works
+there alone; drgnx writes nothing to `~/.claude/settings.json`, so the plain `claude` profile keeps using your login. No
 agent inherits the other vendors' keys from Emacs's environment (`drgnx-agents-scrubbed-env`; the plain `claude`
 profile keeps Claude Code's own variables). The API keys are billed
 per token; Kimi's coding membership is a different endpoint these profiles do not use. Moonshot and DeepSeek have no
@@ -375,6 +376,13 @@ may be a link (as stow or home-manager make it), while the project and local one
 task's folder, never links; any other is skipped. `CLAUDE.md`, skills and agent definitions still
 load (which settings files Claude reads is left as it is: they are content, and the permission check bounds what they
 can make the agent do). Claude Code's own sandbox is off in a job: drgnx's is the boundary.
+
+Every Claude session drgnx starts, a job's or your own, gets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` in its
+environment and its options: no auto-updates, telemetry, error reports, release notes or feature-flag fetches
+(Claude Code's [environment variables](https://code.claude.com/docs/en/env-vars) and
+[network access requirements](https://code.claude.com/docs/en/network-config#network-access-requirements)). Its
+sandbox's proxy would refuse those hosts anyway ([security.md](security.md)); the variable keeps the CLI from trying.
+Features that need feature-flag fetching, such as Remote Control, are not available in a drgnx session.
 
 Your own sessions (New Agent Session…) and agents other than Claude get none of this. Other agents
 (Gemini CLI, Codex) have no such switch yet, so a job runs only **job-safe** profiles (`drgnx-agents-job-safe-p`):

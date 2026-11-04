@@ -411,6 +411,18 @@ project).
   (`git -C . push`, an alias, a script) counts as `code.edit`. That coarse map is acceptable because the rows that
   matter outside the worktree are enforced elsewhere: the sandbox (Gleipnir) decides what network an agent has, and
   a push needs credentials the sandbox does not give the agent.
+- **What network a sandboxed agent has.** None of its own: its only way out is its session's proxy, which tunnels
+  HTTPS (`CONNECT`) to an exact list of `host:port` and nothing else. The list is:
+  - the provider hosts of the agent's profile (for a profile on the gateway, each provider its chain names);
+  - its CLI's own hosts: Claude's API and `platform.claude.com` (where its login token is refreshed); Codex's API,
+    `chatgpt.com` and `auth.openai.com`; Gemini's API, `oauth2.googleapis.com` and `cloudcode-pa.googleapis.com`;
+  - the hosts you list under `agents-net-hosts` for the session's network tier (`provider-only`; none by default).
+
+  Anything else is refused. Each refused host is recorded once per session as an event (`proxy-denied`, with the
+  host), so you can see what an agent tried to reach; it never raises a card. Optional traffic a CLI sends
+  (telemetry, error reports, update checks) is refused the same way; Claude is told not to send it
+  (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, [agents.md](agents.md#jobs-and-your-claude-settings)). To let a session reach another host, add it to
+  the `provider-only` list of `agents-net-hosts`.
 - **Container jobs** (`job.container`) run only images you put on `agents-container-images`, pinned by digest. The hub
   builds the `podman run` line itself: no capabilities, no new privileges, a read-only root, the worktree as the only
   mount, no network of its own (a granted network is the job's allow-list proxy through a mounted socket and a copied forwarder, `drgnx-fwd`, nothing else; the list is the setting `agents-net-hosts`, by default the package hosts of crates.io, npm and PyPI, port 443), limits from `agents-job-memory` and `agents-job-cpus`. An agent chooses an image name and a

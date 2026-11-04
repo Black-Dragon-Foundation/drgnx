@@ -198,7 +198,9 @@ The MCP servers agents get: `coordination' and `search'.
 
 The hosts a job that was granted network may reach, per tier: an alist TIER → list of "host:port" strings.
 `packages' (the tier of a granted network) is the package registries of crates.io, npm and PyPI; `provider-only'
-reaches nothing unless you list hosts.  A tier you leave out reaches nothing.  Only you can set it, never a repository.
+reaches nothing unless you list hosts.  A tier you leave out reaches nothing.  A sandboxed agent session's proxy
+allows its tier's hosts (`provider-only') beside its provider's and its CLI's own.  Only you can set it, never a
+repository.
 
 | Key | Value |
 | --- | --- |

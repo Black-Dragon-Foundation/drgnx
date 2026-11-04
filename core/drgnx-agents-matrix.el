@@ -102,7 +102,9 @@ tasks go first."
               "registry.npmjs.org:443" "pypi.org:443" "files.pythonhosted.org:443"))
   "The hosts a job that was granted network may reach, per tier: an alist TIER → list of \"host:port\" strings.
 `packages' (the tier of a granted network) is the package registries of crates.io, npm and PyPI; `provider-only'
-reaches nothing unless you list hosts.  A tier you leave out reaches nothing.  Only you can set it, never a repository."
+reaches nothing unless you list hosts.  A tier you leave out reaches nothing.  A sandboxed agent session's proxy
+allows its tier's hosts (`provider-only') beside its provider's and its CLI's own.  Only you can set it, never a
+repository."
   :type 'sexp :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
   :runtime "NetHosts" :schema '(alist symbol (list-of (string :match ":[0-9]+\\'"))))
 

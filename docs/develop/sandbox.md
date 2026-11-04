@@ -14,6 +14,7 @@ the old agent runtime, `drgnx-sandbox*.el`, were deleted with it, except the VC 
 | The spec, what it refuses, the bubblewrap argv, Landlock, seccomp, Seatbelt, the relay, the proxy, the check, the escape rows | [gleipnir.md](gleipnir.md) |
 | How the hub starts a session in it (the launch, the status pipe, the lock, the matrix) | [hub.md](hub.md#session-start-lock-sandbox-and-matrix) |
 | The agent's MCP tools through a socket of its own, and the gateway socket | [hub.md](hub.md#per-session-sockets), [coordination.md](coordination.md#how-an-agent-reaches-the-tools) |
+| The session's network: its provider proxy on `proxy.sock`, what it allows, denials as events | [hub.md](hub.md#the-sessions-provider-proxy-proxysock) |
 | The git side: snapshot and worktree modes, the bundle, the merge gate | [coordination.md](coordination.md#plan-runs-git-the-merge-gate-trial-merges-drgnx-ratatoskrsrcrunnergitrs) |
 | What the settings pin (`drgnx-sandbox-memory-max`, `-secret-files`, `-proxy-pinned-addresses`) | [settings.md](settings.md) |
 | Whether it works on this machine | `drgnx doctor`, check `job-sandbox` ([install.md](../guide/install.md)); a host where it does not work starts no session |

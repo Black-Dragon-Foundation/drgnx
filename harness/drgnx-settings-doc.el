@@ -5,7 +5,7 @@
 ;;; Commentary:
 ;; docs/reference/settings.md is generated from the settings declared with `drgnx-defsetting', so it cannot drift
 ;; from the code.  Regenerate it after declaring or changing one (docs/develop/core.md):
-;;   emacs --batch -Q -L core -L wb -L harness -L modules/tools -L modules/editor -l drgnx-settings-doc \
+;;   emacs --batch -Q -L core -L wb -L harness -L modules/tools -L modules/editor -L modules/ui -l drgnx-settings-doc \
 ;;         --eval '(drgnx-settings-doc-regenerate "docs/reference/settings.md")'
 ;; Settings declared in a file are reached by a `(require FEATURE)' entry of `drgnx-settings-doc-sources'; each
 ;; port appends its own entry (one line each) and regenerates the reference.
