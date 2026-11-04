@@ -201,7 +201,11 @@ fn a_chat_is_not_a_worker_and_a_bad_session_id_is_refused() {
         net: NetCell::ProviderOnly,
         role: Role::Chat,
     };
-    assert!(spawn(&fx.env(), &fx.plan(".claude"), &req).is_err());
+    let refused = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(spawn(&fx.env(), &fx.plan(".claude"), &req));
+    assert!(refused.is_err());
     assert!(scratch_dir(&fx.env(), "../x").is_err());
 }
 
@@ -526,7 +530,13 @@ impl Tools {
         let s = |rel: &str| self.fx.p(rel).to_str().unwrap().to_owned();
         let mut dirs: Vec<String> = path
             .iter()
-            .map(|d| if d.starts_with('/') { d.to_string() } else { s(d) })
+            .map(|d| {
+                if d.starts_with('/') {
+                    d.to_string()
+                } else {
+                    s(d)
+                }
+            })
             .collect();
         dirs.extend(["/usr/bin".to_string(), "/bin".to_string()]);
         Env::new(
@@ -625,7 +635,11 @@ fn the_reduced_tier_leaves_out_a_root_with_a_credential_file() {
         .unwrap_or_else(|r| panic!("refused: {r}"))
         .spec;
     assert!(spec.hide.is_empty(), "{:?}", spec.hide);
-    assert!(!spec.read.contains(&p("home/.local/share/mise/installs/node/22.1")));
+    assert!(
+        !spec
+            .read
+            .contains(&p("home/.local/share/mise/installs/node/22.1"))
+    );
     assert!(spec.read.contains(&p("home/.local/share/claude/versions")));
     assert!(spec.read.contains(&p("home/.cargo/bin")));
 }
@@ -663,7 +677,9 @@ fn a_program_the_sandbox_does_not_show_is_refused_by_its_path() {
     assert_eq!(ok.program, full);
     assert_eq!(
         t.spec(&env, &["sh"], Tier::Full).unwrap().program,
-        sandbox::true_name(Path::new("/usr/bin")).unwrap().join("sh")
+        sandbox::true_name(Path::new("/usr/bin"))
+            .unwrap()
+            .join("sh")
     );
 }
 
@@ -680,7 +696,8 @@ fn the_launch_takes_the_tier_whose_check_passes() {
     };
     let container = || {
         Check::failed(
-            "inside a container: bubblewrap needs user namespaces the container does not give".into(),
+            "inside a container: bubblewrap needs user namespaces the container does not give"
+                .into(),
             Some("run it on the host".into()),
         )
     };
@@ -705,7 +722,8 @@ fn the_launch_takes_the_tier_whose_check_passes() {
     .unwrap_err();
     assert_eq!(refused.rule, gleipnir::Rule::Setup);
     assert!(
-        refused.message.contains("inside a container") && refused.message.contains("run it on the host"),
+        refused.message.contains("inside a container")
+            && refused.message.contains("run it on the host"),
         "{refused}"
     );
 }

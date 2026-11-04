@@ -820,7 +820,10 @@ pub fn toolchain(
     let named = Path::new(program);
     let hit = if program.as_bytes().contains(&b'/') {
         if !named.is_absolute() {
-            return Err(refused(named, "a command with a slash must be an absolute path"));
+            return Err(refused(
+                named,
+                "a command with a slash must be an absolute path",
+            ));
         }
         named.to_path_buf()
     } else {
@@ -835,8 +838,7 @@ pub fn toolchain(
         (Some(dir), Some(name)) => dir.join(name),
         _ => return Err(refused(&hit, "its folder cannot be named")),
     };
-    let real =
-        std::fs::canonicalize(&program).map_err(|e| refused(&program, &format!("{e}")))?;
+    let real = std::fs::canonicalize(&program).map_err(|e| refused(&program, &format!("{e}")))?;
     let mut dirs = path_dirs;
     if let Some(dir) = program.parent().filter(|d| !dirs.iter().any(|p| p == d)) {
         dirs.push(dir.to_path_buf());
@@ -864,7 +866,9 @@ pub fn toolchain(
     let mut hide = toolchain::hide_list(&roots);
     if tier == gleipnir::Tier::Reduced {
         // no mount namespace: a hide inside a granted root is refused, so a root holding a credential file stays out
-        roots.dirs.retain(|d| !hide.iter().any(|h| h.starts_with(d)));
+        roots
+            .dirs
+            .retain(|d| !hide.iter().any(|h| h.starts_with(d)));
         roots.files.retain(|f| !hide.contains(f));
         hide.clear();
     }
