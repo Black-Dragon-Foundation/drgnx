@@ -2202,6 +2202,66 @@ Tests: unit tests in each module. `route`'s tests play transcripts written by ha
 (`crates/heimdall/tests/data/*.jsonl`: an input line, then what it must give), and the fuzz target `cdp_envelope`
 ([runtime.md](runtime.md#fuzzing)) seeds from them.
 
+**The fallback's late replies.** In the fallback the agent owns the root session, so a reply there could outlive its
+agent and reach the next one. The router remembers the root commands an agent left unanswered when it went, and drops
+the first reply with each such id: Chromium answers one session's commands in order, so that reply is the old agent's,
+even when the next agent reused the id. At most 4096 ids are kept (the oldest go first).
+
+### The websocket server (`browser::broker`)
+
+The hub serves each browser session's `cdp.sock` with `broker::start(cfg, listener, host) -> BrokerHandle`, where `host`
+is the hub's end of the socketpair to the browser host ([The browser host](#the-browser-host)). `BrokerCfg` holds:
+- `sid` (logs say `cdp://SID`, never the path);
+- `secret` (32 bytes);
+- `max_message` (`agents-browser-max-message`);
+- `idle` (`agents-browser-idle`);
+- `gate`, an async closure that returns the session's `browser` cell as a `Gate`;
+- `events`, a channel of `BrokerEvent`s: downloads, `NoBrowserSession` and `Stopped { why }`. A full channel loses the
+  event, which is logged.
+
+The handle's `stop(why)`, `close()` and `connected()` do what their names say, and dropping the handle closes it.
+
+**The upgrade.** A connection from another uid is closed at once (`conn::peer_allowed`). HTTP/1.1 (hyper, a 10 s head
+timeout) then serves one path, `GET /devtools/browser/<the secret's 64 hex>` with a websocket upgrade (fastwebsockets).
+The secret is compared in constant time (`subtle`). Anything else (a wrong secret, no upgrade, a query) is 404 with no
+body. With the right secret:
+1. a broker whose host has ended answers 503;
+2. while an agent websocket is open, a second gets 409 "the agent's browser is already connected";
+3. `gate()` is asked: `Allow` goes on, `Ask(n)` is 403 "waiting for the user's yes: card N", and `Never(why)` is 403 with
+   WHY. So a cell narrowed to Never refuses the next connection, though not the open one;
+4. then 101.
+
+**The browser's life.** The first upgrade while the browser is stopped sends `{"op":"start"}` to the host. The agent's
+messages are held, in order, until `started` has come and the router is ready (its attach answered). More than twice
+the message limit held closes the agent with 1008. A message over the limit closes it with 1009.
+- **The agent goes:** the router's `agent_closed` commands go to the browser (resume, detach, attach afresh). A new
+  agent's messages wait for that attach.
+- **Idle:** with no agent websocket for `idle`, the broker sends `stop` with `idle` and reports `Stopped { why: "idle" }`.
+- **`stop(why)`:** an open websocket is closed with 1001. For `memory` the reason is "the browser was stopped: the
+  session is near its memory cap", and otherwise "the browser was stopped (WHY)". The broker then sends `{"op":"stop",
+  "why":WHY}` and reports `Stopped { why }`.
+- **`exited` while the browser ran** (a crash, or Chromium's own end): an open websocket is closed with 1011 "the browser
+  exited (signal N)" (or "(code N)", or the host's error text).
+- **After any stop or exit:** the next upgrade starts a fresh Chromium through the same host. An agent that connected
+  while a stop was under way gets the fresh one when `exited` comes.
+- **The host's end** (EOF on the socketpair): an open websocket is closed with 1011, and every later upgrade with the
+  right secret is 503 "the browser's host ended; restart the session to get it back".
+- **The hub restarted:** a resumed session has no host, since the socketpair died with the old hub.
+  `broker::start_after_restart(cfg, listener)` serves its endpoint with 503 "the browser ended with the hub's restart;
+  restart the session to get it back".
+- **`close()`:** the broker sends `stop` with `hub`, closes the agent with 1001, and closes the socketpair, so the
+  host exits.
+
+One task, the actor, owns the router and the state. The accept loop, each connection's reader and writer (the
+websocket split in two, fastwebsockets' `unstable-split`), and the host's reader and writer are tasks that talk to it
+over channels.
+
+Tests: `browser::broker` tests run a broker over the real browser host (`host::serve` on a thread with the stand-in
+Chromium), with a websocket client of their own: the 404s, 403s, 409, 503, the relay both ways, idle, the memory stop, a
+crash (Review Focus 3), a reconnect while the router detaches, and a log with no secret in it. The row
+`browser/the-endpoint-refuses-a-wrong-secret` (test-hooks) checks the endpoint through a hub: `__test_browser_endpoint
+{socket}` starts a broker with no browser behind it and answers its secret.
+
 ## The browser host
 
 `ratatoskr browser-host` (`browser::host`, Linux only) runs Chromium inside a session's sandbox for the hub. The inner
@@ -2250,6 +2310,8 @@ There is no async runtime: the main thread reads the hub, and each start has a w
 waiter thread. The main thread is the one that forks, so Chromium's death signal fires when the host ends.
 
 Tests: `browser::host` unit tests run the host on a thread against `tests/data/fake-chromium.sh`, a stand-in that
-speaks the pipe, echoes every command as its reply, records its argv and environment in its dir, and on `Fake.crash`
-dies by SIGKILL or on `Fake.stubborn` ignores SIGTERM and the pipe's end. `tests/browser_sandboxed.rs` (`#[ignore]`, the
+speaks the pipe and echoes every command as its reply. It records its argv, its environment and every call in its
+dir, and answers `Target.attachToBrowserTarget` and `Target.detachFromTarget` as Chromium would. On `Fake.attach` it
+sends a paused child target, on `Fake.crash` it dies by SIGKILL, and on `Fake.stubborn` it ignores SIGTERM and the
+pipe's end. `tests/browser_sandboxed.rs` (`#[ignore]`, the
 VM) starts the host under a real bwrap launch with the stand-in.

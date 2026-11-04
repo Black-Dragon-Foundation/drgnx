@@ -7,8 +7,10 @@
 //! arguments that do not parse.
 //!
 //! `ratatoskr browser-host` ([`host`], Linux only) is the other end: the process inside a session's sandbox that runs
-//! Chromium over its pipe for the hub ([`host_main`]).
+//! Chromium over its pipe for the hub ([`host_main`]). [`broker`] is the hub's side: the agent's websocket on the
+//! session's `cdp.sock`, brokered to that host.
 
+pub mod broker;
 #[cfg(target_os = "linux")]
 pub mod host;
 pub mod install;

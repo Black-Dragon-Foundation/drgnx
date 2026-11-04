@@ -251,7 +251,7 @@ pub struct Caller {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::conn::Outbox;
     use crate::front::Front;
@@ -472,8 +472,8 @@ mod tests {
 
     /// Capture this thread's log lines (TRACE and up, JSON).  The subscriber is the global one, for every test
     /// thread: a subscriber scoped to one thread misses events whose call site another test thread hit first
-    /// (tracing caches each call site's interest across threads).
-    fn capture_log() -> Arc<Mutex<Vec<u8>>> {
+    /// (tracing caches each call site's interest across threads). The browser broker's log test uses it too.
+    pub(crate) fn capture_log() -> Arc<Mutex<Vec<u8>>> {
         static INIT: std::sync::Once = std::sync::Once::new();
         INIT.call_once(|| {
             let subscriber = tracing_subscriber::fmt()

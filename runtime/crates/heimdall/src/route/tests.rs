@@ -393,3 +393,42 @@ fn attach_failure_falls_back_to_root() {
         Step::Event(BrokerEvent::NoBrowserSession)
     );
 }
+
+/// In the fallback the agent owns the root, so a reply there that arrives after its agent has gone would reach the
+/// next one: the router drops the first reply of each id the gone agent left unanswered.
+#[test]
+fn a_gone_agents_late_root_reply_never_reaches_the_next() {
+    let (mut r, _) = Router::new();
+    r.from_browser(br#"{"id":1073741824,"error":{"code":-32000,"message":"no"}}"#);
+    assert!(r.fallback);
+    let cmd = |id: u64| format!(r#"{{"id":{id},"method":"Page.navigate","params":{{}}}}"#);
+    let reply = |id: u64| format!(r#"{{"id":{id},"result":{{}}}}"#);
+    assert!(matches!(
+        r.from_agent(cmd(5).as_bytes()),
+        Step::ToBrowser(_)
+    ));
+    assert!(matches!(
+        r.from_agent(cmd(7).as_bytes()),
+        Step::ToBrowser(_)
+    ));
+    assert!(matches!(
+        r.from_browser(reply(5).as_bytes()),
+        Step::ToAgent(_)
+    ));
+    r.agent_closed();
+    // the next agent reuses 7 before the old 7 is answered: the first 7 is the old one's
+    assert!(matches!(
+        r.from_agent(cmd(7).as_bytes()),
+        Step::ToBrowser(_)
+    ));
+    assert_eq!(r.from_browser(reply(7).as_bytes()), Step::Drop);
+    assert!(matches!(
+        r.from_browser(reply(7).as_bytes()),
+        Step::ToAgent(_)
+    ));
+    // 5 was answered before the agent went: a reply 5 now is the new agent's (or nobody's) as usual
+    assert!(matches!(
+        r.from_browser(reply(5).as_bytes()),
+        Step::ToAgent(_)
+    ));
+}

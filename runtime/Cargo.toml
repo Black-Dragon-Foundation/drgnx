@@ -40,6 +40,8 @@ libc = "0.2"
 hyper = { version = "1.12", features = ["server", "client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "http1", "client-legacy", "client-proxy"] }
 http-body-util = "0.1"
+# the CDP broker's websocket server on cdp.sock, on the hyper above; `unstable-split` reads and writes it from two tasks
+fastwebsockets = { version = "0.10", features = ["upgrade", "unstable-split"] }
 # `drgnx browser install` unpacks the pinned Chrome for Testing archive; read only, deflate only
 zip = { version = "9.3", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 # `rustls-platform-verifier` is turned on by bifrost's default feature `platform-verifier`, so an Android build can drop it

@@ -2,9 +2,9 @@
 //! 1 MiB codec to [`Front::line`], and lines out through a writer task
 //! of its own with a queue that drops a client that stopped reading (16 MiB queued, or 10 s without the write making
 //! progress), so one stopped client never stalls another.  With the `test-hooks` feature a line calling
-//! `__test_flood`, `__test_owner_gone` or `__test_advance` is served here, before the dispatcher (none is a method of
-//! the registry), and under `serve --test-sequencer` lines are read and served in the order
-//! the `sequencer` gives (`__test_barrier` is its own).
+//! `__test_flood`, `__test_owner_gone`, `__test_advance`, `__test_matrix_ask` or `__test_browser_endpoint` is served
+//! here, before the dispatcher (none is a method of the registry), and under `serve --test-sequencer` lines are read and
+//! served in the order the `sequencer` gives (`__test_barrier` is its own).
 //!
 //! The queue and the choice between reading and stopping are a pure core (`pure`, tested in every order); this file is
 //! the shell that does the I/O and feeds the core every event.
@@ -441,6 +441,7 @@ async fn serve_conn(stream: UnixStream, front: Arc<Front>, socket: Socket) {
                 || owner_gone::serve(&front, &out, &l).await
                 || advance::serve(&out, &l).await
                 || matrix_ask::serve(&front, &out, &l).await
+                || browser_endpoint::serve(&out, &l)
                 || barrier_refused(&out, &l)
             {
                 continue;
@@ -503,7 +504,8 @@ async fn sequenced(
                         && !(flood::serve(out, &l).await
                             || owner_gone::serve(front, out, &l).await
                             || advance::serve(out, &l).await
-                            || matrix_ask::serve(front, out, &l).await)
+                            || matrix_ask::serve(front, out, &l).await
+                            || browser_endpoint::serve(out, &l))
                     {
                         front.line(session, out, &l).await;
                     }
@@ -756,6 +758,40 @@ mod matrix_ask {
                     Gate::Never(why) => json!({"gate": "never", "why": why}),
                 }
             }
+        };
+        if let Some(id) = req.id {
+            let a = serde_json::to_string(&Answer {
+                id,
+                result,
+                ignored: vec![],
+            })
+            .expect("an answer serializes");
+            out.push(format!("{a}\n").into());
+        }
+        true
+    }
+}
+
+/// `__test_browser_endpoint {socket}` (test-hooks): a CDP broker on SOCKET with no browser behind it
+/// (`browser::broker::test_endpoint`), answered with its secret (`{"secret": HEX}`, or `{"error": TEXT}`).
+#[cfg(feature = "test-hooks")]
+mod browser_endpoint {
+    use super::Outbox;
+    use runstav::wire::{Answer, Request};
+    use serde_json::json;
+
+    /// Serve LINE when it is a `__test_browser_endpoint` request (true), else leave it to the dispatcher.
+    pub(super) fn serve(out: &Outbox, line: &str) -> bool {
+        let Ok(req) = serde_json::from_str::<Request>(line) else {
+            return false;
+        };
+        if req.method != "__test_browser_endpoint" {
+            return false;
+        }
+        let socket = req.params["socket"].as_str().unwrap_or("");
+        let result = match crate::browser::broker::test_endpoint(std::path::Path::new(socket)) {
+            Ok(secret) => json!({"secret": secret}),
+            Err(e) => json!({"error": e}),
         };
         if let Some(id) = req.id {
             let a = serde_json::to_string(&Answer {

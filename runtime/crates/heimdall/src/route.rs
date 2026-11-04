@@ -19,7 +19,7 @@
 //! The router is created per browser start. Before the attach is answered it is not `ready`: the broker holds the
 //! agent's messages until it is, and a message passed anyway gets an error reply.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -45,6 +45,8 @@ pub const REFUSED_ALWAYS: &[&str] = &[
 /// to `i32::MAX`, and an agent's must stay below.
 pub const HUB_ID_BASE: u64 = 1 << 30;
 const HUB_ID_LAST: u64 = i32::MAX as u64;
+/// How many gone agents' root command ids the fallback remembers.
+const ROOT_STALE_MAX: usize = 4096;
 
 /// Where the browser saves downloads, named by their guid (the browser host's own dir; the agent can read it).
 pub const DOWNLOAD_DIR: &str = "/tmp/drgnx-browser/downloads";
@@ -74,6 +76,9 @@ pub enum BrokerEvent {
     /// `Target.attachToBrowserTarget` failed: the agent has the root session, and the hub cannot watch (Mode B is
     /// unavailable for this browser).
     NoBrowserSession,
+    /// The hub's broker stopped the browser: `why` is `idle`, `memory`, or what its caller named. (The router never
+    /// makes it; the broker does.)
+    Stopped { why: String },
 }
 
 /// Where one message goes.
@@ -130,6 +135,11 @@ pub struct Router {
     attach_id: Option<u64>,
     browser_target: Option<String>,
     next_id: u64,
+    /// In the fallback, the agent's root commands awaiting their replies.
+    root_pending: BTreeSet<u64>,
+    /// In the fallback, the root commands of agents that have gone: the first reply with such an id is theirs, and is
+    /// dropped, so it never reaches the next agent (Chromium answers one session's commands in order).
+    root_stale: BTreeSet<u64>,
 }
 
 #[derive(Serialize)]
@@ -251,6 +261,8 @@ impl Router {
             attach_id: None,
             browser_target: None,
             next_id: HUB_ID_BASE,
+            root_pending: BTreeSet::new(),
+            root_stale: BTreeSet::new(),
         };
         let attach = r.attach();
         (r, vec![attach])
@@ -378,6 +390,9 @@ impl Router {
         {
             s.waiting = false;
         }
+        if self.fallback && session.is_none() {
+            self.root_pending.insert(id);
+        }
         Step::ToBrowser(command(id, method, session.as_deref(), env.params))
     }
 
@@ -392,6 +407,16 @@ impl Router {
                 && id >= HUB_ID_BASE
             {
                 return self.hub_reply(id, &env);
+            }
+            if self.fallback
+                && env.session_id.is_none()
+                && let Some(id) = env.id
+            {
+                // a gone agent's late reply on the root
+                if self.root_stale.remove(&id) {
+                    return Step::Drop;
+                }
+                self.root_pending.remove(&id);
             }
             return self.route(&env, msg);
         }
@@ -458,6 +483,12 @@ impl Router {
             }
         }
         if self.fallback {
+            // its replies still to come on the root are dropped when they arrive (bounded: the oldest ids go first)
+            let pending = std::mem::take(&mut self.root_pending);
+            self.root_stale.extend(pending);
+            while self.root_stale.len() > ROOT_STALE_MAX {
+                self.root_stale.pop_first();
+            }
             // the agent's protocol state on the root stays with the connection: turn off what would pause new targets
             let off =
                 json!({"autoAttach": false, "waitForDebuggerOnStart": false, "flatten": true});
