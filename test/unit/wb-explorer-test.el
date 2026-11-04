@@ -44,7 +44,7 @@
   (let ((end (+ (drgnx-test-wait-now) secs)))
     (while (< (drgnx-test-wait-now) end)
       (drgnx-run-ert-drain-events)
-      (drgnx-test-pause 0.05))))
+      (drgnx-test-pause 0.05 "a window: what may not happen in it, the caller asserts"))))
 
 (defun drgnx-explorer-test--rows ()
   "The Explorer's rows as (DEPTH NAME) lists."

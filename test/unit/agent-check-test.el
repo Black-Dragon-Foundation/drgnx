@@ -820,7 +820,7 @@ nothing and the fake `systemctl' (SYSTEMCTL-BODY, a shell command) is the only p
         (should (drgnx-agent-check-test--gone-p marker))
         ;; the hanging systemctl was deleted
         (should (drgnx-agent-check-test--gone-p "sleep 3176"))
-        (drgnx-test-pause 0.5)                                  ; no second result
+        (drgnx-test-pause 0.5 "no second result")
         (should (= calls 1))))))
 
 (ert-deftest drgnx-agent-check/a-systemctl-that-cannot-be-started-falls-back-to-the-tree ()
@@ -841,7 +841,7 @@ nothing and the fake `systemctl' (SYSTEMCTL-BODY, a shell command) is the only p
         ;; at the timer's 1 s plus the child's start, long before the 3 s backstop
         (should (< (plist-get result :time) 2.8))
         (should (drgnx-agent-check-test--gone-p marker))
-        (drgnx-test-pause 0.5)                                  ; no second result
+        (drgnx-test-pause 0.5 "no second result")
         (should (= calls 1))))))
 
 (ert-deftest drgnx-agent-check/a-timer-in-a-buffer-with-no-directory-still-ends-the-check ()
@@ -863,7 +863,7 @@ nothing and the fake `systemctl' (SYSTEMCTL-BODY, a shell command) is the only p
         (should (< (plist-get result :time) 2.8))
         (should (drgnx-agent-check-test--gone-p marker))
         (should (member "--user kill --signal=KILL drgnx-check-fake.scope" (drgnx-agent-check-test--systemctl-log)))
-        (drgnx-test-pause 0.5)                                  ; no second result
+        (drgnx-test-pause 0.5 "no second result")
         (should (= calls 1))))))
 
 (ert-deftest drgnx-agent-check/a-finished-check-asks-systemd-to-clear-its-scope ()

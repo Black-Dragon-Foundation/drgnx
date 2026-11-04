@@ -356,7 +356,7 @@ uninstalled afterwards."
     (drgnx-clip-test--gsettings "echo false")
     (drgnx-clip-test--x11 '("bash")
       (drgnx-clipboard-install)
-      (drgnx-test-pause 0.5)
+      (drgnx-test-pause 0.5 "the answers may not turn the syncing off")
       (should select-active-regions))))
 
 (ert-deftest drgnx-clip/a-gsettings-that-hangs-is-given-up-after-a-second ()
@@ -365,10 +365,12 @@ uninstalled afterwards."
     (drgnx-clip-test--x11 '("bash")
       (drgnx-clipboard-install)
       (should select-active-regions)                  ; the hanging ask did not block the install
-      (drgnx-test-pause 1.5)
+      ;; given up: the ask's process is gone (a second, by the give-up's own timer), and nothing changed
+      (should (drgnx-clip-test--wait
+               (lambda () (not (seq-filter (lambda (p) (string-prefix-p "drgnx-gpaste" (process-name p))) (process-list))))
+               10))
       (should select-active-regions)
-      (should-not (plist-get (drgnx-clipboard-doctor-facts) :manager))
-      (should-not (seq-filter (lambda (p) (string-prefix-p "drgnx-gpaste" (process-name p))) (process-list))))))
+      (should-not (plist-get (drgnx-clipboard-doctor-facts) :manager)))))
 
 (ert-deftest drgnx-clip/the-setting-overrides-detection ()
   ;; t: published even where a manager syncs

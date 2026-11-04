@@ -23,9 +23,10 @@
 synchronous `call-process' (git and the like) is allowed; `drgnx-test-pause' and `drgnx-test-proc-await-exit' are real
 waits; the `drgnx-timer-*' layer only fills timer lists.")
 
-(defconst drgnx-lint-classes--cond-banned '(sleep-for sit-for-positive)
-  "What a conditional test never calls: a fixed pause.  `drgnx-test-pause' stays allowed (the \"did not happen\" window);
-in test/ui it says what may not happen (`drgnx-lint-classes--gui-pauses').")
+(defconst drgnx-lint-classes--cond-banned '(sleep-for sit-for-positive pause-without-a-reason)
+  "What a conditional test never calls: a fixed pause.  `drgnx-test-pause' stays allowed as the \"did not happen\"
+window, and says what may not happen in it (`(drgnx-test-pause SECS \"WHY\")'): a pause with no reason is a settle,
+which waits for a condition instead.  In test/ui every top-level form is held to that (`drgnx-lint-classes--gui-pauses').")
 
 (defconst drgnx-lint-classes--clock-reads '(float-time-bare current-time time-since drgnx-test-real-time clock-read-nil)
   "Calls that read the wall clock; `float-time' of an argument only converts a time, and `clock-read-nil' is a time of
@@ -373,7 +374,11 @@ a test reaches by a call: a command a test binds to a key is named by `function'
   (should (drgnx-lint-classes--check :cond #'drgnx-lint-classes--rule-cond "(ert-deftest a/b () (sleep-for 0.1))"))
   (should (drgnx-lint-classes--check :cond #'drgnx-lint-classes--rule-cond "(ert-deftest a/b () (sit-for 1))"))
   (should-not (drgnx-lint-classes--check :cond #'drgnx-lint-classes--rule-cond
-                                         "(ert-deftest a/b () (sit-for 0) (drgnx-test-pause 0.2) (run-at-time 1 nil #'ignore))"))
+                                         "(ert-deftest a/b () (sit-for 0) (drgnx-test-pause 0.2 \"no second answer\") (run-at-time 1 nil #'ignore))"))
+  ;; a pause with no reason is a settle, in any tier: through a helper too
+  (should (equal (drgnx-lint-classes--check :cond #'drgnx-lint-classes--rule-cond
+                                            "(defun settle () (drgnx-test-pause 0.1)) (ert-deftest a/b () (settle))")
+                 '("pause-without-a-reason (through settle)")))
   ;; a window in the GUI tier says what may not happen; the rest of the suite's windows are the plain call
   (should (memq 'pause-without-a-reason (drgnx-lint-classes--calls '(progn (drgnx-test-pause 0.3)))))
   (should-not (memq 'pause-without-a-reason (drgnx-lint-classes--calls '(drgnx-test-pause 0.3 "no second answer"))))

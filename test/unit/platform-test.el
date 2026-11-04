@@ -177,7 +177,7 @@ does not require to happen."
                                                (should (= n 1))
                                                (should (eq 'sway (frame-parameter frame 'drgnx-platform-wm))))
                                       (advice-remove 'drgnx-platform-detect 'platform-test-count))
-                                    (drgnx-test-pause 0.1)             ; no call in the window
+                                    (drgnx-test-pause 0.1 "no call may come")
                                     (should-not (drgnx-platform-test--log-lines))))))
 
 (drgnx-platform-test--deftest drgnx-platform/adapters-are-registered-in-order-and-extended-by-name ()
@@ -260,12 +260,12 @@ does not require to happen."
                                        (drgnx-platform-monitors frame (lambda (r) (push r calls)))
                                        (should (drgnx-platform-test--await (lambda () calls) 2))
                                        (should (< (- (float-time) start) 1.0))
-                                       (drgnx-test-pause 0.3)           ; no second answer in the window
+                                       (drgnx-test-pause 0.3 "no second answer may come")
                                        (should (equal calls '((:error "timed out"))))
                                        (setq calls nil)
                                        (drgnx-platform-move-frame frame (drgnx-platform-test--mon "x" 0 0 1 1) (lambda (r) (push r calls)))
                                        (should (drgnx-platform-test--await (lambda () calls) 2))
-                                       (drgnx-test-pause 0.3)           ; no second answer in the window
+                                       (drgnx-test-pause 0.3 "no second answer may come")
                                        (should (equal calls '((:error "timed out"))))
                                        (setq fm 'unset)
                                        (drgnx-platform-frame-monitor frame (lambda (m) (setq fm m)))
@@ -379,7 +379,7 @@ does not require to happen."
                                   ;; safe: the cut deletes the process before it calls back
                                   (should-not (process-live-p proc))
                                   (should (drgnx-platform-test--await (lambda () (not (file-exists-p (format "/proc/%d" pid)))) 1))
-                                  (drgnx-test-pause 0.3)            ; a line arriving later calls nothing
+                                  (drgnx-test-pause 0.3 "a line arriving later may call nothing")
                                   (should (= 1 (length calls))))))
 
 (drgnx-platform-test--deftest drgnx-platform/a-missing-tool-calls-back-an-error-never-signals ()
@@ -400,7 +400,7 @@ does not require to happen."
                                             ((symbol-function 'drgnx-notify) (lambda (_s _v text &rest _) (push text msgs) nil)))   ; a notice, Task 20
                                     (drgnx-platform-call '("swaymsg") :callback (lambda (_s _o) (cl-incf n) (error "boom")))
                                     (should (drgnx-platform-test--await (lambda () msgs)))
-                                    (drgnx-test-pause 0.1))         ; the callback is not called twice
+                                    (drgnx-test-pause 0.1 "the callback may not be called twice"))
                                   (should (= n 1))
                                   (should (string-match-p "boom" (car msgs))))))
 

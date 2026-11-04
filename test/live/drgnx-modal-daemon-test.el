@@ -17,7 +17,8 @@
 (defun drgnx-modal-daemon-test--windows-become (sess n)
   "Wait (10 s at most) until SESS has N graphical windows; non-nil when it has."
   (let ((deadline (+ (float-time) 10)))
-    (while (and (/= (drgnx-modal-daemon-test--windows sess) n) (< (float-time) deadline)) (drgnx-test-pause 0.1))
+    (while (and (/= (drgnx-modal-daemon-test--windows sess) n) (< (float-time) deadline))
+      (drgnx-test-pause 0.1 "between two looks: the loop waits on its condition"))
     (= (drgnx-modal-daemon-test--windows sess) n)))
 
 (defun drgnx-modal-daemon-test--answers-p (sess)
@@ -69,7 +70,7 @@
             (should (= 2 (drgnx-modal-daemon-test--windows sess)))
             (drgnx-modal-session-act sess ":" '(:type "q") "RET")
             (should (drgnx-modal-daemon-test--windows-become sess 1))
-            (drgnx-test-pause 0.5)                             ; nothing closes the other a moment later
+            (drgnx-test-pause 0.5 "nothing may close the other a moment later")
             (should (= 1 (drgnx-modal-daemon-test--windows sess)))
             (should (drgnx-modal-daemon-test--answers-p sess)))
         (delete-directory dir t)))))

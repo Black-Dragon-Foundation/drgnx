@@ -53,7 +53,7 @@
             (let ((deadline (+ (float-time) 15)) after)
               (while (and (< (float-time) deadline)
                           (not (equal (butlast (setq after (drgnx-persist-reopen--eval sess drgnx-persist-reopen--layout))) (butlast before))))
-                (drgnx-test-pause 0.2))
+                (drgnx-test-pause 0.2 "between two looks: the loop waits on its condition"))
               (should (equal (butlast after) (butlast before)))
               ;; The two halves of the split come back to the pixel (M12a-14: window-state-put alone swapped 230/234).
               (should (= (length (car (last after))) (length (car (last before)))))

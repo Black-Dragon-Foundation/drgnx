@@ -214,7 +214,7 @@ no agents, and everything closed afterwards."
           (should-not (string-search "DRIVING" (substring-no-properties (drgnx-live--header))))
           (should-not (eq (key-binding "a") #'drgnx-live-key))
           (drgnx-live-mouse (drgnx-live-test--event 'down-mouse-1 10 10 640 400)))
-        (drgnx-test-pause 0.1)                    ; a window in which no further input may arrive
+        (drgnx-test-pause 0.1 "no further input may arrive")
         (should (= 3 (length (drgnx-mock-cdp-received "Input.dispatchMouseEvent"))))
         (should (= 2 (length steered)))))))
 
@@ -373,7 +373,8 @@ are pushed to STEERED as (NAME TEXT)."
   (skip-unless drgnx-live-test--websocket)
   (drgnx-live-test--with
     (drgnx-live-test--open)
-    (drgnx-test-pause 0.3)
+    (should (drgnx-mock-cdp-wait (lambda () (with-current-buffer "*drgnx live*" (= 2 (length drgnx-live--targets))))))
+    (drgnx-test-pause 0.3 "no second attach and no second screencast may start")
     (should (equal (mapcar (lambda (m) (plist-get (plist-get m :params) :targetId)) (drgnx-mock-cdp-received "Target.attachToTarget"))
                    '("T1")))
     (should (= 1 (length (drgnx-mock-cdp-received "Page.startScreencast"))))
@@ -536,7 +537,7 @@ are pushed to STEERED as (NAME TEXT)."
            (widths (lambda () (mapcar (lambda (m) (plist-get (plist-get m :params) :maxWidth))
                                       (drgnx-mock-cdp-received "Page.startScreencast")))))
       (drgnx-state-sync) (drgnx-state--deliver-idle)
-      (drgnx-test-pause 0.1)                      ; a window in which no second screencast may start
+      (drgnx-test-pause 0.1 "no second screencast may start")
       (should (equal (funcall widths) (list before)))
       (unwind-protect
           (progn

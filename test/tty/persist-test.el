@@ -37,7 +37,7 @@
           (while (and (drgnx-tty-session--pane-alive-p s) (< (float-time) deadline))
             (when (drgnx-tty-session-find s "\\((yes or no)\\|(y or n)\\)")        ; whatever Emacs asks before it exits
               (drgnx-tty-session-send s "yes\r"))
-            (drgnx-test-pause 0.1)))
+            (drgnx-test-pause 0.1 "between two looks: the loop waits on its condition")))
         (should-not (drgnx-tty-session--pane-alive-p s))
         (should (equal (with-temp-buffer (insert-file-contents-literally file) (buffer-string)) bytes))
         (should (equal (file-attribute-modification-time (file-attributes file)) mtime))))))

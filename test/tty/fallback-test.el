@@ -46,7 +46,7 @@
   (drgnx-tty-session-eval s '(setq kx-seen nil))
   (drgnx-tty-session-send c bytes)
   (drgnx-tty-session-wait s 'kx-seen 10)
-  (drgnx-test-pause 0.3)
+  (drgnx-test-pause 0.3 "COMMAND may not run from the rest of the bytes")
   (should-not (drgnx-tty-session-eval s `(assq ',command kx-seen))))
 
 (ert-deftest drgnx-tty-fallback/alt-shift-p-is-not-the-palette ()
@@ -81,10 +81,11 @@
                        (how-many "This terminal can't send Ctrl\\+Shift keys: use Alt\\+Shift (or F6 then the key)\\. drgnx doctor has details\\."
                                  (point-min) (point-max))))
              (before (progn (drgnx-tty-session-wait s `(> ,count 0))
-                            (drgnx-test-pause 1.5) ; every hint already on its way has arrived
+                            ;; DEFERRED: a settle for the baseline, until each client's hint can be counted apart
+                            (drgnx-test-pause 1.5 "settle: every hint already on its way arrives")
                             (drgnx-tty-session-eval s count))))
         (drgnx-tty-fallback-test--legacy s)
-        (drgnx-test-pause 1.5)
+        (drgnx-test-pause 1.5 "the second VTE client may get no hint")
         (should (= before (drgnx-tty-session-eval s count))))
       (should (= 1 (seq-count (lambda (id) (eq id 'vte)) (drgnx-tty-session-eval s '(plist-get (drgnx-tty--read-report) :hinted))))))))
 
@@ -145,7 +146,7 @@
       (drgnx-tty-session-send c (concat "\C-x" f6))
       (drgnx-tty-session-wait-screen c "Ctrl\\+Shift\\+…")
       (drgnx-tty-session-send c "\a")
-      (drgnx-test-pause 0.5)
+      (drgnx-test-pause 0.5 "the bell may run no command but a quit")
       (should-not (drgnx-tty-session-eval s '(seq-remove (lambda (c) (memq (car c) '(keyboard-quit nil))) kx-seen)))
       ;; a click after F6 is a click: F6 is dropped, nothing of the mouse report is typed
       (let ((text `(with-current-buffer "*scratch*" (buffer-string))))
@@ -153,7 +154,7 @@
           (drgnx-tty-session-send c f6)
           (drgnx-tty-session-wait-screen c "Ctrl\\+Shift\\+…")
           (drgnx-tty-session-send c "\e[<0;60;6M\e[<0;60;6m")
-          (drgnx-test-pause 0.5)
+          (drgnx-test-pause 0.5 "nothing of the mouse report may be typed")
           (should (equal (drgnx-tty-session-eval s text) before))
           (should-not (drgnx-tty-session-find c "60;6\\|\\[<0"))
           (should-not (drgnx-tty-session-find c "Ctrl\\+Shift\\+…"))))

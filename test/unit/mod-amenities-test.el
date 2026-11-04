@@ -83,7 +83,7 @@
                                      (python-mode)
                                      (goto-char (point-max)) (insert "y  =  2\n")
                                      (save-buffer)
-                                     (drgnx-test-pause 2)
+                                     (drgnx-test-pause 2 "no formatter may rewrite the saved file")
                                      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "x  =  1\ny  =  2\n"))
                                      (set-buffer-modified-p nil) (kill-buffer))))
       (delete-file file))))

@@ -3058,8 +3058,9 @@ timer; when nothing can run and nothing is left to wait for it fails at once, wi
   that starts nothing) lets processes and timers run with `(drgnx-test-pause SECS)` and then asserts. It is the only
   fixed real-time window in a test, and it can only miss a bug on a loaded machine, never fail a correct one. Not
   `sleep-for`: that runs one link of a timer chain. A helper converted to `drgnx-test-wait` never takes
-  `(lambda () nil)` or `#'ignore` for a pause, since that now fails at the deadline. In `test/ui` it says what may not
-  happen, `(drgnx-test-pause SECS "WHY")`, checked by `drgnx-lint/cond-tests-have-no-fixed-pause`.
+  `(lambda () nil)` or `#'ignore` for a pause, since that now fails at the deadline. It says what may not happen,
+  `(drgnx-test-pause SECS "WHY")`, in every tier, checked by `drgnx-lint/cond-tests-have-no-fixed-pause`: a pause
+  with no reason is a settle, and a settle waits for its condition.
 - **Inside the clock fixture** (`drgnx-test-with-clock`) it works unchanged: the deadline is read through
   `drgnx-test-real-time`, and each of its timed `accept-process-output` calls moves virtual time by 0.02 s (a
   zero-length look; a real wait only while a real child is live), so the wait steps through the timers.

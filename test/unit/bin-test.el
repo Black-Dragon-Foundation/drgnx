@@ -1384,7 +1384,8 @@ macOS (no /proc there)."
                  (alive (lambda () (seq-filter #'drgnx-bin-test--pid-alive-p ids))))
             (should (= 2 (length (funcall alive))))
             (signal-process proc 'TERM)
-            (drgnx-test-pause 0.5)                        ; the first TERM is taken before the second arrives
+            ;; the first TERM is taken before the second arrives; too short only merges the two (a missed case)
+            (drgnx-test-pause 0.5 "the cleanup may not end the run inside the grace period")
             (signal-process proc 'TERM)
             (should (drgnx-bin-test--wait-exit proc 30))
             (should-not (funcall alive))

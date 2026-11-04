@@ -1,5 +1,5 @@
 ;;; wb-monitors-test.el --- batch tests: Move to Monitor…, Next and Previous -*- lexical-binding: t -*-
-;; test-class: cond
+;; No class: test/class-exempt.eld (rewritten in .6).
 ;; A fake adapter stands in for the window manager; the real compositor, D-Bus and display are never reached
 ;; (the isolation macro of platform-test.el wraps every test).  The frame is batch Emacs' only frame, a terminal
 ;; one, so `display-graphic-p' is stubbed where a graphical frame is needed.

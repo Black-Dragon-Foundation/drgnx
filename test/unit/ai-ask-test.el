@@ -86,7 +86,7 @@ provider `o' served by a mock answering ANSWER, its LOG."
           (drgnx-ai-stop)
           (should-not drgnx-ai--active)
           (should-not (drgnx-ai-ask-test--curls))                         ; the process is gone
-          (drgnx-test-pause 2.0)                                          ; past the mock's answer (nothing may come)
+          (drgnx-test-pause 2.0 "past the mock's answer, nothing may come")
           (should-not (get-buffer "*AI answer*"))                         ; the callback never ran
           (should (seq-find (lambda (m) (string-match-p "stopped" m)) said)))))))
 
@@ -96,7 +96,7 @@ provider `o' served by a mock answering ANSWER, its LOG."
       (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
         (drgnx-ai-ask "where do we frobnicate widgets?" default-directory)
         (drgnx-ai-stop)                                                   ; the grep has not answered yet
-        (drgnx-test-pause 1.0)                                            ; nothing may be asked
+        (drgnx-test-pause 1.0 "nothing may be asked")
         (should-not (drgnx-ai-ask-test--curls))
         (should-not (get-buffer "*AI answer*"))
         (should-not drgnx-ai--active)))))
@@ -184,7 +184,7 @@ provider `o' served by a mock answering ANSWER, its LOG."
     (should (seq-find (lambda (p) (and (equal (process-name p) "drgnx-ai-grep") (process-live-p p))) (process-list)))
     (drgnx-ai-stop)
     (should-not (seq-find (lambda (p) (and (equal (process-name p) "drgnx-ai-grep") (process-live-p p))) (process-list)))
-    (drgnx-test-pause 0.3)                                                ; no answer may come
+    (drgnx-test-pause 0.3 "no answer may come")
     (should-not (get-buffer "*AI answer*"))))
 
 (ert-deftest drgnx-ai-ask/hidden-files-never-reach-the-model ()

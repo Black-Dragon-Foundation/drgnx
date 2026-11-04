@@ -148,7 +148,7 @@ is signalled) and the root frame stubbed; the variable `calls' counts the sample
                (let ((orig (symbol-function 'accept-process-output)))
                  (lambda (&optional process secs &rest more) (apply orig process (min secs 0.001) more)))))
       (run-at-time 0 nil #'drgnx-wait-test--link)
-      (should-not (drgnx-test-pause 4)))
+      (should-not (drgnx-test-pause 4 "the chain runs back to back, not one link a wait")))
     (should (= drgnx-wait-test--links 50))
     (should (>= now 4))))
 
@@ -177,5 +177,5 @@ is signalled) and the root frame stubbed; the variable `calls' counts the sample
 (ert-deftest drgnx-test-pause/on-the-auto-clock-is-virtual ()
   (skip-unless (drgnx-test--core-p))
   (drgnx-test-with-clock (:auto t)
-    (should-not (drgnx-test-pause 5))
+    (should-not (drgnx-test-pause 5 "virtual seconds on the auto clock"))
     (should (= 5 (round (drgnx-test-clock-now))))))

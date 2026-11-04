@@ -149,8 +149,7 @@
         ;; a second answer from the same backend changes nothing
         (funcall (car pending) "again")
         (should (equal got2 '(("one" :thing car) ("two") ("four"))))
-        ;; the older request's timeout never fires its callback
-        (drgnx-test-pause 1.2)
+        (drgnx-test-pause 1.2 "the older request's timeout may not fire its callback")
         (should (eq got1 :none))))))
 
 (ert-deftest drgnx-quickhelp/collect-never-waits ()
@@ -372,7 +371,8 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
           (drgnx-quickhelp--hover-look)          ; the card for `car' goes, `cdr' starts resting
           (should-not drgnx-quickhelp--origin)
           (should-not requests)
-          (drgnx-test-pause 0.08)
+          ;; never too short: a pause lasts at least its length, so the rest is past the delay on any machine
+          (drgnx-test-pause 0.08 "the pointer may not move while it rests past the 0.05 s delay")
           (drgnx-quickhelp--hover-look)          ; rested: its card, the pointer did not have to move again
           (should (equal requests (list (list (selected-window) 10 nil)))))))))
 

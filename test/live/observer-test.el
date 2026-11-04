@@ -41,7 +41,8 @@
       (add-hook 'post-command-hook #'obs-schedule)
       (add-hook 'first-change-hook #'obs-schedule)
       (drgnx-uitest--json (list :ok t)))")
-    (drgnx-test-pause 0.5)
+    ;; the call's own 0.15 s timer runs first (a pause lasts at least its length), so the measure starts at rest
+    (drgnx-test-pause 0.5 "no command may run before the measure")
     (let ((r (drgnx-ui-measure sess (list (list :buffer "*obs*" :text "line 10")))))
       (should (>= (plist-get r :oscillations) 1))
       (should (>= (plist-get r :settle_ms) 100)))))

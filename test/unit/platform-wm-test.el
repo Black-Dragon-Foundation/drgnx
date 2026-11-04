@@ -42,7 +42,7 @@
   (let ((before (make-symbol "before")) (idle (make-symbol "idle")))
     `(let ((,before (copy-sequence timer-list)) (,idle (copy-sequence timer-idle-list)))
        (prog1 (progn ,@body)
-         (drgnx-test-pause 0.1)
+         (drgnx-test-pause 0.1 "no timer may be left armed")
          (should-not (cl-set-difference timer-list ,before))
          (should-not (cl-set-difference timer-idle-list ,idle))))))
 

@@ -271,7 +271,7 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
       (should (eql 0 (car (call '("-t") env))))
       (should (member "-t" (car (last (tty-bin-test--calls dir)))))
       (should-not (seq-find (lambda (c) (member tty-bin-test--capable c)) (tty-bin-test--calls dir)))
-      (drgnx-test-pause 0.3)                ; kitty is not started in the window
+      (drgnx-test-pause 0.3 "kitty may not be started")
       (should-not (file-exists-p (expand-file-name "kitty.log" dir))))))
 
 (ert-deftest drgnx-bin/open-t-stays-here-by-default ()
@@ -280,14 +280,14 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
     ;; the daemon has no capable terminal to offer (the option is off): this terminal, kitty not started
     (should (eql 0 (car (call '("-t") '(("VTE_VERSION" . "7600"))))))
     (should (member "-t" (car (last (tty-bin-test--calls dir)))))
-    (drgnx-test-pause 0.3)                  ; kitty is not started in the window
+    (drgnx-test-pause 0.3 "kitty may not be started")
     (should-not (file-exists-p (expand-file-name "kitty.log" dir)))
     ;; a terminal that sends every key is not asked about at all
     (write-region "(\"kitty\" \"--\")\n" nil (expand-file-name "capable" dir))
     (delete-file (expand-file-name "client.log" dir))
     (should (eql 0 (car (call '("-t") '(("TERM" . "xterm-kitty"))))))
     (should-not (seq-find (lambda (c) (member tty-bin-test--capable c)) (tty-bin-test--calls dir)))
-    (drgnx-test-pause 0.3)                  ; kitty is not started in the window
+    (drgnx-test-pause 0.3 "kitty may not be started")
     (should-not (file-exists-p (expand-file-name "kitty.log" dir)))))
 
 (ert-deftest drgnx-bin/test-tty-tiers-are-listed ()

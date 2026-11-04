@@ -1028,8 +1028,10 @@ deleted or replaced by a plan) are listed in `test/class-exempt.eld` as `(FILE :
   `drgnx-test-proc-await-exit`, `accept-process-output` with a time, or `float-time` deadline outside
   `drgnx-test-with-clock`, directly or through a function of the same file. A synchronous `call-process` is allowed.
   A det test failing and passing on the rerun fails the run, whatever `test/flaky.eld` lists.
-- **cond**: waits on conditions; no fixed pause (`sleep-for`, `sit-for` above 0). `drgnx-test-pause` stays allowed; in
-  `test/ui` it gives a reason (`(drgnx-test-pause SECS "WHY")`), and a wait for a frame is `drgnx-test-wait-presented`.
+- **cond**: waits on conditions; no fixed pause (`sleep-for`, `sit-for` above 0). `drgnx-test-pause` stays allowed as
+  the window for what must not happen, and says what that is (`(drgnx-test-pause SECS "WHY")`), in every tier: one
+  with no reason is a settle, which waits for its condition instead (`drgnx-test-wait`; a wait for a frame is
+  `drgnx-test-wait-presented`). A pause that only has to last long enough (past a delay) can never be too short.
 - **timing**: may assert elapsed time; no other class may `should` over a wall-clock comparison.
 
 `test/unit/lint-test-classes-test.el` has a lint for each rule. It reads the files (never loads them) and sees:

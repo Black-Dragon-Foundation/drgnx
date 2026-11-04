@@ -271,11 +271,12 @@ choice of two nobody has."
             (drgnx-remote-test--await "the stub server connected" (eglot-current-server))
             (let ((server (eglot-current-server)))
               (should (eq (eieio-oref server 'inhibit-autoreconnect) t))   ; not the timer eglot set
-              (drgnx-test-pause 1.5)                                         ; past the 1 s window: eglot would reconnect
+              ;; past the 1 s window in which eglot would reconnect (a pause lasts at least its length)
+              (drgnx-test-pause 1.5 "the server may not be reconnected inside eglot's window")
               (kill-process (jsonrpc--process server))
               (drgnx-remote-test--await "the server died" (not (jsonrpc-running-p server)))
               (setq drgnx-tramp-mock-sends 0)
-              (drgnx-test-pause 1.5)
+              (drgnx-test-pause 1.5 "no reconnect and no send may follow the death")
               (should (= connects 1))
               (should (= drgnx-tramp-mock-sends 0))))
         (advice-remove 'eglot--connect 'drgnx-remote-test)))))
@@ -608,7 +609,8 @@ choice of two nobody has."
                 (let ((p (make-process :name "drgnx-test-sentinel" :command '("sh" "-c" "true") :noquery t
                                        :sentinel (lambda (p _e) (unwind-protect (funcall try) (process-put p :done t))))))
                   (drgnx-test-wait (lambda () (process-get p :done)) :what "the sentinel's process"))
-                (drgnx-test-pause 0.4)
+                ;; past the two 0.05 s timers (a pause lasts at least its length)
+                (drgnx-test-pause 0.4 "no further answer and no connect may come")
                 (should (equal results '(refused refused refused refused)))
                 (should (= connects 0))
                 (setq results nil)
@@ -639,9 +641,9 @@ choice of two nobody has."
 (defun drgnx-remote-test--managed-p (buffer) (buffer-local-value 'eglot--managed-mode buffer))
 
 (defun drgnx-remote-test--wait-for-server (buffer)
-  "Wait until a server has answered for BUFFER's project, then let the attaching finish."
-  (drgnx-test-wait (lambda () (with-current-buffer buffer (eglot-current-server))) :what "a server answering for the buffer's project")
-  (drgnx-test-pause 0.5))
+  "Wait until a server has answered for BUFFER's project.  The attaching is done then: eglot's answer to initialize
+registers the server, turns its buffers on and runs `eglot-connect-hook' (`drgnx-lang--attach-buffers') in one call."
+  (drgnx-test-wait (lambda () (with-current-buffer buffer (eglot-current-server))) :what "a server answering for the buffer's project"))
 
 (ert-deftest drgnx-remote/the-starting-buffer-and-the-project-are-managed ()
   "Eglot attaches buffers to a new server in a process filter; the guard skips remote buffers there, so the lang

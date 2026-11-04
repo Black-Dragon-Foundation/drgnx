@@ -56,7 +56,7 @@ afterwards.  (cdr SPEC) :kkp t: skip unless kkp is there; :size: kitty's size in
       (setq tries (1+ tries))
       (let ((deadline (+ (float-time) 1)))
         (while (and (drgnx-tty-session-eval s '(and (active-minibuffer-window) t)) (< (float-time) deadline))
-          (drgnx-test-pause 0.05))))
+          (drgnx-test-pause 0.05 "between two looks: the loop waits on its condition"))))
     (should-not (drgnx-tty-session-eval s '(active-minibuffer-window)))))
 
 ;;;; Keys
@@ -100,7 +100,7 @@ afterwards.  (cdr SPEC) :kkp t: skip unless kkp is there; :size: kitty's size in
     (drgnx-tty-keys-test--ran s 'kx-f6 "<f6>")
     ;; no hint: none was recorded for kitty, none was said — after the moment it would have come (0.5 s), so the
     ;; check cannot pass early
-    (drgnx-test-pause 1)
+    (drgnx-test-pause 1 "no hint may come for kitty")
     (let ((hint (drgnx-tty-session-eval s '(drgnx-tty-fallback-hint-text))))
       (should-not (memq 'kitty (plist-get (drgnx-tty-session-eval s '(drgnx-tty--read-report)) :hinted)))
       (should-not (drgnx-tty-session-eval s `(with-current-buffer "*Messages*" (string-search ,hint (buffer-string)))))
@@ -157,7 +157,8 @@ afterwards.  (cdr SPEC) :kkp t: skip unless kkp is there; :size: kitty's size in
       (drgnx-tty-session-kitty-key s "f12")
       (drgnx-test-wait (lambda () (file-exists-p started)) :secs 10 :what "the program to start")
       ;; kkp gives kitty its plain keys back as the program starts
-      (drgnx-test-pause 0.5)            ; Emacs is blocked in the program: nothing to ask it
+      ;; DEFERRED: a settle (Emacs is blocked in the program: nothing to ask it), until kkp's hand-back is visible
+      (drgnx-test-pause 0.5 "settle: kkp hands kitty its plain keys back, nothing to ask")
       (let ((sent (float-time)))
         (drgnx-tty-session-kitty-key s "ctrl+g")
         (should (< (- (drgnx-tty-session-wait s 'kx-returned 10) sent) 2)))

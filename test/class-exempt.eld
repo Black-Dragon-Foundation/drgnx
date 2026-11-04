@@ -21,4 +21,5 @@
  ("test/unit/mod-review-test.el" :why "frozen UI: the agent panel, cockpit, job window, review and Work UI are replaced")
  ("test/unit/work-ui-test.el" :why "frozen UI: the agent panel, cockpit, job window, review and Work UI are replaced")
  ("test/unit/compat-gryphn-test.el" :off t :why "gryphn is dead")
+ ("test/unit/wb-monitors-test.el" :why "rewritten in .6 (the workbench): its settle pauses are not fixed in code .6 replaces")
 )

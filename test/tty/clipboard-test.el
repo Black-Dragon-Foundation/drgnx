@@ -95,7 +95,7 @@
     (drgnx-tty-clip-test--select-five s)
     (drgnx-tty-session-send s "\C-xh")
     (drgnx-tty-session-wait s '(with-current-buffer "*sel*" (and (use-region-p) (= (- (region-end) (region-beginning)) 11))))
-    (drgnx-test-pause 0.6)                                       ; past the delay: still no cut
+    (drgnx-test-pause 0.6 "past the delay: no cut may happen")
     (should (equal (drgnx-tty-session-eval s '(with-current-buffer "*sel*" (buffer-string))) "hello drgnx"))
     (should-not (drgnx-tty-session-eval s '(car kill-ring)))))
 
