@@ -3040,7 +3040,8 @@ timer; when nothing can run and nothing is left to wait for it fails at once, wi
 - **Wait on a done flag.** Have the sentinel (or filter) set `(process-put p :done t)` and wait for
   `(process-get p :done)`. `process-live-p` turns nil before the sentinel has run, so a wait on it races the
   sentinel (M3b-19). `drgnx-lint/test-waits-read-a-done-flag-not-process-live-p` fails for any `drgnx-test-wait`
-  under `test/` whose PRED mentions `process-live-p`.
+  under `test/` whose PRED mentions `process-live-p`, and for a call of a file's own wrapper of it (a function that
+  calls `drgnx-test-wait`, or another such wrapper) that waits for `(not (process-live-p P))`.
 - **A chain of timers runs back to back.** One `accept-process-output` runs one link of a chain of zero-delay
   timers (a view drawing in slices) however long it waits, so while a timer is due the wait polls without a timeout.
   A 20 ms poll per link starved the Search view's 10,100 rows (`drgnx-view-ui/replace-retype-has-no-jank`).

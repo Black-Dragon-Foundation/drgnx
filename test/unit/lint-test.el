@@ -169,9 +169,66 @@ Only a literal PRED form is read: `(drgnx-test-wait #\\='my-pred)' is not follow
              (let (hit) (drgnx-lint--walk (cadr form) (lambda (f) (when (eq f 'process-live-p) (setq hit t)))) hit))
     "drgnx-test-wait on process-live-p (wait on the sentinel's done flag: process-live-p turns nil before it has run)"))
 
+(defun drgnx-lint--wait-wrappers (forms)
+  "The names of the functions and macros among FORMS (a file's top-level forms) that call `drgnx-test-wait', directly
+or through another of them: a test's own wait helper."
+  (let ((defs (seq-filter (lambda (f) (and (memq (car-safe f) '(defun cl-defun defmacro cl-defmacro)) (symbolp (cadr f))))
+                          forms))
+        (names '(drgnx-test-wait)) (changed t))
+    (while changed
+      (setq changed nil)
+      (dolist (d defs)
+        (unless (memq (cadr d) names)
+          (let (hit) (drgnx-lint--walk (nthcdr 2 d) (lambda (f) (when (and (consp f) (memq (car f) names)) (setq hit t))))
+               (when hit (push (cadr d) names) (setq changed t))))))
+    (delq 'drgnx-test-wait names)))
+
+(defun drgnx-lint--waits-through-wrappers-on-process-live-p (files)
+  "\"file: message\" strings for each call, in FILES, of a file-local wrapper of `drgnx-test-wait'
+\(`drgnx-lint--wait-wrappers') whose arguments wait for a process to be gone: `(not (process-live-p P))' or `null'
+of it.  A wrapper's wait for a process to start (`(process-live-p P)') is no race with the sentinel and passes."
+  (let (out)
+    (dolist (f files)
+      (let* ((forms (drgnx-lint--forms f)) (wrappers (drgnx-lint--wait-wrappers forms)))
+        (when wrappers
+          (dolist (top forms)
+            (unless (memq (car-safe top) '(defun cl-defun defmacro cl-defmacro))
+              (drgnx-lint--walk
+               top (lambda (form)
+                     (when (and (consp form) (memq (car form) wrappers)
+                                (let (hit)
+                                  (drgnx-lint--walk (cdr form)
+                                                    (lambda (x) (when (and (memq (car-safe x) '(not null))
+                                                                           (eq (car-safe (car-safe (cdr-safe x))) 'process-live-p))
+                                                                  (setq hit t))))
+                                  hit))
+                       (push (format "%s: %s on process-live-p (wait on the sentinel's done flag: process-live-p turns nil before it has run)"
+                                     (file-relative-name f drgnx-dir) (car form))
+                             out)))))))))
+    (nreverse out)))
+
 (ert-deftest drgnx-lint/test-waits-read-a-done-flag-not-process-live-p ()
   ;; fb4ee8c (M3b-19): `process-live-p' is nil before the sentinel has run, so a wait on it races the sentinel.
   (should (equal (drgnx-lint--violations (drgnx-lint--files "test") #'drgnx-lint--wait-on-process-live-p) nil))
+  ;; also through a test's own wrapper of the wait (`drgnx-hub-client-test--wait')
+  (should (equal (drgnx-lint--waits-through-wrappers-on-process-live-p (drgnx-lint--files "test")) nil))
+  (let* ((dir (make-temp-file "drgnx-lint-wrap" t)) (f (expand-file-name "w.el" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file f
+            (insert "(defun w (pred) (drgnx-test-wait pred :secs 30))\n(defun w2 (pred) (w pred))\n"
+                    "(ert-deftest a/b () (w (lambda () (not (process-live-p p)))) (w2 (lambda () (process-get p :done))))\n"))
+          (should (= 1 (length (drgnx-lint--waits-through-wrappers-on-process-live-p (list f)))))
+          (with-temp-file f
+            (insert "(defun w (pred) (drgnx-test-wait pred :secs 30))\n(defun w2 (pred) (w pred))\n"
+                    "(ert-deftest a/b () (w2 (lambda () (not (process-live-p p)))))\n"))
+          (should (= 1 (length (drgnx-lint--waits-through-wrappers-on-process-live-p (list f)))))
+          ;; a wait for a process to start is no race with its sentinel
+          (with-temp-file f
+            (insert "(defun w (pred) (drgnx-test-wait pred :secs 30))\n"
+                    "(ert-deftest a/b () (w (lambda () (process-live-p p))))\n"))
+          (should-not (drgnx-lint--waits-through-wrappers-on-process-live-p (list f))))
+      (delete-directory dir t)))
   (let* ((dir (make-temp-file "drgnx-lint-wait" t))
          (bad (expand-file-name "bad.el" dir)) (good (expand-file-name "good.el" dir)))
     (unwind-protect

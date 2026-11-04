@@ -341,7 +341,8 @@ panel's rules on."
                 ;; the prompt after it clears the flag again
                 (should (drgnx-terminal-test--wait-until (lambda () (not (process-query-on-exit-flag proc)))))))
           ;; the shell may still be dying (the cleanup killed its terminal): not before it is gone, or HOME is not empty
-          (when shell-proc (drgnx-terminal-test--wait-until (lambda () (not (process-live-p shell-proc)))))
+          (when shell-proc
+            (condition-case nil (drgnx-test-wait-ended shell-proc :secs 5 :what "the shell's end") (ert-test-failed nil)))
           (delete-directory home t))))))
 
 (ert-deftest drgnx-terminal/the-fallback-scan-is-local-and-runs-once-per-pass ()
