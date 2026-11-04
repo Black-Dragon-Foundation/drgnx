@@ -148,9 +148,11 @@ that changed."
       (let ((alist (and (not why) (drgnx-shell-env-parse output (drgnx-shell-env--names)))))
         (if (not alist)
             (drgnx-shell-env--fail (or why "it printed no environment") callback)
-          (let ((changed (drgnx-shell-env-apply alist)))
+          (let ((changed (drgnx-shell-env-apply alist))
+                (new (not (equal alist drgnx-shell-env--last))))
             (setq drgnx-shell-env--last alist)
-            (when (member "PATH" changed) (drgnx-shell-env--tell-hub alist))
+            ;; also when this Emacs already had the login PATH (started from a terminal): the hub, a service, may not
+            (when (or new (member "PATH" changed)) (drgnx-shell-env--tell-hub alist))
             (when callback (funcall callback changed)))))
     (error (drgnx-shell-env--fail (error-message-string err) callback))))
 
@@ -164,7 +166,9 @@ that changed."
   "Ask your login shell ($SHELL) for its environment and take `drgnx-shell-env-names' (and the extra names) from
 it, without waiting: the process, or nil when skipped (a batch Emacs, Windows, DRGNX_NO_SHELL_ENV set) or it could
 not start.  The shell's input is closed at once and it is stopped after `drgnx-shell-env-timeout'; it never asks
-anything.  When PATH changed and a hub runs, the hub gets it too.  CALLBACK gets the names that changed; a failure is
+anything.  When the read gave something new (another answer than last time, or PATH changed here) and a hub runs,
+the hub gets it too, also when this Emacs already had the login PATH; a hub that connects before the read finishes
+is told by the read's finish.  CALLBACK gets the names that changed; a failure is
 a notice, said in the echo area when there is a CALLBACK (a command waits for its reply)."
   (unless (drgnx-shell-env--skip-reason)
     (condition-case err

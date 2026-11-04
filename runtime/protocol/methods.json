@@ -2662,7 +2662,7 @@
       "classes": [
         "user"
       ],
-      "doc": "a prompt to the session (queued or steering as its mode says)",
+      "doc": "a prompt to the session (queued or steering as its mode says; with if_free, only when it is free, else false)",
       "name": "agents/send",
       "params": {
         "$defs": {
@@ -2682,6 +2682,13 @@
         "properties": {
           "id": {
             "$ref": "#/$defs/Id"
+          },
+          "if_free": {
+            "description": "Only when the session is free (idle, not paused by a Stop, nothing queued): else nothing is queued, steered or\nsent and the answer is `false` (busy).  For the editor's own deliveries, which never join a running turn.",
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "text": {
             "$ref": "#/$defs/Prompt"

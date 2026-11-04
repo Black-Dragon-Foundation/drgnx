@@ -148,10 +148,11 @@ hub hands that permission request to the editor."
      (nreverse calls)))
 
 (ert-deftest drgnx-agents-mirror/deliver-sends-agents-send ()
-  ;; a free mirror takes the text as a new turn: one `agents/send', and t
+  ;; a free mirror takes the text as a new turn: one `agents/send' that the hub sends only if the session is free (the
+  ;; mirror may be stale), and t
   (let ((m (drgnx-agents--make :remote "s-d" :id "s-d" :status 'idle)) (took nil))
     (should (equal (drgnx-agents-mirror-test--calls (setq took (drgnx-agents-deliver m "go on")))
-                   '(("agents/send" :id "s-d" :text "go on"))))
+                   '(("agents/send" :id "s-d" :text "go on" :if_free t))))
     (should took))
   ;; one that is not free (busy, paused by a Stop, something queued) or is no mirror gets nothing
   (dolist (s (list (drgnx-agents--make :remote "s-d" :id "s-d" :status 'busy)
@@ -161,6 +162,21 @@ hub hands that permission request to the editor."
     (let ((took 'unset))
       (should-not (drgnx-agents-mirror-test--calls (setq took (drgnx-agents-deliver s "go on"))))
       (should-not took))))
+
+(ert-deftest drgnx-agents-mirror/deliver-says-when-the-hub-found-the-session-busy ()
+  ;; the mirror said idle, the hub's session was busy (a snapshot throttled away): the hub sent nothing and answered
+  ;; false, so the caller's DECLINED runs (it tries again when the session is free); an answer of true, or an error
+  ;; (said in the echo area), does not
+  (let ((m (drgnx-agents--make :remote "s-d" :id "s-d" :status 'idle :name "d")) (declined 0) (cb nil))
+    (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (_method _params f) (setq cb f)))
+              ((symbol-function 'drgnx-notify) #'ignore))
+      (drgnx-agents-deliver m "go on" (lambda () (cl-incf declined)))
+      (funcall cb t nil)
+      (should (= declined 0))
+      (funcall cb :false nil)
+      (should (= declined 1))
+      (funcall cb nil "boom")
+      (should (= declined 1)))))
 
 (ert-deftest drgnx-agents-mirror/steer-sends-steer ()
   ;; a steer is an `agents/send': the hub steers a busy session under mode `steer', else queues; t says the hub steers
@@ -316,6 +332,39 @@ hub hands that permission request to the editor."
         (funcall turn 3 2)
         (should (= 2 (cl-count 'turn-end events :key #'car)))
         (should (= 2 (cl-count 'turn-start events :key #'car)))))))
+
+(ert-deftest drgnx-agents-mirror/a-failed-turn-ends-at-its-error-entry ()
+  ;; a turn that fails writes an `error' entry (marked `stop': it ends the turn), not a `stop' one; with its busy
+  ;; status throttled away it must still run `turn-end', once; an error in the middle of a turn (a refused wait) is
+  ;; not marked and ends nothing
+  (let (events)
+    (drgnx-agents-mirror-test--hooks events
+      (drgnx-agents-mirror--apply-snapshot (drgnx-agents-mirror-test--snap "idle" "T#1"))
+      (let ((turn (lambda (seq i)
+                    (drgnx-agents-mirror--event
+                     "agent-entries" (list :id "h-t" :seq seq
+                                           :entries (list (list i '(:type "user" :text "go"))
+                                                          (list (1+ i) '(:type "error" :text "boom" :stop "Error"))))))))
+        (funcall turn 1 0)
+        (should (equal (mapcar #'car (reverse events)) '(start turn-start turn-end)))
+        (funcall turn 2 0)                  ; the same entries again: nothing
+        (should (= 3 (length events)))
+        (funcall turn 3 2)                  ; the next failed turn: one more
+        (should (= 2 (cl-count 'turn-end events :key #'car)))
+        (should (= 2 (cl-count 'turn-start events :key #'car))))
+      ;; a refused wait inside a turn: no end
+      (drgnx-agents-mirror--event "agent-entries" (list :id "h-t" :seq 4
+                                                        :entries (list (list 4 '(:type "error" :text "your job runs")))))
+      (should (= 2 (cl-count 'turn-end events :key #'car))))))
+
+(ert-deftest drgnx-agents-mirror/a-turn-the-status-ended-is-not-ended-again-by-its-error-entry ()
+  (let (events)
+    (drgnx-agents-mirror-test--hooks events
+      (dolist (status '("idle" "busy" "idle"))
+        (drgnx-agents-mirror--apply-snapshot (drgnx-agents-mirror-test--snap status "T#1")))
+      (drgnx-agents-mirror--event "agent-entries"
+                                  (list :id "h-t" :seq 1 :entries (list (list 0 '(:type "error" :text "boom" :stop "Error")))))
+      (should (equal (mapcar #'car (reverse events)) '(start turn-start turn-end))))))
 
 (ert-deftest drgnx-agents-mirror/a-turn-the-status-ended-is-not-ended-again-by-its-stop-entry ()
   (let (events)

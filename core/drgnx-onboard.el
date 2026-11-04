@@ -1231,12 +1231,15 @@ end: a program you chose earlier on the PATH keeps winning."
 (defun drgnx-onboard--claude-profile ()
   "Ask the hub whether the `claude' agent profile's program starts and answers ACP initialize (`agents/probe'; the hub
 starts and ends it, this Emacs starts no agent process): (t . TEXT) when it answers within `drgnx-onboard-agent-wait'
-seconds, else (nil . WHY).  Called by the step's command, never from a timer: it waits for the answer."
+seconds, else (nil . WHY).  Called by the step's command, never from a timer: it waits for the answer.
+The call's own deadline is that wait + 25 s, not + 5: the hub's worst case is the wait + 20 s (its sandbox status) +
+3 s, and calls on one connection are served in order, so a deadline that fell inside it would leave the editor's other
+calls queued behind a probe nobody waits for."
   (require 'drgnx-hub-client)
   (drgnx-onboard--say "Starting the claude profile's agent…")
   (condition-case err
       (let* ((r (drgnx-hub-call-sync "agents/probe" (list :profile "claude" :wait_s drgnx-onboard-agent-wait)
-                                     (+ drgnx-onboard-agent-wait 5)))
+                                     (+ drgnx-onboard-agent-wait 25)))
              (ok (plist-get r :ok)))
         (if (and ok (not (eq ok :false)))
             (let ((info (plist-get r :agent)))

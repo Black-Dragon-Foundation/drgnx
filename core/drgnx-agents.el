@@ -524,13 +524,15 @@ at all."
 
 (declare-function drgnx-hub-call "drgnx-hub-client")
 
-(defun drgnx-agents--remote (s method params)
+(defun drgnx-agents--remote (s method params &optional on-reply)
   "Ask the hub to do METHOD (with PARAMS) on mirror S's session; asynchronous, never waits.  An error is the reply to
-the command that asked (stop, answer, send): said in the echo area each time."
+the command that asked (stop, answer, send): said in the echo area each time.  ON-REPLY: called with the result when
+the hub answered without an error."
   (require 'drgnx-hub-client)
   (drgnx-hub-call method (append (list :id (drgnx-agent-session-remote s)) params)
-                  (lambda (_r err)
-                    (when err
+                  (lambda (r err)
+                    (if (not err)
+                        (when on-reply (funcall on-reply r))
                       (let ((text (format "agent %s: %s" (drgnx-agent-session-name s) err)))
                         (drgnx-notice-clear 'agents text)
                         (drgnx-notify 'agents 'warn text :id text :echo t))))))
@@ -556,10 +558,16 @@ leaves S's list at once, and the hub hears the answer when S is its session's mi
   (and (drgnx-agent-session-remote s) (eq (drgnx-agent-session-status s) 'idle) (not (drgnx-agent-session-paused s))
        (null (drgnx-agent-session-queue s)) t))
 
-(defun drgnx-agents-deliver (s text)
-  "Give TEXT to mirror S as a new turn (`agents/send') if it is free (`drgnx-agents-free-p'); t when it did.  Never
-queues, never steers, never interrupts, whatever S's mode — for drgnx's own deliveries."
-  (when (drgnx-agents-free-p s) (drgnx-agents--remote s "agents/send" (list :text text)) t))
+(defun drgnx-agents-deliver (s text &optional declined)
+  "Give TEXT to mirror S as a new turn (`agents/send') if it is free (`drgnx-agents-free-p'); t when the hub was asked.
+Never queues, never steers, never interrupts, whatever S's mode — for drgnx's own deliveries.  The mirror may be a
+snapshot behind (the hub sends a session's state at most every 50 ms), so the request says `if_free': a hub whose
+session is busy sends nothing and answers false, and then DECLINED is called (no arguments) so the caller can try
+again when the session is free."
+  (when (drgnx-agents-free-p s)
+    (drgnx-agents--remote s "agents/send" (list :text text :if_free t)
+                          (lambda (r) (when (and declined (memq r '(nil :false))) (funcall declined))))
+    t))
 
 (defun drgnx-agents-steer (s text)
   "Put TEXT into mirror S's running turn: `agents/send', and the hub steers when the profile's mode is `steer' and

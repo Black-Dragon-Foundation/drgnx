@@ -252,6 +252,43 @@
           (drgnx-work-collect-jobs)
           (should (equal (drgnx-work-rec--titles "task:/p.md#14") '("job in a worktree"))))))))
 
+(defmacro drgnx-work-rec--dated (secs &rest body)
+  "BODY with every commit dated SECS seconds from now."
+  (declare (indent 1))
+  `(let* ((date (format-time-string "%FT%TZ" (time-add nil ,secs) t))
+          (process-environment (append (list (concat "GIT_COMMITTER_DATE=" date) (concat "GIT_AUTHOR_DATE=" date))
+                                       process-environment)))
+     ,@body))
+
+(ert-deftest drgnx-work/a-job-first-seen-after-it-ended-still-gets-its-commits ()
+  ;; the editor was closed while the job ran: the first time it sees the job it is done.  Its commits are those on its
+  ;; own branch since it started (the hub keeps no start commit); what was there before it started is not its own
+  (drgnx-work-rec--with repo
+    (let* ((wt (concat repo ".wt/"))
+           (started (format-time-string "%FT%T%z" (time-add nil 30)))
+           (job (list :id "j16" :name "j" :task "task:/p.md#16" :status 'done :cwd wt :started started))
+           (drgnx-work--job-starts (make-hash-table :test #'equal)))
+      (drgnx-work-rec--git repo "worktree" "add" "-q" wt "-b" "w")
+      (drgnx-work-rec--dated 60 (drgnx-work-rec--commit wt "job work"))
+      (cl-letf (((symbol-function 'drgnx-exec-list) (lambda () (list job))))
+        (drgnx-work-collect-jobs)
+        (should (equal (drgnx-work-rec--titles "task:/p.md#16") '("job work")))))))
+
+(ert-deftest drgnx-work/a-job-s-commits-on-its-own-branch-count-before-they-are-merged ()
+  ;; seen running, then done with its commits only on its worktree's branch (the main checkout has not got them)
+  (drgnx-work-rec--with repo
+    (let* ((wt (concat repo ".wt/"))
+           (job (list :id "j18" :name "j" :task "task:/p.md#18" :status 'running :cwd wt
+                      :started (format-time-string "%FT%T%z" (time-subtract (current-time) 5))))
+           (drgnx-work--job-starts (make-hash-table :test #'equal)))
+      (drgnx-work-rec--git repo "worktree" "add" "-q" wt "-b" "w")
+      (cl-letf (((symbol-function 'drgnx-exec-list) (lambda () (list job))))
+        (drgnx-work-collect-jobs)
+        (drgnx-work-rec--dated 60 (drgnx-work-rec--commit wt "unmerged job work"))
+        (setq job (plist-put (copy-sequence job) :status 'done))
+        (drgnx-work-collect-jobs)
+        (should (equal (drgnx-work-rec--titles "task:/p.md#18") '("unmerged job work")))))))
+
 (ert-deftest drgnx-work/git-notes-follow-the-environment ()
   (drgnx-work-rec--with repo
     (let ((sha (drgnx-work-rec--commit repo "noted by the cli")) (default-directory repo) (drgnx-work-git-notes nil)

@@ -164,20 +164,32 @@ on a timer, never inside the process filter that saw the turn end."
 (declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
 
 (defvar drgnx-work--job-starts (make-hash-table :test #'equal)
-  "Job id → (:head SHA :repo DIR): the commit HEAD pointed at, and the repository, when a job that works on a task was
-first seen (the hub keeps neither).  Bounded: `drgnx-work-collect-jobs' drops the ids the hub no longer lists.")
+  "Job id → (:head SHA :repo DIR :late BOOL): the commit HEAD pointed at, and the repository, when a job that works on
+a task was first seen (the hub keeps neither), and whether it had ended by then (its HEAD then says nothing of where
+it began).  Bounded: `drgnx-work-collect-jobs' drops the ids the hub no longer lists.")
 
 (defun drgnx-work--job-start (job)
-  "JOB's (:head :repo) as first seen (`drgnx-work--job-starts'), read from its folder now when that was not yet."
+  "JOB's (:head :repo :late) as first seen (`drgnx-work--job-starts'), read from its folder now when that was not yet."
   (let ((id (plist-get job :id)))
     (or (gethash id drgnx-work--job-starts)
-        (puthash id (list :head (drgnx-work--head (plist-get job :cwd)) :repo (drgnx-work--main-repo (plist-get job :cwd)))
+        (puthash id (list :head (drgnx-work--head (plist-get job :cwd)) :repo (drgnx-work--main-repo (plist-get job :cwd))
+                          :late (and (memq (plist-get job :status) '(done failed stopped)) t))
                  drgnx-work--job-starts))))
+
+(defun drgnx-work--commits-since (dir to since)
+  "The commits on TO's own line (first parents) in DIR's repository committed at SINCE or later, newest first, at most
+`drgnx-work-collect-max' and one more (so that too many can be told): for a job first seen after it ended, whose start
+commit is unknown (`drgnx-work--new-commits' needs it)."
+  (when to
+    (seq-filter (lambda (c) (>= (nth 1 c) (- since 2)))
+                (drgnx-work--log dir "--first-parent" "-n" (number-to-string (1+ drgnx-work-collect-max)) to))))
 
 (defun drgnx-work-collect-jobs ()
   "Record the commits of the jobs that worked on a task and ended (each job once), in the repository
 the job started in (its worktree may be gone by now).  A job's start commit is HEAD of its folder when this first saw
-it (`drgnx-work--job-start'), its end commit HEAD of the repository now.  Through the hub: `graph/record' with the key
+it (`drgnx-work--job-start'), its end commit HEAD of its folder (its own branch) now, or of the repository when the
+folder is gone.  A job first seen after it ended has no known start: its commits are those on that line committed
+since the job's start time (`drgnx-work--commits-since').  Through the hub: `graph/record' with the key
 `job ID' (which the hub keeps, so a job is never collected twice), or the key alone (`graph/put-parsed') when there is
 nothing to record."
   (require 'drgnx-exec)
@@ -193,10 +205,15 @@ nothing to record."
           (when (and (memq (plist-get job :status) '(done failed stopped))
                      (not (sqlite-select (drgnx-work-db-read) "select 1 from meta where key = ?" (list key))))
             (let* ((repo (plist-get start :repo))
-                   (end (and repo (drgnx-work--head repo))))
+                   (cwd (plist-get job :cwd))
+                   ;; the job's own branch while its folder is there, else the repository's HEAD
+                   (end (and repo (or (and cwd (file-directory-p cwd) (drgnx-work--head cwd))
+                                      (drgnx-work--head repo)))))
               (when repo                               ; else: the repository may come back; try again later
-                (let ((new (drgnx-work--new-commits repo (plist-get start :head) end
-                                                    (if-let* ((s (plist-get job :started))) (float-time (date-to-time s)) 0))))
+                (let* ((since (if-let* ((s (plist-get job :started))) (float-time (date-to-time s)) 0))
+                       (new (if (plist-get start :late)
+                                (drgnx-work--commits-since repo end since)
+                              (drgnx-work--new-commits repo (plist-get start :head) end since))))
                   (if (and new (<= (length new) drgnx-work-collect-max))
                       (progn (drgnx-work-record-commits (plist-get job :task) repo new key)
                              (when (drgnx-work--notes-p) (dolist (c new) (drgnx-work--note repo (car c) (plist-get job :task)))))

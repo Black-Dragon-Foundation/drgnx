@@ -102,8 +102,9 @@ the transcript has.  A turn runs its hooks once, whichever of the status change 
       (when (drgnx-agent-session-task m) (drgnx-agents-mirror--task-hook m 'turn-end)))))
 
 (defun drgnx-agents-mirror--stops (m n)
-  "N new `stop' entries came into mirror M's transcript: each ends a turn that the status did not already end.  The hub
-sends a session's state at most every 50 ms, so a short turn can go by with no busy status in between."
+  "N new turn-ending entries (`stop', or the `error' of a failed turn) came into mirror M's transcript: each ends a turn
+that the status did not already end.  The hub sends a session's state at most every 50 ms, so a short turn can go by
+with no busy status in between."
   (let ((c (drgnx-agents-mirror--counts (drgnx-agent-session-remote m))))
     (dotimes (_ n)
       (cl-incf (aref c 2))
@@ -196,14 +197,21 @@ the hub).  The agent runs in the hub, so it keeps working when this Emacs closes
       ;; a start that failed leaves nothing for a hook function's list to hold on to
       (unless (drgnx-agent-session-remote s) (setf (drgnx-agent-session-status s) 'exited)))))
 
+(defun drgnx-agents-mirror--ends-turn-p (entry)
+  "Does transcript ENTRY end a turn: a `stop' entry, or the `error' entry of a turn that failed (the hub marks it with
+`stop'; an error in the middle of a turn, a refused wait, is not marked)?"
+  (let ((type (plist-get entry :type)))
+    (or (eq type 'stop) (and (eq type 'error) (plist-get entry :stop) t))))
+
 (defun drgnx-agents-mirror--apply-entries (m entries)
-  "Put ENTRIES ((INDEX ENTRY)…, as the hub's JSON arrays arrive) into mirror M's transcript.  The number of `stop'
-entries that were not in the transcript before."
+  "Put ENTRIES ((INDEX ENTRY)…, as the hub's JSON arrays arrive) into mirror M's transcript.  The number of entries
+that end a turn (`drgnx-agents-mirror--ends-turn-p': `stop', or a failed turn's `error') that were not in the
+transcript before."
   (let ((v (vconcat (drgnx-agent-session-entries m))) (stops 0))
     (mapc (lambda (pair)
             (when-let* ((read (drgnx-agents-mirror--decode 'drgnx-records-entry (elt pair 1))) (i (elt pair 0)))
               (when (>= i (length v)) (setq v (vconcat v (make-vector (- (1+ i) (length v)) nil))))
-              (when (and (eq (plist-get (car read) :type) 'stop) (not (eq (plist-get (aref v i) :type) 'stop)))
+              (when (and (drgnx-agents-mirror--ends-turn-p (car read)) (not (drgnx-agents-mirror--ends-turn-p (aref v i))))
                 (cl-incf stops))
               (aset v i (car read))))
           entries)
