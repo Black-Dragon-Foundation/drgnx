@@ -44,6 +44,7 @@ runtime/
 | `huginn` | a reader for the data subset of Emacs Lisp: literal values with byte spans, never evaluated, every reader macro refused; settings files and a serde deserializer (feature `serde`); generic ([settings.md](settings.md#the-data-subset)). `drgnx-ratatoskr` reads `settings.el` and the shipped `runtime-defaults.el` with it ([hub.md](hub.md#settings)) |
 | `hermod` | an ACP client on `agent-client-protocol-schema`'s types and runstav's line codec (no SDK role framework): stamped updates, message ids, fork at a message, exactly-once exit; generic (agent system part 1, Task 1) |
 | `saga` | the org folder's record formats (plans, ledgers, DEFERRED, the build board, `board.org`) parsed and rendered back byte-exact, turned into graph operations; pure, `pulldown-cmark` for Markdown (agent system part 1, Tasks 5, 6, 14) |
+| `skuld` | test support, never shipped: every order of a pure core, and the one real-time wait Rust tests may use ([below](#every-order-skuld)); crates name it under `[dev-dependencies]` only |
 | `domr` (formerly `drgnx-conformance`; lives in `runtime/conformance/`) | the conformance harness (this page) |
 
 The protocol is still called "the hub protocol", and the socket, cap and lock files keep their `hub-HASH.*` names.
@@ -467,6 +468,58 @@ TCP or a session socket, the gateway on its listener and `ratatoskr-mock llm` as
 last step, streaming first chunk first, spend once, the budget, a hang-up, need-keys, keep-alive, the drained
 refusal, the connection cap, the editor's pass-through). It finds the mock at `RATATOSKR_MOCK`, else beside its own
 binary, so build it first: `cargo build -p domr --bin ratatoskr-mock` (a workspace `cargo test` builds it anyway).
+
+## Every order: skuld
+
+`crates/skuld` is the Rust half of the `orders` test pattern (the Lisp half is `drgnx-test-every-order`). Code whose
+correctness depends on the order of its inputs is split into a **pure core** (no I/O, clock or threads) and a thin
+shell that does the I/O; a test runs the core in every order its inputs can arrive in, so an ordering bug fails at
+write time instead of flaking later. Crates name `skuld` under `[dev-dependencies]` only.
+
+```rust
+#[derive(Clone, Debug)]
+enum Ev { Data(u8), Eof, Closed }
+skuld::events!(Ev { Data, Eof, Closed });   // the declared kinds: every one must be produced
+
+impl skuld::Core for Conn {
+    type Event = Ev;
+    fn step(&mut self, ev: Ev) -> Vec<Ev> { /* … */ }   // returns the events its effects raise
+}
+
+let mut p = skuld::Partial::new();
+let socket = p.source("socket", vec![Ev::Data(1), Ev::Eof]);
+let client = p.source("client", vec![Ev::Data(2)]);
+p.before((client, 0), (socket, 1));   // a claim the shell keeps; its own test checks it
+skuld::every_order(&p, skuld::Bound::default(), Conn::new, |conn, order| conn.check(order));
+```
+
+- **The inputs are a partial order:** sources, each in its own order, plus happens-before edges across them
+  (`before(a, b)`: event `a.1` of source `a.0` before event `b.1` of source `b.0`). Each edge is a claim about the
+  shell; write it next to the test and test it in the shell's tests.
+- **Effects re-enter:** the events a step returns are fed back, depth first, before the next external event.
+  `check` gets the core and the external order; a failure message also shows everything fed.
+- **The bound** (`Bound::default()`): every order while there are at most 20,000 of them (`exhaustive_max`; two
+  sources of 8 events give C(16,8) = 12,870). Above that, every order within 2 delays (`delays`) of the natural
+  one: the natural scheduler always takes the lowest-numbered source whose next event is enabled, and a delay skips
+  the source it would take, once (Emmi, Qadeer and Rakamarić's delay-bounded scheduling). Two chains of 9 events
+  have 48,620 orders, so they run the 55 within two delays. `skuld::count(&p, cap)` counts the orders exactly up to
+  `cap` (dynamic programming over the sources' positions); the `Report` says how many ran and in which `Mode`.
+- **Random orders on top:** `random_orders(&p, seeds, make, check)` runs one order per seed, drawn uniformly from
+  every order (not only the bounded ones) by proptest's ChaCha `TestRng`; the same seed gives the same order.
+- **No vacuous pass:** a cycle in the edges ("the edges form a cycle"), no events or no seeds ("no order to run"), a
+  declared kind that no order produced (external or re-entrant: "the author forgot the EOF" fails), and re-entry
+  deeper than `reentry_depth` (64) each panic with the cause. A failing check panics with
+  `order I of N (MODE): [events…], fed: […]: MESSAGE`, and a random one names its seed.
+- **What a pass means:** the core is right in every order of the declared events within this bound; nothing about
+  events the test did not declare, or about the shell beyond its edges.
+
+`skuld::wait_until(what, secs, f)` is the one real-time wait Rust tests may use: it polls `f` every 10 ms and panics
+naming `what` after `secs`. The deadline only bounds a failure, so a test never widens it to pass.
+
+`cargo test -p skuld` checks the helper against answers known exactly: the closed forms (12,870 for 2×8, 1,680 for
+3×3, 63,063,000 for 4×4, binomials up to 7×7, the cap), and brute force over every interleaving for the orders an
+exhaustive or a delay-bounded run visits (with and without edges, two and three sources), each once; the re-entry
+order, each vacuous run, the printed order, a seed's repeat, and a uniformity check that a per-step coin would fail.
 
 ## The conformance harness
 
