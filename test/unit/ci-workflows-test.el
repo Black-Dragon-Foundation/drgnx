@@ -114,6 +114,54 @@
       (should (eql 0 (call-process "bash" nil t nil script "--self-test")))
       (should (string-search "timing-lane self-test: ok" (buffer-string))))))
 
+(ert-deftest drgnx-ci/no-job-runs-on-a-moving-image-label ()
+  ;; `ubuntu-latest' moves to 26.04 by 2026-11-19: every job names its image
+  (dolist (yml (drgnx-ci-test--workflows-and-actions
+                '("ci.yml" "macos.yml" "gui.yml" "drgnx-tiers.yml" "tty.yml" "images.yml" "bootstrap.yml" "runtime.yml")))
+    (skip-unless yml)
+    (should-not (string-match-p "runs-on:.*-latest" yml))))
+
+(ert-deftest drgnx-ci/the-escape-suite-also-runs-on-26.04-without-the-sysctl ()
+  (let* ((rt (drgnx-ci-test--yml "runtime.yml")) (job (and rt (drgnx-ci-test--job rt "escape-host"))))
+    (skip-unless job)
+    (drgnx-ci-test--has job "ubuntu-26.04, ubuntu-26.04-arm"
+                        "/usr/bin/bwrap" "-Dtests=false")
+    ;; the sysctl step is for the 24.04 legs only
+    (let ((step (string-search "AppArmor's restriction lifted" job)))
+      (should step)
+      (should (string-search "if: ${{ !startsWith(matrix.os, 'ubuntu-26.04') }}" job step)))
+    ;; one report and one cache per image
+    (drgnx-ci-test--has job "escape-report-host-${{ matrix.os }}" "-escape-${{ matrix.os }}-")))
+
+(ert-deftest drgnx-ci/every-rust-timing-test-is-in-the-timing-list ()
+  ;; the Rust tests marked #[ignore = "timing: …"] run in the timing lane's Rust step and nowhere else
+  (let ((list-file (expand-file-name "test/timing-rust.txt" drgnx-ci-test--root))
+        (src (expand-file-name "runtime" drgnx-ci-test--root)) found listed)
+    (skip-unless (and (file-exists-p list-file) (file-directory-p src)))
+    (dolist (f (directory-files-recursively src "\\.rs\\'"))
+      (unless (string-match-p "/target/" f)
+        (with-temp-buffer
+          (insert-file-contents f)
+          (while (re-search-forward "#\\[ignore = \"timing:[^]]*\\]\\s-*\\(?:async \\)?fn \\([a-z0-9_]+\\)" nil t)
+            (push (match-string 1) found)))))
+    (should found)
+    (with-temp-buffer
+      (insert-file-contents list-file)
+      (while (not (eobp))
+        (let ((line (buffer-substring (line-beginning-position) (line-end-position))))
+          (unless (string-match-p "\\`\\s-*\\(#\\|\\'\\)" line)
+            (push (nth 2 (split-string line)) listed)))
+        (forward-line 1)))
+    (should (equal (sort (copy-sequence found) #'string<) (sort (copy-sequence listed) #'string<)))))
+
+(ert-deftest drgnx-ci/the-timing-job-runs-the-rust-timing-tests-report-only ()
+  (let* ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")) (script (expand-file-name "test/timing-rust.sh" drgnx-ci-test--root)))
+    (skip-unless (and tiers (file-exists-p script)))
+    (drgnx-ci-test--has (drgnx-ci-test--job tiers "timing") "test/timing-rust.sh --report" "drgnx-timing-rust-report")
+    (should (file-executable-p script))
+    ;; report only: the script exits 0 whatever the tests said
+    (with-temp-buffer (insert-file-contents script) (should (string-search "\nexit 0\n" (buffer-string))))))
+
 (ert-deftest drgnx-ci/linux-unit-jobs-fail-a-det-test-that-uses-real-time ()
   ;; the runtime audit on and failing (docs/develop/harness.md, "The audit"): with the pre-flight off, CI is where a
   ;; det test that really sleeps, waits or starts a process turns red
