@@ -37,6 +37,9 @@ with a throwaway profile.
 `npx playwright test` runs, which launch their own browsers. Use Browser: Agent's Page and Browser: Test Report for
 those.
 
+**Sandboxed agents cannot drive it yet:** a sandboxed session's network reaches only the hub's proxy to its AI
+provider, so it cannot reach the browser's port. A browser for sandboxed agents is being designed.
+
 ## The Live view
 
 The view shows the page through Chrome DevTools Protocol screencast frames (JPEG, quality 60, as wide as the
