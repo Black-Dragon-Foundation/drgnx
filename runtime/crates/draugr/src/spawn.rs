@@ -370,7 +370,23 @@ impl Child {
 
     /// The last [`STDERR_TAIL_CHARS`] characters the child wrote to stderr so far (invalid UTF-8 replaced).
     pub fn stderr_tail(&self) -> String {
-        let bytes = self.tail.lock().unwrap_or_else(|e| e.into_inner());
+        self.stderr().get()
+    }
+
+    /// The same tail as a handle that outlives a move of the child (into a task that waits for it).
+    pub fn stderr(&self) -> StderrTail {
+        StderrTail(self.tail.clone())
+    }
+}
+
+/// A child's stderr tail, readable from anywhere while the child runs and after ([`Child::stderr`]).
+#[derive(Clone, Debug)]
+pub struct StderrTail(Arc<Mutex<Vec<u8>>>);
+
+impl StderrTail {
+    /// [`Child::stderr_tail`].
+    pub fn get(&self) -> String {
+        let bytes = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let text = String::from_utf8_lossy(&bytes);
         let skip = text.chars().count().saturating_sub(STDERR_TAIL_CHARS);
         text.chars().skip(skip).collect()

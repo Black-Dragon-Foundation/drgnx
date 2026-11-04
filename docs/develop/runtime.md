@@ -508,8 +508,9 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 
 **Tags** (`requires`): `v1` (hello v1: every row), `sudo` (euid 0, or `sudo -n true` succeeds), `test-hooks` (the
 binary's `version --json` says `"test_hooks": true`), `linux`, `macos`, `perf`, `agent-locks`, `podman` (`podman` is on
-the PATH; an excused skip otherwise). A tag that is not in this list is a parse error naming it. A row whose
-requirement is missing is skipped.
+the PATH; an excused skip otherwise), `real-sandbox` (the binary has **no** test hooks and its `sandbox check --json`
+says `ok`; an excused skip otherwise, with the reason: [the real-start rows](#the-real-start-rows)). A tag that is not in
+this list is a parse error naming it. A row whose requirement is missing is skipped.
 
 **Known reds** (`"pending": "REASON"` in the header, REASON naming the task that turns it green): the row runs, and a
 failure is listed as `PENDING` and counted apart (`N pending` in the summary), never as a failure; a row that passes
@@ -695,6 +696,19 @@ Paths: the agent sockets are `<root>/run/drgnx/s/SID/hub.sock`; past 103 bytes (
 
 `test/conformance/class-matrix.json` is not a row: it is the hand-written class table (`{method: [classes]}`) that the
 registry's test and the `class_matrix` step read.
+
+### The real-start rows
+
+A test-hooks hub starts every agent session unsandboxed (`spawn_spec`'s test launch), so no other row runs the launch a
+user gets. `real-start/*` rows (`requires` `real-sandbox`) run against a **release** hub on a host whose sandbox starts:
+`cargo build --release -p drgnx-ratatoskr -p domr`, then `domr --hub-bin runtime/target/release/ratatoskr --scenarios
+test/conformance --only 'real-start/*' --require-all` (a Linux host with bwrap and user namespaces, a VM, or a podman
+container with `--security-opt unmask=ALL`). Against a test-hooks hub, or where `sandbox check` fails, they are
+excused skips that name the reason.
+
+| Row | Proves |
+|---|---|
+| `an-agent-starts-sandboxed` | the editor's shape (a project cwd, no task) through `launch::spawn_chat`, Gleipnir's validation and the sandbox: the mock agent is a link in `~/.local/bin` to a versioned install under `~/.local/share/claude/versions` (Claude's own layout), so the [toolchain roots](gleipnir.md#toolchain-roots) must be bound for it to exec; it answers a prompt, cannot write the home, `agents/get` says `enforced: true`, and `agents/stop` leaves no process and no session dir |
 
 ### The perf rows
 

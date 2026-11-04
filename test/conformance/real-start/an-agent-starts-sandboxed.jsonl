@@ -1,0 +1,22 @@
+{"scenario": "real-start/an-agent-starts-sandboxed", "requires": ["v1", "linux", "real-sandbox"], "doc": "A release hub (no test hooks) starts an agent for real: agents/start goes through the sandboxed launch, Gleipnir's validation and bwrap (or the reduced tier). The agent's CLI lives under the home as Claude's does, a link in ~/.local/bin to a versioned install, so the sandbox must bind the toolchain roots to exec it. The editor's shape: a project cwd and no task. The agent answers a prompt, cannot write the home, agents/get says the session is enforced, and agents/stop leaves no process and no session dir."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "set -e; mkdir -p $ROOT/project $HOME/.local/bin $HOME/.local/share/claude/versions/9.9.9; cp $MOCK $HOME/.local/share/claude/versions/9.9.9/ratatoskr-mock; ln -s $HOME/.local/share/claude/versions/9.9.9/ratatoskr-mock $HOME/.local/bin/ratatoskr-mock; echo readme > $ROOT/project/README"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"ratatoskr-mock\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "env": {"PATH": "$HOME/.local/bin:/usr/bin:/bin"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/project"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "hello\ntool:exec cat README; touch $HOME/x"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-entries", "data": {"id": "$sid", "seq": "$number", "entries": {"$contains": [["$any", {"type": "stop"}]]}}}, "within_ms": 20000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/get", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"session": {"id": "$sid", "status": "idle", "enforced": true, "role": "chat"}, "entries": {"$contains": [{"type": "user", "text": "$string"},{"type": "agent", "text": "$string"}, {"type": "stop"}]}}}}
+{"do": "file", "path": "$HOME/x", "exists": false}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/stop", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": "$any"}, "within_ms": 10000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "pgrep -f '$HOME/.local/bin/ratatoskr-moc[k]'"], "expect_code": 1, "retry_ms": 10000}
+{"do": "file", "path": "$SOCKET_DIR/s/$sid", "exists": false}

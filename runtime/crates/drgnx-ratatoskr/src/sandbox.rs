@@ -777,15 +777,164 @@ pub fn tmp_dir(env: &Env) -> PathBuf {
         .map_or_else(|| PathBuf::from("/tmp"), PathBuf::from)
 }
 
-/// The Gleipnir spec of one agent session: only `shape.write` (and the CLI's login dir) writable, `shape.read` and
-/// the system readable, the lock's `protected_ro` pinned read-only, its session dir (`hub.sock`, and `proxy.sock`
-/// unless the network is open) read-only, the network the cell's: the proxy through the relay, or the host's.  A plan
-/// on the gateway's socket (`LaunchPlan::gateway`) gets a second relay port, to `gateway.sock`, with
-/// `ANTHROPIC_BASE_URL` on it and loopback in `NO_PROXY`; it needs an isolated network.  The program's environment is
-/// a short base, the proxy's (and the gateway's) variables, and the lock's `env` last (but its `ANTHROPIC_BASE_URL`
-/// on a gateway plan).  `scratch` is the
-/// session's private temp parent.  The session dir is made here (`paths::make_session_dir`, which does nothing to one
-/// that is there); the sockets in it need not exist yet.  There is no unsandboxed spec: nothing here builds one.
+/// The `PATH` a session gets when the hub's environment has none.
+const DEFAULT_PATH: &str = "/usr/local/bin:/usr/bin:/bin";
+
+/// What a session reads of the user's toolchains (docs/develop/gleipnir.md, "Toolchain roots"), and its program.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Toolchain {
+    /// The read-only roots under the home: bin dirs and install roots, never a whole tool home.
+    pub read: Vec<PathBuf>,
+    /// The credential files inside them (the full tier and macOS; the reduced tier cannot hide inside a granted
+    /// root, so it leaves a root that holds one out instead).
+    pub hide: Vec<PathBuf>,
+    /// The program to run: its `PATH` hit (or its absolute path), with the folder as its true name and the file
+    /// name kept (a link keeps the name its program may go by).
+    pub program: PathBuf,
+}
+
+/// The toolchain roots `path` (a `PATH` value) leads into under `ctx.home`, and where `program` (the profile's
+/// command: a name looked up on `path`, or an absolute path) is.  The program's own folder counts as a `PATH` entry, so a
+/// link there leads to its install (`~/.local/bin/claude` → `~/.local/share/claude/versions/V/`).  Each root passes
+/// validation's read rules for `target` (`gleipnir::toolchain::readable`); drgnx's data dir and checkout are never one.
+/// The program is refused, naming its path, when it is not found, or when the sandbox would not see it: the file, or its
+/// link's target, outside every root, every path in `granted` (the session's own reads and writes) and the system's
+/// trees.
+pub fn toolchain(
+    env: &Env,
+    ctx: &Context,
+    path: &str,
+    program: &OsStr,
+    granted: &[PathBuf],
+    tier: gleipnir::Tier,
+    target: gleipnir::Target,
+) -> Result<Toolchain, Refusal> {
+    use gleipnir::toolchain;
+    let refused = |p: &Path, why: &str| Refusal {
+        rule: Rule::Setup,
+        path: Some(p.to_path_buf()),
+        message: format!("the agent's program {}: {why}", p.display()),
+    };
+    let path_dirs: Vec<PathBuf> = path
+        .split(':')
+        .filter(|d| d.starts_with('/'))
+        .map(PathBuf::from)
+        .collect();
+    let named = Path::new(program);
+    let hit = if program.as_bytes().contains(&b'/') {
+        if !named.is_absolute() {
+            return Err(refused(
+                named,
+                "a command with a slash must be an absolute path",
+            ));
+        }
+        named.to_path_buf()
+    } else {
+        path_dirs
+            .iter()
+            .map(|d| d.join(named))
+            .find(|p| is_executable(p))
+            .ok_or_else(|| refused(named, "not found on PATH"))?
+    };
+    // the folder as its true name (a PATH entry that is a link is not there inside), the file name as it is
+    let program = match (hit.parent().and_then(true_name), hit.file_name()) {
+        (Some(dir), Some(name)) => dir.join(name),
+        _ => return Err(refused(&hit, "its folder cannot be named")),
+    };
+    let real = std::fs::canonicalize(&program).map_err(|e| refused(&program, &format!("{e}")))?;
+    let mut dirs = path_dirs;
+    if let Some(dir) = program.parent().filter(|d| !dirs.iter().any(|p| p == d)) {
+        dirs.push(dir.to_path_buf());
+    }
+    let mut exclude = vec![paths::data_dir(env)];
+    exclude.extend(
+        env.vars
+            .get("DRGNX_DIR")
+            .filter(|v| v.starts_with('/'))
+            .map(PathBuf::from),
+    );
+    let mise = env
+        .vars
+        .get("MISE_DATA_DIR")
+        .filter(|v| v.starts_with('/'))
+        .map(PathBuf::from)
+        .or_else(|| {
+            env.vars
+                .get("XDG_DATA_HOME")
+                .filter(|v| v.starts_with('/'))
+                .map(|d| Path::new(d).join("mise"))
+        });
+    let roots = toolchain::roots(&dirs, &ctx.home, mise.as_deref(), &exclude);
+    let mut roots = toolchain::readable(roots, ctx, target);
+    let mut hide = toolchain::hide_list(&roots);
+    if tier == gleipnir::Tier::Reduced {
+        // no mount namespace: a hide inside a granted root is refused, so a root holding a credential file stays out
+        roots
+            .dirs
+            .retain(|d| !hide.iter().any(|h| h.starts_with(d)));
+        roots.files.retain(|f| !hide.contains(f));
+        hide.clear();
+    }
+    let seen = |p: &Path| {
+        roots.dirs.iter().chain(granted).any(|r| p.starts_with(r))
+            || roots.files.iter().any(|f| f == p)
+            || (!p.starts_with(&ctx.home) && system_reads(target).iter().any(|s| p.starts_with(s)))
+    };
+    for p in [&program, &real] {
+        if !seen(p) || hide.iter().any(|h| h == p) {
+            return Err(refused(
+                p,
+                "the sandbox does not show it (only bin folders and install roots under the home are bound, and \
+                 a mise shim is not one: put the tool's own folder on PATH or name the program by its full path)",
+            ));
+        }
+    }
+    let mut read = roots.dirs;
+    read.extend(roots.files);
+    Ok(Toolchain {
+        read,
+        hide,
+        program,
+    })
+}
+
+/// An executable regular file (a link followed).
+fn is_executable(p: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+/// The system trees a sandbox of `target` shows read-only (macOS: every path outside the home counts; Seatbelt's
+/// base policy reads the system).
+fn system_reads(target: gleipnir::Target) -> Vec<PathBuf> {
+    let names: Vec<&str> = match target {
+        gleipnir::Target::LinuxBwrap => {
+            let mut v = vec!["/usr"];
+            v.extend(gleipnir::bwrap::SYSTEM_READS);
+            v
+        }
+        gleipnir::Target::LinuxReduced => gleipnir::landlock::REDUCED_SYSTEM_ROOTS.to_vec(),
+        gleipnir::Target::Macos => vec!["/"],
+    };
+    names.into_iter().map(PathBuf::from).collect()
+}
+
+/// A session's spec ([`session_spec`]) and the program it runs ([`Toolchain::program`]).
+#[derive(Debug, Clone)]
+pub struct SessionSpec {
+    pub spec: gleipnir::Spec,
+    pub program: PathBuf,
+}
+
+/// The Gleipnir spec of one agent session: only `shape.write` (and the CLI's login dir) writable, `shape.read`, the
+/// [`toolchain`] roots and the system readable (the toolchains' credential files hidden), the lock's `protected_ro`
+/// pinned read-only, its session dir (`hub.sock`, and `proxy.sock` unless the network is open) read-only, the network
+/// the cell's: the proxy through the relay, or the host's.  A plan on the gateway's socket (`LaunchPlan::gateway`) gets
+/// a second relay port, to `gateway.sock`, with `ANTHROPIC_BASE_URL` on it and loopback in `NO_PROXY`; it needs an
+/// isolated network.  The program's environment is a short base, the proxy's (and the gateway's) variables, and the
+/// lock's `env` last (but its `ANTHROPIC_BASE_URL` on a gateway plan).  `scratch` is the session's private temp
+/// parent.  The session dir is made here (`paths::make_session_dir`, which does nothing to one that is there); the
+/// sockets in it need not exist yet.  There is no unsandboxed spec: nothing here builds one.
 pub fn session_spec(
     env: &Env,
     ctx: &Context,
@@ -794,7 +943,7 @@ pub fn session_spec(
     scratch: &Path,
     tier: gleipnir::Tier,
     target: gleipnir::Target,
-) -> Result<gleipnir::Spec, Refusal> {
+) -> Result<SessionSpec, Refusal> {
     use crate::agents::launch::NetCell;
     use gleipnir::{Bind, Layers, Mode, Net, RelayPort, Spec};
     let malformed = |message: String| Refusal {
@@ -802,6 +951,10 @@ pub fn session_spec(
         path: None,
         message,
     };
+    let command = plan
+        .argv
+        .first()
+        .ok_or_else(|| malformed("the profile has no command".into()))?;
     // made here: a new session's id has no MCP session or agent socket yet, and `run`'s source must exist
     let run = paths::make_session_dir(env, &paths::socket_path(env), &shape.sid)
         .map_err(|e| malformed(format!("session dir: {e}")))?;
@@ -811,6 +964,13 @@ pub fn session_spec(
     // The CLI's own login dir, for it alone (its token refreshes in place); never the home.
     write.extend(plan.login_dir.iter().filter(|d| d.exists()).cloned());
     let mut read = shape.read.clone();
+    let path = env
+        .vars
+        .get("PATH")
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_PATH.into());
+    let granted: Vec<PathBuf> = read.iter().chain(&write).cloned().collect();
+    let tools = toolchain(env, ctx, &path, command, &granted, tier, target)?;
     let (pinned, made_here) = pin_protected(&shape.cwd, &plan.protected_ro)?;
     if !made_here.is_empty() {
         use std::io::Write;
@@ -826,6 +986,7 @@ pub fn session_spec(
         record.map_err(|e| malformed(format!("{}: {e}", scratch.display())))?;
     }
     read.extend(pinned.iter().cloned());
+    read.extend(tools.read);
     let binds = pinned
         .iter()
         .map(|p| Bind {
@@ -839,13 +1000,7 @@ pub fn session_spec(
     let proxy = run.join(paths::SESSION_PROXY_SOCKET);
     let mut sockets = vec![hub];
     let mut vars: Vec<(String, String)> = vec![
-        (
-            "PATH".into(),
-            env.vars
-                .get("PATH")
-                .cloned()
-                .unwrap_or_else(|| "/usr/local/bin:/usr/bin:/bin".into()),
-        ),
+        ("PATH".into(), path),
         ("HOME".into(), ctx.home.to_string_lossy().into_owned()),
         ("TMPDIR".into(), tmp.to_string_lossy().into_owned()),
     ];
@@ -906,10 +1061,10 @@ pub fn session_spec(
             .filter(|(k, _)| !(plan.gateway && k == "ANTHROPIC_BASE_URL"))
             .cloned(),
     );
-    Ok(Spec {
+    let spec = Spec {
         read,
         write,
-        hide: vec![],
+        hide: tools.hide,
         sockets,
         binds,
         home: None,
@@ -924,6 +1079,10 @@ pub fn session_spec(
         tmp: Some(tmp),
         layers: Layers::for_target(target),
         extra_tcp_ports: vec![],
+    };
+    Ok(SessionSpec {
+        spec,
+        program: tools.program,
     })
 }
 

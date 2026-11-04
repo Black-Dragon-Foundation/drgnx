@@ -720,7 +720,7 @@ fn project_read_allowed(kind: launch::Kind, eff: &norn::matrix::Effective) -> Re
 /// and `test-hooks` builds have it (the mock agent lives outside any sandbox's reach); a shipped build always goes
 /// through `launch::spawn` and Gleipnir.
 #[cfg(any(test, feature = "test-hooks"))]
-fn spawn_spec(
+async fn spawn_spec(
     shell: &crate::shell_env::ShellEnv,
     p: &AgentProfile,
     plan: &plock::LaunchPlan,
@@ -768,7 +768,7 @@ fn spawn_spec(
 /// directory (`launch::scratch_dir`) is the plain one; a chat in a project reads the project and writes its scratch
 /// directory only.  The network is the provider's alone: `Open` is never granted here.
 #[cfg(not(any(test, feature = "test-hooks")))]
-fn spawn_spec(
+async fn spawn_spec(
     shell: &crate::shell_env::ShellEnv,
     _: &AgentProfile,
     plan: &plock::LaunchPlan,
@@ -786,19 +786,22 @@ fn spawn_spec(
 > {
     let env = shell.paths_env();
     let launched = match launch::kind(role, cwd, scratch) {
-        launch::Kind::Plain => launch::spawn_plain(&env, plan, sid),
-        launch::Kind::Chat => launch::spawn_chat(&env, plan, sid, cwd),
-        launch::Kind::Worktree => launch::spawn(
-            &env,
-            plan,
-            &launch::SandboxReq {
-                sid: sid.to_string(),
-                worktree: cwd.to_path_buf(),
-                read: Vec::new(),
-                net: SESSION_NET,
-                role,
-            },
-        ),
+        launch::Kind::Plain => launch::spawn_plain(&env, plan, sid).await,
+        launch::Kind::Chat => launch::spawn_chat(&env, plan, sid, cwd).await,
+        launch::Kind::Worktree => {
+            launch::spawn(
+                &env,
+                plan,
+                &launch::SandboxReq {
+                    sid: sid.to_string(),
+                    worktree: cwd.to_path_buf(),
+                    read: Vec::new(),
+                    net: SESSION_NET,
+                    role,
+                },
+            )
+            .await
+        }
     }
     .map_err(|r| refuse(&format!("the sandbox refused the launch: {}", r.message)))?;
     Ok((launched.spec, launched.status, None))
@@ -914,7 +917,7 @@ pub(super) async fn prepare(
     let scratch = launch::scratch_dir(&runstav::paths::Env::process(), sid).unwrap_or_default();
     project_read_allowed(launch::kind(role, cwd, &scratch), &eff)?;
     let (spec, status, unsandboxed) =
-        spawn_spec(&front.shell_env, profile, &plan, &scratch, cwd, sid, role)?;
+        spawn_spec(&front.shell_env, profile, &plan, &scratch, cwd, sid, role).await?;
     Ok(Prepared {
         spec,
         status,
@@ -1226,10 +1229,12 @@ async fn launch(
         .await
         .map_err(|e| internal(e.to_string()))?;
     let kill = || draugr::kill_group(conn.pid(), Duration::ZERO, &draugr::RealSignaller);
-    // The sandbox helper reports on a pipe; a launch whose status is not read hangs (Task 10).
+    // The sandbox helper reports on a pipe; a launch whose status is not read hangs (Task 10).  A start that fails
+    // before the helper speaks says why on stderr (bwrap's own message).
     if let Some(fd) = prep.status {
+        let stderr = conn.stderr();
         let read = tokio::task::spawn_blocking(move || {
-            gleipnir::read_status(fd, &String::new, Duration::from_secs(20))
+            gleipnir::read_status(fd, &|| stderr.get(), Duration::from_secs(20))
         })
         .await;
         match read {
@@ -1280,7 +1285,15 @@ async fn launch(
         Ok(x) => x,
         Err(e) => {
             kill().await;
-            return Err(internal(format!("{}: {e}", profile.name)));
+            // an agent that never answered (its program not found inside the sandbox, a crash) says why on stderr
+            let last = conn.stderr().get();
+            let why = last
+                .lines()
+                .map(str::trim)
+                .rfind(|l| !l.is_empty())
+                .map(|l| format!(" ({})", super::transcript::redact(l)))
+                .unwrap_or_default();
+            return Err(internal(format!("{}: {e}{why}", profile.name)));
         }
     };
     if prep.plan.enforced == plock::Enforced::Yes

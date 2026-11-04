@@ -177,8 +177,13 @@ not count), so a busy hub is never restarted.
 - **Spawning:** every child leads its own process group, gets SIGPIPE back to ignored before `exec` (std resets it
   to the default; a write to a pipe whose reader left must be an error), has stdin
   `/dev/null` unless the caller wants a pipe, and stdout and stderr piped. The last 8000 characters of stderr are
-  kept (`Child::stderr_tail`). `Child::wait` reports the exit status once; later calls return nothing. There is no
-  `PR_SET_PDEATHSIG`: it fires when the forking *thread* exits, and tokio's threads come and go.
+  kept (`Child::stderr_tail`; `Child::stderr` is a `StderrTail` handle to the same text that outlives a move of the
+  child, so a caller can read it from another thread while a task waits for the exit). `Child::wait` reports the exit
+  status once; later calls return nothing. There is no `PR_SET_PDEATHSIG`: it fires when the forking *thread* exits,
+  and tokio's threads come and go. Sandboxed children start from one long-lived thread instead (`spawn_pinned`):
+  bwrap's `--die-with-parent` and the inner helper's parent-death signal would otherwise fire when a pool thread
+  retires. hermod's `Conn::spawn` (every agent session and `agents/probe`) always uses it, and `Conn::stderr` gives the
+  hub the agent's stderr before the agent speaks, for `gleipnir::read_status`.
 - **Start times:** `start_time(pid)` is field 22 of `/proc/PID/stat` on Linux (clock ticks since boot, read after
   the last `)` of the command name) and `proc_pidinfo`'s start in microseconds on macOS. `boot_id()` is Linux's
   `/proc/sys/kernel/random/boot_id` and macOS's `kern.bootsessionuuid` (the pid of a job is checked against the boot it started in).

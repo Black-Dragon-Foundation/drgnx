@@ -297,3 +297,76 @@ async fn unknown_notifications_are_ignored_unknown_requests_get_32601() {
         "{stderr}"
     );
 }
+
+/// The stderr a child wrote before it said anything is readable while it runs (a sandbox's complaint before the
+/// status line), from any thread.
+#[tokio::test]
+async fn stderr_is_readable_while_the_child_runs() {
+    let (conn, _rx) = start("echo 'bwrap: no permission' >&2; cat >/dev/null", opts()).await;
+    let tail = conn.stderr();
+    let seen = tokio::task::spawn_blocking(move || {
+        let end = std::time::Instant::now() + Duration::from_secs(10);
+        while std::time::Instant::now() < end {
+            if tail.get().contains("bwrap: no permission") {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
+    })
+    .await
+    .unwrap();
+    assert!(seen, "{:?}", conn.stderr().get());
+}
+
+/// An agent's child is forked from draugr's pinned thread: a parent-death signal (what bwrap's `--die-with-parent`
+/// sets) does not fire when the thread that called `Conn::spawn` retires.  Linux only (PR_SET_PDEATHSIG; util-linux's
+/// setpriv).
+#[cfg(target_os = "linux")]
+#[test]
+fn the_agent_survives_its_callers_thread() {
+    let (stopped_tx, mut stopped) = tokio::sync::mpsc::unbounded_channel();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .thread_keep_alive(Duration::from_millis(100))
+        .on_thread_stop(move || {
+            // this thread's own /proc entry: "PID/task/TID"
+            let _ = stopped_tx.send(std::fs::read_link("/proc/thread-self").ok());
+        })
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let mut spec = spec(&format!("read a; printf '%s\\n' '{INIT}'; cat >/dev/null"));
+        let mut args: Vec<std::ffi::OsString> = ["--pdeathsig", "KILL", "--", "/bin/sh"]
+            .map(Into::into)
+            .to_vec();
+        args.append(&mut spec.args);
+        spec.program = "/usr/bin/setpriv".into();
+        spec.args = args;
+        let (conn, _rx) = tokio::task::spawn_blocking(|| {
+            tokio::runtime::Handle::current().block_on(Conn::spawn(spec, opts()))
+        })
+        .await
+        .unwrap()
+        .expect("spawn");
+        // the blocking thread retires after 100 ms idle; wait until its /proc entry is gone (the kernel has sent
+        // the signals of its exit by then)
+        let task = tokio::time::timeout(Duration::from_secs(30), stopped.recv())
+            .await
+            .expect("the blocking thread retired within 30 s")
+            .flatten()
+            .expect("its /proc entry");
+        let entry = Path::new("/proc").join(task);
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while entry.exists() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the retired thread exited within 30 s");
+        conn.initialize(ClientCaps::default())
+            .await
+            .expect("the agent is alive after its caller's thread is gone");
+    });
+}

@@ -65,7 +65,7 @@ pub struct ParseError {
     pub msg: String,
 }
 
-pub const TAGS: [&str; 8] = [
+pub const TAGS: [&str; 9] = [
     "v1",
     "sudo",
     "test-hooks",
@@ -74,6 +74,7 @@ pub const TAGS: [&str; 8] = [
     "perf",
     "agent-locks",
     "podman",
+    "real-sandbox",
 ];
 
 fn err(line: usize, msg: impl Into<String>) -> ParseError {
@@ -210,6 +211,9 @@ pub struct Host {
     pub podman: bool,
     /// The harness has `CAP_SYS_PTRACE` and no `setpriv` to run a `drop_ptrace` step without it.
     pub ptrace_stays: bool,
+    /// Why a `real-sandbox` row cannot run here (the hub has test hooks, so its sessions start unsandboxed, or its
+    /// `sandbox check` fails); `None`: a release hub whose sandbox starts.
+    pub no_real_sandbox: Option<String>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -245,6 +249,12 @@ pub fn gate(s: &Scenario, h: &Host) -> Gate {
     }
     if has("perf") && !h.perf {
         return skip("needs --perf", true); // a mode of the run, not a missing capability: --require-all lets it be
+    }
+    if has("real-sandbox")
+        && let Some(why) = &h.no_real_sandbox
+    {
+        // the test-hooks hub of the main run, or a host without a sandbox: neither is a red of this row
+        return skip(why, true);
     }
     if h.ptrace_stays
         && s.steps
@@ -494,6 +504,28 @@ mod tests {
         // where sudo works the row runs, so --require-all has nothing to excuse
         let with = Host {
             sudo: probe_sudo("true"),
+            linux: true,
+            ..Host::default()
+        };
+        assert_eq!(gate(&s, &with), Gate::Run);
+    }
+
+    #[test]
+    fn a_real_sandbox_row_runs_only_on_a_release_hub_whose_sandbox_starts() {
+        let s = row("\"real-sandbox\"");
+        let without = Host {
+            linux: true,
+            no_real_sandbox: Some("the hub binary has test-hooks".into()),
+            ..Host::default()
+        };
+        assert_eq!(
+            gate(&s, &without),
+            Gate::Skip {
+                reason: "the hub binary has test-hooks".into(),
+                excused: true
+            }
+        );
+        let with = Host {
             linux: true,
             ..Host::default()
         };

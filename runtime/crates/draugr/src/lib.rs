@@ -15,5 +15,5 @@ pub mod spawn;
 pub mod starttime;
 
 pub use reap::{RealSignaller, ReapOutcome, Record, Signaller, Skip, alive, kill_group, reap};
-pub use spawn::{Child, PassFd, Spec, spawn, spawn_pinned};
+pub use spawn::{Child, PassFd, Spec, StderrTail, spawn, spawn_pinned};
 pub use starttime::{boot_id, start_time};

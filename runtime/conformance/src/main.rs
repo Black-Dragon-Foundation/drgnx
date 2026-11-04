@@ -73,6 +73,28 @@ fn test_hooks(bin: &std::path::Path) -> bool {
         .is_some_and(|v| v["test_hooks"] == true)
 }
 
+/// Why a `real-sandbox` row cannot run against `bin`: a test-hooks hub starts its sessions unsandboxed, and a hub
+/// whose `sandbox check --json` does not say `ok` has no sandbox here.  `None`: it can.
+fn no_real_sandbox(bin: &std::path::Path) -> Option<String> {
+    if test_hooks(bin) {
+        return Some("the hub binary has test-hooks: its sessions start unsandboxed".into());
+    }
+    let out = Command::new(bin)
+        .args(["sandbox", "check", "--json"])
+        .output();
+    let check = out
+        .ok()
+        .and_then(|o| serde_json::from_slice::<serde_json::Value>(&o.stdout).ok());
+    match check {
+        Some(c) if c["ok"] == true => None,
+        Some(c) => Some(format!(
+            "no sandbox here: {}",
+            c["reason"].as_str().unwrap_or("the check failed")
+        )),
+        None => Some("no sandbox here: `sandbox check --json` gave no answer".into()),
+    }
+}
+
 fn connect_as(argv: &[String]) -> Result<(), String> {
     let path = match argv {
         [flag, p] if flag == "--socket" => p,
@@ -141,6 +163,16 @@ fn main() -> ExitCode {
         perf: args.perf.is_some(),
         podman: scenario::podman_available(),
         ptrace_stays: scenario::ptrace_effective() && !scenario::setpriv_available(),
+        no_real_sandbox: scenarios
+            .iter()
+            .filter(|s| {
+                args.only
+                    .as_deref()
+                    .is_none_or(|g| scenario::glob(g, &s.name))
+            })
+            .any(|s| s.requires.iter().any(|t| t == "real-sandbox"))
+            .then(|| no_real_sandbox(&args.hub_bin))
+            .flatten(),
     };
     let cfg = exec::Config {
         hub_bin: args.hub_bin.clone(),

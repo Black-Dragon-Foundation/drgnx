@@ -44,14 +44,14 @@ pub struct Launch {
 /// A worker or manager session's launch: its worktree is the only project path it can write.  A `Role::Chat` is
 /// refused (a chat has no worktree: [`spawn_plain`] or [`spawn_chat`]).
 /// ENV is the hub's environment with the login shell's variables applied (`ShellEnv::paths_env`).
-pub fn spawn(env: &Env, plan: &LaunchPlan, req: &SandboxReq) -> Result<Launch, Refusal> {
+pub async fn spawn(env: &Env, plan: &LaunchPlan, req: &SandboxReq) -> Result<Launch, Refusal> {
     if req.role == Role::Chat {
         return Err(refusal(
             "a chat has no worktree: use spawn_plain or spawn_chat",
         ));
     }
     let (plan, shape) = worktree_launch(plan, req);
-    launch(env, &plan, &shape).map(with_stdin)
+    launch(env, &plan, &shape).await.map(with_stdin)
 }
 
 /// An agent session's launch: the hub speaks ACP on the agent's stdin and stdout, so its stdin is a pipe, not the
@@ -80,7 +80,7 @@ pub fn worktree_launch(plan: &LaunchPlan, req: &SandboxReq) -> (LaunchPlan, Sess
 
 /// A chat with no project, still in Gleipnir: its cwd is a scratch dir of its own (`scratch_dir`), nothing of the
 /// project or the home is bound beyond the CLI's own login dir, and only the provider's network is reachable.
-pub fn spawn_plain(env: &Env, plan: &LaunchPlan, sid: &str) -> Result<Launch, Refusal> {
+pub async fn spawn_plain(env: &Env, plan: &LaunchPlan, sid: &str) -> Result<Launch, Refusal> {
     let scratch = scratch_dir(env, sid)?;
     let shape = SessionShape {
         sid: sid.to_string(),
@@ -89,18 +89,18 @@ pub fn spawn_plain(env: &Env, plan: &LaunchPlan, sid: &str) -> Result<Launch, Re
         read: vec![],
         net: NetCell::ProviderOnly,
     };
-    launch(env, plan, &shape).map(with_stdin)
+    launch(env, plan, &shape).await.map(with_stdin)
 }
 
 /// A chat in a project (design §4.2: project-scoped, read access per the matrix): [`chat_launch`]'s shape.
-pub fn spawn_chat(
+pub async fn spawn_chat(
     env: &Env,
     plan: &LaunchPlan,
     sid: &str,
     project: &Path,
 ) -> Result<Launch, Refusal> {
     let (plan, shape) = chat_launch(env, plan, sid, project)?;
-    launch(env, &plan, &shape).map(with_stdin)
+    launch(env, &plan, &shape).await.map(with_stdin)
 }
 
 /// The plan and shape of a chat in PROJECT: the project (as its true name: the editor's `default-directory` ends in a
@@ -198,15 +198,70 @@ pub fn scratch_dir(env: &Env, sid: &str) -> Result<PathBuf, Refusal> {
     Ok(dir)
 }
 
-/// Validate and prepare `shape` for `plan` on this host: the full tier when bwrap is usable, else the reduced tier
-/// (the caller's explicit choice), else a refusal.  Nothing is spawned.
-pub fn launch(env: &Env, plan: &LaunchPlan, shape: &SessionShape) -> Result<Launch, Refusal> {
+/// Validate and prepare `shape` for `plan` on this host, in the sandbox [`detect`] finds.  Nothing is spawned.
+pub async fn launch(env: &Env, plan: &LaunchPlan, shape: &SessionShape) -> Result<Launch, Refusal> {
+    let sb = detect().await?;
+    launch_on(env, &sb, plan, shape)
+}
+
+/// The tier that passed the check here, kept for the hub's life once it passed; a failed check is run again at the
+/// next launch, so a bubblewrap installed since is found.
+static USABLE: std::sync::Mutex<Option<Tier>> = std::sync::Mutex::new(None);
+
+/// The sandbox a launch runs in: the full tier when its check passes (the doctor's check: the real invocation around
+/// a probe, so a bwrap that is present but cannot run, as in a container, does not count), else the reduced tier
+/// when its check passes, else a refusal with the full tier's reason and fix.
+pub async fn detect() -> Result<Sandbox, Refusal> {
     let helper = sandbox::helper().map_err(|e| refusal(&format!("the helper's own path: {e}")))?;
-    let sb = Sandbox::detect(Tier::Full, helper.clone(), None)
-        .or_else(|_| Sandbox::detect(Tier::Reduced, helper, None))?;
+    let known = *USABLE.lock().unwrap_or_else(|e| e.into_inner());
+    let tier = match known {
+        Some(t) => t,
+        None => {
+            // the probe's status is read blocking: on a thread and a runtime of its own, never a hub worker
+            let t = pick(|tier| async move {
+                tokio::task::spawn_blocking(move || {
+                    sandbox::check_blocking(tier, None, sandbox::CHECK_TIMEOUT)
+                })
+                .await
+                .unwrap_or_else(|e| gleipnir::check::Check::failed(format!("the check: {e}"), None))
+            })
+            .await?;
+            *USABLE.lock().unwrap_or_else(|e| e.into_inner()) = Some(t);
+            t
+        }
+    };
+    let sb = Sandbox::detect(tier, helper, None)?;
     #[cfg(target_os = "macos")]
     let sb = sb.with_mac(sandbox::mac_context());
-    launch_on(env, &sb, plan, shape)
+    Ok(sb)
+}
+
+/// The tier [`detect`] takes, given the check of a tier: the full one, else the reduced one, else the refusal (the
+/// full tier's reason and fix, as `ratatoskr sandbox check` and the doctor say them).
+pub async fn pick<F, Fut>(check: F) -> Result<Tier, Refusal>
+where
+    F: Fn(Tier) -> Fut,
+    Fut: std::future::Future<Output = gleipnir::check::Check>,
+{
+    let full = check(Tier::Full).await;
+    if full.ok {
+        return Ok(Tier::Full);
+    }
+    if check(Tier::Reduced).await.ok {
+        return Ok(Tier::Reduced);
+    }
+    let mut message = format!(
+        "no sandbox can start here: {}",
+        full.reason.as_deref().unwrap_or("unknown")
+    );
+    if let Some(fix) = &full.fix {
+        message.push_str(&format!(" (fix: {fix})"));
+    }
+    Err(Refusal {
+        rule: Rule::Setup,
+        path: None,
+        message,
+    })
 }
 
 /// [`launch`] on a chosen sandbox.  The spec makes the session dir (`sandbox::session_spec`): a launch that is refused
@@ -242,11 +297,11 @@ fn launch_in(
 ) -> Result<Launch, Refusal> {
     let ctx = sandbox::context(env);
     let scratch = scratch_dir(env, &shape.sid)?;
-    let spec = sandbox::session_spec(env, &ctx, plan, shape, &scratch, sb.tier(), target)?;
-    let valid = gleipnir::validate(spec, &ctx, target)?;
-    let command = plan
-        .argv
-        .iter()
+    let built = sandbox::session_spec(env, &ctx, plan, shape, &scratch, sb.tier(), target)?;
+    let valid = gleipnir::validate(built.spec, &ctx, target)?;
+    // the program by the path the spec showed it at; its arguments as the plan has them
+    let command = std::iter::once(built.program.as_os_str())
+        .chain(plan.argv.iter().skip(1).map(|a| a.as_os_str()))
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
     let prepared = sb.prepare(

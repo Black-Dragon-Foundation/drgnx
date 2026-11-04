@@ -808,7 +808,7 @@ impl Inner {
                     read: vec![],
                     net: NetCell::ProviderAndPackages,
                 };
-                let l = launch::launch(&self.hooks.shell_env.paths_env(), &plan, &shape)?;
+                let l = launch::launch(&self.hooks.shell_env.paths_env(), &plan, &shape).await?;
                 (l.spec, l.status)
             }
             Starter::User => (
