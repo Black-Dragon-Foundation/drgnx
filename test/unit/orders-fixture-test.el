@@ -223,6 +223,10 @@ source whose next event is enabled; taking the r-th enabled source (from 0) cost
     (should (string-match-p "source 0 (a) has 2 events"
                             (message-of :kinds '(a b) :sources (drgnx-orders-test--chains 2 2)
                                         :edges '(((a . 2) . (b . 0))))))
+    ;; two sources of one name
+    (should (string-match-p "source a is named twice"
+                            (message-of :kinds '(a) :sources '((a (a)) (a (a)))
+                                        :edges '(((a . 0) . (a . 0))))))
     (should (string-match-p "no such source"
                             (message-of :kinds '(a b) :sources (drgnx-orders-test--chains 2 2)
                                         :edges '(((z . 0) . (b . 0))))))))

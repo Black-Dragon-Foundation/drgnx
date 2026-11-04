@@ -135,9 +135,8 @@ impl<'a> Tx<'a> {
     /// Dropping it without a commit rolls the savepoint back, as the writer does on an error.
     #[cfg(any(test, feature = "test-hooks"))]
     pub fn for_test(conn: &'a mut Connection, meta: TxMeta, guard: Arc<Guard>) -> Tx<'a> {
-        let at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0.0, |d| d.as_secs_f64());
+        // the writer's own reading of the wall clock (production code), so a tx made here is dated as the writer's are
+        let at = super::writer::next_at(&mut 0.0, None);
         Tx::begin(conn, meta, at, guard)
             .expect("Tx::for_test: the savepoint and the tx row (does CONN hold GRAPH_DDL?)")
     }

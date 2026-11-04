@@ -10,8 +10,14 @@
 //! - `skuld`'s own `wait_until` (`skuld/src/wait.rs`) and the hub clock's module (`drgnx-ratatoskr/src/clock*`);
 //! - `tokio::time::sleep` inside a paused tokio test (`#[tokio::test(start_paused = true)]`, or a body that calls
 //!   `tokio::time::pause()`): the sleep is virtual there;
-//! - `Instant::now` and `tokio::time::sleep` in a file that imports tokio's `Instant` and has paused tests (its
-//!   helpers run on the paused clock too), unless written `std::time::Instant::now`.
+//! - `Instant::now` inside a paused test, in a file that imports tokio's `Instant`, unless written
+//!   `std::time::Instant::now`. A paused test is `start_paused = true` (not `false`) or a body that calls
+//!   `tokio::time::pause()`; the exemption covers that function only, never the rest of its file. A helper that only
+//!   paused tests call is marked `#[doc = "paused clock: …"]` and counts as paused.
+//!
+//! Test code is any `cfg(...)` predicate naming `test` (`cfg(all(test, …))` too). The scan covers `crates/*` and
+//! `conformance`. A bare `sleep(` is classed by the file's `use` line (`std::thread::sleep` or tokio's), and
+//! `X as Y` imports of `Instant`, `SystemTime`, `sleep` and `thread` are followed.
 //!
 //! The check reads the sources as text (comments and string literals blanked); `cargo test --workspace` runs it.
 
@@ -153,9 +159,94 @@ fn bare_sleep(line: &str) -> bool {
     })
 }
 
-fn kinds(line: &str) -> Vec<Kind> {
+/// What the file's `use` statements say: whether a bare `sleep(` is `std::thread::sleep`, whether tokio's `Instant` is
+/// imported, and the aliases (`X as Y`) of `Instant`, `SystemTime`, `sleep` and `thread`, as (alias, what it names).
+#[derive(Default)]
+struct Imports {
+    bare_thread_sleep: bool,
+    tokio_instant: bool,
+    aliases: Vec<(String, String)>,
+}
+
+fn is_ident(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// `line` with each whole word `from` (not part of a path or a method call) replaced by `to`.
+fn replace_word(line: &str, from: &str, to: &str) -> String {
+    let mut out = String::new();
+    let mut last = 0;
+    for (at, _) in line.match_indices(from) {
+        let before = line[..at].chars().next_back();
+        let after = line[at + from.len()..].chars().next();
+        if at >= last
+            && before.is_none_or(|c| !(is_ident(c) || c == ':' || c == '.'))
+            && after.is_none_or(|c| !is_ident(c))
+        {
+            out.push_str(&line[last..at]);
+            out.push_str(to);
+            last = at + from.len();
+        }
+    }
+    out.push_str(&line[last..]);
+    out
+}
+
+fn imports(blanked: &str) -> Imports {
+    let mut im = Imports::default();
+    for stmt in blanked.split(';') {
+        let Some(at) = stmt.rfind("use ") else {
+            continue;
+        };
+        if stmt[..at].chars().next_back().is_some_and(is_ident) {
+            continue;
+        }
+        let stmt = &stmt[at + 4..];
+        let spaced = stmt.replace(['{', '}', ','], " ");
+        let words: Vec<&str> = spaced.split_whitespace().collect();
+        let has_word = |w: &str| {
+            words
+                .iter()
+                .any(|x| *x == w || x.ends_with(&format!("::{w}")))
+        };
+        let tokio = stmt.contains("tokio");
+        let thread = stmt.contains("thread") && !tokio;
+        if has_word("Instant") && tokio {
+            im.tokio_instant = true;
+        }
+        if has_word("sleep") && thread {
+            im.bare_thread_sleep = true;
+        }
+        for w in words.windows(3) {
+            if w[1] != "as" {
+                continue;
+            }
+            let orig = w[0].rsplit("::").next().unwrap_or(w[0]);
+            let target = match orig {
+                "Instant" if tokio => "tokio::time::Instant",
+                "Instant" => "std::time::Instant",
+                "SystemTime" => "SystemTime",
+                "sleep" if thread => "thread::sleep",
+                "sleep" => "tokio::time::sleep",
+                "thread" => "thread",
+                _ => continue,
+            };
+            if w[2] != "_" {
+                im.aliases.push((w[2].to_string(), target.to_string()));
+            }
+        }
+    }
+    im
+}
+
+fn kinds(line: &str, bare_thread_sleep: bool) -> Vec<Kind> {
     let mut out = Vec::new();
-    if line.contains("tokio::time::sleep") || line.contains("time::sleep(") || bare_sleep(line) {
+    if bare_sleep(line) && bare_thread_sleep {
+        out.push(Kind::ThreadSleep);
+    } else if line.contains("tokio::time::sleep")
+        || line.contains("time::sleep(")
+        || bare_sleep(line)
+    {
         out.push(Kind::TokioSleep);
     }
     if line.contains("thread::sleep") {
@@ -207,13 +298,32 @@ impl Region {
     }
 }
 
+/// Whether an attribute is a `cfg(...)` whose predicate names `test` (`cfg(test)`, `cfg(all(test, ...))`, ...), but
+/// not as `not(test)`.
+fn cfg_selects_test(attr: &str) -> bool {
+    let Some(pred) = attr.strip_prefix("#[cfg(") else {
+        return false;
+    };
+    let pred: String = pred.split_whitespace().collect();
+    pred.match_indices("test").any(|(at, _)| {
+        let before = pred[..at].chars().next_back();
+        let after = pred[at + 4..].chars().next();
+        before.is_none_or(|c| !is_ident(c) && c != ':' && c != '"')
+            && after.is_none_or(|c| !is_ident(c) && c != '"')
+            && !pred[..at].ends_with("not(")
+    })
+}
+
 /// The banned sites of one file as (line, kind). `whole` says every line is test code; `mods` collects the names of
 /// the `#[cfg(test)] mod NAME;` files this file declares.
 fn scan(src: &str, whole: bool, mods: &mut Vec<String>) -> Vec<(usize, Kind)> {
-    let blanked = blank(src);
-    // tokio's `Instant` in a file with paused tests reads the paused clock, which is virtual
-    let tokio_clock = blanked.contains("tokio::time::Instant")
-        && (blanked.contains("start_paused") || blanked.contains("time::pause()"));
+    let mut blanked = blank(src);
+    let im = imports(&blanked);
+    for (alias, target) in &im.aliases {
+        blanked = replace_word(&blanked, alias, target);
+    }
+    // tokio's `Instant` reads the paused clock, which is virtual, inside a paused test
+    let tokio_clock = im.tokio_instant || blanked.contains("tokio::time::Instant");
     let mut sites = Vec::new();
     let (mut depth, mut attrs) = (0i64, Vec::<String>::new());
     let (mut test, mut func): (Option<Region>, Option<Region>) = (None, None);
@@ -229,7 +339,7 @@ fn scan(src: &str, whole: bool, mods: &mut Vec<String>) -> Vec<(usize, Kind)> {
             depth += depth_change(line);
             continue;
         }
-        let cfg_test = attrs.iter().any(|a| a.starts_with("#[cfg(test)]"));
+        let cfg_test = attrs.iter().any(|a| cfg_selects_test(a));
         let is_fn = trimmed.contains("fn ");
         if cfg_test && test.is_none() {
             let decl = trimmed
@@ -250,11 +360,17 @@ fn scan(src: &str, whole: bool, mods: &mut Vec<String>) -> Vec<(usize, Kind)> {
             r.timing = attrs
                 .iter()
                 .any(|a| a.starts_with("#[ignore") && a.contains("timing"));
-            r.paused = attrs.iter().any(|a| a.contains("start_paused"));
+            r.paused = attrs.iter().any(|a| {
+                let a: String = a.split_whitespace().collect();
+                (a.contains("start_paused") && !a.contains("start_paused=false"))
+                    || a.starts_with("#[doc=\"pausedclock")
+            });
             func = Some(r);
         }
-        if !trimmed.is_empty() {
-            attrs.clear();
+        attrs.clear();
+        if trimmed.starts_with("use ") || trimmed.starts_with("pub use ") {
+            depth += depth_change(line);
+            continue;
         }
         let in_test = whole || test.is_some();
         if in_test {
@@ -262,12 +378,13 @@ fn scan(src: &str, whole: bool, mods: &mut Vec<String>) -> Vec<(usize, Kind)> {
             if paused_body && let Some(f) = func.as_mut() {
                 f.paused = true;
             }
-            for k in kinds(trimmed) {
+            for k in kinds(trimmed, im.bare_thread_sleep) {
                 let timing = func.as_ref().is_some_and(|f| f.timing);
                 let paused = func.as_ref().is_some_and(|f| f.paused);
-                let virtual_clock = tokio_clock
-                    && (k == Kind::TokioSleep
-                        || (k == Kind::InstantNow && !trimmed.contains("std::time::Instant")));
+                let virtual_clock = paused
+                    && k == Kind::InstantNow
+                    && tokio_clock
+                    && !trimmed.contains("std::time::Instant");
                 if !(timing || virtual_clock || (paused && k == Kind::TokioSleep)) {
                     sites.push((n + 1, k));
                 }
@@ -306,12 +423,20 @@ fn exempt(rel: &str) -> bool {
         || rel.contains("drgnx-ratatoskr/src/clock")
 }
 
-/// Every banned call in test code across `crates/*/{src,tests}`, as `file:line: kind`.
-fn find(crates: &Path) -> Vec<String> {
+/// Every banned call in test code across `crates/*/{src,tests}` and `conformance/{src,tests}` of the workspace at
+/// `runtime`, as `file:line: kind`.
+fn find(runtime: &Path) -> Vec<String> {
+    let crates = runtime;
     let mut files = Vec::new();
-    for krate in fs::read_dir(crates).unwrap().flatten() {
+    let mut members: Vec<PathBuf> = fs::read_dir(runtime.join("crates"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .collect();
+    members.push(runtime.join("conformance"));
+    for member in members {
         for sub in ["src", "tests"] {
-            rust_files(&krate.path().join(sub), &mut files);
+            rust_files(&member.join(sub), &mut files);
         }
     }
     files.sort();
@@ -354,8 +479,12 @@ fn find(crates: &Path) -> Vec<String> {
 
 #[test]
 fn no_real_time_in_test_code() {
-    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let sites = find(crates);
+    let runtime = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let sites = find(runtime);
     assert!(
         sites.is_empty(),
         "real time in test code (wait with skuld::wait_until, pause tokio time, or make it a timing test):\n{}",
@@ -403,6 +532,77 @@ fn timing_tests_and_paused_tests_are_exempt() {
         sites_of(paused, true),
         vec![(4, Kind::ThreadSleep), (13, Kind::TokioSleep)]
     );
+}
+
+#[test]
+fn the_virtual_clock_exemption_is_per_paused_test() {
+    // a real sleep and a std clock read in a plain test next to a paused one are still flagged
+    let src = "use tokio::time::Instant;\n\
+               #[tokio::test(start_paused = true)]\nasync fn p() {\n    let t = Instant::now();\n    tokio::time::sleep(d).await;\n}\n\
+               #[tokio::test]\nasync fn plain() {\n    tokio::time::sleep(d).await;\n    let t = Instant::now();\n}\n\
+               #[tokio::test(start_paused = false)]\nasync fn not_paused() {\n    tokio::time::sleep(d).await;\n}\n";
+    assert_eq!(
+        sites_of(src, true),
+        vec![
+            (9, Kind::TokioSleep),
+            (10, Kind::InstantNow),
+            (14, Kind::TokioSleep)
+        ]
+    );
+    // a helper marked as paused is exempt, an unmarked one is not
+    let helper = "use tokio::time::Instant;\n#[doc = \"paused clock: called by paused tests\"]\nfn marked() {\n    Instant::now();\n}\n\
+                  fn unmarked() {\n    Instant::now();\n}\n";
+    assert_eq!(sites_of(helper, true), vec![(7, Kind::InstantNow)]);
+}
+
+#[test]
+fn any_cfg_predicate_naming_test_makes_test_code() {
+    for attr in [
+        "#[cfg(test)]",
+        "#[cfg(all(test, target_os = \"linux\"))]",
+        "#[cfg(any(feature = \"x\", test))]",
+    ] {
+        assert!(cfg_selects_test(attr), "{attr}");
+        let src = format!("{attr}\nmod tests {{\n    fn a() {{ std::thread::sleep(d); }}\n}}\n");
+        assert_eq!(
+            sites_of(&src, false),
+            vec![(3, Kind::ThreadSleep)],
+            "{attr}"
+        );
+    }
+    for attr in [
+        "#[cfg(not(test))]",
+        "#[cfg(feature = \"test-hooks\")]",
+        "#[cfg(target_os = \"test\")]",
+        "#[cfg(unix)]",
+    ] {
+        assert!(!cfg_selects_test(attr), "{attr}");
+    }
+}
+
+#[test]
+fn imported_names_are_classified_by_their_use_line() {
+    // a bare sleep imported from std::thread is a thread sleep, so a paused test does not excuse it
+    let thread = "use std::thread::sleep;\n#[tokio::test(start_paused = true)]\nasync fn p() {\n    sleep(d);\n}\n";
+    assert_eq!(sites_of(thread, true), vec![(4, Kind::ThreadSleep)]);
+    let grouped = "use std::thread::{self, sleep};\nfn a() { sleep(d); }\n";
+    assert_eq!(sites_of(grouped, true), vec![(2, Kind::ThreadSleep)]);
+    let tokio = "use tokio::time::sleep;\n#[tokio::test(start_paused = true)]\nasync fn p() {\n    sleep(d).await;\n}\n";
+    assert!(sites_of(tokio, true).is_empty());
+    // aliases
+    let clock = "use std::time::Instant as Clock;\nuse std::time::SystemTime as Wall;\nuse std::thread::sleep as nap;\n\
+                 fn a() {\n    Clock::now();\n    Wall::now();\n    nap(d);\n}\n";
+    assert_eq!(
+        sites_of(clock, true),
+        vec![
+            (5, Kind::InstantNow),
+            (6, Kind::SystemTimeNow),
+            (7, Kind::ThreadSleep)
+        ]
+    );
+    let tokio_alias = "use tokio::time::Instant as Clock;\n#[tokio::test(start_paused = true)]\nasync fn p() {\n    Clock::now();\n}\n\
+                       #[tokio::test]\nasync fn q() {\n    Clock::now();\n}\n";
+    assert_eq!(sites_of(tokio_alias, true), vec![(8, Kind::InstantNow)]);
 }
 
 #[test]

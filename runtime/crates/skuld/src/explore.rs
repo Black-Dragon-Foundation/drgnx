@@ -251,6 +251,14 @@ impl<C: Core> Runner<'_, C> {
                         &format!("re-entry deeper than {}", self.reentry_depth),
                     );
                 }
+                if !<C::Event as Events>::KINDS.contains(&ev.kind()) {
+                    self.fail(
+                        &events,
+                        &fed,
+                        seed,
+                        &format!("event kind {:?} is not declared in KINDS", ev.kind()),
+                    );
+                }
                 self.seen.insert(ev.kind());
                 fed.push(ev.clone());
                 let raised = core.step(ev);

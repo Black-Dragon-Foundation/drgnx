@@ -24,6 +24,9 @@ PREDS holds, per source and event, the (SRC . I) the edges put before it."
          (src (lambda (s)
                 (or (if (integerp s) (and (< -1 s (length names)) s) (cl-position s names :test #'equal))
                     (drgnx-test-orders--fail "an edge names source %S, but there is no such source" s)))))
+    (cl-loop for name across names for i from 0
+             when (cl-position name names :test #'equal :end i)
+             do (drgnx-test-orders--fail "source %S is named twice; edges name a source by its name" name))
     (dolist (edge edges)
       (let ((ab (list (cons (funcall src (caar edge)) (cdar edge))
                       (cons (funcall src (cadr edge)) (cddr edge)))))
