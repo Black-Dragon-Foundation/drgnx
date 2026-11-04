@@ -52,9 +52,7 @@
                '(x/unreleased (let ((drgnx-test-gate--active t)) (drgnx-hub--client-filter nil "{}\n")) (should t))
                '(x/released (let ((drgnx-test-gate--active t) (drgnx-test-gate--releasing 'call-1))
                               (drgnx-hub--client-filter nil "{}\n"))
-                            (should t))
-               ;; a test that never enters the gate (a gated file's fake-hub test) is not held to it, as in the lint
-               '(x/no-gate (drgnx-hub--open nil) (drgnx-hub--client-filter nil "{}\n") (should t))))
+                            (should t))))
          (j (apply #'drgnx-run-ert-audit-test--run dir drgnx-run-ert-audit-test--on)))
     (should-not (eql 0 (plist-get j :exit)))
     (should (equal '(("x/unreleased" . "gated test saw a hub line the gate did not release"))
@@ -71,6 +69,28 @@
          (j (apply #'drgnx-run-ert-audit-test--run dir drgnx-run-ert-audit-test--on)))
     (should (equal '(("x/outside" . "gated test opened a hub connection outside the gate"))
                    (drgnx-run-ert-audit-test--failures j)))))
+
+(ert-deftest drgnx-run-ert-audit/a-gated-files-test-that-skips-the-gate-is-held-to-it-unless-listed ()
+  ;; a test that never enters `drgnx-test-gated' is audited as one that does, unless test/gate-exempt.eld lists it
+  (let* ((dir (drgnx-run-ert-audit-test--file
+               "gated"
+               '(x/no-gate (drgnx-hub--open nil) (should t))
+               '(x/no-gate-line (drgnx-hub--client-filter nil "{}\n") (should t))
+               '(x/listed (drgnx-hub--open nil) (should t))
+               '(x/pure (should t))))
+         (exempt (expand-file-name "gate-exempt.eld" dir)))
+    (with-temp-file exempt (insert "((x/listed :why \"a fake hub\"))\n"))
+    ;; the checkout's own register lists no test of this file: every test that talks to the hub fails
+    (let ((j (apply #'drgnx-run-ert-audit-test--run dir drgnx-run-ert-audit-test--on)))
+      (should (equal '(("x/listed" . "gated test opened a hub connection outside the gate")
+                       ("x/no-gate" . "gated test opened a hub connection outside the gate")
+                       ("x/no-gate-line" . "gated test saw a hub line the gate did not release"))
+                     (sort (drgnx-run-ert-audit-test--failures j) (lambda (a b) (string< (car a) (car b)))))))
+    ;; a listed one passes
+    (let ((j (apply #'drgnx-run-ert-audit-test--run dir (concat "DRGNX_TEST_GATE_EXEMPT=" exempt)
+                    drgnx-run-ert-audit-test--on)))
+      (should (equal '("x/no-gate" "x/no-gate-line")
+                     (sort (mapcar #'car (drgnx-run-ert-audit-test--failures j)) #'string<))))))
 
 (ert-deftest drgnx-run-ert-audit/a-handshake-test-that-signalled-an-unparked-child-fails ()
   (let* ((dir (drgnx-run-ert-audit-test--file

@@ -1122,9 +1122,12 @@ while they run, and each failure names the test and carries one of these message
   `quit-process`, `stop-process` or `continue-process` took a process for which `drgnx-test-child-parked-p` is nil (or
   a pid). `drgnx-test-child-signal` signals only a parked child, so a test that goes through it passes.
 
-The two gated checks hold only a test that enters `drgnx-test-gated`, as the static lint does: a gated file's tests
-against a fake hub (`test/fixtures/fake-hub.el`, the client's lying peer) run outside the gate by design. Their messages
-are kept until the test ends and recorded only if it entered the gate at some point.
+The two gated checks hold every test of a gated file, also one that never enters `drgnx-test-gated`, unless
+`test/gate-exempt.eld` lists it (`DRGNX_TEST_GATE_EXEMPT` names another file). A gated file's tests against a fake hub
+(`test/fixtures/fake-hub.el`, the client's lying peer) run outside the gate by design and are listed; a test that is
+not converted yet is listed too, as such. Their messages are kept until the test ends and recorded unless it never
+entered the gate (a watcher on `drgnx-test-gate--active` notes the entry) and is listed. A row is `(TEST-SYMBOL :why
+STRING)`; see [Test patterns](#test-patterns) for what holds the register.
 
 Without `DRGNX_TEST_AUDIT_FAIL=1` they are only reported as `drgnx-audit:` lines.
 
@@ -1151,6 +1154,15 @@ that is not listed fails `drgnx-lint/every-cond-file-has-a-pattern-or-is-pending
 is gone, fails `drgnx-lint/pending-rows-only-shrink`: the register only shrinks, and every new `cond` file carries a
 pattern. A row is a file name, or `(FILE :why STRING)` for a file that cannot meet a pattern. The register being
 empty is the end of the migration.
+
+**The gate-exempt register.** `test/gate-exempt.eld` lists the tests of `gated` files that never enter
+`drgnx-test-gated`: `(TEST-SYMBOL :why STRING)`, one row per test. Those against a fake hub are pure against a lying
+peer and stay; the others say "not converted". The audit holds every other test of a gated file to the gate
+([The audit](#the-audit-what-a-deterministic-test-really-runs)); a listed one is skipped. The register only shrinks:
+`drgnx-lint/gate-exempt-rows-name-tests-in-gated-files` fails a row that names a test that is gone or not in a gated
+file, and `drgnx-lint/gate-exempt-only-shrinks` holds the rows to a constant in `lint-test-patterns-test.el` that
+only loses entries. `drgnx-test-gate-unnamed-ok` is a stopgap until the hub's agent-session tasks run on its clock:
+`drgnx-lint/gate-unnamed-ok-only-where-listed` lets only the two agents-mirror test files bind or set it.
 
 **The rules.** `test/unit/lint-test-patterns-test.el` reads the files that name a pattern (it never loads them) with
 the class lints' reader: test-defining macros are expanded and the file's own helpers are followed; a fixture macro

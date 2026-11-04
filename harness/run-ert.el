@@ -425,14 +425,28 @@ is virtual and not recorded; a process or a socket is real work under the fixtur
 ;; The pattern checks: a :gated test must see hub lines only through the delivery gate and open hub connections only
 ;; inside it; a :handshake test may signal only a parked handshake child.  The gate's own connection (the barrier and
 ;; the clock) has its own filter, and a line the gate delivers runs with `drgnx-test-gate--releasing' bound, so
-;; neither is flagged.  As the static lint does, the gated checks hold only a test that enters `drgnx-test-gated': a
-;; gated file's fake-hub tests (the client's lying peer) run outside the gate by design.
+;; neither is flagged.  A test of a gated file that never enters `drgnx-test-gated' is held to the gated checks all the
+;; same unless test/gate-exempt.eld lists it (the fake-hub tests, the client's lying peer, run outside the gate by
+;; design; the rest are not converted yet): its rows are the only way out, and the register only shrinks.
+
+(defun drgnx-run-ert--gate-exempt-file ()
+  "The listed tests that may skip the gate: DRGNX_TEST_GATE_EXEMPT (a file), else test/gate-exempt.eld of this checkout."
+  (let ((given (drgnx-run-ert--env "DRGNX_TEST_GATE_EXEMPT")))
+    (if given (expand-file-name given)
+      (expand-file-name "../test/gate-exempt.eld" (file-name-directory drgnx-run-ert--self)))))
+
+(defun drgnx-run-ert--gate-exempt-p (name)
+  "Whether the test NAME (a string) has a row in the gate-exempt register."
+  (let ((file (drgnx-run-ert--gate-exempt-file)))
+    (and (file-readable-p file)
+         (cl-loop for e in (with-temp-buffer (insert-file-contents file) (read (current-buffer)))
+                  thereis (equal (format "%s" (car e)) name)))))
 
 (defvar drgnx-run-ert--audit-pattern-current nil "The name of the :gated or :handshake test that runs now, or nil.")
 (defvar drgnx-run-ert--audit-pattern-seen nil "The (TEST . MESSAGE) pairs the pattern checks recorded, newest first.")
 (defvar drgnx-run-ert--audit-gate-entered nil "Whether the :gated test that runs now has entered `drgnx-test-gated'.")
 (defvar drgnx-run-ert--audit-gate-held nil
-  "The gated checks' messages for the test that runs now, newest first: recorded when it ends, if it entered the gate.")
+  "The gated checks' messages for the test that runs now, newest first: recorded when it ends, unless it never entered the gate and is listed as exempt.")
 (defvar drgnx-test-gate--active)
 (defvar drgnx-test-gate--releasing)
 (declare-function drgnx-test-child-parked-p "handshake-fixture")
@@ -518,7 +532,7 @@ fixtures' own tests (`drgnx-run-ert--audit-skip-files') are not audited."
       (unwind-protect (apply fn test args)
         (when audited (drgnx-run-ert--audit-unadvise))
         (when ptags (drgnx-run-ert--audit-pattern-unadvise))
-        (when drgnx-run-ert--audit-gate-entered
+        (when (and ptags (or drgnx-run-ert--audit-gate-entered (not (drgnx-run-ert--gate-exempt-p name))))
           (mapc #'drgnx-run-ert--audit-pattern-record (reverse drgnx-run-ert--audit-gate-held)))))))
 
 (defun drgnx-run-ert--audit-install (&optional file)

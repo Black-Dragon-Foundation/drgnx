@@ -213,6 +213,95 @@ levels that enclose it (a `let' binding, a call's argument); inside a branching 
               nil)))
     (nreverse out)))
 
+;;;; The gate-exempt register
+
+(defconst drgnx-lint-patterns--gate-exempt-allowed
+  '(drgnx-ai/a-refused-request-starts-the-runner-at-most-once-a-minute
+    drgnx-ai/ensure-local-never-waits-for-the-job
+    drgnx-ai/ensure-local-starts-the-runner-when-it-is-down
+    drgnx-ai-onboard/a-projects-route-never-reaches-the-global-roles
+    drgnx-ai-onboard/cli-exit-stops-the-job
+    drgnx-ai-onboard/pull-has-no-hour-limit
+    drgnx-ai-onboard/the-role-tests-run-side-by-side
+    drgnx-ai-onboard/typed-key-cleared-and-env-noted
+    drgnx-hub-client/a-current-hello-clears-the-restart-notice
+    drgnx-hub-client/a-failing-callback-does-not-drop-the-rest-of-the-chunk
+    drgnx-hub-client/a-hub-that-says-nothing-is-closed-not-legacy
+    drgnx-hub-client/a-key-found-again-quietly-raises-no-notice
+    drgnx-hub-client/a-key-the-hub-lost-is-a-notice
+    drgnx-hub-client/a-late-challenge-is-read-not-taken-for-legacy
+    drgnx-hub-client/a-legacy-hub-gets-no-keys
+    drgnx-hub-client/a-legacy-hub-offers-restart-now
+    drgnx-hub-client/an-answer-read-after-the-subscription-ended-is-dropped
+    drgnx-hub-client/a-netrc-key-goes-again-after-a-restart
+    drgnx-hub-client/a-wrong-hub-proof-gets-no-keys
+    drgnx-hub-client/calls-wait-for-hello
+    drgnx-hub-client/deadline-and-disconnect-fire-once
+    drgnx-hub-client/env-resent-on-reconnect
+    drgnx-hub-client/keys-again-after-a-restart
+    drgnx-hub-client/need-keys-on-an-unproven-connection-is-ignored
+    drgnx-hub-client/need-keys-re-reads-the-environment
+    drgnx-hub-client/need-keys-without-a-key-raises-a-notice-never-prompts
+    drgnx-hub-client/providers-carry-no-key
+    drgnx-hub-client/providers-sent-on-connect-and-on-change
+    drgnx-hub-client/records-pause-the-mirror
+    drgnx-hub-client/restart-now-over-ratatoskr
+    drgnx-hub-client/the-editor-token-and-held-keys-are-fetched-on-every-connect
+    drgnx-hub-client/the-first-hello-carries-the-binary-version
+    drgnx-hub-client/the-update-notice-offers-restart-now
+    drgnx-onboard/a-failed-download-says-how-to-retry
+    drgnx-onboard/lm-studio-is-set-up-the-same-way
+    drgnx-onboard/lm-studio-without-lms-says-what-to-do
+    drgnx-onboard/ollama-is-installed-started-pulled-and-tested
+    drgnx-onboard/openrouter-key-goes-to-the-keychain
+    drgnx-onboard/the-ai-step-finds-providers-sets-roles-and-tests-them
+    drgnx-onboard/the-ai-step-keeps-roles-that-work)
+  "The tests test/gate-exempt.eld may list: the rows of 2026-11-05.  The register only shrinks (a test that enters the
+gate, or is deleted, leaves it); a new row is a test that skips the gate, which the audit would catch.")
+
+(defconst drgnx-lint-patterns--unnamed-ok-allowed
+  '("test/unit/agents-mirror-test.el" "test/unit/agents-mirror-permission-test.el")
+  "The files that may bind or set `drgnx-test-gate-unnamed-ok': a stopgap until the hub's agent-session tasks run on
+its clock.")
+
+(defun drgnx-lint-patterns--gate-exempt-rows ()
+  "The rows of test/gate-exempt.eld: (TEST-SYMBOL :why STRING)."
+  (with-temp-buffer
+    (insert-file-contents (expand-file-name "test/gate-exempt.eld" drgnx-dir))
+    (read (current-buffer))))
+
+(defun drgnx-lint-patterns--gated-test-names ()
+  "The names (strings) of the tests of every file that names the `gated' pattern."
+  (let (out)
+    (dolist (rel (drgnx-lint-patterns--files 'gated))
+      (dolist (test (cdr (drgnx-lint-classes--parse
+                          (drgnx-lint-classes--forms (expand-file-name rel drgnx-dir)))))
+        (push (format "%s" (cadr test)) out)))
+    out))
+
+(defun drgnx-lint-patterns--gate-exempt-misnamed (rows names)
+  "The tests (strings) ROWS list that NAMES (the tests of the gated files) does not hold."
+  (cl-loop for row in rows
+           for name = (format "%s" (car-safe row))
+           unless (member name names) collect name))
+
+(defun drgnx-lint-patterns--gate-exempt-new (rows allowed)
+  "The tests (strings) ROWS list that ALLOWED (symbols) does not hold."
+  (cl-loop for row in rows
+           unless (memq (car-safe row) allowed) collect (format "%s" (car-safe row))))
+
+(defun drgnx-lint-patterns--unnamed-ok-p (forms)
+  "Whether FORMS (top-level forms) use `drgnx-test-gate-unnamed-ok' as code: quoted data and strings are not code."
+  (cl-labels ((walk (f)
+                (cond ((eq f 'drgnx-test-gate-unnamed-ok) t)
+                      ((atom f) nil)
+                      ((eq (car f) 'quote) nil)
+                      (t (let ((hit nil))
+                           (while (and (consp f) (not hit))
+                             (setq hit (walk (car f)) f (cdr f)))
+                           (or hit (and f (walk f))))))))
+    (cl-some #'walk forms)))
+
 ;;;; Tests
 
 (ert-deftest drgnx-lint/every-cond-file-has-a-pattern-or-is-pending ()
@@ -248,7 +337,41 @@ levels that enclose it (a `let' binding, a call's argument); inside a branching 
 (ert-deftest drgnx-lint/orders-tests-declare-their-kinds ()
   (should-not (drgnx-lint-patterns--violations 'orders #'drgnx-lint-patterns--rule-orders)))
 
+(ert-deftest drgnx-lint/gate-exempt-rows-name-tests-in-gated-files ()
+  (should-not (drgnx-lint-patterns--gate-exempt-misnamed (drgnx-lint-patterns--gate-exempt-rows)
+                                                         (drgnx-lint-patterns--gated-test-names))))
+
+(ert-deftest drgnx-lint/gate-exempt-only-shrinks ()
+  (should-not (drgnx-lint-patterns--gate-exempt-new (drgnx-lint-patterns--gate-exempt-rows)
+                                                    drgnx-lint-patterns--gate-exempt-allowed)))
+
+(ert-deftest drgnx-lint/gate-unnamed-ok-only-where-listed ()
+  (let (bad)
+    (dolist (rel (drgnx-lint-classes--files))
+      (unless (member rel drgnx-lint-patterns--unnamed-ok-allowed)
+        (when (drgnx-lint-patterns--unnamed-ok-p
+               (drgnx-lint-classes--forms (expand-file-name rel drgnx-dir)))
+          (push rel bad))))
+    (should-not (nreverse bad))))
+
 ;;;; The lints bite
+
+(ert-deftest drgnx-lint/gate-exempt-lints-bite ()
+  ;; a row that names a test the gated files do not hold, or one that is not allowed, fails
+  (should (equal (drgnx-lint-patterns--gate-exempt-misnamed '((a/b :why "x") (c/d :why "y")) '("a/b" "e/f")) '("c/d")))
+  (should-not (drgnx-lint-patterns--gate-exempt-misnamed '((a/b :why "x")) '("a/b" "e/f")))
+  (should (equal (drgnx-lint-patterns--gate-exempt-new '((a/b :why "x") (c/d :why "y")) '(a/b)) '("c/d")))
+  (should-not (drgnx-lint-patterns--gate-exempt-new '((a/b :why "x")) '(a/b c/d)))
+  (should-not (drgnx-lint-patterns--gate-exempt-new nil nil)))
+
+(ert-deftest drgnx-lint/gate-unnamed-ok-lint-bites ()
+  (dolist (bad '("(let ((drgnx-test-gate-unnamed-ok t)) (f))" "(setq drgnx-test-gate-unnamed-ok t)"
+                 "(ert-deftest a/b () (let* ((x 1) (drgnx-test-gate-unnamed-ok t)) (f)))"
+                 "(setq-default drgnx-test-gate-unnamed-ok t)"))
+    (should (drgnx-lint-patterns--unnamed-ok-p (car (read-from-string (concat "(" bad ")"))))))
+  (dolist (ok '("(f)" "(defvar x 'drgnx-test-gate-unnamed-ok)" "(message \"drgnx-test-gate-unnamed-ok\")"
+                ";; drgnx-test-gate-unnamed-ok\n(f)" "(let ((x 1)) (f x))"))
+    (should-not (drgnx-lint-patterns--unnamed-ok-p (car (read-from-string (concat "(" ok ")")))))))
 
 (ert-deftest drgnx-lint/handshake-lint-bites ()
   (let ((rule #'drgnx-lint-patterns--rule-handshake))
