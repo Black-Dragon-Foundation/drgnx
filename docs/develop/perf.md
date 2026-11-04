@@ -533,10 +533,12 @@ and the deltas of the watchdog's own summary lines). The difference comes from N
 Without the feature the probe reports `:watchdog nil` and no stalls row is judged. The soak also prints `(:heap :live_mb
 F)`, the live Lisp heap after its last collection (from `garbage-collect-heapsize`); reported, not gated.
 
-**The switch.** `DRGNX_PERF_WATCHDOG` is read once when a session records: unset or `default` runs
-the watchdog at 100 ms (the shipped configuration), `on` at 1 ms (the stress case), `off` leaves it off. The switch is
-`drgnx-watchdog-mode`, so `off` also stops the doctor's record hook and idle timer; the synthetic day applies it as the
-session starts, before build-up.
+**The switch.** `DRGNX_PERF_WATCHDOG` is applied when a recording starts (`drgnx-perf-begin`): unset or `default` runs
+the watchdog at 100 ms (the shipped configuration), `on` at 1 ms (the stress case), `off` leaves it off. A watchdog
+already in that state is not restarted. The switch is `drgnx-watchdog-mode`, so `off` also stops the doctor's record
+hook and idle timer. `drgnx-perf-end` puts the watchdog back as it was before the recording (mode and threshold), so a
+recording leaves nothing running; the synthetic day applies the switch itself as the session starts, before
+build-up, and it stays for the whole day.
 
 **Budgets.** `(W (:stalls) 0)`, `(W (:gc :max) 250)` and `(W (:gc :p95) 50)` for every input workload. They are
 reported until seeded (`drgnx-perf-watchdog-gated`), as every new row is. The GC max is skipped when the workload

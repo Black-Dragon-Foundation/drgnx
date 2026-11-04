@@ -141,17 +141,41 @@ the compositor (`wl_surface.commit'), on either side of an A/B.")
 (defvar drgnx-perf--watchdog-applied nil "Non-nil once $DRGNX_PERF_WATCHDOG has been applied in this session.")
 (defvar drgnx-perf--stalls nil "While recording: the stall records the watchdog resolved, newest first.")
 
+(defvar drgnx-perf--watchdog-prior nil
+  "What the running recording's `drgnx-perf-begin' applied of $DRGNX_PERF_WATCHDOG, for `drgnx-perf-end' to undo: nil
+(nothing applied), t (applied, nothing changed) or (ON . THRESHOLD), the watchdog as it was before.")
+
 (defun drgnx-perf--watchdog-env ()
-  "Apply $DRGNX_PERF_WATCHDOG once per session: unset or `default' runs `nidhogg-watchdog-mode' at 100 ms (the shipped
-configuration), `on' at 1 ms (the stress case), `off' leaves it off.  Without the feature, nothing."
+  "Apply $DRGNX_PERF_WATCHDOG once (until `drgnx-perf--watchdog-restore'): unset or `default' runs
+`nidhogg-watchdog-mode' at 100 ms (the shipped configuration), `on' at 1 ms (the stress case), `off' leaves it off.
+A watchdog already in that state is not restarted.  Without the feature, nothing.  Returns nil when it did not apply,
+t when nothing had to change, else (ON . THRESHOLD) as they were before."
   (when (and (not drgnx-perf--watchdog-applied) (featurep 'nidhogg-watchdog))
     (setq drgnx-perf--watchdog-applied t)
     (let* ((v (getenv "DRGNX_PERF_WATCHDOG"))
-           (ms (cond ((equal v "off") nil) ((equal v "on") 1) (t 100))))
-      (drgnx-perf--watchdog-set nil)
-      (when ms
-        (setq nidhogg-watchdog-threshold ms)
-        (drgnx-perf--watchdog-set t)))))
+           (ms (cond ((equal v "off") nil) ((equal v "on") 1) (t 100)))
+           (prior (cons (and (drgnx-perf--watchdog-on-p) t)
+                        (and (boundp 'nidhogg-watchdog-threshold) nidhogg-watchdog-threshold))))
+      (if (if ms (and (car prior) (eql (cdr prior) ms)) (not (car prior)))
+          t
+        (drgnx-perf--watchdog-set nil)
+        (when ms
+          (setq nidhogg-watchdog-threshold ms)
+          (drgnx-perf--watchdog-set t))
+        prior))))
+
+(defun drgnx-perf--watchdog-restore ()
+  "Undo what `drgnx-perf-begin' applied of $DRGNX_PERF_WATCHDOG: the watchdog's mode and threshold as they were, and
+the next `drgnx-perf-begin' applies it again.  What another caller of `drgnx-perf--watchdog-env' applied (the
+synthetic day) stays."
+  (let ((prior drgnx-perf--watchdog-prior))
+    (setq drgnx-perf--watchdog-prior nil)
+    (when prior
+      (setq drgnx-perf--watchdog-applied nil)
+      (when (consp prior)
+        (drgnx-perf--watchdog-set nil)
+        (when (cdr prior) (setq nidhogg-watchdog-threshold (cdr prior)))
+        (when (car prior) (drgnx-perf--watchdog-set t))))))
 
 (defun drgnx-perf--watchdog-set (on)
   "Turn the whole watchdog stack on or off.  A drgnx session has already started it at init, through
@@ -299,7 +323,7 @@ without the watchdog."
   "Start recording: every command's latency, every GC pause, memory, Glitnir's frame-time record (the
 compose probe: reset here, read by `drgnx-perf-end' under :compose) and the stall watchdog's records (`:stalls')."
   (drgnx-perf--glitnir-env)
-  (drgnx-perf--watchdog-env)
+  (setq drgnx-perf--watchdog-prior (drgnx-perf--watchdog-env))
   (drgnx-perf--stalls-begin)
   (drgnx-perf--compose-stats t)
   (setq drgnx-perf--latencies nil drgnx-perf--allocs nil drgnx-perf--cpus nil drgnx-perf--t0 nil drgnx-perf--presents nil
@@ -320,7 +344,7 @@ with the load on the machine; wall clock does.  :compose is Glitnir's record sin
   (remove-hook 'post-gc-hook #'drgnx-perf--gc)
   (pcase-let ((`(,gcs ,elapsed ,rss ,rows) drgnx-perf--start)
               (compose (drgnx-perf--compose-stats))
-              (stalls (drgnx-perf--stalls-end)))
+              (stalls (prog1 (drgnx-perf--stalls-end) (drgnx-perf--watchdog-restore))))
     (append
      stalls
      (list :gc (drgnx-perf--gc-row drgnx-perf--gc-pauses)

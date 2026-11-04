@@ -65,6 +65,37 @@ stubbed the way the real one acts: it carries Nidhogg's mode with it."
 (defun perf-watchdog-test--stats (spans missed cpu drain)
   (list :spans spans :missed missed :stale 0 :stalls 0 :monitor-cpu-ms cpu :drain drain))
 
+(ert-deftest drgnx-perf/a-recording-puts-the-watchdog-back ()
+  ;; begin applies the arm for the recording, end puts the watchdog back as it found it (mode and threshold), and the
+  ;; next begin applies the arm again; what the synthetic day applied itself stays through its recordings
+  (cl-letf (((symbol-function 'nidhogg-watchdog-drain-now) #'ignore)
+            ((symbol-function 'nidhogg-watchdog-stats)
+             (lambda (&optional _) (perf-watchdog-test--stats 0 0 0.0 [0 0 0 0 0 0 0 0 0]))))
+    ;; (ARM WAS-ON THRESHOLD ON-DURING THRESHOLD-DURING)
+    (dolist (case '(("off" t 100 nil 100) ("on" t 100 t 1) ("default" nil 100 t 100) ("default" t 100 t 100)))
+      (pcase-let ((`(,arm ,was ,thr ,during ,during-thr) case))
+        (let ((process-environment (cons (concat "DRGNX_PERF_WATCHDOG=" arm) process-environment)))
+          (perf-watchdog-test--with-feature
+           (let ((drgnx-perf--watchdog-prior nil) (nidhogg-watchdog-record-functions nil))
+             (setq drgnx-watchdog-mode was nidhogg-watchdog-mode was nidhogg-watchdog-threshold thr)
+             (dotimes (_ 2)
+               (drgnx-perf-begin)
+               (should (eq nidhogg-watchdog-mode during))
+               (should (= nidhogg-watchdog-threshold during-thr))
+               (drgnx-perf-end)
+               (should (eq nidhogg-watchdog-mode was))
+               (should (eq drgnx-watchdog-mode was))
+               (should (= nidhogg-watchdog-threshold thr))))))))
+    (let ((process-environment (cons "DRGNX_PERF_WATCHDOG=off" process-environment)))
+      (perf-watchdog-test--with-feature
+       (let ((drgnx-perf--watchdog-prior nil) (nidhogg-watchdog-record-functions nil))
+         (setq drgnx-watchdog-mode t nidhogg-watchdog-mode t)
+         (drgnx-perf--watchdog-env)
+         (drgnx-perf-begin)
+         (drgnx-perf-end)
+         (should-not nidhogg-watchdog-mode)
+         (should-not drgnx-watchdog-mode))))))
+
 (defvar nidhogg-watchdog--drain-edges)
 
 (ert-deftest drgnx-perf/stalls-probe-shape ()
