@@ -6,7 +6,8 @@
 ;; (drgnx-test-hub-advance MS [HOLD])    the hub's clock moved by MS, then `drgnx-test-deliver-all' (not with HOLD)
 ;; (drgnx-test-gate-conn NAME)           the process of connection NAME (`call-1', `sub-1', ...)
 ;; (drgnx-test-gate-held NAME)           what the gate holds for NAME: its lines, then `:eof'
-;; (drgnx-test-gate-transcript)          what the gate delivered so far: ((NAME . LINE-or-:eof) ...)
+;; (drgnx-test-gate-transcript)          what the gate delivered so far: ((NAME . LINE-or-:eof) ...), and
+;;                                       (:child . PROCESS-NAME) where a real look handed over a child's output
 ;;
 ;; DRGNX_TEST_GATE_SWAP=K                the K-th adjacent pair of released lines from different connections is handed
 ;;                                       over the other way round; each gated run prints `drgnx-gate-swap-pairs: N'
@@ -415,13 +416,42 @@ Whether anything was released."
                                 (not (drgnx-test-gate--conn-challenged c)))))
            drgnx-test-gate--conns))
 
+(defun drgnx-test-gate--calls-out ()
+  "The calls out on the gated connections whose answers only a step or `drgnx-test-deliver-all' releases (not
+handshake or `(:answers ...)' ones), on connections the client has not seen end: ((NAME ID METHOD) ...)."
+  (cl-loop for c in drgnx-test-gate--conns
+           unless (or (drgnx-test-gate--conn-deleted c)
+                      (and (drgnx-test-gate--conn-ended c) (not (drgnx-test-gate--conn-eof c))))
+           nconc (cl-loop for s in (drgnx-test-gate--conn-sent c)
+                          unless (nth 2 s) collect (list (drgnx-test-gate--conn-name c) (nth 0 s) (nth 1 s)))))
+
 (defun drgnx-test-gate--children ()
-  "The body's live real children the code under test may wait on: started inside the body, not peers (a hub, a mock
-server or a handshake child the test drives: `:drgnx-test-peer').  The hub's jobs are its children, not these."
-  (cl-remove-if-not (lambda (p) (and (eq (process-type p) 'real) (process-live-p p)
+  "The body's live children the code under test may wait on, started inside the body: real processes, and network
+clients (a connection to a peer server, as url.el's to the mock LLM; not a server, not the gate's own connections).
+Not peers (a hub, a mock server or a handshake child the test drives: `:drgnx-test-peer'; a server's accepted
+connections inherit its properties).  The hub's jobs are its children, not these."
+  (cl-remove-if-not (lambda (p) (and (pcase (process-type p)
+                                       ('real t)
+                                       ('network (not (or (process-contact p :server) (drgnx-test-gate--of p)
+                                                          (eq p drgnx-test-gate--control)))))
+                                     (process-live-p p)
                                      (not (memq p drgnx-test-gate--before))
                                      (not (process-get p :drgnx-test-peer))))
                     (process-list)))
+
+(defun drgnx-test-gate--look (secs)
+  "A real look of up to SECS at every process (`accept-process-output' with no process); its result.  Each time it
+hands the client output of one of the body's children (`drgnx-test-gate--children'), the transcript gets
+\(:child . NAME): the order of that output against the hub lines is real time's, not the schedule's."
+  (let ((notes (mapcar (lambda (p)
+                         (let ((name (process-name p)))
+                           (cons p (lambda (&rest _)
+                                     (unless (equal (car drgnx-test-gate--transcript) (cons :child name))
+                                       (push (cons :child name) drgnx-test-gate--transcript))))))
+                       (drgnx-test-gate--children))))
+    (dolist (n notes) (add-function :before (process-filter (car n)) (cdr n)))
+    (unwind-protect (funcall drgnx-test-gate--raw nil secs)
+      (dolist (n notes) (remove-function (process-filter (car n)) (cdr n))))))
 
 (defun drgnx-test-gate--on-children (children)
   "A timed wait of the code under test while CHILDREN (`drgnx-test-gate--children') live: no virtual time moves, a
@@ -429,7 +459,7 @@ real look of up to 50 ms instead.  Non-nil when output came (from any process) o
 for `drgnx-test-gate-block-secs' of real time fails the test, naming the children and the code that waits."
   (let ((now (drgnx-test-real-time)))
     (unless drgnx-test-gate--progress (setq drgnx-test-gate--progress now))
-    (if (or (funcall drgnx-test-gate--raw nil 0.05)
+    (if (or (drgnx-test-gate--look 0.05)
             (cl-notevery #'process-live-p children))
         (progn (setq drgnx-test-gate--progress (drgnx-test-real-time)) t)
       (when (> (- (drgnx-test-real-time) drgnx-test-gate--progress) drgnx-test-gate-block-secs)
@@ -441,7 +471,9 @@ for `drgnx-test-gate-block-secs' of real time fails the test, naming the childre
 (defun drgnx-test-gate--idle (orig process seconds millisec just-this-one)
   "A wait with nothing to release: one on another process is the clock's own.  A timed one while the body's real
 children live waits on them for real (`drgnx-test-gate--on-children'); else a zero-length look, virtual time moved by
-its timeout (its timers running), and a look again.  Nil: nothing was delivered."
+its timeout (its timers running), and a look again.  Nil: nothing was delivered.  Past the schedule's last step, a
+timed wait with a call out whose answer the gate holds fails the test: the jump would take the code under test to its
+deadline, and it would take its timeout path for an answer the hub gave."
   (if (and process (not (drgnx-test-gate--of process)))
       (funcall orig process seconds millisec just-this-one)
     (let* ((secs (drgnx-test--wait-secs seconds millisec))
@@ -449,7 +481,7 @@ its timeout (its timers running), and a look again.  Nil: nothing was delivered.
       (cond
        ;; a step waits on a line the hub may still hold: a real look, no virtual time (the step's own bound)
        ((and secs (> secs 0) drgnx-test-gate--awaiting)
-        (funcall drgnx-test-gate--raw nil (min secs 0.05))
+        (drgnx-test-gate--look (min secs 0.05))
         nil)
        (children
         (drgnx-test-gate--on-children children))
@@ -457,6 +489,10 @@ its timeout (its timers running), and a look again.  Nil: nothing was delivered.
         (setq drgnx-test-gate--progress nil)
         (funcall drgnx-test-gate--raw process 0 nil just-this-one)
         (when (and secs (> secs 0))
+          (when-let* (((null drgnx-test-gate--steps)) (calls (drgnx-test-gate--calls-out)))
+            (drgnx-test-gate--fail "drgnx-test-gated: a timed wait after the last step, on an answer the gate holds"
+                                   :calls calls :caller (drgnx-test-gate--caller) :secs secs
+                                   :virtual-secs (drgnx-test-clock-now)))
           (drgnx-test-advance secs)
           (funcall drgnx-test-gate--raw process 0 nil just-this-one))
         nil)))))
@@ -482,7 +518,7 @@ looks."
 up to SECS that moves no virtual time.  A test's own wait never fails for a pause."
   (drgnx-test-gate--rethrow)
   (unless (and (not (drgnx-test-gate--paused-p)) (drgnx-test-gate--release))
-    (funcall drgnx-test-gate--raw nil secs)))
+    (drgnx-test-gate--look secs)))
 
 ;;;; Advice on the client and on Emacs
 
@@ -723,7 +759,8 @@ advance's result."
             (drgnx-test-gate--conn-queue c))))
 
 (defun drgnx-test-gate-transcript ()
-  "What the gate has delivered, oldest first: (NAME . LINE) for a line (without the newline), (NAME . :eof) for an end."
+  "What the gate has delivered, oldest first: (NAME . LINE) for a line (without the newline), (NAME . :eof) for an end,
+\(:child . PROCESS-NAME) where a real look handed the client output of a child of the body (once per run of it)."
   (reverse drgnx-test-gate--transcript))
 
 ;;;; The macro
@@ -774,6 +811,10 @@ advance's result."
         (progn (dolist (a drgnx-test-gate--advice) (advice-add (nth 0 a) (nth 1 a) (nth 2 a)))
                (funcall body)
                (drgnx-test-gate--flush)
+               ;; a step or a pause left: the order the schedule names never happened, whatever the body asserted
+               (when (and drgnx-test-gate--steps (not drgnx-test-gate--failure))
+                 (drgnx-test-gate--fail "drgnx-test-gated: the body ended with steps it never released"
+                                        :steps drgnx-test-gate--steps))
                (setq ok t)
                ;; `bin/drgnx test --orders' reads the count to know how many K there are
                (when drgnx-test-gate--swap (message "drgnx-gate-swap-pairs: %d" drgnx-test-gate--swap-pairs)))
@@ -822,12 +863,14 @@ releases what is due up to the next pause: a step is due once its connection is 
 gone out; the gate then waits, for real, for an answer's line.  An event, a line or an end the hub may still hold (a
 job's end) is not waited for inside the gate: the gate asks the hub for a barrier, and until the line comes each timed
 wait is a real look that moves no virtual time (`drgnx-test-gate--await').  A timed wait with nothing to release is a
-zero-length look and a virtual advance by its timeout; while a real child BODY started lives (not a peer,
-`:drgnx-test-peer'), it is a real look instead and no virtual time moves (`drgnx-test-gate--on-children').  While
-paused, a wait in the code under test with a line held or a call out fails the test at once, naming the pause and the
-caller; the test's own `drgnx-test-wait' just looks.  Lines the schedule does
-not name stay held until `drgnx-test-deliver-all'.  Each line the client sends on a gated connection is stamped with
-`__seq'."
+zero-length look and a virtual advance by its timeout; while a real child or a network client BODY started lives (not
+a peer, `:drgnx-test-peer'), it is a real look instead and no virtual time moves (`drgnx-test-gate--on-children'), and
+the transcript notes each child whose output a real look handed over.  While paused, a wait in the code under test
+with a line held or a call out fails the test at once, naming the pause and the caller; the test's own
+`drgnx-test-wait' just looks.  Past the last step, a timed wait in the code under test with a call out whose answer
+the gate holds fails the same way.  Lines the schedule does not name stay held until `drgnx-test-deliver-all'.  A body
+that ends with a step or a pause left fails the test.  Each line the client sends on a gated connection is stamped
+with `__seq'."
   (declare (indent 1))
   `(drgnx-test-gate--call ,schedule (lambda () ,@body)))
 

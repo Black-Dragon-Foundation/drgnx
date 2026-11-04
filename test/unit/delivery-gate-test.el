@@ -176,6 +176,33 @@ naming the pause, the next step and the caller."
       ;; at its first wait: not one virtual tick toward the call's deadline went by
       (should (equal (plist-get data :virtual-secs) 0.0)))))
 
+(ert-deftest drgnx-delivery-gate/a-nested-wait-after-the-last-step-fails-naming-the-call ()
+  "Past the schedule's last step, `drgnx-hub-call-sync' waiting for an answer the gate holds fails the test at once,
+naming the call and the caller: a virtual jump would take the code to its deadline, and it would take its timeout path
+for an answer the hub gave."
+  (drgnx-delivery-gate-test--with-hub
+    (let* ((err (should-error (drgnx-test-gated nil
+                                (drgnx-hub-call-sync "ping" nil 10))
+                              :type 'ert-test-failed))
+           (data (cdr (cadr err))))
+      (should (string-match-p "after the last step" (car (cadr err))))
+      (should (member "ping" (mapcar (lambda (c) (nth 2 c)) (plist-get data :calls))))
+      (should (eq (plist-get data :caller) 'drgnx-hub-call-sync))
+      (should (< (plist-get data :virtual-secs) 10)))))
+
+(ert-deftest drgnx-delivery-gate/a-body-that-ends-with-steps-left-fails-naming-them ()
+  "A step the body never released (its call never made: a misspelt method) or a pause never continued fails the test
+when the body ends: the order the schedule names never happened, whatever the body asserted."
+  (drgnx-delivery-gate-test--with-hub
+    ;; (SCHEDULE STEPS-LEFT CALL): with (:answers t) the ping is answered and the misspelt step is never due; at the
+    ;; pause the body makes no call (a wait there would fail as one while paused)
+    (dolist (c '((((:answers t) (call-1 :answer "gateway/keys-helt")) ((call-1 :answer "gateway/keys-helt")) t)
+                 (((:pause "never")) ((:pause "never")) nil)))
+      (let ((err (should-error (drgnx-test-gated (car c) (when (nth 2 c) (drgnx-hub-call-sync "ping" nil 10)))
+                               :type 'ert-test-failed)))
+        (should (string-match-p "steps it never released" (car (cadr err))))
+        (should (equal (plist-get (cdr (cadr err)) :steps) (cadr c)))))))
+
 ;;;; A line the hub holds
 
 (ert-deftest drgnx-delivery-gate/a-step-for-a-held-write-gets-it-from-the-hub ()
@@ -256,6 +283,51 @@ bound, naming the child and the code that waits; never a timeout the code would 
     (should (string-match-p "a real child" (car (cadr err))))
     (should (equal (car (car (plist-get data :children))) "drgnx-gate-child"))
     (should (eq (plist-get data :caller) 'drgnx-onboard--wait))))
+
+(ert-deftest drgnx-delivery-gate/a-childs-output-a-real-look-hands-over-is-in-the-transcript ()
+  "A real look that hands the client a child's output records it in the transcript, (:child . NAME), among the hub
+lines: that order is real time's, not the schedule's, and the transcript says so."
+  (let ((said (list nil)) transcript)
+    (drgnx-test-gated nil
+      (drgnx-delivery-gate-test--child "sleep 0.2; echo answered" said)
+      (drgnx-onboard--wait (lambda () (car said)) 0.1)
+      (setq transcript (drgnx-test-gate-transcript))
+      (drgnx-test-deliver-all))
+    (should (equal (car said) "answered\n"))
+    (should (cl-find-if (lambda (e) (and (eq (car e) :child) (string-prefix-p "drgnx-gate-child" (cdr e)))) transcript))))
+
+(ert-deftest drgnx-delivery-gate/a-wait-on-a-network-client-moves-no-virtual-time ()
+  "A connection the body opens to a peer server (url.el's to the mock LLM, say) is waited on like a child: a timed
+wait in the code under test while it is open is a real look, so the server's answer, after real time passed, comes
+within the code's deadline."
+  (let* ((dir (make-temp-file "drgnx-gate-net" t)) (sock (expand-file-name "s" dir)) (said (list nil))
+         ;; the server, started before the body (so never waited on): it answers each connection 0.2 s after it came
+         (server (make-process
+                  :name "drgnx-gate-server" :noquery t :connection-type 'pipe
+                  ;; (the server's program is text: its pause is the peer's, not the test's)
+                  :command (list (expand-file-name invocation-name invocation-directory) "-Q" "--batch" "--eval"
+                                 (format "(progn (make-network-process :name \"s\" :server t :family 'local :service %S
+                                                   :log (lambda (_s c _m) (sleep-for 0.2)
+                                                          (process-send-string c \"answered\\n\")))
+                                                 (send-string-to-terminal \"ready\\n\")
+                                                 (while t (accept-process-output nil 1)))"
+                                         sock))
+                  :filter (lambda (p s) (process-put p :out (concat (process-get p :out) s)))))
+         got now client)
+    (unwind-protect
+        (progn
+          (drgnx-test-wait (lambda () (string-search "ready" (or (process-get server :out) ""))) :what "the server")
+          (drgnx-test-gated nil
+            (setq client (make-network-process :name "drgnx-gate-client" :family 'local :service sock :noquery t
+                                               :filter (lambda (_p s) (setcar said (concat (car said) s)))))
+            (setq got (drgnx-onboard--wait (lambda () (car said)) 0.1)
+                  now (drgnx-test-clock-now))
+            (delete-process client)
+            (drgnx-test-deliver-all))
+          (should (equal got "answered\n"))
+          (should (= now 0)))
+      (when (process-live-p server) (delete-process server))
+      (delete-directory dir t))))
 
 (ert-deftest drgnx-delivery-gate/a-deleted-connection-gets-nothing-it-held ()
   "The client deletes a connection while the gate holds its lines: its sentinel runs once, at the delete, and nothing

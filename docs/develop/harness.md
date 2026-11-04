@@ -1155,8 +1155,11 @@ when there is none) and tags each of the file's tests `:orders`, `:gated` and `:
 **The register.** `test/pattern-pending.eld` lists the `cond` files that have no line yet. A `cond` file with no line
 that is not listed fails `drgnx-lint/every-cond-file-has-a-pattern-or-is-pending`, and a listed file that has a line, or
 is gone, fails `drgnx-lint/pending-rows-only-shrink`: the register only shrinks, and every new `cond` file carries a
-pattern. A row is a file name, or `(FILE :why STRING)` for a file that cannot meet a pattern. The register being
-empty is the end of the migration.
+pattern. `drgnx-lint/the-registers-equal-their-constants` holds the rows equal to a snapshot constant in
+`lint-test-patterns-test.el` (`drgnx-lint-patterns--pending-allowed`): a row added fails, and so does a row removed
+from the register but left in the constant, so a shrink edits both and a removed row cannot come back. A row is a file
+name, or `(FILE :why STRING)` for a file that cannot meet a pattern. The register being empty is the end of the
+migration.
 
 **The gate-exempt register.** `test/gate-exempt.eld` lists the tests of `gated` files that never enter
 `drgnx-test-gated`: `(TEST-SYMBOL :why STRING)`, one row per test. Those against a fake hub are pure against a lying
@@ -1164,8 +1167,13 @@ peer and stay; the others say "not converted". The audit holds every other test 
 ([The audit](#the-audit-what-a-deterministic-test-really-runs)); a listed one is skipped. The register only shrinks:
 `drgnx-lint/gate-exempt-rows-name-tests-in-gated-files` fails a row that names a test that is gone or not in a gated
 file, and `drgnx-lint/gate-exempt-only-shrinks` holds the rows to a constant in `lint-test-patterns-test.el` that
-only loses entries. `drgnx-test-gate-unnamed-ok` is a stopgap until the hub's agent-session tasks run on its clock:
-`drgnx-lint/gate-unnamed-ok-only-where-listed` lets only the two agents-mirror test files bind or set it.
+only loses entries; `drgnx-lint/the-registers-equal-their-constants` holds the two equal, as for the pattern register.
+`drgnx-test-gate-unnamed-ok` is a stopgap until the hub's agent-session tasks run on its clock:
+`drgnx-lint/gate-unnamed-ok-only-where-listed` lets only the two agents-mirror test files bind or set it. A process
+marked `:drgnx-test-peer` is one the gate never waits on for the code under test ([The delivery
+gate](#the-delivery-gate)); `drgnx-lint/test-peer-only-from-fixtures` lets only the fixtures (`test/fixtures/`: the
+mock LLM, a handshake child) and two test files mark one: the gate's own tests, and the hub the hub-client tests start
+(`drgnx-lint-patterns--peer-allowed`).
 
 **The rules.** `test/unit/lint-test-patterns-test.el` reads the files that name a pattern (it never loads them) with
 the class lints' reader: test-defining macros are expanded and the file's own helpers are followed; a fixture macro
@@ -1183,7 +1191,10 @@ is a plain form.
 - **gated** (`drgnx-lint/gated-asserts-follow-deliver-all`): in the body, every `should`, `should-not` and
   `should-error` comes after a `drgnx-test-deliver-all` or `drgnx-test-hub-advance` at the same or an outer level: a
   delivery in a `let` binding or an argument counts for what follows; one inside a branch (`if`, `when`, `cond`,
-  `and`, a loop, a lambda) counts only inside it.
+  `and`, a loop, a lambda) counts only inside it. An assertion after the macro needs no delivery: the gate fails a
+  body that ends with a step or a pause left, so by then the client has seen every line the schedule names, and the
+  lines no step named were dropped, never delivered. A wait after the macro would let the hub's lines reach the client
+  ungated, and the audit fails that.
 - **orders** (`drgnx-lint/orders-tests-declare-their-kinds`): `drgnx-test-every-order` has a non-empty `:kinds`: a
   quoted list, a `list` of something, or a named constant.
 
@@ -1270,6 +1281,12 @@ the client half of the `gated` pattern; the hub half is Ratatoskr's test clock a
   under test while paused, with a line held or a call out, fails the test at once, naming the pause, the next step and
   the waiting function: it would only end at a deadline. The test's own `drgnx-test-wait` just looks, so the test can
   wait there for what it set up (`(drgnx-test-gate-held NAME)`: the held lines, then `:eof`).
+- **Past the last step,** a timed wait in the code under test that would move virtual time while a call is out whose
+  answer the gate holds (one no handshake rule or `(:answers …)` releases) fails the test the same way, naming the
+  calls and the waiting function: the jump would take the code to its deadline, and it would take its timeout path for
+  an answer the hub gave. Release that answer with a step, or `(:answers METHOD)`.
+- **The body's end.** A body that ends with a step or a pause left fails the test, naming the steps: the order the
+  schedule names never happened (a call never made, a misspelt method, a pause never continued).
 - **Stamps.** Each line the client writes on a gated connection gets `"__seq": N`, counted across connections in the
   order written, and the hub serves them in that order. The gate waits for each new connection's challenge as it
   opens, so the hub knows a connection before any later line is stamped.
@@ -1290,14 +1307,19 @@ the client half of the `gated` pattern; the hub half is Ratatoskr's test clock a
   fire only when the test advances virtual time, never because real time passed while the gate waited.
 - **Real I/O under virtual time.** The code under test often waits on a virtual-clock loop (`float-time` and a timed
   `accept-process-output`) for real I/O. Who answers decides the rule:
-  - **A real child of this Emacs** (a curl to a provider, a version read) is outside the gate's control. A timed wait
-    in the code under test, with nothing to release, while a real child the body started is alive, moves no virtual
-    time. It is a real look of up to 50 ms instead, so the loop asks its condition again once output came or a child
-    ended. The loop's deadline is reached only when no such child is alive, so the answer counts however slow the
-    machine is. No output and no end for `drgnx-test-gate-block-secs` (30 s) of real time fails the test, naming the
-    children and the waiting function. A deadline never passes silently. Processes there before the body began, and
-    peers the test drives (`(process-put PROC :drgnx-test-peer t)`: a hub the test starts, the mock LLM
-    (`drgnx-ai-test-mock-llm`), a handshake child), are never waited on. Their timed waits stay virtual.
+  - **A real child of this Emacs** (a curl to a provider, a version read), or a **network client** the body opened
+    (url.el's connection to the mock LLM; not a server, not the gate's connections), is outside the gate's control.
+    A timed wait in the code under test, with nothing to release, while such a child of the body is alive, moves no
+    virtual time. It is a real look of up to 50 ms instead, so the loop asks its condition again once output came or
+    a child ended. The loop's deadline is reached only when no such child is alive, so the answer counts however slow
+    the machine is. No output and no end for `drgnx-test-gate-block-secs` (30 s) of real time fails the test, naming
+    the children and the waiting function. A deadline never passes silently. Processes there before the body began,
+    and peers the test drives (`(process-put PROC :drgnx-test-peer t)`: a hub the test starts, the mock LLM
+    (`drgnx-ai-test-mock-llm`), a handshake child; a server's accepted connections inherit its mark), are never waited
+    on. Their timed waits stay virtual. Only fixtures mark peers (the lint `drgnx-lint/test-peer-only-from-fixtures`).
+    Which comes first, a child's output or a hub line a step releases, is real time's choice, not the schedule's:
+    each real look that hands the client a child's output adds `(:child . PROCESS-NAME)` to the transcript, so a
+    test (or a failure) sees where it fell. A child whose order matters announces and parks (below).
   - **The hub, and the jobs it runs**, write hub lines (`exec/start`'s answer, `exec-done`, a notice). These come
     through the schedule or `drgnx-test-deliver-all`, never through real time, and a real look never releases one.
     A job's end is written by the hub's job task, so the hub's sequencer holds it until a barrier. A step that names
@@ -1320,7 +1342,8 @@ the client half of the `gated` pattern; the hub half is Ratatoskr's test clock a
 
   The audit's rules are unchanged: a real look reads a gated connection into the gate's queue, never into the
   client's filter.
-- `(drgnx-test-gate-transcript)` lists the deliveries so far, `(NAME . LINE)` or `(NAME . :eof)`, and
+- `(drgnx-test-gate-transcript)` lists the deliveries so far, `(NAME . LINE)`, `(NAME . :eof)` or `(:child .
+  PROCESS-NAME)` (a real look handed over a child's output), and
   `drgnx-test-gate--releasing` names the connection while the gate hands a line over. Hub chaos (`DRGNX_TEST_HUB_CHAOS`)
   leaves gated connections alone.
 - **Swap.** `DRGNX_TEST_GATE_SWAP=K` hands the K-th adjacent pair of lines released together from different connections
