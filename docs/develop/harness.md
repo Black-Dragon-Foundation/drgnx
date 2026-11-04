@@ -70,7 +70,9 @@ budget allows.
 
 `bin/drgnx test --one-process` (or `DRGNX_TEST_ONE_PROCESS=1`) runs every file in one Emacs instead: for hunting a
 leak from one file into another (run the files in question this way; a test that fails only here depends on what an
-earlier file left). `bin/drgnx check`'s `unit-timing` job does not: it runs a file per Emacs, as CI does, and the
+earlier file left). The GUI tiers' sessions, `--find-polluter` and the runner's own file children use the same mode.
+A one-Emacs run makes its temp directory in the short root (`/tmp/drgnx-t-XXXXXX`), as a file's Emacs does, when the
+caller's run directory is longer than 40 bytes (macOS's `$TMPDIR`): the hub's socket paths then fit. `bin/drgnx check`'s `unit-timing` job does not: it runs a file per Emacs, as CI does, and the
 tag prefilter starts one only for the files that hold a `:timing` test (a test that scans what is loaded, as the
 fingerprint's does, measures its own file's load, not every test file's). The runner unsets
 the variable for the tests themselves, so a test that runs the runner gets one Emacs per file unless it sets it. The
@@ -241,7 +243,12 @@ monitor (default 1600×900) and a Wayland display named after the session (or un
 i3: see [Compositors](#compositors)). Nothing is shown on your screen
 and nothing talks to your own Emacs.
 
-**Run directory** (`$XDG_STATE_HOME/drgnx/ui/<name>/`, override with `DRGNX_UI_STATE`):
+**Run directory** (`$XDG_STATE_HOME/drgnx/ui/<name>/`, override with `DRGNX_UI_STATE`; the `test-*` commands behind
+`drgnx test --ui`, `--scenario`, `--bench`, `--perf`, `--soak` and `--day` run in a directory of their own
+(`$DRGNX_RUN_TMP`, removed when they end) and keep their sessions' run directories in its `ui/`, unless
+`DRGNX_UI_STATE` names a root; every session, whatever its compositor, has a private `XDG_RUNTIME_DIR` next to its
+socket directory: its Wayland display and IPC sockets live there, never in the caller's. A session id is
+`drgnx-ui-N-HEX`, never reused, and another MCP client's session is refused unless adopted):
 
 ```
 session.json   name, socket, size, config

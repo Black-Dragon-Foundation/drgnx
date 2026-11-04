@@ -960,6 +960,30 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
                                  (drgnx-ui-test--env-value (drgnx-ui-session-env s) "DBUS_SESSION_BUS_ADDRESS")))
         (drgnx-ui-stop "drgnx-ui-1-00000a")))))
 
+(ert-deftest drgnx-ui/the-bench-perf-soak-and-day-commands-run-their-sessions-at-their-tiers ()
+  ;; the CLI dispatch binds the tier its controller's sessions start with; no session is started here
+  (require 'drgnx-bench)
+  (require 'drgnx-perf-run)
+  (let (seen)
+    (cl-letf (((symbol-function 'drgnx-bench-run) (lambda () (push (cons 'bench drgnx-ui-session-tier) seen) 0))
+              ((symbol-function 'drgnx-perf-run) (lambda (&rest _) (push (cons 'perf drgnx-ui-session-tier) seen) 0))
+              ((symbol-function 'drgnx-perf-soak) (lambda (&rest _) (push (cons 'soak drgnx-ui-session-tier) seen) 0))
+              ((symbol-function 'drgnx-perf-day) (lambda (&rest _) (push (cons 'day drgnx-ui-session-tier) seen) 0)))
+      (dolist (c '("test-bench" "test-perf" "test-soak" "test-day")) (drgnx-ui--dispatch c nil)))
+    (should (equal (nreverse seen) '((bench . bench) (perf . perf) (soak . perf) (day . perf))))
+    (should (eq drgnx-ui-session-tier 'ui))))
+
+(ert-deftest drgnx-ui/a-test-command-keeps-its-state-root-in-the-run ()
+  ;; `bin/drgnx test --ui' and its siblings run in a directory of their own (DRGNX_RUN_TMP): their sessions' run
+  ;; directories go there too, never into the caller's state; a state root the caller names stays theirs.
+  (let ((roots nil))
+    (cl-letf (((symbol-function 'drgnx-ui-run-ui-tests) (lambda () (push (drgnx-ui-state-root) roots) 0)))
+      (let ((process-environment (append '("DRGNX_RUN_TMP=/tmp/run-x" "DRGNX_UI_STATE") process-environment)))
+        (drgnx-ui--dispatch "test-ui" nil))
+      (let ((process-environment (append '("DRGNX_RUN_TMP=/tmp/run-x" "DRGNX_UI_STATE=/tmp/mine") process-environment)))
+        (drgnx-ui--dispatch "test-ui" nil)))
+    (should (equal (nreverse roots) '("/tmp/run-x/ui" "/tmp/mine")))))
+
 ;;;; Scales and sizes (Glitnir plan Task 7)
 
 (ert-deftest drgnx-ui/scale-argv-mutter ()
