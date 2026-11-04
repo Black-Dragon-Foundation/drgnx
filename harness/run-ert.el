@@ -425,10 +425,14 @@ is virtual and not recorded; a process or a socket is real work under the fixtur
 ;; The pattern checks: a :gated test must see hub lines only through the delivery gate and open hub connections only
 ;; inside it; a :handshake test may signal only a parked handshake child.  The gate's own connection (the barrier and
 ;; the clock) has its own filter, and a line the gate delivers runs with `drgnx-test-gate--releasing' bound, so
-;; neither is flagged.
+;; neither is flagged.  As the static lint does, the gated checks hold only a test that enters `drgnx-test-gated': a
+;; gated file's fake-hub tests (the client's lying peer) run outside the gate by design.
 
 (defvar drgnx-run-ert--audit-pattern-current nil "The name of the :gated or :handshake test that runs now, or nil.")
 (defvar drgnx-run-ert--audit-pattern-seen nil "The (TEST . MESSAGE) pairs the pattern checks recorded, newest first.")
+(defvar drgnx-run-ert--audit-gate-entered nil "Whether the :gated test that runs now has entered `drgnx-test-gated'.")
+(defvar drgnx-run-ert--audit-gate-held nil
+  "The gated checks' messages for the test that runs now, newest first: recorded when it ends, if it entered the gate.")
 (defvar drgnx-test-gate--active)
 (defvar drgnx-test-gate--releasing)
 (declare-function drgnx-test-child-parked-p "handshake-fixture")
@@ -448,16 +452,24 @@ is virtual and not recorded; a process or a socket is real work under the fixtur
           (when drgnx-run-ert--audit-file
             (ignore-errors (write-region (concat row "\n") nil drgnx-run-ert--audit-file t 'silent))))))))
 
+(defun drgnx-run-ert--audit-gate-watch (_symbol newval _operation _where)
+  "Watcher of `drgnx-test-gate--active': note that the test that runs now entered the gate."
+  (when newval (setq drgnx-run-ert--audit-gate-entered t)))
+
+(defun drgnx-run-ert--audit-gated-hold (message)
+  "Hold MESSAGE of a gated check until the test ends (`drgnx-run-ert--audit-gate-held')."
+  (unless (member message drgnx-run-ert--audit-gate-held) (push message drgnx-run-ert--audit-gate-held)))
+
 (defun drgnx-run-ert--audit-filter-around (fn conn chunk)
-  "Around `drgnx-hub--client-filter': a line that arrives while the gate is not releasing is recorded."
+  "Around `drgnx-hub--client-filter': a line that arrives while the gate is not releasing is held for the record."
   (unless (and (boundp 'drgnx-test-gate--releasing) drgnx-test-gate--releasing)
-    (drgnx-run-ert--audit-pattern-record "gated test saw a hub line the gate did not release"))
+    (drgnx-run-ert--audit-gated-hold "gated test saw a hub line the gate did not release"))
   (funcall fn conn chunk))
 
 (defun drgnx-run-ert--audit-open-around (fn &rest args)
-  "Around `drgnx-hub--open': a connection opened outside `drgnx-test-gated' is recorded."
+  "Around `drgnx-hub--open': a connection opened outside `drgnx-test-gated' is held for the record."
   (unless (and (boundp 'drgnx-test-gate--active) drgnx-test-gate--active)
-    (drgnx-run-ert--audit-pattern-record "gated test opened a hub connection outside the gate"))
+    (drgnx-run-ert--audit-gated-hold "gated test opened a hub connection outside the gate"))
   (apply fn args))
 
 (defun drgnx-run-ert--audit-signal-around (fn &optional process &rest args)
@@ -473,6 +485,7 @@ is virtual and not recorded; a process or a socket is real work under the fixtur
 (defun drgnx-run-ert--audit-pattern-advise (tags)
   "Advise what the pattern checks of TAGS (`:gated', `:handshake') watch."
   (when (memq :gated tags)
+    (add-variable-watcher 'drgnx-test-gate--active #'drgnx-run-ert--audit-gate-watch)
     (advice-add 'drgnx-hub--client-filter :around #'drgnx-run-ert--audit-filter-around '((name . drgnx-run-ert-audit)))
     (advice-add 'drgnx-hub--open :around #'drgnx-run-ert--audit-open-around '((name . drgnx-run-ert-audit))))
   (when (memq :handshake tags)
@@ -481,6 +494,7 @@ is virtual and not recorded; a process or a socket is real work under the fixtur
 
 (defun drgnx-run-ert--audit-pattern-unadvise ()
   "Remove the pattern checks' advice."
+  (remove-variable-watcher 'drgnx-test-gate--active #'drgnx-run-ert--audit-gate-watch)
   (dolist (s (append '(drgnx-hub--client-filter drgnx-hub--open) drgnx-run-ert--audit-signals))
     (advice-remove s 'drgnx-run-ert-audit)))
 
@@ -494,14 +508,18 @@ fixtures' own tests (`drgnx-run-ert--audit-skip-files') are not audited."
          (ptags (and (not skip) (seq-filter (lambda (tag) (memq tag (ert-test-tags test))) '(:gated :handshake))))
          (name (symbol-name (ert-test-name test)))
          (drgnx-run-ert--audit-current (and audited name))
-         (drgnx-run-ert--audit-pattern-current (and ptags name)))
+         (drgnx-run-ert--audit-pattern-current (and ptags name))
+         (drgnx-run-ert--audit-gate-entered nil)
+         (drgnx-run-ert--audit-gate-held nil))
     (if (not (or audited ptags))
         (apply fn test args)
       (when audited (drgnx-run-ert--audit-advise))
       (when ptags (drgnx-run-ert--audit-pattern-advise ptags))
       (unwind-protect (apply fn test args)
         (when audited (drgnx-run-ert--audit-unadvise))
-        (when ptags (drgnx-run-ert--audit-pattern-unadvise))))))
+        (when ptags (drgnx-run-ert--audit-pattern-unadvise))
+        (when drgnx-run-ert--audit-gate-entered
+          (mapc #'drgnx-run-ert--audit-pattern-record (reverse drgnx-run-ert--audit-gate-held)))))))
 
 (defun drgnx-run-ert--audit-install (&optional file)
   "Turn the audit on; rows are also appended to FILE when given.  The audit's three variables are read once and removed

@@ -1122,6 +1122,10 @@ while they run, and each failure names the test and carries one of these message
   `quit-process`, `stop-process` or `continue-process` took a process for which `drgnx-test-child-parked-p` is nil (or
   a pid). `drgnx-test-child-signal` signals only a parked child, so a test that goes through it passes.
 
+The two gated checks hold only a test that enters `drgnx-test-gated`, as the static lint does: a gated file's tests
+against a fake hub (`test/fixtures/fake-hub.el`, the client's lying peer) run outside the gate by design. Their messages
+are kept until the test ends and recorded only if it entered the gate at some point.
+
 Without `DRGNX_TEST_AUDIT_FAIL=1` they are only reported as `drgnx-audit:` lines.
 
 ### Test patterns

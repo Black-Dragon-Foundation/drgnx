@@ -49,8 +49,12 @@
 (ert-deftest drgnx-run-ert-audit/a-gated-test-that-saw-an-unreleased-line-fails ()
   (let* ((dir (drgnx-run-ert-audit-test--file
                "gated"
-               '(x/unreleased (drgnx-hub--client-filter nil "{}\n") (should t))
-               '(x/released (let ((drgnx-test-gate--releasing 'call-1)) (drgnx-hub--client-filter nil "{}\n")) (should t))))
+               '(x/unreleased (let ((drgnx-test-gate--active t)) (drgnx-hub--client-filter nil "{}\n")) (should t))
+               '(x/released (let ((drgnx-test-gate--active t) (drgnx-test-gate--releasing 'call-1))
+                              (drgnx-hub--client-filter nil "{}\n"))
+                            (should t))
+               ;; a test that never enters the gate (a gated file's fake-hub test) is not held to it, as in the lint
+               '(x/no-gate (drgnx-hub--open nil) (drgnx-hub--client-filter nil "{}\n") (should t))))
          (j (apply #'drgnx-run-ert-audit-test--run dir drgnx-run-ert-audit-test--on)))
     (should-not (eql 0 (plist-get j :exit)))
     (should (equal '(("x/unreleased" . "gated test saw a hub line the gate did not release"))
@@ -62,7 +66,7 @@
 (ert-deftest drgnx-run-ert-audit/a-gated-test-that-opened-a-connection-outside-the-gate-fails ()
   (let* ((dir (drgnx-run-ert-audit-test--file
                "gated"
-               '(x/outside (drgnx-hub--open nil) (should t))
+               '(x/outside (let ((drgnx-test-gate--active t)) nil) (drgnx-hub--open nil) (should t))
                '(x/inside (let ((drgnx-test-gate--active t)) (drgnx-hub--open nil)) (should t))))
          (j (apply #'drgnx-run-ert-audit-test--run dir drgnx-run-ert-audit-test--on)))
     (should (equal '(("x/outside" . "gated test opened a hub connection outside the gate"))
