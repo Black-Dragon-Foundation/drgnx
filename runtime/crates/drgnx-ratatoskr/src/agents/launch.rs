@@ -1,8 +1,9 @@
 //! Sandboxed launch (Task 10; `docs/develop/gleipnir.md`, "Ratatoskr's side"): `launch::spawn(env, plan, req) ->
 //! draugr::Spec` for every worker and manager (its worktree writable, the lock's protected paths read-only, the
-//! network the matrix's `network` cell grants) and `launch::spawn_plain(env, plan, sid)` for a chat with no project (still
-//! in Gleipnir: a scratch cwd, provider network only).  No code path starts a session unsandboxed: `Unsandboxed` is
-//! never granted here, and a host with no sandbox refuses the launch.
+//! network the matrix's `network` cell grants), `launch::spawn_plain(env, plan, sid)` for a chat with no project (still
+//! in Gleipnir: a scratch cwd, provider network only) and `launch::spawn_chat(env, plan, sid, project)` for a chat in a
+//! project (the project read-only, its scratch dir writable, provider network only).  [`kind`] picks one.  No code path
+//! starts a session unsandboxed: `Unsandboxed` is never granted here, and a host with no sandbox refuses the launch.
 
 use crate::agents::lock::LaunchPlan;
 use crate::sandbox::{self, SessionShape};
@@ -41,11 +42,13 @@ pub struct Launch {
 }
 
 /// A worker or manager session's launch: its worktree is the only project path it can write.  A `Role::Chat` is
-/// refused (a chat has no worktree: [`spawn_plain`]).
+/// refused (a chat has no worktree: [`spawn_plain`] or [`spawn_chat`]).
 /// ENV is the hub's environment with the login shell's variables applied (`ShellEnv::paths_env`).
 pub fn spawn(env: &Env, plan: &LaunchPlan, req: &SandboxReq) -> Result<Launch, Refusal> {
     if req.role == Role::Chat {
-        return Err(refusal("a chat has no worktree: use spawn_plain"));
+        return Err(refusal(
+            "a chat has no worktree: use spawn_plain or spawn_chat",
+        ));
     }
     let (plan, shape) = worktree_launch(plan, req);
     launch(env, &plan, &shape)
@@ -80,6 +83,91 @@ pub fn spawn_plain(env: &Env, plan: &LaunchPlan, sid: &str) -> Result<Launch, Re
         net: NetCell::ProviderOnly,
     };
     launch(env, plan, &shape)
+}
+
+/// A chat in a project (design §4.2: project-scoped, read access per the matrix): [`chat_launch`]'s shape.
+pub fn spawn_chat(
+    env: &Env,
+    plan: &LaunchPlan,
+    sid: &str,
+    project: &Path,
+) -> Result<Launch, Refusal> {
+    let (plan, shape) = chat_launch(env, plan, sid, project)?;
+    launch(env, &plan, &shape)
+}
+
+/// The plan and shape of a chat in PROJECT: the project (as its true name: the editor's `default-directory` ends in a
+/// slash, and a link would be refused) is its cwd and read-only, its scratch dir (`scratch_dir`) the only writable
+/// path beside the CLI's login dir, and only the provider's network is reachable.  Nothing in the project can be
+/// written, so its git folder's hooks and config are out of reach as well; the lock's protected paths are not pinned
+/// (they are read-only with the rest), so nothing is made in the user's project and a linked `.envrc` is no refusal.
+/// A linked worktree's (or a submodule's) git folders outside the project are read-only too ([`outside_git_dirs`]), so
+/// `git log` and `git diff` work in it; they are never writable.
+pub fn chat_launch(
+    env: &Env,
+    plan: &LaunchPlan,
+    sid: &str,
+    project: &Path,
+) -> Result<(LaunchPlan, SessionShape), Refusal> {
+    let dir = sandbox::true_name(project)
+        .filter(|p| p.is_dir())
+        .ok_or_else(|| setup(project, "the chat's project is not a folder"))?;
+    let scratch = scratch_dir(env, sid)?;
+    let mut plan = plan.clone();
+    plan.protected_ro.clear();
+    let mut read = vec![dir.clone()];
+    read.extend(outside_git_dirs(&dir)?);
+    let shape = SessionShape {
+        sid: sid.to_string(),
+        cwd: dir,
+        write: vec![scratch],
+        read,
+        net: NetCell::ProviderOnly,
+    };
+    Ok((plan, shape))
+}
+
+/// The git folders PROJECT's git needs that lie outside it, as true names (`sandbox::git_dirs`): a linked worktree's
+/// or a submodule's `.git` is a file naming its own folder, and that folder's `commondir` the common one (the objects,
+/// refs and config).  The common folder is given, and the own one when it is not inside it.  A plain checkout (`.git`
+/// a folder) or no `.git` needs none.  A `.git` file whose folders do not resolve is refused: the chat's git would read
+/// nothing, and a path that is not its true name is never bound.
+pub fn outside_git_dirs(project: &Path) -> Result<Vec<PathBuf>, Refusal> {
+    let dot = project.join(".git");
+    if !dot.symlink_metadata().is_ok_and(|m| m.is_file()) {
+        return Ok(vec![]);
+    }
+    let g = sandbox::git_dirs(project)
+        .ok_or_else(|| setup(&dot, "names a git folder that does not resolve"))?;
+    let mut out: Vec<PathBuf> = Vec::new();
+    for d in [g.common, g.gitdir] {
+        if !d.starts_with(project) && !out.iter().any(|o| d.starts_with(o)) {
+            out.push(d);
+        }
+    }
+    Ok(out)
+}
+
+/// Which launch a session gets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// [`spawn_plain`]: a chat in its own scratch dir.
+    Plain,
+    /// [`spawn_chat`]: a chat in a project.
+    Chat,
+    /// [`spawn`]: a worker or manager in its worktree.
+    Worktree,
+}
+
+/// The launch of a session in ROLE working in CWD, whose scratch dir is SCRATCH.
+pub fn kind(role: Role, cwd: &Path, scratch: &Path) -> Kind {
+    if cwd == scratch {
+        Kind::Plain
+    } else if role == Role::Chat {
+        Kind::Chat
+    } else {
+        Kind::Worktree
+    }
 }
 
 /// A session's scratch dir, `<tmp>/drgnx-scratch-UID/SID`.  It is not in the session dir: that one is

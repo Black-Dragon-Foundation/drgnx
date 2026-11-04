@@ -606,8 +606,10 @@ the status bar.
 A session starts in this order (`agents/session.rs`): the matrix's cells for the session's columns, `lock::plan` (Claude's
 managed settings plus the deny/ask rules of the user's and the worktree's settings, Codex's `-c` overrides plus
 `projects."<cwd>".trust_level="untrusted"`, Gemini's `--approval-mode default`), a refusal of a worker or manager whose
-lock is not enforced unless the preset is autonomous, `launch::spawn` (`spawn_plain` for a chat in its own scratch
-directory; test builds spawn the mock unsandboxed), the sandbox status pipe read (`gleipnir::read_status`), the ACP
+lock is not enforced unless the preset is autonomous, a refusal of a chat in a project whose `chat.project-read`
+cell is never (the message names the row; it is not started without the project instead), `launch::spawn` (`spawn_plain` for a chat in its own scratch
+directory, `spawn_chat` for a chat in a project: the project read-only, its scratch directory the only writable path;
+test builds spawn the mock unsandboxed), the sandbox status pipe read (`gleipnir::read_status`), the ACP
 handshake, `lock::verify` (a lock that does not hold kills the session). Every permission request then goes through
 `MatrixGate::check` with the session's id (so a manager's delegation applies): allowed answers at once, never
 refuses at once, an ask waits for the user; a session's `exec/start` is checked as `code.edit` the same way.

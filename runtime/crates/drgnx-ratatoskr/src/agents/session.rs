@@ -572,10 +572,13 @@ struct Launched {
     gateway: Option<String>,
 }
 
-/// Where a path may be read or written: inside the session's directory; a brainstorm writes its document only.
+/// Where a path may be read or written: inside the session's directory; a brainstorm writes its document only, and a
+/// chat in a project writes nothing (the hub serves `fs/write_text_file` outside the sandbox, which binds the project
+/// read-only).
 pub(crate) struct Fence {
     pub cwd: PathBuf,
     pub document: Option<PathBuf>,
+    pub read_only: bool,
 }
 
 fn normalize(p: &Path) -> PathBuf {
@@ -629,6 +632,11 @@ impl Fence {
                 ))
             };
         }
+        if write && self.read_only {
+            return Err(format!(
+                "{path}: a chat reads its project and writes nothing in it"
+            ));
+        }
         if real.starts_with(resolve(&self.cwd))
             || (!write && self.document.as_ref().is_some_and(|d| real == resolve(d)))
         {
@@ -680,6 +688,28 @@ fn step_provider(profile: &AgentProfile) -> Option<String> {
     })
 }
 
+/// The role of a session `agents/start` makes: the one asked for, else a worker on a task or job, else a chat.
+fn start_role(asked: Option<Role>, task_or_job: bool) -> Role {
+    asked.unwrap_or(if task_or_job {
+        Role::Worker
+    } else {
+        Role::Chat
+    })
+}
+
+/// A chat in a project (`launch::Kind::Chat`) has the project bound read-only: refused when the matrix's
+/// `chat.project-read` is never for this session (its profile, its preset), rather than started without it.
+fn project_read_allowed(kind: launch::Kind, eff: &norn::matrix::Effective) -> Result<(), Error> {
+    if kind == launch::Kind::Chat
+        && eff.cell(Action::ChatProjectRead).verdict == norn::matrix::Verdict::Never
+    {
+        return Err(refuse(
+            "this chat may not read the project (chat.project-read is never): start it without a project",
+        ));
+    }
+    Ok(())
+}
+
 /// The launch of a test session: the plan's command, unsandboxed, with a short allowlisted environment.  Only tests
 /// and `test-hooks` builds have it (the mock agent lives outside any sandbox's reach); a shipped build always goes
 /// through `launch::spawn` and Gleipnir.
@@ -728,8 +758,9 @@ fn spawn_spec(
     Ok((spec, None, Some("a test launch: unsandboxed")))
 }
 
-/// The sandboxed launch: a worktree session writes its worktree only; a chat in its own scratch directory
-/// (`launch::scratch_dir`) is the plain one.  The network is the provider's alone: `Open` is never granted here.
+/// The sandboxed launch (`launch::kind`): a worktree session writes its worktree only; a chat in its own scratch
+/// directory (`launch::scratch_dir`) is the plain one; a chat in a project reads the project and writes its scratch
+/// directory only.  The network is the provider's alone: `Open` is never granted here.
 #[cfg(not(any(test, feature = "test-hooks")))]
 fn spawn_spec(
     shell: &crate::shell_env::ShellEnv,
@@ -748,10 +779,10 @@ fn spawn_spec(
     Error,
 > {
     let env = shell.paths_env();
-    let launched = if cwd == scratch {
-        launch::spawn_plain(&env, plan, sid)
-    } else {
-        launch::spawn(
+    let launched = match launch::kind(role, cwd, scratch) {
+        launch::Kind::Plain => launch::spawn_plain(&env, plan, sid),
+        launch::Kind::Chat => launch::spawn_chat(&env, plan, sid, cwd),
+        launch::Kind::Worktree => launch::spawn(
             &env,
             plan,
             &launch::SandboxReq {
@@ -761,7 +792,7 @@ fn spawn_spec(
                 net: launch::NetCell::ProviderOnly,
                 role,
             },
-        )
+        ),
     }
     .map_err(|r| refuse(&format!("the sandbox refused the launch: {}", r.message)))?;
     Ok((launched.spec, launched.status, None))
@@ -873,6 +904,7 @@ pub(super) async fn prepare(
         )));
     }
     let scratch = launch::scratch_dir(&runstav::paths::Env::process(), sid).unwrap_or_default();
+    project_read_allowed(launch::kind(role, cwd, &scratch), &eff)?;
     let (spec, status, unsandboxed) =
         spawn_spec(&front.shell_env, profile, &plan, &scratch, cwd, sid, role)?;
     Ok(Prepared {
@@ -1028,11 +1060,7 @@ pub(crate) async fn open_as(
         None => new_sid()?,
     };
     let name = format!("{}-{}", profile.name, &sid[1..5]);
-    let role = p.role.unwrap_or(if p.task.is_some() || p.job.is_some() {
-        Role::Worker
-    } else {
-        Role::Chat
-    });
+    let role = start_role(p.role, p.task.is_some() || p.job.is_some());
     let cwd = match &p.cwd {
         Some(c) => PathBuf::from(c.as_str()),
         None => launch::scratch_dir(&runstav::paths::Env::process(), &sid)
@@ -2102,6 +2130,8 @@ impl Session {
         Fence {
             cwd: self.cwd.clone(),
             document: self.document.clone(),
+            read_only: self.role == Role::Chat
+                && self.cwd != launch::scratch_path(&runstav::paths::Env::process(), &self.id),
         }
     }
 
@@ -3755,6 +3785,7 @@ mod tests {
         let f = Fence {
             cwd: cwd.clone(),
             document: None,
+            read_only: false,
         };
         let s = |p: &Path| p.to_string_lossy().into_owned();
         assert!(f.check(&s(&cwd.join("a.txt")), true).is_ok());
@@ -3772,6 +3803,7 @@ mod tests {
         let f = Fence {
             cwd: dir.path().to_path_buf(),
             document: Some(doc.clone()),
+            read_only: true,
         };
         assert!(f.check(&doc.to_string_lossy(), true).is_ok());
         assert!(
@@ -3783,6 +3815,73 @@ mod tests {
             f.check(&dir.path().join("src.rs").to_string_lossy(), false)
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn a_chat_in_a_project_reads_it_and_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = Fence {
+            cwd: dir.path().to_path_buf(),
+            document: None,
+            read_only: true,
+        };
+        let src = dir.path().join("src.rs");
+        assert!(f.check(&src.to_string_lossy(), false).is_ok());
+        let refused = f.check(&src.to_string_lossy(), true).unwrap_err();
+        assert!(refused.contains("writes nothing"), "{refused}");
+    }
+
+    /// The editor's agents panel and review start a session with a profile and a project cwd and nothing else: that
+    /// is a chat, and it goes to the project chat's launch, never to `launch::spawn` (which refuses a chat).
+    #[test]
+    fn a_start_with_a_project_and_no_task_is_a_project_chat() {
+        use launch::Kind;
+        let (project, scratch) = (Path::new("/p/proj"), Path::new("/t/scratch/S1"));
+        let role = start_role(None, false);
+        assert_eq!(role, Role::Chat);
+        assert_eq!(launch::kind(role, project, scratch), Kind::Chat);
+        assert_eq!(launch::kind(role, scratch, scratch), Kind::Plain);
+        let worker = start_role(None, true);
+        assert_eq!(worker, Role::Worker);
+        assert_eq!(launch::kind(worker, project, scratch), Kind::Worktree);
+        assert_eq!(
+            launch::kind(start_role(Some(Role::Chat), true), project, scratch),
+            Kind::Chat
+        );
+    }
+
+    /// A chat in a project starts under the shipped presets (`chat.project-read` asks) and is refused, naming the row,
+    /// when your matrix says never for it; the row does not apply to a plain chat or a worker.
+    #[test]
+    fn a_project_chat_is_refused_when_chat_project_read_is_never() {
+        use launch::Kind;
+        use norn::matrix::{Cell, Column, Matrix, Preset, Verdict, effective, preset};
+        let who = Who {
+            role: Some(Role::Chat),
+            agent: Some("claude".into()),
+            provider: None,
+        };
+        for p in [Preset::Cautious, Preset::Balanced, Preset::Autonomous] {
+            let eff = effective(&[&preset(p)], &who);
+            assert!(project_read_allowed(Kind::Chat, &eff).is_ok(), "{p:?}");
+        }
+        let mut mine = Matrix::default();
+        let never = Cell {
+            verdict: Verdict::Never,
+            limit: None,
+        };
+        // your matrix's chat column, over the preset's
+        mine.set(Action::ChatProjectRead, Column::Role(Role::Chat), never);
+        let eff = effective(&[&preset(Preset::Balanced), &mine], &who);
+        let refused = project_read_allowed(Kind::Chat, &eff).unwrap_err();
+        assert!(
+            refused.message.contains("chat.project-read is never")
+                && refused.message.contains("start it without a project"),
+            "{}",
+            refused.message
+        );
+        assert!(project_read_allowed(Kind::Plain, &eff).is_ok());
+        assert!(project_read_allowed(Kind::Worktree, &eff).is_ok());
     }
 
     #[test]
