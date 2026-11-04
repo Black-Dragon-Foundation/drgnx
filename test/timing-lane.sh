@@ -2,10 +2,11 @@
 # drgnx's timing lane (report-only): the :timing tests, judged against the runner's own speed.
 #   test/timing-lane.sh --report F [--rows FILE] [--samples N] [--runner EXE]
 #   test/timing-lane.sh --self-test
+#   test/timing-lane.sh --calibrate          (one calibration: its seconds)
 # Every CI tier sets DRGNX_TEST_NO_TIMING=1, so the tests tagged :timing (wall-clock assertions) run nowhere else; this
 # lane is their one place.  Each row of timing-rows.txt (`NAME BUDGET-RATIO`) is a set of them: NAME `all` is every
 # :timing test of the live files (exempt files carry no class, so no tag), any other NAME the :timing tests whose name
-# starts with it (a shard, if the whole set exceeds 45 min: 20 samples on a pinned host).  A row takes N (20) samples,
+# starts with it: the rows are the areas' prefixes, so each area is judged on its own time.  A row takes N (20) samples,
 # each one `bin/drgnx test --container` run with DRGNX_TEST_TIME_FACTOR = calibration / reference calibration (at
 # least 1), and is judged on the MEDIAN of the samples' times divided by the calibration: the time a fixed ~1 s workload
 # takes on this runner, measured before and after the row.  Rules (Nidhogg's):
@@ -15,13 +16,16 @@
 # F gets one line per row: `ROW VERDICT median=X ratio=R calibration=C fails=K/N (note)`, VERDICT pass|flaky|red|void.
 # Exit 0 always while the lane is report-only (2 on a usage error).
 # A sample is EXE TARGET (--runner), which prints the seconds the run took and exits 0 when it passed; the default runs
-# bin/drgnx.  TARGET `calibration` is the workload: DRGNX_TIMING_CALIB_CMD, else a batch Emacs (DRGNX_EMACS or emacs).
+# bin/drgnx.  TARGET `calibration` is the workload: DRGNX_TIMING_CALIB_CMD, else a batch Emacs in the image the tests
+# run in (DRGNX_TEST_IMAGE, which CI's test-image step sets, else drgnx-test:f45; DRGNX_CONTAINER, else podman), so the
+# calibration and the samples share one Emacs and one runtime; the workload times itself, the container's start is out.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/.." && pwd)
-rows="$here/timing-rows.txt" samples=20 runner="" report="" self=0
+rows="$here/timing-rows.txt" samples=20 runner="" report="" self=0 calonly=0
 while [ $# -gt 0 ]; do
   case $1 in
+    --calibrate) calonly=1; shift ;;
     --report) report=${2:?}; shift 2 ;;
     --rows) rows=${2:?}; shift 2 ;;
     --samples) samples=${2:?}; shift 2 ;;
@@ -41,7 +45,9 @@ workload='(let ((n 0.0) (t0 (float-time))) (dotimes (_ 1500000) (setq n (+ n (st
 default_sample() {
   local t=$1 sel log rc secs
   if [ "$t" = calibration ]; then
-    if [ -n "${DRGNX_TIMING_CALIB_CMD:-}" ]; then bash -c "$DRGNX_TIMING_CALIB_CMD"; else "${DRGNX_EMACS:-emacs}" --batch -Q --eval "$workload"; fi
+    if [ -n "${DRGNX_TIMING_CALIB_CMD:-}" ]; then bash -c "$DRGNX_TIMING_CALIB_CMD"
+    else "${DRGNX_CONTAINER:-podman}" run --rm --memory 1g --memory-swap 1g "${DRGNX_TEST_IMAGE:-drgnx-test:f45}" \
+           /usr/local/bin/emacs --batch -Q --eval "$workload" </dev/null; fi
     return $?
   fi
   if [ "$t" = all ]; then sel='(tag :timing)'; else sel="(and (tag :timing) \"^$t\")"; fi
@@ -190,11 +196,23 @@ EOF
 1.5 0
 1.0 0
 EOF
+  # the calibration runs in the tests' image, with its own Emacs: never a host Emacs (a CI runner has none)
+  cat > "$d/ctr" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$(dirname "$0")/ctr-args"; echo 0.5
+EOF
+  chmod +x "$d/ctr"
+  out=$(DRGNX_CONTAINER="$d/ctr" DRGNX_TEST_IMAGE=drgnx-test:probe DRGNX_TIMING_CALIB_CMD='' bash "$0" --calibrate)
+  if [ "$out" != 0.5 ] || ! grep -qx 'drgnx-test:probe' "$d/ctr-args" || ! grep -qx /usr/local/bin/emacs "$d/ctr-args"; then
+    echo "FAIL: calibration: wanted a run of drgnx-test:probe's /usr/local/bin/emacs, got $out: $(tr '\n' ' ' < "$d/ctr-args" 2>/dev/null)"
+    rc=1
+  fi
   [ "$rc" != 0 ] || echo "timing-lane self-test: ok"
   return "$rc"
 }
 
 if [ "$self" = 1 ]; then self_test; exit $?; fi
+if [ "$calonly" = 1 ]; then default_sample calibration; exit $?; fi
 [ -n "$report" ] || { sed -n '2,3p' "$0" >&2; exit 2; }
 run_lane
 exit 0

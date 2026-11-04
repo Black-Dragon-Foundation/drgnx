@@ -469,6 +469,26 @@ a test reaches by a call: a command a test binds to a key is named by `function'
     (when drgnx-lint-classes--all-classified
       (should-not without))))
 
+(ert-deftest drgnx-lint/every-timing-test-is-in-a-row ()
+  ;; the timing lane (test/timing-lane.sh) runs the unit tier's :timing tests by the rows of test/timing-rows.txt, a
+  ;; name prefix each: a test no row starts runs nowhere
+  (let ((rows (with-temp-buffer
+                (insert-file-contents (expand-file-name "test/timing-rows.txt" drgnx-dir))
+                (cl-loop for line in (split-string (buffer-string) "\n" t)
+                         for name = (car (split-string (replace-regexp-in-string "#.*" "" line) " " t))
+                         when name collect name)))
+        missing)
+    (should rows)
+    (dolist (rel (drgnx-lint-classes--files))
+      (when (string-prefix-p "test/unit/" rel)
+        (let* ((file (expand-file-name rel drgnx-dir)) (file-class (drgnx-run-ert--file-class file)))
+          (dolist (test (cdr (drgnx-lint-classes--parse (drgnx-lint-classes--forms file))))
+            (when (eq (or (drgnx-lint-classes--own-class test) file-class) :timing)
+              (let ((name (symbol-name (cadr test))))
+                (unless (or (member "all" rows) (seq-some (lambda (r) (string-prefix-p r name)) rows))
+                  (push (format "%s: %s" rel name) missing))))))))
+    (should-not missing)))
+
 (ert-deftest drgnx-lint/no-stale-exempt-rows ()
   ;; always on, in either merge order: a row whose file is gone, or a file that has both a row and a class line
   (let (stale classed)

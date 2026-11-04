@@ -293,12 +293,13 @@ jobs:
 
   # The timing lane (report only): the tests tagged :timing, which every other tier leaves out (DRGNX_TEST_NO_TIMING),
   # judged against the runner's own speed (test/timing-lane.sh). Report only because the lane script reports and exits 0
-  # (a red job would make the run red); `CI gate` does not need it
+  # (a red job would make the run red); `CI gate` does not need it. The calibration runs in the test image the step
+  # below sets (DRGNX_TEST_IMAGE), one row per area's prefix (test/timing-rows.txt), 20 samples each
   timing:
     name: Timing tests (report only)
     if: ${{ contains(format(' {0} ', inputs.tiers), ' timing ') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 150
     permissions:
       contents: read
       packages: read

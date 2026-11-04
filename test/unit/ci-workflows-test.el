@@ -106,6 +106,14 @@
     (should-not (string-search "(tag :timing)" tiers))
     (should-not (string-search "emacs-30" tiers))))
 
+(ert-deftest drgnx-ci/the-timing-lane-judges-and-calibrates-in-the-image ()
+  ;; the lane's own self-test: the verdict rules, and a calibration run in the tests' image (a CI runner has no Emacs)
+  (let ((script (expand-file-name "test/timing-lane.sh" drgnx-ci-test--root)))
+    (skip-unless (and (file-exists-p script) (executable-find "bash")))
+    (with-temp-buffer
+      (should (eql 0 (call-process "bash" nil t nil script "--self-test")))
+      (should (string-search "timing-lane self-test: ok" (buffer-string))))))
+
 (ert-deftest drgnx-ci/linux-unit-jobs-fail-a-det-test-that-uses-real-time ()
   ;; the runtime audit on and failing (docs/develop/harness.md, "The audit"): with the pre-flight off, CI is where a
   ;; det test that really sleeps, waits or starts a process turns red

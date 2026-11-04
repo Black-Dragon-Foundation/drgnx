@@ -199,11 +199,14 @@ tested once:
 Every tier sets `DRGNX_TEST_NO_TIMING=1`, so the tests tagged `:timing` (wall-clock assertions) run in one place only:
 the `timing` job of the tiers workflow (`tiers: timing`), which runs `test/timing-lane.sh`. It is report-only
 (the script reports and exits 0, so a red verdict never reddens the run; `CI gate` does not need it). The lane takes 20 samples of each row of `test/timing-rows.txt`
-(`all`, or a test-name prefix when the set must be sharded), measures a fixed workload before and after (the calibration),
+(one row for each area's test-name prefix, so an area is judged on its own time; `drgnx-lint/every-timing-test-is-in-a-row`
+fails a `:timing` test no row holds), measures a fixed workload before and after (the calibration: a batch Emacs in the
+image the tests run in, `DRGNX_TEST_IMAGE`, never a host Emacs, which a CI runner does not have),
 and passes `DRGNX_TEST_TIME_FACTOR` = calibration / the budgets' reference calibration (`# island-calibration` in the rows
 file) to the tests. A row is `void` when the two calibrations differ by over 25 % (retried once), `red` when its median
 time exceeds the ratio times the calibration or over half the samples fail (rerun once; a pass on the rerun is `flaky`).
-`test/timing-lane.sh --self-test` checks the verdicts.
+`test/timing-lane.sh --self-test` checks the verdicts and where the calibration runs (`drgnx-ci/the-timing-lane-judges-and-calibrates-in-the-image`
+runs it with the unit suite).
 
 `bin/drgnx test --preflight --out REPORT [--seeds N] [--nidhogg-tarball FILE]` hunts ordering bugs: the `det` files twice
 in two shuffle orders with the runtime audit failing (`DRGNX_TEST_AUDIT_FAIL=1`: a `det` test that really sleeps, waits

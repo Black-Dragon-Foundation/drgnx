@@ -1,6 +1,31 @@
 # NAME BUDGET-RATIO (test/timing-lane.sh): NAME `all` is every :timing test of the live files, any other NAME the :timing
-# tests whose name starts with it (a shard). A row is red when the median of its samples exceeds ratio x the runner's
-# calibration.  The ratio is a placeholder until the first run on a pinned host sets it (the median over
-# the calibration of 20 samples, times 1.25: what two calibrations of one run may differ before it is void).
+# tests whose name starts with it: one row for each area's prefix, so a slow area is judged on its own time, not hidden
+# in the whole run's. A row is red when the median of its samples exceeds ratio x the runner's calibration.  The ratios
+# are placeholders until the first run on a pinned host sets them (the median over the calibration of 20 samples,
+# times 1.25: what two calibrations of one run may differ before it is void).  A new :timing test whose name no row
+# starts with is in no row: drgnx-lint/every-timing-test-is-in-a-row fails then.
 # island-calibration 1
-all 100
+drgnx-agent 100
+drgnx-ai 100
+drgnx-bin 100
+drgnx-bootstrap 100
+drgnx-check 100
+drgnx-chrome 100
+drgnx-file 100
+drgnx-lang 100
+drgnx-live 100
+drgnx-monitors 100
+drgnx-onboard 100
+drgnx-perf 100
+drgnx-platform 100
+drgnx-quickhelp 100
+drgnx-remote 100
+drgnx-run-ert 100
+drgnx-sandbox 100
+drgnx-search 100
+drgnx-shell 100
+drgnx-state 100
+drgnx-statusbar 100
+drgnx-test 100
+drgnx-timer 100
+drgnx-tty 100
