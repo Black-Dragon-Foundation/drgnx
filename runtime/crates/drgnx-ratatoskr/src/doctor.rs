@@ -166,7 +166,7 @@ pub const WAL_WARN: u64 = 64 << 20;
 pub const BACKUP_STALE: u64 = 48 * 3600;
 
 fn now_secs() -> u64 {
-    std::time::SystemTime::now()
+    crate::clock::wall()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
 }
@@ -389,8 +389,8 @@ pub fn doctor(env: &Env, json_out: bool) -> i32 {
     let binary = crate::idle::resolve_exe()
         .map(Path::to_path_buf)
         .unwrap_or_default();
-    let deadline = std::time::Instant::now() + DOCTOR_ASK;
-    let left = || deadline.saturating_duration_since(std::time::Instant::now());
+    let deadline = crate::clock::real_now() + DOCTOR_ASK;
+    let left = || deadline.saturating_duration_since(crate::clock::real_now());
     let (running, sandbox) = std::thread::scope(|s| {
         let check = s.spawn(|| sandbox::check_blocking(Tier::Full, None, DOCTOR_CHECK));
         let running = Client::user(env, left())

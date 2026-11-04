@@ -253,9 +253,7 @@ async fn denied_event(w: &Writer, sid: &str, host: String) {
             event(
                 tx,
                 Event {
-                    at: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_or(0.0, |d| d.as_secs_f64()),
+                    at: crate::clock::wall_secs(),
                     agent: Some(sid.clone()),
                     job: None,
                     task: None,

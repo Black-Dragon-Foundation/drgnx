@@ -346,9 +346,7 @@ pub trait RunGit: std::marker::Send + Sync {
 // ---- small helpers ------------------------------------------------------------------------------------------
 
 pub(crate) fn now() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0.0, |d| d.as_secs_f64())
+    crate::clock::wall_secs()
 }
 
 pub(crate) fn invalid(message: impl Into<String>) -> Error {

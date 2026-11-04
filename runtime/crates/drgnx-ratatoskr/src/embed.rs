@@ -20,9 +20,10 @@ use norn::deny::{DenyList, Source, Verdict};
 use norn::store::{CoordDb, CoordError};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::time::Instant;
 use urdr::graph::search::{BoxFuture, EmbedError, Embedder, vec_put, vec_stale};
 use urdr::graph::{Class, TxMeta};
 
@@ -108,7 +109,7 @@ impl Embedder for Tei {
         texts: &'a [String],
     ) -> BoxFuture<'a, Result<Vec<Vec<f32>>, EmbedError>> {
         Box::pin(async move {
-            match tokio::time::timeout(DEADLINE, self.post(texts)).await {
+            match crate::clock::timeout(DEADLINE, self.post(texts)).await {
                 Ok(r) => r.map_err(EmbedError),
                 Err(_) => Err(EmbedError(format!(
                     "{} did not answer in time",

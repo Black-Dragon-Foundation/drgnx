@@ -740,9 +740,7 @@ pub fn run(env: &Env, cmd: GraphCommand) -> i32 {
             return 1;
         }
     };
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0.0, |d| d.as_secs_f64());
+    let now = crate::clock::wall_secs();
     let (method, params) = match cmd.request(&cwd, now) {
         Ok(r) => r,
         Err(e) => {

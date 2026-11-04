@@ -76,7 +76,7 @@ impl Connector for Outside {
     ) -> BoxFuture<'static, Prelude> {
         let (kind, cwd) = (self.kind.clone(), self.cwd.clone());
         Box::pin(async move {
-            match tokio::time::timeout(PRELUDE, attach(r, w, kind, cwd)).await {
+            match crate::clock::timeout(PRELUDE, attach(r, w, kind, cwd)).await {
                 Ok(done) => done,
                 Err(_) => Err(Dial::Again(
                     "the hub did not answer the bridge's hello in time".into(),

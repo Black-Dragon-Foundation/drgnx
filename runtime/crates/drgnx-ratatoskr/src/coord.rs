@@ -159,9 +159,7 @@ pub(crate) fn fail(e: CoordError) -> Error {
 
 /// Seconds since the epoch, as `float-time` gives them.
 fn now() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0.0, |d| d.as_secs_f64())
+    crate::clock::wall_secs()
 }
 
 /// A wire number as the store's integer.
@@ -571,7 +569,7 @@ pub async fn broadcast_events(front: Arc<Front>) {
                     if !full {
                         break;
                     }
-                    tokio::time::sleep(PACE).await;
+                    crate::clock::sleep(PACE).await;
                 }
                 Ok(_) => break,
                 Err(e) => {
@@ -580,7 +578,7 @@ pub async fn broadcast_events(front: Arc<Front>) {
                 }
             }
         }
-        tokio::time::sleep(PACE).await;
+        crate::clock::sleep(PACE).await;
     }
 }
 

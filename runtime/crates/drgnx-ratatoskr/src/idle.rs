@@ -233,7 +233,7 @@ pub async fn build_at(path: &Path, commit: &str) -> Build {
         let status = child.wait().await.ok()?;
         status.success().then_some(text)
     };
-    let text = match tokio::time::timeout(VERSION_DEADLINE, run).await {
+    let text = match crate::clock::timeout(VERSION_DEADLINE, run).await {
         Ok(Some(t)) => t,
         Ok(None) => {
             tracing::warn!("{} version failed", path.display());
@@ -319,8 +319,7 @@ pub async fn run(front: Arc<Front>, tick: Duration) {
         watch,
         front: front.clone(),
     };
-    let mut every = tokio::time::interval(tick);
-    every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut every = crate::clock::interval(tick);
     every.tick().await;
     loop {
         every.tick().await;

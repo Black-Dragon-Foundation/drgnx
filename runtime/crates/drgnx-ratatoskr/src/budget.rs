@@ -618,9 +618,7 @@ pub async fn pace(f: &Front, _: &Caller, p: PaceParams) -> Result<Paces, Error> 
 }
 
 fn now() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0.0, |d| d.as_secs_f64())
+    crate::clock::wall_secs()
 }
 
 /// The registrations of every session at or below SCOPE carry what is left of the nested `usd` limit.

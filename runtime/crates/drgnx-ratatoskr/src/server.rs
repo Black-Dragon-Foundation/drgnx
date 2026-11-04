@@ -223,14 +223,14 @@ pub async fn run(args: ServeArgs) -> Exit {
         .open_store(env.clone(), socket.clone(), runtime.clone());
     front.mcp.restore().await;
     front.core.agents.open_store(runtime.clone());
-    tokio::spawn(sessions::watch(front.clone()));
+    crate::clock::spawn("sessions:watch", sessions::watch(front.clone()));
     // a job's end wakes the session that started it
-    tokio::spawn(crate::agents::wake::run(
-        front.clone(),
-        front.core.exec.subscribe(),
-    ));
+    crate::clock::spawn(
+        "wake:run",
+        crate::agents::wake::run(front.clone(), front.core.exec.subscribe()),
+    );
     // a queued message reaches its session once that is free
-    tokio::spawn(crate::agents::deliver::run(front.clone()));
+    crate::clock::spawn("deliver:run", crate::agents::deliver::run(front.clone()));
     // settings.el and the shipped defaults, as data, before anything is served (its last good values in runtime.db)
     front
         .settings
@@ -254,14 +254,14 @@ pub async fn run(args: ServeArgs) -> Exit {
     // the gateway: listening, then the registrations of live owners (and their sessions' sockets) kept
     front.core.budgets.open_store(runtime.clone()).await;
     if let Some(notes) = front.core.budgets.take_notes() {
-        tokio::spawn(crate::budget::run(front.clone(), notes));
+        crate::clock::spawn("budget:run", crate::budget::run(front.clone(), notes));
     }
     front.gate.open_store(runtime.clone());
     match front.gate.listen(gateway_port).await {
         Ok(events) => {
             front.gate.restore(&front.mcp).await;
             tokio::spawn(gateway::run_events(events, front.clone()));
-            tokio::spawn(gateway::watch(front.clone()));
+            crate::clock::spawn("gateway:watch", gateway::watch(front.clone()));
         }
         Err(e) => tracing::error!("the gateway does not listen: {e}"),
     }
@@ -276,10 +276,13 @@ pub async fn run(args: ServeArgs) -> Exit {
             .flatten()
             .as_deref(),
     );
-    tokio::spawn(watch_schema(front.clone()));
-    tokio::spawn(coord::broadcast_events(front.clone()));
+    crate::clock::spawn("server:watch-schema", watch_schema(front.clone()));
+    crate::clock::spawn(
+        "coord:broadcast-events",
+        coord::broadcast_events(front.clone()),
+    );
     crate::records::install_tool(&front);
-    tokio::spawn(crate::records::follow(front.clone()));
+    crate::clock::spawn("records:follow", crate::records::follow(front.clone()));
     front.core.runs.set_git(Arc::new(
         crate::runner::git::HubGit::new(
             crate::sandbox::runs_root(&env),
@@ -293,14 +296,14 @@ pub async fn run(args: ServeArgs) -> Exit {
         .core
         .runs
         .set_hooks(Arc::new(crate::runner::review::PlanHooks::default()));
-    tokio::spawn(crate::runner::tick::run(front.clone()));
-    tokio::spawn(crate::supervisor::run(front.clone()));
-    tokio::spawn(crate::manager::run(front.clone()));
+    crate::clock::spawn("runner:tick", crate::runner::tick::run(front.clone()));
+    crate::clock::spawn("supervisor:run", crate::supervisor::run(front.clone()));
+    crate::clock::spawn("manager:run", crate::manager::run(front.clone()));
     #[cfg(feature = "test-hooks")]
     let tick = args.idle_tick_ms.map_or(idle::TICK, Duration::from_millis);
     #[cfg(not(feature = "test-hooks"))]
     let tick = idle::TICK;
-    tokio::spawn(idle::run(front.clone(), tick));
+    crate::clock::spawn("idle:run", idle::run(front.clone(), tick));
     for (l, s) in agents {
         tokio::spawn(accept(l, front.clone(), s));
     }
@@ -319,8 +322,7 @@ pub async fn run(args: ServeArgs) -> Exit {
             .filter(|p| *p > 0)
     });
     let mut parent = parent_pid.map(|p| {
-        let mut every = tokio::time::interval(Duration::from_secs(1));
-        every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let every = crate::clock::interval(Duration::from_secs(1));
         (p, every)
     });
     let exit = loop {
@@ -343,7 +345,7 @@ pub async fn run(args: ServeArgs) -> Exit {
                 Err(e) => {
                     // out of descriptors, for example: never a hot loop
                     tracing::warn!("accept failed: {e}");
-                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    crate::clock::sleep(Duration::from_millis(50)).await;
                 }
             },
             how = front.stopped() => {
@@ -460,7 +462,7 @@ async fn accept(listener: UnixListener, front: Arc<Front>, socket: Socket) {
             }
             Err(e) => {
                 tracing::warn!("accept failed: {e}");
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                crate::clock::sleep(Duration::from_millis(50)).await;
             }
         }
     }
@@ -542,12 +544,11 @@ async fn open_store(
 /// The writer looks at the file too (opened when it is there, again when it was replaced), and the `events`
 /// broadcaster sends what another process wrote meanwhile (its 2 s tick).
 async fn watch_schema(front: Arc<Front>) {
-    let mut every = tokio::time::interval(SCHEMA_TICK);
-    every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut every = crate::clock::interval(SCHEMA_TICK);
     every.tick().await;
     let mut privacy = norn::privacy::Watch::default();
     let embed = Arc::new(std::sync::Mutex::new(crate::embed::Timer::new(
-        std::time::Instant::now(),
+        crate::clock::now(),
     )));
     loop {
         every.tick().await;
@@ -599,7 +600,7 @@ fn embed_idle(front: &Arc<Front>, timer: &Arc<std::sync::Mutex<crate::embed::Tim
     if !matches!(st.last_open, Some(urdr::graph::OpenOutcome::Ready { .. })) {
         return;
     }
-    let now = std::time::Instant::now();
+    let now = crate::clock::now();
     let (due, probe) = {
         let mut t = timer
             .lock()
@@ -641,7 +642,7 @@ fn embed_idle(front: &Arc<Front>, timer: &Arc<std::sync::Mutex<crate::embed::Tim
         timer
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .finish(stopped, std::time::Instant::now());
+            .finish(stopped, crate::clock::now());
     });
 }
 
@@ -653,7 +654,7 @@ fn nightly_backup(front: &Front) {
         g.writer.status().last_open,
         Some(urdr::graph::OpenOutcome::Ready { .. })
     );
-    let now = std::time::SystemTime::now()
+    let now = crate::clock::wall()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
     if !ready || !crate::backup_timer::due_at(now) || !crate::backup_timer::begin() {

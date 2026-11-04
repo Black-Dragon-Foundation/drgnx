@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 use std::io::{self, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 /// The folder under `<state>/hub/` that takes what moves.
 pub const DIR: &str = "migrated-p7";
@@ -231,7 +231,7 @@ fn job_ended(dir: &Path) -> bool {
         None => std::fs::metadata(dir)
             .and_then(|m| m.modified())
             .ok()
-            .and_then(|t| SystemTime::now().duration_since(t).ok())
+            .and_then(|t| crate::clock::wall().duration_since(t).ok())
             .is_some_and(|age| age >= JOB_QUIET),
     }
 }

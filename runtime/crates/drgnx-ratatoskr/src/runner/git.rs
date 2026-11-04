@@ -183,7 +183,7 @@ impl HubGit {
         if let Some(d) = dir {
             c.current_dir(d);
         }
-        let out = tokio::time::timeout(self.deadline, c.output())
+        let out = crate::clock::timeout(self.deadline, c.output())
             .await
             .map_err(|_| err(what.clone(), "past its deadline"))?
             .map_err(|e| err(what.clone(), e.to_string()))?;
@@ -203,9 +203,7 @@ impl HubGit {
     pub async fn touch(&self, folder: &Path) -> Result<(), GitError> {
         let Some(db) = &self.db else { return Ok(()) };
         let f = folder.to_string_lossy().into_owned();
-        let at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0.0, |d| d.as_secs_f64());
+        let at = crate::clock::wall_secs();
         db.write(move |c| {
             c.execute(
                 "insert or ignore into op(folder, kind, at) values (?1, 'touched', ?2)",

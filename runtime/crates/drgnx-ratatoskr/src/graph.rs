@@ -106,9 +106,7 @@ fn fail(e: WriteError) -> Error {
 
 /// Seconds since the epoch.
 fn now() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0.0, |d| d.as_secs_f64())
+    crate::clock::wall_secs()
 }
 
 /// A wire number as the store's integer.

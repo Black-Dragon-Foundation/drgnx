@@ -185,9 +185,7 @@ fn invalid(path: &str, message: impl Into<String>) -> Error {
 
 /// Seconds since the epoch.
 fn now() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0.0, |d| d.as_secs_f64())
+    crate::clock::wall_secs()
 }
 
 /// PID's start time while it runs (a zombie has ended), else `None`.
@@ -320,7 +318,7 @@ async fn accept(
                 Err(e) => {
                     // out of descriptors, for example: never a hot loop
                     tracing::warn!(sid, "accept failed: {e}");
-                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    crate::clock::sleep(Duration::from_millis(50)).await;
                     continue;
                 }
             },
@@ -752,8 +750,7 @@ pub fn outside(s: &Session, kind: &str) -> Result<Identity, Error> {
 
 /// Close the sessions of gone owners each [`TICK`], for as long as the hub serves.
 pub async fn watch(front: Arc<Front>) {
-    let mut every = tokio::time::interval(TICK);
-    every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut every = crate::clock::interval(TICK);
     loop {
         every.tick().await;
         front.mcp.prune().await;
