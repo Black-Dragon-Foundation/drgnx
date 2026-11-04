@@ -60,7 +60,7 @@
                                                                (string-search "Make two steps faster" (overlay-get drgnx-blame--overlay 'after-string))))))
               (redisplay t)
               ;; the Review tab, from a reviewer that answers with two findings
-              (let* ((s (drgnx-agents--make :id "ui-rev" :name "reviewer" :status 'idle :conn 'fake :cwd repo))
+              (let* ((s (drgnx-agents--make :id "ui-rev" :remote "ui-rev" :name "reviewer" :status 'idle :cwd repo))
                      (drgnx-review--runs (make-hash-table :test #'equal)) (drgnx-review--current nil))
                 (cl-letf (((symbol-function 'drgnx-agents-mirror-start) (lambda (&rest _) s))
                           ((symbol-function 'drgnx-agents-deliver) (lambda (&rest _) t))
