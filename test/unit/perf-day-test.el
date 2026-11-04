@@ -3,6 +3,9 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-perf-run)
+;; what the transcript replay loads when it starts, loaded with the file: their definitions are no test's leak
+(require 'drgnx-agents)
+(require 'drgnx-timer)
 
 (defconst perf-day-test--dir
   (expand-file-name "../../" (file-name-directory (or load-file-name buffer-file-name)))
@@ -29,7 +32,6 @@
 
 (ert-deftest drgnx-perf-day/transcript-replay-runs-without-an-agent ()
   ;; a session with no process; a chunk per tick, the next tick set at the recorded pace; the transcript grows
-  (require 'drgnx-agents)
   (let* ((chunks '((40 . "one ") (25 . "two ") (60 . "three")))
          (drgnx-agents--sessions nil) (drgnx-perf--replays nil)
          starts changed)

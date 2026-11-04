@@ -21,21 +21,25 @@
   `(let ((nidhogg-watchdog-mode nil) (nidhogg-watchdog-log-directory nil) (nidhogg-watchdog-typing-commands nil)
          (nidhogg-watchdog-package-functions nil) (nidhogg-watchdog-record-functions nil) (drgnx-watchdog-mode nil) (drgnx-speed-watchdog t)
          (noninteractive nil) (calls nil))
-     (cl-letf (((symbol-function 'nidhogg-watchdog-mode)
-                (lambda (&optional arg) (push arg calls) (setq nidhogg-watchdog-mode (and arg (> arg 0)))))
-               ((symbol-function 'drgnx-watchdog-available-p) (lambda () t))
-               ((symbol-function 'drgnx-watchdog--wanted-p) (lambda () drgnx-speed-watchdog)))
-       (unwind-protect (progn ,@body)
-         (drgnx-watchdog-mode -1)))))
+     ;; a fresh notice model: a start defines the watchdog's notice source, which stays while drgnx runs
+     (drgnx-notice-test-with-model
+       (cl-letf (((symbol-function 'nidhogg-watchdog-mode)
+                  (lambda (&optional arg) (push arg calls) (setq nidhogg-watchdog-mode (and arg (> arg 0)))))
+                 ((symbol-function 'drgnx-watchdog-available-p) (lambda () t))
+                 ((symbol-function 'drgnx-watchdog--wanted-p) (lambda () drgnx-speed-watchdog)))
+         (unwind-protect (progn ,@body)
+           (drgnx-watchdog-mode -1))))))
 
 (ert-deftest drgnx-watchdog/on-by-default ()
   (skip-unless (featurep 'nidhogg-watchdog))
-  (let ((noninteractive nil) (drgnx-speed-watchdog t))
-    (unwind-protect
-        (progn (drgnx-watchdog-maybe-start)
-               (should drgnx-watchdog-mode)
-               (should nidhogg-watchdog-mode))
-      (drgnx-watchdog-mode -1))))
+  ;; a fresh notice model: the start defines the watchdog's notice source, which stays while drgnx runs
+  (drgnx-notice-test-with-model
+    (let ((noninteractive nil) (drgnx-speed-watchdog t))
+      (unwind-protect
+          (progn (drgnx-watchdog-maybe-start)
+                 (should drgnx-watchdog-mode)
+                 (should nidhogg-watchdog-mode))
+        (drgnx-watchdog-mode -1)))))
 
 (ert-deftest drgnx-watchdog/settings ()
   (drgnx-watchdog-test--stubbed

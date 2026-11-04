@@ -78,7 +78,19 @@
       (drgnx-freezes-show-collections))
     (should (equal (nreverse calls) '(audit collections)))))
 
+(defun drgnx-freezes-test--defun (file name)
+  "The `defun' form of NAME in FILE (relative to the checkout), or nil."
+  (with-temp-buffer
+    (insert-file-contents (expand-file-name file drgnx-dir))
+    (let (form found)
+      (while (and (not found) (setq form (ignore-errors (read (current-buffer)))))
+        (when (and (eq (car-safe form) 'defun) (eq (cadr form) name)) (setq found form)))
+      found)))
+
 (ert-deftest drgnx-freezes/command-is-registered ()
-  (require 'drgnx)
-  (drgnx--core-commands)
-  (should (drgnx-commands-get 'freezes)))
+  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
+    (drgnx-freezes-register-commands)
+    (should (eq (drgnx-cmd-command (drgnx-commands-get 'freezes)) #'drgnx-freezes-show)))
+  ;; drgnx's core registers it with the other core commands (read from the source: loading drgnx here would register
+  ;; them all, and the test would leave them behind)
+  (should (memq 'drgnx-freezes-register-commands (flatten-tree (drgnx-freezes-test--defun "core/drgnx.el" 'drgnx--core-commands)))))
