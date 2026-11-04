@@ -36,6 +36,131 @@ Seconds without input after which the editor tells the hub you are away (the tim
 | `:agents` | `never` |
 | `:schema` | `natnum` |
 
+## drgnx-agents-browser-deny-hosts
+
+Host names (like "example.com") a session's browser never reaches, whatever you grant: a list of strings.
+Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat string)` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Vec<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(list-of string)` |
+
+## drgnx-agents-browser-idle
+
+Seconds without a command after which a session's browser is stopped; the next command starts it again.
+Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `600` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"u64"` |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
+
+## drgnx-agents-browser-local-ports
+
+The TCP ports on this machine's loopback that a session's browser may reach as host.drgnx.internal:PORT once you
+grant it (a list of port numbers, 1 to 65535).  Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `(3000 3001 4173 4200 5000 5173 8000 8080 8888)` |
+| Type | `(repeat integer)` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Vec<u16>"` |
+| `:agents` | `never` |
+| `:schema` | `(list-of (integer :min 1 :max 65535))` |
+
+## drgnx-agents-browser-max-message
+
+The largest message, in bytes, that passes between an agent and its session's browser (64 MiB).
+Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `67108864` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"u64"` |
+| `:agents` | `never` |
+| `:schema` | `(integer :min 1)` |
+
+## drgnx-agents-browser-memory-high
+
+The share of the session's memory cap (1 to 99, a percent) at which its browser is stopped.
+Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `75` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"u32"` |
+| `:agents` | `never` |
+| `:schema` | `(integer :min 1 :max 99)` |
+
+## drgnx-agents-browser-once-window
+
+Seconds a one-time browser grant lasts after you give it.  Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `600` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"u64"` |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
+
+## drgnx-agents-browser-program
+
+The browser an agent session gets: the absolute path of a Chromium, Chrome or headless shell, or nil to find one
+(a distro package first, then the one `drgnx browser install' downloaded).  Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(choice (const :tag "find one" nil) file)` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Option<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(or null (string :match "\\`/"))` |
+
 ## drgnx-agents-checkpoint-cap
 
 Bytes of checkpoints kept per project (the shadow repos of all its sessions together); the oldest of finished
@@ -345,6 +470,24 @@ another one on, remove it from this list (or set it in the profile's `:env').
 | `:runtime` | - |
 | `:agents` | `never` |
 | `:schema` | - |
+
+## drgnx-agents-session-memory
+
+The memory cap of one agent session with its browser, like "4G" or "512M".
+Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `"4G"` |
+| Type | `string` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"String"` |
+| `:agents` | `never` |
+| `:schema` | `(string :match "\\`[1-9][0-9]*[KMGT]?\\'")` |
 
 ## drgnx-agents-silent-after
 

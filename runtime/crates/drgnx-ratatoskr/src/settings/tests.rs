@@ -67,6 +67,69 @@ fn defaults_parse() {
 }
 
 #[test]
+fn browser_settings_defaults() {
+    let dir = config(" (drgnx-agents-default \"review\")\n");
+    let l = Settings::load(dir.path(), &Kv::default());
+    assert_eq!(l.problems, []);
+    let v = &l.values;
+    assert_eq!(v.agents_browser_program, None);
+    assert_eq!(
+        v.agents_browser_local_ports,
+        [3000, 3001, 4173, 4200, 5000, 5173, 8000, 8080, 8888]
+    );
+    assert_eq!(v.agents_browser_deny_hosts, Vec::<String>::new());
+    assert_eq!(v.agents_browser_max_message, 67_108_864);
+    assert_eq!(v.agents_browser_idle, 600);
+    assert_eq!(v.agents_browser_once_window, 600);
+    assert_eq!(v.agents_session_memory, "4G");
+    assert_eq!(v.agents_browser_memory_high, 75);
+}
+
+#[test]
+fn browser_settings_refuse_bad_values() {
+    for (name, value) in [
+        ("drgnx-agents-browser-local-ports", "(0)"),
+        ("drgnx-agents-browser-local-ports", "(3000 70000)"),
+        ("drgnx-agents-browser-program", "\"chromium\""),
+        ("drgnx-agents-session-memory", "\"4 G\""),
+        ("drgnx-agents-browser-memory-high", "0"),
+        ("drgnx-agents-browser-memory-high", "100"),
+    ] {
+        let dir = config(&format!(" ({name} {value})\n"));
+        let l = Settings::load(dir.path(), &Kv::default());
+        assert_eq!(l.problems.len(), 1, "{name} {value}: {:?}", l.problems);
+        assert_eq!(l.problems[0].setting, Some(name), "{value}");
+        // it fell back to the shipped default
+        assert_eq!(l.values.agents_browser_program, None);
+        assert_eq!(l.values.agents_browser_memory_high, 75);
+        assert_eq!(l.values.agents_session_memory, "4G");
+        assert_eq!(l.values.agents_browser_local_ports.len(), 9);
+        // the editor's override is refused the same way
+        let json = match value {
+            "(0)" => serde_json::json!([0]),
+            "(3000 70000)" => serde_json::json!([3000, 70000]),
+            v if v.starts_with('"') => serde_json::json!(v.trim_matches('"')),
+            v => serde_json::json!(v.parse::<u32>().unwrap()),
+        };
+        let mut values = RuntimeValues::default();
+        assert!(overrides::from_json(name, &json, &mut values).is_err(), "{name} {value}");
+    }
+    // good values are taken
+    let dir = config(
+        " (drgnx-agents-browser-program \"/usr/bin/chromium\")\n (drgnx-agents-browser-local-ports (3000))\n (drgnx-agents-session-memory \"512M\")\n (drgnx-agents-browser-memory-high 99)\n",
+    );
+    let l = Settings::load(dir.path(), &Kv::default());
+    assert_eq!(l.problems, []);
+    assert_eq!(
+        l.values.agents_browser_program.as_deref(),
+        Some("/usr/bin/chromium")
+    );
+    assert_eq!(l.values.agents_browser_local_ports, [3000]);
+    assert_eq!(l.values.agents_session_memory, "512M");
+    assert_eq!(l.values.agents_browser_memory_high, 99);
+}
+
+#[test]
 fn only_runtime_names_decode() {
     let dir = config(
         r#" (drgnx-agents-default "review")
@@ -96,8 +159,8 @@ fn only_runtime_names_decode() {
     // what is not a runtime setting has no place to go: RUNTIME is the whole list
     // (8, and agent system part 1's 13: the matrix, the away signal, the job and container limits, the net hosts; and
     // the names a module may add to a session's environment; and part 2's providers whose shell steps are traced; and
-    // the runners' five per-project settings; and the proxies' pinned names; and Hrafn's 5)
-    assert_eq!(RUNTIME_NAMES.len(), 34);
+    // the runners' five per-project settings; and the proxies' pinned names; and Hrafn's 5; and the agent browser's 8)
+    assert_eq!(RUNTIME_NAMES.len(), 42);
     assert!(RUNTIME_NAMES.iter().all(|n| {
         n.starts_with("drgnx-agents-")
             || n.starts_with("drgnx-ai-")

@@ -514,6 +514,11 @@ with the line) and `:agents never` (the `settings_change` tool refuses them). Th
 `-away-after`, `-wait-refusals` (3), `-close-idle-after` (1800 s), `-checkpoint-cap` (2 GiB), `-job-memory` ("4G"),
 `-job-cpus` (2), `-container-images` (name → digest-pinned image), and the supervisor's `-silent-after`
 (task 600 s, brainstorm 1800 s), `-repeat-limit` (3), `-no-progress-tokens` (20000) and `-manager-context` (0.7).
+The agent browser has eight more, each with its unit in the docstring (see the
+[settings reference](../reference/settings.md)): `-browser-program` (nil: find one), `-browser-local-ports` (3000
+3001 4173 4200 5000 5173 8000 8080 8888), `-browser-deny-hosts` (nil), `-browser-max-message` (64 MiB),
+`-browser-idle` (600 s), `-browser-once-window` (600 s), `-session-memory` ("4G", the browser included) and
+`-browser-memory-high` (75 %).
 The hub reads them from `settings.el`.
 
 ## Changing settings

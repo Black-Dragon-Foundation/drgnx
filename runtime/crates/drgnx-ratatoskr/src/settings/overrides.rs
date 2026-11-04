@@ -169,6 +169,34 @@ pub fn from_json(name: &str, v: &Value, values: &mut RuntimeValues) -> Result<()
         "drgnx-search-include" => values.search_include = de(v)?,
         "drgnx-search-exclude" => values.search_exclude = de(v)?,
         "drgnx-search-off" => values.search_off = de(v)?,
+        "drgnx-agents-browser-program" => {
+            let p = de(v)?;
+            super::check_browser_program(&p).map_err(|m| refused("", m))?;
+            values.agents_browser_program = p;
+        }
+        "drgnx-agents-browser-local-ports" => {
+            let p: Vec<u16> = de(v)?;
+            super::check_browser_ports(&p).map_err(|m| refused("", m))?;
+            values.agents_browser_local_ports = p;
+        }
+        "drgnx-agents-browser-deny-hosts" => values.agents_browser_deny_hosts = de(v)?,
+        "drgnx-agents-browser-max-message" => {
+            let n = de(v)?;
+            super::check_max_message(n).map_err(|m| refused("", m))?;
+            values.agents_browser_max_message = n;
+        }
+        "drgnx-agents-browser-idle" => values.agents_browser_idle = de(v)?,
+        "drgnx-agents-browser-once-window" => values.agents_browser_once_window = de(v)?,
+        "drgnx-agents-session-memory" => {
+            let m: String = de(v)?;
+            super::check_memory(&m).map_err(|m| refused("", m))?;
+            values.agents_session_memory = m;
+        }
+        "drgnx-agents-browser-memory-high" => {
+            let n = de(v)?;
+            super::check_memory_high(n).map_err(|m| refused("", m))?;
+            values.agents_browser_memory_high = n;
+        }
         other => return Err(refused("", format!("{other} is not a runtime setting"))),
     }
     Ok(())
@@ -267,6 +295,14 @@ pub fn to_json(name: &str, values: &RuntimeValues) -> Option<Value> {
         "drgnx-search-include" => json!(values.search_include),
         "drgnx-search-exclude" => json!(values.search_exclude),
         "drgnx-search-off" => json!(values.search_off),
+        "drgnx-agents-browser-program" => json!(values.agents_browser_program),
+        "drgnx-agents-browser-local-ports" => json!(values.agents_browser_local_ports),
+        "drgnx-agents-browser-deny-hosts" => json!(values.agents_browser_deny_hosts),
+        "drgnx-agents-browser-max-message" => json!(values.agents_browser_max_message),
+        "drgnx-agents-browser-idle" => json!(values.agents_browser_idle),
+        "drgnx-agents-browser-once-window" => json!(values.agents_browser_once_window),
+        "drgnx-agents-session-memory" => json!(values.agents_session_memory),
+        "drgnx-agents-browser-memory-high" => json!(values.agents_browser_memory_high),
         _ => return None,
     })
 }

@@ -108,6 +108,53 @@ repository."
   :type 'sexp :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
   :runtime "NetHosts" :schema '(alist symbol (list-of (string :match ":[0-9]+\\'"))))
 
+(drgnx-defsetting drgnx-agents-browser-program nil
+  "The browser an agent session gets: the absolute path of a Chromium, Chrome or headless shell, or nil to find one
+(a distro package first, then the one `drgnx browser install' downloaded).  Only you can set it, never a repository."
+  :type '(choice (const :tag "find one" nil) file) :group 'drgnx :scope 'global :workspace 'never
+  :on-error 'strict :agents 'never :runtime "Option<String>" :schema '(or null (string :match "\\`/")))
+
+(drgnx-defsetting drgnx-agents-browser-local-ports '(3000 3001 4173 4200 5000 5173 8000 8080 8888)
+  "The TCP ports on this machine's loopback that a session's browser may reach as host.drgnx.internal:PORT once you
+grant it (a list of port numbers, 1 to 65535).  Only you can set it, never a repository."
+  :type '(repeat integer) :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "Vec<u16>" :schema '(list-of (integer :min 1 :max 65535)))
+
+(drgnx-defsetting drgnx-agents-browser-deny-hosts nil
+  "Host names (like \"example.com\") a session's browser never reaches, whatever you grant: a list of strings.
+Only you can set it, never a repository."
+  :type '(repeat string) :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "Vec<String>" :schema '(list-of string))
+
+(drgnx-defsetting drgnx-agents-browser-max-message 67108864
+  "The largest message, in bytes, that passes between an agent and its session's browser (64 MiB).
+Only you can set it, never a repository."
+  :type 'natnum :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "u64" :schema '(integer :min 1))
+
+(drgnx-defsetting drgnx-agents-browser-idle 600
+  "Seconds without a command after which a session's browser is stopped; the next command starts it again.
+Only you can set it, never a repository."
+  :type 'natnum :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "u64" :schema 'natnum)
+
+(drgnx-defsetting drgnx-agents-browser-once-window 600
+  "Seconds a one-time browser grant lasts after you give it.  Only you can set it, never a repository."
+  :type 'natnum :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "u64" :schema 'natnum)
+
+(drgnx-defsetting drgnx-agents-session-memory "4G"
+  "The memory cap of one agent session with its browser, like \"4G\" or \"512M\".
+Only you can set it, never a repository."
+  :type 'string :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "String" :schema '(string :match "\\`[1-9][0-9]*[KMGT]?\\'"))
+
+(drgnx-defsetting drgnx-agents-browser-memory-high 75
+  "The share of the session's memory cap (1 to 99, a percent) at which its browser is stopped.
+Only you can set it, never a repository."
+  :type 'natnum :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "u32" :schema '(integer :min 1 :max 99))
+
 (drgnx-defsetting drgnx-agents-container-images nil
   "The images container jobs may run: an alist NAME → image reference pinned by digest (\"registry/name@sha256:…\").
 The hub pulls them; a job names one of them and nothing else.  Only you can set it, never a repository."
