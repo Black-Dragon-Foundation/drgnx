@@ -1089,6 +1089,50 @@ audited, and the three variables are read once and removed from the environment,
 sees the runner's switches. CI's `unit` and `no-lisp-writes` jobs ([ci.md](ci.md)) and `bin/drgnx test --preflight`'s
 `det` step run with the audit on and failing.
 
+### Test patterns
+
+#### Every order
+
+Code whose correctness depends on the order of its inputs is split into a **pure core** (a step function: no process,
+timer or clock) and a thin shell that does the I/O. `drgnx-test-every-order` (in `test/fixtures/orders-fixture.el`)
+runs the core in every order its inputs can arrive in, so an ordering bug fails at write time instead of flaking later.
+It is the Lisp half of the `orders` pattern and keeps the same rules and bound as the Rust helper `skuld`
+([runtime.md](runtime.md#every-order-skuld)).
+
+```elisp
+(drgnx-test-every-order
+ :kinds '(data eof closed)                        ; the declared kinds: every one must be produced
+ :sources '((socket (data "a") (eof)) (client (data "b")))
+ :edges '(((client . 0) . (socket . 1)))          ; a claim the shell keeps; its own test checks it
+ :init #'my-core-new                              ; () -> STATE
+ :step #'my-core-step                             ; (STATE EVENT) -> (STATE . RAISED)
+ :check (lambda (state order) (my-core-wrong state order)))   ; nil, or a failure string
+```
+
+- **The inputs are a partial order:** `:sources` is `((NAME . EVENTS) …)`, each source in its own order; `:edges` is
+  `(((SRC . I) . (SRC2 . J)) …)`: SRC's I-th event happens before SRC2's J-th, a SRC named or numbered. Each edge is a
+  claim about the shell; the task that owns the shell tests it with peers (`drgnx-test-peer-*`).
+- **Kinds:** `:kind-of` maps an event to its kind (default `car`). An event whose kind is not in `:kinds` fails, and so
+  does a declared kind that no order produced, external or raised ("the author forgot the EOF" cannot pass).
+- **Effects re-enter:** the RAISED events a step returns are fed, depth first, before the next external event (a
+  sentinel `delete-process` runs at once, a hook a filter runs), at most `:reentry-depth` (64) deep.
+- **The bound:** every order while there are at most `:exhaustive-max` (20,000; two sources of 8 events give
+  C(16,8) = 12,870); above that, every order within `:delays` (2) delays of the natural one. The natural scheduler
+  takes the lowest-numbered source whose next event is enabled, and a delay skips the source it would take, once. Two
+  chains of 9 events have 48,620 orders, so they run the 55 within two delays. `drgnx-test-every-order-count`
+  (`&key sources edges cap`) counts the orders exactly up to `cap`.
+- **The result** is `(:orders N :mode exhaustive|(delay-bounded K) :kinds-seen KINDS)`. A bad order fails through
+  `ert-fail` with `(:order I :of N :mode MODE :events ORDER :fed FED :message MESSAGE)`; `:check` gets the external
+  order, `:fed` adds the raised events.
+- **No vacuous pass:** a cycle in the edges ("the edges form a cycle"), no events ("no order to run"), an unproduced
+  kind, deep re-entry ("re-entry deeper than 64") and an edge naming a missing event or source each fail with
+  `(:message …)`, the same messages as `skuld`.
+
+The helper has no process and no clock, so a test of a core is `det`. `test/unit/orders-fixture-test.el` checks it
+against skuld's known answers (12,870 for 2×8, 1,680 for 3×3, 1 with the edge that puts one chain first, 63,063,000
+for 4×4, binomials, the cap) and brute force over every interleaving for what an exhaustive or delay-bounded run visits
+(55 for 2×9 under two delays; three sources; edges), each once.
+
 ## Frozen tests
 
 A test of code that a plan replaces carries `:frozen` in its `:tags` (within the first 8 lines of its form). It is left out
