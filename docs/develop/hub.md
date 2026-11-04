@@ -505,7 +505,9 @@ ask for it, the sentinel forgets the editor token (`drgnx-hub--editor` nil) and 
 `:unknown`), says so to `drgnx-hub-disconnect-functions`, and `drgnx-hub--resubscribe-schedule` arms the layer timer
 `hub-resubscribe`: `drgnx-hub-connect` after 1 s, then 2, 4 … up to 30 s between tries (a dial that fails at once, a
 socket that is gone, arms the next one). The hand-over (settings, keys, token) runs on the new subscription as on
-any other. After `drgnx-hub-resubscribe-give-up` (600 s) from the first loss it stops and posts one notice (id
+any other. An answer to the hand-over's `gateway/editor-token` or `gateway/keys-held` read after the subscription it
+was asked under ended is dropped (`drgnx-hub--answered-under`): Ratatoskr ends its connections in any order, so the call
+connection's answers can come after the subscription's end, and they would undo the forget. After `drgnx-hub-resubscribe-give-up` (600 s) from the first loss it stops and posts one notice (id
 `resubscribe-gave-up`) naming Hub: Restart Now. It **never runs `ensure`**: a hub the user stopped stays stopped.
 Asked ends do not redial: `drgnx-hub-disconnect` and a `shutdown` call this editor sent set
 `drgnx-hub--asked-disconnect` (cleared by the next `drgnx-hub-connect`) and cancel the timer.

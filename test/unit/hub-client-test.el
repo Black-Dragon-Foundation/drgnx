@@ -1068,6 +1068,31 @@
     (should-not drgnx-hub--editor)
     (should (eq drgnx-hub--keys-held :unknown))))
 
+(ert-deftest drgnx-hub-client/an-answer-read-after-the-subscription-ended-is-dropped ()
+  ;; Ratatoskr ends its connections in any order: the hand-over's answers on the call connection can be read after the
+  ;; subscription's end forgot the token and the held keys.  They are the gone hub's, and are dropped.
+  (drgnx-hub-client-test--with-fake (:silent '("gateway/editor-token" "gateway/keys-held"))
+    (let ((drgnx-hub--editor nil) (drgnx-hub--keys-held :unknown) (process-environment (drgnx-hub-client-test--no-keys-env))
+          (questions nil))
+      (drgnx-hub-connect)
+      (drgnx-hub-client-test--wait (lambda () (member "gateway/keys-held" (drgnx-fake-hub-methods hub))) "the hand-over's questions")
+      (setq questions (seq-filter (lambda (l) (member (plist-get l :method) '("gateway/editor-token" "gateway/keys-held")))
+                                  (drgnx-fake-hub-lines hub)))
+      (should (= (length questions) 2))
+      ;; the subscription ends unasked: the token and the held keys are forgotten
+      (delete-process drgnx-hub--events)
+      (drgnx-hub-client-test--wait (lambda () (null drgnx-hub--events)) "the subscription ends")
+      (should (eq drgnx-hub--keys-held :unknown))
+      ;; then the answers come, on the call connection
+      (dolist (q questions)
+        (drgnx-fake-hub-answer hub q (if (equal (plist-get q :method) "gateway/keys-held")
+                                         '(:providers ["openrouter"])
+                                       '(:token "tok-late" :url "http://127.0.0.1:4242"))))
+      (drgnx-hub-client-test--wait (lambda () (cl-notany (lambda (q) (gethash (plist-get q :id) drgnx-hub--pending)) questions))
+                                   "the answers read")
+      (should-not drgnx-hub--editor)
+      (should (eq drgnx-hub--keys-held :unknown)))))
+
 (ert-deftest drgnx-hub-client/no-resubscribe-after-asked-disconnect ()
   (drgnx-hub-client-test--with-ratatoskr
     ;; drgnx-hub-disconnect

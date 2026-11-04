@@ -914,9 +914,18 @@ here, so an answer that came before the hub took them raises nothing.  Runs in a
     (drgnx-hub--keys-note)))
 
 (defun drgnx-hub--fetch-editor ()
-  "Ask the hub for this Emacs's editor token and for the keys it holds: the ids of the two calls."
-  (list (drgnx-hub-call "gateway/editor-token" nil #'drgnx-hub--editor-answered)
-        (drgnx-hub-call "gateway/keys-held" nil #'drgnx-hub--keys-held-answered)))
+  "Ask the hub for this Emacs's editor token and for the keys it holds: the ids of the two calls.  Asked under a
+subscription, an answer read after that subscription ended is dropped: it is the gone hub's, and the end forgot both
+\(`drgnx-hub--client-sentinel').  The hub ends its connections in any order, so the call connection's answers can come
+after the subscription's end; the next subscription asks again."
+  (let ((sub drgnx-hub--events))
+    (list (drgnx-hub-call "gateway/editor-token" nil (lambda (r e) (drgnx-hub--answered-under sub #'drgnx-hub--editor-answered r e)))
+          (drgnx-hub-call "gateway/keys-held" nil (lambda (r e) (drgnx-hub--answered-under sub #'drgnx-hub--keys-held-answered r e))))))
+
+(defun drgnx-hub--answered-under (sub fn result err)
+  "Call FN with RESULT and ERR unless the subscription SUB (nil: none) a question was asked under has ended."
+  (when (or (null sub) (eq sub drgnx-hub--events))
+    (funcall fn result err)))
 
 (defun drgnx-hub--keys-changed (event data)
   "`gateway/keys-changed' (DATA (:providers [ID…])) from a hub that proved itself: the keys it holds now."

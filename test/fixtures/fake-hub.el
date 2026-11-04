@@ -10,7 +10,8 @@
 ;; (METHOD . (:code :message :path)) of methods answered with that error.  RESULTS: an alist (METHOD . RESULT) of methods
 ;; answered with that result (the others with true).  DELAY: seconds before the answer to any other method (hello and
 ;; ping answer at once).
-;; `drgnx-fake-hub-lines' are the requests read, oldest first; `drgnx-fake-hub-event' sends an event to every client.
+;; `drgnx-fake-hub-lines' are the requests read, oldest first; `drgnx-fake-hub-event' sends an event to every client;
+;; `drgnx-fake-hub-answer' answers a request SILENT left unanswered, on the connection it came on.
 ;; The cap file is written beside SOCKET.
 (require 'cl-lib)
 (require 'drgnx-hub-client)
@@ -34,6 +35,7 @@
 
 (defun drgnx-fake-hub--line (server conn json)
   (process-put server :lines (cons json (process-get server :lines)))
+  (process-put conn :lines (cons json (process-get conn :lines)))
   (let ((id (plist-get json :id)) (method (plist-get json :method)))
     (cond ((member method (process-get server :silent)))
           ((null id))
@@ -103,6 +105,12 @@
   "Send EVENT (a string) with DATA to every connection SERVER accepted."
   (dolist (p (process-list))
     (when (eq (process-get p :fake) server) (drgnx-fake-hub--send p (list :event event :data data)))))
+
+(defun drgnx-fake-hub-answer (server request result)
+  "Answer REQUEST (one of `drgnx-fake-hub-lines') with RESULT, on the connection of SERVER it came on."
+  (dolist (p (process-list))
+    (when (and (eq (process-get p :fake) server) (memq request (process-get p :lines)))
+      (drgnx-fake-hub--send p (list :id (plist-get request :id) :result result)))))
 
 (defun drgnx-fake-hub-close-clients (server)
   "Close every connection SERVER accepted."
