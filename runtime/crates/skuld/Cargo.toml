@@ -1,0 +1,12 @@
+[package]
+name = "skuld"
+description = "test support: every order of a pure core within a stated bound, and the one real-time wait Rust tests may use"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# Crates name it under [dev-dependencies] only; it never reaches a shipped binary.
+[dependencies]
+proptest.workspace = true
