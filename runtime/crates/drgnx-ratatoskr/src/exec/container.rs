@@ -876,7 +876,6 @@ mod tests {
 mod name_and_pull_tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
-    use std::time::Instant;
 
     fn script(dir: &Path, body: &str) -> PathBuf {
         let p = dir.join("podman");
