@@ -1232,19 +1232,38 @@ event and performs what it answers; the entries, steps and transcript stay with 
 What the core keeps:
 
 - A turn starts only when none runs, with the queue's next prompt, and only when the queue is not held, no kill is
-  under way and the hub is not ending (a prompt sent then waits on disk for the next start).
+  under way and the hub is not ending.
+- A prompt sent while the process is being ended for good (`agents/kill`, `agents/stop` with no turn running, a
+  Stop's deadline) is refused as exited, and the session is not free then: the sender keeps it (a peer's message goes
+  back to `queued`, a wake stays pending). A prompt sent while the hub ends waits on disk for the next start.
 - A turn ends once, at its agent's answer. A second Stop of a stopped turn changes nothing; a Stop's deadline ends
   the process only if the turn it stopped still runs.
 - Each permission request is answered or answered cancelled once. A Stop, the pause after a tool call, the turn's end,
-  a kill and the agent's exit cancel what is held. A request the matrix decides on after its turn was cancelled or
-  ended is answered cancelled at once: the agent no longer waits on it.
+  a kill and the agent's exit cancel what is held; a kill's cancels change the snapshot at once, so the editors drop
+  the card before the exit. A request the matrix decides on after its turn was cancelled or ended is answered
+  cancelled at once: the agent no longer waits on it.
 - One event pair is armed at a time; the timer's tick sends it.
 
-`agents/session/turn_core/tests.rs` runs the core in every order (skuld, exhaustive) of a user who sends, stops and
-delivers, a second Stop (the refused waits), an agent that answers what it works on, and the stops' deadlines; of
-four senders, an editor that removes and delivers, and an agent; and of a user who answers and stops, an agent that
-asks twice, completes a tool call and answers, a pause after the tool call, and the cockpit settling a card. The
-edges those orders take as given are the shell's:
+The shell acts on a turn's end as the step decided it: whether the hub is ending is read under the step's lock, never
+again after it.
+
+`agents/session/turn_core/tests.rs` runs the core in every order (skuld, exhaustive) of:
+
+- a user who sends, stops and delivers, a second Stop (the refused waits), an agent that answers what it works on, and
+  the stops' deadlines (a deadline's kill leaves the process alive until the agent's next answer);
+- four senders, an editor that removes and delivers, an agent, and a pause after the tool call;
+- two senders, the hub's delivery (`sending`, then the prompt), an editor that delivers, an agent, and the user's kill
+  or the hub's end, then the exit;
+- a user who answers and stops, an agent that asks twice, completes a tool call and answers, a pause after the tool
+  call, and the cockpit settling a card;
+- two senders, an agent that asks in each turn, the matrix deciding late, and the user's kill, the hub's end or a
+  crash.
+
+After every step the tests check that a turn starts only when none runs, once per prompt, never while the queue is
+held or on a process being ended; that a turn ends at its agent's answer; that a request waits only while its turn
+runs and never once the process is being ended; that what is on disk (each `Persist`, and a turn's start) is what the
+core holds; and that a free session starts a turn with the next prompt. Each source was shown to fail on a bug it
+exists for. The edges those orders take as given are the shell's:
 
 - a turn's answer follows its start, and every update the agent sent in that turn (the reader drains them first);
 - a permission request names the turn that ran when the reader received it;

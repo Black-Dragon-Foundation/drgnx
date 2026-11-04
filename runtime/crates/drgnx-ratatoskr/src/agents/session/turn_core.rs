@@ -74,7 +74,8 @@ pub(crate) enum QueueEdit {
 /// What the shell does about a step.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TurnEffect {
-    /// Refused: the session has exited.
+    /// Refused: the session has exited, or its process is ending for good (the user's kill, a Stop's deadline; the
+    /// hub's end is not: a prompt sent then waits on disk for the next start).
     Exited,
     /// Refused: `if_free`, and the session is not free.
     NotFree,
@@ -116,6 +117,7 @@ pub(crate) enum TurnEffect {
 
 /// See the module.
 #[derive(Debug)]
+#[cfg_attr(test, derive(Clone))]
 pub(crate) struct TurnCore {
     status: SessionStatus,
     /// Prompts waiting for the turn to end (or held).
@@ -130,7 +132,8 @@ pub(crate) struct TurnCore {
     cancelling: bool,
     /// A Stop armed its deadline for this turn.
     stopped: bool,
-    /// The process is being ended: no turn starts.
+    /// The process is being ended (a kill, a Stop's deadline): no turn starts, and unless the hub is ending, no prompt
+    /// is taken.
     killed: bool,
     /// The hub is ending: a turn's end holds nothing and starts nothing.
     ending: bool,
@@ -171,7 +174,9 @@ impl TurnCore {
                 steer_mode,
                 if_free,
             } => {
-                if self.status == SessionStatus::Exited {
+                // a process ending for good runs nothing more: the sender keeps what it sent (the hub's end keeps the
+                // queue on disk instead)
+                if self.status == SessionStatus::Exited || (self.killed && !self.ending) {
                     return vec![E::Exited];
                 }
                 if if_free && !self.is_free() {
@@ -225,6 +230,8 @@ impl TurnCore {
                 why: KillWhy::StopDue { turn },
             } => {
                 if self.status == SessionStatus::Busy && self.turn == turn {
+                    // nothing starts on the process that ends now (a queued prompt, a wake)
+                    self.killed = true;
                     vec![E::KillProcess]
                 } else {
                     Vec::new()
@@ -410,9 +417,9 @@ impl TurnCore {
     }
 
     /// Can a new turn start now without joining anything: idle (not busy, not waiting on a job), not held, nothing
-    /// queued.
+    /// queued, and its process not being ended.
     pub(crate) fn is_free(&self) -> bool {
-        self.status == SessionStatus::Idle && !self.paused && self.queue.is_empty()
+        self.status == SessionStatus::Idle && !self.paused && self.queue.is_empty() && !self.killed
     }
 
     pub(crate) fn status(&self) -> SessionStatus {
