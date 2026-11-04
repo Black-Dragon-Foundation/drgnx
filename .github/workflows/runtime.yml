@@ -299,11 +299,14 @@ jobs:
           path: ${{ runner.temp }}/escape/escape-${{ runner.arch }}.json
           if-no-files-found: warn
       # The agent core's sandbox lane (agent system part 1): the tests marked #[ignore] because they need the real
-      # bubblewrap (exec runs in the starter's sandbox).
+      # bubblewrap (exec runs in the starter's sandbox). The provider and gateway rows of tests/launch_sandboxed.rs
+      # run domr's ratatoskr-mock (the mock LLM), which they find beside the ratatoskr binary: built first.
       - name: build the agent core's tests (test hooks)
         id: core-build
         if: ${{ !cancelled() }}
-        run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --no-run
+        run: |
+          cargo build --locked --manifest-path runtime/Cargo.toml -p domr --bin ratatoskr-mock
+          cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --no-run
       # Landlock ABI 9 is the reduced tier's floor; on a runner kernel below it the launch rows of the reduced tier run
       # on the full tier (tests/launch_sandboxed.rs), which needs bubblewrap 0.12 only. --no-fail-fast: every test
       # binary's failures in one run.
