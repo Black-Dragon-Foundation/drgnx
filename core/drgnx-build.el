@@ -3,7 +3,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; `drgnx build' byte-compiles core/, wb/ and modules/ in place (the .elc files are not
+;; `drgnx build' byte-compiles core/, wb/, modules/ and harness/ in place (the .elc files are not
 ;; tracked).  Compiled drgnx is several times faster and makes far less garbage than
 ;; interpreted drgnx; when Emacs has native compilation, it compiles the .elc files natively
 ;; in the background as they load.  drgnx's init sets `load-prefer-newer', so a stale .elc
@@ -16,7 +16,9 @@
 
 (declare-function drgnx-guard-wrap "drgnx-guard")
 
-(defconst drgnx-build-dirs '("core" "wb" "modules") "What `drgnx build' compiles, under the checkout.")
+(defconst drgnx-build-dirs '("core" "wb" "modules" "harness")
+  "What `drgnx build' compiles, under the checkout.  The test files (test/) are not compiled: they are loaded
+into a runner, not alone, so they carry no declarations for what the runner defines.")
 
 (defun drgnx-build-files (root)
   "The .el files to compile under ROOT (a checkout)."
@@ -31,7 +33,7 @@
   "Byte-compile FILE of the checkout ROOT here; return (:compiled BOOL :warnings LIST :errors LIST).
 `drgnx-build' calls it in a fresh batch Emacs per file."
   (let ((rel (file-relative-name file root))
-        (load-path (append (mapcar (lambda (d) (expand-file-name d root)) '("core" "wb")) load-path))
+        (load-path (append (mapcar (lambda (d) (expand-file-name d root)) '("core" "wb" "harness")) load-path))
         (byte-compile-docstring-max-column 120)        ; the project's line length
         (load-prefer-newer t)                           ; a changed dependency, not its old .elc
         (warnings nil) (errors nil) (ok nil))

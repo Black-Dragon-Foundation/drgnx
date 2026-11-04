@@ -457,10 +457,10 @@ The eat terminal runs COMMAND with SWITCHES directly: no shell, so no shell conf
 
 (defun drgnx-perf-run--hub-form ()
   "The agent workloads' setup, as a form string: the session functions that start Ratatoskr (a test-hooks build,
-$DRGNX_RATATOSKR_BIN, with `ratatoskr-mock' beside it) for the workload, give it the profile \"mock\" (`ratatoskr-mock acp'
-running a script whose n-th line is the n-th prompt's program) and follow a turn through its transcript.  A turn is over
-when its `stop' entry is in the mirror: the hub sends a session's state at most every 50 ms, so a turn can go by with no
-busy status in between and the status cannot tell it."
+$DRGNX_RATATOSKR_BIN, with `ratatoskr-mock' beside it) for the workload, give it the profile \"mock\"
+\(`ratatoskr-mock acp' running a script whose n-th line is the n-th prompt's program) and follow a turn through
+its transcript.  A turn is over when its `stop' entry is in the mirror: the hub sends a session's state at most
+every 50 ms, so a turn can go by with no busy status in between and the status cannot tell it."
   (concat
    ;; the session's environment is the harness's allowlist: the binary's name goes in the form
    "(progn (defvar drgnx-perf--hub-bin nil \"The Ratatoskr binary.\") (setq drgnx-perf--hub-bin "
@@ -786,7 +786,8 @@ error if it does not hold).  With :actions, :measure runs after the input and it
   "The line printed when the popup workloads are left out.")
 
 (defun drgnx-perf-run--childframe-elpa ()
-  "The package directory $DRGNX_CHILDFRAME_ELPA names (the pinned posframe, corfu, eldoc-box: `drgnx childframe-elpa'), or nil."
+  "The package directory $DRGNX_CHILDFRAME_ELPA names (the pinned posframe, corfu, eldoc-box:
+`drgnx childframe-elpa'), or nil."
   (let ((dir (getenv "DRGNX_CHILDFRAME_ELPA")))
     (and dir (not (string-empty-p dir)) (expand-file-name dir))))
 
@@ -1013,7 +1014,8 @@ INIT-DIR: drgnx's init/ (default).  (:server_ms STATS :modules_ms N)."
              :p50))
 
 (defun drgnx-perf-run--medians (runs)
-  "One result from RUNS: every numeric value (also inside nested plists: stats, the :compose record) the median over the runs."
+  "One result from RUNS: every numeric value (also inside nested plists: stats, the :compose record) the median
+over the runs."
   (let (out)
     (cl-loop for (k v) on (car runs) by #'cddr
              do (setq out (plist-put out k
@@ -1784,11 +1786,12 @@ mid-run (\"can't find socket\").  The run stops them when it ends.")
 (cl-defun drgnx-perf-ab (ref &key (n 100) env)
   "`drgnx test --perf --ab REF': wall clock judged by interleaving two trees.  REF is exported with `git archive'
 and both trees are built; one session each; per workload one discarded warm-up run per side, then runs
-A, B, A, B… until each side has at least N per-command samples (and `drgnx-perf-ab-min-rounds' rounds), with the calibration before and
-after.  Per workload: both sides' stats, the bootstrap verdict (`drgnx-perf-ab-verdict'), both sides' allocation,
-CPU and rows, and the work tree's wall budgets (judged at n >= 100).  Exit: 0 judged and clean, 1 regressed or a
-budget fails, 3 not judged (a loaded calibration, a busy host, an inconclusive interval).  Results go to
-$DRGNX_PERF_RESULTS.  With DRGNX_LEASE_BUSY set it runs plain `--perf' on the work tree instead.
+A, B, A, B… until each side has at least N per-command samples (and `drgnx-perf-ab-min-rounds' rounds), with the
+calibration before and after.  Per workload: both sides' stats, the bootstrap verdict (`drgnx-perf-ab-verdict'),
+both sides' allocation, CPU and rows, and the work tree's wall budgets (judged at n >= 100).  Exit: 0 judged
+and clean, 1 regressed or a budget fails, 3 not judged (a loaded calibration, a busy host, an inconclusive
+interval).  Results go to $DRGNX_PERF_RESULTS.  With DRGNX_LEASE_BUSY set it runs plain `--perf' on the work
+tree instead.
 Each judged workload also prints the p95 verdict (T = 1 ms) and, when the runs carry it, the verdict on
 `(:compose :draw-ms :p95)'; with ENV they count in the exit code as well, and `:compose' budget rows are judged.
 ENV, (VAR JUDGED REF) from `drgnx-perf-ab-env-parse', makes it an A/B on one tree (REF is nil, nothing is exported):

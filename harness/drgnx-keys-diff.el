@@ -15,6 +15,19 @@
 (require 'cl-lib)
 (require 'seq)
 
+;; drgnx's own libraries, which the command loads from the checkout it runs in
+(defvar drgnx-dir)
+(defvar drgnx-modules-stages)
+(defvar drgnx-keys-profiles)
+(declare-function drgnx-cmd-id "drgnx-registry")
+(declare-function drgnx-commands-all "drgnx-registry")
+(declare-function drgnx-keys-resolve "drgnx-keys")
+(declare-function drgnx-modules-load-external "drgnx-modules")
+(declare-function drgnx-modules-update-state "drgnx-modules")
+(declare-function drgnx-modules-run "drgnx-modules")
+(declare-function drgnx-modules-load-directory "drgnx-modules")
+(declare-function drgnx--core-commands "drgnx")
+
 (defconst drgnx-keys-diff-aliases
   '((view-explorer . toggle-sidebar) (view-explorer-focus . focus-explorer) (view-buffers-focus . focus-buffers)
     (view-panel . toggle-panel) (view-palette . palette) (view-line-numbers . line-numbers)

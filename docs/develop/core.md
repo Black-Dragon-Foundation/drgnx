@@ -2029,12 +2029,14 @@ on (see "Global modes are owned by the first module that turns them on" in the s
 
 ## Build (`drgnx-build.el`)
 
-`bin/drgnx build` byte-compiles `core/`, `wb/` and `modules/` in place (`.elc` files are not tracked); with native
-compilation available, Emacs then compiles them natively in the background as they load. Compiled drgnx is several
+`bin/drgnx build` byte-compiles `core/`, `wb/`, `modules/` and `harness/` in place (`.elc` files are not tracked); with
+native compilation available, Emacs then compiles them natively in the background as they load. The test files
+(`test/`) are not compiled: they load into the runner, never alone, so they carry no declarations for what the
+runner defines. Compiled drgnx is several
 times faster and makes far less garbage. `install.sh` runs it; drgnx sets `load-prefer-newer`, so a stale `.elc`
 never shadows newer source. The build must stay warning-free (`test/unit/build-test.el`).
 
-Each file compiles in a fresh batch Emacs (`-Q`, `core/` and `wb/` on `load-path`), as the native compiler compiles
+Each file compiles in a fresh batch Emacs (`-Q`, `core/`, `wb/` and `harness/` on `load-path`), as the native compiler compiles
 it when a session loads the `.elc`: in one shared Emacs, a library an earlier file's compile loaded (`project`, `cl-macs`,
 another drgnx file) hid a missing `declare-function` or `require`, and the native compiler's warning then opened
 `*Warnings*` in the user's frame. `drgnx-build-jobs` files compile at once: one per 150 MiB of `MemAvailable` beyond

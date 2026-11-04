@@ -144,10 +144,11 @@
                    (apply insert file args)))))
       (should (> (drgnx-perf-rss-kb) 0)))))
 
+(defvar drgnx-perf-test-hook nil)       ; special before the test's `let' below, so the hook it fills is the let's own
+
 (ert-deftest drgnx-perf/the-hook-audit-names-what-costs-and-restores-the-hooks ()
   :tags '(:timing)
   (let ((drgnx-perf-test-hook nil) (slow (lambda () (sleep-for 0.02))))
-    (defvar drgnx-perf-test-hook)
     (add-hook 'drgnx-perf-test-hook #'ignore)
     (add-hook 'drgnx-perf-test-hook slow)
     (let ((before (copy-sequence drgnx-perf-test-hook)))

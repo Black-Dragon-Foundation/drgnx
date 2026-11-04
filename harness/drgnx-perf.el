@@ -16,6 +16,16 @@
 (require 'seq)
 (require 'subr-x)
 
+;; the session's agent code, which the replay workloads drive
+(defvar drgnx-agents--sessions)
+(declare-function drgnx-agents-ui-transcript-buffer "drgnx-agents-ui")
+(declare-function drgnx-timer-cancel "drgnx-timer")
+(declare-function drgnx-timer-start "drgnx-timer")
+(declare-function drgnx-agents--changed "drgnx-agents")
+(declare-function drgnx-agent-session-entries "drgnx-agents")
+(declare-function drgnx-agents--append-text "drgnx-agents")
+(declare-function drgnx-agents--make "drgnx-agents")
+
 ;;;; Statistics
 
 (defun drgnx-perf-stats (values)
@@ -432,12 +442,12 @@ the wrappers are swapped back, so whatever else changed on the hook stays.")
 before the first command.")
 (defvar drgnx-perf--hook-samples nil "While auditing: the finished commands' totals (ms).")
 
-(defvar drgnx-perf--audit-hooks nil "The last audit's per-command stats (`drgnx-perf-audit-hooks').")
+(defvar drgnx-perf--audit-stats nil "The last audit's per-command stats (`drgnx-perf-audit-hooks').")
 
 (defun drgnx-perf-audit-hooks ()
   "The last audit's :hooks: STATS (:n :p50 :p90 …) over the commands of the ms the audited hook functions and the
 timers took while each ran, up to the next command's start.  Process filters are not timed (DEFERRED)."
-  drgnx-perf--audit-hooks)
+  drgnx-perf--audit-stats)
 
 (defun drgnx-perf--hooks-add (ms)
   (when drgnx-perf--cmd-hooks (setq drgnx-perf--cmd-hooks (+ drgnx-perf--cmd-hooks ms))))
@@ -508,7 +518,7 @@ then gives the per-command totals."
   (pcase-let ((`(,table ,advised ,wrapped) drgnx-perf--audit) (rows nil))
     (when drgnx-perf--audit
       (drgnx-perf--hooks-flush)
-      (setq drgnx-perf--audit-hooks (mapcar #'drgnx-perf--round2 (drgnx-perf-stats drgnx-perf--hook-samples))))
+      (setq drgnx-perf--audit-stats (mapcar #'drgnx-perf--round2 (drgnx-perf-stats drgnx-perf--hook-samples))))
     (setq drgnx-perf--audit nil drgnx-perf--cmd-hooks nil)
     (advice-remove 'timer-event-handler #'drgnx-perf--timers-ad)
     (pcase-dolist (`(,fn . ,ad) advised) (advice-remove fn ad))

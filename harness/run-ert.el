@@ -11,7 +11,13 @@
 (require 'seq)
 (require 'subr-x)
 (require 'ert)
-(require 'drgnx-test-env (expand-file-name "drgnx-test-env" (file-name-directory (or load-file-name buffer-file-name))))
+(require 'drgnx-test-env (expand-file-name "drgnx-test-env" (file-name-directory (or load-file-name buffer-file-name
+                                                                                     byte-compile-current-file))))
+
+(declare-function drgnx-work-db-gate-enable "work-db-gate" ())
+(declare-function drgnx-timer-cancel "drgnx-timer" (key))
+(declare-function drgnx-modules-fingerprint "drgnx-modules-fingerprint" (&optional full))
+(declare-function drgnx-modules-fingerprint-diff "drgnx-modules-fingerprint" (before after))
 
 (defun drgnx-run-ert-drain-events ()
   "Handle the events queued for a command loop batch Emacs does not have (file-notify events from a test's
@@ -1428,6 +1434,19 @@ trampoline (each replaced primitive has its own already); the test's definitions
     (when (fboundp 'comp-subr-trampoline-install)
       (dolist (s '(make-process read-from-minibuffer)) (ignore-errors (comp-subr-trampoline-install s))))))
 
+(defun drgnx-run-ert-trampolines (cache)
+  "The native trampolines (files) in the eln-cache directory CACHE, sorted; nil when it does not exist."
+  (and (file-directory-p cache)
+       (sort (directory-files-recursively cache "\\`subr--trampoline-") #'string<)))
+
+(defun drgnx-run-ert-trampolines-stayed-p (before cache)
+  "Did no trampoline land in the eln-cache CACHE since BEFORE (its `drgnx-run-ert-trampolines')?  A run's trampolines
+go to drgnx's own directory (`drgnx-run-ert--use-eln-dir'); one in the user's cache means a tier or a child Emacs
+missed that, and a later Emacs of the user would load it.  Say which ones when some landed."
+  (let ((new (seq-difference (drgnx-run-ert-trampolines cache) before)))
+    (dolist (f new) (message "drgnx: test run left a trampoline in the user's eln-cache: %s" f))
+    (null new)))
+
 (defun drgnx-run-ert-batch ()
   "Batch entry point: run the suite in the remaining arguments — a directory, or test files (a shard) —
 exit 0 or 1."
@@ -1446,6 +1465,7 @@ exit 0 or 1."
          ;; native trampolines: drgnx's directory, never the user's ~/.config/emacs/eln-cache (both before HOME changes)
          (eln (drgnx-run-ert--eln-dir))
          (user-eln (file-name-as-directory (expand-file-name "eln-cache/" user-emacs-directory)))
+         (user-eln-before (drgnx-run-ert-trampolines user-eln))
          ;; The suite never sees the user's drgnx config, packages, state or cache.
          ;; `bin/drgnx test' makes a directory of its own, DRGNX_RUN_TMP, and removes it: used as it is (so
          ;; paths stay short), never deleted here.  Anything else the variable holds — empty (the current
@@ -1494,7 +1514,7 @@ exit 0 or 1."
                ;; each file's directory in a short root of its own (a socket path has at most 103 bytes on macOS)
                (drgnx-run-ert-files (drgnx-run-ert--files dir) (getenv "DRGNX_TEST_RESULTS")))))
     (when own (drgnx-run-ert--delete-run-dir own))
-    (kill-emacs (if ok 0 1))))
+    (kill-emacs (if (and (drgnx-run-ert-trampolines-stayed-p user-eln-before user-eln) ok) 0 1))))
 
 ;;;; Prompts in GUI sessions
 

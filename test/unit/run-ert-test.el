@@ -362,6 +362,26 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
           (should-not (directory-files-recursively home "\\`subr--trampoline-")))
       (delete-directory tmp t))))
 
+(ert-deftest drgnx-run-ert/a-trampoline-left-in-the-users-eln-cache-fails-the-run ()
+  ;; The run ends by looking at the eln-cache of the home its Emacs started with (any tier, not just the unit one):
+  ;; a trampoline that landed there since the start is a failure, named on the output.
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-eln" t)))
+         (home (expand-file-name "home" tmp)) (suite (expand-file-name "suite" tmp))
+         (stray (expand-file-name ".emacs.d/eln-cache/31.0-abc/subr--trampoline-stray.eln" home)))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name ".emacs.d" home) t)
+          (drgnx-run-ert-test--suite suite '(("ok-test.el" . "(ert-deftest stray/ok () (should t))")))
+          ;; control: a green suite that writes nothing there passes
+          (should (eql 0 (drgnx-run-ert-test--run-suite suite (concat "HOME=" home) "XDG_CONFIG_HOME")))
+          ;; a green suite that leaves a trampoline in the cache is red, on its own cause
+          (drgnx-run-ert-test--suite
+           suite `(("ok-test.el" . ,(format "(ert-deftest stray/ok () (make-directory %S t) (write-region \"\" nil %S) (should t))"
+                                            (file-name-directory stray) stray))))
+          (should-not (eql 0 (drgnx-run-ert-test--run-suite suite (concat "HOME=" home) "XDG_CONFIG_HOME")))
+          (should (file-exists-p stray)))
+      (delete-directory tmp t))))
+
 (ert-deftest drgnx-run-ert/children-share-the-eln-dir ()
   ;; Every Emacs of a run (per-file processes, check shards, a test that runs the runner) uses one directory, so
   ;; a trampoline is compiled once: the runner exports it as DRGNX_TEST_ELN_DIR, and a runner given one uses it.
