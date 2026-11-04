@@ -740,8 +740,8 @@ replace a good one in the hub."
 (defun drgnx-hub--send-keys ()
   "Hand the hub the keys this Emacs holds (`drgnx-hub--held-keys'), over the socket: never in an environment, an
 argument or a file, and only to a hub that proved itself (`drgnx-hub-core--transmit').  Once the hub took them this
-Emacs drops them (`drgnx-hub--keys-taken'): the hub alone holds them, in memory, and those in the environment go again on
-each start and each (re)connect.  The call's id."
+Emacs drops them (`drgnx-hub--keys-taken'): the hub alone holds them, in memory, and those in the environment go
+again on each start and each (re)connect.  The call's id."
   (when-let* ((keys (drgnx-hub--held-keys)))
     (drgnx-hub-call "gateway/keys" (list :keys keys) (lambda (_result err) (drgnx-hub--keys-taken keys err)))))
 
