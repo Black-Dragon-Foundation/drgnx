@@ -35,8 +35,10 @@
 (cl-defun drgnx-test-child-start (&key name command shim group)
   "Start COMMAND (a list: program and arguments) as a child that speaks the announce-and-park protocol; return the process.
 A child announces `DRGNX-STATE: NAME' lines on stdout and, after each, waits for a line `GO' on stdin.
-SHIM, non-nil, wraps COMMAND, a third-party binary, in `handshake-shim.sh', which announces RUNNING and, after the
-job and its whole group are gone, STOPPED.  GROUP, non-nil, runs it in its own process group, which is the shim too."
+SHIM, non-nil, wraps COMMAND, a third-party binary, in `handshake-shim.sh', which announces RUNNING once the job is
+started and, after the job and its whole group are gone, STOPPED, and parks after each (the job runs on while the shim
+is parked at RUNNING; the shim waits for it only after GO).  GROUP, non-nil, runs it in its own process group, which
+is the shim too."
   (let ((command (if (or shim group)
                      (append (list "sh" (expand-file-name "handshake-shim.sh" drgnx-handshake--dir)) command)
                    command)))

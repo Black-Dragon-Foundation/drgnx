@@ -1085,8 +1085,11 @@ standard input; between the two it is parked.
 
 - `(drgnx-test-child-start :name N :command (PROGRAM ARG…) [:shim t] [:group t])` starts it. `:shim`/`:group` wrap a
   third-party binary in `test/fixtures/handshake-shim.sh`: it runs the binary as one job in its own process group
-  (`set -m`), announces `RUNNING`, forwards TERM, INT, HUP, USR1 and USR2 to the group, and announces `STOPPED` only
-  once the job and every process of its group are gone (zombies do not count).
+  (`set -m`), announces `RUNNING` once the job is started, forwards TERM, INT, HUP, USR1 and USR2 to the group, and
+  announces `STOPPED` only once the job and every process of its group are gone (zombies do not count). It parks after
+  each: at `RUNNING` it waits for `GO` before it waits for the job, so `STOPPED` comes only after the test's `GO`, and
+  it exits only after the `GO` that follows `STOPPED`. The binary itself cannot park and runs on meanwhile; the parked
+  process, the one the test signals, is the shim.
 - `(drgnx-test-child-await PROC STATE)` waits (through `drgnx-test-wait`) for the announcement; the child is then
   parked (`drgnx-test-child-parked-p`). `(drgnx-test-child-go PROC)` sends `GO`.
 - `(drgnx-test-child-signal PROC SIG)` signals a parked child only, and never twice the same SIG before a new

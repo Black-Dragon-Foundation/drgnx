@@ -75,9 +75,25 @@
                       :what "the grandchild's pid")))
             (should (drgnx-handshake-test--alive-p pid))
             (drgnx-test-child-signal child 'term)
+            (drgnx-test-child-go child)
             (drgnx-test-child-await child "STOPPED")
             (should-not (drgnx-handshake-test--alive-p pid))))
       (delete-file pidfile))))
+
+(ert-deftest drgnx-handshake/a-shim-parks-at-running-until-go ()
+  "The shim's RUNNING is a park: a job that ends at once leaves the shim at RUNNING, saying nothing more, until the test
+sends GO; then STOPPED, parked again, and it exits only after the next GO."
+  (drgnx-handshake-test--with-child child (list :command (list "true") :shim t)
+    (process-put child :exit nil)
+    (set-process-sentinel child (lambda (p _e) (when (memq (process-status p) '(exit signal))
+                                                 (process-put p :exit (process-exit-status p)))))
+    (drgnx-test-child-await child "RUNNING" :secs 5)
+    (drgnx-test-child-go child)
+    (drgnx-test-child-await child "STOPPED")
+    (should-not (process-get child :exit))
+    (drgnx-test-child-go child)
+    (drgnx-test-wait (lambda () (process-get child :exit)) :what "the shim's exit, after its last GO")
+    (should (eql 0 (process-get child :exit)))))
 
 (ert-deftest drgnx-handshake/a-child-emacs-announces-from-lisp ()
   (drgnx-handshake-test--with-child child
