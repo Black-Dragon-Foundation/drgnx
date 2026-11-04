@@ -541,6 +541,21 @@ a test reaches by a call: a command a test binds to a key is named by `function'
       (should (equal 0 (plist-get (drgnx-run-ert--judge-flaky (funcall summary con)) :failed)))
       (should (equal 1 (plist-get (drgnx-run-ert--judge-flaky (funcall summary det)) :failed))))))
 
+(ert-deftest drgnx-run-ert/a-whole-file-flake-with-a-det-test-fails-even-when-listed ()
+  ;; a file that hung or died is judged by every test it holds: a :det test of a cond file may be what hung
+  (let* ((mixed (drgnx-lint-classes-test--tmp ";; test-class: cond" '(ert-deftest x/c () (should t))
+                                              '(ert-deftest x/d () :tags '(:det) (should t))))
+         (plain (drgnx-lint-classes-test--tmp ";; test-class: cond" '(ert-deftest x/c () (should t))))
+         (list-file (make-temp-file "drgnx-flaky"))
+         (summary (lambda (file)
+                    (list :total 1 :passed 1 :failed 0 :failures [] :known_red [] :tests [] :skipped []
+                          :flaky (vector (list :name "file x-test.el" :file file :condition "timed out")))))
+         (process-environment (cons (concat "DRGNX_TEST_FLAKY=" list-file) process-environment)))
+    (with-temp-file list-file (insert "((\"file x-test.el\" :reason \"a cause\" :stress \"a run\"))\n"))
+    (let ((inhibit-message t))
+      (should (equal 0 (plist-get (drgnx-run-ert--judge-flaky (funcall summary plain)) :failed)))
+      (should (equal 1 (plist-get (drgnx-run-ert--judge-flaky (funcall summary mixed)) :failed))))))
+
 (ert-deftest drgnx-run-ert/the-audit-records-a-real-sleep-and-ignores-the-clock ()
   (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
   (let ((drgnx-run-ert--audit-seen nil) (drgnx-run-ert--audit-file nil) (inhibit-message t))

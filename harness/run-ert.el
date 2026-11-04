@@ -332,13 +332,17 @@ is a failure.  Prints the flakes."
       (message "\nFlaky (%d): failed first, passed on the rerun" (length flaky))
       (dolist (x flaky)
         (let* ((name (plist-get x :name))
-               ;; a deterministic test has no flake: flaky.eld never excuses it
-               (det (eq (drgnx-run-ert--test-class (plist-get x :file) name) :det))
+               (whole (string-prefix-p "file " name))
+               ;; a deterministic test has no flake: flaky.eld never excuses it, nor a whole file (a hang, a crash)
+               ;; that holds one, whatever the file's class: the det test may be what hung
+               (det (if whole
+                        (drgnx-run-ert--file-holds-det-p (plist-get x :file))
+                      (eq (drgnx-run-ert--test-class (plist-get x :file) name) :det)))
                (reason (and (not det) (drgnx-run-ert--flaky-listed name))))
           (if reason
               (message "   %s  flaky (listed: %s)" name reason)
             (message "   %s  flaky: %s" name (plist-get x :condition))
-            (let ((whole (string-prefix-p "file " name)))
+            (progn
               (setq summary
                     (plist-put (plist-put (plist-put (plist-put summary :failed (1+ (plist-get summary :failed)))
                                                      :passed (if whole (plist-get summary :passed) (1- (plist-get summary :passed))))
@@ -498,6 +502,27 @@ in its top-level `ert-deftest'), else the file's class (`drgnx-run-ert--file-cla
                            (and (stringp own) own))))
           (intern own))
         (drgnx-run-ert--file-class file))))
+
+(defun drgnx-run-ert--file-holds-det-p (file)
+  "Whether the test FILE holds a test of class det: its class is det, or a test defined in it (a top-level form whose
+head ends in `deftest') has `:det' in its own quoted `:tags'.  Nil when FILE is nil."
+  (when (stringp file)
+    (or (eq (drgnx-run-ert--file-class file) :det)
+        (let ((obarray (obarray-make)) (found nil))
+          (cl-labels ((named (x s) (and (symbolp x) (equal (symbol-name x) s))))
+            (ignore-errors
+              (with-temp-buffer
+                (insert-file-contents file)
+                (condition-case nil
+                    (while (not found)
+                      (let ((form (read (current-buffer))))
+                        (when (and (consp form) (symbolp (car form)) (string-suffix-p "deftest" (symbol-name (car form))))
+                          (let* ((key (seq-find (lambda (x) (named x ":tags")) form))
+                                 (tags (and key (cadr (memq key form)))))
+                            (when (and (named (car-safe tags) "quote") (listp (cadr tags)))
+                              (setq found (seq-some (lambda (x) (named x ":det")) (cadr tags))))))))
+                  (end-of-file nil)))))
+          found))))
 
 (defun drgnx-run-ert--tag-classes (file)
   "Give each test loaded from FILE its file's class as an ERT tag, unless it has a class tag of its own, so that

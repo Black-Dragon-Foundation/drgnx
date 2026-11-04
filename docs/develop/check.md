@@ -141,7 +141,9 @@ file's.
 `test/flaky.eld` entries are `(NAME :reason STRING :stress STRING)`: the cause, and the stress run
 (`bin/drgnx test --stress`: the command and its result) that the commit adding the entry quotes. A listed flake
 prints `flaky (listed: REASON)` and passes. `drgnx-lint/flaky-entries-have-a-reason-and-a-stress-run` checks every
-entry; a flake without a cause is fixed, not listed. `DRGNX_TEST_FLAKY=FILE` names another list (the runner's own tests).
+entry; a flake without a cause is fixed, not listed. A `det` test's flake fails the run whatever the list says, and so
+does a whole-file flake (`file NAME`: its Emacs hung or died) of a file that holds a `det` test, by its class line or
+a test's own `:det` tag: that test may be what hung. `DRGNX_TEST_FLAKY=FILE` names another list (the runner's own tests).
 
 ## Stress (`bin/drgnx test --stress N [--load K]`)
 
