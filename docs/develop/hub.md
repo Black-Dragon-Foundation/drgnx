@@ -1177,8 +1177,9 @@ and name. The session is recorded in `runtime.db` (`asession`, migration 5) and 
   unsandboxed.
 - **Stop and kill.** `agents/stop` on a running turn cancels it (`session/cancel`), answers the pending permission
   requests cancelled and holds the queue (`paused`); an agent that has not ended the turn after 2 s loses its process
-  group. On a session with no turn running it ends the session (SIGTERM, SIGKILL after 3 s). `agents/kill` ends it
-  at once.
+  group. A second Stop of the same turn changes nothing. On a session with no turn running it ends the session
+  (SIGTERM, SIGKILL after 3 s). `agents/kill` ends it at once. The pause after a tool call and the turn's end answer
+  the requests still waiting cancelled too.
 
 ### Prompts, queue and steer (Task 8b)
 
@@ -1192,6 +1193,44 @@ snapshot's `queue` lists the waiting texts and `paused` is true while they are h
 the pause: the running tool call completes, then the turn is cancelled and the queue held.
 
 A turn ending as cancelled holds the queue, an error does too; an end-of-turn stop delivers the next prompt at once.
+
+### A session's turn
+
+The choices about a session's turn are a pure core, `agents/session/turn_core.rs` (`TurnCore`). It has no I/O, clock
+or threads, and lives in the session's state under the same lock. The shell (`agents/session.rs`) feeds it every
+event and performs what it answers; the entries, steps and transcript stay with `State::apply` and the shell.
+
+- Events: `Send` (a prompt, with the profile's steer mode and `if_free`), `PromptDone` (cancelled or not),
+  `PromptFailed` (closed or not), `Stop` (or the pause after a tool call), `Kill` (`agents/kill`, the hub ending, or
+  a Stop's deadline for its turn), `PermissionAsked` (with the turn it came in), `PermissionAnswered`,
+  `ToolCompleted`, `EmitTick`, `QueueEdited` (deliver, unqueue, requeue, the freshness gate's notice), `Changed` and
+  `Exited`.
+- Effects: start a turn with the next prompt, end it (waiting on a job, or held), tell the agent to cancel, arm a
+  Stop's deadline, end the process group, hold a permission request for the user, answer it or answer it cancelled,
+  keep the queue on disk, announce a change, arm and send the event pair; and the refusals (exited, not free, no
+  turn running, no such queued prompt, no such request).
+- The shell asks it `status()`, `queue()`, `paused()`, `turn()`, `ending()` and `is_free()`.
+
+What the core keeps:
+
+- A turn starts only when none runs, with the queue's next prompt, and only when the queue is not held, no kill is
+  under way and the hub is not ending (a prompt sent then waits on disk for the next start).
+- A turn ends once, at its agent's answer. A second Stop of a stopped turn changes nothing; a Stop's deadline ends
+  the process only if the turn it stopped still runs.
+- Each permission request is answered or answered cancelled once. A Stop, the pause after a tool call, the turn's end,
+  a kill and the agent's exit cancel what is held. A request the matrix decides on after its turn was cancelled or
+  ended is answered cancelled at once: the agent no longer waits on it.
+- One event pair is armed at a time; the timer's tick sends it.
+
+`agents/session/turn_core/tests.rs` runs the core in every order (skuld, exhaustive) of a user who sends, stops and
+delivers, a second Stop (the refused waits), an agent that answers what it works on, and the stops' deadlines; of
+four senders, an editor that removes and delivers, and an agent; and of a user who answers and stops, an agent that
+asks twice, completes a tool call and answers, a pause after the tool call, and the cockpit settling a card. The
+edges those orders take as given are the shell's:
+
+- a turn's answer follows its start, and every update the agent sent in that turn (the reader drains them first);
+- a permission request names the turn that ran when the reader received it;
+- a Stop's deadline names the turn that Stop stopped.
 
 ### Transcripts
 

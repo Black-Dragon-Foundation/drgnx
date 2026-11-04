@@ -1,0 +1,445 @@
+//! A session's turn, queue, Stop and permission choices, without I/O (docs/develop/hub.md, "A session's turn"): when
+//! a prompt starts a turn or waits in the queue, when a turn ends and what follows it, what a Stop, a pause after a
+//! tool call or a kill does to the turn, which permission requests the user is asked and when each is answered or
+//! cancelled, and when an event pair is sent.  The shell ([`super::Session`]) does the I/O and feeds every event
+//! through [`TurnCore::step`]; the entries, steps and transcript stay with `State::apply` and the shell.
+//!
+//! The edges the shell keeps: a turn's `PromptDone` or `PromptFailed` comes after its `StartTurn`, and after every
+//! update the agent sent in that turn (the reader drains them first); a `PermissionAsked` names the turn that was
+//! running when the reader received the request; a `Kill` for a stop's deadline names the turn that Stop stopped.
+
+use super::super::queue::{Origin, Queue, Queued};
+use runstav::methods::agents::SessionStatus;
+
+/// What happens to a session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TurnEvent {
+    /// A prompt arrives.  STEER_MODE: the profile's mode is `steer` (the prompt goes ahead of the ordinary queued ones
+    /// while a turn runs).  IF_FREE: a turn or nothing (`agents/send` with `if_free`).
+    Send {
+        item: Queued,
+        steer_mode: bool,
+        if_free: bool,
+    },
+    /// The agent answered the turn's prompt; CANCELLED: its stop reason is `cancelled`.  JOBS: a job the session
+    /// started still runs.
+    PromptDone { cancelled: bool, jobs: bool },
+    /// The turn's prompt failed; CLOSED: the agent's connection closed.
+    PromptFailed { closed: bool, jobs: bool },
+    /// The user's Stop (or the refused waits'); AFTER_TOOL: the pause, which cancels once the running tool call
+    /// completes (`Hub::cancel_after_tool`).
+    Stop { after_tool: bool },
+    /// The agent's process is to end.
+    Kill { why: KillWhy },
+    /// The matrix asks the user about permission request REQUEST, which the agent sent during TURN.
+    PermissionAsked { request: u64, turn: u64 },
+    /// The user answered REQUEST (or settled its matrix card).
+    PermissionAnswered { request: u64 },
+    /// A tool call completed or failed.
+    ToolCompleted,
+    /// The event pair's timer fired.
+    EmitTick,
+    /// The queue was edited (`agents/do`, the freshness gate's notice).
+    QueueEdited(QueueEdit),
+    /// Something the snapshot shows changed (an update, an entry, a step).
+    Changed,
+    /// The agent's process exited.
+    Exited,
+}
+
+/// Why the agent's process ends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum KillWhy {
+    /// `agents/kill`, or `agents/stop` with no turn running.
+    User,
+    /// The hub ends: nothing is held for a Stop, and the queue stays on disk for the next start.
+    HubEnding,
+    /// A Stop's deadline for TURN: the process ends only if that turn still runs.
+    StopDue { turn: u64 },
+}
+
+/// An edit of the queue.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum QueueEdit {
+    /// The held queue is released and the next prompt sent.
+    Deliver,
+    /// The Nth waiting prompt is removed.
+    Unqueue(usize),
+    /// The Nth waiting prompt's text is replaced; an empty text removes it.
+    Requeue(usize, String),
+    /// TEXT goes ahead of the ordinary queued prompts, without starting a turn (the freshness gate's notice).
+    SteerIn(String),
+}
+
+/// What the shell does about a step.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TurnEffect {
+    /// Refused: the session has exited.
+    Exited,
+    /// Refused: `if_free`, and the session is not free.
+    NotFree,
+    /// A Stop with no turn running: the hub ends the session.
+    NotRunning,
+    /// Refused: no such queued prompt.
+    NoSuchItem,
+    /// Refused: no such permission request waits (answered or cancelled already).
+    NoSuchRequest,
+    /// Turn TURN starts with ITEM: its prompt goes to the agent.
+    StartTurn { turn: u64, item: Queued },
+    /// Turn TURN ended.  WAITING: on a job (no model request until the wake); PAUSED: the queue is held.
+    EndTurn {
+        turn: u64,
+        waiting: bool,
+        paused: bool,
+    },
+    /// The agent is told to cancel the turn (`session/cancel`).
+    CancelTurn,
+    /// The Stop's deadline for TURN: a `Kill` with [`KillWhy::StopDue`] after `STOP_ANSWER`.
+    ArmStopDeadline { turn: u64 },
+    /// The agent's process group ends.
+    KillProcess,
+    /// The request waits for the user, in the snapshot.
+    Hold { request: u64 },
+    /// The user's answer goes to the agent.
+    Answer { request: u64 },
+    /// The request is answered cancelled.
+    Cancel { request: u64 },
+    /// The queue and the pause are kept on disk.
+    Persist,
+    /// The snapshot changed: its change number goes up and an event pair is due.
+    Announce,
+    /// The event pair's timer starts (`EMIT_EVERY`).
+    ArmEmit,
+    /// The event pair is sent now.
+    Emit,
+}
+
+/// See the module.
+#[derive(Debug)]
+pub(crate) struct TurnCore {
+    status: SessionStatus,
+    /// Prompts waiting for the turn to end (or held).
+    queue: Queue,
+    /// The queue is held (a Stop, an error, the pause after a tool call) until delivered or something new is sent.
+    paused: bool,
+    /// Cancel once the running tool call completes.
+    hold: bool,
+    /// The turn running, counting from 1.
+    turn: u64,
+    /// The agent was told to cancel this turn.
+    cancelling: bool,
+    /// A Stop armed its deadline for this turn.
+    stopped: bool,
+    /// The process is being ended: no turn starts.
+    killed: bool,
+    /// The hub is ending: a turn's end holds nothing and starts nothing.
+    ending: bool,
+    /// The requests the user is asked, oldest first.
+    held: Vec<u64>,
+    /// The event pair's timer runs.
+    emit_armed: bool,
+}
+
+impl Default for TurnCore {
+    fn default() -> Self {
+        TurnCore {
+            status: SessionStatus::Starting,
+            queue: Queue::default(),
+            paused: false,
+            hold: false,
+            turn: 0,
+            cancelling: false,
+            stopped: false,
+            killed: false,
+            ending: false,
+            held: Vec::new(),
+            emit_armed: false,
+        }
+    }
+}
+
+impl TurnCore {
+    pub(crate) fn new() -> TurnCore {
+        TurnCore::default()
+    }
+
+    pub(crate) fn step(&mut self, ev: TurnEvent) -> Vec<TurnEffect> {
+        use TurnEffect as E;
+        match ev {
+            TurnEvent::Send {
+                item,
+                steer_mode,
+                if_free,
+            } => {
+                if self.status == SessionStatus::Exited {
+                    return vec![E::Exited];
+                }
+                if if_free && !self.is_free() {
+                    return vec![E::NotFree];
+                }
+                let idle = self.idle();
+                self.queue
+                    .push_keyed(item.text, item.origin, !idle && steer_mode, item.key);
+                if idle {
+                    self.paused = false;
+                }
+                let mut fx = vec![E::Persist];
+                if idle {
+                    fx.extend(self.next());
+                }
+                fx.push(E::Announce);
+                fx
+            }
+            TurnEvent::PromptDone { cancelled, jobs } => {
+                self.finish(cancelled && !self.ending, jobs)
+            }
+            TurnEvent::PromptFailed { closed, jobs } => self.finish(!closed && !self.ending, jobs),
+            TurnEvent::Stop { after_tool: true } => {
+                match self.status {
+                    SessionStatus::Exited => return vec![E::Exited],
+                    SessionStatus::Busy => self.hold = true,
+                    _ => self.paused = true,
+                }
+                vec![E::Persist, E::Announce]
+            }
+            TurnEvent::Stop { after_tool: false } => {
+                if self.status != SessionStatus::Busy {
+                    return vec![E::NotRunning];
+                }
+                if self.stopped {
+                    // stopped already: the turn ends once, at the agent's answer or the first deadline
+                    return Vec::new();
+                }
+                self.paused = true;
+                self.hold = false;
+                self.stopped = true;
+                let mut fx = self.cancel();
+                fx.extend([
+                    E::Persist,
+                    E::Announce,
+                    E::ArmStopDeadline { turn: self.turn },
+                ]);
+                fx
+            }
+            TurnEvent::Kill {
+                why: KillWhy::StopDue { turn },
+            } => {
+                if self.status == SessionStatus::Busy && self.turn == turn {
+                    vec![E::KillProcess]
+                } else {
+                    Vec::new()
+                }
+            }
+            TurnEvent::Kill { why } => {
+                self.killed = true;
+                if why == KillWhy::HubEnding {
+                    self.ending = true;
+                }
+                self.cancel_held()
+            }
+            TurnEvent::PermissionAsked { request, turn } => {
+                let asked = self.status == SessionStatus::Busy
+                    && turn == self.turn
+                    && !self.cancelling
+                    && !self.killed;
+                if asked {
+                    self.held.push(request);
+                    vec![E::Hold { request }]
+                } else {
+                    // its turn is cancelled or over: nobody will answer it
+                    vec![E::Cancel { request }]
+                }
+            }
+            TurnEvent::PermissionAnswered { request } => {
+                if self.take_held(request) {
+                    vec![E::Answer { request }]
+                } else {
+                    vec![E::NoSuchRequest]
+                }
+            }
+            TurnEvent::ToolCompleted => {
+                if !self.hold {
+                    return Vec::new();
+                }
+                // the pause after a tool call: the turn ends here, the queue waits
+                self.hold = false;
+                self.paused = true;
+                let mut fx = self.cancel();
+                fx.push(E::Persist);
+                fx
+            }
+            TurnEvent::EmitTick => {
+                self.emit_armed = false;
+                vec![E::Emit]
+            }
+            TurnEvent::Changed => {
+                if self.emit_armed {
+                    return Vec::new();
+                }
+                self.emit_armed = true;
+                vec![E::ArmEmit]
+            }
+            TurnEvent::QueueEdited(edit) => {
+                match edit {
+                    QueueEdit::Deliver => {
+                        self.paused = false;
+                        let mut fx = vec![E::Persist];
+                        fx.extend(self.next());
+                        fx.push(E::Announce);
+                        return fx;
+                    }
+                    QueueEdit::Unqueue(n) => {
+                        if self.queue.remove(n).is_none() {
+                            return vec![E::NoSuchItem];
+                        }
+                    }
+                    QueueEdit::Requeue(n, text) => {
+                        let done = if text.trim().is_empty() {
+                            self.queue.remove(n).is_some()
+                        } else {
+                            self.queue.replace(n, text)
+                        };
+                        if !done {
+                            return vec![E::NoSuchItem];
+                        }
+                    }
+                    QueueEdit::SteerIn(text) => self.queue.push(text, Origin::Hub, true),
+                }
+                vec![E::Persist, E::Announce]
+            }
+            TurnEvent::Exited => {
+                self.status = SessionStatus::Exited;
+                self.cancel_held()
+            }
+        }
+    }
+
+    /// The session is up: idle, or WAITING on a job it started.  Nothing starts here ([`TurnCore::next`] does).
+    pub(crate) fn ready(&mut self, waiting: bool) {
+        self.status = if waiting {
+            SessionStatus::Waiting
+        } else {
+            SessionStatus::Idle
+        };
+    }
+
+    /// The queue and pause kept on disk, for a session not yet shared.
+    pub(crate) fn restore(&mut self, queue: Queue, paused: bool) {
+        self.queue = queue;
+        self.paused = paused;
+    }
+
+    /// The queue, for a session not yet shared (a resume's first prompt).
+    pub(crate) fn queue_mut(&mut self) -> &mut Queue {
+        &mut self.queue
+    }
+
+    /// The next queued prompt starts when the session is idle (or waiting on a job), not held, and not ending.
+    pub(crate) fn next(&mut self) -> Vec<TurnEffect> {
+        if !self.idle() || self.paused || self.killed || self.ending {
+            return Vec::new();
+        }
+        let Some(item) = self.queue.pop() else {
+            return Vec::new();
+        };
+        self.status = SessionStatus::Busy;
+        self.turn += 1;
+        self.cancelling = false;
+        self.stopped = false;
+        vec![TurnEffect::StartTurn {
+            turn: self.turn,
+            item,
+        }]
+    }
+
+    /// The turn's end.  PAUSE: its end holds the queue (cancelled, or an error).
+    fn finish(&mut self, pause: bool, jobs: bool) -> Vec<TurnEffect> {
+        // a pause asked for during the turn (a budget limit) holds the queue though no tool call ended it
+        if (self.hold && !self.ending) || pause {
+            self.paused = true;
+        }
+        self.hold = false;
+        // the turn is over: nobody answers what it still asked
+        let mut fx = self.cancel_held();
+        if self.status == SessionStatus::Busy {
+            self.status = if jobs {
+                SessionStatus::Waiting
+            } else {
+                SessionStatus::Idle
+            };
+            fx.push(TurnEffect::EndTurn {
+                turn: self.turn,
+                waiting: jobs,
+                paused: self.paused,
+            });
+        }
+        // a job's result is for the model even after a Stop or the refused waits
+        if self.queue.has_hub() {
+            self.paused = false;
+        }
+        if self.ending {
+            return fx;
+        }
+        fx.extend([TurnEffect::Persist, TurnEffect::Announce]);
+        fx.extend(self.next());
+        fx
+    }
+
+    /// The agent is told to cancel the turn; what it asked is answered cancelled first.
+    fn cancel(&mut self) -> Vec<TurnEffect> {
+        self.cancelling = true;
+        let mut fx = self.cancel_held();
+        fx.push(TurnEffect::CancelTurn);
+        fx
+    }
+
+    fn cancel_held(&mut self) -> Vec<TurnEffect> {
+        std::mem::take(&mut self.held)
+            .into_iter()
+            .map(|request| TurnEffect::Cancel { request })
+            .collect()
+    }
+
+    fn take_held(&mut self, request: u64) -> bool {
+        let at = self.held.iter().position(|r| *r == request);
+        at.map(|i| self.held.remove(i)).is_some()
+    }
+
+    fn idle(&self) -> bool {
+        matches!(self.status, SessionStatus::Idle | SessionStatus::Waiting)
+    }
+
+    /// Can a new turn start now without joining anything: idle (not busy, not waiting on a job), not held, nothing
+    /// queued.
+    pub(crate) fn is_free(&self) -> bool {
+        self.status == SessionStatus::Idle && !self.paused && self.queue.is_empty()
+    }
+
+    pub(crate) fn status(&self) -> SessionStatus {
+        self.status
+    }
+
+    pub(crate) fn queue(&self) -> &Queue {
+        &self.queue
+    }
+
+    pub(crate) fn paused(&self) -> bool {
+        self.paused
+    }
+
+    pub(crate) fn turn(&self) -> u64 {
+        self.turn
+    }
+
+    pub(crate) fn ending(&self) -> bool {
+        self.ending
+    }
+
+    #[cfg(test)]
+    pub(crate) fn held(&self) -> &[u64] {
+        &self.held
+    }
+}
+
+#[cfg(test)]
+mod tests;
