@@ -115,6 +115,12 @@ pub fn plan(p: &AgentProfile, role: Role, _e: &Effective) -> LaunchPlan {
     let enforced = match p.provider() {
         None => Enforced::No("drgnx has no lock for this agent's CLI"),
         Some(Provider::Claude) => {
+            // no telemetry, error reports or update checks: the session's proxy denies those hosts anyway, and a
+            // sandboxed CLI should not keep trying them (code.claude.com/docs/en/network-config, env-vars)
+            env.push((
+                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".to_string(),
+                "1".to_string(),
+            ));
             if p.ai.is_some() && matches!(role, Role::Worker | Role::Manager) {
                 env.push(("CLAUDE_CODE_PROMPT_CACHE_TTL".to_string(), "1h".to_string()));
             }

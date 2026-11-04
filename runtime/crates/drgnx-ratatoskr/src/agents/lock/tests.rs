@@ -29,7 +29,8 @@ fn args(p: &LaunchPlan) -> Vec<String> {
 
 #[test]
 fn claude_options_equal_the_lisp_oracle() {
-    // The fixture is `drgnx-agents-job-claude-options` plus `:env` as `drgnx-agents--session-meta` adds it.
+    // The fixture is `drgnx-agents-job-claude-options` plus `:env` as `drgnx-agents--session-meta` adds it, with the
+    // lock's own `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` after the profile's variables.
     let want: Value = serde_json::from_str(include_str!("claude-options.json")).unwrap();
     let p = profile(&["claude-agent-acp"], None, &["A=1", "A=2", "B"], None);
     let plan = plan(&p, Role::Worker, &Effective::default());
@@ -137,16 +138,45 @@ fn gateway_profiles_get_claudes_lock_and_ttl_1h() {
         let plan = plan(&gw, role, &Effective::default());
         assert_eq!(
             plan.env,
-            [("CLAUDE_CODE_PROMPT_CACHE_TTL".to_string(), "1h".to_string())]
+            [
+                (
+                    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".to_string(),
+                    "1".to_string()
+                ),
+                ("CLAUDE_CODE_PROMPT_CACHE_TTL".to_string(), "1h".to_string())
+            ]
         );
         let env = &plan.session_meta.unwrap()["claudeCode"]["options"]["env"];
         assert_eq!(env["CLAUDE_CODE_PROMPT_CACHE_TTL"], "1h");
     }
     // Chats keep 5 m; a subscription profile has no TTL variable.
-    assert!(plan(&gw, Role::Chat, &Effective::default()).env.is_empty());
+    let ttl = |p: &LaunchPlan| p.env.iter().any(|(k, _)| k == "CLAUDE_CODE_PROMPT_CACHE_TTL");
+    assert!(!ttl(&plan(&gw, Role::Chat, &Effective::default())));
     let sub = profile(&["claude-agent-acp"], None, &[], None);
     let plan = plan(&sub, Role::Worker, &Effective::default());
-    assert!(plan.env.is_empty() && plan.session_meta.is_some());
+    assert!(!ttl(&plan) && plan.session_meta.is_some());
+}
+
+/// Every Claude session sends no nonessential traffic (telemetry, error reports, update checks): its proxy denies
+/// those hosts.  Another CLI's plan does not get the variable.
+#[test]
+fn claude_sends_no_nonessential_traffic() {
+    for (cmd, ai) in [("claude-agent-acp", None), ("claude-agent-acp", Some("claude-openrouter"))] {
+        for role in [Role::Chat, Role::Worker, Role::Manager] {
+            let plan = plan(&profile(&[cmd], ai, &[], None), role, &Effective::default());
+            assert!(
+                plan.env
+                    .contains(&("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".into(), "1".into())),
+                "{ai:?} {role:?}"
+            );
+            let env = &plan.session_meta.unwrap()["claudeCode"]["options"]["env"];
+            assert_eq!(env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"], "1");
+        }
+    }
+    for cmd in ["codex-acp", "gemini"] {
+        let plan = plan(&profile(&[cmd], None, &[], None), Role::Worker, &Effective::default());
+        assert!(plan.env.is_empty(), "{cmd}");
+    }
 }
 
 #[test]

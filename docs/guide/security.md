@@ -420,7 +420,8 @@ project).
 
   Anything else is refused. Each refused host is recorded once per session as an event (`proxy-denied`, with the
   host), so you can see what an agent tried to reach; it never raises a card. Optional traffic a CLI sends
-  (telemetry, error reports, update checks) is refused the same way. To let a session reach another host, add it to
+  (telemetry, error reports, update checks) is refused the same way; Claude is told not to send it
+  (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, [agents.md](agents.md#jobs-and-your-claude-settings)). To let a session reach another host, add it to
   the `provider-only` list of `agents-net-hosts`.
 - **Container jobs** (`job.container`) run only images you put on `agents-container-images`, pinned by digest. The hub
   builds the `podman run` line itself: no capabilities, no new privileges, a read-only root, the worktree as the only

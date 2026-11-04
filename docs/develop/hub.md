@@ -1117,7 +1117,8 @@ makes: the hub never grants `Open`) has no network but its sandbox's relay port,
 - **A denied host is an event, never a card.** The proxy says each denied `host:port` once per session; the hub writes
   it to work.db's `event` table: kind `status`, the session as `agent`, data
   `{"proxy-denied": true, "session": SID, "host": "HOST:PORT"}`. A refusal (a private address, a wildcard, a malformed
-  request) is only logged.
+  request) is only logged. Claude's lock sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (`agents::lock::plan`), so
+  its telemetry, error reports and update checks are not even tried (code.claude.com/docs/en/env-vars).
 - **It goes with the session.** When the agent's process ends (a stop, a kill, a crash, a close while it waits on a
   job) the proxy closes its listener and every tunnel and removes the socket; a resume binds a new one. A start that
   fails after the bind drops it the same way. The removal checks the socket's inode, so an old session's end never

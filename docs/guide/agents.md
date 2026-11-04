@@ -376,6 +376,13 @@ task's folder, never links; any other is skipped. `CLAUDE.md`, skills and agent 
 load (which settings files Claude reads is left as it is: they are content, and the permission check bounds what they
 can make the agent do). Claude Code's own sandbox is off in a job: drgnx's is the boundary.
 
+Every Claude session drgnx starts, a job's or your own, gets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` in its
+environment and its options: no auto-updates, telemetry, error reports, release notes or feature-flag fetches
+(Claude Code's [environment variables](https://code.claude.com/docs/en/env-vars) and
+[network access requirements](https://code.claude.com/docs/en/network-config#network-access-requirements)). Its
+sandbox's proxy would refuse those hosts anyway ([security.md](security.md)); the variable keeps the CLI from trying.
+Features that need feature-flag fetching, such as Remote Control, are not available in a drgnx session.
+
 Your own sessions (New Agent Session…) and agents other than Claude get none of this. Other agents
 (Gemini CLI, Codex) have no such switch yet, so a job runs only **job-safe** profiles (`drgnx-agents-job-safe-p`):
 those whose options say `:job-safe t` and that run Claude Code's adapter, so a job-safe profile always gets these
