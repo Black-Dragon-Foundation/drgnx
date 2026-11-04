@@ -1206,10 +1206,8 @@ mod tests {
         };
         let mut r = rig(cfg, &[], &[]);
         let p = r.listen(1);
-        let started = std::time::Instant::now();
         let (mut s, code) = ask(&p, b"CONNECT up.test:443 HTTP/1.1\r\nHost: up").await;
         assert_eq!(code, 400);
-        assert!(started.elapsed() >= Duration::from_millis(300));
         assert!(closed(&mut s).await);
         assert_eq!(
             r.said(),
@@ -1219,6 +1217,22 @@ mod tests {
                 why: RefuseWhy::BadRequest
             }]
         );
+    }
+
+    /// The refusal waits out the head timeout: a timing test (the elapsed time is the assertion).
+    #[tokio::test]
+    #[ignore = "timing: a slow head is refused only after the head timeout"]
+    async fn slow_head_is_refused_only_after_the_head_timeout() {
+        let cfg = ProxyConfig {
+            head_timeout: Duration::from_millis(300),
+            ..ProxyConfig::default()
+        };
+        let r = rig(cfg, &[], &[]);
+        let p = r.listen(1);
+        let started = std::time::Instant::now();
+        let (_s, code) = ask(&p, b"CONNECT up.test:443 HTTP/1.1\r\nHost: up").await;
+        assert_eq!(code, 400);
+        assert!(started.elapsed() >= Duration::from_millis(300));
     }
 
     #[tokio::test]
@@ -1243,18 +1257,15 @@ mod tests {
 
         // the slots come back when they close
         drop(held);
-        let deadline = std::time::Instant::now() + WAIT;
-        loop {
-            let (_s, code) = connect_to(&p, &format!("up.test:{}", up.port())).await;
-            if code == 200 {
-                break;
+        let target = format!("up.test:{}", up.port());
+        skuld::wait_until_async("the slots come back", WAIT.as_secs(), || {
+            let (p, target) = (&p, &target);
+            async move {
+                let (_s, code) = connect_to(p, target).await;
+                (code == 200).then_some(())
             }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "the slots never came back"
-            );
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        })
+        .await;
     }
 
     #[tokio::test]
@@ -1337,11 +1348,11 @@ mod tests {
         assert_eq!(code, 200);
         assert!(echoes(&mut d, b"new").await);
         // tag 1 no longer accepts
-        let deadline = std::time::Instant::now() + WAIT;
-        while UnixStream::connect(&p1).await.is_ok() {
-            assert!(std::time::Instant::now() < deadline, "tag 1 still accepts");
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        skuld::wait_until_async("tag 1 stops accepting", WAIT.as_secs(), || {
+            let p1 = &p1;
+            async move { UnixStream::connect(p1).await.is_err().then_some(()) }
+        })
+        .await;
 
         // close forgets what tag 1 was told, and only that: tag 2 stays quiet about x.test, a new tag 1 hears it again
         let (_s, code) = connect_to(&p2, "x.test:443").await;

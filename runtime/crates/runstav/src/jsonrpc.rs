@@ -285,7 +285,7 @@ mod tests {
 
     #[test]
     fn pending_ends_once() {
-        let t0 = Instant::now();
+        let t0 = skuld::origin();
         let mut p: Pending<&str> = Pending::new();
         assert!(
             p.insert(Id::Num(1), t0 + Duration::from_secs(1), "a")

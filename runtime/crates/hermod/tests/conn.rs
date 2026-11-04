@@ -304,19 +304,13 @@ async fn unknown_notifications_are_ignored_unknown_requests_get_32601() {
 async fn stderr_is_readable_while_the_child_runs() {
     let (conn, _rx) = start("echo 'bwrap: no permission' >&2; cat >/dev/null", opts()).await;
     let tail = conn.stderr();
-    let seen = tokio::task::spawn_blocking(move || {
-        let end = std::time::Instant::now() + Duration::from_secs(10);
-        while std::time::Instant::now() < end {
-            if tail.get().contains("bwrap: no permission") {
-                return true;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        false
+    tokio::task::spawn_blocking(move || {
+        skuld::wait_until("the child's stderr holds its complaint", 10, || {
+            tail.get().contains("bwrap: no permission").then_some(())
+        });
     })
     .await
     .unwrap();
-    assert!(seen, "{:?}", conn.stderr().get());
 }
 
 /// An agent's child is forked from draugr's pinned thread: a parent-death signal (what bwrap's `--die-with-parent`

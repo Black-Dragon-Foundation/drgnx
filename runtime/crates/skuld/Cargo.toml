@@ -10,3 +10,4 @@ publish = false
 # Crates name it under [dev-dependencies] only; it never reaches a shipped binary.
 [dependencies]
 proptest.workspace = true
+tokio = { workspace = true, features = ["time"] }   # wait_until_async's pause between looks

@@ -11,7 +11,6 @@ use support::{BIN, Hub, Root, ping};
 #[cfg(feature = "test-hooks")]
 use {
     serde_json::{Value, json},
-    std::time::{Duration, Instant},
     support::{Client, FAILED_AFTER, mock_binary},
 };
 
@@ -284,18 +283,17 @@ fn a_stopped_reader_is_dropped_after_16_mib_while_another_keeps_reading() {
     assert!(ping(&socket));
     // the line is written by the hub, which says nothing when it has: the log is looked at again until it shows
     // (`FAILED_AFTER` only bounds a failure)
-    let deadline = Instant::now() + FAILED_AFTER;
-    loop {
-        let log: String = std::fs::read_dir(root.log_dir())
-            .unwrap()
-            .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
-            .collect();
-        if log.contains("queued over 16 MiB") {
-            break;
-        }
-        assert!(Instant::now() < deadline, "no drop in the log: {log}");
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    skuld::wait_until(
+        "the hub logs why it dropped the reader",
+        FAILED_AFTER.as_secs(),
+        || {
+            let log: String = std::fs::read_dir(root.log_dir())
+                .unwrap()
+                .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+                .collect();
+            log.contains("queued over 16 MiB").then_some(())
+        },
+    );
 }
 
 #[cfg(feature = "test-hooks")]
@@ -394,13 +392,10 @@ fn the_lines_a_client_sent_before_it_left_are_served() {
         drop(c);
         // the hub says nothing when it served the line: `status` is asked again until it counts it (`FAILED_AFTER`
         // only bounds a failure)
-        let deadline = Instant::now() + FAILED_AFTER;
-        while refusals(&socket) < i {
-            assert!(
-                Instant::now() < deadline,
-                "run {i}: the line sent before leaving was not served"
-            );
-            std::thread::sleep(Duration::from_millis(20));
-        }
+        skuld::wait_until(
+            &format!("run {i}: the line sent before leaving is served"),
+            FAILED_AFTER.as_secs(),
+            || (refusals(&socket) >= i).then_some(()),
+        );
     }
 }

@@ -283,17 +283,11 @@ fn a_gateway_session_reaches_the_hubs_gateway_through_its_relay() {
         .expect("the hub");
     let within = Duration::from_secs(10);
     // a look repeated: the hub says nothing when it is ready; 30 s only bounds a failure
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    let mut c = loop {
-        match Client::user(&env, Duration::from_secs(2)) {
-            Ok(c) => break c,
-            Err(e) if std::time::Instant::now() > deadline => panic!(
-                "no hub: {e}: {}",
-                std::fs::read_to_string(fx.p("hub.err")).unwrap_or_default()
-            ),
-            Err(_) => std::thread::sleep(Duration::from_millis(100)),
-        }
-    };
+    let mut c = skuld::wait_until(
+        "the hub answers a client (its stderr is hub.err)",
+        30,
+        || Client::user(&env, Duration::from_secs(2)).ok(),
+    );
     let provider = json!({"a": {"kind": "anthropic", "url": format!("http://127.0.0.1:{port}"),
                                 "caps": ["chat"], "messages": true}});
     c.call(

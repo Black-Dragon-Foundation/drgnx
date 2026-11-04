@@ -52,7 +52,7 @@ fn several_writers_and_a_checkpointer_keep_the_wal_whole() {
             go.wait();
             for _ in 0..60 {
                 let _ = c.query_row("pragma wal_checkpoint(restart)", [], |_| Ok(()));
-                std::thread::sleep(Duration::from_millis(5));
+                std::thread::yield_now();
             }
         })
     };

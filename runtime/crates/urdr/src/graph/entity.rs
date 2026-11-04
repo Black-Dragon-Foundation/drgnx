@@ -1029,10 +1029,8 @@ mod tests {
         conn.execute_batch("pragma journal_mode = wal; pragma secure_delete = on;")
             .unwrap();
         conn.execute_batch(GRAPH_DDL).unwrap();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
+        // a suffix no other database or word holds: this process's id
+        let nanos = u128::from(std::process::id());
         // One token in a version that an update replaced, one in the version that is deleted. They share no prefix
         // with each other or the other words, so FTS5's prefix compression stores each whole (the scan can see it).
         let old = format!("old{nanos:x}");

@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub const BIN: &str = env!("CARGO_BIN_EXE_ratatoskr");
 
@@ -135,18 +135,19 @@ impl Hub {
     /// Returns when the hub answers a ping. This one is a look repeated (the hub says nothing when it is ready); it
     /// ends at once, with the hub's stderr, when the hub ended, and `FAILED_AFTER` only bounds a failure.
     pub fn wait_ready(&mut self, socket: &Path) {
-        let deadline = Instant::now() + FAILED_AFTER;
-        while !ping(socket) {
-            if let Some(s) = self.exited() {
-                panic!("the hub ended with {s}: {}", self.stderr_text());
-            }
-            assert!(
-                Instant::now() < deadline,
-                "no ping answer: {}",
-                self.stderr_text()
-            );
-            std::thread::sleep(Duration::from_millis(30));
-        }
+        skuld::wait_until(
+            "the hub answers a ping (its stderr is in the hub's log)",
+            FAILED_AFTER.as_secs(),
+            || {
+                if ping(socket) {
+                    return Some(());
+                }
+                if let Some(s) = self.exited() {
+                    panic!("the hub ended with {s}: {}", self.stderr_text());
+                }
+                None
+            },
+        );
     }
 
     pub fn stderr_text(&self) -> String {

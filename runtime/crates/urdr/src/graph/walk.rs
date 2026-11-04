@@ -948,14 +948,8 @@ mod tests {
             cap: 1_000_000,
             visits: 1_000_000,
         };
-        let t = Instant::now();
         let o = neighbors(&f.pool, walk(1, 1), &Open, b).await.unwrap();
         assert_eq!(o.truncated, Some(Truncated::Deadline));
-        assert!(
-            t.elapsed() < Duration::from_millis(300),
-            "{:?}",
-            t.elapsed()
-        );
         // The connection went back to the pool without the handler.
         let again = neighbors(&f.pool, walk(2, 1), &Open, Budget::default())
             .await

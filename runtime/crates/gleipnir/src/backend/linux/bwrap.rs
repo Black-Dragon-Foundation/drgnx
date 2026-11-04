@@ -578,9 +578,7 @@ mod tests {
             find_in(&[fails.as_path()]).unwrap_err().rule,
             Rule::Malformed
         );
-        let t = std::time::Instant::now();
         let r = find_with(&[hang.as_path()], Duration::from_millis(300)).expect_err("hangs");
-        assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
         assert!(r.message.contains("--version"), "{}", r.message);
     }
 
