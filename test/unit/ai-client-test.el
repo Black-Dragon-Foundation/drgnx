@@ -1,5 +1,6 @@
 ;;; ai-client-test.el --- batch tests: requests to providers, fallback, cancel, probes, the doctor's ai check -*- lexical-binding: t -*-
 ;; test-class: cond
+;; test-pattern: handshake
 (require 'ert)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-ai-client)
@@ -126,8 +127,33 @@ keyless, so asked directly — and `k' (openai, key in K_KEY), which only the hu
       (drgnx-ai-cancel h)
       (drgnx-test-pause 2 "an answer from the cancelled request")   ; no answer may come: the server's delay is 1 s
       (should-not called)
-      ;; safe: `drgnx-ai-cancel' ran `delete-process', which sets the status at once
-      (should-not (process-live-p (drgnx-ai-request-process h))))))
+      ;; `drgnx-ai-cancel' ran `delete-process', which sets the status at once
+      (should-not (memq (process-status (drgnx-ai-request-process h)) '(run open))))))
+
+(ert-deftest drgnx-ai-client/a-converter-that-exits-at-once-is-no-error ()
+  ;; A curl that reads its first byte and ends: it is gone, and its sentinel has run, before `process-send-eof' reaches
+  ;; it.  The advice makes that order happen on every run: the eof waits for the child's end.
+  (let* ((dir (file-name-as-directory (make-temp-file "drgnx-ai-curl" t)))
+         (exec-path (list dir)) (result nil) (eof-after-end nil) (proc nil))
+    (unwind-protect
+        (progn
+          (with-temp-file (concat dir "curl") (insert "#!/bin/sh\nhead -c 1 >/dev/null\nexit 7\n"))
+          (set-file-modes (concat dir "curl") #o755)
+          (cl-flet ((wait-for-the-end (p)
+                      (when (equal (process-name p) "drgnx-ai")
+                        (drgnx-test-wait (lambda () (not (memq (process-status p) '(run open))))
+                                         :what "the converter's end before the eof")
+                        (setq eof-after-end t))))
+            (advice-add 'process-send-eof :before #'wait-for-the-end)
+            (unwind-protect
+                (setq proc (drgnx-ai--curl "http://127.0.0.1:1/x" (lambda (status text) (setq result (list status text)))
+                                           :body '(:messages []) :timeout 5))
+              (advice-remove 'process-send-eof #'wait-for-the-end)))
+          (should (processp proc))
+          (should eof-after-end)
+          (drgnx-test-wait (lambda () result) :what "the answer of a converter that ended")
+          (should (equal result '(0 ""))))                    ; a failed converter: status 0, no text, no error
+      (delete-directory dir t))))
 
 (ert-deftest drgnx-ai-probe/finds-running-providers-and-tells-tei-from-localai ()
   (drgnx-ai-client-test--with

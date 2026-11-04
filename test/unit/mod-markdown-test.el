@@ -1,5 +1,6 @@
 ;;; mod-markdown-test.el --- batch tests: Markdown — GFM for READMEs, a preview, Mermaid through mmdc as a job -*- lexical-binding: t -*-
 ;; test-class: cond
+;; test-pattern: handshake
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
@@ -134,6 +135,26 @@
           (should-not (string-search "made" (with-current-buffer p (buffer-string))))   ; it did not wait for the program
           (should (drgnx-markdown-test--wait (lambda () (string-search "made" (with-current-buffer p (buffer-string))))))
           (should-not (string-search "WARNING" (with-current-buffer p (buffer-string)))))))))
+
+(ert-deftest drgnx-markdown/a-preview-converter-that-exits-at-once-is-no-error ()
+  ;; A converter that reads its first byte and ends is gone, sentinel run, before `process-send-eof' reaches it; the
+  ;; advice makes the eof wait for the child's end, so that order happens on every run.
+  (skip-unless (fboundp 'libxml-parse-html-region))
+  (drgnx-markdown-test--with
+    (let ((drgnx-markdown-programs '(("sh" "-c" "head -c 1 >/dev/null; exit 7"))) (eof-after-end nil) (p nil))
+      (cl-flet ((wait-for-the-end (proc)
+                  (when (and (processp proc) (equal (process-name proc) "markdown-preview"))
+                    (drgnx-test-wait (lambda () (not (memq (process-status proc) '(run open))))
+                                     :what "the converter's end before the eof")
+                    (setq eof-after-end t))))
+        (with-temp-buffer
+          (markdown-mode) (insert "# Hello\n")
+          (advice-add 'process-send-eof :before #'wait-for-the-end)
+          (unwind-protect (setq p (drgnx-markdown-preview))
+            (advice-remove 'process-send-eof #'wait-for-the-end))
+          (should (buffer-live-p p))
+          (should eof-after-end)
+          (should-not (with-current-buffer p (string-search "Hello" (buffer-string)))))))))   ; it made nothing, and said nothing
 
 (ert-deftest drgnx-markdown/the-preview-key-is-local-to-markdown-mode ()
   ;; M11a-1: the command carries the keymap, so the VS Code profile's C-S-v binds in markdown-mode-map, not globally.
