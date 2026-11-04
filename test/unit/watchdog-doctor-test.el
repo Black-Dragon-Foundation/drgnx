@@ -94,6 +94,20 @@
     (should (eq (car r) 'info))
     (should (string-match-p "off" (nth 1 r)))))
 
+(ert-deftest drgnx-watchdog/doctor-where-it-cannot-run ()
+  ;; macOS: with or without the watchdog built in it does not run there, so both checks say that, as `info' with
+  ;; nothing to do; not "update Nidhogg" (no newer Nidhogg runs it there yet)
+  (dolist (built '(t nil))
+    (let ((features (if built (cons 'nidhogg-watchdog features) (remq 'nidhogg-watchdog features)))
+          (system-type 'darwin))
+      (should (equal (drgnx-watchdog-doctor-facts) '(:unsupported "macOS")))
+      (should (equal (drgnx-watchdog-doctor--gc-facts) '(:unsupported "macOS")))
+      (dolist (check '(freezes gc))
+        (let ((r (drgnx-doctor-check check (list :watchdog (drgnx-watchdog-doctor-facts)))))
+          (should (eq (car r) 'info))
+          (should (equal (nth 1 r) "off: the watchdog does not run on macOS yet (Linux only)"))
+          (should-not (nth 2 r)))))))
+
 (ert-deftest drgnx-watchdog/doctor-reads-the-day-file ()
   "The facts come from today's day file in the state folder."
   (let* ((root (make-temp-file "drgnx-wd-doctor" t))
@@ -141,14 +155,16 @@
 (ert-deftest drgnx-watchdog/doctor-in-a-batch-process-reads-the-day-files ()
   ;; `drgnx doctor' runs in its own batch Emacs: the watchdog mode is nil there and the heap is the doctor's own.  So
   ;; nothing here binds the mode or stubs the doctor's view; the verdict comes from the setting and the day files.
+  ;; The system is one the watchdog runs on (on macOS the facts say only that it does not run there).
   (let* ((root (make-temp-file "drgnx-wd-batch" t))
          (process-environment (append (list (concat "XDG_STATE_HOME=" root) (concat "XDG_CONFIG_HOME=" root)) process-environment))
          (features (cons 'nidhogg-watchdog features))
          (nidhogg-watchdog-mode nil)
          (drgnx-heap-budgets '((:owner "total" :measure live :cap 600))))
     (unwind-protect
-        (let* ((dir (drgnx-watchdog-log-directory))
-               (file (expand-file-name (format-time-string "%F.jsonl") dir)))
+        (cl-letf* (((symbol-function 'drgnx-watchdog-platform-p) (lambda () t))
+                   (dir (drgnx-watchdog-log-directory))
+                   (file (expand-file-name (format-time-string "%F.jsonl") dir)))
           (make-directory dir t)
           (with-temp-file file
             (insert (json-serialize '((type . "stall") (nongc_ms . 120) (felt . :false) (culprit . ((pkg . "p"))))) "\n"
@@ -172,7 +188,8 @@
     (drgnx-notice-define-source 'watchdog :title "Freezes" :command 'freezes)
     (let ((features (cons 'nidhogg-watchdog features)) (drgnx-watchdog-doctor--gc-noticed nil)
           (reads 0) (snapshots 0) (max-ms 100.0))
-      (cl-letf (((symbol-function 'nidhogg-watchdog-gc-row)
+      (cl-letf (((symbol-function 'drgnx-watchdog-platform-p) (lambda () t))
+                ((symbol-function 'nidhogg-watchdog-gc-row)
                  (lambda (&rest _)
                    (list :days (list (list :date "2026-10-27" :max max-ms :meets t)) :week (list :p95 40 :heap '(:live_mb 300.0))
                          :meets t :target 50 :gc-max 250)))
@@ -207,7 +224,8 @@
          (process-environment (append (list (concat "XDG_STATE_HOME=" root) (concat "XDG_CONFIG_HOME=" root)) process-environment))
          (features (cons 'nidhogg-watchdog features)) (nidhogg-watchdog-mode t))
     (unwind-protect
-        (let ((dir (drgnx-watchdog-log-directory)))
+        (cl-letf (((symbol-function 'drgnx-watchdog-platform-p) (lambda () t))
+                  (dir (drgnx-watchdog-log-directory)))
           (make-directory dir t)
           (with-temp-file (expand-file-name (format-time-string "%F.jsonl" (time-subtract (current-time) 86400)) dir)
             (insert (json-serialize '((type . "stall") (nongc_ms . 90) (killed . t))) "\n"))

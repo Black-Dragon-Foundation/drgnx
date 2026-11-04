@@ -8,6 +8,7 @@
 (load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
 
 (defvar nidhogg-watchdog-record-functions)
+(defvar features)                       ; special here, so a `let' of it is dynamic (`features' is not special in Emacs)
 
 (defvar nidhogg-watchdog-mode)
 (defvar nidhogg-watchdog-log-directory)
@@ -31,15 +32,41 @@
            (drgnx-watchdog-mode -1))))))
 
 (ert-deftest drgnx-watchdog/on-by-default ()
+  ;; the real watchdog: on where Nidhogg runs it (Linux); on a system where it is built in but refuses to start
+  ;; (macOS) quietly off, with no error, no notice and no start error for the doctor
   (skip-unless (featurep 'nidhogg-watchdog))
   ;; a fresh notice model: the start defines the watchdog's notice source, which stays while drgnx runs
   (drgnx-notice-test-with-model
-    (let ((noninteractive nil) (drgnx-speed-watchdog t))
+    (let ((noninteractive nil) (drgnx-speed-watchdog t) (drgnx-watchdog-start-error nil))
       (unwind-protect
           (progn (drgnx-watchdog-maybe-start)
-                 (should drgnx-watchdog-mode)
-                 (should nidhogg-watchdog-mode))
+                 (if (eq system-type 'gnu/linux)
+                     (progn (should drgnx-watchdog-mode)
+                            (should nidhogg-watchdog-mode))
+                   (should-not drgnx-watchdog-mode)
+                   (should-not nidhogg-watchdog-mode)
+                   (should-not drgnx-watchdog-start-error)
+                   (should-not (drgnx-notices))))
         (drgnx-watchdog-mode -1)))))
+
+(ert-deftest drgnx-watchdog/quietly-off-where-it-cannot-run ()
+  ;; macOS: the feature is built in, but Nidhogg's start signals "not on this platform yet".  Neither the start at
+  ;; init, the setting's apply nor the mode itself calls it: the mode stays off, with no error, notice or prompt
+  (drgnx-notice-test-with-model
+    (let ((features (cons 'nidhogg-watchdog features)) (system-type 'darwin)
+          (nidhogg-watchdog-mode nil) (drgnx-watchdog-mode nil) (drgnx-speed-watchdog t) (noninteractive nil)
+          (drgnx-watchdog-start-error nil) (calls nil))
+      (cl-letf (((symbol-function 'nidhogg-watchdog-mode)
+                 (lambda (&optional arg) (push arg calls) (error "nidhogg-watchdog: not on this platform yet")))
+                ((symbol-function 'drgnx-watchdog--wanted-p) (lambda () t)))
+        (should-not (drgnx-watchdog-available-p))
+        (drgnx-watchdog-maybe-start)
+        (drgnx-watchdog--settings-apply)
+        (drgnx-watchdog-mode 1)
+        (should-not drgnx-watchdog-mode)
+        (should-not calls)
+        (should-not drgnx-watchdog-start-error)
+        (should-not (drgnx-notices))))))
 
 (ert-deftest drgnx-watchdog/settings ()
   (drgnx-watchdog-test--stubbed

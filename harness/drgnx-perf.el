@@ -145,12 +145,22 @@ the compositor (`wl_surface.commit'), on either side of an A/B.")
   "What the running recording's `drgnx-perf-begin' applied of $DRGNX_PERF_WATCHDOG, for `drgnx-perf-end' to undo: nil
 (nothing applied), t (applied, nothing changed) or (ON . THRESHOLD), the watchdog as it was before.")
 
+(declare-function drgnx-watchdog-available-p "drgnx-watchdog")
+
+(defun drgnx-perf--watchdog-runs-p ()
+  "Non-nil when the watchdog is built into this Emacs and can start on this system: drgnx's
+`drgnx-watchdog-available-p' where drgnx is loaded, else the same test (the feature, on Linux: Nidhogg's C side
+refuses to start elsewhere)."
+  (if (fboundp 'drgnx-watchdog-available-p)
+      (drgnx-watchdog-available-p)
+    (and (featurep 'nidhogg-watchdog) (eq system-type 'gnu/linux))))
+
 (defun drgnx-perf--watchdog-env ()
   "Apply $DRGNX_PERF_WATCHDOG once (until `drgnx-perf--watchdog-restore'): unset or `default' runs
 `nidhogg-watchdog-mode' at 100 ms (the shipped configuration), `on' at 1 ms (the stress case), `off' leaves it off.
-A watchdog already in that state is not restarted.  Without the feature, nothing.  Returns nil when it did not apply,
-t when nothing had to change, else (ON . THRESHOLD) as they were before."
-  (when (and (not drgnx-perf--watchdog-applied) (featurep 'nidhogg-watchdog))
+A watchdog already in that state is not restarted.  Without the feature, or on a system it does not run on, nothing.
+Returns nil when it did not apply, t when nothing had to change, else (ON . THRESHOLD) as they were before."
+  (when (and (not drgnx-perf--watchdog-applied) (drgnx-perf--watchdog-runs-p))
     (setq drgnx-perf--watchdog-applied t)
     (let* ((v (getenv "DRGNX_PERF_WATCHDOG"))
            (ms (cond ((equal v "off") nil) ((equal v "on") 1) (t 100)))

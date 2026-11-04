@@ -44,6 +44,18 @@
   "The checks' detail when this Emacs has no watchdog."
   (format "the watchdog needs Nidhogg %s or newer" drgnx-watchdog-doctor-min-nidhogg))
 
+(defun drgnx-watchdog-doctor--absent (w)
+  "The row of either check when the watchdog does not run here, from its fact W, or nil when it may: on a system it
+does not run on yet (W is (:unsupported SYSTEM)) an `info' with nothing to do, without the watchdog in this Emacs an
+`info' that says which Nidhogg to update to."
+  (cond ((plist-get w :unsupported)
+         (list 'info (format "off: the watchdog does not run on %s yet (Linux only)" (plist-get w :unsupported)) nil))
+        ((null w) (list 'info (drgnx-watchdog-doctor--needs-nidhogg) drgnx-watchdog-doctor-update-fix))))
+
+(defun drgnx-watchdog-doctor--unsupported ()
+  "The `:watchdog' fact on a system the watchdog does not run on: (:unsupported SYSTEM), SYSTEM a name to show."
+  (list :unsupported (if (eq system-type 'darwin) "macOS" (symbol-name system-type))))
+
 ;;;; Reading the day
 
 (defun drgnx-watchdog-doctor--read-day (file)
@@ -141,11 +153,14 @@ the hang began."
                (drgnx-watchdog-doctor--read-day file))))
 
 (defun drgnx-watchdog-doctor-facts ()
-  "The `:watchdog' fact: nil without the watchdog in this Emacs, else (:running BOOL :wanted BOOL :today SUMMARY :gc ROW
-:heap HEAP :largest OWNER), read from the day files.  `drgnx doctor' is a batch Emacs, so :running is the setting
-being on and a day file written in the last quarter hour (or the mode, in a live session), and :heap the live heap the
-watchdog's session recorded.  Never signals."
-  (when (drgnx-watchdog-available-p)
+  "The `:watchdog' fact: (:unsupported SYSTEM) on a system the watchdog does not run on, nil without the watchdog in
+this Emacs, else (:running BOOL :wanted BOOL :today SUMMARY :gc ROW :heap HEAP :largest OWNER), read from the day
+files.  `drgnx doctor' is a batch Emacs, so :running is the setting being on and a day file written in the last
+quarter hour (or the mode, in a live session), and :heap the live heap the watchdog's session recorded.  Never
+signals."
+  (cond
+   ((not (drgnx-watchdog-available-p)) (and (not (drgnx-watchdog-platform-p)) (drgnx-watchdog-doctor--unsupported)))
+   (t
     (condition-case err
         (let* ((dir (drgnx-watchdog-log-directory))
                (file (expand-file-name (format-time-string "%F.jsonl") dir))
@@ -165,7 +180,7 @@ watchdog's session recorded.  Never signals."
                 :heap (drgnx-watchdog-doctor--heap (or (drgnx-watchdog-doctor--live-mb lines)
                                                        (plist-get (plist-get (plist-get gc :week) :heap) :live_mb)))
                 :largest (drgnx-watchdog-doctor--largest-owner)))
-      (error (list :error (error-message-string err))))))
+      (error (list :error (error-message-string err)))))))
 
 ;;;; The checks
 
@@ -175,7 +190,7 @@ watchdog's session recorded.  Never signals."
   "The `freezes' check on FACTS: (STATUS DETAIL FIX)."
   (let ((w (plist-get facts :watchdog)))
     (cond
-     ((null w) (list 'info (drgnx-watchdog-doctor--needs-nidhogg) drgnx-watchdog-doctor-update-fix))
+     ((drgnx-watchdog-doctor--absent w))
      ((plist-get w :error) (list 'info (format "the watchdog's day could not be read: %s" (plist-get w :error)) nil))
      ((and (not (plist-get w :running)) (plist-get w :start-error))
       (list 'info (format "off: could not start: %s" (plist-get w :start-error))
@@ -229,7 +244,7 @@ watchdog's session recorded.  Never signals."
          (over-max (and (numberp max-ms) (numberp gc-max) (>= max-ms gc-max)))
          (over-heap (plist-get heap :over)) (largest (plist-get w :largest)))
     (cond
-     ((null w) (list 'info (drgnx-watchdog-doctor--needs-nidhogg) drgnx-watchdog-doctor-update-fix))
+     ((drgnx-watchdog-doctor--absent w))
      ((plist-get w :error) (list 'info (format "the GC row could not be read: %s" (plist-get w :error)) nil))
      ((and (null day) (not over-heap)) (list 'info "no collection recorded yet" nil))
      ((or over-max over-heap)
@@ -290,14 +305,16 @@ felt stall of 1 s or more, or a killed hang.  Numbers and one `drgnx-notify'; ne
 (defun drgnx-watchdog-doctor--gc-facts ()
   "The `:watchdog' fact for the `gc' check alone: the GC row and, from it, the live heap.  It reads neither the day's
 file nor the heap audit snapshot (an idle timer calls it).  Never signals."
-  (when (drgnx-watchdog-available-p)
+  (cond
+   ((not (drgnx-watchdog-available-p)) (and (not (drgnx-watchdog-platform-p)) (drgnx-watchdog-doctor--unsupported)))
+   (t
     (condition-case err
         (let* ((nidhogg-watchdog-log-directory (drgnx-watchdog-log-directory))
                (gc (and (or (fboundp 'nidhogg-watchdog-gc-row) (require 'nidhogg-watchdog-gc nil t))
                         (fboundp 'nidhogg-watchdog-gc-row)
                         (nidhogg-watchdog-gc-row))))
           (list :gc gc :heap (drgnx-watchdog-doctor--heap (plist-get (plist-get (plist-get gc :week) :heap) :live_mb))))
-      (error (list :error (error-message-string err))))))
+      (error (list :error (error-message-string err)))))))
 
 (defun drgnx-watchdog-doctor--gc-check ()
   "Once a day, notice a collection at the limit or a heap over its budget; read the day files at most every 30

@@ -3,8 +3,8 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; Where the running Emacs is a Nidhogg built with the stall watchdog (`(featurep 'nidhogg-watchdog)'), drgnx turns
-;; it on at start: the day files go to (drgnx-state-dir)/watchdog/, the typing commands are the ones whose latency
+;; Where the running Emacs is a Nidhogg built with the stall watchdog (`(featurep 'nidhogg-watchdog)') on a system it
+;; runs on (Linux for now: `drgnx-watchdog-platform-p'), drgnx turns it on at start: the day files go to (drgnx-state-dir)/watchdog/, the typing commands are the ones whose latency
 ;; counts as typing, and the package of a file is named by drgnx's owner map.  Only in an interactive Emacs (not in `drgnx safe'), and
 ;; only while the setting `drgnx-speed-watchdog' is on (the default).  `drgnx-watchdog-mode' is drgnx's side of
 ;; the switch: turning it off turns Nidhogg's mode off.  Without the feature nothing happens; the doctor's
@@ -42,9 +42,15 @@
 Read at every start; a change turns it on or off at once.  Without a watchdog in Emacs it does nothing."
   :type 'boolean :group 'drgnx :scope 'global :workspace 'never :apply #'drgnx-watchdog--settings-apply)
 
+(defun drgnx-watchdog-platform-p ()
+  "Non-nil on a system where Nidhogg's watchdog can start: Linux.  Elsewhere (macOS) the feature is built in, but
+`nidhogg-watchdog--start' signals \"not on this platform yet\" (its C side is `#ifndef __linux__').  Nidhogg names no
+predicate for this; the test is the one its own suite uses."
+  (eq system-type 'gnu/linux))
+
 (defun drgnx-watchdog-available-p ()
-  "Non-nil when this Emacs has the stall watchdog (a Nidhogg built with it)."
-  (featurep 'nidhogg-watchdog))
+  "Non-nil when this Emacs has the stall watchdog (a Nidhogg built with it) and it can run on this system."
+  (and (featurep 'nidhogg-watchdog) (drgnx-watchdog-platform-p)))
 
 (defun drgnx-watchdog-log-directory ()
   "Where the watchdog's day files go: (drgnx-state-dir)/watchdog/."

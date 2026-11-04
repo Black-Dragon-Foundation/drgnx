@@ -15,15 +15,16 @@
 (defvar nidhogg-watchdog--bucket-edges)
 
 (defmacro perf-watchdog-test--with-feature (&rest body)
-  "Run BODY as if `nidhogg-watchdog' were loaded, with its mode and functions stubbed.  `drgnx-watchdog-mode' is
-stubbed the way the real one acts: it carries Nidhogg's mode with it."
+  "Run BODY as if `nidhogg-watchdog' were loaded on a system it runs on, with its mode and functions stubbed.
+`drgnx-watchdog-mode' is stubbed the way the real one acts: it carries Nidhogg's mode with it."
   `(let ((features (cons 'nidhogg-watchdog features))
          (drgnx-perf--watchdog-applied nil)
          (nidhogg-watchdog-mode nil)
          (drgnx-watchdog-mode nil)
          (nidhogg-watchdog-threshold 100)
          (nidhogg-watchdog--bucket-edges [4 8 16 33 50 100 250 1000]))
-     (cl-letf (((symbol-function 'nidhogg-watchdog-mode)
+     (cl-letf (((symbol-function 'drgnx-perf--watchdog-runs-p) (lambda () t))
+               ((symbol-function 'nidhogg-watchdog-mode)
                 (lambda (&optional arg) (setq nidhogg-watchdog-mode (and (not (eq arg -1)) t))))
                ((symbol-function 'drgnx-watchdog-mode)
                 (lambda (&optional arg)
@@ -61,6 +62,23 @@ stubbed the way the real one acts: it carries Nidhogg's mode with it."
      (should drgnx-watchdog-mode)
      (should nidhogg-watchdog-mode)
      (should (= nidhogg-watchdog-threshold 1)))))
+
+(ert-deftest drgnx-perf/no-watchdog-arm-where-it-cannot-run ()
+  ;; macOS: the feature is built in, but Nidhogg's start signals "not on this platform yet"; a recording applies and
+  ;; restores nothing, so `drgnx-perf-begin' does not signal
+  (let ((features (cons 'nidhogg-watchdog features)) (system-type 'darwin) (drgnx-perf--watchdog-applied nil)
+        (drgnx-perf--watchdog-prior nil) (nidhogg-watchdog-mode nil) (calls 0))
+    (cl-letf (((symbol-function 'nidhogg-watchdog-mode)
+               (lambda (&optional _) (cl-incf calls) (error "nidhogg-watchdog: not on this platform yet"))))
+      (unwind-protect
+          (progn (should-not (drgnx-perf--watchdog-env))
+                 (should-not drgnx-perf--watchdog-applied)
+                 (drgnx-perf-begin)
+                 (drgnx-perf-end)
+                 (should (= calls 0)))
+        (remove-hook 'pre-command-hook #'drgnx-perf--pre)
+        (remove-hook 'post-command-hook #'drgnx-perf--post)
+        (remove-hook 'post-gc-hook #'drgnx-perf--gc)))))
 
 (defun perf-watchdog-test--stats (spans missed cpu drain)
   (list :spans spans :missed missed :stale 0 :stalls 0 :monitor-cpu-ms cpu :drain drain))

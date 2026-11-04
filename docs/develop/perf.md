@@ -535,7 +535,8 @@ F)`, the live Lisp heap after its last collection (from `garbage-collect-heapsiz
 
 **The switch.** `DRGNX_PERF_WATCHDOG` is applied when a recording starts (`drgnx-perf-begin`): unset or `default` runs
 the watchdog at 100 ms (the shipped configuration), `on` at 1 ms (the stress case), `off` leaves it off. A watchdog
-already in that state is not restarted. The switch is `drgnx-watchdog-mode`, so `off` also stops the doctor's record
+already in that state is not restarted. On a system the watchdog does not run on (macOS: Nidhogg builds it but refuses
+to start it) the switch does nothing, and nothing is put back. The switch is `drgnx-watchdog-mode`, so `off` also stops the doctor's record
 hook and idle timer. `drgnx-perf-end` puts the watchdog back as it was before the recording (mode and threshold), so a
 recording leaves nothing running; the synthetic day applies the switch itself as the session starts, before
 build-up, and it stays for the whole day.

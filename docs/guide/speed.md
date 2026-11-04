@@ -81,6 +81,9 @@ It runs only in an interactive Emacs, never in a batch command, and not in safe 
 ([Settings](settings.md)); the change applies at once. In an Emacs without the watchdog the setting does nothing, and
 `drgnx doctor` says so.
 
+The watchdog runs on Linux only for now. On macOS Nidhogg is built with it but does not start it there, so drgnx leaves
+it off without a notice or an error, and `drgnx doctor` says it does not run on macOS yet (an `info`, nothing to do).
+
 ## The doctor's speed checks
 
 `drgnx doctor` has two checks in the group Speed. Each says whether the day **meets** or **missed** its goal, beside
@@ -92,7 +95,7 @@ how serious it is.
   for a stall you felt of a second or more, a package with ten or more stalls, or a hang that ended with the session being killed (the watchdog never kills anything), and
   the fix line names the package, the drgnx module that enables it, how often it stalled, how long in all and how many
   you felt: open **Help → Show Freezes**. In an Emacs without the watchdog it is `info` and says to update Nidhogg
-  (`drgnx update`).
+  (`drgnx update`); on a system the watchdog does not run on yet (macOS) both checks are `info` and say so, with no fix.
 - **gc** judges the garbage collection row (a pause p95 of 50 ms or less over the last week and no collection of 250 ms
   or more) and the live heap against its budget. `ok` when met; `info` with the numbers when missed without a long
   collection; `warn` for a collection of 250 ms or more or a heap over its budget, with the fix **Help → Heap Audit**
