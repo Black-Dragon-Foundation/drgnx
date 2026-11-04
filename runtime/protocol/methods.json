@@ -120,6 +120,13 @@
                   "null"
                 ]
               },
+              "browser_why": {
+                "description": "Why a session whose `browser` cell allows the agent browser started without it, and the fix (a host that\ncannot give one: no full sandbox tier, Landlock below ABI 9, no browser found).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "capabilities": true,
               "commands": {
                 "default": [],
@@ -2281,6 +2288,13 @@
                   "null"
                 ]
               },
+              "browser_why": {
+                "description": "Why a session whose `browser` cell allows the agent browser started without it, and the fix (a host that\ncannot give one: no full sandbox tier, Landlock below ABI 9, no browser found).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "capabilities": true,
               "commands": {
                 "default": [],
@@ -2689,6 +2703,13 @@
             "properties": {
               "about": {
                 "description": "A brainstorm's topic note.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "browser_why": {
+                "description": "Why a session whose `browser` cell allows the agent browser started without it, and the fix (a host that\ncannot give one: no full sandbox tier, Landlock below ABI 9, no browser found).",
                 "type": [
                   "string",
                   "null"

@@ -113,6 +113,7 @@ fn the_host_starts_under_its_layer() {
         write: vec![b.join("wt")],
         read: vec![data.clone()],
         net: NetCell::ProviderOnly,
+        browser: None,
     };
     let sb = Sandbox::detect(Tier::Full, helper_at(Path::new(RATATOSKR)), None)
         .unwrap_or_else(|r| panic!("the full tier is not usable here: {r}"));
@@ -196,5 +197,256 @@ fn the_host_starts_under_its_layer() {
             exited["code"].is_number() || exited["signal"].is_number(),
             "{exited}"
         );
+    });
+}
+
+/// A worker session's launch with the browser, as the hub makes it (`launch_on` with a `BrowserShape`: the relays,
+/// the socketpair, `Spec.browser`), the stand-in Chromium as its program; the agent runs `bash -c AGENT` in `wt`.
+struct Launched {
+    _dir: tempfile::TempDir,
+    b: PathBuf,
+    launch: drgnx_ratatoskr::agents::launch::Launch,
+}
+
+fn launch_with_browser(agent: &str) -> Launched {
+    let abi = gleipnir::landlock::kernel_abi();
+    assert!(
+        abi >= 9,
+        "the kernel's Landlock ABI is {abi}: the browser needs 9"
+    );
+    let dir = tempfile::Builder::new()
+        .prefix("glp-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let b = std::fs::canonicalize(dir.path()).unwrap();
+    for d in ["home", "wt", "run", "t"] {
+        std::fs::create_dir_all(b.join(d)).unwrap();
+    }
+    let s = |rel: &str| b.join(rel).to_str().unwrap().to_owned();
+    let env = Env::new(
+        &[
+            ("HOME", &s("home")),
+            ("XDG_RUNTIME_DIR", &s("run")),
+            ("TMPDIR", &s("t")),
+            ("PATH", "/usr/bin:/bin"),
+        ],
+        rustix::process::geteuid().as_raw(),
+    );
+    let plan = LaunchPlan {
+        argv: vec!["/bin/bash".into(), "-c".into(), agent.into()],
+        env: vec![],
+        session_meta: None,
+        protected_ro: vec![],
+        login_dir: None,
+        enforced: Enforced::Yes,
+        gateway: false,
+    };
+    let data = data_dir();
+    let shape = SessionShape {
+        sid: "S1".into(),
+        cwd: b.join("wt"),
+        write: vec![b.join("wt")],
+        read: vec![data.clone()],
+        net: NetCell::ProviderOnly,
+        browser: Some(sandbox::BrowserShape {
+            program: data.join("fake-chromium.sh"),
+            kind: drgnx_ratatoskr::browser::resolve::Kind::Full,
+            web_port: sandbox::WEB_PORT,
+            cdp_port: sandbox::CDP_PORT,
+            local_ports: vec![3000],
+            max_message: 1 << 20,
+            secret: drgnx_ratatoskr::browser::Secret::new().unwrap(),
+        }),
+    };
+    let sb = Sandbox::detect(Tier::Full, helper_at(Path::new(RATATOSKR)), None)
+        .unwrap_or_else(|r| panic!("the full tier is not usable here: {r}"));
+    let launch = drgnx_ratatoskr::agents::launch::launch_on(&env, &sb, &plan, &shape)
+        .unwrap_or_else(|r| panic!("refused: {r}"));
+    assert!(launch.browser.is_some(), "the hub's end of the socketpair");
+    Launched {
+        _dir: dir,
+        b,
+        launch,
+    }
+}
+
+/// The processes under PID (its descendants, PID included) whose command line names the stand-in Chromium.
+fn chromiums_under(pid: i32) -> Vec<i32> {
+    let mut parent = std::collections::HashMap::new();
+    let mut named = Vec::new();
+    for e in std::fs::read_dir("/proc").unwrap().flatten() {
+        let Some(p) = e.file_name().to_str().and_then(|n| n.parse::<i32>().ok()) else {
+            continue;
+        };
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{p}/stat")) else {
+            continue;
+        };
+        // the field after the command's closing parenthesis: state, then the parent's pid
+        let ppid = stat
+            .rsplit_once(')')
+            .and_then(|(_, rest)| rest.split_whitespace().nth(1))
+            .and_then(|x| x.parse::<i32>().ok())
+            .unwrap_or(0);
+        parent.insert(p, ppid);
+        if std::fs::read(format!("/proc/{p}/cmdline"))
+            .is_ok_and(|c| String::from_utf8_lossy(&c).contains("fake-chromium"))
+        {
+            named.push(p);
+        }
+    }
+    named
+        .into_iter()
+        .filter(|&p| {
+            let mut cur = p;
+            for _ in 0..64 {
+                if cur == pid {
+                    return true;
+                }
+                match parent.get(&cur) {
+                    Some(&pp) if pp > 0 => cur = pp,
+                    _ => return false,
+                }
+            }
+            false
+        })
+        .collect()
+}
+
+/// Until F holds, within WITHIN (a failure guard: it ends as soon as F holds).
+fn until(what: &str, within: Duration, f: impl Fn() -> bool) {
+    let end = Instant::now() + within;
+    while !f() {
+        assert!(Instant::now() < end, "{what}: not within {within:?}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Review Focus 1: the hub ends while the session's browser runs. Its end of the socketpair goes with it; the browser
+/// host sees EOF, stops Chromium and exits, so no Chromium is left; the agent itself runs on.
+#[test]
+#[ignore = "needs bwrap, user namespaces and Landlock ABI 9 (the VM)"]
+fn a_hub_restart_leaves_no_chromium() {
+    let mut l = launch_with_browser("sleep 60");
+    let hub_end = l.launch.browser.take().unwrap();
+    let status = l.launch.status.take().expect("a status pipe");
+    let spec = std::mem::replace(
+        &mut l.launch.spec,
+        draugr::Spec {
+            program: PathBuf::new(),
+            args: vec![],
+            env: vec![],
+            cwd: None,
+            stdin_null: true,
+            pass_fds: vec![],
+            new_session: false,
+        },
+    );
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let mut child = draugr::spawn_pinned(spec).await.expect("spawn");
+        gleipnir::inner::read_status_for(
+            status,
+            &|| child.stderr_tail(),
+            Duration::from_secs(20),
+            true,
+        )
+        .unwrap_or_else(|r| panic!("the sandbox did not start: {r}\n{}", child.stderr_tail()));
+        let pid = child.id();
+        let mut hub = Hub {
+            s: hub_end,
+            dec: FrameDecoder::new((1 << 20) + 64),
+            backlog: vec![],
+        };
+        hub.send(KIND_CONTROL, &json!({"op": "start"}).to_string());
+        let started = hub.event("started");
+        assert!(started["pid"].as_i64().is_some_and(|p| p > 0), "{started}");
+        assert!(!chromiums_under(pid).is_empty(), "the stand-in runs");
+        // the hub goes: its end of the socketpair closes with it
+        drop(hub);
+        until("no Chromium left", Duration::from_secs(15), || {
+            chromiums_under(pid).is_empty()
+        });
+        // the agent is not the browser's: it runs on until its session ends
+        assert!(
+            std::fs::metadata(format!("/proc/{pid}")).is_ok(),
+            "the sandbox ended with the browser"
+        );
+        // SAFETY: the sandbox's own process group, which draugr made.
+        unsafe { libc::kill(-pid, libc::SIGKILL) };
+        let _ = child.wait().await;
+    });
+    drop(l);
+}
+
+/// No CDP port listens inside the session but the relay's 9222: with the browser started, the netns's TCP listeners
+/// are the three relays' (3128 provider, 9222 CDP, 3130 web) and nothing else.
+#[test]
+#[ignore = "needs bwrap, user namespaces and Landlock ABI 9 (the VM)"]
+fn there_is_no_listening_cdp_port_inside() {
+    let mut l = launch_with_browser(
+        "while [ ! -e go ]; do sleep 0.05; done; cat /proc/net/tcp /proc/net/tcp6 > tcp.tmp; mv tcp.tmp tcp; sleep 60",
+    );
+    let wt = l.b.join("wt");
+    let hub_end = l.launch.browser.take().unwrap();
+    let status = l.launch.status.take().expect("a status pipe");
+    let spec = std::mem::replace(
+        &mut l.launch.spec,
+        draugr::Spec {
+            program: PathBuf::new(),
+            args: vec![],
+            env: vec![],
+            cwd: None,
+            stdin_null: true,
+            pass_fds: vec![],
+            new_session: false,
+        },
+    );
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let mut child = draugr::spawn_pinned(spec).await.expect("spawn");
+        gleipnir::inner::read_status_for(
+            status,
+            &|| child.stderr_tail(),
+            Duration::from_secs(20),
+            true,
+        )
+        .unwrap_or_else(|r| panic!("the sandbox did not start: {r}\n{}", child.stderr_tail()));
+        let mut hub = Hub {
+            s: hub_end,
+            dec: FrameDecoder::new((1 << 20) + 64),
+            backlog: vec![],
+        };
+        hub.send(KIND_CONTROL, &json!({"op": "start"}).to_string());
+        hub.event("started");
+        std::fs::write(wt.join("go"), "").unwrap();
+        until(
+            "the agent's look at its listeners",
+            Duration::from_secs(10),
+            || wt.join("tcp").exists(),
+        );
+        let text = std::fs::read_to_string(wt.join("tcp")).unwrap();
+        let mut listening: Vec<u16> = text
+            .lines()
+            .filter_map(|line| {
+                let f: Vec<&str> = line.split_whitespace().collect();
+                // sl local_address rem_address st …: state 0A is LISTEN
+                (f.len() > 3 && f[3] == "0A")
+                    .then(|| f[1].rsplit_once(':'))
+                    .flatten()
+                    .and_then(|(_, port)| u16::from_str_radix(port, 16).ok())
+            })
+            .collect();
+        listening.sort_unstable();
+        listening.dedup();
+        assert_eq!(listening, [3128, 3130, 9222], "{text}");
+        // SAFETY: the sandbox's own process group, which draugr made.
+        unsafe { libc::kill(-child.id(), libc::SIGKILL) };
+        let _ = child.wait().await;
     });
 }

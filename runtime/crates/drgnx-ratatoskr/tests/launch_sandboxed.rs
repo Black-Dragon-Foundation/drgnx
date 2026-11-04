@@ -114,6 +114,7 @@ impl Fx {
             write: vec![self.p("wt")],
             read: vec![],
             net,
+            browser: None,
         }
     }
 }
@@ -579,6 +580,7 @@ fn plain_chat_cannot_read_home() {
         write: vec![scratch.clone()],
         read: vec![],
         net: NetCell::ProviderOnly,
+        browser: None,
     };
     // Home lists nothing but the login dir: on the full tier home is the empty folder bwrap makes for that bind, on the
     // reduced tier it cannot be listed at all.
@@ -774,6 +776,7 @@ fn a_worker_under_the_hub_run_root_cannot_write_the_protected_files() {
         write: vec![wt.clone()],
         read: vec![],
         net: NetCell::ProviderOnly,
+        browser: None,
     };
     let code = fx.run(Tier::Full, &plan, &shape);
     assert_eq!(code, 0);

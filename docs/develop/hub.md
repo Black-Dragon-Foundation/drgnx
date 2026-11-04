@@ -1622,11 +1622,41 @@ own.
     listener the hub registers (`hold`, `release`), and an Emacs TCP server's port, read every 30 s from the first line
     (`HOST:PORT PID`) of each server file in `~/.emacs.d/server/` and `$XDG_CONFIG_HOME/emacs/server/` (the hub's
     HOME; the line with the key is never read).
-- **Test hooks.** A `test-hooks` hub with `DRGNX_TEST_WEB_PROXY` set gives every session a web proxy at its start;
-  `DRGNX_TEST_WEB_REDIRECT=ADDR:PORT` sends every upstream but the host's loopback there (the mock LLM stands for the
-  site), and `DRGNX_TEST_PROXY_PINS` pins names for it as for the provider proxy.
+- **Test hooks.** A test launch is unsandboxed and has no browser host. With `DRGNX_TEST_BROWSER` set, a session
+  whose `browser` cell is not Never still gets the hub's side of its browser at its start (the web proxy, and the
+  broker with the far end of its socketpair held); `DRGNX_TEST_WEB_REDIRECT=ADDR:PORT` sends every upstream but the
+  host's loopback there (the mock LLM stands for the site), and `DRGNX_TEST_PROXY_PINS` pins names for it as for the
+  provider proxy.
 
 Rows: `test/conformance/browser/web-*.jsonl`, `browser/private-*.jsonl`.
+
+### A session with the browser
+
+At `prepare`, the session's `browser` cell decides (`agents/session.rs`, `sandbox::browser_for`):
+
+- **Never:** today's spec, no browser.
+- **Allow or Ask:** the browser, when the sandbox is bubblewrap's full tier, the kernel's Landlock ABI is at least 9
+  and `browser::resolve` finds a program. Ask comes at first use: the broker asks the cell at each websocket upgrade.
+  Otherwise (OD1 (b)) the session starts without it: `agents/get` says why in `browser_why`, with the fix, and the hub
+  raises one `notice` per reason per hub run (`id` `browser-tier`, `browser-landlock` or `browser-program`).
+- **The spec** ([gleipnir.md](gleipnir.md), "Ratatoskr's side"): the relays 3128 → `proxy.sock`, 9222 → `cdp.sock`,
+  3130 → `web.sock`; the local ports (`agents-browser-local-ports`) in `extra_tcp_ports`; the program's folder and
+  `/var/cache/fontconfig` read-only; `PLAYWRIGHT_MCP_CDP_ENDPOINT` and `DRGNX_BROWSER_CDP` set to
+  `ws://127.0.0.1:9222/devtools/browser/SECRET` (a fresh 32-byte secret per session, in hex, in the environment
+  only: never in an argv or a log); no display, no runtime dir; `Spec.browser` with `--headless-shell` or `--full`
+  and `--max-message N`. An editor's value for either endpoint name is dropped for every session (`module_env`).
+- **The launch** makes the browser host's socketpair (`agents::launch::launch_on`): the host's end goes into the
+  sandbox, the hub's end to the broker. The status line must say the browser host is layered and ready
+  (`gleipnir::inner::read_status_for`). Where a user systemd answers, the sandbox runs in a scope of its own,
+  `drgnx-session-SID`, with `MemoryMax` = `agents-session-memory` and `TasksMax=4096` (`exec::unit::session_scope`).
+- **Before the spawn** `agents::net::start_browser` starts the web proxy (above) and the CDP broker on `cdp.sock`
+  (0600): its gate is the `browser` cell, its limits `agents-browser-max-message` and `agents-browser-idle`.
+- **The memory watch** (a scope only): it reads the scope's cgroup once (`systemctl --user show -P ControlGroup`),
+  then `memory.current` every second, and stops the browser (`stop("memory")`) each time it rises above
+  `agents-browser-memory-high` percent of `agents-session-memory`.
+- **At the end** of the agent's process the broker, the web proxy, the provider proxy and the socketpair close (the
+  browser host stops Chromium and exits), their sockets go, and the scope ends with its process. A resumed session
+  is launched again, with a fresh browser.
 
 ## The MCP bridge
 

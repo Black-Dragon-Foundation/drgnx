@@ -70,6 +70,7 @@ impl Fx {
             write: vec![self.p("wt")],
             read: vec![],
             net,
+            browser: None,
         }
     }
 
@@ -397,6 +398,7 @@ fn a_plain_chat_works_in_a_scratch_dir_with_no_home() {
         write: vec![scratch.clone()],
         read: vec![],
         net: NetCell::ProviderOnly,
+        browser: None,
     };
     let spec = fx.spec(&fx.plan(".claude"), &shape);
     assert_eq!(spec.chdir, scratch);
@@ -426,7 +428,7 @@ fn a_chat_is_not_a_worker_and_a_bad_session_id_is_refused() {
     let refused = tokio::runtime::Builder::new_current_thread()
         .build()
         .unwrap()
-        .block_on(spawn(&fx.env(), &fx.plan(".claude"), &req));
+        .block_on(spawn(&fx.env(), &fx.plan(".claude"), &req, None));
     assert!(refused.is_err());
     assert!(scratch_dir(&fx.env(), "../x").is_err());
 }
@@ -622,6 +624,7 @@ fn a_worktree_under_the_hub_run_root_launches_with_only_the_run_root_opened() {
         write: vec![wt.clone()],
         read: vec![],
         net: NetCell::ProviderOnly,
+        browser: None,
     };
     let plan = fx.plan(".claude");
     let scratch = scratch_dir(&env, &shape.sid).unwrap();
@@ -640,10 +643,13 @@ fn a_worktree_under_the_hub_run_root_launches_with_only_the_run_root_opened() {
         gleipnir::validate(spec, ctx, Target::LinuxReduced)
     };
     let ctx = context_for(&env, None);
-    assert_eq!(
-        ctx.open_inside_closed,
-        vec![fs::canonicalize(state.join("hub")).unwrap().join("runs")]
-    );
+    // the run root, and the data dir's downloaded browsers: nothing of the state folder but the run root
+    let mut open = vec![
+        fs::canonicalize(state.join("hub")).unwrap().join("runs"),
+        crate::sandbox::true_name(&paths::data_dir(&env).join("browsers")).unwrap(),
+    ];
+    open.sort();
+    assert_eq!(ctx.open_inside_closed, open);
     build(&ctx).expect("the shipped layout validates");
     let mut shut = ctx.clone();
     shut.open_inside_closed.clear();
@@ -1033,5 +1039,75 @@ fn the_launch_takes_the_tier_whose_check_passes() {
         refused.message.contains("inside a container")
             && refused.message.contains("run it on the host"),
         "{refused}"
+    );
+}
+
+#[test]
+fn the_cdp_secret_is_never_in_argv_or_logs() {
+    let fx = Fx::new();
+    let program = fx.p("chrome/chrome");
+    fs::create_dir_all(program.parent().unwrap()).unwrap();
+    fs::write(&program, "#!/bin/sh\n").unwrap();
+    let secret = crate::browser::Secret([0xc3; 32]);
+    let hex = secret.hex();
+    let shape = SessionShape {
+        browser: Some(crate::sandbox::BrowserShape {
+            program,
+            kind: crate::browser::resolve::Kind::Full,
+            web_port: crate::sandbox::WEB_PORT,
+            cdp_port: crate::sandbox::CDP_PORT,
+            local_ports: vec![3000],
+            max_message: 1 << 20,
+            secret,
+        }),
+        ..fx.shape(NetCell::ProviderOnly)
+    };
+    // what a log could show of the launch's inputs: never the secret
+    assert!(!format!("{shape:?}").contains(&hex));
+    let env = fx.env();
+    let ctx = context_for(&env, None);
+    let scratch = scratch_dir(&env, "S1").unwrap();
+    let built = session_spec(
+        &env,
+        &ctx,
+        &fx.plan(".claude"),
+        &shape,
+        &scratch,
+        Tier::Full,
+        Target::LinuxBwrap,
+    )
+    .unwrap();
+    let in_env = built
+        .spec
+        .env
+        .iter()
+        .filter(|(_, v)| v.contains(&hex))
+        .count();
+    assert_eq!(in_env, 2, "the two endpoint names, and nothing else");
+    let b = built.spec.browser.as_ref().unwrap();
+    assert!(b.host_args.iter().all(|a| !a.contains(&hex)));
+    // the prepared launch's argv (bwrap's, the helper's): where this host has a full tier to prepare it on
+    let helper = crate::sandbox::helper_at(&std::env::current_exe().unwrap());
+    let Ok(sb) = Sandbox::detect(Tier::Full, helper, None) else {
+        eprintln!("no bubblewrap here: the argv half is the sandbox lane's");
+        return;
+    };
+    let launch = launch_on(&env, &sb, &fx.plan(".claude"), &shape)
+        .unwrap_or_else(|r| panic!("refused: {r}"));
+    let argv = std::iter::once(launch.spec.program.as_os_str())
+        .chain(launch.spec.args.iter().map(|a| a.as_os_str()))
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert!(argv.iter().all(|a| !a.contains(&hex)), "{argv:?}");
+    // the hub keeps its end of the socketpair; the host's end is passed to the sandbox
+    assert!(launch.browser.is_some());
+    assert!(
+        launch
+            .spec
+            .pass_fds
+            .iter()
+            .any(|p| p.target == gleipnir::bwrap::BROWSER_FD),
+        "{:?}",
+        launch.spec.pass_fds
     );
 }

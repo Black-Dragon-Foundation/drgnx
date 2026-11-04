@@ -83,6 +83,17 @@ this returns.
 - `to_draugr(invocation)` is the `draugr::Spec` (stdin `/dev/null`, the fds as `PassFd`s, `new_session`). An agent
   session's launch (`launch::spawn`, `spawn_plain`, `spawn_chat`) gives the program a stdin pipe instead
   (`launch::with_stdin`): the hub speaks ACP on its stdin and stdout. A job's stdin stays `/dev/null`.
+- A session with the agent browser (`SessionShape.browser: Option<BrowserShape>`, decided by
+  `sandbox::browser_for`: the `browser` cell not Never, the `Bwrap` backend, Landlock ABI ≥ 9, a program found;
+  [hub.md](hub.md#a-session-with-the-browser)). `session_spec` adds the relays `CDP_PORT` 9222 → `cdp.sock` and
+  `WEB_PORT` 3130 → `web.sock` after the proxy's (and the gateway's), the local ports to `extra_tcp_ports`, the
+  program's folder (outside `/usr` and `/opt`) and `/var/cache/fontconfig` to `read` and to the browser's
+  `extra_read`, the two endpoint variables (the hub's alone: the lock's and an editor's are dropped), and
+  `Spec.browser` (`own_dir` `/tmp/drgnx-browser`, `host_args` `--headless-shell` or `--full` and `--max-message N`).
+  It never carries `WAYLAND_DISPLAY`, `DISPLAY`, `XDG_RUNTIME_DIR` or a `/run/user` path. `launch_on` makes the
+  socketpair: the host's end to `Sandbox::prepare`, the hub's end in `Launch.browser`; the caller reads the status
+  with `inner::read_status_for(…, browser)`. `context` opens `<data>/browsers` inside the closed data dir, where
+  `drgnx browser install` puts its downloads.
 - Agent sessions (`agents/launch.rs`, `sandbox::session_spec`; Task 10): `launch::spawn(plan, req)` for a worker or
   manager, `launch::spawn_plain(plan, sid)` for a chat with no project and `launch::spawn_chat(plan, sid, project)`
   for a chat in a project (`launch::kind(role, cwd, scratch)` picks: the cwd is the scratch dir → plain; else a chat →

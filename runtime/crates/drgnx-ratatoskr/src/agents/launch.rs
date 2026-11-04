@@ -1,8 +1,9 @@
-//! Sandboxed launch (Task 10; `docs/develop/gleipnir.md`, "Ratatoskr's side"): `launch::spawn(env, plan, req) ->
-//! draugr::Spec` for every worker and manager (its worktree writable, the lock's protected paths read-only, the
-//! network the matrix's `network` cell grants), `launch::spawn_plain(env, plan, sid)` for a chat with no project (still
-//! in Gleipnir: a scratch cwd, provider network only) and `launch::spawn_chat(env, plan, sid, project)` for a chat in a
-//! project (the project read-only, its scratch dir writable, provider network only).  [`kind`] picks one.  No code path
+//! Sandboxed launch (Task 10; `docs/develop/gleipnir.md`, "Ratatoskr's side"): `launch::spawn(env, plan, req,
+//! browser) -> Launch` for every worker and manager (its worktree writable, the lock's protected paths read-only, the
+//! network the matrix's `network` cell grants), `launch::spawn_plain(env, plan, sid, browser)` for a chat with no
+//! project (still in Gleipnir: a scratch cwd, provider network only) and `launch::spawn_chat(env, plan, sid, project,
+//! browser)` for a chat in a project (the project read-only, its scratch dir writable, provider network only); each
+//! with the session's browser when it has one.  [`kind`] picks one.  No code path
 //! starts a session unsandboxed: `Unsandboxed` is never granted here, and a host with no sandbox refuses the launch.
 
 use crate::agents::lock::LaunchPlan;
@@ -32,25 +33,35 @@ pub struct SandboxReq {
 }
 
 /// A launch ready to spawn: the `draugr::Spec`, and the helper's status pipe (read end) and known layers.  The caller
-/// reads the status line (`gleipnir::read_status`) after spawning: a launch whose status is not read is not known to
-/// have started inside the sandbox, so the session must be killed when it fails.
+/// reads the status line (`gleipnir::inner::read_status_for`, with `browser`) after spawning: a launch whose status is
+/// not read is not known to have started inside the sandbox, so the session must be killed when it fails.  A launch
+/// with the browser holds the hub's end of the browser host's socketpair (the host's end is in the spec's fds).
 #[derive(Debug)]
 pub struct Launch {
     pub spec: draugr::Spec,
     pub status: Option<std::os::fd::OwnedFd>,
     pub layers: Option<gleipnir::LayersReport>,
+    /// The hub's end of the browser host's socketpair: a launch with the browser only.
+    pub browser: Option<std::os::unix::net::UnixStream>,
 }
 
 /// A worker or manager session's launch: its worktree is the only project path it can write.  A `Role::Chat` is
 /// refused (a chat has no worktree: [`spawn_plain`] or [`spawn_chat`]).
-/// ENV is the hub's environment with the login shell's variables applied (`ShellEnv::paths_env`).
-pub async fn spawn(env: &Env, plan: &LaunchPlan, req: &SandboxReq) -> Result<Launch, Refusal> {
+/// ENV is the hub's environment with the login shell's variables applied (`ShellEnv::paths_env`).  BROWSER is the
+/// session's browser, when it has one.
+pub async fn spawn(
+    env: &Env,
+    plan: &LaunchPlan,
+    req: &SandboxReq,
+    browser: Option<sandbox::BrowserShape>,
+) -> Result<Launch, Refusal> {
     if req.role == Role::Chat {
         return Err(refusal(
             "a chat has no worktree: use spawn_plain or spawn_chat",
         ));
     }
-    let (plan, shape) = worktree_launch(plan, req);
+    let (plan, mut shape) = worktree_launch(plan, req);
+    shape.browser = browser;
     launch(env, &plan, &shape).await.map(with_stdin)
 }
 
@@ -74,13 +85,19 @@ pub fn worktree_launch(plan: &LaunchPlan, req: &SandboxReq) -> (LaunchPlan, Sess
         write,
         read: req.read.clone(),
         net: req.net,
+        browser: None,
     };
     (plan, shape)
 }
 
 /// A chat with no project, still in Gleipnir: its cwd is a scratch dir of its own (`scratch_dir`), nothing of the
 /// project or the home is bound beyond the CLI's own login dir, and only the provider's network is reachable.
-pub async fn spawn_plain(env: &Env, plan: &LaunchPlan, sid: &str) -> Result<Launch, Refusal> {
+pub async fn spawn_plain(
+    env: &Env,
+    plan: &LaunchPlan,
+    sid: &str,
+    browser: Option<sandbox::BrowserShape>,
+) -> Result<Launch, Refusal> {
     let scratch = scratch_dir(env, sid)?;
     let shape = SessionShape {
         sid: sid.to_string(),
@@ -88,6 +105,7 @@ pub async fn spawn_plain(env: &Env, plan: &LaunchPlan, sid: &str) -> Result<Laun
         write: vec![scratch],
         read: vec![],
         net: NetCell::ProviderOnly,
+        browser,
     };
     launch(env, plan, &shape).await.map(with_stdin)
 }
@@ -98,8 +116,10 @@ pub async fn spawn_chat(
     plan: &LaunchPlan,
     sid: &str,
     project: &Path,
+    browser: Option<sandbox::BrowserShape>,
 ) -> Result<Launch, Refusal> {
-    let (plan, shape) = chat_launch(env, plan, sid, project)?;
+    let (plan, mut shape) = chat_launch(env, plan, sid, project)?;
+    shape.browser = browser;
     launch(env, &plan, &shape).await.map(with_stdin)
 }
 
@@ -130,6 +150,7 @@ pub fn chat_launch(
         write: vec![scratch],
         read,
         net: NetCell::ProviderOnly,
+        browser: None,
     };
     Ok((plan, shape))
 }
@@ -265,7 +286,8 @@ where
 }
 
 /// [`launch`] on a chosen sandbox.  The spec makes the session dir (`sandbox::session_spec`): a launch that is refused
-/// removes it again when it was not there before.
+/// removes it again when it was not there before.  A shape with the browser makes the browser host's socketpair: the
+/// host's end goes to the sandbox (`Sandbox::prepare`), the hub's end into the [`Launch`]; a refusal closes both.
 pub fn launch_on(
     env: &Env,
     sb: &Sandbox,
@@ -304,10 +326,18 @@ fn launch_in(
         .chain(plan.argv.iter().skip(1).map(|a| a.as_os_str()))
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
+    let (hub, host) = match &shape.browser {
+        Some(_) => {
+            let (hub, host) = std::os::unix::net::UnixStream::pair()
+                .map_err(|e| refusal(&format!("the browser's socketpair: {e}")))?;
+            (Some(hub), Some(std::os::fd::OwnedFd::from(host)))
+        }
+        None => (None, None),
+    };
     let prepared = sb.prepare(
         valid,
         command,
-        None,
+        host,
         #[cfg(feature = "test-hooks")]
         gleipnir::TestHooks::default(),
     )?;
@@ -315,6 +345,7 @@ fn launch_in(
         spec: sandbox::to_draugr(prepared.invocation),
         status: prepared.status,
         layers: prepared.layers,
+        browser: hub,
     })
 }
 

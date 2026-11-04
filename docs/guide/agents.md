@@ -332,6 +332,19 @@ Onboarding's Agents step asks for both and writes them without touching the rest
 edit them by hand too. The search tool lets an agent read the indexed code of any of your projects, so it is off until
 you say yes.
 
+### What a session gets with the browser
+
+When the matrix's `browser` cell allows it (Balanced: managers and workers; a chat asks), a session also gets a
+headless browser inside its own sandbox ([agent-browser.md](agent-browser.md)). Its agent finds it at
+`PLAYWRIGHT_MCP_CDP_ENDPOINT` (and `DRGNX_BROWSER_CDP`): a `ws://127.0.0.1:9222/devtools/browser/…` address with a
+secret of its own, set by the hub. Playwright MCP and other CDP clients connect there with no setup. The browser
+reaches your servers on the ports of `drgnx-agents-browser-local-ports`, and the web only through the session's web
+proxy, as the `browser.web` and `browser.private` cells say. With a user systemd the session and its browser share
+one memory cap (`drgnx-agents-session-memory`); near it, the browser is stopped and starts again at the next use.
+
+A host that cannot give the browser (no bubblewrap full tier, a kernel below Landlock ABI 9, no browser found:
+`drgnx browser install`) starts the session without it. Its `agents/get` says why, and you see one notice with the fix.
+
 ### What modules add to a session
 
 A module can add variables to the environment of an agent you start from the editor (no module of drgnx does now;

@@ -18,6 +18,109 @@ pub mod nevers;
 pub mod resolve;
 pub mod web;
 
+/// The two names a session's CDP endpoint is given under. The hub sets both; an editor's value for either is dropped.
+pub const ENDPOINT_ENV: [&str; 2] = ["PLAYWRIGHT_MCP_CDP_ENDPOINT", "DRGNX_BROWSER_CDP"];
+
+/// A session's CDP secret: 32 random bytes. It travels in the agent's environment only: its `Debug` never shows it,
+/// and nothing logs the endpoint's path.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Secret(pub [u8; 32]);
+
+impl Secret {
+    /// 32 fresh bytes from the kernel.
+    pub fn new() -> std::io::Result<Secret> {
+        use std::io::Read;
+        let mut b = [0u8; 32];
+        std::fs::File::open("/dev/urandom")?.read_exact(&mut b)?;
+        Ok(Secret(b))
+    }
+
+    /// The bytes as 64 lower-case hex digits, as the URL carries them.
+    pub fn hex(&self) -> String {
+        self.0.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// The endpoint the agent connects to through its CDP relay PORT: `ws://127.0.0.1:PORT/devtools/browser/HEX`.
+    pub fn endpoint(&self, port: u16) -> String {
+        format!("ws://127.0.0.1:{port}{}{}", broker::PATH_PREFIX, self.hex())
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Secret(…)")
+    }
+}
+
+/// A session's memory cap (`agents-session-memory`: digits and an optional K, M, G or T, powers of 1024) in bytes.
+pub fn memory_bytes(text: &str) -> Option<u64> {
+    let (digits, unit) = match text.char_indices().last()? {
+        (i, c) if c.is_ascii_alphabetic() => (&text[..i], c),
+        _ => (text, 'B'),
+    };
+    let n: u64 = digits.parse().ok().filter(|n| *n > 0)?;
+    let shift = match unit {
+        'B' => 0,
+        'K' => 10,
+        'M' => 20,
+        'G' => 30,
+        'T' => 40,
+        _ => return None,
+    };
+    n.checked_mul(1 << shift)
+}
+
+/// Whether CURRENT bytes are above HIGH percent of CAP.
+pub fn over_high(current: u64, cap: u64, high: u32) -> bool {
+    u128::from(current) * 100 > u128::from(cap) * u128::from(high)
+}
+
+/// A browser session's memory watch (Linux, with a user systemd): its scope's cgroup is read once (`systemctl --user
+/// show -P ControlGroup UNIT`, within 2 s), then its `memory.current` every second; each time it rises above HIGH
+/// percent of CAP, STOP is called (`BrokerHandle::stop("memory")`, which does nothing while the browser is not
+/// running). It ends when the cgroup goes, or when STOP says the session is gone (false).
+pub async fn memory_watch(unit: String, cap: u64, high: u32, stop: impl Fn() -> bool) {
+    let cg = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        tokio::process::Command::new("systemctl")
+            .args(["--user", "show", "-P", "ControlGroup", &unit])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output(),
+    )
+    .await;
+    let cg = match cg {
+        Ok(Ok(o)) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_owned(),
+        _ => {
+            tracing::info!(unit = %unit, "no memory watch: the scope's cgroup is not known");
+            return;
+        }
+    };
+    if !cg.starts_with('/') {
+        tracing::info!(unit = %unit, "no memory watch: the scope has no cgroup");
+        return;
+    }
+    let file = std::path::Path::new("/sys/fs/cgroup")
+        .join(cg.trim_start_matches('/'))
+        .join("memory.current");
+    let mut above = false;
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        let Some(current) = tokio::fs::read_to_string(&file)
+            .await
+            .ok()
+            .and_then(|t| t.trim().parse::<u64>().ok())
+        else {
+            return;
+        };
+        let now = over_high(current, cap, high);
+        if now && !above && !stop() {
+            return;
+        }
+        above = now;
+    }
+}
+
 use std::ffi::OsString;
 
 /// `ratatoskr browser-host …` ([`host::main`]); its exit code. Not Linux: 1, as there is no browser host there.
@@ -229,5 +332,26 @@ mod tests {
         assert!(parse(args(&["list", "--version", "1"])).is_err());
         assert!(parse(args(&["frob"])).is_err());
         assert!(parse(args(&["install", "extra"])).is_err());
+    }
+
+    #[test]
+    fn the_secret_is_never_shown_and_the_memory_mark_is_a_share_of_the_cap() {
+        let s = Secret([0xab; 32]);
+        assert_eq!(format!("{s:?}"), "Secret(…)");
+        assert!(!format!("{:?}", Some(&s)).contains("ab"));
+        assert_eq!(
+            s.endpoint(9222),
+            format!("ws://127.0.0.1:9222/devtools/browser/{}", "ab".repeat(32))
+        );
+        assert_ne!(Secret::new().unwrap(), Secret::new().unwrap());
+        assert_eq!(memory_bytes("4G"), Some(4 << 30));
+        assert_eq!(memory_bytes("512M"), Some(512 << 20));
+        assert_eq!(memory_bytes("1000"), Some(1000));
+        for bad in ["", "0", "4 G", "G", "4X", "-1G"] {
+            assert_eq!(memory_bytes(bad), None, "{bad}");
+        }
+        let cap = 4 << 30;
+        assert!(!over_high(cap / 4 * 3, cap, 75));
+        assert!(over_high(cap / 4 * 3 + 1, cap, 75));
     }
 }

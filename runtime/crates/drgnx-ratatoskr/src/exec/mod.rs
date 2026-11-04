@@ -1069,6 +1069,7 @@ impl Inner {
                     write: vec![worktree],
                     read: vec![],
                     net: NetCell::ProviderAndPackages,
+                    browser: None,
                 };
                 let l = launch::launch(&self.hooks.shell_env.paths_env(), &plan, &shape).await?;
                 (l.spec, l.status)

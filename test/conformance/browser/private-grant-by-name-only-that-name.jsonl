@@ -4,7 +4,7 @@
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
 {"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
-{"do": "start", "hub": "h", "env": {"DRGNX_TEST_WEB_PROXY": "1", "DRGNX_TEST_WEB_REDIRECT": "127.0.0.1:$port", "DRGNX_TEST_PROXY_PINS": "nas.test=192.168.77.20,evil.test=192.168.77.20"}}
+{"do": "start", "hub": "h", "env": {"DRGNX_TEST_BROWSER": "1", "DRGNX_TEST_WEB_REDIRECT": "127.0.0.1:$port", "DRGNX_TEST_PROXY_PINS": "nas.test=192.168.77.20,evil.test=192.168.77.20"}}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "connect", "conn": "e", "hub": "h"}
 {"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
