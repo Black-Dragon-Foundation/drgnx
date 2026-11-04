@@ -75,6 +75,20 @@ pub enum RefuseWhy {
     BadRequest,
     /// A target with a byte outside printable ASCII (a NUL, a U-label).
     NotAscii,
+    /// The web policy: a hard never (a metadata address or name, `0/8`, `::`, multicast, broadcast, `240/4`, another
+    /// reserved range, a hub endpoint), under any grant.
+    Never,
+    /// The web policy: a public target on a port other than 80 and 443.
+    Port,
+    /// The web policy: an IPv6 address that carries a private IPv4 one (mapped, NAT64, 6to4, …).
+    Embedded,
+    /// The web policy: a loopback spelling or one of the host's own addresses, which only `host.drgnx.internal`
+    /// reaches.
+    Loopback,
+    /// The web policy: on the user's deny list.
+    DenyListed,
+    /// The web policy: a name whose private answer a grant covers, but no grant names the name (DNS rebinding).
+    Rebound,
 }
 
 /// A socket the proxy accepts clients on: a Unix socket on Linux, `127.0.0.1:0` on macOS.

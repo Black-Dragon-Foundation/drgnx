@@ -1035,6 +1035,58 @@ that changes after the check (rebinding) cannot lead it anywhere else.
   connect does. Both hold one of the `max_conns` places meanwhile.
 - The proxy speaks HTTP CONNECT only: no plain HTTP forwarding and no SOCKS.
 
+### The web policy
+
+A browser session's web proxy judges its requests by `net::policy`, not by an allowlist: public-any on ports 80 and
+443 once the session holds `browser.web`, private targets only through `browser.private` grants, and hard nevers that
+no grant opens. The module is pure (no I/O) and builds on every target, so the doctor can ask it the same questions.
+
+`pre_resolve(target, ctx)` runs first: it refuses what needs no DNS, says `Resolve` for a name, and gives the fixed
+addresses of a literal or of `host.drgnx.internal` (`127.0.0.1` and `::1`). `judge(target, answer, ctx)` then gives the
+verdict: `Connect(addrs)`, `WebOff` (a public target without `browser.web`: the card's question), `Private { addr,
+class }` (a private target no grant opens: the card's question, with the address it leads to) or `Refuse(why)`. The
+context (`WebCtx`) holds whether `browser.web` is granted, the user's deny list (`agents-browser-deny-hosts`), the
+`browser.private` grants with their expiry, the host's own addresses (`HostAddrs`, kept live by the hub) and the hub's
+own TCP ports on the host's loopback (`NeverSet`).
+
+**The classes.** Every address is judged by the IPv4 address it carries, unwrapped first (`net::host::unwrap_embedded`:
+IPv4-mapped, IPv4-compatible, NAT64 `64:ff9b::/96` and `64:ff9b:1::/48`, 6to4 `2002::/16`, Teredo `2001::/32`'s client).
+`classify` then names one of: `Public`; `Lan` (RFC 1918); `Ula` (`fc00::/7`); `LinkLocal` (`169.254/16`, `fe80::/10`);
+`Cgnat` (`100.64/10`); `Loopback` (`127/8`, `::1`); `HostOwn` (one of `HostAddrs`); and `Never`, which holds the hard
+nevers and every other range that is not public (documentation, benchmarking, `192.0.0/24`, `fec0::/10`, `100::/64`,
+and a public IPv4 address inside Teredo or local-use NAT64, which no public route carries).
+
+**The hard nevers**, under any grant: the metadata addresses `169.254.169.254`, `fd00:ec2::254`, `100.100.100.200`,
+`168.63.129.16` (Azure's WireServer, which `is_public` counts as public), `169.254.170.2`, `169.254.170.23` and
+`fd00:ec2::23`; the names `metadata.google.internal` and `metadata.azure.com` and every name under them; `0/8`, `::`,
+multicast, broadcast and `240/4`; and the hub's own TCP ports on the host's loopback (`NeverSet::loopback_ports`).
+
+**The grants** (`PrivateGrant { target, expires }`, `expires` in Unix seconds or none for as long as the scope lasts)
+name one of: a host:port (`{"host_port":"printer.local:631"}`), a CIDR with a port or a range
+(`{"cidr":"192.168.1.0/24","ports":"80-443"}`), or `"all_private"`. A grant's address is plain IPv4 or native IPv6,
+and a CIDR has no host bits. A host:port covers that literal, that very name, or `host.drgnx.internal:PORT`; a CIDR covers
+the literals in it except link-local; all-private covers LAN and ULA literals only.
+
+**The order of the checks:**
+1. A hard-never name, or a target on the deny list (a name denies itself and every name under it, an address that
+   address) → `Refuse(Never)` or `Refuse(DenyListed)`.
+2. A literal: wrapped and not public → `Refuse(Embedded)` (a grant names plain IPv4 or native IPv6); a never →
+   `Refuse(Never)`; loopback or the host's own → `Refuse(Loopback)`.
+3. `host.drgnx.internal:PORT`: a hub port → `Refuse(Never)`; a live host:port grant naming it exactly → `Connect` to
+   `127.0.0.1` and `::1`; else `Private { 127.0.0.1:PORT, Loopback }`, offered as that one host:port.
+4. A name's answer: its nevers are dropped, and an answer of nevers only → `Refuse(Never)`. (An empty answer connects
+   to nothing; the proxy answers 502 before asking.)
+5. Any public address left: those only (a mixed answer drops the private ones), on 80 and 443 only (else
+   `Refuse(Port)`), and only with `browser.web` (else `WebOff`).
+6. An all-private answer: a wrapped address → `Refuse(Embedded)`; loopback or the host's own (an mDNS answer is not
+   authenticated) → `Refuse(Loopback)`; a live host:port grant naming that very name and port → `Connect`; a grant
+   that covers the address but not the name → `Refuse(Rebound)` (DNS rebinding onto a granted target); else `Private`,
+   offered as the name and port.
+7. A private literal: a live grant that covers it → `Connect`, else `Private`.
+
+DNS is resolved once per connection and pinned, so the answer judged is the address connected. That closes the gap
+inside one connection; step 6's name rule closes rebinding across connections.
+
 ## The check
 
 `gleipnir::check` (`src/check.rs`) says whether the sandbox starts on this host, and when it does not, why and what
