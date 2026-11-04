@@ -132,7 +132,7 @@ fn restore(env: &Env, yes: bool) -> Result<String, String> {
         ));
     }
     let live = data.join("work.db");
-    let stamp = std::time::SystemTime::now()
+    let stamp = crate::clock::wall()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
     let aside = aside_name(&data, stamp);

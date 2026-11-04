@@ -37,9 +37,7 @@ pub fn wake_text(d: &ExecDone) -> String {
 }
 
 fn now() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0.0, |d| d.as_secs_f64())
+    crate::clock::wall_secs()
 }
 
 /// A wake that has to be delivered is a `wake` row of `runtime.db` (migration 7): `pending`, `sending` while a

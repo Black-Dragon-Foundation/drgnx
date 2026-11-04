@@ -33,7 +33,7 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// The names a supervisor passes on, each only when set (review I11): the directories (a long path would resolve
 /// differently under systemd or launchd than in the editor without `TMPDIR` and `HOME`), drgnx's own (`DRGNX_DIR`: the
@@ -458,7 +458,7 @@ fn ensure_say(env: &Env, timeout: Duration, say: bool) -> i32 {
             return 1;
         }
     };
-    let deadline = Instant::now() + timeout;
+    let deadline = crate::clock::real_now() + timeout;
     let mut ended = None;
     loop {
         if client::ping(&socket, Duration::from_secs(1)).is_some() {
@@ -474,7 +474,7 @@ fn ensure_say(env: &Env, timeout: Duration, say: bool) -> i32 {
         {
             ended = Some(status);
         }
-        if Instant::now() >= deadline {
+        if crate::clock::real_now() >= deadline {
             break;
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -500,13 +500,13 @@ fn ensure_say(env: &Env, timeout: Duration, say: bool) -> i32 {
 
 /// Wait up to WITHIN for the lock at PATH to be released (nobody holds it any more).
 fn wait_released(path: &Path, within: Duration) -> bool {
-    let deadline = Instant::now() + within;
+    let deadline = crate::clock::real_now() + within;
     loop {
         match lock::holder(path, &lock::System) {
             Ok(Holder::Ratatoskr { .. }) => {}
             _ => return true,
         }
-        if Instant::now() >= deadline {
+        if crate::clock::real_now() >= deadline {
             return false;
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -515,9 +515,9 @@ fn wait_released(path: &Path, within: Duration) -> bool {
 
 /// Wait up to WITHIN for the Lisp lock directory at PATH to be gone.
 fn wait_gone(path: &Path, within: Duration) -> bool {
-    let deadline = Instant::now() + within;
+    let deadline = crate::clock::real_now() + within;
     while std::fs::symlink_metadata(path).is_ok() {
-        if Instant::now() >= deadline {
+        if crate::clock::real_now() >= deadline {
             return false;
         }
         std::thread::sleep(Duration::from_millis(50));

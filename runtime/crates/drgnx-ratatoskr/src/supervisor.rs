@@ -362,9 +362,7 @@ async fn act(f: &Front, o: &Obs, rule: Rule, text: &str) {
         title: Some(format!("{rule_name}: {text}")),
         data: Some(data),
     };
-    let at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0.0, |d| d.as_secs_f64());
+    let at = crate::clock::wall_secs();
     let made = f
         .writer
         .db
@@ -392,13 +390,10 @@ async fn act(f: &Front, o: &Obs, rule: Rule, text: &str) {
 
 /// The hub's loop (spawned once by the server).
 pub async fn run(f: Arc<Front>) {
-    let mut every = tokio::time::interval(EVERY);
-    every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut every = crate::clock::interval(EVERY);
     loop {
         every.tick().await;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0.0, |d| d.as_secs_f64());
+        let now = crate::clock::wall_secs();
         f.core.supervisor.tick(&f, now).await;
     }
 }

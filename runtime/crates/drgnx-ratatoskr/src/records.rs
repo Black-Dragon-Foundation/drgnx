@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use urdr::graph::entity::{self, Changes, EntityNew, Origin};
 use urdr::graph::{Class, TxMeta};
 
@@ -56,9 +56,7 @@ pub struct Views {
 }
 
 fn now() -> f64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0.0, |d| d.as_secs_f64())
+    crate::clock::wall_secs()
 }
 
 fn err(msg: impl Into<String>) -> Error {
@@ -1161,8 +1159,8 @@ impl Views {
     ) {
         let me = self.clone();
         let p = path.clone();
-        let h = tokio::spawn(async move {
-            tokio::time::sleep(DEBOUNCE).await;
+        let h = crate::clock::spawn("records:debounce", async move {
+            crate::clock::sleep(DEBOUNCE).await;
             if let Ok(f) = me.flush(&db, &p, false).await
                 && let Some(e) = me.event_of(&db, &p, f).await
             {
@@ -1184,7 +1182,7 @@ pub async fn follow(front: Arc<Front>) {
         loop {
             tokio::select! {
                 () = signals.records.notified() => {}
-                () = tokio::time::sleep(DEBOUNCE) => break,
+                () = crate::clock::sleep(DEBOUNCE) => break,
             }
         }
         match front.core.records.flush_all(&front.writer.db).await {

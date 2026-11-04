@@ -31,8 +31,7 @@ pub const GIT_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// The loop: every running job steps each [`EVERY`] and when something wakes it (an approval, an unblock).
 pub async fn run(front: Arc<Front>) {
-    let mut every = tokio::time::interval(EVERY);
-    every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut every = crate::clock::interval(EVERY);
     loop {
         tokio::select! {
             _ = every.tick() => {}
@@ -643,7 +642,7 @@ pub(crate) async fn git(dir: &Path, args: &[&str]) -> Result<String, GitError> {
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);
-    match tokio::time::timeout(GIT_TIMEOUT, cmd.output()).await {
+    match crate::clock::timeout(GIT_TIMEOUT, cmd.output()).await {
         Err(_) => Err(GitError {
             what,
             stderr: "timed out".into(),

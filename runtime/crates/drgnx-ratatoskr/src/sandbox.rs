@@ -14,7 +14,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Environment names never passed into a sandbox beside `gleipnir::BASE_ENV_DENY`: drgnx's own dirs, the agent's
 /// identity, and the names the Lisp backend of older hubs was given (its socket, parent pid and secret), should one
@@ -266,8 +266,8 @@ fn setup(message: String) -> Refusal {
 /// The check's spawn: the prepared probe started the way a job is (`draugr::spawn_pinned`), its status line read, and
 /// its exit awaited, all within `timeout`. Whatever is still running at the deadline is killed.
 pub async fn run_probe(prepared: Prepared, timeout: Duration) -> Ran {
-    let end = Instant::now() + timeout;
-    let left = || end.saturating_duration_since(Instant::now());
+    let end = crate::clock::now() + timeout;
+    let left = || end.saturating_duration_since(crate::clock::now());
     let Prepared {
         invocation,
         status,
@@ -290,7 +290,7 @@ pub async fn run_probe(prepared: Prepared, timeout: Duration) -> Ran {
     };
     let mut exit = None;
     let finished = report.is_ok()
-        && match tokio::time::timeout(left(), child.wait()).await {
+        && match crate::clock::timeout(left(), child.wait()).await {
             Ok(Ok(Some(s))) => {
                 exit = Some(s.code().unwrap_or_else(|| 128 + s.signal().unwrap_or(0)));
                 true
@@ -302,7 +302,7 @@ pub async fn run_probe(prepared: Prepared, timeout: Duration) -> Ran {
         // the group is ended.
         let _ = tokio::join!(
             draugr::kill_group(child.id(), draugr::reap::GRACE, &draugr::RealSignaller),
-            tokio::time::timeout(Duration::from_secs(7), child.wait())
+            crate::clock::timeout(Duration::from_secs(7), child.wait())
         );
     }
     Ran {
@@ -501,7 +501,7 @@ mod run {
             Ok(Some(s)) => Some(s.code().unwrap_or_else(|| 128 + s.signal().unwrap_or(0))),
             _ => None,
         };
-        let _ = tokio::time::timeout(Duration::from_secs(2), pump).await;
+        let _ = crate::clock::timeout(Duration::from_secs(2), pump).await;
         let tail = child.stderr_tail();
         let _ = io::stderr().write_all(tail.as_bytes());
         out

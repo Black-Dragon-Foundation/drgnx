@@ -502,9 +502,7 @@ fn store_err(e: CoordError) -> Error {
 }
 
 fn now_secs() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0.0, |d| d.as_secs_f64())
+    crate::clock::wall_secs()
 }
 
 pub async fn get(f: &Front, _: &Caller, p: GetParams) -> Result<MatrixView, Error> {

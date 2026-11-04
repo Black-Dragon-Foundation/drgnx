@@ -89,7 +89,7 @@ impl Editors {
         let Some(rx) = rx else {
             return EditorAnswer::Sent;
         };
-        let got = tokio::time::timeout(wait, rx).await;
+        let got = crate::clock::timeout(wait, rx).await;
         lock(&self.confirms).remove(&tx);
         match got {
             Ok(Ok(a)) => a,
@@ -128,7 +128,7 @@ impl Editors {
                 root
             }),
         );
-        let got = tokio::time::timeout(wait, rx).await;
+        let got = crate::clock::timeout(wait, rx).await;
         lock(&self.explains).remove(&req);
         got.ok()?.ok()
     }

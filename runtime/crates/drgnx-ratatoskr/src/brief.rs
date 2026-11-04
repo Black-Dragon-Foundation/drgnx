@@ -315,9 +315,7 @@ fn gather(
 }
 
 fn now() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0.0, |d| d.as_secs_f64())
+    crate::clock::wall_secs()
 }
 
 /// The plan and project TASK works under (what a plan run's session is filed under): its job's plan (else the job),

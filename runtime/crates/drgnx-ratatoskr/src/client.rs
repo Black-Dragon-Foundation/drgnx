@@ -25,7 +25,7 @@ const MAX_LINE: u64 = 1 << 20;
 
 fn read_line(r: &mut BufReader<UnixStream>, deadline: Instant) -> Result<String, String> {
     use std::io::Read;
-    let left = deadline.saturating_duration_since(Instant::now());
+    let left = deadline.saturating_duration_since(crate::clock::real_now());
     if left.is_zero() {
         return Err("no answer in time".into());
     }
@@ -81,7 +81,7 @@ fn connect(socket: &Path, within: Duration) -> Result<UnixStream, String> {
 
 /// Does a hub answer `ping` on SOCKET?  Its pid.  (A v1 hub sends its challenge first; a v0 hub answers at once.)
 pub fn ping(socket: &Path, within: Duration) -> Option<u32> {
-    let deadline = Instant::now() + within;
+    let deadline = crate::clock::real_now() + within;
     let mut s = connect(socket, within).ok()?;
     s.write_all(b"{\"id\":0,\"method\":\"ping\"}\n").ok()?;
     let mut r = BufReader::new(s);
@@ -100,7 +100,7 @@ pub fn ping(socket: &Path, within: Duration) -> Option<u32> {
 /// A v0 line to a Lisp hub, which serves it without a hello: METHOD with no params.  Whether it answered.  The
 /// connection stays until the answer is read: a Lisp hub that finds its client gone does not carry out a `shutdown`.
 pub fn v0_call(socket: &Path, method: &str) -> bool {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = crate::clock::real_now() + Duration::from_secs(2);
     let Ok(mut s) = connect(socket, Duration::from_secs(2)) else {
         return false;
     };
@@ -125,7 +125,7 @@ impl Client {
     }
 
     pub fn user_at(socket: &Path, within: Duration) -> Result<Client, String> {
-        let deadline = Instant::now() + within;
+        let deadline = crate::clock::real_now() + within;
         let cap_file: PathBuf = paths::cap_path(socket);
         let dir = trusted(socket).map_err(|e| e.to_string())?;
         let cap = paths::open_in_trusted(&dir, name_of(&cap_file))
@@ -159,7 +159,7 @@ impl Client {
         let reply = c.call(
             "hello",
             hello,
-            deadline.saturating_duration_since(Instant::now()),
+            deadline.saturating_duration_since(crate::clock::real_now()),
         )?;
         let theirs = reply["proof"].as_str().unwrap_or_default();
         if !proof::verify(&proof::hub_proof(&cap, &mine, &hub_nonce), theirs) {
@@ -176,7 +176,7 @@ impl Client {
 
     /// METHOD with PARAMS: the result, or the error as "code: message".
     pub fn call(&mut self, method: &str, params: Value, within: Duration) -> Result<Value, String> {
-        let deadline = Instant::now() + within;
+        let deadline = crate::clock::real_now() + within;
         let id = self.next;
         self.next += 1;
         let line = json!({"id": id, "method": method, "params": params}).to_string();

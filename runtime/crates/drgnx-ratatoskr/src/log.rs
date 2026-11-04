@@ -82,7 +82,7 @@ pub fn rfc3339(secs: u64) -> String {
 }
 
 fn today() -> String {
-    let secs = std::time::SystemTime::now()
+    let secs = crate::clock::wall()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
     day(secs)

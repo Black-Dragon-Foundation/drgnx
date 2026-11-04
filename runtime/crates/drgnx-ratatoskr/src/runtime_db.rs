@@ -85,7 +85,7 @@ pub fn open(hub_dir: &Path) -> Result<(urdr::Store, urdr::Handle), String> {
     let fail = |e: urdr::Error| format!("cannot open {}: {e}", path.display());
     match urdr::Store::spawn(spec()) {
         Err(urdr::Error::NewerSchema { found, .. }) => {
-            let at = std::time::SystemTime::now()
+            let at = crate::clock::wall()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs());
             let aside = hub_dir.join(format!("runtime.db.newer-{found}-{at}"));

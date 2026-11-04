@@ -75,9 +75,7 @@ fn invalid(path: &str, message: impl Into<String>) -> Error {
 
 /// Seconds since the epoch.
 fn now() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0.0, |d| d.as_secs_f64())
+    crate::clock::wall_secs()
 }
 
 fn read<T>(l: &RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
@@ -1209,8 +1207,7 @@ pub async fn run_events(mut events: mpsc::UnboundedReceiver<GatewayEvent>, front
 
 /// Prune the registrations of gone owners and closed sessions each [`sessions::TICK`], for as long as the hub serves.
 pub async fn watch(front: Arc<Front>) {
-    let mut every = tokio::time::interval(sessions::TICK);
-    every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut every = crate::clock::interval(sessions::TICK);
     loop {
         every.tick().await;
         front.gate.prune(&front.mcp).await;

@@ -178,9 +178,7 @@ pub(crate) async fn pass(front: &Front, told: &mut HashMap<String, u64>) {
             continue;
         }
         super::die_at("after-queue-before-mark");
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0.0, |d| d.as_secs_f64());
+        let now = crate::clock::wall_secs();
         let marked = front
             .writer
             .write(&hub_caller(), "coord/deliver", move |tx| {
@@ -214,7 +212,7 @@ pub async fn run(front: Arc<Front>) {
     loop {
         tokio::select! {
             () = front.writer.signals.deliver.notified() => {}
-            () = tokio::time::sleep(EVERY) => {}
+            () = crate::clock::sleep(EVERY) => {}
         }
         pass(&front, &mut told).await;
     }
@@ -239,12 +237,7 @@ pub async fn recover(front: &Front) {
                     .find(|s| s.is_for(r))
             })
             .is_some_and(|s| s.holds_key(&message_key(m.id)));
-        let (id, now) = (
-            m.id,
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0.0, |d| d.as_secs_f64()),
-        );
+        let (id, now) = (m.id, crate::clock::wall_secs());
         let r = front
             .writer
             .write(&hub_caller(), "coord/deliver", move |tx| {

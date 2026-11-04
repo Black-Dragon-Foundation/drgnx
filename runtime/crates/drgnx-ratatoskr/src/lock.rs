@@ -12,7 +12,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 /// How long a Lisp lock directory without a readable pid counts as one being made.
 pub const LISP_LOCK_GRACE: Duration = Duration::from_secs(10);
@@ -96,7 +96,7 @@ pub fn acquire(path: &Path, procs: &impl Procs) -> Result<Lock, LockError> {
         let age = meta
             .modified()
             .ok()
-            .and_then(|t| SystemTime::now().duration_since(t).ok())
+            .and_then(|t| crate::clock::wall().duration_since(t).ok())
             .unwrap_or(Duration::ZERO);
         match judge_lisp_lock(pid, age, procs) {
             LispLock::Respect => return Err(LockError::LispHub { pid }),
@@ -168,7 +168,7 @@ pub fn lisp_dir(path: &Path, procs: &impl Procs) -> Option<(Option<u32>, LispLoc
     let age = meta
         .modified()
         .ok()
-        .and_then(|t| SystemTime::now().duration_since(t).ok())
+        .and_then(|t| crate::clock::wall().duration_since(t).ok())
         .unwrap_or(Duration::ZERO);
     Some((pid, judge_lisp_lock(pid, age, procs)))
 }

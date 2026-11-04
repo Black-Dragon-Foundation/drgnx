@@ -29,7 +29,8 @@ use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::Instant;
 
 /// The most steps a slice carries.
 pub const SLICE_MAX: u64 = 50;
@@ -331,7 +332,7 @@ async fn digest_now(f: &Front, sid: &str, back: Option<i64>) -> String {
             st.ends.retain(|(s, _)| !(kids.contains(s) || s == sid));
             if let Some(m) = st.seen.get_mut(sid) {
                 m.since_tx = upto;
-                m.last = Some(Instant::now());
+                m.last = Some(crate::clock::now());
             }
             text
         }
@@ -345,8 +346,7 @@ async fn digest_now(f: &Front, sid: &str, back: Option<i64>) -> String {
 /// The hub's loop: a manager that is free and has changes to hear of is woken with its digest, at most once per
 /// debounce period, so a burst of changes is one wake.
 pub async fn run(f: Arc<Front>) {
-    let mut every = tokio::time::interval(Duration::from_millis(500));
-    every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut every = crate::clock::interval(Duration::from_millis(500));
     loop {
         every.tick().await;
         for s in f.core.agents.live_sessions() {
@@ -367,9 +367,11 @@ pub async fn run(f: Arc<Front>) {
             }
             let due = {
                 let st = f.core.manager.st();
-                st.seen
-                    .get(&s.id)
-                    .is_none_or(|m| m.last.is_none_or(|l| l.elapsed() >= debounce()))
+                st.seen.get(&s.id).is_none_or(|m| {
+                    m.last.is_none_or(|l| {
+                        crate::clock::now().saturating_duration_since(l) >= debounce()
+                    })
+                })
             };
             if !due {
                 continue;

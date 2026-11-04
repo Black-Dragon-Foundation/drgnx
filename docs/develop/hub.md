@@ -221,7 +221,17 @@ Every timer of the hub and every reading of its time go through `drgnx-ratatoskr
 moves the next ones), and `spawn(origin, future)`, which names a task (`"module:what"`). In a release build each is
 tokio's or std's, inlined. `real_now()` is real time on every clock, for a blocking thread's limit on something outside
 the hub (a podman pull). The session's update throttle (`EMIT_EVERY`, 50 ms), its Stop timers (`STOP_ANSWER`, the
-close when idle), a move's wait, a connection's `STUCK_AFTER` and flush, and a job's time box and stop all read it.
+close when idle), a move's wait, a connection's `STUCK_AFTER` and flush, and a job's time box and stop all read it,
+and so does every other timer: the hub's tick loops (sessions, delivery, schema, runner, supervisor, manager, idle),
+the debounces, the paced reads, the accept back-off, the sandbox probe's limits and the stored timestamps. A `Delay`
+interval is the only kind (a late tick moves the next ones). A task that sleeps on the clock is started with
+`clock::spawn`, so its origin is named.
+
+The test `tests/hub_reads_its_clock.rs` (`no_raw_time_outside_the_clock`) keeps it so: it scans `src/` for a raw
+`Instant::now`, `SystemTime::now`, `tokio::time::{sleep,timeout,interval}`, `MissedTickBehavior` or
+`set_missed_tick_behavior` outside `clock.rs` (inline `#[cfg(test)]` code and `tests.rs` files excluded) and names each
+file:line. The blocking command-line code (`client`, `supervise`, `doctor`) has no virtual clock; its deadlines read
+`clock::real_now()`.
 
 **`serve --test-clock`** installs a virtual clock before any task starts. It stands still, whatever real time passes,
 until a client sends **`__test_advance {"ms": N}`**, answered with `{"now_ms", "woken", "busy", "unnamed"}`; a hub on

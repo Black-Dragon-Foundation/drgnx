@@ -137,7 +137,7 @@ async fn run(
         ),
         // the agent ended before it answered: its exit status and the end of its stderr
         Err(e) => {
-            let exit = tokio::time::timeout(EXIT_WAIT, async {
+            let exit = crate::clock::timeout(EXIT_WAIT, async {
                 while let Some(ev) = events.recv().await {
                     if let Event::Exit {
                         code,
