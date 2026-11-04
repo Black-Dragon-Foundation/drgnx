@@ -38,7 +38,6 @@
  (drgnx-hub-client/records-pause-the-mirror :why "fake hub: pure against a lying peer")
  (drgnx-hub-client/the-editor-token-and-held-keys-are-fetched-on-every-connect :why "fake hub: pure against a lying peer")
  (drgnx-hub-client/the-first-hello-carries-the-binary-version :why "fake hub: pure against a lying peer")
- (drgnx-hub-client/the-update-notice-offers-restart-now :why "not converted: runtime/crates/drgnx-ratatoskr/src/idle.rs:325 (one tick sends the notice and asks the restart, so the gated hub ends with the notice still held)")
  (drgnx-onboard/a-failed-download-says-how-to-retry :why "not converted: core/drgnx-onboard.el:767 (the job's loop), real shell jobs")
  (drgnx-onboard/lm-studio-is-set-up-the-same-way :why "not converted: core/drgnx-onboard.el:767 (the job's loop), real shell jobs")
  (drgnx-onboard/lm-studio-without-lms-says-what-to-do :why "not converted: core/drgnx-onboard.el:467 (the wait for `lms' on the real clock)")

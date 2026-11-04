@@ -245,7 +245,6 @@ levels that enclose it (a `let' binding, a call's argument); inside a branching 
     drgnx-hub-client/records-pause-the-mirror
     drgnx-hub-client/the-editor-token-and-held-keys-are-fetched-on-every-connect
     drgnx-hub-client/the-first-hello-carries-the-binary-version
-    drgnx-hub-client/the-update-notice-offers-restart-now
     drgnx-onboard/a-failed-download-says-how-to-retry
     drgnx-onboard/lm-studio-is-set-up-the-same-way
     drgnx-onboard/lm-studio-without-lms-says-what-to-do

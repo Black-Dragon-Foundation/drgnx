@@ -689,34 +689,44 @@ connects inside `drgnx-test-gated'.  `hub' is the hub's process; the fixture dis
 
 (ert-deftest drgnx-hub-client/the-update-notice-offers-restart-now ()
   ;; binary: the file the hub runs from is replaced by another commit's (an update): the hub's `notice' event becomes
-  ;; a notice whose command is Hub: Restart Now (needs the binary's test hooks: the 200 ms tick)
+  ;; a notice whose command is Hub: Restart Now (needs the binary's test hooks: the idle tick on the hub's clock).
+  ;; One idle tick sends the notice and, nothing being busy, ends the hub: the notice is held by the sequencer, which
+  ;; writes it before the hub's connections close, and the gate hands it over at `drgnx-test-deliver-all'
   (skip-unless (and (drgnx-hub-client-test--bin)
                     (string-search "\"test_hooks\":true"
                                    (shell-command-to-string (concat (shell-quote-argument (drgnx-hub-client-test--bin)) " version --json")))))
-  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
+  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil) n)
     (drgnx-hub-client-test--register)
-    (drgnx-hub-client-test--with
-      ;; the hub runs from a copy of the binary, started by a wrapper that gives it the 200 ms tick
+    (drgnx-hub-client-test--in-root
+      ;; the hub runs from a copy of the binary, started by a wrapper that gives `serve' the 200 ms tick
       (let* ((live (concat root "ratatoskr-live"))
+             (drgnx-hub--presence-sent :unknown) (drgnx-hub-editor-token-hook nil)
+             (drgnx-exec--jobs (make-hash-table :test #'equal)) (drgnx-exec--stale nil)
              (process-environment
               (cons (concat "DRGNX_RATATOSKR_BIN="
                             (progn (copy-file (drgnx-hub-client-test--bin) live)
                                    (set-file-modes live #o755)
-                                   (drgnx-hub-client-test--stub root (format "exec %s \"$@\" --idle-tick-ms 200"
-                                                                             (shell-quote-argument live)))))
+                                   (drgnx-hub-client-test--stub
+                                    root (format "case \"$1\" in serve) exec %s \"$@\" --idle-tick-ms 200;; esac\nexec %s \"$@\""
+                                                 (shell-quote-argument live) (shell-quote-argument live)))))
                     process-environment)))
-        (drgnx-test-with-ratatoskr root
-          (unwind-protect
-              (progn
-                (drgnx-hub-connect)
-                (drgnx-hub-client-test--wait (lambda () (process-live-p drgnx-hub--events)) "the subscription")
-                (let ((other (drgnx-hub-client-test--stub root "echo '{\"commit\":\"another\"}'")))
-                  (rename-file other (concat root "ratatoskr-live") t))
-                (let ((n (drgnx-hub-client-test--wait (lambda () (gethash '(hub . restart-when-idle) drgnx-notice--table))
-                                                      "the update notice")))
-                  (should (eq (plist-get n :command) 'hub-restart-now))
-                  (should (eq (plist-get n :life) 'condition))))
-            (drgnx-notice-clear 'hub 'restart-when-idle)))))))
+        (drgnx-test-with-ratatoskr root :gated t
+                                   (unwind-protect
+                                       (progn
+                                         (drgnx-test-gated '((sub-1 :answer "subscribe"))
+                                           (drgnx-hub-connect)
+                                           (drgnx-hub-client-test--wait (lambda () (process-live-p drgnx-hub--events)) "the subscription")
+                                           (let ((other (drgnx-hub-client-test--stub root "echo '{\"commit\":\"another\"}'")))
+                                             (rename-file other live t))
+                                           ;; the tick; no barrier after it: the hub ends on its own
+                                           (drgnx-test-hub-advance 200 t)
+                                           (drgnx-hub-client-test--wait (lambda () (process-get hub :done)) "the hub ends (restart-when-idle)")
+                                           (drgnx-test-deliver-all)
+                                           (setq n (gethash '(hub . restart-when-idle) drgnx-notice--table)))
+                                         (should n)
+                                         (should (eq (plist-get n :command) 'hub-restart-now))
+                                         (should (eq (plist-get n :life) 'condition)))
+                                     (drgnx-notice-clear 'hub 'restart-when-idle)))))))
 
 (defmacro drgnx-hub-client-test--restart-and-redial ()
   "Inside `drgnx-test-gated', after the hand-over, in a body that has the fixture's `hub': Hub: Restart Now (the schedule
@@ -1083,15 +1093,17 @@ client's clock reaches the redial."
 ;;;; The editor's subscription (HUB-RESUBSCRIBE-1)
 
 (defun drgnx-hub-client-test--serve ()
-  "Start Ratatoskr (foreground, no supervisor) on the current dirs; the process."
+  "Start Ratatoskr (foreground, no supervisor) on the current dirs; the process (a peer: the gate never waits on it)."
   (let ((process-environment (append (list (concat "DRGNX_DIR=" (directory-file-name drgnx-dir)) "RATATOSKR_SUPERVISOR=none"
                                            (concat "DRGNX_EMACS=" (expand-file-name invocation-name invocation-directory)))
                                      process-environment)))
-    (make-process :name "ratatoskr" :noquery t :connection-type 'pipe :buffer (generate-new-buffer " *ratatoskr*")
-                  :sentinel (lambda (p _event) (unless (process-live-p p) (process-put p :done t)))
-                  :command (append (list (drgnx-hub-client-test--bin) "serve" "--foreground"
-                                         "--parent-pid" (number-to-string (emacs-pid)))
-                                   drgnx-test-gate-hub-args))))
+    (let ((p (make-process :name "ratatoskr" :noquery t :connection-type 'pipe :buffer (generate-new-buffer " *ratatoskr*")
+                           :sentinel (lambda (p _event) (unless (process-live-p p) (process-put p :done t)))
+                           :command (append (list (drgnx-hub-client-test--bin) "serve" "--foreground"
+                                                  "--parent-pid" (number-to-string (emacs-pid)))
+                                            drgnx-test-gate-hub-args))))
+      (process-put p :drgnx-test-peer t)
+      p)))
 
 (defun drgnx-hub-client-test--hub-listens-p ()
   "Whether something accepts connections on the hub's socket (a connect, closed at once; it waits for nothing)."
