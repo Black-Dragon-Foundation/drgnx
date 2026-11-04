@@ -242,6 +242,33 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
     (should (eq 0 (car (drgnx-update-test--run dir nil bin "update"))))
     (should-not (file-exists-p (expand-file-name "lock" state)))))
 
+(ert-deftest drgnx-update/the-lock-does-not-rest-on-mkdir-alone ()
+  ;; uutils' mkdir (Ubuntu 26.04's) lets two racing commands both make the lock directory: here a mkdir that never
+  ;; refuses, and a live owner already in the lock.  The pid file, made with O_EXCL, is what refuses the second.
+  (drgnx-update-test--with-install
+    (let* ((mkdir (expand-file-name "stubs/mkdir" dir)))        ; the stubs come first on the run's PATH
+      (write-region (format "#!/bin/sh\nexec %s -p \"$@\"\n" (shell-quote-argument (executable-find "mkdir"))) nil mkdir)
+      (set-file-modes mkdir #o755)
+      (make-directory (expand-file-name "lock" state) t)
+      (write-region (format "%d\n" (emacs-pid)) nil (expand-file-name "lock/pid" state))
+      (let ((r (drgnx-update-test--run dir nil bin "update")))
+        (should (eq (car r) 1))
+        (should (string-match-p "another update is running" (cdr r))))
+      (should (equal (format "%d\n" (emacs-pid)) (drgnx-update-test--slurp (expand-file-name "lock/pid" state)))))))
+
+(ert-deftest drgnx-update/a-lock-without-a-pid-yet-is-not-taken-over ()
+  ;; The winner of the lock has made the directory and not yet written its pid: the loser waits for the pid (it
+  ;; sleeps between looks), and does not remove the lock.  Here the first sleep is the winner writing its pid.
+  (drgnx-update-test--with-install
+    (let* ((sleep (expand-file-name "stubs/sleep" dir)) (pid (expand-file-name "lock/pid" state)))
+      (write-region (format "#!/bin/sh\nprintf '%%s\\n' %d > %s\n" (emacs-pid) (shell-quote-argument pid)) nil sleep)
+      (set-file-modes sleep #o755)
+      (make-directory (expand-file-name "lock" state) t)
+      (let ((r (drgnx-update-test--run dir nil bin "update")))
+        (should (eq (car r) 1))
+        (should (string-match-p "another update is running" (cdr r))))
+      (should (file-exists-p pid)))))
+
 (ert-deftest drgnx-update/back-returns-to-the-commit-before-the-update ()
   (drgnx-update-test--with-install
     (let ((old (drgnx-update-test--head dir)))

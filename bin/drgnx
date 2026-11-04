@@ -55,7 +55,7 @@ cmd_doctor() { # [--json] [--dev] — checks run inside the Emacs drgnx uses (co
   return "$rc"
 }
 
-cmd_build() { # byte-compile core/, wb/, modules/ in place (core/drgnx-build.el)
+cmd_build() { # byte-compile core/, wb/, modules/, harness/ in place (core/drgnx-build.el)
   "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -l drgnx-build -f drgnx-build-cli
 }
 
@@ -1037,7 +1037,7 @@ cmd_lease() { # light|heavy|exclusive [--wait SECS] -- CMD… | status
   fi
   started=$SECONDS
   while ! lease_try "$class"; do
-    if [[ -n "$maxwait" ]] && ((SECONDS - started >= maxwait)); then
+    if [[ -n "$maxwait" ]] && ((SECONDS - started > maxwait)); then   # SECONDS counts whole seconds: `>=' could give up 1 s early
       if [[ "$class" == exclusive ]]; then
         echo "drgnx lease: wall clock not judged: host busy; holders:" >&2; lease_prune_and_list >&2
         DRGNX_LEASE_BUSY=1 DRGNX_LEASE_HELD="exclusive:0" exec "$@"
@@ -1102,7 +1102,7 @@ open_lock() { # one `drgnx open' at a time decides whether to start the daemon a
   stale=$((OPEN_WAIT + 15))                         # a holder is done within the wait; older: its owner is gone
   deadline=$((SECONDS + stale + 10))
   token="$$.$RANDOM$RANDOM"
-  while ((SECONDS < deadline)); do
+  while ((SECONDS <= deadline)); do     # whole seconds: `<' could give up 1 s early
     # the owner file is the lock: made with O_EXCL (noclobber), as uutils' mkdir (Ubuntu 26.04's) lets two
     # commands that race both "make" the directory
     if mkdir "$lock" 2>/dev/null && (set -C; printf '%s\n' "$token" >"$lock/owner") 2>/dev/null; then
@@ -1115,7 +1115,7 @@ open_lock() { # one `drgnx open' at a time decides whether to start the daemon a
       if (($(date +%s) - since > stale)); then open_steal "$lock" "$owner"; fi
     else   # made a moment ago, or its owner died before stamping it: stale after 5 s without a stamp
       [[ -n "$nostamp" ]] || nostamp=$SECONDS
-      if ((SECONDS - nostamp >= 5)); then open_steal "$lock" "$owner"; nostamp=""; fi
+      if ((SECONDS - nostamp > 5)); then open_steal "$lock" "$owner"; nostamp=""; fi
     fi
     sleep 0.1
   done
@@ -1142,7 +1142,7 @@ open_ensure_window() { # drgnx's daemon is running and has a window; under the l
   if [[ "$(probe -e '(drgnx-session-gui-frame-p)' 2>/dev/null)" != t ]]; then
     client -n -c >/dev/null || return 1
     deadline=$((SECONDS + 10))
-    while ((SECONDS < deadline)); do   # -n returns before the window exists: the next open must see it
+    while ((SECONDS <= deadline)); do   # -n returns before the window exists: the next open must see it
       [[ "$(probe -e '(drgnx-session-gui-frame-p)' 2>/dev/null)" == t ]] && break
       sleep 0.1
     done
@@ -1376,16 +1376,33 @@ update_record_run() { # TEXT — the line `drgnx update --auto status' shows as 
   update_write_atomic "$(update_state_dir)/last-run" "$(date '+%Y-%m-%d %H:%M:%S%z') $mode: $1"
 }
 
-update_lock() { # one update at a time (the timer and a person): a mkdir lock holding the owner's pid
-  local lock owner=""
+update_steal() { # LOCK OWNER — remove a stale lock, but only the one seen (OWNER's pid, "" for none); a fresh one made meanwhile stays
+  local lock="$1" owner="$2" grab="$1.stale.$$"
+  mv "$lock" "$grab" 2>/dev/null || return 0         # one winner among those who find it stale
+  if [[ "$(cat "$grab/pid" 2>/dev/null || true)" == "$owner" ]]; then rm -rf "${grab:?}" || true
+  elif [[ ! -e "$lock" ]] && mv "$grab" "$lock" 2>/dev/null; then :   # someone's fresh lock: put it back
+  else rm -rf "${grab:?}" || true; fi
+}
+
+update_lock() { # one update at a time (the timer and a person): a directory holding the owner's pid
+  local lock owner="" tries waited
   lock="$(update_state_dir)/lock"
   mkdir -p "$(update_state_dir)"
-  if ! mkdir "$lock" 2>/dev/null; then
-    owner="$(cat "$lock/pid" 2>/dev/null || true)"
+  # The pid file is the lock, made with O_EXCL (noclobber), as the open lock's owner file is: uutils' mkdir lets two
+  # commands that race both "make" the directory.
+  for tries in 1 2 3; do
+    if mkdir "$lock" 2>/dev/null && (set -C; printf '%s\n' "$$" >"$lock/pid") 2>/dev/null; then break; fi
+    # held, or its owner is between mkdir and writing the pid: give that one a moment to write it before judging
+    owner=""
+    for waited in $(seq 1 30); do
+      owner="$(cat "$lock/pid" 2>/dev/null || true)"
+      [[ -n "$owner" ]] && break
+      sleep 0.1
+    done
     if [[ -n "$owner" ]] && kill -0 "$owner" 2>/dev/null; then update_err "another update is running (pid $owner)"; return 1; fi
-    rm -rf "${lock:?}"; mkdir "$lock" 2>/dev/null || { update_err "cannot take the update lock ($lock)"; return 1; }
-  fi
-  printf '%s\n' "$$" >"$lock/pid"
+    update_steal "$lock" "$owner"                    # a dead owner's, or one that never wrote its pid
+    if [[ "$tries" == 3 ]]; then update_err "cannot take the update lock ($lock)"; return 1; fi
+  done
   UPD_LOCK="$lock"
   trap update_on_exit EXIT
   trap 'UPD_SIGNALED=1; exit 130' INT       # Ctrl-C, the timer's timeout, logout: leave through the EXIT handler, which rolls back
@@ -1854,7 +1871,7 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx open --wait FILE… open FILEs and return when you are done with them (C-x #): drgnx as $EDITOR
        drgnx open --check      start drgnx's daemon if needed, print its Emacs version, stop it if this started it
        drgnx macos-app         macOS: install drgnx.app into ~/Applications (Finder, Spotlight, Dock, Open With)
-       drgnx build             byte-compile drgnx (core, wb, modules); native compilation follows on load
+       drgnx build             byte-compile drgnx (core, wb, modules, harness); native compilation follows on load
        drgnx runtime build [--install] [--prefix DIR] | install [--prefix DIR]
                                build Ratatoskr (Rust) from source / install the built binary (docs/guide/install.md)
        drgnx update [--quiet]  update this install to GitHub main: fast-forward, then sync and build; the previous
