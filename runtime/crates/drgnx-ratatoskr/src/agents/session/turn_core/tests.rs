@@ -73,6 +73,13 @@ struct Shell {
     turn_of: BTreeMap<u64, u64>,
     asked: Vec<u64>,
     replies: BTreeMap<u64, Vec<&'static str>>,
+    /// The shell sends a turn's prompt in a step of its own after the turn started (`Session::turn`), not at once.
+    gap: bool,
+    /// A turn started whose prompt the shell has not sent yet, with its text.
+    unsent: Option<(u64, String)>,
+    /// The prompts that reached the agent, and those sent to a process the hub's end was ending.
+    reached: Vec<String>,
+    lost: Vec<String>,
     /// The first broken invariant.
     broken: Option<String>,
 }
@@ -103,7 +110,19 @@ impl Shell {
             turn_of: BTreeMap::new(),
             asked: Vec::new(),
             replies: BTreeMap::new(),
+            gap: false,
+            unsent: None,
+            reached: Vec::new(),
+            lost: Vec::new(),
             broken: None,
+        }
+    }
+
+    /// A shell whose turn sends its prompt in a step of its own.
+    fn with_gap() -> Shell {
+        Shell {
+            gap: true,
+            ..Shell::new()
         }
     }
 
@@ -136,9 +155,36 @@ impl Shell {
                     if self.doomed {
                         self.note(format!("{} started on a process being ended", item.text));
                     }
-                    self.running = Some(*turn);
+                    if let Some((t, text)) = &self.unsent {
+                        self.note(format!(
+                            "turn {turn} ({}) started while turn {t} ({text}) is not sent",
+                            item.text
+                        ));
+                    }
+                    if self.gap {
+                        self.unsent = Some((*turn, item.text.clone()));
+                    } else {
+                        // the shell's turn sends at once
+                        let sent = self.core.step(TurnEvent::Sending { turn: *turn });
+                        if sent != [TurnEffect::Prompt { turn: *turn }] {
+                            self.note(format!("turn {turn} started, but its send got {sent:?}"));
+                        }
+                        self.running = Some(*turn);
+                        self.reached.push(item.text.clone());
+                    }
                     self.cancel_sent = false;
                     self.started.push((*turn, item.text.clone()));
+                }
+                TurnEffect::PutBack { turn } => {
+                    // the turn never ran: its prompt waits in the queue again
+                    if self.unsent.as_ref().map(|u| u.0) != Some(*turn) {
+                        self.note(format!(
+                            "turn {turn} put back, but {:?} was not sent",
+                            self.unsent
+                        ));
+                    }
+                    self.unsent = None;
+                    self.started.retain(|(t, _)| t != turn);
                 }
                 TurnEffect::EndTurn { turn, .. } => {
                     // a turn ends at its agent's answer
@@ -239,21 +285,59 @@ impl Shell {
 
     /// TEXT from ORIGIN: taken, or refused (the sender keeps it).
     fn prompt(&mut self, text: &str, origin: Origin, steer_mode: bool) {
+        self.prompt_keyed(text, origin, steer_mode, None);
+    }
+
+    /// [`Shell::prompt`] of a prompt the hub knows by KEY.  Whether it was taken.
+    fn prompt_keyed(
+        &mut self,
+        text: &str,
+        origin: Origin,
+        steer_mode: bool,
+        key: Option<&str>,
+    ) -> bool {
         self.sent.push(text.into());
         // a prompt sent while no turn runs releases what a Stop or a pause held
-        if self.running.is_none() {
+        if self.running.is_none() && self.unsent.is_none() {
             self.held = false;
         }
         let fx = self.feed(TurnEvent::Send {
-            item: item(text, origin),
+            item: Queued {
+                key: key.map(str::to_owned),
+                ..item(text, origin)
+            },
             steer_mode,
             if_free: false,
         });
         if fx.contains(&TurnEffect::Exited) {
             self.refused.push(text.into());
+            return false;
         } else if self.killed_by_user {
             self.after_kill.push(text.into());
         }
+        true
+    }
+
+    /// The shell's turn sends the prompt of the turn that started, if one waits: the agent works on it from now.  Sent
+    /// to a process the hub's end is ending, it is lost (the agent dies with it, and the queue on disk no longer
+    /// holds it).
+    fn send_prompt(&mut self) {
+        let Some((t, text)) = self.unsent.take() else {
+            return;
+        };
+        // the core says whether it still goes (the hub's end may have put it back)
+        if !self
+            .feed(TurnEvent::Sending { turn: t })
+            .contains(&TurnEffect::Prompt { turn: t })
+        {
+            return;
+        }
+        if self.doomed {
+            self.lost.push(text);
+            return;
+        }
+        self.running = Some(t);
+        self.reached.push(text);
     }
 
     fn send(&mut self, text: &str) {
@@ -302,12 +386,12 @@ impl Shell {
     }
 
     /// The process is to end (`agents/kill`, `agents/stop` with no turn running, the hub's end).
-    fn kill(&mut self, why: KillWhy) {
+    fn kill(&mut self, why: KillWhy) -> Vec<TurnEffect> {
         self.doomed = true;
         if why == KillWhy::User {
             self.killed_by_user = true;
         }
-        self.feed(TurnEvent::Kill { why });
+        self.feed(TurnEvent::Kill { why })
     }
 
     fn exit(&mut self) {
@@ -613,7 +697,9 @@ impl Core for KillShell {
             }
             KillEv::Deliver => s.deliver(),
             KillEv::Done => s.done(),
-            KillEv::Kill(why) => s.kill(why),
+            KillEv::Kill(why) => {
+                s.kill(why);
+            }
             KillEv::Exit => {
                 s.close();
                 s.exit();
@@ -666,6 +752,235 @@ fn every_order_a_send_after_the_users_kill_is_refused() {
 #[test]
 fn every_order_a_send_while_the_hub_ends_is_kept() {
     kill_orders(KillWhy::HubEnding);
+}
+
+// ---- the hub's end keeps a prompt that has not reached the agent ----
+
+/// The user sends two prompts; the shell sends each turn's prompt in a step of its own (the turn's task); the agent
+/// answers what it works on; the hub ends (its process group goes), then the process exits.
+#[derive(Clone, Debug)]
+enum SendEv {
+    Send(&'static str),
+    Prompt,
+    Done,
+    HubEnds,
+    Exit,
+}
+skuld::events!(SendEv {
+    Send,
+    Prompt,
+    Done,
+    HubEnds,
+    Exit
+});
+
+struct SendShell(Shell);
+
+impl Core for SendShell {
+    type Event = SendEv;
+
+    fn step(&mut self, ev: SendEv) -> Vec<SendEv> {
+        let s = &mut self.0;
+        match ev {
+            SendEv::Send(t) => s.send(t),
+            SendEv::Prompt => s.send_prompt(),
+            SendEv::Done => s.done(),
+            SendEv::HubEnds => {
+                s.kill(KillWhy::HubEnding);
+            }
+            SendEv::Exit => {
+                s.close();
+                s.exit();
+            }
+        }
+        Vec::new()
+    }
+}
+
+fn check_send(q: &SendShell, _: &[SendEv]) -> Result<(), String> {
+    let s = &q.0;
+    s.settled()?;
+    // the next start finds every prompt that did not reach the agent in the queue on disk (`after_step` holds the
+    // disk to the core's queue)
+    if !s.lost.is_empty() {
+        return Err(format!(
+            "{:?} sent to the agent the hub's end was ending: lost",
+            s.lost
+        ));
+    }
+    if let Some((t, text)) = &s.unsent {
+        return Err(format!(
+            "turn {t} ({text}) never reached the agent and is not queued"
+        ));
+    }
+    // (a prompt sent after the exit is refused: its sender keeps it)
+    let mut seen = s.reached.clone();
+    seen.extend(s.core.queue().texts());
+    seen.extend(s.refused.iter().cloned());
+    seen.sort();
+    let mut sent = s.sent.clone();
+    sent.sort();
+    if seen != sent {
+        return Err(format!(
+            "sent {sent:?}; reached the agent {:?}, queued {:?}, refused {:?}",
+            s.reached,
+            s.core.queue().texts(),
+            s.refused
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn every_order_the_hubs_end_keeps_a_prompt_that_has_not_reached_the_agent() {
+    let mut p = Partial::new();
+    p.source("user", vec![SendEv::Send("u1"), SendEv::Send("u2")]);
+    p.source("turn", vec![SendEv::Prompt, SendEv::Prompt]);
+    p.source("agent", vec![SendEv::Done, SendEv::Done]);
+    p.source("hub", vec![SendEv::HubEnds, SendEv::Exit]);
+    let r = every_order(
+        &p,
+        Bound::default(),
+        || SendShell(Shell::with_gap()),
+        check_send,
+    );
+    assert_eq!(r.mode, Mode::Exhaustive);
+    assert_eq!(r.orders, 2_520);
+}
+
+// ---- a delivered peer message a user's kill discards goes back to the store's queue ----
+
+/// The user sends a prompt; the hub's delivery (`deliver::pass`) finds the session free and marks the peer's message
+/// `sending`, prompts it (a turn may have started in between: it is queued; a refusal puts it back), then marks it
+/// `delivered`; the agent answers what it works on; the user kills the session, then its process exits.
+#[derive(Clone, Debug)]
+enum DeliverEv {
+    Send(&'static str),
+    Offer,
+    Give,
+    Mark,
+    Done,
+    Kill,
+    Exit,
+}
+skuld::events!(DeliverEv {
+    Send,
+    Offer,
+    Give,
+    Mark,
+    Done,
+    Kill,
+    Exit
+});
+
+/// The message's state in the store.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Msg {
+    Queued,
+    Sending,
+    Delivered,
+}
+
+struct DeliverShell {
+    s: Shell,
+    msg: Msg,
+    /// The session took the message's prompt (`prompt_keyed` answered).
+    given: bool,
+}
+
+const MESSAGE_KEY: &str = "message:1";
+
+impl Core for DeliverShell {
+    type Event = DeliverEv;
+
+    fn step(&mut self, ev: DeliverEv) -> Vec<DeliverEv> {
+        match ev {
+            DeliverEv::Send(t) => self.s.send(t),
+            DeliverEv::Offer => {
+                if self.msg == Msg::Queued && self.s.core.is_free() {
+                    self.msg = Msg::Sending;
+                }
+            }
+            DeliverEv::Give => {
+                if self.msg == Msg::Sending {
+                    self.given = self.s.prompt_keyed(
+                        "p1",
+                        Origin::Peer("w".into()),
+                        true,
+                        Some(MESSAGE_KEY),
+                    );
+                    if !self.given {
+                        // `messages::unsend`
+                        self.msg = Msg::Queued;
+                    }
+                }
+            }
+            // `messages::delivered`: only a message still `sending` (a kill may have put it back)
+            DeliverEv::Mark => {
+                if self.given && self.msg == Msg::Sending {
+                    self.msg = Msg::Delivered;
+                }
+            }
+            DeliverEv::Done => self.s.done(),
+            DeliverEv::Kill => {
+                // what the kill discards that the store gave the session goes back to `queued` (`deliver::put_back`)
+                for e in self.s.kill(KillWhy::User) {
+                    if let TurnEffect::Discard(items) = e
+                        && items.iter().any(|i| i.key.as_deref() == Some(MESSAGE_KEY))
+                    {
+                        self.msg = Msg::Queued;
+                    }
+                }
+            }
+            DeliverEv::Exit => {
+                self.s.close();
+                self.s.exit();
+            }
+        }
+        Vec::new()
+    }
+}
+
+fn check_deliver(d: &DeliverShell, _: &[DeliverEv]) -> Result<(), String> {
+    let s = &d.s;
+    s.settled()?;
+    let ran = s.started.iter().any(|(_, t)| t == "p1");
+    // delivered: its prompt ran; else the store still has it queued for the next pass (the user's kill discards the
+    // session's own queue)
+    match d.msg {
+        Msg::Delivered if !ran => Err(format!(
+            "the message is delivered, but its prompt never ran (queued {:?} when the user killed the session)",
+            s.core.queue().texts()
+        )),
+        Msg::Queued if ran => Err("the message ran and is queued again".into()),
+        Msg::Sending => Err("the message is left sending".into()),
+        _ => Ok(()),
+    }
+}
+
+#[test]
+fn every_order_a_delivered_message_a_kill_discards_is_queued_again() {
+    let mut p = Partial::new();
+    let user = p.source("user", vec![DeliverEv::Send("u1")]);
+    p.source(
+        "delivery",
+        vec![DeliverEv::Offer, DeliverEv::Give, DeliverEv::Mark],
+    );
+    let agent = p.source("agent", vec![DeliverEv::Done, DeliverEv::Done]);
+    p.source("killer", vec![DeliverEv::Kill, DeliverEv::Exit]);
+    p.before((user, 0), (agent, 0));
+    let r = every_order(
+        &p,
+        Bound::default(),
+        || DeliverShell {
+            s: Shell::new(),
+            msg: Msg::Queued,
+            given: false,
+        },
+        check_deliver,
+    );
+    assert_eq!(r.mode, Mode::Exhaustive);
+    assert_eq!(r.orders, 560);
 }
 
 // ---- a held permission is answered or cancelled once ----
@@ -831,7 +1146,9 @@ impl Core for EndShell {
                     s.feed(TurnEvent::PermissionAsked { request, turn });
                 }
             }
-            EndEv::End(Ending::Kill(why), 0) => s.kill(why),
+            EndEv::End(Ending::Kill(why), 0) => {
+                s.kill(why);
+            }
             EndEv::End(Ending::Kill(_), _) => {
                 s.close();
                 s.exit();

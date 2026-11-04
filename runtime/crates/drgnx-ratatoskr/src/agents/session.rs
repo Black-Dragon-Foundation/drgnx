@@ -149,6 +149,9 @@ struct State {
     tool_ended: bool,
     /// Entries before this index are in the transcript file.
     flushed: usize,
+    /// The user entry of a turn whose prompt has not reached the agent: it and what follows stay out of the
+    /// transcript file until it does (the hub's end puts such a turn back in the queue and drops its entries).
+    unsent_at: Option<usize>,
     /// The step running, and the steps closed since the last drain.
     cur: Option<OpenStep>,
     stash: Option<OpenStep>,
@@ -216,6 +219,7 @@ impl State {
             core: TurnCore::new(),
             tool_ended: false,
             flushed: 0,
+            unsent_at: None,
             cur: None,
             stash: None,
             last_mid: None,
@@ -336,7 +340,16 @@ impl State {
                     continue;
                 }
                 TurnEffect::StartTurn { item, .. } => {
+                    self.unsent_at = Some(self.entries.len());
                     self.begin_turn(item);
+                    continue;
+                }
+                TurnEffect::Prompt { .. } => {
+                    self.unsent_at = None;
+                    continue;
+                }
+                TurnEffect::PutBack { .. } => {
+                    self.undo_turn();
                     continue;
                 }
                 _ => continue,
@@ -375,6 +388,20 @@ impl State {
         }
         self.open = None;
         self.step_begin(StepClass::Think, None);
+    }
+
+    /// The turn whose prompt never reached the agent is undone: its entries (none of them in the transcript file) and
+    /// its open step go; the prompt is back in the queue.
+    fn undo_turn(&mut self) {
+        let Some(at) = self.unsent_at.take() else {
+            return;
+        };
+        self.entries.truncate(at);
+        self.dirty.retain(|i| *i < at);
+        self.tools.retain(|_, i| *i < at);
+        self.open = None;
+        self.cur = None;
+        self.stash = None;
     }
 
     fn push(&mut self, kind: EntryType, rest: Map<String, Value>) -> usize {
@@ -2127,14 +2154,18 @@ impl Session {
         }
     }
 
-    /// The entries not yet in the transcript file, written (redacted) now.
+    /// The entries not yet in the transcript file, written (redacted) now; a turn not yet sent to the agent waits.
     fn flush_transcript(&self) {
         let Some(store) = &self.store else { return };
         let fresh: Vec<(u64, Entry)> = {
             let mut st = lock(&self.state);
-            let from = st.flushed.min(st.entries.len());
-            st.flushed = st.entries.len();
-            st.entries[from..]
+            let to = st
+                .unsent_at
+                .unwrap_or(st.entries.len())
+                .min(st.entries.len());
+            let from = st.flushed.min(to);
+            st.flushed = to;
+            st.entries[from..to]
                 .iter()
                 .enumerate()
                 .map(|(i, e)| ((from + i) as u64, e.clone()))
@@ -2145,14 +2176,12 @@ impl Session {
         }
     }
 
-    /// The held queue and the pause, kept for a restart.
+    /// The held queue and the pause, kept for a restart.  Written under the state's lock: two writes from different
+    /// tasks (a turn's end, the hub's end) land in the order of the states they read, so the file ends as the last.
     fn persist_queue(&self) {
         let Some(store) = &self.store else { return };
-        let (q, paused) = {
-            let st = lock(&self.state);
-            (st.core.queue().clone(), st.core.paused())
-        };
-        if let Err(e) = store.save_queue(&self.id, &q, paused) {
+        let st = lock(&self.state);
+        if let Err(e) = store.save_queue(&self.id, st.core.queue(), st.core.paused()) {
             tracing::warn!(sid = self.id, "queue not kept: {e}");
         }
     }
@@ -2181,7 +2210,7 @@ impl Session {
         }
         for e in s.fx {
             match e {
-                TurnEffect::StartTurn { item, .. } => self.start_turn(item),
+                TurnEffect::StartTurn { turn, item } => self.start_turn(turn, item),
                 TurnEffect::CancelTurn => {
                     let _ = self.conn.cancel(&self.acp);
                 }
@@ -2900,7 +2929,18 @@ impl Session {
     pub(crate) async fn end(self: &Arc<Self>, kill: bool) {
         // no turn starts now, and nobody answers what it asked
         let stepped = lock(&self.state).turn_step(TurnEvent::Kill { why: KillWhy::User });
+        let dropped: Vec<Queued> = stepped
+            .fx
+            .iter()
+            .filter_map(|e| match e {
+                TurnEffect::Discard(items) => Some(items.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
         self.reply_cancelled(stepped);
+        // a message the store gave this session and that never ran waits in the store again, for its next session
+        super::deliver::put_back(&self.writer, &dropped).await;
         let _ = self.conn.cancel(&self.acp);
         let grace = if kill { Duration::ZERO } else { STOP_GRACE };
         draugr::kill_group(self.conn.pid(), grace, &draugr::RealSignaller).await;
@@ -2965,18 +3005,28 @@ impl Session {
         self.perform(fx);
     }
 
-    /// Turn ITEM began (its entry and step are in the state): its prompt goes to the agent.
-    fn start_turn(self: &Arc<Self>, item: Queued) {
+    /// Turn TURN of ITEM began (its entry and step are in the state): its prompt goes to the agent.
+    fn start_turn(self: &Arc<Self>, turn: u64, item: Queued) {
         self.wait_refusals.store(0, Ordering::Relaxed);
         self.persist_queue();
         self.flush_transcript();
         self.changed();
-        tokio::spawn(self.clone().turn(item));
+        tokio::spawn(self.clone().turn(turn, item));
     }
 
     /// One turn of ITEM, and what follows it: the stop entry, the steps closed, the transcript written, the next
-    /// queued prompt unless a Stop or a pause holds it.
-    async fn turn(self: Arc<Self>, item: Queued) {
+    /// queued prompt unless a Stop or a pause holds it.  The prompt goes only if the turn is still to send (the core's
+    /// `Sending` step, under the state's lock): the hub's end may have put it back in the queue since it began.
+    async fn turn(self: Arc<Self>, turn: u64, item: Queued) {
+        let send = lock(&self.state)
+            .turn_step(TurnEvent::Sending { turn })
+            .fx
+            .contains(&TurnEffect::Prompt { turn });
+        if !send {
+            return;
+        }
+        // its entry is the agent's now: in the transcript file too
+        self.flush_transcript();
         let block = json!({"type": "text", "text": item.origin.frame(&item.text)});
         let blocks = serde_json::from_value(json!([block])).unwrap_or_default();
         let out = self.conn.prompt(&self.acp, blocks, None).await;
@@ -3084,12 +3134,16 @@ impl Session {
     }
 
     /// The hub ends: the transcript written, the agent's process group ended, the queue left as it is on disk for
-    /// the next start.
+    /// the next start, with a turn whose prompt has not reached the agent back at its front.
     pub(crate) async fn shutdown(self: &Arc<Self>) {
         let stepped = lock(&self.state).turn_step(TurnEvent::Kill {
             why: KillWhy::HubEnding,
         });
+        let put_back = stepped.fx.contains(&TurnEffect::Persist);
         self.reply_cancelled(stepped);
+        if put_back {
+            self.persist_queue();
+        }
         self.flush_transcript();
         draugr::kill_group(
             self.conn.pid(),

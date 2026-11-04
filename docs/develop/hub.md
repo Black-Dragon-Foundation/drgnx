@@ -829,7 +829,10 @@ resume, the tick goes on from the store with the same workers, and the wakes sti
   queue and transcript do not hold the `[job ID finished` prompt, one of a job that is gone is dropped, and a finished
   job of a live session with no row and no such prompt (the hub died between its result and the row) is woken.
 - **A message is `sending` before its prompt is queued**; at the next start (`deliver::recover`) a `sending` one whose
-  prompt the session holds is marked `read`, else it is `queued` again: delivered once across a crash.
+  prompt the session holds is marked `read`, else it is `queued` again: delivered once across a crash. The delivery
+  marks it `delivered` and `read` only while it is still `sending`; a message whose prompt was queued behind a turn
+  and discarded by the user's kill (`agents/kill`, or `agents/stop` with no turn running) goes back to `queued`
+  (`deliver::put_back`), so its recipient's next session gets it.
 - **A queued message stays in the store** and is delivered after the sessions are back
   ([coordination.md](coordination.md#delivery-the-hub)); a prompt queued in a session is read back from its
   `<sid>.queue.json`.
@@ -1221,9 +1224,10 @@ event and performs what it answers; the entries, steps and transcript stay with 
 - Events: `Send` (a prompt, with the profile's steer mode and `if_free`), `PromptDone` (cancelled or not),
   `PromptFailed` (closed or not), `Stop` (or the pause after a tool call), `Kill` (`agents/kill`, the hub ending, or
   a Stop's deadline for its turn), `PermissionAsked` (with the turn it came in), `PermissionAnswered`,
-  `ToolCompleted`, `EmitTick`, `QueueEdited` (deliver, unqueue, requeue, the freshness gate's notice), `Changed` and
-  `Exited`.
-- Effects: start a turn with the next prompt, end it (waiting on a job, or held), tell the agent to cancel, arm a
+  `ToolCompleted`, `EmitTick`, `QueueEdited` (deliver, unqueue, requeue, the freshness gate's notice), `Changed`,
+  `Exited`, and `Sending` (the turn's task is about to hand its prompt to the agent).
+- Effects: start a turn with the next prompt, send its prompt now (`Prompt`) or put it back (`PutBack`, the hub's
+  end), name what a user's kill drops (`Discard`), end it (waiting on a job, or held), tell the agent to cancel, arm a
   Stop's deadline, end the process group, hold a permission request for the user, answer it or answer it cancelled,
   keep the queue on disk, announce a change, arm and send the event pair; and the refusals (exited, not free, no
   turn running, no such queued prompt, no such request).
@@ -1236,6 +1240,11 @@ What the core keeps:
 - A prompt sent while the process is being ended for good (`agents/kill`, `agents/stop` with no turn running, a
   Stop's deadline) is refused as exited, and the session is not free then: the sender keeps it (a peer's message goes
   back to `queued`, a wake stays pending). A prompt sent while the hub ends waits on disk for the next start.
+- A turn's prompt reaches the agent only through its `Sending` step. When the hub ends between a turn's start and that
+  step, the turn is put back: its prompt goes back to the front of the queue, which is kept on disk, and the shell
+  drops the turn's entries (the transcript file holds a turn's entries only once its prompt was sent). When the
+  user's kill comes there instead, the prompt is dropped with the queue, and `Discard` names both, so a peer's
+  message among them goes back to `queued` in the store.
 - A turn ends once, at its agent's answer. A second Stop of a stopped turn changes nothing; a Stop's deadline ends
   the process only if the turn it stopped still runs.
 - Each permission request is answered or answered cancelled once. A Stop, the pause after a tool call, the turn's end,
@@ -1257,7 +1266,11 @@ again after it.
 - a user who answers and stops, an agent that asks twice, completes a tool call and answers, a pause after the tool
   call, and the cockpit settling a card;
 - two senders, an agent that asks in each turn, the matrix deciding late, and the user's kill, the hub's end or a
-  crash.
+  crash;
+- two senders, the turn's task that sends each prompt in a step of its own, an agent, and the hub's end, then the exit
+  (every prompt reached the agent or waits in the queue on disk);
+- a sender, the hub's delivery (`sending`, the prompt, the mark), an agent, and the user's kill, then the exit (a
+  message marked delivered ran; one the kill discarded is `queued` again).
 
 After every step the tests check that a turn starts only when none runs, once per prompt, never while the queue is
 held or on a process being ended; that a turn ends at its agent's answer; that a request waits only while its turn

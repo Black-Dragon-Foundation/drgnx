@@ -180,6 +180,38 @@ pub fn unsend(tx: &mut WTx<'_>, id: i64) -> Result<(), CoordError> {
     Ok(())
 }
 
+/// A `sending` message's prompt is the session's (the hub's delivery): `delivered`, then `read`, stamped `now`.  False
+/// when it is no longer `sending` (a kill put it back to `queued`), and then nothing changes.
+pub fn delivered(tx: &mut WTx<'_>, id: i64, now: f64) -> Result<bool, CoordError> {
+    let state: Option<String> =
+        match tx
+            .sql()
+            .query_row("select state from message where id = ?1", [id], |r| {
+                r.get(0)
+            }) {
+            Ok(s) => s,
+            Err(urdr::SqliteError::QueryReturnedNoRows) => None,
+            Err(e) => return Err(e.into()),
+        };
+    if state.as_deref() != Some("sending") {
+        return Ok(false);
+    }
+    mark(tx, id, "delivered", now)?;
+    mark(tx, id, "read", now)
+}
+
+/// A message given to a session whose prompt never ran (the user's kill discarded it) goes back to `queued`, its
+/// delivery stamps cleared: the next pass gives it again.  A message acted on, held or retracted stays as it is.
+pub fn undeliver(tx: &mut WTx<'_>, id: i64) -> Result<(), CoordError> {
+    let by = tx.id();
+    tx.sql().execute(
+        "update message set state = 'queued', delivered = null, read = null, tx = ?2 \
+         where id = ?1 and state in ('sending', 'delivered', 'read')",
+        (id, by),
+    )?;
+    Ok(())
+}
+
 /// Take message `id` back (Task 24): only while it is `queued` (nobody was given it yet); it becomes `retracted` and
 /// is never delivered.  `(whether it was taken back, the state it has now)`, or `None` for no such message.
 pub fn retract(tx: &mut WTx<'_>, id: i64) -> Result<Option<(bool, String)>, CoordError> {
@@ -375,6 +407,42 @@ mod tests {
             .execute("update message set state = 'held' where id = ?1", [id])
             .unwrap();
         assert!(!mark(&mut tx, id, "acted", 4.0).unwrap());
+    }
+
+    #[test]
+    fn a_delivery_marks_only_a_sending_message_and_a_kill_queues_it_again() {
+        let mut c = db7();
+        let mut tx = tx_of(&mut c);
+        let SendResult::Ok { id, .. } = send(&mut tx, msg("a", "b", "x"), 1.0).unwrap() else {
+            panic!("held")
+        };
+        let row = |tx: &mut WTx<'_>| -> (String, Option<f64>, Option<f64>) {
+            tx.sql()
+                .query_row(
+                    "select state, delivered, read from message where id = ?1",
+                    [id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .unwrap()
+        };
+        // queued: no delivery marks it
+        assert!(!delivered(&mut tx, id, 2.0).unwrap());
+        assert_eq!(row(&mut tx).0, "queued");
+        assert!(sending(&mut tx, id).unwrap());
+        // put back before the mark: the mark then finds it queued and leaves it
+        undeliver(&mut tx, id).unwrap();
+        assert!(!delivered(&mut tx, id, 3.0).unwrap());
+        assert_eq!(row(&mut tx), ("queued".into(), None, None));
+        // put back after the mark: queued again, its stamps gone
+        assert!(sending(&mut tx, id).unwrap());
+        assert!(delivered(&mut tx, id, 4.0).unwrap());
+        assert_eq!(row(&mut tx), ("read".into(), Some(4.0), Some(4.0)));
+        undeliver(&mut tx, id).unwrap();
+        assert_eq!(row(&mut tx), ("queued".into(), None, None));
+        // acted on: it stays
+        assert!(mark(&mut tx, id, "acted", 5.0).unwrap());
+        undeliver(&mut tx, id).unwrap();
+        assert_eq!(row(&mut tx).0, "acted");
     }
 
     #[test]
