@@ -1,5 +1,6 @@
 ;;; drgnx-session-keep-or-quit-test.el --- live: drgnx PATH reaches the daemon; the last window closes, it stays or quits -*- lexical-binding: t -*-
 ;; test-class: cond
+;; test-pattern: handshake
 ;; Scenario session-keep-or-quit: a daemon session of config drgnx.  `bin/drgnx open' reaches it (its socket as
 ;; DRGNX_SERVER_NAME), a file and a folder with a space and an accent; then the last window's close button (the
 ;; `delete-frame' event's binding) in keep-running mode → the daemon stays; in quit mode → it is gone.
@@ -58,9 +59,9 @@ request returns before drgnx may quit."
           ;; Keep running (the default): the last window closes, drgnx stays.
           (drgnx-session-live--eval sess "(drgnx-session-set-keep-running t)")
           (drgnx-session-live--close-last-window sess)
-          (let ((deadline (+ (float-time) 10)))
-            (while (and (< (float-time) deadline) (/= 0 (drgnx-session-live--gui-count sess)))
-              (drgnx-test-pause 0.1 "between two looks: the loop waits on its condition")))
+          (condition-case nil
+              (drgnx-test-wait (lambda () (= 0 (drgnx-session-live--gui-count sess))) :secs 10 :what "the last window to close")
+            (ert-test-failed nil))
           (should (= 0 (drgnx-session-live--gui-count sess)))
           (drgnx-test-pause 1 "the daemon may not quit with its last window")
           (should (drgnx-session-live--alive-p sess))
@@ -69,9 +70,9 @@ request returns before drgnx may quit."
           (should (eql 0 (plist-get (drgnx-ui-new-frame sess) :exit)))
           (drgnx-session-live--eval sess "(drgnx-session-set-keep-running nil)")
           (drgnx-session-live--close-last-window sess)
-          (let ((deadline (+ (float-time) 10)))
-            (while (and (< (float-time) deadline) (drgnx-session-live--alive-p sess))
-              (drgnx-test-pause 0.2 "between two looks: the loop waits on its condition")))
+          (condition-case nil
+              (drgnx-test-wait (lambda () (not (drgnx-session-live--alive-p sess))) :secs 10 :what "drgnx to quit")
+            (ert-test-failed nil))
           (should-not (drgnx-session-live--alive-p sess)))
       (drgnx-ui-stop name)
       (delete-directory root t))))

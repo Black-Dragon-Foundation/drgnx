@@ -1,5 +1,6 @@
 ;;; drgnx-terminal-test.el --- live: drgnx's terminal (eat running zsh) in a GUI session (config=drgnx) -*- lexical-binding: t -*-
 ;; test-class: cond
+;; test-pattern: handshake
 ;; Real keys in a headless session.  The terminal runs zsh with a temp ZDOTDIR whose .zshrc sources etc/shell/drgnx.zsh,
 ;; the checkout's bin/ first on PATH (never an installed drgnx), and git's identity from the environment; HOME is the
 ;; runner's temp home.  eat is loaded read-only from the user's packages (DRGNX_USER_ELPA).
@@ -23,10 +24,9 @@
 
 (defun drgnx-live-term--until (sess form seconds)
   "FORM's value in SESS once it is non-nil, polled for up to SECONDS; nil if it never is."
-  (let ((deadline (+ (float-time) seconds)) v)
-    (while (and (not (setq v (drgnx-live-term--q sess form))) (< (float-time) deadline))
-      (drgnx-test-pause 0.1 "between two looks: the loop waits on its condition"))
-    v))
+  (condition-case nil
+      (drgnx-test-wait (lambda () (drgnx-live-term--q sess form)) :secs seconds :what (format "%s in the session" form))
+    (ert-test-failed nil)))
 
 (defun drgnx-live-term--setup-form (zdotdir)
   "The session's setup: eat on `load-path', module tools/terminal-eat run, zsh with ZDOTDIR, the checkout's bin/ first."
@@ -157,9 +157,11 @@
       (should (equal (expand-file-name ".git/COMMIT_EDITMSG" repo)
                      (drgnx-live-term--q sess "(buffer-file-name (get-buffer \"COMMIT_EDITMSG\"))")))
       (drgnx-live-term--q sess "(with-current-buffer \"COMMIT_EDITMSG\" (goto-char (point-min)) (insert \"first\") (save-buffer) (server-edit) t)")
-      (let ((deadline (+ (float-time) 10)) subject)
-        (while (and (not (equal (setq subject (funcall git "log" "-1" "--format=%s")) "first")) (< (float-time) deadline))
-          (drgnx-test-pause 0.2 "between two looks: the loop waits on its condition"))
+      (let (subject)
+        (condition-case nil
+            (drgnx-test-wait (lambda () (equal (setq subject (funcall git "log" "-1" "--format=%s")) "first"))
+                             :secs 10 :what "git's commit")
+          (ert-test-failed nil))
         (should (equal subject "first"))))))
 
 (ert-deftest drgnx-live/terminal-keys-split ()

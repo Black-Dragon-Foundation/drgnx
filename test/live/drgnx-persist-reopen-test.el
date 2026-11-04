@@ -1,5 +1,6 @@
 ;;; drgnx-persist-reopen-test.el --- live: a daemon that keeps running restores the layout when a window opens again -*- lexical-binding: t -*-
 ;; test-class: cond
+;; test-pattern: handshake
 ;; The keep-running case: the last window closes, the daemon stays, `emacsclient -c' brings the layout back.
 (require 'ert)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
@@ -50,10 +51,13 @@
                                 (plist-get (drgnx-ui-call sess "(drgnx-uitest--json (list :v (prin1-to-string (file-exists-p (drgnx-persist--file)))))") :v)))))
             ;; A new window: same split, same files, same Explorer folders.
             (should (eql 0 (plist-get (drgnx-ui-new-frame sess) :exit)))
-            (let ((deadline (+ (float-time) 15)) after)
-              (while (and (< (float-time) deadline)
-                          (not (equal (butlast (setq after (drgnx-persist-reopen--eval sess drgnx-persist-reopen--layout))) (butlast before))))
-                (drgnx-test-pause 0.2 "between two looks: the loop waits on its condition"))
+            (let (after)
+              (condition-case nil
+                  (drgnx-test-wait (lambda ()
+                                     (equal (butlast (setq after (drgnx-persist-reopen--eval sess drgnx-persist-reopen--layout)))
+                                            (butlast before)))
+                                   :secs 15 :what "the reopened window's layout")
+                (ert-test-failed nil))
               (should (equal (butlast after) (butlast before)))
               ;; The two halves of the split come back to the pixel (M12a-14: window-state-put alone swapped 230/234).
               (should (= (length (car (last after))) (length (car (last before)))))

@@ -1,7 +1,9 @@
 ;;; drgnx-modules-test.el --- live: modules driven by real keys in a GUI session (config=drgnx) -*- lexical-binding: t -*-
 ;; test-class: cond
+;; test-pattern: handshake
 (require 'ert)
 (require 'drgnx-ui)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 
 (defmacro drgnx-live-mod--with (sess &rest body)
   "BODY with SESS a session editing an elisp file (VS Code key profile)."
@@ -50,14 +52,17 @@
     ;; Its module sets up at startup, so the view exists when keys are sent back to back.
     (drgnx-ui-measure sess (list (list :keys "C-S-f") (list :type "list") (list :keys "RET")))
     (should (eq (drgnx-live-mod--q sess "(drgnx-wb-sidebar-view)") 'search))
-    (should (drgnx-live-mod--q sess "(let ((d (+ (float-time) 10)) (v (get-buffer drgnx-replace-buffer-name)))
-                                       (while (and (not (with-current-buffer v (and (not (drgnx-replace--busy-p))
-                                                                                     (seq-some (lambda (m) (string-suffix-p \"/f.el\" (plist-get m :file))) drgnx-replace--matches))))
-                                                   (< (float-time) d))
-                                         (accept-process-output nil 0.05))
-                                       (with-current-buffer v (and (equal (drgnx-replace--text 'find) \"list\")
-                                                                         (seq-some (lambda (m) (string-suffix-p \"/f.el\" (plist-get m :file))) drgnx-replace--matches)
-                                                                         t)))"))
+    ;; the search runs in the session: its matches are asked for until they are in
+    (drgnx-test-wait (lambda ()
+                       (drgnx-live-mod--q sess "(with-current-buffer (get-buffer drgnx-replace-buffer-name)
+                                                  (and (not (drgnx-replace--busy-p))
+                                                       (seq-some (lambda (m) (string-suffix-p \"/f.el\" (plist-get m :file))) drgnx-replace--matches)
+                                                       t))"))
+                     :secs 10 :what "the search's matches")
+    (should (drgnx-live-mod--q sess "(with-current-buffer (get-buffer drgnx-replace-buffer-name)
+                                       (and (equal (drgnx-replace--text 'find) \"list\")
+                                            (seq-some (lambda (m) (string-suffix-p \"/f.el\" (plist-get m :file))) drgnx-replace--matches)
+                                            t))"))
     (should (equal (drgnx-live-mod--q sess "drgnx-wb-unrouted") nil))))
 
 (defun drgnx-live-mod--elpa ()

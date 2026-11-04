@@ -1,5 +1,6 @@
 ;;; tmux-test.el --- tty tier: drgnx inside tmux — keys, copy, focus, colour, what is reported -*- lexical-binding: t -*-
 ;; test-class: cond
+;; test-pattern: handshake
 ;; Run under `drgnx-run-ert-batch' (temp HOME and XDG dirs).  Every test has two private tmux servers: the outer
 ;; one the harness always has (the terminal) and an inner one (`:nested' LINES = its config) with Emacs in it,
 ;; as in real use.  Keys, copies and the screen go through the outer one.  The inner tmux's defaults are tmux's
@@ -41,17 +42,19 @@
     (should (string-match-p "inner" (drgnx-tty-session-eval s '(getenv "TMUX"))))
     (should (stringp (drgnx-tty-session-eval s '(plist-get (drgnx-tty-tmux-options) :version))))))
 
-(defconst drgnx-tty-tmux-test--busy
-  '(progn
+(defun drgnx-tty-tmux-test--busy (started)
+  "A form, in the inner Emacs: F12 runs `kx-busy', 30 s of busy Lisp that writes the file STARTED once it is inside
+the loop and sets `kx-returned' when it ends."
+  `(progn
      (defvar kx-returned nil)
      (defun kx-busy ()
        (interactive)
        (let ((t0 (float-time)))
-         (unwind-protect (while (< (- (float-time) t0) 30))
+         (unwind-protect (progn (write-region "" nil ,started nil 'silent)
+                                (while (< (- (float-time) t0) 30)))
            (setq kx-returned (float-time)))))
      (push (list (cons t (let ((m (make-sparse-keymap))) (define-key m [f12] #'kx-busy) m))) emulation-mode-map-alists)
-     t)
-  "A form, in the inner Emacs: F12 runs `kx-busy', 30 s of busy Lisp that sets `kx-returned' when it ends.")
+     t))
 
 (defun drgnx-tty-tmux-test--caps (sess)
   (drgnx-tty-session-eval sess '(terminal-parameter nil 'drgnx-tty-caps)))
@@ -80,10 +83,11 @@
     (drgnx-tty-session-send s "a")
     (drgnx-tty-session-wait s '(memq 'self-insert-command kx-commands))
     ;; C-g stops busy Lisp
-    (drgnx-tty-session-eval s drgnx-tty-tmux-test--busy)
-    (drgnx-tty-session-key s "<f12>" 'mok)
-    ;; DEFERRED: a settle (Emacs is blocked in the program: nothing to ask it), until the hand-back is visible
-    (drgnx-test-pause 0.5 "settle: the keys are handed back, nothing to ask")
+    (let ((started (expand-file-name "busy-started" (plist-get s :run))))
+      (drgnx-tty-session-eval s (drgnx-tty-tmux-test--busy started))
+      (drgnx-tty-session-key s "<f12>" 'mok)
+      ;; Emacs is blocked in the loop and cannot be asked: the loop says it is in
+      (drgnx-test-wait (lambda () (file-exists-p started)) :secs 10 :what "the busy Lisp to start"))
     (let ((sent (float-time)))
       (drgnx-tty-session-key s "C-g")
       (should (< (- (drgnx-tty-session-wait s 'kx-returned 10) sent) 2)))))

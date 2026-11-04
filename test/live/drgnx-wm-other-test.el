@@ -1,5 +1,6 @@
 ;;; drgnx-wm-other-test.el --- live: move and restore across monitors under KWin; niri on its one output -*- lexical-binding: t -*-
 ;; test-class: cond
+;; test-pattern: handshake
 ;; Each test runs only in its compositor's tier, in the window managers' image (test/container/Containerfile.wm):
 ;; `DRGNX_TEST_SELECTOR='"^drgnx-wm/"' bin/drgnx test --container --ui --compositor kwin' (or `niri'); elsewhere
 ;; it is skipped.  The sessions are daemons of the `drgnx' config with monitors of 1280x800 in a temp state root;
@@ -21,10 +22,9 @@
 
 (defun drgnx-wm-other--until (thunk &optional seconds)
   "Call THUNK every 0.2 s until it returns non-nil (that value) or SECONDS (default 8) pass (nil)."
-  (let ((deadline (+ (float-time) (or seconds 8))) r)
-    (while (and (not (setq r (funcall thunk))) (< (float-time) deadline))
-      (drgnx-test-pause 0.2 "between two looks: the loop waits on its condition"))
-    r))
+  (condition-case nil
+      (drgnx-test-wait thunk :secs (or seconds 8) :what "the condition of a look")
+    (ert-test-failed nil)))
 
 (defmacro drgnx-wm-other--in-root (root &rest body)
   "BODY with ROOT a temp directory that is the harness state root (and where saved layouts go)."

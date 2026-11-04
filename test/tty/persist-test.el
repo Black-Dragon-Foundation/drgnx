@@ -1,5 +1,6 @@
 ;;; persist-test.el --- tty tier: a terminal session never writes the desktop layout -*- lexical-binding: t -*-
 ;; test-class: cond
+;; test-pattern: handshake
 ;; Run under `drgnx-run-ert-batch' (temp HOME and XDG dirs); every test has its own tmux server.
 (require 'ert)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
@@ -33,11 +34,12 @@
         ;; C-x C-c
         (drgnx-tty-session-key s "C-x")
         (drgnx-tty-session-key s "C-c")
-        (let ((deadline (+ (float-time) 20)))
-          (while (and (drgnx-tty-session--pane-alive-p s) (< (float-time) deadline))
-            (when (drgnx-tty-session-find s "\\((yes or no)\\|(y or n)\\)")        ; whatever Emacs asks before it exits
-              (drgnx-tty-session-send s "yes\r"))
-            (drgnx-test-pause 0.1 "between two looks: the loop waits on its condition")))
+        (drgnx-test-wait (lambda ()
+                           (or (not (drgnx-tty-session--pane-alive-p s))
+                               (progn (when (drgnx-tty-session-find s "\\((yes or no)\\|(y or n)\\)")        ; whatever Emacs asks before it exits
+                                        (drgnx-tty-session-send s "yes\r"))
+                                      nil)))
+                         :secs 20 :what "Emacs to exit")
         (should-not (drgnx-tty-session--pane-alive-p s))
         (should (equal (with-temp-buffer (insert-file-contents-literally file) (buffer-string)) bytes))
         (should (equal (file-attribute-modification-time (file-attributes file)) mtime))))))

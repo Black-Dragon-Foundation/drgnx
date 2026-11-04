@@ -1,5 +1,6 @@
 ;;; fallback-test.el --- tty tier: the fallback layer — Alt+Shift where it is free, F6 then the key always -*- lexical-binding: t -*-
 ;; test-class: cond
+;; test-pattern: handshake
 ;; Run under `drgnx-run-ert-batch' (temp HOME and XDG dirs); every test has its own tmux server.  A legacy client
 ;; is a VTE (Ptyxis, GNOME Terminal): TERM=xterm-256color, VTE_VERSION, and VTE's answer to XTVERSION (the test
 ;; gives it: tmux would answer as tmux).  Keys are the bytes such a terminal sends: Alt+Shift+F is ESC F, F6 is
@@ -81,8 +82,10 @@
                        (how-many "This terminal can't send Ctrl\\+Shift keys: use Alt\\+Shift (or F6 then the key)\\. drgnx doctor has details\\."
                                  (point-min) (point-max))))
              (before (progn (drgnx-tty-session-wait s `(> ,count 0))
-                            ;; DEFERRED: a settle for the baseline, until each client's hint can be counted apart
-                            (drgnx-test-pause 1.5 "settle: every hint already on its way arrives")
+                            ;; a client's hint is a timer (the frame's `tty-fallback-hint' key) until it is said: the
+                            ;; baseline is taken when no frame has one
+                            (drgnx-tty-session-wait s '(cl-notany (lambda (f) (drgnx-timer-active-p (cons 'tty-fallback-hint f)))
+                                                                  (frame-list)))
                             (drgnx-tty-session-eval s count))))
         (drgnx-tty-fallback-test--legacy s)
         (drgnx-test-pause 1.5 "the second VTE client may get no hint")
