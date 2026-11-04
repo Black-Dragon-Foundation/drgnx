@@ -21,4 +21,4 @@ RUN bash /tmp/nidhogg.sh fedora-45 && rm /tmp/nidhogg.sh
 COPY childframe-packages.eld childframe-elpa.sh /tmp/childframe/
 RUN echo "dc2200b525282f1543664979adec716bb922d82eec3087b89f199f89d3580be0  /tmp/childframe/childframe-packages.eld" | sha256sum -c - \
     && sh /tmp/childframe/childframe-elpa.sh /opt/childframe-elpa && rm -r /tmp/childframe
-ENV DRGNX_EMACS=/opt/nidhogg/31.1-nidhogg.4/bin/nidhogg
+ENV DRGNX_EMACS=/opt/nidhogg/31.1-nidhogg.5/bin/nidhogg

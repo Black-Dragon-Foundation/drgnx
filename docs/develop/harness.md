@@ -1041,8 +1041,7 @@ deleted or replaced by a plan) are listed in `test/class-exempt.eld` as `(FILE :
 
 `test/fixtures/peer-fixture.el` gives a test a process whose input it writes itself (`drgnx-test-peer-make`,
 `-write`, `-calls`, `-close`): the filter runs once per write, after the write has fully arrived; no child process, no
-sleep, no timer. It is Nidhogg's `nidhogg-test-peer`; an image whose Nidhogg pin lacks it loads
-`test/fixtures/nidhogg-test-peer-compat.el`, a copy that goes when the pin moves. `scripted-process.el` (a `sh` on a
+sleep, no timer. It is Nidhogg's `nidhogg-test-peer` (Nidhogg 31.1-nidhogg.5 and later ship it). `scripted-process.el` (a `sh` on a
 FIFO) stays for tests that need a real child's exit.
 
 ### Held children
