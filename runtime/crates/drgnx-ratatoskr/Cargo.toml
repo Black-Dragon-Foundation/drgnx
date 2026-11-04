@@ -54,3 +54,4 @@ zeroize.workspace = true  # the line that carries provider keys to the backend i
 # other crate turning it on)
 urdr = { path = "../urdr", version = "0.1.0", features = ["test-hooks"] }
 tempfile.workspace = true
+skuld = { path = "../skuld" }  # every order of a pure core (the connection's)
