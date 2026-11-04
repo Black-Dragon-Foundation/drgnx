@@ -135,6 +135,9 @@
                           ;; a seed that ran no test is red too
                           "s/^drgnx: [0-9]+ test files.*: ([0-9]+) tests,.*/\\1/p")
       ;; a red under chaos is a race: never rerun, never let off
+      ;; after the seeds, the gated files once per swapped pair of lines across connections
+      (drgnx-ci-test--has job "bin/drgnx test --orders --container")
+      (should (< (string-search "for seed in 1 2 3; do" job) (string-search "bin/drgnx test --orders" job)))
       (should-not (string-search "DRGNX_TEST_RERUN" job))
       (should-not (string-search "selector: ${{" job)))
     ;; the fixture reads the variable the job sets

@@ -261,6 +261,30 @@ names would not fit in the environment) and `DRGNX_TEST_ORDER_OUT=FILE` (write t
 what the bisect's Emacsen are given; they are not for people (the runner reads them first and removes them from the
 environment of the tests, so a runner a test starts is a normal one).
 
+## Orders (`bin/drgnx test --orders`)
+
+A test in the delivery gate (`docs/develop/harness.md`, "The delivery gate") fixes the order of the hub's lines for
+each connection, and across connections the order its schedule gives. `--orders` asks whether the test also holds when
+two lines released one after the other, from different connections, arrive the other way round.
+
+```sh
+bin/drgnx test --orders [--container]                       # every gated file
+bin/drgnx test --orders --only test/unit/delivery-gate-test.el
+DRGNX_TEST_GATE_SWAP=3 DRGNX_TEST_ONLY=test/unit/delivery-gate-test.el bin/drgnx test   # one K again
+```
+
+A gated file is one whose `;; test-pattern:` line (an exact line within the first 15) names `gated`. For each such
+file the command runs the file once with `DRGNX_TEST_GATE_SWAP=0`; each `drgnx-test-gated` run then prints
+`drgnx-gate-swap-pairs: N`, the number of adjacent pairs of released lines from different connections it met, and the
+command goes on with K = 1 to the largest N of the file, one run per K. It stops at the first red, prints the run's
+output and the K, and exits 1. A file that prints no count is red too (a run that swapped nothing proves nothing).
+
+K counts the pairs of one `drgnx-test-gated` body, from 0. Lines are paired within one release (one wait's batch, or
+`drgnx-test-deliver-all`): the gate never holds a line past the end of the batch, so a client that waits for it is not
+stalled, and a pair never spans a wait of the client. A connection's own lines never change order. `DRGNX_TEST_ONLY`
+(a file, relative to the checkout) narrows any `bin/drgnx test` run to that file. CI runs `--orders` in the
+`hub-chaos` job ([Hub chaos](ci.md#hub-chaos)).
+
 ## The host lease
 
 Every worktree on a machine runs tests, and a dozen runs at once starve each other (and the machine). `bin/drgnx lease`

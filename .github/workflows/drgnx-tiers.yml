@@ -197,6 +197,15 @@ jobs:
             fi
           done
           [ -z "$red" ] || { echo "red under hub chaos seed(s):$red"; exit 1; }
+      # after the seeds, whatever they said: each gated file once per swapped pair of lines across connections (--orders)
+      # stops at its first red and names the K; DRGNX_TEST_GATE_SWAP=K replays it. No rerun
+      - name: The gated files, one run per swapped pair of lines across connections (no rerun)
+        if: ${{ !cancelled() }}
+        working-directory: drgnx
+        env:
+          DRGNX_CONTAINER: podman
+          DRGNX_TEST_NO_TIMING: "1"
+        run: bin/drgnx test --orders --container
 
   # The GUI tier: real Nidhogg sessions under headless mutter, in test/container/Containerfile.gui; the live tests that
   # need the hub start their own against the run's Ratatoskr (test/no-skip.eld)

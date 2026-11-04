@@ -293,5 +293,46 @@ answer read after it is dropped (the forget race, every run).  The other order i
       (should seen-b)
       (should-not editor-b))))
 
+;;;; The swap: DRGNX_TEST_GATE_SWAP=K
+
+(defun drgnx-delivery-gate-test--connect-run (swap)
+  "Connect the client in the gate with DRGNX_TEST_GATE_SWAP=SWAP (nil: unset); (TRANSCRIPT . PAIRS), PAIRS nil unswapped."
+  (let ((process-environment (if swap (cons (format "DRGNX_TEST_GATE_SWAP=%d" swap) process-environment)
+                               process-environment))
+        transcript pairs)
+    (drgnx-delivery-gate-test--with-hub
+      (drgnx-test-gated nil
+        (drgnx-hub-connect)
+        (drgnx-test-deliver-all)
+        (setq transcript (drgnx-test-gate-transcript) pairs (drgnx-test-gate-swap-pairs))))
+    (cons (mapcar #'drgnx-delivery-gate-test--shape transcript) pairs)))
+
+(ert-deftest drgnx-delivery-gate/swap-k-swaps-one-cross-connection-pair ()
+  "With K past the last pair nothing is swapped and the run counts its pairs; with K = 0 the same lines arrive with two
+adjacent ones from different connections exchanged."
+  (let* ((plain (drgnx-delivery-gate-test--connect-run 99999))
+         (pairs (cdr plain)) (base (car plain))
+         (swapped (car (drgnx-delivery-gate-test--connect-run 0)))
+         (diff (cl-loop for a in base for b in swapped for i from 0 unless (equal a b) collect i)))
+    (should (> pairs 0))
+    (should (= (length base) (length swapped)))
+    (should (equal (sort (copy-sequence (mapcar #'prin1-to-string base)) #'string<)
+                   (sort (copy-sequence (mapcar #'prin1-to-string swapped)) #'string<)))
+    (should (= (length diff) 2))
+    (should (= (cadr diff) (1+ (car diff))))
+    (should (equal (nth (car diff) base) (nth (cadr diff) swapped)))
+    (should (equal (nth (cadr diff) base) (nth (car diff) swapped)))
+    (should-not (eq (car (nth (car diff) base)) (car (nth (cadr diff) base))))))
+
+(ert-deftest drgnx-delivery-gate/swap-never-reorders-one-connection ()
+  "Whatever pair is swapped, each connection's lines arrive in the order they do unswapped."
+  (let* ((plain (drgnx-delivery-gate-test--connect-run 99999))
+         (per-conn (lambda (tr name) (seq-filter (lambda (e) (eq (car e) name)) tr))))
+    (should (> (cdr plain) 0))
+    (dotimes (k (cdr plain))
+      (let ((swapped (car (drgnx-delivery-gate-test--connect-run k))))
+        (dolist (name '(call-1 sub-1))
+          (should (equal (funcall per-conn (car plain) name) (funcall per-conn swapped name))))))))
+
 (provide 'delivery-gate-test)
 ;;; delivery-gate-test.el ends here

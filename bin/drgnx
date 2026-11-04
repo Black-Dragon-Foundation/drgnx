@@ -304,10 +304,59 @@ test_batch_emacs() { # [FUNCTION ARGS…] — SIGPIPE ignored, as the hub runs (
        NIDHOGG_TEST_CLOCK="${NIDHOGG_TEST_CLOCK:-1}" \
        "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
        -l "$here/harness/run-ert.el" \
-       -f "$fn" "${@:-${DRGNX_TEST_DIR:-$here/test/unit}}"
+       -f "$fn" "${@:-${DRGNX_TEST_ONLY:-${DRGNX_TEST_DIR:-$here/test/unit}}}"
 }
 
 test_batch() { run_in_tmp test_batch_emacs; }
+
+orders_files() { # the test files whose `;; test-pattern:' line (an exact line in the first 15, as drgnx-run-ert--file-patterns reads it) names `gated'
+  local f
+  while IFS= read -r f; do
+    if head -n 15 "$f" | grep -Eq '^;; test-pattern: ((orders|gated|handshake) )*gated( (orders|gated|handshake))*$'; then echo "$f"; fi
+  done < <(find "$here/test" -name '*-test.el' | LC_ALL=C sort)
+}
+
+test_orders() { # [--only FILE] [--container] — each gated file once per K of DRGNX_TEST_GATE_SWAP: the K-th adjacent pair of
+  # released lines from different connections swapped (test/fixtures/delivery-gate-fixture.el); the first red stops the run with its K
+  local only="" container=() files=() f k pairs log out
+  while (($#)); do
+    case "$1" in
+      --only) [[ -n "${2:-}" && "${2:0:1}" != - ]] || { echo "usage: drgnx test --orders [--only FILE] [--container]" >&2; return 2; }
+              only="$2"; shift ;;
+      --container|--podman) container=("$1") ;;
+      *) echo "usage: drgnx test --orders [--only FILE] [--container]" >&2; return 2 ;;
+    esac
+    shift
+  done
+  if [ -n "$only" ]; then
+    only="$(cd "$(dirname "$only")" 2>/dev/null && pwd -P)/$(basename "$only")"
+    while IFS= read -r f; do [ "$f" = "$only" ] && files+=("$f"); done < <(orders_files)
+    [ ${#files[@]} -gt 0 ] || { echo "drgnx: test --orders: $only is not a gated file (no ';; test-pattern: … gated' line)" >&2; return 2; }
+  else
+    while IFS= read -r f; do files+=("$f"); done < <(orders_files)
+    [ ${#files[@]} -gt 0 ] || { echo "drgnx: test --orders: no gated files" >&2; return 2; }
+  fi
+  log="$(mktemp "${TMPDIR:-/tmp}/drgnx-orders.XXXXXX")"
+  for f in "${files[@]}"; do
+    f="${f#"$here"/}"; pairs=""; k=0
+    while [ -z "$pairs" ] || [ "$k" -lt "$pairs" ]; do
+      echo "drgnx: orders: $f, K=$k${pairs:+ of $pairs}" >&2
+      if ! DRGNX_TEST_GATE_SWAP="$k" DRGNX_TEST_ONLY="$f" "$here/bin/drgnx" test ${container[@]+"${container[@]}"} >"$log" 2>&1; then
+        cat "$log"; rm -f -- "$log"
+        echo "drgnx: orders: RED at K=$k in $f; replay: DRGNX_TEST_GATE_SWAP=$k DRGNX_TEST_ONLY=$f bin/drgnx test${container:+ ${container[*]}}" >&2
+        return 1
+      fi
+      if [ -z "$pairs" ]; then   # the first run says how many pairs there are: the largest count any test of the file met
+        out="$(sed -nE 's/.*drgnx-gate-swap-pairs: ([0-9]+).*/\1/p' "$log" | sort -n | tail -n 1)"
+        [ -n "$out" ] || { cat "$log"; rm -f -- "$log"; echo "drgnx: orders: $f printed no pair count (a vacuous run proves nothing)" >&2; return 1; }
+        pairs="$out"; echo "drgnx: orders: $f has $pairs pairs" >&2
+      fi
+      k=$((k + 1))
+    done
+  done
+  rm -f -- "$log"
+  echo "drgnx: orders: green, ${#files[@]} gated file(s)" >&2
+}
 
 test_tty_emacs() { # the terminal tier (test/tty): each file in an Emacs of its own, SIGPIPE ignored as test_batch_emacs;
   # its sessions run in private tmux servers (harness/drgnx-tty-session.el, which start Emacs with `env -i'); this Emacs
@@ -416,7 +465,7 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=
   # the run-control variables go in with their values when set: a narrowed run stays narrow, the files run at once
   # (CI: the runner's cores), a failed file reruns once, wall clock is skipped, the perf run's results and factors,
   # the sessions' monitor size, count and scales
-  local v pass=(DRGNX_TEST_SELECTOR DRGNX_TEST_JOBS DRGNX_TEST_RERUN DRGNX_TEST_NO_TIMING DRGNX_TEST_FROZEN DRGNX_WORK_DB_GATE NIDHOGG_TEST_CLOCK NIDHOGG_TEST_SEED DRGNX_TEST_HUB_CHAOS DRGNX_TEST_SHUFFLE DRGNX_TEST_AUDIT DRGNX_TEST_AUDIT_ALL DRGNX_TEST_AUDIT_FAIL DRGNX_PERF_RESULTS
+  local v pass=(DRGNX_TEST_SELECTOR DRGNX_TEST_JOBS DRGNX_TEST_RERUN DRGNX_TEST_NO_TIMING DRGNX_TEST_FROZEN DRGNX_WORK_DB_GATE NIDHOGG_TEST_CLOCK NIDHOGG_TEST_SEED DRGNX_TEST_HUB_CHAOS DRGNX_TEST_GATE_SWAP DRGNX_TEST_ONLY DRGNX_TEST_SHUFFLE DRGNX_TEST_AUDIT DRGNX_TEST_AUDIT_ALL DRGNX_TEST_AUDIT_FAIL DRGNX_PERF_RESULTS
                 DRGNX_PERF_CPU_FACTOR DRGNX_PERF_WORKLOADS DRGNX_PERF_MACHINE DRGNX_UITEST_SETTLE_SCALE DRGNX_UI_TEST_TIMEOUT
                 DRGNX_UI_SIZE DRGNX_UI_MONITORS DRGNX_UI_SCALE DRGNX_UI_SCALES)
   for v in "${pass[@]}"; do
@@ -830,6 +879,7 @@ cmd_test() {
       else
         test_batch
       fi ;;
+    --orders) shift; test_orders "$@" ;;
     --stress) shift; test_stress "$@" ;;
     --preflight) shift; test_preflight "$@" ;;
     --install) shift; test_install "$@" ;;
@@ -952,6 +1002,7 @@ lease_test_class() { # ARGS of `drgnx test` → light (the batch tier), heavy (t
   case "${1:-}" in
     --ui|--tty|--scenario|--bench|--soak|--day|--container|--podman|--install|--bootstrap|--stress|--preflight) echo heavy ;;
     --perf) case " $* " in *" --ab "*|*" --ab-env "*) echo exclusive ;; *) echo heavy ;; esac ;;
+    --orders) case " $* " in *" --container "*|*" --podman "*) echo heavy ;; *) echo light ;; esac ;;
     *) echo light ;;
   esac
 }

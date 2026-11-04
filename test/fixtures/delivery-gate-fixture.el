@@ -8,6 +8,10 @@
 ;; (drgnx-test-gate-held NAME)           what the gate holds for NAME: its lines, then `:eof'
 ;; (drgnx-test-gate-transcript)          what the gate delivered so far: ((NAME . LINE-or-:eof) ...)
 ;;
+;; DRGNX_TEST_GATE_SWAP=K                the K-th adjacent pair of released lines from different connections is handed
+;;                                       over the other way round; each gated run prints `drgnx-gate-swap-pairs: N'
+;;                                       (`bin/drgnx test --orders' loops K over 0..N-1)
+;;
 ;; The client side of the `gated' pattern.  The hub (Ratatoskr with `drgnx-test-gate-hub-args') serves the client's
 ;; lines in the order the gate stamped them (`__seq') and holds the writes no request made; this gate holds what the hub
 ;; sends, split into whole lines per connection, and hands each line to the client's own filter when the schedule says
@@ -41,6 +45,9 @@
 (defvar drgnx-test-gate--opening nil "Inside `drgnx-hub--open': (EVENTS).")
 (defvar drgnx-test-gate--control nil "The gate's own connection to the hub, for the barrier and the clock.")
 (defvar drgnx-test-gate--real-status nil "Non-nil: `process-status' says what Emacs knows, held ends included.")
+(defvar drgnx-test-gate--swap nil "K of `DRGNX_TEST_GATE_SWAP=K' for this run, or nil.")
+(defvar drgnx-test-gate--swap-pairs 0 "The pairs of lines from different connections met so far (only counted with a swap).")
+(defvar drgnx-test-gate--lag nil "The released line the swap holds back: (CONN . LINE), or nil.")
 
 (defvar drgnx-test--active)
 (defvar drgnx-test--core)
@@ -211,6 +218,50 @@ an end from the hub is held after that connection's lines."
 
 ;;;; Delivery
 
+(defun drgnx-test-gate--swap-env ()
+  "K of `DRGNX_TEST_GATE_SWAP=K' (a number), or nil when it is unset."
+  (let ((v (getenv "DRGNX_TEST_GATE_SWAP")))
+    (and v (string-match-p "\\`[0-9]+\\'" v) (string-to-number v))))
+
+(defun drgnx-test-gate--hand (c line)
+  "Hand LINE to C's filter, as the transcript's next delivery.  Nothing when the client deleted C meanwhile."
+  (unless (drgnx-test-gate--conn-deleted c)
+    (let* ((name (drgnx-test-gate--conn-name c)) (drgnx-test-gate--releasing name))
+      (push (cons name (string-trim-right line "\n")) drgnx-test-gate--transcript)
+      (when (drgnx-test-gate--conn-filter c)
+        (funcall (drgnx-test-gate--conn-filter c) (drgnx-test-gate--conn-proc c) line)))))
+
+(defun drgnx-test-gate--flush ()
+  "Hand over the line the swap holds back, if any."
+  (when drgnx-test-gate--lag
+    (let ((held drgnx-test-gate--lag))
+      (setq drgnx-test-gate--lag nil)
+      (drgnx-test-gate--hand (car held) (cdr held)))))
+
+(defun drgnx-test-gate--emit (c line)
+  "A line released for C.  With `DRGNX_TEST_GATE_SWAP' set, each line waits for the next one released in the same batch:
+the two make a pair when they are on different connections, the K-th pair (counted from 0) is handed over the other
+way round.  A line is never handed over after a later line of its own connection."
+  (let ((prev drgnx-test-gate--lag))
+    (cond ((null drgnx-test-gate--swap) (drgnx-test-gate--hand c line))
+          ((or (null prev) (eq (car prev) c))
+           (setq drgnx-test-gate--lag (cons c line))
+           (when prev (drgnx-test-gate--hand (car prev) (cdr prev))))
+          (t (let ((n drgnx-test-gate--swap-pairs))
+               (cl-incf drgnx-test-gate--swap-pairs)
+               (if (= n drgnx-test-gate--swap)
+                   ;; PREV stays held while C's line goes first, so a later line of PREV's connection still follows it
+                   (progn (drgnx-test-gate--hand c line)
+                          (when (eq drgnx-test-gate--lag prev)
+                            (setq drgnx-test-gate--lag nil)
+                            (drgnx-test-gate--hand (car prev) (cdr prev))))
+                 (setq drgnx-test-gate--lag (cons c line))
+                 (drgnx-test-gate--hand (car prev) (cdr prev))))))))
+
+(defun drgnx-test-gate-swap-pairs ()
+  "How many pairs of lines from different connections the swap has met so far (nil when `DRGNX_TEST_GATE_SWAP' is unset)."
+  (and drgnx-test-gate--swap drgnx-test-gate--swap-pairs))
+
 (defun drgnx-test-gate--deliver (c upto)
   "Hand C's held items, the first through position UPTO, to the client: a line as one call of its filter, the end
 as its sentinel.  A delete by the client on the way drops the rest."
@@ -219,16 +270,16 @@ as its sentinel.  A delete by the client on the way drops the rest."
       (let* ((item (pop (drgnx-test-gate--conn-queue c))) (proc (drgnx-test-gate--conn-proc c))
              (name (drgnx-test-gate--conn-name c)) (drgnx-test-gate--releasing name))
         (if (eq (car item) :eof)
-            (progn (setf (drgnx-test-gate--conn-eof c) nil)
+            (progn (drgnx-test-gate--flush)
+                   (setf (drgnx-test-gate--conn-eof c) nil)
                    (push (cons name :eof) drgnx-test-gate--transcript)
                    (when (drgnx-test-gate--conn-sentinel c)
                      (funcall (drgnx-test-gate--conn-sentinel c) proc (nth 1 item))))
           (let ((line (nth 1 item)) (id (drgnx-test-gate--item-id item)))
-            (push (cons name (string-trim-right line "\n")) drgnx-test-gate--transcript)
             (when id
               (setf (drgnx-test-gate--conn-sent c) (cl-remove id (drgnx-test-gate--conn-sent c) :key #'car :test #'equal)))
             (when (equal (drgnx-test-gate--item-event item) "challenge") (setf (drgnx-test-gate--conn-challenged c) t))
-            (when (drgnx-test-gate--conn-filter c) (funcall (drgnx-test-gate--conn-filter c) proc line))))))))
+            (drgnx-test-gate--emit c line)))))))
 
 (defun drgnx-test-gate--implicit-done-p (entry)
   (let ((c (car entry)) (key (cdr entry)))
@@ -296,6 +347,7 @@ Whether anything was released."
     (while (and go (not (drgnx-test-gate--paused-p)))
       (setq go (or (drgnx-test-gate--release-implicit) (drgnx-test-gate--release-step)))
       (when go (setq any t)))
+    (drgnx-test-gate--flush)
     any))
 
 ;;;; Waits inside the body
@@ -544,6 +596,7 @@ wrote from a task without an origin (`unnamed' > 0) or a step cannot be met."
           (dolist (c drgnx-test-gate--conns)
             (let ((n (length (drgnx-test-gate--conn-queue c))))
               (when (> n 0) (drgnx-test-gate--deliver c (1- n)))))
+          (drgnx-test-gate--flush)
           (setq done (drgnx-test-gate--settled-p mark)))))
     m))
 
@@ -620,11 +673,15 @@ wrote from a task without an origin (`unnamed' > 0) or a step cannot be met."
         (drgnx-test-gate--conns nil) (drgnx-test-gate--counts nil) (drgnx-test-gate--seq 0)
         (drgnx-test-gate--transcript nil) (drgnx-test-gate--failure nil) (drgnx-test-gate--raw drgnx-test--accept)
         (drgnx-test-gate--opening nil) (drgnx-test-gate--control nil) (drgnx-test-gate--releasing nil)
+        (drgnx-test-gate--swap (drgnx-test-gate--swap-env)) (drgnx-test-gate--swap-pairs 0) (drgnx-test-gate--lag nil)
         (ok nil))
     (unwind-protect
         (progn (dolist (a drgnx-test-gate--advice) (advice-add (nth 0 a) (nth 1 a) (nth 2 a)))
                (funcall body)
-               (setq ok t))
+               (drgnx-test-gate--flush)
+               (setq ok t)
+               ;; `bin/drgnx test --orders' reads the count to know how many K there are
+               (when drgnx-test-gate--swap (message "drgnx-gate-swap-pairs: %d" drgnx-test-gate--swap-pairs)))
       (drgnx-test-gate--restore)
       (dolist (a drgnx-test-gate--advice) (advice-remove (nth 0 a) (nth 2 a)))
       (when (processp drgnx-test-gate--control) (delete-process drgnx-test-gate--control)))
