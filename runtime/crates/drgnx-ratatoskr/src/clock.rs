@@ -216,10 +216,32 @@ pub async fn advance(d: Duration) -> Advanced {
     v.advance(d).await
 }
 
-/// The origin of the task running now (test-hooks): its [`spawn`] name, none outside such a task.
+/// The origin of the task running now (test-hooks): its [`spawn`] name and the task's spawn ordinal (one count across
+/// every task this process spawned), none outside such a task.
 #[cfg(feature = "test-hooks")]
-pub(crate) fn origin_name() -> Option<String> {
-    virt::origin_name()
+pub(crate) fn origin() -> Option<(String, u64)> {
+    virt::origin()
+}
+
+/// F, a wait on something outside the hub's clock that ends by itself (a child's exit, a blocking thread, another
+/// process's answer).  With the `test-hooks` feature, on the virtual clock, a [`spawn`]ed task inside one is waited for
+/// by a barrier, and named `waiting` when it stays inside ([`settle_real`]).
+#[inline]
+pub(crate) async fn real<F: Future>(f: F) -> F::Output {
+    #[cfg(feature = "test-hooks")]
+    let f = virt::real(f);
+    f.await
+}
+
+/// Wait, at most WITHIN of real time, until no [`spawn`]ed task whose origin OK does not list is inside a [`real`] wait
+/// or in the poll that left one; then the origins of the tasks still inside one (sorted, once each): those OK lists,
+/// and after WITHIN the others.  Empty on the real clock (test-hooks).
+#[cfg(feature = "test-hooks")]
+pub(crate) async fn settle_real(within: Duration, ok: &[String]) -> Vec<String> {
+    match virt::current() {
+        Some(v) => v.settle_real(within, ok).await,
+        None => vec![],
+    }
 }
 
 /// F, or [`Elapsed`] once D of real time has passed, whatever clock the hub runs on: only for a limit on a wait a
@@ -267,6 +289,7 @@ mod virt {
     use std::collections::{BTreeMap, BTreeSet, HashSet};
     use std::future::Future;
     use std::pin::Pin;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
     use std::task::{Context, Poll, Waker};
     use std::time::{Duration, SystemTime};
@@ -290,9 +313,13 @@ mod virt {
         let _ = GLOBAL.set(Arc::new(Virtual::new()));
     }
 
-    pub(super) fn origin_name() -> Option<String> {
-        TASK.try_with(|t| t.origin.as_str().to_string()).ok()
+    pub(super) fn origin() -> Option<(String, u64)> {
+        TASK.try_with(|t| (t.origin.as_str().to_string(), t.ordinal))
+            .ok()
     }
+
+    /// The next task's spawn ordinal.
+    static ORDINALS: AtomicU64 = AtomicU64::new(0);
 
     pub(super) fn current() -> Option<Arc<Virtual>> {
         #[cfg(test)]
@@ -309,6 +336,8 @@ mod virt {
     /// A task [`super::spawn`] started.  Lock order: the clock's state, then a task's flags.
     pub(super) struct Task {
         origin: Origin,
+        /// Its place in the order the process spawned tasks in: one origin's tasks are told apart by it.
+        ordinal: u64,
         flags: Mutex<Flags>,
     }
 
@@ -323,6 +352,8 @@ mod virt {
         /// Wakes the clock gave it, and the count its last finished poll began after.
         fired: u64,
         seen: u64,
+        /// The [`super::real`] waits it is inside.
+        real: u32,
     }
 
     impl Task {
@@ -361,6 +392,8 @@ mod virt {
         /// During an advance: the tasks the woken ones spawned.
         born: Vec<Arc<Task>>,
         advancing: bool,
+        /// Tasks that went into a real wait, until a settle sees them out of it and its poll.
+        real: Vec<Arc<Task>>,
     }
 
     pub(crate) struct Virtual {
@@ -385,6 +418,7 @@ mod virt {
                     fresh: Vec::new(),
                     born: Vec::new(),
                     advancing: false,
+                    real: Vec::new(),
                 }),
                 changed: Notify::new(),
                 one_at_a_time: tokio::sync::Mutex::new(()),
@@ -605,6 +639,70 @@ mod virt {
         .await
     }
 
+    /// Inside a [`super::real`] wait: counted in its task's flags while it lasts.
+    struct InReal {
+        clock: Arc<Virtual>,
+        task: Arc<Task>,
+    }
+
+    impl Drop for InReal {
+        fn drop(&mut self) {
+            self.task.flags().real -= 1;
+            self.clock.changed.notify_waiters();
+        }
+    }
+
+    pub(super) async fn real<F: Future>(f: F) -> F::Output {
+        let (Some(clock), Ok(task)) = (current(), TASK.try_with(Arc::clone)) else {
+            return f.await;
+        };
+        {
+            let mut st = clock.state();
+            task.flags().real += 1;
+            if !st.real.iter().any(|t| Arc::ptr_eq(t, &task)) {
+                st.real.push(task.clone());
+            }
+        }
+        let _inside = InReal { clock, task };
+        f.await
+    }
+
+    impl Virtual {
+        pub(super) async fn settle_real(&self, within: Duration, ok: &[String]) -> Vec<String> {
+            let give_up = tokio::time::Instant::now() + within;
+            loop {
+                let note = self.changed.notified();
+                let mut note = std::pin::pin!(note);
+                note.as_mut().enable();
+                let waited: Vec<Arc<Task>> = {
+                    let mut st = self.state();
+                    // inside a real wait, or in the poll that left one
+                    st.real.retain(|t| {
+                        let f = t.flags();
+                        !f.ended && (f.real > 0 || f.polling)
+                    });
+                    st.real
+                        .iter()
+                        .filter(|t| !ok.iter().any(|o| o == t.origin.as_str()))
+                        .cloned()
+                        .collect()
+                };
+                if waited.is_empty() || tokio::time::timeout_at(give_up, note).await.is_err() {
+                    let st = self.state();
+                    let mut inside: Vec<String> = st
+                        .real
+                        .iter()
+                        .filter(|t| t.flags().real > 0)
+                        .map(|t| t.origin.as_str().to_string())
+                        .collect();
+                    inside.sort();
+                    inside.dedup();
+                    return inside;
+                }
+            }
+        }
+    }
+
     pub(super) fn spawn<F>(origin: Origin, f: F) -> tokio::task::JoinHandle<F::Output>
     where
         F: Future + Send + 'static,
@@ -612,6 +710,7 @@ mod virt {
     {
         let task = Arc::new(Task {
             origin,
+            ordinal: ORDINALS.fetch_add(1, Ordering::SeqCst),
             flags: Mutex::default(),
         });
         let scoped = TASK.scope(task.clone(), f);

@@ -286,6 +286,8 @@ impl Pending {
 const KEEP_JOBS: usize = 200;
 const KEEP_DAYS: f64 = 14.0;
 const KEEP_GRACE_S: f64 = 3600.0;
+/// How long a stop waits for the job's end to be recorded.
+const STOP_WAIT: Duration = Duration::from_secs(5);
 
 /// The jobs the hub runs.
 pub struct Runner {
@@ -419,8 +421,13 @@ impl Runner {
     }
 
     /// End a running job (its group gets SIGTERM, then SIGKILL) and answer its row once it ended.
-    pub async fn stop(&self, id: &str) -> Option<ExecRow> {
-        self.inner.get()?.clone().stop(id).await
+    pub async fn stop(&self, id: &str) -> Result<ExecRow, Error> {
+        self.inner
+            .get()
+            .ok_or_else(|| no_job(id))?
+            .clone()
+            .stop(id)
+            .await
     }
 
     /// N lines of the job's log from line FROM (0-based), read up to the last of them only; bytes that are not UTF-8
@@ -891,7 +898,8 @@ impl Inner {
         crate::clock::spawn("exec:watch", async move {
             // a container job's proxy answers for as long as the job runs
             let _proxy = proxy;
-            me.clone().watch(&id, Some(child)).await;
+            // a real wait (the child's end): a test's barrier waits for a job that ends, and names one that does not
+            crate::clock::real(me.clone().watch(&id, Some(child))).await;
             drop(permit);
             me.pump();
         });
@@ -1066,14 +1074,14 @@ impl Inner {
         }
     }
 
-    async fn stop(self: Arc<Self>, id: &str) -> Option<ExecRow> {
-        let meta = self.meta(id)?;
+    async fn stop(self: Arc<Self>, id: &str) -> Result<ExecRow, Error> {
+        let meta = self.meta(id).ok_or_else(|| no_job(id))?;
         if meta.queued && self.end(id).is_none() {
             // still waiting for a slot: it never starts
             let _ = std::fs::write(self.dir(id).join("why"), "stopped");
             self.queue.lock().unwrap().retain(|q| q != id);
             self.finish(id).await;
-            return self.row(id);
+            return self.row(id).ok_or_else(|| no_job(id));
         }
         if self.end(id).is_none() {
             // subscribed before the first look, so an end after it is an event this receiver holds
@@ -1085,7 +1093,7 @@ impl Inner {
                 let _ = draugr::kill_group(p, Duration::from_secs(2), &draugr::RealSignaller).await;
             }
             // the watcher records the end, then says so: wait for that, at most 5 s on the hub's clock
-            let _ = crate::clock::timeout(Duration::from_secs(5), async {
+            let ended = crate::clock::timeout(STOP_WAIT, async {
                 while self.end(id).is_none() {
                     if let Err(tokio::sync::broadcast::error::RecvError::Closed) =
                         events.recv().await
@@ -1093,10 +1101,29 @@ impl Inner {
                         break;
                     }
                 }
-            })
-            .await;
+            });
+            // test-hooks: the virtual clock stands still while the sequencer serves this step, so real time bounds
+            // the wait too, and a wait that runs out fails the request, naming the job
+            #[cfg(feature = "test-hooks")]
+            if crate::clock::is_virtual() {
+                if crate::clock::real_timeout(STOP_WAIT, ended).await.is_err() {
+                    tracing::error!(
+                        "job {id}: its end did not come within {STOP_WAIT:?} of real time of the stop"
+                    );
+                    return Err(error(
+                        ErrorCode::Internal,
+                        format!(
+                            "job {id}: its end did not come within {} s of real time of the stop (the hub's clock \
+                             stands still while a request is served)",
+                            STOP_WAIT.as_secs()
+                        ),
+                    ));
+                }
+                return self.row(id).ok_or_else(|| no_job(id));
+            }
+            let _ = ended.await;
         }
-        self.row(id)
+        self.row(id).ok_or_else(|| no_job(id))
     }
 
     /// Watch every job a hub before this one left without a result.
@@ -1118,7 +1145,9 @@ impl Inner {
                 }
                 running.insert(id.clone());
                 let me = self.clone();
-                crate::clock::spawn("exec:watch", async move { me.watch(&id, None).await });
+                crate::clock::spawn("exec:watch", async move {
+                    crate::clock::real(me.watch(&id, None)).await;
+                });
             }
         }
         // jobs that waited for a slot when the last hub ended wait again, oldest first
@@ -1576,9 +1605,7 @@ pub async fn list(f: &Front, _: &Caller, p: ListParams) -> Result<Jobs, Error> {
 pub async fn stop(f: &Front, c: &Caller, p: ById) -> Result<ExecRow, Error> {
     let r = runner(f)?;
     visible(r, c, p.id.as_str())?;
-    r.stop(p.id.as_str())
-        .await
-        .ok_or_else(|| no_job(p.id.as_str()))
+    r.stop(p.id.as_str()).await
 }
 
 pub async fn log(f: &Front, c: &Caller, p: LogParams) -> Result<LogSlice, Error> {
