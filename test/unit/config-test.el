@@ -69,6 +69,25 @@ A file's mistake is a notice (`drgnx-config--notify'): `drgnx-modules', required
 
 ;;;; Definitions
 
+(ert-deftest drgnx-config/the-fixture-keeps-what-a-library-loaded-inside-it-defines ()
+  ;; A library defines its config file once, when it loads, and stays loaded: setting the table back to a snapshot
+  ;; taken before the load made the next test find the feature loaded and its file undefined.
+  (let ((lib (make-temp-file "drgnx-config-lib" nil ".el")))
+    (unwind-protect
+        (progn
+          (with-temp-file lib
+            (insert ";;; -*- lexical-binding: t -*-\n"
+                    "(drgnx-config-define 'drgnx-config-test-lib :file \"lib.eld\" :schema '(plist (:a integer \"A\")))\n"))
+          (drgnx-test-with-config
+            (load lib nil t)
+            (should (drgnx-config-defined-p 'drgnx-config-test-lib))
+            ;; a definition made by the test itself is not a library's
+            (drgnx-config-test--define))
+          (should (drgnx-config-defined-p 'drgnx-config-test-lib))
+          (should-not (drgnx-config-defined-p 'drgnx-config-test)))
+      (drgnx-config-undefine 'drgnx-config-test-lib)
+      (delete-file lib))))
+
 (ert-deftest drgnx-config/define-checks-its-arguments ()
   (drgnx-test-with-config
     (should-error (drgnx-config-test--define :dir 'home))

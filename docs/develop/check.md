@@ -288,7 +288,10 @@ stalled, and a pair never spans a wait of the client. A connection's own lines n
 ## The host lease
 
 Every worktree on a machine runs tests, and a dozen runs at once starve each other (and the machine). `bin/drgnx lease`
-keeps them to what the memory and cores carry, across all checkouts.
+keeps them to what the memory and cores carry, across all checkouts. **The lease is Linux-only, by decision:** it rests
+on `flock` and bash 4's `{fd}>` redirections, which macOS does not ship (bash 3.2), and it exists for a development host
+that runs many worktrees at once, not for a Mac that runs one checkout. There it is off (see "Off" below), with no
+fallback lock, and the lease tests skip on it (`drgnx-lease-test--available`): a statement, not a gap.
 
     bin/drgnx lease light|heavy|exclusive [--wait SECS] -- CMD…
     bin/drgnx lease status
