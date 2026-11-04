@@ -508,6 +508,37 @@ fn vacuous_runs_fail() {
     assert!(msg.contains("source 0 (a) has 2 events"), "{msg}");
 }
 
+/// A hand-written `Events` whose `kind` names a variant `KINDS` does not declare.
+#[derive(Clone, Debug)]
+enum Lax {
+    Declared,
+    Stray,
+}
+
+impl Events for Lax {
+    const KINDS: &'static [&'static str] = &["Declared"];
+    fn kind(&self) -> &'static str {
+        match self {
+            Lax::Declared => "Declared",
+            Lax::Stray => "Stray",
+        }
+    }
+}
+
+#[test]
+fn a_fed_kind_must_be_declared() {
+    let mut p = Partial::new();
+    p.source("a", vec![Lax::Declared, Lax::Stray]);
+    let msg = panic_text(|| {
+        every_order(&p, Bound::default(), rec::<Lax>, |_, _| Ok(()));
+    });
+    assert!(msg.contains("\"Stray\" is not declared"), "{msg}");
+    let msg = panic_text(|| {
+        random_orders(&p, 0..3, rec::<Lax>, |_, _| Ok(()));
+    });
+    assert!(msg.contains("\"Stray\" is not declared"), "{msg}");
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Ab {
     A,

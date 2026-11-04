@@ -1102,6 +1102,7 @@ mod tests {
         type R = ReadHalf<DuplexStream>;
         type W = WriteHalf<DuplexStream>;
 
+        #[doc = "paused clock: only the paused tests of this module dial"]
         fn connect(&self) -> BoxFuture<'static, Result<(Self::R, Self::W), Dial>> {
             let (hub, ctx) = (self.hub.clone(), self.ctx.clone());
             Box::pin(async move {
@@ -1188,7 +1189,7 @@ mod tests {
             if f() {
                 return;
             }
-            tokio::time::sleep(Duration::from_millis(1)).await;
+            tokio::time::advance(Duration::from_millis(1)).await;
         }
         panic!("never: {what}");
     }

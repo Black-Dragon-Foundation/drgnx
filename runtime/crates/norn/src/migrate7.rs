@@ -922,7 +922,7 @@ fn hook(path: &Path, step: &'static str) -> Result<(), Stop> {
         {
             let _ = fs::write(file, b"paused");
             loop {
-                std::thread::sleep(std::time::Duration::from_secs(1));
+                std::thread::park();
             }
         }
     }

@@ -536,7 +536,7 @@ fn is_busy(e: &rusqlite::Error) -> bool {
 }
 
 /// `max(now, previous at)`: a clock stepping back never reorders time.
-fn next_at(last_at: &mut f64, clock: Option<&Clock>) -> f64 {
+pub(super) fn next_at(last_at: &mut f64, clock: Option<&Clock>) -> f64 {
     let now = match clock {
         Some(c) => c(),
         None => SystemTime::now()
