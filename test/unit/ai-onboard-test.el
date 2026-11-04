@@ -1,14 +1,23 @@
 ;;; ai-onboard-test.el --- batch tests: onboarding step 4, AI providers -*- lexical-binding: t -*-
 ;; test-class: cond
+;; test-pattern: gated
 (require 'ert)
 (require 'drgnx-onboard)
 (require 'drgnx-ai-probe)
 (require 'drgnx-exec)
+(require 'drgnx-settings-runtime)
+(require 'drgnx-settings-agents nil t)
+(require 'drgnx-records-review nil t)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/runtime-settings-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/ratatoskr-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/delivery-gate-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/handshake-fixture" drgnx-dir) nil t)
+
+(defvar drgnx-exec--jobs)
+(defvar drgnx-exec--stale)
 
 (defmacro drgnx-ai-onboard-test--with (&rest body)
   "BODY with only provider `o' (Ollama, a mock serving two models and answering chat and fill-in-the-middle)
@@ -300,11 +309,6 @@ with BODY."
          (when (and (> pid 0) (process-attributes pid)) (signal-process pid 'SIGTERM)))
        (delete-directory root t))))
 
-(defun drgnx-ai-onboard-test--hub-running ()
-  "The hub's running jobs, asked of the hub itself (a job another process started is in no cache here)."
-  (seq-filter (lambda (j) (equal (plist-get j :status) "running"))
-              (plist-get (ignore-errors (drgnx-hub-call-sync "exec/list" nil 5)) :jobs)))
-
 (defmacro drgnx-ai-onboard-test--with-mac-jobs (answers &rest body)
   "`drgnx-ai-onboard-test--with-mac', and BODY with the real Ratatoskr serving the jobs (they are the hub's), every
 job stopped at the end."
@@ -481,32 +485,56 @@ job stopped at the end."
 
 (ert-deftest drgnx-ai-onboard/a-real-ctrl-c-stops-the-job ()
   ;; The same with a real SIGINT: a batch Emacs waiting on a job ends on it without unwinding, and its
-  ;; `kill-emacs-hook' entry stops the job.  (`env --default-signal=INT': a background job ignores SIGINT.)  The signal
-  ;; goes as soon as the hub runs the job: the entry is in before the start, and a start not answered yet is waited
-  ;; for; the hub serves the stop although the child left without reading the answers before it.
+  ;; `kill-emacs-hook' entry stops the job.  (`env --default-signal=INT': a background job ignores SIGINT.)  The child
+  ;; parks (test/fixtures/handshake-fixture.el) right after it sent the job's start and before it read the answer: the
+  ;; entry is in before the start, and a start not answered yet is waited for, so the exit stops the job although the
+  ;; child never read the answer on its own.  The test serves the start (the hub's barrier), signals the parked child,
+  ;; and proves the stop was served on the job-ended event the hub sends this Emacs.
   (skip-unless (eql 0 (call-process "env" nil nil nil "--default-signal=INT" "true")))
   (let* ((root (file-name-as-directory (make-temp-file "drgnx-sigint" t)))
          (process-environment (append (list (concat "HOME=" root "home") (concat "DRGNX_CONFIG_DIR=" root "config")
                                             (concat "XDG_STATE_HOME=" root "state") (concat "DRGNX_DATA_DIR=" root "data"))
                                       process-environment))
-         (child nil))
+         (drgnx-hub--presence-sent :unknown) (drgnx-hub-editor-token-hook nil)
+         (drgnx-exec--jobs (make-hash-table :test #'equal)) (drgnx-exec--stale nil)
+         (child nil) (ended nil) (gone nil))
     (unwind-protect
         ;; the jobs are the hub's: the real Ratatoskr serves them, the child finds it by the environment
-        (drgnx-test-with-ratatoskr root
-          (make-directory (concat root "home") t)
-          ;; the job sleeps far longer than any wait below: only the stop can end it while the test waits
-          (setq child (make-process :name "drgnx-sigint" :connection-type 'pipe :noquery t :buffer nil
-                                    :command (list "env" "--default-signal=INT" (expand-file-name invocation-name invocation-directory)
-                                                   "--batch" "-Q" "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-onboard"
-                                                   "--eval" "(drgnx-onboard--job \"Sleeping\" (list \"sleep\" \"3600\"))")
-                                    :sentinel (lambda (p _e) (process-put p :done t))))
-          (should (drgnx-test-wait #'drgnx-ai-onboard-test--hub-running :what "the child's job running"))
-          (signal-process child 'SIGINT)
-          (should (drgnx-test-wait (lambda () (process-get child :done)) :what "the child's exit"))
-          (should (drgnx-test-wait (lambda () (not (drgnx-ai-onboard-test--hub-running))) :what "the job stopped")))
-      (when (and child (process-live-p child)) (signal-process child 'SIGKILL))
-      (drgnx-ai-onboard-test--stop-jobs)
-      (delete-directory root t))))
+        (drgnx-test-with-ratatoskr root :gated t
+                                   (make-directory (concat root "home") t)
+                                   (drgnx-test-gated '((sub-1 :answer "subscribe"))
+                                     (add-hook 'drgnx-hub-event-functions (lambda (event _data) (when (equal event "exec-done") (setq ended t))))
+                                     (drgnx-hub-connect)
+                                     (drgnx-test-wait (lambda () drgnx-hub--events) :what "the subscription")
+                                     ;; the job sleeps far longer than any wait below: only the stop can end it while the test waits.  The
+                                     ;; child connects and settles first, so its start goes out at once; it parks once that is sent
+                                     (setq child (drgnx-test-child-start
+                                                  :name "drgnx-sigint"
+                                                  :command (list "env" "--default-signal=INT" (expand-file-name invocation-name invocation-directory)
+                                                                 "--batch" "-Q" "-L" (expand-file-name "core" drgnx-dir)
+                                                                 "-l" "drgnx-onboard" "-l" "drgnx-exec"
+                                                                 "-l" (expand-file-name "test/fixtures/handshake-fixture.el" drgnx-dir)
+                                                                 "--eval" (concat "(progn"
+                                                                                  " (advice-add 'drgnx-exec-start :before"
+                                                                                  "  (lambda (&rest _) (drgnx-hub-connect)"
+                                                                                  "    (while (not (drgnx-hub-settled-p)) (accept-process-output nil 0.05))))"
+                                                                                  " (advice-add 'drgnx-exec-start :after"
+                                                                                  "  (lambda (&rest _) (drgnx-test-child-announce \"STARTED\")))"
+                                                                                  " (drgnx-onboard--job \"Sleeping\" (list \"sleep\" \"3600\")))"))))
+                                     (drgnx-test-child-await child "STARTED")
+                                     (drgnx-test-deliver-all)        ; the hub has served the start
+                                     (set-process-sentinel child (lambda (p _event) (unless (process-live-p p) (process-put p :done t))))
+                                     ;; the signal is pending in the parked child (blocked on its input) until it reads GO
+                                     (drgnx-test-child-signal child 'SIGINT)
+                                     (drgnx-test-child-go child)
+                                     (drgnx-test-wait (lambda () (process-get child :done)) :what "the child's exit")
+                                     (drgnx-test-deliver-all)        ; the hub has served the stop the exit sent
+                                     (drgnx-test-wait (lambda () ended) :what "the job's end")
+                                     (setq gone (process-get child :done))))
+      (when (and child (process-live-p child)) (delete-process child))
+      (delete-directory root t))
+    (should ended)
+    (should gone)))
 
 (defvar drgnx-ai-onboard-test--job-what nil "The job `drgnx-onboard--job' is waiting on (the test's view).")
 

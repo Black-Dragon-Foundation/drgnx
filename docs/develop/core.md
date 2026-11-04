@@ -91,7 +91,7 @@ next run, so a report with a mistake is not kept aside.
 `drgnx-exec-get` and `drgnx-exec-list` read `drgnx-exec--jobs`, a cache that
 `drgnx-exec-sync` fills from `exec/list` and the `exec-done` events (bounded by `drgnx-exec--keep`; a closed hub
 connection marks it stale, and the next event refreshes it): they never call the hub, so a timer or redisplay may use
-them. The editor calls `drgnx-exec-sync` each time its subscription to the hub is answered (`drgnx-hub--subscribed`)
+them. The editor calls `drgnx-exec-sync` each time its subscription to the hub is answered (`drgnx-hub-core--subscribed`, [the hub client's core](hub.md#the-clients-core))
 and `drgnx-exec-unsync` in `drgnx-hub-disconnect`; a batch Emacs that waits on a job (the onboarding CLI) calls it
 after its start is answered. `drgnx-exec-start` and `-stop` are asynchronous; `drgnx-exec-log` is a synchronous call for commands (it refuses
 under `inhibit-interaction`): one `exec/log` with `tail_bytes`, so the hub reads only the log's end. `drgnx-exec-unsync` removes the hooks and clears the cache.

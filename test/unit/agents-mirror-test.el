@@ -1,49 +1,72 @@
 ;;; agents-mirror-test.el --- batch tests: the editing Emacs mirrors the hub's agent sessions -*- lexical-binding: t -*-
-;; The hub runs as its own process (as it does for the user); this Emacs plays the editor.
+;; The hub runs as its own process (as it does for the user); this Emacs plays the editor.  Each test runs inside the
+;; delivery gate (a test-hooks Ratatoskr, `drgnx-test-gated'): the hub's lines reach the editor when the test says so.
+;; The agent behind a session is a real child (mock-acp) whose turns run in real time; what it did is a condition the
+;; test sees in the mirror after each release of the hub's lines (`drgnx-agents-mirror-test--settle'), never a deadline.
 ;; test-class: cond
+;; test-pattern: gated
 (require 'ert)
 (require 'drgnx-agents)
 (require 'drgnx-agents-mirror)
 (require 'drgnx-records)
 (require 'drgnx-hub-client)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/ratatoskr-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/delivery-gate-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/runtime-settings-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/unit/hub-client-test" drgnx-dir) nil t)   ; its Ratatoskr helpers
 
-(defmacro drgnx-agents-mirror-test--with (&rest body)
-  "BODY with Ratatoskr serving drgnx's dirs under ROOT (profile \"mock\" in its settings.el), no mirrors yet; skipped
-without the binary (`drgnx-hub-client-test--with-ratatoskr')."
-  (declare (indent 0))
-  `(drgnx-hub-client-test--with-ratatoskr
+(defmacro drgnx-agents-mirror-test--with (schedule &rest body)
+  "BODY inside `drgnx-test-gated' SCHEDULE (quoted, as there) with a gated Ratatoskr serving drgnx's dirs under ROOT
+\(profile \"mock\" in its settings.el), this Emacs not connected, no mirrors yet; skipped without the binary
+\(`drgnx-hub-client-test--with-hub')."
+  (declare (indent 1))
+  `(drgnx-hub-client-test--with-hub
      (drgnx-hub-client-test--mock-profile root)
-     (let ((drgnx-agents--sessions nil) (drgnx-agents-profiles nil))
-       (unwind-protect (progn ,@body)
-         (drgnx-agents-mirror-stop)))))
+     (let ((drgnx-agents--sessions nil) (drgnx-agents-profiles nil) (drgnx-test-gate-unnamed-ok t))
+       (drgnx-test-gated ,schedule
+         (unwind-protect (progn ,@body)
+           (drgnx-agents-mirror-stop))))))
 
-(defun drgnx-agents-mirror-test--wait (pred &optional secs)
-  (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "a mirror's condition"))
+(defun drgnx-agents-mirror-test--settle (pred what)
+  "Wait until PRED holds, the hub's clock moved past its update throttle and what it has written released
+\(`drgnx-test-hub-advance') before each look.  The hub's agents are real children: their progress is what PRED sees in
+the mirrors.  PRED's value."
+  (drgnx-test-wait (lambda () (drgnx-test-hub-advance 100) (funcall pred)) :what what))
+
+(defun drgnx-agents-mirror-test--ask (method params)
+  "The hub's answer (the result) to METHOD with PARAMS, asked without a wait of its own: the answer is released with
+the rest, so no schedule step has to be met before the next look."
+  (let (done result)
+    (drgnx-hub-call method params (lambda (r _err) (setq result r done t)))
+    (drgnx-agents-mirror-test--settle (lambda () done) (format "the hub's answer to %s" method))
+    result))
 
 (defun drgnx-agents-mirror-test--mirror (id) (seq-find (lambda (s) (equal (drgnx-agent-session-remote s) id)) drgnx-agents--sessions))
 
 (defun drgnx-agents-mirror-test--text (s)
   (mapconcat (lambda (e) (format "%s" (or (plist-get e :text) ""))) (drgnx-agent-session-entries s) " "))
 
-(defun drgnx-agents-mirror-test--start ()
-  (let ((id (plist-get (drgnx-hub-call-sync "agents/start" (list :profile "mock" :cwd (getenv "HOME"))) :id)))   ; ROOT/home
-    (drgnx-agents-mirror-test--wait
-     (lambda () (equal (plist-get (plist-get (drgnx-hub-call-sync "agents/get" (list :id id)) :session) :status) "idle")))
-    id))
+(defun drgnx-agents-mirror-test--idle-mirror (id)
+  "Mirror ID's mirror once it exists and is idle (a settle's condition), else nil."
+  (let ((m (drgnx-agents-mirror-test--mirror id))) (and m (eq (drgnx-agent-session-status m) 'idle) m)))
+
+(defun drgnx-agents-mirror-test--start (&rest params)
+  "Start a session of PARAMS (a plist: :profile …) in the hub; its mirror once it is idle.  The caller's schedule has
+the answer to `agents/start', and this Emacs mirrors the hub (`drgnx-agents-mirror-sync')."
+  (let ((id (plist-get (drgnx-agents-mirror-test--ask "agents/start" (append params (list :cwd (getenv "HOME")))) :id)))   ; ROOT/home
+    (drgnx-agents-mirror-test--settle (lambda () (drgnx-agents-mirror-test--idle-mirror id)) "the new session's mirror, idle")))
 
 (ert-deftest drgnx-agents-mirror/hub-sessions-appear-and-stay-current ()
-  (drgnx-agents-mirror-test--with
-    (let ((id (drgnx-agents-mirror-test--start)))
-      (drgnx-agents-mirror-sync)
-      (should (drgnx-agents-mirror-test--wait (lambda () (drgnx-agents-mirror-test--mirror id))))
-      (let ((m (drgnx-agents-mirror-test--mirror id)))
-        (should (eq (drgnx-agent-session-status m) 'idle))
-        (should-not (drgnx-agent-session-conn m))                   ; a mirror: the agent runs in the hub
-        (drgnx-agents-send m "hello mirror")
-        (should (drgnx-agents-mirror-test--wait (lambda () (string-search "You said: hello mirror" (drgnx-agents-mirror-test--text m)))))))))
+  (drgnx-agents-mirror-test--with '()
+    (drgnx-agents-mirror-sync)
+    (let* ((m (drgnx-agents-mirror-test--start :profile "mock")) (was (drgnx-agent-session-status m)))
+      (drgnx-agents-send m "hello mirror")
+      (drgnx-agents-mirror-test--settle (lambda () (string-search "You said: hello mirror" (drgnx-agents-mirror-test--text m)))
+                                        "the answer in the mirror")
+      (drgnx-test-deliver-all)
+      (should (eq was 'idle))
+      (should-not (drgnx-agent-session-conn m)))))                   ; a mirror: the agent runs in the hub
 
 (defun drgnx-agents-mirror-test--asking (root)
   "ROOT's settings.el: the profile \"mock\" (as `drgnx-hub-client-test--mock-profile'), the profile \"asks\"
@@ -60,65 +83,74 @@ hub hands that permission request to the editor."
                               "acp" "--as" "claude")))
    'drgnx-agents-matrix '(:cells ((:action code.edit :column (:role worker) :verdict ask)))))
 
-(defun drgnx-agents-mirror-test--start-asking ()
-  "Start a worker of the profile \"asks\" in the hub; its id once it is idle."
-  (let ((id (plist-get (drgnx-hub-call-sync "agents/start" (list :profile "asks" :cwd (getenv "HOME") :role "worker")) :id)))
-    (drgnx-agents-mirror-test--wait
-     (lambda () (equal (plist-get (plist-get (drgnx-hub-call-sync "agents/get" (list :id id)) :session) :status) "idle")))
-    id))
-
 (ert-deftest drgnx-agents-mirror/actions-on-a-mirror-go-to-the-hub ()
-  (drgnx-agents-mirror-test--with
+  (drgnx-agents-mirror-test--with '()
     (drgnx-agents-mirror-test--asking root)
-    (let ((id (drgnx-agents-mirror-test--start-asking)))
-      (drgnx-agents-mirror-sync)
-      (should (drgnx-agents-mirror-test--wait (lambda () (drgnx-agents-mirror-test--mirror id))))
-      (let ((m (drgnx-agents-mirror-test--mirror id)))
-        (drgnx-agents-send m "ask:permission edit")
-        (should (drgnx-agents-mirror-test--wait (lambda () (drgnx-agent-session-permissions m))))
-        (let* ((request (car (drgnx-agent-session-permissions m)))
-               (option (plist-get (car (plist-get request :options)) :optionId)))
-          (should (stringp option))
-          (drgnx-agents-answer-permission m request option)
-          (should (drgnx-agents-mirror-test--wait
-                   (lambda () (string-search (concat "permission: " option) (drgnx-agents-mirror-test--text m))))))
-        (drgnx-agents-kill m)
-        (should (drgnx-agents-mirror-test--wait (lambda () (eq (drgnx-agent-session-status m) 'exited))))))))
+    (drgnx-agents-mirror-sync)
+    (let ((m (drgnx-agents-mirror-test--start :profile "asks" :role "worker")) request option)
+      (drgnx-agents-send m "ask:permission edit")
+      (drgnx-agents-mirror-test--settle (lambda () (drgnx-agent-session-permissions m)) "the permission request in the mirror")
+      (setq request (car (drgnx-agent-session-permissions m))
+            option (plist-get (car (plist-get request :options)) :optionId))
+      (when (stringp option) (drgnx-agents-answer-permission m request option))
+      (drgnx-agents-mirror-test--settle
+       (lambda () (string-search (concat "permission: " option) (drgnx-agents-mirror-test--text m))) "the agent's word on the answer")
+      (drgnx-agents-kill m)
+      (drgnx-agents-mirror-test--settle (lambda () (eq (drgnx-agent-session-status m) 'exited)) "the killed session, exited")
+      (drgnx-test-deliver-all)
+      (should (stringp option)))))
 
+;; A hub's sessions are its children: they end with it, and the editor must not show them working.  What the mirror says
+;; of why depends on which reached the editor first, the session's own end or the hub's: the test chooses.
 (ert-deftest drgnx-agents-mirror/when-the-hub-ends-its-mirrors-say-so ()
-  ;; a hub's sessions are its children: they end with it, and the editor must not show them working
-  (drgnx-agents-mirror-test--with
-    (let ((id (drgnx-agents-mirror-test--start)))
-      (drgnx-agents-mirror-sync)
-      (should (drgnx-agents-mirror-test--wait (lambda () (drgnx-agents-mirror-test--mirror id))))
-      (drgnx-hub-call-sync "shutdown" nil)
-      (should (drgnx-agents-mirror-test--wait (lambda () (eq (drgnx-agent-session-status (drgnx-agents-mirror-test--mirror id)) 'exited))))
-      (should (string-search "hub" (or (drgnx-agent-session-stderr (drgnx-agents-mirror-test--mirror id)) ""))))))
+  ;; the hub's end comes first (the session's own end is a snapshot the hub never sends once it is gone)
+  (drgnx-agents-mirror-test--with '()
+    (drgnx-agents-mirror-sync)
+    (let ((m (drgnx-agents-mirror-test--start :profile "mock")))
+      (drgnx-hub-call "shutdown" nil #'ignore)
+      (drgnx-test-wait (lambda () (memq :eof (drgnx-test-gate-held 'sub-1))) :what "the subscription's end, held")
+      (drgnx-test-deliver-all)
+      (should (eq (drgnx-agent-session-status m) 'exited))
+      (should (string-search "hub" (or (drgnx-agent-session-stderr m) ""))))))
+
+(ert-deftest drgnx-agents-mirror/a-session-that-ended-before-the-hub-keeps-its-own-reason ()
+  ;; the session's end comes first: the hub's end leaves what the session said alone
+  (drgnx-agents-mirror-test--with '()
+    (drgnx-agents-mirror-sync)
+    (let ((m (drgnx-agents-mirror-test--start :profile "mock")) own)
+      (drgnx-agents-kill m)
+      (drgnx-agents-mirror-test--settle (lambda () (eq (drgnx-agent-session-status m) 'exited)) "the killed session, exited")
+      (setq own (drgnx-agent-session-stderr m))
+      (drgnx-hub-call "shutdown" nil #'ignore)
+      (drgnx-test-wait (lambda () (memq :eof (drgnx-test-gate-held 'sub-1))) :what "the subscription's end, held")
+      (drgnx-test-deliver-all)
+      (should (eq (drgnx-agent-session-status m) 'exited))
+      (should (equal (drgnx-agent-session-stderr m) own)))))
 
 (ert-deftest drgnx-agents-mirror/a-new-emacs-reattaches ()
-  (drgnx-agents-mirror-test--with
-    (let ((id (drgnx-agents-mirror-test--start)))
-      (drgnx-agents-mirror-sync)
-      (drgnx-agents-mirror-test--wait (lambda () (drgnx-agents-mirror-test--mirror id)))
-      (drgnx-hub-call-sync "agents/send" (list :id id :text "slow work"))       ; it streams while this Emacs goes away
-      (drgnx-agents-mirror-test--wait (lambda () (string-search "part 1" (drgnx-agents-mirror-test--text (drgnx-agents-mirror-test--mirror id)))))
+  (drgnx-agents-mirror-test--with '()
+    (drgnx-agents-mirror-sync)
+    (let* ((m (drgnx-agents-mirror-test--start :profile "mock")) (id (drgnx-agent-session-remote m)) hub again)
+      (drgnx-agents-mirror-test--ask "agents/send" (list :id id :text "slow work"))       ; it streams while this Emacs goes away
+      (drgnx-agents-mirror-test--settle (lambda () (string-search "part 1" (drgnx-agents-mirror-test--text m))) "the stream under way")
       (drgnx-agents-mirror-stop) (drgnx-hub-disconnect) (setq drgnx-agents--sessions nil)
-      (drgnx-agents-mirror-test--wait (lambda () (string-search "part 3" (format "%S" (plist-get (drgnx-hub-call-sync "agents/get" (list :id id)) :entries)))))   ; it went on in the hub
       (drgnx-agents-mirror-sync)                                             ; a new editor
-      (should (drgnx-agents-mirror-test--wait (lambda () (let ((m (drgnx-agents-mirror-test--mirror id)))
-                                                           (and m (string-search "part 10" (drgnx-agents-mirror-test--text m)))))
-                                              15))
-      (drgnx-agents-mirror-test--wait (lambda () (eq (drgnx-agent-session-status (drgnx-agents-mirror-test--mirror id)) 'idle)))
+      (setq m (drgnx-agents-mirror-test--settle
+               (lambda () (let ((m (drgnx-agents-mirror-test--mirror id)))
+                            (and m (eq (drgnx-agent-session-status m) 'idle) (string-search "part 10" (drgnx-agents-mirror-test--text m)) m)))
+               "the stream's end in the new editor's mirror"))
       ;; nothing lost: the mirror's transcript is the hub's
-      (let ((hub (mapcar (lambda (e) (drgnx-records-from-json 'drgnx-records-entry e))
-                         (plist-get (drgnx-hub-call-sync "agents/get" (list :id id)) :entries))))
-        (should (drgnx-agents-mirror-test--wait (lambda () (equal (drgnx-agent-session-entries (drgnx-agents-mirror-test--mirror id)) hub))))
-        ;; and once the session is quiet (no event will come): a new editor still gets the whole transcript
-        (drgnx-agents-mirror-stop) (drgnx-hub-disconnect) (setq drgnx-agents--sessions nil)
-        (drgnx-agents-mirror-sync)
-        (should (drgnx-agents-mirror-test--wait
-                 (lambda () (let ((m (drgnx-agents-mirror-test--mirror id))) (and m (equal (drgnx-agent-session-entries m) hub))))
-                 5))))))
+      (setq hub (mapcar (lambda (e) (drgnx-records-from-json 'drgnx-records-entry e))
+                        (plist-get (drgnx-agents-mirror-test--ask "agents/get" (list :id id)) :entries)))
+      (drgnx-agents-mirror-test--settle (lambda () (equal (drgnx-agent-session-entries m) hub)) "the mirror's transcript is the hub's")
+      ;; and once the session is quiet (no event will come): a new editor still gets the whole transcript
+      (drgnx-agents-mirror-stop) (drgnx-hub-disconnect) (setq drgnx-agents--sessions nil)
+      (drgnx-agents-mirror-sync)
+      (drgnx-agents-mirror-test--settle
+       (lambda () (let ((m (drgnx-agents-mirror-test--mirror id))) (and m (setq again m) (equal (drgnx-agent-session-entries m) hub))))
+       "the whole transcript in a third editor's mirror")
+      (drgnx-test-deliver-all)
+      (should again))))
 
 ;; From the old UI list ("a malformed RUN_STARTED aborting the board refresh"): one unreadable record from the
 ;; hub must not stop the others from being mirrored.
@@ -227,17 +259,16 @@ hub hands that permission request to the editor."
 
 (ert-deftest drgnx-agents-mirror/sessions-and-entries-arrive-as-json ()
   ;; a session from a mock-acp agent in a hub: status and entry types reach the mirror as symbols
-  (drgnx-agents-mirror-test--with
-    (let ((id (drgnx-agents-mirror-test--start)))
-      (drgnx-hub-call-sync "agents/send" (list :id id :text "hello json"))
-      (drgnx-agents-mirror-sync)
-      (should (drgnx-agents-mirror-test--wait
-               (lambda () (let ((m (drgnx-agents-mirror-test--mirror id)))
-                            (and m (string-search "You said: hello json" (drgnx-agents-mirror-test--text m)))))))
-      (let ((m (drgnx-agents-mirror-test--mirror id)))
-        (should (memq (drgnx-agent-session-status m) '(busy idle)))
-        (should (cl-every (lambda (e) (symbolp (plist-get e :type))) (drgnx-agent-session-entries m)))
-        (should (memq 'agent (mapcar (lambda (e) (plist-get e :type)) (drgnx-agent-session-entries m))))))))
+  (drgnx-agents-mirror-test--with '()
+    (drgnx-agents-mirror-sync)
+    (let* ((m (drgnx-agents-mirror-test--start :profile "mock")) (id (drgnx-agent-session-remote m)))
+      (drgnx-agents-mirror-test--ask "agents/send" (list :id id :text "hello json"))
+      (drgnx-agents-mirror-test--settle (lambda () (string-search "You said: hello json" (drgnx-agents-mirror-test--text m)))
+                                        "the answer in the mirror")
+      (drgnx-test-deliver-all)
+      (should (memq (drgnx-agent-session-status m) '(busy idle)))
+      (should (cl-every (lambda (e) (symbolp (plist-get e :type))) (drgnx-agent-session-entries m)))
+      (should (memq 'agent (mapcar (lambda (e) (plist-get e :type)) (drgnx-agent-session-entries m)))))))
 
 (ert-deftest drgnx-agents-mirror/no-read-of-hub-data ()
   (let ((drgnx-agents--sessions nil) (inhibit-message t))
@@ -423,19 +454,21 @@ hub hands that permission request to the editor."
 
 (ert-deftest drgnx-agents-mirror/start-goes-through-the-hub ()
   ;; a real Ratatoskr (mock profile): the editor's start is the hub's agents/start, and the mirror follows the session
-  (drgnx-hub-client-test--with-ratatoskr
-    (drgnx-hub-client-test--mock-profile root)
-    (let ((drgnx-agents--sessions nil) (drgnx-agents-profiles nil) (drgnx-hub-event-functions nil))
-      (unwind-protect
-          (let* ((m (drgnx-agents-mirror-start "mock" root)) (id (drgnx-agent-session-remote m)))
-            (should (stringp id))
-            (should (seq-find (lambda (s) (equal (plist-get s :id) id))
-                              (plist-get (drgnx-hub-call-sync "agents/list" nil 10) :sessions)))
-            (should-not (drgnx-agent-session-conn m))                ; the agent runs in the hub
-            (drgnx-hub-client-test--wait (lambda () (eq (drgnx-agent-session-status m) 'idle)) "the mirror is idle")
-            (drgnx-agents-send m "hello hub")
-            (drgnx-hub-client-test--wait
-             (lambda () (string-search "hello hub" (drgnx-agents-mirror-test--text m))) "the mirror follows the session"))
-        (drgnx-agents-mirror-stop)))))
+  ;; The mirror is already syncing (the hook is on), so the start does not ask for the hub: the hub runs.  The start's
+  ;; answer reaches the editor before the session's snapshot (the gate holds that line), so the start fetches the
+  ;; session itself.
+  (drgnx-agents-mirror-test--with '((call-1 :answer "agents/start") (call-1 :answer "agents/get"))
+    (drgnx-agents-mirror-sync)
+    (let* ((m (drgnx-agents-mirror-start "mock" root)) (id (drgnx-agent-session-remote m))
+           (listed (seq-find (lambda (s) (equal (plist-get s :id) id))
+                             (plist-get (drgnx-agents-mirror-test--ask "agents/list" nil) :sessions))))
+      (drgnx-agents-mirror-test--settle (lambda () (eq (drgnx-agent-session-status m) 'idle)) "the mirror is idle")
+      (drgnx-agents-send m "hello hub")
+      (drgnx-agents-mirror-test--settle (lambda () (string-search "hello hub" (drgnx-agents-mirror-test--text m)))
+                                        "the mirror follows the session")
+      (drgnx-test-deliver-all)
+      (should (stringp id))
+      (should listed)
+      (should-not (drgnx-agent-session-conn m)))))                  ; the agent runs in the hub
 
 ;;; agents-mirror-test.el ends here

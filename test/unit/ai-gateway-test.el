@@ -4,6 +4,7 @@
 ;; hub added); the editor's own side is recorded at `drgnx-ai--curl' (which address and which bearer token it sent).
 ;; Without the binary (or the mock beside it) these skip; test/no-skip.eld lists them.
 ;; test-class: cond
+;; test-pattern: gated
 (require 'ert)
 (require 'cl-lib)
 (require 'json)
@@ -13,6 +14,8 @@
 (require 'drgnx-hub-client)
 (require 'drgnx-search-index)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/ratatoskr-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/delivery-gate-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/runtime-settings-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-commit-message" drgnx-dir) nil t)
@@ -74,65 +77,68 @@
   "BODY with the real hub serving ROOT, `ratatoskr-mock llm' answering SCRIPT as the provider on PORT (providers `a'
 \(openai, key in A_KEY, chat fim embed), `b' (openai, key B_KEY, none set) and `o' (ollama, keyless) point at it in
 `drgnx-ai-providers', here and in settings.el for the hub),
-this Emacs connected: it holds the editor token and the hub holds a's key.  Skipped without the binary."
+this Emacs connected: it holds the editor token and the hub holds a's key.  Skipped without the binary.  BODY runs
+inside `drgnx-test-gated'.  `:steps STEPS' before BODY (not quoted): the schedule's steps for the calls BODY makes
+\((call-1 :answer METHOD)…), in the order the hub answers them."
   (declare (indent 1))
-  `(let* ((bin (or (drgnx-ai-gateway-test--bin) (ert-skip "DRGNX_RATATOSKR_BIN (with ratatoskr-mock beside it) is not set")))
-          (root (file-name-as-directory (make-temp-file "drgnx-ai-gw" t)))
-          (mock nil) (port nil) (hub nil)
-          (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config") (concat "DRGNX_DATA_DIR=" root "data")
-                                             (concat "XDG_STATE_HOME=" root "state") (concat "XDG_RUNTIME_DIR=" root "run")
-                                             (concat "XDG_DATA_HOME=" root "xdg-data") (concat "XDG_CONFIG_HOME=" root "xdg-config")
-                                             (concat "XDG_CACHE_HOME=" root "cache") (concat "HOME=" root "home")
-                                             (concat "DRGNX_RATATOSKR_BIN=" bin) "DRGNX_JOBS_LAUNCHER=detached"
-                                             (concat "DRGNX_DIR=" (directory-file-name drgnx-dir)) "RATATOSKR_SUPERVISOR=none"
-                                             (concat "DRGNX_EMACS=" (expand-file-name invocation-name invocation-directory))
-                                             (concat "A_KEY=" drgnx-ai-gateway-test--key) "B_KEY" "OPENROUTER_API_KEY"
-                                             "DRGNX_AI_GATEWAY_URL" "DRGNX_NO_HUB_START"
-                                             (format "DRGNX_HUB_PARENT_PID=%d" (emacs-pid)))
-                                       process-environment))
-          (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq)) (drgnx-ai-detected nil)
-          (drgnx-ai-providers nil) (drgnx-ai-roles nil)
-          (drgnx-ai-gateway-test--sent nil)
-          (drgnx-hub--client nil) (drgnx-hub--events nil) (drgnx-hub--subscribing nil)
-          (drgnx-hub--pending (make-hash-table)) (drgnx-hub--last-hello nil) (drgnx-hub-client-proves t)
-          (drgnx-hub--ensuring nil) (drgnx-hub--binary-version nil) (drgnx-hub--binary-reading nil)
-          (drgnx-hub-event-functions nil) (drgnx-hub-disconnect-functions nil) (drgnx-hub-skew-functions nil)
-          (drgnx-hub--editor nil) (drgnx-hub--keys-held :unknown) (drgnx-hub--keys-had nil))
-     (dolist (d '("run" "home" "config" "data")) (with-file-modes #o700 (make-directory (concat root d) t)))
-     (unwind-protect
-         (progn
-           (setq mock (drgnx-ai-gateway-test--start-mock root ,script) port (process-get mock :port))
-           (setq drgnx-ai-providers `((a :name "A" :kind openai :url ,(format "http://127.0.0.1:%d/v1" port) :key-env "A_KEY"
-                                         :caps (chat fim embed))
-                                      (b :name "B" :kind openai :url ,(format "http://127.0.0.1:%d/b" port) :key-env "B_KEY"
-                                         :caps (chat))
-                                      (o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (chat)))
-                 drgnx-ai-roles '((chat (a . "m")) (embed (a . "e"))))
-           (drgnx-test-write-settings (concat root "config/settings.el")
-                                      'drgnx-ai-providers drgnx-ai-providers 'drgnx-ai-roles drgnx-ai-roles)
-           (setq hub (make-process :name "ratatoskr" :noquery t :connection-type 'pipe :buffer (generate-new-buffer " *ratatoskr*")
-                                   :sentinel (lambda (p _event) (unless (process-live-p p) (process-put p :done t)))
-                                   :command (list bin "serve" "--foreground" "--parent-pid" (number-to-string (emacs-pid)))))
-           (drgnx-test-wait #'drgnx-hub-running-p :secs 30 :what "Ratatoskr answers a ping")
-           (drgnx-hub-connect)
-           (should (drgnx-hub-ensure))                         ; the table and the key, waited for
-           (drgnx-test-wait (lambda () (and drgnx-hub--editor (listp (drgnx-hub-keys-held)) (member "a" (drgnx-hub-keys-held))))
-                            :secs 30 :what "the editor token and the held keys")
-           ;; the ensure's hand-over went on the call connection; the event connection subscribes on its own and hands
-           ;; over again when it is done.  Events sent before that are missed, and that second keys-held answer would
-           ;; overwrite what the body changes: the body starts when the subscription is in and nothing is pending
-           (drgnx-test-wait (lambda () (and drgnx-hub--events (zerop (hash-table-count drgnx-hub--pending))))   ; set by the answer
-                            :secs 30 :what "the event connection subscribed and the hand-over answered")
-           (advice-add 'drgnx-ai--curl :around #'drgnx-ai-gateway-test--record)
-           ,@body)
-       (advice-remove 'drgnx-ai--curl #'drgnx-ai-gateway-test--record)
-       (drgnx-hub-disconnect)
-       (when (process-live-p hub) (signal-process hub 'term))
-       (when hub (ignore-errors (drgnx-test-wait (lambda () (process-get hub :done)) :secs 10 :what "Ratatoskr ends")))
-       (when (process-live-p hub) (signal-process hub 'kill))
-       (when (and hub (buffer-live-p (process-buffer hub))) (kill-buffer (process-buffer hub)))
-       (when mock (delete-process mock))
-       (delete-directory root t))))
+  (let ((steps (and (eq (car body) :steps) (prog1 (cadr body) (setq body (cddr body))))))
+    `(let* ((bin (or (drgnx-ai-gateway-test--bin) (ert-skip "DRGNX_RATATOSKR_BIN (with ratatoskr-mock beside it) is not set")))
+            (root (file-name-as-directory (make-temp-file "drgnx-ai-gw" t)))
+            (mock nil) (port nil)
+            (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config") (concat "DRGNX_DATA_DIR=" root "data")
+                                               (concat "XDG_STATE_HOME=" root "state") (concat "XDG_RUNTIME_DIR=" root "run")
+                                               (concat "XDG_DATA_HOME=" root "xdg-data") (concat "XDG_CONFIG_HOME=" root "xdg-config")
+                                               (concat "XDG_CACHE_HOME=" root "cache") (concat "HOME=" root "home")
+                                               (concat "DRGNX_RATATOSKR_BIN=" bin) "DRGNX_JOBS_LAUNCHER=detached"
+                                               (concat "DRGNX_DIR=" (directory-file-name drgnx-dir)) "RATATOSKR_SUPERVISOR=none"
+                                               (concat "DRGNX_EMACS=" (expand-file-name invocation-name invocation-directory))
+                                               (concat "A_KEY=" drgnx-ai-gateway-test--key) "B_KEY" "OPENROUTER_API_KEY"
+                                               "DRGNX_AI_GATEWAY_URL" "DRGNX_NO_HUB_START"
+                                               (format "DRGNX_HUB_PARENT_PID=%d" (emacs-pid)))
+                                         process-environment))
+            (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq)) (drgnx-ai-detected nil)
+            (drgnx-ai-providers nil) (drgnx-ai-roles nil)
+            (drgnx-ai-gateway-test--sent nil)
+            (drgnx-hub--client nil) (drgnx-hub--events nil) (drgnx-hub--subscribing nil)
+            (drgnx-hub--pending (make-hash-table)) (drgnx-hub--last-hello nil) (drgnx-hub-client-proves t)
+            (drgnx-hub--ensuring nil) (drgnx-hub--binary-version nil) (drgnx-hub--binary-reading nil)
+            (drgnx-hub-event-functions nil) (drgnx-hub-disconnect-functions nil) (drgnx-hub-skew-functions nil)
+            (drgnx-hub--editor nil) (drgnx-hub--keys-held :unknown) (drgnx-hub--keys-had nil))
+       (dolist (d '("run" "home" "config" "data")) (with-file-modes #o700 (make-directory (concat root d) t)))
+       (unwind-protect
+           (progn
+             (setq mock (drgnx-ai-gateway-test--start-mock root ,script) port (process-get mock :port))
+             (setq drgnx-ai-providers `((a :name "A" :kind openai :url ,(format "http://127.0.0.1:%d/v1" port) :key-env "A_KEY"
+                                           :caps (chat fim embed))
+                                        (b :name "B" :kind openai :url ,(format "http://127.0.0.1:%d/b" port) :key-env "B_KEY"
+                                           :caps (chat))
+                                        (o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (chat)))
+                   drgnx-ai-roles '((chat (a . "m")) (embed (a . "e"))))
+             (drgnx-test-write-settings (concat root "config/settings.el")
+                                        'drgnx-ai-providers drgnx-ai-providers 'drgnx-ai-roles drgnx-ai-roles)
+             (drgnx-test-with-ratatoskr root :gated t
+                                        (drgnx-test-gated ',(if steps
+                                                                `((sub-1 :answer "subscribe") (call-1 :answer "gateway/keys-held")
+                                                                  (:pause "ready") ,@steps)
+                                                              '((sub-1 :answer "subscribe")))
+                                          (drgnx-hub-connect)
+                                          ;; the connect's hand-over (the table, the key, the token, the held keys) and the subscription: every
+                                          ;; answer is delivered, and the body starts when the subscription is in and no call waits (a second
+                                          ;; keys-held answer would overwrite what the body changes).  STEPS, the answers of calls the body
+                                          ;; makes, wait behind the pause
+                                          ,@(if steps
+                                                '((drgnx-test-wait (lambda () (and drgnx-hub--events (listp drgnx-hub--keys-held)))
+                                                                   :what "the subscription and the held keys")
+                                                  (drgnx-test-wait #'drgnx-hub-settled-p :what "the hand-over's answers")
+                                                  (drgnx-test-gate-continue "ready"))
+                                              '((drgnx-test-deliver-all)
+                                                (drgnx-test-wait #'drgnx-hub-settled-p
+                                                                 :what "the subscription and the hand-over's answers")))
+                                          (advice-add 'drgnx-ai--curl :around #'drgnx-ai-gateway-test--record)
+                                          (unwind-protect (progn ,@body)
+                                            (advice-remove 'drgnx-ai--curl #'drgnx-ai-gateway-test--record)))))
+         (when mock (delete-process mock))
+         (delete-directory root t)))))
 
 (defun drgnx-ai-gateway-test--ask (kind payload &optional chain &rest keys)
   "Run a KIND request along CHAIN (a's step) and wait: (TEXT . INFO).  KEYS go to `drgnx-ai-request'."
@@ -279,27 +285,36 @@ no provider key; the mock got the hub's key and never the editor's token."
 
 (ert-deftest drgnx-ai-gateway/usable-comes-from-keys-held ()
   (drgnx-ai-gateway-test--with nil
-    (should (drgnx-ai-usable-p 'a 'chat))                                ; the hub holds a's key
-    (should-not (drgnx-ai-usable-p 'b 'chat))                            ; …and none for b
-    ;; a key reaches the hub: keys-changed makes b usable, with nothing else done in this Emacs
-    (drgnx-hub-call-sync "gateway/keys" '(:keys (:b "sk-b-key")))
-    (drgnx-test-wait (lambda () (member "b" (drgnx-hub-keys-held))) :secs 10 :what "keys-changed")
-    (should (drgnx-ai-usable-p 'b 'chat))
-    ;; this Emacs having a key in its environment is not what decides
-    (let ((process-environment (cons "B_KEY=sk-local-only" process-environment)) (drgnx-hub--keys-held nil))
-      (should-not (drgnx-ai-usable-p 'b 'chat)))))
+    :steps ((call-1 :answer "gateway/keys"))
+    (let ((a-before (drgnx-ai-usable-p 'a 'chat))                        ; the hub holds a's key
+          (b-before (drgnx-ai-usable-p 'b 'chat)))                       ; …and none for b
+      ;; a key reaches the hub: keys-changed makes b usable, with nothing else done in this Emacs.  The hub's
+      ;; `gateway/keys-changed' event is a write no request made: the barrier releases it
+      (drgnx-hub-call-sync "gateway/keys" '(:keys (:b "sk-b-key")))
+      (drgnx-test-deliver-all)
+      (should a-before)
+      (should-not b-before)
+      (should (member "b" (drgnx-hub-keys-held)))
+      (should (drgnx-ai-usable-p 'b 'chat))
+      ;; this Emacs having a key in its environment is not what decides
+      (let ((process-environment (cons "B_KEY=sk-local-only" process-environment)) (drgnx-hub--keys-held nil))
+        (should-not (drgnx-ai-usable-p 'b 'chat))))))
 
 (ert-deftest drgnx-ai-gateway/a-key-found-by-a-command-goes-to-the-hub ()
   ;; b's key sits in a netrc (a store, not the environment): a command finds it and hands it to the hub once; the mock
   ;; sees it as the provider key, never the editor token
   (drgnx-ai-gateway-test--with '((:path "/b/chat/completions" :body "{\"choices\":[{\"message\":{\"content\":\"hi\"}}]}"))
+    :steps ((call-1 :answer "gateway/keys"))
     (let ((netrc (concat root "netrc")))
       (with-temp-file netrc (insert "machine 127.0.0.1 login drgnx password sk-from-the-store\n"))
       (set-file-modes netrc #o600)
-      (let ((auth-sources (list netrc)) (r nil))
-        (should-not (drgnx-ai-usable-p 'b 'chat))
-        (should (drgnx-ai-usable-p 'b 'chat t))
-        (setq r (drgnx-ai-gateway-test--ask 'chat '(:messages [(:role "user" :content "x")]) '((b . "m")) :interactive t))
+      (let* ((auth-sources (list netrc))
+             (plain (drgnx-ai-usable-p 'b 'chat))
+             (asked (drgnx-ai-usable-p 'b 'chat t))
+             (r (drgnx-ai-gateway-test--ask 'chat '(:messages [(:role "user" :content "x")]) '((b . "m")) :interactive t)))
+        (drgnx-test-deliver-all)        ; the hub's `gateway/keys-changed' event
+        (should-not plain)
+        (should asked)
         (should (equal (car r) "hi"))
         (let ((req (car (drgnx-ai-gateway-test--requests root))))
           (should (equal (plist-get req :path) "/b/chat/completions"))

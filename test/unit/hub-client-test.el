@@ -1,7 +1,10 @@
 ;;; hub-client-test.el --- batch tests: the editor's v1 client (hello, proofs, deadlines, skew, the line reader) -*- lexical-binding: t -*-
 ;; Fake hubs (test/fixtures/fake-hub.el) lie about their proof or speak protocol 0; the tests marked "binary" run
-;; against Ratatoskr (DRGNX_RATATOSKR_BIN), and skip without it (test/no-skip.eld lists them).
+;; against Ratatoskr (DRGNX_RATATOSKR_BIN), and skip without it (test/no-skip.eld lists them).  A binary test that
+;; connects chooses its order through the delivery gate (`drgnx-test-gated': a test-hooks Ratatoskr, its clock and
+;; sequencer; docs/develop/harness.md, "The delivery gate").
 ;; test-class: cond
+;; test-pattern: gated
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)
@@ -20,8 +23,25 @@
 (load (expand-file-name "test/fixtures/config-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/fake-hub" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/ratatoskr-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/delivery-gate-fixture" drgnx-dir) nil t)
+(require 'drgnx-exec)
+(require 'drgnx-settings-runtime)
+(require 'drgnx-settings-agents nil t)
+(require 'drgnx-records-review nil t)
+
+(defvar drgnx-exec--jobs)
+(defvar drgnx-exec--stale)
 
 (defmacro drgnx-hub-client-test--with (&rest body)
+  "BODY with drgnx's dirs under ROOT (the hub's socket in ROOT/run/drgnx), the client's state fresh; the client is
+disconnected at the end."
+  (declare (indent 0))
+  `(drgnx-hub-client-test--in-root
+     (unwind-protect (progn ,@body)
+       (drgnx-hub-disconnect))))
+
+(defmacro drgnx-hub-client-test--in-root (&rest body)
   "BODY with drgnx's dirs under ROOT (the hub's socket in ROOT/run/drgnx), the client's state fresh."
   (declare (indent 0))
   `(let* ((root (file-name-as-directory (make-temp-file "drgnx-hc" t)))
@@ -40,7 +60,6 @@
           (drgnx-hub--asked-disconnect nil) (drgnx-hub--resubscribe-since nil) (drgnx-hub--resubscribe-delay 1))
      (dolist (d '("run" "home" "config" "data")) (with-file-modes #o700 (make-directory (concat root d) t)))
      (unwind-protect (progn ,@body)
-       (drgnx-hub-disconnect)
        (delete-directory root t))))
 
 (defun drgnx-hub-client-test--wait (pred &optional what)
@@ -58,11 +77,10 @@
   (let ((b (getenv "DRGNX_RATATOSKR_BIN")))
     (and b (file-name-absolute-p b) (file-executable-p b) (not (file-directory-p b)) b)))
 
-(defvar drgnx-hub-client-test--serve-fn nil
-  "A function (ROOT) → (BINARY ARG…) that replaces the binary `with-ratatoskr' serves with, and adds arguments.")
-
 (defmacro drgnx-hub-client-test--with-ratatoskr (&rest body)
-  "BODY with Ratatoskr serving ROOT (`drgnx-hub-client-test--with'); skipped without the binary."
+  "BODY with Ratatoskr serving ROOT (`drgnx-hub-client-test--with'), this Emacs not yet connected; skipped without the
+binary.  For the tests of other files that drive a real agent through the hub and wait on conditions of their own (the
+agents mirror's): their order is the agent's, not the gate's."
   (declare (indent 0))
   `(drgnx-hub-client-test--with
      (skip-unless (drgnx-hub-client-test--bin))
@@ -71,12 +89,8 @@
                                          process-environment))
             (hub (make-process :name "ratatoskr" :noquery t :connection-type 'pipe :buffer (generate-new-buffer " *ratatoskr*")
                                :sentinel (lambda (p _event) (unless (process-live-p p) (process-put p :done t)))
-                               :command (let ((s (if drgnx-hub-client-test--serve-fn
-                                                     (funcall drgnx-hub-client-test--serve-fn root)
-                                                   (list (drgnx-hub-client-test--bin)))))
-                                          (append (list (car s) "serve" "--foreground"
-                                                        "--parent-pid" (number-to-string (emacs-pid)))
-                                                  (cdr s))))))
+                               :command (list (drgnx-hub-client-test--bin) "serve" "--foreground"
+                                              "--parent-pid" (number-to-string (emacs-pid))))))
        (unwind-protect
            (progn (drgnx-hub-client-test--wait #'drgnx-hub-running-p "Ratatoskr answers a ping")
                   ,@body)
@@ -85,6 +99,24 @@
          (ignore-errors (drgnx-test-wait (lambda () (process-get hub :done)) :secs 10 :what "Ratatoskr ends"))
          (when (process-live-p hub) (signal-process hub 'kill))
          (kill-buffer (process-buffer hub))))))
+
+(defmacro drgnx-hub-client-test--with-hub (&rest body)
+  "BODY with a gated Ratatoskr serving ROOT (`drgnx-hub-client-test--in-root'), this Emacs not connected: BODY
+connects inside `drgnx-test-gated'.  `hub' is the hub's process; the fixture disconnects at the end."
+  (declare (indent 0))
+  `(drgnx-hub-client-test--in-root
+     (let ((drgnx-hub--presence-sent :unknown) (drgnx-hub-editor-token-hook nil)
+           (drgnx-exec--jobs (make-hash-table :test #'equal)) (drgnx-exec--stale nil))
+       (drgnx-test-with-ratatoskr root :gated t ,@body))))
+
+(defun drgnx-hub-client-test--answer-held-p (name key)
+  "Whether the gate holds an answer on connection NAME with KEY in its result."
+  (cl-some (lambda (line)
+             (let ((j (and (stringp line) (ignore-errors (json-parse-string line :object-type 'plist :null-object nil
+                                                                            :false-object nil)))))
+               (and (plist-get j :id) (not (plist-get j :event)) (consp (plist-get j :result))
+                    (plist-member (plist-get j :result) key))))
+           (drgnx-test-gate-held name)))
 
 (defun drgnx-hub-client-test--mock-profile (root)
   "The profile \"mock\" (test/fixtures/mock-acp.el) in ROOT's settings.el."
@@ -96,40 +128,65 @@
 
 (ert-deftest drgnx-hub-client/proves-itself-and-is-user ()
   ;; binary: the hello's proof makes the connection user class, and Ratatoskr's proof back checks out
-  (drgnx-hub-client-test--with-ratatoskr
-    (should (natnump (plist-get (drgnx-hub-call-sync "ping" nil 10) :pid)))
-    (should (equal (plist-get drgnx-hub--last-hello :class) "user"))
-    (should (process-get drgnx-hub--client :drgnx-proven))
-    (should (drgnx-hub-has-method-p "agents/list"))
-    (should-not (drgnx-hub-has-method-p "no/such-method"))))
+  (drgnx-hub-client-test--with-hub
+    (let (pid class proven agents nope)
+      (drgnx-test-gated '((call-1 :answer "ping"))
+        (setq pid (plist-get (drgnx-hub-call-sync "ping" nil 10) :pid)
+              class (plist-get drgnx-hub--last-hello :class)
+              proven (process-get drgnx-hub--client :drgnx-proven)
+              agents (drgnx-hub-has-method-p "agents/list")
+              nope (drgnx-hub-has-method-p "no/such-method"))
+        (drgnx-test-deliver-all))
+      (should (natnump pid))
+      (should (equal class "user"))
+      (should proven)
+      (should agents)
+      (should-not nope))))
 
 (ert-deftest drgnx-hub-client/ping-probe-skips-the-challenge ()
-  ;; binary: the challenge is the first line on every connection; the probe reads past it to the answer
-  (drgnx-hub-client-test--with-ratatoskr
+  ;; binary: the challenge is the first line on every connection; the probe reads past it to the answer.  The probe is
+  ;; its own socket and its own real-time look, so it runs outside the gate: there is no client connection to order.
+  (drgnx-hub-client-test--with-hub
     (should (drgnx-hub--ping-socket (drgnx-hub-socket)))))
 
 (ert-deftest drgnx-hub-client/a-service-line-asking-for-keys-is-refused ()
   ;; binary: a connection with no hello is service class: a line that asks for keys is refused and counted
-  (drgnx-hub-client-test--with-ratatoskr
-    (let ((refused (lambda () (plist-get (plist-get (drgnx-hub-call-sync "status" nil 10) :refusals) :count))))
-      (should (eql (funcall refused) 0))
-      (let ((c (make-network-process :name "raw" :family 'local :service (drgnx-hub-socket) :noquery t)))
-        (process-send-string c "{\"id\":1,\"method\":\"gateway/keys\",\"params\":{\"keys\":{}}}\n")
-        (drgnx-hub-client-test--wait (lambda () (eql (funcall refused) 1)) "the service's gateway/keys is refused")
-        (delete-process c)))))
+  (drgnx-hub-client-test--with-hub
+    (let (before after reply)
+      (drgnx-test-gated '((call-1 :answer "status") (call-1 :answer "status"))
+        (let* ((refused (lambda () (plist-get (plist-get (drgnx-hub-call-sync "status" nil 10) :refusals) :count)))
+               (c (make-network-process :name "raw" :family 'local :service (drgnx-hub-socket) :noquery t
+                                        :filter (lambda (_p s) (setq reply (concat reply s))))))
+          (unwind-protect
+              (progn
+                (setq before (funcall refused))
+                (process-send-string c "{\"id\":1,\"method\":\"gateway/keys\",\"params\":{\"keys\":{}}}\n")
+                ;; the hub's answer to the raw line says it was served (and counted)
+                (drgnx-test-wait (lambda () (and reply (string-search "\"id\":1" reply))) :what "the refusal's answer")
+                (setq after (funcall refused)))
+            (delete-process c))
+          (drgnx-test-deliver-all)))
+      (should (eql before 0))
+      (should (string-search "\"error\"" reply))
+      (should (eql after 1)))))
 
 (ert-deftest drgnx-hub-client/mirror-over-ratatoskr ()
   ;; binary: a session the hub starts reaches this Emacs's mirror
-  (drgnx-hub-client-test--with-ratatoskr
+  (drgnx-hub-client-test--with-hub
     (drgnx-hub-client-test--mock-profile root)
-    (let ((drgnx-agents--sessions nil) (drgnx-agents-profiles nil))
-      (unwind-protect
-          (let ((id (plist-get (drgnx-hub-call-sync "agents/start" (list :profile "mock" :cwd root) 30) :id)))
-            (should (stringp id))
-            (drgnx-agents-mirror-sync)
-            (drgnx-hub-client-test--wait (lambda () (drgnx-agents-mirror--find id)) "the mirror of the hub's session")
-            (drgnx-hub-call-sync "agents/kill" (list :id id) 10))
-        (drgnx-agents-mirror-stop)))))
+    (let ((drgnx-agents--sessions nil) (drgnx-agents-profiles nil) id)
+      (drgnx-test-gated '((call-1 :answer "agents/start") (call-1 :answer "agents/list") (:pause "mirrored")
+                          (call-1 :answer "agents/kill"))
+        (unwind-protect
+            (progn
+              (setq id (plist-get (drgnx-hub-call-sync "agents/start" (list :profile "mock" :cwd root) 30) :id))
+              (drgnx-agents-mirror-sync)
+              (drgnx-hub-client-test--wait (lambda () (drgnx-agents-mirror--find id)) "the mirror of the hub's session")
+              (drgnx-test-gate-continue "mirrored")
+              (drgnx-hub-call-sync "agents/kill" (list :id id) 10)
+              (drgnx-test-deliver-all))
+          (drgnx-agents-mirror-stop)))
+      (should (stringp id)))))
 
 (defvar drgnx-hub-client-test--traffic nil "(METHOD PARAMS ERROR) of each answered call, newest first.")
 
@@ -636,26 +693,30 @@
   (skip-unless (and (drgnx-hub-client-test--bin)
                     (string-search "\"test_hooks\":true"
                                    (shell-command-to-string (concat (shell-quote-argument (drgnx-hub-client-test--bin)) " version --json")))))
-  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-        (drgnx-hub-client-test--serve-fn
-         (lambda (root)
-           (let ((live (concat root "ratatoskr-live")))
-             (copy-file (drgnx-hub-client-test--bin) live)
-             (set-file-modes live #o755)
-             (list live "--idle-tick-ms" "200")))))
+  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
     (drgnx-hub-client-test--register)
-    (drgnx-hub-client-test--with-ratatoskr
-      (unwind-protect
-          (progn
-            (drgnx-hub-connect)
-            (drgnx-hub-client-test--wait (lambda () (process-live-p drgnx-hub--events)) "the subscription")
-            (let ((other (drgnx-hub-client-test--stub root "echo '{\"commit\":\"another\"}'")))
-              (rename-file other (concat root "ratatoskr-live") t))
-            (let ((n (drgnx-hub-client-test--wait (lambda () (gethash '(hub . restart-when-idle) drgnx-notice--table))
-                                                  "the update notice")))
-              (should (eq (plist-get n :command) 'hub-restart-now))
-              (should (eq (plist-get n :life) 'condition))))
-        (drgnx-notice-clear 'hub 'restart-when-idle)))))
+    (drgnx-hub-client-test--with
+      ;; the hub runs from a copy of the binary, started by a wrapper that gives it the 200 ms tick
+      (let* ((live (concat root "ratatoskr-live"))
+             (process-environment
+              (cons (concat "DRGNX_RATATOSKR_BIN="
+                            (progn (copy-file (drgnx-hub-client-test--bin) live)
+                                   (set-file-modes live #o755)
+                                   (drgnx-hub-client-test--stub root (format "exec %s \"$@\" --idle-tick-ms 200"
+                                                                             (shell-quote-argument live)))))
+                    process-environment)))
+        (drgnx-test-with-ratatoskr root
+          (unwind-protect
+              (progn
+                (drgnx-hub-connect)
+                (drgnx-hub-client-test--wait (lambda () (process-live-p drgnx-hub--events)) "the subscription")
+                (let ((other (drgnx-hub-client-test--stub root "echo '{\"commit\":\"another\"}'")))
+                  (rename-file other (concat root "ratatoskr-live") t))
+                (let ((n (drgnx-hub-client-test--wait (lambda () (gethash '(hub . restart-when-idle) drgnx-notice--table))
+                                                      "the update notice")))
+                  (should (eq (plist-get n :command) 'hub-restart-now))
+                  (should (eq (plist-get n :life) 'condition))))
+            (drgnx-notice-clear 'hub 'restart-when-idle)))))))
 
 (ert-deftest drgnx-hub-client/restart-now-over-ratatoskr ()
   ;; binary + the Lisp backend (R-T17-3): ensure starts Ratatoskr, the editor's key reaches it, Hub: Restart Now
@@ -1029,14 +1090,17 @@
                                      process-environment)))
     (make-process :name "ratatoskr" :noquery t :connection-type 'pipe :buffer (generate-new-buffer " *ratatoskr*")
                   :sentinel (lambda (p _event) (unless (process-live-p p) (process-put p :done t)))
-                  :command (list (drgnx-hub-client-test--bin) "serve" "--foreground"
-                                 "--parent-pid" (number-to-string (emacs-pid))))))
+                  :command (append (list (drgnx-hub-client-test--bin) "serve" "--foreground"
+                                         "--parent-pid" (number-to-string (emacs-pid)))
+                                   drgnx-test-gate-hub-args))))
 
-(defun drgnx-hub-client-test--asking-p (methods)
-  "Whether a call of one of METHODS (strings) still waits for the hub's answer."
-  (catch 'found
-    (maphash (lambda (_id e) (when (member (plist-get e :method) methods) (throw 'found t))) drgnx-hub--pending)
-    nil))
+(defun drgnx-hub-client-test--hub-listens-p ()
+  "Whether something accepts connections on the hub's socket (a connect, closed at once; it waits for nothing)."
+  (condition-case nil
+      (let ((p (make-network-process :name "drgnx-listen-probe" :family 'local :service (drgnx-hub-socket) :noquery t)))
+        (delete-process p)
+        t)
+    (error nil)))
 
 (defun drgnx-hub-client-test--stop (hub)
   (when (process-live-p hub) (signal-process hub 'term))
@@ -1053,32 +1117,72 @@
          (unwind-protect (progn ,@body) (advice-remove ,fn ,adv))))))
 
 (ert-deftest drgnx-hub-client/resubscribes-after-restart ()
-  (drgnx-hub-client-test--with-ratatoskr
-    (drgnx-hub-connect)
-    (drgnx-hub-client-test--wait (lambda () (process-live-p drgnx-hub--events)) "the first subscription")
-    (let ((old drgnx-hub--events))
-      (drgnx-hub-client-test--stop hub)
-      ;; the sentinel's own mark: it lets go of the subscription when it ran (`process-live-p' is nil before that)
-      (drgnx-hub-client-test--wait (lambda () (not (eq drgnx-hub--events old))) "the subscription's sentinel ran")
-      (should (gethash 'hub-resubscribe drgnx-timer--table))
-      (setq hub (drgnx-hub-client-test--serve))
-      (drgnx-hub-client-test--wait (lambda () (and (process-live-p drgnx-hub--events) (not (eq drgnx-hub--events old))))
-                                   "the editor subscribes again")
-      (should-not drgnx-hub--resubscribe-since)
-      (should-not (gethash 'hub-resubscribe drgnx-timer--table)))))
+  ;; the hub ends, the client schedules its redial and, when the client's clock reaches it, subscribes again to the
+  ;; hub that is back: no real time is waited
+  (drgnx-hub-client-test--with-hub
+    (let (scheduled since timer)
+      (drgnx-test-gated '((sub-1 :answer "subscribe") (call-1 :answer "gateway/keys-held") (:pause "up")
+                          (sub-1 :eof) (:pause "down") (sub-2 :answer "subscribe"))
+        (drgnx-hub-connect)
+        ;; the hand-over's keys-held answer is the step before the pause: the hub is stopped after it answered
+        (drgnx-hub-client-test--wait (lambda () (and (process-live-p drgnx-hub--events) (listp drgnx-hub--keys-held)))
+                                     "the first subscription and the hand-over's answers")
+        (let ((old drgnx-hub--events))
+          (signal-process hub 'term)
+          (drgnx-hub-client-test--wait (lambda () (memq :eof (drgnx-test-gate-held 'sub-1)))
+                                       "the first subscription's end, held")
+          (drgnx-test-gate-continue "up")
+          ;; the sentinel's own mark: it lets go of the subscription when it ran (`process-live-p' is nil before that)
+          (drgnx-hub-client-test--wait (lambda () (not (eq drgnx-hub--events old))) "the subscription's sentinel ran")
+          (setq scheduled (and (gethash 'hub-resubscribe drgnx-timer--table) t))
+          (drgnx-hub-client-test--wait (lambda () (process-get hub :done)) "the hub ends")
+          (setq hub (drgnx-hub-client-test--serve))
+          (drgnx-hub-client-test--wait #'drgnx-hub-client-test--hub-listens-p "the hub is back")
+          (drgnx-test-gate-continue "down")
+          (drgnx-test-advance 1)              ; the redial's delay
+          (drgnx-hub-client-test--wait (lambda () (and (process-live-p drgnx-hub--events) (not (eq drgnx-hub--events old))))
+                                       "the editor subscribes again")
+          (setq since drgnx-hub--resubscribe-since
+                timer (gethash 'hub-resubscribe drgnx-timer--table))
+          (drgnx-test-deliver-all)))
+      (should scheduled)
+      (should-not since)
+      (should-not timer))))
+
+(defun drgnx-hub-client-test--forget-after (after-stop)
+  "Subscribe, hold the hand-over's answers on the call connection, end the hub, then release AFTER-STOP (a schedule
+of `(sub-1 :eof)' and `(call-1 :answer \"gateway/keys-held\")' in some order).  (EDITOR KEYS-HELD TOKEN-SEEN): the
+token and the held keys at the end, and whether the token reached `drgnx-hub-editor-token-hook'."
+  (let (editor keys seen)
+    (drgnx-hub-client-test--with-hub
+      (drgnx-test-gated (append '((sub-1 :answer "subscribe") (:pause "stop")) after-stop)
+        (add-hook 'drgnx-hub-editor-token-hook (lambda () (setq seen t)))
+        (drgnx-hub-connect)
+        (drgnx-hub-client-test--wait (lambda () (and (drgnx-hub-client-test--answer-held-p 'call-1 :token)
+                                                     (drgnx-hub-client-test--answer-held-p 'call-1 :providers)))
+                                     "the hand-over's answers, held")
+        (signal-process hub 'term)
+        (drgnx-hub-client-test--wait (lambda () (and (memq :eof (drgnx-test-gate-held 'sub-1))
+                                                     (memq :eof (drgnx-test-gate-held 'call-1))))
+                                     "both ends, held")
+        (drgnx-test-gate-continue "stop")
+        (drgnx-test-deliver-all)
+        (setq editor drgnx-hub--editor keys drgnx-hub--keys-held)))
+    (list editor keys seen)))
 
 (ert-deftest drgnx-hub-client/forgets-token-and-keys-on-disconnect ()
-  (drgnx-hub-client-test--with-ratatoskr
-    (drgnx-hub-connect)
-    (drgnx-hub-client-test--wait (lambda () (process-live-p drgnx-hub--events)) "the subscription")
-    ;; the hand-over's answers first: this test is about the forget (an answer read after it is the next test's)
-    (drgnx-hub-client-test--wait (lambda () (not (drgnx-hub-client-test--asking-p '("gateway/editor-token" "gateway/keys-held"))))
-                                 "the hand-over's answers")
-    (setq drgnx-hub--editor (cons "tok" "http://x") drgnx-hub--keys-held '("openrouter"))
-    (drgnx-hub-client-test--stop hub)
-    (drgnx-hub-client-test--wait (lambda () (null drgnx-hub--events)) "the subscription ends")
-    (should-not drgnx-hub--editor)
-    (should (eq drgnx-hub--keys-held :unknown))))
+  ;; the subscription's end forgets the token and the held keys, whichever order the call connection's hand-over
+  ;; answers come in: after the end (they are the gone hub's, and dropped) or before it (taken, then forgotten)
+  (pcase-let ((`(,editor-a ,keys-a ,seen-a)
+               (drgnx-hub-client-test--forget-after '((sub-1 :eof) (call-1 :answer "gateway/keys-held"))))
+              (`(,editor-b ,keys-b ,seen-b)
+               (drgnx-hub-client-test--forget-after '((call-1 :answer "gateway/keys-held") (sub-1 :eof)))))
+    (should-not editor-a)
+    (should (eq keys-a :unknown))
+    (should-not seen-a)
+    (should-not editor-b)
+    (should (eq keys-b :unknown))
+    (should seen-b)))
 
 (ert-deftest drgnx-hub-client/an-answer-read-after-the-subscription-ended-is-dropped ()
   ;; Ratatoskr ends its connections in any order: the hand-over's answers on the call connection can be read after the
@@ -1106,25 +1210,34 @@
       (should (eq drgnx-hub--keys-held :unknown)))))
 
 (ert-deftest drgnx-hub-client/no-resubscribe-after-asked-disconnect ()
-  (drgnx-hub-client-test--with-ratatoskr
-    ;; drgnx-hub-disconnect
-    (drgnx-hub-client-test--spy 'drgnx-hub-connect dials
-      (drgnx-hub-connect)
-      (drgnx-hub-client-test--wait (lambda () (process-live-p drgnx-hub--events)) "the subscription")
-      (drgnx-hub-disconnect)
-      (drgnx-test-pause 0.3 "no resubscribe may start")
-      (should-not (gethash 'hub-resubscribe drgnx-timer--table))
-      (should-not drgnx-hub--resubscribe-since)
-      (should (= (length dials) 1)))
-    ;; a shutdown this editor sent
-    (drgnx-hub-connect)
-    (drgnx-hub-client-test--wait (lambda () (process-live-p drgnx-hub--events)) "the second subscription")
-    (drgnx-hub-call "shutdown" nil #'ignore)
-    (drgnx-hub-client-test--wait (lambda () (process-get hub :done)) "Ratatoskr shuts down")
-    (drgnx-hub-client-test--wait (lambda () (null drgnx-hub--events)) "the subscription ends")
-    (should drgnx-hub--asked-disconnect)
-    (should-not (gethash 'hub-resubscribe drgnx-timer--table))
-    (should-not drgnx-hub--resubscribe-since)))
+  (drgnx-hub-client-test--with-hub
+    (let (timer-1 since-1 dials-1 asked timer-2 since-2)
+      (drgnx-test-gated '((sub-1 :answer "subscribe") (sub-2 :answer "subscribe") (:pause "shutdown") (sub-2 :eof))
+        ;; drgnx-hub-disconnect
+        (drgnx-hub-client-test--spy 'drgnx-hub-connect dials
+          (drgnx-hub-connect)
+          (drgnx-hub-client-test--wait (lambda () (process-live-p drgnx-hub--events)) "the subscription")
+          (drgnx-hub-disconnect)
+          (drgnx-test-advance 5)            ; past the first redial's delay
+          (setq timer-1 (gethash 'hub-resubscribe drgnx-timer--table)
+                since-1 drgnx-hub--resubscribe-since
+                dials-1 (length dials)))
+        ;; a shutdown this editor sent
+        (drgnx-hub-connect)
+        (drgnx-hub-client-test--wait (lambda () (process-live-p drgnx-hub--events)) "the second subscription")
+        (drgnx-test-gate-continue "shutdown")
+        (drgnx-hub-call "shutdown" nil #'ignore)
+        (drgnx-hub-client-test--wait (lambda () (process-get hub :done)) "Ratatoskr shuts down")
+        (drgnx-hub-client-test--wait (lambda () (null drgnx-hub--events)) "the subscription ends")
+        (setq asked drgnx-hub--asked-disconnect
+              timer-2 (gethash 'hub-resubscribe drgnx-timer--table)
+              since-2 drgnx-hub--resubscribe-since))
+      (should-not timer-1)
+      (should-not since-1)
+      (should (= dials-1 1))
+      (should asked)
+      (should-not timer-2)
+      (should-not since-2))))
 
 (ert-deftest drgnx-hub-client/gives-up-after-ten-minutes ()
   ;; the clock is injected: backoff 1, 2, 4 … 30 s; at 600 s one notice naming Hub: Restart Now
@@ -1146,16 +1259,23 @@
       (should-not drgnx-hub--resubscribe-since))))
 
 (ert-deftest drgnx-hub-client/never-runs-ensure ()
-  (drgnx-hub-client-test--with-ratatoskr
-    (drgnx-hub-connect)
-    (drgnx-hub-client-test--wait (lambda () (process-live-p drgnx-hub--events)) "the subscription")
-    (drgnx-hub-client-test--spy 'drgnx-hub-ensure ensures
-      (drgnx-hub-client-test--spy 'drgnx-hub--ensure-running runs
-        (drgnx-hub-client-test--spy 'drgnx-hub-connect dials
-          (drgnx-hub-client-test--stop hub)
-          (drgnx-hub-client-test--wait (lambda () (>= (length dials) 2)) "two redials against a hub that stays down")
-          (should-not ensures)
-          (should-not runs))))))
+  (drgnx-hub-client-test--with-hub
+    (let (redials ensured ran)
+      (drgnx-test-gated '((sub-1 :answer "subscribe") (:pause "down") (sub-1 :eof))
+        (drgnx-hub-connect)
+        (drgnx-hub-client-test--wait (lambda () (process-live-p drgnx-hub--events)) "the subscription")
+        (drgnx-hub-client-test--spy 'drgnx-hub-ensure ensures
+          (drgnx-hub-client-test--spy 'drgnx-hub--ensure-running runs
+            (drgnx-hub-client-test--spy 'drgnx-hub-connect dials
+              (drgnx-hub-client-test--stop hub)
+              (drgnx-test-gate-continue "down")
+              (drgnx-hub-client-test--wait (lambda () (null drgnx-hub--events)) "the subscription ends")
+              (drgnx-test-advance 1)        ; the first redial, against a hub that stays down
+              (drgnx-test-advance 2)        ; the second
+              (setq redials (length dials) ensured ensures ran runs)))))
+      (should (>= redials 2))
+      (should-not ensured)
+      (should-not ran))))
 
 (ert-deftest drgnx-hub-client/matrix-card-shown ()
   ;; a matrix card and a supervisor pause become notices of the hub; nothing asks, nothing waits; agent-step is ignored
