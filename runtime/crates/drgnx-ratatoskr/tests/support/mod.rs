@@ -79,8 +79,13 @@ impl Hub {
     }
 
     pub fn start_with(root: &Root, n: usize, extra: &[&str]) -> Hub {
+        Hub::start_from(Path::new(BIN), root, n, extra)
+    }
+
+    /// [`Hub::start_with`], the hub run from the binary at BIN (a copy the test may replace: an update).
+    pub fn start_from(bin: &Path, root: &Root, n: usize, extra: &[&str]) -> Hub {
         let stderr = root.dir.path().join(format!("hub-{n}.err"));
-        let mut child = Command::new(BIN)
+        let mut child = Command::new(bin)
             .args([
                 "serve",
                 "--foreground",

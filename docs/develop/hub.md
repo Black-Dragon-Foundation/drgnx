@@ -279,6 +279,12 @@ sends, counting across its connections in the order it wrote them). The stamp is
   woken tasks have parked, before its answer) and at `__test_barrier`. A write from a task without an origin is held
   too, and counted.
 - `mcp/attach` works: nothing after it is read as lines until it is served.
+- **The hub's end never drops a held write.** When the hub ends (`shutdown`, `restart`, restart-when-idle, a signal,
+  its parent gone), the step being served finishes and nothing more is served. What is still held is released in key
+  order, and every connection's queue is written before the connections close. Restart-when-idle needs this: one idle
+  tick sends the update notice (held) and, with nothing busy, ends the hub. The client's delivery gate still holds the
+  lines and the end behind them, so the test still decides when its client sees them. Each of these waits is bounded
+  by 5 s of real time, since the virtual clock stands still; one that runs out is logged.
 
 **`__test_barrier {}`**, which the sequencer serves itself when it is the lowest pending line:
 

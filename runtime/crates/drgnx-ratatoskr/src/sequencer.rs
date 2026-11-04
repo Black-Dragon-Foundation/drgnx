@@ -8,6 +8,10 @@
 //! writes are serving steps.  A write from any other task (a turn, a timer) is held, keyed by (virtual ms, origin,
 //! the origin's count), and released in key order at `__test_advance` and `__test_barrier`; a write from a task
 //! without an origin is counted (`unnamed`).
+//!
+//! When the hub ends ([`Sequencer::end`]), the step being served finishes, nothing more is served, and what is still
+//! held is released in key order and written before the connections close: an end never drops a held write, and the
+//! client's delivery gate still decides when its client sees it.
 
 use crate::clock;
 use crate::conn::Outbox;
@@ -15,7 +19,7 @@ use runstav::wire::{Answer, Event, Id};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 use tokio::sync::{Notify, mpsc, oneshot};
@@ -245,7 +249,14 @@ pub struct Sequencer {
     /// A connection's socket became readable.
     kick: Notify,
     markers: AtomicU64,
+    /// Held while a round of reads and serving steps runs, and by [`Sequencer::end`].
+    step: tokio::sync::Mutex<()>,
+    /// The hub ends: nothing more is served.
+    ended: AtomicBool,
 }
+
+/// How long, in real time, the hub's end waits for the step being served and for each connection's queue to be written.
+const END_WITHIN: Duration = Duration::from_secs(5);
 
 impl Sequencer {
     fn new() -> Sequencer {
@@ -255,6 +266,8 @@ impl Sequencer {
             eof: Mutex::new(BTreeSet::new()),
             kick: Notify::new(),
             markers: AtomicU64::new(0),
+            step: tokio::sync::Mutex::new(()),
+            ended: AtomicBool::new(false),
         }
     }
 
@@ -297,11 +310,36 @@ impl Sequencer {
         }
     }
 
+    /// The hub ends (its shutdown, a restart, a signal): once the step being served is done, nothing more is served;
+    /// what is still held is released in key order, and every connection's queue is written.  Each wait is bounded by
+    /// [`END_WITHIN`] of real time (the virtual clock stands still), and one that runs out is logged.
+    pub async fn end(&self) {
+        let step = clock::real_timeout(END_WITHIN, self.step.lock()).await;
+        if step.is_err() {
+            tracing::warn!("the hub ends while a request is still being served");
+        }
+        self.ended.store(true, Ordering::SeqCst);
+        self.release();
+        let outs: Vec<Arc<Outbox>> = lock(&self.conns).values().map(|h| h.out.clone()).collect();
+        for out in outs {
+            if clock::real_timeout(END_WITHIN, out.flushed(END_WITHIN))
+                .await
+                .is_err()
+            {
+                tracing::warn!("the hub ends with lines not yet written to a connection");
+            }
+        }
+    }
+
     async fn run(self: Arc<Self>) {
         loop {
             self.kick.notified().await;
             // until a read brings nothing to serve
             loop {
+                let _step = self.step.lock().await;
+                if self.ended.load(Ordering::SeqCst) {
+                    return;
+                }
                 self.drain_all().await;
                 let served = self.serve_pending().await;
                 self.finish_ended();
