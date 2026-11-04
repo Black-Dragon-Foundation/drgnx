@@ -53,6 +53,7 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
 ;; runs here; the gate holds whatever a hub would say.
 
 (ert-deftest drgnx-onboard/the-ai-step-finds-providers-sets-roles-and-tests-them ()
+  :tags '(:frozen)
   (drgnx-ai-onboard-test--with
     (let (r)
       (drgnx-test-gated nil
@@ -68,6 +69,7 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
       (should-not (string-search "sk-" (with-temp-buffer (insert-file-contents (concat root "config/settings.el")) (buffer-string)))))))
 
 (ert-deftest drgnx-onboard/the-ai-step-keeps-roles-that-work ()
+  :tags '(:frozen)
   (drgnx-ai-onboard-test--with
     (drgnx-test-gated nil
       (drgnx-ai-set-role 'chat '((o . "qwen2.5-coder:1.5b")))  ; the settings go to a hub, if one runs
@@ -76,6 +78,7 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
     (should (equal (drgnx-ai-role 'chat) '((o . "qwen2.5-coder:1.5b"))))))         ; the user's choice stays
 
 (ert-deftest drgnx-onboard/the-ai-step-with-nothing-running-says-what-to-do ()
+  :tags '(:frozen)
   (drgnx-ai-onboard-test--with
     (delete-process mock) (setq mock nil)
     (let ((r (drgnx-onboard--ai-step '(:interactive nil))))
@@ -109,6 +112,7 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
       (should (string-match-p "Chat (module extra/llm) is on" (cadr r))))))
 
 (ert-deftest drgnx-ai-onboard/role-written-only-after-answer ()
+  :tags '(:frozen)
   ;; A provider that never answers leaves the roles (settings.el) as they were, and the three test calls share one
   ;; budget: the step ends within about the budget, not 3 ×.  Roles that ran out of time read "not tested".
   ;; The budget on the clock fixture: virtual time, which a loaded machine does not move.
@@ -131,6 +135,7 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
   (alist-get role (default-value 'drgnx-ai-roles)))
 
 (ert-deftest drgnx-ai-onboard/a-projects-route-never-reaches-the-global-roles ()
+  :tags '(:frozen)
   (drgnx-ai-onboard-test--with
     (make-directory (concat root "proj/.drgnx") t)
     (with-temp-file (concat root "proj/.drgnx/ai.eld")
@@ -160,6 +165,7 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
     nil))
 
 (ert-deftest drgnx-ai-onboard/the-role-tests-run-side-by-side ()
+  :tags '(:frozen)
   ;; A provider that takes 2.5 s per call answers all three roles within the budget: one wait, not three in a row.
   ;; FLAKY-2: on the clock fixture the provider's 2.5 s are virtual, and the budget is measured on virtual time.  The
   ;; probe's curls are real: inside the gate no virtual time passes while they live.
@@ -179,6 +185,7 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
           (mapc #'cancel-timer (car timers)))))))
 
 (ert-deftest drgnx-ai-onboard/a-slow-provider-is-not-tested-and-never-sets-ai-up ()
+  :tags '(:frozen)
   ;; Calls still waiting when the budget is up read "not tested", are not counted as asked, and the interactive step
   ;; does not offer "Set up AI with" for them.
   ;; On the clock fixture: the 2 s budget and the provider's 30 s are virtual.
@@ -200,6 +207,7 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
           (mapc #'cancel-timer (car timers)))))))
 
 (ert-deftest drgnx-ai-onboard/a-provider-that-refuses-at-once-did-not-answer ()
+  :tags '(:frozen)
   (drgnx-ai-onboard-test--with
     (cl-letf (((symbol-function 'drgnx-ai-request) (lambda (_r _k _p callback &rest _) (funcall callback nil '(:error "refused")) nil)))
       (let ((r (drgnx-onboard--ai-found '(:interactive nil))))
@@ -415,6 +423,7 @@ while a step waits; until each end comes no virtual time passes."
                  '((complete . "qwen2.5-coder-1.5b-instruct") (edit . "qwen2.5-coder-7b-instruct") (chat . "qwen2.5-coder-7b-instruct")))))
 
 (ert-deftest drgnx-onboard/ollama-is-installed-started-pulled-and-tested ()
+  :tags '(:frozen)
   ;; four jobs end, in turn: the install and three downloads (the server keeps running)
   (drgnx-ai-onboard-test--with-mac-jobs drgnx-ai-onboard-test--ollama-answers
     (cl-letf* ((shown nil)
@@ -457,6 +466,7 @@ while a step waits; until each end comes no virtual time passes."
                             jobs)))))))
 
 (ert-deftest drgnx-onboard/lm-studio-is-set-up-the-same-way ()
+  :tags '(:frozen)
   ;; six jobs end, in turn: the install, LM Studio's first start, `lms server start' (it starts the server and ends)
   ;; and three downloads
   (drgnx-ai-onboard-test--with-mac-jobs drgnx-ai-onboard-test--openai-answers
@@ -481,6 +491,7 @@ while a step waits; until each end comes no virtual time passes."
           (should (string-match-p "Ask the Codebase answered" (cadr r))))))))
 
 (ert-deftest drgnx-onboard/lm-studio-without-lms-says-what-to-do ()
+  :tags '(:frozen)
   ;; two jobs end (the install, LM Studio's first start); then the wait for lms runs out on the virtual clock
   (drgnx-ai-onboard-test--with-mac-jobs drgnx-ai-onboard-test--openai-answers
     (let ((_ (write-region "" nil (concat root "home/.no-lms") nil 'silent)) (drgnx-onboard-lms-wait 1))
@@ -529,6 +540,7 @@ while a step waits; until each end comes no virtual time passes."
           (delete-process mock))))))
 
 (ert-deftest drgnx-ai-onboard/cli-exit-stops-the-job ()
+  :tags '(:frozen)
   ;; `drgnx onboard' in batch: while a job is waited on, ending Emacs (Ctrl-C) stops the job; the entry is gone
   ;; once the wait is over.
   ;; Every answer as it is due (the stop's answer is the stopped job's row); the job's end comes at the end.
@@ -550,6 +562,7 @@ while a step waits; until each end comes no virtual time passes."
         (should (eq (car r) 'fail))))))
 
 (ert-deftest drgnx-ai-onboard/a-real-ctrl-c-stops-the-job ()
+  :tags '(:frozen)
   ;; The same with a real SIGINT: a batch Emacs waiting on a job ends on it without unwinding, and its
   ;; `kill-emacs-hook' entry stops the job.  (`env --default-signal=INT': a background job ignores SIGINT.)  The child
   ;; parks (test/fixtures/handshake-fixture.el) right after it sent the job's start and before it read the answer: the
@@ -605,6 +618,7 @@ while a step waits; until each end comes no virtual time passes."
 (defvar drgnx-ai-onboard-test--job-what nil "The job `drgnx-onboard--job' is waiting on (the test's view).")
 
 (ert-deftest drgnx-ai-onboard/pull-has-no-hour-limit ()
+  :tags '(:frozen)
   ;; A model download (and the full-ai package sync) waits without the one-hour cap: C-g stops it, the progress shows.
   (drgnx-ai-onboard-test--with-mac-jobs drgnx-ai-onboard-test--ollama-answers
     (let ((waits nil) (job (symbol-function 'drgnx-onboard--job)) (until (symbol-function 'drgnx-onboard--until)))
@@ -628,12 +642,14 @@ while a step waits; until each end comes no virtual time passes."
             (dolist (w pulls) (should (or (null (cdr w)) (>= (cdr w) (* 6 3600)))))))))))
 
 (ert-deftest drgnx-ai-onboard/the-package-sync-has-no-hour-limit ()
+  :tags '(:frozen)
   (let ((seen nil))
     (cl-letf (((symbol-function 'drgnx-onboard--job) (lambda (_what _command &optional secs) (setq seen (list secs)) 'ok)))
       (drgnx-onboard--sync-job))
     (should (equal seen '(:none)))))
 
 (ert-deftest drgnx-ai-onboard/estimate-skips-models-present ()
+  :tags '(:frozen)
   ;; A re-run's "about N GB to download" counts only the models the provider does not list yet.
   (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--ollama-answers
     (let* ((names (delete-dups (mapcar #'cdr (drgnx-onboard--local-models)))) (prompts nil))
@@ -651,6 +667,7 @@ while a step waits; until each end comes no virtual time passes."
         (should (= (nth 2 gb) 0.0))))))                    ; all there (also as name:latest): nothing
 
 (ert-deftest drgnx-ai-onboard/last-line-has-no-escapes ()
+  :tags '(:frozen)
   ;; A progress bar's last state, without ANSI escapes or the carriage-return redraws before it; only the end of the
   ;; log (4 KB) is asked of the hub.
   (let ((log "") (asked nil))
@@ -695,6 +712,7 @@ while a step waits; until each end comes no virtual time passes."
           (delete-process mock))))))
 
 (ert-deftest drgnx-onboard/openrouter-from-the-cli-asks-for-no-key ()
+  :tags '(:frozen)
   (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--openai-answers
     (cl-letf (((symbol-function 'read-passwd) (lambda (&rest _) (error "Asked for a key in batch"))))
       (let ((r (drgnx-onboard--ai-setup 'openrouter '(:interactive t))))     ; `drgnx onboard' runs in batch
@@ -702,6 +720,7 @@ while a step waits; until each end comes no virtual time passes."
         (should-not (file-exists-p (concat root "security.stdin")))))))
 
 (ert-deftest drgnx-onboard/a-failed-download-says-how-to-retry ()
+  :tags '(:frozen)
   ;; six jobs end, in turn: the install and two downloads (the second fails, and the step stops there), then on the
   ;; second run three downloads (the server keeps running)
   (drgnx-ai-onboard-test--with-mac-jobs drgnx-ai-onboard-test--ollama-answers
@@ -732,6 +751,7 @@ while a step waits; until each end comes no virtual time passes."
           (should (equal (car (drgnx-ai-role 'edit)) '(ollama . "qwen2.5-coder:7b"))))))))
 
 (ert-deftest drgnx-onboard/non-interactive-installs-nothing ()
+  :tags '(:frozen)
   (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--ollama-answers
     (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) (error "Asked")))
               ((symbol-function 'completing-read) (lambda (&rest _) (error "Asked"))))

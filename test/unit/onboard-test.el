@@ -69,6 +69,7 @@ unset around its use, or it wins."
 ;;;; Task 1: steps, progress, runner
 
 (ert-deftest drgnx-onboard/steps-run-in-order-and-record-progress ()
+  :tags '(:frozen)
   (drgnx-onboard-test--with root
     (let ((drgnx-onboard--steps nil) (ran nil))
       (drgnx-onboard-define-step 'b :title "B" :order 20 :run (lambda (_) (push 'b ran) '(ok "b done")))
@@ -87,6 +88,7 @@ unset around its use, or it wins."
       (should (equal ran '(c))))))
 
 (ert-deftest drgnx-onboard/a-check-follows-every-step ()
+  :tags '(:frozen)
   (drgnx-onboard-test--with root
     (let ((drgnx-onboard--steps nil))
       (drgnx-onboard-define-step 'a :title "A" :order 1 :run (lambda (_) '(ok "ran"))
@@ -94,6 +96,7 @@ unset around its use, or it wins."
       (should (equal (cdr (car (drgnx-onboard-run :non-interactive t))) '(warn "but the doctor says no"))))))
 
 (ert-deftest drgnx-onboard/non-interactive-never-asks ()
+  :tags '(:frozen)
   (drgnx-onboard-test--with root
     (let ((drgnx-onboard--steps nil))
       (drgnx-onboard-define-step 'asks :title "Asks" :order 1
@@ -103,6 +106,7 @@ unset around its use, or it wins."
 ;;;; Task 2: environment, look and keys, presets
 
 (ert-deftest drgnx-onboard/presets-choose-the-extra-modules ()
+  :tags '(:frozen)
   (drgnx-onboard-test--with root
     (drgnx-modules-update-state (lambda (_) '(:disabled (ui/look) :theme tango)))
     (drgnx-onboard-apply-preset 'minimal)
@@ -120,6 +124,7 @@ unset around its use, or it wins."
                             (plist-get (drgnx-modules-read-state) :disabled)))))
 
 (ert-deftest drgnx-onboard/the-environment-says-what-is-missing-and-how-to-fix-it ()
+  :tags '(:frozen)
   (cl-letf (((symbol-function 'executable-find) (lambda (p &rest _) (and (member p '("git" "rg")) (concat "/usr/bin/" p)))))
     (let ((env (drgnx-onboard-environment)))
       (should (eq (plist-get (alist-get 'git env) :status) 'ok))
@@ -127,7 +132,7 @@ unset around its use, or it wins."
       (should (plist-get (alist-get 'fd env) :fix)))))
 
 (ert-deftest drgnx-onboard/macos-fixes-say-brew ()
-  :tags '(:cond)
+  :tags '(:cond :frozen)
   ;; Nothing is installed: every tool and the Command Line Tools are missing, and each fix is a Homebrew
   ;; or xcode-select command (the GPU row is ok on a Mac: Apple silicon shares its memory).
   (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos))
@@ -147,6 +152,7 @@ unset around its use, or it wins."
     (should (string-search "podman machine init" (plist-get (alist-get 'podman (drgnx-onboard-environment)) :fix)))))
 
 (ert-deftest drgnx-onboard/linux-has-no-command-line-tools-row-and-keeps-its-fixes ()
+  :tags '(:frozen)
   (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'linux))
             ((symbol-function 'executable-find) (lambda (&rest _) nil))
             ((symbol-function 'drgnx-onboard--font-p) (lambda (_) t)))
@@ -156,6 +162,7 @@ unset around its use, or it wins."
       (should (string-search "dnf install ripgrep" (plist-get (alist-get 'ripgrep env) :fix))))))
 
 (ert-deftest drgnx-onboard/no-fc-list-is-not-a-missing-font ()
+  :tags '(:frozen)
   (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) nil))
             ((symbol-function 'executable-find) (lambda (p &rest _) (and (not (equal p "fc-list")) (concat "/usr/bin/" p)))))
     (should (eq (drgnx-onboard--font-p "Symbols Nerd Font") 'unknown))
@@ -167,12 +174,14 @@ unset around its use, or it wins."
         (should-not (string-search "missing" (cadr r)))))))
 
 (ert-deftest drgnx-onboard/the-font-is-asked-of-emacs-in-a-graphical-session ()
+  :tags '(:frozen)
   (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t))
             ((symbol-function 'font-family-list) (lambda (&rest _) '("Menlo" "Symbols Nerd Font"))))
     (should (drgnx-onboard--font-p "Symbols Nerd Font"))
     (should-not (drgnx-onboard--font-p "Nope Font"))))
 
 (ert-deftest drgnx-onboard/look-and-keys-writes-the-choices ()
+  :tags '(:frozen)
   (drgnx-onboard-test--with root
     (let ((r (drgnx-onboard-run :only '(look-and-keys) :non-interactive t
                                 :options '(:preset ide :keys "Emacs" :theme modus-vivendi))))
@@ -264,6 +273,7 @@ unset around its use, or it wins."
 ;;;; Task 4: daemon, detection, finish; the whole flow
 
 (ert-deftest drgnx-onboard/the-daemon-step-writes-files-and-installs-nothing ()
+  :tags '(:frozen)
   (drgnx-onboard-test--with root
     (let ((r (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'linux)))
                (car (drgnx-onboard-run :only '(daemon) :non-interactive t)))))
@@ -286,7 +296,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
       (list (car (drgnx-onboard-run :only '(daemon))) (nreverse prompts) programs installed))))
 
 (ert-deftest drgnx-onboard/step-7-on-macos-asks-once-and-installs-the-app ()
-  :tags '(:cond)
+  :tags '(:cond :frozen)
   (drgnx-onboard-test--with root
     (let ((drgnx-macos-app-dir (concat root "Applications/")) (drgnx-keep-running t))
       (pcase-let ((`(,r ,prompts ,programs ,installed) (drgnx-onboard-test--step-7 'macos nil t)))
@@ -316,6 +326,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
         (should (drgnx-onboard-test--keep-running-is t))))))
 
 (ert-deftest drgnx-onboard/step-7-on-macos-without-interaction-installs-nothing ()
+  :tags '(:frozen)
   (drgnx-onboard-test--with root
     (let ((drgnx-macos-app-dir (concat root "Applications/")) (drgnx-keep-running t) (installed nil))
       (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos))
@@ -333,7 +344,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
         (should (drgnx-onboard-test--keep-running-is nil))))))
 
 (ert-deftest drgnx-onboard/step-7-on-linux-is-unchanged-plus-the-question ()
-  :tags '(:cond)
+  :tags '(:cond :frozen)
   (drgnx-onboard-test--with root
     (let ((drgnx-keep-running t))
       (pcase-let ((`(,r ,prompts ,programs ,installed) (drgnx-onboard-test--step-7 'linux t nil)))
@@ -350,6 +361,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
         (should (drgnx-onboard-test--keep-running-is t))))))
 
 (ert-deftest drgnx-onboard/the-first-window-opens-the-welcome-once ()
+  :tags '(:frozen)
   ;; The first graphical frame schedules the Welcome (a timer: never inside the hook); it opens when onboarding
   ;; never ran here, and marks it so it never opens by itself again.
   (drgnx-onboard-test--with root
@@ -381,7 +393,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
           (should (= opened 1)))))))
 
 (ert-deftest drgnx-onboard/the-whole-flow-twice ()
-  :tags '(:cond)
+  :tags '(:cond :frozen)
   ;; The M6 exit, in batch: a fresh config onboarded non-interactively with fixture repos; the board
   ;; is not touched (it only reports); the doctor has no failure; the second run changes nothing.
   (drgnx-onboard-test--with root
@@ -463,6 +475,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
         (should-not asked)))))
 
 (ert-deftest drgnx-onboard/the-cli ()
+  :tags '(:frozen)
   (let (got)
     (cl-letf (((symbol-function 'drgnx-onboard-run) (lambda (&rest a) (setq got a) '((a ok "fine")))))
       (should (eql (drgnx-onboard-cli-run '("--non-interactive" "--preset" "minimal" "--roots" "/x" "/y" "--step" "projects")) 0))
@@ -487,12 +500,14 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
 (require 'drgnx-doctor)
 
 (ert-deftest drgnx-onboard/the-doctor-reports-onboarding ()
+  :tags '(:frozen)
   (let ((check (lambda (s) (drgnx-doctor-check 'onboarding (list :onboarding s)))))
     (should (eq (car (funcall check nil)) 'info))
     (should (eq (car (funcall check '((environment :status ok) (projects :status fail)))) 'warn))
     (should (eq (car (funcall check '((environment :status ok) (projects :status info)))) 'ok))))
 
 (ert-deftest drgnx-onboard/every-step-is-a-command ()
+  :tags '(:frozen)
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
     (drgnx-onboard-register-commands)
     (should (drgnx-commands-get 'onboarding))
@@ -563,7 +578,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
       (should (equal (drgnx-onboard-test--board) "* x\n")))))
 
 (ert-deftest drgnx-onboard/a-scan-that-runs-out-of-time-says-so ()
-  :tags '(:cond)
+  :tags '(:cond :frozen)
   ;; I7
   (drgnx-onboard-test--with root
     (drgnx-onboard-test--repo (concat root "ws/alpha"))
@@ -573,7 +588,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
         (should (string-match-p "stopped" (nth 2 r)))))))
 
 (ert-deftest drgnx-onboard/todos-are-imported-only-when-asked ()
-  :tags '(:cond)
+  :tags '(:cond :frozen)
   ;; I8
   (drgnx-onboard-test--with root
     (drgnx-onboard-test--repo (concat root "ws/alpha") '("TODO.md" . "- [ ] a thing\n"))
@@ -624,6 +639,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
         (should (string-match-p "urgent" board))))))
 
 (ert-deftest drgnx-onboard/the-linux-desktop-files-are-written-in-the-data-folder-only ()
+  :tags '(:frozen)
   (drgnx-onboard-test--with root
     (let ((calls nil) (orig (symbol-function 'drgnx-file-write-text)))
       (cl-letf (((symbol-function 'drgnx-file-write-text)
@@ -639,10 +655,12 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
 
 
 (ert-deftest drgnx-onboard/the-desktop-entry-never-starts-another-config ()
+  :tags '(:frozen)
   ;; M1: emacsclient -a "" would start a daemon with the default init (not drgnx's) on drgnx's socket.
   (should-not (string-match-p " -a " drgnx-onboard-desktop-entry)))
 
 (ert-deftest drgnx-onboard/the-desktop-entry-claims-nidhoggs-windows ()
+  :tags '(:frozen)
   ;; the native shell's app id: without this line the switcher shows the bare id and no icon
   (should (string-match-p "^StartupWMClass=nidhogg$" drgnx-onboard-desktop-entry))
   (should (string-match-p "^Icon=drgnx$" drgnx-onboard-desktop-entry)))
@@ -725,7 +743,7 @@ Returns (RESULT PROMPTS)."
       (list (car (drgnx-onboard-run :only '(projects) :options `(:roots (,(concat root "ws/"))))) (nreverse prompts)))))
 
 (ert-deftest drgnx-onboard/the-project-picker-can-pick-none-and-paths-with-commas ()
-  :tags '(:cond)
+  :tags '(:cond :frozen)
   (drgnx-onboard-test--with root
     (let ((odd (directory-file-name (drgnx-onboard-test--repo (concat root "ws/al,pha")))))
       (drgnx-onboard-test--repo (concat root "ws/beta"))
@@ -861,7 +879,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
           cell)))
 
 (ert-deftest drgnx-onboard/claude-missing-is-installed-with-permission ()
-  :tags '(:cond)
+  :tags '(:cond :frozen)
   (drgnx-onboard-test--claude 'macos
     (let ((asked (drgnx-onboard-test--asked '(("\\`Set up Claude Code" . t)))))
       ;; without interaction: nothing installed, the commands said, no job
@@ -887,10 +905,11 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
       (should (equal (plist-get (drgnx-agents-claude-adapter) :name) "@agentclientprotocol/claude-agent-acp")))))
 
 (ert-deftest drgnx-onboard/the-onboarding-package-is-the-maintained-adapter ()
+  :tags '(:frozen)
   (should (equal drgnx-onboard-claude-package drgnx-agents-claude-package)))
 
 (ert-deftest drgnx-onboard/a-deprecated-adapter-keeps-working-and-the-step-says-how-to-move ()
-  :tags '(:cond)
+  :tags '(:cond :frozen)
   ;; C2-3: the deprecated @zed-industries package installed earlier: the profile is checked with it, the step warns
   ;; with the command — and nothing is installed or removed without that command
   (drgnx-onboard-test--claude 'linux
@@ -912,7 +931,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
        (should (file-exists-p (concat pkg "package.json")))))))
 
 (ert-deftest drgnx-onboard/claude-missing-says-no-and-nothing-is-installed ()
-  :tags '(:cond)                        ; the agents step starts the hub
+  :tags '(:cond :frozen)                        ; the agents step starts the hub
   (drgnx-onboard-test--claude 'macos
     (let ((asked (drgnx-onboard-test--asked '(("\\`Set up Claude Code" . nil)))))
       (let ((r (cl-letf (((symbol-function 'y-or-n-p) (car asked))) (drgnx-onboard--agents-step '(:interactive t)))))
@@ -921,7 +940,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
       (should (equal (drgnx-onboard-test--slurp calls) "")))))
 
 (ert-deftest drgnx-onboard/claude-on-linux-uses-its-installer-and-your-terminal-for-sudo ()
-  :tags '(:cond)
+  :tags '(:cond :frozen)
   (drgnx-onboard-test--claude 'linux
     (let* ((asked (drgnx-onboard-test--asked '(("\\`Set up Claude Code" . t))))
            (drgnx-onboard-app-wait 10)
@@ -940,7 +959,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
                               (drgnx-onboard-test--slurp calls))))))
 
 (ert-deftest drgnx-onboard/a-vs-code-extensions-claude-does-not-count ()
-  :tags '(:cond)                        ; the agents step starts the hub
+  :tags '(:cond :frozen)                        ; the agents step starts the hub
   (drgnx-onboard-test--claude 'macos
     (drgnx-onboard-test--script (concat home ".vscode/extensions/anthropic.claude-code-2/resources/native-binary/claude") "exit 0\n")
     (drgnx-onboard-test--have bin "npm" "claude-agent-acp")
@@ -954,7 +973,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
   `(progn (drgnx-onboard-test--have bin "claude" "claude-agent-acp" "npm") ,@body))
 
 (ert-deftest drgnx-onboard/claude-not-logged-in-opens-its-login ()
-  :tags '(:cond)
+  :tags '(:cond :frozen)
   (drgnx-onboard-test--claude 'macos
     (drgnx-onboard-test--installed
      (let ((asked (drgnx-onboard-test--asked '(("log in" . t)))))
@@ -981,7 +1000,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
        (should (= 1 (length (car (cdr asked)))))))))
 
 (ert-deftest drgnx-onboard/a-claude-that-cannot-say-is-offered-the-login-and-never-fails-the-step ()
-  :tags '(:cond)
+  :tags '(:cond :frozen)
   (drgnx-onboard-test--claude 'macos
     (drgnx-onboard-test--installed
      (let ((process-environment (cons "FAKE_OLD_CLAUDE=1" process-environment))
@@ -993,7 +1012,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
          (should (string-match-p "claude profile" (cadr r))))))))    ; and the agent was still checked
 
 (ert-deftest drgnx-onboard/the-claude-profile-is-checked ()
-  :tags '(:cond)
+  :tags '(:cond :frozen)
   (drgnx-onboard-test--claude 'macos
     (drgnx-onboard-test--installed
      (write-region "" nil (concat home ".logged-in"))
@@ -1020,7 +1039,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
          (should (string-match-p "hub could not check" (cadr r))))))))
 
 (ert-deftest drgnx-onboard/claude-profile-asks-the-hub ()
-  :tags '(:cond)
+  :tags '(:cond :frozen)
   (drgnx-onboard-test--claude 'macos
     (drgnx-onboard-test--installed
      (write-region "" nil (concat home ".logged-in"))
@@ -1035,7 +1054,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
      (should-not (seq-find (lambda (p) (string-prefix-p "drgnx-acp" (process-name p))) (process-list))))))
 
 (ert-deftest drgnx-onboard/an-npm-failure-says-how-to-retry ()
-  :tags '(:cond)
+  :tags '(:cond :frozen)
   (drgnx-onboard-test--claude 'macos
     (let ((asked (drgnx-onboard-test--asked '(("\\`Set up Claude Code" . t))))
           (_ (write-region "" nil (concat home ".npm-fail") nil 'silent)))
@@ -1054,6 +1073,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
           (should (equal r (list 'ok (cadr r)))))))))
 
 (ert-deftest drgnx-onboard/the-preset-step-offers-the-packages ()
+  :tags '(:frozen)
   ;; After the preset: its packages (the lock's, with what they need), asked once with their size, then `drgnx sync'
   ;; as a job; never without interaction; not again once they are installed.
   (drgnx-onboard-test--with root
@@ -1108,6 +1128,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
           (should (eq (car r) 'ok)))))))
 
 (ert-deftest drgnx-onboard/a-fresh-install-is-full-ai ()
+  :tags '(:frozen)
   ;; Nothing turned off is the full-ai preset — the Modules question's default — so Return keeps Chat on.
   (drgnx-onboard-test--with root
     (should (eq (drgnx-onboard--current-preset) 'full-ai))
@@ -1135,6 +1156,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
 (defvar drgnx-onboard-test--asked nil)
 
 (ert-deftest drgnx-onboard/every-question-shows-its-choices-and-default ()
+  :tags '(:frozen)
   ;; A first start has no completion UI: the prompt itself lists the few choices and the default Return takes.
   (drgnx-onboard-test--with root
     (setq drgnx-onboard-test--asked nil)
@@ -1153,6 +1175,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
       (should-error (drgnx-onboard--choose "Pick" '("a" "b") "a") :type 'user-error))))
 
 (ert-deftest drgnx-onboard/set-up-ai-with-defaults-to-the-machine ()
+  :tags '(:frozen)
   ;; Return alone: Ollama when models get 10 GB of room here, else OpenRouter; never Skip.
   (require 'drgnx-ai-probe)
   (dolist (c '((16000 macos "ollama") (10000 linux "ollama") (8000 macos "openrouter") (nil linux "openrouter")))
@@ -1168,6 +1191,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
                    (format-prompt "Set up AI with (ollama, lmstudio, openrouter, skip)" "ollama")))))
 
 (ert-deftest drgnx-onboard/the-welcome-says-where-to-start-and-moves-on ()
+  :tags '(:frozen)
   (drgnx-onboard-test--with root
     (let ((drgnx-onboard--steps nil) (ran nil))
       (drgnx-onboard-define-step 'a :title "A" :order 10 :doc "a" :run (lambda (_) (push 'a ran) '(ok "a done")))
@@ -1186,6 +1210,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
       (kill-buffer "*drgnx Welcome*"))))
 
 (ert-deftest drgnx-onboard/on-a-mac-look-and-keys-asks-about-option-once ()
+  :tags '(:frozen)
   (drgnx-onboard-test--with root
     (let ((asked nil) (answer t) (opts '(:preset full-ai :keys "VS Code" :theme modus-vivendi)))
       (cl-letf (((symbol-function 'completing-read)
@@ -1218,6 +1243,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
         (should-not asked)))))
 
 (ert-deftest drgnx-onboard/option-question-shows-the-current-choice ()
+  :tags '(:frozen)
   ;; M12a-80: the question names both answers and offers the saved one on Return (Meta before anything is saved)
   (drgnx-onboard-test--with root
     (let ((seen nil) (answer "Meta") (opts '(:preset full-ai :keys "VS Code" :theme modus-vivendi)))
@@ -1276,6 +1302,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
           (should-not (string-search "Finish" (cdr r))))))))
 
 (ert-deftest drgnx-onboard/chat-step-turns-chat-on-whatever-the-file-says-now ()
+  :tags '(:frozen)
   ;; This Emacs applied a settings.el with extra/llm off; the file has it on since (a hand edit, another process).
   ;; "Turn on Chat? y" must leave it on: a toggle would read the file and turn it off.
   (drgnx-onboard-test--with root
@@ -1307,6 +1334,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
 
 ;; M12a-74: the restart asks its save questions first, detaches the waiter only after they are answered, then quits.
 (ert-deftest drgnx-onboard/restart-detaches-after-the-questions ()
+  :tags '(:frozen)
   (let ((events nil))
     (cl-letf (((symbol-function 'drgnx-onboard--restart-spawn) (lambda (_line) (push 'detach events)))
               ((symbol-function 'kill-emacs) (lambda (&rest _) (push 'kill events))))
@@ -1328,7 +1356,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
 ;; A drgnx running as a systemd service dies with its whole cgroup (KillMode=control-group): a `setsid' waiter
 ;; started from it is killed with it and never reopens drgnx.  There the waiter runs as its own transient unit.
 (ert-deftest drgnx-onboard/restart-waiter-outlives-a-systemd-service ()
-  :tags '(:cond)
+  :tags '(:cond :frozen)
   (let ((detached nil) (calls nil) (rc 0))
     (cl-letf (((symbol-function 'drgnx-onboard--detach) (lambda (line) (push line detached)))
               ((symbol-function 'executable-find) (lambda (p &rest _) (and (equal p "systemd-run") "/usr/bin/systemd-run")))
@@ -1358,6 +1386,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
           (should (equal detached (list line))))))))
 
 (ert-deftest drgnx-onboard/new-modules-need-a-restart-and-finish-offers-it ()
+  :tags '(:frozen)
   ;; Packages installed into a running drgnx load at its next start: Look and Keys says so, and Finish (in the
   ;; app) offers the restart — drgnx open, detached, then quit — or says how to do it yourself.
   (drgnx-onboard-test--with root
@@ -1413,7 +1442,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
               (delete-directory drgnx-macos-app-dir t))))))))
 
 (ert-deftest drgnx-onboard/finish-names-spotlight-only-with-the-app ()
-  :tags '(:cond)
+  :tags '(:cond :frozen)
   ;; M12a-76: Spotlight finds drgnx.app; without the app the sentence would send you to a search that finds nothing
   (let ((drgnx-macos-app-dir (file-name-as-directory (make-temp-file "drgnx-apps" t))) (drgnx-onboard--restart-needed nil))
     (unwind-protect
@@ -1424,6 +1453,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
       (delete-directory drgnx-macos-app-dir t))))
 
 (ert-deftest drgnx-onboard/the-agents-step-and-its-docs ()
+  :tags '(:frozen)
   (should (string-match-p "Claude" (plist-get (alist-get 'agents drgnx-onboard--steps) :doc)))
   (should (eq (plist-get (alist-get 'agents drgnx-onboard--steps) :run) #'drgnx-onboard--agents-step)))
 
@@ -1435,7 +1465,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
   (concat home ".local/bin"))
 
 (ert-deftest drgnx-ai-onboard/brew-dir-is-appended-to-path ()
-  :tags '(:cond)                        ; the agents step starts the hub
+  :tags '(:cond :frozen)                        ; the agents step starts the hub
   ;; A directory onboarding finds a tool in goes behind the PATH you have, never in front of a program you chose.
   (drgnx-onboard-test--claude 'macos
     (let ((dir (drgnx-onboard-test--adapter-in-local-bin root home)))
@@ -1447,7 +1477,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
 (require 'drgnx-hub-client)             ; so a stub of `drgnx-hub-running-p' is not replaced by the load
 
 (ert-deftest drgnx-ai-onboard/path-added-with-a-hub-says-hub-stop ()
-  :tags '(:cond)
+  :tags '(:cond :frozen)
   ;; The hub keeps the PATH it started with: when the step added a directory and a hub runs, the result says so.
   (drgnx-onboard-test--claude 'macos
     (drgnx-onboard-test--have bin "claude")
@@ -1467,7 +1497,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
       (should-not (string-match-p "hub" (cadr (drgnx-onboard--agents-step '(:interactive nil))))))))
 
 (ert-deftest drgnx-ai-onboard/the-install-question-explains-the-vs-code-claude ()
-  :tags '(:cond)                        ; the agents step starts the hub
+  :tags '(:cond :frozen)                        ; the agents step starts the hub
   ;; The install question says why a claude inside a VS Code extension does not count, only when claude is missing.
   (drgnx-onboard-test--claude 'macos
     (let ((asked (drgnx-onboard-test--asked '(("\\`Set up Claude Code" . nil)))))
@@ -1483,7 +1513,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
 ;; M12a-48, -49, -50: the Agents step's smaller corners
 
 (ert-deftest drgnx-ai-onboard/quit-during-auth-status-kills-it ()
-  :tags '(:cond)
+  :tags '(:cond :frozen)
   ;; C-g while `claude auth status' is being waited for leaves nothing running, and quits on
   (drgnx-onboard-test--claude 'macos
     (drgnx-onboard-test--script (concat bin "slow-claude") "exec sleep 30\n")
@@ -1493,7 +1523,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
     (should-not (seq-some (lambda (p) (and (string-prefix-p "drgnx-claude-auth" (process-name p)) (process-live-p p))) (process-list)))))
 
 (ert-deftest drgnx-ai-onboard/non-homebrew-npm-on-macos-uses-local-prefix ()
-  :tags '(:cond)
+  :tags '(:cond :frozen)
   ;; A Node that is not Homebrew's has a global directory that is not yours (EACCES): the adapter goes to ~/.local
   (drgnx-onboard-test--claude 'macos
     (let ((other (concat root "other/")))
@@ -1512,7 +1542,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
       (should (file-executable-p (concat home ".local/bin/claude-agent-acp"))))))
 
 (ert-deftest drgnx-ai-onboard/failed-claude-installer-names-the-command ()
-  :tags '(:cond)
+  :tags '(:cond :frozen)
   ;; A failed Linux installer run ends with the command to try in a terminal, as the adapter's does
   (drgnx-onboard-test--claude 'linux
     (drgnx-onboard-test--script (concat bin "curl") "echo 'echo installer broke; exit 7'\n")
@@ -1532,7 +1562,7 @@ record the prompts and the default in the lists they return as the cars of (PROM
           prompts defaults)))
 
 (ert-deftest drgnx-ai-onboard/agents-offer-mcp-servers-and-a-default-profile ()
-  :tags '(:cond)
+  :tags '(:cond :frozen)
   (drgnx-onboard-test--claude 'macos
     (drgnx-onboard-test--installed
      (write-region "" nil (concat home ".logged-in"))
@@ -1560,7 +1590,7 @@ record the prompts and the default in the lists they return as the cars of (PROM
        (should (equal (drgnx-agents-mcp-names) '(coordination search)))))))
 
 (ert-deftest drgnx-ai-onboard/agent-defaults-are-never-asked-without-interaction ()
-  :tags '(:cond)
+  :tags '(:cond :frozen)
   (drgnx-onboard-test--claude 'macos
     (drgnx-onboard-test--installed
      (write-region "" nil (concat home ".logged-in"))
@@ -1639,6 +1669,7 @@ record the prompts and the default in the lists they return as the cars of (PROM
       (mapc #'kill-buffer bufs))))
 
 (ert-deftest drgnx-onboard/the-definition ()
+  :tags '(:frozen)
   (drgnx-test-with-config
     (should (drgnx-config-defined-p 'onboarding))
     (let ((def (drgnx-config-definition 'onboarding)))
@@ -1649,6 +1680,7 @@ record the prompts and the default in the lists they return as the cars of (PROM
     (should-not (drgnx-onboard-state))))
 
 (ert-deftest drgnx-onboard/an-older-file-keeps-working-and-keeps-its-steps ()
+  :tags '(:frozen)
   ;; The form every earlier drgnx wrote: one line of `prin1', no header, a step with a nil message.
   (drgnx-test-with-config
     (drgnx-test-config-put 'onboarding
@@ -1664,6 +1696,7 @@ record the prompts and the default in the lists they return as the cars of (PROM
     (should-not (drgnx-onboard-test--baks))))
 
 (ert-deftest drgnx-onboard/record-replaces-its-step-and-keeps-other-entries-and-keys ()
+  :tags '(:frozen)
   (drgnx-test-with-config
     (drgnx-test-config-put 'onboarding
                            "((a :status ok :message \"x\" :time \"t\" :extra 7) (b :status fail :message \"y\" :time \"t\"))")
@@ -1677,13 +1710,14 @@ record the prompts and the default in the lists they return as the cars of (PROM
     (should-not (drgnx-config-problem 'onboarding))))
 
 (ert-deftest drgnx-onboard/a-new-file-has-the-header-and-reads-back ()
+  :tags '(:frozen)
   (drgnx-test-with-config
     (drgnx-onboard--record 'a 'ok "one")
     (should (string-prefix-p ";;" (drgnx-test-config-text 'onboarding)))
     (should (equal (mapcar #'car (drgnx-config-reread 'onboarding)) '(a)))))
 
 (ert-deftest drgnx-onboard/two-processes-record-different-steps-both-kept ()
-  :tags '(:cond)
+  :tags '(:cond :frozen)
   (drgnx-test-with-config
     (drgnx-onboard--record 'seed 'ok "seed")
     (drgnx-onboard-test--children
@@ -1711,6 +1745,7 @@ record the prompts and the default in the lists they return as the cars of (PROM
       (should (file-exists-p file)))))
 
 (ert-deftest drgnx-onboard/write-state-writes-the-state-whole-and-nil-leaves-an-empty-file ()
+  :tags '(:frozen)
   (drgnx-test-with-config
     (drgnx-onboard--write-state nil)
     (should (file-exists-p (drgnx-onboard-state-file)))
@@ -1729,6 +1764,7 @@ record the prompts and the default in the lists they return as the cars of (PROM
       (should-not (drgnx-onboard-test--baks)))))
 
 (ert-deftest drgnx-onboard/the-doctor-and-the-reference-know-onboarding ()
+  :tags '(:frozen)
   (should (memq 'drgnx-onboard drgnx-doctor-config-features))
   (should (member '(require drgnx-onboard) drgnx-config-doc-sources)))
 

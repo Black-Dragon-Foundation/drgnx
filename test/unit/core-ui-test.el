@@ -114,6 +114,7 @@
        (should (equal (substring-no-properties (funcall st 't/b)) "X failed: kaputt"))))))
 
 (ert-deftest drgnx-onboard/steps-use-the-kit ()
+  :tags '(:frozen)
   (let ((drgnx-onboard--steps '((a :title "A" :order 1) (b :title "B" :order 2) (c :title "C" :order 3) (d :title "D" :order 4)))
         (drgnx-onboard--progress nil))
     (cl-letf (((symbol-function 'drgnx-onboard-state)

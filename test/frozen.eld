@@ -280,18 +280,130 @@
   :tests (drgnx-ai/own-gptel-api-key-keeps-default-backend)
   :keep ())
  ("test/unit/ai-onboard-test.el"
-  :by "2026-10-24-agent-system-design:8; 2026-11-01-agent-system-p4:45" :since "2026-11-04"
-  :tests (drgnx-onboard/the-ai-step-checks-chats-module-when-providers-work
+  :by "2026-10-24-agent-system-design:8; 2026-11-01-agent-system-p4:45; onboarding rebuilt on the Rust runtime (2026-11-05): 2026-11-04-race-proof-tests.ledger:137"
+  :since "2026-11-04"
+  :tests (drgnx-onboard/the-ai-step-finds-providers-sets-roles-and-tests-them
+          drgnx-onboard/the-ai-step-keeps-roles-that-work
+          drgnx-onboard/the-ai-step-with-nothing-running-says-what-to-do
+          drgnx-onboard/the-ai-step-checks-chats-module-when-providers-work
+          drgnx-ai-onboard/role-written-only-after-answer
+          drgnx-ai-onboard/a-projects-route-never-reaches-the-global-roles
+          drgnx-ai-onboard/the-role-tests-run-side-by-side
+          drgnx-ai-onboard/a-slow-provider-is-not-tested-and-never-sets-ai-up
+          drgnx-ai-onboard/a-provider-that-refuses-at-once-did-not-answer
+          drgnx-onboard/ollama-is-installed-started-pulled-and-tested
+          drgnx-onboard/lm-studio-is-set-up-the-same-way
+          drgnx-onboard/lm-studio-without-lms-says-what-to-do
+          drgnx-ai-onboard/cli-exit-stops-the-job
+          drgnx-ai-onboard/a-real-ctrl-c-stops-the-job
+          drgnx-ai-onboard/pull-has-no-hour-limit
+          drgnx-ai-onboard/the-package-sync-has-no-hour-limit
+          drgnx-ai-onboard/estimate-skips-models-present
+          drgnx-ai-onboard/last-line-has-no-escapes
+          drgnx-onboard/openrouter-from-the-cli-asks-for-no-key
+          drgnx-onboard/a-failed-download-says-how-to-retry
+          drgnx-onboard/non-interactive-installs-nothing
           drgnx-onboard/chat-needs-its-module
           drgnx-onboard/chat-turned-on-installs-its-package)
-  :keep ())
+  :keep (drgnx-onboard/openrouter-key-goes-to-the-keychain
+         drgnx-ai-onboard/typed-key-cleared-and-env-noted))
  ("test/unit/mod-extras-teardown-test.el"
   :by "2026-10-24-agent-system-design:8; 2026-11-01-agent-system-p4:45" :since "2026-11-04"
   :tests (drgnx-extras-teardown/llm-hook-is-a-name-and-the-backend-returns)
   :keep ())
  ("test/unit/onboard-test.el"
-  :by "2026-10-24-agent-system-design:8; 2026-11-01-agent-system-p4:45" :since "2026-11-04"
-  :tests (drgnx-onboard/chat-check-in-batch-offers-no-restart)
+  :by "2026-10-24-agent-system-design:8; 2026-11-01-agent-system-p4:45; onboarding rebuilt on the Rust runtime (2026-11-05): 2026-11-04-race-proof-tests.ledger:137"
+  :since "2026-11-04"
+  :tests (drgnx-onboard/steps-run-in-order-and-record-progress
+          drgnx-onboard/a-check-follows-every-step
+          drgnx-onboard/non-interactive-never-asks
+          drgnx-onboard/presets-choose-the-extra-modules
+          drgnx-onboard/the-environment-says-what-is-missing-and-how-to-fix-it
+          drgnx-onboard/macos-fixes-say-brew
+          drgnx-onboard/linux-has-no-command-line-tools-row-and-keeps-its-fixes
+          drgnx-onboard/no-fc-list-is-not-a-missing-font
+          drgnx-onboard/the-font-is-asked-of-emacs-in-a-graphical-session
+          drgnx-onboard/look-and-keys-writes-the-choices
+          drgnx-onboard/the-daemon-step-writes-files-and-installs-nothing
+          drgnx-onboard/step-7-on-macos-asks-once-and-installs-the-app
+          drgnx-onboard/step-7-on-macos-without-interaction-installs-nothing
+          drgnx-onboard/step-7-on-linux-is-unchanged-plus-the-question
+          drgnx-onboard/the-first-window-opens-the-welcome-once
+          drgnx-onboard/the-whole-flow-twice
+          drgnx-onboard/the-cli
+          drgnx-onboard/the-doctor-reports-onboarding
+          drgnx-onboard/every-step-is-a-command
+          drgnx-onboard/a-scan-that-runs-out-of-time-says-so
+          drgnx-onboard/todos-are-imported-only-when-asked
+          drgnx-onboard/the-linux-desktop-files-are-written-in-the-data-folder-only
+          drgnx-onboard/the-desktop-entry-never-starts-another-config
+          drgnx-onboard/the-desktop-entry-claims-nidhoggs-windows
+          drgnx-onboard/the-project-picker-can-pick-none-and-paths-with-commas
+          drgnx-onboard/claude-missing-is-installed-with-permission
+          drgnx-onboard/the-onboarding-package-is-the-maintained-adapter
+          drgnx-onboard/a-deprecated-adapter-keeps-working-and-the-step-says-how-to-move
+          drgnx-onboard/claude-missing-says-no-and-nothing-is-installed
+          drgnx-onboard/claude-on-linux-uses-its-installer-and-your-terminal-for-sudo
+          drgnx-onboard/a-vs-code-extensions-claude-does-not-count
+          drgnx-onboard/claude-not-logged-in-opens-its-login
+          drgnx-onboard/a-claude-that-cannot-say-is-offered-the-login-and-never-fails-the-step
+          drgnx-onboard/the-claude-profile-is-checked
+          drgnx-onboard/claude-profile-asks-the-hub
+          drgnx-onboard/an-npm-failure-says-how-to-retry
+          drgnx-onboard/the-preset-step-offers-the-packages
+          drgnx-onboard/a-fresh-install-is-full-ai
+          drgnx-onboard/every-question-shows-its-choices-and-default
+          drgnx-onboard/set-up-ai-with-defaults-to-the-machine
+          drgnx-onboard/the-welcome-says-where-to-start-and-moves-on
+          drgnx-onboard/on-a-mac-look-and-keys-asks-about-option-once
+          drgnx-onboard/option-question-shows-the-current-choice
+          drgnx-onboard/chat-check-in-batch-offers-no-restart
+          drgnx-onboard/chat-step-turns-chat-on-whatever-the-file-says-now
+          drgnx-onboard/restart-detaches-after-the-questions
+          drgnx-onboard/restart-waiter-outlives-a-systemd-service
+          drgnx-onboard/new-modules-need-a-restart-and-finish-offers-it
+          drgnx-onboard/finish-names-spotlight-only-with-the-app
+          drgnx-onboard/the-agents-step-and-its-docs
+          drgnx-ai-onboard/brew-dir-is-appended-to-path
+          drgnx-ai-onboard/path-added-with-a-hub-says-hub-stop
+          drgnx-ai-onboard/the-install-question-explains-the-vs-code-claude
+          drgnx-ai-onboard/quit-during-auth-status-kills-it
+          drgnx-ai-onboard/non-homebrew-npm-on-macos-uses-local-prefix
+          drgnx-ai-onboard/failed-claude-installer-names-the-command
+          drgnx-ai-onboard/agents-offer-mcp-servers-and-a-default-profile
+          drgnx-ai-onboard/agent-defaults-are-never-asked-without-interaction
+          drgnx-onboard/the-definition
+          drgnx-onboard/an-older-file-keeps-working-and-keeps-its-steps
+          drgnx-onboard/record-replaces-its-step-and-keeps-other-entries-and-keys
+          drgnx-onboard/a-new-file-has-the-header-and-reads-back
+          drgnx-onboard/two-processes-record-different-steps-both-kept
+          drgnx-onboard/write-state-writes-the-state-whole-and-nil-leaves-an-empty-file
+          drgnx-onboard/the-doctor-and-the-reference-know-onboarding)
+  :keep (drgnx-onboard/projects-non-interactive-never-writes-the-board
+         drgnx-onboard/projects-interactive-asks-before-writing-the-board
+         drgnx-onboard/running-look-and-keys-again-keeps-the-users-choices
+         drgnx-onboard/look-step-stops-at-a-keys-mistake-before-any-change
+         drgnx-ai-onboard/agent-defaults-keep-the-rest-of-settings-el
+         drgnx-onboard/an-unreadable-state-is-backed-up
+         drgnx-onboard/an-unreadable-file-is-never-written-by-a-read))
+ ("test/unit/core-ui-test.el"
+  :by "onboarding rebuilt on the Rust runtime (2026-11-05): 2026-11-04-race-proof-tests.ledger:137" :since "2026-11-05"
+  :tests (drgnx-onboard/steps-use-the-kit)
+  :keep ())
+ ("test/unit/portable-test.el"
+  :by "onboarding rebuilt on the Rust runtime (2026-11-05): 2026-11-04-race-proof-tests.ledger:137" :since "2026-11-05"
+  :tests (drgnx-onboard/desktop-files-are-machine-local)
+  :keep ())
+ ("test/unit/search-setup-test.el"
+  :by "onboarding rebuilt on the Rust runtime (2026-11-05): 2026-11-04-race-proof-tests.ledger:137" :since "2026-11-05"
+  :tests (drgnx-onboard/search-step-non-interactive-detects
+          drgnx-onboard/search-step-interactive-runs-the-wizard)
+  :keep ())
+ ("test/unit/tty-onboard-test.el"
+  :by "onboarding rebuilt on the Rust runtime (2026-11-05): 2026-11-04-race-proof-tests.ledger:137" :since "2026-11-05"
+  :tests (drgnx-onboard/the-daemon-step-names-good-terminals
+          drgnx-onboard/run-in-a-terminal-shows-its-row
+          drgnx-onboard/a-limited-terminal-gets-the-recommendation)
   :keep ())
  ("test/unit/mod-live-test.el"
   :by "2026-11-04-agent-browser-p1:100,1133-1145" :since "2026-11-04"

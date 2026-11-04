@@ -166,6 +166,7 @@
 ;;;; Onboarding step 7 and agent commands
 
 (ert-deftest drgnx-onboard/desktop-files-are-machine-local ()
+  :tags '(:frozen)
   (drgnx-portable-test--with root
     (let ((r (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'linux)))
                (car (drgnx-onboard-run :only '(daemon) :non-interactive t)))))

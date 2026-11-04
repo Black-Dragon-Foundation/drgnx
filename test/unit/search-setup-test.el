@@ -278,6 +278,7 @@ answered at once with DIMS-wide vectors), and the index job start recorded in ST
           (should-not (plist-get facts :embed-dims)))))))
 
 (ert-deftest drgnx-onboard/search-step-non-interactive-detects ()
+  :tags '(:frozen)
   (drgnx-search-setup-test--with
     (let ((roots (list root)))
       (cl-letf (((symbol-function 'drgnx-search-setup--roots) (lambda () roots)))
@@ -297,6 +298,7 @@ answered at once with DIMS-wide vectors), and the index job start recorded in ST
           (should (string-match-p "Text Embeddings Inference" (cadr r))))))))
 
 (ert-deftest drgnx-onboard/search-step-interactive-runs-the-wizard ()
+  :tags '(:frozen)
   (drgnx-search-setup-test--with
     (cl-letf (((symbol-function 'drgnx-search-setup--current-root) (lambda () root)))
       (let ((r (drgnx-onboard--search-step '(:interactive t))))

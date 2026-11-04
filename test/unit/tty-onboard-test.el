@@ -45,6 +45,7 @@ frame with CAPS (nil: none known).  Linux, Fedora 45, no installed terminal, not
        (delete-directory root t))))
 
 (ert-deftest drgnx-onboard/the-daemon-step-names-good-terminals ()
+  :tags '(:frozen)
   ;; no terminal frame: the paragraph of the terminals drgnx works best in, after the step's own result
   (tty-onboard-test--daemon-step nil
     (should (string-search "drgnx works best in" message))
@@ -56,6 +57,7 @@ frame with CAPS (nil: none known).  Linux, Fedora 45, no installed terminal, not
     (should-not (string-search "cannot send C-S- chords and the like" message))))
 
 (ert-deftest drgnx-onboard/run-in-a-terminal-shows-its-row ()
+  :tags '(:frozen)
   ;; a kitty: its row (what works, what it keeps), and no recommendation, as it sends every key
   (tty-onboard-test--daemon-step '(:id kitty :keys kkp :c-g waits :folded nil :osc52 t :colors 16777216 :mouse t)
     (should (string-search (drgnx-tty-onboard-note 'kitty) message))
@@ -64,6 +66,7 @@ frame with CAPS (nil: none known).  Linux, Fedora 45, no installed terminal, not
     (should-not (string-search "cannot send C-S- chords and the like" message))))
 
 (ert-deftest drgnx-onboard/a-limited-terminal-gets-the-recommendation ()
+  :tags '(:frozen)
   ;; a VTE (Ptyxis, GNOME Terminal) on Fedora 45: its row, then what to install; nothing is installed
   (tty-onboard-test--daemon-step '(:id vte :keys legacy :c-g always :folded nil :osc52 nil :colors 256 :mouse t)
     (should (string-search (drgnx-tty-onboard-note 'vte) message))
