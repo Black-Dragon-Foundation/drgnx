@@ -294,3 +294,24 @@ pub fn ping(socket: &Path) -> bool {
     }
     false
 }
+
+/// The end of a child's exec, as a state a test can wait for.  `Command::spawn` can return while the child is still
+/// the forked copy of this test binary, so `/proc/PID/exe` names the test until the exec; the child holds a close-on-exec
+/// end of a pipe, which closes at the exec.
+pub struct ExecHandshake(std::io::PipeReader);
+
+impl ExecHandshake {
+    /// Spawn CMD; the handshake ends when the child has exec'd.
+    pub fn spawn(cmd: &mut Command) -> std::io::Result<(std::process::Child, ExecHandshake)> {
+        let (reader, writer) = std::io::pipe()?;
+        let child = cmd.spawn()?;
+        drop(writer);
+        Ok((child, ExecHandshake(reader)))
+    }
+
+    /// Block until the child has exec'd.
+    pub fn wait(mut self) {
+        let mut sink = Vec::new();
+        std::io::Read::read_to_end(&mut self.0, &mut sink).unwrap();
+    }
+}
