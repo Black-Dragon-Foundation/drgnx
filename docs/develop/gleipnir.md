@@ -100,7 +100,8 @@ this returns.
   - the lock's `protected_ro` paths are read-only binds (a pin inside the writable root: the full tier only, as for
     [your settings files](#ratatoskrs-side));
   - network from the matrix's Network cell: `ProviderOnly` and `ProviderAndPackages` are isolated with the relay to
-    `<session dir>/proxy.sock` and `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` set (the proxy's allowlist is what differs);
+    `<session dir>/proxy.sock` and `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` set (the proxy's allowlist is what differs;
+    the hub binds the session's proxy there before the spawn, [hub.md](hub.md#the-sessions-provider-proxy-proxysock));
     `Open` shares the host network. A chat is always provider-only;
   - the session dir (`run`, read-only) is made by the spec itself (`paths::make_session_dir`, which leaves one that
     is there alone), since validation requires `run`'s source to exist and a new session has none yet: `agents/start`

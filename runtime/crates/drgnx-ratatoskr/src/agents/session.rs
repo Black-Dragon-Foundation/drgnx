@@ -45,6 +45,8 @@ const EMIT_EVERY: Duration = Duration::from_millis(50);
 const STOP_GRACE: Duration = Duration::from_secs(3);
 /// A Stop that the agent has not answered by then ends its process.
 const STOP_ANSWER: Duration = Duration::from_secs(2);
+/// A session's network: the provider's alone, through its proxy (`super::net`); `Open` is never granted here.
+const SESSION_NET: launch::NetCell = launch::NetCell::ProviderOnly;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -513,6 +515,8 @@ pub struct Session {
     budgets: crate::budget::Budgets,
     /// The token of the session's gateway registration (a gateway profile).
     gateway: Mutex<Option<String>>,
+    /// Its provider proxy on `proxy.sock`: dropped when its agent's process ends.
+    net: Mutex<Option<super::net::SessionNet>>,
     scheduled: AtomicBool,
     next_request: AtomicU64,
     /// The hub's running jobs: a session whose turn ends while one of its own runs waits for it.
@@ -570,6 +574,8 @@ struct Launched {
     enforced_why: Option<String>,
     /// The token of the gateway registration this launch made (a gateway profile).
     gateway: Option<String>,
+    /// Its provider proxy, bound before the spawn.
+    net: Option<super::net::SessionNet>,
 }
 
 /// Where a path may be read or written: inside the session's directory; a brainstorm writes its document only, and a
@@ -789,7 +795,7 @@ fn spawn_spec(
                 sid: sid.to_string(),
                 worktree: cwd.to_path_buf(),
                 read: Vec::new(),
-                net: launch::NetCell::ProviderOnly,
+                net: SESSION_NET,
                 role,
             },
         ),
@@ -1181,6 +1187,10 @@ async fn launch(
 ) -> Result<(Launched, tokio::sync::mpsc::Receiver<Event>), Error> {
     let prep = prepare(front, profile, role, sid, cwd, job, module_env).await?;
     let mcp = bridge(front, profile, sid, cwd, task, job).await;
+    // the provider proxy the spec's relay reaches, bound before the spawn; a start that fails below drops it, and its
+    // socket with it
+    let net = super::net::start_session(front, profile, sid, SESSION_NET)
+        .map_err(|e| internal(format!("the session's provider proxy: {e}")))?;
     let (conn, rx) = Conn::spawn(prep.spec, ConnOpts::default())
         .await
         .map_err(|e| internal(e.to_string()))?;
@@ -1256,6 +1266,7 @@ async fn launch(
             enforced: prep.enforced,
             enforced_why: prep.enforced_why,
             gateway: prep.gateway,
+            net,
         },
         rx,
     ))
@@ -1329,6 +1340,7 @@ fn assemble(
         scopes: front.core.runs.scopes(),
         budgets: front.core.budgets.clone(),
         gateway: Mutex::new(l.gateway.clone()),
+        net: Mutex::new(l.net),
         scheduled: AtomicBool::new(false),
         next_request: AtomicU64::new(1),
         live: front.core.exec.live(),
@@ -2240,6 +2252,8 @@ impl Session {
                     stderr,
                 } => {
                     self.remove_stubs();
+                    // its process is gone, and its provider proxy with it (a resume binds a new one)
+                    drop(lock(&self.net).take());
                     if self.closed.load(Ordering::SeqCst) {
                         // closed on purpose while it waited on a job: still waiting; the wake resumes it
                         {

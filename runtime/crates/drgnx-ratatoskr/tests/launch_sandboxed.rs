@@ -208,6 +208,83 @@ fn an_agent_sessions_stdin_reaches_the_program_inside() {
     assert_eq!(code, 0, "the program did not read the hub's line");
 }
 
+/// A sandboxed session reaches its provider through its own proxy: the hub's order (the launch makes the session dir,
+/// `agents::net::SessionNet` binds `proxy.sock` in it, then the spawn), and `curl` inside, tunnelling through
+/// `HTTPS_PROXY` (the relay port), reaches `ratatoskr-mock llm` under a pinned name.  The mock is domr's
+/// `ratatoskr-mock`, built beside this binary (`cargo build -p domr`).
+#[test]
+#[ignore = "needs the real sandbox (bwrap with user namespaces): the sandbox lane"]
+fn a_session_reaches_its_provider_through_the_proxy() {
+    use drgnx_ratatoskr::agents::net::SessionNet;
+    use std::io::BufRead;
+    let mock = Path::new(RATATOSKR).with_file_name("ratatoskr-mock");
+    assert!(
+        mock.is_file(),
+        "{} is not built: cargo build -p domr",
+        mock.display()
+    );
+    let fx = Fx::new();
+    let env = fx.env();
+    let script = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../test/conformance/fixtures/llm-messages.json");
+    let log = fx.p("llm.log");
+    let mut llm = std::process::Command::new(&mock)
+        .args(["llm", "--script"])
+        .arg(&script)
+        .arg("--log")
+        .arg(&log)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("ratatoskr-mock llm");
+    let mut line = String::new();
+    std::io::BufReader::new(llm.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    let port: u16 = line
+        .trim()
+        .strip_prefix("MOCK-LLM-PORT ")
+        .and_then(|p| p.parse().ok())
+        .unwrap_or_else(|| panic!("the mock said {line:?}"));
+    let body =
+        r#"{"model": "m", "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]}"#;
+    let plan = fx.plan(&format!(
+        "out=$(curl -sS --proxytunnel -x \"$HTTPS_PROXY\" -H 'content-type: application/json' \
+         -d '{body}' http://llm.test:{port}/v1/messages) || exit 11; \
+         echo \"$out\" | grep -q msg-1 || exit 12; exit 0"
+    ));
+    let shape = fx.shape(NetCell::ProviderOnly);
+    let launch = launch_on(&env, &sandbox(Tier::Full), &plan, &shape)
+        .unwrap_or_else(|r| panic!("refused: {r}"));
+    let dir = paths::session_dir(&env, &paths::socket_path(&env), &shape.sid).unwrap();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let code = rt.block_on(async {
+        let allow = vec![gleipnir::net::host::parse_target(&format!("llm.test:{port}")).unwrap()];
+        let pinned = vec![("llm.test".to_string(), std::net::Ipv4Addr::LOCALHOST.into())];
+        let net = SessionNet::start(&dir, &shape.sid, allow, pinned, None).expect("the proxy");
+        let mut child = draugr::spawn_pinned(launch.spec).await.expect("spawn");
+        if let Some(fd) = launch.status {
+            gleipnir::read_status(fd, &|| child.stderr_tail(), Duration::from_secs(20))
+                .unwrap_or_else(|r| panic!("the sandbox did not start: {r}"));
+        }
+        let status = child.wait().await.expect("wait").expect("status");
+        let tail = child.stderr_tail();
+        drop(net);
+        (status.code().unwrap_or(-1), tail)
+    });
+    let _ = llm.kill();
+    let _ = llm.wait();
+    assert_eq!(code.0, 0, "the provider was not reached: {}", code.1);
+    assert!(
+        std::fs::read_to_string(&log).is_ok_and(|t| t.contains("\"request\"")),
+        "the mock saw no request"
+    );
+    assert!(std::fs::symlink_metadata(dir.join(paths::SESSION_PROXY_SOCKET)).is_err());
+}
+
 #[test]
 #[ignore = "needs the real sandbox (bwrap with user namespaces): the sandbox lane"]
 fn worker_writes_only_its_worktree() {

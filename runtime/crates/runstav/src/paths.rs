@@ -262,8 +262,17 @@ pub const SESSION_MCP_SOCKET: &str = "mcp.sock";
 /// The gateway's socket in a session dir (`gateway/register` with `sid`): a token issued for it is good only there.
 pub const SESSION_GATEWAY_SOCKET: &str = "gateway.sock";
 
-/// The longest socket name a session dir holds (`hub.sock`, `mcp.sock`, `search.sock`, `gateway.sock`): it sizes the
-/// fallback.
+/// The session's provider proxy in a session dir: the sandbox's relay port reaches it (`agents::net` in Ratatoskr).
+pub const SESSION_PROXY_SOCKET: &str = "proxy.sock";
+
+/// A browser session's web proxy in a session dir.
+pub const SESSION_WEB_SOCKET: &str = "web.sock";
+
+/// A browser session's CDP endpoint in a session dir.
+pub const SESSION_CDP_SOCKET: &str = "cdp.sock";
+
+/// The longest socket name a session dir holds (`hub.sock`, `mcp.sock`, `search.sock`, `gateway.sock`, `proxy.sock`,
+/// `web.sock`, `cdp.sock`): it sizes the fallback.
 const SESSION_LONGEST_SOCKET: &str = SESSION_GATEWAY_SOCKET;
 
 /// Where session dirs are made, for the hub SOCKET names: `<socket dir>/s` and `<tmp>/drgnx-hub-UID/s` (the
@@ -557,6 +566,20 @@ mod tests {
         let fits = session_dir(&t, &room(103), sid).unwrap();
         assert_eq!(fits.join("gateway.sock").as_os_str().len(), 103);
         assert!(fits.starts_with(room(103).parent().unwrap()));
+        // every socket a session dir holds fits where its longest does
+        for name in [
+            SESSION_HUB_SOCKET,
+            SESSION_MCP_SOCKET,
+            SESSION_GATEWAY_SOCKET,
+            SESSION_PROXY_SOCKET,
+            SESSION_WEB_SOCKET,
+            SESSION_CDP_SOCKET,
+        ] {
+            assert!(
+                fits.join(name).as_os_str().len() <= MAX_SOCKET_PATH,
+                "{name}"
+            );
+        }
         assert_eq!(
             session_dir(&t, &room(104), sid).unwrap(),
             Path::new("/var/tmp/drgnx-hub-4242/s/0123456789ab")

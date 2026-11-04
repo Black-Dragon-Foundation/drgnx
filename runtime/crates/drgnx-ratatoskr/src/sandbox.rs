@@ -562,8 +562,8 @@ mod run {
 /// The proxy port inside a session whose network is the provider's only.
 pub const PROXY_PORT: u16 = 3128;
 
-/// The one allow-list of a job's proxy by its network cell (exact `host:port`): the hub starts no other proxy.  The
-/// lists are the setting `agents-net-hosts` (HOSTS: tier name to hosts; shipped default: the package registries of
+/// The allow-list of a job's proxy by its network cell (exact `host:port`), and the tier part of a session's
+/// (`agents::net::provider_hosts`).  The lists are the setting `agents-net-hosts` (HOSTS: tier name to hosts; shipped default: the package registries of
 /// crates.io, npm and PyPI under `packages`).  Provider-only has the `provider-only` list (shipped: none; a job has no
 /// provider); the packages cell reaches the `packages` list.  `Open` shares the host's network for a session and gets
 /// the packages list here.  A tier the setting does not name reaches nothing.
@@ -829,7 +829,8 @@ pub fn session_spec(
         })
         .collect();
     let hub = run.join("hub.sock");
-    let proxy = run.join("proxy.sock");
+    // served by the session's provider proxy (`agents::net`), bound before the spawn
+    let proxy = run.join(paths::SESSION_PROXY_SOCKET);
     let mut sockets = vec![hub];
     let mut vars: Vec<(String, String)> = vec![
         (
