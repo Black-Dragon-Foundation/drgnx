@@ -1157,7 +1157,9 @@ for a timer. Load it with `(load (expand-file-name "test/fixtures/clock-fixture"
   Then `drgnx-timer-reset` runs, when bound. The timer layer's seams (`drgnx-timer--now`, `drgnx-timer--idle-time`,
   `drgnx-timer--input-pending-p`), when defined, follow the same clock, pause and input.
 - **What stays real on the advice:** `time-since`, `(time-subtract nil ...)` and `format-time-string` with no time read
-  the real clock; a test of code that uses them uses real time. `drgnx-test-real-time` is the real time as a float, for
+  the real clock; a test of code that uses them uses real time. A test whose code names a file or a key by today's
+  date holds the day instead, so the test's read and the code's never fall on two sides of midnight
+  (`drgnx-watchdog-doctor-test--on-one-day` in `test/unit/watchdog-doctor-test.el`). `drgnx-test-real-time` is the real time as a float, for
   waits and reports, on both clocks. `sleep-for` and `sit-for` move virtual time by their argument and a timed
   `accept-process-output` that finds no output by its timeout (a zero-length look; a real wait only on a real child),
   each running the timers that come due, so no wait moves virtual time by how long the machine took

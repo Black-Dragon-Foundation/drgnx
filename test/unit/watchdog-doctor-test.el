@@ -108,78 +108,103 @@
           (should (equal (nth 1 r) "off: the watchdog does not run on macOS yet (Linux only)"))
           (should-not (nth 2 r)))))))
 
+(defmacro drgnx-watchdog-doctor-test--on-one-day (&rest body)
+  "BODY on one day: `current-time' and `format-time-string' with no time read the time at entry, so the day file the
+test writes and the one the code reads (today's, yesterday's) are named alike even across midnight.  File times and
+`time-since' stay real."
+  (declare (indent 0))
+  `(let* ((now (current-time)) (fmt (symbol-function 'format-time-string)))
+     (cl-letf (((symbol-function 'current-time) (lambda () now))
+               ((symbol-function 'format-time-string)
+                (lambda (format &optional time zone) (funcall fmt format (or time now) zone))))
+       ,@body)))
+
+(ert-deftest drgnx-watchdog/day-reads-hold-one-day ()
+  ;; one second before midnight at entry: every read after it is that second, so none crosses into the next day
+  (let ((reads 0))
+    (cl-letf (((symbol-function 'current-time)
+               (lambda () (cl-incf reads) (encode-time (list 59 59 23 1 1 2026 nil -1 nil)))))
+      (drgnx-watchdog-doctor-test--on-one-day
+        (should (equal (format-time-string "%F") "2026-01-01"))
+        (should (equal (format-time-string "%F" (time-subtract (current-time) 86400)) "2025-12-31"))
+        (should (equal (format-time-string "%F") "2026-01-01"))))
+    (should (= reads 1))))
+
 (ert-deftest drgnx-watchdog/doctor-reads-the-day-file ()
   "The facts come from today's day file in the state folder."
-  (let* ((root (make-temp-file "drgnx-wd-doctor" t))
-         (process-environment (cons (concat "XDG_STATE_HOME=" root) process-environment)))
-    (unwind-protect
-        (cl-letf (((symbol-function 'drgnx-watchdog-available-p) (lambda () t))
-                  ((symbol-function 'drgnx-watchdog--wanted-p) (lambda () t))
-                  ((symbol-function 'drgnx-watchdog-doctor--heap) #'ignore)
-                  ((symbol-function 'drgnx-watchdog-doctor--largest-owner) #'ignore))
-          (let ((dir (drgnx-watchdog-log-directory)) (nidhogg-watchdog-mode t))
-            (make-directory dir t)
-            (with-temp-file (expand-file-name (format-time-string "%F.jsonl") dir)
-              (insert (json-serialize '((type . "stall") (nongc_ms . 400) (felt . t) (culprit . ((pkg . "p")))))
-                      "\nnot json\n"))
-            (let* ((w (drgnx-watchdog-doctor-facts)) (s (plist-get w :today)))
-              (should (plist-get w :running))
-              (should (= 1 (plist-get s :stalls)))
-              (should (= 1 (plist-get s :felt))))))
-      (delete-directory root t))))
+  (drgnx-watchdog-doctor-test--on-one-day
+    (let* ((root (make-temp-file "drgnx-wd-doctor" t))
+           (process-environment (cons (concat "XDG_STATE_HOME=" root) process-environment)))
+      (unwind-protect
+          (cl-letf (((symbol-function 'drgnx-watchdog-available-p) (lambda () t))
+                    ((symbol-function 'drgnx-watchdog--wanted-p) (lambda () t))
+                    ((symbol-function 'drgnx-watchdog-doctor--heap) #'ignore)
+                    ((symbol-function 'drgnx-watchdog-doctor--largest-owner) #'ignore))
+            (let ((dir (drgnx-watchdog-log-directory)) (nidhogg-watchdog-mode t))
+              (make-directory dir t)
+              (with-temp-file (expand-file-name (format-time-string "%F.jsonl") dir)
+                (insert (json-serialize '((type . "stall") (nongc_ms . 400) (felt . t) (culprit . ((pkg . "p")))))
+                        "\nnot json\n"))
+              (let* ((w (drgnx-watchdog-doctor-facts)) (s (plist-get w :today)))
+                (should (plist-get w :running))
+                (should (= 1 (plist-get s :stalls)))
+                (should (= 1 (plist-get s :felt))))))
+        (delete-directory root t)))))
 
 (ert-deftest drgnx-watchdog/notice-once-per-signature-day ()
-  (drgnx-notice-test-with-model
-    (drgnx-notice-define-source 'watchdog :title "Freezes" :command 'freezes)
-    (let ((drgnx-watchdog-doctor--noticed nil)
-          (felt (list :nongc-ms 1500 :felt t :signature "sig-a" :culprit '(:pkg "pkg-a")))
-          (small (list :nongc-ms 400 :felt t :signature "sig-s"))
-          (quiet (list :nongc-ms 3000 :felt nil :signature "sig-q")))
-      (drgnx-watchdog-doctor-note small)
-      (drgnx-watchdog-doctor-note quiet)
-      (should (null (drgnx-notices)))                       ; neither felt-and-long nor killed
-      (drgnx-watchdog-doctor-note felt)
-      (drgnx-watchdog-doctor-note (plist-put (copy-sequence felt) :nongc-ms 1900))
-      (should (= 1 (length (drgnx-notices))))               ; the same signature again: nothing
-      (let ((n (car (drgnx-notices))))
-        (should (eq (plist-get n :source) 'watchdog))
-        (should (eq (plist-get n :severity) 'warn))
-        (should (eq (plist-get n :command) 'freezes)))
-      (drgnx-watchdog-doctor-note (list :nongc-ms 50 :killed t :signature "sig-k"))
-      (should (= 2 (length (drgnx-notices))))               ; a killed hang counts at any length
-      ;; the next day starts afresh
-      (setcar drgnx-watchdog-doctor--noticed "2000-01-01")
-      (drgnx-watchdog-doctor-note felt)
-      (should (equal (cdr drgnx-watchdog-doctor--noticed) '("sig-a"))))))
+  (drgnx-watchdog-doctor-test--on-one-day
+    (drgnx-notice-test-with-model
+      (drgnx-notice-define-source 'watchdog :title "Freezes" :command 'freezes)
+      (let ((drgnx-watchdog-doctor--noticed nil)
+            (felt (list :nongc-ms 1500 :felt t :signature "sig-a" :culprit '(:pkg "pkg-a")))
+            (small (list :nongc-ms 400 :felt t :signature "sig-s"))
+            (quiet (list :nongc-ms 3000 :felt nil :signature "sig-q")))
+        (drgnx-watchdog-doctor-note small)
+        (drgnx-watchdog-doctor-note quiet)
+        (should (null (drgnx-notices)))                       ; neither felt-and-long nor killed
+        (drgnx-watchdog-doctor-note felt)
+        (drgnx-watchdog-doctor-note (plist-put (copy-sequence felt) :nongc-ms 1900))
+        (should (= 1 (length (drgnx-notices))))               ; the same signature again: nothing
+        (let ((n (car (drgnx-notices))))
+          (should (eq (plist-get n :source) 'watchdog))
+          (should (eq (plist-get n :severity) 'warn))
+          (should (eq (plist-get n :command) 'freezes)))
+        (drgnx-watchdog-doctor-note (list :nongc-ms 50 :killed t :signature "sig-k"))
+        (should (= 2 (length (drgnx-notices))))               ; a killed hang counts at any length
+        ;; the next day starts afresh
+        (setcar drgnx-watchdog-doctor--noticed "2000-01-01")
+        (drgnx-watchdog-doctor-note felt)
+        (should (equal (cdr drgnx-watchdog-doctor--noticed) '("sig-a")))))))
 
 (ert-deftest drgnx-watchdog/doctor-in-a-batch-process-reads-the-day-files ()
   ;; `drgnx doctor' runs in its own batch Emacs: the watchdog mode is nil there and the heap is the doctor's own.  So
   ;; nothing here binds the mode or stubs the doctor's view; the verdict comes from the setting and the day files.
   ;; The system is one the watchdog runs on (on macOS the facts say only that it does not run there).
-  (let* ((root (make-temp-file "drgnx-wd-batch" t))
-         (process-environment (append (list (concat "XDG_STATE_HOME=" root) (concat "XDG_CONFIG_HOME=" root)) process-environment))
-         (features (cons 'nidhogg-watchdog features))
-         (nidhogg-watchdog-mode nil)
-         (drgnx-heap-budgets '((:owner "total" :measure live :cap 600))))
-    (unwind-protect
-        (cl-letf* (((symbol-function 'drgnx-watchdog-platform-p) (lambda () t))
-                   (dir (drgnx-watchdog-log-directory))
-                   (file (expand-file-name (format-time-string "%F.jsonl") dir)))
-          (make-directory dir t)
-          (with-temp-file file
-            (insert (json-serialize '((type . "stall") (nongc_ms . 120) (felt . :false) (culprit . ((pkg . "p"))))) "\n"
-                    (json-serialize '((type . "gc") (pause_ms . 20) (heap . ((live_mb . 512.5))))) "\n"))
-          (let* ((w (drgnx-watchdog-doctor-facts)) (r (drgnx-doctor-check 'freezes (list :watchdog w))))
-            (should (plist-get w :running))
-            (should (= 512.5 (plist-get (plist-get w :heap) :live-mb)))
-            (should-not (string-match-p "needs Nidhogg\\|is off" (nth 1 r)))
-            (should (string-match-p "1 stalls over 100 ms" (nth 1 r))))
-          ;; the files are old: it is not running now
-          (set-file-times file (time-subtract (current-time) 3600))
-          (let* ((w (drgnx-watchdog-doctor-facts)) (r (drgnx-doctor-check 'freezes (list :watchdog w))))
-            (should-not (plist-get w :running))
-            (should (string-match-p "no recent watchdog record" (nth 1 r)))))
-      (delete-directory root t))))
+  (drgnx-watchdog-doctor-test--on-one-day
+    (let* ((root (make-temp-file "drgnx-wd-batch" t))
+           (process-environment (append (list (concat "XDG_STATE_HOME=" root) (concat "XDG_CONFIG_HOME=" root)) process-environment))
+           (features (cons 'nidhogg-watchdog features))
+           (nidhogg-watchdog-mode nil)
+           (drgnx-heap-budgets '((:owner "total" :measure live :cap 600))))
+      (unwind-protect
+          (cl-letf* (((symbol-function 'drgnx-watchdog-platform-p) (lambda () t))
+                     (dir (drgnx-watchdog-log-directory))
+                     (file (expand-file-name (format-time-string "%F.jsonl") dir)))
+            (make-directory dir t)
+            (with-temp-file file
+              (insert (json-serialize '((type . "stall") (nongc_ms . 120) (felt . :false) (culprit . ((pkg . "p"))))) "\n"
+                      (json-serialize '((type . "gc") (pause_ms . 20) (heap . ((live_mb . 512.5))))) "\n"))
+            (let* ((w (drgnx-watchdog-doctor-facts)) (r (drgnx-doctor-check 'freezes (list :watchdog w))))
+              (should (plist-get w :running))
+              (should (= 512.5 (plist-get (plist-get w :heap) :live-mb)))
+              (should-not (string-match-p "needs Nidhogg\\|is off" (nth 1 r)))
+              (should (string-match-p "1 stalls over 100 ms" (nth 1 r))))
+            ;; the files are old: it is not running now
+            (set-file-times file (time-subtract (current-time) 3600))
+            (let* ((w (drgnx-watchdog-doctor-facts)) (r (drgnx-doctor-check 'freezes (list :watchdog w))))
+              (should-not (plist-get w :running))
+              (should (string-match-p "no recent watchdog record" (nth 1 r)))))
+        (delete-directory root t)))))
 
 (ert-deftest drgnx-watchdog/gc-check-reads-neither-the-day-nor-the-snapshot-unless-it-warns ()
   ;; the idle timer's look is the instrument's own cost: it takes the GC row (Nidhogg's, cached) and nothing else; the
@@ -209,27 +234,29 @@
 
 (ert-deftest drgnx-watchdog/a-killed-hang-is-noticed-with-its-wall-time-and-its-own-key ()
   ;; a record built from a hang file has :wall-ms and no :nongc-ms, and often no signature
-  (drgnx-notice-test-with-model
-    (drgnx-notice-define-source 'watchdog :title "Freezes" :command 'freezes)
-    (let ((drgnx-watchdog-doctor--noticed nil))
-      (drgnx-watchdog-doctor-note (list :killed t :wall-ms 5400.0 :culprit '(:pkg "pkg-a")))
-      (drgnx-watchdog-doctor-note (list :killed t :wall-ms 7000.0 :culprit '(:pkg "pkg-b")))
-      (drgnx-watchdog-doctor-note (list :killed t :wall-ms 7100.0 :culprit '(:pkg "pkg-b")))
-      (should (= 2 (length (drgnx-notices))))              ; one per kind of hang, not one for every killed hang
-      (should (cl-some (lambda (n) (string-match-p "hung for 5\\.4 s in pkg-a" (plist-get n :text))) (drgnx-notices))))))
+  (drgnx-watchdog-doctor-test--on-one-day
+    (drgnx-notice-test-with-model
+      (drgnx-notice-define-source 'watchdog :title "Freezes" :command 'freezes)
+      (let ((drgnx-watchdog-doctor--noticed nil))
+        (drgnx-watchdog-doctor-note (list :killed t :wall-ms 5400.0 :culprit '(:pkg "pkg-a")))
+        (drgnx-watchdog-doctor-note (list :killed t :wall-ms 7000.0 :culprit '(:pkg "pkg-b")))
+        (drgnx-watchdog-doctor-note (list :killed t :wall-ms 7100.0 :culprit '(:pkg "pkg-b")))
+        (should (= 2 (length (drgnx-notices))))              ; one per kind of hang, not one for every killed hang
+        (should (cl-some (lambda (n) (string-match-p "hung for 5\\.4 s in pkg-a" (plist-get n :text))) (drgnx-notices)))))))
 
 (ert-deftest drgnx-watchdog/freezes-counts-the-killed-hangs-of-yesterday ()
   ;; a hang file collected at the next start is written under the day the hang began, which may be yesterday
-  (let* ((root (make-temp-file "drgnx-wd-killed" t))
-         (process-environment (append (list (concat "XDG_STATE_HOME=" root) (concat "XDG_CONFIG_HOME=" root)) process-environment))
-         (features (cons 'nidhogg-watchdog features)) (nidhogg-watchdog-mode t))
-    (unwind-protect
-        (cl-letf (((symbol-function 'drgnx-watchdog-platform-p) (lambda () t))
-                  (dir (drgnx-watchdog-log-directory)))
-          (make-directory dir t)
-          (with-temp-file (expand-file-name (format-time-string "%F.jsonl" (time-subtract (current-time) 86400)) dir)
-            (insert (json-serialize '((type . "stall") (nongc_ms . 90) (killed . t))) "\n"))
-          (let ((w (drgnx-watchdog-doctor-facts)))
-            (should (= 1 (plist-get (plist-get w :today) :killed)))
-            (should (eq 'warn (car (drgnx-doctor-check 'freezes (list :watchdog w)))))))
-      (delete-directory root t))))
+  (drgnx-watchdog-doctor-test--on-one-day
+    (let* ((root (make-temp-file "drgnx-wd-killed" t))
+           (process-environment (append (list (concat "XDG_STATE_HOME=" root) (concat "XDG_CONFIG_HOME=" root)) process-environment))
+           (features (cons 'nidhogg-watchdog features)) (nidhogg-watchdog-mode t))
+      (unwind-protect
+          (cl-letf (((symbol-function 'drgnx-watchdog-platform-p) (lambda () t))
+                    (dir (drgnx-watchdog-log-directory)))
+            (make-directory dir t)
+            (with-temp-file (expand-file-name (format-time-string "%F.jsonl" (time-subtract (current-time) 86400)) dir)
+              (insert (json-serialize '((type . "stall") (nongc_ms . 90) (killed . t))) "\n"))
+            (let ((w (drgnx-watchdog-doctor-facts)))
+              (should (= 1 (plist-get (plist-get w :today) :killed)))
+              (should (eq 'warn (car (drgnx-doctor-check 'freezes (list :watchdog w)))))))
+        (delete-directory root t)))))
