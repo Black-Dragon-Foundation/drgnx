@@ -216,13 +216,7 @@ levels that enclose it (a `let' binding, a call's argument); inside a branching 
 ;;;; The gate-exempt register
 
 (defconst drgnx-lint-patterns--gate-exempt-allowed
-  '(drgnx-ai/a-refused-request-starts-the-runner-at-most-once-a-minute
-    drgnx-ai/ensure-local-never-waits-for-the-job
-    drgnx-ai/ensure-local-starts-the-runner-when-it-is-down
-    drgnx-ai-onboard/cli-exit-stops-the-job
-    drgnx-ai-onboard/pull-has-no-hour-limit
-    drgnx-ai-onboard/typed-key-cleared-and-env-noted
-    drgnx-hub-client/a-current-hello-clears-the-restart-notice
+  '(drgnx-hub-client/a-current-hello-clears-the-restart-notice
     drgnx-hub-client/a-failing-callback-does-not-drop-the-rest-of-the-chunk
     drgnx-hub-client/a-hub-that-says-nothing-is-closed-not-legacy
     drgnx-hub-client/a-key-found-again-quietly-raises-no-notice
@@ -242,12 +236,7 @@ levels that enclose it (a `let' binding, a call's argument); inside a branching 
     drgnx-hub-client/providers-sent-on-connect-and-on-change
     drgnx-hub-client/records-pause-the-mirror
     drgnx-hub-client/the-editor-token-and-held-keys-are-fetched-on-every-connect
-    drgnx-hub-client/the-first-hello-carries-the-binary-version
-    drgnx-onboard/a-failed-download-says-how-to-retry
-    drgnx-onboard/lm-studio-is-set-up-the-same-way
-    drgnx-onboard/lm-studio-without-lms-says-what-to-do
-    drgnx-onboard/ollama-is-installed-started-pulled-and-tested
-    drgnx-onboard/openrouter-key-goes-to-the-keychain)
+    drgnx-hub-client/the-first-hello-carries-the-binary-version)
   "The tests test/gate-exempt.eld may list: the rows of 2026-11-05.  The register only shrinks (a test that enters the
 gate, or is deleted, leaves it); a new row is a test that skips the gate, which the audit would catch.")
 

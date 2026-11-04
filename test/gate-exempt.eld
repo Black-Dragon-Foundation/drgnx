@@ -9,12 +9,6 @@
 ;; `drgnx-lint/gate-exempt-rows-name-tests-in-gated-files' fails a row naming a test that is gone or not in a gated file,
 ;; `drgnx-lint/gate-exempt-only-shrinks' holds the rows to a constant in test/unit/lint-test-patterns-test.el.
 (
- (drgnx-ai/a-refused-request-starts-the-runner-at-most-once-a-minute :why "not converted: the runner's start is a hub job (core/drgnx-ai-probe.el:215, from a timer at :196) whose exec/start and exec/get answers need steps; its fixture connects outside the gate")
- (drgnx-ai/ensure-local-never-waits-for-the-job :why "not converted: the runner's start is a hub job (core/drgnx-ai-probe.el:215) whose exec/start and exec/get answers need steps; its fixture connects outside the gate")
- (drgnx-ai/ensure-local-starts-the-runner-when-it-is-down :why "not converted: the runner's start and stop are hub jobs (core/drgnx-ai-probe.el:215) whose answers need steps; its fixture connects outside the gate")
- (drgnx-ai-onboard/cli-exit-stops-the-job :why "not converted: core/drgnx-onboard.el:740 (the start waits on exec/start and exec/get) and :694 (the job loop asks exec/log each virtual second): a step per hub call; its fixture connects outside the gate")
- (drgnx-ai-onboard/pull-has-no-hour-limit :why "not converted: core/drgnx-onboard.el:694 over hub jobs: each pull ends by a held exec-done and asks exec/log each virtual second")
- (drgnx-ai-onboard/typed-key-cleared-and-env-noted :why "not converted: core/drgnx-onboard.el:694 after the key's hand-over (gateway/keys and its events need steps); its fixture connects outside the gate")
  (drgnx-hub-client/a-current-hello-clears-the-restart-notice :why "fake hub: pure against a lying peer")
  (drgnx-hub-client/a-failing-callback-does-not-drop-the-rest-of-the-chunk :why "pure: a pipe process stands in for the hub's connection")
  (drgnx-hub-client/a-hub-that-says-nothing-is-closed-not-legacy :why "fake hub: pure against a lying peer")
@@ -36,9 +30,4 @@
  (drgnx-hub-client/records-pause-the-mirror :why "fake hub: pure against a lying peer")
  (drgnx-hub-client/the-editor-token-and-held-keys-are-fetched-on-every-connect :why "fake hub: pure against a lying peer")
  (drgnx-hub-client/the-first-hello-carries-the-binary-version :why "fake hub: pure against a lying peer")
- (drgnx-onboard/a-failed-download-says-how-to-retry :why "not converted: core/drgnx-onboard.el:740 and :694 over several hub jobs (install, server, pulls): every hub call and each job's held exec-done need steps")
- (drgnx-onboard/lm-studio-is-set-up-the-same-way :why "not converted: core/drgnx-onboard.el:740 and :694 over several hub jobs (install, server, pulls): every hub call and each job's held exec-done need steps")
- (drgnx-onboard/lm-studio-without-lms-says-what-to-do :why "not converted: the cask install is a hub job (core/drgnx-onboard.el:740, :694) before the wait for `lms' (:467)")
- (drgnx-onboard/ollama-is-installed-started-pulled-and-tested :why "not converted: core/drgnx-onboard.el:740 and :694 over several hub jobs (install, server, pulls): every hub call and each job's held exec-done need steps")
- (drgnx-onboard/openrouter-key-goes-to-the-keychain :why "not converted: the key's hand-over and the role tests through the hub's gateway (core/drgnx-onboard.el:467) need steps for gateway/keys and its events; its fixture connects outside the gate")
 )

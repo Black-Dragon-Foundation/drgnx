@@ -325,16 +325,39 @@ with BODY."
          (when (and (> pid 0) (process-attributes pid)) (signal-process pid 'SIGTERM)))
        (delete-directory root t))))
 
+(defmacro drgnx-ai-onboard-test--with-hub (&rest body)
+  "BODY (inside `drgnx-ai-onboard-test--with-mac') with the real Ratatoskr serving ROOT, gated (its clock and
+sequencer), this Emacs not connected: BODY connects inside `drgnx-test-gated' (`drgnx-ai-onboard-test--subscribe'
+first), and stops its jobs there before it delivers all (`drgnx-ai-onboard-test--stop-jobs')."
+  (declare (indent 0))
+  ;; the fixture binds its own `bin' (Ratatoskr's program): the fakes' folder is put back inside
+  `(let ((fakes bin) (drgnx-hub--presence-sent :unknown) (drgnx-hub-editor-token-hook nil)
+         (drgnx-exec--jobs (make-hash-table :test #'equal)) (drgnx-exec--stale nil))
+     (drgnx-test-with-ratatoskr root :gated t
+                                (let ((bin fakes))
+                                  ,@body))))
+
 (defmacro drgnx-ai-onboard-test--with-mac-jobs (answers &rest body)
-  "`drgnx-ai-onboard-test--with-mac', and BODY with the real Ratatoskr serving the jobs (they are the hub's), every
-job stopped at the end."
+  "`drgnx-ai-onboard-test--with-mac', and BODY with the real Ratatoskr serving the jobs (they are the hub's):
+`drgnx-ai-onboard-test--with-hub'."
   (declare (indent 1))
   `(drgnx-ai-onboard-test--with-mac ,answers
-     ;; the fixture binds its own `bin' (Ratatoskr's program): the fakes' folder is put back inside
-     (let ((fakes bin))
-       (drgnx-test-with-ratatoskr root
-         (let ((bin fakes))
-           (unwind-protect (progn ,@body) (drgnx-ai-onboard-test--stop-jobs)))))))
+     (drgnx-ai-onboard-test--with-hub ,@body)))
+
+(defun drgnx-ai-onboard-test--subscribe ()
+  "Inside `drgnx-test-gated' (with `(:answers t)'): this Emacs connected as the ungated fixture connects it (the
+provider table and keys handed over, the editor token and the held keys taken), and subscribed before anything starts
+a job, so every job's end reaches it."
+  (drgnx-hub-connect)
+  (drgnx-hub-ensure)
+  (drgnx-test-wait (lambda () (and drgnx-hub--events drgnx-hub--editor (listp (drgnx-hub-keys-held))))
+                   :what "the subscription, the editor token and the held keys"))
+
+(defun drgnx-ai-onboard-test--job-ends (n)
+  "The schedule of a test whose code waits on N jobs ending, one after the other: every answer as it is due, then
+each job's `exec-done' in turn.  The hub writes a job's end from the job's own task, so the gate asks it for barriers
+while a step waits; until each end comes no virtual time passes."
+  (cons '(:answers t) (make-list n '(sub-1 :event "exec-done"))))
 
 (defun drgnx-ai-onboard-test--calls (calls)
   (split-string (drgnx-ai-onboard-test--slurp calls) "\n" t))
@@ -392,6 +415,7 @@ job stopped at the end."
                  '((complete . "qwen2.5-coder-1.5b-instruct") (edit . "qwen2.5-coder-7b-instruct") (chat . "qwen2.5-coder-7b-instruct")))))
 
 (ert-deftest drgnx-onboard/ollama-is-installed-started-pulled-and-tested ()
+  ;; four jobs end, in turn: the install and three downloads (the server keeps running)
   (drgnx-ai-onboard-test--with-mac-jobs drgnx-ai-onboard-test--ollama-answers
     (cl-letf* ((shown nil)
                ((symbol-function 'completing-read)
@@ -399,105 +423,131 @@ job stopped at the end."
                ((symbol-function 'y-or-n-p) (lambda (&rest _) t))
                ((symbol-function 'drgnx-onboard--refresh-welcome)   ; what the Welcome's row says, each time it changes
                 (lambda () (push (cdr drgnx-onboard--progress) shown))))
-      (let ((r (drgnx-onboard--ai-step '(:interactive t))))
-        (should (equal (drgnx-ai-onboard-test--calls calls)
-                       '("brew install ollama" "ollama serve"
-                         "ollama pull qwen2.5-coder:1.5b" "ollama pull qwen2.5-coder:7b" "ollama pull nomic-embed-text")))
-        ;; the row is never empty while it works, and always says how to stop
-        (should (member "Starting Ollama… — C-g stops" shown))
-        (should (member "Testing every feature… — C-g stops" shown))
-        (should (seq-every-p (lambda (s) (string-suffix-p " — C-g stops" s)) (delq nil shown)))
-        (should-not drgnx-onboard--progress)                            ; and cleared at the end
-        ;; the runner drgnx starts again after a restart
-        (should (equal (drgnx-ai-managed) `(ollama :start (,(concat bin "ollama") "serve") :name "Ollama")))
-        (should (equal (car (drgnx-ai-role 'complete)) '(ollama . "qwen2.5-coder:1.5b")))
-        (should (equal (car (drgnx-ai-role 'edit)) '(ollama . "qwen2.5-coder:7b")))
-        (should (equal (car (drgnx-ai-role 'chat)) '(ollama . "qwen2.5-coder:7b")))
-        (should (equal (car (drgnx-ai-role 'embed)) '(ollama . "nomic-embed-text")))
-        (should (eq (car r) 'ok))
-        (dolist (role '("complete" "edit" "chat" "embed"))
-          (should (string-match-p (concat role ": ollama/[^ ]+ answered") (cadr r))))
-        (should (string-match-p "Ask the Codebase answered" (cadr r)))
-        (let ((asked (drgnx-ai-onboard-test--slurp llm-log)))
-          (should (string-search "POST /api/generate" asked))           ; complete
-          (should (string-search "POST /api/embed" asked))              ; embed
-          (should (string-search "Excerpts:" asked)))                   ; Ask: the retriever's snippets went to the model
-        ;; the server stays: a drgnx job (not at login)
-        (should (seq-find (lambda (j) (and (equal (plist-get j :argv) (list (concat bin "ollama") "serve"))
-                                           (eq (plist-get j :status) 'running)))
-                          (drgnx-exec-list)))))))
+      (drgnx-test-gated (drgnx-ai-onboard-test--job-ends 4)
+        (drgnx-ai-onboard-test--subscribe)
+        (let* ((r (drgnx-onboard--ai-step '(:interactive t)))
+               (jobs (drgnx-exec-list)))
+          (drgnx-ai-onboard-test--stop-jobs)
+          (drgnx-test-deliver-all)
+          (should (equal (drgnx-ai-onboard-test--calls calls)
+                         '("brew install ollama" "ollama serve"
+                           "ollama pull qwen2.5-coder:1.5b" "ollama pull qwen2.5-coder:7b" "ollama pull nomic-embed-text")))
+          ;; the row is never empty while it works, and always says how to stop
+          (should (member "Starting Ollama… — C-g stops" shown))
+          (should (member "Testing every feature… — C-g stops" shown))
+          (should (seq-every-p (lambda (s) (string-suffix-p " — C-g stops" s)) (delq nil shown)))
+          (should-not drgnx-onboard--progress)                            ; and cleared at the end
+          ;; the runner drgnx starts again after a restart
+          (should (equal (drgnx-ai-managed) `(ollama :start (,(concat bin "ollama") "serve") :name "Ollama")))
+          (should (equal (car (drgnx-ai-role 'complete)) '(ollama . "qwen2.5-coder:1.5b")))
+          (should (equal (car (drgnx-ai-role 'edit)) '(ollama . "qwen2.5-coder:7b")))
+          (should (equal (car (drgnx-ai-role 'chat)) '(ollama . "qwen2.5-coder:7b")))
+          (should (equal (car (drgnx-ai-role 'embed)) '(ollama . "nomic-embed-text")))
+          (should (eq (car r) 'ok))
+          (dolist (role '("complete" "edit" "chat" "embed"))
+            (should (string-match-p (concat role ": ollama/[^ ]+ answered") (cadr r))))
+          (should (string-match-p "Ask the Codebase answered" (cadr r)))
+          (let ((asked (drgnx-ai-onboard-test--slurp llm-log)))
+            (should (string-search "POST /api/generate" asked))           ; complete
+            (should (string-search "POST /api/embed" asked))              ; embed
+            (should (string-search "Excerpts:" asked)))                   ; Ask: the retriever's snippets went to the model
+          ;; the server stays: a drgnx job (not at login)
+          (should (seq-find (lambda (j) (and (equal (plist-get j :argv) (list (concat bin "ollama") "serve"))
+                                             (eq (plist-get j :status) 'running)))
+                            jobs)))))))
 
 (ert-deftest drgnx-onboard/lm-studio-is-set-up-the-same-way ()
+  ;; six jobs end, in turn: the install, LM Studio's first start, `lms server start' (it starts the server and ends)
+  ;; and three downloads
   (drgnx-ai-onboard-test--with-mac-jobs drgnx-ai-onboard-test--openai-answers
     (cl-letf (((symbol-function 'completing-read)
                (drgnx-ai-onboard-test--answer '(("Set up AI with" . "lmstudio"))))
               ((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
-      (let ((r (drgnx-onboard--ai-step '(:interactive t))))
-        ;; lms comes with the app's first start: drgnx opens LM Studio once
-        (should (equal (drgnx-ai-onboard-test--calls calls)
-                       (list "brew install --cask lm-studio" "open -a LM Studio" "lms server start"
-                             (concat "lms get -y " (nth 2 (assoc "qwen2.5-coder:1.5b" drgnx-ai-lmstudio-models)))
-                             (concat "lms get -y " (nth 2 (assoc "qwen2.5-coder:7b" drgnx-ai-lmstudio-models)))
-                             (concat "lms get -y " (nth 2 (assoc "nomic-embed-text" drgnx-ai-lmstudio-models))))))
-        (should (equal (car (drgnx-ai-role 'complete)) '(lmstudio . "qwen2.5-coder-1.5b-instruct")))
-        (should (equal (car (drgnx-ai-role 'chat)) '(lmstudio . "qwen2.5-coder-7b-instruct")))
-        (should (equal (car (drgnx-ai-role 'embed)) '(lmstudio . "text-embedding-nomic-embed-text-v1.5")))
-        (should (eq (car r) 'ok))
-        (should (string-match-p "Ask the Codebase answered" (cadr r)))))))
+      (drgnx-test-gated (drgnx-ai-onboard-test--job-ends 6)
+        (drgnx-ai-onboard-test--subscribe)
+        (let ((r (drgnx-onboard--ai-step '(:interactive t))))
+          (drgnx-ai-onboard-test--stop-jobs)
+          (drgnx-test-deliver-all)
+          ;; lms comes with the app's first start: drgnx opens LM Studio once
+          (should (equal (drgnx-ai-onboard-test--calls calls)
+                         (list "brew install --cask lm-studio" "open -a LM Studio" "lms server start"
+                               (concat "lms get -y " (nth 2 (assoc "qwen2.5-coder:1.5b" drgnx-ai-lmstudio-models)))
+                               (concat "lms get -y " (nth 2 (assoc "qwen2.5-coder:7b" drgnx-ai-lmstudio-models)))
+                               (concat "lms get -y " (nth 2 (assoc "nomic-embed-text" drgnx-ai-lmstudio-models))))))
+          (should (equal (car (drgnx-ai-role 'complete)) '(lmstudio . "qwen2.5-coder-1.5b-instruct")))
+          (should (equal (car (drgnx-ai-role 'chat)) '(lmstudio . "qwen2.5-coder-7b-instruct")))
+          (should (equal (car (drgnx-ai-role 'embed)) '(lmstudio . "text-embedding-nomic-embed-text-v1.5")))
+          (should (eq (car r) 'ok))
+          (should (string-match-p "Ask the Codebase answered" (cadr r))))))))
 
 (ert-deftest drgnx-onboard/lm-studio-without-lms-says-what-to-do ()
+  ;; two jobs end (the install, LM Studio's first start); then the wait for lms runs out on the virtual clock
   (drgnx-ai-onboard-test--with-mac-jobs drgnx-ai-onboard-test--openai-answers
     (let ((_ (write-region "" nil (concat root "home/.no-lms") nil 'silent)) (drgnx-onboard-lms-wait 1))
       (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
-        (let ((r (drgnx-onboard--ai-setup 'lmstudio '(:interactive t))))
-          (should (eq (car r) 'fail))
-          (should (string-match-p "Open LM Studio once" (cadr r)))
-          (should (string-match-p "run this step again" (cadr r))))))))
+        (drgnx-test-gated (drgnx-ai-onboard-test--job-ends 2)
+          (drgnx-ai-onboard-test--subscribe)
+          (let ((r (drgnx-onboard--ai-setup 'lmstudio '(:interactive t))))
+            (drgnx-ai-onboard-test--stop-jobs)
+            (drgnx-test-deliver-all)
+            (should (eq (car r) 'fail))
+            (should (string-match-p "Open LM Studio once" (cadr r)))
+            (should (string-match-p "run this step again" (cadr r)))))))))
 
 (ert-deftest drgnx-onboard/openrouter-key-goes-to-the-keychain ()
-  ;; binary: the key goes to the Keychain and to the hub, which alone holds it; the features are tested through it
+  ;; binary: the key goes to the Keychain and to the hub, which alone holds it; the features are tested through it.
+  ;; Every answer as it is due; the hub's events (the held keys changed) come at the end
   (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--openai-answers
     (drgnx-ai-onboard-test--openrouter-in-settings)
-    (drgnx-test-with-ratatoskr root
+    (drgnx-ai-onboard-test--with-hub
       (let ((mock (drgnx-ai-test-mock-llm port script llm-log)) (prompted 0))
         (unwind-protect
-            (let ((system-type 'darwin) (noninteractive nil))          ; the drgnx app: the Keychain may be used
+            (let ((system-type 'darwin))
               (cl-letf (((symbol-function 'completing-read)
                          (drgnx-ai-onboard-test--answer '(("Set up AI with" . "openrouter"))))
                         ((symbol-function 'read-passwd) (lambda (&rest _) (cl-incf prompted) "sk-or-test-123"))
                         ((symbol-function 'auth-source-search)        ; the Keychain gives the key back, once stored
                          (lambda (&rest _) (and (file-exists-p (concat root "security.stdin"))
                                                 (list (list :secret "sk-or-test-123"))))))
-                (let ((r (drgnx-onboard--ai-step '(:interactive t))))
-                  (should (= prompted 1))
-                  (should (string-search "sk-or-test-123" (drgnx-ai-onboard-test--slurp (concat root "security.stdin"))))
-                  (should-not (string-search "sk-or-test-123" (drgnx-ai-onboard-test--slurp calls)))   ; never in argv
-                  (should (member "openrouter" (drgnx-hub-keys-held)))       ; the hub holds it…
-                  (should-not (gethash 'openrouter drgnx-ai--keys))          ; …and this Emacs does not
-                  (dolist (role '(complete edit chat)) (should (eq (car (car (drgnx-ai-role role))) 'openrouter)))
-                  (should (equal (drgnx-ai-role 'embed) '((tei))))            ; no embeddings there: step 5's
-                  (should (string-match-p "semantic search needs a local model or TEI" (cadr r)))
-                  (should (string-match-p "Ask the Codebase answered" (cadr r)))
-                  (should (eq (car r) 'ok))
-                  (should-not (string-search "sk-or-test-123" (cadr r)))
-                  (should-not (string-search "sk-or-test-123" (drgnx-ai-onboard-test--slurp (concat root "config/settings.el")))))))
+                (drgnx-test-gated '((:answers t))
+                  (drgnx-ai-onboard-test--subscribe)
+                  ;; the drgnx app: the Keychain may be used (inside the gate, whose clock is entered in batch)
+                  (let ((r (let ((noninteractive nil)) (drgnx-onboard--ai-step '(:interactive t)))))
+                    (drgnx-test-deliver-all)
+                    (should (= prompted 1))
+                    (should (string-search "sk-or-test-123" (drgnx-ai-onboard-test--slurp (concat root "security.stdin"))))
+                    (should-not (string-search "sk-or-test-123" (drgnx-ai-onboard-test--slurp calls)))   ; never in argv
+                    (should (member "openrouter" (drgnx-hub-keys-held)))       ; the hub holds it…
+                    (should-not (gethash 'openrouter drgnx-ai--keys))          ; …and this Emacs does not
+                    (dolist (role '(complete edit chat)) (should (eq (car (car (drgnx-ai-role role))) 'openrouter)))
+                    (should (equal (drgnx-ai-role 'embed) '((tei))))            ; no embeddings there: step 5's
+                    (should (string-match-p "semantic search needs a local model or TEI" (cadr r)))
+                    (should (string-match-p "Ask the Codebase answered" (cadr r)))
+                    (should (eq (car r) 'ok))
+                    (should-not (string-search "sk-or-test-123" (cadr r)))
+                    (should-not (string-search "sk-or-test-123" (drgnx-ai-onboard-test--slurp (concat root "config/settings.el"))))))))
           (delete-process mock))))))
 
 (ert-deftest drgnx-ai-onboard/cli-exit-stops-the-job ()
   ;; `drgnx onboard' in batch: while a job is waited on, ending Emacs (Ctrl-C) stops the job; the entry is gone
   ;; once the wait is over.
+  ;; Every answer as it is due (the stop's answer is the stopped job's row); the job's end comes at the end.
   (drgnx-ai-onboard-test--with-mac-jobs nil
     (should noninteractive)
-    (let ((before kill-emacs-hook) (during nil) (r nil))
-      (run-at-time 1 nil (lambda ()
-                           (setq during kill-emacs-hook)
-                           (dolist (f (seq-difference kill-emacs-hook before)) (funcall f))))   ; what exiting runs
-      (setq r (drgnx-onboard--job "Sleeping" (list "sleep" "30") 15))
-      (should (> (length during) (length before)))
-      (should (equal kill-emacs-hook before))
-      (should (eq (car r) 'fail))
-      (drgnx-test-wait (lambda () (not (seq-find (lambda (j) (eq (plist-get j :status) 'running)) (drgnx-exec-list))))
-                       :what "the job stopped"))))
+    (let ((before kill-emacs-hook) (during nil) (r nil) (after nil))
+      (drgnx-test-gated '((:answers t))
+        (drgnx-ai-onboard-test--subscribe)
+        (run-at-time 1 nil (lambda ()
+                             (setq during kill-emacs-hook)
+                             (dolist (f (seq-difference kill-emacs-hook before)) (funcall f))))   ; what exiting runs
+        (setq r (drgnx-onboard--job "Sleeping" (list "sleep" "30") 15)
+              after kill-emacs-hook)
+        (drgnx-test-wait (lambda () (not (seq-find (lambda (j) (eq (plist-get j :status) 'running)) (drgnx-exec-list))))
+                         :what "the job stopped")
+        (drgnx-test-deliver-all)
+        (should (> (length during) (length before)))
+        (should (equal after before))
+        (should (eq (car r) 'fail))))))
 
 (ert-deftest drgnx-ai-onboard/a-real-ctrl-c-stops-the-job ()
   ;; The same with a real SIGINT: a batch Emacs waiting on a job ends on it without unwinding, and its
@@ -567,10 +617,15 @@ job stopped at the end."
                  (lambda (pred secs)
                    (push (cons drgnx-ai-onboard-test--job-what secs) waits)
                    (funcall until pred secs))))
-        (drgnx-onboard--ai-step '(:interactive t)))
-      (let ((pulls (seq-filter (lambda (w) (string-prefix-p "Downloading" (or (car w) ""))) waits)))
-        (should (= (length pulls) 3))
-        (dolist (w pulls) (should (or (null (cdr w)) (>= (cdr w) (* 6 3600)))))))))
+        ;; four jobs end, in turn: the install and three downloads (the server keeps running)
+        (drgnx-test-gated (drgnx-ai-onboard-test--job-ends 4)
+          (drgnx-ai-onboard-test--subscribe)
+          (drgnx-onboard--ai-step '(:interactive t))
+          (drgnx-ai-onboard-test--stop-jobs)
+          (drgnx-test-deliver-all)
+          (let ((pulls (seq-filter (lambda (w) (string-prefix-p "Downloading" (or (car w) ""))) waits)))
+            (should (= (length pulls) 3))
+            (dolist (w pulls) (should (or (null (cdr w)) (>= (cdr w) (* 6 3600)))))))))))
 
 (ert-deftest drgnx-ai-onboard/the-package-sync-has-no-hour-limit ()
   (let ((seen nil))
@@ -613,24 +668,30 @@ job stopped at the end."
   ;; The string `read-passwd' returned is zeroed once the key is stored (the in-memory key is a copy); with
   ;; OPENROUTER_API_KEY set the environment's key wins over the stored one (it goes to the hub on each connect), it
   ;; stays in the environment, and the result says so.  Binary: the typed key goes to the hub.
+  ;; Every answer as it is due; the hub's events come at the end.  This Emacs connects before the key is in its
+  ;; environment, as the fixture did before.
   (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--openai-answers
     (drgnx-ai-onboard-test--openrouter-in-settings)
-    (drgnx-test-with-ratatoskr root
-      (let ((mock (drgnx-ai-test-mock-llm port script llm-log)) (typed nil))
+    (drgnx-ai-onboard-test--with-hub
+      (let ((mock (drgnx-ai-test-mock-llm port script llm-log)) (typed nil) (env nil))
         (unwind-protect
-            (let ((system-type 'darwin) (noninteractive nil)
-                  (process-environment (cons "OPENROUTER_API_KEY=sk-env-456" process-environment)))
-              (cl-letf (((symbol-function 'read-passwd) (lambda (&rest _) (setq typed (copy-sequence "sk-or-test-123"))))
-                        ((symbol-function 'auth-source-search)
-                         (lambda (&rest _) (and (file-exists-p (concat root "security.stdin"))
-                                                (list (list :secret "sk-or-test-123"))))))
-                (let ((r (drgnx-onboard--ai-setup 'openrouter '(:interactive t))))
-                  (should (string-search "sk-or-test-123" (drgnx-ai-onboard-test--slurp (concat root "security.stdin"))))
-                  (should (equal typed (make-string (length typed) 0)))      ; cleared, not just dropped
-                  (should (equal (getenv "OPENROUTER_API_KEY") "sk-env-456"))
-                  (should-not (gethash 'openrouter drgnx-ai--keys))
-                  (should (string-match-p "OPENROUTER_API_KEY is set in the environment, which wins over the stored key" (cadr r)))
-                  (should-not (string-search "sk-env-456" (cadr r))))))
+            (drgnx-test-gated '((:answers t))
+              (drgnx-ai-onboard-test--subscribe)
+              (let ((r (let ((system-type 'darwin) (noninteractive nil)
+                             (process-environment (cons "OPENROUTER_API_KEY=sk-env-456" process-environment)))
+                         (cl-letf (((symbol-function 'read-passwd) (lambda (&rest _) (setq typed (copy-sequence "sk-or-test-123"))))
+                                   ((symbol-function 'auth-source-search)
+                                    (lambda (&rest _) (and (file-exists-p (concat root "security.stdin"))
+                                                           (list (list :secret "sk-or-test-123"))))))
+                           (prog1 (drgnx-onboard--ai-setup 'openrouter '(:interactive t))
+                             (setq env (getenv "OPENROUTER_API_KEY")))))))
+                (drgnx-test-deliver-all)
+                (should (string-search "sk-or-test-123" (drgnx-ai-onboard-test--slurp (concat root "security.stdin"))))
+                (should (equal typed (make-string (length typed) 0)))      ; cleared, not just dropped
+                (should (equal env "sk-env-456"))
+                (should-not (gethash 'openrouter drgnx-ai--keys))
+                (should (string-match-p "OPENROUTER_API_KEY is set in the environment, which wins over the stored key" (cadr r)))
+                (should-not (string-search "sk-env-456" (cadr r)))))
           (delete-process mock))))))
 
 (ert-deftest drgnx-onboard/openrouter-from-the-cli-asks-for-no-key ()
@@ -641,26 +702,34 @@ job stopped at the end."
         (should-not (file-exists-p (concat root "security.stdin")))))))
 
 (ert-deftest drgnx-onboard/a-failed-download-says-how-to-retry ()
+  ;; six jobs end, in turn: the install and two downloads (the second fails, and the step stops there), then on the
+  ;; second run three downloads (the server keeps running)
   (drgnx-ai-onboard-test--with-mac-jobs drgnx-ai-onboard-test--ollama-answers
     (cl-letf (((symbol-function 'completing-read)
                (drgnx-ai-onboard-test--answer '(("Keep" . "Change") ("Set up AI with" . "ollama"))))
               ((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
-      (let ((r (progn (write-region "qwen2.5-coder:7b" nil (concat root "home/.pull-fail") nil 'silent)
-                      (car (drgnx-onboard-run :only '(ai))))))
-        (delete-file (concat root "home/.pull-fail"))
-        (should (eq (nth 1 r) 'fail))
-        (should (string-match-p "qwen2\\.5-coder:7b" (nth 2 r)))
-        (should (string-match-p "run the step again" (nth 2 r)))
-        (should (string-match-p "max retries exceeded" (nth 2 r)))         ; why, from its log
-        (should-not (equal (car (drgnx-ai-role 'edit)) '(ollama . "qwen2.5-coder:7b"))))
-      ;; again, the download working now: no second install or server; ok
-      (delete-file calls)
-      (let ((r (car (drgnx-onboard-run :only '(ai)))))
-        (should (eq (nth 1 r) 'ok))
-        (should-not (seq-find (lambda (c) (string-prefix-p "brew" c)) (drgnx-ai-onboard-test--calls calls)))
-        (should-not (member "ollama serve" (drgnx-ai-onboard-test--calls calls)))
-        (should (member "ollama pull qwen2.5-coder:7b" (drgnx-ai-onboard-test--calls calls)))
-        (should (equal (car (drgnx-ai-role 'edit)) '(ollama . "qwen2.5-coder:7b")))))))
+      (drgnx-test-gated (drgnx-ai-onboard-test--job-ends 6)
+        (drgnx-ai-onboard-test--subscribe)
+        (let* ((first (progn (write-region "qwen2.5-coder:7b" nil (concat root "home/.pull-fail") nil 'silent)
+                             (car (drgnx-onboard-run :only '(ai)))))
+               (edit-after-first (car (drgnx-ai-role 'edit)))
+               ;; again, the download working now: no second install or server; ok
+               (again (progn (delete-file (concat root "home/.pull-fail"))
+                             (delete-file calls)
+                             (car (drgnx-onboard-run :only '(ai)))))
+               (calls-again (drgnx-ai-onboard-test--calls calls)))
+          (drgnx-ai-onboard-test--stop-jobs)
+          (drgnx-test-deliver-all)
+          (should (eq (nth 1 first) 'fail))
+          (should (string-match-p "qwen2\\.5-coder:7b" (nth 2 first)))
+          (should (string-match-p "run the step again" (nth 2 first)))
+          (should (string-match-p "max retries exceeded" (nth 2 first)))         ; why, from its log
+          (should-not (equal edit-after-first '(ollama . "qwen2.5-coder:7b")))
+          (should (eq (nth 1 again) 'ok))
+          (should-not (seq-find (lambda (c) (string-prefix-p "brew" c)) calls-again))
+          (should-not (member "ollama serve" calls-again))
+          (should (member "ollama pull qwen2.5-coder:7b" calls-again))
+          (should (equal (car (drgnx-ai-role 'edit)) '(ollama . "qwen2.5-coder:7b"))))))))
 
 (ert-deftest drgnx-onboard/non-interactive-installs-nothing ()
   (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--ollama-answers
@@ -758,63 +827,92 @@ job stopped at the end."
   "Wait until PRED (`drgnx-test-wait': at least 30 s, or SECS): the probe and the start are asynchronous."
   (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the runner's job"))
 
+;; The runner's start and stop go through the gate with every answer as it is due (the start's `exec/get' and the
+;; stop's answer are the job's row); the jobs' ends come at the end.  A look in the runner's window is the test's own
+;; wait, which moves no virtual time, so "at most once a minute" is not reached by waiting.
+
 (ert-deftest drgnx-ai/ensure-local-starts-the-runner-when-it-is-down ()
   (drgnx-ai-onboard-test--with-mac-jobs drgnx-ai-onboard-test--ollama-answers
-    (let ((noninteractive nil) (serve (list (concat bin "fake-serve") "serve")))
+    (let ((serve (list (concat bin "fake-serve") "serve")) started serving stopped later)
       (cl-letf (((symbol-function 'message) #'ignore))
-        (drgnx-ai-set-managed 'ollama serve "Ollama")
-        ;; down, no job: started
-        (drgnx-ai-ensure-local)
-        (should (drgnx-ai-onboard-test--settle (lambda () (drgnx-ai-onboard-test--serving serve)) 5))
-        ;; a job runs it already: not a second one
-        (setq drgnx-ai--ensure-time nil)
-        (drgnx-ai-ensure-local)
-        (drgnx-test-pause 1.5 "a second one may not come")
-        (should (= 1 (length (drgnx-ai-onboard-test--serving serve))))
-        ;; it answers: nothing started
-        (dolist (j (drgnx-exec-list)) (drgnx-exec-stop (plist-get j :id)))
-        (should (drgnx-ai-onboard-test--settle (lambda () (null (drgnx-ai-onboard-test--serving serve)))))
-        (let ((mock (drgnx-ai-test-mock-llm port script)))
-          (unwind-protect
-              (progn (setq drgnx-ai--ensure-time nil)
-                     (drgnx-ai-ensure-local)
-                     (drgnx-test-pause 1.5 "nothing may start")
-                     (should-not (drgnx-ai-onboard-test--serving serve)))
-            (delete-process mock)))))))
+        (drgnx-test-gated '((:answers t))
+          (drgnx-ai-onboard-test--subscribe)
+          (let ((noninteractive nil))         ; inside the gate: its clock is entered in batch
+            (drgnx-ai-set-managed 'ollama serve "Ollama")
+            ;; down, no job: started
+            (drgnx-ai-ensure-local)
+            (setq started (drgnx-ai-onboard-test--settle (lambda () (drgnx-ai-onboard-test--serving serve)) 5))
+            ;; a job runs it already: not a second one
+            (setq drgnx-ai--ensure-time nil)
+            (drgnx-ai-ensure-local)
+            (drgnx-test-pause 1.5 "a second one may not come")
+            (setq serving (length (drgnx-ai-onboard-test--serving serve)))
+            ;; it answers: nothing started
+            (dolist (j (drgnx-exec-list)) (drgnx-exec-stop (plist-get j :id)))
+            (setq stopped (drgnx-ai-onboard-test--settle (lambda () (null (drgnx-ai-onboard-test--serving serve)))))
+            (let ((mock (drgnx-ai-test-mock-llm port script)))
+              (unwind-protect
+                  (progn (setq drgnx-ai--ensure-time nil)
+                         (drgnx-ai-ensure-local)
+                         (drgnx-test-pause 1.5 "nothing may start")
+                         (setq later (drgnx-ai-onboard-test--serving serve)))
+                (delete-process mock))))
+          (drgnx-ai-onboard-test--stop-jobs)
+          (drgnx-test-deliver-all)
+          (should started)
+          (should (= 1 serving))
+          (should stopped)
+          (should-not later))))))
 
 (ert-deftest drgnx-ai/a-refused-request-starts-the-runner-at-most-once-a-minute ()
   (drgnx-ai-onboard-test--with-mac-jobs drgnx-ai-onboard-test--ollama-answers
-    (let ((noninteractive nil) (serve (list (concat bin "fake-serve") "serve"))
+    (let ((serve (list (concat bin "fake-serve") "serve"))
           (ask (lambda () (let ((done nil))
                             (drgnx-ai-request 'chat 'chat (list :messages (vector (list :role "user" :content "hi")))
                                               (lambda (_ _) (setq done t)) :chain '((ollama . "m")))
-                            (drgnx-ai-onboard-test--settle (lambda () done) 5)))))
+                            (drgnx-ai-onboard-test--settle (lambda () done) 5))))
+          started stopped again other)
       (cl-letf (((symbol-function 'message) #'ignore))
-        (drgnx-ai-set-managed 'ollama serve "Ollama")
-        (funcall ask)                                       ; nothing listens: connection refused
-        (should (drgnx-ai-onboard-test--settle (lambda () (drgnx-ai-onboard-test--serving serve)) 5))
-        (dolist (j (drgnx-exec-list)) (drgnx-exec-stop (plist-get j :id)))
-        (should (drgnx-ai-onboard-test--settle (lambda () (null (drgnx-ai-onboard-test--serving serve)))))
-        (funcall ask)                                       ; again within the minute: left alone
-        (drgnx-test-pause 1.5 "nothing may start")
-        (should-not (drgnx-ai-onboard-test--serving serve))
-        ;; another provider refusing never starts it
-        (setq drgnx-ai--ensure-time nil)
-        (drgnx-ai--refused 'lmstudio)
-        (drgnx-test-pause 1.5 "nothing may start")
-        (should-not (drgnx-ai-onboard-test--serving serve))))))
+        (drgnx-test-gated '((:answers t))
+          (drgnx-ai-onboard-test--subscribe)
+          (let ((noninteractive nil))         ; inside the gate: its clock is entered in batch
+            (drgnx-ai-set-managed 'ollama serve "Ollama")
+            (funcall ask)                                       ; nothing listens: connection refused
+            (setq started (drgnx-ai-onboard-test--settle (lambda () (drgnx-ai-onboard-test--serving serve)) 5))
+            (dolist (j (drgnx-exec-list)) (drgnx-exec-stop (plist-get j :id)))
+            (setq stopped (drgnx-ai-onboard-test--settle (lambda () (null (drgnx-ai-onboard-test--serving serve)))))
+            (funcall ask)                                       ; again within the minute: left alone
+            (drgnx-test-pause 1.5 "nothing may start")
+            (setq again (drgnx-ai-onboard-test--serving serve))
+            ;; another provider refusing never starts it
+            (setq drgnx-ai--ensure-time nil)
+            (drgnx-ai--refused 'lmstudio)
+            (drgnx-test-pause 1.5 "nothing may start")
+            (setq other (drgnx-ai-onboard-test--serving serve)))
+          (drgnx-ai-onboard-test--stop-jobs)
+          (drgnx-test-deliver-all)
+          (should started)
+          (should stopped)
+          (should-not again)
+          (should-not other))))))
 
 (ert-deftest drgnx-ai/ensure-local-never-waits-for-the-job ()
   ;; the probe's callback runs in a curl sentinel: it starts nothing itself, and the start does not wait for the hub
   (drgnx-ai-onboard-test--with-mac-jobs drgnx-ai-onboard-test--ollama-answers
-    (let ((noninteractive nil) (serve (list (concat bin "fake-serve") "serve")) (in-callback 'unset))
+    (let ((serve (list (concat bin "fake-serve") "serve")) (in-callback 'unset) started)
       (cl-letf (((symbol-function 'message) #'ignore)
                 ((symbol-function 'drgnx-ai-probe)            ; nothing answers; the callback at once
                  (lambda (callback &optional _ids) (funcall callback) (setq in-callback (drgnx-exec-list)) nil)))
-        (drgnx-ai-set-managed 'ollama serve "Ollama")
-        (drgnx-ai-ensure-local)
-        (should (null in-callback))                           ; the callback returned before any job was started
-        (should (drgnx-ai-onboard-test--settle (lambda () (drgnx-ai-onboard-test--serving serve)) 5))))))
+        (drgnx-test-gated '((:answers t))
+          (drgnx-ai-onboard-test--subscribe)
+          (let ((noninteractive nil))         ; inside the gate: its clock is entered in batch
+            (drgnx-ai-set-managed 'ollama serve "Ollama")
+            (drgnx-ai-ensure-local)
+            (setq started (drgnx-ai-onboard-test--settle (lambda () (drgnx-ai-onboard-test--serving serve)) 5)))
+          (drgnx-ai-onboard-test--stop-jobs)
+          (drgnx-test-deliver-all)
+          (should (null in-callback))                           ; the callback returned before any job was started
+          (should started))))))
 
 (ert-deftest drgnx-ai/ensure-local-does-nothing-in-batch ()
   (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--ollama-answers
