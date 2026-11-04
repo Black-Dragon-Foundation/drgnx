@@ -17,7 +17,7 @@ on:
         type: string
         default: release
       tiers:
-        description: "Space-separated jobs to run: unit no-lisp-writes ui scenario perf tty timing macos"
+        description: "Space-separated jobs to run: unit no-lisp-writes hub-chaos ui scenario perf tty timing macos"
         type: string
         required: true
       selector:
@@ -36,7 +36,7 @@ jobs:
   # the test binaries, built once for every Linux job that needs them (fetch-test-bins)
   bins-linux:
     name: Test binaries (Linux)
-    if: ${{ contains(format(' {0} ', inputs.tiers), ' unit ') || contains(format(' {0} ', inputs.tiers), ' no-lisp-writes ') || contains(format(' {0} ', inputs.tiers), ' ui ') || contains(format(' {0} ', inputs.tiers), ' perf ') }}
+    if: ${{ contains(format(' {0} ', inputs.tiers), ' unit ') || contains(format(' {0} ', inputs.tiers), ' no-lisp-writes ') || contains(format(' {0} ', inputs.tiers), ' hub-chaos ') || contains(format(' {0} ', inputs.tiers), ' ui ') || contains(format(' {0} ', inputs.tiers), ' perf ') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -141,6 +141,62 @@ jobs:
           DRGNX_TEST_AUDIT_FAIL: "1"
           DRGNX_TEST_SELECTOR: ${{ inputs.selector }}
         run: DRGNX_TEST_JOBS="$(nproc)" bin/drgnx test --container
+
+  # Hub chaos (docs/develop/ci.md, "Hub chaos"): the hub-client and ai-gateway files once per seed, 1 to 3, with each hub
+  # connection's answers delivered after its own seeded delay (DRGNX_TEST_HUB_CHAOS, test/fixtures/hub-chaos-fixture.el),
+  # against the run's test-hooks Ratatoskr. No rerun: a red under chaos is a race, not a flake. A red names its seed,
+  # and the same variable replays it
+  hub-chaos:
+    name: Hub chaos (hub client and gateway, seeds 1-3)
+    needs: bins-linux
+    if: ${{ !cancelled() && contains(format(' {0} ', inputs.tiers), ' hub-chaos ') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.drgnx_ref && 'Black-Dragon-Foundation/drgnx' || '' }}
+          ref: ${{ inputs.drgnx_ref }}
+          path: drgnx
+          persist-credentials: false
+      - uses: ./drgnx/.github/actions/fetch-test-bins
+      - if: ${{ !cancelled() }}
+        uses: ./drgnx/.github/actions/test-image
+        with:
+          containerfile: Containerfile
+          image: drgnx-test
+          variable: DRGNX_TEST_IMAGE
+          nidhogg-artifact: ${{ inputs.nidhogg == 'artifact' && 'tarball-fedora-45' || '' }}
+      - name: The hub-client and ai-gateway files under hub chaos, seeds 1 to 3 (no rerun)
+        if: ${{ !cancelled() }}
+        working-directory: drgnx
+        env:
+          DRGNX_CONTAINER: podman
+          DRGNX_TEST_NO_TIMING: "1"
+          DRGNX_TEST_SELECTOR: '"^drgnx-\\(hub-client\\|ai-gateway\\)/"'
+        run: |
+          red=""
+          for seed in 1 2 3; do
+            echo "::group::Hub chaos seed $seed"
+            log="$RUNNER_TEMP/hub-chaos-$seed.log" rc=0
+            DRGNX_TEST_HUB_CHAOS=$seed DRGNX_TEST_JOBS="$(nproc)" bin/drgnx test --container 2>&1 | tee "$log" || rc=$?
+            echo "::endgroup::"
+            ran=$(sed -nE 's/^drgnx: [0-9]+ test files.*: ([0-9]+) tests,.*/\1/p' "$log" | tail -n 1)
+            replay="DRGNX_TEST_HUB_CHAOS=$seed DRGNX_TEST_SELECTOR='$DRGNX_TEST_SELECTOR' bin/drgnx test --container"
+            if [ "$rc" != 0 ]; then
+              echo "::error title=Hub chaos seed $seed::red under hub chaos seed $seed (exit $rc); replay: $replay"
+              red="$red $seed"
+            elif [ "${ran:-0}" -eq 0 ]; then
+              echo "::error title=Hub chaos seed $seed::seed $seed ran no test (a vacuous pass proves nothing); replay: $replay"
+              red="$red $seed"
+            else
+              echo "hub chaos seed $seed: green, $ran tests"
+            fi
+          done
+          [ -z "$red" ] || { echo "red under hub chaos seed(s):$red"; exit 1; }
 
   # The GUI tier: real Nidhogg sessions under headless mutter, in test/container/Containerfile.gui; the live tests that
   # need the hub start their own against the run's Ratatoskr (test/no-skip.eld)

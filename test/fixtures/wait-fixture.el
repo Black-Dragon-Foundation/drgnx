@@ -6,6 +6,8 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-uitest)                 ; `drgnx-uitest-settle-scale': definitions only, no window or frame work
+;; the pre-flight's seeded hub answer delays (DRGNX_TEST_HUB_CHAOS); nothing without that variable
+(load (expand-file-name "hub-chaos-fixture" (file-name-directory (or load-file-name buffer-file-name))) nil t)
 
 (defun drgnx-test-wait-now ()
   "Real seconds, even inside the clock fixture (which fakes `float-time')."

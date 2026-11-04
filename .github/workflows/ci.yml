@@ -1,6 +1,6 @@
 # Every push to main or a ci/* branch and every pull request: the Rust runtime (runtime.yml, called as the `runtime`
 # job), the unit suite in plain and gate mode (formatting, byte-compile with no warnings and the lints are tests in it)
-# on the pinned Nidhogg (drgnx-tiers.yml), shellcheck, and the leak scan. The `gate` job ("CI gate") is the check
+# and the hub files under hub chaos on the pinned Nidhogg (drgnx-tiers.yml), shellcheck, and the leak scan. The `gate` job ("CI gate") is the check
 # branch protection requires. On a joint round's branch (ci/joint/*) the tiers run in Nidhogg's run on its new build
 # instead, so they are skipped here and the gate allows exactly that. A pull request or a ci/* push runs only the jobs
 # its change can affect (the `changes` job, .github/ci/paths.txt); a manual run can name jobs and a test selector, and
@@ -18,7 +18,7 @@ on:
         type: string
         default: "10"
       jobs:
-        description: "Narrowed: the jobs to run, ids from .github/ci/paths.txt (rt-linux ... unit no-lisp-writes ui ... macos tty); empty: all"
+        description: "Narrowed: the jobs to run, ids from .github/ci/paths.txt (rt-linux ... unit no-lisp-writes hub-chaos ui ... macos tty); empty: all"
         type: string
         default: ""
       selector:
@@ -62,8 +62,8 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           BASE: ${{ github.event.pull_request.base.sha }}
           GATE: CI gate
-          PUSH: rt-linux rt-msrv rt-escape rt-containers rt-android rt-deny rt-fuzz rt-macos unit no-lisp-writes
-          CAN: rt-linux rt-msrv rt-escape rt-containers rt-android rt-deny rt-fuzz rt-macos unit no-lisp-writes ui scenario perf macos tty timing
+          PUSH: rt-linux rt-msrv rt-escape rt-containers rt-android rt-deny rt-fuzz rt-macos unit no-lisp-writes hub-chaos
+          CAN: rt-linux rt-msrv rt-escape rt-containers rt-android rt-deny rt-fuzz rt-macos unit no-lisp-writes hub-chaos ui scenario perf macos tty timing
           REQUEST: ${{ inputs.jobs }}
           SELECTOR: ${{ inputs.selector }}
           GH_TOKEN: ${{ github.token }}
@@ -94,7 +94,7 @@ jobs:
     uses: ./.github/workflows/drgnx-tiers.yml
     with:
       nidhogg: release
-      tiers: ${{ needs.changes.outputs.tiers || 'unit no-lisp-writes' }}
+      tiers: ${{ needs.changes.outputs.tiers || 'unit no-lisp-writes hub-chaos' }}
       selector: ${{ inputs.selector }}
 
   scripts:

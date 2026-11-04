@@ -25,7 +25,7 @@ is what branch protection requires (the names differ, so each is one check):
 
 | Check | Workflow | Needs |
 |---|---|---|
-| `CI gate` | `CI` | `changes`, `runtime` (all of `runtime.yml`), `tiers` (`drgnx-tiers.yml`'s `unit` and `no-lisp-writes`; skipped on a joint round's branch, [Joint rounds](#joint-rounds)), `scripts` |
+| `CI gate` | `CI` | `changes`, `runtime` (all of `runtime.yml`), `tiers` (`drgnx-tiers.yml`'s `unit`, `no-lisp-writes` and `hub-chaos`; skipped on a joint round's branch, [Joint rounds](#joint-rounds)), `scripts` |
 | `macOS gate` | `macOS` | `changes`, `tiers` (`drgnx-tiers.yml`'s `macos`; the weekly `install` never runs on a push; the weekly run has no gate) |
 | `GUI tier gate` | `GUI tier` | `changes`, `tiers` (`drgnx-tiers.yml`'s `ui`, `scenario`, `perf`) |
 
@@ -48,7 +48,7 @@ image builds it), and its paths filter means most pushes never run it, so a requ
 
 | Workflow | When | What |
 |---|---|---|
-| `CI` (`.github/workflows/ci.yml`) | every push to `main` or `ci/*`, every pull request, on demand | the `runtime` job (calls `runtime.yml`, below: a `needs:` cannot reach another workflow file, so the call puts its jobs in `CI gate`); the `tiers` job, which calls `drgnx-tiers.yml` ([The tiers workflow](#the-tiers-workflow)) with `unit no-lisp-writes`: the unit suite on **Nidhogg 31.1** (drgnx's own Emacs build, from its release tarball; Fedora 45, `bin/drgnx test --container`) against a test-hooks `ratatoskr` built once on the runner (`bins-linux`), with `ratatoskr-mock` beside it (the gateway tests' provider) (`DRGNX_RATATOSKR_BIN`; the runner's glibc is older than Fedora 45's, so it runs in the container; the tests that need it fail rather than skip, `test/no-skip.eld`), and huginn's `dump` example (`DRGNX_HUGINN_DUMP`: the editor's differential test, `drgnx-huginn/differential-fresh-seed`, reads a fresh seed with it and with Emacs's reader; on `test/no-skip.eld`), its files in parallel, a failed file rerun once, the `:timing` tests left out by name ([Parallel files](#parallel-files)); `no-lisp-writes`, the same suite once with `DRGNX_WORK_DB_GATE=1` (it fetches the same `ratatoskr`, `ratatoskr-mock` and huginn `dump`, so `test/no-skip.eld` holds there too) (opening `work.db` read-write signals; only the tests tagged `:work-db-writer` are left out; docs/develop/store.md, "The one-writer gate"); `shellcheck --severity=warning` on `install.sh`, `bin/drgnx`, the pre-commit hook, `test/container/nidhogg.sh` and `.github/ci/`'s scripts; the path filter's self-test; the leak scan; `CI gate` |
+| `CI` (`.github/workflows/ci.yml`) | every push to `main` or `ci/*`, every pull request, on demand | the `runtime` job (calls `runtime.yml`, below: a `needs:` cannot reach another workflow file, so the call puts its jobs in `CI gate`); the `tiers` job, which calls `drgnx-tiers.yml` ([The tiers workflow](#the-tiers-workflow)) with `unit no-lisp-writes hub-chaos`: the unit suite on **Nidhogg 31.1** (drgnx's own Emacs build, from its release tarball; Fedora 45, `bin/drgnx test --container`) against a test-hooks `ratatoskr` built once on the runner (`bins-linux`), with `ratatoskr-mock` beside it (the gateway tests' provider) (`DRGNX_RATATOSKR_BIN`; the runner's glibc is older than Fedora 45's, so it runs in the container; the tests that need it fail rather than skip, `test/no-skip.eld`), and huginn's `dump` example (`DRGNX_HUGINN_DUMP`: the editor's differential test, `drgnx-huginn/differential-fresh-seed`, reads a fresh seed with it and with Emacs's reader; on `test/no-skip.eld`), its files in parallel, a failed file rerun once, the `:timing` tests left out by name ([Parallel files](#parallel-files)); `no-lisp-writes`, the same suite once with `DRGNX_WORK_DB_GATE=1` (it fetches the same `ratatoskr`, `ratatoskr-mock` and huginn `dump`, so `test/no-skip.eld` holds there too) (opening `work.db` read-write signals; only the tests tagged `:work-db-writer` are left out; docs/develop/store.md, "The one-writer gate"); `hub-chaos`, the `hub-client` and `ai-gateway` files once per seed (1 to 3) under seeded hub answer delays, with no rerun ([Hub chaos](#hub-chaos)); `shellcheck --severity=warning` on `install.sh`, `bin/drgnx`, the pre-commit hook, `test/container/nidhogg.sh` and `.github/ci/`'s scripts; the path filter's self-test; the leak scan; `CI gate` |
 | `GUI tier` (`.github/workflows/gui.yml`) | every push to `main` or `ci/*` (not `ci/joint/*`), nightly, on demand | `drgnx-tiers.yml` with `ui scenario perf`: real Nidhogg sessions under headless mutter, three jobs: `ui` (`bin/drgnx test --container --ui`, `DRGNX_TEST_NO_TIMING=1`: the GUI and live tiers, the `:timing` tests left out; it fetches the run's test-hooks `ratatoskr` for the live tests that start a hub, `DRGNX_RATATOSKR_BIN`), `scenario` (`--container --scenario`, `DRGNX_TEST_NO_TIMING=1`: the frame budget is reported, not judged) and `perf` (`--container --perf`, `DRGNX_PERF_CPU_FACTOR=2`, `DRGNX_PERF_RESULTS=perf-results.json` uploaded as the `perf-results` artifact, also when the run fails); `GUI tier gate`. A newer push to a `ci/*` branch cancels an older run of the same branch |
 | `Terminal tier` (`.github/workflows/tty.yml`) | nightly, on demand | a `tiers` job calling `drgnx-tiers.yml` with `tty`: `bin/drgnx test --container --tty --fedora 45`, the terminal tests (Emacs in tmux) on Emacs 31.1, after fetching the pinned kkp. No gate: it is not a push workflow |
 | `Bootstrap` (`.github/workflows/bootstrap.yml`) | weekly (Monday), on demand with a Fedora release (45 by default, or 44; the pinned Nidhogg release is unpacked first, so no build) | `bin/drgnx test --bootstrap --fedora N`: the exit test of a second machine — `install.sh --yes --config … --identity …` in a fresh Fedora container reaches a green doctor with the configuration, the locked packages and the provider keys back, and a second run changes nothing ([harness.md](harness.md)) |
@@ -122,8 +122,9 @@ others: the tiers), the first matching row wins. The workflows pass on what it d
 - The workflows, `.github/ci/`, `bin/`, `install.sh`, the harness, `settings/`, the lock, `test/container/` (the
   Nidhogg pin and the images), `test/support/`, `test/fixtures/`, `core/` (the Lisp hub and the Rust tests read it),
   `runtime/` and `docs/develop/hub.md` (a Rust test reads its method table) run everything. Other Lisp runs the tiers
-  (`modules/` the runtime's test jobs too); docs and the README run the tiers (tests read them); a tier's own test
-  directory runs that tier and the unit suite (its lints read every test file); `SECURITY.md` and the licences run
+  (`modules/` the runtime's test jobs too); docs and the README run the tiers but `hub-chaos` (tests read them); a
+  tier's own test directory runs that tier and the unit suite (its lints read every test file), and the `hub-client`
+  and `ai-gateway` test files `hub-chaos` too; `SECURITY.md` and the licences run
   nothing but the always-run `scripts` job (shellcheck, the leak scan, the filter's self-test).
 
 `bash .github/ci/changes.sh .github/ci/paths.txt --self-test` checks the mechanism and every `test` line of the table
@@ -141,8 +142,9 @@ gh workflow run ci.yml --ref ci/my-lane -f jobs='rt-linux' -f fuzz_minutes=1
 ```
 
 `jobs` takes the table's ids (`rt-linux rt-msrv rt-escape rt-containers rt-android rt-deny rt-fuzz rt-macos unit
-no-lisp-writes ui scenario perf macos tty timing`; the GUI tiers and `macos` run in `CI`'s own `tiers` job then),
-`selector` is `DRGNX_TEST_SELECTOR` (an ERT selector, read as Lisp: a string is a regexp, `\|` not `|`). When the run
+no-lisp-writes hub-chaos ui scenario perf macos tty timing`; the GUI tiers and `macos` run in `CI`'s own `tiers` job then),
+`selector` is `DRGNX_TEST_SELECTOR` (an ERT selector, read as Lisp: a string is a regexp, `\|` not `|`; `hub-chaos`
+keeps its own). When the run
 leaves out a job the change needs, or narrows the tests, its gate is `CI gate (partial)`: green when what it ran
 passed, never the check `main`'s protection requires. A narrowed run goes through the same path filter, so it never
 runs less than it asks for; it saves caches like any `ci/*` run.
@@ -158,8 +160,8 @@ included) and the steps live in one place. Inputs:
 |---|---|---|
 | `drgnx_ref` | commit, branch or tag; empty | the drgnx commit to test; empty: the caller's own commit |
 | `nidhogg` | `release`, `artifact` | `release`: the images as built (the pinned release, `test/container/nidhogg.sh`); `artifact`: the run's `tarball-fedora-45` and `tarball-macos` |
-| `tiers` | any of `unit no-lisp-writes ui scenario perf tty macos` | the jobs that run; the others are skipped |
-| `selector` | an ERT selector; empty | `DRGNX_TEST_SELECTOR` of the test jobs (not `perf` or `timing`): a narrowed run |
+| `tiers` | any of `unit no-lisp-writes hub-chaos ui scenario perf tty macos` | the jobs that run; the others are skipped |
+| `selector` | an ERT selector; empty | `DRGNX_TEST_SELECTOR` of the test jobs (not `hub-chaos`, `perf` or `timing`): a narrowed run |
 
 Every job checks drgnx out into `drgnx/` (in Nidhogg's run the workspace is Nidhogg's checkout) and takes the local
 actions from there (`uses: ./drgnx/.github/actions/…`), so they come from the drgnx commit under test:
@@ -167,7 +169,7 @@ actions from there (`uses: ./drgnx/.github/actions/…`), so they come from the 
 - `build-test-bins`: Ratatoskr with the test hooks, `ratatoskr-mock` and huginn's `dump`, with a cargo cache
   (`cargo-OS-drgnx-test-bins-TOOLCHAIN-HASH`, [What is cached](#what-is-cached)) saved by a push or manual run of `main`,
   `nidhogg-31` (when Nidhogg's run calls `drgnx-tiers.yml`; `github.ref` in a called workflow is the caller's) or a
-  `ci/*` branch, never by a pull request. `bins-linux` runs it once, for `unit`, `no-lisp-writes`, `ui` and `perf` (whose agent workloads start a hub with
+  `ci/*` branch, never by a pull request. `bins-linux` runs it once, for `unit`, `no-lisp-writes`, `hub-chaos`, `ui` and `perf` (whose agent workloads start a hub with
   `ratatoskr-mock` beside it), and uploads the binaries (`drgnx-test-bins-linux`, kept a day); `macos` runs it itself (one macOS job, so no second macOS runner for it: GitHub's free plan runs 5 at once).
 - `fetch-test-bins`: puts them back under the checkout's `runtime/target/debug` (so `bin/drgnx test --container` sees
   them at `/src`, `ratatoskr-mock` beside Ratatoskr) and sets `DRGNX_RATATOSKR_BIN` and `DRGNX_HUGINN_DUMP`.
@@ -194,6 +196,24 @@ tested once:
 3. After the Nidhogg release, drgnx's pin moves to it (`nidhogg.sh`, `install.sh`, the Containerfiles) on a plain
    `ci/<name>` branch: the full run there, on the published release, is `main`'s gate (scenario and perf run there).
 
+## Hub chaos
+
+The `hub-chaos` job of the tiers workflow (in `CI gate` through `ci.yml`'s `tiers` job, on every push) runs the
+`hub-client` and `ai-gateway` files three times, with `DRGNX_TEST_HUB_CHAOS` set to 1, 2 and 3, against the run's
+test-hooks `ratatoskr` (`bins-linux`): under a seed, what each real hub connection reads reaches the client after that
+connection's own delay (none, or 10 to 200 ms, `test/fixtures/hub-chaos-fixture.el`; the pre-flight's P3-hub step,
+below). It finds a test body that starts before its event connection is subscribed, which no CPU limit shows (a limit
+slows every connection alike). No rerun: a red under chaos is a race, not a flake, so the job sets no
+`DRGNX_TEST_RERUN`. A red is an error annotation naming the seed with the command that replays it; a seed that ran no
+test is red too. The same locally:
+
+```
+DRGNX_TEST_HUB_CHAOS=2 DRGNX_TEST_SELECTOR='"^drgnx-\\(hub-client\\|ai-gateway\\)/"' bin/drgnx test --container
+```
+
+A seed is the two files at once, 62 tests in about 20 s on a desktop (the `:timing` ones left out), so the job is a
+few minutes after `bins-linux`, the image pull and the binaries' download.
+
 ## The timing lane and the pre-flight
 
 Every tier sets `DRGNX_TEST_NO_TIMING=1`, so the tests tagged `:timing` (wall-clock assertions) run in one place only:
@@ -215,7 +235,12 @@ core (`DRGNX_TEST_PODMAN_ARGS=--cpus=…`) N times each, and the `cond` tests of
 (`hub-client`, `test-proc`, `remote`, `shell-env`, `shell-completion`, `session`; `DRGNX_PREFLIGHT_P3_SELECTOR`
 overrides) on a chaos Nidhogg image: `DRGNX_TEST_CHAOS_IMAGE`, or the image `$DRGNX_DET_IMAGE TARBALL preflight` prints
 as its last `DRGNX_TEST_IMAGE=` line (`DRGNX_DET_IMAGE` is the org folder's `tooling/det-image.sh`); without an image P3 is
-skipped. The files are chosen by class tag, so exempt and unclassified files are never run, and a step that ran no test
+skipped. P3-hub needs no image: the `hub-client` and `ai-gateway` files N times, seeds 1 to N, with
+`DRGNX_TEST_HUB_CHAOS=SEED`, under which what each hub connection reads reaches the client after that connection's own
+delay (its end runs at once, as Emacs runs it, or after output still queued) (none, or 10 to 200 ms, `test/fixtures/hub-chaos-fixture.el`; not on the
+virtual clock of `drgnx-test-with-clock`, where the test orders time itself): a CPU limit
+slows every connection alike, this changes which one is answered first (a test body that starts before its event connection is subscribed). A red prints its seed; the same
+variable replays it. The files are chosen by class tag, so exempt and unclassified files are never run, and a step that ran no test
 is red (a vacuous pass proves nothing). `REPORT.stamp` (`COMMIT PASSES DATE`) is written only when every step ran, ran
 tests and passed; a failed, skipped-P3, zero-test or killed run leaves none.
 
