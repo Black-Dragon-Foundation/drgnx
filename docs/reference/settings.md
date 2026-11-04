@@ -802,6 +802,24 @@ Preferences: Keep drgnx Running in the Background, which remembers it in setting
 | `:agents` | `never` |
 | `:schema` | - |
 
+## drgnx-speed-watchdog
+
+Non-nil: run Nidhogg's stall watchdog (Help → Show Freezes) when this Emacs has it.
+Read at every start; a change turns it on or off at once.  Without a watchdog in Emacs it does nothing.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-watchdog--settings-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | - |
+
 ## drgnx-trust-parents
 
 Folders whose projects are trusted for data: their workspace settings apply, and their code waits for Review

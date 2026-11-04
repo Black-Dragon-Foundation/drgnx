@@ -30,7 +30,8 @@
     (require drgnx-search-chunk)          ; Task 17: drgnx-search-{include,exclude,off}
     (require drgnx-settings-runtime)      ; drgnx-sandbox-memory-max, -secret-files, -proxy-pinned-addresses
     (require drgnx-settings-trust)        ; Task 18: drgnx-trust-parents
-    (require drgnx-user-lisp))            ; Task 29: drgnx-user-lisp-files
+    (require drgnx-user-lisp)             ; Task 29: drgnx-user-lisp-files
+    (require drgnx-watchdog))             ; drgnx-speed-watchdog
   "What declares the settings of the reference: entries `(require FEATURE)'.")
 
 (defun drgnx-settings-doc-load ()

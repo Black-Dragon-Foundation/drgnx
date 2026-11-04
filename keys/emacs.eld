@@ -415,4 +415,5 @@
         (store-revoke-personal-file :none "rare: in the palette (Preferences)")
         (store-deny-personal-path :none "rare: in the palette (Preferences)")
         (store-undeny-personal-path :none "rare: in the palette (Preferences)")
-        (heap-audit :none "Help → Heap Audit")))
+        (heap-audit :none "Help → Heap Audit")
+        (freezes :none "Help → Show Freezes")))

@@ -325,21 +325,29 @@ env_eval() { # FORM — evaluate with harness/drgnx-env.el loaded, print the res
   "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -l drgnx-env --eval "(princ (or $1 \"\"))"
 }
 
-test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fedora 45]] — the batch (GUI, scenario, perf, terminal) tier inside a fedora:45 / Nidhogg 31.1 container
+test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --day [MIN] | --tty [--fedora 45]] — the batch (GUI, scenario, perf, terminal) tier inside a fedora:45 / Nidhogg 31.1 container
   # DRGNX_TEST_IMAGE / DRGNX_TEST_GUI_IMAGE / DRGNX_TEST_TTY_IMAGE: use that image (CI pulls a prebuilt one) instead of building it
   # --tty --fedora 45 (the default): Fedora 44's Emacs is 30.2, which drgnx no longer supports
-  local rt mount image file elpa prebuilt="${DRGNX_TEST_IMAGE:-}" args=() cmd=(bin/drgnx test) build=() tier="" fedora="" compositor=""
+  local rt mount image file elpa prebuilt="${DRGNX_TEST_IMAGE:-}" args=() cmd=(bin/drgnx test) build=() tier="" fedora="" compositor="" abenv="" abn="" soakmin=""
   while (($#)); do
     case "$1" in
-      --ui|--tty|--scenario|--perf)
-        if [[ -n "$tier" && "$tier" != "${1#--}" ]]; then echo "drgnx: test --container takes one of --ui, --scenario, --perf, --tty" >&2; return 2; fi
-        tier="${1#--}" ;;
+      --ui|--tty|--scenario|--perf|--soak|--day)
+        if [[ -n "$tier" && "$tier" != "${1#--}" ]]; then echo "drgnx: test --container takes one of --ui, --scenario, --perf, --soak, --day, --tty" >&2; return 2; fi
+        tier="${1#--}"
+        if { [ "$tier" = soak ] || [ "$tier" = day ]; } && [[ "${2:-}" =~ ^[0-9]+$ ]]; then soakmin="$2"; shift; fi ;;
+      --ab-env) [[ "${2:-}" =~ ^[A-Z_][A-Z0-9_]*=[^,=]+,[^,=]+$ ]] || { echo "usage: drgnx test --container --perf --ab-env VAR=JUDGED,REF [--n N]" >&2; return 2; }
+                abenv="$2"; shift ;;
+      --n) [[ "${2:-}" =~ ^[0-9]+$ ]] || { echo "usage: drgnx test --container --perf --ab-env VAR=JUDGED,REF [--n N]" >&2; return 2; }
+           abn="$2"; shift ;;
       --fedora) fedora="${2:-?}"; if (($# > 1)); then shift; fi ;;
       --compositor) compositor="${2:-}"; ui_compositor_ok "$compositor" || return 2; shift ;;
-      *) echo "drgnx: unknown option for test --container: $1 (--ui [--compositor C] | --scenario | --perf | --tty [--fedora 45])" >&2; return 2 ;;
+      *) echo "drgnx: unknown option for test --container: $1 (--ui [--compositor C] | --scenario | --perf [--ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --day [MIN] | --tty [--fedora 45])" >&2; return 2 ;;
     esac
     shift
   done
+  if { [ -n "$abenv" ] || [ -n "$abn" ]; } && { [ "$tier" != perf ] || [ -z "$abenv" ]; }; then
+    echo "drgnx: --ab-env VAR=JUDGED,REF [--n N] goes with --perf" >&2; return 2
+  fi
   if [ -n "$fedora" ] && { [ "$tier" != tty ] || [[ ! "$fedora" =~ ^45$ ]]; }; then
     echo "drgnx: --fedora 45 goes with --tty (the terminal tier's image); got: $fedora" >&2; return 2
   fi
@@ -350,10 +358,13 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fed
   [ -n "$rt" ] || { echo "drgnx: no container runtime found (podman, docker, nerdctl); set DRGNX_CONTAINER" >&2; return 1; }
   mount="$here:/src:ro"; [ "$rt" = podman ] && mount="$mount,Z"
   image=drgnx-test:f45; file=Containerfile
-  if [ "$tier" = ui ] || [ "$tier" = scenario ] || [ "$tier" = perf ]; then   # the GUI image: sessions under headless mutter
+  if [ "$tier" = ui ] || [ "$tier" = scenario ] || [ "$tier" = perf ] || [ "$tier" = soak ] || [ "$tier" = day ]; then   # the GUI image: sessions under headless mutter
     image=drgnx-test-gui:f45; file=Containerfile.gui; cmd=(bin/drgnx test --ui); prebuilt="${DRGNX_TEST_GUI_IMAGE:-}"
     [ "$tier" = scenario ] && cmd=(bin/drgnx test --scenario --config drgnx)
     [ "$tier" = perf ] && cmd=(bin/drgnx test --perf)
+    if [ -n "$abenv" ]; then cmd+=(--ab-env "$abenv"); [ -z "$abn" ] || cmd+=(--n "$abn"); fi
+    if [ "$tier" = soak ]; then cmd=(bin/drgnx test --soak); [ -z "$soakmin" ] || cmd+=("$soakmin"); fi
+    if [ "$tier" = day ]; then cmd=(bin/drgnx test --day); [ -z "$soakmin" ] || cmd+=("$soakmin"); fi
     local comp="${DRGNX_UI_COMPOSITOR:-}"
     if [ -n "$compositor" ]; then cmd+=(--compositor "$compositor"); comp="$compositor"; fi
     # KWin and niri are in an image of their own (Containerfile.wm); DRGNX_TEST_WM_IMAGE: a prebuilt one
@@ -361,8 +372,14 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fed
     # --memory: a GUI run (sessions, compositors, the X11 Emacs) must never push the host into the OOM killer;
     # --memory-swap the same: no swap on top.  DRGNX_TEST_GUI_MEMORY (default 3g) for a bigger run
     local mem="${DRGNX_TEST_GUI_MEMORY:-3g}"
+    # the synthetic day keeps a long session, more than a GUI test needs: DRGNX_TEST_DAY_MEMORY (default 6g, a desktop
+    # size; a laptop sets 4g or less); the results name this host, not the container's id
+    if [ "$tier" = day ]; then mem="${DRGNX_TEST_DAY_MEMORY:-6g}"; DRGNX_PERF_MACHINE="${DRGNX_PERF_MACHINE:-$(hostname 2>/dev/null || echo unknown)}"; fi
     args=(--memory "$mem" --memory-swap "$mem" --security-opt seccomp=unconfined --security-opt label=disable)
     mount="$here:/src:ro"
+    # an A/B compiles the tree (`bin/drgnx build`) before its sessions start: under podman the checkout is an overlay,
+    # so the .elc files go to a layer the run throws away and the checkout stays as it was
+    if [ -n "$abenv" ] && [ "$rt" = podman ]; then mount="$here:/src:O"; fi
     if [ -n "${DRGNX_UI_COMPOSITOR:-}" ]; then args+=(-e "DRGNX_UI_COMPOSITOR=$DRGNX_UI_COMPOSITOR"); fi
   elif [ "$tier" = tty ]; then
     fedora="${fedora:-45}"
@@ -400,7 +417,7 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fed
   # (CI: the runner's cores), a failed file reruns once, wall clock is skipped, the perf run's results and factors,
   # the sessions' monitor size, count and scales
   local v pass=(DRGNX_TEST_SELECTOR DRGNX_TEST_JOBS DRGNX_TEST_RERUN DRGNX_TEST_NO_TIMING DRGNX_TEST_FROZEN DRGNX_WORK_DB_GATE NIDHOGG_TEST_CLOCK NIDHOGG_TEST_SEED DRGNX_TEST_SHUFFLE DRGNX_TEST_AUDIT DRGNX_TEST_AUDIT_ALL DRGNX_TEST_AUDIT_FAIL DRGNX_PERF_RESULTS
-                DRGNX_PERF_CPU_FACTOR DRGNX_PERF_WORKLOADS DRGNX_UITEST_SETTLE_SCALE DRGNX_UI_TEST_TIMEOUT
+                DRGNX_PERF_CPU_FACTOR DRGNX_PERF_WORKLOADS DRGNX_PERF_MACHINE DRGNX_UITEST_SETTLE_SCALE DRGNX_UI_TEST_TIMEOUT
                 DRGNX_UI_SIZE DRGNX_UI_MONITORS DRGNX_UI_SCALE DRGNX_UI_SCALES)
   for v in "${pass[@]}"; do
     [ "$v" = DRGNX_PERF_RESULTS ] && continue   # below: the checkout is read-only, so the file goes through a mount
@@ -435,7 +452,24 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fed
   args+=(-e DRGNX_LEASE=off)   # the host's lease is not the container's: one run owns it
   # the image's own Emacs, named: drgnx never falls back to a bare `emacs' (Nidhogg, which test/container/nidhogg.sh links
   # into /usr/local/bin; the Containerfiles' ENV names the same build)
-  args+=(-e DRGNX_EMACS=/usr/local/bin/emacs)
+  # DRGNX_CONTAINER_NIDHOGG=PREFIX: an unpacked Nidhogg instead, mounted read-only at the prefix its
+  # share/nidhogg/BUILDINFO names (it was built for that path), else at PREFIX itself as given (not with its
+  # symlinks resolved: a dev build bakes in the path it was built at)
+  if [ -n "${DRGNX_CONTAINER_NIDHOGG:-}" ]; then
+    local nsrc npfx nmount
+    [ -d "$DRGNX_CONTAINER_NIDHOGG" ] || { echo "drgnx: DRGNX_CONTAINER_NIDHOGG is not a directory: $DRGNX_CONTAINER_NIDHOGG" >&2; return 2; }
+    nsrc="$(cd "$DRGNX_CONTAINER_NIDHOGG" && pwd -P)"; npfx="$(cd "$DRGNX_CONTAINER_NIDHOGG" && pwd)"
+    if [ -f "$nsrc/share/nidhogg/BUILDINFO" ]; then
+      npfx="$(sed -n 's/^prefix=//p' "$nsrc/share/nidhogg/BUILDINFO" | head -n1)"
+      npfx="${npfx:-$nsrc}"
+    fi
+    case "$nsrc$npfx" in *:*) echo "drgnx: DRGNX_CONTAINER_NIDHOGG and its BUILDINFO prefix must not contain ':' (mounted with -v): $nsrc" >&2; return 2 ;; esac
+    case "$npfx" in /*) ;; *) echo "drgnx: the BUILDINFO prefix is not absolute: $npfx" >&2; return 2 ;; esac
+    nmount="$nsrc:$npfx:ro"; [ "$rt" = podman ] && nmount="$nmount,z"
+    args+=(-v "$nmount" -e "DRGNX_EMACS=$npfx/bin/nidhogg")
+  else
+    args+=(-e DRGNX_EMACS=/usr/local/bin/emacs)
+  fi
   # evil for the modal tests (DRGNX_MODAL_ELPA), read-only; ,z: a shared label, other containers may read it too
   if [ -n "${DRGNX_MODAL_ELPA:-}" ] && [ -d "$DRGNX_MODAL_ELPA" ]; then
     local elpa; elpa="$(cd "$DRGNX_MODAL_ELPA" && pwd -P):/modal-elpa:ro"
@@ -809,9 +843,10 @@ cmd_test() {
             esac
             run_in_tmp ui_exec test-perf ;;
     --soak) shift; run_in_tmp ui_exec test-soak "${1:-30}" ;;
+    --day) shift; run_in_tmp ui_exec test-day "${1:-30}" ;;
     --container) shift; test_container "$@" ;;
     --podman) shift; DRGNX_CONTAINER=podman test_container "$@" ;;
-    *) echo "usage: drgnx test [--one-process] [--leaks] [--shuffle[=SEED]] | drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…] | drgnx test --stress N [--load K] [--ui|--tty|--scenario] | drgnx test [--ui [--compositor C] | --tty | --scenario [--config C] | --bench | --perf [--audit | --ab REF [--n N] | --ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --container [--ui [--compositor C] | --scenario | --perf | --tty [--fedora 45]] | --install [NAME…] | --bootstrap [--fedora 44|45]]" >&2; exit 2 ;;
+    *) echo "usage: drgnx test [--one-process] [--leaks] [--shuffle[=SEED]] | drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…] | drgnx test --stress N [--load K] [--ui|--tty|--scenario] | drgnx test [--ui [--compositor C] | --tty | --scenario [--config C] | --bench | --perf [--audit | --ab REF [--n N] | --ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --day [MIN] | --container [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --day [MIN] | --tty [--fedora 45]] | --install [NAME…] | --bootstrap [--fedora 44|45]]" >&2; exit 2 ;;
   esac
 }
 
@@ -907,7 +942,7 @@ lease_self() { # CLASS ARGS… — take the lease for this command: re-exec as `
 
 lease_test_class() { # ARGS of `drgnx test` → light (the batch tier), heavy (the GUI, tty and container tiers), exclusive (A/B perf)
   case "${1:-}" in
-    --ui|--tty|--scenario|--bench|--soak|--container|--podman|--install|--bootstrap|--stress|--preflight) echo heavy ;;
+    --ui|--tty|--scenario|--bench|--soak|--day|--container|--podman|--install|--bootstrap|--stress|--preflight) echo heavy ;;
     --perf) case " $* " in *" --ab "*|*" --ab-env "*) echo exclusive ;; *) echo heavy ;; esac ;;
     *) echo light ;;
   esac
@@ -1794,12 +1829,16 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                (--audit: what each hook function costs, not judged; --ab-env: the paired A/B on
                                one tree, the first value the judged side, e.g. DRGNX_PERF_GLITNIR=on,off)
        drgnx test --soak [MIN] the workloads in a loop for MIN minutes (30); memory must hold
+       drgnx test --day [MIN]  the synthetic day: a build-up (files, Org, eglot on a replay server, vc-git,
+                               transcript replays) then rounds of workloads for MIN minutes (30); RSS growth
+                               across the rounds <= 20%, no workload may fail (perf.md, The synthetic day)
        drgnx test --scenario [--config drgnx|gryphn|DIR]
                                behaviour scenarios in a session of that configuration
        drgnx test --container [--ui [--compositor C]]
                                the same inside a fedora:45 / Nidhogg 31.1 container (GUI: capped at 3 GB, no swap;
                                DRGNX_TEST_GUI_MEMORY overrides; image builds 3 GB, DRGNX_TEST_BUILD_MEMORY)
-                               (podman, else docker, else nerdctl; DRGNX_CONTAINER overrides)
+                               (podman, else docker, else nerdctl; DRGNX_CONTAINER overrides); also --perf [--ab-env VAR=JUDGED,REF [--n N]]
+                               and --soak [MIN] and --day [MIN] (capped at DRGNX_TEST_DAY_MEMORY, 6g); DRGNX_CONTAINER_NIDHOGG=PREFIX runs an unpacked Nidhogg instead of the image's
        drgnx test --container --tty [--fedora 45]
                                the terminal tier in a container (45: Nidhogg 31.1, the default; 44's 30.2 is no longer supported)
        drgnx test --install [NAME…]

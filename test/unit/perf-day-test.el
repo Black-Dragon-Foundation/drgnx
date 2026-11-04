@@ -1,0 +1,171 @@
+;;; perf-day-test.el --- batch tests: the synthetic day (composition, transcript replay, LSP replay, rules) -*- lexical-binding: t -*-
+;; test-class: cond
+(require 'ert)
+(require 'cl-lib)
+(require 'drgnx-perf-run)
+;; what the transcript replay loads when it starts, loaded with the file: their definitions are no test's leak
+(require 'drgnx-agents)
+(require 'drgnx-timer)
+
+(defconst perf-day-test--dir
+  (expand-file-name "../../" (file-name-directory (or load-file-name buffer-file-name)))
+  "The repository root (test/unit/'s grandparent).")
+
+(ert-deftest drgnx-perf-day/composition-is-pinned ()
+  ;; every input is a file under test/fixtures/day/, the seed is fixed, and no workload of the day is one the container
+  ;; skips; the composition's SHA changes when an input does
+  (let* ((drgnx-ui-repo-dir perf-day-test--dir)
+         (c (drgnx-perf-day-composition)))
+    (should (equal (plist-get c :seed) "drgnx-day-1"))
+    (should (plist-get c :files))
+    (dolist (f (plist-get c :files))
+      (should (string-prefix-p "test/fixtures/" f))
+      (should (file-exists-p (expand-file-name f perf-day-test--dir))))
+    (should (file-exists-p (expand-file-name "test/fixtures/lsp-replay.el" perf-day-test--dir)))
+    (should (string-match-p "\\`[0-9a-f]\\{12\\}\\'" (plist-get c :sha)))
+    (should (equal (plist-get c :sha) (plist-get (drgnx-perf-day-composition) :sha)))
+    (let ((all (drgnx-perf-run--workloads)))
+      (should (memq 'transcript-replay (plist-get c :workloads)))
+      (dolist (w (plist-get c :workloads))
+        (should-not (assq w drgnx-perf-run-container-skipped))
+        (should (plist-get (cdr (assq w all)) :actions))))))
+
+(ert-deftest drgnx-perf-day/transcript-replay-runs-without-an-agent ()
+  ;; a session with no process; a chunk per tick, the next tick set at the recorded pace; the transcript grows
+  (let* ((chunks '((40 . "one ") (25 . "two ") (60 . "three")))
+         (drgnx-agents--sessions nil) (drgnx-perf--replays nil)
+         starts changed)
+    (cl-letf (((symbol-function 'drgnx-timer-start)
+               (lambda (key secs fn &rest r) (push (list key secs fn (plist-get r :args)) starts) key))
+              ((symbol-function 'drgnx-timer-cancel) #'ignore)
+              ((symbol-function 'drgnx-agents--changed) (lambda (s) (push s changed)))
+              ((symbol-function 'make-process) (lambda (&rest _) (error "A process was started")))
+              ((symbol-function 'start-process) (lambda (&rest _) (error "A process was started"))))
+      (let ((s (drgnx-perf-replay-start "day-a" chunks)))
+        (should (memq s drgnx-agents--sessions))
+        (should-not (drgnx-agent-session-conn s))
+        (should (equal (nth 1 (car starts)) 0.04))            ; the first chunk's delay
+        (drgnx-perf-replay-tick "day-a")
+        (should (equal (nth 1 (car starts)) 0.025))           ; the second's
+        (drgnx-perf-replay-tick "day-a")
+        (drgnx-perf-replay-tick "day-a")
+        (should (equal (drgnx-agents-entry-text (car (drgnx-agent-session-entries s))) "one two three"))
+        (should (= (drgnx-perf-replay-count "day-a") 3))
+        (should (= (length changed) 3))
+        ;; the recording ended: the answer is done and the loop starts again
+        (should (plist-get (car (drgnx-agent-session-entries s)) :done))
+        (should (equal (nth 1 (car starts)) 0.04))
+        (drgnx-perf-replay-stop "day-a")
+        (should-not (memq s drgnx-agents--sessions))
+        (should (= (drgnx-perf-replay-count "day-a") 0))))))
+
+(ert-deftest drgnx-perf-day/lsp-replay-answers-initialize ()
+  ;; the stub, a batch Emacs on stdio, answers `initialize' from the recording and `shutdown' with null, and
+  ;; leaves a notification unanswered
+  (let* ((out "") (stub (expand-file-name "test/fixtures/lsp-replay.el" perf-day-test--dir))
+         (frame (lambda (json) (format "Content-Length: %d\r\n\r\n%s" (string-bytes json) json)))
+         (proc (make-process :name "lsp-replay-test" :connection-type 'pipe :noquery t
+                             :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "-l" stub)
+                             :filter (lambda (_p s) (setq out (concat out s))))))
+    (unwind-protect
+        (let ((wait (lambda (re) (let ((d (+ (float-time) 30)))
+                                   (while (and (not (string-match-p re out)) (< (float-time) d)) (accept-process-output proc 0.2))))))
+          (process-send-string proc (funcall frame "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}"))
+          (funcall wait "\"id\":1")
+          (should (string-match "Content-Length: [0-9]+\r\n\r\n{[^\n]*\"id\":1[^\n]*\"serverInfo\":{\"name\":\"replay\"" out))
+          (process-send-string proc (funcall frame "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}"))
+          (process-send-string proc (funcall frame "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\"}"))
+          (funcall wait "\"id\":2")
+          (should (string-match-p "\"id\":2,\"result\":null" out))
+          (should (= 2 (with-temp-buffer (insert out) (how-many "Content-Length:" (point-min))))))   ; one answer each, none for the notification
+      (when (process-live-p proc) (delete-process proc)))))
+
+(ert-deftest drgnx-perf-day/no-400mb-rule ()
+  ;; the soak's 400 MB cap is not the day's: a flat 1 GB passes, 25 % growth across the steady rounds fails, and so
+  ;; does a workload's error
+  (let ((flat (mapcar (lambda (kb) (list :rss_kb kb)) '(1048576 1048576 1050000 1048576))))
+    (should-not (drgnx-perf-day-verdict flat nil)))
+  (let ((fails (drgnx-perf-day-verdict (mapcar (lambda (kb) (list :rss_kb kb)) '(1000000 1100000 1250000)) nil)))
+    (should (= 1 (length fails)))
+    (should (string-match-p "grew 25\\.0%" (car fails))))
+  (should (drgnx-perf-day-verdict (list (list :rss_kb 1000) (list :rss_kb 1000)) '("typing: boom"))))
+
+(ert-deftest drgnx-perf-day/a-round-fails-when-a-replay-or-the-language-server-died ()
+  ;; after each steady round both background replays must have produced since the last one and eglot must be up
+  (should-not (drgnx-perf-day-liveness-fails 2 '(10 20) '(:replays [15 30] :eglot t)))
+  (let ((fails (drgnx-perf-day-liveness-fails 3 '(15 30) '(:replays [15 41] :eglot t))))
+    (should (= 1 (length fails)))
+    (should (string-match-p "round 3: replay day-1 stopped" (car fails))))
+  (let ((fails (drgnx-perf-day-liveness-fails 1 '(0 0) '(:replays (5 6) :eglot :false))))
+    (should (= 1 (length fails)))
+    (should (string-match-p "language server" (car fails)))))
+
+(defvar perf-day-test--clock 0.0)
+
+(ert-deftest drgnx-perf-day/the-watchdog-is-applied-before-build-up-and-the-results-are-kept ()
+  ;; the day switches the watchdog (and so its arm) as the session starts, before build-up; it keeps each workload's
+  ;; watchdog numbers and reads the cumulative stats, without resetting, at each phase start and after each round
+  (let* ((calls nil) (reads 0) (out "") (perf-day-test--clock 1000.0) (file (make-temp-file "day" nil ".json"))
+         (process-environment (cons (concat "DRGNX_PERF_RESULTS=" file) process-environment))
+         (drgnx-perf-day-workloads '(typing)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'float-time) (lambda (&optional _) perf-day-test--clock))
+                  ((symbol-function 'drgnx-perf-run--make-fixture) (lambda () (make-temp-file "fx")))
+                  ((symbol-function 'drgnx-perf-run--session-size) #'ignore)
+                  ((symbol-function 'drgnx-ui-start) (lambda (&rest _) '(:name "s")))
+                  ((symbol-function 'drgnx-ui-own-session) (lambda (&rest _) 'sess))
+                  ((symbol-function 'drgnx-ui-stop) #'ignore)
+                  ((symbol-function 'drgnx-perf-run--check-gc) #'ignore)
+                  ((symbol-function 'drgnx-perf-day--fixture-repo) #'ignore)
+                  ((symbol-function 'drgnx-perf-day--buildup-form) (lambda (_) "BUILDUP"))
+                  ((symbol-function 'drgnx-perf-run--workloads) (lambda () '((typing :actions "x"))))
+                  ((symbol-function 'drgnx-perf-day--shuffle) #'identity)
+                  ((symbol-function 'drgnx-perf-run-workload)
+                   (lambda (&rest _)
+                     (cl-incf perf-day-test--clock 1000.0)
+                     (list :stalls 1 :stalls-felt 1 :stall-max-ms 150.0
+                           :watchdog (list :missed 1 :monitor-cpu-ms 2.0 :drain-p95-ms 4.0))))
+                  ((symbol-function 'send-string-to-terminal) (lambda (s) (setq out (concat out s))))
+                  ((symbol-function 'drgnx-perf-run--call)
+                   (lambda (_sess form &optional _timeout)
+                     (push form calls)
+                     (cond
+                      ((equal form "BUILDUP") [])
+                      ((string-match-p "watchdog-day-read" form)
+                       (cl-incf reads)
+                       (list :on t :native t :version-dir "v/" :drgnx-mode t
+                             :stats (list :spans (* reads 1000) :samples (* reads 1000) :missed reads :stale 0 :stalls 0
+                                          :monitor-cpu-ms (* reads 5.0) :drain [0 0 0 0 0 0 0 0 0])
+                             :stalls (vector (list :wall-ms 150.0 :felt t :signature "a.el:f" :culprit "f"))))
+                      ((string-match-p "rss_kb" form)
+                       (list :rss_kb 1000 :heap_mb 10.0 :gcs 1 :replays [1 1] :eglot t))
+                      (t t)))))
+          (let ((printed (with-output-to-string (drgnx-perf-day 1))))
+            (setq out (concat out printed)))
+          (let* ((forms (reverse calls))
+                 (env (cl-position-if (lambda (f) (string-match-p "watchdog-env" f)) forms))
+                 (build (cl-position "BUILDUP" forms :test #'equal))
+                 (first-read (cl-position-if (lambda (f) (string-match-p "watchdog-day-read" f)) forms)))
+            (should env)
+            (should (< env build))
+            (should (< env first-read))
+            (should-not (cl-some (lambda (f) (string-match-p "stats t" f)) forms)))
+          (should (string-match-p "day: round 1 watchdog: monitor" out))
+          (should (string-match-p "day: watchdog: on, .*native yes.*max 0\\.0 ms" out))
+          (let* ((j (with-temp-buffer (insert-file-contents file) (goto-char (point-min))
+                                      (json-parse-buffer :object-type 'plist :array-type 'list)))
+                 (round (car (plist-get j :rounds))))
+            (should (equal (plist-get (car (plist-get round :workload_watchdog)) :name) "typing"))
+            (should (= 1 (plist-get (car (plist-get round :workload_watchdog)) :stalls)))
+            (should (plist-get j :watchdog))))
+      (delete-file file))))
+
+(ert-deftest drgnx-perf-day/the-watchdog-line-reads-the-delta ()
+  (let* ((delta (list :monitor-cpu-ms 350.0 :drain-p95-ms 2.0 :drain-max-ms 8.0 :missed 2 :samples 200))
+         (stalls (list (list :wall-ms 150.0 :felt t :signature "a.el:f") (list :wall-ms 90.0 :felt nil :signature "a.el:f")))
+         (line (drgnx-perf-day--watchdog-line delta 100.0 stalls)))
+    (should (string-match-p "monitor 0\\.35% of wall" line))
+    (should (string-match-p "drain p95 2\\.0 ms, max 8\\.0 ms" line))
+    (should (string-match-p "missed 2 of 200 samples" line))
+    (should (string-match-p "stalls 2 (1 felt)" line))
+    (should (string-match-p "a\\.el:f x2" line))))

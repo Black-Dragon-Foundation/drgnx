@@ -8,6 +8,7 @@ drgnx test --perf           every workload; fails when a gated budget (allocatio
                             what got worse than the local history is printed
 drgnx test --perf --audit   the workloads with every hook function timed: judged on the hook budget only
 drgnx test --soak [MIN]     the input workloads in a loop for MIN minutes (30); fails when memory grows
+drgnx test --day [MIN]      the synthetic day (below): a pinned session of files, Org, eglot, vc-git and transcript replays
 DRGNX_STARTUP_TRACE=FILE    emacs --init-directory …/init: where startup time goes, written to FILE
 DRGNX_PERF_WORKLOADS='A B'  only those workloads (space-separated names from the table below; unset: all; a typo is an error).
                             A partial run is judged against its own budgets and writes no history line
@@ -29,6 +30,7 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | tabs | 20 next-tab switches among 20 open files | input latency |
 | explorer | focus the Explorer, 10 rows down (each one moves), back | input latency |
 | agent-typing | typing while an agent streams a reply into the Agents tab: a `ratatoskr-mock acp` in a Ratatoskr hub, the editor's session a mirror of the hub's (see "The agent workloads" below); the turn takes three seconds (checked: its `stop` entry is not in the mirror yet at the end) | input latency |
+| transcript-replay | the typing workload's six strings while the editor's other window shows a transcript fed from a recording by a timer at the recorded pace (no agent; checked: chunks arrived while typing); runs in the container | input latency |
 | agent-stream | the typing workload's six strings while the editor's other window shows a transcript whose running answer starts 400 kB long (not done) and the hub's mock streams 100-character chunks onto it, 50 a second, for thirty seconds (checked: still streaming at the end): a chunk costs the chunk, and only the new text is drawn | input latency |
 | cockpit-cards | typing while the Work cockpit is filtered to a job (Show Job in Work: the graph, and What needs you with four cards, three tasks and their agents; twenty decisions) and three hub mock agents stream, the panes following the hub's events (checked: still streaming at the end); until M12f `job-window`, the job's own frame | input latency |
 | code-scrolling | `<next>`×30 then `<prior>`×30 through the 12k-line fixture with sticky scroll and indent guides (when installed) on — smooth scrolling is on but pixel scrolling is a wheel's, not `<next>`'s | input latency |
@@ -143,7 +145,7 @@ seccomp=unconfined --security-opt label=disable -v CHECKOUT:/src:ro -v OUT:/out 
 between the runs. The checkout is not built there, so the figures are those of code loaded from source; compiled
 code allocates less, so a built checkout stays under them. A workload that could not run in the container has no
 gated rows yet and is named, with the reason, in `drgnx-perf-run-unseeded` (a test checks both ways).
-In a container the lab names the workloads that error there (`drgnx-perf-run-container-skipped`: the Live view and the terminal ones, for want of the websocket and eat packages in the image) and leaves them out, so the CI perf job does not fail on them; on a host they run.
+In a container the lab names the workloads that error there (`drgnx-perf-run-container-skipped`: the Live view and the terminal ones, for want of the websocket and eat packages in the image) and leaves them out, so the CI perf job does not fail on them; on a host they run. `transcript-replay` (the synthetic day's stream, below) runs in the container too, with no agent or hub.
 
 **Raising a budget** is a change of its own: edit `budgets.eld` in the same commit as the code that needs it, with the
 reason in a comment on the row. A budget is raised for a measured, explained increase, never to make a run pass.
@@ -316,6 +318,60 @@ redisplay, is left out. Process filters are not timed yet.
 PERF-HOOKS-2: CI's perf job runs `--perf`, not `--audit`, so it does not enforce the `:hooks` budget; it is enforced
 only in a local audit, and stays gated off in CI until it is measured on every seeded workload.
 
+## A given Nidhogg, in a container
+
+```sh
+DRGNX_CONTAINER_NIDHOGG=/path/to/unpacked/nidhogg DRGNX_PERF_WORKLOADS=popup-typing \
+  bin/drgnx test --container --perf --ab-env VAR=JUDGED,REF
+DRGNX_CONTAINER_NIDHOGG=/path/to/unpacked/nidhogg bin/drgnx test --container --soak 30
+```
+
+The container runs the Nidhogg at `DRGNX_CONTAINER_NIDHOGG` (an unpacked build; see [harness.md](harness.md)) instead of
+the image's, so a build under test is measured without touching the host. `--soak [MIN]` is the soak of the section above in
+the GUI image, memory-capped like `--ui`; `--ab-env` is the interleaved A/B of the Glitnir section (it compiles the
+tree first, so under podman the checkout is mounted as an overlay, `/src:O`: the `.elc` files go to a layer the run
+throws away; other runtimes keep it read-only, where the A/B's build fails). Name the workloads
+(`DRGNX_PERF_WORKLOADS`) for any A/B: the lab's other workloads need not suit the Nidhogg you mount.
+
+## The synthetic day
+
+```sh
+DRGNX_CONTAINER_NIDHOGG=/path/to/unpacked/nidhogg bin/drgnx test --container --day 30
+```
+
+A long, mixed, deterministic session the container can run: for soaks and cost checks of a build (the stall
+watchdog's gate) and for a rerun on a pinned release. Every input is pinned under `test/fixtures/day/`
+(`drgnx-perf-day-composition` hashes them with the seed and the workload list into the 12-hex `:composition` that labels
+every line, with the machine: `(:synthetic t :composition SHA :machine HOST)`).
+
+- **Build-up**, once: the project's files and two Org trees open; eglot starts on the project against
+  `test/fixtures/lsp-replay.el` (a batch Emacs on stdio that answers each request from the recorded exchange
+  `lsp-exchange.eld`: no network, no language server); `vc-git` reads the status and the log of the fixture repository
+  (made in a temporary directory, two commits at fixed dates and an uncommitted change); two `transcript-replay`
+  streams start. Each step prints its time, RSS and live Lisp heap.
+- **Steady**, until MIN minutes (default 30) have passed: rounds of `drgnx-perf-day-workloads` (`typing`, `scrolling`,
+  `tabs`, `explorer`, `code-scrolling`, `diff-scrolling`, `replace-typing`, `replace-retype`, `window-switch`,
+  `transcript-replay`), their order shuffled per round from the fixed seed. After each round: RSS and the live heap
+  (`drgnx-perf-heap-mb`, after a collection), and the number of collections. With the watchdog on, the day also reads its cumulative counters
+  (never reset) at the start, after build-up and after each round, and prints per phase and per round: the monitor's CPU
+  as a percent of the wall, the drain's p95 and largest bucket, missed against samples, and the stalls with felt and
+  the most frequent signatures. The closing line says whether `drgnx-watchdog-mode` is on and whether the preloaded
+  Lisp is natively compiled. Each workload's own stalls and `:watchdog` numbers are kept per round in the results
+  JSON (`:workload_watchdog`), with the interval's numbers under `:watchdog`.
+- **`transcript-replay`** is `agent-stream` with no agent: a session with no process whose transcript is fed from
+  `transcript.eld` by a timer, one `drgnx-agents--append-text` and `drgnx-agents--changed` per recorded chunk at the
+  recorded delay, while keys are typed in the editor window beside it. It runs in the container, which `agent-stream`
+  cannot. It has no budgets yet (`drgnx-perf-run-unseeded`).
+- **Rules** (`drgnx-perf-day-verdict`): RSS grows at most 20 % from the first steady round to the last, and no
+  workload fails. There is **no 400 MB rule** (that is the soak's); a day is not compared with a user's numbers (a user's
+  RSS is not the Lisp heap, the number of collections follows their consing, pauses differ by machine).
+- **Not in it:** the workloads that need eat, websocket, evil, popups, a mock agent or the repository's own index; real
+  language servers and agents; Magit (the built-in `vc-git` stands in).
+- **Container memory:** `DRGNX_TEST_DAY_MEMORY` (default 6g, a desktop size; set 4g or less on a laptop), swap equal. The
+  host name in the label is `DRGNX_PERF_MACHINE`, which `--container` sets to the host's.
+- **Results:** `DRGNX_PERF_RESULTS` gets the composition, the phases' start and end times (to slice another log by
+  phase), the build-up steps, the rounds and any errors as JSON.
+
 ## In CI
 
 The `perf` job of `gui.yml` runs `bin/drgnx test --container --perf` on every push to `main` or `ci/*` with
@@ -464,9 +520,39 @@ each `require` took, the functions most often on the stack (a CPU profile), and 
 session most of the time is not drgnx's: the harness's own minimal configuration starts in about a second (the
 compositor, the first frame, fonts); drgnx's own init is ~220 ms in batch and ~200 ms to a daemon's server.
 
+## The stalls probe (the stall watchdog)
+
+On a Nidhogg with `nidhogg-watchdog` the perf lab reads the watchdog per workload. `drgnx-perf-begin` drains it
+(`nidhogg-watchdog-drain-now`) and collects its records through `nidhogg-watchdog-record-functions`; `drgnx-perf-end`
+drains again and reports `(:stalls N :stalls-felt N :stall-max-ms F :gc (:count N :max F :p95 F) :typing (:ge16 F :p95 F)
+:watchdog (:missed N :spans N :samples N :monitor-cpu-ms F :drain-p95-ms F :drain-max-ms F))`. The watchdog's counters are
+never reset: the probe snapshots them at the start and reports the difference (a reset would zero the totals the day reads
+and the deltas of the watchdog's own summary lines). The difference comes from Nidhogg's `nidhogg-watchdog--stats-delta`
+(which copes with a reset in between) and the drain p95 and largest bucket are read on Nidhogg's own drain edges
+(1 2 4 8 16 33 50 100 ms; a forced `drain-now` is not in them); a build without these falls back to the C bucket edges. Each stall it keeps carries its wall time, felt, signature and culprit. `:typing :ge16` is the percent of commands at 16 ms or more.
+Without the feature the probe reports `:watchdog nil` and no stalls row is judged. The soak also prints `(:heap :live_mb
+F)`, the live Lisp heap after its last collection (from `garbage-collect-heapsize`); reported, not gated.
+
+**The switch.** `DRGNX_PERF_WATCHDOG` is applied when a recording starts (`drgnx-perf-begin`): unset or `default` runs
+the watchdog at 100 ms (the shipped configuration), `on` at 1 ms (the stress case), `off` leaves it off. A watchdog
+already in that state is not restarted. The switch is `drgnx-watchdog-mode`, so `off` also stops the doctor's record
+hook and idle timer. `drgnx-perf-end` puts the watchdog back as it was before the recording (mode and threshold), so a
+recording leaves nothing running; the synthetic day applies the switch itself as the session starts, before
+build-up, and it stays for the whole day.
+
+**Budgets.** `(W (:stalls) 0)`, `(W (:gc :max) 250)` and `(W (:gc :p95) 50)` for every input workload. They are
+reported until seeded (`drgnx-perf-watchdog-gated`), as every new row is. The GC max is skipped when the workload
+collected nothing, and the GC p95 is judged only over at least 20 collections; below that the tail is the maximum. A GC pause includes Lisp finalizers and the image-cache prune, so a
+long pause is not always the collector's own marking.
+
+**A/B.** Gated: `bin/drgnx test --perf --ab-env DRGNX_PERF_WATCHDOG=default,off` (the shipped watchdog against none).
+Reported stress: `--ab-env DRGNX_PERF_WATCHDOG=on,off` (1 ms; not a gate).
+
+Tests: `test/unit/perf-watchdog-test.el`.
+
 ## Slow frames in another configuration
 
-A new frame under drgnx takes ~66 ms (in a session) and ~190 ms from a daemon (`emacsclient -c`). The 2.1 s
+Start with Show Freezes (the watchdog's report) and the stalls probe above. A new frame under drgnx takes ~66 ms (in a session) and ~190 ms from a daemon (`emacsclient -c`). The 2.1 s
 frames seen with an earlier reference configuration do not reproduce in an isolated session ([scenarios.md](scenarios.md)):
 they depend on live state — restored workspace layouts, many buffers, language servers. To see what a slow frame
 spends in your own daemon — this changes it while it runs (advice and wrapped hook entries, undone at the end:

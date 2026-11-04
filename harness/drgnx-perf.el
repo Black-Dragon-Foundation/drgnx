@@ -124,10 +124,207 @@ the compositor (`wl_surface.commit'), on either side of an A/B.")
   "Glitnir's frame-time record (`glitnir-stats'; RESET clears it), or nil on a build or a root without it."
   (and (fboundp 'glitnir-stats) (glitnir-stats nil reset)))
 
+;;;; The stall watchdog (docs/develop/perf.md, "The stalls probe")
+
+(defvar nidhogg-watchdog-mode)
+(defvar drgnx-watchdog-mode)
+(defvar nidhogg-watchdog--bucket-edges)
+(defvar nidhogg-watchdog--drain-edges)
+(declare-function nidhogg-watchdog--stats-delta "nidhogg-watchdog")
+(declare-function drgnx-watchdog-mode "drgnx-watchdog")
+(defvar nidhogg-watchdog-threshold)
+(defvar nidhogg-watchdog-record-functions)
+(declare-function nidhogg-watchdog-mode "nidhogg-watchdog")
+(declare-function nidhogg-watchdog-drain-now "nidhogg-watchdog")
+(declare-function nidhogg-watchdog-stats "nidhogg-watchdog")
+
+(defvar drgnx-perf--watchdog-applied nil "Non-nil once $DRGNX_PERF_WATCHDOG has been applied in this session.")
+(defvar drgnx-perf--stalls nil "While recording: the stall records the watchdog resolved, newest first.")
+
+(defvar drgnx-perf--watchdog-prior nil
+  "What the running recording's `drgnx-perf-begin' applied of $DRGNX_PERF_WATCHDOG, for `drgnx-perf-end' to undo: nil
+(nothing applied), t (applied, nothing changed) or (ON . THRESHOLD), the watchdog as it was before.")
+
+(defun drgnx-perf--watchdog-env ()
+  "Apply $DRGNX_PERF_WATCHDOG once (until `drgnx-perf--watchdog-restore'): unset or `default' runs
+`nidhogg-watchdog-mode' at 100 ms (the shipped configuration), `on' at 1 ms (the stress case), `off' leaves it off.
+A watchdog already in that state is not restarted.  Without the feature, nothing.  Returns nil when it did not apply,
+t when nothing had to change, else (ON . THRESHOLD) as they were before."
+  (when (and (not drgnx-perf--watchdog-applied) (featurep 'nidhogg-watchdog))
+    (setq drgnx-perf--watchdog-applied t)
+    (let* ((v (getenv "DRGNX_PERF_WATCHDOG"))
+           (ms (cond ((equal v "off") nil) ((equal v "on") 1) (t 100)))
+           (prior (cons (and (drgnx-perf--watchdog-on-p) t)
+                        (and (boundp 'nidhogg-watchdog-threshold) nidhogg-watchdog-threshold))))
+      (if (if ms (and (car prior) (eql (cdr prior) ms)) (not (car prior)))
+          t
+        (drgnx-perf--watchdog-set nil)
+        (when ms
+          (setq nidhogg-watchdog-threshold ms)
+          (drgnx-perf--watchdog-set t))
+        prior))))
+
+(defun drgnx-perf--watchdog-restore ()
+  "Undo what `drgnx-perf-begin' applied of $DRGNX_PERF_WATCHDOG: the watchdog's mode and threshold as they were, and
+the next `drgnx-perf-begin' applies it again.  What another caller of `drgnx-perf--watchdog-env' applied (the
+synthetic day) stays."
+  (let ((prior drgnx-perf--watchdog-prior))
+    (setq drgnx-perf--watchdog-prior nil)
+    (when prior
+      (setq drgnx-perf--watchdog-applied nil)
+      (when (consp prior)
+        (drgnx-perf--watchdog-set nil)
+        (when (cdr prior) (setq nidhogg-watchdog-threshold (cdr prior)))
+        (when (car prior) (drgnx-perf--watchdog-set t))))))
+
+(defun drgnx-perf--watchdog-set (on)
+  "Turn the whole watchdog stack on or off.  A drgnx session has already started it at init, through
+`drgnx-watchdog-mode', which also carries the doctor's record hook and idle timer; so that is the switch, and Nidhogg's
+mode is only touched directly where drgnx is not loaded."
+  (if (fboundp 'drgnx-watchdog-mode)
+      (drgnx-watchdog-mode (if on 1 -1))
+    (nidhogg-watchdog-mode (if on 1 -1)))
+  (when (and (not on) (boundp 'nidhogg-watchdog-mode) nidhogg-watchdog-mode)
+    (nidhogg-watchdog-mode -1)))
+
+(defun drgnx-perf--watchdog-on-p ()
+  (and (featurep 'nidhogg-watchdog) (boundp 'nidhogg-watchdog-mode) nidhogg-watchdog-mode))
+
+(defun drgnx-perf--drain-edges ()
+  "The upper edges (ms) of the drain histogram's buckets: Nidhogg's `nidhogg-watchdog--drain-edges', for a build
+without them its C bucket edges, else the C defaults."
+  (cond ((boundp 'nidhogg-watchdog--drain-edges) nidhogg-watchdog--drain-edges)
+        ((boundp 'nidhogg-watchdog--bucket-edges) nidhogg-watchdog--bucket-edges)
+        (t [4 8 16 33 50 100 250 1000])))
+
+(defun drgnx-perf-watchdog-snapshot ()
+  "The watchdog's cumulative counters now, without resetting them (nil when it is off): :spans :samples :missed :stale
+:stalls :monitor-cpu-ms and :drain, the drain histogram as a vector; with Nidhogg's newer stats also :drain-take (a
+vector) and :drain-over-budget.  `:samples' is Nidhogg's own count when it has one, else its spans."
+  (when-let* (((drgnx-perf--watchdog-on-p)) (s (nidhogg-watchdog-stats)))
+    (append (list :spans (or (plist-get s :spans) 0)
+                  :samples (or (plist-get s :samples) (plist-get s :spans) 0)
+                  :missed (or (plist-get s :missed) 0) :stale (or (plist-get s :stale) 0)
+                  :stalls (or (plist-get s :stalls) 0)
+                  :monitor-cpu-ms (or (plist-get s :monitor-cpu-ms) 0.0)
+                  :drain (vconcat (plist-get s :drain)))
+            (when (plist-member s :drain-take) (list :drain-take (vconcat (plist-get s :drain-take))))
+            (when (plist-member s :drain-over-budget) (list :drain-over-budget (plist-get s :drain-over-budget))))))
+
+(defun drgnx-perf--hist-edge (hist edges q)
+  "The upper edge (ms) of the bucket of HIST (counts by bucket; the last bucket is open) that holds the share Q (0..1)
+of its counts, 0 when HIST is empty.  EDGES are the buckets' upper edges."
+  (let ((total (apply #'+ (append hist nil))) (acc 0) (i 0))
+    (if (zerop total)
+        0
+      (while (and (< i (1- (length edges))) (< (* 100 (setq acc (+ acc (aref hist i)))) (* 100 q total)))
+        (setq i (1+ i)))
+      (aref edges (min i (1- (length edges)))))))
+
+(defun drgnx-perf-watchdog-delta (before after &optional edges)
+  "The counters AFTER minus those of BEFORE (both snapshots; nil BEFORE is zero).  With Nidhogg's
+`nidhogg-watchdog--stats-delta' it does the subtraction (it copes with a counter reset in between) and its ready
+`:drain-p95-ms' is used; without, counters never go below zero and the p95 comes from the difference of the
+histograms.  The largest bucket is read by EDGES (default `drgnx-perf--drain-edges')."
+  (let* ((edges (let ((e (vconcat edges))) (if (> (length e) 0) e (drgnx-perf--drain-edges))))
+         (d (if (fboundp 'nidhogg-watchdog--stats-delta)
+                (funcall 'nidhogg-watchdog--stats-delta after before)
+              (let* ((num (lambda (k) (max 0 (- (or (plist-get after k) 0) (or (plist-get before k) 0)))))
+                     (a (vconcat (plist-get after :drain))) (b (vconcat (plist-get before :drain))))
+                (list :spans (funcall num :spans) :samples (funcall num :samples) :missed (funcall num :missed)
+                      :stale (funcall num :stale) :stalls (funcall num :stalls)
+                      :monitor-cpu-ms (funcall num :monitor-cpu-ms)
+                      :drain-over-budget (funcall num :drain-over-budget)
+                      :drain (vconcat (cl-loop for i from 0 below (length a)
+                                               collect (max 0 (- (aref a i) (if (< i (length b)) (aref b i) 0)))))))))
+         (hist (vconcat (plist-get d :drain)))
+         (top (cl-position-if (lambda (n) (> n 0)) hist :from-end t)))
+    (list :spans (or (plist-get d :spans) 0) :samples (or (plist-get d :samples) 0) :missed (or (plist-get d :missed) 0)
+          :stale (or (plist-get d :stale) 0) :stalls (or (plist-get d :stalls) 0)
+          :monitor-cpu-ms (drgnx-perf--round (float (or (plist-get d :monitor-cpu-ms) 0)))
+          :drain-over-budget (or (plist-get d :drain-over-budget) 0)
+          :drain hist
+          :drain-p95-ms (drgnx-perf--round (float (or (plist-get d :drain-p95-ms) (drgnx-perf--hist-edge hist edges 0.95))))
+          :drain-max-ms (drgnx-perf--round (float (if top (aref edges (min top (1- (length edges)))) 0))))))
+
+(defun drgnx-perf--stall-record (record)
+  "A `nidhogg-watchdog-record-functions' entry: keep what RECORD says of the stall (wall time, felt, signature, culprit)."
+  (push (list :wall-ms (plist-get record :wall-ms) :felt (plist-get record :felt)
+              :signature (plist-get record :signature) :culprit (plist-get record :culprit))
+        drgnx-perf--stalls))
+
+(defvar drgnx-perf--stalls-snapshot nil "The watchdog's counters when the stalls probe began.")
+
+(defun drgnx-perf--stalls-begin ()
+  "Drain what came before, snapshot the counters (they are not reset: the watchdog's summaries and the day's totals
+read them) and start keeping the records."
+  (setq drgnx-perf--stalls nil drgnx-perf--stalls-snapshot nil)
+  (when (drgnx-perf--watchdog-on-p)
+    (nidhogg-watchdog-drain-now)
+    (setq drgnx-perf--stalls-snapshot (drgnx-perf-watchdog-snapshot))
+    (add-hook 'nidhogg-watchdog-record-functions #'drgnx-perf--stall-record)))
+
+(defun drgnx-perf--stalls-end ()
+  "The probe's keys (:stalls :stalls-felt :stall-max-ms :watchdog) for the workload just run: only :watchdog nil
+without the watchdog."
+  (if (not (drgnx-perf--watchdog-on-p))
+      (list :watchdog nil)
+    (nidhogg-watchdog-drain-now)
+    (remove-hook 'nidhogg-watchdog-record-functions #'drgnx-perf--stall-record)
+    (let ((d (drgnx-perf-watchdog-delta drgnx-perf--stalls-snapshot (drgnx-perf-watchdog-snapshot)))
+          (walls (delq nil (mapcar (lambda (s) (plist-get s :wall-ms)) drgnx-perf--stalls))))
+      (list :stalls (length drgnx-perf--stalls)
+            :stalls-felt (length (seq-filter (lambda (s) (plist-get s :felt)) drgnx-perf--stalls))
+            :stall-max-ms (drgnx-perf--round (if walls (apply #'max walls) 0.0))
+            :watchdog (list :missed (plist-get d :missed) :spans (plist-get d :spans) :samples (plist-get d :samples)
+                            :monitor-cpu-ms (plist-get d :monitor-cpu-ms)
+                            :drain-p95-ms (plist-get d :drain-p95-ms)
+                            :drain-max-ms (plist-get d :drain-max-ms))))))
+
+(defvar drgnx-perf--day-stalls nil "The stalls the day's session has seen since the last `drgnx-perf-watchdog-day-read'.")
+
+(defun drgnx-perf--day-stall-record (record)
+  "A record function of the day: keep the stall's wall time, felt, signature and culprit, for the phase report."
+  (let ((c (plist-get record :culprit)))
+    (push (list :wall-ms (or (plist-get record :wall-ms) 0.0) :felt (if (plist-get record :felt) t :false)
+                :signature (or (plist-get record :signature) "")
+                :culprit (cond ((stringp c) c) (c (format "%S" c)) (t "")))
+          drgnx-perf--day-stalls)))
+
+(defun drgnx-perf-watchdog-day-read ()
+  "For the synthetic day, in the session: what the watchdog shows now, as a plist for the harness.  No reset.  :on,
+:native (the preloaded Lisp is compiled), :version-dir, :drgnx-mode, :stats (`drgnx-perf-watchdog-snapshot') and :stalls
+(the vector of stalls since the last call).  Collecting begins on the first call."
+  (if (not (drgnx-perf--watchdog-on-p))
+      (list :on :false :drgnx-mode (if (and (boundp 'drgnx-watchdog-mode) drgnx-watchdog-mode) t :false))
+    (nidhogg-watchdog-drain-now)
+    (add-hook 'nidhogg-watchdog-record-functions #'drgnx-perf--day-stall-record)
+    (prog1 (list :on t
+                 :native (if (and (fboundp 'native-comp-function-p) (native-comp-function-p (symbol-function 'nidhogg-watchdog-mode))) t :false)
+                 :version-dir (if (boundp 'comp-native-version-dir) (format "%s" comp-native-version-dir) "")
+                 :drgnx-mode (if (and (boundp 'drgnx-watchdog-mode) drgnx-watchdog-mode) t :false)
+                 :stats (drgnx-perf-watchdog-snapshot)
+                 :edges (vconcat (drgnx-perf--drain-edges))
+                 :stalls (vconcat (reverse drgnx-perf--day-stalls)))
+      (setq drgnx-perf--day-stalls nil))))
+
+(defun drgnx-perf--gc-row (pauses)
+  "(:count N :max MS :p95 MS) of PAUSES (ms); :max and :p95 are nil with no collection."
+  (list :count (length pauses)
+        :max (and pauses (drgnx-perf--round (apply #'max pauses)))
+        :p95 (and pauses (drgnx-perf--round (drgnx-perf--p95 pauses)))))
+
+(defun drgnx-perf--typing-row (latencies)
+  "(:ge16 PERCENT :p95 MS) of the commands' LATENCIES (ms): the share at or over one 60 Hz frame, and the tail."
+  (list :ge16 (if latencies (drgnx-perf--round (/ (* 100.0 (seq-count (lambda (l) (>= l 16)) latencies)) (length latencies))) 0.0)
+        :p95 (and latencies (drgnx-perf--round (drgnx-perf--p95 latencies)))))
+
 (defun drgnx-perf-begin ()
-  "Start recording: every command's latency, every GC pause, memory, and Glitnir's frame-time record (the
-compose probe: reset here, read by `drgnx-perf-end' under :compose)."
+  "Start recording: every command's latency, every GC pause, memory, Glitnir's frame-time record (the
+compose probe: reset here, read by `drgnx-perf-end' under :compose) and the stall watchdog's records (`:stalls')."
   (drgnx-perf--glitnir-env)
+  (setq drgnx-perf--watchdog-prior (drgnx-perf--watchdog-env))
+  (drgnx-perf--stalls-begin)
   (drgnx-perf--compose-stats t)
   (setq drgnx-perf--latencies nil drgnx-perf--allocs nil drgnx-perf--cpus nil drgnx-perf--t0 nil drgnx-perf--presents nil
         drgnx-perf--gc-pauses nil drgnx-perf--gc-last gc-elapsed
@@ -146,8 +343,12 @@ with the load on the machine; wall clock does.  :compose is Glitnir's record sin
   (remove-hook 'post-command-hook #'drgnx-perf--post)
   (remove-hook 'post-gc-hook #'drgnx-perf--gc)
   (pcase-let ((`(,gcs ,elapsed ,rss ,rows) drgnx-perf--start)
-              (compose (drgnx-perf--compose-stats)))
+              (compose (drgnx-perf--compose-stats))
+              (stalls (prog1 (drgnx-perf--stalls-end) (drgnx-perf--watchdog-restore))))
     (append
+     stalls
+     (list :gc (drgnx-perf--gc-row drgnx-perf--gc-pauses)
+           :typing (drgnx-perf--typing-row drgnx-perf--latencies))
      (list :input (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--latencies))
            :alloc (drgnx-perf-stats drgnx-perf--allocs)
            :cpu_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats drgnx-perf--cpus))
@@ -333,6 +534,26 @@ most workloads, where there is no p95)."
 (defconst drgnx-perf-gated-metrics '(:alloc :cpu_ms :rows :processes :rss_kb)
   "The metrics a budget can fail a run on: what load does not move.  Every other path (wall clock) is reported.")
 
+(defvar drgnx-perf-watchdog-gated nil
+  "Non-nil once the watchdog rows (`:stalls', `:gc') are seeded: they then fail a run.  Until then they are reported
+(docs/develop/perf.md: a new row is reported first).")
+
+(defconst drgnx-perf-gc-p95-min-collections 20
+  "A GC p95 is judged only over at least this many collections (fewer: the tail is the maximum).")
+
+(defun drgnx-perf--gated-p (path)
+  "Whether a budget at PATH can fail a run."
+  (or (memq (car path) drgnx-perf-gated-metrics)
+      (and drgnx-perf-watchdog-gated (memq (car path) '(:stalls :gc)))))
+
+(defun drgnx-perf--watchdog-row-skipped-p (results w path)
+  "Whether the watchdog row at PATH of W has nothing to judge: the stalls rows without the watchdog (`:watchdog' nil),
+the GC max with no collection, the GC p95 over fewer than `drgnx-perf-gc-p95-min-collections' collections."
+  (let ((gcs (or (drgnx-perf--get results w '(:gc :count)) 0)))
+    (or (and (eq (car path) :stalls) (not (drgnx-perf--get results w '(:watchdog))))
+        (and (equal path '(:gc :max)) (= gcs 0))
+        (and (equal path '(:gc :p95)) (< gcs drgnx-perf-gc-p95-min-collections)))))
+
 (defun drgnx-perf--cpu-factor ()
   "$DRGNX_PERF_CPU_FACTOR (a number; default 1, 2 on hosted runners): the headroom CPU budgets get."
   (let ((env (getenv "DRGNX_PERF_CPU_FACTOR")))
@@ -353,7 +574,8 @@ hold.  Gated: `drgnx-perf-gated-metrics' — allocation (:alloc :p50, measured x
   (let (out)
     (dolist (b budgets)
       (pcase-let ((`(,w ,path ,limit . ,_) b))
-        (when (and (memq (car path) drgnx-perf-gated-metrics) (drgnx-perf--budget-applies-p b emacs-major))
+        (when (and (drgnx-perf--gated-p path) (drgnx-perf--budget-applies-p b emacs-major)
+                   (not (and (assq w results) (drgnx-perf--watchdog-row-skipped-p results w path))))
           (let ((v (drgnx-perf--get results w path))
                 (limit (if (eq (car path) :cpu_ms) (* limit cpu-factor) limit)))
             (cond ((not (assq w results)) (cl-pushnew (format "%s: not measured" w) out :test #'equal))
@@ -367,7 +589,7 @@ and that it is reported, not judged.  A p95 or p99 below n = 100 has no value."
   (let (out)
     (dolist (b budgets)
       (pcase-let ((`(,w ,path ,limit . ,_) b))
-        (when (and (not (memq (car path) drgnx-perf-gated-metrics)) (assq w results)
+        (when (and (not (drgnx-perf--gated-p path)) (assq w results)
                    (drgnx-perf--budget-applies-p b emacs-major))
           (push (format "%s %s %s (budget %s): reported (wall clock; judge with --perf --ab)" w (drgnx-perf--path-name path)
                         (or (drgnx-perf--round (drgnx-perf--get results w path)) "-") limit)
@@ -543,6 +765,82 @@ the core for a share of the loop, so the wall-clock numbers taken now carry that
     (drgnx-perf--spin 2000000)
     (let ((w (* 1000 (- (float-time) w0))) (c (- (drgnx-perf--cpu-ms) c0)))
       (list :wall_ms (drgnx-perf--round w) :cpu_ms (drgnx-perf--round c) :loaded (and (> c 0) (> (/ w c) 1.3) t)))))
+
+;;;; Transcript replay (the synthetic day, `transcript-replay'): a streaming transcript with no agent behind it
+
+(cl-defstruct (drgnx-perf-replay (:constructor drgnx-perf-replay--make) (:copier nil))
+  name session chunks left (fed 0))
+
+(defvar drgnx-perf--replays nil "Live replays (`drgnx-perf-replay'), newest first.")
+
+(defun drgnx-perf-replay--get (name) (seq-find (lambda (r) (equal (drgnx-perf-replay-name r) name)) drgnx-perf--replays))
+
+(defun drgnx-perf-replay--arm (r)
+  "Set the timer of the next chunk of replay R, after the delay recorded for it."
+  (drgnx-timer-start (cons 'perf-replay (drgnx-perf-replay-name r))
+                     (/ (car (car (drgnx-perf-replay-left r))) 1000.0) #'drgnx-perf-replay-tick
+                     :args (list (drgnx-perf-replay-name r)) :owner :core))
+
+(defun drgnx-perf-replay-start (name chunks)
+  "Start a transcript session NAME fed from CHUNKS, ((DELAY-MS . TEXT)…), in a loop: no agent process.
+Each timer tick calls `drgnx-agents--append-text' and `drgnx-agents--changed' as a streaming agent's event does;
+the recording's end finishes the answer and starts it over.  Returns the session."
+  (require 'drgnx-agents)
+  (require 'drgnx-timer)
+  (drgnx-perf-replay-stop name)
+  (let* ((s (drgnx-agents--make :name name :profile "replay" :cwd temporary-file-directory :status 'busy :id name))
+         (r (drgnx-perf-replay--make :name name :session s :chunks chunks :left chunks)))
+    (push s drgnx-agents--sessions)
+    (push r drgnx-perf--replays)
+    (drgnx-perf-replay--arm r)
+    s))
+
+(defun drgnx-perf-replay-tick (name)
+  "Feed replay NAME its next chunk and set the timer of the one after."
+  (when-let* ((r (drgnx-perf-replay--get name)))
+    (let ((s (drgnx-perf-replay-session r)) (chunk (pop (drgnx-perf-replay-left r))))
+      (drgnx-agents--append-text s 'agent (cdr chunk))
+      (cl-incf (drgnx-perf-replay-fed r))
+      (unless (drgnx-perf-replay-left r)
+        (plist-put (car (last (drgnx-agent-session-entries s))) :done t)
+        (setf (drgnx-perf-replay-left r) (drgnx-perf-replay-chunks r)))
+      (drgnx-agents--changed s)
+      (drgnx-perf-replay--arm r))))
+
+(defun drgnx-perf-replay-count (name)
+  "How many chunks replay NAME has fed (0 for none)."
+  (if-let* ((r (drgnx-perf-replay--get name))) (drgnx-perf-replay-fed r) 0))
+
+(defun drgnx-perf-replay-stop (name)
+  "Stop replay NAME: its timer, its session and its transcript buffer."
+  (when-let* ((r (drgnx-perf-replay--get name)))
+    (drgnx-timer-cancel (cons 'perf-replay name))
+    (setq drgnx-perf--replays (delq r drgnx-perf--replays)
+          drgnx-agents--sessions (delq (drgnx-perf-replay-session r) drgnx-agents--sessions))
+    (when-let* ((b (get-buffer (format "*agent: %s*" name))))
+      (when-let* ((w (get-buffer-window b))) (ignore-errors (delete-window w)))
+      (let ((kill-buffer-query-functions nil)) (kill-buffer b)))))
+
+(defun drgnx-perf-replay-buffer (name)
+  "Replay NAME's transcript buffer, drawn (not shown)."
+  (require 'drgnx-agents-ui)
+  (drgnx-agents-ui-transcript-buffer (drgnx-perf-replay-session (drgnx-perf-replay--get name))))
+
+(defun drgnx-perf-live-mb ()
+  "The live Lisp heap in MB after a collection, from `garbage-collect-heapsize' (Nidhogg), else `drgnx-perf-heap-mb'."
+  (if (fboundp 'garbage-collect-heapsize)
+      (let ((bytes 0))
+        (dolist (e (garbage-collect-heapsize))
+          (when (and (numberp (nth 1 e)) (numberp (nth 2 e))) (cl-incf bytes (* (nth 1 e) (nth 2 e)))))
+        (/ bytes 1048576.0))
+    (drgnx-perf-heap-mb)))
+
+(defun drgnx-perf-heap-mb ()
+  "The live Lisp heap in MB after a collection: SIZE × USED over `garbage-collect''s entries."
+  (let ((bytes 0))
+    (dolist (e (garbage-collect))
+      (when (and (numberp (nth 1 e)) (numberp (nth 2 e))) (cl-incf bytes (* (nth 1 e) (nth 2 e)))))
+    (/ bytes 1048576.0)))
 
 (provide 'drgnx-perf)
 ;;; drgnx-perf.el ends here

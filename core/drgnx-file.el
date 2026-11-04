@@ -369,7 +369,9 @@ something there that is not a regular file (a FIFO would block).  No buffer visi
       (drgnx-file--locally
         (let ((coding-system-for-write 'utf-8-unix) (write-region-inhibit-fsync t) (create-lockfiles nil)
               (write-region-annotate-functions nil) (write-region-post-annotation-function nil))
-          (write-region (concat line "\n") nil target t 'silent)
+          ;; LOCKNAME is a name no buffer visits: a buffer visiting FILE (a person reading the log) would otherwise make
+          ;; `write-region' ask about the changed file, from a timer.
+          (write-region (concat line "\n") nil target t 'silent (concat target ".nolock"))
           target)))))
 
 ;;;; Backups

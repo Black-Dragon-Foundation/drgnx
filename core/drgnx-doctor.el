@@ -478,6 +478,7 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :checkout-init (drgnx-doctor--checkout-init drgnx-dir)
            :timers-report (drgnx-doctor--timers-report)
            :notices (drgnx-doctor--notices)
+           :watchdog (progn (require 'drgnx-watchdog-doctor) (drgnx-watchdog-doctor-facts))
            :statusbar-slow (drgnx-doctor--state-file "statusbar-slow.eld")   ; the status bar's slow entries
            :statusbar-slow-time (drgnx-doctor--state-file-time "statusbar-slow.eld")
            ;; file names only: a key found in the config dir is never part of the facts
@@ -1519,4 +1520,5 @@ table) continues indented by the same six spaces."
     (kill-emacs (drgnx-doctor-exit-code results))))
 
 (provide 'drgnx-doctor)
+(require 'drgnx-watchdog-doctor)   ; its checks (freezes, gc) join the list once this file is provided
 ;;; drgnx-doctor.el ends here

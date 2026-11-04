@@ -60,3 +60,66 @@ can size is counted as 0, and the view says how many there were.
 Each audit also writes a snapshot, `heap-YYYY-MM-DD.json`, next to the census files (one per day, the last audit of
 the day). It holds sizes and names only — variable, buffer and process names — never what a variable or a buffer
 contains, and only you can read it (mode 0600). Audits on different days can be compared from these files.
+
+## The watchdog
+
+When drgnx runs on a Nidhogg built with the stall watchdog (31.1-nidhogg.3 or newer), it turns the watchdog on at every start; there is
+nothing to install and nothing to switch on. The watchdog times every busy span of Emacs and, when one lasts 100 ms or
+more, notes what it was doing: the command, the sampled stack, and the culprit: the innermost frame that is not Emacs's own
+code and was present in at least half of the samples taken outside garbage collection, with the package that owns it. It writes one line per stall into the same `watchdog/` folder of drgnx's state folder as the census
+(`YYYY-MM-DD.jsonl`, files older than 14 days are deleted), while the census stops writing. The typing commands
+(`self-insert-command`, the delete commands, `newline`, and Evil's insert-state ones when Evil is loaded) feed a per-command typing-latency
+histogram (the share of typing commands that took 16 ms or more). Whether you felt a stall comes from the input and
+commands the watchdog recorded around it. A file's package is named by drgnx's own owner map
+(your packages, drgnx's modules, Emacs itself).
+
+If the watchdog cannot start (another library owns its signal, say), drgnx starts anyway, posts one notice, and
+`drgnx doctor` says "off: could not start" with the reason. A hang that ended with the session being killed is turned
+into a record at the next start, and noticed then; the doctor counts those from the last two days.
+
+It runs only in an interactive Emacs, never in a batch command, and not in safe mode (`drgnx safe`), so safe mode rules it out. To turn it off, set `drgnx-speed-watchdog` to `nil`
+([Settings](settings.md)); the change applies at once. In an Emacs without the watchdog the setting does nothing, and
+`drgnx doctor` says so.
+
+## The doctor's speed checks
+
+`drgnx doctor` has two checks in the group Speed. Each says whether the day **meets** or **missed** its goal, beside
+how serious it is.
+
+- **freezes** judges today's stalls by the time Emacs was busy not counting garbage collection, against 100 ms. It is
+  `ok` when there was none (and says how many of your typing commands took 16 ms or more). It is `info` when there were
+  some but all under 250 ms and none you felt, with the counts and the three packages with most stalls. It is `warn`
+  for a stall you felt of a second or more, a package with ten or more stalls, or a hang that ended with the session being killed (the watchdog never kills anything), and
+  the fix line names the package, the drgnx module that enables it, how often it stalled, how long in all and how many
+  you felt: open **Help → Show Freezes**. In an Emacs without the watchdog it is `info` and says to update Nidhogg
+  (`drgnx update`).
+- **gc** judges the garbage collection row (a pause p95 of 50 ms or less over the last week and no collection of 250 ms
+  or more) and the live heap against its budget. `ok` when met; `info` with the numbers when missed without a long
+  collection; `warn` for a collection of 250 ms or more or a heap over its budget, with the fix **Help → Heap Audit**
+  and the largest owner of the last audit.
+
+`drgnx doctor` runs in an Emacs of its own, so it judges what your running drgnx wrote: the day files, and the live
+heap recorded with the newest collection. The watchdog counts as running when the setting is on and a day file was
+written in the last 15 minutes; with the setting on and nothing recent, `freezes` is `info` and says there is no recent
+watchdog record (is drgnx running?).
+
+The watchdog also posts a notice (source *Freezes*, a warning, not echoed) for a stall you felt of a second or more
+or a killed hang, at most once per kind of stall per day, and one for the GC at most once a day. The GC look runs at idle every half hour and reads only the GC row (the heap
+audit's snapshot only to word a warning), so the watchdog does not cause the stalls it reports. Each opens Show
+Freezes (or the Heap Audit).
+
+## Show Freezes
+
+**Help → Show Freezes** (or the palette) lists what the watchdog found, worst first, over the days it keeps. At the top
+is the **GC row**: how many collections, how many you felt, the longest and the total, whether the week meets its
+target, and, once you have run a Heap Audit, its largest owner. Below it, one row per package: how many stalls, how many
+you **felt** (the felt column: they came while you typed or waited on Emacs), the time in all and the longest, each kind of
+stall (its signature) and the call tree, the busiest branches first.
+
+Each package row has buttons: **Source** (the package's library, or its folder), **Homepage** (when the package
+names one) and **Module** (the drgnx module that enables it; the modules list lets you turn it off). The header has
+**Copy report**, which puts the names, durations, call stacks and the Nidhogg version on the clipboard, with no file
+path, ready to paste into a bug report, and **Sample the next freeze in depth**, which makes the watchdog keep a
+longer stack for the next stall; a notice tells you when the record that was sampled in
+depth is in (it needs the watchdog on; with it off the command says so). The GC row has **Run a heap audit** (it
+asks first, see [Heap Audit](#heap-audit)) and **Show collections** (the GC census report). `g` draws the page again.
