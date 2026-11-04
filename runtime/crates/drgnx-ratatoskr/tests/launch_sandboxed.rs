@@ -5,9 +5,7 @@
 //! job, the desktop), never a container's, which has neither.  Fixtures live under /tmp/glp-XXXXXX; HOME points there.
 #![cfg(target_os = "linux")]
 
-use drgnx_ratatoskr::agents::launch::{
-    NetCell, chat_launch, launch_on, scratch_dir, with_stdin,
-};
+use drgnx_ratatoskr::agents::launch::{NetCell, chat_launch, launch_on, scratch_dir, with_stdin};
 use drgnx_ratatoskr::agents::lock::{Enforced, LaunchPlan};
 use drgnx_ratatoskr::sandbox::{SessionShape, helper_at};
 use gleipnir::{Sandbox, Tier};
