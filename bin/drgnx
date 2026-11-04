@@ -316,9 +316,13 @@ orders_files() { # the test files whose `;; test-pattern:' line (an exact line i
   done < <(find "$here/test" -name '*-test.el' | LC_ALL=C sort)
 }
 
+orders_skipped() { # LOG — the names of the tests a run's log lists as skipped (the runner's "Skipped (N):" block), sorted
+  awk '/^Skipped \([0-9]+\):$/ { s = 1; next } s && /^   [^ ]/ { print $1; next } { s = 0 }' "$1" | LC_ALL=C sort -u
+}
+
 test_orders() { # [--only FILE] [--container] — each gated file once per K of DRGNX_TEST_GATE_SWAP: the K-th adjacent pair of
   # released lines from different connections swapped (test/fixtures/delivery-gate-fixture.el); the first red stops the run with its K
-  local only="" container=() files=() f k pairs log out
+  local only="" container=() files=() f k pairs log out skipped0 newskip
   while (($#)); do
     case "$1" in
       --only) [[ -n "${2:-}" && "${2:0:1}" != - ]] || { echo "usage: drgnx test --orders [--only FILE] [--container]" >&2; return 2; }
@@ -338,18 +342,29 @@ test_orders() { # [--only FILE] [--container] — each gated file once per K of 
   fi
   log="$(mktemp "${TMPDIR:-/tmp}/drgnx-orders.XXXXXX")"
   for f in "${files[@]}"; do
-    f="${f#"$here"/}"; pairs=""; k=0
-    while [ -z "$pairs" ] || [ "$k" -lt "$pairs" ]; do
-      echo "drgnx: orders: $f, K=$k${pairs:+ of $pairs}" >&2
+    f="${f#"$here"/}"; pairs=0; k=0; skipped0=""
+    while [ "$k" -eq 0 ] || [ "$k" -lt "$pairs" ]; do
+      echo "drgnx: orders: $f, K=$k$([ "$k" -gt 0 ] && echo " of $pairs")" >&2
       if ! DRGNX_TEST_GATE_SWAP="$k" DRGNX_TEST_ONLY="$f" "$here/bin/drgnx" test ${container[@]+"${container[@]}"} >"$log" 2>&1; then
         cat "$log"; rm -f -- "$log"
         echo "drgnx: orders: RED at K=$k in $f; replay: DRGNX_TEST_GATE_SWAP=$k DRGNX_TEST_ONLY=$f bin/drgnx test${container:+ ${container[*]}}" >&2
         return 1
       fi
-      if [ -z "$pairs" ]; then   # the first run says how many pairs there are: the largest count any test of the file met
-        out="$(sed -nE 's/.*drgnx-gate-swap-pairs: ([0-9]+).*/\1/p' "$log" | sort -n | tail -n 1)"
-        [ -n "$out" ] || { cat "$log"; rm -f -- "$log"; echo "drgnx: orders: $f printed no pair count (a vacuous run proves nothing)" >&2; return 1; }
-        pairs="$out"; echo "drgnx: orders: $f has $pairs pairs" >&2
+      # every run says how many pairs it met (the largest count of any test of the file): a swap can meet more than
+      # K=0 did, so K goes up to the largest count of any run
+      out="$(sed -nE 's/.*drgnx-gate-swap-pairs: ([0-9]+).*/\1/p' "$log" | sort -n | tail -n 1)"
+      [ -n "$out" ] || { cat "$log"; rm -f -- "$log"; echo "drgnx: orders: $f printed no pair count at K=$k (a vacuous run proves nothing)" >&2; return 1; }
+      if [ "$out" -gt "$pairs" ]; then pairs="$out"; echo "drgnx: orders: $f has $pairs pairs" >&2; fi
+      # a test that ran at K=0 and skipped at this K left its swap unexplored: red
+      if [ "$k" -eq 0 ]; then
+        skipped0="$(orders_skipped "$log")"
+      else
+        newskip="$(LC_ALL=C comm -13 <(printf '%s\n' "$skipped0") <(orders_skipped "$log") | sed '/^$/d')"
+        if [ -n "$newskip" ]; then
+          cat "$log"; rm -f -- "$log"
+          echo "drgnx: orders: RED at K=$k in $f: skipped at K=$k but ran at K=0: $(echo $newskip)" >&2
+          return 1
+        fi
       fi
       k=$((k + 1))
     done

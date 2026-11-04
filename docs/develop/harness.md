@@ -1126,7 +1126,9 @@ while they run, and each failure names the test and carries one of these message
   a pid). `drgnx-test-child-signal` signals only a parked child, so a test that goes through it passes.
 
 The two gated checks hold every test of a gated file, also one that never enters `drgnx-test-gated`, unless
-`test/gate-exempt.eld` lists it (`DRGNX_TEST_GATE_EXEMPT` names another file). A gated file's tests against a fake hub
+`test/gate-exempt.eld` lists it. `DRGNX_TEST_GATE_EXEMPT` names another register, for the audit's own tests
+(`run-ert-audit-test.el`) only: it is honoured for a test whose file lies outside the checkout, in the register's own
+directory, so no run of the checkout's tests (CI's included) can swap the register. A gated file's tests against a fake hub
 (`test/fixtures/fake-hub.el`, the client's lying peer) run outside the gate by design and are listed; a test that is
 not converted yet is listed too, as such. Their messages are kept until the test ends and recorded unless it never
 entered the gate (a watcher on `drgnx-test-gate--active` notes the entry) and is listed. A row is `(TEST-SYMBOL :why

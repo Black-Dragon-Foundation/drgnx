@@ -936,6 +936,38 @@ macOS (no /proc there)."
             (should (string-prefix-p "drwx------" (nth 1 lines)))))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-bin/orders-reads-every-runs-pair-count-and-fails-a-new-skip ()
+  ;; `test --orders' runs K up to the largest pair count any run printed (a swap can meet more pairs than K=0 did), and
+  ;; a test that ran at K=0 but skipped at a later K makes it red: that swap went unexplored
+  (let* ((dir (make-temp-file "drgnx-bin-orders" t))
+         (parent (expand-file-name "parent" dir))
+         (seen (expand-file-name "seen" dir))
+         (file (expand-file-name "test/unit/delivery-gate-test.el" drgnx-bin-test--root))
+         (drgnx-bin-test--cwd dir)
+         (run (lambda (body)
+                (when (file-exists-p seen) (delete-file seen))
+                (drgnx-bin-test--call
+                 drgnx-bin-test--bin
+                 (drgnx-bin-test--env dir parent
+                                      (concat "DRGNX_EMACS=" (drgnx-bin-test--fake-emacs (expand-file-name "fake-emacs" dir)
+                                                                                         (concat "k=$DRGNX_TEST_GATE_SWAP; echo $k >> " seen "; " body))))
+                 "test" "--orders" "--only" file)))
+         (ks (lambda () (split-string (drgnx-bin-test--slurp seen) "\n" t))))
+    (unwind-protect
+        (progn
+          (make-directory parent)
+          ;; K=0 meets 2 pairs, every later K 3: K runs 0, 1 and 2 (K=0's count alone would stop after K=1)
+          (let ((r (funcall run "if [ $k = 0 ]; then n=2; else n=3; fi; echo \"drgnx-gate-swap-pairs: $n\"")))
+            (should (eql 0 (car r)))
+            (should (equal (funcall ks) '("0" "1" "2"))))
+          ;; x/always skips at every K; x/held-order runs at K=0 and skips at K=1: red there, naming only it
+          (let ((r (funcall run (concat "echo 'drgnx-gate-swap-pairs: 3'; printf '\\nSkipped (%s):\\n   x/always  no hub\\n' 1;"
+                                        " if [ $k = 1 ]; then echo '   x/held-order  no hub'; fi"))))
+            (should (eql 1 (car r)))
+            (should (string-match-p "skipped at K=1 but ran at K=0: x/held-order$" (cdr r)))
+            (should (equal (funcall ks) '("0" "1")))))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-bin/a-container-run-forwards-the-test-selector ()
   ;; A narrowed `bin/drgnx test --container' stays narrow inside the container.
   (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
