@@ -495,8 +495,10 @@ job stopped at the end."
           (setq child (make-process :name "drgnx-sigint" :connection-type 'pipe :noquery t :buffer nil
                                     :command (list "env" "--default-signal=INT" (expand-file-name invocation-name invocation-directory)
                                                    "--batch" "-Q" "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-onboard"
-                                                   ;; the marker is written from a timer, which first runs inside the job's wait: after the hook
-                                                   "--eval" (format "(progn (run-at-time 0.1 nil (lambda () (write-region \"\" nil %S nil 'silent))) (drgnx-onboard--job \"Sleeping\" (list \"sleep\" \"3600\")))"
+                                                   ;; the marker is written as the job's wait starts, after the hook went in.  Not from a
+                                                   ;; timer: one fires inside the start's own wait too, while the job already runs in
+                                                   ;; the hub and the hook is not in yet, and a SIGINT then leaves the job running
+                                                   "--eval" (format "(progn (advice-add 'drgnx-onboard--until :before (lambda (&rest _) (write-region \"\" nil %S nil 'silent))) (drgnx-onboard--job \"Sleeping\" (list \"sleep\" \"3600\")))"
                                                                     (concat root "hooked")))
                                     :sentinel (lambda (p _e) (process-put p :done t))))
           (should (drgnx-test-wait #'drgnx-ai-onboard-test--hub-running :what "the child's job running"))
