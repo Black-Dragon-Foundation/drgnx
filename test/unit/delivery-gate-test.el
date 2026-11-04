@@ -23,6 +23,7 @@
 
 (defvar drgnx-exec--jobs)
 (defvar drgnx-exec--stale)
+(defvar drgnx-test-gate-waiting-ok)
 
 (defmacro drgnx-delivery-gate-test--with-hub (&rest body)
   "BODY with ROOT a fresh folder, drgnx's dirs under it, and a gated Ratatoskr serving them; this Emacs not connected."
@@ -198,6 +199,55 @@ queues, and no virtual time passes meanwhile."
       (should started)
       (should ended)
       (should (= now then)))))
+
+;;;; A hub task inside a real wait
+
+(defun drgnx-delivery-gate-test--start-held-job (go)
+  "Start a job that runs until a line is written to the named pipe GO (made here); its id once the hub answered (the
+schedule names `exec/start' and `exec/get')."
+  (let ((id nil))
+    (call-process "mkfifo" nil nil nil go)
+    (drgnx-exec-start "gate-held-job" (list "sh" "-c" (concat "read x < " (shell-quote-argument go)))
+                      :cwd (file-name-directory go) :callback (lambda (i _why) (setq id i)))
+    (drgnx-test-wait (lambda () id) :what "the job's start")
+    id))
+
+(defun drgnx-delivery-gate-test--end-held-job (go)
+  "End the job of `drgnx-delivery-gate-test--start-held-job' (bounded: a job that is not reading lets it go)."
+  (when (file-exists-p go)
+    (call-process "timeout" nil nil nil "5" "sh" "-c" (concat "echo go > " (shell-quote-argument go)))))
+
+(ert-deftest drgnx-delivery-gate/a-job-still-running-at-a-barrier-fails-naming-its-watcher ()
+  "A job runs on through a barrier: its watcher waits on the child's end, a real wait, so what it writes later is not
+ordered by the test.  The barrier waits for it (5 s of real time), then the test fails, naming the watcher's origin."
+  (drgnx-delivery-gate-test--with-hub
+    (let* ((go (concat root "go"))
+           (err (unwind-protect
+                    (should-error (drgnx-test-gated '((sub-1 :answer "subscribe") (call-1 :answer "exec/start")
+                                                      (call-1 :answer "exec/get"))
+                                    (drgnx-hub-connect)
+                                    (drgnx-test-wait (lambda () drgnx-hub--events) :what "the subscription")
+                                    (drgnx-delivery-gate-test--start-held-job go)
+                                    (drgnx-test-deliver-all))
+                                  :type 'ert-test-failed)
+                  (drgnx-delivery-gate-test--end-held-job go))))
+      (should (string-match-p "real wait" (car (cadr err))))
+      (should (equal (plist-get (cdr (cadr err)) :waiting) '("exec:watch"))))))
+
+(ert-deftest drgnx-delivery-gate/an-allowed-origin-inside-a-real-wait-passes-the-barrier ()
+  "The same job, with its watcher's origin in `drgnx-test-gate-waiting-ok': the hub does not wait for it at the
+barrier, and the test goes on."
+  (drgnx-delivery-gate-test--with-hub
+    (let ((go (concat root "go")) (drgnx-test-gate-waiting-ok '("exec:watch")) id m)
+      (unwind-protect
+          (drgnx-test-gated '((sub-1 :answer "subscribe") (call-1 :answer "exec/start") (call-1 :answer "exec/get"))
+            (drgnx-hub-connect)
+            (drgnx-test-wait (lambda () drgnx-hub--events) :what "the subscription")
+            (setq id (drgnx-delivery-gate-test--start-held-job go))
+            (setq m (drgnx-test-deliver-all)))
+        (drgnx-delivery-gate-test--end-held-job go))
+      (should id)
+      (should (natnump m)))))
 
 (ert-deftest drgnx-delivery-gate/answers-t-releases-every-answer-as-it-is-due ()
   "With (:answers t) every answer is released like a handshake line, so a call the code under test waits on returns

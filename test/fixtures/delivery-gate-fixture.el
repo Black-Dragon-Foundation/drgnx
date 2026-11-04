@@ -36,6 +36,13 @@
 held and released at the barrier like the named ones, so the order they reach the client in is the gate's; what is not
 the gate's is whether a write has happened yet, so a test that sets this waits for what the agent did as a condition.")
 
+(defvar drgnx-test-gate-waiting-ok nil
+  "Origins (strings, as `clock::spawn' names them) a barrier may find inside a real wait without failing the test.
+A barrier waits up to 5 s of real time for the hub's tasks inside a real wait (a job's watcher: the child's end) and
+fails the test on those still inside (`waiting'): what they write later is not ordered by the test.  The hub does not
+wait for the origins listed here (a job the test keeps running); what they write after a barrier is held until the next
+one.  `drgnx-lint/gate-waiting-ok-only-where-listed' fences it to listed files.")
+
 (defvar drgnx-test-gate--active nil "Non-nil while `drgnx-test-gated' runs its body.")
 (defvar drgnx-test-gate--releasing nil
   "The connection's name while the gate hands a line or an end to the client, else nil.  The audit reads it.")
@@ -606,20 +613,28 @@ no hub answers."
       (drgnx-test-gate--control-wait p (lambda () (gethash id (process-get p :answers))) method))))
 
 (defun drgnx-test-gate--check-answer (answer method)
-  "ANSWER to the gate's METHOD: its result, after failing the test on an error or on `unnamed' writes."
-  (let ((result (plist-get answer :result)))
+  "ANSWER to the gate's METHOD: its result, after failing the test on an error, on `unnamed' writes or on tasks still
+inside a real wait (`waiting') that `drgnx-test-gate-waiting-ok' does not list."
+  (let* ((result (plist-get answer :result))
+         (waiting (cl-remove-if (lambda (o) (member o drgnx-test-gate-waiting-ok))
+                                (append (plist-get result :waiting) nil))))
     (when (plist-get answer :error)
       (drgnx-test-gate--fail (format "drgnx-test-gated: the hub refused %s (is Ratatoskr built with test-hooks?)" method)
                              :error (plist-get answer :error)))
     (when (and (> (or (plist-get result :unnamed) 0) 0) (not drgnx-test-gate-unnamed-ok))
       (drgnx-test-gate--fail "drgnx-test-gated: the hub wrote from tasks without an origin (not deterministic)"
                              :method method :unnamed (plist-get result :unnamed) :busy (plist-get result :busy)))
+    (when waiting
+      (drgnx-test-gate--fail
+       "drgnx-test-gated: hub tasks were still inside a real wait at the barrier (what they write later is not ordered)"
+       :method method :waiting waiting))
     result))
 
 (defun drgnx-test-gate--barrier ()
   "`__test_barrier': once answered, each open gated connection's marker is waited for, so everything the hub wrote
 before it is held.  The marker M, or nil when no hub answers."
-  (when-let* ((answer (drgnx-test-gate--control-call "__test_barrier" nil)))
+  (when-let* ((answer (drgnx-test-gate--control-call "__test_barrier"
+                                                     (list :waiting_ok (vconcat drgnx-test-gate-waiting-ok)))))
     (let ((m (plist-get (drgnx-test-gate--check-answer answer "__test_barrier") :marker)))
       (dolist (c drgnx-test-gate--conns)
         (unless (or (drgnx-test-gate--conn-deleted c) (drgnx-test-gate--conn-ended c))
@@ -674,7 +689,8 @@ barrier (another barrier is needed), else t.  A step that cannot be met fails th
 `__test_barrier' first (the hub serves every line it has, releases its held writes and writes marker M on every
 connection; each one's marker is waited for), then the remaining steps (pauses skipped), then every held line in
 connection open order.  What the client sends meanwhile gets another barrier, until nothing moves.  Fails when the hub
-wrote from a task without an origin (`unnamed' > 0) or a step cannot be met."
+wrote from a task without an origin (`unnamed' > 0), when a hub task stayed inside a real wait through the barrier
+(`waiting', `drgnx-test-gate-waiting-ok') or when a step cannot be met."
   (drgnx-test-gate--check-active)
   (drgnx-test-gate--rethrow)
   (let ((m nil) (rounds 0) (done nil))
