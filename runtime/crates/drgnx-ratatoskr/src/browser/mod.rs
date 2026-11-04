@@ -5,13 +5,32 @@
 //! Nothing of the commands runs by itself: the download happens only when the user runs `browser install`, and no command reads
 //! from the terminal.  Exit 0 when it did what was asked, 1 when it could not (the text is on stderr), 2 for
 //! arguments that do not parse.
+//!
+//! `ratatoskr browser-host` ([`host`], Linux only) is the other end: the process inside a session's sandbox that runs
+//! Chromium over its pipe for the hub ([`host_main`]).
 
+#[cfg(target_os = "linux")]
+pub mod host;
 pub mod install;
 pub mod nevers;
 pub mod resolve;
 pub mod web;
 
 use std::ffi::OsString;
+
+/// `ratatoskr browser-host …` ([`host::main`]); its exit code. Not Linux: 1, as there is no browser host there.
+pub fn host_main(args: Vec<OsString>) -> i32 {
+    #[cfg(target_os = "linux")]
+    {
+        host::main(args)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = args;
+        eprintln!("ratatoskr browser-host: the browser host is Linux only");
+        1
+    }
+}
 
 use runstav::paths::{Env, config_dir, data_dir};
 use serde_json::json;

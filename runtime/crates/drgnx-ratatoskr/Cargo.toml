@@ -51,6 +51,7 @@ vegvisir = { path = "../vegvisir", version = "0.1.0" }  # the Work map's model a
 forseti = { path = "../forseti", version = "0.1.0" }  # the scheduler core: the queue's order, placement and admission
 hrafn-embed = { path = "../hrafn-embed", version = "0.1.0" }  # the model table, the cache's checks, the embed worker's engine
 hrafn = { path = "../hrafn", version = "0.1.0" }  # each project's code store, tier 1 and the store side of tier 2
+heimdall = { path = "../heimdall", version = "0.1.0" }  # the browser host's codecs (browser::host)
 huginn = { path = "../huginn", version = "0.1.0", features = ["serde"] }  # settings.el and runtime-defaults.el, as data
 serde_path_to_error.workspace = true  # where in a setting's value a mistake is
 tokio = { workspace = true, features = ["io-std"] }  # mcp-bridge's stdio (a feature, no new crate)

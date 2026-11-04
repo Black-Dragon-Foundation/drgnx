@@ -1,8 +1,9 @@
 //! The command line (lexopt): `ratatoskr serve [--foreground] [--parent-pid PID] [--supervisor none|self|launchd]`,
 //! `ensure`, `stop`, `status`, `doctor`, `restart`, `version [--json]`, `methods --json|--markdown`,
-//! `sandbox check`, `sandbox-inner …` and `relay …` (the sandbox's inner helper and its relay, their arguments taken
-//! raw), `mcp-bridge --socket PATH | --outside --kind KIND [--cwd DIR]` (an agent's coordination tools over stdio),
-//! `embed-worker …` (Hrafn's embed worker), and with the `test-hooks` feature `sandbox run …`.  A line that does not parse exits 2 ([`crate::Exit::Usage`]).
+//! `sandbox check`, `sandbox-inner …`, `relay …` and `browser-host …` (the sandbox's inner helper, its relay and its
+//! browser host, their arguments taken raw), `mcp-bridge --socket PATH | --outside --kind KIND [--cwd DIR]` (an agent's
+//! coordination tools over stdio), `embed-worker …` (Hrafn's embed worker), and with the `test-hooks` feature
+//! `sandbox run …`.  A line that does not parse exits 2 ([`crate::Exit::Usage`]).
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -18,6 +19,8 @@ pub const USAGE: &str = "usage: ratatoskr serve [--foreground] [--parent-pid PID
     \x20      ratatoskr methods --json|--markdown\n\
     \x20      ratatoskr sandbox-inner --spec-fd 3 -- CMD...   (the sandbox's inner helper; run by the sandbox only)\n\
     \x20      ratatoskr relay --parent-pid PID [--ready-fd N] PORT=SOCKET...   (the sandbox's relay; run by the sandbox only)\n\
+    \x20      ratatoskr browser-host --hub-fd 3 --ready-fd 4 --program P --dir D --web-port N [--max-message B]\n\
+    \x20          [--headless-shell|--full]   (Chromium over a pipe for the hub; run by the sandbox only)\n\
     \x20      ratatoskr sandbox check [--json] [--tier full|reduced]   (does the job sandbox start here?)\n\
     \x20      ratatoskr store migrate-check --db FILE --scratch DIR [--json]   (migrate a copy of work.db; counts only)\n\
     \x20      ratatoskr store restore-pre7 [--yes]   (the hub stopped: work.db back from before schema 7)\n\
@@ -79,6 +82,11 @@ pub enum Command {
     },
     /// The sandbox's relay (`gleipnir::net::relay::main`), its arguments untouched. It builds its own runtime.
     Relay {
+        args: Vec<OsString>,
+    },
+    /// The browser host (`crate::browser::host`), its arguments untouched: Chromium over a pipe, inside a session's
+    /// sandbox. It builds no runtime.
+    BrowserHost {
         args: Vec<OsString>,
     },
     /// `sandbox run` (test-hooks only): one command under the sandbox, for the escape rows.
@@ -355,6 +363,10 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
         }),
         // The relay parses its own arguments too (`gleipnir::net::relay::main`).
         "relay" => Ok(Command::Relay {
+            args: p.raw_args().map_err(e)?.collect(),
+        }),
+        // So does the browser host (`browser::host::parse`).
+        "browser-host" => Ok(Command::BrowserHost {
             args: p.raw_args().map_err(e)?.collect(),
         }),
         "sandbox" => {
@@ -841,6 +853,20 @@ mod tests {
         assert_eq!(
             p(&all),
             Ok(Command::Relay {
+                args: rest.map(OsString::from).to_vec()
+            })
+        );
+    }
+
+    /// `browser-host` takes its arguments raw too: the host parses its own.
+    #[test]
+    fn browser_host_parses_raw() {
+        let rest = ["--hub-fd", "3", "--ready-fd", "4", "--full", "--json"];
+        let mut all = vec!["browser-host"];
+        all.extend(rest);
+        assert_eq!(
+            p(&all),
+            Ok(Command::BrowserHost {
                 args: rest.map(OsString::from).to_vec()
             })
         );

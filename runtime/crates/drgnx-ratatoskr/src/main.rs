@@ -52,6 +52,8 @@ fn main() -> ExitCode {
         // The relay builds its own single-threaded runtime; it refuses to start under another parent than its
         // `--parent-pid`.
         Command::Relay { args } => return code(gleipnir::net::relay::main(args.into_iter())),
+        // No runtime: threads per started Chromium. It refuses to run outside the browser layer.
+        Command::BrowserHost { args } => return code(drgnx_ratatoskr::browser::host_main(args)),
         // Its own single-threaded runtime; it reads no environment variable but, outside, the data dir's.
         Command::McpBridge(args) => return ExitCode::from(drgnx_ratatoskr::bridge::main(args)),
         // No runtime: the migration and the copy run on this thread, and refuse while a hub holds the store.

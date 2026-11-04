@@ -2201,3 +2201,55 @@ In the fallback it instead turns the root's auto-attach and target discovery off
 Tests: unit tests in each module. `route`'s tests play transcripts written by hand from the protocol JSON
 (`crates/heimdall/tests/data/*.jsonl`: an input line, then what it must give), and the fuzz target `cdp_envelope`
 ([runtime.md](runtime.md#fuzzing)) seeds from them.
+
+## The browser host
+
+`ratatoskr browser-host` (`browser::host`, Linux only) runs Chromium inside a session's sandbox for the hub. The inner
+helper forks it under the browser layer, its own Landlock domain and seccomp filter ([gleipnir.md](gleipnir.md), "The
+inner helper", step 6b), with the hub's end of a socketpair at fd 3 and a ready pipe at fd 4:
+
+```
+browser-host --hub-fd 3 --ready-fd 4 --program P --dir D --web-port N [--max-message B] [--headless-shell|--full]
+```
+
+**The layer check.** Before it touches a descriptor or makes a dir, the host checks that it runs under the browser
+layer: `NoNewPrivs: 1` in `/proc/self/status`, and a TCP bind on loopback refused (`EACCES`). The browser layer binds no
+port at all, while the agent's own layer and an unsandboxed process may, so the bind tells the layers apart without a
+path. Otherwise it exits 1. Only a `test-hooks` build has `--unconfined`, which skips the check for the container tests
+that run it with a real Chromium and no sandbox.
+
+**Start.** The host makes `D/profile` and `D/downloads` (0700), writes `ready\n` on fd 4, closes it, and reads frames
+from fd 3 (`heimdall::codec`, `[kind u8][len u32 BE][payload]`; the largest is the message limit plus 64 bytes). A
+`{"op":"start"}` forks Chromium:
+- in its own process group, with `PR_SET_PDEATHSIG(SIGKILL)`;
+- stdin and stdout on `/dev/null`, stderr on a pipe, the CDP pipe at fds 3 (in) and 4 (out), every other fd closed at
+  the exec;
+- exactly the flags of the design (`--remote-debugging-pipe --user-data-dir=D/profile --no-sandbox --disable-gpu
+  --proxy-server=http://127.0.0.1:N …  about:blank`), and `--headless` unless `--headless-shell`;
+- an environment of `HOME`, `XDG_CACHE_HOME` and `TMPDIR`, all `D`, and nothing else.
+
+It answers `{"ev":"started","pid":N}`. A program that cannot be exec'd gets `{"ev":"exited","code":127|126,
+"signal":null,"error":"cannot start P: …"}` instead. A start while one runs answers `started` for the running one.
+
+**The relay.** A CDP frame from the hub goes to the pipe with its NUL. Each NUL-ended message from the pipe goes back as
+one CDP frame; one over the limit is dropped up to its NUL. A CDP frame while no browser runs is dropped.
+
+**Stop and exit.** `{"op":"stop","why":W}` closes the pipe, sends SIGTERM to Chromium's process group, and SIGKILL after
+2 s. However Chromium ends (stopped, crashed, or on its own), the host waits for the main process without reaping it,
+kills what is left of its group (the group's id is still held by the unreaped leader), reaps it, lets the pipe's last
+messages through for up to 1 s, and sends `{"ev":"exited","code":N|null,"signal":N|null}`. The next `start` is a fresh
+Chromium through the same host.
+
+**The hub goes.** EOF on fd 3 (the hub ended, or restarted: an inherited fd cannot be handed over again) stops Chromium as
+`stop` does, and the host exits 0, so no Chromium is left behind.
+
+**Stderr.** Chromium's stderr lines go out as `{"ev":"stderr","line":S}`, at most one a second (the others are only in the
+tail), and the last 16 KiB are kept in `D/stderr.tail` across starts.
+
+There is no async runtime: the main thread reads the hub, and each start has a writer, a reader, a stderr reader and a
+waiter thread. The main thread is the one that forks, so Chromium's death signal fires when the host ends.
+
+Tests: `browser::host` unit tests run the host on a thread against `tests/data/fake-chromium.sh`, a stand-in that
+speaks the pipe, echoes every command as its reply, records its argv and environment in its dir, and on `Fake.crash`
+dies by SIGKILL or on `Fake.stubborn` ignores SIGTERM and the pipe's end. `tests/browser_sandboxed.rs` (`#[ignore]`, the
+VM) starts the host under a real bwrap launch with the stand-in.
