@@ -1030,6 +1030,12 @@
                   :command (list (drgnx-hub-client-test--bin) "serve" "--foreground"
                                  "--parent-pid" (number-to-string (emacs-pid))))))
 
+(defun drgnx-hub-client-test--asking-p (methods)
+  "Whether a call of one of METHODS (strings) still waits for the hub's answer."
+  (catch 'found
+    (maphash (lambda (_id e) (when (member (plist-get e :method) methods) (throw 'found t))) drgnx-hub--pending)
+    nil))
+
 (defun drgnx-hub-client-test--stop (hub)
   (when (process-live-p hub) (signal-process hub 'term))
   (ignore-errors (drgnx-test-wait (lambda () (process-get hub :done)) :secs 10 :what "Ratatoskr ends"))
@@ -1062,6 +1068,9 @@
   (drgnx-hub-client-test--with-ratatoskr
     (drgnx-hub-connect)
     (drgnx-hub-client-test--wait (lambda () (process-live-p drgnx-hub--events)) "the subscription")
+    ;; the hand-over's answers first: this test is about the forget (an answer read after it is the next test's)
+    (drgnx-hub-client-test--wait (lambda () (not (drgnx-hub-client-test--asking-p '("gateway/editor-token" "gateway/keys-held"))))
+                                 "the hand-over's answers")
     (setq drgnx-hub--editor (cons "tok" "http://x") drgnx-hub--keys-held '("openrouter"))
     (drgnx-hub-client-test--stop hub)
     (drgnx-hub-client-test--wait (lambda () (null drgnx-hub--events)) "the subscription ends")
