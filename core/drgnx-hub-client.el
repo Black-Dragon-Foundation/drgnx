@@ -21,6 +21,7 @@
 (require 'drgnx-notice)
 (require 'drgnx-agents-matrix)          ; `drgnx-agents-away-after'
 (require 'drgnx-work-db)                ; `drgnx-work-db-schema-version', which the hello says
+(require 'drgnx-hub-core)               ; every ordering decision of the connections and the subscription
 
 (declare-function drgnx-exec-sync "drgnx-exec")
 (declare-function drgnx-exec-unsync "drgnx-exec")
@@ -61,14 +62,8 @@ only for a hub that proved itself checks its `:drgnx-proven'.")
   "Request id → (:cb CALLBACK :conn CONNECTION :full FULL :method METHOD), until its callback has run.")
 (defvar drgnx-hub--next-id 0)
 
-(defconst drgnx-hub-schema-readable-max 7
-  "The newest work.db schema this editor reads (`drgnx-work-db-read': schema 7's compatibility views, `compat-read' 6):
-a hub whose hello says a schema from `drgnx-work-db-schema-version' to this one is not skewed.")
-
-(defconst drgnx-hub-proto 1 "The hub protocol this drgnx speaks: its `hello' says it.")
-(defconst drgnx-hub-proto-min 1 "The oldest hub protocol this drgnx still speaks.")
-(defconst drgnx-hub-records 2
-  "The record layout this drgnx reads (records 2: JSON objects): the agents mirror pauses while a hub's differs.")
+;; `drgnx-hub-proto', `drgnx-hub-proto-min', `drgnx-hub-records' and `drgnx-hub-schema-readable-max' are in
+;; drgnx-hub-core.el: the skew is decided there.
 
 (defcustom drgnx-hub-call-deadline 30
   "Seconds a call to the hub may go unanswered: then its callback gets an error (`drgnx-hub-call')."
@@ -316,10 +311,6 @@ the CLI proves it read in its hello."
     (secure-hash 'sha256 (concat (funcall pad #x5c)
                                  (secure-hash 'sha256 (concat (funcall pad #x36) (encode-coding-string text 'utf-8 t)) nil nil t)))))
 
-(defun drgnx-hub--same-p (a b)
-  "Whether the strings A and B are equal, compared as SHA-256 digests (the time taken never tells where they differ)."
-  (and (stringp a) (stringp b) (string= (secure-hash 'sha256 a) (secure-hash 'sha256 b))))
-
 (defun drgnx-hub--nonce ()
   "A fresh nonce, 32 hex digits: unique, not secret (SHA-256 of the pid, the time, a counter and `random')."
   (substring (secure-hash 'sha256 (format "%d %s %d %d" (emacs-pid) (format-time-string "%s.%N")
@@ -419,48 +410,30 @@ subscribed connection) goes to `drgnx-hub-event-functions'."
   (drgnx-hub--lines conn chunk (lambda (json) (drgnx-hub--client-line conn json))))
 
 (defun drgnx-hub--client-line (conn json)
+  "One line JSON read on CONN, as the core's event: the challenge, an event, or an answer."
   (let ((event (plist-get json :event)))
-    (cond ((and (equal event "challenge") (eq (process-get conn :drgnx-state) 'legacy))
-           ;; a v1 hub taken for `legacy': its calls would all be refused as service class; the next call connects again
-           (drgnx-hub--reject-hub conn (format "the hub at %s sent its challenge late: connecting again" (drgnx-hub-socket))))
-          ((equal event "challenge")
-           (when (eq (process-get conn :drgnx-state) 'wait)
-             (drgnx-timer-cancel (cons 'hub-challenge conn))
-             (let ((nonce (plist-get (plist-get json :data) :nonce)))
-               (if (stringp nonce)
-                   ;; the binary's version goes in the first hello too: it waits for the read that runs (R-T17-2); the
-                   ;; connection is no longer `wait'ing for a challenge (the probe's answer must not make it `legacy')
-                   (progn (process-put conn :drgnx-state 'version)
-                          (drgnx-hub--with-binary-version (lambda () (when (process-live-p conn) (drgnx-hub--hello conn nonce)))))
-                 (drgnx-hub--reject-hub conn (format "the hub at %s sent a challenge without a nonce" (drgnx-hub-socket)))))))
-          (event (when (process-get conn :drgnx-events)
-                   (let ((drgnx-hub--event-conn conn))
-                     (drgnx-guard-run-hook 'drgnx-hub-event-functions event (plist-get json :data)))))
+    (cond ((equal event "challenge")
+           (drgnx-hub--step (list 'challenge conn (plist-get (plist-get json :data) :nonce) (drgnx-hub-socket))))
+          (event (drgnx-hub--step (list 'event conn event (plist-get json :data))))
           ((plist-get json :id)
-           (drgnx-hub--settle (plist-get json :id) (plist-get json :result) (plist-get json :error))))))
+           (drgnx-hub--step (list 'answer conn (plist-get json :id) (plist-get json :result) (plist-get json :error)))))))
 
 (defun drgnx-hub--settle (id result error)
   "Call the callback of call ID with RESULT and ERROR (the hub's error object, or this side's message) — once: the
 call is forgotten first and its deadline cancelled.  The callback runs in the guard (`drgnx-guard--call'): what it
 raises is recorded, and the lines after its answer are still read."
-  (when-let* ((entry (gethash id drgnx-hub--pending)))
-    (remhash id drgnx-hub--pending)
-    (drgnx-timer-cancel (cons 'hub-call id))
-    (let ((err (cond ((null error) nil) ((stringp error) (list :message error)) (t error))))
-      (drgnx-guard--call (plist-get entry :cb) (format "hub answer %s" (plist-get entry :method))
-                         (list (and (not err) result) (and err (if (plist-get entry :full) err (plist-get err :message))))))))
+  (drgnx-hub--step (list 'answer nil id result error)))
 
 (defun drgnx-hub--call-expired (id)
   "Call ID's deadline passed: its callback gets an error."
-  (when-let* ((entry (gethash id drgnx-hub--pending)))
-    (drgnx-hub--settle id nil (format "the drgnx hub did not answer %s in time" (plist-get entry :method)))))
+  (drgnx-hub--step (list 'timer (cons 'hub-call id))))
 
-(defun drgnx-hub--fail-conn (conn message)
-  "Every call waiting on CONN gets MESSAGE as its error (once each)."
-  (let (ids)
-    (maphash (lambda (id e) (when (eq (plist-get e :conn) conn) (push id ids))) drgnx-hub--pending)
-    (process-put conn :drgnx-queue nil)
-    (dolist (id (sort ids #'<)) (drgnx-hub--settle id nil message))))
+;;;; The shell: the core decides (drgnx-hub-core.el), this runs what it decided
+
+(defconst drgnx-hub--conn-props
+  '((:state . :drgnx-state) (:queue . :drgnx-queue) (:proven . :drgnx-proven) (:asked . :drgnx-asked)
+    (:events . :drgnx-events) (:since . :since))
+  "The core's connection fields and the process properties that keep them between steps.")
 
 (defvar drgnx-hub--asked-disconnect nil
   "Non-nil when this editor ended its own subscription (`drgnx-hub-disconnect', or a `shutdown' it sent): a hub that
@@ -473,65 +446,131 @@ goes away then is not redialled (`drgnx-hub--resubscribe-schedule').  Cleared by
 
 (defconst drgnx-hub-resubscribe-give-up 600 "Seconds of redialling after which the editor stops and says so once.")
 
+(defun drgnx-hub--snapshot (conns)
+  "The client's globals, and the properties of its connections, of those its calls wait on, and of CONNS, as a core
+state."
+  (let (pending)
+    (maphash (lambda (id e) (push (cons id e) pending) (push (plist-get e :conn) conns)) drgnx-hub--pending)
+    (drgnx-hub-core-make
+     :client drgnx-hub--client :events drgnx-hub--events :subscribing drgnx-hub--subscribing :pending pending
+     :next-id drgnx-hub--next-id :editor drgnx-hub--editor :keys-held drgnx-hub--keys-held
+     :asked-disconnect drgnx-hub--asked-disconnect :resubscribe-since drgnx-hub--resubscribe-since
+     :resubscribe-delay drgnx-hub--resubscribe-delay :last-hello drgnx-hub--last-hello
+     :conns (mapcar (lambda (c)
+                      (cons c (cl-loop for (k . prop) in drgnx-hub--conn-props
+                                       append (list k (process-get c prop)) into l
+                                       finally return (append (list :live (process-live-p c)) l))))
+                    (delete-dups (cl-remove-if-not #'processp (append (list drgnx-hub--client drgnx-hub--events
+                                                                            drgnx-hub--subscribing)
+                                                                      conns))))
+     :config (list :call-deadline drgnx-hub-call-deadline :challenge-wait drgnx-hub--challenge-wait
+                   :subscribe-deadline drgnx-hub-subscribe-deadline :give-up drgnx-hub-resubscribe-give-up
+                   :schema drgnx-work-db-schema-version :noninteractive noninteractive))))
+
+(defun drgnx-hub--write-back (old new)
+  "Write the core's state NEW (stepped from OLD) back to the globals and the connections' properties."
+  (setq drgnx-hub--client (drgnx-hub-core-client new) drgnx-hub--events (drgnx-hub-core-events new)
+        drgnx-hub--subscribing (drgnx-hub-core-subscribing new) drgnx-hub--next-id (drgnx-hub-core-next-id new)
+        drgnx-hub--editor (drgnx-hub-core-editor new) drgnx-hub--keys-held (drgnx-hub-core-keys-held new)
+        drgnx-hub--asked-disconnect (drgnx-hub-core-asked-disconnect new)
+        drgnx-hub--resubscribe-since (drgnx-hub-core-resubscribe-since new)
+        drgnx-hub--resubscribe-delay (drgnx-hub-core-resubscribe-delay new)
+        drgnx-hub--last-hello (drgnx-hub-core-last-hello new))
+  ;; the same table (a test let-binds its own and reads it), filled again only when a call came or went
+  (unless (eq (drgnx-hub-core-pending old) (drgnx-hub-core-pending new))
+    (clrhash drgnx-hub--pending)
+    (dolist (p (drgnx-hub-core-pending new)) (puthash (car p) (cdr p) drgnx-hub--pending)))
+  (dolist (c (drgnx-hub-core-conns new))
+    (when (processp (car c))
+      (cl-loop for (k . prop) in drgnx-hub--conn-props do (process-put (car c) prop (plist-get (cdr c) k))))))
+
+(defun drgnx-hub--step (event &rest conns)
+  "Run EVENT (`drgnx-hub-core-event-kinds') through the core: the globals and the properties of the client's
+connections, the processes in EVENT and CONNS go in; the new state is written back before the effects run, so an
+effect that comes back (a sentinel, a callback that calls the hub) steps from it.  The core's new state."
+  (let* ((old (drgnx-hub--snapshot (append conns (cl-remove-if-not #'processp (cdr event)))))
+         (r (drgnx-hub-core-step old event)))
+    (drgnx-hub--write-back old (car r))
+    (dolist (e (cdr r)) (drgnx-hub--effect e))
+    (car r)))
+
+(defun drgnx-hub--effect (effect)
+  "Run one of the core's EFFECT (`drgnx-hub-core-effect-kinds')."
+  (pcase effect
+    (`(send ,conn ,msg) (drgnx-hub--send conn msg))
+    (`(delete ,conn) (when (process-live-p conn) (delete-process conn)))
+    (`(timer-start (hub-call . ,id) ,secs)
+     (drgnx-timer-start (cons 'hub-call id) secs #'drgnx-hub--call-expired :args (list id) :owner :core))
+    (`(timer-start (hub-challenge . ,c) ,secs)
+     (drgnx-timer-start (cons 'hub-challenge c) secs #'drgnx-hub--challenge-late :args (list c) :owner :core))
+    (`(timer-start hub-resubscribe ,secs) (drgnx-timer-start 'hub-resubscribe secs #'drgnx-hub--resubscribe :owner :core))
+    (`(timer-cancel ,key) (drgnx-timer-cancel key))
+    (`(callback ,fn ,label ,args) (drgnx-guard--call fn label args))
+    (`(hook ,name . ,args) (apply #'drgnx-hub--run-hook name args))
+    (`(notify :clear ,id) (drgnx-notice-clear 'hub id))
+    (`(notify ,severity ,text ,id . ,props) (apply #'drgnx-notify 'hub severity text :id id props))
+    (_ (error "drgnx hub: no effect %S" effect))))
+
+(defun drgnx-hub--run-hook (name &rest args)
+  "The core's effect (hook NAME . ARGS): what only the shell can do — read, wait, start, run the hooks."
+  (pcase name
+    ('version (let ((conn (nth 0 args)) (nonce (nth 1 args)))
+                ;; the binary's version goes in the first hello too: it waits for the read that runs (R-T17-2)
+                (drgnx-hub--with-binary-version (lambda () (drgnx-hub--step (list 'version-known conn nonce))))))
+    ('hello (apply #'drgnx-hub--hello args))
+    ('read (let ((conn (car args)))
+             ;; review S2: an Emacs busy past the wait runs the timer before it reads a challenge waiting in the socket
+             (when (process-live-p conn) (accept-process-output conn 0 nil t))
+             (drgnx-hub--step (list 'timer (cons 'hub-challenge conn) :read t :socket (drgnx-hub-socket)) conn)))
+    ('skew (drgnx-guard-run-hook 'drgnx-hub-skew-functions (nth 0 args) (nth 1 args))
+           (drgnx-hub--skew-notice (nth 0 args) (nth 1 args)))
+    ('events (let ((drgnx-hub--event-conn (nth 0 args)))
+               (drgnx-guard-run-hook 'drgnx-hub-event-functions (nth 1 args) (nth 2 args))))
+    ('disconnected (drgnx-guard-run-hook 'drgnx-hub-disconnect-functions))
+    ('presence-start (drgnx-hub--presence-start))
+    ('presence-stop (drgnx-hub--presence-stop))
+    ;; the editor's own jobs (grammars, mermaid, the browser, …): their cache, read again on every subscription
+    ('exec-sync (with-demoted-errors "drgnx hub: jobs not synced: %S" (require 'drgnx-exec) (drgnx-exec-sync)))
+    ('hand-over (with-demoted-errors "drgnx hub: keys not handed over: %S" (drgnx-hub--hand-over)))
+    ('connected (drgnx-guard-run-hook 'drgnx-hub-connected-functions))
+    ('editor-token (drgnx-guard-run-hook 'drgnx-hub-editor-token-hook))
+    ('keys-held (require 'drgnx-ai) (drgnx-hub--keys-lost) (drgnx-hub--keys-note))
+    ('dial (drgnx-hub--dial))
+    ('redial (condition-case nil (drgnx-hub-connect) (error (drgnx-hub--resubscribe-schedule))))
+    ('quiet (set-process-sentinel (car args) #'ignore))
+    ('unsync (drgnx-hub--unsync))
+    (_ (error "drgnx hub: no hook %S" name))))
+
 (defun drgnx-hub--resubscribe-schedule ()
   "Arm the next redial of the subscription (timer key `hub-resubscribe'): after 1 s, then twice as long each time, up to
 30 s.  After `drgnx-hub-resubscribe-give-up' seconds from the first loss it stops and posts one notice naming
-Hub: Restart Now.  It never runs `ensure': a hub the user stopped stays stopped."
-  (let ((now (drgnx-timer-now)))
-    (unless drgnx-hub--resubscribe-since
-      (setq drgnx-hub--resubscribe-since now drgnx-hub--resubscribe-delay 1))
-    (if (>= (- now drgnx-hub--resubscribe-since) drgnx-hub-resubscribe-give-up)
-        (progn (setq drgnx-hub--resubscribe-since nil drgnx-hub--resubscribe-delay 1)
-               (drgnx-notify 'hub 'warn "the drgnx hub is gone and did not come back; start it with Hub: Restart Now"
-                             :id 'resubscribe-gave-up :command 'hub-restart-now))
-      (drgnx-timer-start 'hub-resubscribe drgnx-hub--resubscribe-delay #'drgnx-hub--resubscribe :owner :core)
-      (setq drgnx-hub--resubscribe-delay (min 30 (* 2 drgnx-hub--resubscribe-delay))))))
+Hub: Restart Now.  It never runs `ensure': a hub the user stopped stays stopped.  (The core's `:redial-failed'.)"
+  (drgnx-hub--step (list 'connect (drgnx-timer-now) :redial-failed t)))
 
 (defun drgnx-hub--resubscribe ()
   "The redial timer: subscribe again (`drgnx-hub-connect'); a dial that fails at once arms the next one, one that
 fails later is found by the sentinel.  Never starts a hub, never asks anything."
-  (unless (or drgnx-hub--asked-disconnect (process-live-p drgnx-hub--events))
-    (condition-case nil (drgnx-hub-connect)
-      (error (drgnx-hub--resubscribe-schedule)))))
-
-(defun drgnx-hub--resubscribe-stop ()
-  "Forget a redial under way: its timer and its clock."
-  (drgnx-timer-cancel 'hub-resubscribe)
-  (setq drgnx-hub--resubscribe-since nil drgnx-hub--resubscribe-delay 1))
+  (drgnx-hub--step (list 'timer 'hub-resubscribe)))
 
 (defun drgnx-hub--client-sentinel (conn _event)
   "A client connection closed: its calls fail; the subscribed one's end is said (`drgnx-hub-disconnect-functions').
 When the subscription went away without being asked to (a hub restart or crash), the editor token and the held keys are
-forgotten and the subscription is redialled with a backoff (`drgnx-hub--resubscribe-schedule')."
-  (unless (process-live-p conn)
-    (drgnx-timer-cancel (cons 'hub-challenge conn))
-    (drgnx-hub--fail-conn conn "the drgnx hub's connection closed")
-    (when (eq drgnx-hub--client conn) (setq drgnx-hub--client nil))
-    (when (process-get conn :drgnx-events)
-      (let ((lost (or (eq drgnx-hub--events conn) drgnx-hub--resubscribe-since))
-            (asked (or drgnx-hub--asked-disconnect (process-get conn :drgnx-asked))))
-        (when (eq drgnx-hub--events conn) (setq drgnx-hub--events nil) (drgnx-hub--presence-stop))
-        (when (eq drgnx-hub--subscribing conn) (setq drgnx-hub--subscribing nil))
-        (when (and lost (not asked))
-          (setq drgnx-hub--editor nil drgnx-hub--keys-held :unknown)
-          (drgnx-hub--resubscribe-schedule))
-        ;; the hub went away (shutdown, a crash, a restart): whoever mirrors it is told
-        (drgnx-guard-run-hook 'drgnx-hub-disconnect-functions)))))
+forgotten and the subscription is redialled with a backoff (`drgnx-hub--resubscribe-schedule').  The core gets one
+`closed' per connection, its last event: the filter has run for everything read before the end."
+  (unless (or (process-live-p conn) (process-get conn :drgnx-closed))
+    (process-put conn :drgnx-closed t)
+    (drgnx-hub--step (list 'closed conn (drgnx-timer-now)))))
 
 (defun drgnx-hub--open (events)
   "A new connection to the hub (`drgnx-hub--connect-socket'); EVENTS non-nil: the subscribed connection.  Calls on it
 wait in its queue until it is proven or `legacy' (`drgnx-hub--hello').  A `ping' goes at once: a hub of before
 protocol 1 answers it, where Ratatoskr's challenge always comes first, so such a hub is not waited for.  None of the
 two within `drgnx-hub--challenge-wait' closes the connection (`drgnx-hub--challenge-late'): only the probe's answer
-makes a hub `legacy'."
+makes a hub `legacy'.  The process."
   (let ((c (drgnx-hub--connect-socket #'drgnx-hub--client-filter)))
-    (process-put c :drgnx-events events)
     (set-process-sentinel c (drgnx-guard-wrap #'drgnx-hub--client-sentinel "hub connection"))
-    (process-put c :drgnx-state 'wait)
     (drgnx-hub-client-binary-version t)         ; read now, never waiting: for this hello and the skew
-    (drgnx-timer-start (cons 'hub-challenge c) drgnx-hub--challenge-wait #'drgnx-hub--challenge-late :args (list c) :owner :core)
-    (drgnx-hub--call-on c "ping" nil (lambda (_r err) (unless err (drgnx-hub--legacy-now c)))
-                        :deadline drgnx-hub--challenge-wait :first t)
+    (drgnx-hub--step (list 'open c events))
     c))
 
 (defun drgnx-hub--challenge-late (conn)
@@ -539,75 +578,27 @@ makes a hub `legacy'."
 first: an Emacs busy past the wait runs this timer before it reads the challenge waiting in the socket (review S2).
 Still nothing: CONN is closed and its calls fail — never taken for `legacy' (a v1 hub would then refuse every user
 call on it); the next call connects again."
-  (when (and (process-live-p conn) (eq (process-get conn :drgnx-state) 'wait))
-    (accept-process-output conn 0 nil t)
-    (when (and (process-live-p conn) (eq (process-get conn :drgnx-state) 'wait))
-      (drgnx-hub--reject-hub conn (format "the drgnx hub at %s sent nothing within %s s" (drgnx-hub-socket)
-                                          drgnx-hub--challenge-wait)))))
-
-(defun drgnx-hub--legacy-now (conn)
-  "CONN's hub answered the probe before it sent a challenge: it is `legacy'."
-  (when (and (process-live-p conn) (eq (process-get conn :drgnx-state) 'wait))
-    (drgnx-timer-cancel (cons 'hub-challenge conn))
-    (process-put conn :drgnx-state 'legacy)
-    (drgnx-hub--hello-done conn :legacy)))
+  (drgnx-hub--step (list 'timer (cons 'hub-challenge conn)) conn))
 
 (defun drgnx-hub--hello (conn hub-nonce)
   "Answer CONN's challenge HUB-NONCE with this Emacs's hello: its protocol, the binary's version (when known), its
 schema and records, a fresh nonce and — when `drgnx-hub-client-proves' — the proof that it read the cap file.  The
-answer goes to `drgnx-hub--hello-answered'."
+core judges the answer from what the hello said: the proof the hub must give back, never the cap itself."
   (let* ((nonce (drgnx-hub--nonce))
          (cap (and drgnx-hub-client-proves (drgnx-hub--read-cap)))
          (proof (and (stringp cap) (drgnx-hub-hmac cap (format "drgnx-hub client %s %s" hub-nonce nonce))))
          (version (drgnx-hub-client-binary-version t)))
-    (process-put conn :drgnx-state 'hello)
     (drgnx-hub--call-on conn "hello"
                         (append (list :proto drgnx-hub-proto :nonce nonce)
                                 (and version (list :drgnx_version version))
                                 (list :schema drgnx-work-db-schema-version :records drgnx-hub-records
                                       :client (if noninteractive "cli" "editor"))
                                 (and proof (list :proof proof)))
-                        (lambda (r err) (drgnx-hub--hello-answered conn hub-nonce nonce cap r err))
-                        :full t :first t)))
-
-(defun drgnx-hub--hello-answered (conn hub-nonce nonce cap reply err)
-  "The hub's answer to CONN's hello (HUB-NONCE its challenge, NONCE this side's; CAP the cap read, or (:problem
-REASON), or nil when `drgnx-hub-client-proves' is nil).  `no method hello' is `legacy'; a hub that should have proved
-itself and did not is closed, its calls failed and the user told; otherwise the calls waiting go out."
-  (let ((socket (drgnx-hub-socket)))
-    (cond
-     ((and err (null (plist-get err :code)) (equal (plist-get err :message) "no method hello"))
-      (process-put conn :drgnx-state 'legacy)
-      (drgnx-hub--hello-done conn :legacy))
-     (err (drgnx-hub--reject-hub conn (format "the hub at %s refused this Emacs's hello: %s" socket (plist-get err :message))))
-     ((consp cap)
-      (drgnx-hub--reject-hub conn (format "this Emacs cannot read the hub's cap %s (%s)" (drgnx-hub-cap-file) (plist-get cap :problem))))
-     ((and (stringp cap)
-           (not (drgnx-hub--same-p (plist-get reply :proof) (drgnx-hub-hmac cap (format "drgnx-hub hub %s %s" nonce hub-nonce)))))
-      (drgnx-hub--reject-hub conn (format "the hub at %s did not prove it read %s" socket (drgnx-hub-cap-file)) 'unproven))
-     (t (process-put conn :drgnx-state 'ready)
-        (process-put conn :drgnx-proven (stringp cap))
-        (drgnx-hub--hello-done conn reply)))))
-
-(defun drgnx-hub--reject-hub (conn message &optional tell)
-  "CONN's hub is not used: its calls fail with MESSAGE and it closes.  TELL, a notice id: the user is told too (a
-`fail' notice of source `hub')."
-  (process-put conn :drgnx-state 'rejected)
-  (drgnx-hub--fail-conn conn message)
-  (when tell (drgnx-notify 'hub 'fail message :id tell))
-  (when (process-live-p conn) (delete-process conn)))
-
-(defun drgnx-hub--hello-done (conn reply)
-  "CONN's hello was answered with REPLY (`:legacy' for a hub of before protocol 1): skew is applied
-\(`drgnx-hub-skew', `drgnx-hub-skew-functions'), and the calls waiting go out — unless the hub is `incompatible',
-when they fail."
-  (setq drgnx-hub--last-hello reply)
-  (let ((skew (drgnx-hub-skew reply)))
-    (drgnx-guard-run-hook 'drgnx-hub-skew-functions skew reply)
-    (drgnx-hub--skew-notice skew reply)
-    (if (eq skew 'incompatible)
-        (drgnx-hub--reject-hub conn (drgnx-hub--incompatible-text reply) (and (not noninteractive) 'incompatible))
-      (drgnx-hub--send-queued conn))))
+                        nil :full t :first t
+                        :hello (list :problem (and (consp cap) (or (plist-get cap :problem) "it cannot be read"))
+                                     :proves (stringp cap)
+                                     :expect (and (stringp cap) (drgnx-hub-hmac cap (format "drgnx-hub hub %s %s" nonce hub-nonce)))
+                                     :version version :socket (drgnx-hub-socket) :cap-file (drgnx-hub-cap-file)))))
 
 (defun drgnx-hub--skew-notice (skew reply)
   "The notice for a hub of SKEW (`drgnx-hub-skew') that answered with REPLY.  A legacy hub (the Lisp hub of an install
@@ -620,50 +611,24 @@ takes away the notice that offered a restart (the Ratatoskr one is the hub's own
                          :id 'restart-when-idle :life 'condition :command 'hub-restart-now)))
         ((eq skew 'ok) (drgnx-notice-clear 'hub 'restart-when-idle))))
 
-(defun drgnx-hub--send-queued (conn)
-  "Send the calls waiting in CONN's queue, in order — only those still waiting: one whose deadline passed was told it
-failed, so it never goes."
-  (let ((queue (process-get conn :drgnx-queue)))
-    (process-put conn :drgnx-queue nil)
-    (dolist (msg queue)
-      (when (gethash (plist-get msg :id) drgnx-hub--pending) (drgnx-hub--transmit conn msg)))))
-
-(defun drgnx-hub--transmit (conn msg)
-  "Send the call MSG (:id :method :params) on CONN.  Keys go only to a hub that proved itself: on any other
-connection `gateway/keys' fails at once and `gateway/register' goes without its `:keys'."
-  (let ((proven (process-get conn :drgnx-proven)) (method (plist-get msg :method)))
-    (if (and (equal method "gateway/keys") (not proven))
-        (drgnx-hub--settle (plist-get msg :id) nil "keys go only to a hub that proved itself")
-      (when (and (equal method "gateway/register") (not proven) (consp (plist-get msg :params)))
-        (setq msg (list :id (plist-get msg :id) :method method
-                        :params (cl-loop for (k v) on (plist-get msg :params) by #'cddr unless (eq k :keys) append (list k v)))))
-      (drgnx-hub--send conn msg))))
-
-(cl-defun drgnx-hub--call-on (conn method params callback &key deadline full first)
+(cl-defun drgnx-hub--call-on (conn method params callback &rest keys &key deadline full first hello role under)
   "Call METHOD with PARAMS on CONN (`drgnx-hub-call'); FIRST: send it now (the probe, the hello), else once CONN is
-proven or `legacy'."
-  (let ((id (cl-incf drgnx-hub--next-id)))
-    (when (equal method "shutdown")     ; the hub ends at this editor's request: the subscription is not redialled
-      (setq drgnx-hub--asked-disconnect t)
-      (drgnx-hub--resubscribe-stop))
-    (puthash id (list :cb callback :conn conn :full full :method method) drgnx-hub--pending)
-    (drgnx-timer-start (cons 'hub-call id) (or deadline drgnx-hub-call-deadline) #'drgnx-hub--call-expired
-                       :args (list id) :owner :core)
-    (let ((msg (list :id id :method method :params (or params (make-hash-table)))))
-      (cond (first (drgnx-hub--send conn msg))
-            ((memq (process-get conn :drgnx-state) '(wait version hello))
-             (process-put conn :drgnx-queue (nconc (process-get conn :drgnx-queue) (list msg))))
-            (t (drgnx-hub--transmit conn msg))))
-    id))
+proven or `legacy'.  HELLO, ROLE and UNDER: as the core's `call' event has them.  The call's id."
+  (ignore deadline full first hello role under)
+  (drgnx-hub-core-next-id (drgnx-hub--step (append (list 'call conn method params callback) keys))))
+
+(defun drgnx-hub--call (method params callback &rest keys)
+  "`drgnx-hub-call' with the core's KEYS: on the call connection, opened when there is none."
+  (unless (process-live-p drgnx-hub--client)
+    (setq drgnx-hub--client (drgnx-hub--open nil)))
+  (apply #'drgnx-hub--call-on drgnx-hub--client method params callback keys))
 
 (cl-defun drgnx-hub-call (method params callback &key deadline full)
   "Ask the hub METHOD with PARAMS (a plist); CALLBACK gets (RESULT ERROR) exactly once — ERROR the hub's message (with
 FULL its error, (:code :message :path)), or this side's when DEADLINE (`drgnx-hub-call-deadline') seconds pass or
 the connection goes first.  A new connection proves itself first (`drgnx-hub--open'); calls wait for that.  Signals
 when no hub serves.  The call's id."
-  (unless (process-live-p drgnx-hub--client)
-    (setq drgnx-hub--client (drgnx-hub--open nil)))
-  (drgnx-hub--call-on drgnx-hub--client method params callback :deadline deadline :full full))
+  (drgnx-hub--call method params callback :deadline deadline :full full))
 
 (defun drgnx-hub-call-sync (method params &optional timeout)
   "METHOD's result from the hub, waiting up to TIMEOUT (5) s — for commands and the CLI only.  Signals the hub's
@@ -728,27 +693,18 @@ closes it when this Emacs dies."
 
 (defun drgnx-hub-disconnect ()
   "Close this Emacs's connections to the hub; the calls waiting on them fail (once)."
-  (setq drgnx-hub--asked-disconnect t)
-  (drgnx-hub--resubscribe-stop)
-  (dolist (c (list drgnx-hub--client drgnx-hub--events drgnx-hub--subscribing))
-    (when (processp c)
-      (process-put c :drgnx-asked t)
-      (drgnx-timer-cancel (cons 'hub-challenge c))
-      (drgnx-hub--fail-conn c "disconnected from the drgnx hub"))
-    (when (process-live-p c) (delete-process c)))
-  (setq drgnx-hub--client nil drgnx-hub--events nil drgnx-hub--subscribing nil)
-  (drgnx-hub--presence-stop)
+  (drgnx-hub--step '(disconnect)))
+
+(defun drgnx-hub--unsync ()
+  "What `drgnx-hub-disconnect' undoes beside the connections: the jobs' cache and the event handlers
+`drgnx-hub-connect' added."
   (when (featurep 'drgnx-exec) (drgnx-exec-unsync))
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--note-notice)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--need-keys)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--keys-changed)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--note-card)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-settings-agents--event)
-  (remove-hook 'drgnx-hub-event-functions #'drgnx-records-review--event)
-  (setq drgnx-hub--editor nil drgnx-hub--keys-held :unknown)
-  (let (ids)
-    (maphash (lambda (id _) (push id ids)) drgnx-hub--pending)
-    (dolist (id ids) (drgnx-hub--settle id nil "disconnected from the drgnx hub"))))
+  (remove-hook 'drgnx-hub-event-functions #'drgnx-records-review--event))
 
 ;;;; Skew: another drgnx's hub
 
@@ -757,25 +713,8 @@ closes it when this Emacs dies."
 `drgnx-hub-proto-min', or this drgnx's older than its `proto_min'); `restart-when-idle' (a legacy hub, `:legacy';
 another `records'; a `drgnx_version' other than the binary on disk's, when that is known; a `schema' this editor cannot
 read — below `drgnx-work-db-schema-version' or above `drgnx-hub-schema-readable-max', 0 (no work.db yet) counting as
-readable; schema 7 of the hub is read through its compatibility views); else `ok'."
-  (cond ((eq reply :legacy) 'restart-when-idle)
-        ((let ((proto (plist-get reply :proto)) (min (plist-get reply :proto_min)))
-           (or (not (natnump proto)) (< proto drgnx-hub-proto-min) (and (natnump min) (< drgnx-hub-proto min))))
-         'incompatible)
-        ((or (not (eql (plist-get reply :records) drgnx-hub-records))
-             (let ((v (drgnx-hub-client-binary-version t))) (and v (not (equal (plist-get reply :drgnx_version) v))))
-             (let ((s (plist-get reply :schema)))
-               (and (natnump s) (/= s 0) (not (<= drgnx-work-db-schema-version s drgnx-hub-schema-readable-max)))))
-         'restart-when-idle)
-        (t 'ok)))
-
-(defun drgnx-hub--incompatible-text (reply)
-  "What the user is told about an incompatible hub (REPLY its hello's answer)."
-  (if (and (natnump (plist-get reply :proto_min)) (< drgnx-hub-proto (plist-get reply :proto_min)))
-      (format "the hub is drgnx %s (protocol %s, at least %s); this drgnx speaks protocol %d — update drgnx"
-              (plist-get reply :drgnx_version) (plist-get reply :proto) (plist-get reply :proto_min) drgnx-hub-proto)
-    (format "the hub is drgnx %s (protocol %s); this drgnx needs protocol %d or later — drgnx hub stop, then try again"
-            (plist-get reply :drgnx_version) (plist-get reply :proto) drgnx-hub-proto-min)))
+readable; schema 7 of the hub is read through its compatibility views); else `ok'.  (`drgnx-hub-core-skew'.)"
+  (drgnx-hub-core-skew reply (drgnx-hub-client-binary-version t) drgnx-work-db-schema-version))
 
 (defun drgnx-hub-has-method-p (name)
   "Whether the last hub that answered this Emacs's hello has method NAME (nil for a legacy hub)."
@@ -799,7 +738,7 @@ replace a good one in the hub."
 
 (defun drgnx-hub--send-keys ()
   "Hand the hub the keys this Emacs holds (`drgnx-hub--held-keys'), over the socket: never in an environment, an
-argument or a file, and only to a hub that proved itself (`drgnx-hub--transmit').  Once the hub took them this Emacs
+argument or a file, and only to a hub that proved itself (`drgnx-hub-core--transmit').  Once the hub took them this Emacs
 drops them (`drgnx-hub--keys-taken'): the hub alone holds them, in memory, and those in the environment go again on
 each start and each (re)connect.  The call's id."
   (when-let* ((keys (drgnx-hub--held-keys)))
@@ -873,12 +812,6 @@ said, or `:unknown' before the hub answered.  Never a key.")
   "Functions of no arguments run (inside the guard) when the hub gave this Emacs its editor token: what needed the
 gateway's address (gptel's backend) can be set up.")
 
-(defun drgnx-hub--editor-answered (result _err)
-  "The answer to `gateway/editor-token': RESULT (:token :url)."
-  (when (and (consp result) (stringp (plist-get result :token)) (stringp (plist-get result :url)))
-    (setq drgnx-hub--editor (cons (plist-get result :token) (plist-get result :url)))
-    (drgnx-guard-run-hook 'drgnx-hub-editor-token-hook)))
-
 (defun drgnx-hub--keys-note ()
   "The hub said which keys it holds (`drgnx-hub--keys-held'): each is one it had (`drgnx-hub--keys-had'), and its
 `key-lost' notice goes."
@@ -904,28 +837,15 @@ here, so an answer that came before the hub took them raises nothing.  Runs in a
             (drgnx-notify 'hub 'warn (format "the drgnx hub restarted without your %s key: run AI: Load Keys" name)
                           :id (intern (concat "key-lost-" name)) :life 'condition :command 'drgnx-ai-load-keys)))))))
 
-(defun drgnx-hub--keys-held-answered (result _err)
-  "The answer to `gateway/keys-held': RESULT (:providers [ID…]).  A key the hub held before and lost is a notice
-\(`drgnx-hub--keys-lost')."
-  (when (consp result)
-    (setq drgnx-hub--keys-held (seq-filter #'stringp (append (plist-get result :providers) nil)))
-    (require 'drgnx-ai)
-    (drgnx-hub--keys-lost)
-    (drgnx-hub--keys-note)))
-
 (defun drgnx-hub--fetch-editor ()
-  "Ask the hub for this Emacs's editor token and for the keys it holds: the ids of the two calls.  Asked under a
-subscription, an answer read after that subscription ended is dropped: it is the gone hub's, and the end forgot both
-\(`drgnx-hub--client-sentinel').  The hub ends its connections in any order, so the call connection's answers can come
-after the subscription's end; the next subscription asks again."
+  "Ask the hub for this Emacs's editor token and for the keys it holds: the ids of the two calls.  The core keeps the
+answers (`drgnx-hub--editor', `drgnx-hub--keys-held'; then `drgnx-hub-editor-token-hook', and a key the hub held
+before and lost is a notice, `drgnx-hub--keys-lost').  Asked under a subscription, an answer read after that
+subscription ended is dropped: it is the gone hub's, and the end forgot both.  The hub ends its connections in any
+order, so the call connection's answers can come after the subscription's end; the next subscription asks again."
   (let ((sub drgnx-hub--events))
-    (list (drgnx-hub-call "gateway/editor-token" nil (lambda (r e) (drgnx-hub--answered-under sub #'drgnx-hub--editor-answered r e)))
-          (drgnx-hub-call "gateway/keys-held" nil (lambda (r e) (drgnx-hub--answered-under sub #'drgnx-hub--keys-held-answered r e))))))
-
-(defun drgnx-hub--answered-under (sub fn result err)
-  "Call FN with RESULT and ERR unless the subscription SUB (nil: none) a question was asked under has ended."
-  (when (or (null sub) (eq sub drgnx-hub--events))
-    (funcall fn result err)))
+    (list (drgnx-hub--call "gateway/editor-token" nil nil :role 'token :under sub)
+          (drgnx-hub--call "gateway/keys-held" nil nil :role 'keys-held :under sub))))
 
 (defun drgnx-hub--keys-changed (event data)
   "`gateway/keys-changed' (DATA (:providers [ID…])) from a hub that proved itself: the keys it holds now."
@@ -933,6 +853,11 @@ after the subscription's end; the next subscription asks again."
              (process-get drgnx-hub--event-conn :drgnx-proven))
     (setq drgnx-hub--keys-held (seq-filter #'stringp (append (plist-get data :providers) nil)))
     (drgnx-hub--keys-note)))
+
+(defun drgnx-hub-settled-p ()
+  "Whether this Emacs is subscribed and no call to the hub waits for its answer (`drgnx-hub-core-settled-p'): no
+hand-over answer can still change the editor token or the held keys.  What a test waits for before it changes them."
+  (drgnx-hub-core-settled-p (drgnx-hub--snapshot nil)))
 
 (defun drgnx-hub-keys-held ()
   "The ids (strings) of the providers whose key the hub holds, or `:unknown' when the hub has not said yet."
@@ -1123,51 +1048,32 @@ Sent to the hub when this editor connects and when you change it."
 (defun drgnx-hub-connect ()
   "Subscribe to the hub's events (`drgnx-hub-event-functions') and, once the hub answered, hand it the provider table and
 the keys this Emacs holds (`drgnx-hub--hand-over'); answer its `gateway/need-keys' (`drgnx-hub--need-keys').
-Asynchronous; safe to call again, also before the hub has answered (one subscription)."
-  ;; a subscribe left unanswered past the deadline (a hub stopped, or one that lost the line) is given up quietly
-  (when (and (process-live-p drgnx-hub--subscribing)
-             (> (- (float-time) (process-get drgnx-hub--subscribing :since)) drgnx-hub-subscribe-deadline))
-    (let ((c drgnx-hub--subscribing))
-      (setq drgnx-hub--subscribing nil)
-      (set-process-sentinel c #'ignore)
-      (drgnx-timer-cancel (cons 'hub-challenge c))
-      (drgnx-hub--fail-conn c "the drgnx hub did not answer subscribe")
-      (when (process-live-p c) (delete-process c))))
-  (unless (or (process-live-p drgnx-hub--events) (process-live-p drgnx-hub--subscribing))
-    (setq drgnx-hub--asked-disconnect nil)
-    ;; a connection of its own, which proves itself first (`drgnx-hub--open'); its end is said by its sentinel
-    (let ((c (drgnx-hub--open t)))
-      (setq drgnx-hub--subscribing c)
-      (process-put c :since (float-time))
-      (drgnx-hub--call-on c "subscribe" nil (lambda (r _err) (drgnx-hub--subscribed c r)))
-      ;; all removed by `drgnx-hub-disconnect'
-      (add-hook 'drgnx-hub-event-functions #'drgnx-hub--note-notice)
-      (add-hook 'drgnx-hub-event-functions #'drgnx-hub--need-keys)
-      (add-hook 'drgnx-hub-event-functions #'drgnx-hub--keys-changed)
-      (add-hook 'drgnx-hub-event-functions #'drgnx-hub--note-card)
-      (when (require 'drgnx-settings-agents nil t) (add-hook 'drgnx-hub-event-functions #'drgnx-settings-agents--event))
-      (when (require 'drgnx-records-review nil t) (add-hook 'drgnx-hub-event-functions #'drgnx-records-review--event))
-      (drgnx-hub-send-settings)
-      (when (fboundp 'drgnx-settings-history-connected) (drgnx-settings-history-connected)))))
+Asynchronous; safe to call again, also before the hub has answered (one subscription: the core decides whether to
+dial, and gives up a `subscribe' left unanswered past `drgnx-hub-subscribe-deadline').  When the hub answers the
+subscription, the core runs the hand-over (`drgnx-hub-core--subscribed')."
+  (drgnx-hub--step (list 'connect (float-time))))
 
-(defun drgnx-hub--subscribed (conn result)
-  "The hub answered CONN's `subscribe' with RESULT: CONN is the subscribed connection, and the hub gets the provider
-table and the keys.  A hub keeps keys in memory only: one that restarted has none, so each new subscription gives them
-again.  They go after the answer, so a `gateway/need-keys' the hub sends a new subscriber is about the keys it held
-before them."
-  (when (and result (process-live-p conn))
-    (setq drgnx-hub--events conn)
-    (when (eq drgnx-hub--subscribing conn) (setq drgnx-hub--subscribing nil))
-    (drgnx-hub--resubscribe-stop)
-    (drgnx-hub--presence-start)
-    ;; the editor's own jobs (grammars, mermaid, the browser, …): their cache, read again on every subscription
-    (with-demoted-errors "drgnx hub: jobs not synced: %S"
-      (require 'drgnx-exec)
-      (drgnx-exec-sync))
-    (drgnx-notice-clear 'hub 'resubscribe-gave-up)
-    (with-demoted-errors "drgnx hub: keys not handed over: %S" (drgnx-hub--hand-over))
-    (when (process-get conn :drgnx-proven)
-      (drgnx-guard-run-hook 'drgnx-hub-connected-functions))))
+(defun drgnx-hub--dial ()
+  "The core's dial: a connection of its own for the subscription, which proves itself first (`drgnx-hub--open'); its
+end is said by its sentinel."
+  (let ((c (drgnx-hub--open t)))
+    (drgnx-hub--step (list 'connect (float-time) :opened c))
+    (drgnx-hub--call-on c "subscribe" nil nil)
+    ;; all removed by `drgnx-hub-disconnect'
+    (add-hook 'drgnx-hub-event-functions #'drgnx-hub--note-notice)
+    (add-hook 'drgnx-hub-event-functions #'drgnx-hub--need-keys)
+    (add-hook 'drgnx-hub-event-functions #'drgnx-hub--keys-changed)
+    (add-hook 'drgnx-hub-event-functions #'drgnx-hub--note-card)
+    (when (require 'drgnx-settings-agents nil t) (add-hook 'drgnx-hub-event-functions #'drgnx-settings-agents--event))
+    (when (require 'drgnx-records-review nil t) (add-hook 'drgnx-hub-event-functions #'drgnx-records-review--event))
+    (drgnx-hub-send-settings)
+    (when (fboundp 'drgnx-settings-history-connected) (drgnx-settings-history-connected))))
+
+;; The subscription's answer is the core's (`drgnx-hub-core--subscribed'): the hub answered a `subscribe', so that
+;; connection is the subscribed one, and the hub gets the provider table and the keys (`drgnx-hub--hand-over', the hook
+;; `hand-over').  A hub keeps keys in memory only: one that restarted has none, so each new subscription gives them
+;; again.  They go after the answer, so a `gateway/need-keys' the hub sends a new subscriber is about the keys it held
+;; before them.
 
 ;;;; The away signal (agent system part 1, Task 13)
 ;; The editor tells the hub when you are away (`presence/set'), so the matrix's time presets follow.  Never from an

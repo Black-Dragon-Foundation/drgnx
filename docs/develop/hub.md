@@ -590,7 +590,7 @@ ask for it, the sentinel forgets the editor token (`drgnx-hub--editor` nil) and 
 `hub-resubscribe`: `drgnx-hub-connect` after 1 s, then 2, 4 … up to 30 s between tries (a dial that fails at once, a
 socket that is gone, arms the next one). The hand-over (settings, keys, token) runs on the new subscription as on
 any other. An answer to the hand-over's `gateway/editor-token` or `gateway/keys-held` read after the subscription it
-was asked under ended is dropped (`drgnx-hub--answered-under`): Ratatoskr ends its connections in any order, so the call
+was asked under ended is dropped (`drgnx-hub-core--answered-under`): Ratatoskr ends its connections in any order, so the call
 connection's answers can come after the subscription's end, and they would undo the forget. After `drgnx-hub-resubscribe-give-up` (600 s) from the first loss it stops and posts one notice (id
 `resubscribe-gave-up`) naming Hub: Restart Now. It **never runs `ensure`**: a hub the user stopped stays stopped.
 Asked ends do not redial: `drgnx-hub-disconnect` and a `shutdown` call this editor sent set
@@ -625,6 +625,51 @@ modification time. CACHED-ONLY (the skew runs in a filter: a daemon path) never 
 or nil while a read started then runs. The hello does not send without it: on the challenge the connection is in
 state `version` (queueing calls) until the read ends (`drgnx-hub--with-binary-version`; a timer ends a read at 2 s and
 the hello goes without a version), so the first hello of an Emacs carries `drgnx_version` too.
+
+### The client's core
+
+Every ordering decision above is made by a pure core, `core/drgnx-hub-core.el`: which connection a call waits on and
+when it goes, the challenge, the probe, the hello and its proof, deadlines, the one subscription, its end, its redial,
+and which answers still count. `(drgnx-hub-core-step STATE EVENT)` returns `(STATE . EFFECTS)` and calls no process,
+timer, file or hook. `test/unit/hub-core-test.el` runs it in every order of its inputs (`drgnx-test-every-order`,
+[harness.md](harness.md#every-order)).
+
+**The shell** (`core/drgnx-hub-client.el`) is the rest. `drgnx-hub--step` snapshots the globals
+(`drgnx-hub--client`, `--events`, `--subscribing`, `--pending`, `--next-id`, `--editor`, `--keys-held`,
+`--asked-disconnect`, `--resubscribe-since`, `--resubscribe-delay`, `--last-hello`) and the connections' properties
+(`:drgnx-state`, `-queue`, `-proven`, `-asked`, `-events`, `:since`, and whether each is live) into a state. It calls
+the core, writes the new state back, and only then runs the effects, so an effect that comes back (a sentinel
+`delete-process` runs at once, a callback that calls the hub) steps from the new state. The globals stay the truth
+between steps: a test may let-bind them or set a connection's property. Its two I/O points stay
+`drgnx-hub--open` (returns the process) and `drgnx-hub--send-line`.
+
+**Events** (`drgnx-hub-core-event-kinds`), each fed by one shell entry point:
+
+| Kind | Fed by |
+|---|---|
+| `open` | `drgnx-hub--open`, once it connected: the challenge timer and the probe |
+| `connect` | `drgnx-hub-connect`; its dial (`:opened`); a redial that failed at once (`drgnx-hub--resubscribe-schedule`, `:redial-failed`) |
+| `call` | `drgnx-hub--call-on` (`drgnx-hub-call`, the hello, the subscribe, the hand-over's questions) |
+| `challenge`, `answer`, `event` | the filter, one line at a time (`drgnx-hub--client-line`); `drgnx-hub--settle` is an `answer` |
+| `closed` | the sentinel, once per connection |
+| `timer` | the layer timers `(hub-call . ID)`, `(hub-challenge . CONN)` (and its read of what had arrived), `hub-resubscribe` |
+| `disconnect` | `drgnx-hub-disconnect` |
+| `version-known` | the binary's version read ending, which the hello waits for |
+
+**Effects** (`drgnx-hub-core-effect-kinds`): `send`, `delete`, `timer-start`, `timer-cancel`, `callback` (a caller's
+callback, inside the guard), `notify` and `hook`. A hook is what only the shell does: read the version, compute the
+hello (the cap is read there; the core gets the proof the hub must give back, never the cap), read what arrived
+before giving up on a challenge, run the event, skew, disconnect and connected hooks, the hand-over, presence, the
+jobs' cache, and dial.
+
+**The shell's edges**, which the every-order tests assume and `test/unit/hub-client-shell-test.el` checks with
+scripted peers: a connection's lines reach the core in the order they were written (so the challenge, Ratatoskr's
+first line, comes first), whatever the chunks; its `closed` comes once, after everything read before the end, and
+nothing of it comes after. A `subscribe` answer precedes that connection's events, and an answer its call: both are
+the hub's order on one connection.
+
+`drgnx-hub-settled-p` (`drgnx-hub-core-settled-p`) says the editor is subscribed and no call waits: no hand-over
+answer can still change the editor token or the held keys. A test that changes them waits for it first.
 
 ### Starting the hub, and Hub: Restart Now
 
@@ -1338,7 +1383,7 @@ The registrations, the port and the keys of the Lisp runtime's gateway (`registr
 [`legacy::migrate`](#what-the-lisp-runtime-left) moves aside; nothing reads them.
 
 **The editor's side** (`core/drgnx-hub-client.el`):
-- **The runtime settings** (`core/drgnx-settings-runtime.el`). Once a subscription is answered (`drgnx-hub--subscribed`),
+- **The runtime settings** (`core/drgnx-settings-runtime.el`). Once a subscription is answered (`drgnx-hub-core--subscribed`),
   and from `drgnx-hub-ensure`, an editor sends `config/settings` (`drgnx-settings-runtime-send`) with the runtime
   settings whose value comes from your Lisp or Customize rather than settings.el (`drgnx-settings-runtime-overrides`,
   by `drgnx-settings-explain`'s winner); the hub reads settings.el itself, and the presets are its own. A provider goes
@@ -1368,7 +1413,7 @@ The registrations, the port and the keys of the Lisp runtime's gateway (`registr
 - **The drop** (design §5.6). When a `gateway/keys` the editor sent is answered without an error
   (`drgnx-hub--keys-taken`), and after `drgnx-hub-give-key` or an agent's `gateway/register` that carried keys, the
   editor forgets them: `drgnx-hub--drop-keys` → `drgnx-ai-forget-keys` removes each from `drgnx-ai--keys` (unless a
-  newer key for the provider replaced it meanwhile) and calls `auth-source-forget-all-cached`. `drgnx-hub--transmit` sends
+  newer key for the provider replaced it meanwhile) and calls `auth-source-forget-all-cached`. `drgnx-hub-core--transmit` sends
   `gateway/keys` only on a proven connection, so a key goes only to a hub that proved itself. The environment is
   left as it is (`drgnx doctor`'s `ai-env-keys` names the variables set). Only AI: Load Keys keeps a key it reads
   (`drgnx-ai-key`'s KEEP) until the hand-over takes it; every other read, and above all a usability check
