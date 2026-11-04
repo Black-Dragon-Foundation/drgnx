@@ -240,6 +240,8 @@ async fn record(mut rx: mpsc::Receiver<ProxyEvent>, sid: String, writer: Option<
             ProxyEvent::Refused { target, why, .. } => {
                 tracing::info!(sid = %sid, request = %target, ?why, "the provider proxy refused a request");
             }
+            // The web policy's events; this proxy runs the allowlist policy, which never sends them.
+            _ => {}
         }
     }
 }
