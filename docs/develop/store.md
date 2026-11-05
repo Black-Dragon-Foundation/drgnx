@@ -620,11 +620,12 @@ result. What the rule answers for the file it finds:
 
 | The file | The answer |
 |---|---|
-| missing (or empty) | made at schema 7 and moved to 8: schema 6's tables, then shaped as a migrated file is, so both have the same schema |
-| schema 6 | migrated (below), then moved to 8, then `Ready { 8 }` |
-| schema 7 | moved to 8 (next section), then `Ready { 8 }` |
-| schema 8 | `Ready { 8 }` |
-| above 8 | `ReadOnly { schema }`: writes answer `schema`; nothing is changed or copied |
+| missing (or empty) | made at schema 7 and moved to 9: schema 6's tables, then shaped as a migrated file is, so both have the same schema |
+| schema 6 | migrated (below), then moved to 8 and 9, then `Ready { 9 }` |
+| schema 7 | moved to 8 and 9 (next sections), then `Ready { 9 }` |
+| schema 8 | moved to 9, then `Ready { 9 }` |
+| schema 9 | `Ready { 9 }` |
+| above 9 | `ReadOnly { schema }`: writes answer `schema`; nothing is changed or copied |
 | below 6 | `NotReady`: "work.db is schema N; open it once with drgnx 6 first, or remove it (installs are disposable)" |
 | a migration that failed | `Failed { reason }`, never tried again in this process (call 18) |
 
@@ -708,7 +709,27 @@ schema 7 is made, migrated or found, so schema 6 and a fresh file arrive at 8 to
   `end` is null while the step runs. `write::steps::{open, close}` write it; `read::steps::for_session(conn, sid,
   since_seq)` lists a session's steps and `rollup(conn, Scope::{Session, Task, Plan, Project}, id)` sums seconds by
   class (closed steps only), cost by unit (units never mix) and tokens.
-- `status.schema`, `store.schema` and the hub's read-only rule now say 8; a file of schema 9 or above is read-only.
+- `status.schema`, `store.schema` and the hub's read-only rule now say 9 (schema 9 below); a file of schema 10 or above is read-only.
+
+## Schema 9: asks, step detail, worktree bases and conclusion sources (agent system part 2, Task 1)
+
+`norn::migrate9` moves a schema-8 file to 9 in one `BEGIN IMMEDIATE` transaction (the opening rule chains it after
+`migrate8`; a crash leaves 8; no row is rewritten: `migrate9::tests::upgrade_keeps_rows_and_is_idempotent`).
+
+- **Kind `ask`** (what the user asked: `{text, at, by: user, channel: say | chat | manager | brainstorm, session?,
+  message_id?}`) and **link `asked`**, ask to `spec`, `plan`, `task` or `session`. The hub writes them as
+  `("hub", Class::System)` through `write::work::{new_ask, link_asked}`; kind `ask` is registered with the class guard,
+  so an agent's `graph_write` of it is refused.
+- **`step_detail`** (what a timeline step read, searched or fetched; one row per `step`): `step, tool, kind, path,
+  line_start, line_end, query, url, title, origin`, with `origin` one of `acp`, `acp-title`, `browser`, `command`,
+  `opened`. Content is never kept. `write::work::put_step_detail`, `read::work::step_detail`.
+- **`worktree_base`** (`worktree, repo, base_branch, base_commit, base_tree, at`): where a worktree branched from.
+  `write::work::put_base`, `read::work::base`.
+- **`decision.sources`**: `decision` is a view over the entity, so the migration recreates the view with a last column
+  `sources` (the `sources` key of the entity's `data`, a JSON array). A conclusion names at most 12 sources
+  (`{path, lines?: [a, b]}` or `{url}`; `write::work::check_sources`). On a `finding` note the same array is the
+  `sources` key of its data.
+- `write::work` refuses every author but `("hub", Class::System)`: nothing is written (`work::agent_write_of_ask_is_refused`).
 
 ## Parsed entities (Task 15a)
 

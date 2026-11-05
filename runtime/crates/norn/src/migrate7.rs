@@ -39,8 +39,8 @@ use urdr::graph::{Class, OpenOutcome, OpenRule, Tx, TxMeta, WriteError};
 
 use crate::deny::{DenyList, Source, Verdict};
 use crate::kinds;
-use crate::migrate8;
 use crate::project::{self, ProjectCache};
+use crate::{migrate8, migrate9};
 
 #[cfg(test)]
 mod tests;
@@ -154,22 +154,44 @@ pub fn open_rule(opts: MigrateOpts) -> OpenRule {
 }
 
 fn open(conn: &mut Connection, path: &Path, opts: &MigrateOpts) -> OpenOutcome {
-    match open7(conn, path, opts) {
-        // the file is at schema 7 now (made, migrated or already): the step table moves it to 8 (`migrate8`)
-        OpenOutcome::Ready { schema: SCHEMA } => match migrate8::upgrade(conn) {
-            Ok(_) => OpenOutcome::Ready {
-                schema: migrate8::SCHEMA,
-            },
+    // schema 7 now (made, migrated or already): the step table moves it to 8 (`migrate8`), the hub's facts to 9
+    let step =
+        |conn: &mut Connection,
+         to: u32,
+         f: fn(&mut Connection) -> Result<bool, urdr::SqliteError>| match f(conn) {
+            Ok(_) => None,
             Err(e) => {
-                let reason = format!("the move of work.db to schema 8 failed: {e}");
-                if urdr::is_busy(&urdr::Error::Sqlite(e)) {
+                let reason = format!("the move of work.db to schema {to} failed: {e}");
+                Some(if urdr::is_busy(&urdr::Error::Sqlite(e)) {
                     OpenOutcome::NotReady(BUSY_TEXT.into())
                 } else {
                     tracing::error!("{reason}");
                     OpenOutcome::Failed(reason)
-                }
+                })
             }
-        },
+        };
+    match open7(conn, path, opts) {
+        OpenOutcome::Ready { schema: SCHEMA } => {
+            if let Some(out) = step(conn, migrate8::SCHEMA, migrate8::upgrade) {
+                return out;
+            }
+            if let Some(out) = step(conn, migrate9::SCHEMA, migrate9::upgrade) {
+                return out;
+            }
+            OpenOutcome::Ready {
+                schema: migrate9::SCHEMA,
+            }
+        }
+        OpenOutcome::Ready {
+            schema: migrate8::SCHEMA,
+        } => {
+            if let Some(out) = step(conn, migrate9::SCHEMA, migrate9::upgrade) {
+                return out;
+            }
+            OpenOutcome::Ready {
+                schema: migrate9::SCHEMA,
+            }
+        }
         other => other,
     }
 }
@@ -195,7 +217,10 @@ fn open7(conn: &mut Connection, path: &Path, opts: &MigrateOpts) -> OpenOutcome 
         Ok(migrate8::SCHEMA) => OpenOutcome::Ready {
             schema: migrate8::SCHEMA,
         },
-        Ok(s) if s > migrate8::SCHEMA => OpenOutcome::ReadOnly { schema: s },
+        Ok(migrate9::SCHEMA) => OpenOutcome::Ready {
+            schema: migrate9::SCHEMA,
+        },
+        Ok(s) if s > migrate9::SCHEMA => OpenOutcome::ReadOnly { schema: s },
         Ok(6) => match migrate(conn, path, opts) {
             Ok(report) => {
                 tracing::info!(report = %report.to_json(), "work.db moved to schema 7");
