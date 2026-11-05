@@ -1424,12 +1424,13 @@ view only what changed, to the connection that shows it.
 - **Sources.** Each session's snapshot and subagents at its `agent` emit (state, spend, context; its branch and tree
   read from its folder's `.git` at first sight: `branch:REPO/NAME`, REPO being the main tree's folder name, so a linked
   worktree is a branch of its repository); each closed step (the card's activity); the presence model's changed files
-  (edits in flight and reads, keyed `file:REPO/PATH` through the session's tree or a workspace root); the machine
-  registry; and, re-read after each write while a map is open (task `map:run`), the store's asks, specs, plans,
+  (edits in flight and reads, keyed `file:REPO/PATH` through the session's tree or a workspace root); after each step
+  that took a snapshot (an edit, or a turn's first step), the worktree's changed files against its base
+  (`work::edits::changed`, the interim before the edit history) as its changed set; the machine registry; and, re-read after each write while a map is open (task `map:run`), the store's asks, specs, plans,
   tasks, `asked` and `derives` links, open cards and the worktree bases' "based on" pairs. A session belongs to a
   workspace when its folder, its tree or its repository is under one of the roots. Overlaps are the core's: two live
-  agents on two branches changing one file, from their edits in flight until the edit history's changed sets reach
-  it.
+  agents on two branches changing one file, from their edits in flight and from their worktrees' changed sets, so a
+  finished edit still overlaps.
 - **Restart:** nothing is kept. The editor's re-subscription after a restart gets a full frame from the new hub's
   sessions and store.
 

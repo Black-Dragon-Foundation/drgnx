@@ -596,6 +596,42 @@ impl Map {
         self.feed_sessions(&mut g, sid, vec![ev]);
     }
 
+    /// Session SID took a step snapshot: its worktree's changed files against its base (`work::edits::changed`) as
+    /// the worktree's changed set, keyed `REPO/PATH` through the session's tree.
+    pub async fn edited(self: &Arc<Self>, sid: &str) {
+        if !self.open() {
+            return;
+        }
+        let Some(front) = self.front.get().and_then(Weak::upgrade) else {
+            return;
+        };
+        let (Some(wt), Ok(Some(changed))) = (
+            front.core.agents.worktree(sid),
+            crate::work::edits::changed(&front, sid).await,
+        ) else {
+            return;
+        };
+        self.ensure(&[sid]);
+        let mut g = lock(&self.inner);
+        let Some(place) = g.sessions.get(sid).and_then(|s| s.place.clone()) else {
+            return;
+        };
+        let files = changed
+            .files
+            .iter()
+            .filter_map(|c| {
+                let abs = wt.join(&c.path);
+                file_key(&abs.to_string_lossy(), Some(&place), &[]).map(|k| (k, (c.plus, c.minus)))
+            })
+            .collect();
+        let ev = Event::Changed {
+            worktree: place.top.to_string_lossy().into_owned(),
+            base: changed.base,
+            files,
+        };
+        self.feed_sessions(&mut g, sid, vec![ev]);
+    }
+
     /// Who is in each of FILES now (absolute paths), from the presence model.
     pub fn presence(self: &Arc<Self>, files: &[(String, Vec<crate::work::presence::Entry>)]) {
         if !self.open() || files.is_empty() {

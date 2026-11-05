@@ -2133,6 +2133,13 @@ async fn write_steps(
         {
             map.step(&ctx.session, id, &step.class, step.start);
         }
+        // a snapshot was taken (an edit, or the turn's first step): the worktree's changed files reach the map's
+        // overlaps, also once the edit is no longer in flight
+        if let Some(map) = &sink.map
+            && step.snapshot.is_some()
+        {
+            map.edited(&ctx.session).await;
+        }
         // a conclusion's tool step is written, or the turn ended: the stamps that are due
         if let Some(stamps) = &sink.stamps {
             use crate::work::conclusions::StampEv;

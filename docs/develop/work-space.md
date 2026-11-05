@@ -208,7 +208,7 @@ worktree the hub makes branched from: its repository, the branch, the commit, an
   `invalid-params`.
 
 Only sessions the hub holds are served. `edits::changed(front, session)` gives the same counts to the map's `Changed`
-fact. Git runs in the shadow repository only, never in an agent's tree.
+fact, after every step that took a snapshot (`Map::edited`, from the step-close path). Git runs in the shadow repository only, never in an agent's tree.
 
 ### Live specs
 
