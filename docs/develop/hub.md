@@ -1867,7 +1867,8 @@ accepted); `link_error` makes the machine down or out of reach `Lost` and the re
 `forwardagent`, the forwards and the proxy (`Effective`), for the onboarding probe and the runner list.
 
 Tests: unit rows `runners::` [D]; the fleet rows `tests/fleet_link.rs` [C] (`#[ignore = "fleet"]`) run in a fleet's
-harness against real sshd (its header has the commands). They need sshd set two ways, through
+harness against real sshd (its header has the commands). The target builds only with `--features fleet`, so the
+escape lane's `--ignored` run never picks it up. They need sshd set two ways, through
 `DRGNX_FLEET_RUNNER_OPTS` mounting `test/runners/link/*.conf` as `05-link.conf` (read before the image's
 `10-fleet.conf`): agent forwarding allowed with `--max-sessions 3`, and a `ForceCommand` that prints Tailscale's
 banner. Each row first shows the user's own ssh doing what the hub must not (forwarding the agent, running the user's
