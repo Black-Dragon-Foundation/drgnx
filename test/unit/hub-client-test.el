@@ -408,7 +408,18 @@ connects inside `drgnx-test-gated'.  `hub' is the hub's process; the fixture dis
   ;; the hub's schema 7 is read through the compatibility views: not a reason to restart
   (cl-letf (((symbol-function 'drgnx-hub-client-binary-version) #'ignore))
     (should (eq (drgnx-hub-skew (list :proto 1 :proto_min 1 :records 2 :schema 7)) 'ok))
-    (should (eq (drgnx-hub-skew (list :proto 1 :proto_min 1 :records 2 :schema 8)) 'restart-when-idle))))
+    (should (eq (drgnx-hub-skew (list :proto 1 :proto_min 1 :records 2 :schema (1+ drgnx-hub-schema-readable-max)))
+                'restart-when-idle))))
+
+(ert-deftest drgnx-hub-client/the-hubs-own-schema-is-no-skew ()
+  ;; Pattern D.  The schema this checkout's hub writes (its protocol file, runtime/protocol/methods.json) keeps the
+  ;; compatibility views: a hub at it is no reason to restart.  Each branch that moves work.db on moves this.
+  (let ((schema (with-temp-buffer
+                  (insert-file-contents (expand-file-name "runtime/protocol/methods.json" drgnx-dir))
+                  (gethash "schema" (json-parse-buffer)))))
+    (should (natnump schema))
+    (cl-letf (((symbol-function 'drgnx-hub-client-binary-version) #'ignore))
+      (should (eq (drgnx-hub-skew (list :proto 1 :proto_min 1 :records 2 :schema schema)) 'ok)))))
 
 (ert-deftest drgnx-hub-client/mcp-session-passes-the-profile ()
   (let (sent)

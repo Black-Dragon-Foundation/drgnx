@@ -701,7 +701,7 @@ reads its `methods`. `(drgnx-hub-skew REPLY)` is:
 |---|---|
 | `:legacy` (no challenge, or `no method hello`) | `restart-when-idle` |
 | `proto` missing or below `drgnx-hub-proto-min`, or `proto_min` above `drgnx-hub-proto` | `incompatible`: the connection is closed, its calls fail, an editor tells the user |
-| `records` other than 2; `drgnx_version` other than the binary on disk's commit (when that is known); `schema` other than `drgnx-work-db-schema-version` (0, no work.db yet, counts as the same) | `restart-when-idle` |
+| `records` other than 2; `drgnx_version` other than the binary on disk's commit (when that is known); `schema` below `drgnx-work-db-schema-version` or above `drgnx-hub-schema-readable-max` (10: schemas 8 to 10 keep schema 7's compatibility views; 0, no work.db yet, counts as readable) | `restart-when-idle` |
 | anything else | `ok` |
 
 `drgnx-hub-skew-functions` gets `(SKEW REPLY)` after each hello, inside the guard. The agents mirror pauses while
