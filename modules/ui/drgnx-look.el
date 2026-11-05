@@ -46,6 +46,96 @@ restores the old value, and the refresh recorded before it runs after that).  Wi
     (drgnx-decor-faces-on)
     (glitnir-refresh)))
 
+;;;; Cards (Glitnir, the compositor)
+
+(defcustom drgnx-look-card
+  '((corner-radius . 10) (shadow . (:blur 3 :offset (0 . 1) :spread 0 :opacity 0.45))
+    (ring . (vertical-border . 0.6)) (gap . 6))
+  "The card look of the docked panes (Explorer, panel, right dock) and the editor groups under Glitnir, in logical pixels.
+`corner-radius', `shadow' and `ring' become the window parameters Glitnir reads; `gap' is the frame's
+`right-divider-width' and `bottom-divider-width', the room the ring and shadow are drawn in (set in device
+pixels: the gap times the frame's scale, and again when the scale changes).  The ring is a face
+\(its foreground) and an opacity: no colour is named here."
+  :type 'sexp :group 'drgnx-face)
+
+(defun drgnx-look--cards-p ()
+  "Non-nil when Glitnir draws the frames, so windows can be cards."
+  (and (featurep 'glitnir) (fboundp 'glitnir-active-p) (glitnir-active-p) t))
+
+(defun drgnx-look--card-window-p (window)
+  "Non-nil when WINDOW is a card: a docked pane (the Explorer, the panel, the right dock) or an editor group.
+An editor group is an ordinary window: not the minibuffer, a package's side window or a popup lane."
+  (let ((role (window-parameter window 'drgnx-role)))
+    (if role
+        (and (memq role '(dock panel right)) t)
+      (not (or (window-minibuffer-p window) (window-parameter window 'window-side)
+               (window-parameter window 'drgnx-popup))))))
+
+(defconst drgnx-look--card-parameters '(corner-radius shadow ring)
+  "The window parameters of `drgnx-look-card' that make a card.")
+
+(defun drgnx-look--card-frames ()
+  "The graphical root frames."
+  (seq-filter (lambda (f) (and (display-graphic-p f) (not (frame-parent f)))) (frame-list)))
+
+(defun drgnx-look--card-set (window)
+  "Give WINDOW the card parameters, only those that differ (a setting of one reruns the hooks)."
+  (dolist (p drgnx-look--card-parameters)
+    (let ((v (alist-get p drgnx-look-card)))
+      (unless (equal (window-parameter window p) v) (set-window-parameter window p v))))
+  (unless (window-parameter window 'drgnx-look-card) (set-window-parameter window 'drgnx-look-card t)))
+
+(defun drgnx-look--card-unset (window)
+  "Take the card parameters off WINDOW, when this module put them on."
+  (when (window-parameter window 'drgnx-look-card)
+    (dolist (p (cons 'drgnx-look-card drgnx-look--card-parameters)) (set-window-parameter window p nil))))
+
+(defun drgnx-look--card-gap-px (frame)
+  "The gap in FRAME's own pixels: `gap' logical pixels times the frame's scale (a frame pixel is a device pixel
+on the native shell)."
+  (round (* (alist-get 'gap drgnx-look-card) (frame-scale-factor frame))))
+
+(defun drgnx-look--card-follow-scale (frame)
+  "Give FRAME's dividers the gap again when its scale changed under it (a frame that is a card frame only)."
+  (when (and (frame-live-p frame) (frame-parameter frame 'drgnx-look-card-saved))
+    (drgnx-look--card-frame frame)))
+
+(defun drgnx-look--card-frame (frame)
+  "Make the docked panes of FRAME cards and widen the dividers to the gap; the frame's own widths are kept.  The
+frame's edge gets the same gap (`internal-border-width'), in the dividers' colour."
+  (let ((gap (drgnx-look--card-gap-px frame)))
+    (unless (frame-parameter frame 'drgnx-look-card-saved)
+      (set-frame-parameter frame 'drgnx-look-card-saved
+                           (list (frame-parameter frame 'right-divider-width)
+                                 (frame-parameter frame 'bottom-divider-width)
+                                 (frame-parameter frame 'internal-border-width))))
+    (dolist (p '(right-divider-width bottom-divider-width internal-border-width))
+      (unless (eql (frame-parameter frame p) gap) (set-frame-parameter frame p gap)))
+    (let ((colour (face-foreground 'window-divider frame t)))
+      (when (and colour (not (equal colour (face-background 'internal-border frame))))
+        (set-face-background 'internal-border colour frame)))
+    (dolist (w (window-list frame 'nomini))
+      (if (drgnx-look--card-window-p w) (drgnx-look--card-set w) (drgnx-look--card-unset w)))))
+
+(defun drgnx-look--card-restore (frame)
+  "Take the cards off FRAME and give its divider widths and edge gap back."
+  (dolist (w (window-list frame 'nomini)) (drgnx-look--card-unset w))
+  (when-let* ((saved (frame-parameter frame 'drgnx-look-card-saved)))
+    (set-frame-parameter frame 'right-divider-width (car saved))
+    (set-frame-parameter frame 'bottom-divider-width (cadr saved))
+    (set-frame-parameter frame 'internal-border-width (or (nth 2 saved) 0))
+    (set-face-background 'internal-border nil frame)
+    (set-frame-parameter frame 'drgnx-look-card-saved nil)))
+
+(defun drgnx-look-cards-apply ()
+  "Docked panes as cards on every graphical frame, while Glitnir draws them."
+  (when (drgnx-look--cards-p)
+    (dolist (f (drgnx-look--card-frames)) (drgnx-look--card-frame f))))
+
+(defun drgnx-look-cards-clear ()
+  "Every card off, the dividers as they were."
+  (dolist (f (frame-list)) (drgnx-look--card-restore f)))
+
 ;;;; Theme
 
 (drgnx-defsetting drgnx-look-theme nil
@@ -153,6 +243,12 @@ refuses (`drgnx-settings-refused') before the theme changes."
                      (lambda ()
                        (setq drgnx-look--taken (list :previous (copy-sequence custom-enabled-themes) :ours nil))
                        (drgnx-look--chrome-on)
+                       (drgnx-modules-push-undo "docked panes as cards" #'drgnx-look-cards-clear)
+                       (drgnx-module-hook window-configuration-change-hook cards-follow-windows ()
+                         (drgnx-look-cards-apply))
+                       (drgnx-module-hook window-size-change-functions cards-follow-scale (frame)
+                         (drgnx-look--card-follow-scale frame))
+                       (drgnx-look-cards-apply)
                        (drgnx-command-define 'preferences-theme :category "Preferences" :title "Color Theme"
                                              :command #'drgnx-look-choose-theme :menu '("Options") :doc "Pick the colour theme (remembered)")
                        (drgnx-command-define 'view-zen :category "View" :title "Zen Mode" :scope 'window

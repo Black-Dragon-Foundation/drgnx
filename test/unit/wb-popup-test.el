@@ -218,3 +218,18 @@
        (should (eq lane again))
        (should (string-prefix-p " Completions" (window-parameter lane 'header-line-format)))
        (kill-buffer "*Completions*")))))
+
+(ert-deftest drgnx-popup/wb-popup-style-auto-picks-window-without-glitnir ()
+  "Race-proof pattern D (pure).  `auto' floats only under Glitnir: here it is the window lane; `float' and `window'
+are taken as asked."
+  (drgnx-popup-test--with
+   (let ((n (length (window-list nil 'nomini))))
+     (let ((drgnx-popup-style 'auto))
+       (should-not (drgnx-popup--float-p))
+       (let ((w (display-buffer (get-buffer-create "*Calendar*"))))
+         (should (eq (window-frame w) (selected-frame)))
+         (should (= (1+ n) (length (window-list nil 'nomini))))
+         (should-not (plist-get (window-parameter w 'drgnx-popup) :float))
+         (quit-windows-on "*Calendar*")))
+     (let ((drgnx-popup-style 'float)) (should (drgnx-popup--float-p)))
+     (let ((drgnx-popup-style 'window)) (should-not (drgnx-popup--float-p))))))

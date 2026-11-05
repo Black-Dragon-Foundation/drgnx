@@ -387,9 +387,28 @@ The lane always has a one-line header: the popup's name (`Calendar`, `which-key`
 click it, or press `Esc` or `q` while the lane has focus (**Close Pane**), to end the popup. Because the header is
 there whether the popup borrows the panel or has a window of its own, borrowing never changes the header's height.
 
+**Floating lane.** `drgnx-popup-style` is `auto` (the default), `window` or `float`. Under Glitnir (Nidhogg's
+compositor) `auto` is `float`: the popup shows in one child frame of the window, bottom-centre above the echo area,
+as wide as its text (at most 0.9 of the frame) and at most a third of the frame high. The frame is made once per
+window and reused; ending the popup (`delete-window`, `quit-window`, `bury-buffer`, killing the buffer) hides it, and
+it is never deleted while the window lives. It never takes focus: transient and which-key keep their keys in the
+editor, and a click on a candidate in `*Completions*` chooses it. Without Glitnir, or with `window`, the lane is the
+window described above.
+
 In a terminal window the lane works the same, and the line you are on stays visible. Completion as you type
 (corfu) shows as a child frame there. See
 [terminal.md](terminal.md#popups).
+
+### Docked panes as cards
+
+While `ui/look` runs under Glitnir, the Explorer, the panel, the right dock and every editor group are **cards**: corner radius 10, a
+1 px ring just outside in the divider colour (60 % opaque) and a soft shadow, on a 6 px gap. `drgnx-look-card` holds
+the numbers (logical pixels; the ring is a face and an opacity, never a colour). The gap is the frame's
+`right-divider-width` and `bottom-divider-width` (set in device pixels, so the gap is 6 logical pixels at any display
+scale, and set again when the scale changes); the frame's edge gets the same gap (`internal-border-width`, painted in
+the divider colour), so the outer cards have their corners, ring and shadow against a margin and not the frame's edge or the top line. So the ring and shadow have room and never cover text. Turning the
+module off takes the cards away and gives the frame its divider widths back. An editor card keeps its corners while it scrolls. Without
+Glitnir nothing changes.
 
 ### The panel and the right dock
 

@@ -352,3 +352,51 @@ call, no bus flush: the `windows-changed' `now' subscriber."
       (setq runs (sort runs #'<))
       (message "chrome now subscribers, 7 windows: %.1f µs per call (median of 21 × %d)" (nth 10 runs) n)
       (should (<= (nth 10 runs) (* 50 (drgnx-run-ert-time-factor)))))))
+
+;;;; Docked panes as cards (ui/look under Glitnir)
+;; Race-proof pattern D (pure): window and frame parameters of one frame, no timing.
+
+(load (expand-file-name "modules/ui/drgnx-look" drgnx-dir) nil t)
+
+(ert-deftest drgnx-chrome/wb-card-params-set-and-undone ()
+  "A docked pane and an editor window get the card parameters and the frame the gap in its dividers; a popup lane
+window gets none.  Taking the cards off gives back the parameters and the divider widths the frame had."
+  (drgnx-chrome-test--with _dir
+    (let* ((f (selected-frame)) (editor (selected-window))
+           (dock (split-window editor nil 'left))
+           (lane (split-window editor nil 'below))
+           (gap (alist-get 'gap drgnx-look-card))
+           (before (list (frame-parameter f 'right-divider-width) (frame-parameter f 'bottom-divider-width))))
+      (set-window-parameter dock 'drgnx-role 'dock)
+      (set-window-parameter lane 'drgnx-popup (list :popup nil))
+      (drgnx-look--card-frame f)
+      (dolist (p '(corner-radius shadow ring))
+        (should (equal (window-parameter dock p) (alist-get p drgnx-look-card)))
+        (should (equal (window-parameter editor p) (alist-get p drgnx-look-card)))
+        (should-not (window-parameter lane p)))
+      (should (eql (frame-parameter f 'right-divider-width) (round (* gap (frame-scale-factor f)))))
+      (should (eql (frame-parameter f 'bottom-divider-width) (round (* gap (frame-scale-factor f)))))
+      (drgnx-look--card-frame f)               ; again: the saved widths are still the first ones
+      (drgnx-look--card-restore f)
+      (dolist (p '(corner-radius shadow ring))
+        (should-not (window-parameter dock p))
+        (should-not (window-parameter editor p)))
+      (should (equal before (list (frame-parameter f 'right-divider-width) (frame-parameter f 'bottom-divider-width)))))))
+
+(ert-deftest drgnx-chrome/wb-card-gap-is-in-logical-pixels ()
+  "The gap is logical: at a frame scale of 2 the dividers are twice the gap, in device pixels, and a change of the
+scale re-applies it.  Race-proof pattern D (pure: the scale is stubbed)."
+  (drgnx-chrome-test--with _dir
+    (let* ((f (selected-frame)) (gap (alist-get 'gap drgnx-look-card)) (scale 2)
+           (border (frame-parameter f 'internal-border-width)))
+      (cl-letf (((symbol-function 'frame-scale-factor) (lambda (&optional _frame) scale)))
+        (drgnx-look--card-frame f)
+        (should (eql (frame-parameter f 'right-divider-width) 12))
+        (should (eql (frame-parameter f 'bottom-divider-width) 12))
+        (should (eql (frame-parameter f 'internal-border-width) 12)) ; the frame's outer gap
+        (setq scale 1.25)
+        (drgnx-look--card-follow-scale f)
+        (should (eql (frame-parameter f 'right-divider-width) (round (* gap 1.25))))
+        (should (eql (frame-parameter f 'internal-border-width) (round (* gap 1.25))))
+        (drgnx-look--card-restore f)
+        (should (eql (frame-parameter f 'internal-border-width) (or border 0)))))))
