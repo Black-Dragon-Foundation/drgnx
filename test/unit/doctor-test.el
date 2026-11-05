@@ -91,6 +91,19 @@
   (should (string-search "31.2" (nth 1 (drgnx-doctor-check 'security (drgnx-doctor-test--facts)))))
   (should (eq (drgnx-doctor-test--status 'security (drgnx-doctor-test--facts :version "31.2")) 'ok)))
 
+(ert-deftest drgnx-doctor/security-knows-nidhogg-backports ()
+  ;; Nidhogg 4 and later backport the TRAMP and Flymake fixes; the shorthands issue stays (fixed only in Emacs 32).
+  (let ((old (nth 1 (drgnx-doctor-check 'security (drgnx-doctor-test--facts :nidhogg "31.1-nidhogg.3"))))
+        (new (nth 1 (drgnx-doctor-check 'security (drgnx-doctor-test--facts :nidhogg "31.1-nidhogg.4"))))
+        (newer (nth 1 (drgnx-doctor-check 'security (drgnx-doctor-test--facts :nidhogg "31.1-nidhogg.10")))))
+    (should (string-search "CVE-2026-108976" old))
+    (should (string-search "CVE-2026-96442" old))
+    (dolist (m (list new newer))
+      (should-not (string-search "CVE-2026-108976" m))
+      (should-not (string-search "CVE-2026-96442" m))
+      (should (string-search "CVE-2026-96269 (partly fixed here)" m)))
+    (should (eq 'warn (drgnx-doctor-test--status 'security (drgnx-doctor-test--facts :nidhogg "31.1-nidhogg.4"))))))
+
 (ert-deftest drgnx-doctor/dev-checks-only-with-dev ()
   (let ((names (lambda (results) (mapcar (lambda (r) (plist-get r :name)) results))))
     ;; ui-magick: a dev check on every platform (ui-mutter is Linux-only)
