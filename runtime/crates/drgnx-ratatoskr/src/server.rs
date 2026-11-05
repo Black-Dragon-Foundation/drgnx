@@ -287,15 +287,27 @@ pub async fn run(args: ServeArgs) -> Exit {
     );
     crate::records::install_tool(&front);
     crate::clock::spawn("records:follow", crate::records::follow(front.clone()));
-    front.core.runs.set_git(Arc::new(
-        crate::runner::git::HubGit::new(
-            crate::sandbox::runs_root(&env),
-            crate::runner::TreeMode::Snapshot,
-            Box::new(crate::runner::git::HubPolicy(Arc::downgrade(&front))),
-            Some(runtime.clone()),
-        )
-        .with_shell_env(front.shell_env.clone()),
-    ));
+    let mut git = crate::runner::git::HubGit::new(
+        crate::sandbox::runs_root(&env),
+        crate::runner::TreeMode::Snapshot,
+        Box::new(crate::runner::git::HubPolicy(Arc::downgrade(&front))),
+        Some(runtime.clone()),
+    )
+    .with_shell_env(front.shell_env.clone());
+    // each tree the hub makes records where it branched from (work.db's worktree_base)
+    if let Some(dirs) = front.dirs.get() {
+        let writer = front.writer.clone();
+        git = git.with_bases(
+            dirs.hub.join("checkpoints"),
+            Arc::new(move |row| {
+                let w = writer.clone();
+                crate::clock::spawn("bases:put", async move {
+                    crate::work::bases::put(&w, row).await;
+                });
+            }),
+        );
+    }
+    front.core.runs.set_git(Arc::new(git));
     front
         .core
         .runs

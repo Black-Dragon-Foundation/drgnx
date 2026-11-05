@@ -679,6 +679,8 @@ pub(crate) struct StepSink {
     pub snap: Option<crate::timeline::Snap>,
     /// The plan and project a plan run's session works under (none: not a plan run, or a test).
     pub scopes: Option<crate::runner::Scopes>,
+    /// The graph store a spec an edit step wrote is stored in (none: a test).
+    pub tools: Option<Arc<norn::tools::Coord>>,
 }
 
 /// What `open` and `resume` know of a session before its agent is running.
@@ -1471,9 +1473,19 @@ fn assemble(
             bus,
             snap: crate::timeline::Snap::of(front),
             scopes: Some(front.core.runs.scopes()),
+            tools: Some(front.tools.clone()),
         },
         ctx,
     ));
+    // a folder the hub made no tree for is measured from its head now (a docs agent in the org folder)
+    if let Some(d) = front.dirs.get() {
+        tokio::spawn(crate::work::bases::session_started(
+            front.writer.clone(),
+            d.hub.clone(),
+            i.id.clone(),
+            i.cwd.clone(),
+        ));
+    }
     let scope = scope_of(i.role, &i.id);
     front.core.budgets.enroll(&scope);
     if let Some(m) = &i.parent {
@@ -1961,6 +1973,14 @@ async fn write_steps(
             cost_unit: None,
             detail: c.detail.as_ref().map(crate::work::detail::wire),
         };
+        // a spec an agent just wrote is stored at once, not at the next scan
+        if let (Some(tools), Some(d)) = (&sink.tools, &c.detail)
+            && d.kind.as_deref() == Some("edit")
+            && let Some(p) = &d.path
+        {
+            crate::work::specs::on_written(&sink.writer, tools, &ctx.session, &ctx.cwd.join(p))
+                .await;
+        }
         // a shell step may have committed: link the new commits to the decisions this session recorded
         if let Some(task) = &ctx.task
             && step.class == StepClass::Tool
@@ -3735,6 +3755,7 @@ mod tests {
             bus,
             snap: None,
             scopes: None,
+            tools: None,
         };
         tokio::spawn(write_steps(rx, sink, ctx));
         let open = |class, tool: Option<&str>| OpenStep {
@@ -3817,6 +3838,7 @@ mod tests {
             bus: tokio::sync::broadcast::channel(16).0,
             snap: Some(crate::timeline::Snap::for_test(dir.join("cp"), settings)),
             scopes: None,
+            tools: None,
         };
         let ctx = StepCtx {
             session: "a1".into(),

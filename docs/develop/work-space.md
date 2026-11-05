@@ -3,6 +3,31 @@
 The hub's code for the Work space lives in `runtime/crates/drgnx-ratatoskr/src/work/`. The pure parts take no clock and
 no I/O, so tests run them in every order or directly.
 
+## Worktree bases
+
+`work::bases` records, in `worktree_base` (written by the hub as `("hub", System)`, never by an agent), where each
+worktree the hub makes branched from: its repository, the branch, the commit, and a tree of the new worktree.
+
+- `HubGit` (`runner/git.rs`) tells a sink after it makes a tree (`with_bases`); the server's sink writes the row.
+  `bases::row_for` finds the branch by git in the trusted repository: the branch the base names, or the one local
+  branch that points at the commit, or, among several, the run's own `job/<run>` for a tree `job/<run>-<task>`. It never
+  defaults to `main`, and when it cannot tell the branch is empty.
+- The tree is `timeline::snapshot::take_base`: the worktree as it is when made, kept as `refs/drgnx/base/<hash>` in its
+  shadow repository (a prune leaves it). `snapshot::numstat(root, worktree, from_tree, to_tree)` counts the lines
+  between two trees there, and marks a file not in the first as new (`untracked`); it runs git in the shadow
+  repository only, so it works with the worktree gone and never runs git in an agent's tree.
+- A session in a folder the hub made no tree for (a docs agent in the org folder) gets a row at its start, from the
+  folder's head (`bases::session_started`); folders under `<state>/hub/runs` record their own.
+- `bases::ancestry_of(rows, roots)` and `bases::ancestry(front, workspace)` answer "based on" pairs of
+  `BranchRef {repo, branch}` for the workspace's roots, computed from the rows when asked.
+
+## Live specs
+
+`work::specs` stores a spec an agent's edit step wrote: a Markdown file under `docs/specs/` (a path tail from
+`DEFAULT_DIRS`) is read after the step is written, its title is the first `# ` heading (the file's name if none), and
+it goes in through `graph/put-parsed` as `spec:<path>`, as a scanned spec does. A spec written by a shell command is not
+seen here (the scan finds it).
+
 ## Machines
 
 `work::machines` keeps the list `machines/list` and the event `machines-changed` carry (types in

@@ -10,6 +10,17 @@ use crate::wire::Error;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// The workspace a Work view shows: one id, the roots (repositories or folders) it spans. The editor sends it with
+/// every subscription; the hub never decides what a workspace is.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Workspace {
+    /// `workspace:` and 12 hex digits.
+    pub id: String,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub roots: Vec<std::path::PathBuf>,
+}
+
 /// One slot of a machine: where one agent job runs.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
