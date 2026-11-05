@@ -1518,8 +1518,11 @@ makes: the hub never grants `Open`) has no network but its sandbox's relay port,
   job) the proxy closes its listener and every tunnel and removes the socket; a resume binds a new one. A start that
   fails after the bind drops it the same way. The removal checks the socket's inode, so an old session's end never
   removes a newer socket at the same path.
-- **Test hook.** A `test-hooks` build reads `DRGNX_TEST_PROXY_PINS` (`NAME=ADDR,…`): names the proxy resolves to a
-  fixed address, so a row reaches the mock LLM on loopback under a name. A shipped build pins nothing.
+- **Pinned names.** The proxy resolves the names of `drgnx-sandbox-proxy-pinned-addresses` (a runtime setting,
+  `ProxyPins`, read from `settings.el`; `agents::net::pins`) to their address instead of asking DNS; a pinned name
+  may lead to a private address and must still be on the allowlist. A container job's proxy pins the same names
+  (`Caps.pins`, from `settings::containers::caps`). A `test-hooks` build adds `DRGNX_TEST_PROXY_PINS`
+  (`NAME=ADDR,…`), so a row reaches the mock LLM on loopback under a name.
 
 Rows: `test/conformance/sandbox-net/`. The real launch: `tests/launch_sandboxed.rs`
 (`a_session_reaches_its_provider_through_the_proxy`, the sandbox lane).

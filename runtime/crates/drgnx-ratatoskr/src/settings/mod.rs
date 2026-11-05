@@ -108,6 +108,11 @@ pub const RUNTIME: &[RuntimeSetting] = &[
     setting("drgnx-agents-repeat-limit", "u32", OnError::Strict),
     setting("drgnx-agents-no-progress-tokens", "u64", OnError::Strict),
     setting("drgnx-agents-manager-context", "f64", OnError::Strict),
+    setting(
+        "drgnx-sandbox-proxy-pinned-addresses",
+        "ProxyPins",
+        OnError::LastGood,
+    ),
 ];
 
 /// The names of [`RUNTIME`].
@@ -151,6 +156,7 @@ pub struct RuntimeValues {
     pub agents_repeat_limit: u32,
     pub agents_no_progress_tokens: u64,
     pub agents_manager_context: f64,
+    pub sandbox_proxy_pins: ProxyPins,
 }
 
 /// One entry of `drgnx-agents-container-images`: a name and its image reference pinned by digest (the shared podman
@@ -162,6 +168,10 @@ pub type NetHosts = Vec<(String, Vec<String>)>;
 
 /// `drgnx-agents-silent-after`: seconds without an update per kind of work, in order.
 pub type SilentAfter = Vec<(String, u64)>;
+
+/// `drgnx-sandbox-proxy-pinned-addresses`: the names the proxies (a session's provider proxy, a container job's)
+/// resolve to a fixed address instead of asking DNS, in order.
+pub type ProxyPins = Vec<(String, std::net::IpAddr)>;
 
 /// An `agents-matrix` value that is valid, as a message when it is not.
 pub(crate) fn check_matrix(v: &Value) -> Result<(), String> {
@@ -259,6 +269,10 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-agents-repeat-limit" => values.agents_repeat_limit = de(node)?,
         "drgnx-agents-no-progress-tokens" => values.agents_no_progress_tokens = de(node)?,
         "drgnx-agents-manager-context" => values.agents_manager_context = de(node)?,
+        "drgnx-sandbox-proxy-pinned-addresses" => {
+            let profiles::Alist(pairs) = de::<profiles::Alist<std::net::IpAddr>>(node)?;
+            values.sandbox_proxy_pins = pairs;
+        }
         other => {
             return Err(Bad::at(
                 node,

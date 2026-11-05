@@ -650,7 +650,9 @@ after `drgnx-settings-live-start` get their watcher at the next sync.
   `:runtime`, `:on-error last-good`. `drgnx-agents-allow-unsandboxed` is new (nothing reads it before the sandbox
   tasks). The sandbox's `drgnx-sandbox-memory-max`, `drgnx-sandbox-secret-files` and
   `drgnx-sandbox-proxy-pinned-addresses` (`core/drgnx-settings-runtime.el`) are settings too: `:scope global`,
-  `:workspace never`, `:agents never` (design §13).
+  `:workspace never`, `:agents never` (design §13). The pins are `:runtime "ProxyPins"` (last good on a mistake): the
+  hub reads them from `settings.el` for every session's provider proxy and container job's proxy; like the matrix
+  settings they have no encoder, so a value set only in your Lisp or Customize does not reach the hub.
 - **Callers read `default-value`.** `drgnx-agents-profile`, `-profile-names`, `-default-profile`, `-mcp-names`,
   `drgnx-ai-providers` (the function), `drgnx-ai-role` and `drgnx-ai-user-role` read the global
   value, so a buffer-local value (a `.dir-locals.el`, a `setq-local`) never reaches them. Tests bind the variable with

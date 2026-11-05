@@ -370,6 +370,9 @@ fn decode_default(name: &str, default: &RuntimeValues, values: &mut RuntimeValue
         "drgnx-agents-manager-context" => {
             values.agents_manager_context = default.agents_manager_context;
         }
+        "drgnx-sandbox-proxy-pinned-addresses" => {
+            values.sandbox_proxy_pins = default.sandbox_proxy_pins.clone();
+        }
         _ => {}
     }
 }

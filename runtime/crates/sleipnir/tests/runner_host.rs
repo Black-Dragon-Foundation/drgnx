@@ -250,6 +250,7 @@ fn caps(memory: &str) -> Caps {
         pids: 100,
         proxy: None,
         net_hosts: vec![],
+        pins: vec![],
     }
 }
 

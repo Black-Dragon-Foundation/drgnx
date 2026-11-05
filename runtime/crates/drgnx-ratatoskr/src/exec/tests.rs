@@ -632,6 +632,7 @@ fn container_spec(cwd: &Path) -> ExecSpec {
                 pids: container::PIDS,
                 proxy: None,
                 net_hosts: vec![],
+                pins: vec![],
             },
             net: None,
         }),
@@ -878,6 +879,7 @@ fn a_container_job_in_a_subfolder_mounts_the_worktree() {
         pids: container::PIDS,
         proxy: None,
         net_hosts: vec![],
+        pins: vec![],
     };
     let a: Vec<String> = container::argv(&req, &caps)
         .unwrap()

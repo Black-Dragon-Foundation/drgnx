@@ -124,7 +124,8 @@ pub(crate) fn start_session(
     );
     let env = front.shell_env.paths_env();
     let dir = runstav::paths::make_session_dir(&env, &runstav::paths::socket_path(&env), sid)?;
-    SessionNet::start(&dir, sid, allow, pins(), Some(front.writer.clone())).map(Some)
+    let pinned = pins(&cur.loaded.values);
+    SessionNet::start(&dir, sid, allow, pinned, Some(front.writer.clone())).map(Some)
 }
 
 /// A provider's base URL as the `host:port` a CONNECT names: the URL's host, and its port or the scheme's (443 for
@@ -275,18 +276,20 @@ async fn denied_event(w: &Writer, sid: &str, host: String) {
     }
 }
 
-/// Names the provider proxy resolves to a fixed address: none in a shipped build; a test build reads
-/// `DRGNX_TEST_PROXY_PINS` (`NAME=ADDR,…`), so a row can reach the mock LLM on loopback under a name.
-pub fn pins() -> Vec<(String, IpAddr)> {
+/// Names the provider proxy resolves to a fixed address: those of `drgnx-sandbox-proxy-pinned-addresses` in VALUES;
+/// a test build adds `DRGNX_TEST_PROXY_PINS` (`NAME=ADDR,…`), so a row can reach the mock LLM on loopback under a name.
+pub fn pins(values: &crate::settings::RuntimeValues) -> Vec<(String, IpAddr)> {
+    #[allow(unused_mut)] // a shipped build adds nothing
+    let mut out = values.sandbox_proxy_pins.clone();
     #[cfg(any(test, feature = "test-hooks"))]
     if let Ok(v) = std::env::var("DRGNX_TEST_PROXY_PINS") {
-        return v
-            .split(',')
-            .filter_map(|p| p.split_once('='))
-            .filter_map(|(n, a)| Some((n.to_string(), a.parse().ok()?)))
-            .collect();
+        out.extend(
+            v.split(',')
+                .filter_map(|p| p.split_once('='))
+                .filter_map(|(n, a)| Some((n.to_string(), a.parse().ok()?))),
+        );
     }
-    Vec::new()
+    out
 }
 
 #[cfg(test)]

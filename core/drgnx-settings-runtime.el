@@ -44,11 +44,12 @@ hidden in the sandbox.  npm's global config is PREFIX/etc/npmrc."
   :type '(repeat string) :group 'drgnx :scope 'global :workspace 'never :agents 'never)
 
 (drgnx-defsetting drgnx-sandbox-proxy-pinned-addresses nil
-  "Names the job proxies resolve to a fixed address instead of asking DNS: ((NAME . ADDRESS)…), ADDRESS an IPv4 or
-IPv6 literal.  A pinned name may lead to a private or loopback address (a registry on the company's network, a
+  "Names the agents' proxies resolve to a fixed address instead of asking DNS: ((NAME . ADDRESS)…), ADDRESS an IPv4
+or IPv6 literal.  A pinned name may lead to a private or loopback address (a registry on the company's network, a
 test's local upstream); a name resolved through DNS never does.  Pinning only resolves: the name must still be on the
-job's allowlist."
-  :type '(alist :key-type string :value-type string) :group 'drgnx :scope 'global :workspace 'never :agents 'never)
+allowlist.  The hub reads it from settings.el for each session's provider proxy and each container job's proxy."
+  :type '(alist :key-type string :value-type string) :group 'drgnx :scope 'global :workspace 'never :agents 'never
+  :runtime "ProxyPins")
 
 ;;;; Encoding: Lisp values as the runtime types' JSON
 

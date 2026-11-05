@@ -740,6 +740,7 @@ impl<W: Write> Serve<W> {
             pids: podman::PIDS,
             proxy: None,
             net_hosts: vec![],
+            pins: vec![],
         };
         let req = ContainerReq {
             image: "job".into(),

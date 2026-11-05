@@ -67,6 +67,10 @@ pub struct Caps {
     pub proxy: Option<Proxy>,
     /// The hosts (`host:port`) a granted network reaches, by tier name.
     pub net_hosts: Vec<(String, Vec<String>)>,
+    /// Names the job's proxy resolves to a fixed address instead of asking DNS (a pinned name may lead to a private
+    /// address; it must still be in `net_hosts`).  Absent in an older peer's caps: none.
+    #[serde(default)]
+    pub pins: Vec<(String, std::net::IpAddr)>,
 }
 
 /// A granted network is not a network: the job keeps `--network=none`, and two files are bind-mounted read-only into
@@ -475,6 +479,7 @@ mod tests {
                 socket: "/run/h/job.sock".into(),
                 forwarder: "/opt/drgnx-fwd".into(),
             }),
+            pins: vec![],
         }
     }
 
