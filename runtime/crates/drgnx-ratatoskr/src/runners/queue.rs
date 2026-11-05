@@ -1342,6 +1342,8 @@ impl Queue {
                             image,
                             env: vec![],
                             net_hosts: vec![],
+                            // no network reaches a runner job yet (`net_hosts`), so no names to pin either
+                            pins: vec![],
                             parser: "exit".into(),
                         });
                     }
