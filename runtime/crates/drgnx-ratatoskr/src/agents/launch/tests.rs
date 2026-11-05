@@ -59,6 +59,7 @@ impl Fx {
             login_dir: Some(self.p(&format!("home/{login}"))),
             enforced: Enforced::Yes,
             gateway: false,
+            trace: None,
         }
     }
 

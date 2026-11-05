@@ -769,6 +769,8 @@ pub(crate) struct StepSink {
     pub stamps: Option<Arc<crate::work::conclusions::Stamps>>,
     /// The presence model: the files each step was in (none: a test).
     pub presence: Option<Arc<crate::work::presence::Live>>,
+    /// The trace supervisor: a shell step's close takes what its command opened (none: a test).
+    pub traces: Option<Arc<crate::work::trace::Traces>>,
 }
 
 /// What `open` and `resume` know of a session before its agent is running.
@@ -891,6 +893,31 @@ pub(super) struct Prepared {
     enforced: bool,
     enforced_why: Option<String>,
     gateway: Option<String>,
+    /// How its shell steps' opens are seen (`work::trace`).
+    trace: crate::work::trace::TraceMode,
+}
+
+/// How PROFILE's sessions are traced: by its CLI's kind and `agents-trace-opens`; never on macOS (a test hub takes
+/// `DRGNX_TEST_TRACE_PLATFORM=macos` as macOS).
+fn trace_mode(front: &Front, profile: &AgentProfile) -> crate::work::trace::TraceMode {
+    let provider = profile.provider().and_then(|p| {
+        serde_json::to_value(p)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_owned))
+    });
+    let traced = front
+        .settings
+        .current()
+        .loaded
+        .values
+        .agents_trace_opens
+        .clone();
+    #[cfg(feature = "test-hooks")]
+    let macos = cfg!(target_os = "macos")
+        || std::env::var("DRGNX_TEST_TRACE_PLATFORM").is_ok_and(|v| v == "macos");
+    #[cfg(not(feature = "test-hooks"))]
+    let macos = cfg!(target_os = "macos");
+    crate::work::trace::TraceMode::of(provider.as_deref(), &traced, macos)
 }
 
 /// WHO a session is, for the matrix's columns.
@@ -946,7 +973,7 @@ async fn spawn_spec(
     plan: &plock::LaunchPlan,
     _: &Path,
     cwd: &Path,
-    _: &str,
+    sid: &str,
     _: Role,
 ) -> Result<
     (
@@ -967,6 +994,22 @@ async fn spawn_spec(
         .map(|(k, v)| (k.to_string(), v.into()))
         .collect();
     pairs.extend(plan.env.iter().map(|(k, v)| (k.clone(), v.into())));
+    // per-step tracing without the sandbox: the wrapper is this binary by its name, linked in the session dir
+    if plan.trace == Some(gleipnir::trace::Scope::Step) {
+        let env = runstav::paths::Env::process();
+        let run = runstav::paths::make_session_dir(&env, &runstav::paths::socket_path(&env), sid)
+            .map_err(|e| internal(format!("session dir: {e}")))?;
+        let link = run.join(gleipnir::trace::WRAPPER_NAME);
+        let exe = std::env::current_exe().map_err(|e| internal(e.to_string()))?;
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&exe, &link)
+            .map_err(|e| internal(format!("{}: {e}", link.display())))?;
+        pairs.push(("CLAUDE_CODE_SHELL_PREFIX".into(), link.into()));
+        pairs.push((
+            gleipnir::trace::SOCK_ENV.into(),
+            run.join(runstav::paths::SESSION_TRACE_SOCKET).into(),
+        ));
+    }
     let set: Vec<(&str, &std::ffi::OsStr)> = pairs
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_os_str()))
@@ -1119,6 +1162,9 @@ pub(super) async fn prepare(
     }
     // the spec relays a port to the session's gateway.sock and points ANTHROPIC_BASE_URL at it
     plan.gateway = relayed;
+    // and gives it the trace supervisor's socket when its shell steps' opens are seen
+    let trace = trace_mode(front, profile);
+    plan.trace = trace.scope();
     // what an editor module added comes last, so it wins over the profile's and the lock's
     plan.env.extend(module_env.iter().cloned());
     let why = match plan.enforced {
@@ -1145,6 +1191,7 @@ pub(super) async fn prepare(
         enforced_why: unsandboxed.or(why).map(str::to_string),
         plan,
         gateway,
+        trace,
     })
 }
 
@@ -1447,6 +1494,15 @@ async fn launch(
     // socket with it
     let net = super::net::start_session(front, profile, sid, SESSION_NET)
         .map_err(|e| internal(format!("the session's provider proxy: {e}")))?;
+    // the trace supervisor's socket, served before the spawn too (a traced session); an untraced one labels its steps
+    let env = runstav::paths::Env::process();
+    let run = runstav::paths::make_session_dir(&env, &runstav::paths::socket_path(&env), sid)
+        .map_err(|e| internal(format!("session dir: {e}")))?;
+    front
+        .core
+        .traces
+        .open(front, sid, cwd, &run, prep.trace.clone())
+        .map_err(|e| internal(format!("the session's trace socket: {e}")))?;
     let (conn, rx) = Conn::spawn(prep.spec, ConnOpts::default())
         .await
         .map_err(|e| internal(e.to_string()))?;
@@ -1567,6 +1623,7 @@ fn assemble(
             asks: Some(front.core.asks.handle()),
             stamps: Some(front.core.stamps.clone()),
             presence: Some(front.core.presence.clone()),
+            traces: Some(front.core.traces.clone()),
         },
         ctx,
     ));
@@ -1767,6 +1824,16 @@ impl Session {
             })
             .collect();
         crate::work::subagents::group(&self.id, &calls)
+    }
+
+    /// The command of the shell step running now (one a permission wait cut into counts), if one is: the trace
+    /// supervisor traces a wrapper's offer only when it is this command ([`crate::work::trace`]).
+    pub(crate) fn open_shell_command(&self) -> Option<String> {
+        let st = lock(&self.state);
+        [st.cur.as_ref(), st.stash.as_ref()]
+            .into_iter()
+            .flatten()
+            .find_map(|s| s.tool_id.as_deref().and_then(|id| st.tool_command(id)))
     }
 
     /// Where the user's messages to this session come from, as an ask records it.
@@ -2117,6 +2184,14 @@ async fn write_steps(
                     files,
                 });
             }
+        }
+        // a shell step closed: what its traced command opened goes out once its listener ended too
+        if let (Some(traces), Some(cmd)) = (&sink.traces, &c.command)
+            && id != 0
+        {
+            traces
+                .step_closed(&ctx.session, id, cmd.clone(), step.start)
+                .await;
         }
         // a conclusion's tool step is written, or the turn ended: the stamps that are due
         if let Some(stamps) = &sink.stamps {
@@ -3706,6 +3781,7 @@ fn asks_gone(f: &Front, sid: &str) {
         .apply(crate::work::presence::PresenceEv::SessionEnd {
             session: sid.to_string(),
         });
+    f.core.traces.end(sid);
 }
 
 /// The sessions the hub recorded, with their folders (the presence model's rebuild at start).
@@ -4080,6 +4156,7 @@ mod tests {
             asks: None,
             stamps: None,
             presence: None,
+            traces: None,
         };
         tokio::spawn(write_steps(rx, sink, ctx));
         let open = |class, tool: Option<&str>| OpenStep {
@@ -4170,6 +4247,7 @@ mod tests {
             asks: None,
             stamps: None,
             presence: None,
+            traces: None,
         };
         let ctx = StepCtx {
             session: "a1".into(),

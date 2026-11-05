@@ -85,6 +85,8 @@ pub fn tool_shape(what: &str, arg: &str) -> Option<Value> {
         "write" => json!({"title": format!("Write {arg}"), "kind": "edit",
             "locations": [{"path": arg}],
             "rawInput": {"file_path": arg, "content": "written by the mock\n"}, "_meta": meta("Write")}),
+        "bash" => json!({"title": arg, "kind": "execute",
+            "rawInput": {"command": arg, "description": "a mock command"}, "_meta": meta("Bash")}),
         _ => return None,
     })
 }

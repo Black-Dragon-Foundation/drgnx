@@ -327,3 +327,39 @@ Layer 1 of "reads through shell commands" (the files a command names; labelled "
 - Tests: `work::shell_read::tests` (class `det`, pattern D, with a property test over the corpus and random words),
   the corpus in `src/work/shell_read/corpus.txt`, and the timing row `shell_parse_within_200_us`
   (`tests/work_timing.rs`, listed in `test/timing-rust.txt`, 200 µs at p95).
+
+Layer 2 (the files a command's processes opened; labelled "seen open") is Gleipnir's tracer
+([sandbox.md](sandbox.md#seeing-the-files-a-shell-step-opens)) and the hub's supervisor, `work::trace`:
+
+- **Who is traced** (`TraceMode::of`, at the session's start): `drgnx-agents-trace-opens` lists providers, `("claude")`
+  by default. Claude Code is traced per step: its spec gets `trace: per_step` and `CLAUDE_CODE_SHELL_PREFIX` (the
+  wrapper); Codex and Gemini, when listed, over their whole tree (`trace: tree`). Not listed, or on macOS, the session
+  is `Off` with a label. The socket is `trace.sock` in the session dir (`runstav::paths::SESSION_TRACE_SOCKET`),
+  served from before the spawn (`Traces::open`) until the session ends (`Traces::end`). A test hub's unsandboxed
+  launch links the hub binary as `gleipnir-trace` in the session dir and sets the same variables.
+- **Offers** (`shell.rs`, off the async threads): a per-step offer is skipped when another shell step is open (a hook
+  or a status line through the prefix); when no step is open yet (the hub may not have read the tool call) it is
+  traced as given. A command whose head is on the skip list (`SKIP_HEADS`: the design's list plus `emacs`, `nidhogg`,
+  every `bin/drgnx` subcommand; `go` only to build or test) or on the worktree's learned list is skipped and its step
+  labelled "opens not traced for this build". A whole-tree offer is traced with the CLI's own thread group ignored
+  (its peer pid).
+- **Opens** come from Gleipnir's channel: a system or toolchain path is dropped at once, a read of a missing file is a
+  failed probe (dropped, and remembered for the step); the rest goes into the pure `Core` as `Opened`. The budget is
+  checked on each: the answering thread's time plus 6 µs per notification against max(5 %, 50 ms) of the step so far,
+  at most 250 ms (`over_budget`). Over it, reading stops for the rest of the step (`Listener::set_reading(false)`),
+  what it saw is dropped, the step is labelled, and its heads join the worktree's learned list (in memory).
+- **`Core`** (pure) ties traces to steps: a step's close takes the oldest trace whose command matches its own (as
+  given, or inside what the CLI wrapped around it, `command_matches`), and the step goes out once both its close and
+  its listener's end have come, in either order. In whole-tree mode an open goes to the shell step open when it
+  arrives (one per session as the hub sees it), and an open while N run is labelled "one of N parallel commands".
+- **What goes out** (`touches`): each path by its true name, under the session's folder (as layer 1's), never under
+  the system's or the home's toolchain and cache dirs, not git-ignored (`git check-ignore`, cached per path); a write
+  is looked at now, at its step's close. The files go to the presence model as `opened` on the step; a label goes to
+  the step's detail (origin `opened`, the label as `title`) when the step has no detail of its own, and so does an
+  `Off` session's label on each of its shell steps.
+- **Not kept:** a step's opens are not stored (like layer 1's, they come back only with the session's next steps after
+  a restart); the learned skip list is lost with the hub; whole-tree mode has no budget of its own (it is opt-in).
+- Tests: `work::trace::tests` (pattern A: a step's close before or after its listener's last notifications; pattern
+  D: the rules through a fake probe, the budget, the skip list, the labels), and the rows
+  `trace/claude-bash-reads-are-seen-open` (the mock's `provider:bash` through the wrapper) and
+  `trace/macos-says-not-traced` (`DRGNX_TEST_TRACE_PLATFORM=macos`, test hubs only), in the sandbox container.

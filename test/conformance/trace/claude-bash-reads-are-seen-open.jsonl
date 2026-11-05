@@ -1,0 +1,19 @@
+{"scenario": "trace/claude-bash-reads-are-seen-open", "requires": ["v1", "test-hooks"], "doc": "Linux, in the sandbox container: a Claude Code Bash call runs through Gleipnir's wrapper ($CLAUDE_CODE_SHELL_PREFIX), the hub's trace supervisor answers its offer, and the files the command opened become presence entries `opened` on its step: a.txt, read inside `$(…)`, which the command parse (layer 1) never guesses, b.txt, which it names too, and the redirect's write c.txt. Pattern B: the turn's last step is the gate, then agents/presence/get is read back until the trace's emission has landed (it follows the listener's end)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && printf 'one\\n' > $ROOT/work/a.txt && printf '1\\n2\\n3\\n' > $ROOT/work/b.txt"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "provider:bash x=$(cat a.txt); sed -n 1,2p b.txt > c.txt\nsay done"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"turn_id": "t1"}}}, "within_ms": 30000}
+{"do": "poll", "conn": "c", "json": {"id": 3, "method": "agents/presence/get", "params": {"file": "$ROOT/work/a.txt"}}, "expect": {"id": 3, "result": {"file": "$ROOT/work/a.txt", "entries": [{"session": "$sid", "mode": "read", "source": "opened"}]}}, "within_ms": 20000}
+{"do": "poll", "conn": "c", "json": {"id": 4, "method": "agents/presence/get", "params": {"file": "$ROOT/work/c.txt"}}, "expect": {"id": 4, "result": {"file": "$ROOT/work/c.txt", "entries": [{"session": "$sid", "mode": "write", "source": "opened"}]}}, "within_ms": 20000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/presence/get", "params": {"file": "$ROOT/work/b.txt"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"file": "$ROOT/work/b.txt", "entries": [{"session": "$sid", "mode": "read", "source": "opened"}]}}}

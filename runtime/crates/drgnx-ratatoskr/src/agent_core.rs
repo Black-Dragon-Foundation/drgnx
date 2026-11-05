@@ -53,6 +53,8 @@ pub struct Core {
     pub stamps: std::sync::Arc<crate::work::conclusions::Stamps>,
     /// Who is in which file now ([`crate::work::presence`]).
     pub presence: std::sync::Arc<crate::work::presence::Live>,
+    /// The files shell steps opened, from Gleipnir's tracer ([`crate::work::trace`]).
+    pub traces: std::sync::Arc<crate::work::trace::Traces>,
 }
 
 fn answer<T: Serialize>(r: Result<T, Error>) -> Result<Value, Error> {

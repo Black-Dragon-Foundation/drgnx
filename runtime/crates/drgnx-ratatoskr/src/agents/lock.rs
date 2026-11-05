@@ -59,6 +59,9 @@ pub struct LaunchPlan {
     /// `ANTHROPIC_BASE_URL` at it (`sandbox::session_spec`).  Set by the session's start for a gateway profile, never
     /// by a lock.
     pub gateway: bool,
+    /// The session's shell steps are traced (`work::trace`): per step through Gleipnir's wrapper, or over the whole
+    /// tree; the spec gets the hand-off socket (`sandbox::session_spec`).  Set by the session's start, never by a lock.
+    pub trace: Option<gleipnir::trace::Scope>,
 }
 
 /// A lock that does not hold: the session is killed.
@@ -192,6 +195,7 @@ pub fn plan(p: &AgentProfile, role: Role, _e: &Effective) -> LaunchPlan {
         login_dir,
         enforced,
         gateway: false,
+        trace: None,
     }
 }
 
