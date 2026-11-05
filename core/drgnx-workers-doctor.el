@@ -80,7 +80,7 @@ would be this process's, not the editor's.  Never signals."
   (let ((w (plist-get facts :workers)))
     (cond
      ((null w)
-      (list 'info "work off the main thread needs Nidhogg 31.1-nidhogg.N or newer" drgnx-workers-doctor-update-fix))
+      (list 'info "work off the main thread needs Nidhogg 31.1-nidhogg.5 or newer" drgnx-workers-doctor-update-fix))
      ((not (plist-get w :live))
       ;; a batch Emacs: the build and its defaults, never counters
       (let ((sw (plist-get w :switches)))

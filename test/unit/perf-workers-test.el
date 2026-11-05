@@ -1,4 +1,5 @@
 ;;; perf-workers-test.el --- batch tests: the perf lab's worker rows (DRGNX_PERF_WORKERS, report-only rows, completion metrics, digests, phases, the 2-core shape) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-perf)

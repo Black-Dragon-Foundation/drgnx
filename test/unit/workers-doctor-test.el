@@ -1,4 +1,5 @@
 ;;; workers-doctor-test.el --- batch tests: the doctor's workers check -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)
@@ -89,7 +90,7 @@
 (ert-deftest drgnx-workers-doctor/no-flag-info ()
   (let ((r (drgnx-doctor-check 'workers (list :workers nil))))
     (should (eq (car r) 'info))
-    (should (string-match-p "needs Nidhogg 31.1-nidhogg.N or newer" (nth 1 r)))
+    (should (string-match-p "needs Nidhogg 31.1-nidhogg.5 or newer" (nth 1 r)))
     (should (string-match-p "drgnx update" (nth 2 r)))))
 
 (ert-deftest drgnx-workers-doctor/batch-claims-no-counters ()
