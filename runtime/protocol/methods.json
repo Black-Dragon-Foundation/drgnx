@@ -808,6 +808,13 @@
                 "description": "How the hub learned it: `acp`, `acp-title` (parsed from the title), `browser`, `command` or `opened`.",
                 "type": "string"
               },
+              "parent_tool": {
+                "description": "The `Task` tool call of the subagent that made the step (Claude's `parentToolUseId`); absent: the session's\nown step.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "path": {
                 "type": [
                   "string",
@@ -3779,6 +3786,13 @@
               "origin": {
                 "description": "How the hub learned it: `acp`, `acp-title` (parsed from the title), `browser`, `command` or `opened`.",
                 "type": "string"
+              },
+              "parent_tool": {
+                "description": "The `Task` tool call of the subagent that made the step (Claude's `parentToolUseId`); absent: the session's\nown step.",
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "path": {
                 "type": [
@@ -16206,6 +16220,13 @@
               "origin": {
                 "description": "How the hub learned it: `acp`, `acp-title` (parsed from the title), `browser`, `command` or `opened`.",
                 "type": "string"
+              },
+              "parent_tool": {
+                "description": "The `Task` tool call of the subagent that made the step (Claude's `parentToolUseId`); absent: the session's\nown step.",
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "path": {
                 "type": [

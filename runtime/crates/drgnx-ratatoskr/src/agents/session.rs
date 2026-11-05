@@ -199,6 +199,8 @@ struct OpenStep {
     key: i64,
     /// A call of a drgnx tool that records a conclusion ([`crate::work::conclusions`]).
     mcp: bool,
+    /// The `Task` tool call of the subagent that made it ([`crate::work::subagents`]).
+    parent_tool: Option<String>,
 }
 
 /// A step that ended, waiting to be written to the `step` table and announced.
@@ -273,7 +275,22 @@ impl State {
     fn step_close(&mut self, end: f64, turn_use: Option<TurnUse>) {
         if let Some(open) = self.cur.take() {
             let u = turn_use.unwrap_or_default();
-            let detail = open.tool_id.as_deref().and_then(|id| self.tool_detail(id));
+            let mut detail = open.tool_id.as_deref().and_then(|id| self.tool_detail(id));
+            // a subagent's step keeps its parent, with a detail of its own if it has none
+            if let Some(p) = &open.parent_tool {
+                let name = open
+                    .tool_id
+                    .as_deref()
+                    .and_then(|id| self.tool_meta.get(id))
+                    .and_then(|m| m.name.clone());
+                detail
+                    .get_or_insert_with(|| norn::write::work::StepDetail {
+                        tool: name,
+                        origin: "acp".into(),
+                        ..Default::default()
+                    })
+                    .parent_tool = Some(p.clone());
+            }
             let command = open.tool_id.as_deref().and_then(|id| self.tool_command(id));
             self.closed.push(ClosedStep {
                 detail,
@@ -343,6 +360,10 @@ impl State {
             message_id: self.last_mid.clone(),
             key: self.steps_begun,
             mcp: false,
+            parent_tool: tool
+                .and_then(|t| t.2)
+                .and_then(|id| self.tool_meta.get(id))
+                .and_then(|m| m.parent.clone()),
         });
     }
 
@@ -1725,6 +1746,27 @@ impl Session {
     }
     pub(crate) fn cwd(&self) -> &Path {
         &self.cwd
+    }
+
+    /// The subagents this session ran (Claude Code's `Task` tool), from its tool calls so far.
+    pub fn subagents(&self) -> Vec<crate::work::subagents::Child> {
+        let st = lock(&self.state);
+        let calls: Vec<crate::work::subagents::ToolCall> = st
+            .entries
+            .iter()
+            .filter(|e| e.kind == EntryType::Tool)
+            .filter_map(|e| {
+                let id = e.rest.get("id").and_then(Value::as_str)?.to_string();
+                let meta = st.tool_meta.get(&id);
+                Some(crate::work::subagents::ToolCall {
+                    name: meta.and_then(|m| m.name.clone()),
+                    parent: meta.and_then(|m| m.parent.clone()),
+                    raw_input: e.rest.get("rawInput").cloned(),
+                    id,
+                })
+            })
+            .collect();
+        crate::work::subagents::group(&self.id, &calls)
     }
 
     /// Where the user's messages to this session come from, as an ask records it.
@@ -4049,6 +4091,7 @@ mod tests {
             message_id: None,
             key: 0,
             mcp: false,
+            parent_tool: None,
         };
         for (class, tool, turn) in [
             (StepClass::Think, None, None),
@@ -4146,6 +4189,7 @@ mod tests {
             message_id: Some("m1".into()),
             key: 0,
             mcp: false,
+            parent_tool: None,
         };
         for (o, end, turn) in [
             (open(StepClass::Think, None, 1.0), 2.0, None),

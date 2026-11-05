@@ -380,6 +380,7 @@ fn read_session(
                 query: r.get(9).ok().flatten(),
                 url: r.get(10).ok().flatten(),
                 title: r.get(11).ok().flatten(),
+                parent_tool: None,
             });
             Ok(StepWithDetail {
                 id,

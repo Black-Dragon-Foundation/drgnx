@@ -17,13 +17,15 @@ pub const SCHEMA: u32 = 9;
 /// `origin` of a `step_detail` row: how the hub learned it.
 pub const ORIGINS: [&str; 5] = ["acp", "acp-title", "browser", "command", "opened"];
 
-/// The two tables.  `step` is a timeline step's id; `repo`, `worktree` and the base fields are paths and git ids;
+/// The two tables.  `step` is a timeline step's id; `parent_tool` the tool call of the subagent that made the step
+/// (Claude's `parentToolUseId`; none: the session's own); `repo`, `worktree` and the base fields are paths and git ids;
 /// `at` is seconds since the epoch.
 pub const TABLES_DDL: &str = "
 create table step_detail (
   step integer primary key references step(id),
   tool text, kind text, path text, line_start integer, line_end integer,
   query text, url text, title text,
+  parent_tool text,
   origin text not null check (origin in ('acp', 'acp-title', 'browser', 'command', 'opened')));
 create table worktree_base (
   worktree text primary key,

@@ -82,6 +82,8 @@ pub struct StepDetail {
     pub query: Option<String>,
     pub url: Option<String>,
     pub title: Option<String>,
+    /// The tool call of the subagent that made the step (none: the session's own).
+    pub parent_tool: Option<String>,
     /// One of [`ORIGINS`].
     pub origin: String,
 }
@@ -120,8 +122,8 @@ pub fn put_step_detail(tx: &WTx<'_>, d: StepDetail) -> Result<(), CoordError> {
         )));
     }
     tx.sql().execute(
-        "insert or replace into step_detail (step, tool, kind, path, line_start, line_end, query, url, title, origin) \
-         values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "insert or replace into step_detail (step, tool, kind, path, line_start, line_end, query, url, title, origin, \
+         parent_tool) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         (
             d.step,
             &d.tool,
@@ -133,6 +135,7 @@ pub fn put_step_detail(tx: &WTx<'_>, d: StepDetail) -> Result<(), CoordError> {
             &d.url,
             &d.title,
             &d.origin,
+            &d.parent_tool,
         ),
     )?;
     Ok(())

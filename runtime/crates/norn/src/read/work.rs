@@ -16,7 +16,7 @@ fn opt<T>(r: Result<T, SqliteError>) -> Result<Option<T>, CoordError> {
 /// The detail of timeline step STEP, if it has one.
 pub fn step_detail(conn: &Tx, step: i64) -> Result<Option<StepDetail>, CoordError> {
     opt(conn.query_row(
-        "select step, tool, kind, path, line_start, line_end, query, url, title, origin \
+        "select step, tool, kind, path, line_start, line_end, query, url, title, origin, parent_tool \
          from step_detail where step = ?1",
         [step],
         |r| {
@@ -31,6 +31,7 @@ pub fn step_detail(conn: &Tx, step: i64) -> Result<Option<StepDetail>, CoordErro
                 url: r.get(7)?,
                 title: r.get(8)?,
                 origin: r.get(9)?,
+                parent_tool: r.get(10)?,
             })
         },
     ))

@@ -535,6 +535,15 @@ impl Agent {
                     &out,
                 );
             }
+            // a subagent, in the shape only Claude sends
+            "provider:task" if self.kind == Kind::Claude => {
+                let task = format!("tc-{turn}-{}", self.next_out_id);
+                let child = format!("tc-{turn}-{}", self.next_out_id + 1);
+                self.next_out_id += 2;
+                for u in claude::task_updates(&task, &child, rest) {
+                    self.update(sid, u);
+                }
+            }
             _ if head.starts_with("provider:") => {
                 self.provider_tool(sid, turn, &head[9..], rest);
             }

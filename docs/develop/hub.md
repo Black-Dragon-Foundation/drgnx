@@ -1359,7 +1359,8 @@ query or URL, which is only in the title, is labelled `acp-title`. A `Read` has 
 Content is never kept and no text field is longer than 4 KiB. A shell call has no detail yet (the shell-read layers
 write `command` and `opened` details). The detail is the step's `detail` on `agent-step` and `timeline/get`
 (`runstav::methods::timeline::StepDetail`). The mock agent's `provider:read|grep|web-search|web-fetch|write` words
-send each personality's real shapes.
+send each personality's real shapes. A Claude Code subagent's steps (the `Task` tool's nested calls) keep the
+`Task` call's id as `detail.parent_tool` (`work::subagents`); the mock's `provider:task DESCRIPTION` sends one.
 
 ### The presence model
 

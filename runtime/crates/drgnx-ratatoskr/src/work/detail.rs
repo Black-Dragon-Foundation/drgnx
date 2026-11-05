@@ -35,6 +35,7 @@ pub fn wire(d: &StepDetail) -> runstav::methods::timeline::StepDetail {
         query: d.query.clone(),
         url: d.url.clone(),
         title: d.title.clone(),
+        parent_tool: d.parent_tool.clone(),
         origin: d.origin.clone(),
     }
 }

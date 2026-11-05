@@ -252,6 +252,24 @@ it was recorded in, and computes the steps it rests on. `work/conclusions {sessi
 - Tests: `work::conclusions::tests` (`both_arrival_orders_stamp_the_same_step`, pattern A over two sessions; the
   rest pattern D) and norn's `the_agents_step_argument_is_ignored` (D).
 
+### Subagents
+
+`work::subagents` groups a Claude Code session's subagents under it. Each nested update of a subagent carries
+`_meta.claudeCode.parentToolUseId`, the id of the parent's `Task` tool call; the hub keeps it beside the entries
+(`tool_meta`) and on each of the subagent's steps (`step_detail.parent_tool`, `detail.parent_tool` on `agent-step` and
+`timeline/get`).
+
+- `group(session, calls) -> Vec<Child {parent_session, parent_tool, name, description, steps}>` (pure): one child per
+  `Task` call that has nested calls, named by the call's `rawInput.subagent_type` (else `subagent`) and described by
+  its `description`, its steps the nested calls in order. `Child::item_id()` is `agent:SID/TOOLID`, the map's
+  `Kind::Subagent` item; it shares the parent's worktree and its spend is the parent's. `Session::subagents()` groups a
+  live session's tool calls.
+- Without a parent id (another adapter, or none sent) there is no child: the steps stay the parent's, and the trail
+  says "subagent steps not separated". The hub does not advertise `capabilities.subagents` (that form makes child
+  sessions the hub did not start).
+- Tests: `work::subagents::tests` (pattern D) and conformance `work/claude-subagent-is-a-child` (pattern B; the mock's
+  `provider:task`).
+
 ### Presence
 
 `work::presence` is the hub's presence model; its contract is in `docs/develop/hub.md`, "The presence model".

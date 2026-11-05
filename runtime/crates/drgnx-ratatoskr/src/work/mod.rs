@@ -9,6 +9,7 @@
 //! - [`presence`]: who is in which file, at which line, now (the presence model part 3 builds on).
 //! - [`shell_read`]: the files a shell command names, parsed from its text and kept inside the workspace (layer 1 of
 //!   "reads through shell commands").
+//! - [`subagents`]: Claude Code's subagents, grouped under their parent by the `Task` call that started them.
 //! - [`specs`]: a spec an agent writes becomes a `spec` entity at once.
 
 pub mod asks;
@@ -19,3 +20,4 @@ pub mod machines;
 pub mod presence;
 pub mod shell_read;
 pub mod specs;
+pub mod subagents;

@@ -721,8 +721,9 @@ schema 7 is made, migrated or found, so schema 6 and a fresh file arrive at 8 to
   `("hub", Class::System)` through `write::work::{new_ask, link_asked}`; kind `ask` is registered with the class guard,
   so an agent's `graph_write` of it is refused.
 - **`step_detail`** (what a timeline step read, searched or fetched; one row per `step`): `step, tool, kind, path,
-  line_start, line_end, query, url, title, origin`, with `origin` one of `acp`, `acp-title`, `browser`, `command`,
-  `opened`. Content is never kept. `write::work::put_step_detail`, `read::work::step_detail`.
+  line_start, line_end, query, url, title, parent_tool, origin`, with `origin` one of `acp`, `acp-title`, `browser`,
+  `command`, `opened`; `parent_tool` is the `Task` tool call of the Claude Code subagent that made the step (every
+  subagent step has a row for it). Content is never kept. `write::work::put_step_detail`, `read::work::step_detail`.
 - **`worktree_base`** (`worktree, repo, base_branch, base_commit, base_tree, at`): where a worktree branched from.
   `write::work::put_base`, `read::work::base`.
 - **`decision.sources`**: `decision` is a view over the entity, so the migration recreates the view with a last column

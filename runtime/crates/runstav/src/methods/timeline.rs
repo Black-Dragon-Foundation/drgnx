@@ -54,6 +54,10 @@ pub struct StepDetail {
     /// A page's title (the agent browser's).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// The `Task` tool call of the subagent that made the step (Claude's `parentToolUseId`); absent: the session's
+    /// own step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_tool: Option<String>,
     /// How the hub learned it: `acp`, `acp-title` (parsed from the title), `browser`, `command` or `opened`.
     pub origin: String,
 }
