@@ -893,7 +893,10 @@ Methods: `matrix/get`, `matrix/check` (no card), `presence/set`.
   work comes back as a bundle (`<task>.bundle`). The store is cloned, or fetched from the repository, before every
   tree is made from it, one store operation at a time (a run's tasks start together). A manager worker's tree that is made again
   after a restart reads its base in the store, fetched first (its own `.git` holds the integration branch as it was
-  when the tree was made), with the tree's objects lent to it; no git runs in the tree.
+  when the tree was made), with the tree's objects lent to it; no git runs in the tree. Whether a snapshot tree's
+  branch is there and where its tip is are read from its ref files (`.git/refs/heads/…`, `.git/packed-refs`), which
+  the agent writes, as `eitri::read_regular` reads (`runner::git::agent_text`): no link followed below the task folder,
+  a FIFO or device refused without blocking, 64 MiB at most; anything else counts as no ref.
 - **The gate reads the trusted repository only** (never a task folder; this removes the VC-guard refusals of the Lisp
   gate in snapshot mode). A snapshot bundle is first imported: `git bundle verify`, `fetch` with
   `fetch.fsckObjects`/`transfer.fsckObjects`, a branch that descends from the task's base, and the ref written
