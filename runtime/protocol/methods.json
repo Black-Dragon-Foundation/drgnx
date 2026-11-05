@@ -265,6 +265,15 @@
                   "null"
                 ]
               },
+              "turns": {
+                "description": "How many turns this hub process has started for the session: an editor that saw the count rise and no `busy`\nknows whole turns went by between two snapshots (a turn can be shorter than the update throttle).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "usage": {
                 "anyOf": [
                   {
@@ -2158,6 +2167,15 @@
                   "null"
                 ]
               },
+              "turns": {
+                "description": "How many turns this hub process has started for the session: an editor that saw the count rise and no `busy`\nknows whole turns went by between two snapshots (a turn can be shorter than the update throttle).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "usage": {
                 "anyOf": [
                   {
@@ -2559,6 +2577,15 @@
               "task": {
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "turns": {
+                "description": "How many turns this hub process has started for the session: an editor that saw the count rise and no `busy`\nknows whole turns went by between two snapshots (a turn can be shorter than the update throttle).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
                   "null"
                 ]
               },

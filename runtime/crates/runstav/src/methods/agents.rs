@@ -132,6 +132,10 @@ pub struct Snapshot {
         skip_serializing_if = "Option::is_none"
     )]
     pub entries_count: Option<u64>,
+    /// How many turns this hub process has started for the session: an editor that saw the count rise and no `busy`
+    /// knows whole turns went by between two snapshots (a turn can be shorter than the update throttle).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turns: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enforced: Option<bool>,
     /// Why the provider's lock is not enforced (shown "not enforced").

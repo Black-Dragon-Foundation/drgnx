@@ -379,7 +379,11 @@ in place: chunks appended, tool calls updated), at most one of each per session 
 agent, job); `events` (below).
 
 **Who gets what.** `agent` goes to every subscribed connection, and carries no tool call's `rawInput` (a permission
-request's tool call included). `agent-entries` goes only to the connections that called `agents/entries/subscribe`
+request's tool call included). A connection gets a session's snapshots at once (at most one per 50 ms) only while it
+shows the session (it subscribed to its entries); for every other session it gets at most 30 snapshots a second on the
+hub's clock, and when that is reached only the latest state of each session waits for the next second. The snapshot's
+`turns` counts the turns the hub process started for the session, so an editor that saw it rise with no `busy` in
+between knows whole turns went by (a turn can be shorter than the update throttle). `agent-entries` goes only to the connections that called `agents/entries/subscribe`
 for that session (the answer is the change number to continue from; the connection's subscriptions end with it, and
 `agents/entries/unsubscribe` ends one), and its tool entries have no `rawInput` either (a string `url` of the input
 stays as `url`). An editor that needs a tool call's input asks `agents/tool-input` (at most 256 KiB of its JSON text;
@@ -387,7 +391,8 @@ a larger one comes back cut, as a string, with `truncated`). The hub keeps the w
 busy session's turn once the tool call running now completes, and holds its queue. A mirror (below) subscribes while a
 transcript of its session is shown (`drgnx-agents-mirror-show` and `-hide`, run from `window-buffer-change-functions`
 for transcript buffers only) and fetches the transcript then; a session nobody shows has its turns told by the
-snapshots' `status` alone. `agents/get` still returns whole entries.
+snapshots' `status` and `turns`. `agents/get` still returns whole entries, `rawInput` included: it is one editor
+asking for one session on demand, not a broadcast.
 
 **Mirrors** (`core/drgnx-agents-mirror.el`): the editing Emacs keeps a `drgnx-agent-session` per hub session (`remote`
 = its id) filled from these events; an action on a mirror goes to the hub (`drgnx-agents--remote`, never waiting).

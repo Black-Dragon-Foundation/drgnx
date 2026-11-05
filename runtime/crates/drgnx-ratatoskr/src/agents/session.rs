@@ -168,6 +168,8 @@ struct State {
     max_repeat: u32,
     /// Tokens the finished turns used.
     tokens: u64,
+    /// Turns started by this hub process (the snapshot's `turns`).
+    turns: u64,
 }
 
 /// What a turn core step decided, with the permission requests it took out of the snapshot.
@@ -239,6 +241,7 @@ impl State {
             cmd_counts: HashMap::new(),
             max_repeat: 0,
             tokens: 0,
+            turns: 0,
             closed: Vec::new(),
             seq: 0,
             entries: Vec::new(),
@@ -2305,8 +2308,8 @@ impl Session {
                 .collect();
             (st.seq, entries)
         };
-        self.editors.broadcast(
-            "agent",
+        self.editors.broadcast_agent(
+            &self.id,
             json!({"id": self.id, "seq": seq, "session": self.snapshot()}),
         );
         if entries.is_empty() {
@@ -2364,6 +2367,7 @@ impl Session {
             exit: st.exit,
             stderr: st.stderr.clone(),
             entries_count: Some(st.entries.len() as u64),
+            turns: Some(st.turns),
             enforced: Some(self.enforced),
             enforced_why: self.enforced_why.clone(),
             role: Some(self.role),
@@ -3111,6 +3115,7 @@ impl Session {
     /// Turn TURN of ITEM began (its entry and step are in the state): its prompt goes to the agent.
     fn start_turn(self: &Arc<Self>, turn: u64, item: Queued) {
         self.wait_refusals.store(0, Ordering::Relaxed);
+        lock(&self.state).turns += 1;
         self.persist_queue();
         self.flush_transcript();
         self.changed();

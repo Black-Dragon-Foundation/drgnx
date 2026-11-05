@@ -66,5 +66,25 @@ and release what it wrote: an entry it holds has been sent to whoever asked for 
       (should (equal (reverse events) '((start . "h-t") (turn-start . "h-t") (turn-end . "h-t"))))
       (should-not (drgnx-agent-session-entries (drgnx-agents-mirror--find "h-t"))))))
 
+(ert-deftest drgnx-agents-mirror/short-turn-on-an-unshown-session-fires-one-turn-end ()
+  ;; a turn shorter than the hub's update throttle: no snapshot says busy, the turn count rose
+  (let (events (drgnx-agents-mirror--hub-turns (make-hash-table :test #'equal)))
+    (drgnx-agents-mirror-test--hooks events
+      (let ((snap (lambda (status turns)
+                    (drgnx-records-from-json 'drgnx-records-session
+                                             (list :id "h-t" :name "t" :profile "mock" :cwd "/w" :status status :task "T#1"
+                                                   :turns turns)))))
+        (drgnx-agents-mirror--apply-snapshot (funcall snap "idle" 0))
+        (should (equal (reverse events) '((start . "h-t"))))
+        (drgnx-agents-mirror--apply-snapshot (funcall snap "idle" 1))   ; one whole turn went by unseen
+        (should (equal (reverse events) '((start . "h-t") (turn-start . "h-t") (turn-end . "h-t"))))
+        (drgnx-agents-mirror--apply-snapshot (funcall snap "idle" 1))   ; the same again: nothing
+        (should (= 1 (cl-count 'turn-end events :key #'car)))
+        (drgnx-agents-mirror--apply-snapshot (funcall snap "busy" 3))   ; two whole turns, and one open now
+        (should (= 2 (cl-count 'turn-end events :key #'car)))
+        (should (= 3 (cl-count 'turn-start events :key #'car)))
+        (drgnx-agents-mirror--apply-snapshot (funcall snap "idle" 3))   ; the open one ends
+        (should (= 3 (cl-count 'turn-end events :key #'car) (cl-count 'turn-start events :key #'car)))))))
+
 (provide 'agents-mirror-entries-test)
 ;;; agents-mirror-entries-test.el ends here

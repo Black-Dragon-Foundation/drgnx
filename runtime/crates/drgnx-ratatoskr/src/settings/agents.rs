@@ -21,6 +21,8 @@ pub struct Editors {
     subscribers: Mutex<BTreeMap<u64, Arc<Outbox>>>,
     /// Session id → the connections that asked for its `agent-entries`.
     entry_subs: Mutex<HashMap<String, std::collections::BTreeSet<u64>>>,
+    /// Connection → the pace of the snapshots it gets for sessions it does not show.
+    pacers: Mutex<HashMap<u64, crate::agents::wire::Pacer>>,
     confirms: Mutex<HashMap<i64, oneshot::Sender<EditorAnswer>>>,
     explains: Mutex<HashMap<u64, oneshot::Sender<Vec<Value>>>>,
     next: AtomicU64,
@@ -39,6 +41,7 @@ impl Editors {
     /// Connection CONN is gone.
     pub fn gone(&self, conn: u64) {
         lock(&self.subscribers).remove(&conn);
+        lock(&self.pacers).remove(&conn);
         lock(&self.entry_subs).retain(|_, set| {
             set.remove(&conn);
             !set.is_empty()
@@ -70,12 +73,83 @@ impl Editors {
         false
     }
 
+    /// Session SID's snapshot DATA (`agent`) to every subscriber.  A connection that shows the session (it asked for
+    /// its entries) gets it at once; any other gets at most [`SNAPSHOTS_PER_WINDOW`] a window of the sessions it does
+    /// not show, the latest state of each when the window opens (on the hub's clock).
+    pub fn broadcast_agent(self: &Arc<Self>, sid: &str, data: Value) {
+        let Some(line) = crate::front::event_line("agent", data) else {
+            return;
+        };
+        let shown = lock(&self.entry_subs).get(sid).cloned().unwrap_or_default();
+        let conns: Vec<(u64, Arc<Outbox>)> = lock(&self.subscribers)
+            .iter()
+            .map(|(c, o)| (*c, o.clone()))
+            .collect();
+        let now = crate::clock::now();
+        let mut closed = Vec::new();
+        for (conn, out) in conns {
+            let (send, arm) = if shown.contains(&conn) {
+                if let Some(p) = lock(&self.pacers).get_mut(&conn) {
+                    p.forget(sid);
+                }
+                (Some(line.clone()), None)
+            } else {
+                let o = lock(&self.pacers)
+                    .entry(conn)
+                    .or_default()
+                    .offer(now, sid, line.clone());
+                (o.send, o.arm)
+            };
+            if send.is_some_and(|l| !out.push(l)) {
+                closed.push(conn);
+            }
+            if let Some(after) = arm {
+                self.arm_snapshots(conn, after);
+            }
+        }
+        if !closed.is_empty() {
+            lock(&self.subscribers).retain(|c, _| !closed.contains(c));
+        }
+    }
+
+    /// Call [`Editors::flush_snapshots`] for CONN after AFTER on the hub's clock.
+    fn arm_snapshots(self: &Arc<Self>, conn: u64, after: Duration) {
+        let me = self.clone();
+        crate::clock::spawn("editors:snapshots", async move {
+            crate::clock::sleep(after).await;
+            me.flush_snapshots(conn);
+        });
+    }
+
+    fn flush_snapshots(self: &Arc<Self>, conn: u64) {
+        let Some(out) = lock(&self.subscribers).get(&conn).cloned() else {
+            lock(&self.pacers).remove(&conn);
+            return;
+        };
+        let (lines, again) = match lock(&self.pacers).get_mut(&conn) {
+            Some(p) => p.flush(crate::clock::now()),
+            None => return,
+        };
+        for l in lines {
+            if !out.push(l) {
+                lock(&self.subscribers).remove(&conn);
+                return;
+            }
+        }
+        if let Some(after) = again {
+            self.arm_snapshots(conn, after);
+        }
+    }
+
     /// Connection CONN gets session SID's `agent-entries` from now on.
     pub fn subscribe_entries(&self, sid: &str, conn: u64) {
         lock(&self.entry_subs)
             .entry(sid.to_string())
             .or_default()
             .insert(conn);
+        if let Some(p) = lock(&self.pacers).get_mut(&conn) {
+            p.forget(sid);
+        }
     }
 
     /// Connection CONN no longer gets session SID's `agent-entries`.

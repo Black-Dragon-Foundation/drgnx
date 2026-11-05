@@ -112,13 +112,26 @@ with no busy status in between."
         (drgnx-agents-mirror--turn-begin m)
         (drgnx-agents-mirror--turn-end m)))))
 
-(defun drgnx-agents-mirror--transitions (m new prev)
+(defvar drgnx-agents-mirror--shown)
+(defvar drgnx-agents-mirror--hub-turns (make-hash-table :test #'equal)
+  "Hub id → the turn count (the snapshot's `turns') of the last snapshot applied.")
+
+(defun drgnx-agents-mirror--transitions (m new prev &optional turned)
   "Run the task hooks for what a snapshot changed in mirror M, which was in status PREV before it (M was just made,
 NEW).  A session with a task runs `start' when first seen, `turn-start' when it becomes busy and `turn-end' when it
-stops being busy: each once per turn (`drgnx-agents-mirror--turns'), so a snapshot sent again runs nothing."
+stops being busy: each once per turn (`drgnx-agents-mirror--turns'), so a snapshot sent again runs nothing.
+TURNED, the number of turns the hub started since the last snapshot (when positive), tells of turns that were over
+between two snapshots (shorter than the hub's update throttle, so no `busy' was seen): the open turn ends, each whole
+turn begins and ends, and the one open now begins."
   (when (and new (drgnx-agent-session-task m)) (drgnx-agents-mirror--task-hook m 'start))
   (let ((was (eq prev 'busy)) (is (eq (drgnx-agent-session-status m) 'busy)))
-    (cond ((and is (not was)) (drgnx-agents-mirror--turn-begin m))
+    (cond ((and turned (> turned 0))
+           (when was (drgnx-agents-mirror--turn-end m))
+           (dotimes (_ (- turned (if is 1 0)))
+             (drgnx-agents-mirror--turn-begin m)
+             (drgnx-agents-mirror--turn-end m))
+           (when is (drgnx-agents-mirror--turn-begin m)))
+          ((and is (not was)) (drgnx-agents-mirror--turn-begin m))
           ((and was (not is)) (drgnx-agents-mirror--turn-end m)))))
 
 (defun drgnx-agents-mirror--apply-snapshot (snap)
@@ -137,7 +150,11 @@ stops being busy: each once per turn (`drgnx-agents-mirror--turns'), so a snapsh
       (when (and new (plist-get snap :enforced_why))
         (drgnx-notify 'agents 'warn (format "%s: %s" (plist-get snap :name) (format "not enforced: %s" (plist-get snap :enforced_why)))
                       :id (intern (concat "lock-" id)) :life 'event)))
-    (drgnx-agents-mirror--transitions m new prev)
+    ;; a session whose transcript is shown has its turns told by its entries too; one nobody shows, by the count alone
+    (let* ((turns (plist-get snap :turns)) (last (gethash id drgnx-agents-mirror--hub-turns)))
+      (when turns (puthash id turns drgnx-agents-mirror--hub-turns))
+      (drgnx-agents-mirror--transitions
+       m new prev (and turns last (> turns last) (not (gethash id drgnx-agents-mirror--shown)) (- turns last))))
     (cons m new)))
 
 (defun drgnx-agents-mirror-lock-label (m)
@@ -354,6 +371,7 @@ different connections, so the fetch waits): the entries between the two wait (`-
   (remove-hook 'window-buffer-change-functions #'drgnx-agents-mirror--windows-changed)
   (setq drgnx-agents-mirror--paused nil)
   (clrhash drgnx-agents-mirror--shown)
+  (clrhash drgnx-agents-mirror--hub-turns)
   (clrhash drgnx-agents-mirror--fetching)
   (clrhash drgnx-agents-mirror--lock)
   (clrhash drgnx-agents-mirror--turns)

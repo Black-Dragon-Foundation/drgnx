@@ -1,12 +1,13 @@
-{"scenario": "work/mirror-traffic-at-30-agents", "requires": ["v1", "test-hooks"], "pending": "the burst of 30 agents sends 44 agent snapshots in one go, over the budget row's 30 per second: the hub has no snapshot coalescing across sessions (the manager decides whether the budget or the hub changes)", "doc": "Budget row work-mirror-traffic (design 13): 30 agents each finish a turn that writes 1 MB, while an editor is subscribed to the hub's events and a second one also to the entries of one session. In 1 s the first gets at most 30 agent snapshots and no agent-entries; the second gets entries of its one session only; no line to either holds rawInput."}
+{"scenario": "work/mirror-traffic-at-30-agents", "requires": ["v1", "test-hooks"], "doc": "Budget row work-mirror-traffic (design 13), on the hub clock. 30 agents each finish two turns that write 1 MB within one hub second, while an editor is subscribed to the hub's events and a second also to the entries of one session. The first gets at most 30 agent snapshots in that second, no agent-entries, and when the next window opens only the latest state of each session (two turns done); the second gets its session's entries only. No line to either holds rawInput."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
 {"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
-{"do": "start", "hub": "h"}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "connect", "conn": "e", "hub": "h"}
 {"do": "connect", "conn": "s", "hub": "h"}
+{"do": "connect", "conn": "q", "hub": "h"}
 {"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
 {"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
 {"do": "send", "conn": "s", "json": {"id": 1, "method": "subscribe"}}
@@ -41,39 +42,55 @@
 {"do": "send", "conn": "c", "json": {"id": 128, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "chat"}}}
 {"do": "send", "conn": "c", "json": {"id": 129, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "chat"}}}
 {"do": "send", "conn": "c", "json": {"id": 130, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "chat"}}}
-{"do": "expect", "conn": "c", "json": {"id": 101, "result": {"id": "$capture:sid1", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 102, "result": {"id": "$capture:sid2", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 103, "result": {"id": "$capture:sid3", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 104, "result": {"id": "$capture:sid4", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 105, "result": {"id": "$capture:sid5", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 106, "result": {"id": "$capture:sid6", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 107, "result": {"id": "$capture:sid7", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 108, "result": {"id": "$capture:sid8", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 109, "result": {"id": "$capture:sid9", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 110, "result": {"id": "$capture:sid10", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 111, "result": {"id": "$capture:sid11", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 112, "result": {"id": "$capture:sid12", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 113, "result": {"id": "$capture:sid13", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 114, "result": {"id": "$capture:sid14", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 115, "result": {"id": "$capture:sid15", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 116, "result": {"id": "$capture:sid16", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 117, "result": {"id": "$capture:sid17", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 118, "result": {"id": "$capture:sid18", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 119, "result": {"id": "$capture:sid19", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 120, "result": {"id": "$capture:sid20", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 121, "result": {"id": "$capture:sid21", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 122, "result": {"id": "$capture:sid22", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 123, "result": {"id": "$capture:sid23", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 124, "result": {"id": "$capture:sid24", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 125, "result": {"id": "$capture:sid25", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 126, "result": {"id": "$capture:sid26", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 127, "result": {"id": "$capture:sid27", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 128, "result": {"id": "$capture:sid28", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 129, "result": {"id": "$capture:sid29", "name": "$string"}}}
-{"do": "expect", "conn": "c", "json": {"id": 130, "result": {"id": "$capture:sid30", "name": "$string"}}}
+{"do": "expect", "conn": "c", "json": {"id": 101, "result": {"id": "$capture:sid1", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 102, "result": {"id": "$capture:sid2", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 103, "result": {"id": "$capture:sid3", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 104, "result": {"id": "$capture:sid4", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 105, "result": {"id": "$capture:sid5", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 106, "result": {"id": "$capture:sid6", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 107, "result": {"id": "$capture:sid7", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 108, "result": {"id": "$capture:sid8", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 109, "result": {"id": "$capture:sid9", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 110, "result": {"id": "$capture:sid10", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 111, "result": {"id": "$capture:sid11", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 112, "result": {"id": "$capture:sid12", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 113, "result": {"id": "$capture:sid13", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 114, "result": {"id": "$capture:sid14", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 115, "result": {"id": "$capture:sid15", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 116, "result": {"id": "$capture:sid16", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 117, "result": {"id": "$capture:sid17", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 118, "result": {"id": "$capture:sid18", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 119, "result": {"id": "$capture:sid19", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 120, "result": {"id": "$capture:sid20", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 121, "result": {"id": "$capture:sid21", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 122, "result": {"id": "$capture:sid22", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 123, "result": {"id": "$capture:sid23", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 124, "result": {"id": "$capture:sid24", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 125, "result": {"id": "$capture:sid25", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 126, "result": {"id": "$capture:sid26", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 127, "result": {"id": "$capture:sid27", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 128, "result": {"id": "$capture:sid28", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 129, "result": {"id": "$capture:sid29", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 130, "result": {"id": "$capture:sid30", "name": "$string"}}, "within_ms": 30000}
 {"do": "send", "conn": "s", "json": {"id": 2, "method": "agents/entries/subscribe", "params": {"session": "$sid1"}}}
 {"do": "expect", "conn": "s", "json": {"id": 2, "result": {"seq": "$number"}}}
-{"do": "count_events", "conn": "e", "for_ms": 500}
+{"do": "send", "conn": "c", "json": {"id": 301, "method": "__test_advance", "params": {"ms": 250}}}
+{"do": "expect", "conn": "c", "json": {"id": 301, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 302, "method": "__test_advance", "params": {"ms": 250}}}
+{"do": "expect", "conn": "c", "json": {"id": 302, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 303, "method": "__test_advance", "params": {"ms": 250}}}
+{"do": "expect", "conn": "c", "json": {"id": 303, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 304, "method": "__test_advance", "params": {"ms": 250}}}
+{"do": "expect", "conn": "c", "json": {"id": 304, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 305, "method": "__test_advance", "params": {"ms": 250}}}
+{"do": "expect", "conn": "c", "json": {"id": 305, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 306, "method": "__test_advance", "params": {"ms": 250}}}
+{"do": "expect", "conn": "c", "json": {"id": 306, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 307, "method": "__test_advance", "params": {"ms": 250}}}
+{"do": "expect", "conn": "c", "json": {"id": 307, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 308, "method": "__test_advance", "params": {"ms": 250}}}
+{"do": "expect", "conn": "c", "json": {"id": 308, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "count_events", "conn": "e", "for_ms": 300}
 {"do": "count_events", "conn": "s", "for_ms": 1}
 {"do": "send", "conn": "c", "json": {"id": 201, "method": "agents/send", "params": {"id": "$sid1", "text": "tool:write 1000000"}}}
 {"do": "send", "conn": "c", "json": {"id": 202, "method": "agents/send", "params": {"id": "$sid2", "text": "tool:write 1000000"}}}
@@ -135,6 +152,81 @@
 {"do": "expect", "conn": "c", "json": {"id": 228, "result": true}}
 {"do": "expect", "conn": "c", "json": {"id": 229, "result": true}}
 {"do": "expect", "conn": "c", "json": {"id": 230, "result": true}}
-{"do": "expect", "conn": "s", "json": {"event": "agent-entries", "data": {"id": "$sid1", "entries": {"$contains": [["$any", {"type": "stop"}]]}}}, "within_ms": 20000}
-{"do": "count_events", "conn": "e", "for_ms": 1000, "at_most": {"agent": 30}, "none": ["agent-entries"], "lacks": "rawInput"}
-{"do": "count_events", "conn": "s", "for_ms": 300, "at_most": {"agent-entries": 10}, "lacks": "rawInput"}
+{"do": "expect_silent", "conn": "q", "for_ms": 2500}
+{"do": "send", "conn": "c", "json": {"id": 501, "method": "__test_advance", "params": {"ms": 100}}}
+{"do": "expect", "conn": "c", "json": {"id": 501, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 401, "method": "agents/send", "params": {"id": "$sid1", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 402, "method": "agents/send", "params": {"id": "$sid2", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 403, "method": "agents/send", "params": {"id": "$sid3", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 404, "method": "agents/send", "params": {"id": "$sid4", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 405, "method": "agents/send", "params": {"id": "$sid5", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 406, "method": "agents/send", "params": {"id": "$sid6", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 407, "method": "agents/send", "params": {"id": "$sid7", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 408, "method": "agents/send", "params": {"id": "$sid8", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 409, "method": "agents/send", "params": {"id": "$sid9", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 410, "method": "agents/send", "params": {"id": "$sid10", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 411, "method": "agents/send", "params": {"id": "$sid11", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 412, "method": "agents/send", "params": {"id": "$sid12", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 413, "method": "agents/send", "params": {"id": "$sid13", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 414, "method": "agents/send", "params": {"id": "$sid14", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 415, "method": "agents/send", "params": {"id": "$sid15", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 416, "method": "agents/send", "params": {"id": "$sid16", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 417, "method": "agents/send", "params": {"id": "$sid17", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 418, "method": "agents/send", "params": {"id": "$sid18", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 419, "method": "agents/send", "params": {"id": "$sid19", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 420, "method": "agents/send", "params": {"id": "$sid20", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 421, "method": "agents/send", "params": {"id": "$sid21", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 422, "method": "agents/send", "params": {"id": "$sid22", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 423, "method": "agents/send", "params": {"id": "$sid23", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 424, "method": "agents/send", "params": {"id": "$sid24", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 425, "method": "agents/send", "params": {"id": "$sid25", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 426, "method": "agents/send", "params": {"id": "$sid26", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 427, "method": "agents/send", "params": {"id": "$sid27", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 428, "method": "agents/send", "params": {"id": "$sid28", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 429, "method": "agents/send", "params": {"id": "$sid29", "text": "tool:write 1000000"}}}
+{"do": "send", "conn": "c", "json": {"id": 430, "method": "agents/send", "params": {"id": "$sid30", "text": "tool:write 1000000"}}}
+{"do": "expect", "conn": "c", "json": {"id": 401, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 402, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 403, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 404, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 405, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 406, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 407, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 408, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 409, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 410, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 411, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 412, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 413, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 414, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 415, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 416, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 417, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 418, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 419, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 420, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 421, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 422, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 423, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 424, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 425, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 426, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 427, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 428, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 429, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 430, "result": true}}
+{"do": "expect_silent", "conn": "q", "for_ms": 2500}
+{"do": "send", "conn": "c", "json": {"id": 502, "method": "__test_advance", "params": {"ms": 100}}}
+{"do": "expect", "conn": "c", "json": {"id": 502, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "count_events", "conn": "e", "for_ms": 300, "at_most": {"agent": 30}, "none": ["agent-entries"], "lacks": "rawInput"}
+{"do": "send", "conn": "c", "json": {"id": 601, "method": "__test_advance", "params": {"ms": 250}}}
+{"do": "expect", "conn": "c", "json": {"id": 601, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 602, "method": "__test_advance", "params": {"ms": 250}}}
+{"do": "expect", "conn": "c", "json": {"id": 602, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 603, "method": "__test_advance", "params": {"ms": 250}}}
+{"do": "expect", "conn": "c", "json": {"id": 603, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 604, "method": "__test_advance", "params": {"ms": 250}}}
+{"do": "expect", "conn": "c", "json": {"id": 604, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid30", "session": {"status": "idle", "entries-count": 6}}}, "within_ms": 10000}
+{"do": "count_events", "conn": "e", "for_ms": 300, "at_most": {"agent": 29}, "none": ["agent-entries"], "lacks": "rawInput"}
+{"do": "count_events", "conn": "s", "for_ms": 300, "lacks": "rawInput"}
