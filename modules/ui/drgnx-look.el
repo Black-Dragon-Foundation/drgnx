@@ -13,7 +13,10 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-wb)
-(require 'drgnx-decor)
+;; the decorations module sits beside this file (modules are not on the load path)
+(unless (featurep 'drgnx-decor)
+  (load (expand-file-name "drgnx-decor" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(declare-function drgnx-decor-faces-on "drgnx-decor" ())
 
 ;;;; Chrome (Glitnir, the compositor)
 
