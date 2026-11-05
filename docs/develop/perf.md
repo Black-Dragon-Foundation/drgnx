@@ -14,8 +14,6 @@ DRGNX_PERF_WORKLOADS='A B'  only those workloads (space-separated names from the
                             A partial run is judged against its own budgets and writes no history line
 DRGNX_PERF_RESULTS=FILE     write the results as JSON: every metric (wall clock included), each workload's calibration,
                             the Emacs version and the commit
-DRGNX_PERF_ONLY=REGEXP      run only the workloads whose name matches (an Emacs regexp: `\|` for alternation): judged
-                            against their own budgets, the history is not written
 DRGNX_UI_SIZE=WxH           the perf sessions' monitor size (default 1400x800); DRGNX_UI_SCALE=S their scale (a session
                             that cannot apply it fails to start: exit 1, nothing measured)
 DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the three evil workloads
@@ -108,7 +106,7 @@ in the same runs, and `typing-evil` minus `typing` was between -1.1 and -0.1 ms:
 To measure only some workloads (the run is GUI-heavy), name them:
 
 ```sh
-DRGNX_MODAL_ELPA=… DRGNX_PERF_ONLY='^\(typing\|typing-evil\)$' bin/drgnx test --perf
+DRGNX_MODAL_ELPA=… DRGNX_PERF_WORKLOADS='typing typing-evil' bin/drgnx test --perf
 ```
 
 Only the budgets of the workloads that ran are judged, and such a run is not written to the history. Without the
@@ -571,7 +569,7 @@ The audit lists the hook functions that ran while the frame opened (`after-make-
 
 ## Tests
 
-`test/unit/perf-modal-test.el` (the evil workloads, their budget rows, the 1 ms rule, `DRGNX_PERF_ONLY`), `test/unit/perf-test.el` (statistics, the probes, the audit — including that it never stops a function from removing
+`test/unit/perf-modal-test.el` (the evil workloads, their budget rows, the 1 ms rule, `DRGNX_PERF_WORKLOADS`), `test/unit/perf-test.el` (statistics, the probes, the audit — including that it never stops a function from removing
 itself — budgets, history), `test/unit/core-gc-test.el`, `test/unit/gc-census-test.el` (the census); the workloads run
 with `drgnx test --perf`.
 

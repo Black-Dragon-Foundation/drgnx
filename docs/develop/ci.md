@@ -233,6 +233,17 @@ time exceeds the ratio times the calibration or over half the samples fail (reru
 `test/timing-lane.sh --self-test` checks the verdicts and where the calibration runs (`drgnx-ci/the-timing-lane-judges-and-calibrates-in-the-image`
 runs it with the unit suite).
 
+The same job then runs the Rust timing tests (`#[ignore = "timing: …"]` under `runtime/`, which no other Rust job runs) with
+`test/timing-rust.sh`: each test listed in `test/timing-rust.txt` alone, from a Fedora 45 container, one `pass`/`red` line each,
+also report-only (artifact `drgnx-timing-rust-report`). `drgnx-ci/every-rust-timing-test-is-in-the-timing-list` fails a timing
+test the list lacks.
+
+**Runner images.** Every job names its image (`ubuntu-24.04`, never `ubuntu-latest`, which moves to 26.04 between
+2026-10-19 and 2026-11-19), so the move changes nothing until a job is moved on purpose. `runtime.yml`'s `escape-host`
+also runs on `ubuntu-26.04` and `ubuntu-26.04-arm`, gating like the others: bubblewrap 0.12.0 as `/usr/bin/bwrap` and no global sysctl
+(26.04 keeps `apparmor_restrict_unprivileged_userns=1` and confirms `/usr/bin/bwrap` by its own profile), the setup
+[gleipnir.md](gleipnir.md) recommends. The 24.04 legs lift the restriction with the sysctl.
+
 `bin/drgnx test --preflight --out REPORT [--seeds N] [--nidhogg-tarball FILE]` hunts ordering bugs: the `det` files twice
 in two shuffle orders with the runtime audit failing (`DRGNX_TEST_AUDIT_FAIL=1`: a `det` test that really sleeps, waits
 on a process or starts one is red; any red, or a difference between the runs, is red), the `cond` files at 1 CPU, 2 CPUs and half a

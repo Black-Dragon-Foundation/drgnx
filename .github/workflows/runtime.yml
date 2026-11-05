@@ -235,10 +235,13 @@ jobs:
     if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-escape ')) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    # Every runner is pinned (never `ubuntu-latest`, which moves to 26.04 by 2026-11-19). The 24.04 legs lift AppArmor's
+    # userns restriction with a global sysctl; the 26.04 legs do not: they test the configuration Gleipnir recommends
+    # (bubblewrap 0.12.0 as /usr/bin/bwrap, which 26.04's `bwrap-userns-restrict` profile covers).
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, ubuntu-26.04, ubuntu-26.04-arm]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -258,6 +261,7 @@ jobs:
           sudo ninja -C _build install
           ls -l /usr/bin/bwrap; /usr/bin/bwrap --version
       - name: user namespaces for unprivileged processes (AppArmor's restriction lifted)
+        if: ${{ !startsWith(matrix.os, 'ubuntu-26.04') }}
         run: |
           uname -r
           cat /sys/kernel/security/lsm; echo
@@ -265,6 +269,13 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           unshare --user --map-root-user true
           bwrap --unshare-all --ro-bind / / true
+      # 26.04, no sysctl: what the kernel and the profile say about unprivileged user namespaces, for the report
+      - name: user namespaces as the image ships them
+        if: ${{ startsWith(matrix.os, 'ubuntu-26.04') }}
+        run: |
+          uname -r
+          sysctl kernel.apparmor_restrict_unprivileged_userns kernel.unprivileged_userns_clone || true
+          /usr/bin/bwrap --unshare-all --ro-bind / / true && echo "bwrap: user namespaces work" || echo "bwrap: refused (exit $?)"
       - run: rustup toolchain install stable --profile minimal
       # one cache for the job's builds (the escape suite's and the agent core's tests), saved at its end
       - id: rv
@@ -276,8 +287,8 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             runtime/target
-          key: cargo-${{ runner.os }}-${{ runner.arch }}-escape-${{ steps.rv.outputs.v }}-${{ hashFiles('runtime/Cargo.lock', 'runtime/Cargo.toml', 'runtime/*/Cargo.toml', 'runtime/crates/*/Cargo.toml') }}
-          restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-escape-${{ steps.rv.outputs.v }}-
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-escape-${{ matrix.os }}-${{ steps.rv.outputs.v }}-${{ hashFiles('runtime/Cargo.lock', 'runtime/Cargo.toml', 'runtime/*/Cargo.toml', 'runtime/crates/*/Cargo.toml') }}
+          restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-escape-${{ matrix.os }}-${{ steps.rv.outputs.v }}-
       # the seccomp real-install cases and everything else of the three Linux crates, on this architecture
       - run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p gleipnir -p draugr -p eitri -p gleipnir-escape
       - id: build
@@ -295,7 +306,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: escape-report-host-${{ runner.arch }}
+          name: escape-report-host-${{ matrix.os }}
           path: ${{ runner.temp }}/escape/escape-${{ runner.arch }}.json
           if-no-files-found: warn
       # The agent core's sandbox lane (agent system part 1): the tests marked #[ignore] because they need the real
