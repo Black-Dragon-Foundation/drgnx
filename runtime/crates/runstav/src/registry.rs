@@ -369,7 +369,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 123, "{names:?}");
+        assert_eq!(names.len(), 124, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -437,9 +437,10 @@ mod tests {
     ];
 
     /// The agent core's methods that write (agent system part 1, Task 0), besides `agents/*` and `job/*`.
-    const CORE_WRITES: [&str; 10] = [
+    const CORE_WRITES: [&str; 11] = [
         "agents/move",
         "agents/role",
+        "exec/bump",
         "exec/start",
         "exec/stop",
         "messages/retract",
@@ -639,7 +640,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 86);
+        assert_eq!(with, 87);
     }
 
     #[test]

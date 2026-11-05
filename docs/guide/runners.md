@@ -34,3 +34,61 @@ terminal". That covers:
 
 **A changed host key is never accepted.** The runner stops until you have found out why the key changed and fixed your
 `known_hosts` yourself.
+
+## Keys
+
+Some jobs need a secret: a registry token to publish, a deploy key to fetch a private dependency. A job names the
+keys it needs (names only); drgnx gets them to the job on the runner without writing them anywhere there:
+
+- **Only in memory.** The key travels inside drgnx's own connection and goes straight to a small helper that lives
+  exactly as long as the job. The helper keeps it in memory that is never swapped, never in a core dump and not
+  readable by other programs, and wipes it when the job ends. Nothing is written to the runner's disk, and podman's
+  own records (`podman inspect`) show the key's name, never its value.
+- **Into the job's own environment.** The job's command runs as `drgnx-key exec NAME=VARIABLE -- your command`
+  (drgnx sets that up, the job can't change it): `drgnx-key` reads each key and starts the command with the variable
+  set, in that process only. A tool that reads a secret from a pipe can use `drgnx-key get NAME` instead.
+- **A key that never arrives is drgnx's problem, not the job's.** `drgnx-key` waits up to 60 s for a key; if it
+  doesn't come (the connection dropped before drgnx could send it), the job ends as "key not delivered", never as a
+  failed test.
+- **Network goes through drgnx's proxy.** A job that may use the network reaches only the hosts it was allowed, through
+  a proxy beside it; cloud metadata services and link-local addresses are never reachable, even by a name you allowed.
+
+If the runner's disk gets low (below 20 GB, or 10 % of the runner folder's disk), the job that grew most since it
+started is stopped and ends as "disk", not as a failure.
+
+**The runner bundle.** drgnx copies three small programs to a runner: `sleipnir` (the runner itself), `drgnx-key` and
+`drgnx-fwd` (the job's way to the proxy). They are built static, so they start on any Linux and in any image.
+`install.sh` builds them for this machine's processor; for a runner of the other kind, run
+`drgnx build runner-bundle --arch aarch64` (or `x86_64`).
+
+## Which jobs go where
+
+All jobs wait in one queue, this machine's and your runners' alike, and each goes to the allowed machine that finishes
+it first (ties stay here). A job you start has priority 1; an agent's has 3, or 5 when it marks it `background`; only
+you can set or bump a priority. A job's row says where it runs and, while it waits, why. Each project chooses, in its
+settings:
+
+- `drgnx-runners-send`: which of its jobs may leave this machine: `"heavy"` (the default: only jobs marked heavy),
+  `"all"` or `"none"`;
+- `drgnx-runners-heavy`: suite or command patterns whose jobs count as heavy;
+- `drgnx-runners-image`: the image (pinned by digest) a runner runs its command jobs in;
+- `drgnx-runners-weight`: its share against other projects within a priority (default 1);
+- `drgnx-runners-project-visibility`: `"private"` (the default) or `"public"`.
+
+A job marked `local_only`, or started with `machine: local`, never leaves this machine; `machine: NAME` pins it to one
+runner.
+
+## When a machine fails
+
+A lost link is never a job's result: a job on a runner whose link drops is *detached*, and comes back when the runner
+answers again (a runner that lingers keeps its jobs for 10 minutes), or goes back to the queue. A **strike** is a
+failure that is the runner's, not the job's: setup or sync failed, the job's image is missing, the disk guard couldn't
+free room, the runner's own guard killed jobs, its link was lost while jobs ran (the second time in a day), its health
+check failed, or a key didn't arrive although the link stayed up. A red test, a crash, a job's own out-of-memory, a
+time-out, a preemption or an eviction never is.
+
+**Two strikes in a row, or two within an hour, bench the runner**: no job is placed there, and the runner list shows
+`benched: REASON (HH:MM, HH:MM)`, the reason of the strike that benched it and the times of its last two (UTC). Every
+5 minutes the hub checks each runner: its probe and the runner contract, a canary `true` in its image under the job
+caps, its free disk above the floor, and its clock within 2 s of this machine's. A pass brings a benched runner back
+with no strikes; a failure is one more strike. `drgnx runner unbench NAME` brings it back at once.

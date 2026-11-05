@@ -542,6 +542,7 @@ dependencies = [
  "bytes",
  "draugr",
  "eitri",
+ "forseti",
  "gleipnir",
  "hermod",
  "huginn",
@@ -2118,6 +2119,7 @@ name = "sleipnir"
 version = "0.1.0"
 dependencies = [
  "forseti",
+ "gleipnir",
  "libc",
  "proptest",
  "rustix",
@@ -2127,6 +2129,7 @@ dependencies = [
  "sha2",
  "skuld",
  "tempfile",
+ "tokio",
  "zeroize",
 ]
 

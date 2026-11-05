@@ -154,7 +154,6 @@ const RAW_SPAWNS: &[(&str, usize, &str)] = &[
     // write to clients: not on the clock yet; the gated tests do not reach them
     ("server.rs", 3, "the resume, the embedder and the backup"),
     ("sessions.rs", 2, "a session's MCP sockets"),
-    ("exec/mod.rs", 1, "a queued job's start"),
     ("agents/wake.rs", 1, "a job end's wake"),
     (
         "agents/session.rs",

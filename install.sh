@@ -844,6 +844,13 @@ build_ratatoskr() { # the toolchain, then `drgnx runtime build' and `runtime ins
     return 0
   fi
   "$DIR/bin/drgnx" runtime install --prefix "$PREFIX" || warn "could not install Ratatoskr: run drgnx runtime install --prefix $PREFIX"
+  # the runner bundle for this machine's architecture (docs/guide/runners.md): what `drgnx runner add` copies to a
+  # runner; a failure only means no runners yet
+  if [[ "$FAMILY" != macos ]]; then
+    say "Building the runner bundle (static, for your other machines; log: $log)…"
+    "$DIR/bin/drgnx" build runner-bundle >>"$log" 2>&1 ||
+      warn "the runner bundle failed to build (log: $log): drgnx runs, but can't add runners until it does. Fix the cause, then run: drgnx build runner-bundle"
+  fi
 }
 
 remember_emacs() { # drgnx commands run in the Emacs just installed, even when it is not `emacs' on PATH (macOS)

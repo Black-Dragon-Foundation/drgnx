@@ -74,7 +74,7 @@ cargo test -p sleipnir --no-default-features --features linux --test runner_host
 fleet.sh host runtime/target/debug/deps/runner_host-HASH [FILTER]...
 ```
 
-`host` copies the binary (and the `sleipnir` binary beside its `deps/`, which the job-exec rows start) into
+`host` copies the binary (and the `sleipnir` and `drgnx-key` binaries beside its `deps/`, which the job-exec and key rows start) into
 `/fleet/share` and runs it in every runner with `--ignored --test-threads=1`.
 
 ## Fleet rows

@@ -19,7 +19,8 @@ it does not depend on the agent that started it or on the editor, and it survive
   any other ("… is outside your worktree …"); `job_start` without a `cwd` uses the worktree. Your own jobs run with
   your rights, in the folder they name. On Linux the job is
   a transient `systemd-run --user` scope with a memory cap (`agents-job-memory`, default 4G); without a user systemd it
-  has a session and process group of its own. A job on another machine is refused: part 1 runs jobs on this machine.
+  has a session and process group of its own. `machine` is `auto` (the default: whichever allowed machine finishes it
+  first), `local`, or one of your runners by name (see `docs/guide/runners.md`); a name that is no runner is refused.
 - **Its files.** `<state>/hub/exec/<id>/` holds the log, the exit code and the result. The hub reads the same files
   after a restart: a job still running is picked up again (by its process and start time, not just its pid), one that
   ended meanwhile gets its result, one that vanished without an exit is marked lost. A picked-up job is waited on by
@@ -38,7 +39,16 @@ it does not depend on the agent that started it or on the editor, and it survive
   waits at no cost and is woken by the end.
 - **Methods.** `exec/start`, `exec/get`, `exec/list`, `exec/stop`, `exec/log` (at most 1000 lines a call from line
   `from`, or with `tail_bytes` the log's last bytes, up to 1 MiB, read from the file's end; bytes that are not UTF-8
-  come back replaced); agents use the `job_*` tools.
+  come back replaced), `exec/bump` (yours only: a queued job to priority 1); agents use the `job_*` tools.
+- **The queue and priority.** Every job but your servers enters one queue, kept in the hub's `runtime.db`, so it
+  survives a restart. The hub sets each job's priority: 1 for yours, 3 for an agent's `job_start`, 5 for `background`
+  work (2 and 4 are the splitter's probes and a plan's or gate's bulk). Only your own connections may send `priority`
+  (1 to 5) or bump a job; an agent's request with a priority is refused, and `background` can only lower its job's.
+  A job waits until a machine admits it, and its row says why (`waiting`: "every job slot of the machine is in use",
+  "needs 6144 MiB of memory; …", "this machine is on battery", …). Rows also say where a job runs (`machine`), its
+  `priority`, and on a runner its `attempt`. A start may mark a job `heavy` (under the project's
+  `drgnx-runners-send heavy`, the default, only heavy jobs may leave this machine), `local_only`, name the `keys` it
+  needs, and the `writes` it may make to the tree.
 
 ### The editor's jobs
 
@@ -124,13 +134,15 @@ cache for this).
   the agent's process ends (`session/close` first, for the CLIs that have it). The job's end, or your next message,
   resumes it on the same session (`session/resume`; Gemini, which can only load a session, reloads it with
   `session/load`).
-- **Machine slots.** This machine runs four agents' jobs at once (your own jobs, the editor's servers and one-shot work
-  among them, take no slot: they never hold an agent's job up, nor wait behind one, as the editor's jobs never had a
-  limit). A fifth agent's job is recorded as queued and `job_start` answers at once
-  ("queued ... you will be woken"): the agent ends its turn like for any job. The queued job (its row says `queued`,
-  with no unit yet) starts when a slot frees, oldest first, and also after a hub restart; `exec/stop` ends it without
-  it ever starting. A queued job that cannot start (its request is gone, the sandbox refuses) ends as `lost` with the
-  reason in its log, and its starter is woken. Waiting for a job is a `job-wait` step.
+- **The machine's room.** On Linux this machine admits a job by what it has free (memory, pressure, disk, power, the
+  other schedulers' reservations, under the `workstation` profile: 4 GiB and 4 threads kept for you, no new jobs on
+  battery, 10 s between starts); a macOS hub admits four at once. Your servers (no time box) never wait: they start at
+  once and count only in the memory they use. A job that finds no room is recorded as queued and `job_start` answers
+  at once ("queued (…) … you will be woken"): the agent ends its turn like for any job. The queued job (its row says
+  `queued`, with no unit yet) starts when the machine admits it, in the queue's order (priority, then shortest
+  expected first, with fairness between projects), and also after a hub restart; `exec/stop` ends it without it ever
+  starting. A queued job that cannot start (its request is gone, the sandbox refuses) ends as `lost` with the reason in
+  its log, and its starter is woken. Waiting for a job is a `job-wait` step.
 - **Tools in a hub-started session.** An agent the hub starts gets the coordination tools (including the job tools)
   through `ratatoskr mcp-bridge` on a socket the hub made for that session; the socket goes when the session ends.
 

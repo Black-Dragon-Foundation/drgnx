@@ -1118,7 +1118,7 @@
               },
               {
                 "const": "queued",
-                "description": "Waiting for a machine slot (no process yet); it starts when one frees.",
+                "description": "In the queue (no process yet): it starts where and when a machine admits it; `waiting` says why not yet.",
                 "type": "string"
               },
               {
@@ -6584,8 +6584,8 @@
       "classes": [
         "user"
       ],
-      "doc": "one job: its status and, once it ended, its summary",
-      "name": "exec/get",
+      "doc": "a queued job raised to priority 1 (the user's own connections only)",
+      "name": "exec/bump",
       "params": {
         "$defs": {
           "Id": {
@@ -6631,7 +6631,7 @@
               },
               {
                 "const": "queued",
-                "description": "Waiting for a machine slot (no process yet); it starts when one frees.",
+                "description": "In the queue (no process yet): it starts where and when a machine admits it; `waiting` says why not yet.",
                 "type": "string"
               },
               {
@@ -6704,6 +6704,15 @@
             },
             "type": "array"
           },
+          "attempt": {
+            "description": "Its attempt on a runner (1, then 2 after a requeue); absent for a job of this machine.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "cwd": {
             "type": "string"
           },
@@ -6727,10 +6736,27 @@
           "kind": {
             "$ref": "#/$defs/ExecKind"
           },
+          "machine": {
+            "description": "Where it runs or ran: `local`, or a runner's name; absent while it waits.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "name": {
             "description": "The name the user gave it, if any.",
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "priority": {
+            "description": "Its priority, 1 (the user's) to 5 (background work), as the hub set it.",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": [
+              "integer",
               "null"
             ]
           },
@@ -6776,6 +6802,260 @@
           },
           "unit": {
             "description": "The transient unit's name (Linux), or none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "waiting": {
+            "description": "Why a queued job waits, in words.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "cwd",
+          "status",
+          "started"
+        ],
+        "title": "ExecRow",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "one job: its status and, once it ended, its summary",
+      "name": "exec/get",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ById",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ExecKind": {
+            "description": "What a job runs, for its summary's parser; `container` runs an allowed image (Task 11b).",
+            "enum": [
+              "cargo",
+              "ert",
+              "domr",
+              "other",
+              "container"
+            ],
+            "type": "string"
+          },
+          "ExecStatus": {
+            "description": "Where a job is.",
+            "oneOf": [
+              {
+                "enum": [
+                  "running"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "queued",
+                "description": "In the queue (no process yet): it starts where and when a machine admits it; `waiting` says why not yet.",
+                "type": "string"
+              },
+              {
+                "const": "done",
+                "description": "Ended by itself (any exit code).",
+                "type": "string"
+              },
+              {
+                "const": "stopped",
+                "description": "Ended by `exec/stop` or `job_stop`.",
+                "type": "string"
+              },
+              {
+                "const": "timed-out",
+                "description": "Ended by its time box.",
+                "type": "string"
+              },
+              {
+                "const": "lost",
+                "description": "Its unit or process was gone at a hub start and left no exit.",
+                "type": "string"
+              }
+            ]
+          },
+          "ExecSummary": {
+            "additionalProperties": false,
+            "description": "A job's end, as the wake and `exec/get` give it: at most 20 lines.",
+            "properties": {
+              "exit": {
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "failing": {
+                "default": [],
+                "description": "The failing tests' names the parser found (cargo test, ERT, domr).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "lines": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "log": {
+                "description": "The whole log's path.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "log"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "One job.",
+        "properties": {
+          "argv": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "attempt": {
+            "description": "Its attempt on a runner (1, then 2 after a requeue); absent for a job of this machine.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "ended": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "image": {
+            "description": "A container job's image, by digest.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/$defs/ExecKind"
+          },
+          "machine": {
+            "description": "Where it runs or ran: `local`, or a runner's name; absent while it waits.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "The name the user gave it, if any.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "priority": {
+            "description": "Its priority, 1 (the user's) to 5 (background work), as the hub set it.",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "session": {
+            "description": "The session that started it; none: the user.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started": {
+            "description": "When it started and ended (seconds since the epoch).",
+            "format": "double",
+            "type": "number"
+          },
+          "status": {
+            "$ref": "#/$defs/ExecStatus"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ExecSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "task": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timebox_s": {
+            "description": "Seconds before the hub ends it; absent: the job has no time box (`no_timebox`).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "unit": {
+            "description": "The transient unit's name (Linux), or none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "waiting": {
+            "description": "Why a queued job waits, in words.",
             "type": [
               "string",
               "null"
@@ -6857,6 +7137,15 @@
                 },
                 "type": "array"
               },
+              "attempt": {
+                "description": "Its attempt on a runner (1, then 2 after a requeue); absent for a job of this machine.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "cwd": {
                 "type": "string"
               },
@@ -6880,10 +7169,27 @@
               "kind": {
                 "$ref": "#/$defs/ExecKind"
               },
+              "machine": {
+                "description": "Where it runs or ran: `local`, or a runner's name; absent while it waits.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "name": {
                 "description": "The name the user gave it, if any.",
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "priority": {
+                "description": "Its priority, 1 (the user's) to 5 (background work), as the hub set it.",
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": [
+                  "integer",
                   "null"
                 ]
               },
@@ -6933,6 +7239,13 @@
                   "string",
                   "null"
                 ]
+              },
+              "waiting": {
+                "description": "Why a queued job waits, in words.",
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -6955,7 +7268,7 @@
               },
               {
                 "const": "queued",
-                "description": "Waiting for a machine slot (no process yet); it starts when one frees.",
+                "description": "In the queue (no process yet): it starts where and when a machine admits it; `waiting` says why not yet.",
                 "type": "string"
               },
               {
@@ -7137,7 +7450,7 @@
       "classes": [
         "user"
       ],
-      "doc": "a job the hub runs as a unit of its own (in a project folder; a container job from the allowed images only); local only",
+      "doc": "a job the hub queues and runs on whichever allowed machine finishes it first (machine auto), this one (local) or a runner; a container job from the allowed images only",
       "name": "exec/start",
       "params": {
         "$defs": {
@@ -7200,6 +7513,13 @@
             "maxItems": 256,
             "type": "array"
           },
+          "background": {
+            "description": "Work nobody waits for: priority 5.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "cwd": {
             "anyOf": [
               {
@@ -7222,11 +7542,30 @@
               "null"
             ]
           },
+          "heavy": {
+            "description": "The job is heavy: under the project's `drgnx-runners-send heavy` (the default) only heavy jobs leave this\nmachine.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "image": {
             "description": "A container job's image: a name on `agents-container-images` (kind container only).",
             "maxLength": 256,
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "keys": {
+            "description": "The keys the job needs, by name (never a value; at most 16).",
+            "items": {
+              "maxLength": 128,
+              "type": "string"
+            },
+            "maxItems": 16,
+            "type": [
+              "array",
               "null"
             ]
           },
@@ -7240,6 +7579,13 @@
               }
             ]
           },
+          "local_only": {
+            "description": "The job runs on this machine only.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "machine": {
             "anyOf": [
               {
@@ -7249,7 +7595,7 @@
                 "type": "null"
               }
             ],
-            "description": "The machine: only `local` in part 1 (any other is refused: Calls made 3)."
+            "description": "The machine: `auto` (the default: whichever allowed machine finishes it first), `local`, or a runner's name."
           },
           "memory_max": {
             "description": "The most memory the job's unit may use, in systemd's syntax (`512M`, `2G`; the user's jobs only).",
@@ -7291,12 +7637,34 @@
               "null"
             ]
           },
+          "priority": {
+            "description": "The job's priority, 1 (highest) to 5: the user's connections only (a session's request is refused).",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "timebox_s": {
             "description": "Seconds before it is ended: 1 to 86400 (default 3600).",
             "format": "uint64",
             "minimum": 0,
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "writes": {
+            "description": "The paths (globs) the job may write back into the tree (at most 64).",
+            "items": {
+              "maxLength": 512,
+              "type": "string"
+            },
+            "maxItems": 64,
+            "type": [
+              "array",
               "null"
             ]
           }
@@ -7379,7 +7747,7 @@
               },
               {
                 "const": "queued",
-                "description": "Waiting for a machine slot (no process yet); it starts when one frees.",
+                "description": "In the queue (no process yet): it starts where and when a machine admits it; `waiting` says why not yet.",
                 "type": "string"
               },
               {
@@ -7452,6 +7820,15 @@
             },
             "type": "array"
           },
+          "attempt": {
+            "description": "Its attempt on a runner (1, then 2 after a requeue); absent for a job of this machine.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "cwd": {
             "type": "string"
           },
@@ -7475,10 +7852,27 @@
           "kind": {
             "$ref": "#/$defs/ExecKind"
           },
+          "machine": {
+            "description": "Where it runs or ran: `local`, or a runner's name; absent while it waits.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "name": {
             "description": "The name the user gave it, if any.",
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "priority": {
+            "description": "Its priority, 1 (the user's) to 5 (background work), as the hub set it.",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": [
+              "integer",
               "null"
             ]
           },
@@ -7524,6 +7918,13 @@
           },
           "unit": {
             "description": "The transient unit's name (Linux), or none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "waiting": {
+            "description": "Why a queued job waits, in words.",
             "type": [
               "string",
               "null"

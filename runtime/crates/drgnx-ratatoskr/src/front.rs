@@ -612,6 +612,7 @@ impl Front {
             | Params::ExecList(_)
             | Params::ExecStop(_)
             | Params::ExecLog(_)
+            | Params::ExecBump(_)
             | Params::JobPropose(_)
             | Params::JobStartTask(_)
             | Params::JobApprove(_)

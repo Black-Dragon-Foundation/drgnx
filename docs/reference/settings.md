@@ -675,6 +675,92 @@ Module flags: ((MODULE FLAG…)…).
 | `:agents` | `never` |
 | `:schema` | `(alist symbol (list-of symbol))` |
 
+## drgnx-runners-heavy
+
+Suite or command patterns whose jobs are heavy in this project (a job is heavy only when marked so).
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat string)` |
+| `:scope` | `project` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Vec<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(list-of string)` |
+
+## drgnx-runners-image
+
+The image a runner runs the project's command jobs in, pinned by digest ("registry/name@sha256:…"), or nil.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(choice (const nil) string)` |
+| `:scope` | `project` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Option<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(or null string)` |
+
+## drgnx-runners-project-visibility
+
+"public" or "private": a public project's job whose commit the public origin has may run on a shared runner.
+
+| Key | Value |
+| --- | --- |
+| Default | `"private"` |
+| Type | `(choice (const "public") (const "private"))` |
+| `:scope` | `project` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"String"` |
+| `:agents` | `never` |
+| `:schema` | `(string :match "\\`\\(?:public\\\|private\\)\\'")` |
+
+## drgnx-runners-send
+
+Which of the project's jobs may leave this machine for a runner: "all", "heavy" (only jobs marked heavy) or
+"none".
+
+| Key | Value |
+| --- | --- |
+| Default | `"heavy"` |
+| Type | `(choice (const "all") (const "heavy") (const "none"))` |
+| `:scope` | `project` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"String"` |
+| `:agents` | `never` |
+| `:schema` | `(string :match "\\`\\(?:all\\\|heavy\\\|none\\)\\'")` |
+
+## drgnx-runners-weight
+
+The project's weight when projects share the machines within a priority (2: twice the share of a project at 1).
+
+| Key | Value |
+| --- | --- |
+| Default | `1.0` |
+| Type | `number` |
+| `:scope` | `project` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"f64"` |
+| `:agents` | `never` |
+| `:schema` | `number` |
+
 ## drgnx-sandbox-memory-max
 
 The memory cap of each sandboxed agent, the `:memory-max' of a spec that does not give one: a systemd size (4G,

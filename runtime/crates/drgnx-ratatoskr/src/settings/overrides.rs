@@ -142,6 +142,23 @@ pub fn from_json(name: &str, v: &Value, values: &mut RuntimeValues) -> Result<()
         "drgnx-agents-repeat-limit" => values.agents_repeat_limit = de(v)?,
         "drgnx-agents-no-progress-tokens" => values.agents_no_progress_tokens = de(v)?,
         "drgnx-agents-manager-context" => values.agents_manager_context = de(v)?,
+        "drgnx-runners-send" => {
+            let s: String = de(v)?;
+            if !["all", "heavy", "none"].contains(&s.as_str()) {
+                return Err(refused("", "\"all\", \"heavy\" or \"none\""));
+            }
+            values.runners_send = s;
+        }
+        "drgnx-runners-heavy" => values.runners_heavy = de(v)?,
+        "drgnx-runners-image" => values.runners_image = de(v)?,
+        "drgnx-runners-weight" => values.runners_weight = de(v)?,
+        "drgnx-runners-project-visibility" => {
+            let s: String = de(v)?;
+            if !["public", "private"].contains(&s.as_str()) {
+                return Err(refused("", "\"public\" or \"private\""));
+            }
+            values.runners_project_visibility = s;
+        }
         other => return Err(refused("", format!("{other} is not a runtime setting"))),
     }
     Ok(())
@@ -222,6 +239,11 @@ pub fn to_json(name: &str, values: &RuntimeValues) -> Option<Value> {
         "drgnx-agents-repeat-limit" => json!(values.agents_repeat_limit),
         "drgnx-agents-no-progress-tokens" => json!(values.agents_no_progress_tokens),
         "drgnx-agents-manager-context" => json!(values.agents_manager_context),
+        "drgnx-runners-send" => json!(values.runners_send),
+        "drgnx-runners-heavy" => json!(values.runners_heavy),
+        "drgnx-runners-image" => json!(values.runners_image),
+        "drgnx-runners-weight" => json!(values.runners_weight),
+        "drgnx-runners-project-visibility" => json!(values.runners_project_visibility),
         _ => return None,
     })
 }
@@ -242,7 +264,14 @@ pub fn apply(values: &mut RuntimeValues, list: &[Override]) {
 /// The runtime settings a project's set may hold: those the Lisp declares `:scope project` (a workspace sets them as
 /// data). Every other one is `:scope global :workspace never :agents never` (profiles and their commands, providers
 /// and their URLs, `drgnx-agents-allow-unsandboxed`, …): a project never changes it.
-pub const PER_PROJECT: &[&str] = &["drgnx-ai-roles"];
+pub const PER_PROJECT: &[&str] = &[
+    "drgnx-ai-roles",
+    "drgnx-runners-send",
+    "drgnx-runners-heavy",
+    "drgnx-runners-image",
+    "drgnx-runners-weight",
+    "drgnx-runners-project-visibility",
+];
 
 /// The first override of LIST that cannot be one: its index and why (a name not in [`RUNTIME_NAMES`], one not in
 /// [`PER_PROJECT`] in a project's set (PROJECT true), a value that does not fit the type).
@@ -524,7 +553,7 @@ mod tests {
             let one = [o(name, to_json(name, d).unwrap())];
             assert_eq!(
                 validate(&one, true).is_ok(),
-                name == "drgnx-ai-roles",
+                name == "drgnx-ai-roles" || name.starts_with("drgnx-runners-"),
                 "{name}"
             );
             assert!(validate(&one, false).is_ok(), "{name}");

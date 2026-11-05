@@ -39,6 +39,7 @@
   "env/set": ["user"],
   "events/add": ["user"],
   "events/since": ["user"],
+  "exec/bump": ["user"],
   "exec/get": ["user"],
   "exec/list": ["user"],
   "exec/log": ["user"],

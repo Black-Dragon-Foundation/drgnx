@@ -1,0 +1,1723 @@
+//! One queue for every machine (docs/develop/hub.md, "Runners: the queue"; design §6.8, §7.4): this machine (the local
+//! runner) and the user's runners, kept in `runtime.db` and driven through `forseti` at every tick (every 2 s and on
+//! every event).
+//!
+//! A tick orders the queued jobs (`effective_priorities`, `queue_order`, then fairness between projects with
+//! `Drr::order`), places each (`forseti::pick` over this machine and the runners that may take it), and either starts
+//! it here (the local runner's admission), offers it to a runner (a new attempt with a nonce: `runners::attempts`), or
+//! writes why it waits. A runner's frames come back through [`Queue::on_link`]; its verdicts, losses and late results
+//! go to the job layer as [`Outcome`]s.
+
+use super::attempts::{self, Effect, Event as AEvent, Listed};
+use super::health::{self, Facts, StrikeCtx, Strikes};
+use super::link::{LinkEvent, Route, Session};
+use super::local::LocalRunner;
+use crate::exec::Starter;
+use forseti::{
+    Accept, Candidate, Drr, Expect, Expected, Job, JobId, JobSpec, JobState, JobTrust, Kind, Lane,
+    Pick, PlaceCtx, Priority, Range, RunnerState, RunnerTrust, RunningJob, WaitReason, Weight,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use sleipnir::proto::{Frame, JobRef, Nonce, PROTO_VERSION};
+use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, Weak};
+use std::time::Duration;
+use tokio::sync::mpsc;
+
+/// How often the queue ticks when nothing happens.
+pub const TICK: Duration = Duration::from_secs(2);
+/// This machine's name in rows and placement.
+pub const LOCAL: &str = "local";
+/// How much sooner a cloud machine must finish than the best own one (`runners-cloud-after`, phase 2).
+const CLOUD_AFTER_S: f64 = 120.0;
+
+/// What started a job, besides who: a request (the user's or an agent's), the splitter (F2), a plan's or gate's bulk,
+/// or the hub's own upkeep (image builds, cache warm-ups).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Origin {
+    Request,
+    Splitter,
+    Bulk,
+    Upkeep,
+}
+
+/// A job's priority from who started it and how (design §6.8.1): 1 for the user's request, 2 for the splitter's
+/// probes and reruns, 3 for an agent's `job_start`, 4 for a plan's or gate's bulk, 5 for `background` work and the
+/// hub's upkeep. `background` only lowers.
+pub fn priority_of(starter: &Starter, background: bool, from: Origin) -> Priority {
+    if background {
+        return Priority::P5;
+    }
+    match from {
+        Origin::Splitter => Priority::P2,
+        Origin::Bulk => Priority::P4,
+        Origin::Upkeep => Priority::P5,
+        Origin::Request => match starter {
+            Starter::User => Priority::P1,
+            Starter::Session(_) => Priority::P3,
+        },
+    }
+}
+
+/// Where a job may run: anywhere allowed (`auto`), this machine, or one runner.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Machine {
+    #[default]
+    Auto,
+    Local,
+    Runner(String),
+}
+
+impl Machine {
+    /// `exec/start`'s `machine`: none or `auto`, `local`, or a runner's name.
+    pub fn parse(s: Option<&str>) -> Machine {
+        match s {
+            None | Some("auto") => Machine::Auto,
+            Some("local") => Machine::Local,
+            Some(n) => Machine::Runner(n.into()),
+        }
+    }
+}
+
+/// A project's send mode (`drgnx-runners-send`): which of its jobs may leave this machine.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SendMode {
+    All,
+    #[default]
+    Heavy,
+    None,
+}
+
+impl SendMode {
+    pub fn parse(s: &str) -> Option<SendMode> {
+        match s {
+            "all" => Some(SendMode::All),
+            "heavy" => Some(SendMode::Heavy),
+            "none" => Some(SendMode::None),
+            _ => None,
+        }
+    }
+
+    fn forseti(self) -> forseti::place::Send {
+        match self {
+            SendMode::All => forseti::place::Send::All,
+            SendMode::Heavy => forseti::place::Send::Heavy,
+            SendMode::None => forseti::place::Send::None,
+        }
+    }
+}
+
+/// Where and how a job is placed, as its start asked and its project's settings say.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Placement {
+    pub machine: Machine,
+    pub heavy: bool,
+    /// The keys it needs, by name.
+    pub keys: Vec<String>,
+    pub local_only: bool,
+    pub background: bool,
+    pub writes: Vec<String>,
+    /// The priority the user asked for (the user's connections only).
+    pub priority: Option<u8>,
+    pub send: SendMode,
+    /// The starter's `machines` matrix cell allows sending it away.
+    pub machines_cell: bool,
+    /// The image a runner runs a command job in (`drgnx-runners-image`), or a container job's own.
+    pub image: Option<String>,
+    /// The project's weight in fairness (`drgnx-runners-weight`).
+    pub weight: f64,
+}
+
+impl Default for Placement {
+    fn default() -> Placement {
+        Placement {
+            machine: Machine::Auto,
+            heavy: false,
+            keys: vec![],
+            local_only: false,
+            background: false,
+            writes: vec![],
+            priority: None,
+            send: SendMode::Heavy,
+            machines_cell: true,
+            image: None,
+            weight: 1.0,
+        }
+    }
+}
+
+/// A forseti job spec with nothing declared but its name: the shape a hub job starts from.
+pub fn blank_spec(name: &str) -> JobSpec {
+    JobSpec {
+        name: name.into(),
+        kind: Kind::Other,
+        weight: Weight::Light,
+        suite: None,
+        tree: PathBuf::new(),
+        cwd: PathBuf::new(),
+        command: vec![],
+        select: None,
+        needs: vec![],
+        inputs_extra: vec![],
+        inputs_outside: vec![],
+        features: vec![],
+        cores: Range { min: 1, max: 1 },
+        mem_mib: Range {
+            min: 512,
+            max: 4096,
+        },
+        disk_gib: 0,
+        timeout_s: 3600,
+        restartable: true,
+        writes_tree: false,
+        priority: None,
+        for_user: None,
+        gate: None,
+        expect: Expect::default(),
+        outputs: vec![],
+        state: vec![],
+        on: None,
+        lane: Lane::Work,
+        fresh: false,
+        stop_on_red: false,
+        project: String::new(),
+        trust: JobTrust::Private,
+        keys: vec![],
+        local_only: false,
+        writes: vec![],
+    }
+}
+
+/// A job entering the queue.
+#[derive(Clone, Debug)]
+pub struct Submit {
+    pub id: String,
+    /// The session that started it; none: the user.
+    pub session: Option<String>,
+    pub own: Priority,
+    pub spec: JobSpec,
+    pub place: Placement,
+    /// What the job layer starts it from (its `Pending`), kept with it.
+    pub pending: Value,
+}
+
+/// A runner the queue may place on, as its registry record says (Task 19 fills these in).
+#[derive(Clone, Debug)]
+pub struct RemoteRunner {
+    pub name: String,
+    pub trust: RunnerTrust,
+    pub accept: Accept,
+    /// An attempt's grace there (`RunnerCfg::grace`).
+    pub grace_s: u64,
+    /// The image its health check's canary runs `true` in, by digest.
+    pub image: Option<String>,
+}
+
+/// A runner as the queue sees it: `ready`, `benched: REASON (HH:MM, HH:MM)`, …; its strikes and the last one's reason.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunnerRow {
+    pub state: String,
+    pub strikes: u32,
+    pub last: Option<String>,
+}
+
+/// What the queue tells the job layer.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Outcome {
+    /// A runner's verdict for the job's current attempt (its `result.json`).
+    Done {
+        id: String,
+        attempt: u32,
+        result: Value,
+    },
+    /// The job's runner is gone and the job isn't restartable.
+    Lost { id: String },
+    /// A late attempt's result, kept as that attempt's, never applied.
+    Late {
+        id: String,
+        attempt: u32,
+        result: Value,
+    },
+}
+
+/// What a tick did: the jobs to start here now, and what ended.
+#[derive(Debug, Default)]
+pub struct Ticked {
+    pub starts: Vec<String>,
+    pub outcomes: Vec<Outcome>,
+}
+
+/// A job's row as the queue knows it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Row {
+    pub machine: Option<String>,
+    pub attempt: Option<u32>,
+    pub waiting: Option<String>,
+    pub priority: u8,
+}
+
+/// A job the database kept (a hub restart).
+#[derive(Clone, Debug)]
+pub struct Stored {
+    pub submit: Submit,
+    pub submitted: u64,
+    pub state: String,
+    pub attempt: u32,
+}
+
+/// An attempt the database kept.
+#[derive(Clone, Debug)]
+pub struct StoredAttempt {
+    pub job: String,
+    pub attempt: u32,
+    pub nonce: Nonce,
+    pub runner: String,
+    pub state: String,
+    pub log_offset: u64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum QState {
+    Queued,
+    Local,
+    /// Offered to, or running on, a runner.
+    Remote(String),
+}
+
+#[derive(Clone, Debug)]
+struct QJob {
+    s: Submit,
+    submitted: u64,
+    state: QState,
+    waiting: Option<String>,
+    attempt: u32,
+    machine: Option<String>,
+}
+
+struct Remote {
+    r: RemoteRunner,
+    session: Session,
+    state: RunnerState,
+    strikes: Strikes,
+    /// When the next health check is due (0: not yet set).
+    next_check: u64,
+    check: Option<Check>,
+    /// The runner's clock minus the hub's at its last `ping`.
+    skew_s: Option<i64>,
+}
+
+/// A health check under way: its canary's attempt, and what it found.
+struct Check {
+    started: u64,
+    /// The canary's job id, once offered; none until then, and again after a refusal.
+    canary: Option<String>,
+    last_offer: u64,
+    facts: Facts,
+}
+
+/// A health check's canary job id on RUNNER: letters and digits, as a runner takes a job id, and never a job of the
+/// job layer's (theirs start with `x`).
+fn canary_id(runner: &str, now: u64) -> String {
+    let name: String = runner.chars().filter(char::is_ascii_alphanumeric).collect();
+    format!("health{name}{now}")
+}
+
+fn is_canary(job: &str) -> bool {
+    job.starts_with("health")
+}
+
+/// A write to `runtime.db`, in order.
+type DbOp = Box<dyn FnOnce(&urdr::Connection) -> Result<(), urdr::Error> + Send>;
+
+enum Db {
+    Op(DbOp),
+    Flush(tokio::sync::oneshot::Sender<()>),
+}
+
+#[derive(Default)]
+struct St {
+    jobs: BTreeMap<String, QJob>,
+    local_running: BTreeMap<String, RunningJob>,
+    last_local_start: Option<u64>,
+    drr: Drr,
+    attempts: attempts::Core,
+    runners: BTreeMap<String, Remote>,
+}
+
+/// How the queue is made.
+pub struct QueueCfg {
+    /// The hub's id at a runner's `hello`.
+    pub hub_id: String,
+    /// `<state>/hub/exec`: each job's folder, where a runner's log frames go.
+    pub exec_root: PathBuf,
+    pub local: LocalRunner,
+    /// `runtime.db`; none: the queue lives in memory only (unit tests).
+    pub db: Option<urdr::Handle>,
+}
+
+/// The queue.
+pub struct Queue {
+    st: Mutex<St>,
+    local: LocalRunner,
+    hub_id: String,
+    exec_root: PathBuf,
+    db: Option<mpsc::UnboundedSender<Db>>,
+    links: mpsc::UnboundedSender<LinkEvent>,
+    /// Told when a job enters the queue, so an idle tick loop wakes.
+    wake: tokio::sync::Notify,
+}
+
+/// The log file of attempt R of a job whose current attempt is CURRENT.
+fn log_file(root: &std::path::Path, r: &JobRef, late: bool) -> PathBuf {
+    let dir = root.join(&r.job);
+    if late {
+        dir.join(format!("log.{}", r.attempt))
+    } else {
+        dir.join("log")
+    }
+}
+
+/// The queue's [`Route`]: a frame counts only for an attempt placed on that runner with that nonce.
+struct QRoute(Weak<Queue>);
+
+impl Route for QRoute {
+    fn log_path(&self, runner: &str, r: &JobRef) -> Option<PathBuf> {
+        let q = self.0.upgrade()?;
+        let late = q.lock().attempts.frame_ok(runner, r)?;
+        let path = log_file(&q.exec_root, r, late);
+        if let Some(dir) = path.parent()
+            && let Err(e) = std::fs::create_dir_all(dir)
+        {
+            tracing::warn!("runners: {}: {e}", dir.display());
+            return None;
+        }
+        Some(path)
+    }
+}
+
+fn nonce() -> Nonce {
+    let mut b = [0u8; 16];
+    use std::io::Read;
+    if let Err(e) = std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b)) {
+        panic!("runners: no random bytes for a nonce: {e}");
+    }
+    Nonce(b)
+}
+
+/// The words a waiting job shows.
+pub fn wait_text(r: &WaitReason) -> String {
+    match r {
+        WaitReason::Needs(j) => format!("waits for job {j}"),
+        WaitReason::Behind(p) => format!("behind priority {} work", p.number()),
+        WaitReason::NoRoom { need_mib, free_mib } => {
+            format!("needs {need_mib} MiB of memory; {free_mib} MiB is free for jobs")
+        }
+        WaitReason::HeadProtection(j) => format!("room is kept for job {j}"),
+        WaitReason::State { dir, holder } => {
+            format!("{} is held by job {holder}", dir.display())
+        }
+        WaitReason::IslandBusy => "the timing island is busy".into(),
+        WaitReason::DrainWaits => "the machine is draining".into(),
+        WaitReason::DesktopUnreachable { .. } => "its runner can't be reached".into(),
+        WaitReason::SpillIn { minutes } => format!("may go to a runner in {minutes} min"),
+        WaitReason::DiskLow => "the disk is below its floor".into(),
+        WaitReason::OnBattery => "this machine is on battery".into(),
+        WaitReason::Pressure { what, value, limit } => {
+            format!("{what} pressure is {value:.0} % (the limit is {limit:.0} %)")
+        }
+        WaitReason::Gap { secs } => format!("the next start is in {secs} s"),
+        WaitReason::Threads => "every job slot of the machine is in use".into(),
+        WaitReason::Trust(why) => why.clone(),
+        WaitReason::Pinned => "its machine can't take it now".into(),
+        WaitReason::NeedsLogin => "its runner needs a login".into(),
+        WaitReason::NeedsKeys => "its runner needs keys".into(),
+        WaitReason::CloudCap(why) => why.clone(),
+        WaitReason::Benched => "its runner is benched".into(),
+        WaitReason::Mode => "the project's send mode keeps it on this machine".into(),
+        WaitReason::Features(f) => format!("no machine has {}", f.join(", ")),
+        WaitReason::Matrix => "the matrix keeps it on this machine".into(),
+        WaitReason::AwaitingConfirm => "its runner waits for your confirm".into(),
+        WaitReason::NoRunner => "no machine may take it".into(),
+    }
+}
+
+/// The verdict in a runner's `result.json`.
+pub fn verdict_of(result: &Value) -> Option<forseti::Verdict> {
+    serde_json::from_value(result.get("verdict")?.clone()).ok()
+}
+
+impl Queue {
+    /// The queue, and the receiver of its runners' link events (the job layer pumps them into [`Queue::on_link`]).
+    pub fn new(cfg: QueueCfg) -> (Arc<Queue>, mpsc::UnboundedReceiver<LinkEvent>) {
+        let db = cfg.db.map(|handle| {
+            let (tx, mut rx) = mpsc::unbounded_channel::<Db>();
+            crate::clock::spawn("runners:queue-db", async move {
+                while let Some(op) = rx.recv().await {
+                    match op {
+                        Db::Op(op) => {
+                            if let Err(e) = handle.write(op).await {
+                                tracing::warn!("runners: the queue's runtime.db write: {e}");
+                            }
+                        }
+                        Db::Flush(done) => {
+                            let _ = done.send(());
+                        }
+                    }
+                }
+            });
+            tx
+        });
+        let (links, rx) = mpsc::unbounded_channel();
+        let q = Queue {
+            st: Mutex::new(St::default()),
+            local: cfg.local,
+            hub_id: cfg.hub_id,
+            exec_root: cfg.exec_root,
+            db,
+            links,
+            wake: tokio::sync::Notify::new(),
+        };
+        (Arc::new(q), rx)
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, St> {
+        self.st.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn persist(&self, op: DbOp) {
+        if let Some(db) = &self.db {
+            let _ = db.send(Db::Op(op));
+        }
+    }
+
+    /// Waits until every write queued so far is done.
+    pub async fn flush(&self) {
+        if let Some(db) = &self.db {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            if db.send(Db::Flush(tx)).is_ok() {
+                let _ = rx.await;
+            }
+        }
+    }
+
+    /// Where a runner's session sends its events.
+    pub fn link_events(&self) -> mpsc::UnboundedSender<LinkEvent> {
+        self.links.clone()
+    }
+
+    /// The [`Route`] runners' sessions write logs through.
+    pub fn route(self: &Arc<Self>) -> Arc<dyn Route> {
+        Arc::new(QRoute(Arc::downgrade(self)))
+    }
+
+    /// Whether a runner of that name is known.
+    pub fn has_runner(&self, name: &str) -> bool {
+        self.lock().runners.contains_key(name)
+    }
+
+    /// Runner NAME's row.
+    pub fn runner(&self, name: &str) -> Option<RunnerRow> {
+        let st = self.lock();
+        let r = st.runners.get(name)?;
+        let state = match &r.state {
+            RunnerState::Ready => "ready".to_string(),
+            RunnerState::Benched(why) => r
+                .strikes
+                .text()
+                .unwrap_or_else(|| format!("benched: {why}")),
+            RunnerState::NeedsLogin(cmd) => format!("needs a login: {cmd}"),
+            RunnerState::NeedsKeys => "needs keys".into(),
+            RunnerState::AwaitingConfirm => "waits for your confirm".into(),
+            RunnerState::Unreachable { .. } => "unreachable".into(),
+            RunnerState::Draining => "draining".into(),
+            RunnerState::Preempting => "preempting".into(),
+        };
+        Some(RunnerRow {
+            state,
+            strikes: r.strikes.count(),
+            last: r.strikes.last().map(String::from),
+        })
+    }
+
+    /// Runner NAME's health check is due at the next tick.
+    pub fn check_now(&self, name: &str) {
+        if let Some(r) = self.lock().runners.get_mut(name) {
+            r.next_check = 1;
+        }
+    }
+
+    /// How many runners are known.
+    pub fn runners(&self) -> usize {
+        self.lock().runners.len()
+    }
+
+    /// Whether a tick has work: a job waits, or an attempt is on a runner (its grace may end).
+    pub fn busy(&self) -> bool {
+        let st = self.lock();
+        !st.runners.is_empty() || st.jobs.values().any(|j| j.state != QState::Local)
+    }
+
+    /// Returns once the queue may have become busy (a job entered it) since the last call.
+    pub async fn woken(&self) {
+        self.wake.notified().await
+    }
+
+    /// The room job ID holds here until the slot is dropped (its end, or a launch that failed).
+    pub fn slot(self: &Arc<Self>, id: &str) -> Slot {
+        Slot {
+            q: self.clone(),
+            id: id.into(),
+        }
+    }
+
+    /// A runner the queue may place on, over SESSION: it says `hello` now and is ready at its `hello-ok`.
+    pub fn add_runner(&self, r: RemoteRunner, session: Session) {
+        session.send(Frame::Hello {
+            version: PROTO_VERSION,
+            hub_id: self.hub_id.clone(),
+        });
+        let name = r.name.clone();
+        self.lock().runners.insert(
+            name,
+            Remote {
+                r,
+                session,
+                state: RunnerState::Unreachable { since: 0 },
+                strikes: Strikes::default(),
+                next_check: 0,
+                check: None,
+                skew_s: None,
+            },
+        );
+    }
+
+    /// The user's `runners/unbench`: NAME back in rotation, with no strikes.
+    pub fn unbench(&self, name: &str) {
+        if let Some(r) = self.lock().runners.get_mut(name) {
+            r.strikes.clear();
+            if matches!(r.state, RunnerState::Benched(_)) {
+                r.state = RunnerState::Ready;
+            }
+        }
+    }
+
+    fn put_job(&self, j: &QJob, eff: Priority) {
+        let id = j.s.id.clone();
+        let spec = json!({
+            "job": j.s.spec,
+            "place": j.s.place,
+            "pending": j.s.pending,
+            "session": j.s.session,
+        })
+        .to_string();
+        let (own, eff) = (j.s.own.number(), eff.number());
+        let trust = serde_json::to_value(j.s.spec.trust)
+            .ok()
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_default();
+        let pin = match &j.s.place.machine {
+            Machine::Auto => None,
+            Machine::Local => Some(LOCAL.to_string()),
+            Machine::Runner(n) => Some(n.clone()),
+        };
+        let project = j.s.spec.project.clone();
+        let state = match j.state {
+            QState::Queued => "queued",
+            QState::Local | QState::Remote(_) => "running",
+        };
+        let (submitted, attempt) = (j.submitted as f64, j.attempt);
+        self.persist(Box::new(move |c| {
+            c.execute(
+                "insert or replace into rq_job(id, spec, own, effective, trust, pin, project, input_key, state, \
+                 submitted, attempt) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, null, ?8, ?9, ?10)",
+                (id, spec, own, eff, trust, pin, project, state, submitted, attempt),
+            )?;
+            Ok(())
+        }));
+    }
+
+    fn drop_job(&self, id: &str) {
+        let id = id.to_string();
+        self.persist(Box::new(move |c| {
+            for t in [
+                "rq_job where id",
+                "rq_attempt where job",
+                "rq_offer where job",
+                "rq_admission where job",
+                "rq_detached where job",
+            ] {
+                c.execute(&format!("delete from {t} = ?1"), [&id])?;
+            }
+            Ok(())
+        }));
+    }
+
+    /// Writes JOB's attempts as the state machine has them, and the detached ones' graces.
+    fn put_attempts(&self, st: &St, job: &str) {
+        let rows: Vec<(u32, attempts::Attempt)> = st
+            .attempts
+            .attempts()
+            .filter(|((j, _), _)| j == job)
+            .map(|((_, n), a)| (*n, a.clone()))
+            .collect();
+        let job = job.to_string();
+        self.persist(Box::new(move |c| {
+            for (n, a) in rows {
+                c.execute(
+                    "insert into rq_attempt(job, attempt, nonce, runner, placed, grant, state, verdict, log_offset) \
+                     values (?1, ?2, ?3, ?4, ?5, null, ?6, null, ?7) on conflict(job, attempt) do update set \
+                     state = excluded.state, log_offset = excluded.log_offset",
+                    (
+                        &job,
+                        n,
+                        a.nonce.hex(),
+                        &a.runner,
+                        crate::clock::wall_secs(),
+                        a.state.word(),
+                        a.log_offset as i64,
+                    ),
+                )?;
+                match a.state {
+                    attempts::AttemptState::Detached { since, grace_until } => {
+                        c.execute(
+                            "insert or replace into rq_detached(job, attempt, runner, since, grace_until, reason) \
+                             values (?1, ?2, ?3, ?4, ?5, 'runner not heard')",
+                            (&job, n, &a.runner, since as f64, grace_until as f64),
+                        )?;
+                    }
+                    _ => {
+                        c.execute(
+                            "delete from rq_detached where job = ?1 and attempt = ?2",
+                            (&job, n),
+                        )?;
+                    }
+                }
+            }
+            Ok(())
+        }))
+    }
+
+    /// A job enters the queue at NOW.
+    pub fn submit(&self, s: Submit, now: u64) {
+        let j = QJob {
+            submitted: now,
+            state: QState::Queued,
+            waiting: None,
+            attempt: 0,
+            machine: None,
+            s,
+        };
+        self.put_job(&j, j.s.own);
+        self.lock().jobs.insert(j.s.id.clone(), j);
+        self.wake.notify_one();
+    }
+
+    /// A job the database kept goes back into the queue (a hub restart). A queued one waits again; one that ran here
+    /// is the job layer's to adopt; one on a runner keeps its attempts, detached until the runner's `hello`.
+    pub fn restore(&self, jobs: Vec<Stored>, attempts: Vec<StoredAttempt>, now: u64) {
+        let mut st = self.lock();
+        for s in jobs {
+            let remote = attempts
+                .iter()
+                .filter(|a| a.job == s.submit.id && a.attempt == s.attempt)
+                .map(|a| a.runner.clone())
+                .next();
+            let state = match (s.state.as_str(), remote) {
+                ("running", Some(r)) => QState::Remote(r),
+                ("running", None) => continue,
+                _ => QState::Queued,
+            };
+            let machine = match &state {
+                QState::Remote(r) => Some(r.clone()),
+                _ => None,
+            };
+            st.jobs.insert(
+                s.submit.id.clone(),
+                QJob {
+                    submitted: s.submitted,
+                    state,
+                    waiting: None,
+                    attempt: s.attempt,
+                    machine,
+                    s: s.submit,
+                },
+            );
+        }
+        let mut jobs_with_attempts = Vec::new();
+        for a in attempts {
+            let Some(j) = st.jobs.get(&a.job) else {
+                continue;
+            };
+            let state = match a.state.as_str() {
+                "offered" => attempts::AttemptState::Offered,
+                "running" | "detached" => attempts::AttemptState::Running,
+                "finished" => attempts::AttemptState::Finished,
+                "requeued" => attempts::AttemptState::Requeued,
+                _ => attempts::AttemptState::Lost,
+            };
+            let grace_s = st.runners.get(&a.runner).map_or(600, |r| r.r.grace_s);
+            let (current, restartable) = (j.attempt == a.attempt, j.s.spec.restartable);
+            st.attempts.restore(
+                &a.job,
+                a.attempt,
+                attempts::Attempt {
+                    runner: a.runner,
+                    nonce: a.nonce,
+                    state,
+                    grace_s,
+                    log_offset: a.log_offset,
+                },
+                current,
+                restartable,
+            );
+            jobs_with_attempts.push(a.job);
+        }
+        let effects = st.attempts.step(now, AEvent::HubRestarted);
+        let mut out = vec![];
+        self.apply(&mut st, effects, now, &mut out);
+        for j in jobs_with_attempts {
+            self.put_attempts(&st, &j);
+        }
+        drop(st);
+        self.wake.notify_one();
+    }
+
+    /// A job that runs here since before a hub restart: it counts against this machine's room until it ends.
+    pub fn adopt(&self, id: &str, own: Priority, now: u64) {
+        let mut st = self.lock();
+        st.local_running
+            .insert(id.to_string(), running(id, own, now, 512, 1));
+        let j = st.jobs.entry(id.to_string()).or_insert_with(|| QJob {
+            s: Submit {
+                id: id.into(),
+                session: None,
+                own,
+                spec: blank_spec(id),
+                place: Placement::default(),
+                pending: Value::Null,
+            },
+            submitted: now,
+            state: QState::Local,
+            waiting: None,
+            attempt: 0,
+            machine: Some(LOCAL.into()),
+        });
+        j.state = QState::Local;
+        j.machine = Some(LOCAL.into());
+    }
+
+    /// Job ID ended here, or never started: it leaves the queue and frees its room.
+    pub fn release(&self, id: &str) {
+        let mut st = self.lock();
+        let ran_here = st.local_running.remove(id).is_some();
+        let remote = st
+            .jobs
+            .get(id)
+            .is_some_and(|j| matches!(j.state, QState::Remote(_)));
+        if !remote {
+            st.jobs.remove(id);
+            st.attempts.forget(id);
+            drop(st);
+            self.drop_job(id);
+        }
+        if ran_here {
+            self.local.release(id);
+        }
+    }
+
+    /// A queued job is stopped before it started: it leaves the queue (true). One on a runner is cancelled there; its
+    /// end comes back as an [`Outcome`] (false).
+    pub fn remove(&self, id: &str, now: u64) -> (bool, Vec<Outcome>) {
+        let mut st = self.lock();
+        match st.jobs.get(id).map(|j| j.state.clone()) {
+            Some(QState::Queued) => {
+                st.jobs.remove(id);
+                drop(st);
+                self.drop_job(id);
+                (true, vec![])
+            }
+            Some(QState::Remote(_)) => {
+                let effects = st.attempts.step(now, AEvent::Cancel { job: id.into() });
+                let mut out = vec![];
+                self.apply(&mut st, effects, now, &mut out);
+                (false, out)
+            }
+            _ => (false, vec![]),
+        }
+    }
+
+    /// Job ID is bumped to priority 1 (the user's `exec/bump`); false when the queue doesn't hold it.
+    pub fn bump(&self, id: &str) -> bool {
+        let mut st = self.lock();
+        let Some(j) = st.jobs.get_mut(id) else {
+            return false;
+        };
+        j.s.own = Priority::P1;
+        let j = j.clone();
+        drop(st);
+        self.put_job(&j, Priority::P1);
+        true
+    }
+
+    /// What job ID starts from (its `Pending`).
+    pub fn pending(&self, id: &str) -> Option<Value> {
+        self.lock()
+            .jobs
+            .get(id)
+            .map(|j| j.s.pending.clone())
+            .filter(|v| !v.is_null())
+    }
+
+    /// Job ID's row as the queue knows it.
+    pub fn row(&self, id: &str) -> Option<Row> {
+        let st = self.lock();
+        let j = st.jobs.get(id)?;
+        let remote = matches!(j.state, QState::Remote(_)) || j.attempt > 0;
+        Some(Row {
+            machine: j.machine.clone(),
+            attempt: remote.then_some(j.attempt),
+            waiting: (j.state == QState::Queued)
+                .then(|| j.waiting.clone())
+                .flatten(),
+            priority: j.s.own.number(),
+        })
+    }
+
+    fn forseti_job(j: &QJob) -> Job {
+        let mut spec = j.s.spec.clone();
+        spec.local_only |= j.s.place.local_only || j.s.place.machine == Machine::Local;
+        if let Machine::Runner(n) = &j.s.place.machine {
+            spec.on = Some(n.clone());
+        }
+        if j.s.place.heavy {
+            spec.weight = Weight::Heavy;
+        }
+        spec.keys = j.s.place.keys.clone();
+        spec.writes = j.s.place.writes.clone();
+        Job {
+            id: JobId(j.s.id.clone()),
+            spec,
+            own: j.s.own,
+            submitted: j.submitted,
+            state: JobState::Queued,
+            attempt: j.attempt,
+            evicted_once: false,
+            disturbed: false,
+            blocked_caller: false,
+        }
+    }
+
+    /// One tick at NOW: graces that ended, then every queued job in the queue's order, placed or told why it waits.
+    pub fn tick(&self, now: u64) -> Ticked {
+        let mut st = self.lock();
+        let mut t = Ticked::default();
+        for (job, attempt) in st.attempts.graces_due(now) {
+            let effects = st.attempts.step(
+                now,
+                AEvent::GraceEnded {
+                    job: job.clone(),
+                    attempt,
+                },
+            );
+            self.apply(&mut st, effects, now, &mut t.outcomes);
+            self.put_attempts(&st, &job);
+        }
+        let names: Vec<String> = st.runners.keys().cloned().collect();
+        for name in names {
+            self.health(&mut st, &name, now);
+        }
+        let queued: Vec<Job> = st
+            .jobs
+            .values()
+            .filter(|j| j.state == QState::Queued)
+            .map(Self::forseti_job)
+            .collect();
+        if queued.is_empty() {
+            return t;
+        }
+        let eff = forseti::effective_priorities(&queued, &[], &[]);
+        let exp = |_: &JobId| Expected {
+            minutes: forseti::history::DEFAULT_MINUTES,
+            cpu: 1.0,
+            mem_p95_mib: None,
+        };
+        let order = forseti::queue_order(&queued, &eff, &exp, now);
+        let project: HashMap<JobId, String> = queued
+            .iter()
+            .map(|j| (j.id.clone(), j.spec.project.clone()))
+            .collect();
+        let weights: HashMap<String, f64> = st
+            .jobs
+            .values()
+            .map(|j| (j.s.spec.project.clone(), j.s.place.weight))
+            .collect();
+        let order = st.drr.order(
+            &order,
+            &eff,
+            &|j| project.get(j).cloned().unwrap_or_default(),
+            &HashMap::new(),
+            &weights,
+        );
+        let by_id: HashMap<&JobId, &Job> = queued.iter().map(|j| (&j.id, j)).collect();
+        for id in &order {
+            let job = by_id[id];
+            let e = eff.get(id).copied().unwrap_or(job.own);
+            self.place(&mut st, job, e, now, &mut t.starts);
+        }
+        t
+    }
+
+    /// Places JOB: here (admitted: started), on a runner (offered), or not yet (why).
+    fn place(&self, st: &mut St, job: &Job, eff: Priority, now: u64, starts: &mut Vec<String>) {
+        let id = job.id.0.clone();
+        let Some(q) = st.jobs.get(&id) else {
+            return;
+        };
+        // this machine always (a pin elsewhere filters it), then every runner
+        let mut cands = vec![Candidate {
+            name: LOCAL.into(),
+            local: true,
+            trust: RunnerTrust::Mine,
+            keys_allowed: vec![],
+            features: job.spec.features.clone(),
+            state: RunnerState::Ready,
+            accept: Accept::All,
+            link_bps: None,
+            missing_bytes: 0,
+            start_s: 0.0,
+            wait_s: 0.0,
+            speed: 1.0,
+            history: vec![],
+            cloud: None,
+        }];
+        for (name, r) in &st.runners {
+            cands.push(Candidate {
+                name: name.clone(),
+                local: false,
+                trust: r.r.trust,
+                keys_allowed: vec![],
+                features: job.spec.features.clone(),
+                state: r.state.clone(),
+                accept: r.r.accept,
+                link_bps: None,
+                missing_bytes: 0,
+                start_s: 0.0,
+                wait_s: 0.0,
+                speed: 1.0,
+                history: vec![],
+                cloud: None,
+            });
+        }
+        let ctx = PlaceCtx {
+            eff,
+            send: q.s.place.send.forseti(),
+            machines_cell_allows: q.s.place.machines_cell,
+            gates_allowed: false,
+            cloud_after_s: CLOUD_AFTER_S,
+            now,
+            commits_not_on_origin: 0,
+        };
+        // the pick, then this machine's own admission: refused here, the job may still go to a runner
+        let mut here: Option<WaitReason> = None;
+        let placed = loop {
+            match forseti::pick(job, &cands, &ctx) {
+                Pick::Local => {
+                    let running: Vec<RunningJob> = st.local_running.values().cloned().collect();
+                    match self
+                        .local
+                        .admit(job, eff, &running, st.last_local_start, now)
+                    {
+                        Ok(g) => break Placed::Here(g),
+                        Err(r) => {
+                            here.get_or_insert(r);
+                            cands.retain(|c| !c.local);
+                        }
+                    }
+                }
+                Pick::Runner(n) => break Placed::There(n),
+                Pick::Wait(r) => break Placed::Wait(here.take().unwrap_or(r)),
+            }
+        };
+        let q = st.jobs.get_mut(&id).expect("the job");
+        match placed {
+            Placed::Here(g) => {
+                q.state = QState::Local;
+                q.machine = Some(LOCAL.into());
+                q.waiting = None;
+                let j = q.clone();
+                st.local_running
+                    .insert(id.clone(), running(&id, eff, now, g.reserve_mib, g.cores));
+                st.last_local_start = Some(now);
+                self.put_job(&j, eff);
+                starts.push(id);
+            }
+            Placed::There(name) => self.offer(st, job, eff, &name, now),
+            Placed::Wait(r) => {
+                // a runner's refusal stays shown until something else holds the job
+                let refused = q.waiting.as_deref().is_some_and(|w| w.contains(": "));
+                if !refused || !matches!(r, WaitReason::Mode | WaitReason::NoRunner) {
+                    q.waiting = Some(wait_text(&r));
+                }
+            }
+        }
+    }
+
+    /// Offers JOB to runner NAME: a new attempt with a nonce.
+    fn offer(&self, st: &mut St, job: &Job, eff: Priority, name: &str, now: u64) {
+        let id = job.id.0.clone();
+        let Some(grace_s) = st.runners.get(name).map(|r| r.r.grace_s) else {
+            return;
+        };
+        let q = st.jobs.get_mut(&id).expect("the job");
+        q.attempt += 1;
+        let r = JobRef {
+            job: id.clone(),
+            attempt: q.attempt,
+            nonce: nonce(),
+        };
+        q.state = QState::Remote(name.into());
+        q.machine = Some(name.into());
+        q.waiting = None;
+        let j = q.clone();
+        st.attempts.step(
+            now,
+            AEvent::Placed {
+                job: id.clone(),
+                attempt: r.attempt,
+                nonce: r.nonce,
+                runner: name.into(),
+                grace_s,
+                restartable: job.spec.restartable,
+            },
+        );
+        if let Some(rr) = st.runners.get(name) {
+            rr.session.send(Frame::Offer {
+                r: r.clone(),
+                spec: Box::new(job.spec.clone()),
+                priority: eff,
+                input_key: String::new(),
+                grant_hint: None,
+                expected: None,
+            });
+        }
+        self.put_job(&j, eff);
+        self.put_attempts(st, &id);
+        let (attempt, runner) = (r.attempt, name.to_string());
+        self.persist(Box::new(move |c| {
+            c.execute(
+                "insert into rq_offer(job, attempt, runner, sent, expires) values (?1, ?2, ?3, ?4, ?5)",
+                (id, attempt, runner, now as f64, (now + 60) as f64),
+            )?;
+            Ok(())
+        }));
+    }
+
+    /// Runner NAME's health check at NOW: started when due (its probe asked, its canary offered, offered again after a
+    /// refusal), judged once every answer is in or its wait has run out. A pass clears its strikes and returns it to
+    /// rotation; a failure is a strike, which may bench it.
+    fn health(&self, st: &mut St, name: &str, now: u64) {
+        let Some(r) = st.runners.get_mut(name) else {
+            return;
+        };
+        if r.next_check == 0 {
+            r.next_check = now + health::CHECK_EVERY_S;
+        }
+        let up = matches!(r.state, RunnerState::Ready | RunnerState::Benched(_));
+        if r.check.is_none() && up && now >= r.next_check {
+            r.session.send(Frame::Probe);
+            r.check = Some(Check {
+                started: now,
+                canary: None,
+                last_offer: 0,
+                facts: Facts::default(),
+            });
+        }
+        let Some(c) = r.check.as_mut() else {
+            return;
+        };
+        c.facts.skew_s = r.skew_s;
+        let offer = c.canary.is_none() && now >= c.last_offer + 2 && c.facts.canary.is_none();
+        let done = c.facts.complete() || now >= c.started + health::CHECK_WAIT_S;
+        if offer && !done {
+            let id = canary_id(name, now);
+            c.canary = Some(id.clone());
+            c.last_offer = now;
+            let r = JobRef {
+                job: id.clone(),
+                attempt: 1,
+                nonce: nonce(),
+            };
+            let mut spec = blank_spec("health check");
+            spec.command = vec!["true".into()];
+            spec.tree = PathBuf::from("/src/health");
+            spec.cwd = PathBuf::from(".");
+            spec.mem_mib = Range { min: 64, max: 256 };
+            spec.timeout_s = 60;
+            spec.restartable = false;
+            st.attempts.step(
+                now,
+                AEvent::Placed {
+                    job: id,
+                    attempt: 1,
+                    nonce: r.nonce,
+                    runner: name.into(),
+                    grace_s: 0,
+                    restartable: false,
+                },
+            );
+            if let Some(rr) = st.runners.get(name) {
+                rr.session.send(Frame::Offer {
+                    r,
+                    spec: Box::new(spec),
+                    priority: Priority::P1,
+                    input_key: String::new(),
+                    grant_hint: None,
+                    expected: None,
+                });
+            }
+            return;
+        }
+        if !done {
+            return;
+        }
+        let Some(c) = r.check.take() else {
+            return;
+        };
+        r.next_check = now + health::CHECK_EVERY_S;
+        match health::judge(&c.facts) {
+            Ok(()) => {
+                r.strikes.clear();
+                if matches!(r.state, RunnerState::Benched(_)) {
+                    r.state = RunnerState::Ready;
+                }
+                tracing::info!("runners: {name}: the health check passed");
+            }
+            Err(why) => {
+                tracing::info!("runners: {name}: the health check failed: {why}");
+                let reason = format!("{}: {why}", health::CHECK);
+                if r.strikes.strike(now, &reason) {
+                    r.state = RunnerState::Benched(reason);
+                }
+            }
+        }
+        if let Some(job) = c.canary {
+            st.attempts.forget(&job);
+        }
+    }
+
+    /// The canary of a check on RUNNER ended: VERDICT, or none when it never ran (refused: offered again).
+    fn canary_ended(st: &mut St, job: &str, verdict: Option<forseti::Verdict>) {
+        for r in st.runners.values_mut() {
+            if let Some(c) = r.check.as_mut()
+                && c.canary.as_deref() == Some(job)
+            {
+                match verdict {
+                    Some(v) => c.facts.canary = Some(v),
+                    None => c.canary = None,
+                }
+                return;
+            }
+        }
+    }
+
+    /// The strike a verdict of RUNNER's is, if any: counted, and the runner benched at its second.
+    fn strike_of(st: &mut St, runner: &str, v: &forseti::Verdict, now: u64) {
+        let Some(r) = st.runners.get_mut(runner) else {
+            return;
+        };
+        let ctx = StrikeCtx {
+            link_lost_today: 0,
+            link_stayed_up: !matches!(r.state, RunnerState::Unreachable { .. }),
+        };
+        if r.strikes.record(now, v, &ctx) {
+            r.state = RunnerState::Benched(v.to_string());
+            tracing::warn!("runners: {runner} is benched: {v}");
+        }
+    }
+
+    /// A runner's link event at NOW: frames into the attempt state machine, its effects carried out.
+    pub fn on_link(&self, ev: LinkEvent, now: u64) -> Vec<Outcome> {
+        let mut st = self.lock();
+        let mut out = vec![];
+        match ev {
+            LinkEvent::Logged { r, upto, .. } => st.attempts.logged(&r, upto),
+            LinkEvent::Clock { runner, at } => {
+                if let Some(r) = st.runners.get_mut(&runner) {
+                    r.skew_s = Some(at as i64 - now as i64);
+                }
+            }
+            LinkEvent::Lost { runner, why } => {
+                tracing::info!("runners: {runner}: the link is lost ({why})");
+                self.link_lost(&mut st, &runner, now, &mut out);
+            }
+            LinkEvent::Bye { runner } => self.link_lost(&mut st, &runner, now, &mut out),
+            LinkEvent::Frame { runner, frame } => {
+                self.frame(&mut st, &runner, frame, now, &mut out)
+            }
+        }
+        out
+    }
+
+    fn link_lost(&self, st: &mut St, runner: &str, now: u64, out: &mut Vec<Outcome>) {
+        // a link lost while jobs ran is a strike the second time in a day
+        let ran = st
+            .attempts
+            .attempts()
+            .any(|(_, a)| a.runner == runner && a.state.open());
+        if let Some(r) = st.runners.get_mut(runner) {
+            if ran {
+                let ctx = StrikeCtx {
+                    link_lost_today: r.strikes.lost_link(now),
+                    link_stayed_up: false,
+                };
+                let lost = forseti::Verdict::Infra(forseti::classify::infra::RUNNER_LOST.into());
+                if r.strikes.record(now, &lost, &ctx) {
+                    tracing::warn!("runners: {runner} is benched: its link was lost twice today");
+                }
+            }
+            r.state = match r.strikes.benched() {
+                Some(why) => RunnerState::Benched(why.to_string()),
+                None => RunnerState::Unreachable { since: now },
+            };
+        }
+        let effects = st.attempts.step(
+            now,
+            AEvent::LinkLost {
+                runner: runner.into(),
+            },
+        );
+        let jobs = jobs_of(&effects);
+        self.apply(st, effects, now, out);
+        for j in st.jobs.keys().cloned().collect::<Vec<_>>() {
+            if st
+                .attempts
+                .current(&j)
+                .is_some_and(|(_, a)| a.runner == runner)
+                || jobs.contains(&j)
+            {
+                self.put_attempts(st, &j);
+            }
+        }
+    }
+
+    fn frame(&self, st: &mut St, runner: &str, f: Frame, now: u64, out: &mut Vec<Outcome>) {
+        let ev = match f {
+            Frame::HelloOk { attempts, .. } => {
+                if let Some(r) = st.runners.get_mut(runner) {
+                    // a benched runner stays out of rotation until a check passes or the user unbenches it
+                    r.state = match r.strikes.benched() {
+                        Some(why) => RunnerState::Benched(why.to_string()),
+                        None => RunnerState::Ready,
+                    };
+                }
+                AEvent::Hello {
+                    runner: runner.into(),
+                    listed: attempts.iter().map(Listed::from).collect(),
+                }
+            }
+            Frame::Admit { r, grant } => {
+                if st.attempts.frame_ok(runner, &r) == Some(false) {
+                    // a health check's canary runs in the runner's own image
+                    let image = if is_canary(&r.job) {
+                        st.runners.get(runner).and_then(|rr| rr.r.image.clone())
+                    } else {
+                        st.jobs.get(&r.job).and_then(|j| j.s.place.image.clone())
+                    };
+                    if let Some(rr) = st.runners.get(runner) {
+                        rr.session.send(Frame::Start {
+                            r: r.clone(),
+                            image,
+                            env: vec![],
+                            net_hosts: vec![],
+                            parser: "exit".into(),
+                        });
+                    }
+                    let (job, attempt, runner) = (r.job.clone(), r.attempt, runner.to_string());
+                    let grant = serde_json::to_string(&grant).unwrap_or_default();
+                    self.persist(Box::new(move |c| {
+                        c.execute(
+                            "insert or replace into rq_admission(job, attempt, runner, grant, admitted) \
+                             values (?1, ?2, ?3, ?4, ?5)",
+                            (job, attempt, runner, grant, now as f64),
+                        )?;
+                        Ok(())
+                    }));
+                }
+                AEvent::FrameFrom {
+                    runner: runner.into(),
+                    r,
+                }
+            }
+            Frame::Refuse { r, why, .. } => {
+                let current = st.attempts.frame_ok(runner, &r) == Some(false);
+                let job = r.job.clone();
+                let effects = st.attempts.step(
+                    now,
+                    AEvent::Refused {
+                        runner: runner.into(),
+                        r,
+                    },
+                );
+                self.apply(st, effects, now, out);
+                self.put_attempts(st, &job);
+                if is_canary(&job) {
+                    // a check's canary refused (the runner busy): offered again
+                    st.attempts.forget(&job);
+                    Self::canary_ended(st, &job, None);
+                    return;
+                }
+                if current && let Some(j) = st.jobs.get_mut(&job) {
+                    j.waiting = Some(format!("{runner}: {why}"));
+                }
+                return;
+            }
+            Frame::ProbeResult {
+                facts,
+                missing,
+                limits,
+                ..
+            } => {
+                if let Some(c) = st.runners.get_mut(runner).and_then(|r| r.check.as_mut()) {
+                    c.facts.probed = true;
+                    c.facts.missing = missing.iter().map(|m| m.what.clone()).collect();
+                    c.facts.limits = limits;
+                    // the probe's facts carry the free space only: the floor is its 20 GB part
+                    if let Some(f) = facts {
+                        c.facts.disk_free_gb = f.disk_free_gb;
+                    }
+                }
+                return;
+            }
+            Frame::Started { r, .. } => AEvent::Started {
+                runner: runner.into(),
+                r,
+            },
+            Frame::Finished { r, result } => {
+                let job = r.job.clone();
+                let late = st.attempts.frame_ok(runner, &r) == Some(true)
+                    || st
+                        .attempts
+                        .attempt(&r.job, r.attempt)
+                        .is_some_and(|a| !a.state.open());
+                let effects = st.attempts.step(
+                    now,
+                    AEvent::Finished {
+                        runner: runner.into(),
+                        r: r.clone(),
+                        result: result.clone(),
+                    },
+                );
+                if late && effects.iter().any(|e| matches!(e, Effect::KeepLate { .. })) {
+                    let path = self
+                        .exec_root
+                        .join(&job)
+                        .join(format!("result.{}.json", r.attempt));
+                    if let Err(e) = std::fs::write(&path, result.to_string()) {
+                        tracing::warn!("runners: {}: {e}", path.display());
+                    }
+                    out.push(Outcome::Late {
+                        id: job.clone(),
+                        attempt: r.attempt,
+                        result,
+                    });
+                }
+                // the result is recorded: the runner's folder of it may go
+                let recorded = effects
+                    .iter()
+                    .any(|e| matches!(e, Effect::Verdict { .. } | Effect::KeepLate { .. }));
+                if recorded && let Some(rr) = st.runners.get(runner) {
+                    rr.session.send(Frame::Done { r });
+                }
+                self.put_attempts(st, &job);
+                self.apply(st, effects, now, out);
+                return;
+            }
+            Frame::Preempting { .. } => {
+                if let Some(r) = st.runners.get_mut(runner) {
+                    r.state = RunnerState::Preempting;
+                }
+                AEvent::Preempting {
+                    runner: runner.into(),
+                }
+            }
+            Frame::Draining => {
+                if let Some(r) = st.runners.get_mut(runner) {
+                    r.state = RunnerState::Draining;
+                }
+                return;
+            }
+            f => match f.job() {
+                Some(r) => AEvent::FrameFrom {
+                    runner: runner.into(),
+                    r: r.clone(),
+                },
+                None => return,
+            },
+        };
+        let effects = st.attempts.step(now, ev);
+        let jobs = jobs_of(&effects);
+        self.apply(st, effects, now, out);
+        for j in jobs {
+            self.put_attempts(st, &j);
+        }
+    }
+
+    /// Carries out the attempt state machine's EFFECTS.
+    fn apply(&self, st: &mut St, effects: Vec<Effect>, now: u64, out: &mut Vec<Outcome>) {
+        for e in effects {
+            match e {
+                Effect::Verdict {
+                    job,
+                    attempt,
+                    result,
+                } => {
+                    let runner = st.attempts.attempt(&job, attempt).map(|a| a.runner.clone());
+                    let verdict = verdict_of(&result)
+                        .unwrap_or_else(|| forseti::Verdict::Infra("no verdict".into()));
+                    if is_canary(&job) {
+                        Self::canary_ended(st, &job, Some(verdict));
+                        continue;
+                    }
+                    if let Some(r) = runner {
+                        Self::strike_of(st, &r, &verdict, now);
+                    }
+                    st.jobs.remove(&job);
+                    st.attempts.forget(&job);
+                    self.drop_job(&job);
+                    out.push(Outcome::Done {
+                        id: job,
+                        attempt,
+                        result,
+                    });
+                }
+                Effect::Requeue { job, reason } => {
+                    if let Some(j) = st.jobs.get_mut(&job) {
+                        // the next attempt's log starts afresh; this one's is kept as its own
+                        let dir = self.exec_root.join(&job);
+                        let _ = std::fs::rename(
+                            dir.join("log"),
+                            dir.join(format!("log.{}", j.attempt)),
+                        );
+                        j.state = QState::Queued;
+                        j.machine = None;
+                        j.waiting = Some(format!("requeued ({reason})"));
+                        let j = j.clone();
+                        self.put_job(&j, j.s.own);
+                    }
+                }
+                Effect::Lost { job } if is_canary(&job) => {
+                    let lost =
+                        forseti::Verdict::Infra(forseti::classify::infra::RUNNER_LOST.into());
+                    Self::canary_ended(st, &job, Some(lost));
+                }
+                Effect::Lost { job } => {
+                    st.jobs.remove(&job);
+                    st.attempts.forget(&job);
+                    self.drop_job(&job);
+                    out.push(Outcome::Lost { id: job });
+                }
+                Effect::Ignore { notice } => tracing::info!("runners: {notice}"),
+                Effect::ResumeLog {
+                    job,
+                    attempt,
+                    offset,
+                } => {
+                    let Some(a) = st.attempts.attempt(&job, attempt) else {
+                        continue;
+                    };
+                    let r = JobRef {
+                        job: job.clone(),
+                        attempt,
+                        nonce: a.nonce,
+                    };
+                    if let Some(rr) = st.runners.get(&a.runner) {
+                        rr.session.send(Frame::Attach {
+                            r,
+                            log_offset: offset,
+                        });
+                    }
+                }
+                Effect::KeepLate { .. } => {}
+                Effect::SendCancel { runner, r } => {
+                    if let Some(rr) = st.runners.get(&runner) {
+                        rr.session.send(Frame::Cancel { r });
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A job's room on this machine: dropping it gives the room back ([`Queue::release`]).
+pub struct Slot {
+    q: Arc<Queue>,
+    id: String,
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.q.release(&self.id);
+    }
+}
+
+/// Where a placement put a job.
+enum Placed {
+    Here(forseti::Grant),
+    There(String),
+    Wait(WaitReason),
+}
+
+/// The jobs EFFECTS are about.
+fn jobs_of(effects: &[Effect]) -> Vec<String> {
+    effects
+        .iter()
+        .filter_map(|e| match e {
+            Effect::Verdict { job, .. }
+            | Effect::Requeue { job, .. }
+            | Effect::Lost { job }
+            | Effect::ResumeLog { job, .. }
+            | Effect::KeepLate { job, .. } => Some(job.clone()),
+            Effect::SendCancel { r, .. } => Some(r.job.clone()),
+            Effect::Ignore { .. } => None,
+        })
+        .collect()
+}
+
+/// A running job of the local runner's.
+fn running(id: &str, eff: Priority, now: u64, reserve_mib: u64, cores: u32) -> RunningJob {
+    RunningJob {
+        id: JobId(id.into()),
+        priority: eff,
+        started: now,
+        reserve_mib,
+        current_mib: 0,
+        cores,
+        expected: Expected {
+            minutes: forseti::history::DEFAULT_MINUTES,
+            cpu: f64::from(cores),
+            mem_p95_mib: None,
+        },
+        restartable: true,
+        evicted_once: false,
+        long_build: false,
+    }
+}
+
+/// The jobs and attempts `runtime.db` kept, for [`Queue::restore`].
+pub async fn stored(db: &urdr::Handle) -> (Vec<Stored>, Vec<StoredAttempt>) {
+    let jobs = db
+        .read(|c| {
+            let mut st =
+                c.prepare("select id, spec, own, state, submitted, attempt from rq_job")?;
+            let rows = st
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, f64>(4)?,
+                        r.get::<_, i64>(5)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!("runners: the queue in runtime.db: {e}");
+            vec![]
+        });
+    let jobs = jobs
+        .into_iter()
+        .filter_map(|(id, spec, own, state, submitted, attempt)| {
+            let v: Value = serde_json::from_str(&spec).ok()?;
+            Some(Stored {
+                submit: Submit {
+                    id,
+                    session: v.get("session").and_then(Value::as_str).map(String::from),
+                    own: Priority::from_number(own.clamp(1, 5) as u8),
+                    spec: serde_json::from_value(v.get("job")?.clone()).ok()?,
+                    place: serde_json::from_value(v.get("place")?.clone()).ok()?,
+                    pending: v.get("pending").cloned().unwrap_or(Value::Null),
+                },
+                submitted: submitted as u64,
+                state,
+                attempt: attempt.max(0) as u32,
+            })
+        })
+        .collect();
+    let attempts = db
+        .read(|c| {
+            let mut st =
+                c.prepare("select job, attempt, nonce, runner, state, log_offset from rq_attempt")?;
+            let rows = st
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, String>(4)?,
+                        r.get::<_, i64>(5)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(job, attempt, nonce, runner, state, log_offset)| {
+            Some(StoredAttempt {
+                job,
+                attempt: attempt.max(0) as u32,
+                nonce: Nonce::from_hex(&nonce)?,
+                runner,
+                state,
+                log_offset: log_offset.max(0) as u64,
+            })
+        })
+        .collect();
+    (jobs, attempts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // [D] pure: the design's table, row by row
+    #[test]
+    fn priority_of_is_the_designs_table() {
+        let user = Starter::User;
+        let agent = Starter::Session("s1".into());
+        // a job the user starts (the UI, `drgnx job …`)
+        assert_eq!(priority_of(&user, false, Origin::Request), Priority::P1);
+        // the splitter's fail-fast probes and reruns of fresh reds
+        assert_eq!(priority_of(&agent, false, Origin::Splitter), Priority::P2);
+        // an agent's `job_start`
+        assert_eq!(priority_of(&agent, false, Origin::Request), Priority::P3);
+        // a plan run's or the merge gate's bulk
+        assert_eq!(priority_of(&agent, false, Origin::Bulk), Priority::P4);
+        // `background`, image builds, cache warm-ups
+        assert_eq!(priority_of(&agent, true, Origin::Request), Priority::P5);
+        assert_eq!(priority_of(&user, true, Origin::Request), Priority::P5);
+        assert_eq!(priority_of(&user, false, Origin::Upkeep), Priority::P5);
+        // background only lowers: never above what the rest of the table gives
+        for from in [
+            Origin::Request,
+            Origin::Splitter,
+            Origin::Bulk,
+            Origin::Upkeep,
+        ] {
+            for s in [&user, &agent] {
+                assert!(priority_of(s, true, from) <= priority_of(s, false, from));
+            }
+        }
+    }
+}

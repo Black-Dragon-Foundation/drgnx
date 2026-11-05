@@ -1,0 +1,18 @@
+{"scenario": "runners/macos-fixed-slots", "requires": ["v1", "test-hooks"], "doc": "[B] Admission by count, as a macOS hub's own machine has it (Limits::fixed_slots): test-hooks forces the fixed-slot path with DRGNX_TEST_JOB_SLOTS=2. Two jobs parked on a FIFO run, a third waits saying the slots are in use, and it starts when they end."}
+{"do": "root"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkfifo $ROOT/gate"], "expect_code": 0}
+{"do": "start", "hub": "h", "env": {"DRGNX_TEST_JOB_SLOTS": "2"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "exec/start", "params": {"argv": ["sh", "-c", "cat $ROOT/gate"], "cwd": "$ROOT"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:a", "text": "$string"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "exec/start", "params": {"argv": ["sh", "-c", "cat $ROOT/gate"], "cwd": "$ROOT"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:b", "text": "$string"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "exec/start", "params": {"argv": ["sh", "-c", "echo third"], "cwd": "$ROOT"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$capture:c", "text": "$string"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "exec/list", "params": {"running": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"jobs": {"$contains": [{"id": "$a", "status": "running"}, {"id": "$b", "status": "running"}, {"id": "$c", "status": "queued", "waiting": "$string"}]}}}, "within_ms": 10000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "echo go > $ROOT/gate"], "expect_code": 0}
+{"do": "expect", "conn": "e", "json": {"event": "exec-done", "data": {"id": "$c", "status": "done"}}, "within_ms": 20000}

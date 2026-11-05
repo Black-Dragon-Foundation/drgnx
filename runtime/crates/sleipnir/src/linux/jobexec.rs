@@ -57,7 +57,30 @@ pub struct JobExec {
     pub expect: Expect,
     pub grant: Grant,
     pub timeout_s: u64,
+    /// The job's helper (keys, network, the disk watch), started before the command; none: the job has no helper.
+    #[serde(default)]
+    pub helper: Option<HelperSpec>,
 }
+
+/// What the job helper serves the job: `sleipnir job-helper` in the job's own service, ended with job-exec.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct HelperSpec {
+    /// The runner folder: its disk is watched (empty: no watch).
+    #[serde(default)]
+    pub root: PathBuf,
+    /// The keys the job may read (names only).
+    #[serde(default)]
+    pub keys: Vec<String>,
+    /// The hub's allow-list file: the job has network through the helper's proxy.
+    #[serde(default)]
+    pub hub_allow: Option<PathBuf>,
+    /// The job's container, killed when the disk watch stops the job.
+    #[serde(default)]
+    pub container: Option<String>,
+}
+
+/// The record of key requests that got no key in time (the helper writes it before `drgnx-key` exits 75).
+pub const KEY_TIMEOUT: &str = "key-timeout";
 
 impl JobExec {
     /// Writes the spec into the attempt's folder DIR.
@@ -138,9 +161,60 @@ fn read_log(p: &Path) -> Vec<u8> {
 struct Seen {
     oom: bool,
     timed_out: bool,
+    /// A kill reason appeared while the command ran (the scheduler, the disk watch): the job is stopped whole.
+    stopped: bool,
     signal: Option<i32>,
     exit_code: Option<i32>,
     setup: Option<String>,
+}
+
+/// The job helper, running: dropping its stdin ends it.
+struct Helper {
+    child: std::process::Child,
+}
+
+impl Helper {
+    /// Starts `sleipnir job-helper` for DIR and waits for its `ready` line.
+    fn start(dir: &Path, h: &HelperSpec) -> Result<Helper, String> {
+        let exe = std::env::current_exe().map_err(|e| format!("this binary's path: {e}"))?;
+        let log = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("helper.log"))
+            .map_err(|e| format!("the helper's log: {e}"))?;
+        let mut cmd = Command::new(exe);
+        cmd.arg("job-helper").arg("--dir").arg(dir);
+        if let Some(f) = &h.hub_allow {
+            cmd.arg("--hub-allow").arg(f);
+        }
+        let mut child = cmd
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(log)
+            .spawn()
+            .map_err(|e| format!("the job helper: {e}"))?;
+        let mut line = String::new();
+        let read = child
+            .stdout
+            .take()
+            .map(io::BufReader::new)
+            .map(|mut r| io::BufRead::read_line(&mut r, &mut line));
+        if !matches!(read, Some(Ok(_))) || !line.starts_with("ready ") {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!(
+                "the job helper didn't start (its log: {})",
+                dir.join("helper.log").display()
+            ));
+        }
+        Ok(Helper { child })
+    }
+
+    /// Ends the helper: its stdin closes, it zeroes its keys and exits.
+    fn end(mut self) {
+        drop(self.child.stdin.take());
+        let _ = self.child.wait();
+    }
 }
 
 /// Runs SPEC from the attempt's folder DIR and writes `result.json` there; the result.
@@ -189,6 +263,18 @@ pub fn run(dir: &Path, spec: &JobExec) -> ResultJson {
     if spec.argv.is_empty() {
         seen.setup = Some("the job has no command".into());
     }
+    // the helper comes up after the swap check, so no key reaches a service that could swap, and before the command,
+    // so its sockets are there to mount
+    let helper = match (&seen.setup, &spec.helper) {
+        (None, Some(h)) => match Helper::start(dir, h) {
+            Ok(h) => Some(h),
+            Err(e) => {
+                seen.setup = Some(e);
+                None
+            }
+        },
+        _ => None,
+    };
     if seen.setup.is_none() {
         let mut cmd = Command::new(&spec.argv[0]);
         cmd.args(&spec.argv[1..])
@@ -225,9 +311,22 @@ pub fn run(dir: &Path, spec: &JobExec) -> ResultJson {
                     seen.timed_out = true;
                     break;
                 }
+                if dir.join(KILL_REASON).exists() {
+                    // the scheduler or the disk watch stops the job: its reason is written, the verdict names it
+                    seen.stopped = true;
+                    let _ = child.kill();
+                    if let Ok(st) = child.wait() {
+                        seen.exit_code = st.code();
+                        seen.signal = st.signal();
+                    }
+                    break;
+                }
                 std::thread::sleep(TICK);
             },
         }
+    }
+    if let Some(h) = helper {
+        h.end();
     }
     let after = slice
         .as_ref()
@@ -235,7 +334,7 @@ pub fn run(dir: &Path, spec: &JobExec) -> ResultJson {
         .and_then(|d| CgroupStat::read(d).ok())
         .unwrap_or_default();
     seen.oom |= killed(&after);
-    let stop_slice = seen.oom || seen.timed_out;
+    let stop_slice = seen.oom || seen.timed_out || seen.stopped;
     let result = judge_run(dir, spec, &seen, &before, &after, t0.elapsed());
     let _ = result.write(dir);
     if stop_slice {
@@ -256,11 +355,14 @@ fn judge_run(
 ) -> ResultJson {
     let parsed = parse::parse(spec.parser, &read_log(&spec.log));
     let reason = read_kill_reason(dir);
+    // a key that never came is the runner's failure, known from the helper's record, never from the exit code alone
+    let key_missed = dir.join(KEY_TIMEOUT).exists();
     let ev = ExitEvidence {
         evicted: reason.as_deref() == Some(EVICTED),
         kill_reason: match (&seen.setup, reason) {
             (Some(_), _) => Some(infra::SETUP.to_string()),
             (None, Some(r)) if r != EVICTED => Some(r),
+            (None, None) if key_missed => Some(format!("infra: {}", infra::KEY_NOT_DELIVERED)),
             _ => None,
         },
         oom_kill_grew: seen.oom,
@@ -335,7 +437,43 @@ mod tests {
                 reserve_mib: 256,
             },
             timeout_s: 60,
+            helper: None,
         }
+    }
+
+    /// [D] The helper's record of a key request that timed out makes the attempt `infra: key not delivered`, whatever
+    /// the command's exit (75 from drgnx-key, or the command's own failure after it); a written kill reason still
+    /// wins, and an exit of 75 without the record is the job's own.
+    #[test]
+    fn a_key_timeout_record_is_infra_key_not_delivered() {
+        let d = tempfile::tempdir().unwrap();
+        let log = d.path().join("a3f.1.log");
+        fs::write(&log, "").unwrap();
+        let s = spec(&log);
+        let st = CgroupStat::default();
+        let exited = |c: i32| Seen {
+            exit_code: Some(c),
+            ..Default::default()
+        };
+        let judge = |seen: &Seen| judge_run(d.path(), &s, seen, &st, &st, Duration::from_secs(1));
+        assert_eq!(
+            judge(&exited(75)).verdict,
+            Verdict::Red,
+            "75 alone is the job's"
+        );
+        fs::write(d.path().join(KEY_TIMEOUT), "TOKEN\n").unwrap();
+        for code in [75, 1] {
+            let r = judge(&exited(code));
+            assert_eq!(
+                (r.verdict, r.infra.as_deref()),
+                (
+                    Verdict::Infra("key not delivered".into()),
+                    Some("infra: key not delivered")
+                )
+            );
+        }
+        kill_reason(d.path(), "infra: disk").unwrap();
+        assert_eq!(judge(&exited(75)).verdict, Verdict::Infra("disk".into()));
     }
 
     /// [D] A reason written before a kill names the verdict, whatever the exit and the rows say; an eviction stays an

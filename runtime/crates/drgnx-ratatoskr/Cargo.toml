@@ -43,6 +43,7 @@ hermod = { path = "../hermod", version = "0.1.0" }  # the ACP client of every se
 bifrost = { path = "../bifrost", version = "0.1.0" }
 sleipnir = { path = "../sleipnir", version = "0.1.0", default-features = false, features = ["linux"] }  # the shared podman argv
 vegvisir = { path = "../vegvisir", version = "0.1.0" }  # the Work map's model and layout (work::map)
+forseti = { path = "../forseti", version = "0.1.0" }  # the scheduler core: the queue's order, placement and admission
 huginn = { path = "../huginn", version = "0.1.0", features = ["serde"] }  # settings.el and runtime-defaults.el, as data
 serde_path_to_error.workspace = true  # where in a setting's value a mistake is
 tokio = { workspace = true, features = ["io-std"] }  # mcp-bridge's stdio (a feature, no new crate)
