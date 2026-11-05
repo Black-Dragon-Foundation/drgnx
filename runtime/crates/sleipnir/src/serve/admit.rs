@@ -288,4 +288,50 @@ mod tests {
         };
         assert!(admit(&other, &limits(), "drgnx-hubB", &[], None, 1000, &offer).is_ok());
     }
+
+    /// [D] A fake runner shares its host's pressure files and disk, so a test build takes the machine's pressure,
+    /// disk and available memory from `test-machine.json` in the runner folder when one is there: a busy, nearly
+    /// full host neither refuses nor admits a fleet row's job, and the profile's limits stay as strict as ever.
+    #[cfg(feature = "test-hooks")]
+    #[test]
+    fn a_test_build_takes_the_machine_from_the_facts_file() {
+        let d = tempfile::tempdir().unwrap();
+        let p = probe(d.path());
+        // the host as the desktop was: IO stalled, 44 GB free of 475
+        fs::write(
+            p.proc_root.join("pressure/io"),
+            "some avg10=30.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=28.13 avg60=0.00 avg300=0.00 total=0\n",
+        )
+        .unwrap();
+        let real = Limits::for_profile(Profile::Dedicated, 16384, 8);
+        let small = spec(64);
+        let offer = |id| Offer {
+            id,
+            attempt: 1,
+            spec: &small,
+            priority: Priority::P3,
+            expected: None,
+        };
+        let facts = |json: &str| fs::write(d.path().join("test-machine.json"), json).unwrap();
+        let quiet = r#"{"psi": {"mem_some10": 0.0, "cpu_some10": 0.0, "io_full10": 0.0, "app_mem_some10": null},
+                        "disk_free_gb": 400, "disk_total_gb": 475, "mem_available_mib": 8192}"#;
+        facts(quiet);
+        assert_eq!(
+            admit(&p, &real, "drgnx-hubA", &[], None, 1000, &offer("q1")).map(|_| ()),
+            Ok(()),
+            "the host's pressure or disk reached a test build"
+        );
+        // the facts are the machine: low disk in them is refused under the profile's floor, as on a real runner
+        facts(&quiet.replace("400", "44"));
+        assert_eq!(
+            admit(&p, &real, "drgnx-hubA", &[], None, 1000, &offer("q2"))
+                .unwrap_err()
+                .reason,
+            Some(WaitReason::DiskLow)
+        );
+        // and a broken facts file is a loud refusal, never the host's figures
+        facts("{");
+        let e = admit(&p, &real, "drgnx-hubA", &[], None, 1000, &offer("q3")).unwrap_err();
+        assert!(e.why.contains("test-machine.json"), "{e:?}");
+    }
 }

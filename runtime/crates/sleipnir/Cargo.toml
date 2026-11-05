@@ -42,10 +42,11 @@ required-features = ["linux"]
 name = "runner_host"
 required-features = ["linux"]
 
-# the hub's side of `serve`, run in the fake fleet's harness (tests/fleet_serve.rs)
+# the hub's side of `serve`, run in the fake fleet's harness (tests/fleet_serve.rs); test-hooks so the runner's
+# machine is the rows' figures, not the host's
 [[test]]
 name = "fleet_serve"
-required-features = ["runner"]
+required-features = ["runner", "test-hooks"]
 
 # sync's rows run inside a fake runner too (the real binary's git-receive and credential-helper modes)
 [[test]]

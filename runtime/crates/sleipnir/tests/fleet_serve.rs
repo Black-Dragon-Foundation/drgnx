@@ -2,7 +2,7 @@
 //! They run in the fleet's harness, never on a developer's machine:
 //!
 //! ```text
-//! cargo test -p sleipnir --test fleet_serve --no-run
+//! cargo test -p sleipnir --features test-hooks --test fleet_serve --no-run
 //! fleet.sh up --runners 2 --no-linger-on 2
 //! DRGNX_FLEET_TEST_BIN=<the test binary> fleet.sh test --test-threads=1 serve::
 //! ```
@@ -56,7 +56,14 @@ fn sh(runner: &str, script: &str) -> String {
     String::from_utf8_lossy(&out).trim().to_string()
 }
 
-/// A fresh runner root at ~/NAME on RUNNER with the binary under test installed as each of BUNDLES; its path.
+/// The machine `serve` admits on in these rows: a fake runner's `/proc/pressure`, `/proc/meminfo` and disk are its
+/// host's, so a busy or nearly full host would refuse a row's offer. The test build reads these figures instead
+/// (`probe::TEST_MACHINE`), under the profile's limits as they are.
+const QUIET_MACHINE: &str = r#"{"psi": {"mem_some10": 0.0, "cpu_some10": 0.0, "io_full10": 0.0, "app_mem_some10": null},
+"disk_free_gb": 100, "disk_total_gb": 200, "mem_available_mib": 8192}"#;
+
+/// A fresh runner root at ~/NAME on RUNNER with the binary under test installed as each of BUNDLES, and the quiet
+/// machine's figures; its path.
 fn root(runner: &str, name: &str, bundles: &[&str]) -> String {
     let share =
         std::env::var("DRGNX_FLEET_SHARE").expect("DRGNX_FLEET_SHARE: run through fleet.sh test");
@@ -72,6 +79,7 @@ fn root(runner: &str, name: &str, bundles: &[&str]) -> String {
             " && mkdir {root}/bin/{b} && cp /fleet/share/sleipnir {root}/bin/{b}/sleipnir"
         );
     }
+    script += &format!(" && printf %s '{QUIET_MACHINE}' > {root}/test-machine.json");
     sh(runner, &script);
     root
 }

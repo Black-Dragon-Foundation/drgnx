@@ -32,7 +32,11 @@ tests point it at fixture trees; `Probe::system(name, scheduler, slice_root, fol
 - **`machine(now, limits) -> MachineState`**: `MemTotal` and `MemAvailable`; PSI `avg10` of system memory and CPU
   `some` and IO `full`, and the user's apps' memory `some` (`app.slice/memory.pressure`) when the limits read it
   (the workstation profile); disk free and size of the runner folder's filesystem (`statvfs`); mains power; the boot
-  id; and the other schedulers' live reservations (below). What runs is the scheduler's to fill in.
+  id; and the other schedulers' live reservations (below). What runs is the scheduler's to fill in. In a
+  `test-hooks` build only, a `test-machine.json` in the runner folder (`{psi, disk_free_gb, disk_total_gb,
+  mem_available_mib}`, each optional) stands in for those figures: a fake runner shares its host's pressure files,
+  memory and disk, so the fleet rows set a quiet machine instead of admitting on the host's load. A file that doesn't
+  parse is an error, never the host's figures; the limits judging the figures are the profile's, unchanged.
 - **`cgroup(slice) -> CgroupStat`**: `memory.current`, `memory.stat`'s `file`, `memory.peak`, `memory.events`'
   `oom_kill` and `oom_group_kill`, `cpu.stat`'s `usage_usec` and `memory.pressure`. A slice's cgroup is found the way
   systemd nests it: each `-` opens a level, so `drgnx-runner-work-a3f.slice` is

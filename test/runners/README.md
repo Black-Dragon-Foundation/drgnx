@@ -83,13 +83,16 @@ Rows that play the hub (`#[ignore = "fleet"]`, `sleipnir`'s `tests/fleet_serve.r
 the runners over real SSH:
 
 ```
-cargo test -p sleipnir --test fleet_serve --no-run                     # in the dev container
+cargo test -p sleipnir --features test-hooks --test fleet_serve --no-run   # in the dev container
 fleet.sh up --runners 2 --no-linger-on 2
 DRGNX_FLEET_TEST_BIN=runtime/target/debug/deps/fleet_serve-HASH fleet.sh test --test-threads=1 serve::
 ```
 
 `test` copies the `sleipnir` binary beside the test's `deps/` into the share and tells the rows where the share is
 (`DRGNX_FLEET_SHARE`); each row installs it into its own runner root as a bundle (`<root>/bin/<name>/sleipnir`).
+A runner's `/proc/pressure`, `/proc/meminfo` and disk are the host's, so each row also writes `test-machine.json`
+into its root: a quiet machine with room, whose figures the `test-hooks` build admits on (`sleipnir.md`, "The machine
+probe"). A busy or nearly full host never refuses a row's job.
 Runner 1 lingers and runner 2 (`--no-linger-on 2`) doesn't. The rows can't be root in a runner, so a row that turns
 linger on writes `enable-linger` into the share: the image's `fleet-linger.path` sees it and runs
 `loginctl enable-linger runner`.

@@ -12,6 +12,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+/// Test builds only: the file in the runner folder whose figures stand in for the host's in [`Probe::machine`].
+#[cfg(feature = "test-hooks")]
+pub const TEST_MACHINE: &str = "test-machine.json";
+
 /// Where the probe reads, and who it reads for.
 #[derive(Clone, Debug)]
 pub struct Probe {
@@ -93,7 +97,7 @@ impl Probe {
                 r.boot_id == boot_id && reserve::alive_in(&self.proc_root, r.pid, r.start_time)
             })
             .collect();
-        Ok(MachineState {
+        let m = MachineState {
             name: self.name.clone(),
             profile: self.profile,
             now,
@@ -109,7 +113,42 @@ impl Probe {
             features: vec![],
             reachable: true,
             others,
-        })
+        };
+        #[cfg(feature = "test-hooks")]
+        let m = self.test_machine(m)?;
+        Ok(m)
+    }
+
+    /// Test builds only: a fake runner shares its host's `/proc/pressure`, `/proc/meminfo` and disk, so the folder's
+    /// [`TEST_MACHINE`] file, when there is one, sets the machine's pressure, disk and available memory. A file that
+    /// can't be read as one is an error, never the host's figures.
+    #[cfg(feature = "test-hooks")]
+    fn test_machine(&self, mut m: MachineState) -> io::Result<MachineState> {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Facts {
+            psi: Option<Psi>,
+            disk_free_gb: Option<u64>,
+            disk_total_gb: Option<u64>,
+            mem_available_mib: Option<u64>,
+        }
+        let path = self.folder.join(TEST_MACHINE);
+        let text = match fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(m),
+            Err(e) => return Err(e),
+        };
+        let f: Facts = serde_json::from_str(&text).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{}: {e}", path.display()),
+            )
+        })?;
+        m.psi = f.psi.unwrap_or(m.psi);
+        m.disk_free_gb = f.disk_free_gb.unwrap_or(m.disk_free_gb);
+        m.disk_total_gb = f.disk_total_gb.unwrap_or(m.disk_total_gb);
+        m.mem_available_mib = f.mem_available_mib.unwrap_or(m.mem_available_mib);
+        Ok(m)
     }
 
     /// The cgroup directory of SLICE (one of ours, under the user manager).
