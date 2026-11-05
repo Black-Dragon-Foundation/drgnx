@@ -64,7 +64,8 @@ arrives with the files picker.
   and every agent that waits on you. On the right, the machines' load ("desktop 3/16"). `n` and `N` cycle the chips,
   and `C-k n` / `C-c w n` / `SPC a n` do it from anywhere. **A jump only selects.** Allowing, pushing and answering stay
   on the card's own keys; no key of the map settles anything.
-- The **lens** (the tab line) names the views: Map, Board, Timeline. Only the map exists so far.
+- The **lens** (the tab line) names the views: Map, Board, Timeline. `m`, `b` and `t` switch between them in the same
+  window, and the selection comes along: each view shows the nearest thing it can represent.
 - `f` hides everything not on the selection's chain; while it is on, the arrow keys move inside the chain and ask the
   hub for nothing. `o` shows only the agents and branches that overlap. `1` to `6` collapse a layer to one thin row
   with its name and a count, `0` opens them all, `.` brings finished items back. Each of these is a layout you asked
@@ -72,6 +73,23 @@ arrives with the files picker.
 - `/` narrows the map to the items matching your text: they keep their look, the rest dim, and Enter selects the first.
 - `Esc` clears the search; then the filters and collapsed layers; then closes the pane.
 - When an agent records a new conclusion, its card shows a **new** chip for four seconds.
+
+### The Board
+
+`b` shows the tracker's tasks in six columns (queued, running, waiting, needs you, review, done), one flat card each
+with a thin progress bar (the steps of its plan that are ticked). With a plan, spec or ask selected on the map, the
+Board shows that plan's tasks; otherwise every task. The arrow keys move between cards, `Tab` to the next card that has
+an agent, `Enter` opens that agent's transcript.
+
+What a selection becomes when you switch:
+
+| Selected | On the Board |
+|---|---|
+| an agent (or a subagent) | the card of its task |
+| a file, branch or machine | the cards of the agents that touch it, lit |
+| a plan, spec or ask | that plan's tasks |
+
+From the Board back to the map, a card selects its agent; a task with no agent selects its plan.
 
 ### Files an agent is editing
 

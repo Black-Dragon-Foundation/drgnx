@@ -485,6 +485,22 @@ chain, the edge selection, the item that finished) and the commands are in `drgn
 - The client calls the hub on the subscribed connection (`drgnx-work-client--call`): the hub sends a view's events to
   the connection that subscribed it, and only that connection's events reach `drgnx-hub-event-functions`.
 
+### The lens, and the Board
+
+`drgnx-work-lens-map` is the keymap every Work view shares (the parent of the map's, the Board's and the Timeline's);
+the movement and opening commands (`work-left` and so on), `work-view-map` and `work-view-board` are bound in it. They
+act through `drgnx-work-lens-nav` (buffer-local): a view that is not the map sets it to a function of one direction, and
+`drgnx-work-map--move` and its siblings call it first. The selection always lives in the map buffer
+(`drgnx-work-lens--map` names it from the other views); `drgnx-work-lens-switch` carries it across.
+
+`modules/tools/drgnx-work-board.el` is the Board: a `work-board` view (rows `(:head)` and `(:cards I)`, three lines a
+card, the bar a 4 px `display` space). Its tasks come from `tasks/find` (every task, up to four pages) or `plans/get`
+(a plan's tasks with their steps, for the progress bar), asked again 0.3 s after the map's frame changes
+(`drgnx-timer-soon` keyed `(work-board . VIEW)`). `drgnx-work-board-column` is the Lisp copy of
+`norn::tracker::board_column` (a test pins every status). `drgnx-work-board-for-selection` and
+`drgnx-work-board-to-selection` are the design's table 8.2, pure functions of the cached frame and the cards; an agent
+works on a card when its `task` field names the card's id.
+
 ### Live agents' files
 
 `drgnx-work-live-file-mode` (in `drgnx-work-space.el`) is turned on by the module's `find-file-hook` function in a file

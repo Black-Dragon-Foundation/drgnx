@@ -109,6 +109,7 @@
         (work-needs-you-8 "g 8")
         (work-needs-you-9 "g 9")
         (work-view-map "m")
+        (work-view-board "b")
         (work-focus "f")
         (work-overlaps "o")
         (work-collapse-layer-1 "1")

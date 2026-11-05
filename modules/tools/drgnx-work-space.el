@@ -23,6 +23,12 @@
   (load (expand-file-name "drgnx-work-map" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-work-detail)
   (load (expand-file-name "drgnx-work-detail" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-work-board)
+  (load (expand-file-name "drgnx-work-board" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(declare-function drgnx-work-board-buffers "drgnx-work-board")
+(declare-function drgnx-work-board--changed "drgnx-work-board")
+(declare-function drgnx-work-lens-show-map "drgnx-work-board")
+(declare-function drgnx-work-lens-show-board "drgnx-work-board")
 (declare-function drgnx-work-detail-buffer "drgnx-work-detail")
 (declare-function drgnx-work-detail-update "drgnx-work-detail")
 (declare-function drgnx-work-detail-buffers "drgnx-work-detail")
@@ -85,7 +91,7 @@ it (a notes repository with the code repositories inside it)."
   '(work-view work-outline work-left work-right work-why work-touches work-next-agent work-previous-agent work-open
               work-open-beside work-needs-you-next work-needs-you-here-next work-needs-you-here-previous
               work-needs-you-1 work-needs-you-2 work-needs-you-3 work-needs-you-4 work-needs-you-5 work-needs-you-6
-              work-needs-you-7 work-needs-you-8 work-needs-you-9 work-view-map work-focus work-overlaps
+              work-needs-you-7 work-needs-you-8 work-needs-you-9 work-view-map work-view-board work-focus work-overlaps
               work-collapse-layer-1 work-collapse-layer-2 work-collapse-layer-3 work-collapse-layer-4
               work-collapse-layer-5 work-collapse-layer-6 work-expand-layers work-show-finished work-search
               work-escape work-take-wheel)
@@ -333,6 +339,7 @@ follows the windows; the commands."
   (drgnx-module-hook 'drgnx-hub-connected-functions connected () (drgnx-work-client-connected))
   (drgnx-module-hook 'drgnx-hub-disconnect-functions disconnected () (drgnx-work-client-disconnected))
   (drgnx-module-hook 'drgnx-work-client-change-functions changed (view marks) (drgnx-work-map--changed view marks))
+  (drgnx-module-hook 'drgnx-work-client-change-functions board-changed (view marks) (drgnx-work-board--changed view marks))
   (drgnx-module-hook 'drgnx-work-client-status-functions status (view status) (drgnx-work-space--show-status view status))
   (drgnx-module-hook 'drgnx-work-map-select-functions selected (buffer) (drgnx-work-detail-update buffer))
   (drgnx-module-hook 'find-file-hook live-file () (drgnx-work-live-file--maybe))
@@ -354,13 +361,17 @@ follows the windows; the commands."
                    (work-open "Open" drgnx-work-map-open-selection
                               "An agent's transcript, a branch's repository, a file or a document")
                    (work-open-beside "Open Beside" drgnx-work-map-open-beside "Open it without moving focus")))
-    (drgnx-command-define id :category "Work" :title title :command fn :map 'drgnx-work-map-mode-map :doc doc))
+    ;; the lens map: the Board and the Timeline share these keys and move in their own way
+    (drgnx-command-define id :category "Work" :title title :command fn :map 'drgnx-work-lens-map :doc doc))
+  (drgnx-command-define 'work-view-map :category "Work" :title "Show the Map" :command #'drgnx-work-lens-show-map
+                        :map 'drgnx-work-lens-map :doc "The map, keeping the selection")
+  (drgnx-command-define 'work-view-board :category "Work" :title "Show the Board" :command #'drgnx-work-lens-show-board
+                        :map 'drgnx-work-lens-map :doc "The tracker's tasks by column, keeping the selection")
   (pcase-dolist (`(,id ,title ,fn ,doc)
                  '((work-needs-you-here-next "Select the Next Thing That Needs You" drgnx-work-map-needs-you-here-next
                                              "Cycle the strip's chips; it selects, it never approves")
                    (work-needs-you-here-previous "Select the Previous Thing That Needs You"
                                                  drgnx-work-map-needs-you-here-previous "Cycle the strip's chips backwards")
-                   (work-view-map "Show the Map" drgnx-work-space-open "The map, keeping the selection")
                    (work-focus "Focus on the Chain" drgnx-work-map-focus "Hide what is not on the selection's chain; again for all")
                    (work-overlaps "Show Overlaps Only" drgnx-work-map-overlaps "Only the agents and branches that overlap")
                    (work-expand-layers "Expand All Layers" drgnx-work-map-expand-layers "Every layer open again")
@@ -399,6 +410,7 @@ follows the windows; the commands."
   (dolist (b (buffer-list))
     (when (buffer-local-value 'drgnx-work-live-file-mode b)
       (with-current-buffer b (drgnx-work-live-file-mode -1))))
+  (dolist (b (drgnx-work-board-buffers)) (kill-buffer b))
   (dolist (b (drgnx-work-detail-buffers)) (kill-buffer b))
   (when-let* ((b (get-buffer "*drgnx work: none*"))) (kill-buffer b)))
 
