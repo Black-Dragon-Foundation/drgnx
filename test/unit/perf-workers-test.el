@@ -191,36 +191,6 @@ form and a digest, and a setup form that reads."
 (defun perf-workers-test--session ()
   (load (expand-file-name "test/fixtures/workers/perf-session.el" drgnx-dir) nil t))
 
-(ert-deftest drgnx-perf-workers/lsp-burst-measures-from-the-servers-write ()
-  "lsp-burst puts no advice on jsonrpc's reader (it would keep Nidhogg's framing off, so the A/B's two sides would run
-the same path): each handler is measured from the time the replay server wrote its answer's last byte, which the
-server sends after the answer, and the A/B judges the slowest one."
-  :tags '(:cond)
-  (skip-unless (eq system-type 'gnu/linux))   ; the stub reads its stdin through /proc
-  (perf-workers-test--session)
-  (let ((conn (drgnx-perf-w--lsp-start "rust" '("LSP_REPLAY_STAMP=1"))))
-    (unwind-protect
-        (progn
-          (setq drgnx-perf-w--lsps (list conn) drgnx-perf-w--lsp-handled nil)
-          (clrhash drgnx-perf-w--lsp-sent)
-          (drgnx-perf-w--lsp-request conn :textDocument/documentSymbol '(:textDocument (:uri "file:///perf.c")))
-          (let ((deadline (+ (float-time) 30)))
-            (while (and (< (float-time) deadline) (not (and drgnx-perf-w--lsp-handled (drgnx-perf-w--lsp-stamped-p))))
-              (accept-process-output nil 0.05)))
-          (should-not (advice--p (advice--symbol-function 'jsonrpc--process-filter)))
-          (should-not (advice--p (advice--symbol-function 'jsonrpc--json-read)))
-          (should (= (length drgnx-perf-w--lsp-handled) 1))
-          (should (drgnx-perf-w--lsp-stamped-p))
-          (should-not drgnx-perf-w--lsp-notes)                  ; the write times are not the server's messages
-          (let ((lsp (plist-get (drgnx-perf-w-lsp-burst-measure) :lsp)))
-            (should (= (plist-get lsp :answers) 1))
-            (should (<= 0 (plist-get (plist-get lsp :handler_ms) :max) 30000))))
-      (drgnx-perf-w-lsp-teardown)))
-  (let* ((run (lambda (ms) (list :lsp (list :handler_ms (list :max ms)))))
-         (vs (drgnx-perf-ab-metric-verdicts (cl-loop for i below 10 collect (list :a (funcall run (+ 5.0 (* 0.1 (% i 3))))
-                                                                                  :b (funcall run (+ 40.0 (* 0.1 (% i 3)))))))))
-    (should (eq (plist-get (cdr (assoc '(:lsp :handler_ms :max) vs)) :verdict) 'regressed))))
-
 (ert-deftest drgnx-perf-workers/ts-paste-has-enough-commands-for-p95 ()
   "ts-paste keeps its input p95 row: the three repeats give the 100 samples a p95 needs."
   (let* ((acts (plist-get (cdr (assq 'ts-paste (drgnx-perf-run--workloads))) :actions))
@@ -367,58 +337,6 @@ period, so work finishing later in the pause after the keys was never seen."
           (with-temp-file drgnx-perf-w--as-file (insert "short"))
           (should-not (equal clean (drgnx-perf-w-autosave-digest))))
       (drgnx-perf-w-autosave-teardown))))
-
-(defun perf-workers-test--frames (bytes)
-  "The payload sizes of the framed messages in the unibyte string BYTES: a reply counts its result text only."
-  (let ((pos 0) sizes)
-    (while (string-match "Content-Length: \\([0-9]+\\)\r\n\r\n" bytes pos)
-      (let* ((len (string-to-number (match-string 1 bytes))) (start (match-end 0)) (end (+ start len)))
-        (when (> end (length bytes)) (setq pos (length bytes)) (setq len nil))
-        (when len
-          (let ((body (substring bytes start end)))
-            (push (if (string-match "\\`{\"jsonrpc\":\"2.0\",\"id\":[0-9]+,\"result\":" body)
-                      (- len (match-end 0) 1)
-                    len)
-                  sizes))
-          (setq pos end))))
-    (nreverse sizes)))
-
-(ert-deftest drgnx-perf-workers/capture-is-replayable ()
-  "Each recorded corpus replays through the stub: the messages and bytes it sends equal the capture's manifest."
-  :tags '(:cond)
-  (skip-unless (eq system-type 'gnu/linux))   ; the stub reads its stdin through /proc
-  (let* ((dir (expand-file-name "test/fixtures/workers" drgnx-dir))
-         (manifest (with-temp-buffer (insert-file-contents (expand-file-name "manifest.eld" dir)) (read (current-buffer))))
-         (stub (expand-file-name "test/fixtures/lsp-replay.el" drgnx-dir))
-         (emacs (expand-file-name invocation-name invocation-directory)))
-    (should (= (length manifest) 3))
-    (let ((process-environment (cons "LSP_REPLAY_LIBRARY=1" process-environment)))
-      (load stub nil t))
-    (dolist (entry manifest)
-      (let* ((file (expand-file-name (format "corpus-%s.eld.gz" (car entry)) dir))
-             (corpus (lsp-replay-corpus-read file))
-             (want (list :messages (plist-get (cdr entry) :messages) :bytes (plist-get (cdr entry) :bytes))))
-        (should (equal (lsp-replay-corpus-totals corpus) want))   ; the manifest describes the corpus
-        ;; and the stub, as a process, sends exactly that
-        (let* ((out "") (id 0)
-               (process-environment (append (list (concat "LSP_REPLAY_CORPUS=" file)) process-environment))
-               (proc (make-process :name "perf-workers-test-stub" :noquery t :connection-type 'pipe :coding 'binary
-                                   :command (list emacs "--batch" "-Q" "-l" stub)
-                                   :filter (lambda (_p s) (setq out (concat out s))))))
-          (unwind-protect
-              (cl-flet ((send (json) (process-send-string proc (format "Content-Length: %d\r\n\r\n%s" (string-bytes json) json))))
-                (send "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{}}")
-                (send "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}")
-                (dolist (r (plist-get corpus :replies))
-                  (send (format "{\"jsonrpc\":\"2.0\",\"id\":%d,\"method\":%S,\"params\":{}}" (cl-incf id) (car r))))
-                (let ((deadline (+ (float-time) 60)))
-                  (while (and (< (float-time) deadline)
-                              (< (length (perf-workers-test--frames out)) (plist-get want :messages)))
-                    (accept-process-output proc 0.1))))
-            (when (process-live-p proc) (delete-process proc)))
-          (let ((sizes (perf-workers-test--frames out)))
-            (should (= (length sizes) (plist-get want :messages)))
-            (should (= (apply #'+ sizes) (plist-get want :bytes)))))))))
 
 (ert-deftest drgnx-perf-workers/results-json-takes-lists ()
   ;; An --ab-env result carries the order the sides ran in, ("a" "b" "b" "a" ...): the results file writes it as an

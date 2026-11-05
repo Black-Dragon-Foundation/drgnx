@@ -24,7 +24,15 @@ python, ruby, rust, toml, tsx, typescript, yaml (module `lang/grammars`, sources
 With the [`emacs-lsp-booster`](https://github.com/blahgeek/emacs-lsp-booster) program installed (its release binary
 on your `PATH`), eglot talks to every language server through it: the server's JSON is parsed outside Emacs, so a big
 answer (completions, diagnostics of a large file) no longer stalls typing (module `extra/booster`, package
-`eglot-booster` — from Git, `drgnx sync` installs it). Without the program nothing changes.
+`eglot-booster` — from Git, `drgnx sync` installs it). Without the program nothing changes. The booster is not used
+while Nidhogg's own reading of language servers is on (`nidhogg-workers-framing`): its worker thread then finds and
+parses the messages, which the booster would make it stand back from.
+
+## The language server log
+
+eglot copies every message to and from a server into a log buffer, which costs time on big answers; drgnx turns that
+off. **Show LSP Log** (Code, in the palette) turns it on and shows the current server's log, and turns it off when you
+run it again. A running server keeps the setting it started with: the log fills from the next server you start.
 
 ## Format on save
 

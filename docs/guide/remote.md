@@ -82,6 +82,12 @@ unless the code asking is part of a command of yours (a key you press, `M-x`, a 
 asked for it. A timer, a process filter or a sentinel is never part of your command, even when it fires
 while the command waits: its login gets an error message, never a hidden question.
 
+A language server's answers are handled on Emacs's top-level timers, not inside a TRAMP call that happens to be
+running (TRAMP suspends the timers while it works, so the answer would meet "Forbidden reentrant call of Tramp"). On a
+Nidhogg whose reader thread reads language servers, that guard sits on the function that hands over its batches;
+for a connection it does not read (a remote server is one), on that connection's filter. Elsewhere it is on eglot's
+reader, as before.
+
 Auto-save files of remote buffers go to a private folder (mode 0700) in drgnx's state directory
 (`~/.local/state/drgnx/tramp-auto-save/`, the module sets `tramp-auto-save-directory` unless you set it yourself). So
 TRAMP never asks "Autosave file on local temporary directory, do you want to continue?" for a file owned by root (every

@@ -560,6 +560,13 @@ Tests: `test/unit/perf-watchdog-test.el`.
 On a Nidhogg with `nidhogg-workers` the lab measures the worker threads. Without the feature every row below reports
 `:workers nil` and nothing fails.
 
+**Advice on jsonrpc's reader keeps framing off.** Nidhogg's jsonrpc adoption stands back when `jsonrpc--process-filter`
+or `jsonrpc--json-read` has advice, which includes drgnx's own. So the TRAMP timer guard (`lang/eglot`) is on
+`nidhogg-workers-jsonrpc--batch` and on the filter of unframed connections only, the booster is not set up while
+`nidhogg-workers-framing` is on, and eglot's events log is off (`eglot-events-buffer-config`, Show LSP Log turns it
+on). A measurement of framing under drgnx's config compares the framed path only if none of these is undone
+(`drgnx-lang/framing-engages-under-drgnx`).
+
 **The switch.** `DRGNX_PERF_WORKERS` is read once per session, before any workload, and handed unchanged to
 `(nidhogg-workers-apply SPEC)`: `default` (also unset), `on`, `off`, `inline`, or `+SW`/`-SW` items such as
 `+nidhogg-workers-treesit+nidhogg-treesit-defer` (they have no commas, so `--ab-env` takes them). A step's gate is
