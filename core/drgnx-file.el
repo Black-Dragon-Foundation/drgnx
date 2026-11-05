@@ -288,7 +288,25 @@ unibyte and raw-byte strings, integers beyond 64 bits."
       (end-of-file (cons 'problem (drgnx-file--problem "the file ends inside a form" (point-max))))
       (error (cons 'problem (drgnx-file--problem (error-message-string err) (point)))))))
 
+(defvar drgnx-file--read-share nil
+  "Nil, or a holder (t . LAST) a caller binds around code that reads one file twice in a row: `drgnx-file-read' keeps
+its last result in LAST, and a second read of the same file with the same limit and the same stamp returns a copy of
+it instead of scanning and reading the text again.  The extent of the binding is one call, so the file cannot change.")
+
 (cl-defun drgnx-file-read (file &key max-bytes)
+  "`drgnx-file--read-1', but within `drgnx-file--read-share' a repeat of the last read is not parsed again."
+  (if (null drgnx-file--read-share)
+      (drgnx-file--read-1 file max-bytes)
+    (let ((key (list (expand-file-name file) (or max-bytes drgnx-file-max-bytes) (drgnx-file-stamp file)))
+          (last (cdr drgnx-file--read-share)))
+      (if (and last (equal (car last) key))
+          (let ((r (copy-sequence (cdr last))))     ; the data is the second reader's own: a migration changes it in place
+            (plist-put r :data (copy-tree (plist-get r :data))))
+        (let ((r (drgnx-file--read-1 file max-bytes)))
+          (setcdr drgnx-file--read-share (cons key r))
+          r)))))
+
+(defun drgnx-file--read-1 (file max-bytes)
   "FILE read as one data form: (:status S :data D :text T :problem P :stamp ST).
 S is `absent' (missing, empty, or only whitespace and comments), `ok' or `unreadable'.  D is the data (ok only), T
 the decoded text, P (:text STRING :line N :column N) (lines and columns 1-based) and ST `drgnx-file-stamp'.

@@ -277,7 +277,8 @@ DOC is FILE read now; P the problem that fails it, or nil.  When FILE is a confi
 \(settings.el), the config layer's state is brought up to date (it keeps the last good copy of a file that reads,
 and says a mistake once), and LAST-GOOD is that copy read, as a doc whose file is the copy, when it reads; else nil.
 While FILE reads, the copy holds the same text."
-  (let* ((doc (drgnx-settings-file-read file head))
+  (let* ((drgnx-file--read-share (list t))      ; the config layer's bookkeeping reads the file too: parsed once
+         (doc (drgnx-settings-file-read file head))
          (name (drgnx-settings-file--config-name file))
          (good (when name
                  (drgnx-config-problem name)
