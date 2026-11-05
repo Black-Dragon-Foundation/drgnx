@@ -75,24 +75,38 @@ pub fn run(rows: &[EvalRow], answer: &dyn Fn(&Query) -> Answer) -> Report {
     }
 }
 
-/// The share of NAMES (`(name, path)` of definitions) whose first hit is the definition: the gate wants 1.0.
-pub fn exact_symbol_floor(names: &[(String, String)], answer: &dyn Fn(&Query) -> Answer) -> f64 {
+/// The share of NAMES (`(name, path, first line of its chunk)` of definitions) whose first hit is the chunk that
+/// defines it: the gate wants 1.0. The first misses come back too, each as a line saying what answered instead.
+pub fn exact_symbol_floor(
+    names: &[(String, String, u32)],
+    answer: &dyn Fn(&Query) -> Answer,
+) -> (f64, Vec<String>) {
     if names.is_empty() {
-        return 1.0;
+        return (1.0, Vec::new());
     }
-    let ok = names
-        .iter()
-        .filter(|(name, path)| {
-            let q = Query {
-                text: name.clone(),
-                scope: Scope::All,
-                k: 1,
-            };
-            let first: Option<Hit> = answer(&q).hits.into_iter().next();
-            first.is_some_and(|h| {
-                &h.path == path && (h.symbol.as_deref() == Some(name) || h.preview.contains(name))
-            })
-        })
-        .count();
-    ok as f64 / names.len() as f64
+    let mut misses = Vec::new();
+    let mut ok = 0usize;
+    for (name, path, line) in names {
+        let q = Query {
+            text: name.clone(),
+            scope: Scope::All,
+            k: 1,
+        };
+        let first: Option<Hit> = answer(&q).hits.into_iter().next();
+        if first
+            .as_ref()
+            .is_some_and(|h| &h.path == path && h.line_start == *line)
+        {
+            ok += 1;
+        } else if misses.len() < 10 {
+            misses.push(format!(
+                "{name} ({path}:{line}) answered by {}",
+                first.map_or("nothing".to_string(), |h| format!(
+                    "{}:{} {:?} via {:?}",
+                    h.path, h.line_start, h.symbol, h.routes
+                ))
+            ));
+        }
+    }
+    (ok as f64 / names.len() as f64, misses)
 }

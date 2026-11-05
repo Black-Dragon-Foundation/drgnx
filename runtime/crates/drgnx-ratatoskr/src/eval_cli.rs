@@ -268,19 +268,24 @@ fn spec_of(id: Option<&str>) -> Result<&'static ModelSpec, String> {
     }
 }
 
-/// Up to LIMIT definitions with a name of their own (`(name, path)`), spread evenly through the code files.
-async fn sample_names(store: &CodeStore, limit: usize) -> Result<Vec<(String, String)>, String> {
-    let all: Vec<(String, String, String)> = store
+/// Up to LIMIT definitions with a name of their own (`(name, path, first line of the chunk)`), spread evenly through
+/// the code files.
+async fn sample_names(
+    store: &CodeStore,
+    limit: usize,
+) -> Result<Vec<(String, String, u32)>, String> {
+    let all: Vec<(String, String, String, u32)> = store
         .handle()
         .read(|c| {
             // one pass over the table; the uniqueness is counted here (a `name in (select … group by name having …)`
             // ran for minutes on a 16,000-chunk project)
             let mut q = c.prepare(
-                "select s.name, s.path, f.class from symbol s join file f on f.path = s.path",
+                "select s.name, s.path, f.class, c.line_start from symbol s
+                 join file f on f.path = s.path join chunk c on c.id = s.chunk",
             )?;
             let rows = q
-                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-                .collect::<Result<Vec<(String, String, String)>, _>>()?;
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
             Ok(rows)
         })
         .await
@@ -289,15 +294,17 @@ async fn sample_names(store: &CodeStore, limit: usize) -> Result<Vec<(String, St
 }
 
 /// The definitions of code files whose name is at least 4 characters and defined once in the whole project, by name.
-fn unique_code_names(all: Vec<(String, String, String)>) -> Vec<(String, String)> {
+fn unique_code_names(all: Vec<(String, String, String, u32)>) -> Vec<(String, String, u32)> {
     let mut count: HashMap<&str, u32> = HashMap::new();
-    for (name, _, _) in &all {
+    for (name, _, _, _) in &all {
         *count.entry(name.as_str()).or_default() += 1;
     }
-    let mut out: Vec<(String, String)> = all
+    let mut out: Vec<(String, String, u32)> = all
         .iter()
-        .filter(|(n, _, class)| class == "code" && n.chars().count() >= 4 && count[n.as_str()] == 1)
-        .map(|(n, p, _)| (n.clone(), p.clone()))
+        .filter(|(n, _, class, _)| {
+            class == "code" && n.chars().count() >= 4 && count[n.as_str()] == 1
+        })
+        .map(|(n, p, _, l)| (n.clone(), p.clone(), *l))
         .collect();
     out.sort();
     out
@@ -417,7 +424,11 @@ fn run_set(
     let query_latency = phase
         .replace(Tally::new("exact-symbol", names.len(), 50))
         .stats();
-    report.exact_symbol_r1 = Some(eval::exact_symbol_floor(&names, &answer));
+    let (floor, misses) = eval::exact_symbol_floor(&names, &answer);
+    for m in &misses {
+        eprintln!("exact-symbol miss: {m}");
+    }
+    report.exact_symbol_r1 = Some(floor);
     eprintln!("coverage check");
     let per_file: HashMap<String, u32> = rt
         .block_on(store.handle().read(|c| {
@@ -581,20 +592,22 @@ mod tests {
     /// Pattern D. The exact-symbol sample is names defined once, in code files, of 4 characters or more, spread evenly.
     #[test]
     fn the_symbol_sample_is_unique_code_names() {
-        let row = |n: &str, p: &str, c: &str| (n.to_string(), p.to_string(), c.to_string());
+        let row =
+            |n: &str, p: &str, c: &str, l: u32| (n.to_string(), p.to_string(), c.to_string(), l);
         let names = unique_code_names(vec![
-            row("alpha-one", "a.el", "code"),
-            row("dup-name", "a.el", "code"),
-            row("dup-name", "b.el", "code"),
-            row("abc", "a.el", "code"),
-            row("in-tests", "t.el", "test"),
-            row("beta-two", "b.el", "code"),
+            row("alpha-one", "a.el", "code", 3),
+            row("dup-name", "a.el", "code", 9),
+            row("dup-name", "b.el", "code", 1),
+            row("abc", "a.el", "code", 20),
+            row("in-tests", "t.el", "test", 1),
+            row("beta-two", "b.el", "code", 7),
         ]);
+        // each with the first line of the chunk that defines it
         assert_eq!(
             names,
             [
-                ("alpha-one".into(), "a.el".into()),
-                ("beta-two".into(), "b.el".into())
+                ("alpha-one".into(), "a.el".into(), 3),
+                ("beta-two".into(), "b.el".into(), 7)
             ]
         );
         assert_eq!(spread((0..10).collect::<Vec<_>>(), 5), [0, 2, 4, 6, 8]);
