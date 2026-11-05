@@ -1,4 +1,4 @@
-//! What `trace.rs` and `trace_timing.rs` share: the test binary as its own child, and a supervisor that answers one
+//! What `trace.rs` and `timing.rs` share: the test binary as its own child, and a supervisor that answers one
 //! hand-off at a time.
 //!
 //! The child is this test binary run again with [`CHILD_ENV`] set, on the test `child` alone: it reads what to do
@@ -28,7 +28,7 @@ pub const CHILD_ENV: &str = "GLEIPNIR_TRACE_TEST_CHILD";
 /// What a child does.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Kid {
-    /// `jail`, `io_uring`, `noatime`, `spin`, `opens`.
+    /// `jail`, `io_uring`, `noatime`, `spin`; `opens` (timing.rs's own).
     pub mode: String,
     /// jail: Gleipnir's full-tier deny-list.
     #[serde(default)]
@@ -128,8 +128,7 @@ pub fn child_main(json: &str) -> ! {
             }
             marker("spin: done");
         }
-        "opens" => opens(&c),
-        other => panic!("no child mode {other}"),
+        other => panic!("no child mode {other} (timing.rs runs `opens` itself)"),
     }
     std::process::exit(0)
 }
@@ -196,37 +195,6 @@ fn deny_noatime() {
     // SAFETY: a valid program that outlives the call; no_new_privs is set.
     let r = unsafe { libc::syscall(libc::SYS_seccomp, 1u32, 0u32, &fprog) };
     assert_eq!(r, 0, "{}", std::io::Error::last_os_error());
-}
-
-/// N timed opens of the files listed in `file`, round robin; one JSON marker with the loop's time and the per-open
-/// p50 and p95 in ns.
-fn opens(c: &Kid) {
-    let list: Vec<std::ffi::CString> = std::fs::read_to_string(c.file.as_ref().unwrap())
-        .unwrap()
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|l| std::ffi::CString::new(l).unwrap())
-        .collect();
-    let mut lat = Vec::with_capacity(c.n as usize);
-    let start = std::time::Instant::now();
-    for i in 0..c.n as usize {
-        let p = &list[i % list.len()];
-        let t = std::time::Instant::now();
-        // SAFETY: a NUL-terminated path; the fd is closed at once.
-        let fd = unsafe { libc::open(p.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
-        lat.push(t.elapsed().as_nanos() as u64);
-        assert!(fd >= 0);
-        // SAFETY: our own fd.
-        unsafe { libc::close(fd) };
-    }
-    let loop_ns = start.elapsed().as_nanos();
-    lat.sort_unstable();
-    let pct = |p: f64| lat[((lat.len() - 1) as f64 * p).round() as usize];
-    marker(&format!(
-        "opens: {{\"loop_ns\":{loop_ns},\"p50_ns\":{},\"p95_ns\":{}}}",
-        pct(0.5),
-        pct(0.95)
-    ));
 }
 
 /// The rest of the first line of `out` after `prefix`. The marker may follow the harness's own `test child ... `

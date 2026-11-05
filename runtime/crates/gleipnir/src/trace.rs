@@ -1000,7 +1000,7 @@ mod tests {
             path: path.into(),
             base: base.map(PathBuf::from),
             flags,
-            at: Instant::now(),
+            at: skuld::origin(),
         };
         assert!(!o("a", Some("/w"), 0).writes());
         assert_eq!(o("a", Some("/w"), 0).full(), Some(PathBuf::from("/w/a")));

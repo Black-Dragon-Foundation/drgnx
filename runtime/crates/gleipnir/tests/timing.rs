@@ -3,13 +3,16 @@
 //! deny-list and behind one `bash -c`, five runs each, alternating; medians compared. Timing rows: run alone, on the
 //! desktop's pinned island (`test/timing-rust.txt`), in the sandbox container.
 //!
-//! Pattern C (handshake) for the traced arm: the wrapper announces and parks on the reply (`trace_support`).
+//! Pattern C (handshake) for the traced arm: the wrapper announces and parks on the reply (`trace_support`). The
+//! child's timed opens are here, not in `trace_support`: this file is the crate's timing file, the only test code
+//! that reads the clock.
 // Linux only: the tracer is seccomp's (Android: no backend; fails closed).
 #![cfg(target_os = "linux")]
 
 mod trace_support;
 
 use gleipnir::trace::{self as gt, ListenOptions};
+use std::io::Write;
 use trace_support::{
     CHILD_ENV, Kid, Sup, WRAPPER, child_command, child_line, marker_value, run, spawn,
 };
@@ -18,8 +21,49 @@ use trace_support::{
 #[test]
 fn child() {
     if let Ok(json) = std::env::var(CHILD_ENV) {
+        let c: Kid = serde_json::from_str(&json).expect("the child's description");
+        if c.mode == "opens" {
+            opens(&c);
+            std::process::exit(0);
+        }
         trace_support::child_main(&json);
     }
+}
+
+/// N timed opens of the files listed in `file`, round robin; one JSON marker with the loop's time and the per-open
+/// p50 and p95 in ns.
+fn opens(c: &Kid) {
+    let list: Vec<std::ffi::CString> = std::fs::read_to_string(c.file.as_ref().unwrap())
+        .unwrap()
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| std::ffi::CString::new(l).unwrap())
+        .collect();
+    let mut lat = Vec::with_capacity(c.n as usize);
+    let start = std::time::Instant::now();
+    for i in 0..c.n as usize {
+        let p = &list[i % list.len()];
+        let t = std::time::Instant::now();
+        // SAFETY: a NUL-terminated path; the fd is closed at once.
+        let fd = unsafe { libc::open(p.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
+        lat.push(t.elapsed().as_nanos() as u64);
+        assert!(fd >= 0);
+        // SAFETY: our own fd.
+        unsafe { libc::close(fd) };
+    }
+    let loop_ns = start.elapsed().as_nanos();
+    lat.sort_unstable();
+    let pct = |p: f64| lat[((lat.len() - 1) as f64 * p).round() as usize];
+    // straight to fd 1, as the support's markers go (the harness captures only `print!`)
+    let mut out = std::io::stdout().lock();
+    writeln!(
+        out,
+        "opens: {{\"loop_ns\":{loop_ns},\"p50_ns\":{},\"p95_ns\":{}}}",
+        pct(0.5),
+        pct(0.95)
+    )
+    .unwrap();
+    out.flush().unwrap();
 }
 
 const OPENS: u64 = 2000;

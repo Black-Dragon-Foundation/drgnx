@@ -72,7 +72,7 @@ the deny-list to it as it would untraced.
   kernel then refuses (Landlock) is still seen. A program can read through calls the filter does not watch (an fd a
   forked helper inherited). macOS has no tracer.
 - **Cost** (spike S4, desktop): about +8 µs p50 and +9 µs p95 per traced open, 2.7 µs untraced. Budgets: a notified
-  open's round trip p95 ≤ 15 µs, 2,000 traced opens add ≤ 50 ms (`tests/trace_timing.rs`, timing rows).
+  open's round trip p95 ≤ 15 µs, 2,000 traced opens add ≤ 50 ms (gleipnir's `tests/timing.rs`, timing rows).
 - **Tests:** `runtime/crates/gleipnir/tests/trace.rs`, real children under Landlock and the deny-list, in the sandbox
   container (`ctr.sh --sandbox`); the test binary is its own child (`tests/trace_support/`), and each traced child
   announces itself with its hello and parks on the answer (pattern C).
