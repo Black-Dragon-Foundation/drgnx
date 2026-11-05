@@ -475,3 +475,123 @@ proptest! {
         }
     }
 }
+
+const KEYS: [&str; 3] = ["K1", "K2", "K3"];
+
+fn pick_keys(mask: u8) -> Vec<String> {
+    KEYS.iter()
+        .enumerate()
+        .filter(|(i, _)| mask & (1 << i) != 0)
+        .map(|(_, k)| k.to_string())
+        .collect()
+}
+
+fn runner_trust(n: u8) -> RunnerTrust {
+    [RunnerTrust::Mine, RunnerTrust::MyCloud, RunnerTrust::Shared][usize::from(n % 3)]
+}
+
+proptest! {
+    #[test]
+    fn a_job_never_goes_to_a_runner_its_trust_forbids(
+        trust in 0u8..3,
+        key_mask in 0u8..8,
+        local_only in prop::bool::weighted(0.2),
+        heavy in any::<bool>(),
+        send in 0u8..3,
+        cell in any::<bool>(),
+        has_local in any::<bool>(),
+        runners in prop::collection::vec((0u8..3, 0u8..8, 0u32..3600, any::<bool>()), 0..6),
+    ) {
+        let mut j = job("j", Priority::P3, 0);
+        j.spec.trust = [JobTrust::Public, JobTrust::Private, JobTrust::PrivateKeys][usize::from(trust)];
+        j.spec.keys = pick_keys(key_mask);
+        j.spec.local_only = local_only;
+        j.spec.weight = if heavy { Weight::Heavy } else { Weight::Light };
+        let base = |name: String, local: bool, trust: RunnerTrust| Candidate {
+            name,
+            local,
+            trust,
+            keys_allowed: vec![],
+            features: vec![],
+            state: RunnerState::Ready,
+            accept: Accept::All,
+            link_bps: None,
+            missing_bytes: 0,
+            start_s: 0.0,
+            wait_s: 0.0,
+            speed: 1.0,
+            history: vec![],
+            cloud: None,
+        };
+        let mut cands = Vec::new();
+        if has_local {
+            cands.push(base("local".into(), true, RunnerTrust::Mine));
+        }
+        for (i, &(t, allowed, wait, accept_heavy)) in runners.iter().enumerate() {
+            let mut c = base(format!("r{i}"), false, runner_trust(t));
+            c.keys_allowed = pick_keys(allowed);
+            c.wait_s = f64::from(wait);
+            c.accept = if accept_heavy { Accept::Heavy } else { Accept::All };
+            cands.push(c);
+        }
+        let ctx = PlaceCtx {
+            eff: Priority::P3,
+            send: [forseti::place::Send::All, forseti::place::Send::Heavy, forseti::place::Send::None][usize::from(send)],
+            machines_cell_allows: cell,
+            gates_allowed: false,
+            cloud_after_s: 120.0,
+            now: 0,
+            commits_not_on_origin: 0,
+        };
+        match pick(&j, &cands, &ctx) {
+            Pick::Runner(name) => {
+                let c = cands.iter().find(|c| c.name == name).unwrap();
+                prop_assert!(!c.local);
+                prop_assert!(trust_ok(j.spec.trust, &j.spec.keys, c.trust, &c.keys_allowed),
+                    "{:?} with keys {:?} went to {:?} allowed {:?}", j.spec.trust, j.spec.keys, c.trust, c.keys_allowed);
+                prop_assert!(!j.spec.local_only);
+            }
+            Pick::Local => prop_assert!(has_local),
+            Pick::Wait(_) => {}
+        }
+    }
+}
+
+proptest! {
+    /// Within one priority every project's first job comes within a bound set by the use gaps and weights alone,
+    /// however many jobs the other projects queue; each project keeps its own order and nothing is lost.
+    #[test]
+    fn nothing_starves_under_fairness(
+        projects in prop::collection::vec((0u32..7200, 1u32..8), 1..5),
+        jobs in prop::collection::vec(0usize..5, 1..60),
+    ) {
+        let np = projects.len();
+        let order: Vec<JobId> = jobs.iter().enumerate().map(|(i, p)| JobId(format!("{}-{i}", p % np))).collect();
+        let eff: HashMap<JobId, Priority> = order.iter().map(|j| (j.clone(), Priority::P4)).collect();
+        let project = |j: &JobId| j.0.split('-').next().unwrap().to_string();
+        let usage: HashMap<String, f64> = projects.iter().enumerate().map(|(i, (u, _))| (i.to_string(), f64::from(*u))).collect();
+        let weights: HashMap<String, f64> = projects.iter().enumerate().map(|(i, (_, w))| (i.to_string(), f64::from(*w) / 2.0)).collect();
+        let mut drr = Drr::default();
+        let q = drr.quantum_s;
+        let out = drr.order(&order, &eff, &project, &usage, &weights);
+        let mut sorted_in = order.clone();
+        sorted_in.sort();
+        let mut sorted_out = out.clone();
+        sorted_out.sort();
+        prop_assert_eq!(sorted_in, sorted_out);
+        let of = |v: &[JobId], p: &str| v.iter().filter(|j| project(j) == p).cloned().collect::<Vec<_>>();
+        let present: std::collections::BTreeSet<String> = order.iter().map(&project).collect();
+        let credit = |p: &str| usage[p] / weights[p];
+        for p in &present {
+            prop_assert_eq!(of(&order, p), of(&out, p), "project {} reordered", p);
+            let bound: f64 = present
+                .iter()
+                .filter(|o| *o != p && credit(o) <= credit(p))
+                // + 1e-6: the charges add up in floating point, so a gap of exactly k charges may allow k + 1 picks
+                .map(|o| ((credit(p) - credit(o)) * weights[o.as_str()] / q + 1e-6).floor() + 1.0)
+                .sum();
+            let first = out.iter().position(|j| &project(j) == p).unwrap();
+            prop_assert!(first as f64 <= bound + 1e-9, "project {}'s first job at {} over {}", p, first, bound);
+        }
+    }
+}

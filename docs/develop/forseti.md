@@ -198,3 +198,50 @@ warm }`.
 - **`expected(rows, other, speed_ratio, suite_default)`**: the median time of the last 5 undisturbed runs on this
   machine, with their mean CPU and the p95 of their peak memory; else the same from other machines' rows, the time ×
   the static speed ratio; else the suite's default; else 10 minutes. The last two know no CPU or memory.
+
+## Placement (`place`)
+
+Each runner decides how much it can take (its own `admit`); the hub decides which job goes where. For each queued
+job, in queue order, the hub builds a `Candidate` per machine (the local one with `local: true`) and calls `pick`.
+
+- **`trust_ok(job, keys, runner, keys_allowed)`**, the trust table (runners design §6.6). A job that names keys is
+  `private+keys` whatever its trust says.
+
+  | Job trust | `mine` | `my-cloud` | `shared` |
+  |---|---|---|---|
+  | `public` | yes | yes | yes |
+  | `private` | yes | yes | no |
+  | `private+keys` | yes | if every key is on that runner's list | no |
+
+- **`filter(job, c, send, machines_cell_allows)`**, the hard filters in this order: trust and the pin (`local_only`,
+  or `on` naming another machine), features, the runner's state (benched, needs login, needs keys, awaiting the
+  user's confirm, unreachable, draining or preempting), the project's send mode and the runner's accept mode (a job
+  leaves only if the project sends it and the runner accepts it), and the starter's `machines` matrix cell. The local
+  machine passes trust, the modes and the cell always.
+- **`finish(job, c, now)`**: `wait + start + transfer + expected`. The transfer is `missing_bytes / link_bps` (bytes
+  per second; 0 on the local machine, and 0 until the rate is measured). The expected time comes from `c.history`
+  (the job's rows from every machine): this machine's, else another machine's × `c.speed`, the static speed ratio,
+  else 10 minutes.
+- **`cloud_counts(eff, gates_allowed, is_gate, best_own_s, cloud_s, after_s, projection_ok)`**: a cloud machine
+  counts only for work someone waits on (priority 1–3, or a gate's when the project allows cloud for gates), only if
+  it finishes at least `runners-cloud-after` before the best own machine, and only if starting it fits the spend
+  projection.
+- **`pick(job, cands, ctx)`**: the smallest finish among the candidates that pass; ties go to the local machine,
+  then `mine`, `my-cloud`, `shared`. With none, `Pick::Wait` carries the reason of the candidate that came closest
+  (the latest check it failed: a job pinned to a benched runner waits as `Benched`); with no candidates at all,
+  `NoRunner`.
+- **`why_here(job, cands, ctx)`**: when trust alone keeps a job here, the hub says why, in the design's words:
+  "runs here: needs key `K`, which no runner may get", "runs here: N commits not on origin" (a public project's job
+  whose commits the origin lacks), "runs here: project P is private; the only free runner is shared".
+
+Properties: `a_job_never_goes_to_a_runner_its_trust_forbids` over generated jobs, runners and modes.
+
+## Fairness (`fair`)
+
+Within a priority, projects share by deficit round robin on machine-seconds over the last hour. `Drr::order(order,
+eff, project_of, usage_last_hour_s, weights)` reorders each run of one priority in the queue order (never across
+runs, and P1 not at all): a project starts with its use ÷ its weight (default 1), the project with the least goes
+next (on a tie, the one whose next job comes first), and each job charges it `quantum_s` (600 s) ÷ its weight. A
+project that used less goes first, shares follow the weights, and one project's 400-chunk gate can't starve another
+project's priority-4 work. `nothing_starves_under_fairness` bounds when each project's first job comes by the use
+gaps and weights alone, however many jobs the others queue.

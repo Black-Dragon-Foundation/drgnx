@@ -8,8 +8,10 @@ pub mod admit;
 pub mod classify;
 pub mod drain;
 pub mod evict;
+pub mod fair;
 pub mod history;
 pub mod model;
+pub mod place;
 pub mod priority;
 pub mod reserve;
 pub mod safety;
@@ -21,8 +23,14 @@ pub use admit::{Budget, admit, budget, head_protection, oom_rerun, size};
 pub use classify::{ExitEvidence, classify};
 pub use drain::{drain_abandon, drain_may_evict_p5, drain_may_start, drain_paused};
 pub use evict::{may_evict, preempt_victims};
+pub use fair::Drr;
 pub use history::{HistRow, expected, history_key};
 pub use model::*;
+// `place::Send` stays in its module: at the root, a glob import would shadow the `Send` trait.
+pub use place::{
+    Accept, Candidate, CloudTerms, FinishEstimate, Pick, PlaceCtx, RunnerState, cloud_counts,
+    filter, finish, pick, trust_ok, why_here,
+};
 pub use priority::{check_no_cycle, effective_priorities, promote, queue_order};
 pub use reserve::{count_others, ladder_actor};
 pub use safety::{
