@@ -76,6 +76,7 @@ fn main() -> ExitCode {
         Command::Machines(m) => {
             return code(drgnx_ratatoskr::machines_cli::run(&Env::process(), &m));
         }
+        Command::Runner(r) => return code(drgnx_ratatoskr::runner_cli::run(&Env::process(), r)),
         // Hrafn from a terminal (and `search mcp`, which builds a runtime of its own).
         Command::Search(s) => return code(drgnx_ratatoskr::search_cli::run(&Env::process(), s)),
         // Hrafn's embed worker: threads of its own (stdin, the CPU path's pool), never a tokio runtime.

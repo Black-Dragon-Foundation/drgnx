@@ -27,6 +27,7 @@ commands=(
   'hub:the hub behind agents and jobs'
   'runtime:build and install Ratatoskr, the agent runtime'
   'job:jobs from plans'
+  'runner:the machines that run jobs'
   'search:semantic search'
   'keys:compare key profiles'
   'safe:Emacs with drgnx'"'"'s core only'
@@ -134,6 +135,21 @@ case $cmd in
                    '--auto[approve at once]' '*:plan:_files' ;;
         approve|resume) _arguments '--budget[budget in USD]:budget:' ;;
         status) _arguments '--json[machine-readable]' ;;
+      esac
+    fi ;;
+  runner)
+    if (( CURRENT == 2 )); then
+      _values 'runner command' 'list[the runners]' 'add[make a host a runner]' 'check[check a runner now]' \
+        'bench[bench a runner again]' 'trust[change a runner'"'"'s trust]' 'unbench[put a runner back in rotation]' \
+        'remove[remove a runner and its folder]' 'audit[the keys sent to runners]'
+    else
+      shift words; (( CURRENT-- ))
+      case $sub in
+        list) _arguments '--json[machine-readable]' ;;
+        add) _arguments '--trust[mine, my-cloud or shared]:trust:(mine my-cloud shared)' '--name[the runner'"'"'s name]:name:' \
+               '--profile[dedicated or workstation]:profile:(dedicated workstation)' '--accept[all or heavy]:accept:(all heavy)' \
+               '--root[its folder there]:directory:' '--prefix[what its units are named after]:prefix:' '*:host:' ;;
+        remove) _arguments '--yes[delete its folder]' ;;
       esac
     fi ;;
   search)

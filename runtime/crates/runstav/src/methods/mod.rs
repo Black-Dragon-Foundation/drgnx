@@ -17,6 +17,7 @@ pub mod matrix;
 pub mod mcp;
 pub mod plans;
 pub mod records;
+pub mod runners;
 pub mod search;
 pub mod settings;
 pub mod tasks;
@@ -241,6 +242,14 @@ params! {
     SearchServerPlan(search::ServerKindParams),
     SearchServerStart(search::ServerStartParams),
     SearchServerStop(search::ServerKindParams),
+    RunnersList(Empty),
+    RunnersProbeHost(runners::ProbeParams),
+    RunnersAdd(runners::AddParams),
+    RunnersCheck(runners::ByName),
+    RunnersBench(runners::ByName),
+    RunnersSet(runners::SetParams),
+    RunnersUnbench(runners::ByName),
+    RunnersRemove(runners::RemoveParams),
 }
 
 /// Every method, in no order.
@@ -262,6 +271,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(records::methods());
     v.extend(work::methods());
     v.extend(search::methods());
+    v.extend(runners::methods());
     v
 }
 

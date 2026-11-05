@@ -28,6 +28,7 @@
 //! - [`job_cli`]: `ratatoskr job …`, plan runs from a terminal (propose, approve, status, stop, resume), a client of
 //!   the running hub.
 //! - [`machines_cli`]: `ratatoskr machines report …`, a machine's slots from jobq, a client of the running hub.
+//! - [`runner_cli`]: `ratatoskr runner …`, the runners from a terminal, a client of the running hub.
 //! - [`work`]: the Work space's hub side (machines, shell reads).
 //! - [`sessions`]: the coordination tools on a socket per session (the socket is the identity) and for outside
 //!   agents' bridges (`mcp/session`, `mcp/session-close`, `mcp/attach`), kept in `runtime.db`.
@@ -93,6 +94,7 @@ pub mod matrix_gate;
 pub mod peer;
 pub mod records;
 pub mod runner;
+pub mod runner_cli;
 pub mod runners;
 pub mod runtime_db;
 pub mod sandbox;

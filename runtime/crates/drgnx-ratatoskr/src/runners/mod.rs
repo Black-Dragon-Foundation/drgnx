@@ -13,7 +13,10 @@ pub mod attempts;
 pub mod health;
 pub mod link;
 pub mod local;
+pub mod methods;
 pub mod queue;
+#[cfg(all(unix, not(target_os = "android")))]
+pub mod registry;
 pub mod ssh_config;
 pub mod transport;
 

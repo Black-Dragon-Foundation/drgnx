@@ -45,15 +45,24 @@ pub enum LinkEvent {
 }
 
 /// One runner's link. Dropping it ends the session (the channels close; the runner's attempts run on).
-pub struct Session {
+#[derive(Clone)]
+pub struct Session(Arc<Shared>);
+
+struct Shared {
     runner: String,
     out: mpsc::UnboundedSender<Frame>,
-    tasks: [tokio::task::JoinHandle<()>; 2],
+    tasks: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
-impl Drop for Session {
+impl Shared {
+    fn tasks(&self) -> std::sync::MutexGuard<'_, Vec<tokio::task::JoinHandle<()>>> {
+        self.tasks.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+impl Drop for Shared {
     fn drop(&mut self) {
-        for t in &self.tasks {
+        for t in self.tasks().iter() {
             t.abort();
         }
     }
@@ -82,20 +91,34 @@ impl Session {
             "runners:link-read",
             read_loop(runner.to_string(), control.rx, route, events, out.clone()),
         );
-        Session {
+        Session(Arc::new(Shared {
             runner: runner.into(),
             out,
-            tasks: [writer, reader],
-        }
+            tasks: std::sync::Mutex::new(vec![writer, reader]),
+        }))
     }
 
     pub fn runner(&self) -> &str {
-        &self.runner
+        &self.0.runner
     }
 
     /// Queues F for the runner; false once the link has ended.
     pub fn send(&self, f: Frame) -> bool {
-        !self.tasks[0].is_finished() && self.out.send(f).is_ok()
+        let ended = self.0.tasks().first().is_none_or(|t| t.is_finished());
+        !ended && self.0.out.send(f).is_ok()
+    }
+
+    /// Ends the session now and returns once its tasks are gone, so the channels they held (and a transport's
+    /// sessions with them) are free for a new link. Every copy of the session is ended; one that is ended is left as
+    /// it is.
+    pub async fn close(&self) {
+        let tasks = std::mem::take(&mut *self.0.tasks());
+        for t in &tasks {
+            t.abort();
+        }
+        for t in tasks {
+            let _ = t.await;
+        }
     }
 }
 
@@ -197,7 +220,7 @@ async fn read_loop(
 }
 
 /// One frame from RX, through the protocol's codec: its line, then the chunk its `len` announces.
-async fn read_frame(rx: &mut BufReader<Reader>) -> std::io::Result<Option<Frame>> {
+pub(crate) async fn read_frame(rx: &mut BufReader<Reader>) -> std::io::Result<Option<Frame>> {
     use std::io::{Error, ErrorKind};
     loop {
         let mut line = Vec::new();

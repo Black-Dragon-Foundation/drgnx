@@ -26,6 +26,8 @@ pub const LOCAL: &str = "local";
 pub struct Registry {
     remote: BTreeMap<String, Reported>,
     local: Vec<Slot>,
+    /// The runners the hub keeps (`runners/registry`): listed after `local`, never expiring.
+    runners: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -67,18 +69,38 @@ impl Registry {
         changed
     }
 
-    /// `local` first, then the reported machines by name.
+    /// The hub's runners, by name. True when that changed the list.
+    pub fn set_runners(&mut self, mut names: Vec<String>) -> bool {
+        names.sort();
+        names.dedup();
+        let changed = self.runners != names;
+        self.runners = names;
+        changed
+    }
+
+    /// `local` first, then the runners by name, then the reported machines by name (a report under a runner's name
+    /// is the runner's own and is not listed twice).
     pub fn list(&self) -> Vec<Machine> {
         let mut v = vec![Machine {
             machine: LOCAL.to_string(),
             slots: self.local.clone(),
             local: true,
         }];
-        v.extend(self.remote.iter().map(|(m, r)| Machine {
+        v.extend(self.runners.iter().map(|m| Machine {
             machine: m.clone(),
-            slots: r.slots.clone(),
+            slots: Vec::new(),
             local: false,
         }));
+        v.extend(
+            self.remote
+                .iter()
+                .filter(|(m, _)| !self.runners.contains(m))
+                .map(|(m, r)| Machine {
+                    machine: m.clone(),
+                    slots: r.slots.clone(),
+                    local: false,
+                }),
+        );
         v
     }
 }
@@ -137,6 +159,22 @@ fn refresh(f: &Front) -> Vec<Machine> {
 /// list's first state, not a change, so the first sweep sends no `machines-changed`.
 pub fn seed(f: &Front) {
     f.core.machines.lock().set_local(local_slots(f));
+}
+
+/// The hub's runners are these (`runners/*`): they join the list after `local`, and the subscribers hear of a change.
+pub fn set_runners(f: &Front, names: Vec<String>) {
+    let (list, changed) = {
+        let mut g = f.core.machines.lock();
+        let before = g.list();
+        g.set_runners(names);
+        let after = g.list();
+        let changed = before != after;
+        (after, changed)
+    };
+    if changed {
+        f.core.map.machines(&list);
+        f.broadcast("machines-changed", json!(MachinesList { machines: list }));
+    }
 }
 
 /// The machines now (the registry brought up to date first): the Work map's seed.
@@ -218,6 +256,28 @@ mod tests {
         reg.report(r("laptop", 100.0), 5.0);
         assert!(reg.expire(50.0).is_empty());
         assert_eq!(reg.list()[1].machine, "laptop");
+    }
+
+    /// Pattern D: the runners follow `local`, never expire, and a report under a runner's name isn't listed twice.
+    #[test]
+    fn runners_are_listed_after_local_and_never_expire() {
+        let mut reg = Registry::default();
+        reg.report(r("desktop", 30.0), 100.0);
+        reg.report(r("laptop", 30.0), 100.0);
+        assert!(reg.set_runners(vec!["desktop".into(), "cloud-1".into()]));
+        assert!(!reg.set_runners(vec!["cloud-1".into(), "desktop".into()]));
+        let names =
+            |reg: &Registry| -> Vec<String> { reg.list().into_iter().map(|m| m.machine).collect() };
+        assert_eq!(names(&reg), ["local", "cloud-1", "desktop", "laptop"]);
+        assert_eq!(
+            reg.list()[2].slots.len(),
+            0,
+            "the runner's own entry, not the report"
+        );
+        assert_eq!(reg.expire(1000.0), ["desktop", "laptop"]);
+        assert_eq!(names(&reg), ["local", "cloud-1", "desktop"]);
+        assert!(reg.set_runners(vec![]));
+        assert_eq!(names(&reg), ["local"]);
     }
 
     /// Pattern D.

@@ -239,6 +239,11 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "the machines the hub lists changed (a report, an expiry, a local slot): the whole list"
         ),
         event!(
+            "runners-changed",
+            crate::methods::runners::Runners,
+            "the runners changed (one added, removed, benched or back in rotation, its trust or state, its load): the whole list"
+        ),
+        event!(
             "agent-presence",
             crate::methods::work::FilePresence,
             "who is in a file now changed: its entries, at most once per file per 100 ms, to the connections that asked (agents/presence/subscribe)"
@@ -328,6 +333,7 @@ mod tests {
                     "view-proposal",
                     // agent system part 2
                     "machines-changed",
+                    "runners-changed",
                     "agent-presence",
                     "work-map",
                 ]

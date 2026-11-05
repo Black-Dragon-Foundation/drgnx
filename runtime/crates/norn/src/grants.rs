@@ -262,6 +262,7 @@ pub fn register(guard: &mut Guard) {
     guard::register_key_prefix(guard, SETTING_PREFIX, Class::User, SETTINGS_ARE_THE_USERS);
     crate::privacy::register(guard);
     crate::write::work::register(guard);
+    crate::write::runners::register(guard);
 }
 
 /// The grants' version: the highest `updated_tx` of a grant row (0 when none).

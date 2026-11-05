@@ -257,6 +257,8 @@ pub async fn run(args: ServeArgs) -> Exit {
     // and a job end that reached no session is delivered once they are back.
     crate::exec::ensure_open(&front);
     crate::work::machines::seed(&front);
+    // the runners recorded before this start are linked (in the background: an unreachable one delays nothing)
+    crate::runners::methods::start(&front);
     front.core.runs.set_recovering(true);
     {
         let f = front.clone();
