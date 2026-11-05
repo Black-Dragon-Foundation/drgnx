@@ -291,17 +291,24 @@ The server's own messages wait for `initialized' (the fire function sends it)."
         drgnx-perf-w--lsps (mapcar (lambda (c) (drgnx-perf-w--lsp-start c env)) '("rust" "c" "ts")))
   t)
 
+(defvar drgnx-perf-w--lsp-timeout 60
+  "Seconds a request may wait for its answer: the runner's own completion deadline (`drgnx-perf-run-complete-wait').
+jsonrpc's default is 10 s and a late answer is then dropped without a word.")
+
 (defun drgnx-perf-w--lsp-request (conn method params)
   (let ((id (1+ (jsonrpc--next-request-id conn))) (name (jsonrpc-name conn)))   ; the id jsonrpc gives this request
     (jsonrpc-async-request
      conn method params
+     :timeout drgnx-perf-w--lsp-timeout
+     :timeout-fn (lambda () (push (list method -2 nil name id 'timeout) drgnx-perf-w--lsp-handled))
      :success-fn (lambda (result)
                    (push (list method (drgnx-perf-w--lsp-count result) (float-time) name id) drgnx-perf-w--lsp-handled))
      :error-fn (lambda (e) (push (list method -1 nil name id e) drgnx-perf-w--lsp-handled)))))
 
 (defun drgnx-perf-w--lsp-stamped-p ()
   "Non-nil once every answer handled has its server's write time."
-  (seq-every-p (lambda (h) (gethash (cons (nth 3 h) (nth 4 h)) drgnx-perf-w--lsp-sent)) drgnx-perf-w--lsp-handled))
+  (seq-every-p (lambda (h) (or (eq (nth 5 h) 'timeout) (gethash (cons (nth 3 h) (nth 4 h)) drgnx-perf-w--lsp-sent)))
+               drgnx-perf-w--lsp-handled))
 
 (defun drgnx-perf-w--lsp-burst-round ()
   "One round, per server: three completion answers (0.5, 1 and 3 MB, in turn) and a small request."
@@ -346,7 +353,13 @@ The server's own messages wait for `initialized' (the fire function sends it)."
                                                                    (drgnx-perf--round (* 1000 (- at sent)))))
                                                                drgnx-perf-w--lsp-handled))))
                    :answers (length drgnx-perf-w--lsp-handled)
+                   :timeouts (length (drgnx-perf-w--lsp-timed-out))
+                   :timeout_ids (mapcar (lambda (h) (format "%s/%s" (nth 3 h) (nth 4 h))) (drgnx-perf-w--lsp-timed-out))
                    :framed (drgnx-perf-w--lsp-framed))))
+
+(defun drgnx-perf-w--lsp-timed-out ()
+  "The handled entries that timed out (their answer never came within `drgnx-perf-w--lsp-timeout')."
+  (seq-filter (lambda (h) (eq (nth 5 h) 'timeout)) drgnx-perf-w--lsp-handled))
 
 (defun drgnx-perf-w--lsp-framed ()
   "How many of the connections Nidhogg's reader frames (0 without `nidhogg-workers-framing')."
