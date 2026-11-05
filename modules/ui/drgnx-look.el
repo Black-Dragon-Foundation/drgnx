@@ -17,6 +17,7 @@
 (unless (featurep 'drgnx-decor)
   (load (expand-file-name "drgnx-decor" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (declare-function drgnx-decor-faces-on "drgnx-decor" ())
+(declare-function drgnx-decor-activate "drgnx-decor" ())
 
 ;;;; Chrome (Glitnir, the compositor)
 
