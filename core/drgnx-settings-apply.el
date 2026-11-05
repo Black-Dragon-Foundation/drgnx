@@ -247,13 +247,15 @@ hold: non-nil when drgnx had a value.  A variable modules claim goes through the
   "Remember the entries PUSHED (VAR . ENTRY) over those remembered; a failure is silent (it is only a fallback)."
   (when pushed
     (condition-case nil
-        (let ((all (drgnx-settings-apply--load-applied)))
+        (let* ((all (drgnx-settings-apply--load-applied))
+               (file (drgnx-settings-apply--applied-file)))
           (dolist (cell pushed) (setf (alist-get (car cell) all) (cdr cell)))
-          (drgnx-file-write-text
-           (drgnx-settings-apply--applied-file)
-           (drgnx-settings-file--prin1
-            (mapcar (lambda (c) (list (car c) (drgnx-settings-entry-value (cdr c)) (drgnx-settings-entry-merge (cdr c))))
-                    all))))
+          (let ((text (drgnx-settings-file--prin1
+                       (mapcar (lambda (c) (list (car c) (drgnx-settings-entry-value (cdr c)) (drgnx-settings-entry-merge (cdr c))))
+                               all))))
+            ;; a start that applies what the last one did writes nothing (no fsync, no new file)
+            (unless (equal text (ignore-errors (drgnx-file-read-bounded file)))
+              (drgnx-file-write-text file text))))
       (error nil))))
 
 (defun drgnx-settings-apply--run (owned-only)

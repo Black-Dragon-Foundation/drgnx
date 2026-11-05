@@ -335,4 +335,21 @@
                        (list "Settings" (nth 1 c) (nth 2 c))))
         (should (commandp (nth 2 c)))))))
 
+(ert-deftest drgnx-settings-apply/a-start-that-applies-the-same-values-writes-nothing ()
+  ;; the applied-values file is a fallback for a bad entry; a start with nothing new keeps it as it is (an atomic
+  ;; write makes a new file, so the inode tells)
+  (drgnx-settings-apply-test--with (drgnx-sat--a)
+    (drgnx-settings-apply-test--def 'drgnx-sat--a)
+    (drgnx-settings-apply-test--settings "(drgnx-sat--a 50)")
+    (drgnx-settings-apply-global)
+    (let* ((file (drgnx-settings-apply--applied-file))
+           (inode (file-attribute-inode-number (file-attributes file))))
+      (should inode)
+      (setq drgnx-settings-apply--entries nil)
+      (drgnx-settings-apply-global)
+      (should (equal inode (file-attribute-inode-number (file-attributes file))))
+      (drgnx-settings-apply-test--settings "(drgnx-sat--a 60)")
+      (drgnx-settings-apply-global)
+      (should-not (equal inode (file-attribute-inode-number (file-attributes file)))))))
+
 ;;; settings-apply-test.el ends here
