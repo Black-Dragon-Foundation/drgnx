@@ -130,7 +130,7 @@ mod git {
         let key = SlotKey {
             project: "p".into(),
             worktree: "w".into(),
-            trust: "private".into(),
+            trust: forseti::JobTrust::Private,
             toolchain: "t".into(),
         };
         let p = slot::paths(&t.join("runner"), &key);

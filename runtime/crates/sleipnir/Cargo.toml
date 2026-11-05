@@ -12,7 +12,7 @@ default = ["runner"]
 # the wire protocol: pure
 proto = []
 # input capture, the hardened git and slots: blocking, no tokio
-sync = ["dep:sha2", "dep:rustix"]
+sync = ["dep:forseti", "dep:sha2", "dep:rustix"]
 # the probe, the reservation files and the executor: blocking, std, rustix and serde only, no tokio
 linux = ["dep:forseti", "dep:serde_json", "dep:rustix", "dep:libc"]
 # the binary's modes

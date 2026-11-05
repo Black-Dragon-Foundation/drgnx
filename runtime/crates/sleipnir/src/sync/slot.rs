@@ -18,6 +18,7 @@ use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use forseti::JobTrust;
 use rustix::fs::FlockOperation;
 use sha2::{Digest, Sha256};
 
@@ -33,8 +34,7 @@ pub const UNUSED_FOR: Duration = Duration::from_secs(7 * 24 * 3600);
 pub struct SlotKey {
     pub project: String,
     pub worktree: String,
-    /// The job trust's word: `public`, `private` or `private+keys`.
-    pub trust: String,
+    pub trust: JobTrust,
     pub toolchain: String,
 }
 
@@ -78,14 +78,29 @@ pub enum CopyKind {
 }
 
 impl SlotKey {
-    /// The slot's directory name: 32 hex digits of sha256 over the four words, each length-prefixed.
+    /// The slot's directory name: 32 hex digits of sha256 over the four words (the trust as the design's word),
+    /// each length-prefixed.
     pub fn id(&self) -> String {
         let mut h = Sha256::new();
-        for w in [&self.project, &self.worktree, &self.trust, &self.toolchain] {
+        for w in [
+            self.project.as_str(),
+            self.worktree.as_str(),
+            trust_word(self.trust),
+            self.toolchain.as_str(),
+        ] {
             h.update((w.len() as u64).to_le_bytes());
             h.update(w.as_bytes());
         }
         hex(&h.finalize()[..16])
+    }
+}
+
+/// The job trust's word: `public`, `private` or `private+keys`.
+fn trust_word(t: JobTrust) -> &'static str {
+    match t {
+        JobTrust::Public => "public",
+        JobTrust::Private => "private",
+        JobTrust::PrivateKeys => "private+keys",
     }
 }
 
@@ -464,7 +479,7 @@ mod tests {
         SlotKey {
             project: "p".into(),
             worktree: n.into(),
-            trust: "private".into(),
+            trust: JobTrust::Private,
             toolchain: "t".into(),
         }
     }
@@ -844,7 +859,7 @@ mod tests {
         let a = paths(root, &key("w"));
         assert_eq!(a, paths(root, &key("w")));
         let other = SlotKey {
-            trust: "private+keys".into(),
+            trust: JobTrust::PrivateKeys,
             ..key("w")
         };
         assert_ne!(

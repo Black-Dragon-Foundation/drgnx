@@ -9,7 +9,7 @@ The scheduling decisions are [`forseti`](forseti.md)'s; sleipnir reads the machi
 | Feature | What | Dependencies |
 |---|---|---|
 | `linux` | the machine probe, the reservation files, the executor | std, rustix, libc, serde, `forseti`; blocking, never tokio |
-| `sync` | a job's inputs, the hardened git, checkout slots | std, rustix, `sha2`; blocking, never tokio |
+| `sync` | a job's inputs, the hardened git, checkout slots | std, rustix, `sha2`, `forseti`; blocking, never tokio |
 | `proto` | the wire protocol | pure |
 | `runner` (default) | the binary's modes | all of the above |
 | `test-hooks` | test-only entry points | compiled away otherwise |
@@ -230,7 +230,8 @@ run.
 
 ### Slots (`sync::slot`)
 
-A slot is one checkout per slot key (project, source worktree, trust, toolchain). Its three directories are
+A slot is one checkout per slot key (project, source worktree, trust, toolchain); the trust is
+`forseti::JobTrust`, hashed as its word (`public`, `private`, `private+keys`). Its three directories are
 siblings under the runner folder, named by 32 hex digits of the key's hash:
 
 | Path | What | Jobs see it |
