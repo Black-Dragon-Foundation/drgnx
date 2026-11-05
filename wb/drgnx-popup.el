@@ -79,6 +79,9 @@ bottom-centre, above the echo area."
   ;; compositor later, so `frame-outer-width' right after a resize still says the old one.
   (let* ((child (window-frame window)) (root (frame-parent child))
          (max-w (floor (* 0.9 (frame-pixel-width root)))) (max-h (floor (* 0.33 (frame-pixel-height root))))
+         (frame-resize-pixelwise t)
+         ;; measured in a window as large as the lane may be, or a long line would wrap at a small one's width
+         (_ (set-frame-size child max-w max-h t))
          (extra-w (- (window-pixel-width window) (window-body-width window t)))
          (extra-h (- (window-pixel-height window) (window-body-height window t)))
          (text (window-text-pixel-size window nil nil (- max-w extra-w) (- max-h extra-h)))
@@ -114,9 +117,17 @@ reused (`display-buffer-in-child-frame' makes it the first time)."
   (let ((lane (drgnx-popup--float-window buffer)))
     (set-window-parameter lane 'header-line-format (drgnx-popup--header buffer))
     (set-window-parameter lane 'drgnx-popup (list :float t :popup buffer))
-    (set-window-dedicated-p lane 'drgnx)
+    ;; `delete-window' ends the lane through its `delete-window' parameter (set by `drgnx-popup--show').  `quit-window'
+    ;; and `bury-buffer' would delete a dedicated window — here its frame's only one, so the frame — so the lane is not
+    ;; dedicated, and they take the idle buffer from `quit-restore' / the previous buffers instead; the buffer change
+    ;; then ends the popup (`drgnx-popup--frame-changed' on `window-buffer-change-functions', before anything is drawn).
+    (let ((idle (get-buffer-create " *drgnx-popup-idle*")))
+      (set-window-dedicated-p lane nil)
+      (set-window-prev-buffers lane (list (list idle (copy-marker 1) (copy-marker 1))))
+      (set-window-parameter lane 'quit-restore (list 'window (list idle 1 1 nil) (selected-window) buffer)))
     (drgnx-popup--float-fit lane)
     (make-frame-visible (window-frame lane))
+    (drgnx-popup--float-fit lane)       ; a frame that has just been mapped can take its first size from the toolkit
     lane))
 
 (defun drgnx-popup--show (buffer alist props)
@@ -155,9 +166,9 @@ one; mark it as the lane.  Under `drgnx-popup-style' `float', one child frame in
       (set-window-parameter lane 'drgnx-popup (list :borrowed nil :popup buffer))))
     ;; However the package ends it, it comes here: `delete-window' calls our function, and
     ;; `quit-window' / `bury-buffer' delete the window (no earlier buffers to go back to).
-    (set-window-prev-buffers lane nil)
     (set-window-parameter lane 'delete-window #'drgnx-popup--end)
-    (unless (plist-get (window-parameter lane 'drgnx-popup) :float)
+    (unless (plist-get (window-parameter lane 'drgnx-popup) :float)   ; the float lane's are set by `drgnx-popup--show-float'
+      (set-window-prev-buffers lane nil)
       (set-window-parameter lane 'quit-restore (list 'window 'window (selected-window) buffer)))
     (with-current-buffer buffer (add-hook 'kill-buffer-hook #'drgnx-popup--killed nil t))
     (drgnx-wb-run-body-function lane alist)
@@ -204,6 +215,13 @@ restored window configuration put the panel back) — finish ending it."
   (dolist (f (frame-list))
     (dolist (w (window-list f 'nomini)) (drgnx-popup--check-window w))))
 
+(defun drgnx-popup--frame-changed (frame)
+  "Default `window-buffer-change-functions': a window of FRAME changed its buffer; end a floating lane that no
+longer shows its popup (`quit-window' and `bury-buffer' put the idle buffer there)."
+  (when-let* ((child (if (frame-parameter frame 'drgnx-popup) frame (frame-parameter frame 'drgnx-popup-frame)))
+              ((frame-live-p child)))
+    (drgnx-popup--check-window (frame-root-window child))))
+
 (defun drgnx-popup--killed ()
   "The current buffer is being killed: end the popup showing it."
   (dolist (f (frame-list))
@@ -216,20 +234,13 @@ their window; the editor above must not move).  A temporary lane is fitted as as
   (unless (plist-get (window-parameter (window-normalize-window window) 'drgnx-popup) :borrowed)
     (apply orig window args)))
 
-(defun drgnx-popup--delete (orig window &rest args)
-  "Around `window--delete': the floating lane's window is its frame's only one, so `quit-window' and `bury-buffer'
-\(which delete a dedicated window) would delete the frame.  Ending the popup hides the frame instead."
-  (if (plist-get (window-parameter (window-normalize-window window) 'drgnx-popup) :float)
-      (progn (drgnx-popup--end window) t)
-    (apply orig window args)))
-
 (defun drgnx-popup--mode ()
-  "Follow `drgnx-rules-mode': the fit and delete guards are on while the rules are."
+  "Follow `drgnx-rules-mode': the fit guard and the floating lane's buffer-change check are on while the rules are."
   (if drgnx-rules-mode
       (progn (advice-add 'fit-window-to-buffer :around #'drgnx-popup--fit)
-             (advice-add 'window--delete :around #'drgnx-popup--delete))
+             (add-hook 'window-buffer-change-functions #'drgnx-popup--frame-changed))
     (advice-remove 'fit-window-to-buffer #'drgnx-popup--fit)
-    (advice-remove 'window--delete #'drgnx-popup--delete)))
+    (remove-hook 'window-buffer-change-functions #'drgnx-popup--frame-changed)))
 
 (add-hook 'drgnx-rules-mode-hook #'drgnx-popup--mode)
 (when drgnx-rules-mode (drgnx-popup--mode))

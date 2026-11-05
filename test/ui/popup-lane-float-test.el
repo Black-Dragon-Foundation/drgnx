@@ -70,8 +70,14 @@ at most 0.9 of the frame wide and 0.33 high, and not the selected frame."
       (should (frame-parameter child 'no-other-frame))
       (should-not (eq child (selected-frame)))
       ;; the compositor answers the size later: wait until the frame has the size that was asked for
-      (drgnx-test-wait (lambda () (redisplay t) (<= (frame-outer-height child) (* 0.33 (frame-pixel-height root))))
-                       :secs 10 :what "the lane's frame has its fitted size")
+      (ignore-error ert-test-failed
+        (drgnx-test-wait (lambda ()
+                           (redisplay t)
+                           (and (<= (frame-outer-height child) (* 0.33 (frame-pixel-height root)))
+                                (<= (abs (- (car (frame-position child))
+                                            (/ (- (frame-pixel-width root) (frame-outer-width child)) 2)))
+                                    1)))
+                         :secs 10 :what "the lane's frame has its fitted size and place"))
       (should (<= (frame-outer-width child) (* 0.9 (frame-pixel-width root))))
       (should (<= (frame-outer-height child) (* 0.33 (frame-pixel-height root))))
       (let* ((x (car (frame-position child)))
@@ -106,13 +112,16 @@ at most 0.9 of the frame wide and 0.33 high, and not the selected frame."
             (let ((w (get-buffer-window "*Completions*" t)))
               (should w)
               (should (frame-parent (window-frame w)))
+              (drgnx-test-wait-presented)       ; the lane has its size before a click position is taken in it
               (with-current-buffer "*Completions*"
                 (setq completion-reference-buffer target)
                 (goto-char (point-min))
                 (let ((m (text-property-search-forward 'completion--string "bravo" t)))
                   (should m)
                   (goto-char (prop-match-beginning m)))
-                (let ((event (list 'mouse-1 (posn-at-point (point) w))))
+                ;; the click event is made by hand (window, buffer position): a pixel position taken from the layout
+                ;; would depend on how far the compositor has sized the frame
+                (let ((event (list 'mouse-1 (list w (point) '(0 . 0) 0))))
                   (setq chosen (condition-case err (progn (choose-completion event) t) (error err)))))
               (should (eq chosen t))
               (should (equal (with-current-buffer target (buffer-string)) "bravo"))))
@@ -125,12 +134,15 @@ at most 0.9 of the frame wide and 0.33 high, and not the selected frame."
       (let* ((b (drgnx-popup-float-ui-test--buffer "*Calendar*"))
              (w (display-buffer b)) (child (window-frame w)))
         (should (frame-visible-p child))
+        (redisplay t)         ; the popup is shown before it is buried, as it is for a user: the change functions see both
         (pcase how
           ('delete (delete-window w))
           ('quit (with-selected-window w (quit-window)))
           ('bury (with-selected-window w (bury-buffer)))
           ('kill (kill-buffer b)))
         ;; bury and quit change the window's buffer: the lane ends at the next redisplay
+        (when (memq how '(quit bury))
+          (should-not (eq (window-buffer w) b)))
         (drgnx-test-wait (lambda () (redisplay t) (not (frame-visible-p child))) :secs 10
                          :what (format "the lane ended by %s" how))
         (should (frame-live-p child))
