@@ -340,6 +340,11 @@
     (dolist (c (drgnx-ci-test--matches "if: \\(.*\\)\n *uses: actions/cache/save@" yml))
       (should (or (string-search "steps.prune.outcome == 'success'" c)
                   (string-search "github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')" c))))
+    ;; an action the tiers run on another commit than the workflow's own (Nidhogg's drgnx_ref) saves only its own
+    (when (string-search "inputs.dir" yml)
+      (dolist (c (drgnx-ci-test--matches "if: \\(.*\\)\n *uses: actions/cache/save@" yml))
+        (unless (string-search "steps.prune.outcome == 'success'" c)
+          (should (string-search "steps.own.outputs.commit == github.sha" c)))))
     (dolist (c (drgnx-ci-test--matches "id: prune\n *if: \\(.*\\)\n" yml))
       (should (or (string-search "env.CACHE_SAVE == 'true'" c)
                   (string-search "github.event_name != 'pull_request' && (" c)))))
@@ -348,8 +353,21 @@
     (drgnx-ci-test--has rt "CACHE_SAVE: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/ci/')) }}"
                         "CARGO_INCREMENTAL: \"0\"")))
 
+(ert-deftest drgnx-ci/a-drgnx-ref-is-checked-before-its-checkout-runs ()
+  ;; a checkout of drgnx_ref (Nidhogg's run names it) is followed at once by the check that it is a commit on one of
+  ;; drgnx's own branches, before any of the checkout's actions run: a pull request's or a fork's commit is refused
+  (let ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")))
+    (skip-unless tiers)
+    (let ((checkouts (drgnx-ci-test--matches "ref: \\${{ inputs\\.drgnx_ref }}\n\\(\\(?:.*\n\\)\\{3\\}\\)" tiers)))
+      (should (= (length checkouts) (length (drgnx-ci-test--matches "\\(uses: actions/checkout@\\)" tiers))))
+      (dolist (c checkouts)
+        (should (string-match-p "persist-credentials: false\n *- name: drgnx_ref is a commit on one of drgnx's own branches\n" c))))
+    (should (string-search "refs/pull/*|pull/*)" tiers))
+    (should (string-search "branch --contains \"$sha\"" tiers))))
+
 (ert-deftest drgnx-ci/test-binaries-cache-is-saved-only-by-trusted-runs ()
-  ;; drgnx-tiers.yml runs from Nidhogg too, where github.ref is Nidhogg's
+  ;; drgnx-tiers.yml runs from Nidhogg too, with a drgnx commit Nidhogg names: only drgnx's own run of its own commit
+  ;; writes the cache, so a drgnx_ref never reaches a default branch's cache scope
   (let ((bins (drgnx-ci-test--action "build-test-bins")))
     (skip-unless bins)
     (should-not (string-search "uses: actions/cache@" bins))
@@ -357,8 +375,10 @@
     (should (string-match "id: prune\n *if: \\(.*\\)\n" bins))
     (let ((cond (match-string 1 bins)))
       (dolist (s '("github.event_name != 'pull_request'" "github.ref == 'refs/heads/main'"
-                   "github.ref == 'refs/heads/nidhogg-31'" "startsWith(github.ref, 'refs/heads/ci/')"))
-        (should (string-search s cond))))
+                   "startsWith(github.ref, 'refs/heads/ci/')" "steps.own.outputs.commit == github.sha"
+                   "github.repository == 'Black-Dragon-Foundation/drgnx'"))
+        (should (string-search s cond)))
+      (should-not (string-search "nidhogg-31" cond)))
     ;; the binaries stay for the upload; the save takes the restore's key
     (drgnx-ci-test--has bins "cargo-prune.sh\" \"$DIR/runtime/Cargo.toml\" \"$DIR/runtime/target\" --keep-bins"
                         "key: ${{ steps.bins-cache.outputs.cache-primary-key }}")))

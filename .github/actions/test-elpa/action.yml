@@ -22,7 +22,13 @@ runs:
       env:
         DIR: ${{ inputs.dir }}
       run: sh "$DIR/test/container/modal-elpa.sh" "$RUNNER_TEMP/test-elpa"
-    - if: ${{ steps.cache.outputs.cache-hit != 'true' && (github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) }}
+    # saved only by main's own commit (a push or the daily run): never for a drgnx_ref of another repository's run
+    - id: own
+      shell: bash
+      env:
+        DIR: ${{ inputs.dir }}
+      run: echo "commit=$(git -C "$DIR" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+    - if: ${{ steps.cache.outputs.cache-hit != 'true' && steps.own.outputs.commit == github.sha && github.repository == 'Black-Dragon-Foundation/drgnx' && (github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) }}
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/test-elpa

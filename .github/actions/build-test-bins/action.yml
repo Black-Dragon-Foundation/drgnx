@@ -14,8 +14,14 @@ runs:
   steps:
     # Keyed by the toolchain and the hash of Cargo.lock and the manifests, restored from the newest entry of the same
     # toolchain when they moved (cargo rebuilds whatever is stale). Saved, without what every run rebuilds
-    # (.github/ci/cargo-prune.sh), by a push or a manual run of `main`, `nidhogg-31` (when Nidhogg's run calls
-    # drgnx-tiers.yml: `github.ref` in a called workflow is the caller's) or a `ci/*` branch; never by a pull request.
+    # (.github/ci/cargo-prune.sh), by a push or a manual run of `main` or a `ci/*` branch, and only when the checkout is
+    # the workflow's own commit; never by a pull request, and never for another repository's run (Nidhogg's calls
+    # drgnx-tiers.yml with a drgnx commit of its choosing: it restores, it never writes).
+    - id: own
+      shell: bash
+      env:
+        DIR: ${{ inputs.dir }}
+      run: echo "commit=$(git -C "$DIR" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
     - id: rv
       shell: bash
       run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
@@ -43,7 +49,7 @@ runs:
         echo "DRGNX_HUGINN_DUMP=$t/examples/dump" >> "$GITHUB_ENV"
     # --keep-bins: the job uploads or runs them next
     - id: prune
-      if: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/nidhogg-31' || startsWith(github.ref, 'refs/heads/ci/')) && steps.bins-cache.outputs.cache-hit != 'true' }}
+      if: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/ci/')) && steps.own.outputs.commit == github.sha && github.repository == 'Black-Dragon-Foundation/drgnx' && steps.bins-cache.outputs.cache-hit != 'true' }}
       shell: bash
       env:
         DIR: ${{ inputs.dir }}

@@ -46,6 +46,16 @@ jobs:
           ref: ${{ inputs.drgnx_ref }}
           path: drgnx
           persist-credentials: false
+      - name: drgnx_ref is a commit on one of drgnx's own branches
+        if: ${{ inputs.drgnx_ref != '' }}
+        env:
+          ASKED: ${{ inputs.drgnx_ref }}
+        run: |
+          case "$ASKED" in refs/pull/*|pull/*) echo "::error::drgnx_ref $ASKED is a pull request's, not a branch of drgnx's"; exit 1 ;; esac
+          sha=$(git -C drgnx rev-parse HEAD)
+          git clone -q --bare --no-tags --filter=tree:0 https://github.com/Black-Dragon-Foundation/drgnx.git "$RUNNER_TEMP/drgnx-branches"
+          [ -n "$(git -C "$RUNNER_TEMP/drgnx-branches" branch --contains "$sha" 2>/dev/null)" ] ||
+            { echo "::error::drgnx_ref $ASKED ($sha) is on none of drgnx's branches (a fork's or a pull request's commit)"; exit 1; }
       - uses: ./drgnx/.github/actions/build-test-bins
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -78,6 +88,16 @@ jobs:
           ref: ${{ inputs.drgnx_ref }}
           path: drgnx
           persist-credentials: false
+      - name: drgnx_ref is a commit on one of drgnx's own branches
+        if: ${{ inputs.drgnx_ref != '' }}
+        env:
+          ASKED: ${{ inputs.drgnx_ref }}
+        run: |
+          case "$ASKED" in refs/pull/*|pull/*) echo "::error::drgnx_ref $ASKED is a pull request's, not a branch of drgnx's"; exit 1 ;; esac
+          sha=$(git -C drgnx rev-parse HEAD)
+          git clone -q --bare --no-tags --filter=tree:0 https://github.com/Black-Dragon-Foundation/drgnx.git "$RUNNER_TEMP/drgnx-branches"
+          [ -n "$(git -C "$RUNNER_TEMP/drgnx-branches" branch --contains "$sha" 2>/dev/null)" ] ||
+            { echo "::error::drgnx_ref $ASKED ($sha) is on none of drgnx's branches (a fork's or a pull request's commit)"; exit 1; }
       - id: commit
         run: echo "commit=$(git -C drgnx rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - uses: ./drgnx/.github/actions/fetch-test-bins
@@ -124,6 +144,16 @@ jobs:
           ref: ${{ inputs.drgnx_ref }}
           path: drgnx
           persist-credentials: false
+      - name: drgnx_ref is a commit on one of drgnx's own branches
+        if: ${{ inputs.drgnx_ref != '' }}
+        env:
+          ASKED: ${{ inputs.drgnx_ref }}
+        run: |
+          case "$ASKED" in refs/pull/*|pull/*) echo "::error::drgnx_ref $ASKED is a pull request's, not a branch of drgnx's"; exit 1 ;; esac
+          sha=$(git -C drgnx rev-parse HEAD)
+          git clone -q --bare --no-tags --filter=tree:0 https://github.com/Black-Dragon-Foundation/drgnx.git "$RUNNER_TEMP/drgnx-branches"
+          [ -n "$(git -C "$RUNNER_TEMP/drgnx-branches" branch --contains "$sha" 2>/dev/null)" ] ||
+            { echo "::error::drgnx_ref $ASKED ($sha) is on none of drgnx's branches (a fork's or a pull request's commit)"; exit 1; }
       - uses: ./drgnx/.github/actions/fetch-test-bins
       - if: ${{ !cancelled() }}
         uses: ./drgnx/.github/actions/test-image
@@ -165,6 +195,16 @@ jobs:
           ref: ${{ inputs.drgnx_ref }}
           path: drgnx
           persist-credentials: false
+      - name: drgnx_ref is a commit on one of drgnx's own branches
+        if: ${{ inputs.drgnx_ref != '' }}
+        env:
+          ASKED: ${{ inputs.drgnx_ref }}
+        run: |
+          case "$ASKED" in refs/pull/*|pull/*) echo "::error::drgnx_ref $ASKED is a pull request's, not a branch of drgnx's"; exit 1 ;; esac
+          sha=$(git -C drgnx rev-parse HEAD)
+          git clone -q --bare --no-tags --filter=tree:0 https://github.com/Black-Dragon-Foundation/drgnx.git "$RUNNER_TEMP/drgnx-branches"
+          [ -n "$(git -C "$RUNNER_TEMP/drgnx-branches" branch --contains "$sha" 2>/dev/null)" ] ||
+            { echo "::error::drgnx_ref $ASKED ($sha) is on none of drgnx's branches (a fork's or a pull request's commit)"; exit 1; }
       - uses: ./drgnx/.github/actions/fetch-test-bins
       - if: ${{ !cancelled() }}
         uses: ./drgnx/.github/actions/test-image
@@ -228,6 +268,16 @@ jobs:
           ref: ${{ inputs.drgnx_ref }}
           path: drgnx
           persist-credentials: false
+      - name: drgnx_ref is a commit on one of drgnx's own branches
+        if: ${{ inputs.drgnx_ref != '' }}
+        env:
+          ASKED: ${{ inputs.drgnx_ref }}
+        run: |
+          case "$ASKED" in refs/pull/*|pull/*) echo "::error::drgnx_ref $ASKED is a pull request's, not a branch of drgnx's"; exit 1 ;; esac
+          sha=$(git -C drgnx rev-parse HEAD)
+          git clone -q --bare --no-tags --filter=tree:0 https://github.com/Black-Dragon-Foundation/drgnx.git "$RUNNER_TEMP/drgnx-branches"
+          [ -n "$(git -C "$RUNNER_TEMP/drgnx-branches" branch --contains "$sha" 2>/dev/null)" ] ||
+            { echo "::error::drgnx_ref $ASKED ($sha) is on none of drgnx's branches (a fork's or a pull request's commit)"; exit 1; }
       - uses: ./drgnx/.github/actions/fetch-test-bins
       - if: ${{ !cancelled() }}
         uses: ./drgnx/.github/actions/test-image
@@ -266,6 +316,16 @@ jobs:
           ref: ${{ inputs.drgnx_ref }}
           path: drgnx
           persist-credentials: false
+      - name: drgnx_ref is a commit on one of drgnx's own branches
+        if: ${{ inputs.drgnx_ref != '' }}
+        env:
+          ASKED: ${{ inputs.drgnx_ref }}
+        run: |
+          case "$ASKED" in refs/pull/*|pull/*) echo "::error::drgnx_ref $ASKED is a pull request's, not a branch of drgnx's"; exit 1 ;; esac
+          sha=$(git -C drgnx rev-parse HEAD)
+          git clone -q --bare --no-tags --filter=tree:0 https://github.com/Black-Dragon-Foundation/drgnx.git "$RUNNER_TEMP/drgnx-branches"
+          [ -n "$(git -C "$RUNNER_TEMP/drgnx-branches" branch --contains "$sha" 2>/dev/null)" ] ||
+            { echo "::error::drgnx_ref $ASKED ($sha) is on none of drgnx's branches (a fork's or a pull request's commit)"; exit 1; }
       - uses: ./drgnx/.github/actions/test-image
         with:
           containerfile: Containerfile.gui
@@ -298,6 +358,16 @@ jobs:
           ref: ${{ inputs.drgnx_ref }}
           path: drgnx
           persist-credentials: false
+      - name: drgnx_ref is a commit on one of drgnx's own branches
+        if: ${{ inputs.drgnx_ref != '' }}
+        env:
+          ASKED: ${{ inputs.drgnx_ref }}
+        run: |
+          case "$ASKED" in refs/pull/*|pull/*) echo "::error::drgnx_ref $ASKED is a pull request's, not a branch of drgnx's"; exit 1 ;; esac
+          sha=$(git -C drgnx rev-parse HEAD)
+          git clone -q --bare --no-tags --filter=tree:0 https://github.com/Black-Dragon-Foundation/drgnx.git "$RUNNER_TEMP/drgnx-branches"
+          [ -n "$(git -C "$RUNNER_TEMP/drgnx-branches" branch --contains "$sha" 2>/dev/null)" ] ||
+            { echo "::error::drgnx_ref $ASKED ($sha) is on none of drgnx's branches (a fork's or a pull request's commit)"; exit 1; }
       - uses: ./drgnx/.github/actions/fetch-test-bins
       - if: ${{ !cancelled() }}
         uses: ./drgnx/.github/actions/test-image
@@ -337,6 +407,16 @@ jobs:
           ref: ${{ inputs.drgnx_ref }}
           path: drgnx
           persist-credentials: false
+      - name: drgnx_ref is a commit on one of drgnx's own branches
+        if: ${{ inputs.drgnx_ref != '' }}
+        env:
+          ASKED: ${{ inputs.drgnx_ref }}
+        run: |
+          case "$ASKED" in refs/pull/*|pull/*) echo "::error::drgnx_ref $ASKED is a pull request's, not a branch of drgnx's"; exit 1 ;; esac
+          sha=$(git -C drgnx rev-parse HEAD)
+          git clone -q --bare --no-tags --filter=tree:0 https://github.com/Black-Dragon-Foundation/drgnx.git "$RUNNER_TEMP/drgnx-branches"
+          [ -n "$(git -C "$RUNNER_TEMP/drgnx-branches" branch --contains "$sha" 2>/dev/null)" ] ||
+            { echo "::error::drgnx_ref $ASKED ($sha) is on none of drgnx's branches (a fork's or a pull request's commit)"; exit 1; }
       - uses: ./drgnx/.github/actions/test-image
         with:
           containerfile: Containerfile.tty
@@ -371,6 +451,16 @@ jobs:
           ref: ${{ inputs.drgnx_ref }}
           path: drgnx
           persist-credentials: false
+      - name: drgnx_ref is a commit on one of drgnx's own branches
+        if: ${{ inputs.drgnx_ref != '' }}
+        env:
+          ASKED: ${{ inputs.drgnx_ref }}
+        run: |
+          case "$ASKED" in refs/pull/*|pull/*) echo "::error::drgnx_ref $ASKED is a pull request's, not a branch of drgnx's"; exit 1 ;; esac
+          sha=$(git -C drgnx rev-parse HEAD)
+          git clone -q --bare --no-tags --filter=tree:0 https://github.com/Black-Dragon-Foundation/drgnx.git "$RUNNER_TEMP/drgnx-branches"
+          [ -n "$(git -C "$RUNNER_TEMP/drgnx-branches" branch --contains "$sha" 2>/dev/null)" ] ||
+            { echo "::error::drgnx_ref $ASKED ($sha) is on none of drgnx's branches (a fork's or a pull request's commit)"; exit 1; }
       - uses: ./drgnx/.github/actions/test-image
         with:
           containerfile: Containerfile
@@ -421,6 +511,16 @@ jobs:
           ref: ${{ inputs.drgnx_ref }}
           path: drgnx
           persist-credentials: false
+      - name: drgnx_ref is a commit on one of drgnx's own branches
+        if: ${{ inputs.drgnx_ref != '' }}
+        env:
+          ASKED: ${{ inputs.drgnx_ref }}
+        run: |
+          case "$ASKED" in refs/pull/*|pull/*) echo "::error::drgnx_ref $ASKED is a pull request's, not a branch of drgnx's"; exit 1 ;; esac
+          sha=$(git -C drgnx rev-parse HEAD)
+          git clone -q --bare --no-tags --filter=tree:0 https://github.com/Black-Dragon-Foundation/drgnx.git "$RUNNER_TEMP/drgnx-branches"
+          [ -n "$(git -C "$RUNNER_TEMP/drgnx-branches" branch --contains "$sha" 2>/dev/null)" ] ||
+            { echo "::error::drgnx_ref $ASKED ($sha) is on none of drgnx's branches (a fork's or a pull request's commit)"; exit 1; }
       - id: commit
         run: echo "commit=$(git -C drgnx rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: ripgrep and Rust (Homebrew)

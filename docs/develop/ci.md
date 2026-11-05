@@ -164,12 +164,15 @@ included) and the steps live in one place. Inputs:
 | `selector` | an ERT selector; empty | `DRGNX_TEST_SELECTOR` of the test jobs (not `hub-chaos`, `perf` or `timing`): a narrowed run |
 
 Every job checks drgnx out into `drgnx/` (in Nidhogg's run the workspace is Nidhogg's checkout) and takes the local
-actions from there (`uses: ./drgnx/.github/actions/…`), so they come from the drgnx commit under test:
+actions from there (`uses: ./drgnx/.github/actions/…`), so they come from the drgnx commit under test. A `drgnx_ref`
+is checked right after the checkout, before any of its actions runs: it must be a commit on one of drgnx's own
+branches (only a writer can push one). A pull request's ref (`refs/pull/…`) or a fork's commit, which GitHub also
+serves from this repository, fails the job. The actions save a cache only for drgnx's own run of the workflow's own
+commit (`github.sha`), never for a `drgnx_ref` another repository's run names:
 
 - `build-test-bins`: Ratatoskr with the test hooks, `ratatoskr-mock` and huginn's `dump`, with a cargo cache
-  (`cargo-OS-drgnx-test-bins-TOOLCHAIN-HASH`, [What is cached](#what-is-cached)) saved by a push or manual run of `main`,
-  `nidhogg-31` (when Nidhogg's run calls `drgnx-tiers.yml`; `github.ref` in a called workflow is the caller's) or a
-  `ci/*` branch, never by a pull request. `bins-linux` runs it once, for `unit`, `no-lisp-writes`, `hub-chaos`, `ui` and `perf` (whose agent workloads start a hub with
+  (`cargo-OS-drgnx-test-bins-TOOLCHAIN-HASH`, [What is cached](#what-is-cached)) saved by a push or manual run of `main`
+  or a `ci/*` branch, never by a pull request (Nidhogg's run restores it and never writes). `bins-linux` runs it once, for `unit`, `no-lisp-writes`, `hub-chaos`, `ui` and `perf` (whose agent workloads start a hub with
   `ratatoskr-mock` beside it), and uploads the binaries (`drgnx-test-bins-linux`, kept a day); `macos` runs it itself (one macOS job, so no second macOS runner for it: GitHub's free plan runs 5 at once).
 - `fetch-test-bins`: puts them back under the checkout's `runtime/target/debug` (so `bin/drgnx test --container` sees
   them at `/src`, `ratatoskr-mock` beside Ratatoskr) and sets `DRGNX_RATATOSKR_BIN` and `DRGNX_HUGINN_DUMP`.
@@ -347,8 +350,8 @@ Measured on the runs of 2026-10-19/20 (`gh run view ID --json jobs`): the unit s
 16 min on macOS, a GUI job 1.5–5.5 min, the image pull 18–28 s, `brew install emacs ripgrep` 8 s. Nothing in the unit
 suite downloads: no grammar, no `drgnx sync`. The unit, GUI and terminal jobs use the `test-elpa` action
 (`.github/actions/test-elpa`): `test/container/modal-elpa.sh` fetches the lock's pinned evil, goto-chg, evil-collection
-and kkp, checks each sha256 against `etc/drgnx.lock.eld`, unpacks them into one directory (cached by the lock's hash),
-and the action sets `DRGNX_MODAL_ELPA` and `DRGNX_USER_ELPA` to it. So the evil and real-kkp teardown tests, the modal
+and kkp, checks each sha256 against `etc/drgnx.lock.eld`, unpacks them into one directory (cached by the lock's hash,
+saved only by a push to or the daily run of `main`, on its own commit), and the action sets `DRGNX_MODAL_ELPA` and `DRGNX_USER_ELPA` to it. So the evil and real-kkp teardown tests, the modal
 isolation test and kitty's kkp tests run instead of skipping. So the caches are few:
 
 | What | Key | Saves | Bust it |
