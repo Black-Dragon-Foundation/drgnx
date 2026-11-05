@@ -882,8 +882,12 @@ fn cdp_drive(urls: &[String]) {
     if urls.is_empty() {
         die("usage: cdp-drive URL...");
     }
+    // Playwright MCP writes its page snapshots to an output dir (else to the cwd): a temp one, removed at the end
+    let snaps = std::env::temp_dir().join(format!("ratatoskr-mock-pw-{}", std::process::id()));
     let mut child = std::process::Command::new("node")
         .arg(PW_MCP)
+        .arg("--output-dir")
+        .arg(&snaps)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::inherit())
@@ -946,5 +950,6 @@ fn cdp_drive(urls: &[String]) {
     }
     let _ = child.kill();
     let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&snaps);
     std::process::exit(i32::from(failed));
 }

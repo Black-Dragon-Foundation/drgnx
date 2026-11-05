@@ -824,7 +824,9 @@ excused skips that name the reason.
 | `no-browser-below-abi9` | [OD1](hub.md#the-cdp-broker): a session whose host cannot give it a browser starts without one: a notice with the fix, `browser_why` in `agents/get`, no endpoint variable in the agent's environment. Below ABI 9 the kernel is the reason; on ABI 9 the row's setting names a missing program, so it holds on every kernel |
 | `local-network-access-smoke` | (also `internet`: the gate only, once) Playwright opens `http://example.com/` through the web proxy under Autonomous; whether Chromium's Local Network Access blocked the proxied fetch is in the agent's `drive.out` (a block is a deferred item, not a red) |
 
-CI's sandbox lane (`escape-host` in `runtime.yml`) runs these on its runner: the first and the third run there (bwrap,
+A chat's project cwd is read-only to the session, so the rows' agent writes what they read back (`endpoint.out`,
+`drive*.out`) in its scratch dir, `$TMPDIR/drgnx-scratch-UID/SID` of the hub's `TMPDIR`, and Playwright MCP's
+snapshots go to a temp dir `cdp-drive` removes. CI's sandbox lane (`escape-host` in `runtime.yml`) runs these on its runner: the first and the third run there (bwrap,
 user namespaces, a kernel below ABI 9), the browser rows are excused skips. The Fedora VM runs all four at the gate.
 
 ### The real browser tests

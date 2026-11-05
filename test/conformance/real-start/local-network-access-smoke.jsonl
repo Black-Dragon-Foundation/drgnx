@@ -7,8 +7,8 @@
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/project"}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
-{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "tool:exec ratatoskr-mock cdp-drive http://example.com/ > drive.out 2>&1; echo answered >> drive.out"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "tool:exec cd $ROOT/tmp/drgnx-scratch-$(id -u)/$sid && { ratatoskr-mock cdp-drive http://example.com/ > drive.out 2>&1; echo answered >> drive.out; }"}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
-{"do": "file", "path": "$ROOT/project/drive.out", "contains": "answered", "within_ms": 180000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "cat $ROOT/tmp/drgnx-scratch-*/$sid/drive.out"], "expect_stdout": "answered", "retry_ms": 180000}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/stop", "params": {"id": "$sid"}}}
 {"do": "expect", "conn": "c", "json": {"id": 3, "result": "$any"}, "within_ms": 10000}
