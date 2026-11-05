@@ -95,7 +95,7 @@ Servers: **[Test All]** too).
 Under the rules and project, the page says **Reports to drgnx: yes** or **no**, with a button, **[Add drgnx]** or
 **[Remove drgnx]** (also `R`, or Agent Settings: Report to drgnx in the palette, which is offered on the page). A
 `drgnx` server that is switched off shows **no (disabled)**. An agent that runs outside drgnx, in a terminal or
-another editor, shows in the Work cockpit ([cockpit.md](cockpit.md)) only when it has drgnx's coordination server.
+another editor, shows in the Work space ([work-space.md](work-space.md)) only when it has drgnx's coordination server.
 The button adds an MCP server called `drgnx` to the agent's **user** settings: `<data>/bin/ratatoskr mcp-bridge --outside --kind KIND`, the
 same tools drgnx's own agents are given (an existing entry that runs `bin/drgnx coord mcp` is left as it is). It asks first and names the file. Nothing is written without it, and
 opening the page never writes.

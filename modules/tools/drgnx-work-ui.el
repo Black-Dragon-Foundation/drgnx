@@ -473,13 +473,11 @@ window (viewBox) on the same drawing, so lines cross from one band into the next
       (drgnx-work-ui--graph-open box)
     (message "Work: click a box to open it")))
 
-(declare-function drgnx-cockpit-graph-show "drgnx-cockpit")
 (defun drgnx-work-ui-show-graph ()
-  "Show the Work graph: the Work cockpit's (specs, plans, tasks, agents, jobs, reviews) when module tools/cockpit
-runs, else specs, plans and branches (`drgnx-work-ui-graph')."
+  "Show the Work graph: specs, plans and branches (`drgnx-work-ui-graph').  The Work space's map replaced the cockpit's
+graph of agents, jobs and reviews."
   (interactive)
-  (if (and (fboundp 'drgnx-cockpit-graph-show) (drgnx-module-running-p 'tools/cockpit)) (drgnx-cockpit-graph-show)
-    (drgnx-work-ui-graph)))
+  (drgnx-work-ui-graph))
 
 (defun drgnx-work-ui-graph ()
   "Show specs, plans and branches as a graph (svg.el): click a box to open it, g to draw it again.
@@ -533,9 +531,9 @@ Returns the buffer."
 ;;;; The module
 
 ;; The Work tab (the right dock's tree, its commands `work-view' and `work-open' and the fold, scan and filter keys)
-;; retired when the Work space's map arrived (module tools/work-space owns those ids).  What stays is what the Work
-;; cockpit's graph (tools/cockpit, which requires this module until it retires) still uses: the graph command, the
-;; agent-turn commit recording and the file's helper functions.
+;; retired when the Work space's map arrived (module tools/work-space owns those ids), and the cockpit's graph with the
+;; cockpit.  What stays is the graph command (specs, plans and branches), the agent-turn commit recording and the
+;; file's helper functions.
 (drgnx-module-define 'tools/work
                      :doc "Work: the Work graph command and the commit recording for an agent started on a task (the Work tab retired: see tools/work-space)."
                      :stage 'startup :requires '(core/workbench)

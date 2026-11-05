@@ -30,7 +30,6 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | agent-typing | typing while an agent streams a reply into the Agents tab: a `ratatoskr-mock acp` in a Ratatoskr hub, the editor's session a mirror of the hub's (see "The agent workloads" below); the turn takes three seconds (checked: its `stop` entry is not in the mirror yet at the end) | input latency |
 | transcript-replay | the typing workload's six strings while the editor's other window shows a transcript fed from a recording by a timer at the recorded pace (no agent; checked: chunks arrived while typing); runs in the container | input latency |
 | agent-stream | the typing workload's six strings while the editor's other window shows a transcript whose running answer starts 400 kB long (not done) and the hub's mock streams 100-character chunks onto it, 50 a second, for thirty seconds (checked: still streaming at the end): a chunk costs the chunk, and only the new text is drawn | input latency |
-| cockpit-cards | typing while the Work cockpit is filtered to a job (Show Job in Work: the graph, and What needs you with four cards, three tasks and their agents; twenty decisions) and three hub mock agents stream, the panes following the hub's events (checked: still streaming at the end); until M12f `job-window`, the job's own frame | input latency |
 | code-scrolling | `<next>`×30 then `<prior>`×30 through the 12k-line fixture with sticky scroll and indent guides (when installed) on — smooth scrolling is on but pixel scrolling is a wheel's, not `<next>`'s | input latency |
 | diff-scrolling | `<next>`×30 then `<prior>`×30 through a 10k-line diff in the split layout | input latency |
 | typing-with-ghost | the typing workload with ghost text on: a mock model answers every pause at once, the pause shortened to 10 ms so each key asks and the next cancels (checked: it asked) | input latency |
@@ -51,15 +50,14 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | startup | a drgnx daemon (isolated: its own HOME and drgnx dirs, the harness's environment allowlist) until its server answers (a daemon that never answers fails), 4 starts, the first dropped | server-ready time, modules' time |
 | memory | after the workloads and a GC | RSS |
 
-**The agent workloads** (`agent-typing`, `agent-stream`, `cockpit-cards`) run a Ratatoskr hub in the session, as the
+**The agent workloads** (`agent-typing`, `agent-stream`) run a Ratatoskr hub in the session, as the
 user's editor does: `$DRGNX_RATATOSKR_BIN` (a build with the `test-hooks` feature, `ratatoskr-mock` in the same folder;
 without it the workloads fail and say so) is started with a settings file of its own whose profile `mock` is
 `ratatoskr-mock acp --as claude --script FILE`. The script's n-th line is the program of the n-th prompt (`say TEXT`,
 `silent SECONDS`: docs/develop/runtime.md), so a turn is the same whatever the prompt says. The session holds
 mirrors (`drgnx-agents-mirror-start`). The hub tells of a session's state at most every 50 ms, so a short turn can go
 by with no `busy` status: the workloads count the `stop` entries of the transcript to know that a turn has ended (the
-check "typed while it streamed" is a turn that has not ended), never the status. `cockpit-cards` stubs only the job's
-summary (`job/status`); the agents, their events and the panes' reaction to them are the hub's.
+check "typed while it streamed" is a turn that has not ended), never the status. The agents and their events are the hub's.
 
 **Input latency** is a command's start until the screen shows it: a 0 s timer set after the command redisplays
 before it reads the clock (timers can run before the command loop's own redisplay, which would leave fontification
@@ -77,7 +75,7 @@ three numbers are recorded for each of the commands of a workload:
 
 Each is `(:n :p50 :p90 :p95 :p99 :max :mean)` (nearest rank); **`:p95` and `:p99` are null below n = 100**: the tail of
 fewer samples is the maximum or next to it. A run also has `:rows`, the growth of the sum of the row counters
-(`drgnx-perf-row-counters`: the Explorer's and the Buffers panel's renders, the cockpit's draws), `:gc_count`, `:gc_ms`
+(`drgnx-perf-row-counters`: the Explorer's and the Buffers panel's renders), `:gc_count`, `:gc_ms`
 and `:gc_pause`. A perf session runs at drgnx's GC settings, as a user's does (HARNESS-GC-1): the run stops with an error
 when its `gc-cons-threshold` is not `drgnx-gc-cons-threshold`.
 

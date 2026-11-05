@@ -1238,16 +1238,10 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   them and belong to `:core`: `ai-load-keys` (once per daemon, after `drgnx open`), `ai-first-window` (the idle look at
   the local AI runner) and a finished check's 0.1 s `(agent-check-finish . PROC)`, whose process is already dead. The status bar's debounced refresh is a fourth, `statusbar-refresh`, cancelled when the bar's mode turns off."
 
-The Work cockpit's panes start their checks on the workbench state store's `pane-shown` and cancel them on
-`pane-hidden` (lane `now`), so a hidden pane keeps no timer: the Work graph's `(cockpit-check . BUFFER)`, owned by its
-buffer, every `drgnx-cockpit-check-interval` (it also hears `windows-changed`, lane `idle`, since it can show in any
-window); an agent's edits pane's `(cockpit-edits-check . BUFFER)` (with its one-shots `-tick`, `-turn` and `-flush`,
-and its file watches, all dropped when it is hidden; it also hears `windows-changed`, lane `idle`, since its buffers
-swap in one window); a feed buffer's `(cockpit-feed-check . BUFFER)` (also on
-`windows-changed`). What needs you and the decision log share `cockpit-cards-refresh` and `cockpit-cards-retry`
-(`:core`), cancelled when neither shows. Their draws are their views' timers. `tools/cockpit` owns `cockpit-waiting`
-(its setup's: the status bar's count of what waits on you, every `drgnx-cockpit-check-interval`); its `:teardown`
-kills the cockpit's buffers, so turning it off leaves no timer.
+The Work space's views keep no timer of their own while hidden: a map tells the hub it is hidden and gets nothing
+(`work/map/set {shown: false}`), the Board, the Timeline and the trail ask the hub only on events, through
+`drgnx-timer-soon` keys owned by their buffers (`(work-board . VIEW)`, `(work-timeline . LANE)`,
+`(work-trail-conclusions . NAME)`), and the module's `:teardown` kills the buffers.
 
 The Explorer's three timers are owned by its buffer, so killing it ends them (and with no Explorer none starts):
 `explorer-file-events` (`drgnx-timer-soon`, a wall timer `drgnx-explorer-event-delay` after a burst's first file event;
@@ -1799,19 +1793,10 @@ work. Without VIEW it sums every live view (`:max-slice-rows`: the largest).
   Folding, the filter and a scan's sentinel only touch the view; point and window start stay on their row.
   `drgnx-work-ui-buffer` draws a new buffer at once and only marks an existing one.
 
-- **The Work graph** (`work-graph`, `modules/tools/drgnx-cockpit.el`; DELAY `drgnx-cockpit-redraw-delay`, `equal`
-  keys): hub events, agent sessions, scans and themes only touch the view; SYNC compares a cheap key before it builds
-  the model. Outline rows are the lines keyed by node, `(:node ID N)`; the drawing's rows are its head lines and its
-  bands of image slices, `(:head N)` and `(:band N)`. Each row's signature is a generation that moves only when its
-  text changed (`drgnx-cockpit-row-cell`). A drawing whose boxes did not move changes band images in place and marks
-  nothing. Its check timer runs only while its pane shows (the store's `pane-shown` and `pane-hidden`).
-  [cockpit.md](cockpit.md#redraws) has the rest.
-
-- **The cockpit's feed and parts** (`modules/tools/drgnx-cockpit-feed.el`, `-cards.el`): What happened
-  (`cockpit-happened`: `:head`, a row per event line, `:footer`), the timeline (`cockpit-timeline`: `:head`, a row per
-  agent's chips) and What needs you and the decision log (`cockpit-cards`, DELAY 0: a row per part of the hub's answer,
-  kept while what it shows of it is the same). Events touch the feed's views; a hub answer marks the parts'. A new
-  event draws one row in each feed pane. [cockpit.md](cockpit.md) has the rest.
+- **The Work space's views** (`work-map`, `work-detail`, `work-board`, `work-timeline`, `work-trail`, `work-review`,
+  `modules/tools/drgnx-work-*.el`): the map's rows are the layout's, the Board's are cards across columns, the trail's
+  follow the tail and take older steps with `drgnx-view-insert`; [work-space.md](work-space.md) has the rest. (The
+  cockpit's Work graph and feed views are gone.)
 
 ### The invariant
 
@@ -2888,11 +2873,9 @@ inside `drgnx-automatic`) keyed `(EVENT . FN)`, text `"EVENT FN: message"`, and 
 (newest first, at most 20; kept one release for its tests), never raised.
 Subscribers of one event run in subscription order.
 
-The Work cockpit's panes are such consumers ([cockpit.md](cockpit.md)): `pane-shown` and `pane-hidden` on `now` start
-and cancel each pane's check (and an agent's edits' file watches), so a hidden pane keeps no timer; `pane-resized` on
-`idle` re-fits the graph and the feed. A kind whose buffers swap in one window (an agent's edits, What happened) hears
-`windows-changed` too: one buffer replacing another in a pane's window is no pane event. Whether a buffer shows is
-`drgnx-cockpit-shown-p`: a window the store recorded on a visible frame shows it.
+The Work space's map is such a consumer ([work-space.md](work-space.md)): `windows-changed` tells the hub which maps
+a window shows (`drgnx-work-space-sync-shown`), so a hidden map draws nothing and gets no deltas. Whether a buffer
+shows is `drgnx-view-shown-p`: a window the store recorded on a visible frame shows it.
 
 **The fixture** (`test/fixtures/state-fixture.el`): `(drgnx-test-with-state BODY…)` runs BODY with a fresh store
 and bus and the store's hooks off. It saves every bound variable listed in `drgnx-state-test--variables` (the

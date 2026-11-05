@@ -66,7 +66,7 @@ Returns the names of the modules ENTRIES stand for."
               (unless (or (null file) (member file loaded))
                 (push file loaded)
                 (load (file-name-sans-extension file) nil t)))
-            ;; also when another file's `require' defined it already (tools/cockpit loads tools/work's file)
+            ;; also when another file's `require' defined it already
             (dolist (r (plist-get (alist-get entry drgnx-modules--table) :requires)) (push r todo))))))
     (nreverse names)))
 

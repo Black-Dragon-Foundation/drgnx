@@ -13,9 +13,6 @@
  (explorer (:input :p95) 16) (explorer (:input :max) 50)
  (agent-typing (:input :p95) 16) (agent-typing (:input :max) 50)
  (agent-stream (:input :p95) 16) (agent-stream (:input :max) 50)
- ;; cockpit-cards: PROVISIONAL — the job-window rows renamed (M12f, the job window is the cockpit's), measured on a
- ;; busy machine; part C's close (C12) confirms them
- (cockpit-cards (:input :p95) 16) (cockpit-cards (:input :max) 50)
  (code-scrolling (:input :p95) 16) (code-scrolling (:input :max) 50)
  (typing-with-ghost (:input :p95) 16) (typing-with-ghost (:input :max) 50)
  (diff-scrolling (:input :p95) 16) (diff-scrolling (:input :max) 50)
@@ -102,7 +99,6 @@
  (explorer (:stalls) 0) (explorer (:gc :max) 250) (explorer (:gc :p95) 50)
  (agent-typing (:stalls) 0) (agent-typing (:gc :max) 250) (agent-typing (:gc :p95) 50)
  (agent-stream (:stalls) 0) (agent-stream (:gc :max) 250) (agent-stream (:gc :p95) 50)
- (cockpit-cards (:stalls) 0) (cockpit-cards (:gc :max) 250) (cockpit-cards (:gc :p95) 50)
  (code-scrolling (:stalls) 0) (code-scrolling (:gc :max) 250) (code-scrolling (:gc :p95) 50)
  (typing-with-ghost (:stalls) 0) (typing-with-ghost (:gc :max) 250) (typing-with-ghost (:gc :p95) 50)
  (diff-scrolling (:stalls) 0) (diff-scrolling (:gc :max) 250) (diff-scrolling (:gc :p95) 50)
