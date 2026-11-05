@@ -501,5 +501,19 @@
       (let ((inhibit-message t)) (drgnx-trust-folder drgnx-stt--proj))
       (should-not (drgnx-doctor--dir-locals-trusted-check (drgnx-doctor--dir-locals-trusted))))))
 
+(ert-deftest drgnx-settings-trust/a-missing-trusted-folders-file-is-read-once ()
+  ;; most people have none; every file open asks for its data several times
+  (drgnx-test-with-config
+    (let ((drgnx-settings-trust--data nil) (reads 0) (orig (symbol-function 'drgnx-file-read)))
+      (should-not (file-exists-p (drgnx-trust-folders-file)))
+      (cl-letf (((symbol-function 'drgnx-file-read)
+                 (lambda (&rest args) (cl-incf reads) (apply orig args))))
+        (dotimes (_ 5) (should-not (drgnx-settings-trust--state-data)))
+        (should (= reads 1))
+        (make-directory (file-name-directory (drgnx-trust-folders-file)) t)
+        (with-temp-file (drgnx-trust-folders-file) (insert "(:version 1 :folders nil)\n"))
+        (drgnx-settings-trust--state-data)
+        (should (= reads 2))))))
+
 (provide 'settings-trust-test)
 ;;; settings-trust-test.el ends here

@@ -24,6 +24,14 @@
  (replace-retype (:input :p95) 16) (replace-retype (:input :max) 50) (replace-retype (:slice_ms :max) 6)
  (live-view (:input :p95) 16) (live-view (:input :max) 50)
  (agent-settings-open (:draw_ms) 150) (agent-settings-open (:processes) 0)
+ ;; the unified settings layer (design 16): read+apply of a 200-entry settings.el 2 ms; the page open 100 ms and a search
+ ;; keystroke (worst of the typed name) 16 ms over 5,000 settings; provenance 5 % of a 500-line config.el's load; the
+ ;; index of 200 packages 2 s; a file open with the workspace and language layers in against out, per open
+ (settings-start (:read_ms) 2)
+ (settings-page (:open_ms) 100) (settings-page (:key_max_ms) 16)
+ (settings-prov (:prov_pct) 5)
+ (settings-sync (:index_ms) 2000)
+ (settings-open (:delta_ms) 1)
  (remote-typing (:input :p95) 16) (remote-typing (:input :max) 50)
  (window-switch (:input :p95) 16) (window-switch (:input :max) 50)
  (redisplay (:redisplay :p95) 16)

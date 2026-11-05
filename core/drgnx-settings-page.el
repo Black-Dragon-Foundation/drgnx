@@ -132,6 +132,12 @@ package or a built-in group, `workspace' lists what waits for trust or review."
 
 (defun drgnx-settings-page-vars (group root)
   "The variables GROUP lists (a symbol, or a cons (area . ID), (package . G), (emacs . G)), sorted by name."
+  (if (eq group 'all)
+      (copy-sequence (drgnx-settings-page--all-vars))   ; already sorted, once each, symbols
+    (drgnx-settings-page--vars-1 group root)))
+
+(defun drgnx-settings-page--vars-1 (group root)
+  "`drgnx-settings-page-vars' of a GROUP that is not `all'."
   (let ((vars
          (pcase group
            (`(area . ,id) (cl-remove-if-not (lambda (v) (eq (drgnx-settings-page--area-of v) id))
@@ -330,21 +336,60 @@ package or a built-in group, `workspace' lists what waits for trust or review."
                            (drgnx-settings-page--entry var 'user root t))))
       (_ nil))))
 
+(defvar drgnx-settings-page--hay (make-hash-table :test 'eq)
+  "Variable -> the lower-case text of its name, title and documentation, which a search looks in first.  Emptied when
+the variables are read again (`drgnx-settings-page-refresh' without KEEP); at most one entry per customizable variable.")
+
+(defun drgnx-settings-page--static-hay (var)
+  "The lower-case text of VAR's name, title and documentation (kept in `drgnx-settings-page--hay')."
+  (or (gethash var drgnx-settings-page--hay)
+      (puthash var (downcase (string-join (list (symbol-name var) (drgnx-settings-page--title var)
+                                                (or (ignore-errors (documentation-property var 'variable-documentation t)) ""))
+                                          " "))
+               drgnx-settings-page--hay)))
+
 (defun drgnx-settings-page--text-match-p (var terms)
-  "Whether every one of TERMS is in VAR's name, title, documentation or value."
+  "Whether every one of TERMS is in VAR's name, title, documentation or value.  The value is only looked at for a
+term the rest of the text does not hold."
   (or (null terms)
-      (let ((hay (downcase (string-join (list (symbol-name var) (drgnx-settings-page--title var)
-                                              (or (ignore-errors (documentation-property var 'variable-documentation t)) "")
-                                              (if (default-boundp var) (drgnx-settings-page--value-text (default-value var)) ""))
-                                        " "))))
-        (cl-every (lambda (term) (string-search term hay)) terms))))
+      (let ((hay (drgnx-settings-page--static-hay var)) (value nil) (ok t))
+        (while (and ok terms)                 ; a loop, not a closure: this runs for every setting on a keystroke
+          (let ((term (car terms)))
+            (unless (or (string-search term hay)
+                        (string-search term (or value (setq value (drgnx-settings-page--value-hay var)))))
+              (setq ok nil)))
+          (setq terms (cdr terms)))
+        ok)))
+
+(defvar drgnx-settings-page--value-hay (make-hash-table :test 'eq)
+  "Variable -> (VALUE . TEXT): the lower-case text of VALUE, the default value last seen, kept while the value is the
+same object.  Emptied with `drgnx-settings-page--hay'.")
+
+(defun drgnx-settings-page--value-hay (var)
+  "The lower-case text of VAR's default value (\"\" when it has none), printed again only when the value changed."
+  (let ((value (and (default-boundp var) (default-value var))) (hit (gethash var drgnx-settings-page--value-hay)))
+    (if (and hit (eq (car hit) value))
+        (cdr hit)
+      (cdr (puthash var (cons value (downcase (if (default-boundp var) (drgnx-settings-page--value-text value) "")))
+                    drgnx-settings-page--value-hay)))))
+
+(defvar-local drgnx-settings-page--prior nil
+  "(QUERY . VARIABLES) of the last search of this page that had words and no filter; a longer query starts from them.
+Cleared when the variables are read again.")
 
 (defun drgnx-settings-page-select (group query tab root &optional buffer)
   "The variables to list: GROUP's (or, with a QUERY, all customizable ones) that match QUERY, sorted by name.
 TAB is the explicit tab (nil: each row's default).  Cheap text terms first, then the filters."
   (let* ((q (drgnx-settings-page-parse-query query))
-         (vars (drgnx-settings-page-vars (if (and (or (car q) (cdr q)) t) 'all group) root))
+         (in-page (derived-mode-p 'drgnx-settings-page-mode))
+         ;; typing on: a query that continues the last one (words only) can only keep some of what it found
+         (words-only (and (car q) (null (cdr q)) (not (string-search "@" query))))
+         (prior (and in-page words-only drgnx-settings-page--prior
+                     (string-prefix-p (car drgnx-settings-page--prior) query)
+                     (cdr drgnx-settings-page--prior)))
+         (vars (or prior (drgnx-settings-page-vars (if (and (or (car q) (cdr q)) t) 'all group) root)))
          (vars (cl-remove-if-not (lambda (v) (drgnx-settings-page--text-match-p v (car q))) vars)))
+    (when in-page (setq drgnx-settings-page--prior (and words-only (cons query vars))))
     (if (null (cdr q)) vars
       (cl-remove-if-not
        (lambda (v)
@@ -574,12 +619,17 @@ Ends with a blank line."
       (insert new)
       (delete-region (+ (point-min) (length new)) (+ old-end (length new))))))
 
-(defun drgnx-settings-page-refresh ()
-  "Read the files and the variables again and redraw: the header and the rows (the visible ones first)."
+(defun drgnx-settings-page-refresh (&optional keep)
+  "Read the files and the variables again and redraw: the header and the rows (the visible ones first).
+With KEEP (a search typing on), the list of variables and their search text are kept."
   (interactive)
   (when (derived-mode-p 'drgnx-settings-page-mode)
     (clrhash drgnx-settings-page--docs)
-    (setq drgnx-settings-page--all nil)
+    (unless keep
+      (clrhash drgnx-settings-page--hay)
+      (clrhash drgnx-settings-page--value-hay)
+      (setq drgnx-settings-page--prior nil)
+      (setq drgnx-settings-page--all nil))
     (setq drgnx-settings-page--rows (make-hash-table :test 'eq))
     (setq drgnx-settings-page--keys
           (condition-case err
@@ -724,7 +774,7 @@ ID it undoes the setting of the row at point; elsewhere it asks which of the rec
   (interactive (list (read-string "Search settings (@modified @overridden @source:… @package:… @runtime @needs-trust @needs-review @lang:…): "
                                   drgnx-settings-page--query)))
   (setq drgnx-settings-page--query query)
-  (drgnx-settings-page-refresh))
+  (drgnx-settings-page-refresh t))
 
 (defun drgnx-settings-page-reset-at-point ()
   "Settings: reset the setting of this row: remove this scope's entry from the tab's file."
