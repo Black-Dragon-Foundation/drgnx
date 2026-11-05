@@ -13,6 +13,9 @@
 ;;; Code:
 (require 'drgnx-ui)
 
+(declare-function drgnx-perf-run-workload "drgnx-perf-run")
+(declare-function drgnx-perf-run--workloads "drgnx-perf-run")
+
 (defconst drgnx-ui-mcp-protocol "2025-06-18")
 
 (defun drgnx-ui-mcp--schema (props &optional required)

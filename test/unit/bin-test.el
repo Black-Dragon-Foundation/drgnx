@@ -1798,3 +1798,21 @@ when that is non-nil; return (EXIT OUTPUT INSTALLED-DIRECTORY-NAMES)."
     (should-not (eql exit 0))
     (should (string-match-p "tree" output))
     (should-not dirs)))
+
+;; bash's SECONDS counts whole seconds, and the one it is in can be nearly over: a wait that ends on `SECONDS < deadline'
+;; (or on `SECONDS - start >= N') gives up as early as N - 1 s after it began.  The waits end on `<=' / `>' instead.
+(defun drgnx-bin-test--early-waits (text)
+  "The lines of the script TEXT that end a wait on whole seconds too early (strict `<' on a deadline, `>=' on an elapsed count)."
+  (seq-filter (lambda (line)
+                (string-match-p "((SECONDS *<[^=]\\|((SECONDS - [$A-Za-z_]+ *>=" line))
+              (split-string text "\n")))
+
+(ert-deftest drgnx-bin/no-wait-ends-early-on-whole-second-seconds ()
+  ;; the check bites on the two shapes, and spares the right ones
+  (should (drgnx-bin-test--early-waits "  while ((SECONDS < deadline)); do"))
+  (should (drgnx-bin-test--early-waits "  if ((SECONDS - started >= maxwait)); then"))
+  (should-not (drgnx-bin-test--early-waits "  while ((SECONDS <= deadline)); do\n  if ((SECONDS - started > maxwait)); then"))
+  (dolist (file '("bin/drgnx" "install.sh"))
+    (with-temp-buffer
+      (insert-file-contents (expand-file-name file drgnx-bin-test--root))
+      (should (equal (drgnx-bin-test--early-waits (buffer-string)) nil)))))

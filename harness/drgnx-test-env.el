@@ -80,8 +80,9 @@ HOME, other than `drgnx-test-env-scan-exempt'."
   "The environment of a TIER test run whose private directory is RUN: a list for `process-environment'.
 Entries \"K=V\" set, a bare \"K\" unsets.  TIER is one of `drgnx-test-env-tiers'.  Every tier: HOME, the XDG
 directories, DRGNX_CONFIG_DIR, DRGNX_DATA_DIR and TMPDIR under RUN, a private XDG_RUNTIME_DIR (RUN/run), a dead
-session bus, no provider key, DRGNX_TEST_ISOLATED, no durable hub, DRGNX_EMACS naming this Emacs.  The desktop variables are unset, except in a GUI
-tier, which gets DISPLAY, the \"K=V\" strings of the harness compositor's display.  CONFIG: an external configuration
+session bus, no provider key, DRGNX_TEST_ISOLATED, no durable hub, DRGNX_EMACS naming this Emacs.  The desktop
+variables are unset, except in a GUI tier, which gets DISPLAY, the \"K=V\" strings of the harness compositor's
+display.  CONFIG: an external configuration
 directory whose code directories (`drgnx-test-env-config-links') are linked into RUN/config.
 Also unset: `drgnx-test-env-ambient-variables' (SSH agent, X authority, git configuration, agent sockets …) and any
 other variable of the caller holding a path under the real HOME (`drgnx-test-env--under-home'); GNUPGHOME is RUN/gnupg."

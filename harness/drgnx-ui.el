@@ -15,7 +15,17 @@
 (require 'json)
 (require 'subr-x)
 (require 'drgnx-env)
-(require 'drgnx-test-env (expand-file-name "drgnx-test-env" (file-name-directory (or load-file-name buffer-file-name))))
+(require 'drgnx-test-env (expand-file-name "drgnx-test-env" (file-name-directory (or load-file-name buffer-file-name
+                                                                                     byte-compile-current-file))))
+
+(defvar drgnx-ui--batch-totals)
+(declare-function drgnx-ui-mcp-main "drgnx-ui-mcp")
+(declare-function drgnx-perf-day "drgnx-perf-run")
+(declare-function drgnx-perf-soak "drgnx-perf-run")
+(declare-function drgnx-perf-run "drgnx-perf-run")
+(declare-function drgnx-perf-ab-env "drgnx-perf-run")
+(declare-function drgnx-perf-ab "drgnx-perf-run")
+(declare-function drgnx-bench-run "drgnx-bench")
 
 (defconst drgnx-ui-harness-dir (file-name-directory (or load-file-name buffer-file-name)))
 (defconst drgnx-ui-repo-dir (file-name-directory (directory-file-name drgnx-ui-harness-dir)))
@@ -149,9 +159,12 @@ EXIT is the symbol `timeout' when the process had to be killed."
 (declare-function drgnx-paths-recorded-emacs "drgnx-paths")
 (declare-function drgnx-emacs-program "drgnx-paths")
 (declare-function drgnx-run-ert--printable "run-ert")
+(declare-function drgnx-run-ert-trampolines "run-ert")
+(declare-function drgnx-run-ert-trampolines-stayed-p "run-ert")
 
 (defun drgnx-ui-emacs-bin ()
-  "The Emacs sessions run: $DRGNX_EMACS, else the one install.sh recorded, else Nidhogg, a pgtk Emacs, else the Emacs that is running (`drgnx-emacs-program'; never a bare \"emacs\")."
+  "The Emacs sessions run: $DRGNX_EMACS, else the one install.sh recorded, else Nidhogg, a pgtk Emacs,
+else the Emacs that is running (`drgnx-emacs-program'; never a bare \"emacs\")."
   (or (getenv "DRGNX_EMACS")
       (progn   ; by file: `bin/drgnx ui-launcher' loads this with the harness alone on `load-path'
         (require 'drgnx-paths (expand-file-name "core/drgnx-paths" drgnx-ui-repo-dir))
@@ -1794,8 +1807,13 @@ With a selector a half may select no test (the selector names tests of the other
          (selector (let ((s (getenv "DRGNX_TEST_SELECTOR"))) (and s (not (string-empty-p s)))))
          (process-environment (if selector (cons "DRGNX_TEST_EMPTY_OK=1" process-environment) process-environment))
          (drgnx-ui--batch-totals (cons nil nil))
+         ;; the controller runs as the user: neither half may leave a trampoline in the user's eln-cache
+         (_ (require 'drgnx-run-ert (expand-file-name "run-ert.el" drgnx-ui-harness-dir)))
+         (user-eln (expand-file-name "eln-cache/" user-emacs-directory))
+         (user-eln-before (drgnx-run-ert-trampolines user-eln))
          (ok (eq 0 (drgnx-ui-run-ui-session-tests))))
     (setq ok (and (drgnx-ui-run-live-tests) ok))
+    (setq ok (and (drgnx-run-ert-trampolines-stayed-p user-eln-before user-eln) ok))
     (when (and ok selector (eql 0 (car drgnx-ui--batch-totals)) (eql 0 (cdr drgnx-ui--batch-totals)))
       (princ "ui tier: the selector matched no test in either half\n")
       (setq ok nil))

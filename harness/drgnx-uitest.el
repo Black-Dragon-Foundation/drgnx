@@ -13,6 +13,13 @@
 (require 'cl-lib)
 (require 'drgnx-jank-guard)
 
+(defvar drgnx-uitest-record--last-change)
+(defvar drgnx-uitest-record--t0)
+(declare-function ert-skip "ert" (data))
+(declare-function ert-fail "ert" (data))
+(declare-function x-export-frames "xfns.c" (&optional frames type))
+(declare-function glitnir-snapshot "glitnir")
+
 (defvar drgnx-uitest-session-id nil
   "This session's id (DRGNX_UI_NAME, set by harness/init/prelude.el): `drgnx-uitest-api-as' runs only for it.")
 
@@ -237,7 +244,8 @@ the drag was asked for between two different pixels."
 
 (defun drgnx-uitest--pointer-advice (orig &rest args)
   "`mouse-absolute-pixel-position' while queued mouse events are delivered: their position, not the real pointer's.
-`mouse-drag-line' (a divider, a mode line) measures a drag by the pointer's position, which a synthesized event does not move."
+`mouse-drag-line' (a divider, a mode line) measures a drag by the pointer's position, which a synthesized event
+does not move."
   (or drgnx-uitest--pointer (apply orig args)))
 
 (advice-add 'mouse-absolute-pixel-position :around #'drgnx-uitest--pointer-advice)

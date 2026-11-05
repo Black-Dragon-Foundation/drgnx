@@ -423,7 +423,7 @@ active (`drgnx-statusbar-test--epochs')."
         (deactivate-mark)))
     ;; the hook and the subscriptions are there while the mode is on, and gone when it is off
     (cl-letf (((symbol-function 'drgnx-chrome-apply) #'ignore) ((symbol-function 'force-mode-line-update) #'ignore))
-      (let ((drgnx-signal--subscribers nil))
+      (drgnx-test-with-state
         (unwind-protect
             (progn (drgnx-statusbar-mode 1)
                    (should (memq #'drgnx-statusbar--post-command post-command-hook))
@@ -474,21 +474,22 @@ active (`drgnx-statusbar-test--epochs')."
   (let ((src (with-temp-buffer
                (insert-file-contents (expand-file-name "modules/ui/drgnx-statusbar.el" drgnx-dir))
                (buffer-string)))
-        (posted nil) (drgnx-statusbar--last (make-vector 4 nil)) (drgnx-signal--subscribers nil))
+        (posted nil) (drgnx-statusbar--last (make-vector 4 nil)))
     (should-not (string-match-p "statusbar-window-changed" src))
     (should-not (string-match-p "drgnx-signal-post" src))
-    (cl-letf (((symbol-function 'drgnx-signal-post) (lambda (e) (push e posted)))
-              ((symbol-function 'force-mode-line-update) #'ignore)
-              ((symbol-function 'drgnx-chrome-apply) #'ignore))
-      (let ((other (split-window-right)))
+    (drgnx-test-with-state
+      (cl-letf (((symbol-function 'drgnx-signal-post) (lambda (e) (push e posted)))
+                ((symbol-function 'force-mode-line-update) #'ignore)
+                ((symbol-function 'drgnx-chrome-apply) #'ignore))
+        (let ((other (split-window-right)))
+          (unwind-protect
+              (progn (drgnx-statusbar--post-command)
+                     (with-selected-window other (drgnx-statusbar--post-command)))
+            (delete-window other)))
         (unwind-protect
-            (progn (drgnx-statusbar--post-command)
-                   (with-selected-window other (drgnx-statusbar--post-command)))
-          (delete-window other)))
-      (unwind-protect
-          (progn (drgnx-statusbar-mode 1)
-                 (should-not (alist-get 'statusbar-window-changed drgnx-signal--subscribers)))
-        (drgnx-statusbar-mode -1)))
+            (progn (drgnx-statusbar-mode 1)
+                   (should-not (alist-get 'statusbar-window-changed drgnx-signal--subscribers)))
+          (drgnx-statusbar-mode -1))))
     (should-not posted)))
 
 (ert-deftest drgnx-statusbar/now-subscriber-is-cheap ()
@@ -1439,8 +1440,7 @@ own cache), evil's state tag, other entries of `mode-line-misc-info'; each chang
 
 (ert-deftest drgnx-statusbar/hooks-and-timers-are-owned-by-the-mode ()
   (let ((drgnx-chrome-editor-mode-line drgnx-chrome-editor-mode-line)
-        (drgnx-signal--subscribers nil)
-        (was drgnx-statusbar-mode)                       ; the process's other tests keep what they had
+        (was drgnx-statusbar-mode)                     ; the process's other tests keep what they had
         (hooks '((post-command-hook . drgnx-statusbar--post-command)
                  (drgnx-hub-event-functions . drgnx-statusbar--hub-tests)
                  (drgnx-git-changed-functions . drgnx-statusbar--git-changed)
@@ -1885,21 +1885,22 @@ makes the next redisplay build the bar again."
   (drgnx-statusbar-test--slow-case
     (setq global-mode-string nil)
     (let ((file (expand-file-name "statusbar-slow.eld" (drgnx-state-dir)))
-          (was drgnx-statusbar-mode) (drgnx-signal--subscribers nil)
+          (was drgnx-statusbar-mode)
           (drgnx-chrome-editor-mode-line drgnx-chrome-editor-mode-line))
       (drgnx-file-write file '((:entry "(:eval (gone))" :avg-ms 3.0 :since 1.0)) :fsync nil)
       (should (eq 'warn (car (drgnx-doctor-check 'statusbar-misc (list :statusbar-slow (drgnx-statusbar-test--report))))))
-      (cl-letf (((symbol-function 'drgnx-chrome-apply) #'ignore))
-        (unwind-protect
-            (progn
-              (drgnx-statusbar-mode 1)
-              (should (drgnx-statusbar-test--report))                   ; not written by the mode itself
-              (drgnx-test-advance 1)
-              (should (file-exists-p file))
-              (should-not (drgnx-statusbar-test--report))               ; the current set: none
-              (should (eq 'ok (car (drgnx-doctor-check 'statusbar-misc
-                                                       (list :statusbar-slow (drgnx-statusbar-test--report)))))))
-          (drgnx-statusbar-mode (if was 1 -1)))))))
+      (drgnx-test-with-state
+        (cl-letf (((symbol-function 'drgnx-chrome-apply) #'ignore))
+          (unwind-protect
+              (progn
+                (drgnx-statusbar-mode 1)
+                (should (drgnx-statusbar-test--report))                   ; not written by the mode itself
+                (drgnx-test-advance 1)
+                (should (file-exists-p file))
+                (should-not (drgnx-statusbar-test--report))               ; the current set: none
+                (should (eq 'ok (car (drgnx-doctor-check 'statusbar-misc
+                                                         (list :statusbar-slow (drgnx-statusbar-test--report)))))))
+            (drgnx-statusbar-mode (if was 1 -1))))))))
 
 ;;;; A module's segments go with it (module teardown, Task 23)
 

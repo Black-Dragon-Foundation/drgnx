@@ -13,6 +13,18 @@
 (require 'json)
 (require 'server)
 
+;; what the session loads later, or the configuration under test sets
+(defvar package-quickstart)
+(defvar auth-sources)
+(defvar treemacs-move-files-by-mouse-dragging)
+(defvar drgnx-jank-guard--timer-fn)
+(declare-function drgnx-run-ert "run-ert")
+(declare-function drgnx-run-ert-refuse-idle-prompts "run-ert")
+(declare-function drgnx-uitest-scale-ready-p "drgnx-uitest")
+(declare-function drgnx-uitest-root-frame "drgnx-uitest")
+(declare-function drgnx-jank-guard-enable "drgnx-jank-guard")
+(declare-function drgnx-gc-setup "drgnx-gc")
+
 (defvar drgnx-ui-run (file-name-as-directory (getenv "DRGNX_UI_RUN")))
 (defvar drgnx-ui-harness (file-name-as-directory (getenv "DRGNX_UI_HARNESS")))
 (defvar drgnx-uitest-session-id (getenv "DRGNX_UI_NAME")

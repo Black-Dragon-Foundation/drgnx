@@ -19,6 +19,22 @@
             (should (file-exists-p (expand-file-name "wb/drgnx-explorer.elc" root)))))
       (delete-directory root t))))
 
+(ert-deftest drgnx-build/the-harness-is-built-with-the-rest ()
+  ;; The runner and the session code had no warning check: a missing `declare-function' there compiled nowhere.
+  ;; test/ stays outside (its files load into the runner, never alone).
+  (should (member "harness" drgnx-build-dirs))
+  (should-not (member "test" drgnx-build-dirs))
+  (let ((root (make-temp-file "drgnx-build" t)))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "harness" root))
+          (with-temp-file (expand-file-name "harness/x.el" root)
+            (insert ";;; -*- lexical-binding: t -*-\n(defun drgnx-test-x () (drgnx-test-not-declared))\n(provide 'x)\n"))
+          (let ((r (drgnx-build-test--build root)))
+            (should (= 1 (plist-get r :compiled)))
+            (should (string-match-p "drgnx-test-not-declared" (mapconcat #'identity (plist-get r :warnings) "\n")))))
+      (delete-directory root t))))
+
 (defun drgnx-build-test--emacs (&rest forms)
   "Run FORMS in a fresh batch Emacs (as `drgnx build' runs); return its output."
   (with-temp-buffer

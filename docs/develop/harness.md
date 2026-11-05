@@ -95,6 +95,10 @@ unit run compiles ~60 trampolines at ~0.2 s each, which would cost every run 12â
 trampolines (~1 MB); delete it at any time. When it cannot be made, the run's temp directory (`eln/`) is used.
 `$DRGNX_TEST_ELN_DIR` set from outside (an absolute path) chooses another.
 
+Every tier checks that this held: a batch run (unit, live, terminal tests) ends by looking at the `eln-cache` of the home
+its Emacs started with, and `drgnx test --ui` does the same around its GUI and live halves; a trampoline that appeared
+there since the start fails the run and is named on the output.
+
 A trampoline is compiled when a primitive is first replaced and none is in that directory yet, so inside whatever the
 test has replaced so far: the compile reads and writes files and spawns an Emacs with `call-process`. A test that
 stubs `call-process` (a spy that fails the test, or a fake result) and then a primitive with no trampoline yet would
