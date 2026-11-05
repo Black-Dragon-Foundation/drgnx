@@ -1,4 +1,4 @@
-# The store (Urdr): `work.db` schema 8
+# The store (Urdr): `work.db` schema 10
 
 `work.db` holds one knowledge graph across projects: entities and immutable links with transaction-time history,
 written by Ratatoskr only. The graph layer is the generic `urdr::graph` (kinds, link names and policy are the
@@ -184,17 +184,19 @@ one `ReadPool::with` call (one connection, given back before the next level), ne
   (`retired_tx is null`). Hits are ranked by `bm25(entity_fts, 5, 1)` (a title match counts five body matches;
   lower is better). A contentless table cannot make snippets, so they come from `entity.body` (about 160 characters
   around the first matching word; the title when there is no body).
-- **Vectors.** `vec::quantize` is `drgnx-search-quantize`: sign bits (bit `i % 8` of byte `i / 8`), int8 values
-  `round(v / scale)` (halves to even) and `scale = max|v| / 127`. `entity_vec(n, bits, vec, scale, model)` holds them;
-  `model` is a departure from the design's §5.2 table, needed by `vec_stale`. `hamming_scan` ranks fingerprints by
+- **Vectors.** `vec::quantize` is the quantizer the Lisp search had, kept to its fixtures: sign bits (bit `i % 8` of byte `i / 8`), int8 values
+  `round(v / scale)` (halves to even) and `scale = max|v| / 127`. `entity_vec(n, model, bits, vec, scale)` holds them,
+  keyed `(n, model)` so each embedder keeps its own vector of an entity (a server's and the built-in model's side by
+  side; switching between them embeds nothing again); `model` is a departure from the design's §5.2 table, needed by
+  `vec_stale`. `hamming_scan` ranks fingerprints by
   Hamming distance (u64 popcount, a bounded heap) and `rerank` orders the candidates by the integer dot product
-  of the int8 vectors times both scales. Fixtures: `test/fixtures/quantize/cases.json`, regenerated with `gen.el`
-  from the Lisp quantizer.
+  of the int8 vectors times both scales. Fixtures: `test/fixtures/quantize/cases.json`, made once by the Lisp quantizer
+  (deleted with the Lisp search); the Rust test `quantize_matches_the_lisp_fixtures` holds the Rust one to it.
 - **Fusion.** `rrf(lists, 60)` sums `1 / (k + rank)` over the lists (rank from 1), best first.
-- **Staleness.** `vec_put` replaces an entity's vector; `vec_stale(conn, model, limit)` lists live entities with
+- **Staleness.** `vec_put` replaces an entity's vector of that model; `vec_stale(conn, model, limit)` lists live entities with
   text and no vector of that model (the indexer's work list; Task 12b supplies the `Embedder`). A vector is always
   of its entity's current text: `fts_put`, which every write of a new title or body goes through, deletes the
-  entity's `entity_vec` row in the same tx, so `vec_stale` lists it again and no vector of an old text is kept.
+  entity's `entity_vec` rows (of every model) in the same tx, so `vec_stale` lists it again and no vector of an old text is kept.
   (Chosen over a vector that records the version it was made from and a `vec_stale` that lists mismatches: that
   needs a column and leaves the old text's vector in the file until the embedder runs, which may be never when no
   provider answers.)
@@ -405,16 +407,16 @@ one exception is exactly `HOME/org/board.org` (`Verdict::Board`; `board.org.bak`
   `recorded`); anything else is `None`, and the door denies the record ("unknown source form").
 - **Project roots** (door 3): `check_root` refuses a root inside a denied path, and for a root that contains denied
   paths (`HOME` itself) lists them (`Contains`): `~/org`, the user's file and folder entries, and the names a glob
-  matches at that moment. The Lisp code indexer's door is `drgnx-search--files-1` (`core/drgnx-search-chunk.el`), the
-  one place every indexed path passes: a root `drgnx-search-denied-p` denies (`drgnx-deny-path-p` with the opt-ins
-  ignored) is refused with `drgnx-search-personal-notes-refusal` before its `.drgnx/search.eld` is read, and every
+  matches at that moment. The code indexer (Hrafn, in the hub) has one door, `files::list`
+  (`runtime/crates/hrafn/src/files.rs`), the one place every indexed path passes, with the hub's deny check as its
+  `allow` closure (the opt-ins ignored): a root it denies is refused before its `.drgnx/search.eld` is read, and every
   listed file it denies is dropped before anything reads it.
 - **Import and export** (doors 2 and 5): `may_import` and `may_export` are the hub's filters for `graph/import` and
   `graph/export` (`check_record` over the record's source, id and `data`; an unreadable source string is denied).
   Export asks again at each run, so a path the user denied after it came in does not leave.
 - **The canary** (Task 19): `norn/tests/canary.rs` drives the Rust-only doors (crafted `graph/put-parsed` payloads,
   the 6 → 7 migration of `test/fixtures/work-db-6-canary.sql`, a tampered import, export after a new deny entry) and
-  `test/conformance/privacy/personal-notes-canary.jsonl` the whole path through the Lisp scan and indexer; random
+  `test/conformance/privacy/personal-notes-canary.jsonl` the whole path through the Lisp scan and Hrafn; random
   bytes planted in fixture notes must reach no store, WAL, export, provider request or log, and no file under
   `HOME/org` may change. The entity embedder's door (Task 12b) joins them there.
 
@@ -620,12 +622,13 @@ result. What the rule answers for the file it finds:
 
 | The file | The answer |
 |---|---|
-| missing (or empty) | made at schema 7 and moved to 9: schema 6's tables, then shaped as a migrated file is, so both have the same schema |
-| schema 6 | migrated (below), then moved to 8 and 9, then `Ready { 9 }` |
-| schema 7 | moved to 8 and 9 (next sections), then `Ready { 9 }` |
-| schema 8 | moved to 9, then `Ready { 9 }` |
-| schema 9 | `Ready { 9 }` |
-| above 9 | `ReadOnly { schema }`: writes answer `schema`; nothing is changed or copied |
+| missing (or empty) | made at schema 7 and moved to 10: schema 6's tables, then shaped as a migrated file is, so both have the same schema |
+| schema 6 | migrated (below), then moved to 8, 9 and 10, then `Ready { 10 }` |
+| schema 7 | moved to 8, 9 and 10 (next sections), then `Ready { 10 }` |
+| schema 8 | moved to 9 and 10, then `Ready { 10 }` |
+| schema 9 | moved to 10, then `Ready { 10 }` |
+| schema 10 | `Ready { 10 }` |
+| above 10 | `ReadOnly { schema }`: writes answer `schema`; nothing is changed or copied |
 | below 6 | `NotReady`: "work.db is schema N; open it once with drgnx 6 first, or remove it (installs are disposable)" |
 | a migration that failed | `Failed { reason }`, never tried again in this process (call 18) |
 
@@ -709,7 +712,7 @@ schema 7 is made, migrated or found, so schema 6 and a fresh file arrive at 8 to
   `end` is null while the step runs. `write::steps::{open, close}` write it; `read::steps::for_session(conn, sid,
   since_seq)` lists a session's steps and `rollup(conn, Scope::{Session, Task, Plan, Project}, id)` sums seconds by
   class (closed steps only), cost by unit (units never mix) and tokens.
-- `status.schema`, `store.schema` and the hub's read-only rule now say 9 (schema 9 below); a file of schema 10 or above is read-only.
+- `status.schema`, `store.schema` and the hub's read-only rule said 8 here; they say 10 now (schemas 9 and 10 below).
 
 ## Schema 9: asks, step detail, worktree bases and conclusion sources (agent system part 2, Task 1)
 
@@ -731,6 +734,18 @@ schema 7 is made, migrated or found, so schema 6 and a fresh file arrive at 8 to
   (`{path, lines?: [a, b]}` or `{url}`; `write::work::check_sources`). On a `finding` note the same array is the
   `sources` key of its data.
 - `write::work` refuses every author but `("hub", Class::System)`: nothing is written (`work::agent_write_of_ask_is_refused`).
+
+## Schema 10: `entity_vec` keyed by `(n, model)` (Hrafn)
+
+Schemas 8 and 9 kept `entity_vec` keyed by `n` alone, so a second embedder's vector replaced the first's.
+`norn::migrate10` moves a schema-9 file to 10 in one `BEGIN IMMEDIATE` transaction (the opening rule runs it after 9,
+so older files and fresh ones arrive at 10 too; a crash leaves 9): it builds the table keyed `(n, model)` with
+`without rowid`, copies every row with its model (a row with no model keeps the empty name, which no embedder asks
+for), drops the old table and sets `schema = 10`. A table that already has the key (a file made from today's DDL) only
+gets the number. A second move does nothing. Tests: `rebuild_keeps_every_row_and_its_model`,
+`a_second_model_sits_beside_the_first`, `a_table_with_the_key_is_left_alone`, `a_failed_move_changes_nothing`, and
+`tests/entity_vec_schema8.rs` (a schema-8 file through the real opening rule). A file of schema 11 or above is
+read-only.
 
 ## Parsed entities (Task 15a)
 

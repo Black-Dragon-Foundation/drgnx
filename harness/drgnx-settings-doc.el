@@ -27,8 +27,7 @@
     (require drgnx-session)
     (require drgnx-look)
     (require drgnx-large-files)
-    (require drgnx-search-chunk)          ; Task 17: drgnx-search-{include,exclude,off}
-    (require drgnx-settings-runtime)      ; drgnx-sandbox-memory-max, -secret-files, -proxy-pinned-addresses
+    (require drgnx-settings-runtime)      ; drgnx-sandbox-memory-max, -secret-files, -proxy-pinned-addresses, drgnx-search-{model-mirror,builtin,include,exclude,off}
     (require drgnx-settings-trust)        ; Task 18: drgnx-trust-parents
     (require drgnx-user-lisp)             ; Task 29: drgnx-user-lisp-files
     (require drgnx-watchdog))             ; drgnx-speed-watchdog

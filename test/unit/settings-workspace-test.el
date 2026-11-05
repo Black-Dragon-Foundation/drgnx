@@ -264,7 +264,7 @@ fixture settings; the buffers it opened are killed after."
 
 (ert-deftest drgnx-settings-workspace/old-project-files-read-as-w1 ()
   (drgnx-swt--with
-    (require 'drgnx-search-chunk)
+    (require 'drgnx-settings-runtime)
     (unless (fboundp 'drgnx-large-files--define-config)
       (load (expand-file-name "modules/editor/drgnx-large-files" drgnx-dir) nil t))
     (drgnx-large-files--define-config)

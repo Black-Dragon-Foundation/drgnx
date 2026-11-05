@@ -13,6 +13,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'drgnx-config)
 (require 'drgnx-setting)
 (require 'drgnx-settings-prov)
 (require 'drgnx-settings-workspace)
@@ -50,6 +51,43 @@ test's local upstream); a name resolved through DNS never does.  Pinning only re
 allowlist.  The hub pins them in each session's provider proxy and each container job's proxy."
   :type '(alist :key-type string :value-type string) :group 'drgnx :scope 'global :workspace 'never :agents 'never
   :runtime "ProxyPins")
+
+(drgnx-defsetting drgnx-search-model-mirror nil
+  "Where embedding models are downloaded from: a URL laid out as the Hugging Face host, or nil for that host."
+  :type '(choice (const :tag "Hugging Face" nil) string) :group 'drgnx :scope 'global :workspace 'never
+  :on-error 'strict :agents 'never :runtime "Option<String>" :schema '(or null string))
+
+(drgnx-defsetting drgnx-search-builtin t
+  "Non-nil: the built-in embedding model indexes every project's code and your tasks and notes, whatever servers are
+running.  Nil: only a running server (TEI, Ollama) makes vectors, and with none, search is keyword and symbol only."
+  :type 'boolean :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "bool" :schema 'boolean)
+
+;; What a project's semantic search indexes: the hub (Hrafn) reads `.drgnx/search.eld' itself and takes the per-project
+;; values of these settings from the editor (`config/settings'), so a file narrows what the settings left.
+(drgnx-config-define 'search-project
+                     :dir 'project :file "search.eld"
+                     :schema '(plist (:include (list-of string)) (:exclude (list-of string)) (:off boolean))
+                     :doc "Narrows what a project's semantic search indexes: only these globs, not these, or off.")
+
+(defun drgnx-search--globs-p (x)
+  "Non-nil when X is a list of strings (globs): safe from any workspace, since it can only narrow the list."
+  (and (proper-list-p x) (cl-every #'stringp x)))
+
+(drgnx-defsetting drgnx-search-include nil
+  "Only files matching one of these globs are indexed (nil: all)."
+  :type '(repeat string) :group 'drgnx :safe #'drgnx-search--globs-p :scope 'project
+  :on-error 'strict :agents 'never :runtime "Vec<String>" :schema '(list-of string))
+
+(drgnx-defsetting drgnx-search-exclude nil
+  "Files matching one of these globs are not indexed; a workspace's are added to yours."
+  :type '(repeat string) :group 'drgnx :safe #'drgnx-search--globs-p :scope 'project :merge 'append
+  :on-error 'strict :agents 'never :runtime "Vec<String>" :schema '(list-of string))
+
+(drgnx-defsetting drgnx-search-off nil
+  "Non-nil turns a project's semantic search off."
+  :type 'boolean :group 'drgnx :safe #'booleanp :scope 'project
+  :on-error 'strict :agents 'never :runtime "bool" :schema 'boolean)
 
 ;;;; Encoding: Lisp values as the runtime types' JSON
 
@@ -130,6 +168,10 @@ allowlist.  The hub pins them in each session's provider proxy and each containe
                    (cons :data_collection (drgnx-settings-runtime--str (plist-get v :data-collection)))
                    (cons :zdr (and (plist-member v :zdr) (drgnx-settings-runtime--bool (plist-get v :zdr)))))))))
     (drgnx-agents-allow-unsandboxed . drgnx-settings-runtime--bool)
+    (drgnx-search-builtin . drgnx-settings-runtime--bool)
+    (drgnx-search-include . drgnx-settings-runtime--strings)
+    (drgnx-search-exclude . drgnx-settings-runtime--strings)
+    (drgnx-search-off . drgnx-settings-runtime--bool)
     (drgnx-agents-start-env-names . drgnx-settings-runtime--strings)
     (drgnx-agents-trace-opens . drgnx-settings-runtime--strings)
     ;; the agent limits (`drgnx-agents-matrix.el'); the matrix itself is read from settings.el alone

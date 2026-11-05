@@ -9,7 +9,12 @@ version = 2
 yanked = "deny"
 unmaintained = "all"      # a dormant crate is a finding, then an explicit, dated ignore
 unsound = "all"
-ignore = []               # each entry: id + reason + review date in a comment
+# each entry: id + reason + review date in a comment
+ignore = [
+  # paste is unmaintained, and finished: a proc-macro with no runtime code. It comes through tokenizers and gemm, and goes
+  # when they drop it. Reviewed 2026-11-01; review again at tokenizers 1.0.
+  "RUSTSEC-2024-0436",
+]
 
 [licenses]
 version = 2

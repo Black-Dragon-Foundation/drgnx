@@ -43,7 +43,7 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | settings-sync | the settings index written for 200 fixture packages of three files each | `:index_ms` (budget 2000) |
 | settings-open | 30 files in a project with a shared and a private workspace file and a language override, opened with the workspace and language layers in and out, interleaved (the layers are checked to have applied) | `:open_on_ms`, `:open_off_ms` (medians per open) and `:delta_ms`, what the layers add (budget 1) |
 | remote-typing | the typing workload's 186 characters in a local file while the Explorer lists a mock-method root (test/fixtures/tramp-mock.el: a real TRAMP connection to a local `sh`) and its connection is dead, the segment showing it lost (checked: nothing was sent to the remote, the connection stayed dead) | input latency |
-| typing-with-index | the typing workload's 186 characters with the search module on and the drgnx repo's semantic index loaded: the repo indexed into the session's own state dir by a stub embedder (384 numbers per chunk; no provider, no network), read into memory by one query before the keys (checked: the query cache still holds it); the index file is deleted after | input latency |
+| typing-with-index | the typing workload's 186 characters with the search module on and the drgnx repo indexed by the hub (Hrafn): tier 1 is finished before the keys, tier 2 runs while they are typed (checked: the hub still holds the chunks) | input latency |
 | typing-evil | the typing workload with Vim keys: `i`, the same six strings, `<escape>` (checked: typed, back in normal state) | input latency |
 | motions-evil | a 5000-line copy of the fixture, normal state, from the middle: `j`×20, `w`×20, `}`×10, `C-d`×5, `C-u`×5 (checked: point moved) | input latency |
 | explorer-evil | the explorer workload with Vim keys: `SPC E`, `j`×10, `<escape>` | input latency |
@@ -475,7 +475,7 @@ terminal-typing's p95 is 7 ms: the worst of 16 runs with the module active (1.9 
     (gcmh's own mode function sets its low threshold after the watcher ran, so `gcmh-mode-off-hook` restores
     them too). A `let` of `gcmh-mode` changes nothing.
   - **Batch Emacs** (workers): `drgnx-gc-batch-setup` sets 32 MB (`drgnx-gc-batch-threshold`) and
-    `gc-cons-percentage` 0.2. It is the first form of `drgnx-search-index-cli` and `drgnx-search-mcp-main`; short CLI
+    `gc-cons-percentage` 0.2. It is the first form of a worker's batch entry; short CLI
     commands keep Emacs's defaults.
   - **Harness sessions** of the minimal configuration run at the same settings (`drgnx-ui-gc-early` and
     `drgnx-ui-gc-setup` in `harness/init/prelude.el`); a session of an external configuration brings its own.
@@ -595,6 +595,30 @@ Budget p95 22 ms, max 50 ms, **provisional**. The ruled target is `typing`'s 16 
 (p95 12.2, 17.2, 21.1 ms; max 19.4, 24.0, 25.2 ms), taken on 2026-10-18 at a load average of 7 to 8, where the p95 rose with
 the load. `typing` alone reads 3.5 ms on a quiet machine, so the loaded index is not shown to cost anything yet.
 A quiet-machine `bin/drgnx test --perf` run pins the number: set the p95 to 16 if it holds, and drop this note.
+
+The workload's setup starts a hub of its own (`$DRGNX_RATATOSKR_BIN`, a test-hooks build, as the agent workloads do),
+makes a git project of the checkout's `core/` and `wb/` in a temporary folder (the container's `/src` is not a git
+project) and waits for tier 1. It runs tier 1 only: tier 2 needs an embedder, and the container has no model, so the
+real-model variant on the perf island is still to be added.
+
+### Hrafn's rows
+
+The Rust rows are `#[ignore]` tests that print their figures and assert the budget table's constants. They are not in
+`budgets.eld`: a row there without a workload in a `--perf` run fails as "not measured". Each runs alone on the
+desktop's pinned island (`perf-exclusive.sh` as the outer wrapper, `DRGNX_PERF_CPUS=4`).
+
+| Row | Where | Budget |
+|---|---|---|
+| tier 1 of a drgnx checkout; one saved file searchable | `drgnx-ratatoskr/tests/timing.rs` (`tier1_of_a_checkout_and_one_saved_file`) | 60 s; 1 s |
+| `search/query` p95, 50,000 and 100,000 synthetic chunks, vectors on | the same file (`query_p95_at_50k_chunks`, `…_100k_…`) | 100 ms |
+| built-in embedding tokens/s (GPU), VRAM at 4,096 tokens | `hrafn-embed/tests/timing.rs` (`bench_tokens_per_s`) | 20,000; 800 MB |
+| CPU fallback tokens/s on 4 cores | `bench_cpu` | 680 |
+| one query embedding p95 | `query_p95` and `bench_cpu` | 50 ms |
+| stall probe: no copy over 16.6 ms, worst 16 ms | `stall_probe` | a stand-in for the compositor (a second process copying 64 KB every 8 ms on the same card), not a real frame |
+
+The GPU rows run through `hrafn-gpu.sh` on the Radeon; the RTX 2060's row (0.8 times its first AC figure) runs on the
+laptop on AC. The synthetic stores are made of the fixture's chunk shapes, with every word common, so a keyword list
+ranks nearly every chunk: a worst case for the full-text route.
 
 ## Settings (design §16)
 

@@ -123,6 +123,15 @@ pub const RUNTIME: &[RuntimeSetting] = &[
         "ProxyPins",
         OnError::LastGood,
     ),
+    setting(
+        "drgnx-search-model-mirror",
+        "Option<String>",
+        OnError::Strict,
+    ),
+    setting("drgnx-search-builtin", "bool", OnError::Strict),
+    setting("drgnx-search-include", "Vec<String>", OnError::Strict),
+    setting("drgnx-search-exclude", "Vec<String>", OnError::Strict),
+    setting("drgnx-search-off", "bool", OnError::Strict),
 ];
 
 /// The names of [`RUNTIME`].
@@ -179,6 +188,15 @@ pub struct RuntimeValues {
     /// `public` or `private` (per project): with the commit on the public origin, what makes a job `public`.
     pub runners_project_visibility: String,
     pub sandbox_proxy_pins: ProxyPins,
+    /// Where models come from instead of the Hugging Face host.
+    pub search_model_mirror: Option<String>,
+    /// Whether the built-in embedding model indexes (the floor under any server).
+    pub search_builtin: bool,
+    /// A project's search globs: only these files (none: all), not these, and search off. Per project
+    /// ([`overrides::PER_PROJECT`]).
+    pub search_include: Vec<String>,
+    pub search_exclude: Vec<String>,
+    pub search_off: bool,
 }
 
 /// One entry of `drgnx-agents-container-images`: a name and its image reference pinned by digest (the shared podman
@@ -313,6 +331,11 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
             let profiles::Alist(pairs) = de::<profiles::Alist<std::net::IpAddr>>(node)?;
             values.sandbox_proxy_pins = pairs;
         }
+        "drgnx-search-model-mirror" => values.search_model_mirror = de(node)?,
+        "drgnx-search-builtin" => values.search_builtin = de(node)?,
+        "drgnx-search-include" => values.search_include = de(node)?,
+        "drgnx-search-exclude" => values.search_exclude = de(node)?,
+        "drgnx-search-off" => values.search_off = de(node)?,
         other => {
             return Err(Bad::at(
                 node,

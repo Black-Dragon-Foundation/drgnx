@@ -1,4 +1,4 @@
-;;; mod-search-test.el --- batch tests: Semantic Search commands, index on save -*- lexical-binding: t -*-
+;;; mod-search-test.el --- batch tests: Semantic Search commands, which ask the hub (Hrafn) and only render -*- lexical-binding: t -*-
 ;; test-class: cond
 (require 'ert)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
@@ -6,462 +6,263 @@
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'cl-lib)
 (require 'drgnx)
-(require 'drgnx-area)
+(require 'drgnx-hub-client)
+(require 'drgnx-ai)                       ; loaded now: a command's `require' would replace a stubbed function
+(require 'drgnx-search-setup)
 (require 'project)
-(require 'drgnx-search-store)
-(require 'drgnx-search-chunk)                 ; the libraries whose variables the tests let-bind and whose
-(require 'drgnx-search-query)                 ; functions they stub: loaded here, so the file passes alone
-(require 'drgnx-search-index)                 ; (and in any shard of drgnx check)
 (load (expand-file-name "modules/tools/drgnx-search" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/ratatoskr-fixture" drgnx-dir) nil t)
 
-(defmacro drgnx-search-ui-test--timed (&rest body)
-  "BODY on the virtual clock, with the module `tools/search' running (it owns the re-index timers); what is still
-pending at the end is cancelled."
-  (declare (indent 0))
-  `(let ((drgnx-modules--runs (list (cons 'tools/search (list 'run)))))
-     (drgnx-test-with-clock ()
-       (unwind-protect (progn ,@body)
-         (drgnx-timer-reset)))))
+(defun drgnx-search-test--hit (&rest kv)
+  "A hit of `search/query', changed by KV."
+  (append kv (list :path "a.el" :line_start 3 :line_end 5 :symbol "alpha" :score 0.03
+                   :preview "(defun alpha ()\n  1)" :routes '("symbol") :reanchored nil)))
 
-(defun drgnx-search-ui-test--reindexes ()
-  "The keys of the re-index timers now pending."
-  (seq-filter (lambda (key) (eq (car-safe key) 'search-reindex)) (mapcar #'car (drgnx-timer-pending))))
+(defun drgnx-search-test--answer (&rest kv)
+  "An answer of `search/query' with one hit, a model and a lag line, changed by KV."
+  (append kv (list :hits (list (drgnx-search-test--hit)) :model "granite-embedding-small-english-r2"
+                   :lag '(:chunks_total 40 :chunks_behind 3 :files_behind 12 :dirty_files 0 :built_from "abc")
+                   :lag_line "vectors: 12 files behind (3 chunks); keyword and symbol results are current")))
 
-(defmacro drgnx-search-ui-test--project (&rest body)
-  "Run BODY in a git project (ROOT, with a.txt) whose index and state live in a temp state dir."
-  (declare (indent 0))
-  `(let* ((root (file-name-as-directory (make-temp-file "drgnx-proj" t)))
-          (state (make-temp-file "drgnx-state" t))
-          (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment))
-          (default-directory root) (drgnx-search-last-notice nil))
+(defvar drgnx-search-test--calls nil "The hub calls the stub got, newest first: (METHOD . PARAMS).")
+
+(defmacro drgnx-search-test--with-stub-hub (replies &rest body)
+  "BODY with the hub's `drgnx-hub-call' answering from REPLIES ((METHOD . RESULT)…) at once, and every call recorded
+in `drgnx-search-test--calls'.  `message' is collected in MESSAGES.  A project ROOT (a git repository) is the current
+directory."
+  (declare (indent 1))
+  `(let* ((root (file-name-as-directory (make-temp-file "drgnx-search-proj" t)))
+          (default-directory root) (drgnx-search-test--calls nil) (messages nil))
      (unwind-protect
          (progn
            (call-process "git" nil nil nil "init" "-q")
-           (write-region "alpha\nbeta\n" nil (expand-file-name "a.txt" root) nil 'silent)
-           ,@body)
-       (delete-directory root t)
-       (delete-directory state t))))
+           (cl-letf (((symbol-function 'drgnx-hub-ensure) (lambda () t))
+                     ((symbol-function 'drgnx-hub-call)
+                      (lambda (method params callback &rest _)
+                        (push (cons method params) drgnx-search-test--calls)
+                        (funcall callback (cdr (assoc method ,replies)) nil)
+                        1))
+                     ((symbol-function 'drgnx-ai-confirm-project-route) (lambda () t))
+                     ((symbol-function 'message) (lambda (fmt &rest args) (when fmt (push (apply #'format fmt args) messages)))))
+             ,@body))
+       (delete-directory root t))))
 
-(defun drgnx-search-ui-test--stub-search (results &optional notice)
-  "A `drgnx-search-async' that answers RESULTS and NOTICE (its callback's two arguments) at once."
-  (lambda (_root _query callback &rest _)
-    (funcall callback results notice)))
+(defmacro drgnx-search-test--with-xref (&rest body)
+  "BODY with `xref-show-xrefs' recording the items it was given in ITEMS, in a buffer `*xref*' it makes."
+  (declare (indent 0))
+  `(let ((items nil))
+     (cl-letf (((symbol-function 'xref-show-xrefs)
+                (lambda (fetcher _alist)
+                  (setq items (funcall fetcher))
+                  (with-current-buffer (get-buffer-create "*xref*") (setq header-line-format nil))))
+               ((symbol-function 'get-buffer-window) (lambda (&rest _) nil)))
+       (unwind-protect (progn ,@body) (when (get-buffer "*xref*") (kill-buffer "*xref*"))))))
 
-(ert-deftest drgnx-search-ui/results-go-to-the-results-tab ()
-  (skip-unless (executable-find "git"))
-  (drgnx-search-ui-test--project
-    (drgnx-test-with-state
-      (let ((display-buffer-alist nil)
-            (hits (list (list :path "a.txt" :start 2 :end 2 :text "beta\n  more" :score 0.03 :why 'both))))
-        (delete-other-windows)
-        (drgnx-rules-mode 1)
-        (unwind-protect
-            (cl-letf (((symbol-function 'drgnx-search-async) (drgnx-search-ui-test--stub-search hits)))
-              (drgnx-search-semantic "second line")
-              (let ((buf (window-buffer (drgnx-wb-area-window 'panel))))
-                (should (string-match-p "xref" (buffer-name buf)))
-                (should (eq (drgnx-wb-area-tab 'panel) 'results))
-                (with-current-buffer buf
-                  (should (string-match-p "beta" (buffer-string)))
-                  (should-not (string-match-p "more" (buffer-string))))))   ; the first line only
-          (drgnx-rules-mode -1)
-          (drgnx-wb-area-hide 'panel))))))
+;;;; The real hub
 
-(ert-deftest drgnx-search-ui/keyword-only-says-why ()
-  (skip-unless (executable-find "git"))
-  (drgnx-search-ui-test--project
-    (drgnx-test-with-state
-      (let ((display-buffer-alist nil) (said nil)
-            (hits (list (list :path "a.txt" :start 1 :end 1 :text "alpha" :score 0.03 :why 'keyword))))
-        (cl-letf (((symbol-function 'drgnx-search-async)
-                   (drgnx-search-ui-test--stub-search hits "no embedding provider answered (down) — keyword results only"))
-                  ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
-          ;; hits and a notice: both
-          (drgnx-search-semantic "alpha")
-          (should (cl-some (lambda (s) (string-match-p "keyword results only" s)) said))
-          ;; nothing found: the notice (or a plain line), no error, nothing shown
-          (setq said nil)
-          (let ((shown nil))
-            (cl-letf (((symbol-function 'drgnx-search-async)
-                       (drgnx-search-ui-test--stub-search nil "no index for this project — Search: Index Project"))
-                      ((symbol-function 'xref-show-xrefs) (lambda (&rest _) (setq shown t))))
-              (drgnx-search-semantic "alpha")
-              (should (cl-some (lambda (s) (string-match-p "no index for this project" s)) said))
-              (should-not shown))))))))
+(defmacro drgnx-search-test--with-hub (&rest body)
+  "BODY with the real hub (Ratatoskr from DRGNX_RATATOSKR_BIN) serving a temporary data dir, this Emacs connected, and
+ROOT a git project with one file.  Skipped without the binary (test/no-skip.eld lists the tests)."
+  (declare (indent 0))
+  `(let* ((top (file-name-as-directory (make-temp-file "drgnx-search-hub" t)))
+          (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" top "config") (concat "DRGNX_DATA_DIR=" top "data")
+                                             (concat "XDG_STATE_HOME=" top "state") (concat "XDG_DATA_HOME=" top "xdg-data")
+                                             (concat "XDG_CONFIG_HOME=" top "xdg-config") (concat "XDG_CACHE_HOME=" top "cache")
+                                             (concat "HOME=" top "home") "DRGNX_JOBS_LAUNCHER=detached")
+                                       process-environment))
+          (root (file-name-as-directory (concat top "proj"))))
+     (dolist (d '("run" "home" "config" "data" "state" "proj")) (with-file-modes #o700 (make-directory (concat top d) t)))
+     (unwind-protect
+         (let ((default-directory root))
+           (call-process "git" nil nil nil "init" "-q")
+           (write-region "(defun drgnx-search-test-alpha ()\n  \"Alpha.\"\n  1)\n" nil (concat root "a.el") nil 'silent)
+           (drgnx-test-with-ratatoskr top ,@body))
+       (delete-directory top t))))
 
-(ert-deftest drgnx-search-ui/outside-a-project-is-a-message-not-an-index ()
-  (let ((dir (make-temp-file "drgnx-noproj" t)))
+(ert-deftest drgnx-search/semantic-goes-through-hub ()
+  ;; The real hub answers keyword and symbol results at once, whatever the model: the first query of a fresh install.
+  (drgnx-search-test--with-hub
+    (let (result why (done nil))
+      (drgnx-search--ask "search/query" (list :root (directory-file-name root) :text "drgnx-search-test-alpha" :scope "code" :k 5)
+                         (lambda (r w) (setq result r why w done t)))
+      (drgnx-test-wait (lambda () done) :secs 60 :what "the hub's answer to search/query")
+      (should-not why)
+      (let ((hit (car (plist-get result :hits))))
+        (should (equal (plist-get hit :path) "a.el"))
+        (should (equal (plist-get hit :symbol) "drgnx-search-test-alpha"))
+        (should (= (plist-get hit :line_start) 1)))
+      (should (stringp (plist-get result :lag_line)))
+      (should-not (plist-get result :model)))))
+
+;;;; Commands
+
+(ert-deftest drgnx-search/semantic-asks-the-hub-for-the-project-and-shows-the-hits ()
+  (drgnx-search-test--with-stub-hub `(("search/query" . ,(drgnx-search-test--answer)))
+    (drgnx-search-test--with-xref
+      (let ((window (selected-window)))
+        (ignore window)
+        (drgnx-search-semantic "alpha")
+        (let ((call (car drgnx-search-test--calls)))
+          (should (equal (car call) "search/query"))
+          (should (equal (plist-get (cdr call) :root) (directory-file-name root)))
+          (should (equal (plist-get (cdr call) :text) "alpha")))
+        (should (= (length items) 1))
+        (let ((item (car items)))
+          (should (equal (xref-item-summary item) "(defun alpha ()"))
+          (should (equal (xref-location-line (xref-item-location item)) 3)))))))
+
+(ert-deftest drgnx-search/lag-line-shown ()
+  (drgnx-search-test--with-stub-hub `(("search/query" . ,(drgnx-search-test--answer)))
+    (drgnx-search-test--with-xref
+      (drgnx-search-semantic "alpha")
+      (let ((header (buffer-local-value 'header-line-format (get-buffer "*xref*"))))
+        (should (string-match-p "model granite-embedding-small-english-r2" header))
+        (should (string-match-p "vectors: 12 files behind" header)))
+      (should (seq-some (lambda (m) (string-match-p "vectors: 12 files behind" m)) messages)))))
+
+(ert-deftest drgnx-search/no-model-says-keyword-only ()
+  (drgnx-search-test--with-stub-hub `(("search/query" . ,(drgnx-search-test--answer
+                                                          :model nil :notice "built-in model not downloaded"
+                                                          :lag_line "vectors: not used")))
+    (drgnx-search-test--with-xref
+      (drgnx-search-semantic "alpha")
+      (let ((header (buffer-local-value 'header-line-format (get-buffer "*xref*"))))
+        (should (string-match-p "keyword and symbol results only (built-in model not downloaded)" header))))))
+
+(ert-deftest drgnx-search/no-hub-says-why ()
+  (drgnx-search-test--with-stub-hub nil
+    (cl-letf (((symbol-function 'drgnx-hub-ensure) (lambda () (error "Ratatoskr is not built: run `drgnx runtime build'"))))
+      (drgnx-search-semantic "alpha")
+      (should (seq-some (lambda (m) (string-match-p "Semantic search: the drgnx hub is not available (Ratatoskr is not built" m))
+                        messages))
+      (should-not drgnx-search-test--calls))))
+
+(ert-deftest drgnx-search/index-project-asks-the-hub-and-rebuild-is-the-prefix ()
+  (drgnx-search-test--with-stub-hub '(("search/index" . (:started t)))
+    (drgnx-search-index-project)
+    (should (eq (plist-get (cdr (car drgnx-search-test--calls)) :rebuild) :false))
+    (drgnx-search-index-project t)
+    (should (eq (plist-get (cdr (car drgnx-search-test--calls)) :rebuild) t))
+    (should (seq-some (lambda (m) (string-match-p "Indexing .* in the background" m)) messages))))
+
+(ert-deftest drgnx-search/index-status-says-models-device-and-lag ()
+  (drgnx-search-test--with-stub-hub
+      '(("search/status" . (:files 9 :chunks 120 :coverage_errors nil
+                                   :lag (:chunks_behind 3 :files_behind 1)
+                                   :models ((:model "granite-embedding-small-english-r2" :vectors 117))
+                                   :worker (:device (:kind "gpu" :name "AMD Radeon RX 7900")
+                                                    :fallback "the GPU was lost")
+                                   :tier2 "running" :embedded 4)))
+    (drgnx-search-index-status)
+    (let ((line (car messages)))
+      (should (string-match-p "120 chunks in 9 files" line))
+      (should (string-match-p "vectors: granite-embedding-small-english-r2 (117)" line))
+      (should (string-match-p "device: GPU AMD Radeon RX 7900 (fell back to the CPU: the GPU was lost)" line))
+      (should (string-match-p "tier 2 running" line))
+      (should (string-match-p "behind: 3 chunks in 1 file" line)))))
+
+(ert-deftest drgnx-search/commands-ask-about-a-projects-remote-route-first ()
+  ;; The project's .drgnx/ai.eld may route the embed role to a remote provider; the user is asked once per project root,
+  ;; in the command they ran, with the project as the current directory (never later, from a timer or in batch).
+  (drgnx-search-test--with-stub-hub `(("search/query" . ,(drgnx-search-test--answer)) ("search/index" . (:started t)))
+    (let (asked)
+      (cl-letf (((symbol-function 'drgnx-ai-confirm-project-route)
+                 (lambda () (push (file-truename default-directory) asked) t))
+                ((symbol-function 'drgnx-search-setup) (lambda (&rest _) (list 'ok "fine"))))
+        (let ((default-directory (file-name-as-directory (expand-file-name "sub" root))))
+          (make-directory default-directory t)
+          (drgnx-search-test--with-xref
+            (dolist (cmd '(drgnx-search-semantic drgnx-search-index-project drgnx-search-set-up))
+              (setq asked nil)
+              (if (eq cmd 'drgnx-search-semantic) (funcall cmd "alpha") (funcall cmd))
+              (should (equal asked (list (file-truename root)))))))))))      ; once, with the project root
+
+;;;; The retriever
+
+(ert-deftest drgnx-search/retriever-gives-snippets ()
+  (drgnx-search-test--with-stub-hub `(("search/query" . ,(drgnx-search-test--answer)))
+    (let (got)
+      (drgnx-search--retriever "alpha" root (lambda (s) (push s got)))
+      (should (= (length got) 1))
+      (should (equal (car got) '((:file "a.el" :line 3 :text "(defun alpha ()\n  1)"))))
+      (should (equal (plist-get (cdr (car drgnx-search-test--calls)) :k) 5)))))
+
+(ert-deftest drgnx-search/retriever-gives-nil-without-a-hub-and-never-starts-one ()
+  (let (got (ensured nil))
+    (cl-letf (((symbol-function 'drgnx-hub-ensure) (lambda () (setq ensured t)))
+              ((symbol-function 'drgnx-hub-call) (lambda (&rest _) (error "no hub"))))
+      (drgnx-search--retriever "alpha" "/p/" (lambda (s) (push (list s) got)))
+      (should (equal got '((nil))))
+      (should-not ensured))))
+
+;;;; The keystroke signal
+
+(ert-deftest drgnx-search/typing-is-sent-throttled ()
+  ;; test-pattern: gate (the virtual clock moves it)
+  (let (calls)
+    (drgnx-test-with-clock ()
+      (drgnx-test-with-modules '(tools/search)
+        (cl-letf (((symbol-function 'drgnx-hub-call)
+                   (lambda (method _params _callback &rest _) (push method calls) 1)))
+          (dotimes (_ 5) (drgnx-tools/search--typing))        ; five commands: a flag, no call
+          (should-not calls)
+          (drgnx-test-advance 2.1)
+          (should (equal calls '("search/typing")))             ; one call for the burst
+          (drgnx-test-advance 2.1)
+          (should (= (length calls) 1))                         ; nothing typed since: nothing sent
+          (drgnx-tools/search--typing)
+          (drgnx-test-advance 2.1)
+          (should (= (length calls) 2)))))))
+
+(ert-deftest drgnx-search/typing-never-signals-without-a-hub ()
+  (let ((drgnx-search--typed t))
+    (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (&rest _) (error "no hub"))))
+      (should-not (drgnx-search--send-typing))
+      (should-not drgnx-search--typed))))
+
+(ert-deftest drgnx-search/typing-hook-goes-at-teardown ()
+  (drgnx-test-with-modules '(tools/search) :strict t
+                           (should (memq 'drgnx-tools/search--typing post-command-hook))
+                           (should (drgnx-timer-active-p 'search-typing)))
+  (should-not (memq 'drgnx-tools/search--typing post-command-hook))
+  (should-not (drgnx-timer-active-p 'search-typing)))
+
+;;;; The command line
+
+(ert-deftest drgnx-search/bin-search-goes-to-ratatoskr ()
+  ;; `drgnx search …' execs Ratatoskr's `search' with the same arguments; a stand-in for it records them.
+  (skip-unless (executable-find "bash"))
+  (let* ((dir (file-name-as-directory (make-temp-file "drgnx-search-bin" t)))
+         (stub (concat dir "ratatoskr")) (log (concat dir "args"))
+         (process-environment (append (list (concat "DRGNX_RATATOSKR_BIN=" stub) (concat "STUB_LOG=" log)
+                                            (concat "DRGNX_DATA_DIR=" dir "data") (concat "HOME=" dir "home"))
+                                      process-environment)))
     (unwind-protect
-        (let ((default-directory (file-name-as-directory dir)) (project-find-functions nil))
-          (should-error (drgnx-search-semantic "x") :type 'user-error)
-          (should-error (drgnx-search-index-project) :type 'user-error))
+        (progn
+          (with-temp-file stub (insert "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$STUB_LOG\"\n"))
+          (set-file-modes stub #o755)
+          (should (= 0 (call-process (expand-file-name "bin/drgnx" drgnx-dir) nil nil nil
+                                     "search" "query" "/r" "where" "is" "it" "-k" "3")))
+          (should (equal (with-temp-buffer (insert-file-contents log) (split-string (buffer-string) "\n" t))
+                         '("search" "query" "/r" "where" "is" "it" "-k" "3")))
+          (should (= 2 (call-process (expand-file-name "bin/drgnx" drgnx-dir) nil nil nil "search" "nonsense"))))
       (delete-directory dir t))))
 
-(defun drgnx-search-ui-test--index-exists (root)
-  (require 'drgnx-search-store)
-  (let ((f (drgnx-search-store-file root)))
-    (make-directory (file-name-directory f) t)
-    (write-region "" nil f nil 'silent)))
+;;;; Rendering
 
-(ert-deftest drgnx-search-ui/save-schedules-one-reindex ()
-  (skip-unless (executable-find "git"))
-  (drgnx-search-ui-test--project
-    (drgnx-search-ui-test--index-exists root)
-    (let* ((file (expand-file-name "a.txt" root)) (started nil))
-      (cl-letf (((symbol-function 'drgnx-exec-list) (lambda () (error "a timer listed the jobs")))
-                ((symbol-function 'drgnx-search-index-start) (lambda (r &rest _) (push r started) 1)))
-        (drgnx-search-ui-test--timed
-          (dotimes (_ 3)
-            (with-temp-buffer (setq buffer-file-name file) (drgnx-search--after-save))
-            (drgnx-test-advance 5))
-          (should (= (length (drgnx-search-ui-test--reindexes)) 1))   ; each save replaced the pending timer
-          (drgnx-test-advance 24)                       ; 29 s after the last save
-          (should-not started)
-          (drgnx-test-advance 1)                        ; 30 s: the re-index is due…
-          (should-not started)                          ; …and waits for Emacs to be idle
-          (should (= (length (drgnx-search-ui-test--reindexes)) 1))
-          (drgnx-test-idle 2)                           ; the start comes from the idle timer
-          (should (= (length started) 1))
-          (should (equal (file-name-as-directory (car started)) root))
-          (should-not (drgnx-search-ui-test--reindexes)))))))
-
-(ert-deftest drgnx-search-ui/a-job-still-running-when-the-timer-fires-waits-again ()
-  "A live indexer is known from the project's lock file — the timer never lists the jobs."
-  (skip-unless (executable-find "git"))
-  (drgnx-search-ui-test--project
-    (drgnx-search-ui-test--index-exists root)
-    (require 'drgnx-search-index)
-    (let ((started nil)
-          (lock (drgnx-search-index--lock-file root)))
-      (write-region (format "%d %s" (emacs-pid) (drgnx-search-index--start-time (emacs-pid))) nil lock nil 'silent)
-      (cl-letf (((symbol-function 'drgnx-exec-list) (lambda () (error "a timer listed the jobs")))
-                ((symbol-function 'drgnx-search-index-start) (lambda (r &rest _) (push r started) 1)))
-        (drgnx-search-ui-test--timed
-          (drgnx-search--reindex root)
-          (should-not started)
-          (should (= (length (drgnx-search-ui-test--reindexes)) 1))
-          ;; the lock is gone: the next firing starts
-          (delete-file lock)
-          (drgnx-search--reindex root)
-          (should (= (length started) 1)))))))
-
-(ert-deftest drgnx-search-ui/no-index-no-reindex ()
-  (skip-unless (executable-find "git"))
-  (drgnx-search-ui-test--project
-    (let* ((file (expand-file-name "a.txt" root)))
-      (drgnx-search-ui-test--timed
-        ;; no index file
-        (with-temp-buffer (setq buffer-file-name file) (drgnx-search--after-save))
-        (should-not (drgnx-search-ui-test--reindexes))
-        ;; an index, but the project turned search off
-        (drgnx-search-ui-test--index-exists root)
-        (make-directory (expand-file-name ".drgnx" root) t)
-        (write-region "(:off t)" nil (expand-file-name ".drgnx/search.eld" root) nil 'silent)
-        (with-temp-buffer (setq buffer-file-name file) (drgnx-search--after-save))
-        (should-not (drgnx-search-ui-test--reindexes))
-        ;; a file outside any project
-        (delete-file (expand-file-name ".drgnx/search.eld" root))
-        (let ((project-find-functions nil))
-          (with-temp-buffer (setq buffer-file-name (expand-file-name "x" state)) (drgnx-search--after-save)))
-        (should-not (drgnx-search-ui-test--reindexes))
-        ;; and with the index and no :off it does schedule
-        (with-temp-buffer (setq buffer-file-name file) (drgnx-search--after-save))
-        (should (= (length (drgnx-search-ui-test--reindexes)) 1))))))
-
-(ert-deftest drgnx-search-ui/a-save-with-the-module-off-schedules-nothing ()
-  (skip-unless (executable-find "git"))
-  (drgnx-search-ui-test--project
-    (drgnx-search-ui-test--index-exists root)
-    (let ((drgnx-modules--runs nil))                    ; tools/search has no run: it is off
-      (drgnx-test-with-clock ()
-        (with-temp-buffer (setq buffer-file-name (expand-file-name "a.txt" root)) (drgnx-search--after-save))
-        (should-not (drgnx-search-ui-test--reindexes))))))
-
-(ert-deftest drgnx-search-ui/index-project-starts-the-job-and-a-prefix-rebuilds ()
-  (skip-unless (executable-find "git"))
-  (drgnx-search-ui-test--project
-    (let ((calls nil))
-      (cl-letf (((symbol-function 'drgnx-search-index-start) (lambda (r &optional rebuild) (push (list r rebuild) calls) 1)))
-        (drgnx-search-index-project)
-        (drgnx-search-index-project t)
-        (should (equal (mapcar #'cadr (reverse calls)) '(nil t)))
-        (make-directory (expand-file-name ".drgnx" root) t)
-        (write-region "(:off t)" nil (expand-file-name ".drgnx/search.eld" root) nil 'silent)
-        (drgnx-search-index-project)
-        (should (= (length calls) 2))))))   ; search off: no job
-
-(ert-deftest drgnx-search-ui/a-start-that-backs-off-says-so ()
-  "An index job started a moment ago makes the start return nil: the message must not claim indexing began."
-  (skip-unless (executable-find "git"))
-  (drgnx-search-ui-test--project
-    (let ((said nil))
-      (cl-letf (((symbol-function 'drgnx-search-index-start) (lambda (&rest _) nil))
-                ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
-        (drgnx-search-index-project t)
-        (should (cl-some (lambda (m) (string-match-p "try again shortly" m)) said))
-        (should-not (cl-some (lambda (m) (string-match-p "\\`Indexing" m)) said))))))
-
-(ert-deftest drgnx-search-ui/index-status-reports-the-index ()
-  (skip-unless (and (executable-find "git") (sqlite-available-p)))
-  (drgnx-search-ui-test--project
-    (should (string-match-p "no index" (drgnx-search-status root)))
-    (let ((db (drgnx-search-store-open root)))
-      (drgnx-search-store-put-file db "a.txt" "h" (list (list :start 1 :end 2 :text "alpha" :vector [1.0 0.0])))
-      (drgnx-search-store-set-meta db '(:provider stub :model "stub-1" :dims 2 :indexed-at 1700000000.0))
-      (sqlite-close db))
-    (cl-letf (((symbol-function 'drgnx-search-index--running-job) (lambda (_) nil)))
-      (let ((s (drgnx-search-status root)))
-        (should (string-match-p "1 chunk" s))
-        (should (string-match-p "1 file" s))
-        (should (string-match-p "stub-1" s))
-        (should (string-match-p "not running" s))))
-    (cl-letf (((symbol-function 'drgnx-search-index--running-job) (lambda (_) '(:id 3))))
-      (should (string-match-p "indexing now" (drgnx-search-status root))))))
-
-;;;; Fix round 1
-
-(ert-deftest drgnx-search-ui/results-are-shown-from-the-originating-buffer-and-window ()
-  (skip-unless (executable-find "git"))
-  (drgnx-search-ui-test--project
-    (let* ((origin (generate-new-buffer " origin")) (win (selected-window)) (later nil) (seen nil)
-           (hits (list (list :path "a.txt" :start 1 :end 1 :text "alpha" :score 0.03 :why 'both))))
-      (unwind-protect
-          (with-current-buffer origin
-            (setq default-directory root)
-            (set-window-buffer win origin)
-            (cl-letf (((symbol-function 'drgnx-search-async) (lambda (_r _q cb &rest _) (setq later cb)))
-                      ((symbol-function 'xref-show-xrefs)
-                       (lambda (&rest _) (setq seen (list (current-buffer) (selected-window))))))
-              (drgnx-search-semantic "alpha")
-              ;; the answer arrives from a sentinel: other buffer current, another window selected
-              (with-temp-buffer
-                (let ((other (split-window win)))
-                  (unwind-protect
-                      (with-selected-window other (funcall later hits))
-                    (delete-window other))))
-              (should (eq (car seen) origin))
-              (should (eq (cadr seen) win))))
-        (kill-buffer origin)))))
-
-(ert-deftest drgnx-search-ui/focus-moves-to-the-results-when-the-answer-arrives ()
-  (skip-unless (executable-find "git"))
-  (drgnx-search-ui-test--project
-    (let ((later nil) (hits (list (list :path "a.txt" :start 1 :end 1 :text "alpha" :score 0.03 :why 'both)))
-          (xref (get-buffer-create "*xref*")))
-      (unwind-protect
-          (save-window-excursion
-            (delete-other-windows)
-            (cl-letf (((symbol-function 'drgnx-search-async) (lambda (_r _q cb &rest _) (setq later cb)))
-                      ((symbol-function 'xref-show-xrefs)
-                       (lambda (&rest _) (set-window-buffer (split-window (selected-window)) xref))))
-              (drgnx-search-semantic "alpha")
-              (should-not (eq (window-buffer (selected-window)) xref))
-              (funcall later hits)
-              (should (eq (window-buffer (selected-window)) xref))))
-        (kill-buffer xref)))))
-
-(ert-deftest drgnx-search-ui/results-fall-back-when-the-origin-is-gone-and-errors-are-messages ()
-  (skip-unless (executable-find "git"))
-  (drgnx-search-ui-test--project
-    (let* ((origin (generate-new-buffer " origin")) (later nil) (said nil) (seen nil)
-           (hits (list (list :path "a.txt" :start 1 :end 1 :text "alpha" :score 0.03 :why 'both))))
-      (with-current-buffer origin (setq default-directory root))
-      (cl-letf (((symbol-function 'drgnx-search-async) (lambda (_r _q cb &rest _) (setq later cb)))
-                ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said)))
-                ((symbol-function 'xref-show-xrefs) (lambda (&rest _) (setq seen (current-buffer)))))
-        (with-current-buffer origin (drgnx-search-semantic "alpha"))
-        (kill-buffer origin)                          ; gone before the answer
-        (with-temp-buffer (funcall later hits) (should (buffer-live-p seen)))   ; shown, in whatever is current
-        ;; an error while showing is one message, never a signal from the sentinel
-        (cl-letf (((symbol-function 'xref-show-xrefs) (lambda (&rest _) (error "display broke"))))
-          (setq said nil)
-          (funcall later hits)
-          (should (cl-some (lambda (m) (string-match-p "display broke" m)) said)))))))
-
-(ert-deftest drgnx-search-ui/a-project-is-checked-before-the-prompt ()
-  (let ((dir (make-temp-file "drgnx-noproj" t)))
-    (unwind-protect
-        (let ((default-directory (file-name-as-directory dir)) (project-find-functions nil))
-          (cl-letf (((symbol-function 'read-string) (lambda (&rest _) (error "prompted"))))
-            (should-error (call-interactively #'drgnx-search-semantic) :type 'user-error)))
-      (delete-directory dir t))))
-
-(ert-deftest drgnx-search-ui/save-skips-files-the-indexer-never-indexes ()
-  (skip-unless (executable-find "git"))
-  (drgnx-search-ui-test--project
-    (drgnx-search-ui-test--index-exists root)
-    (make-directory (expand-file-name ".drgnx" root) t)
-    (write-region "(:exclude (\"vendor/\"))" nil (expand-file-name ".drgnx/search.eld" root) nil 'silent)
-    (drgnx-search-ui-test--timed
-      (dolist (rel '(".env" ".github/ci.yml" "id_rsa" "deploy.pem" "my-secret.txt" "vendor/x.js"))
-        (with-temp-buffer (setq buffer-file-name (expand-file-name rel root)) (drgnx-search--after-save)))
-      (should-not (drgnx-search-ui-test--reindexes))
-      (with-temp-buffer (setq buffer-file-name (expand-file-name "src/a.el" root)) (drgnx-search--after-save))
-      (should (= (length (drgnx-search-ui-test--reindexes)) 1)))))
-
-(ert-deftest drgnx-search-ui/the-timer-rechecks-the-index-and-the-config ()
-  (skip-unless (executable-find "git"))
-  (drgnx-search-ui-test--project
-    (let ((started nil))
-      (cl-letf (((symbol-function 'drgnx-search-index-running-p) (lambda (_) nil))
-                ((symbol-function 'drgnx-search-index-start) (lambda (r &rest _) (push r started) 1)))
-        ;; the index was deleted since the save
-        (drgnx-search--reindex root)
-        (should-not started)
-        ;; the index is there but search was turned off since
-        (drgnx-search-ui-test--index-exists root)
-        (make-directory (expand-file-name ".drgnx" root) t)
-        (write-region "(:off t)" nil (expand-file-name ".drgnx/search.eld" root) nil 'silent)
-        (drgnx-search--reindex root)
-        (should-not started)
-        (delete-file (expand-file-name ".drgnx/search.eld" root))
-        (drgnx-search--reindex root)
-        (should (= (length started) 1))))))
-
-(ert-deftest drgnx-search-ui/status-tells-an-unreadable-index-from-no-index ()
-  (skip-unless (and (executable-find "git") (sqlite-available-p)))
-  (drgnx-search-ui-test--project
-    (let ((f (drgnx-search-store-file root)))
-      (make-directory (file-name-directory f) t)
-      (write-region "this is not a database at all, just text\n" nil f nil 'silent))
-    (cl-letf (((symbol-function 'drgnx-search-index--running-job) (lambda (_) nil)))
-      (let ((s (drgnx-search-status root)))
-        (should (string-match-p "cannot be read" s))
-        (should-not (string-match-p "no index" s)))
-      (cl-letf (((symbol-function 'drgnx-search-store-open-read) (lambda (_) (error "cannot open"))))
-        (let ((s (drgnx-search-status root)))
-          (should (string-match-p "cannot be read" s))
-          (should-not (string-match-p "no index" s)))))))
-
-;;;; Final review
-
-(defun drgnx-search-ui-test--said (fn)
-  "The messages FN says, newest first."
-  (let ((said nil))
-    (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said) nil)))
-      (funcall fn))
-    said))
-
-(ert-deftest drgnx-search-ui/without-sqlite-the-index-commands-say-so-and-do-nothing ()
-  (skip-unless (executable-find "git"))
-  (drgnx-search-ui-test--project
-    (let ((no-sqlite "this Emacs has no SQLite — semantic search needs Emacs built with SQLite") (touched nil))
-      (cl-letf (((symbol-function 'sqlite-available-p) (lambda () nil))
-                ((symbol-function 'drgnx-search-index-start) (lambda (&rest _) (setq touched 'start)))
-                ((symbol-function 'drgnx-search-index--running-job) (lambda (&rest _) (setq touched 'jobs) nil))
-                ((symbol-function 'drgnx-search-store-file) (lambda (&rest _) (setq touched 'store) "/nonexistent")))
-        (dolist (rebuild '(nil t))
-          (let ((said (drgnx-search-ui-test--said (lambda () (drgnx-search-index-project rebuild)))))
-            (should (equal said (list no-sqlite)))))
-        (should (equal (drgnx-search-ui-test--said #'drgnx-search-index-status) (list no-sqlite)))
-        (should-not touched)))))
-
-(ert-deftest drgnx-search-ui/a-rebuild-while-a-job-runs-says-to-wait ()
-  (skip-unless (executable-find "git"))
-  (drgnx-search-ui-test--project
-    (let ((calls nil))
-      (cl-letf (((symbol-function 'drgnx-search-index-start) (lambda (&rest a) (push a calls) 1))
-                ((symbol-function 'drgnx-search-index--running-job) (lambda (_) '(:id "j" :status running))))
-        (let ((said (drgnx-search-ui-test--said (lambda () (drgnx-search-index-project t)))))
-          (should (string-match-p "\\`an index job is already running for .+; rebuild after it finishes\\'" (car said))))
-        (let ((said (drgnx-search-ui-test--said (lambda () (drgnx-search-index-project)))))
-          (should (string-match-p "already being indexed" (car said))))
-        (should-not calls)))))
-
-(ert-deftest drgnx-search-ui/the-prompt-offers-the-symbol-as-its-default ()
-  (skip-unless (executable-find "git"))
-  (drgnx-search-ui-test--project
-    (let ((asked nil))
-      (with-temp-buffer
-        (setq default-directory root)
-        (insert "parse_config")
-        (goto-char 3)
-        (cl-letf (((symbol-function 'read-string) (lambda (&rest args) (setq asked args) "parse_config"))
-                  ((symbol-function 'drgnx-search-async) #'ignore))
-          (call-interactively #'drgnx-search-semantic)))
-      (should (string-match-p "parse_config" (nth 0 asked)))   ; shown in the prompt
-      (should-not (nth 1 asked))                                ; no initial input to delete
-      (should (equal (nth 3 asked) "parse_config")))))           ; RET takes it
-
-(ert-deftest drgnx-search-ui/a-broken-config-stops-the-index-commands-and-the-save-hook ()
-  (skip-unless (and (executable-find "git") (sqlite-available-p)))
-  (drgnx-search-ui-test--project
-    (drgnx-search-ui-test--index-exists root)
-    (make-directory (expand-file-name ".drgnx" root) t)
-    (write-region "(:exclude \"vendor/\")" nil (expand-file-name ".drgnx/search.eld" root) nil 'silent)
-    (let ((started nil))
-      (cl-letf (((symbol-function 'drgnx-search-index--running-job) (lambda (_) nil))
-                ((symbol-function 'drgnx-search-index-start) (lambda (r &rest _) (push r started) 1)))
-        (drgnx-search-ui-test--timed
-          (with-temp-buffer (setq buffer-file-name (expand-file-name "a.txt" root)) (drgnx-search--after-save))
-          (should-not (drgnx-search-ui-test--reindexes))
-          (drgnx-search--reindex root)
-          (should-not started)
-          (let ((said (drgnx-search-ui-test--said (lambda () (drgnx-search-index-project)))))
-            (should (string-match-p "\\.drgnx/search\\.eld cannot be read: :exclude: expected a list, got string" (car said))))
-          (should-not started)
-          (should (string-match-p "\\.drgnx/search\\.eld cannot be read" (drgnx-search-status root))))))))
-
-(ert-deftest drgnx-search-ui/status-names-the-index-file ()
-  (skip-unless (and (executable-find "git") (sqlite-available-p)))
-  (drgnx-search-ui-test--project
-    (let ((db (drgnx-search-store-open root)))
-      (drgnx-search-store-put-file db "a.txt" "h" (list (list :start 1 :end 2 :text "alpha" :vector [1.0 0.0])))
-      (drgnx-search-store-set-meta db '(:provider stub :model "stub-1" :dims 2 :indexed-at 1700000000.0))
-      (sqlite-close db))
-    (cl-letf (((symbol-function 'drgnx-search-index--running-job) (lambda (_) nil)))
-      (should (string-search (abbreviate-file-name (drgnx-search-store-file root)) (drgnx-search-status root))))))
-
-(ert-deftest drgnx-search-ui/the-xref-line-is-the-line-shown ()
-  "The summary is the chunk's first non-blank line, and the location is that line."
-  (require 'xref)
-  (let* ((item (drgnx-search--xref "/p/" '(:path "a.el" :start 10 :end 20 :text "\n  \n(defun foo ()\n  1)")))
-         (loc (xref-item-location item)))
-    (should (equal (xref-item-summary item) "(defun foo ()"))
-    (should (= (xref-file-location-line loc) 12))))
+(ert-deftest drgnx-search/main-thread-render ()
+  :tags '(:timing)                                      ; wall-clock budget: the :timing group runs alone
+  ;; Showing a 10-hit answer is render only: the median of 20 renders stays under one frame (16 ms).
+  (drgnx-search-test--with-xref
+    (let ((answer (drgnx-search-test--answer :hits (cl-loop for i from 1 to 10 collect (drgnx-search-test--hit :line_start i))))
+          (samples nil))
+      (dotimes (_ 20)
+        (let ((start (float-time)))
+          (drgnx-search--show "/p/" "alpha" answer)
+          (push (- (float-time) start) samples)))
+      (should (<= (nth 10 (sort samples #'<)) 0.016)))))
 
 (provide 'mod-search-test)
 ;;; mod-search-test.el ends here
-
-(ert-deftest drgnx-search-ui/commands-ask-about-a-projects-remote-route-first ()
-  ;; The project's .drgnx/ai.eld may route the embed role to a remote provider; the user is asked once, in the
-  ;; command they ran, with the project as the current directory (never later, from the job or a timer).
-  (skip-unless (executable-find "git"))
-  (drgnx-search-ui-test--project
-    (let (asked (outside (make-temp-file "drgnx-elsewhere" t)))
-      (unwind-protect
-          (cl-letf (((symbol-function 'drgnx-ai-confirm-project-route)
-                     (lambda () (push (file-truename default-directory) asked) t))
-                    ((symbol-function 'drgnx-search-async) (drgnx-search-ui-test--stub-search nil "no index"))
-                    ((symbol-function 'drgnx-search-setup) (lambda (&rest _) (list 'ok "fine")))
-                    ((symbol-function 'drgnx-search-index-start) (lambda (&rest _) t))
-                    ((symbol-function 'message) #'ignore))
-            (let ((default-directory (file-name-as-directory (expand-file-name "sub" root))))
-              (make-directory default-directory t)
-              (dolist (cmd '(drgnx-search-semantic drgnx-search-index-project drgnx-search-set-up))
-                (setq asked nil)
-                (if (eq cmd 'drgnx-search-semantic) (funcall cmd "alpha") (funcall cmd))
-                (should (equal asked (list (file-truename root)))))))     ; once, with the project root
-        (delete-directory outside t)))))
-
-(ert-deftest drgnx-search/off-stops-a-running-indexer-and-leaves-no-lock ()
-  (skip-unless (executable-find "sleep"))
-  (drgnx-search-ui-test--project
-    (let* ((proc (make-process :name "fake-indexer" :command '("sleep" "60") :noquery t))
-           (pid (process-id proc))
-           (lock (drgnx-search-index--lock-file root))
-           (stopped nil)
-           (job (list :id "j1" :status 'running :name "search-index: proj"
-                      :argv (list (drgnx-emacs-program) "--batch" "-f" "drgnx-search-index-cli" (directory-file-name root)))))
-      (unwind-protect
-          (progn
-            (make-directory (file-name-directory lock) t)
-            (write-region (format "%d 0" pid) nil lock nil 'silent)
-            (should (drgnx-search-index-running-p root))
-            (cl-letf (((symbol-function 'drgnx-exec-list) (lambda () (list job)))
-                      ((symbol-function 'drgnx-exec-stop) (lambda (id) (push id stopped))))
-              (drgnx-search--teardown))
-            (should (equal stopped '("j1")))                    ; the hub is asked, nothing here waited
-            (should-not (file-exists-p lock)))                  ; at once: no stale lock
-        (when (process-live-p proc) (kill-process proc))))))

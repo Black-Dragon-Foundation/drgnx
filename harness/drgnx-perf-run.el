@@ -351,40 +351,41 @@ local sh) listed in the Explorer, remembered as a remote root, its connection op
   "The remote-typing workload's teardown: the Explorer's folders put back, the connections closed, the mock removed.")
 
 (defun drgnx-perf-run--index-setup-form ()
-  "The typing-with-index workload's setup: the drgnx repo indexed into the session's own state dir by a stub
-embedder (384 numbers per chunk, no provider, no network), the index read into memory by one query, and the
-session functions the check and the teardown use."
-  (prin1-to-string
-   `(progn
-      (require 'drgnx-search)
-      (require 'drgnx-search-index)
-      (require 'drgnx-search-query)
-      (unless (sqlite-available-p) (error "This Emacs has no SQLite: no index to load"))
-      (unless (memq 'drgnx-search--after-save after-save-hook) (error "The search module (tools/search) is not on"))
-      (defvar drgnx-perf--index-root nil "The indexed project.")
-      (defun drgnx-perf--index-embed (inputs &rest _)
-        "Unit vectors of 384 numbers from the text's hashes."
-        (setq drgnx-ai-embed-last-info (list :provider 'perf-stub :model "perf-stub"))
-        (vconcat
-         (mapcar (lambda (text)
-                   (let* ((bytes (apply #'append (mapcar (lambda (i) (append (secure-hash 'sha256 (format "%d%s" i text) nil nil t) nil))
-                                                         (number-sequence 1 12))))
-                          (v (mapcar (lambda (b) (/ (- b 127.5) 127.5)) bytes))
-                          (norm (sqrt (apply #'+ (mapcar (lambda (x) (* x x)) v)))))
-                     (vconcat (mapcar (lambda (x) (/ x norm)) v))))
-                 inputs)))
-      (setq drgnx-perf--index-root ,(file-name-as-directory drgnx-ui-repo-dir))
-      (let ((r (drgnx-search-index drgnx-perf--index-root :embed #'drgnx-perf--index-embed)))
-        (when (plist-get r :error) (error "Indexing the repo: %s" (plist-get r :error)))
-        (when (< (plist-get r :chunks) 100) (error "Only %s chunks indexed" (plist-get r :chunks))))
-      (drgnx-search drgnx-perf--index-root "where does the program start" :embed #'drgnx-perf--index-embed)
-      (defun drgnx-perf--index-check ()
-        "The index is in memory: the query cache holds its fingerprints."
-        (and (> (length (nth 1 (car (hash-table-values drgnx-search--cache)))) 0) t))
-      (defun drgnx-perf--index-teardown ()
-        (clrhash drgnx-search--cache)
-        (ignore-errors (delete-file (drgnx-search-store-file drgnx-perf--index-root))))
-      t)))
+  "The typing-with-index workload's setup, as a form string: a hub of the workload (`drgnx-perf-run--hub-form'; the
+session's environment starts none) indexes a git project made of the checkout's own code (the container's /src is
+not a git project; Hrafn; tier 1 done before the typing starts), and the session functions the check and the
+teardown use."
+  (concat
+   "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) "
+   (prin1-to-string
+    `(progn
+       (require 'drgnx-search)
+       (unless (memq 'drgnx-tools/search--typing post-command-hook) (error "The search module (tools/search) is not on"))
+       (defvar drgnx-perf--index-root nil "The indexed project, without a trailing slash.")
+       (defun drgnx-perf--index-chunks ()
+         "How many chunks the hub holds of the project."
+         (or (plist-get (drgnx-hub-call-sync "search/status" (list :root drgnx-perf--index-root) 10) :chunks) 0))
+       (setq drgnx-perf--index-root (directory-file-name (make-temp-file "drgnx-perf-index" t)))
+       (dolist (dir '("core" "wb"))
+         (copy-directory (expand-file-name dir ,(directory-file-name drgnx-ui-repo-dir))
+                         (expand-file-name dir drgnx-perf--index-root) nil t t))
+       (let ((default-directory (file-name-as-directory drgnx-perf--index-root)))
+         (dolist (args '(("init" "-q") ("add" "-A")
+                         ("-c" "user.name=perf" "-c" "user.email=perf@localhost" "commit" "-q" "-m" "perf")))
+           (unless (zerop (apply #'call-process "git" nil nil nil args)) (error "git %S failed" args))))
+       (drgnx-hub-call-sync "search/index" (list :root drgnx-perf--index-root :now t) 30)
+       (let ((deadline (+ (float-time) 120)))
+         (while (and (< (drgnx-perf--index-chunks) 100) (< (float-time) deadline)) (accept-process-output nil 0.5)))
+       (when (< (drgnx-perf--index-chunks) 100) (error "The hub holds only %s chunks of the project" (drgnx-perf--index-chunks)))
+       (defun drgnx-perf--index-check ()
+         "The hub holds the index."
+         (>= (drgnx-perf--index-chunks) 100))
+       (defun drgnx-perf--index-teardown ()
+         (drgnx-perf--hub-stop)
+         (ignore-errors (delete-directory drgnx-perf--index-root t))
+         t)
+       t))
+   ")"))
 
 (defun drgnx-perf-run--window-switch-setup-form ()
   "The window-switch workload's setup: 3 editor groups with the dock, the panel and the right dock shown, and

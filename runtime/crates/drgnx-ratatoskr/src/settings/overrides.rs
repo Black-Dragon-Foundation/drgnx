@@ -164,6 +164,11 @@ pub fn from_json(name: &str, v: &Value, values: &mut RuntimeValues) -> Result<()
             let Alist(pairs) = de::<Alist<std::net::IpAddr>>(v)?;
             values.sandbox_proxy_pins = pairs;
         }
+        "drgnx-search-model-mirror" => values.search_model_mirror = de(v)?,
+        "drgnx-search-builtin" => values.search_builtin = de(v)?,
+        "drgnx-search-include" => values.search_include = de(v)?,
+        "drgnx-search-exclude" => values.search_exclude = de(v)?,
+        "drgnx-search-off" => values.search_off = de(v)?,
         other => return Err(refused("", format!("{other} is not a runtime setting"))),
     }
     Ok(())
@@ -257,6 +262,11 @@ pub fn to_json(name: &str, values: &RuntimeValues) -> Option<Value> {
                 .map(|(k, a)| (k.as_str(), json!(a)))
                 .collect(),
         ),
+        "drgnx-search-model-mirror" => json!(values.search_model_mirror),
+        "drgnx-search-builtin" => json!(values.search_builtin),
+        "drgnx-search-include" => json!(values.search_include),
+        "drgnx-search-exclude" => json!(values.search_exclude),
+        "drgnx-search-off" => json!(values.search_off),
         _ => return None,
     })
 }
@@ -284,6 +294,9 @@ pub const PER_PROJECT: &[&str] = &[
     "drgnx-runners-image",
     "drgnx-runners-weight",
     "drgnx-runners-project-visibility",
+    "drgnx-search-include",
+    "drgnx-search-exclude",
+    "drgnx-search-off",
 ];
 
 /// The first override of LIST that cannot be one: its index and why (a name not in [`RUNTIME_NAMES`], one not in
@@ -566,7 +579,14 @@ mod tests {
             let one = [o(name, to_json(name, d).unwrap())];
             assert_eq!(
                 validate(&one, true).is_ok(),
-                name == "drgnx-ai-roles" || name.starts_with("drgnx-runners-"),
+                name == "drgnx-ai-roles"
+                    || name.starts_with("drgnx-runners-")
+                    || [
+                        "drgnx-search-include",
+                        "drgnx-search-exclude",
+                        "drgnx-search-off"
+                    ]
+                    .contains(&name),
                 "{name}"
             );
             assert!(validate(&one, false).is_ok(), "{name}");

@@ -75,6 +75,7 @@ pub mod coord;
 pub mod dispatch;
 pub mod doctor;
 pub mod embed;
+pub mod eval_cli;
 pub mod exec;
 pub mod front;
 pub mod gateway;
@@ -96,6 +97,8 @@ pub mod runners;
 pub mod runtime_db;
 pub mod sandbox;
 pub mod sandbox_settings;
+pub mod search;
+pub mod search_cli;
 #[cfg(feature = "test-hooks")]
 pub mod sequencer;
 pub mod server;

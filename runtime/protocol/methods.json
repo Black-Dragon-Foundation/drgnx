@@ -15049,6 +15049,986 @@
       "classes": [
         "user"
       ],
+      "doc": "the built-in model's state and device, the servers that can embed and which answer, and the model a query prefers",
+      "name": "search/embedders",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "BuiltinInfo": {
+            "additionalProperties": false,
+            "description": "The built-in model.",
+            "properties": {
+              "bytes": {
+                "description": "What the download is, in bytes.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "device": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Device"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "downloaded": {
+                "description": "Bytes held (all of them when ready).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "error": {
+                "description": "Why the last download failed.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "model": {
+                "type": "string"
+              },
+              "state": {
+                "description": "`missing`, `partial`, `downloading`, `ready` or `corrupt`.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "model",
+              "state",
+              "bytes",
+              "downloaded"
+            ],
+            "type": "object"
+          },
+          "Device": {
+            "additionalProperties": false,
+            "description": "The device the built-in worker runs on, as it said first.",
+            "properties": {
+              "kind": {
+                "description": "`gpu` or `cpu`.",
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "name",
+              "why"
+            ],
+            "type": "object"
+          },
+          "ServerInfo": {
+            "additionalProperties": false,
+            "description": "A server that can embed (the `tei` and `ollama` providers).",
+            "properties": {
+              "answering": {
+                "type": "boolean"
+              },
+              "family": {
+                "description": "The address family that answered the probe: `ipv4` or `ipv6`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "url",
+              "model",
+              "answering"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "builtin": {
+            "$ref": "#/$defs/BuiltinInfo"
+          },
+          "prefer": {
+            "description": "The model a query uses when every project is fully indexed: a server that answers, else the built-in model.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "servers": {
+            "items": {
+              "$ref": "#/$defs/ServerInfo"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "builtin",
+          "servers"
+        ],
+        "title": "EmbeddersAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "start or rebuild a project's index; now overrides the battery gate",
+      "name": "search/index",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "now": {
+            "description": "Overrides the battery gate: tier 2 runs until nothing is missing.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "rebuild": {
+            "description": "Drop the index and build it again.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "title": "IndexParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "started": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "started"
+        ],
+        "title": "Started",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "download the built-in model after the user agreed to its size; nothing downloads without this consent",
+      "name": "search/model-download",
+      "params": {
+        "$defs": {
+          "ConsentParam": {
+            "additionalProperties": false,
+            "description": "The user agreed to the download of this size.",
+            "properties": {
+              "bytes": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "bytes"
+            ],
+            "type": "object"
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "consent": {
+            "$ref": "#/$defs/ConsentParam"
+          },
+          "model": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "model",
+          "consent"
+        ],
+        "title": "DownloadParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "started": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "started"
+        ],
+        "title": "Started",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "hybrid keyword, symbol, path and vector results for a question about a project's code; every answer says which model took part and what lags",
+      "name": "search/query",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "Prompt": {
+            "description": "a prompt or a message: at most 1 MiB (1048576 characters)",
+            "maxLength": 1048576,
+            "type": "string"
+          },
+          "Scope": {
+            "description": "Which files a query looks in.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tests",
+                  "docs",
+                  "all"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "code",
+                "description": "Code, and tests below it.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "k": {
+            "description": "How many hits, 1 to 100; default 10.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath",
+            "description": "The project's root: any checkout of it."
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Scope"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Default `code`."
+          },
+          "text": {
+            "$ref": "#/$defs/Prompt"
+          }
+        },
+        "required": [
+          "root",
+          "text"
+        ],
+        "title": "QueryParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Hit": {
+            "additionalProperties": false,
+            "description": "One hit.",
+            "properties": {
+              "line_end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "line_start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "type": "string"
+              },
+              "preview": {
+                "type": "string"
+              },
+              "reanchored": {
+                "description": "Its lines were found again in the file as it is now.",
+                "type": "boolean"
+              },
+              "routes": {
+                "description": "The routes that found it: `symbol`, `name`, `path`, `keyword`, `vector`.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "score": {
+                "format": "double",
+                "type": "number"
+              },
+              "symbol": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "line_start",
+              "line_end",
+              "score",
+              "preview",
+              "routes",
+              "reanchored"
+            ],
+            "type": "object"
+          },
+          "Lag": {
+            "additionalProperties": false,
+            "description": "How far behind the vectors are.",
+            "properties": {
+              "built_from": {
+                "type": "string"
+              },
+              "chunks_behind": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "chunks_total": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "dirty_files": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "files_behind": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "model": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "chunks_total",
+              "chunks_behind",
+              "files_behind",
+              "dirty_files",
+              "built_from"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "hits": {
+            "items": {
+              "$ref": "#/$defs/Hit"
+            },
+            "type": "array"
+          },
+          "lag": {
+            "$ref": "#/$defs/Lag"
+          },
+          "lag_line": {
+            "description": "The line that ends a text answer, e.g. \"vectors: 12 files behind (…); keyword and symbol results are current\".",
+            "type": "string"
+          },
+          "model": {
+            "description": "The model whose vectors took part; none when the answer is keyword, symbol and path results only.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "notice": {
+            "description": "Why there are no vectors, or what else the reader should know.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "hits",
+          "lag",
+          "lag_line"
+        ],
+        "title": "QueryAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "what starting TEI or Ollama would run, shown before the user agrees; runs and writes nothing",
+      "name": "search/server-plan",
+      "params": {
+        "$defs": {
+          "ServerKind": {
+            "description": "A server the wizard can start on request.",
+            "enum": [
+              "tei",
+              "ollama"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "$ref": "#/$defs/ServerKind"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "ServerKindParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What a start would do, shown before the user agrees. A plan runs and writes nothing.",
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "bytes": {
+            "description": "About what the model weighs.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "commands": {
+            "description": "The commands a start runs, in order.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "gpu": {
+            "description": "The GPU image would run.",
+            "type": "boolean"
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "memory_cap": {
+            "description": "The memory cap of the container (TEI) as podman writes it, e.g. `4g`; empty for Ollama.",
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "unit_path": {
+            "description": "The Quadlet file a start writes (TEI).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "why": {
+            "description": "Why not, when it is not available.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "available",
+          "gpu",
+          "memory_cap",
+          "model",
+          "commands"
+        ],
+        "title": "ServerPlan",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "start TEI (a capped podman Quadlet) or Ollama after the user confirmed the plan; the hub never starts one by itself",
+      "name": "search/server-start",
+      "params": {
+        "$defs": {
+          "ServerKind": {
+            "description": "A server the wizard can start on request.",
+            "enum": [
+              "tei",
+              "ollama"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "description": "The user agreed to what `search/server-plan` showed; a start without it is refused.",
+            "type": "boolean"
+          },
+          "kind": {
+            "$ref": "#/$defs/ServerKind"
+          }
+        },
+        "required": [
+          "kind",
+          "confirm"
+        ],
+        "title": "ServerStartParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ProviderEntry": {
+            "additionalProperties": false,
+            "description": "An entry for the settings' provider table; the editor's settings writer adds it, the hub never does.",
+            "properties": {
+              "auth": {
+                "type": "string"
+              },
+              "base": {
+                "type": "string"
+              },
+              "caps": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "base",
+              "auth",
+              "caps"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "$ref": "#/$defs/ProviderEntry"
+          },
+          "started": {
+            "type": "boolean"
+          },
+          "unit": {
+            "description": "The service that runs it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "started",
+          "unit",
+          "provider"
+        ],
+        "title": "ServerStarted",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "stop the server a start began",
+      "name": "search/server-stop",
+      "params": {
+        "$defs": {
+          "ServerKind": {
+            "description": "A server the wizard can start on request.",
+            "enum": [
+              "tei",
+              "ollama"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "$ref": "#/$defs/ServerKind"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "ServerKindParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "stopped": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "stopped"
+        ],
+        "title": "ServerStopped",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a project's index: files and chunks per class, coverage errors, the lag, the models that have vectors, tier 2's state and the embed worker's device",
+      "name": "search/status",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "title": "RootParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ClassCount": {
+            "additionalProperties": false,
+            "description": "Files and chunks of one class.",
+            "properties": {
+              "chunks": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "class": {
+                "type": "string"
+              },
+              "files": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "class",
+              "files",
+              "chunks"
+            ],
+            "type": "object"
+          },
+          "Device": {
+            "additionalProperties": false,
+            "description": "The device the built-in worker runs on, as it said first.",
+            "properties": {
+              "kind": {
+                "description": "`gpu` or `cpu`.",
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "name",
+              "why"
+            ],
+            "type": "object"
+          },
+          "Lag": {
+            "additionalProperties": false,
+            "description": "How far behind the vectors are.",
+            "properties": {
+              "built_from": {
+                "type": "string"
+              },
+              "chunks_behind": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "chunks_total": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "dirty_files": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "files_behind": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "model": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "chunks_total",
+              "chunks_behind",
+              "files_behind",
+              "dirty_files",
+              "built_from"
+            ],
+            "type": "object"
+          },
+          "ModelCount": {
+            "additionalProperties": false,
+            "properties": {
+              "model": {
+                "type": "string"
+              },
+              "vectors": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "model",
+              "vectors"
+            ],
+            "type": "object"
+          },
+          "WorkerStatus": {
+            "additionalProperties": false,
+            "properties": {
+              "crashes": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "device": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Device"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "fallback": {
+                "description": "Set when a lost GPU sent the work to the CPU path: the reason.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "spawns": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "spawns",
+              "crashes"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "chunks": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "coverage_errors": {
+            "description": "Classes with listed files and no chunks, and non-empty files with none (storage design §12A.3 item 9).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "embedded": {
+            "description": "Vectors tier 2 wrote since the hub opened the project.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "files": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lag": {
+            "$ref": "#/$defs/Lag"
+          },
+          "models": {
+            "description": "Models that have vectors here: the model, and how many.",
+            "items": {
+              "$ref": "#/$defs/ModelCount"
+            },
+            "type": "array"
+          },
+          "per_class": {
+            "items": {
+              "$ref": "#/$defs/ClassCount"
+            },
+            "type": "array"
+          },
+          "tier2": {
+            "description": "`stopped`, `idle`, `running`, `typing`, `battery` or `failed`.",
+            "type": "string"
+          },
+          "worker": {
+            "$ref": "#/$defs/WorkerStatus"
+          }
+        },
+        "required": [
+          "files",
+          "chunks",
+          "per_class",
+          "coverage_errors",
+          "lag",
+          "models",
+          "worker",
+          "tier2",
+          "embedded"
+        ],
+        "title": "StatusAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor's keystroke signal: the vectors wait between requests while typing holds",
+      "name": "search/typing",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the editor's answer to settings/proposed: ok accepts the agent's proposed tx (the editor wrote the file), else it is reverted (blocked when a later change of the setting came first); the agent gets a message either way; only a proposed tx of the tool mcp:settings_change",
       "name": "settings/confirm",
       "params": {

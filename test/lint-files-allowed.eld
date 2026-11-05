@@ -25,7 +25,6 @@
  (:file "core/drgnx-projects.el" :fn drgnx-projects--board-update :what rename-file :why "a user's file: the org board" :until never)
  (:file "core/drgnx-projects.el" :fn drgnx-projects--write-plan :what write-region :why "a user's file: a plan file" :until never)
  (:file "core/drgnx-projects.el" :fn drgnx-projects--write-plan :what rename-file :why "a user's file: a plan file" :until never)
- (:file "core/drgnx-search-index.el" :fn drgnx-search-index--lock :what write-region :why "its own lock protocol: the index lock" :until never)
  (:file "core/drgnx-secrets.el" :fn drgnx-secrets-export :what rename-file :why "age writes it: secrets.age, encrypted by age into secrets.age.new, then renamed" :until never)
  (:file "core/drgnx-settings-workspace.el" :fn drgnx-settings-workspace--dir-locals-layers :what read-site :why "a user's file: a project's .dir-locals.el, read to explain where a value comes from, never written" :until never)
  (:file "core/drgnx-settings-trust.el" :fn drgnx-settings-trust--read-dir-locals :what read-site :why "a user's file: a project's .dir-locals.el, read to list its code for review, never written" :until never)

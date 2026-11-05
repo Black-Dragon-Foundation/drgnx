@@ -19,8 +19,8 @@ pub const PROTO: u32 = 1;
 pub const PROTO_MIN: u32 = 1;
 /// The records layout: 2 is JSON (design 4.5).
 pub const RECORDS: u32 = 2;
-/// The work.db schema this code knows (7: the hub makes it, or migrates a schema-6 file to it at start).
-pub const SCHEMA: u32 = 9;
+/// The work.db schema this code knows (the hub makes it, or migrates an older file to it at start).
+pub const SCHEMA: u32 = 10;
 
 /// What a connection proved (design 4.2): `user` a valid `hello` proof, `agent` the agent socket it came in on,
 /// `service` nothing.
@@ -369,7 +369,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 124, "{names:?}");
+        assert_eq!(names.len(), 133, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -389,6 +389,8 @@ mod tests {
         ];
         want.extend(FRONT_WRITES);
         want.extend(CORE_WRITES);
+        // Hrafn's: the index and the consented download change what the hub holds
+        want.extend(["search/index", "search/model-download"]);
         want.extend(
             registry()
                 .iter()
@@ -640,7 +642,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 87);
+        assert_eq!(with, 94);
     }
 
     #[test]

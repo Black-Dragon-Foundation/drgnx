@@ -17,9 +17,10 @@
 (defconst drgnx-lint-runtime--doomed-files
   (mapcar (lambda (n) (format "core/drgnx-%s.el" n))
           '("hub" "job" "job-snapshot" "job-worktree" "job-clash" "jobs" "coord" "coord-mcp" "acp" "gateway" "mcp-bridge"
-            "sandbox" "sandbox-macos" "sandbox-mcp" "sandbox-proxy" "sandbox-relay"))
-  "The files the runtime deletion removed whole.  `core/drgnx-mcp.el' (it goes with the search indexer's port) joins
-the list when its callers are gone.")
+            "sandbox" "sandbox-macos" "sandbox-mcp" "sandbox-proxy" "sandbox-relay"
+            ;; Hrafn (in the hub) replaced the Lisp search, and the MCP server it was the only user of
+            "mcp" "search-chunk" "search-index" "search-mcp" "search-query" "search-store"))
+  "The files the runtime deletion removed whole.")
 
 (defconst drgnx-lint-runtime--agents-marker ";;;; The agent's requests"
   "In `core/drgnx-agents.el', the line from which the forms are the runtime half unless kept.")
@@ -185,11 +186,10 @@ list of (FILE . HASH-OF-SYMBOLS) for the kept forms."
                   "check" "compat-gryphn" "config" "coord-read" "deny" "doctor" "exec" "face-state" "file"
                   "fmt" "frame-kind" "freezes" "gc-census" "gc" "guard" "heap" "hooks" "hub-client" "hub-core"
                   "keys-edit" "keys-modal"
-                  "keys" "large-file" "lisp-index" "macos" "mcp" "memo" "modal-choose" "modal" "modules-fingerprint"
+                  "keys" "large-file" "lisp-index" "macos" "memo" "modal-choose" "modal" "modules-fingerprint"
                   "modules-helpers" "modules-record" "modules" "notice-desktop" "notice-echo" "notice-save" "notice"
                   "notices" "onboard" "owner" "palette" "paths" "pkg-activate" "pkg" "platform" "portable" "projects"
-                  "records-review" "records" "registry" "sandbox-vc" "schema" "search-chunk" "search-index" "search-mcp"
-                  "search-query" "search-setup" "search-store" "secrets-scan" "secrets" "session" "setting"
+                  "records-review" "records" "registry" "sandbox-vc" "schema" "search-setup" "secrets-scan" "secrets" "session" "setting"
                   "settings-agents" "settings-apply" "settings-area" "settings-defaults" "settings-described"
                   "settings-editors" "settings-file" "settings-history" "settings-index" "settings-lisp-page"
                   "settings-live" "settings-migrate" "settings-mode" "settings-move" "settings-page" "settings-prov"

@@ -209,6 +209,12 @@ pub async fn run(args: ServeArgs) -> Exit {
         config: paths::config_dir(&env),
         hub: hub_dir.clone(),
     });
+    front.search.bind(&front);
+    if let Some(d) = front.dirs.get() {
+        front
+            .search
+            .configure(&env, d.home.clone(), d.config.clone(), runtime.clone());
+    }
     // before anything is served: a hub that could not be hardened takes no key
     front.gate.set_hardened(hardened);
     #[cfg(feature = "test-hooks")]
@@ -223,6 +229,7 @@ pub async fn run(args: ServeArgs) -> Exit {
     front
         .mcp
         .open_store(env.clone(), socket.clone(), runtime.clone());
+    front.mcp.bind_search(&front);
     front.mcp.restore().await;
     front.core.agents.open_store(runtime.clone());
     crate::clock::spawn("sessions:watch", sessions::watch(front.clone()));
@@ -794,13 +801,32 @@ fn embed_idle(front: &Arc<Front>, timer: &Arc<std::sync::Mutex<crate::embed::Tim
     if !due {
         return;
     }
-    let Ok(Some(e)) = front.gate.embedder() else {
+    let current = front.settings.current();
+    let chain = crate::settings::providers::role_chain(
+        &current.loaded.values.ai_roles,
+        &crate::settings::defaults().roles,
+        "embed",
+    );
+    // servers first (when one answers it is preferred), then the built-in model, unless the setting turned it off
+    let mut embedders: Vec<Arc<dyn urdr::graph::search::Embedder>> = front
+        .gate
+        .embedders(&chain)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|e| Arc::new(e) as Arc<dyn urdr::graph::search::Embedder>)
+        .collect();
+    if current.loaded.values.search_builtin
+        && let Some(b) = front.search.builtin()
+    {
+        embedders.push(b);
+    }
+    if embedders.is_empty() {
         timer
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .finish(false, now);
         return;
-    };
+    }
     let (front, timer, deny) = (
         front.clone(),
         timer.clone(),
@@ -810,7 +836,9 @@ fn embed_idle(front: &Arc<Front>, timer: &Arc<std::sync::Mutex<crate::embed::Tim
             .clone(),
     );
     tokio::spawn(async move {
-        let out = crate::embed::run(&front.writer.db, &e, &deny, probe).await;
+        let each: Vec<&dyn urdr::graph::search::Embedder> =
+            embedders.iter().map(|e| e.as_ref()).collect();
+        let out = crate::embed::run(&front.writer.db, &each, &deny, probe).await;
         let stopped = matches!(out, crate::embed::Outcome::Stopped { .. });
         match &out {
             crate::embed::Outcome::Stopped { embedded, why } => {

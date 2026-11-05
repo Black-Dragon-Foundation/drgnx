@@ -2014,10 +2014,10 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                a job from a plan: tasks, routes, estimate; nothing starts before approve
        drgnx job approve|resume ID [--budget USD] | stop ID | status [ID] [--json]
                                run, pause and inspect jobs in the hub (docs/guide/jobs.md)
-       drgnx search index ROOT [--rebuild]
+       drgnx search index ROOT [--rebuild] [--now]
                                build or refresh a project's semantic search index (docs/guide/search.md)
-       drgnx search query ROOT QUESTION… [-k N]
-                               the best chunks as PATH:LINE: first line (the notice, if any, on stderr)
+       drgnx search query ROOT QUESTION… [-k N] [--scope code|tests|docs|all] [--json]
+                               the best chunks, then what lags (the hub answers; Ratatoskr's `search')
        drgnx search mcp [ROOT] serve the `search' tool to an agent over stdio (MCP; ROOT default: here)
        drgnx coord mcp --kind KIND
                                serve the coordination tools to an agent outside drgnx (claude, codex, zed…)
@@ -2088,17 +2088,15 @@ case "${1:-help}" in
   work) shift
         "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-work -f drgnx-work-cli -- "$@" ;;
-  search) shift
-        sub="${1:-}"; [ "$#" -gt 0 ] && shift
-        case "$sub" in
-          index) "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
-                       -l drgnx-search-index -f drgnx-search-index-cli "$@" ;;
-          query) "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
-                       -l drgnx-search-mcp -f drgnx-search-mcp-query-cli -- "$@" ;;
-          mcp) "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
-                     -l drgnx-search-mcp -f drgnx-search-mcp-main -- "$@" ;;
+  search) shift   # code search (Hrafn): Ratatoskr's, a client of the running hub
+        case "${1:-}" in
+          index|query|mcp) ;;
           *) echo "usage: drgnx search index ROOT [--rebuild] | query ROOT QUESTION… [-k N] | mcp [ROOT]" >&2; exit 2 ;;
-        esac ;;
+        esac
+        rtsk="${DRGNX_RATATOSKR_BIN:-}"
+        if [[ "$rtsk" != /* || ! -f "$rtsk" || ! -x "$rtsk" ]]; then rtsk="$(drgnx_dir data)/bin/ratatoskr"; fi
+        if [[ ! -f "$rtsk" || ! -x "$rtsk" ]]; then echo "drgnx: Ratatoskr is not built: run \`drgnx runtime build'" >&2; exit 1; fi
+        DRGNX_DIR="$here" exec "$rtsk" search "$@" ;;
   coord) shift
         # an agent outside drgnx (configs written before the bridge keep working through this): exec Ratatoskr's
         # bridge, so its parent is the agent (its identity, computed by the hub); no cd (the folder it starts in is

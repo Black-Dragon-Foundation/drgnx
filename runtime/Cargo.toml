@@ -28,6 +28,13 @@ sha1 = "0.11"              # the socket name is sha1(data-dir)[0:8] (design 3.1)
 subtle = "2.6"
 getrandom = "0.4"
 rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }
+# hrafn's structural chunker; the grammars arrive with the languages that use them
+tree-sitter = "0.25"   # 0.26 and 0.27 need Rust 1.90; the workspace MSRV is 1.88
+tree-sitter-elisp = "1.7"
+tree-sitter-rust = "0.24"
+tree-sitter-c = "0.24"
+tree-sitter-bash = "0.25"
+notify = "8"
 rustix = { version = "1.1", features = ["fs", "process", "net", "thread"] }
 libc = "0.2"
 hyper = { version = "1.12", features = ["server", "client", "http1"] }
@@ -55,8 +62,36 @@ insta = { version = "1.49", features = ["json"] }
 proptest = "1.12"
 tempfile = "3"
 rmcp = { version = "3.6", default-features = false }   # dev only (mimir's interop test); a member names its features
+# hrafn-embed, pure Rust: a tokeniser with no C regex engine (default-features alone does not compile), and the model file
+tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
+safetensors = "0.8"
+half = "2"
+bytemuck = { version = "1", features = ["extern_crate_alloc"] }
+# hrafn-embed's GPU path. wgpu breaks its API about every 3 months: pinned, moved on purpose
+wgpu = { version = "=30.0.1", default-features = false, features = ["vulkan", "metal", "wgsl"] }
+pollster = "0.4"
+gemm = "=0.19.0"
+rayon = "1"
 
 [profile.release]
 strip = true
 lto = "thin"
 panic = "unwind"
+
+# `cargo test` is a debug build, and a real-model test would crawl in one
+[profile.dev.package.hrafn-embed]
+opt-level = 3
+[profile.dev.package.tokenizers]
+opt-level = 3
+[profile.dev.package.sha2]
+opt-level = 3
+[profile.dev.package.gemm]
+opt-level = 3
+[profile.dev.package.gemm-common]
+opt-level = 3
+[profile.dev.package.gemm-f32]
+opt-level = 3
+[profile.dev.package.rayon]
+opt-level = 3
+[profile.dev.package.rayon-core]
+opt-level = 3

@@ -1,8 +1,8 @@
 //! The command line (lexopt): `ratatoskr serve [--foreground] [--parent-pid PID] [--supervisor none|self|launchd]`,
 //! `ensure`, `stop`, `status`, `doctor`, `restart`, `version [--json]`, `methods --json|--markdown`,
 //! `sandbox check`, `sandbox-inner …` and `relay …` (the sandbox's inner helper and its relay, their arguments taken
-//! raw), `mcp-bridge --socket PATH | --outside --kind KIND [--cwd DIR]` (an agent's coordination tools over stdio), and
-//! with the `test-hooks` feature `sandbox run …`.  A line that does not parse exits 2 ([`crate::Exit::Usage`]).
+//! raw), `mcp-bridge --socket PATH | --outside --kind KIND [--cwd DIR]` (an agent's coordination tools over stdio),
+//! `embed-worker …` (Hrafn's embed worker), and with the `test-hooks` feature `sandbox run …`.  A line that does not parse exits 2 ([`crate::Exit::Usage`]).
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -25,8 +25,13 @@ pub const USAGE: &str = "usage: ratatoskr serve [--foreground] [--parent-pid PID
     \x20      ratatoskr job propose PLAN [--repo DIR] [--budget USD] [--auto] [--json]   (plan runs, from a terminal)\n\
     \x20      ratatoskr job approve ID [--budget USD] | status [ID] | stop ID | resume ID [--budget USD]   [--json]\n\
     \x20      ratatoskr machines report --machine M --ttl SECS [--json FILE|-]   (a machine's slots, from jobq)\n\
-    \x20      ratatoskr mcp-bridge --socket PATH  (an agent's coordination tools: stdio to its session's mcp.sock)\n\
+    \x20      ratatoskr search index ROOT [--rebuild] [--now]   (build or rebuild a project's code index)\n\
+    \x20      ratatoskr search query ROOT QUESTION... [-k N] [--scope code|tests|docs|all] [--json]\n\
+    \x20      ratatoskr search mcp [ROOT]   (the MCP search tool on stdio, for an agent outside drgnx)\n\
+    \x20      ratatoskr mcp-bridge --socket PATH   (an agent's coordination tools: stdio to its session's mcp.sock)\n\
     \x20      ratatoskr mcp-bridge --outside --kind KIND [--cwd DIR]   (an agent outside drgnx: stdio to the hub)\n\
+    \x20      ratatoskr embed-worker --model ID --dir D --device auto|cpu --device-cache FILE [--threads N] [--idle-ms N]\n\
+    \x20          (Hrafn's embed worker; run by the hub only)\n\
     \x20      ratatoskr sandbox run --spec FILE --result FILE [--tier full|reduced] [--bwrap PATH]\n\
     \x20          [--pause-before-spawn FIFO] [--landlock-omit PATH]... [--landlock-abi-cap N] [--settings-guards]\n\
     \x20          -- CMD...   (test builds only)";
@@ -88,6 +93,11 @@ pub enum Command {
     Job(crate::job_cli::JobCommand),
     /// `machines report …`: a machine's slots, from jobq (`crate::machines_cli`).
     Machines(crate::machines_cli::MachinesCommand),
+    /// `search …`: Hrafn from a terminal, and the MCP `search` tool on stdio (`crate::search_cli`).
+    Search(crate::search_cli::SearchCommand),
+    /// `embed-worker …`: Hrafn's embed worker, a child of the hub (`crate::search::worker`). `main` runs it before
+    /// any tokio runtime.
+    EmbedWorker(crate::search::worker::WorkerArgs),
 }
 
 /// `store`'s subcommands.
@@ -365,8 +375,80 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
         "graph" => crate::graph_cli::parse(p.raw_args().map_err(e)?).map(Command::Graph),
         "job" => crate::job_cli::parse(p.raw_args().map_err(e)?).map(Command::Job),
         "machines" => crate::machines_cli::parse(p.raw_args().map_err(e)?).map(Command::Machines),
+        "search" => crate::search_cli::parse(p.raw_args().map_err(e)?).map(Command::Search),
+        "embed-worker" => embed_worker(&mut p).map(Command::EmbedWorker),
         other => Err(format!("unknown command {other:?}")),
     }
+}
+
+/// `embed-worker --model ID --dir D --threads N --device auto|cpu --device-cache FILE [--idle-ms N]`, and with
+/// test-hooks `--device gpu:NAME`, `--test-park`, `--test-crash-once FILE`, `--test-crash-always`,
+/// `--test-rss-cap-mb N`, `--test-power-root DIR`. A repeated option: the last counts.
+fn embed_worker(p: &mut lexopt::Parser) -> Result<crate::search::worker::WorkerArgs, String> {
+    use crate::search::worker::{DeviceArg, WorkerArgs, WorkerTest};
+    use lexopt::prelude::*;
+    let e = |e: lexopt::Error| e.to_string();
+    let (mut model, mut dir, mut threads, mut device, mut cache, mut idle_ms) =
+        (None, None, None, DeviceArg::Auto, None, None);
+    #[allow(unused_mut)] // only the test-hooks switches change it
+    let mut test = WorkerTest::default();
+    while let Some(arg) = p.next().map_err(e)? {
+        match arg {
+            Long("model") => model = Some(p.value().map_err(e)?.string().map_err(e)?),
+            Long("dir") => dir = Some(PathBuf::from(p.value().map_err(e)?)),
+            Long("threads") => {
+                let n: usize = p.value().map_err(e)?.parse().map_err(e)?;
+                if n == 0 {
+                    return Err("--threads takes a number above 0".into());
+                }
+                threads = Some(n);
+            }
+            Long("device") => {
+                let v = p.value().map_err(e)?.string().map_err(e)?;
+                let named = v
+                    .strip_prefix("gpu:")
+                    .filter(|n| !n.is_empty() && cfg!(feature = "test-hooks"));
+                device = match (v.as_str(), named) {
+                    ("auto", _) => DeviceArg::Auto,
+                    ("cpu", _) => DeviceArg::Cpu,
+                    (_, Some(name)) => DeviceArg::Gpu(name.to_string()),
+                    (other, None) => {
+                        return Err(format!("--device takes auto or cpu, not {other:?}"));
+                    }
+                }
+            }
+            Long("device-cache") => cache = Some(PathBuf::from(p.value().map_err(e)?)),
+            Long("idle-ms") => {
+                let ms: u64 = p.value().map_err(e)?.parse().map_err(e)?;
+                if ms == 0 {
+                    return Err("--idle-ms takes a number above 0".into());
+                }
+                idle_ms = Some(ms);
+            }
+            #[cfg(feature = "test-hooks")]
+            Long("test-park") => test.park = true,
+            #[cfg(feature = "test-hooks")]
+            Long("test-crash-once") => test.crash_once = Some(PathBuf::from(p.value().map_err(e)?)),
+            #[cfg(feature = "test-hooks")]
+            Long("test-crash-always") => test.crash_always = true,
+            #[cfg(feature = "test-hooks")]
+            Long("test-rss-cap-mb") => {
+                test.rss_cap_mb = Some(p.value().map_err(e)?.parse().map_err(e)?)
+            }
+            #[cfg(feature = "test-hooks")]
+            Long("test-power-root") => test.power_root = Some(PathBuf::from(p.value().map_err(e)?)),
+            other => return Err(other.unexpected().to_string()),
+        }
+    }
+    Ok(WorkerArgs {
+        model: model.ok_or("embed-worker needs --model ID")?,
+        dir: dir.ok_or("embed-worker needs --dir D")?,
+        threads: threads.unwrap_or_else(crate::search::worker::threads),
+        device,
+        device_cache: cache.ok_or("embed-worker needs --device-cache FILE")?,
+        idle_ms,
+        test,
+    })
 }
 
 /// `store migrate-check --db FILE --scratch DIR [--json]`, or `store restore-pre7 [--yes]`.

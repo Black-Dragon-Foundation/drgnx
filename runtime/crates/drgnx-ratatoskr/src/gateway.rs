@@ -303,18 +303,58 @@ impl Gate {
         Ok(rx)
     }
 
-    /// The embedder for the first provider of kind `tei` that can embed (by id), through this gateway's loopback
-    /// listener with an editor token of its own (kept in memory only, never in `runtime.db`); `None` when there is no
-    /// such provider.  Err: the gateway is not listening.
-    pub fn embedder(&self) -> Result<Option<crate::embed::Tei>, Error> {
+    /// The embedders of the providers of kind `tei` and `ollama` that can embed (by id), through this gateway's
+    /// loopback listener with an editor token of its own (kept in memory only, never in `runtime.db`).  An Ollama
+    /// provider embeds with the model the embed role's CHAIN names for it, and is left out when the chain names none.
+    /// Err: the gateway is not listening.
+    pub fn embedders(
+        &self,
+        chain: &[crate::settings::ChainStep],
+    ) -> Result<Vec<crate::embed::ProviderEmbedder>, Error> {
         let (_, port) = self.engine()?;
-        let Some(id) = read(&self.providers)
+        let found: Vec<(String, Kind)> = read(&self.providers)
             .values()
-            .find(|p| p.kind == Kind::Tei && p.caps.embed)
-            .map(|p| p.id.clone())
-        else {
-            return Ok(None);
-        };
+            .filter(|p| matches!(p.kind, Kind::Tei | Kind::Ollama) && p.caps.embed)
+            .map(|p| (p.id.clone(), p.kind))
+            .collect();
+        if found.is_empty() {
+            return Ok(Vec::new());
+        }
+        let token = self.hub_embed_token()?;
+        let mut out = Vec::new();
+        for (id, kind) in found {
+            match kind {
+                Kind::Tei => out.push(crate::embed::ProviderEmbedder::tei(
+                    *port,
+                    token.clone(),
+                    &id,
+                )),
+                _ => {
+                    if let Some(model) = chain
+                        .iter()
+                        .find(|s| s.provider == id)
+                        .and_then(|s| s.model.as_deref())
+                    {
+                        out.push(crate::embed::ProviderEmbedder::ollama(
+                            *port,
+                            token.clone(),
+                            &id,
+                            model,
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Provider ID's URL, as the table has it.
+    pub fn base_of(&self, id: &str) -> Option<String> {
+        read(&self.providers).get(id).map(|p| p.base.to_string())
+    }
+
+    /// The editor token the hub's own embedders use (made when first asked for).
+    fn hub_embed_token(&self) -> Result<String, Error> {
         let token = match self.embed_token.get() {
             Some(t) => t.clone(),
             None => {
@@ -329,7 +369,7 @@ impl Gate {
                 self.embed_token.get_or_init(|| t).clone()
             }
         };
-        Ok(Some(crate::embed::Tei::new(*port, token, &id)))
+        Ok(token)
     }
 
     /// At start, after the sessions came back: the last provider table, then the registrations of live owners (each
@@ -748,7 +788,7 @@ impl Gate {
     /// TABLE made the provider table (the settings', [`crate::front::Front::apply_settings`]): its warnings, or the
     /// first provider that does not convert (nothing changed).  The clear-text warnings are logged once per provider
     /// per start.
-    pub(crate) fn apply(&self, table: &[ProviderConfig]) -> Result<Vec<ProviderWarning>, Error> {
+    pub fn apply(&self, table: &[ProviderConfig]) -> Result<Vec<ProviderWarning>, Error> {
         let mut next = BTreeMap::new();
         let mut warnings = Vec::new();
         for (i, c) in table.iter().enumerate() {
@@ -998,11 +1038,23 @@ fn restrictions(
     Ok(((!r.is_empty()).then_some(r), kept))
 }
 
+/// A local server's `localhost` as `127.0.0.1`: `localhost` can resolve to `::1` first, and these servers listen on the
+/// IPv4 loopback (storage design §12A.3 item 11).
+fn loopback_literal(kind: ProviderKind, base: &str) -> std::borrow::Cow<'_, str> {
+    if matches!(
+        kind,
+        ProviderKind::Tei | ProviderKind::Ollama | ProviderKind::Llamacpp
+    ) && let Some(rest) = base.strip_prefix("http://localhost")
+        && matches!(rest.chars().next(), None | Some(':' | '/'))
+    {
+        return std::borrow::Cow::Owned(format!("http://127.0.0.1{rest}"));
+    }
+    std::borrow::Cow::Borrowed(base)
+}
+
 /// C as the engine's provider (the URL was checked when it was decoded; it must also be an `http::Uri`).
 fn provider(c: &ProviderConfig) -> Result<Provider, String> {
-    let base: bifrost::Uri = c
-        .base
-        .as_str()
+    let base: bifrost::Uri = loopback_literal(c.kind, c.base.as_str())
         .parse()
         .map_err(|e| format!("not a provider's URL: {e}"))?;
     let caps = c.caps.0.iter().fold(Caps::default(), |mut caps, cap| {

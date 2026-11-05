@@ -96,12 +96,15 @@ fn only_runtime_names_decode() {
     // what is not a runtime setting has no place to go: RUNTIME is the whole list
     // (8, and agent system part 1's 13: the matrix, the away signal, the job and container limits, the net hosts; and
     // the names a module may add to a session's environment; and part 2's providers whose shell steps are traced; and
-    // the runners' five per-project settings; and the proxies' pinned names)
-    assert_eq!(RUNTIME_NAMES.len(), 29);
-    assert!(RUNTIME_NAMES.iter().all(|n| n.starts_with("drgnx-agents-")
-        || n.starts_with("drgnx-ai-")
-        || n.starts_with("drgnx-runners-")
-        || n.starts_with("drgnx-sandbox-")));
+    // the runners' five per-project settings; and the proxies' pinned names; and Hrafn's 5)
+    assert_eq!(RUNTIME_NAMES.len(), 34);
+    assert!(RUNTIME_NAMES.iter().all(|n| {
+        n.starts_with("drgnx-agents-")
+            || n.starts_with("drgnx-ai-")
+            || n.starts_with("drgnx-runners-")
+            || n.starts_with("drgnx-sandbox-")
+            || n.starts_with("drgnx-search-")
+    }));
 }
 
 /// Pattern D. `drgnx-sandbox-proxy-pinned-addresses` is read: each name with its address literal, IPv4 or IPv6.  A

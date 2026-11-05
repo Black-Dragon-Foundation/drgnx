@@ -265,11 +265,6 @@
   :by "onboarding rebuilt on the Rust runtime (2026-11-05): 2026-11-04-race-proof-tests.ledger:137" :since "2026-11-05"
   :tests (drgnx-onboard/desktop-files-are-machine-local)
   :keep ())
- ("test/unit/search-setup-test.el"
-  :by "onboarding rebuilt on the Rust runtime (2026-11-05): 2026-11-04-race-proof-tests.ledger:137" :since "2026-11-05"
-  :tests (drgnx-onboard/search-step-non-interactive-detects
-          drgnx-onboard/search-step-interactive-runs-the-wizard)
-  :keep ())
  ("test/unit/tty-onboard-test.el"
   :by "onboarding rebuilt on the Rust runtime (2026-11-05): 2026-11-04-race-proof-tests.ledger:137" :since "2026-11-05"
   :tests (drgnx-onboard/the-daemon-step-names-good-terminals

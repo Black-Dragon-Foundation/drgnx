@@ -838,9 +838,27 @@ hidden in the sandbox.  npm's global config is PREFIX/etc/npmrc.
 | `:agents` | `never` |
 | `:schema` | - |
 
+## drgnx-search-builtin
+
+Non-nil: the built-in embedding model indexes every project's code and your tasks and notes, whatever servers are
+running.  Nil: only a running server (TEI, Ollama) makes vectors, and with none, search is keyword and symbol only.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"bool"` |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
+
 ## drgnx-search-exclude
 
-Files matching one of these globs are not indexed; a workspace's are added to yours (see `drgnx-search-config').
+Files matching one of these globs are not indexed; a workspace's are added to yours.
 
 | Key | Value |
 | --- | --- |
@@ -849,15 +867,15 @@ Files matching one of these globs are not indexed; a workspace's are added to yo
 | `:scope` | `project` |
 | `:workspace` | `data` |
 | `:merge` | `append` |
-| `:on-error` | `last-good` |
+| `:on-error` | `strict` |
 | `:apply` | - |
-| `:runtime` | - |
-| `:agents` | `grantable` |
-| `:schema` | - |
+| `:runtime` | `"Vec<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(list-of string)` |
 
 ## drgnx-search-include
 
-Only files matching one of these globs are indexed (nil: all); see `drgnx-search-config'.
+Only files matching one of these globs are indexed (nil: all).
 
 | Key | Value |
 | --- | --- |
@@ -866,15 +884,32 @@ Only files matching one of these globs are indexed (nil: all); see `drgnx-search
 | `:scope` | `project` |
 | `:workspace` | `data` |
 | `:merge` | `replace` |
-| `:on-error` | `last-good` |
+| `:on-error` | `strict` |
 | `:apply` | - |
-| `:runtime` | - |
-| `:agents` | `grantable` |
-| `:schema` | - |
+| `:runtime` | `"Vec<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(list-of string)` |
+
+## drgnx-search-model-mirror
+
+Where embedding models are downloaded from: a URL laid out as the Hugging Face host, or nil for that host.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(choice (const :tag "Hugging Face" nil) string)` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Option<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(or null string)` |
 
 ## drgnx-search-off
 
-Non-nil turns a project's semantic search off; see `drgnx-search-config'.
+Non-nil turns a project's semantic search off.
 
 | Key | Value |
 | --- | --- |
@@ -883,11 +918,11 @@ Non-nil turns a project's semantic search off; see `drgnx-search-config'.
 | `:scope` | `project` |
 | `:workspace` | `data` |
 | `:merge` | `replace` |
-| `:on-error` | `last-good` |
+| `:on-error` | `strict` |
 | `:apply` | - |
-| `:runtime` | - |
-| `:agents` | `grantable` |
-| `:schema` | - |
+| `:runtime` | `"bool"` |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
 
 ## drgnx-session-keep-running
 

@@ -277,7 +277,7 @@ and a row that comes back takes its kept data (each row's data is a provenance l
             '(("~/proj/.git/HEAD" . "ref: x\n")
               ("~/proj/.drgnx/search.eld" . "(:include (\"*.md\") :exclude (\"vendor/\"))\n"))
             '((progn
-                (require 'drgnx-search-chunk)
+                (require 'drgnx-settings-runtime)
                 (let* ((root (file-name-as-directory (expand-file-name "proj" (getenv "HOME"))))
                        (n (drgnx-settings-page-convert root)))
                   (list n

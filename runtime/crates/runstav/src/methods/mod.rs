@@ -17,6 +17,7 @@ pub mod matrix;
 pub mod mcp;
 pub mod plans;
 pub mod records;
+pub mod search;
 pub mod settings;
 pub mod tasks;
 pub mod timeline;
@@ -231,6 +232,15 @@ params! {
     WorkFiles(work::EditedFiles),
     WorkHunks(work::HunksParams),
     WorkFileAt(work::FileAtParams),
+    SearchQuery(search::QueryParams),
+    SearchStatus(search::RootParams),
+    SearchIndex(search::IndexParams),
+    SearchEmbedders(Empty),
+    SearchModelDownload(search::DownloadParams),
+    SearchTyping(Empty),
+    SearchServerPlan(search::ServerKindParams),
+    SearchServerStart(search::ServerStartParams),
+    SearchServerStop(search::ServerKindParams),
 }
 
 /// Every method, in no order.
@@ -251,6 +261,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(timeline::methods());
     v.extend(records::methods());
     v.extend(work::methods());
+    v.extend(search::methods());
     v
 }
 
