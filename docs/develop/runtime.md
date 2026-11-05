@@ -987,8 +987,9 @@ the grammar's top-level spans to them.
 Hrafn is the code search behind `search/*` and the MCP `search` tool. `hrafn-embed` holds its embedding side, in pure Rust
 with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-android`.
 
-- **The model table (`models.rs`).** `MODELS` lists gte-modernbert-base (the default until the eval rules), Granite small
-  r2 and CodeRankEmbed, each at a pinned revision. A row names exactly four files with their sizes and sums:
+- **The model table (`models.rs`).** `MODELS` lists gte-modernbert-base, Granite small r2 (the default, `default_model()`: the
+  eval on drgnx's own queries put it ahead overall, 0.312 against 0.271 MRR@10, and 2.7 times faster to embed; gte-modernbert-base stays
+  selectable by id) and CodeRankEmbed, each at a pinned revision. A row names exactly four files with their sizes and sums:
   `model.safetensors`, `tokenizer.json`, `config.json` and `1_Pooling/config.json`. There is no ONNX file and no GGUF.
   `ModelConfig::read` takes the network's shape from the model's own `config.json`, so a model of the same family needs
   a table row and nothing else. All three pool on CLS.

@@ -144,9 +144,13 @@ pub const MODELS: &[ModelSpec] = &[
     },
 ];
 
-/// gte-modernbert-base, until the eval rules on drgnx's own queries.
+/// The built-in model: Granite small r2, which the eval on drgnx's own queries ruled better overall and 2.7 times
+/// faster to embed than gte-modernbert-base (which stays in the table, selectable by id).
 pub fn default_model() -> &'static ModelSpec {
-    &MODELS[0]
+    MODELS
+        .iter()
+        .find(|m| m.id == "granite-embedding-small-english-r2")
+        .expect("the table holds the default model")
 }
 
 /// The size the wizard states.

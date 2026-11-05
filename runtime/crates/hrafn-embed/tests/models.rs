@@ -59,7 +59,11 @@ fn tiny(dir: &Path) -> ModelSpec {
 
 #[test]
 fn table_matches_each_config() {
-    assert_eq!(default_model().id, "gte-modernbert-base");
+    assert_eq!(default_model().id, "granite-embedding-small-english-r2");
+    assert!(
+        MODELS.iter().any(|m| m.id == "gte-modernbert-base"),
+        "the first default stays selectable"
+    );
     for spec in MODELS {
         let config = ModelConfig::read(&dir_of(spec)).unwrap();
         assert_eq!(config.hidden, spec.dims, "{}", spec.id);
