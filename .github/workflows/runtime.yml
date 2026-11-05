@@ -639,37 +639,21 @@ jobs:
 
   # libFuzzer targets on the pinned nightly (the ledger's: nightly-2026-10-15, cargo-fuzz 0.13.2). The ubuntu runner has
   # g++ for libfuzzer-sys. 60 s a target on a push to main, 10 minutes a target nightly, `fuzz_minutes` when dispatched;
-  # a pull request runs none. A crash uploads its input. Four shards of `cargo fuzz list`'s targets, so a nightly takes
-  # about 70 minutes, and a new target runs with no change here.
-  fuzz:
-    name: fuzz (shard ${{ matrix.shard }} of 4)
+  # a pull request runs none. A crash uploads its input. The targets are built once (`fuzz-build`: `cargo fuzz build`,
+  # the build `cargo fuzz run` makes) and the four shards of `cargo fuzz list`'s targets each download their own and
+  # run them as `cargo fuzz run` does, so a nightly takes about 70 minutes, and a new target runs with no change here.
+  fuzz-build:
+    name: fuzz targets (build)
     if: ${{ github.event_name != 'pull_request' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-fuzz ')) }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 355
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [0, 1, 2, 3]
+    timeout-minutes: 60
     env:
       NIGHTLY: nightly-2026-10-15
-      EVENT: ${{ github.event_name }}
-      MINUTES: ${{ inputs.fuzz_minutes }}
-      SHARD: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0          # the whole history, for commit-times.sh
-          filter: blob:none       # without old file contents
           persist-credentials: false
-      - name: How long
-        run: |
-          case "$EVENT" in
-            schedule) secs=600 ;;
-            workflow_dispatch) m=${MINUTES:-10}; case "$m" in ''|*[!0-9]*) echo "fuzz_minutes is a whole number" >&2; exit 2 ;; esac; secs=$((m * 60)) ;;
-            *) secs=60 ;;
-          esac
-          echo "FUZZ_SECONDS=$secs" >> "$GITHUB_ENV"
       - run: rustup toolchain install "$NIGHTLY" --profile minimal
       # the key names the nightly and the cargo-fuzz version (the step below), so a bump is a new cache
       - id: cache
@@ -682,41 +666,48 @@ jobs:
             runtime/fuzz/target
           key: cargo-${{ runner.os }}-fuzz-${{ env.NIGHTLY }}-cargo-fuzz-0.13.2-${{ hashFiles('runtime/fuzz/Cargo.lock', 'runtime/Cargo.toml', 'runtime/*/Cargo.toml', 'runtime/crates/*/Cargo.toml') }}
           restore-keys: cargo-${{ runner.os }}-fuzz-${{ env.NIGHTLY }}-cargo-fuzz-0.13.2-
-      # the corpora the fuzzers grew (runtime/fuzz/corpus/TARGET, beside the committed inputs; a file's name is its
-      # hash, so an old one restored over a committed one is the same input): a longer run starts where the last
-      # stopped. More inputs only reach further; a corpus cannot turn a crash into a pass. Grown by the daily run and
-      # main only, restored everywhere.
-      - id: corpus
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: runtime/fuzz/corpus
-          key: fuzz-corpus-${{ matrix.shard }}-${{ hashFiles('runtime/fuzz/Cargo.lock') }}-${{ github.run_id }}
-          restore-keys: fuzz-corpus-${{ matrix.shard }}-
       - name: cargo-fuzz 0.13.2
         id: tool
         run: test -x ~/.cargo/bin/cargo-fuzz || cargo "+$NIGHTLY" install cargo-fuzz --version 0.13.2 --locked
-      # every target of the shard runs, whatever an earlier one found; the step fails at the end naming each that failed
-      - name: Run each target
-        id: run
+      # every target (release, debug assertions, AddressSanitizer: cargo-fuzz's defaults, as `cargo fuzz run` builds),
+      # then each shard's binaries and list in a directory of its own (the shard's artifact)
+      - name: Build every target
+        id: build
         run: |
-          failed=""
-          targets=$(cargo "+$NIGHTLY" fuzz list --fuzz-dir runtime/fuzz | sort | awk -v s="$SHARD" 'NR % 4 == s')
-          test -n "$targets"
-          for target in $targets; do
-            echo "::group::$target ($FUZZ_SECONDS s)"
-            cargo "+$NIGHTLY" fuzz run "$target" --fuzz-dir runtime/fuzz -- "-max_total_time=$FUZZ_SECONDS" || failed="$failed $target"
-            echo "::endgroup::"
+          cargo "+$NIGHTLY" fuzz build --fuzz-dir runtime/fuzz
+          out="runtime/fuzz/target/$(rustc "+$NIGHTLY" -vV | sed -n 's/^host: //p')/release"
+          for shard in 0 1 2 3; do mkdir -p "$RUNNER_TEMP/fuzz-bins/$shard"; done
+          cargo "+$NIGHTLY" fuzz list --fuzz-dir runtime/fuzz | sort | awk '{ print > (ENVIRON["RUNNER_TEMP"] "/fuzz-bins/" (NR % 4) "/targets") }'
+          for shard in 0 1 2 3; do
+            while read -r target; do cp "$out/$target" "$RUNNER_TEMP/fuzz-bins/$shard/"; done < "$RUNNER_TEMP/fuzz-bins/$shard/targets"
           done
-          if [ -n "$failed" ]; then echo "failed:$failed" >&2; exit 1; fi
+          du -sh "$RUNNER_TEMP"/fuzz-bins/*
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: failure()
         with:
-          name: fuzz-crashes-${{ matrix.shard }}
-          path: runtime/fuzz/artifacts
-          if-no-files-found: ignore
-      # a run's own targets were built when it fuzzed at all (a red target included)
+          name: fuzz-bins-0
+          path: ${{ runner.temp }}/fuzz-bins/0
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-bins-1
+          path: ${{ runner.temp }}/fuzz-bins/1
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-bins-2
+          path: ${{ runner.temp }}/fuzz-bins/2
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-bins-3
+          path: ${{ runner.temp }}/fuzz-bins/3
+          if-no-files-found: error
+          retention-days: 1
       - id: prune
-        if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.tool.outcome == 'success' && (steps.run.outcome == 'success' || steps.run.outcome == 'failure') }}
+        if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
         env:
           RUSTUP_TOOLCHAIN: ${{ env.NIGHTLY }}
         run: bash .github/ci/cargo-prune.sh runtime/fuzz/Cargo.toml runtime/fuzz/target
@@ -729,6 +720,74 @@ jobs:
             ~/.cargo/registry/cache
             runtime/fuzz/target
           key: ${{ steps.cache.outputs.cache-primary-key }}
+
+  fuzz:
+    name: fuzz (shard ${{ matrix.shard }} of 4)
+    needs: fuzz-build
+    if: ${{ github.event_name != 'pull_request' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-fuzz ')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    env:
+      EVENT: ${{ github.event_name }}
+      MINUTES: ${{ inputs.fuzz_minutes }}
+    steps:
+      # the committed inputs (runtime/fuzz/corpus) and the lock the corpus key hashes
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          sparse-checkout: runtime/fuzz
+      - name: How long
+        run: |
+          case "$EVENT" in
+            schedule) secs=600 ;;
+            workflow_dispatch) m=${MINUTES:-10}; case "$m" in ''|*[!0-9]*) echo "fuzz_minutes is a whole number" >&2; exit 2 ;; esac; secs=$((m * 60)) ;;
+            *) secs=60 ;;
+          esac
+          echo "FUZZ_SECONDS=$secs" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: fuzz-bins-${{ matrix.shard }}
+          path: ${{ runner.temp }}/fuzz-bins
+      # the corpora the fuzzers grew (runtime/fuzz/corpus/TARGET, beside the committed inputs; a file's name is its
+      # hash, so an old one restored over a committed one is the same input): a longer run starts where the last
+      # stopped. More inputs only reach further; a corpus cannot turn a crash into a pass. Grown by the daily run and
+      # main only, restored everywhere.
+      - id: corpus
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: runtime/fuzz/corpus
+          key: fuzz-corpus-${{ matrix.shard }}-${{ hashFiles('runtime/fuzz/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.shard }}-
+      # every target of the shard runs, whatever an earlier one found; the step fails at the end naming each that failed.
+      # As `cargo fuzz run` runs it: its artifact prefix and corpus directory, ASan without the ODR check
+      - name: Run each target
+        id: run
+        run: |
+          failed=""
+          bins="$RUNNER_TEMP/fuzz-bins"
+          targets=$(cat "$bins/targets")
+          test -n "$targets"
+          for target in $targets; do
+            echo "::group::$target ($FUZZ_SECONDS s)"
+            chmod +x "$bins/$target"
+            mkdir -p "runtime/fuzz/corpus/$target" "runtime/fuzz/artifacts/$target"
+            ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_odr_violation=0" "$bins/$target" \
+              "-artifact_prefix=runtime/fuzz/artifacts/$target/" "-max_total_time=$FUZZ_SECONDS" "runtime/fuzz/corpus/$target" ||
+              failed="$failed $target"
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then echo "failed:$failed" >&2; exit 1; fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: fuzz-crashes-${{ matrix.shard }}
+          path: runtime/fuzz/artifacts
+          if-no-files-found: ignore
       - if: ${{ !cancelled() && (github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && (steps.run.outcome == 'success' || steps.run.outcome == 'failure') }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
