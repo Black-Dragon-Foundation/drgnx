@@ -121,7 +121,7 @@ reused (`display-buffer-in-child-frame' makes it the first time)."
     ;; and `bury-buffer' would delete a dedicated window — here its frame's only one, so the frame — so the lane is not
     ;; dedicated, and they take the idle buffer from `quit-restore' / the previous buffers instead; the buffer change
     ;; then ends the popup (`drgnx-popup--frame-changed' on `window-buffer-change-functions', before anything is drawn).
-    (let ((idle (get-buffer-create " *drgnx-popup-idle*")))
+    (let ((idle (get-buffer-create " *drgnx-popup-idle*" t)))
       (set-window-dedicated-p lane nil)
       (set-window-prev-buffers lane (list (list idle (copy-marker 1) (copy-marker 1))))
       (set-window-parameter lane 'quit-restore (list 'window (list idle 1 1 nil) (selected-window) buffer)))
