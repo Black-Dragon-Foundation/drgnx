@@ -700,7 +700,7 @@ impl HubGit {
         };
         let (root, repo, path) = (root.clone(), repo.to_path_buf(), tree.path.clone());
         let (base, branch) = (tree.base.clone(), tree.branch.clone());
-        let row = tokio::task::spawn_blocking(move || {
+        let row = crate::clock::blocking(move || {
             crate::work::bases::row_for(&root, &repo, &path, &base, &branch)
         })
         .await;

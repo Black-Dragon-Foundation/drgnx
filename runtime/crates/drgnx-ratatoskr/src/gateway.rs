@@ -298,6 +298,12 @@ impl Gate {
         if self.engine.set((gw.clone(), port)).is_err() {
             return Err("the gateway listens already".into());
         }
+        // a test's barrier waits until every request it saw answered has its events in the channel
+        #[cfg(feature = "test-hooks")]
+        {
+            let in_flight = gw.in_flight();
+            crate::clock::outside("gateway:requests", move || in_flight.get());
+        }
         tokio::spawn(bifrost::listen::serve_tcp(gw, listener, port));
         tracing::info!(port, "the gateway on 127.0.0.1:{port}");
         Ok(rx)

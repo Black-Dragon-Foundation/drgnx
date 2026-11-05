@@ -44,6 +44,8 @@ impl ReadPool {
         R: Send + 'static,
         F: FnOnce(&Connection) -> R + Send + 'static,
     {
+        #[cfg(feature = "test-hooks")]
+        let _waiting = crate::wait::begin();
         let permit = Arc::clone(&self.permits)
             .acquire_owned()
             .await

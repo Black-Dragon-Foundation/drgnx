@@ -1174,3 +1174,84 @@ async fn the_editor_route_without_a_key_is_503_and_need_keys() {
     );
     assert!(mock.requests().is_empty());
 }
+
+// ------------------------------------------------------------------------------------------ in flight (test-hooks)
+
+/// A spend table whose `record` waits until the test lets it go.
+#[cfg(feature = "test-hooks")]
+struct Held(tokio::sync::Semaphore);
+
+#[cfg(feature = "test-hooks")]
+impl Ledger for Held {
+    fn spent(&self, _job: &str) -> BoxFuture<'_, Result<f64, String>> {
+        Box::pin(async { Ok(0.0) })
+    }
+
+    fn record(&self, _row: SpendRow) -> BoxFuture<'_, ()> {
+        Box::pin(async {
+            let _ = self.0.acquire().await;
+        })
+    }
+}
+
+#[cfg(feature = "test-hooks")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_request_is_in_flight_until_its_event_is_sent() {
+    // Pattern C: the client has read its whole answer, and the spend row is held: the request still counts in flight
+    // (its event is not in the channel yet); once the row is let go and the event is sent, nothing does.
+    let mock = Mock::start(json!([
+        {"path": "/a/", "chunks": [[0, MESSAGE_START], [0, MESSAGE_STOP]]}
+    ]));
+    let registry = Arc::new(Mem(
+        [(token_hash(AGENT.as_bytes()), agent(&["a"], None))].into()
+    ));
+    let providers = Arc::new(RwLock::new(
+        [(
+            "a".to_owned(),
+            provider("a", Kind::Anthropic, &mock.url("/a"), Auth::None),
+        )]
+        .into(),
+    ));
+    let ledger = Arc::new(Held(tokio::sync::Semaphore::new(0)));
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let upstream =
+        Upstream::with_proxy(UpstreamOpts::default(), Matcher::builder().build()).unwrap();
+    let gw = Gateway::new(
+        registry,
+        providers,
+        Arc::new(RwLock::new(Keys::new())),
+        ledger.clone(),
+        tx,
+        upstream,
+    );
+    let in_flight = gw.in_flight();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let serving = tokio::spawn(listen::serve_tcp(gw.clone(), listener, port));
+    let (mut sender, _conn) = open(TcpStream::connect(("127.0.0.1", port)).await.unwrap()).await;
+    let request = Request::post("/v1/messages")
+        .header(HOST, format!("127.0.0.1:{port}"))
+        .header(AUTHORIZATION, format!("Bearer {AGENT}"))
+        .header(CONTENT_TYPE, "application/json")
+        .body(Full::new(Bytes::from_static(b"{}")))
+        .unwrap();
+    let reply = read(sender.send_request(request).await.unwrap()).await;
+    assert_eq!(reply.status, 200);
+    assert_eq!(in_flight.get(), 1, "answered, its event not sent");
+    assert!(events.try_recv().is_err());
+    ledger.0.add_permits(1);
+    let event = tokio::time::timeout(Duration::from_secs(30), events.recv())
+        .await
+        .expect("the event within 30 s")
+        .expect("the channel is open");
+    assert!(matches!(event, GatewayEvent::Request(_)), "{event:?}");
+    // the count goes once the task that sent the event ends; nothing else holds one
+    serving.abort();
+    drop((sender, gw));
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while events.recv().await.is_some() {}
+    })
+    .await
+    .expect("the gateway settled within 30 s");
+    assert_eq!(in_flight.get(), 0);
+}

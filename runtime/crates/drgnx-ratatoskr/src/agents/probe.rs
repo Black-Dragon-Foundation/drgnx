@@ -99,7 +99,7 @@ async fn run(
     // the sandbox helper reports on a pipe; a launch whose status is not read hangs
     if let Some(fd) = prep.status {
         let stderr = conn.stderr();
-        let read = tokio::task::spawn_blocking(move || {
+        let read = crate::clock::blocking(move || {
             gleipnir::read_status(fd, &|| stderr.get(), Duration::from_secs(20))
         })
         .await;

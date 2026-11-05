@@ -155,7 +155,7 @@ async fn resolve(dirs: Vec<PathBuf>) -> ProjectCache {
     if dirs.is_empty() {
         return ProjectCache::default();
     }
-    tokio::task::spawn_blocking(move || {
+    crate::clock::blocking(move || {
         let mut cache = ProjectCache::default();
         for d in &dirs {
             cache.fill(d);
@@ -1642,7 +1642,7 @@ async fn privacy(
     let d = dirs.ok_or_else(|| internal("the store's folders are not known yet"))?;
     let (home, config) = (d.home.clone(), d.config.clone());
     let new = Arc::new(
-        tokio::task::spawn_blocking(move || DenyList::load(&home, &config))
+        crate::clock::blocking(move || DenyList::load(&home, &config))
             .await
             .map_err(|e| internal(e.to_string()))?,
     );
@@ -1662,7 +1662,7 @@ async fn privacy(
         Vec::new()
     } else {
         let db = g.writer.path().to_path_buf();
-        tokio::task::spawn_blocking(move || norn::privacy::delete_copies(&db, &wanted))
+        crate::clock::blocking(move || norn::privacy::delete_copies(&db, &wanted))
             .await
             .map_err(|e| internal(e.to_string()))?
     };
@@ -1946,7 +1946,7 @@ async fn tasks_write(
     let found = match (&p.project, &p.cwd) {
         (None, Some(cwd)) => {
             let dir = PathBuf::from(cwd.as_str());
-            tokio::task::spawn_blocking(move || project::resolve(&dir))
+            crate::clock::blocking(move || project::resolve(&dir))
                 .await
                 .ok()
                 .flatten()

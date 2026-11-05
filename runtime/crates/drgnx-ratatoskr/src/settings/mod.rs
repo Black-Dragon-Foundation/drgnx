@@ -641,7 +641,7 @@ impl Settings {
                 .as_deref(),
         );
         let (dir2, kv2) = (dir.clone(), kv.clone());
-        let loaded = match tokio::task::spawn_blocking(move || load::load(&dir2, &kv2)).await {
+        let loaded = match crate::clock::blocking(move || load::load(&dir2, &kv2)).await {
             Ok(l) => l,
             Err(e) => {
                 tracing::warn!("settings.el was not read: {e}");

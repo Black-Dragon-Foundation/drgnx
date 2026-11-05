@@ -1004,7 +1004,7 @@ impl Inner {
         );
         // caps podman cannot enforce refuse the job: a container without its limits is never run
         let shell = self.hooks.shell_env.clone();
-        tokio::task::spawn_blocking(move || {
+        crate::clock::blocking(move || {
             container::check_limits(&shell, &p, Duration::from_secs(30))?;
             container::ensure_image(&shell, &p, &reference, container::PULL_TIMEOUT)
         })
@@ -1105,7 +1105,7 @@ impl Inner {
         // The sandbox helper reports on a pipe; a launch whose status is not read hangs (Task 10).
         if let Some(fd) = status {
             let log = dir.join("log");
-            let read = tokio::task::spawn_blocking(move || {
+            let read = crate::clock::blocking(move || {
                 gleipnir::read_status(
                     fd,
                     &|| {
@@ -1157,8 +1157,9 @@ impl Inner {
         crate::clock::spawn("exec:watch", async move {
             // a container job's proxy answers for as long as the job runs
             let _proxy = proxy;
-            // a real wait (the child's end): a test's barrier waits for a job that ends, and names one that does not
-            crate::clock::real(me.clone().watch(&id, Some(child))).await;
+            // a real wait (the child's end): a test's barrier waits for a job that ends, and names one that does not;
+            // an advance does not wait for it (the job's time box may be what ends it)
+            crate::clock::real_long(me.clone().watch(&id, Some(child))).await;
             drop(permit);
             me.pump();
         });
@@ -1210,8 +1211,12 @@ impl Inner {
                     _ = c.wait() => {}
                     () = time_up => {
                         let _ = std::fs::write(dir.join("why"), "timed-out");
-                        let _ = draugr::kill_group(c.id(), Duration::from_secs(2), &draugr::RealSignaller).await;
-                        let _ = c.wait().await;
+                        // the kill ends by itself, within its grace: an advance past the time box waits for it
+                        crate::clock::real(async {
+                            let _ = draugr::kill_group(c.id(), Duration::from_secs(2), &draugr::RealSignaller).await;
+                            let _ = c.wait().await;
+                        })
+                        .await;
                     }
                 }
             }
@@ -1226,8 +1231,12 @@ impl Inner {
                     () = time_up => {
                         let _ = std::fs::write(dir.join("why"), "timed-out");
                         if let Some(p) = meta.pid {
-                            let _ = draugr::kill_group(p, Duration::from_secs(2), &draugr::RealSignaller)
-                                .await;
+                            let _ = crate::clock::real(draugr::kill_group(
+                                p,
+                                Duration::from_secs(2),
+                                &draugr::RealSignaller,
+                            ))
+                            .await;
                         }
                     }
                 }
@@ -1427,7 +1436,7 @@ impl Inner {
                 }
                 let me = self.clone();
                 crate::clock::spawn("exec:watch", async move {
-                    crate::clock::real(me.watch(&id, None)).await;
+                    crate::clock::real_long(me.watch(&id, None)).await;
                 });
             }
         }
@@ -1442,9 +1451,7 @@ impl Inner {
         // a podman client that died with the last hub leaves its container: remove those no running job owns
         if let Some(podman) = self.hooks.podman.clone() {
             let shell = self.hooks.shell_env.clone();
-            tokio::task::spawn_blocking(move || {
-                container::remove_leftovers(&shell, &podman, &running)
-            });
+            crate::clock::blocking(move || container::remove_leftovers(&shell, &podman, &running));
         }
     }
 }

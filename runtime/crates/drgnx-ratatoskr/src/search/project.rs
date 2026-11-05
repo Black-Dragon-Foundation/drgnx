@@ -199,7 +199,7 @@ impl Project {
             return Err(ProjectError::Denied(why));
         }
         let given = spec.root.clone();
-        let (root, id) = tokio::task::spawn_blocking(move || project_id(&given))
+        let (root, id) = crate::clock::blocking(move || project_id(&given))
             .await
             .map_err(io::Error::other)??;
         if let RootVerdict::Denied { why } = deny.check_root(&root) {
@@ -268,7 +268,7 @@ impl Project {
         let job = inner.clone();
         // the listing runs git and reads every file; the chunking is CPU work: neither on a runtime worker
         let rt = tokio::runtime::Handle::current();
-        let r = tokio::task::spawn_blocking(move || rt.block_on(job.refresh()))
+        let r = crate::clock::blocking(move || rt.block_on(job.refresh()))
             .await
             .map_err(io::Error::other)??;
         if r.keys_missing > 0 || r.files_changed > 0 {
@@ -325,7 +325,7 @@ impl Project {
             return self.tick().await;
         }
         let inner = self.inner.clone();
-        let listed = tokio::task::spawn_blocking(move || inner.list())
+        let listed = crate::clock::blocking(move || inner.list())
             .await
             .map_err(io::Error::other)??;
         let d = hrafn::fresh::diff(&self.inner.store, &listed, DIFF_LIMIT).await?;
@@ -410,7 +410,7 @@ impl Project {
     /// What is wrong with the index's coverage of the listed files (storage design §12A.3 item 9), one line each.
     pub async fn coverage_errors(&self) -> Result<Vec<String>, ProjectError> {
         let inner = self.inner.clone();
-        let listed = tokio::task::spawn_blocking(move || inner.list())
+        let listed = crate::clock::blocking(move || inner.list())
             .await
             .map_err(io::Error::other)??;
         let per_file: std::collections::HashMap<String, u32> = self

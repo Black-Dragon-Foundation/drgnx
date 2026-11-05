@@ -304,7 +304,7 @@ async fn facts_of(f: &Front, o: &Obs, t: &Thresholds) -> Facts {
 /// Added plus deleted lines of the tree against HEAD (none when it is no repository).
 async fn changed_lines(cwd: &std::path::Path) -> Option<u64> {
     let cwd = cwd.to_path_buf();
-    tokio::task::spawn_blocking(move || {
+    crate::clock::blocking(move || {
         let out = std::process::Command::new("git")
             .args(["diff", "--numstat", "HEAD"])
             .current_dir(cwd)

@@ -347,7 +347,7 @@ pub async fn task_scope(front: &Front, task: &str) -> Option<(String, Option<Str
     // the project is found by git, off the db's thread
     let project = match repo {
         Some(r) => {
-            tokio::task::spawn_blocking(move || norn::project::resolve(Path::new(&r)).map(|p| p.id))
+            crate::clock::blocking(move || norn::project::resolve(Path::new(&r)).map(|p| p.id))
                 .await
                 .ok()
                 .flatten()

@@ -548,7 +548,7 @@ pub async fn start(
         .unwrap_or_else(|| format!("plan:{job}"));
     let project = {
         let dir = repo.clone();
-        tokio::task::spawn_blocking(move || norn::project::resolve(&dir).map(|p| p.id))
+        crate::clock::blocking(move || norn::project::resolve(&dir).map(|p| p.id))
             .await
             .ok()
             .flatten()

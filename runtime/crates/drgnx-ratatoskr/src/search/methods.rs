@@ -263,7 +263,7 @@ impl Hub {
         };
         // git runs (up to 3 s): not on a runtime worker
         let at = root.to_path_buf();
-        let project = tokio::task::spawn_blocking(move || norn::project::resolve(&at))
+        let project = crate::clock::blocking(move || norn::project::resolve(&at))
             .await
             .ok()
             .flatten();
@@ -303,7 +303,7 @@ impl Hub {
     pub async fn project(&self, front: &Front, root: &Path) -> Result<Arc<Project>, Error> {
         let dirs = self.dirs()?;
         let given = root.to_path_buf();
-        let (real, id) = tokio::task::spawn_blocking(move || project_id(&given))
+        let (real, id) = crate::clock::blocking(move || project_id(&given))
             .await
             .map_err(internal)?
             .map_err(|e| {
@@ -678,7 +678,7 @@ impl Hub {
     /// `search/server-plan`: what a start would run. The host is read, nothing runs.
     async fn server_plan(&self, kind: w::ServerKind) -> Result<w::ServerPlan, Error> {
         let env = self.dirs()?.env.clone();
-        let host = tokio::task::spawn_blocking(move || servers::Host::probe(&env))
+        let host = crate::clock::blocking(move || servers::Host::probe(&env))
             .await
             .map_err(internal)?;
         Ok(servers::plan(&host, kind))
@@ -707,7 +707,7 @@ impl Hub {
         + 'static,
     ) -> Result<T, Error> {
         let env = self.dirs()?.env.clone();
-        tokio::task::spawn_blocking(move || {
+        crate::clock::blocking(move || {
             let host = servers::Host::probe(&env);
             #[cfg(feature = "test-hooks")]
             let run = servers::Record(
