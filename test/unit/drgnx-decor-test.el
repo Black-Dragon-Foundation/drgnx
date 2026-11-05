@@ -1,4 +1,5 @@
 ;;; drgnx-decor-test.el --- batch tests: decoration faces, chips, card rows, agent cursors -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx)
