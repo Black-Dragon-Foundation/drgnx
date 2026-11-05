@@ -150,6 +150,25 @@
     ;; one report and one cache per image
     (drgnx-ci-test--has job "escape-report-host-${{ matrix.os }}" "-escape-${{ matrix.os }}-")))
 
+(ert-deftest drgnx-ci/the-runner-crates-are-checked-for-android-built-static-and-denied ()
+  ;; forseti and sleipnir's protocol and sync are what jobq and the Android door take; the runner ships static (musl)
+  (let* ((rt (drgnx-ci-test--yml "runtime.yml"))
+         (android (and rt (drgnx-ci-test--job rt "android")))
+         (containers (and rt (drgnx-ci-test--job rt "agent-containers")))
+         (deny (and rt (drgnx-ci-test--job rt "deny"))))
+    (skip-unless (and android containers deny))
+    (drgnx-ci-test--has android
+                        "--target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p huginn -p drgnx-ratatoskr -p forseti\n"
+                        "--target aarch64-linux-android -p sleipnir --no-default-features --features proto,sync\n"
+                        "--all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -p bifrost -p huginn -p forseti -- -D warnings\n"
+                        "--all-targets -p sleipnir --no-default-features --features proto,sync -- -D warnings\n")
+    (drgnx-ci-test--has containers
+                        "-p sleipnir --no-default-features --features linux,sync --target x86_64-unknown-linux-musl --target-dir runtime/target/fwd\n")
+    ;; deny reads the whole workspace (every crate under crates/) for every target the crates ship to
+    (drgnx-ci-test--has deny "run: cargo-deny --manifest-path runtime/Cargo.toml check\n")
+    (drgnx-ci-test--has (drgnx-ci-test--file "runtime/Cargo.toml") "members = [\"conformance\", \"crates/*\"]")
+    (drgnx-ci-test--has (drgnx-ci-test--file "runtime/deny.toml") "\"x86_64-unknown-linux-musl\"" "\"aarch64-linux-android\"")))
+
 (ert-deftest drgnx-ci/every-rust-timing-test-is-in-the-timing-list ()
   ;; the Rust tests marked #[ignore = "timing: …"] run in the timing lane's Rust step and nowhere else
   (let ((list-file (expand-file-name "test/timing-rust.txt" drgnx-ci-test--root))

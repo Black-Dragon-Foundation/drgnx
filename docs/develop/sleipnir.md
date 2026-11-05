@@ -18,7 +18,8 @@ The scheduling decisions are [`forseti`](forseti.md)'s; sleipnir reads the machi
 `probe-result` carry them.
 
 jobq depends with `default-features = false, features = ["linux", "sync"]`, so no async runtime reaches it. The
-Android check builds `--no-default-features --features proto,sync`.
+Android check builds `--no-default-features --features proto,sync`, and CI builds jobq's shape static too
+(`x86_64-unknown-linux-musl`, in `runtime.yml`'s `agent-containers` job; [ci.md](ci.md)).
 
 **Platforms.** systemd and the cgroup files are a desktop-distro fact: `linux::probe`, `linux::reserve` and the
 executor's systemd parts are `target_os = "linux"` only. Android (`target_os = "android"`) has no user manager to run
