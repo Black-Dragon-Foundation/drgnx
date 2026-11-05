@@ -204,6 +204,9 @@ pub enum LoginUse {
     File,
     /// A folder of its own state it writes (made when missing).
     Dir,
+    /// The folder where it keeps every session it runs, yours too: each sandboxed session gets an empty one of its
+    /// own in that place (`sandbox::login_grants`), never yours.
+    Own,
 }
 
 /// What a CLI uses in its login dir LOGIN_DIR during a session, relative to it: what it loads, the token file it
@@ -213,7 +216,7 @@ pub enum LoginUse {
 /// commands, agents, skills, plugins, `CLAUDE.md`/`AGENTS.md`/`GEMINI.md`, Codex's `config.toml` and rules) is
 /// writable.  Claude's project folder is [`claude_project`]'s.
 pub fn login_entries(login_dir: &Path) -> &'static [(&'static str, LoginUse)] {
-    use LoginUse::{Dir, File, Read};
+    use LoginUse::{Dir, File, Own, Read};
     match login_dir.file_name().and_then(|n| n.to_str()) {
         Some(".claude") => &[
             (".credentials.json", File),
@@ -234,7 +237,7 @@ pub fn login_entries(login_dir: &Path) -> &'static [(&'static str, LoginUse)] {
             ("prompts", Read),
             ("skills", Read),
             ("rules", Read),
-            ("sessions", Dir),
+            ("sessions", Own),
             ("log", Dir),
         ],
         Some(".gemini") => &[
@@ -244,7 +247,7 @@ pub fn login_entries(login_dir: &Path) -> &'static [(&'static str, LoginUse)] {
             ("GEMINI.md", Read),
             ("commands", Read),
             ("extensions", Read),
-            ("tmp", Dir),
+            ("tmp", Own),
         ],
         _ => &[],
     }

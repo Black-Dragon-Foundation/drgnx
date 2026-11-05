@@ -945,7 +945,9 @@ struct LoginGrants {
 
 /// What a session's CLI gets of its login dir DIR, which is never shown itself: the entries
 /// [`crate::agents::lock::login_entries`] names that exist, each as the CLI uses it (a missing folder of its own state
-/// is made first; a token file or a folder that is a link is left out), and Claude's folder for the session's cwd
+/// is made first; a token file or a folder that is a link is left out; a folder that holds every session of the CLI,
+/// yours too, is on the full tier an empty one of the session's own, `login/NAME` in its scratch, bound in its place,
+/// and elsewhere not shown), and Claude's folder for the session's cwd
 /// ([`crate::agents::lock::claude_project`]).  That folder is the session's own when its cwd is (a worktree, a chat's
 /// scratch).  A chat in your project shares its cwd with your own Claude Code, whose transcripts and auto memory live
 /// there, so it never gets that folder: on the full tier an empty one of its own (`claude-project` in its scratch) is
@@ -975,6 +977,20 @@ fn login_grants(
                     g.write.push(p);
                 }
             }
+            LoginUse::Own if target == gleipnir::Target::LinuxBwrap => {
+                let own = scratch.join("login").join(name);
+                paths::private_dir(&own).map_err(|e| Refusal {
+                    rule: Rule::Setup,
+                    path: Some(own.clone()),
+                    message: format!("{}: {e}", own.display()),
+                })?;
+                g.binds.push(gleipnir::Bind {
+                    mode: gleipnir::Mode::Rw,
+                    source: own,
+                    dest: p,
+                });
+            }
+            LoginUse::Own => {}
         }
     }
     let Some(project) = crate::agents::lock::claude_project(dir, &shape.cwd) else {

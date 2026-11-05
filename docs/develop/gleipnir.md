@@ -97,8 +97,10 @@ this returns.
     `commands`, `extensions`), an entry that is a link read at its true name and, on the full tier, bound read-only
     at the link's path (`sandbox::read_login_entry`); the token file and the CLI's state in `write` (a missing folder
     made 0700 first, never through a link, and a link there left out): Claude's `.credentials.json` and `todos`,
-    Codex's `auth.json`, `sessions` and `log`, Gemini's `oauth_creds.json` and `tmp` (a file bind or Landlock file
-    rule; a token file is rewritten in place, not renamed over). Claude's folder for the cwd,
+    Codex's `auth.json` and `log`, Gemini's `oauth_creds.json` (a file bind or Landlock file rule; a token file is
+    rewritten in place, not renamed over). Codex's `sessions` and Gemini's `tmp` hold all of that CLI's sessions,
+    yours too (`LoginUse::Own`): on the full tier an rw bind of `<scratch>/login/NAME` takes their place, elsewhere
+    neither is shown. Claude's folder for the cwd,
     `projects/<the cwd, each non-alphanumeric UTF-16 unit as ->` (`lock::claude_project`; none past 200 characters, where Claude Code adds a hash), is writable when the cwd is the
     session's own (a worktree, a plain chat's scratch). A project chat's cwd is your project, whose folder holds your
     transcripts and auto memory: on the full tier (`sandbox::login_grants`) an rw bind of `<scratch>/claude-project`

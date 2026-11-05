@@ -190,37 +190,49 @@ fn a_linked_settings_file_is_read_where_it_really_is() {
     );
 }
 
-/// Pattern D. Codex and Gemini get the same shape: what they load readable, their token file and their sessions'
-/// folders writable, never the login dir itself, and nothing of another CLI's.
+/// Pattern D. Codex and Gemini get the same shape: their token file writable in place, what they load readable, and
+/// nothing of another CLI's.  Their sessions' folders (Codex's `sessions`, Gemini's `tmp`) hold your own sessions
+/// too: on the full tier each session gets an empty one of its own, from its scratch, bound over yours; the reduced
+/// tier cannot bind and gives none.
 #[test]
-fn each_cli_reads_what_it_loads_and_writes_its_token_and_sessions() {
+fn each_cli_keeps_its_sessions_in_a_folder_of_its_own() {
     let fx = Fx::new();
     fs::write(fx.p("home/.codex/auth.json"), "{}").unwrap();
     fs::write(fx.p("home/.codex/config.toml"), "").unwrap();
-    fs::create_dir_all(fx.p("home/.gemini")).unwrap();
+    fs::create_dir_all(fx.p("home/.codex/sessions")).unwrap();
+    fs::create_dir_all(fx.p("home/.gemini/tmp")).unwrap();
     fs::write(fx.p("home/.gemini/oauth_creds.json"), "{}").unwrap();
     fs::write(fx.p("home/.gemini/settings.json"), "{}").unwrap();
     let shape = fx.shape(NetCell::ProviderOnly);
     let (c, g) = (fx.p("home/.codex"), fx.p("home/.gemini"));
-    let codex = fx.spec(&fx.plan(".codex"), &shape);
-    assert_eq!(
-        codex.write,
-        vec![
-            fx.p("wt"),
-            c.join("auth.json"),
-            c.join("sessions"),
-            c.join("log")
-        ]
-    );
-    assert!(codex.read.contains(&c.join("config.toml")));
-    let gemini = fx.spec(&fx.plan(".gemini"), &shape);
-    assert_eq!(
-        gemini.write,
-        vec![fx.p("wt"), g.join("oauth_creds.json"), g.join("tmp")]
-    );
-    assert!(gemini.read.contains(&g.join("settings.json")));
-    for (spec, dir) in [(&codex, &c), (&gemini, &g)] {
-        assert!(!spec.read.iter().chain(&spec.write).any(|p| dir.starts_with(p)));
+    let own = scratch_path(&fx.env(), "S1").join("login");
+    for (tier, target) in [
+        (Tier::Reduced, Target::LinuxReduced),
+        (Tier::Full, Target::LinuxBwrap),
+    ] {
+        let codex = fx.spec_on(&fx.plan(".codex"), &shape, tier, target);
+        assert_eq!(
+            codex.write,
+            vec![fx.p("wt"), c.join("auth.json"), c.join("log")]
+        );
+        assert!(codex.read.contains(&c.join("config.toml")));
+        let gemini = fx.spec_on(&fx.plan(".gemini"), &shape, tier, target);
+        assert_eq!(gemini.write, vec![fx.p("wt"), g.join("oauth_creds.json")]);
+        assert!(gemini.read.contains(&g.join("settings.json")));
+        for (spec, dir, folder) in [(&codex, &c, "sessions"), (&gemini, &g, "tmp")] {
+            assert!(!spec.read.iter().chain(&spec.write).any(|p| dir.starts_with(p)));
+            assert!(!spec.read.contains(&dir.join(folder)));
+            let bound = spec.binds.iter().find(|b| b.dest == dir.join(folder));
+            match tier {
+                Tier::Full => assert_eq!(
+                    bound.map(|b| (b.mode, &b.source)),
+                    Some((Mode::Rw, &own.join(folder))),
+                    "{:?}",
+                    spec.binds
+                ),
+                _ => assert!(bound.is_none(), "{:?}", spec.binds),
+            }
+        }
     }
 }
 

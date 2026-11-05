@@ -705,6 +705,39 @@ fn the_login_dir_shows_only_what_the_cli_loads() {
     }
 }
 
+/// Pattern D (one run, its exit code), full tier.  Codex keeps every session it runs, yours too, in its `sessions`
+/// folder: a sandboxed session gets an empty one of its own bound there, so it can neither read nor change yours, and
+/// what it records lands in its scratch.
+#[test]
+#[ignore = "needs the real sandbox (bwrap with user namespaces): the sandbox lane"]
+fn a_codex_session_records_into_a_sessions_folder_of_its_own() {
+    let fx = Fx::new();
+    let env = fx.env();
+    let s = fx.p("home/.codex/sessions");
+    std::fs::create_dir_all(s.join("2026")).unwrap();
+    std::fs::write(s.join("2026/old.jsonl"), "yours").unwrap();
+    let script = format!(
+        "cat {s}/2026/old.jsonl 2>/dev/null && exit 11; echo x >> {s}/2026/old.jsonl 2>/dev/null; \
+         mkdir -p {s}/2026/11 && echo t > {s}/2026/11/new.jsonl || exit 12; exit 0",
+        s = s.display()
+    );
+    let mut plan = fx.plan(&script);
+    plan.login_dir = Some(fx.p("home/.codex"));
+    let code = fx.run(Tier::Full, &plan, &fx.shape(NetCell::ProviderOnly));
+    assert_eq!(code, 0);
+    assert_eq!(
+        std::fs::read_to_string(s.join("2026/old.jsonl")).unwrap(),
+        "yours"
+    );
+    assert!(!s.join("2026/11").exists());
+    assert!(
+        scratch_dir(&env, "S1")
+            .unwrap()
+            .join("login/sessions/2026/11/new.jsonl")
+            .exists()
+    );
+}
+
 /// B3 + B4 on the shipped layout: the worktree sits under `<state>/hub/runs` (inside Gleipnir's closed folders) and
 /// the lock's real, relative `PROTECTED_RO` list is pinned inside it, `.envrc` and `mise.toml` included, though none
 /// exists yet.  Pinning needs bwrap's read-only bind, so the full tier.
