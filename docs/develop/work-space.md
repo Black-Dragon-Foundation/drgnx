@@ -522,6 +522,35 @@ state, and shows " live · NAME" (`drgnx-work-live-file--lighter`). `drgnx-work-
 that sends `agents/send` naming the file. The module's `:teardown` turns the mode off in every buffer, restoring the
 read-only state each had.
 
+### Into the code (`drgnx-work-code.el`)
+
+The hub keys presence by the path in the agent's own folder, and a map file item is `file:REPO/REL`, so every question is
+asked for REL in each candidate folder: the worktree (`cwd` of the mirrored session whose hub id is the agent's) of each
+agent on the selection's chain (`drgnx-work-code--chain-sids`, from `drgnx-work-nav-chain`), then the root of the
+workspace named REPO. `drgnx-work-code--presence` asks `agents/presence/get` for each path and gathers the entries;
+`drgnx-work-code--pick` chooses: the newest entry of the chain's agents that has a line, else the newest with a line of
+any agent, else the newest without one (the buffer opens at the top and `drgnx-work-code--file-only` is set). An
+answer arrives after the keypress; the file opens when it does, and a hub that is not there opens the first path that
+exists at the top. `drgnx-work-code-open-file` is the entry point (the `file` row of `work-open`).
+
+`work-files` (`e`) calls `work/files {session}` for the agent the selection stands for (an agent, a subagent's parent,
+or the first agent a branch came from) and fills a `drgnx-work-files-mode` buffer, placed in the popup lane. Its hint keys
+come from `drgnx-work-code-hint-keys`. The list is the edited files only: `work/files` has no read list yet (its
+`read_at` is filled when the edit history lands). `work-who-is-here` asks for the visited file in the user's checkout and
+in every mirrored worktree of the same repository (found from the `.git` file), keeps each agent's newest entry, selects
+`file:REPO/REL` when the cached frame holds it and echoes the agents. A file the frame shows only as a count chip is not
+given a node: the hub has no way to add one for a selection yet.
+
+`work-diffs` (`d`, `drgnx-work-code-diffs`) asks `work/files {session}`, then `work/hunks {session, path}` for each file: the
+hub's diff against the worktree's recorded base (the interim source, the base snapshot; part 4's edit history replaces
+it behind the same methods). Each answer becomes a `drgnx-work-diff-mode` buffer (a read-only `diff-mode`, killed and
+made again each time). `drgnx-work-code--diff-layout` saves `current-window-configuration` in
+`drgnx-work-code--saved-windows` unless one is already saved, then splits the window into at most three side by side;
+files from the third on are the third window's tabs: the window parameter `drgnx-work-diff-tabs` holds them and each
+buffer's `tab-line-tabs-function` reads it. `work-diff-quit` (`q`) restores the saved configuration and kills the
+diff buffers; the module's teardown does the same without restoring. `a` and `D` are registered so the keys are
+reserved for hunks, and say the review view decides them (no review view exists in this phase).
+
 ### The view core
 
 `drgnx-view-draw-now VIEW &optional KEYS` draws only the rows named by KEYS (the keypress's own redisplay for a

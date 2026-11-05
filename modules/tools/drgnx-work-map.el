@@ -385,6 +385,8 @@ the side panel follows; the chain's edge tiles one frame later (the timer takes 
 (declare-function drgnx-agents-ui-transcript "drgnx-agents-ui")
 (declare-function drgnx-agent-session-remote "drgnx-agents")
 
+(declare-function drgnx-work-code-open-file "drgnx-work-code")
+
 (defun drgnx-work--open-agent (sid)
   "Open the transcript of the hub session SID in today's Agents view (the agent panel replaces this later)."
   (if-let* ((s (and (boundp 'drgnx-agents--sessions)
@@ -408,10 +410,7 @@ the side panel follows; the chain's edge tiles one frame later (the timer takes 
                  (cond ((null root) (message "Work: %s is not in this workspace" (car parts)))
                        ((fboundp 'magit-status) (funcall #'magit-status root))
                        (t (funcall show (dired-noselect root))))))
-      ('file (let* ((parts (split-string key "/")) (root (drgnx-work-map--root-named (car parts)))
-                    (path (and root (expand-file-name (string-join (cdr parts) "/") root))))
-               (if (and path (file-exists-p path)) (funcall show (find-file-noselect path))
-                 (message "Work: %s is not on disk" key))))
+      ('file (drgnx-work-code-open-file state sel :beside beside))
       ('machine (message "Work: %s — its queue is in the side panel" (plist-get (drgnx-work-client-item state id) :label)))
       (_ (let ((path (seq-some (lambda (root)
                                  (let ((p (expand-file-name key root))) (and (file-regular-p p) p)))
