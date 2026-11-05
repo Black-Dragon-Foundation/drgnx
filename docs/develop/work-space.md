@@ -104,6 +104,7 @@ labels' margin; a 1000 px tile is 226 units (1000 − 84 − 12 px of padding).
 | chip widths: ask, spec, plan, branch, file, machine | 48, 44, 44, 40, 36, 32 | 192 … 128 |
 | gap between cards | 3 | 12 |
 | band between rows | 8 | 32 |
+| band between an agent sub-row and its branches' sub-row | 3 | 12 |
 | gap between blocks | 6 | 24 |
 | a collapsed layer's row | 5 | 20 |
 
@@ -128,10 +129,11 @@ The look's 19 px card lines round to 20 px on the grid. Compact and roomy densit
 5. **Lanes.** An edge longer than one row takes a lane in each row it crosses, a 2 px segment at a free slot of the
    nearest gap. A gap of `g` units holds `g − 1` lanes (`floor((gap − 4 px) / 4 px)`: 2 in a 12 px gap). Edges from
    one source (a plan to its agents, an ask to what it led to) or to one target (agents to a machine, branches to a
-   file) share one lane, a trunk. The row's right end is a gap like the others, so a full row's lanes spread into its
+   file or to the branch they were cut from) share one lane, a trunk. The row's right end is a gap like the others, so a full row's lanes spread into its
    slack; cards never move for a lane. A row with no free slot left bundles the edge into a **port** on its target
    ("↑ N"; the side panel names the parents).
-6. **Bands.** The band above each row holds its curves: from a card's bottom centre to a lane, lane to lane, a lane
+6. **Bands.** The band above each row holds its curves (12 px under an agent sub-row, where only its branches'
+   short edges run; 32 px elsewhere): from a card's bottom centre to a lane, lane to lane, a lane
    to a card's top centre. Same-row arcs (overlaps, "based on", a manager) go in the band above their row.
    `crossings` counts crossing curve pairs per band.
 7. **Fits.** Below 120 units (480 px), or with a card wider than the tile, `fits` is false and the editor shows the

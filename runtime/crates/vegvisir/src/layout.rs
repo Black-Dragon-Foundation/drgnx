@@ -15,7 +15,7 @@
 //!    does not shift the others. Overlaps are resolved left to right with the look's gaps.
 //! 5. An edge longer than one row takes a lane in each row it crosses, in a free slot of the nearest gap: a gap of
 //!    `g` units holds `g - 1` lanes, `floor((gap - 4 px) / 4 px)`. Edges from one source (a plan to its agents) or to
-//!    one target (agents to a machine, branches to a file) share a lane. The row's right end is a gap like the others,
+//!    one target (agents to a machine, branches to a file or to their base) share a lane. The row's right end is a gap like the others,
 //!    so a full row's lanes widen into its slack; a row with no free slot left bundles the edge into a port on its
 //!    target.
 //! 6. Bands hold the curves between consecutive rows: from a card's bottom centre to a lane, lane to lane, a lane to
@@ -135,6 +135,8 @@ pub(crate) struct Metrics {
     chip_h: u32,
     gap: u32,
     band: u32,
+    /// The band between an agent sub-row and its own branches' sub-row.
+    inner_band: u32,
     block_gap: u32,
     /// ask, spec, plan, branch, file, machine
     chips: [u32; 6],
@@ -149,6 +151,7 @@ impl Metrics {
                 chip_h: 6,
                 gap: 2,
                 band: 6,
+                inner_band: 2,
                 block_gap: 4,
                 chips: [44, 40, 40, 36, 32, 28],
             },
@@ -158,6 +161,7 @@ impl Metrics {
                 chip_h: 7,
                 gap: 3,
                 band: 8,
+                inner_band: 3,
                 block_gap: 6,
                 chips: [48, 44, 44, 40, 36, 32],
             },
@@ -167,6 +171,7 @@ impl Metrics {
                 chip_h: 8,
                 gap: 4,
                 band: 10,
+                inner_band: 4,
                 block_gap: 8,
                 chips: [52, 48, 48, 44, 40, 36],
             },
@@ -915,7 +920,10 @@ fn finish(
     let mut out_rows: Vec<Row> = Vec::with_capacity(rows.len());
     for (i, r) in rows.iter().enumerate() {
         if i > 0 {
-            y += mx.band;
+            let p = &rows[i - 1];
+            // an agent sub-row and its own branches' sub-row hold short straight edges only
+            let inner = p.layer == 4 && r.layer == 5 && p.line == r.line && p.sub == r.sub;
+            y += if inner { mx.inner_band } else { mx.band };
         }
         let h = if r.collapsed {
             COLLAPSED_H
@@ -969,7 +977,7 @@ fn finish(
     }
     let key = |(a, b, k): (Sym, Sym, EdgeKind)| match k {
         EdgeKind::CameFrom | EdgeKind::Manages => Key::From(a),
-        EdgeKind::RunsOn | EdgeKind::Edits => Key::To(b),
+        EdgeKind::RunsOn | EdgeKind::Edits | EdgeKind::BasedOn => Key::To(b),
         _ => Key::One(a, b, k),
     };
     // top endpoint first
@@ -1151,7 +1159,7 @@ fn finish(
         bands.push(Band {
             row: r as u32,
             y: top,
-            height_units: mx.band,
+            height_units: out_rows[r].y - top,
             segs: list,
         });
     }

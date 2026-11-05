@@ -32,28 +32,28 @@
       "layer": 5,
       "block_line": 0,
       "sub": 0,
-      "y": 78,
+      "y": 73,
       "height_units": 7
     },
     {
       "layer": 4,
       "block_line": 1,
       "sub": 0,
-      "y": 93,
+      "y": 88,
       "height_units": 25
     },
     {
       "layer": 5,
       "block_line": 1,
       "sub": 0,
-      "y": 126,
+      "y": 116,
       "height_units": 7
     },
     {
       "layer": 6,
       "block_line": 0,
       "sub": 0,
-      "y": 141,
+      "y": 131,
       "height_units": 7
     }
   ],
@@ -78,7 +78,7 @@
     },
     "agent:a4": {
       "x": 0,
-      "y": 93,
+      "y": 88,
       "w": 58,
       "h": 25
     },
@@ -102,43 +102,43 @@
     },
     "branch:drgnx/rp-df-hub": {
       "x": 9,
-      "y": 78,
+      "y": 73,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/rp-fx-sess": {
       "x": 70,
-      "y": 78,
+      "y": 73,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/rp-i6": {
       "x": 134,
-      "y": 78,
+      "y": 73,
       "w": 40,
       "h": 7
     },
     "branch:org/docs-plans-tooling": {
       "x": 9,
-      "y": 126,
+      "y": 116,
       "w": 40,
       "h": 7
     },
     "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs": {
       "x": 48,
-      "y": 141,
+      "y": 131,
       "w": 36,
       "h": 7
     },
     "machine:desktop": {
       "x": 87,
-      "y": 141,
+      "y": 131,
       "w": 32,
       "h": 7
     },
     "machine:laptop": {
       "x": 13,
-      "y": 141,
+      "y": 131,
       "w": 32,
       "h": 7
     },
@@ -376,7 +376,7 @@
     {
       "row": 4,
       "y": 70,
-      "height_units": 8,
+      "height_units": 3,
       "segs": [
         {
           "from": "agent:a1",
@@ -440,7 +440,7 @@
     },
     {
       "row": 5,
-      "y": 85,
+      "y": 80,
       "height_units": 8,
       "segs": [
         {
@@ -482,8 +482,8 @@
     },
     {
       "row": 6,
-      "y": 118,
-      "height_units": 8,
+      "y": 113,
+      "height_units": 3,
       "segs": [
         {
           "from": "agent:a4",
@@ -531,7 +531,7 @@
     },
     {
       "row": 7,
-      "y": 133,
+      "y": 123,
       "height_units": 8,
       "segs": [
         {
@@ -575,5 +575,5 @@
   "fits": true,
   "crossings": 5,
   "width_units": 226,
-  "height_units": 148
+  "height_units": 138
 }

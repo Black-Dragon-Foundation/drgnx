@@ -39,140 +39,140 @@
       "layer": 5,
       "block_line": 0,
       "sub": 0,
-      "y": 78,
+      "y": 73,
       "height_units": 7
     },
     {
       "layer": 4,
       "block_line": 0,
       "sub": 1,
-      "y": 93,
+      "y": 88,
       "height_units": 25
     },
     {
       "layer": 5,
       "block_line": 0,
       "sub": 1,
-      "y": 126,
+      "y": 116,
       "height_units": 7
     },
     {
       "layer": 4,
       "block_line": 0,
       "sub": 2,
-      "y": 141,
+      "y": 131,
       "height_units": 10
     },
     {
       "layer": 5,
       "block_line": 0,
       "sub": 2,
+      "y": 144,
+      "height_units": 7
+    },
+    {
+      "layer": 4,
+      "block_line": 1,
+      "sub": 0,
       "y": 159,
-      "height_units": 7
-    },
-    {
-      "layer": 4,
-      "block_line": 1,
-      "sub": 0,
-      "y": 174,
       "height_units": 25
     },
     {
       "layer": 5,
       "block_line": 1,
       "sub": 0,
-      "y": 207,
+      "y": 187,
       "height_units": 7
     },
     {
       "layer": 4,
       "block_line": 1,
       "sub": 1,
-      "y": 222,
+      "y": 202,
       "height_units": 25
     },
     {
       "layer": 5,
       "block_line": 1,
       "sub": 1,
-      "y": 255,
+      "y": 230,
       "height_units": 7
     },
     {
       "layer": 5,
       "block_line": 1,
       "sub": 2,
-      "y": 270,
+      "y": 245,
       "height_units": 7
     },
     {
       "layer": 4,
       "block_line": 2,
       "sub": 0,
-      "y": 285,
+      "y": 260,
       "height_units": 25
     },
     {
       "layer": 5,
       "block_line": 2,
       "sub": 0,
-      "y": 318,
+      "y": 288,
       "height_units": 7
     },
     {
       "layer": 4,
       "block_line": 2,
       "sub": 1,
-      "y": 333,
+      "y": 303,
       "height_units": 25
     },
     {
       "layer": 5,
       "block_line": 2,
       "sub": 1,
-      "y": 366,
+      "y": 331,
       "height_units": 7
     },
     {
       "layer": 4,
       "block_line": 3,
       "sub": 0,
-      "y": 381,
+      "y": 346,
       "height_units": 25
     },
     {
       "layer": 5,
       "block_line": 3,
       "sub": 0,
-      "y": 414,
+      "y": 374,
       "height_units": 7
     },
     {
       "layer": 4,
       "block_line": 4,
       "sub": 0,
-      "y": 429,
+      "y": 389,
       "height_units": 25
     },
     {
       "layer": 5,
       "block_line": 4,
       "sub": 0,
-      "y": 462,
+      "y": 417,
       "height_units": 7
     },
     {
       "layer": 6,
       "block_line": 0,
       "sub": 0,
-      "y": 477,
+      "y": 432,
       "height_units": 7
     },
     {
       "layer": 6,
       "block_line": 1,
       "sub": 0,
-      "y": 492,
+      "y": 447,
       "height_units": 7
     }
   ],
@@ -209,151 +209,151 @@
     },
     "agent:s04": {
       "x": 0,
-      "y": 93,
+      "y": 88,
       "w": 58,
       "h": 25
     },
     "agent:s05": {
       "x": 61,
-      "y": 93,
+      "y": 88,
       "w": 42,
       "h": 10
     },
     "agent:s06": {
       "x": 106,
-      "y": 93,
+      "y": 88,
       "w": 42,
       "h": 10
     },
     "agent:s07": {
       "x": 151,
-      "y": 93,
+      "y": 88,
       "w": 42,
       "h": 10
     },
     "agent:s08": {
       "x": 0,
-      "y": 141,
+      "y": 131,
       "w": 42,
       "h": 10
     },
     "agent:s09": {
       "x": 45,
-      "y": 141,
+      "y": 131,
       "w": 42,
       "h": 10
     },
     "agent:s10": {
       "x": 90,
-      "y": 141,
+      "y": 131,
       "w": 42,
       "h": 10
     },
     "agent:s11": {
       "x": 0,
-      "y": 174,
+      "y": 159,
       "w": 42,
       "h": 10
     },
     "agent:s11/toolu_c": {
       "x": 45,
-      "y": 174,
+      "y": 159,
       "w": 42,
       "h": 10
     },
     "agent:s12": {
       "x": 90,
-      "y": 174,
+      "y": 159,
       "w": 58,
       "h": 25
     },
     "agent:s13": {
       "x": 151,
-      "y": 174,
+      "y": 159,
       "w": 42,
       "h": 10
     },
     "agent:s14": {
       "x": 0,
-      "y": 222,
+      "y": 202,
       "w": 58,
       "h": 25
     },
     "agent:s15": {
       "x": 61,
-      "y": 222,
+      "y": 202,
       "w": 42,
       "h": 10
     },
     "agent:s16": {
       "x": 106,
-      "y": 222,
+      "y": 202,
       "w": 42,
       "h": 10
     },
     "agent:s17": {
       "x": 151,
-      "y": 222,
+      "y": 202,
       "w": 42,
       "h": 10
     },
     "agent:s18": {
       "x": 0,
-      "y": 285,
+      "y": 260,
       "w": 58,
       "h": 25
     },
     "agent:s18/toolu_d": {
       "x": 61,
-      "y": 285,
+      "y": 260,
       "w": 42,
       "h": 10
     },
     "agent:s19": {
       "x": 106,
-      "y": 285,
+      "y": 260,
       "w": 58,
       "h": 25
     },
     "agent:s20": {
       "x": 167,
-      "y": 285,
+      "y": 260,
       "w": 58,
       "h": 25
     },
     "agent:s21": {
       "x": 0,
-      "y": 333,
+      "y": 303,
       "w": 58,
       "h": 25
     },
     "agent:s22": {
       "x": 61,
-      "y": 333,
+      "y": 303,
       "w": 58,
       "h": 25
     },
     "agent:s23": {
       "x": 0,
-      "y": 381,
+      "y": 346,
       "w": 58,
       "h": 25
     },
     "agent:s24": {
       "x": 61,
-      "y": 381,
+      "y": 346,
       "w": 58,
       "h": 25
     },
     "agent:s25": {
       "x": 0,
-      "y": 429,
+      "y": 389,
       "w": 58,
       "h": 25
     },
     "agent:s26": {
       "x": 61,
-      "y": 429,
+      "y": 389,
       "w": 58,
       "h": 25
     },
@@ -395,223 +395,223 @@
     },
     "branch:drgnx/as2": {
       "x": 134,
-      "y": 159,
+      "y": 144,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/as2-core": {
       "x": 46,
-      "y": 159,
+      "y": 144,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/as2-data": {
       "x": 136,
-      "y": 78,
+      "y": 73,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/as2-edits": {
       "x": 1,
-      "y": 159,
+      "y": 144,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/as2-map": {
       "x": 1,
-      "y": 78,
+      "y": 73,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/as2-s1": {
       "x": 152,
-      "y": 126,
+      "y": 116,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/as2-s4": {
       "x": 107,
-      "y": 126,
+      "y": 116,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/as2-sources": {
       "x": 181,
-      "y": 78,
+      "y": 73,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/as2-step": {
       "x": 62,
-      "y": 126,
+      "y": 116,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/as2-trace": {
       "x": 91,
-      "y": 159,
+      "y": 144,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/as2-wire": {
       "x": 9,
-      "y": 126,
+      "y": 116,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/main": {
       "x": 113,
-      "y": 366,
+      "y": 331,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/rp-core": {
       "x": 9,
-      "y": 318,
+      "y": 288,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/rp-hub": {
       "x": 115,
-      "y": 318,
+      "y": 288,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/rp-install": {
       "x": 70,
-      "y": 366,
+      "y": 331,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/rp-mods": {
       "x": 9,
-      "y": 366,
+      "y": 331,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/rp-sweep": {
       "x": 176,
-      "y": 318,
+      "y": 288,
       "w": 40,
       "h": 7
     },
     "branch:nidhogg/gl-cards": {
       "x": 152,
-      "y": 207,
+      "y": 187,
       "w": 40,
       "h": 7
     },
     "branch:nidhogg/gl-fonts": {
       "x": 152,
-      "y": 255,
+      "y": 230,
       "w": 40,
       "h": 7
     },
     "branch:nidhogg/gl-leg": {
       "x": 99,
-      "y": 207,
+      "y": 187,
       "w": 40,
       "h": 7
     },
     "branch:nidhogg/gl-mask": {
       "x": 1,
-      "y": 207,
+      "y": 187,
       "w": 40,
       "h": 7
     },
     "branch:nidhogg/gl-pacer": {
       "x": 62,
-      "y": 255,
+      "y": 230,
       "w": 40,
       "h": 7
     },
     "branch:nidhogg/gl-scroll": {
       "x": 9,
-      "y": 255,
+      "y": 230,
       "w": 40,
       "h": 7
     },
     "branch:nidhogg/gl-shell": {
       "x": 107,
-      "y": 255,
+      "y": 230,
       "w": 40,
       "h": 7
     },
     "branch:nidhogg/nidhogg-31": {
       "x": 0,
-      "y": 270,
+      "y": 245,
       "w": 40,
       "h": 7
     },
     "branch:org/docs-brainstorm": {
       "x": 9,
-      "y": 462,
+      "y": 417,
       "w": 40,
       "h": 7
     },
     "branch:org/docs-chat": {
       "x": 70,
-      "y": 462,
+      "y": 417,
       "w": 40,
       "h": 7
     },
     "branch:org/jobq-plan": {
       "x": 9,
-      "y": 414,
+      "y": 374,
       "w": 40,
       "h": 7
     },
     "branch:org/jobq-report": {
       "x": 70,
-      "y": 414,
+      "y": 374,
       "w": 40,
       "h": 7
     },
     "branch:org/main": {
       "x": 113,
-      "y": 462,
+      "y": 417,
       "w": 40,
       "h": 7
     },
     "file:drgnx/core/drgnx-hub-core.el": {
       "x": 150,
-      "y": 492,
+      "y": 447,
       "w": 36,
       "h": 7
     },
     "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs": {
       "x": 155,
-      "y": 477,
+      "y": 432,
       "w": 36,
       "h": 7
     },
     "file:drgnx/runtime/crates/vegvisir/src/layout.rs": {
       "x": 3,
-      "y": 477,
+      "y": 432,
       "w": 36,
       "h": 7
     },
     "file:nidhogg/src/xdisp.c": {
       "x": 81,
-      "y": 477,
+      "y": 432,
       "w": 36,
       "h": 7
     },
     "machine:desktop": {
       "x": 120,
-      "y": 477,
+      "y": 432,
       "w": 32,
       "h": 7
     },
     "machine:laptop": {
       "x": 194,
-      "y": 477,
+      "y": 432,
       "w": 32,
       "h": 7
     },
     "machine:local": {
       "x": 46,
-      "y": 477,
+      "y": 432,
       "w": 32,
       "h": 7
     },
@@ -1282,6 +1282,20 @@
     {
       "row": 6,
       "x": 196,
+      "from": "branch:drgnx/as2-data",
+      "to": "branch:drgnx/as2-step",
+      "kind": "overlap"
+    },
+    {
+      "row": 6,
+      "x": 197,
+      "from": "branch:drgnx/as2-data",
+      "to": "branch:drgnx/as2",
+      "kind": "based-on"
+    },
+    {
+      "row": 6,
+      "x": 197,
       "from": "branch:drgnx/as2-map",
       "to": "branch:drgnx/as2",
       "kind": "based-on"
@@ -1289,20 +1303,6 @@
     {
       "row": 6,
       "x": 197,
-      "from": "branch:drgnx/as2-data",
-      "to": "branch:drgnx/as2-step",
-      "kind": "overlap"
-    },
-    {
-      "row": 6,
-      "x": 198,
-      "from": "branch:drgnx/as2-data",
-      "to": "branch:drgnx/as2",
-      "kind": "based-on"
-    },
-    {
-      "row": 6,
-      "x": 201,
       "from": "branch:drgnx/as2-sources",
       "to": "branch:drgnx/as2",
       "kind": "based-on"
@@ -1355,13 +1355,6 @@
       "from": "plan:agent-system-p2",
       "to": "agent:s10",
       "kind": "came-from"
-    },
-    {
-      "row": 7,
-      "x": 103,
-      "from": "branch:drgnx/as2-map",
-      "to": "branch:drgnx/as2",
-      "kind": "based-on"
     },
     {
       "row": 7,
@@ -1477,6 +1470,20 @@
     },
     {
       "row": 7,
+      "x": 150,
+      "from": "branch:drgnx/as2-map",
+      "to": "branch:drgnx/as2",
+      "kind": "based-on"
+    },
+    {
+      "row": 7,
+      "x": 150,
+      "from": "branch:drgnx/as2-sources",
+      "to": "branch:drgnx/as2",
+      "kind": "based-on"
+    },
+    {
+      "row": 7,
       "x": 151,
       "from": "plan:race-proof",
       "to": "agent:s18",
@@ -1519,13 +1526,6 @@
     },
     {
       "row": 7,
-      "x": 196,
-      "from": "branch:drgnx/as2-sources",
-      "to": "branch:drgnx/as2",
-      "kind": "based-on"
-    },
-    {
-      "row": 7,
       "x": 204,
       "from": "plan:jobq",
       "to": "agent:s23",
@@ -1551,13 +1551,6 @@
       "from": "branch:drgnx/as2-map",
       "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
       "kind": "edits"
-    },
-    {
-      "row": 8,
-      "x": 88,
-      "from": "branch:drgnx/as2-wire",
-      "to": "branch:drgnx/as2",
-      "kind": "based-on"
     },
     {
       "row": 8,
@@ -1617,20 +1610,6 @@
     },
     {
       "row": 8,
-      "x": 134,
-      "from": "branch:drgnx/as2-map",
-      "to": "branch:drgnx/as2",
-      "kind": "based-on"
-    },
-    {
-      "row": 8,
-      "x": 135,
-      "from": "branch:drgnx/as2-step",
-      "to": "branch:drgnx/as2",
-      "kind": "based-on"
-    },
-    {
-      "row": 8,
       "x": 136,
       "from": "agent:s01",
       "to": "machine:desktop",
@@ -1680,15 +1659,50 @@
     },
     {
       "row": 8,
-      "x": 140,
+      "x": 154,
+      "from": "branch:drgnx/as2-data",
+      "to": "branch:drgnx/as2",
+      "kind": "based-on"
+    },
+    {
+      "row": 8,
+      "x": 154,
+      "from": "branch:drgnx/as2-map",
+      "to": "branch:drgnx/as2",
+      "kind": "based-on"
+    },
+    {
+      "row": 8,
+      "x": 154,
+      "from": "branch:drgnx/as2-s1",
+      "to": "branch:drgnx/as2",
+      "kind": "based-on"
+    },
+    {
+      "row": 8,
+      "x": 154,
       "from": "branch:drgnx/as2-s4",
       "to": "branch:drgnx/as2",
       "kind": "based-on"
     },
     {
       "row": 8,
-      "x": 155,
-      "from": "branch:drgnx/as2-data",
+      "x": 154,
+      "from": "branch:drgnx/as2-sources",
+      "to": "branch:drgnx/as2",
+      "kind": "based-on"
+    },
+    {
+      "row": 8,
+      "x": 154,
+      "from": "branch:drgnx/as2-step",
+      "to": "branch:drgnx/as2",
+      "kind": "based-on"
+    },
+    {
+      "row": 8,
+      "x": 154,
+      "from": "branch:drgnx/as2-wire",
       "to": "branch:drgnx/as2",
       "kind": "based-on"
     },
@@ -1726,20 +1740,6 @@
       "from": "plan:race-proof",
       "to": "agent:s22",
       "kind": "came-from"
-    },
-    {
-      "row": 8,
-      "x": 163,
-      "from": "branch:drgnx/as2-s1",
-      "to": "branch:drgnx/as2",
-      "kind": "based-on"
-    },
-    {
-      "row": 8,
-      "x": 166,
-      "from": "branch:drgnx/as2-sources",
-      "to": "branch:drgnx/as2",
-      "kind": "based-on"
     },
     {
       "row": 8,
@@ -2493,6 +2493,20 @@
     {
       "row": 12,
       "x": 198,
+      "from": "branch:nidhogg/gl-cards",
+      "to": "branch:nidhogg/nidhogg-31",
+      "kind": "based-on"
+    },
+    {
+      "row": 12,
+      "x": 198,
+      "from": "branch:nidhogg/gl-leg",
+      "to": "branch:nidhogg/nidhogg-31",
+      "kind": "based-on"
+    },
+    {
+      "row": 12,
+      "x": 198,
       "from": "branch:nidhogg/gl-mask",
       "to": "branch:nidhogg/nidhogg-31",
       "kind": "based-on"
@@ -2503,20 +2517,6 @@
       "from": "branch:nidhogg/gl-leg",
       "to": "branch:nidhogg/gl-scroll",
       "kind": "overlap"
-    },
-    {
-      "row": 12,
-      "x": 200,
-      "from": "branch:nidhogg/gl-leg",
-      "to": "branch:nidhogg/nidhogg-31",
-      "kind": "based-on"
-    },
-    {
-      "row": 12,
-      "x": 202,
-      "from": "branch:nidhogg/gl-cards",
-      "to": "branch:nidhogg/nidhogg-31",
-      "kind": "based-on"
     },
     {
       "row": 12,
@@ -2531,6 +2531,20 @@
       "from": "plan:jobq",
       "to": "agent:s24",
       "kind": "came-from"
+    },
+    {
+      "row": 13,
+      "x": 6,
+      "from": "branch:nidhogg/gl-cards",
+      "to": "branch:nidhogg/nidhogg-31",
+      "kind": "based-on"
+    },
+    {
+      "row": 13,
+      "x": 6,
+      "from": "branch:nidhogg/gl-leg",
+      "to": "branch:nidhogg/nidhogg-31",
+      "kind": "based-on"
     },
     {
       "row": 13,
@@ -2552,20 +2566,6 @@
       "from": "ask:5",
       "to": "agent:s25",
       "kind": "came-from"
-    },
-    {
-      "row": 13,
-      "x": 53,
-      "from": "branch:nidhogg/gl-leg",
-      "to": "branch:nidhogg/nidhogg-31",
-      "kind": "based-on"
-    },
-    {
-      "row": 13,
-      "x": 61,
-      "from": "branch:nidhogg/gl-cards",
-      "to": "branch:nidhogg/nidhogg-31",
-      "kind": "based-on"
     },
     {
       "row": 13,
@@ -3304,13 +3304,6 @@
     },
     {
       "row": 17,
-      "x": 122,
-      "from": "branch:drgnx/rp-core",
-      "to": "branch:drgnx/main",
-      "kind": "based-on"
-    },
-    {
-      "row": 17,
       "x": 131,
       "from": "ask:6",
       "to": "agent:s26",
@@ -3318,8 +3311,22 @@
     },
     {
       "row": 17,
-      "x": 134,
+      "x": 133,
+      "from": "branch:drgnx/rp-core",
+      "to": "branch:drgnx/main",
+      "kind": "based-on"
+    },
+    {
+      "row": 17,
+      "x": 133,
       "from": "branch:drgnx/rp-hub",
+      "to": "branch:drgnx/main",
+      "kind": "based-on"
+    },
+    {
+      "row": 17,
+      "x": 133,
+      "from": "branch:drgnx/rp-sweep",
       "to": "branch:drgnx/main",
       "kind": "based-on"
     },
@@ -3441,13 +3448,6 @@
       "from": "agent:s20",
       "to": "machine:desktop",
       "kind": "runs-on"
-    },
-    {
-      "row": 17,
-      "x": 165,
-      "from": "branch:drgnx/rp-sweep",
-      "to": "branch:drgnx/main",
-      "kind": "based-on"
     },
     {
       "row": 17,
@@ -4039,7 +4039,7 @@
     },
     {
       "row": 21,
-      "x": 121,
+      "x": 133,
       "from": "branch:org/jobq-plan",
       "to": "branch:org/main",
       "kind": "based-on"
@@ -4764,7 +4764,7 @@
     {
       "row": 5,
       "y": 70,
-      "height_units": 8,
+      "height_units": 3,
       "segs": [
         {
           "from": "agent:s01",
@@ -4987,7 +4987,7 @@
     },
     {
       "row": 6,
-      "y": 85,
+      "y": 80,
       "height_units": 8,
       "segs": [
         {
@@ -5002,7 +5002,7 @@
           "to": "branch:drgnx/as2",
           "kind": "based-on",
           "x0": 21,
-          "x1": 196
+          "x1": 197
         },
         {
           "from": "ask:5",
@@ -5149,14 +5149,14 @@
           "to": "branch:drgnx/as2-step",
           "kind": "overlap",
           "x0": 156,
-          "x1": 197
+          "x1": 196
         },
         {
           "from": "branch:drgnx/as2-data",
           "to": "branch:drgnx/as2",
           "kind": "based-on",
           "x0": 156,
-          "x1": 198
+          "x1": 197
         },
         {
           "from": "plan:race-proof",
@@ -5205,7 +5205,7 @@
           "to": "branch:drgnx/as2",
           "kind": "based-on",
           "x0": 201,
-          "x1": 201
+          "x1": 197
         },
         {
           "from": "plan:jobq",
@@ -5225,8 +5225,8 @@
     },
     {
       "row": 7,
-      "y": 118,
-      "height_units": 8,
+      "y": 113,
+      "height_units": 3,
       "segs": [
         {
           "from": "agent:s04",
@@ -5439,32 +5439,32 @@
           "x1": 7
         },
         {
-          "from": "branch:drgnx/as2-map",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 196,
-          "x1": 103
-        },
-        {
           "from": "branch:drgnx/as2-data",
           "to": "branch:drgnx/as2-step",
           "kind": "overlap",
-          "x0": 197,
+          "x0": 196,
           "x1": 82
         },
         {
           "from": "branch:drgnx/as2-data",
           "to": "branch:drgnx/as2",
           "kind": "based-on",
-          "x0": 198,
+          "x0": 197,
+          "x1": 150
+        },
+        {
+          "from": "branch:drgnx/as2-map",
+          "to": "branch:drgnx/as2",
+          "kind": "based-on",
+          "x0": 197,
           "x1": 150
         },
         {
           "from": "branch:drgnx/as2-sources",
           "to": "branch:drgnx/as2",
           "kind": "based-on",
-          "x0": 201,
-          "x1": 196
+          "x0": 197,
+          "x1": 150
         },
         {
           "from": "plan:jobq",
@@ -5484,7 +5484,7 @@
     },
     {
       "row": 8,
-      "y": 133,
+      "y": 123,
       "height_units": 8,
       "segs": [
         {
@@ -5506,7 +5506,7 @@
           "to": "branch:drgnx/as2",
           "kind": "based-on",
           "x0": 29,
-          "x1": 88
+          "x1": 154
         },
         {
           "from": "plan:agent-system-p2",
@@ -5534,14 +5534,7 @@
           "to": "branch:drgnx/as2",
           "kind": "based-on",
           "x0": 82,
-          "x1": 135
-        },
-        {
-          "from": "branch:drgnx/as2-map",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 103,
-          "x1": 134
+          "x1": 154
         },
         {
           "from": "plan:glitnir-p2-p4",
@@ -5597,7 +5590,7 @@
           "to": "branch:drgnx/as2",
           "kind": "based-on",
           "x0": 127,
-          "x1": 140
+          "x1": 154
         },
         {
           "from": "ask:6",
@@ -5660,7 +5653,21 @@
           "to": "branch:drgnx/as2",
           "kind": "based-on",
           "x0": 150,
-          "x1": 155
+          "x1": 154
+        },
+        {
+          "from": "branch:drgnx/as2-map",
+          "to": "branch:drgnx/as2",
+          "kind": "based-on",
+          "x0": 150,
+          "x1": 154
+        },
+        {
+          "from": "branch:drgnx/as2-sources",
+          "to": "branch:drgnx/as2",
+          "kind": "based-on",
+          "x0": 150,
+          "x1": 154
         },
         {
           "from": "plan:race-proof",
@@ -5702,7 +5709,7 @@
           "to": "branch:drgnx/as2",
           "kind": "based-on",
           "x0": 172,
-          "x1": 163
+          "x1": 154
         },
         {
           "from": "agent:s03",
@@ -5710,13 +5717,6 @@
           "kind": "overlap",
           "x0": 193,
           "x1": 177
-        },
-        {
-          "from": "branch:drgnx/as2-sources",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 196,
-          "x1": 166
         },
         {
           "from": "plan:jobq",
@@ -5736,8 +5736,8 @@
     },
     {
       "row": 9,
-      "y": 151,
-      "height_units": 8,
+      "y": 141,
+      "height_units": 3,
       "segs": [
         {
           "from": "agent:s08",
@@ -5796,13 +5796,6 @@
           "x0": 66,
           "x1": 154,
           "arc": true
-        },
-        {
-          "from": "branch:drgnx/as2-wire",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 88,
-          "x1": 154
         },
         {
           "from": "plan:glitnir-p2-p4",
@@ -5883,20 +5876,6 @@
           "x1": 132
         },
         {
-          "from": "branch:drgnx/as2-map",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 134,
-          "x1": 154
-        },
-        {
-          "from": "branch:drgnx/as2-step",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 135,
-          "x1": 154
-        },
-        {
           "from": "agent:s01",
           "to": "machine:desktop",
           "kind": "runs-on",
@@ -5946,17 +5925,52 @@
           "x1": 133
         },
         {
-          "from": "branch:drgnx/as2-s4",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 140,
-          "x1": 154
-        },
-        {
           "from": "branch:drgnx/as2-data",
           "to": "branch:drgnx/as2",
           "kind": "based-on",
-          "x0": 155,
+          "x0": 154,
+          "x1": 154
+        },
+        {
+          "from": "branch:drgnx/as2-map",
+          "to": "branch:drgnx/as2",
+          "kind": "based-on",
+          "x0": 154,
+          "x1": 154
+        },
+        {
+          "from": "branch:drgnx/as2-s1",
+          "to": "branch:drgnx/as2",
+          "kind": "based-on",
+          "x0": 154,
+          "x1": 154
+        },
+        {
+          "from": "branch:drgnx/as2-s4",
+          "to": "branch:drgnx/as2",
+          "kind": "based-on",
+          "x0": 154,
+          "x1": 154
+        },
+        {
+          "from": "branch:drgnx/as2-sources",
+          "to": "branch:drgnx/as2",
+          "kind": "based-on",
+          "x0": 154,
+          "x1": 154
+        },
+        {
+          "from": "branch:drgnx/as2-step",
+          "to": "branch:drgnx/as2",
+          "kind": "based-on",
+          "x0": 154,
+          "x1": 154
+        },
+        {
+          "from": "branch:drgnx/as2-wire",
+          "to": "branch:drgnx/as2",
+          "kind": "based-on",
+          "x0": 154,
           "x1": 154
         },
         {
@@ -5995,20 +6009,6 @@
           "x1": 175
         },
         {
-          "from": "branch:drgnx/as2-s1",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 163,
-          "x1": 154
-        },
-        {
-          "from": "branch:drgnx/as2-sources",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 166,
-          "x1": 154
-        },
-        {
           "from": "agent:s03",
           "to": "agent:s19",
           "kind": "overlap",
@@ -6033,7 +6033,7 @@
     },
     {
       "row": 10,
-      "y": 166,
+      "y": 151,
       "height_units": 8,
       "segs": [
         {
@@ -6244,8 +6244,8 @@
     },
     {
       "row": 11,
-      "y": 199,
-      "height_units": 8,
+      "y": 184,
+      "height_units": 3,
       "segs": [
         {
           "from": "agent:s11",
@@ -6475,7 +6475,7 @@
     },
     {
       "row": 12,
-      "y": 214,
+      "y": 194,
       "height_units": 8,
       "segs": [
         {
@@ -6536,17 +6536,17 @@
         },
         {
           "from": "branch:nidhogg/gl-leg",
+          "to": "branch:nidhogg/nidhogg-31",
+          "kind": "based-on",
+          "x0": 119,
+          "x1": 198
+        },
+        {
+          "from": "branch:nidhogg/gl-leg",
           "to": "branch:nidhogg/gl-scroll",
           "kind": "overlap",
           "x0": 119,
           "x1": 199
-        },
-        {
-          "from": "branch:nidhogg/gl-leg",
-          "to": "branch:nidhogg/nidhogg-31",
-          "kind": "based-on",
-          "x0": 119,
-          "x1": 200
         },
         {
           "from": "ask:6",
@@ -6693,7 +6693,7 @@
           "to": "branch:nidhogg/nidhogg-31",
           "kind": "based-on",
           "x0": 172,
-          "x1": 202
+          "x1": 198
         },
         {
           "from": "plan:jobq",
@@ -6713,8 +6713,8 @@
     },
     {
       "row": 13,
-      "y": 247,
-      "height_units": 8,
+      "y": 227,
+      "height_units": 3,
       "segs": [
         {
           "from": "agent:s14",
@@ -6920,6 +6920,20 @@
           "x1": 150
         },
         {
+          "from": "branch:nidhogg/gl-cards",
+          "to": "branch:nidhogg/nidhogg-31",
+          "kind": "based-on",
+          "x0": 198,
+          "x1": 6
+        },
+        {
+          "from": "branch:nidhogg/gl-leg",
+          "to": "branch:nidhogg/nidhogg-31",
+          "kind": "based-on",
+          "x0": 198,
+          "x1": 6
+        },
+        {
           "from": "branch:nidhogg/gl-mask",
           "to": "branch:nidhogg/nidhogg-31",
           "kind": "based-on",
@@ -6932,20 +6946,6 @@
           "kind": "overlap",
           "x0": 199,
           "x1": 29
-        },
-        {
-          "from": "branch:nidhogg/gl-leg",
-          "to": "branch:nidhogg/nidhogg-31",
-          "kind": "based-on",
-          "x0": 200,
-          "x1": 53
-        },
-        {
-          "from": "branch:nidhogg/gl-cards",
-          "to": "branch:nidhogg/nidhogg-31",
-          "kind": "based-on",
-          "x0": 202,
-          "x1": 61
         },
         {
           "from": "plan:jobq",
@@ -6965,9 +6965,23 @@
     },
     {
       "row": 14,
-      "y": 262,
+      "y": 237,
       "height_units": 8,
       "segs": [
+        {
+          "from": "branch:nidhogg/gl-cards",
+          "to": "branch:nidhogg/nidhogg-31",
+          "kind": "based-on",
+          "x0": 6,
+          "x1": 20
+        },
+        {
+          "from": "branch:nidhogg/gl-leg",
+          "to": "branch:nidhogg/nidhogg-31",
+          "kind": "based-on",
+          "x0": 6,
+          "x1": 20
+        },
         {
           "from": "branch:nidhogg/gl-mask",
           "to": "branch:nidhogg/nidhogg-31",
@@ -6994,20 +7008,6 @@
           "to": "branch:nidhogg/nidhogg-31",
           "kind": "based-on",
           "x0": 29,
-          "x1": 20
-        },
-        {
-          "from": "branch:nidhogg/gl-leg",
-          "to": "branch:nidhogg/nidhogg-31",
-          "kind": "based-on",
-          "x0": 53,
-          "x1": 20
-        },
-        {
-          "from": "branch:nidhogg/gl-cards",
-          "to": "branch:nidhogg/nidhogg-31",
-          "kind": "based-on",
-          "x0": 61,
           "x1": 20
         },
         {
@@ -7210,7 +7210,7 @@
     },
     {
       "row": 15,
-      "y": 277,
+      "y": 252,
       "height_units": 8,
       "segs": [
         {
@@ -7414,8 +7414,8 @@
     },
     {
       "row": 16,
-      "y": 310,
-      "height_units": 8,
+      "y": 285,
+      "height_units": 3,
       "segs": [
         {
           "from": "agent:s18",
@@ -7624,7 +7624,7 @@
     },
     {
       "row": 17,
-      "y": 325,
+      "y": 295,
       "height_units": 8,
       "segs": [
         {
@@ -7646,7 +7646,7 @@
           "to": "branch:drgnx/main",
           "kind": "based-on",
           "x0": 29,
-          "x1": 122
+          "x1": 133
         },
         {
           "from": "agent:s18",
@@ -7674,7 +7674,7 @@
           "to": "branch:drgnx/main",
           "kind": "based-on",
           "x0": 135,
-          "x1": 134
+          "x1": 133
         },
         {
           "from": "branch:drgnx/rp-hub",
@@ -7821,7 +7821,7 @@
           "to": "branch:drgnx/main",
           "kind": "based-on",
           "x0": 196,
-          "x1": 165
+          "x1": 133
         },
         {
           "from": "plan:jobq",
@@ -7841,8 +7841,8 @@
     },
     {
       "row": 18,
-      "y": 358,
-      "height_units": 8,
+      "y": 328,
+      "height_units": 3,
       "segs": [
         {
           "from": "agent:s21",
@@ -7910,13 +7910,6 @@
           "x1": 62
         },
         {
-          "from": "branch:drgnx/rp-core",
-          "to": "branch:drgnx/main",
-          "kind": "based-on",
-          "x0": 122,
-          "x1": 133
-        },
-        {
           "from": "ask:6",
           "to": "agent:s26",
           "kind": "came-from",
@@ -7924,10 +7917,24 @@
           "x1": 112
         },
         {
+          "from": "branch:drgnx/rp-core",
+          "to": "branch:drgnx/main",
+          "kind": "based-on",
+          "x0": 133,
+          "x1": 133
+        },
+        {
           "from": "branch:drgnx/rp-hub",
           "to": "branch:drgnx/main",
           "kind": "based-on",
-          "x0": 134,
+          "x0": 133,
+          "x1": 133
+        },
+        {
+          "from": "branch:drgnx/rp-sweep",
+          "to": "branch:drgnx/main",
+          "kind": "based-on",
+          "x0": 133,
           "x1": 133
         },
         {
@@ -8050,13 +8057,6 @@
           "x1": 154
         },
         {
-          "from": "branch:drgnx/rp-sweep",
-          "to": "branch:drgnx/main",
-          "kind": "based-on",
-          "x0": 165,
-          "x1": 133
-        },
-        {
           "from": "branch:drgnx/rp-hub",
           "to": "file:drgnx/core/drgnx-hub-core.el",
           "kind": "edits",
@@ -8081,7 +8081,7 @@
     },
     {
       "row": 19,
-      "y": 373,
+      "y": 338,
       "height_units": 8,
       "segs": [
         {
@@ -8278,8 +8278,8 @@
     },
     {
       "row": 20,
-      "y": 406,
-      "height_units": 8,
+      "y": 371,
+      "height_units": 3,
       "segs": [
         {
           "from": "agent:s23",
@@ -8489,7 +8489,7 @@
     },
     {
       "row": 21,
-      "y": 421,
+      "y": 381,
       "height_units": 8,
       "segs": [
         {
@@ -8511,7 +8511,7 @@
           "to": "branch:org/main",
           "kind": "based-on",
           "x0": 29,
-          "x1": 121
+          "x1": 133
         },
         {
           "from": "agent:s18",
@@ -8685,8 +8685,8 @@
     },
     {
       "row": 22,
-      "y": 454,
-      "height_units": 8,
+      "y": 414,
+      "height_units": 3,
       "segs": [
         {
           "from": "agent:s25",
@@ -8757,7 +8757,7 @@
           "from": "branch:org/jobq-plan",
           "to": "branch:org/main",
           "kind": "based-on",
-          "x0": 121,
+          "x0": 133,
           "x1": 133
         },
         {
@@ -8897,7 +8897,7 @@
     },
     {
       "row": 23,
-      "y": 469,
+      "y": 424,
       "height_units": 8,
       "segs": [
         {
@@ -9072,7 +9072,7 @@
     },
     {
       "row": 24,
-      "y": 484,
+      "y": 439,
       "height_units": 8,
       "segs": [
         {
@@ -9086,7 +9086,7 @@
     }
   ],
   "fits": true,
-  "crossings": 1157,
+  "crossings": 1128,
   "width_units": 226,
-  "height_units": 499
+  "height_units": 454
 }

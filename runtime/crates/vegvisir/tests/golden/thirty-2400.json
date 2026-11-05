@@ -32,70 +32,70 @@
       "layer": 5,
       "block_line": 0,
       "sub": 0,
-      "y": 78,
+      "y": 73,
       "height_units": 7
     },
     {
       "layer": 4,
       "block_line": 0,
       "sub": 1,
-      "y": 93,
+      "y": 88,
       "height_units": 25
     },
     {
       "layer": 5,
       "block_line": 0,
       "sub": 1,
-      "y": 126,
+      "y": 116,
       "height_units": 7
     },
     {
       "layer": 4,
       "block_line": 1,
       "sub": 0,
-      "y": 141,
+      "y": 131,
       "height_units": 25
     },
     {
       "layer": 5,
       "block_line": 1,
+      "sub": 0,
+      "y": 159,
+      "height_units": 7
+    },
+    {
+      "layer": 4,
+      "block_line": 2,
       "sub": 0,
       "y": 174,
-      "height_units": 7
-    },
-    {
-      "layer": 4,
-      "block_line": 2,
-      "sub": 0,
-      "y": 189,
       "height_units": 25
     },
     {
       "layer": 5,
       "block_line": 2,
       "sub": 0,
-      "y": 222,
+      "y": 202,
       "height_units": 7
     },
     {
       "layer": 4,
       "block_line": 3,
       "sub": 0,
-      "y": 237,
+      "y": 217,
       "height_units": 25
     },
     {
       "layer": 5,
       "block_line": 3,
       "sub": 0,
-      "y": 270,
+      "y": 245,
       "height_units": 7
     },
     {
       "layer": 6,
       "block_line": 0,
       "sub": 0,
-      "y": 285,
+      "y": 260,
       "height_units": 7
     }
   ],
@@ -162,121 +162,121 @@
     },
     "agent:s09": {
       "x": 0,
-      "y": 93,
+      "y": 88,
       "w": 58,
       "h": 25
     },
     "agent:s10": {
       "x": 61,
-      "y": 93,
+      "y": 88,
       "w": 58,
       "h": 25
     },
     "agent:s11": {
       "x": 0,
-      "y": 141,
+      "y": 131,
       "w": 58,
       "h": 25
     },
     "agent:s11/toolu_c": {
       "x": 61,
-      "y": 141,
+      "y": 131,
       "w": 42,
       "h": 10
     },
     "agent:s12": {
       "x": 106,
-      "y": 141,
+      "y": 131,
       "w": 58,
       "h": 25
     },
     "agent:s13": {
       "x": 167,
-      "y": 141,
+      "y": 131,
       "w": 58,
       "h": 25
     },
     "agent:s14": {
       "x": 228,
-      "y": 141,
+      "y": 131,
       "w": 58,
       "h": 25
     },
     "agent:s15": {
       "x": 289,
-      "y": 141,
+      "y": 131,
       "w": 58,
       "h": 25
     },
     "agent:s16": {
       "x": 350,
-      "y": 141,
+      "y": 131,
       "w": 58,
       "h": 25
     },
     "agent:s17": {
       "x": 411,
-      "y": 141,
+      "y": 131,
       "w": 58,
       "h": 25
     },
     "agent:s18": {
       "x": 0,
-      "y": 189,
+      "y": 174,
       "w": 58,
       "h": 25
     },
     "agent:s18/toolu_d": {
       "x": 61,
-      "y": 189,
+      "y": 174,
       "w": 42,
       "h": 10
     },
     "agent:s19": {
       "x": 106,
-      "y": 189,
+      "y": 174,
       "w": 58,
       "h": 25
     },
     "agent:s20": {
       "x": 167,
-      "y": 189,
+      "y": 174,
       "w": 58,
       "h": 25
     },
     "agent:s21": {
       "x": 228,
-      "y": 189,
+      "y": 174,
       "w": 58,
       "h": 25
     },
     "agent:s22": {
       "x": 289,
-      "y": 189,
+      "y": 174,
       "w": 58,
       "h": 25
     },
     "agent:s23": {
       "x": 387,
-      "y": 189,
+      "y": 174,
       "w": 58,
       "h": 25
     },
     "agent:s24": {
       "x": 448,
-      "y": 189,
+      "y": 174,
       "w": 58,
       "h": 25
     },
     "agent:s25": {
       "x": 0,
-      "y": 237,
+      "y": 217,
       "w": 58,
       "h": 25
     },
     "agent:s26": {
       "x": 61,
-      "y": 237,
+      "y": 217,
       "w": 58,
       "h": 25
     },
@@ -318,223 +318,223 @@
     },
     "branch:drgnx/as2": {
       "x": 113,
-      "y": 126,
+      "y": 116,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/as2-core": {
       "x": 9,
-      "y": 126,
+      "y": 116,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/as2-data": {
       "x": 160,
-      "y": 78,
+      "y": 73,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/as2-edits": {
       "x": 526,
-      "y": 78,
+      "y": 73,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/as2-map": {
       "x": 9,
-      "y": 78,
+      "y": 73,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/as2-s1": {
       "x": 465,
-      "y": 78,
+      "y": 73,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/as2-s4": {
       "x": 404,
-      "y": 78,
+      "y": 73,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/as2-sources": {
       "x": 221,
-      "y": 78,
+      "y": 73,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/as2-step": {
       "x": 343,
-      "y": 78,
+      "y": 73,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/as2-trace": {
       "x": 70,
-      "y": 126,
+      "y": 116,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/as2-wire": {
       "x": 282,
-      "y": 78,
+      "y": 73,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/main": {
       "x": 341,
-      "y": 222,
+      "y": 202,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/rp-core": {
       "x": 9,
-      "y": 222,
+      "y": 202,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/rp-hub": {
       "x": 115,
-      "y": 222,
+      "y": 202,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/rp-install": {
       "x": 298,
-      "y": 222,
+      "y": 202,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/rp-mods": {
       "x": 237,
-      "y": 222,
+      "y": 202,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/rp-sweep": {
       "x": 176,
-      "y": 222,
+      "y": 202,
       "w": 40,
       "h": 7
     },
     "branch:nidhogg/gl-cards": {
       "x": 176,
-      "y": 174,
+      "y": 159,
       "w": 40,
       "h": 7
     },
     "branch:nidhogg/gl-fonts": {
       "x": 420,
-      "y": 174,
+      "y": 159,
       "w": 40,
       "h": 7
     },
     "branch:nidhogg/gl-leg": {
       "x": 115,
-      "y": 174,
+      "y": 159,
       "w": 40,
       "h": 7
     },
     "branch:nidhogg/gl-mask": {
       "x": 9,
-      "y": 174,
+      "y": 159,
       "w": 40,
       "h": 7
     },
     "branch:nidhogg/gl-pacer": {
       "x": 298,
-      "y": 174,
+      "y": 159,
       "w": 40,
       "h": 7
     },
     "branch:nidhogg/gl-scroll": {
       "x": 237,
-      "y": 174,
+      "y": 159,
       "w": 40,
       "h": 7
     },
     "branch:nidhogg/gl-shell": {
       "x": 359,
-      "y": 174,
+      "y": 159,
       "w": 40,
       "h": 7
     },
     "branch:nidhogg/nidhogg-31": {
       "x": 463,
-      "y": 174,
+      "y": 159,
       "w": 40,
       "h": 7
     },
     "branch:org/docs-brainstorm": {
       "x": 9,
-      "y": 270,
+      "y": 245,
       "w": 40,
       "h": 7
     },
     "branch:org/docs-chat": {
       "x": 70,
-      "y": 270,
+      "y": 245,
       "w": 40,
       "h": 7
     },
     "branch:org/jobq-plan": {
       "x": 396,
-      "y": 222,
+      "y": 202,
       "w": 40,
       "h": 7
     },
     "branch:org/jobq-report": {
       "x": 457,
-      "y": 222,
+      "y": 202,
       "w": 40,
       "h": 7
     },
     "branch:org/main": {
       "x": 113,
-      "y": 270,
+      "y": 245,
       "w": 40,
       "h": 7
     },
     "file:drgnx/core/drgnx-hub-core.el": {
       "x": 170,
-      "y": 285,
+      "y": 260,
       "w": 36,
       "h": 7
     },
     "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs": {
       "x": 318,
-      "y": 285,
+      "y": 260,
       "w": 36,
       "h": 7
     },
     "file:drgnx/runtime/crates/vegvisir/src/layout.rs": {
       "x": 11,
-      "y": 285,
+      "y": 260,
       "w": 36,
       "h": 7
     },
     "file:nidhogg/src/xdisp.c": {
       "x": 209,
-      "y": 285,
+      "y": 260,
       "w": 36,
       "h": 7
     },
     "machine:desktop": {
       "x": 248,
-      "y": 285,
+      "y": 260,
       "w": 32,
       "h": 7
     },
     "machine:laptop": {
       "x": 363,
-      "y": 285,
+      "y": 260,
       "w": 32,
       "h": 7
     },
     "machine:local": {
       "x": 283,
-      "y": 285,
+      "y": 260,
       "w": 32,
       "h": 7
     },
@@ -994,22 +994,57 @@
     },
     {
       "row": 5,
-      "x": 121,
-      "from": "branch:drgnx/as2-map",
-      "to": "branch:drgnx/as2",
-      "kind": "based-on"
-    },
-    {
-      "row": 5,
-      "x": 157,
+      "x": 133,
       "from": "branch:drgnx/as2-data",
       "to": "branch:drgnx/as2",
       "kind": "based-on"
     },
     {
       "row": 5,
-      "x": 187,
+      "x": 133,
+      "from": "branch:drgnx/as2-edits",
+      "to": "branch:drgnx/as2",
+      "kind": "based-on"
+    },
+    {
+      "row": 5,
+      "x": 133,
+      "from": "branch:drgnx/as2-map",
+      "to": "branch:drgnx/as2",
+      "kind": "based-on"
+    },
+    {
+      "row": 5,
+      "x": 133,
+      "from": "branch:drgnx/as2-s1",
+      "to": "branch:drgnx/as2",
+      "kind": "based-on"
+    },
+    {
+      "row": 5,
+      "x": 133,
+      "from": "branch:drgnx/as2-s4",
+      "to": "branch:drgnx/as2",
+      "kind": "based-on"
+    },
+    {
+      "row": 5,
+      "x": 133,
       "from": "branch:drgnx/as2-sources",
+      "to": "branch:drgnx/as2",
+      "kind": "based-on"
+    },
+    {
+      "row": 5,
+      "x": 133,
+      "from": "branch:drgnx/as2-step",
+      "to": "branch:drgnx/as2",
+      "kind": "based-on"
+    },
+    {
+      "row": 5,
+      "x": 133,
+      "from": "branch:drgnx/as2-wire",
       "to": "branch:drgnx/as2",
       "kind": "based-on"
     },
@@ -1029,24 +1064,10 @@
     },
     {
       "row": 5,
-      "x": 218,
-      "from": "branch:drgnx/as2-wire",
-      "to": "branch:drgnx/as2",
-      "kind": "based-on"
-    },
-    {
-      "row": 5,
       "x": 224,
       "from": "branch:drgnx/as2-sources",
       "to": "branch:drgnx/rp-hub",
       "kind": "overlap"
-    },
-    {
-      "row": 5,
-      "x": 248,
-      "from": "branch:drgnx/as2-step",
-      "to": "branch:drgnx/as2",
-      "kind": "based-on"
     },
     {
       "row": 5,
@@ -1103,20 +1124,6 @@
       "from": "agent:s08",
       "to": "machine:desktop",
       "kind": "runs-on"
-    },
-    {
-      "row": 5,
-      "x": 279,
-      "from": "branch:drgnx/as2-s4",
-      "to": "branch:drgnx/as2",
-      "kind": "based-on"
-    },
-    {
-      "row": 5,
-      "x": 309,
-      "from": "branch:drgnx/as2-s1",
-      "to": "branch:drgnx/as2",
-      "kind": "based-on"
     },
     {
       "row": 5,
@@ -1180,13 +1187,6 @@
       "from": "branch:drgnx/as2-step",
       "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
       "kind": "edits"
-    },
-    {
-      "row": 5,
-      "x": 340,
-      "from": "branch:drgnx/as2-edits",
-      "to": "branch:drgnx/as2",
-      "kind": "based-on"
     },
     {
       "row": 5,
@@ -1505,13 +1505,6 @@
     },
     {
       "row": 7,
-      "x": 227,
-      "from": "branch:drgnx/as2",
-      "to": "branch:drgnx/main",
-      "kind": "based-on"
-    },
-    {
-      "row": 7,
       "x": 287,
       "from": "agent:s01",
       "to": "machine:desktop",
@@ -1593,6 +1586,13 @@
       "from": "branch:drgnx/as2-step",
       "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
       "kind": "edits"
+    },
+    {
+      "row": 7,
+      "x": 349,
+      "from": "branch:drgnx/as2",
+      "to": "branch:drgnx/main",
+      "kind": "based-on"
     },
     {
       "row": 7,
@@ -1684,13 +1684,6 @@
       "from": "branch:drgnx/as2-sources",
       "to": "file:drgnx/core/drgnx-hub-core.el",
       "kind": "edits"
-    },
-    {
-      "row": 8,
-      "x": 236,
-      "from": "branch:drgnx/as2",
-      "to": "branch:drgnx/main",
-      "kind": "based-on"
     },
     {
       "row": 8,
@@ -1820,10 +1813,17 @@
     },
     {
       "row": 8,
-      "x": 358,
+      "x": 357,
       "from": "agent:s16",
       "to": "machine:laptop",
       "kind": "runs-on"
+    },
+    {
+      "row": 8,
+      "x": 358,
+      "from": "branch:drgnx/as2",
+      "to": "branch:drgnx/main",
+      "kind": "based-on"
     },
     {
       "row": 8,
@@ -2037,13 +2037,6 @@
     },
     {
       "row": 9,
-      "x": 288,
-      "from": "branch:drgnx/as2",
-      "to": "branch:drgnx/main",
-      "kind": "based-on"
-    },
-    {
-      "row": 9,
       "x": 348,
       "from": "branch:drgnx/as2-data",
       "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
@@ -2055,6 +2048,13 @@
       "from": "branch:drgnx/as2-step",
       "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
       "kind": "edits"
+    },
+    {
+      "row": 9,
+      "x": 361,
+      "from": "branch:drgnx/as2",
+      "to": "branch:drgnx/main",
+      "kind": "based-on"
     },
     {
       "row": 9,
@@ -2289,6 +2289,13 @@
     },
     {
       "row": 11,
+      "x": 133,
+      "from": "branch:org/jobq-plan",
+      "to": "branch:org/main",
+      "kind": "based-on"
+    },
+    {
+      "row": 11,
       "x": 188,
       "from": "branch:drgnx/as2-sources",
       "to": "file:drgnx/core/drgnx-hub-core.el",
@@ -2440,13 +2447,6 @@
       "from": "agent:s21",
       "to": "machine:desktop",
       "kind": "runs-on"
-    },
-    {
-      "row": 11,
-      "x": 275,
-      "from": "branch:org/jobq-plan",
-      "to": "branch:org/main",
-      "kind": "based-on"
     },
     {
       "row": 11,
@@ -3046,7 +3046,7 @@
     {
       "row": 4,
       "y": 70,
-      "height_units": 8,
+      "height_units": 3,
       "segs": [
         {
           "from": "agent:s01",
@@ -3305,7 +3305,7 @@
     },
     {
       "row": 5,
-      "y": 85,
+      "y": 80,
       "height_units": 8,
       "segs": [
         {
@@ -3327,7 +3327,7 @@
           "to": "branch:drgnx/as2",
           "kind": "based-on",
           "x0": 29,
-          "x1": 121
+          "x1": 133
         },
         {
           "from": "ask:6",
@@ -3341,7 +3341,7 @@
           "to": "branch:drgnx/as2",
           "kind": "based-on",
           "x0": 180,
-          "x1": 157
+          "x1": 133
         },
         {
           "from": "branch:drgnx/as2-data",
@@ -3362,7 +3362,7 @@
           "to": "branch:drgnx/as2",
           "kind": "based-on",
           "x0": 241,
-          "x1": 187
+          "x1": 133
         },
         {
           "from": "branch:drgnx/as2-sources",
@@ -3453,7 +3453,7 @@
           "to": "branch:drgnx/as2",
           "kind": "based-on",
           "x0": 302,
-          "x1": 218
+          "x1": 133
         },
         {
           "from": "plan:glitnir-p2-p4",
@@ -3509,7 +3509,7 @@
           "to": "branch:drgnx/as2",
           "kind": "based-on",
           "x0": 363,
-          "x1": 248
+          "x1": 133
         },
         {
           "from": "branch:drgnx/as2-step",
@@ -3558,7 +3558,7 @@
           "to": "branch:drgnx/as2",
           "kind": "based-on",
           "x0": 424,
-          "x1": 279
+          "x1": 133
         },
         {
           "from": "plan:jobq",
@@ -3579,21 +3579,21 @@
           "to": "branch:drgnx/as2",
           "kind": "based-on",
           "x0": 485,
-          "x1": 309
+          "x1": 133
         },
         {
           "from": "branch:drgnx/as2-edits",
           "to": "branch:drgnx/as2",
           "kind": "based-on",
           "x0": 546,
-          "x1": 340
+          "x1": 133
         }
       ]
     },
     {
       "row": 6,
-      "y": 118,
-      "height_units": 8,
+      "y": 113,
+      "height_units": 3,
       "segs": [
         {
           "from": "agent:s09",
@@ -3661,24 +3661,59 @@
           "x1": 50
         },
         {
-          "from": "branch:drgnx/as2-map",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 121,
-          "x1": 133
-        },
-        {
           "from": "branch:drgnx/as2-data",
           "to": "branch:drgnx/as2",
           "kind": "based-on",
-          "x0": 157,
+          "x0": 133,
+          "x1": 133
+        },
+        {
+          "from": "branch:drgnx/as2-edits",
+          "to": "branch:drgnx/as2",
+          "kind": "based-on",
+          "x0": 133,
+          "x1": 133
+        },
+        {
+          "from": "branch:drgnx/as2-map",
+          "to": "branch:drgnx/as2",
+          "kind": "based-on",
+          "x0": 133,
+          "x1": 133
+        },
+        {
+          "from": "branch:drgnx/as2-s1",
+          "to": "branch:drgnx/as2",
+          "kind": "based-on",
+          "x0": 133,
+          "x1": 133
+        },
+        {
+          "from": "branch:drgnx/as2-s4",
+          "to": "branch:drgnx/as2",
+          "kind": "based-on",
+          "x0": 133,
           "x1": 133
         },
         {
           "from": "branch:drgnx/as2-sources",
           "to": "branch:drgnx/as2",
           "kind": "based-on",
-          "x0": 187,
+          "x0": 133,
+          "x1": 133
+        },
+        {
+          "from": "branch:drgnx/as2-step",
+          "to": "branch:drgnx/as2",
+          "kind": "based-on",
+          "x0": 133,
+          "x1": 133
+        },
+        {
+          "from": "branch:drgnx/as2-wire",
+          "to": "branch:drgnx/as2",
+          "kind": "based-on",
+          "x0": 133,
           "x1": 133
         },
         {
@@ -3696,25 +3731,11 @@
           "x1": 188
         },
         {
-          "from": "branch:drgnx/as2-wire",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 218,
-          "x1": 133
-        },
-        {
           "from": "branch:drgnx/as2-sources",
           "to": "branch:drgnx/rp-hub",
           "kind": "overlap",
           "x0": 224,
           "x1": 206
-        },
-        {
-          "from": "branch:drgnx/as2-step",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 248,
-          "x1": 133
         },
         {
           "from": "agent:s01",
@@ -3771,20 +3792,6 @@
           "kind": "runs-on",
           "x0": 264,
           "x1": 264
-        },
-        {
-          "from": "branch:drgnx/as2-s4",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 279,
-          "x1": 133
-        },
-        {
-          "from": "branch:drgnx/as2-s1",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 309,
-          "x1": 133
         },
         {
           "from": "plan:glitnir-p2-p4",
@@ -3850,13 +3857,6 @@
           "x1": 336
         },
         {
-          "from": "branch:drgnx/as2-edits",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 340,
-          "x1": 133
-        },
-        {
           "from": "plan:race-proof",
           "to": "agent:s18",
           "kind": "came-from",
@@ -3909,7 +3909,7 @@
     },
     {
       "row": 7,
-      "y": 133,
+      "y": 123,
       "height_units": 8,
       "segs": [
         {
@@ -3946,7 +3946,7 @@
           "to": "branch:drgnx/main",
           "kind": "based-on",
           "x0": 133,
-          "x1": 227
+          "x1": 349
         },
         {
           "from": "agent:s12",
@@ -4163,8 +4163,8 @@
     },
     {
       "row": 8,
-      "y": 166,
-      "height_units": 8,
+      "y": 156,
+      "height_units": 3,
       "segs": [
         {
           "from": "agent:s11",
@@ -4281,13 +4281,6 @@
           "kind": "overlap",
           "x0": 226,
           "x1": 171
-        },
-        {
-          "from": "branch:drgnx/as2",
-          "to": "branch:drgnx/main",
-          "kind": "based-on",
-          "x0": 227,
-          "x1": 236
         },
         {
           "from": "agent:s14",
@@ -4418,11 +4411,18 @@
           "x1": 339
         },
         {
+          "from": "branch:drgnx/as2",
+          "to": "branch:drgnx/main",
+          "kind": "based-on",
+          "x0": 349,
+          "x1": 358
+        },
+        {
           "from": "agent:s16",
           "to": "machine:laptop",
           "kind": "runs-on",
           "x0": 379,
-          "x1": 358
+          "x1": 357
         },
         {
           "from": "agent:s16",
@@ -4514,7 +4514,7 @@
     },
     {
       "row": 9,
-      "y": 181,
+      "y": 166,
       "height_units": 8,
       "segs": [
         {
@@ -4573,13 +4573,6 @@
           "kind": "edits",
           "x0": 175,
           "x1": 166
-        },
-        {
-          "from": "branch:drgnx/as2",
-          "to": "branch:drgnx/main",
-          "kind": "based-on",
-          "x0": 236,
-          "x1": 288
         },
         {
           "from": "branch:nidhogg/gl-scroll",
@@ -4718,8 +4711,15 @@
           "from": "agent:s16",
           "to": "machine:laptop",
           "kind": "runs-on",
-          "x0": 358,
+          "x0": 357,
           "x1": 379
+        },
+        {
+          "from": "branch:drgnx/as2",
+          "to": "branch:drgnx/main",
+          "kind": "based-on",
+          "x0": 358,
+          "x1": 361
         },
         {
           "from": "plan:race-proof",
@@ -4782,8 +4782,8 @@
     },
     {
       "row": 10,
-      "y": 214,
-      "height_units": 8,
+      "y": 199,
+      "height_units": 3,
       "segs": [
         {
           "from": "agent:s18",
@@ -5035,13 +5035,6 @@
           "x1": 278
         },
         {
-          "from": "branch:drgnx/as2",
-          "to": "branch:drgnx/main",
-          "kind": "based-on",
-          "x0": 288,
-          "x1": 361
-        },
-        {
           "from": "agent:s22",
           "to": "branch:drgnx/rp-install",
           "kind": "came-from",
@@ -5069,6 +5062,13 @@
           "kind": "edits",
           "x0": 348,
           "x1": 339
+        },
+        {
+          "from": "branch:drgnx/as2",
+          "to": "branch:drgnx/main",
+          "kind": "based-on",
+          "x0": 361,
+          "x1": 361
         },
         {
           "from": "agent:s16",
@@ -5117,7 +5117,7 @@
     },
     {
       "row": 11,
-      "y": 229,
+      "y": 209,
       "height_units": 8,
       "segs": [
         {
@@ -5349,14 +5349,14 @@
           "to": "branch:org/main",
           "kind": "based-on",
           "x0": 416,
-          "x1": 275
+          "x1": 133
         }
       ]
     },
     {
       "row": 12,
-      "y": 262,
-      "height_units": 8,
+      "y": 242,
+      "height_units": 3,
       "segs": [
         {
           "from": "agent:s25",
@@ -5394,6 +5394,13 @@
           "x0": 90,
           "x1": 133,
           "arc": true
+        },
+        {
+          "from": "branch:org/jobq-plan",
+          "to": "branch:org/main",
+          "kind": "based-on",
+          "x0": 133,
+          "x1": 133
         },
         {
           "from": "branch:drgnx/as2-sources",
@@ -5550,13 +5557,6 @@
           "x1": 264
         },
         {
-          "from": "branch:org/jobq-plan",
-          "to": "branch:org/main",
-          "kind": "based-on",
-          "x0": 275,
-          "x1": 133
-        },
-        {
           "from": "agent:s18",
           "to": "machine:local",
           "kind": "runs-on",
@@ -5609,7 +5609,7 @@
     },
     {
       "row": 13,
-      "y": 277,
+      "y": 252,
       "height_units": 8,
       "segs": [
         {
@@ -5826,7 +5826,7 @@
     }
   ],
   "fits": true,
-  "crossings": 636,
+  "crossings": 631,
   "width_units": 576,
-  "height_units": 292
+  "height_units": 267
 }
