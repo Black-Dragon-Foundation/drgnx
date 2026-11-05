@@ -25,6 +25,7 @@
 (require 'drgnx-deny)
 (require 'drgnx-setting)
 (require 'drgnx-settings-workspace)
+(require 'drgnx-settings-runtime)
 
 (defconst drgnx-search-chunk-max-file-bytes 1048576
   "Files larger than this are never indexed.")
@@ -88,29 +89,7 @@ whitespace are dropped, so empty TEXT has none."
 
 ;;;; Configuration
 
-(drgnx-config-define 'search-project
-                     :dir 'project :file "search.eld"
-                     :schema '(plist (:include (list-of string)) (:exclude (list-of string)) (:off boolean))
-                     :doc "Narrows what a project's semantic search indexes: only these globs, not these, or off.")
-
-(defun drgnx-search--globs-p (x)
-  "Non-nil when X is a list of strings (globs): safe from any workspace, since it can only narrow the list."
-  (and (proper-list-p x) (cl-every #'stringp x)))
-
-(drgnx-defsetting drgnx-search-include nil
-  "Only files matching one of these globs are indexed (nil: all); see `drgnx-search-config'."
-  :type '(repeat string) :group 'drgnx :safe #'drgnx-search--globs-p :scope 'project
-  :on-error 'strict :agents 'never :runtime "Vec<String>" :schema '(list-of string))
-
-(drgnx-defsetting drgnx-search-exclude nil
-  "Files matching one of these globs are not indexed; a workspace's are added to yours (see `drgnx-search-config')."
-  :type '(repeat string) :group 'drgnx :safe #'drgnx-search--globs-p :scope 'project :merge 'append
-  :on-error 'strict :agents 'never :runtime "Vec<String>" :schema '(list-of string))
-
-(drgnx-defsetting drgnx-search-off nil
-  "Non-nil turns a project's semantic search off; see `drgnx-search-config'."
-  :type 'boolean :group 'drgnx :safe #'booleanp :scope 'project
-  :on-error 'strict :agents 'never :runtime "bool" :schema 'boolean)
+;; The search-project config file and the include/exclude/off settings are declared in drgnx-settings-runtime.el.
 
 (defun drgnx-search-config (root)
   "The search configuration of the project at ROOT.

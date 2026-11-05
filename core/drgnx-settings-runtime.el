@@ -13,6 +13,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'drgnx-config)
 (require 'drgnx-setting)
 (require 'drgnx-settings-prov)
 (require 'drgnx-settings-workspace)
@@ -60,6 +61,32 @@ job's allowlist."
 running.  Nil: only a running server (TEI, Ollama) makes vectors, and with none, search is keyword and symbol only."
   :type 'boolean :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
   :runtime "bool" :schema 'boolean)
+
+;; What a project's semantic search indexes: the hub (Hrafn) reads `.drgnx/search.eld' itself and takes the per-project
+;; values of these settings from the editor (`config/settings'), so a file narrows what the settings left.
+(drgnx-config-define 'search-project
+                     :dir 'project :file "search.eld"
+                     :schema '(plist (:include (list-of string)) (:exclude (list-of string)) (:off boolean))
+                     :doc "Narrows what a project's semantic search indexes: only these globs, not these, or off.")
+
+(defun drgnx-search--globs-p (x)
+  "Non-nil when X is a list of strings (globs): safe from any workspace, since it can only narrow the list."
+  (and (proper-list-p x) (cl-every #'stringp x)))
+
+(drgnx-defsetting drgnx-search-include nil
+  "Only files matching one of these globs are indexed (nil: all)."
+  :type '(repeat string) :group 'drgnx :safe #'drgnx-search--globs-p :scope 'project
+  :on-error 'strict :agents 'never :runtime "Vec<String>" :schema '(list-of string))
+
+(drgnx-defsetting drgnx-search-exclude nil
+  "Files matching one of these globs are not indexed; a workspace's are added to yours."
+  :type '(repeat string) :group 'drgnx :safe #'drgnx-search--globs-p :scope 'project :merge 'append
+  :on-error 'strict :agents 'never :runtime "Vec<String>" :schema '(list-of string))
+
+(drgnx-defsetting drgnx-search-off nil
+  "Non-nil turns a project's semantic search off."
+  :type 'boolean :group 'drgnx :safe #'booleanp :scope 'project
+  :on-error 'strict :agents 'never :runtime "bool" :schema 'boolean)
 
 ;;;; Encoding: Lisp values as the runtime types' JSON
 

@@ -752,7 +752,7 @@ running.  Nil: only a running server (TEI, Ollama) makes vectors, and with none,
 
 ## drgnx-search-exclude
 
-Files matching one of these globs are not indexed; a workspace's are added to yours (see `drgnx-search-config').
+Files matching one of these globs are not indexed; a workspace's are added to yours.
 
 | Key | Value |
 | --- | --- |
@@ -769,7 +769,7 @@ Files matching one of these globs are not indexed; a workspace's are added to yo
 
 ## drgnx-search-include
 
-Only files matching one of these globs are indexed (nil: all); see `drgnx-search-config'.
+Only files matching one of these globs are indexed (nil: all).
 
 | Key | Value |
 | --- | --- |
@@ -803,7 +803,7 @@ Where embedding models are downloaded from: a URL laid out as the Hugging Face h
 
 ## drgnx-search-off
 
-Non-nil turns a project's semantic search off; see `drgnx-search-config'.
+Non-nil turns a project's semantic search off.
 
 | Key | Value |
 | --- | --- |
