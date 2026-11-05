@@ -396,26 +396,31 @@ mod tests {
                 .await;
             }
         });
-        // a failure guard only: each wait ends once the watch did what it waits for
+        // each wait ends once the watch did what it waits for (10 s bounds a failure only)
         let until = |n: usize| {
             let stops = stops.clone();
             async move {
-                tokio::time::timeout(Duration::from_secs(10), async {
-                    while stops.load(Ordering::SeqCst) < n {
-                        tokio::time::sleep(Duration::from_millis(5)).await;
-                    }
+                skuld::wait_until_async("the watch stopped the browser", 10, || {
+                    let stops = stops.clone();
+                    async move { (stops.load(Ordering::SeqCst) >= n).then_some(()) }
                 })
                 .await
-                .expect("the watch stopped the browser")
             }
+        };
+        // a window in which the watch (on this runtime's thread) keeps reading and must not stop the browser again
+        let window = |nothing: &'static str| async move {
+            tokio::task::spawn_blocking(move || skuld::window(Duration::from_millis(200), nothing))
+                .await
+                .unwrap();
         };
         set("80\n");
         until(1).await;
         // still above: no second stop; below, then above again: the second
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        window("no second stop while it stays above").await;
         assert_eq!(stops.load(Ordering::SeqCst), 1);
         set("20\n");
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        window("no stop below the mark").await;
+        assert_eq!(stops.load(Ordering::SeqCst), 1);
         set("90\n");
         until(2).await;
         // the cgroup goes: the watch ends

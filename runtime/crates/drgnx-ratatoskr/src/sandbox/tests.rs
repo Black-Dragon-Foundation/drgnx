@@ -342,6 +342,7 @@ fn browser_plan(env: Vec<(String, String)>) -> crate::agents::lock::LaunchPlan {
         login_dir: None,
         enforced: crate::agents::lock::Enforced::Yes,
         gateway: false,
+        trace: None,
     }
 }
 

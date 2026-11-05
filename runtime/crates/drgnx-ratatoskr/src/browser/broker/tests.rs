@@ -113,14 +113,16 @@ impl Fx {
 
     /// An upgrade that must work, retried while the last agent's close is still on its way (409).
     async fn connect(&self) -> Client {
-        for _ in 0..50 {
-            match request(&self.sock, &self.path(), true).await {
-                Answer::Upgraded(c) => return c,
-                Answer::Status(409, _) => tokio::time::sleep(Duration::from_millis(20)).await,
+        let path = self.path();
+        let (sock, path) = (self.sock.as_path(), path.as_str());
+        skuld::wait_until_async("an upgrade, not a 409", 5, move || async move {
+            match request(sock, path, true).await {
+                Answer::Upgraded(c) => Some(c),
+                Answer::Status(409, _) => None,
                 Answer::Status(s, b) => panic!("{s} {b}"),
             }
-        }
-        panic!("still 409 after 1 s");
+        })
+        .await
     }
 }
 
@@ -420,14 +422,13 @@ async fn narrowing_to_never_refuses_the_next_connection() {
     c.close().await;
     let why = "the browser row is Never for this session";
     *fx.gate.lock().unwrap() = Gate::Never(why.into());
-    let mut last = (0, String::new());
-    for _ in 0..50 {
-        last = status_of(&fx.sock, &fx.path(), true).await;
-        if last.0 != 409 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    let path = fx.path();
+    let (sock, path) = (fx.sock.as_path(), path.as_str());
+    let last = skuld::wait_until_async("an answer, not a 409", 5, move || async move {
+        let s = status_of(sock, path, true).await;
+        (s.0 != 409).then_some(s)
+    })
+    .await;
     assert_eq!(last, (403, why.into()));
 }
 

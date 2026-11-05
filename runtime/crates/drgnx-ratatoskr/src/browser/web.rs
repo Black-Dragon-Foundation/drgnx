@@ -207,7 +207,8 @@ fn spawn_proxy(
     tx: mpsc::Sender<ProxyEvent>,
     redirect: Option<SocketAddr>,
 ) -> ProxyHandle {
-    let resolver = Arc::new(Pinned(crate::agents::net::pins()));
+    // the test pins only: the user's pinned addresses are the provider proxy's, never the browser's
+    let resolver = Arc::new(Pinned(crate::agents::net::pins(&Default::default())));
     match redirect {
         Some(to) => {
             // the host's loopback (`host.drgnx.internal`) is reached as it is; any other upstream goes to TO

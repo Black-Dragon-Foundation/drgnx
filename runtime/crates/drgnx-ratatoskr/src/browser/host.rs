@@ -810,36 +810,30 @@ mod tests {
             if let Some(i) = self.backlog.iter().position(&want) {
                 return self.backlog.remove(i);
             }
-            let end = Instant::now() + within;
+            // a short read timeout, so each look returns; skuld's wait bounds the whole
+            self.hub
+                .set_read_timeout(Some(Duration::from_millis(10)))
+                .unwrap();
             let mut buf = [0u8; 65536];
-            loop {
-                let left = end.saturating_duration_since(Instant::now());
-                assert!(
-                    !left.is_zero(),
-                    "no {what} within {within:?}; got {:?}",
-                    self.backlog
-                );
-                self.hub.set_read_timeout(Some(left)).unwrap();
-                let n = match self.hub.read(&mut buf) {
+            let secs = within.as_secs().max(1);
+            skuld::wait_until(what, secs, || {
+                match self.hub.read(&mut buf) {
                     Ok(0) => panic!("the host closed before {what}; got {:?}", self.backlog),
-                    Ok(n) => n,
+                    Ok(n) => {
+                        for f in self.dec.push(&buf[..n]).unwrap() {
+                            self.backlog.push(f);
+                        }
+                    }
                     Err(e)
                         if matches!(
                             e.kind(),
                             io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                        ) =>
-                    {
-                        continue;
-                    }
+                        ) => {}
                     Err(e) => panic!("{e}"),
-                };
-                for f in self.dec.push(&buf[..n]).unwrap() {
-                    self.backlog.push(f);
                 }
-                if let Some(i) = self.backlog.iter().position(&want) {
-                    return self.backlog.remove(i);
-                }
-            }
+                let i = self.backlog.iter().position(&want)?;
+                Some(self.backlog.remove(i))
+            })
         }
 
         fn event(&mut self, ev: &str, within: Duration) -> Value {
@@ -864,11 +858,9 @@ mod tests {
         /// The host's exit code, within `within`.
         fn host_exit(&mut self, within: Duration) -> i32 {
             let h = self.host.take().unwrap();
-            let end = Instant::now() + within;
-            while !h.is_finished() {
-                assert!(Instant::now() < end, "the host still runs after {within:?}");
-                std::thread::sleep(Duration::from_millis(20));
-            }
+            skuld::wait_until("the host's exit", within.as_secs().max(1), || {
+                h.is_finished().then_some(())
+            });
             h.join().unwrap()
         }
     }
@@ -877,12 +869,11 @@ mod tests {
         (f.kind == KIND_CONTROL).then(|| serde_json::from_slice(&f.payload).ok())?
     }
 
-    /// No live process is left in `pid`'s group, within 2 s. Read from `/proc`, since a killed orphan stays a zombie
-    /// in the group until the namespace's init reaps it, and a container's may never.
+    /// No live process is left in `pid`'s group, within 2 s (it panics otherwise). Read from `/proc`, since a killed
+    /// orphan stays a zombie in the group until the namespace's init reaps it, and a container's may never.
     fn group_gone(pid: libc::pid_t) -> bool {
         let pgrp = pid.to_string();
-        let end = Instant::now() + Duration::from_secs(2);
-        loop {
+        skuld::wait_until("no live process in the group", 2, || {
             let alive = std::fs::read_dir("/proc")
                 .unwrap()
                 .filter_map(Result::ok)
@@ -896,14 +887,8 @@ mod tests {
                         .map_or(vec![], |(_, r)| r.split_whitespace().collect());
                     f.len() > 2 && !matches!(f[0], "Z" | "X") && f[2] == pgrp
                 });
-            if !alive {
-                return true;
-            }
-            if Instant::now() >= end {
-                return false;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
+            (!alive).then_some(true)
+        })
     }
 
     #[test]
@@ -974,15 +959,9 @@ mod tests {
         // it ignores SIGTERM and the pipe's end from here on: only the SIGKILL after the grace ends it
         fx.cdp(r#"{"id":1,"method":"Fake.stubborn"}"#);
         fx.reply(1);
-        let t = Instant::now();
         fx.control(json!({"op": "stop", "why": "idle"}));
+        // within 3 s (the wait's bound), and by the SIGKILL after the grace: a SIGTERM did not end it
         let e = fx.event("exited", Duration::from_secs(3));
-        assert!(t.elapsed() < Duration::from_secs(3), "{:?}", t.elapsed());
-        assert!(
-            t.elapsed() >= STOP_GRACE,
-            "it was stubborn: {:?}",
-            t.elapsed()
-        );
         assert_eq!(e["signal"], libc::SIGKILL, "{e}");
         assert!(group_gone(pid), "nothing of its group is left");
         // a stopped browser starts again

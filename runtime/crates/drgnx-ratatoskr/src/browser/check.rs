@@ -191,8 +191,10 @@ async fn session(
         login_dir: None,
         enforced: Enforced::No("the browser check"),
         gateway: false,
+        trace: None,
     };
-    let mut net = SessionNet::start(dir, sid, Vec::new(), pins(), None)
+    let pinned = pins(&front.settings.current().loaded.values);
+    let mut net = SessionNet::start(dir, sid, Vec::new(), pinned, None)
         .map_err(|e| format!("the check's network: {e}"))?;
     let launched = launch::spawn_plain(env, &plan, sid, Some(shape))
         .await

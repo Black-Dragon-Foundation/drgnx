@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const RATATOSKR: &str = env!("CARGO_BIN_EXE_ratatoskr");
 
@@ -37,19 +37,15 @@ impl Hub {
     }
 
     fn wait(&mut self, what: &str, within: Duration, want: impl Fn(&Frame) -> bool) -> Frame {
-        let end = Instant::now() + within;
+        // a short read timeout, so each look returns; skuld's wait bounds the whole
+        self.s
+            .set_read_timeout(Some(Duration::from_millis(10)))
+            .unwrap();
         let mut buf = [0u8; 65536];
-        loop {
+        skuld::wait_until(what, within.as_secs().max(1), || {
             if let Some(i) = self.backlog.iter().position(&want) {
-                return self.backlog.remove(i);
+                return Some(self.backlog.remove(i));
             }
-            let left = end.saturating_duration_since(Instant::now());
-            assert!(
-                !left.is_zero(),
-                "no {what} within {within:?}; got {:?}",
-                self.backlog
-            );
-            self.s.set_read_timeout(Some(left)).unwrap();
             match self.s.read(&mut buf) {
                 Ok(0) => panic!("the host closed before {what}; got {:?}", self.backlog),
                 Ok(n) => self.backlog.extend(self.dec.push(&buf[..n]).unwrap()),
@@ -57,7 +53,8 @@ impl Hub {
                 Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
                 Err(e) => panic!("{e}"),
             }
-        }
+            None
+        })
     }
 
     fn event(&mut self, ev: &str) -> Value {
@@ -105,6 +102,7 @@ fn the_host_starts_under_its_layer() {
         login_dir: None,
         enforced: Enforced::Yes,
         gateway: false,
+        trace: None,
     };
     let data = data_dir();
     let shape = SessionShape {
@@ -246,6 +244,7 @@ fn launch_with(agent: &str, probe: bool) -> Launched {
         login_dir: None,
         enforced: Enforced::Yes,
         gateway: false,
+        trace: None,
     };
     let data = data_dir();
     let mut read = vec![data.clone()];
@@ -342,11 +341,7 @@ fn procs_under(pid: i32, name: &str) -> Vec<i32> {
 
 /// Until F holds, within WITHIN (a failure guard: it ends as soon as F holds).
 fn until(what: &str, within: Duration, f: impl Fn() -> bool) {
-    let end = Instant::now() + within;
-    while !f() {
-        assert!(Instant::now() < end, "{what}: not within {within:?}");
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    skuld::wait_until(what, within.as_secs().max(1), || f().then_some(()));
 }
 
 /// Review Focus 1: the hub ends while the session's browser runs. Its end of the socketpair goes with it; the browser
@@ -522,17 +517,12 @@ fn the_check_takes_a_screenshot() {
         .stderr(std::fs::File::create(b.join("hub.err")).unwrap())
         .spawn()
         .expect("the hub");
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let mut c = loop {
-        match Client::user(&env, Duration::from_secs(2)) {
-            Ok(c) => break c,
-            Err(e) if Instant::now() > deadline => panic!(
-                "no hub: {e}: {}",
-                std::fs::read_to_string(b.join("hub.err")).unwrap_or_default()
-            ),
-            Err(_) => std::thread::sleep(Duration::from_millis(100)),
-        }
-    };
+    // the hub's stderr says why when it never answers
+    let mut c = skuld::wait_until(
+        &format!("the hub: {}", b.join("hub.err").display()),
+        30,
+        || Client::user(&env, Duration::from_secs(2)).ok(),
+    );
     let program = data_dir().join("fake-chromium-png.sh");
     c.call(
         "config/settings",

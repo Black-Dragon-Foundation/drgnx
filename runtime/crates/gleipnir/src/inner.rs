@@ -1364,6 +1364,7 @@ mod tests {
             tmp: None,
             layers: Layers::for_target(Target::LinuxBwrap),
             extra_tcp_ports: vec![5173],
+            trace: Default::default(),
             browser: Some(SpecBrowser {
                 program: "/usr/lib64/chromium-browser/headless_shell".into(),
                 own_dir: "/tmp/drgnx-browser".into(),
