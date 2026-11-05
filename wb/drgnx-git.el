@@ -14,6 +14,8 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'drgnx-memo)
+(require 'drgnx-timer)
+(require 'drgnx-notice)
 
 (defface drgnx-git-modified '((t :inherit vc-edited-state)) "A modified file, or a folder with changes." :group 'drgnx)
 (defface drgnx-git-added '((t :inherit vc-locally-added-state)) "An added or untracked file." :group 'drgnx)
@@ -33,6 +35,9 @@
 ;; Repository root → plist (:files HASH :folders HASH :branch PLIST :proc PROCESS :again BOOL), at most 16 roots (the
 ;; least recently read goes first; PERF-M5).  A root evicted while its status process runs is put back when the
 ;; process finishes; the process is not killed.  `drgnx-core/workbench' activates it (empties it on teardown).
+(defconst drgnx-git-speedup-entries 50000
+  "A repository whose index holds more entries than this is offered git's own speedups (see `drgnx-git--offer').")
+(defvar drgnx-git--offered nil "Roots offered the speedups this session, newest first (at most 64); not saved.")
 (drgnx-cache-define 'git-status :key 'string :cap drgnx-git-roots-max
                     :doc "Repository root → its status plist; capped at 16 roots, the least recently read evicted.")
 (defvar drgnx-git--roots (make-hash-table :test #'equal) "Folder → its repository root, or `none'.")
@@ -294,7 +299,77 @@ The look is a peek: a late sentinel is no use of ROOT, and a stamp would evict a
         (let ((again (plist-get repo :again)))
           (drgnx-cache-put 'git-status root (plist-put (plist-put repo :proc nil) :again nil))
           (run-hook-with-args 'drgnx-git-changed-functions root)
+          ;; The index header is read here (12 bytes, no process); the rest waits for idle.
+          (when (and (not (member root drgnx-git--offered))
+                     (> (or (drgnx-git--index-entries root) 0) drgnx-git-speedup-entries))
+            (drgnx-timer-soon (cons 'git-speedups root) 1 #'drgnx-git--offer :args (list root) :idle t :owner :core))
           (when again (drgnx-git-refresh root)))))))
+
+;;;; The fsmonitor offer
+
+(defun drgnx-git--git-dir (root)
+  "The git directory of the repository at ROOT (its .git folder, or the one a .git file points at), or nil."
+  (let ((dotgit (expand-file-name ".git" root)))
+    (cond ((file-directory-p dotgit) dotgit)
+          ((file-regular-p dotgit)
+           (with-temp-buffer
+             (insert-file-contents dotgit nil 0 1024)
+             (when (looking-at "gitdir: \\(.+\\)")
+               (expand-file-name (match-string 1) root)))))))
+
+(defun drgnx-git--index-entries (root)
+  "How many entries the index of the repository at ROOT holds, from its 12-byte header (\"DIRC\", version, count:
+bytes 8 to 11, big-endian); nil when there is no readable index.  No process."
+  (when-let* ((dir (drgnx-git--git-dir root)) (index (expand-file-name "index" dir)) ((file-readable-p index)))
+    (with-temp-buffer
+      (set-buffer-multibyte nil)
+      (insert-file-contents-literally index nil 0 12)
+      (let ((s (buffer-string)))
+        (when (and (= (length s) 12) (equal (substring s 0 4) "DIRC"))
+          (+ (ash (aref s 8) 24) (ash (aref s 9) 16) (ash (aref s 10) 8) (aref s 11)))))))
+
+(defun drgnx-git--config (root key)
+  "The value git has for KEY in the repository at ROOT, or nil.  A short synchronous call, made once per large repository."
+  (with-temp-buffer
+    (when (eq 0 (call-process "git" nil (list t nil) nil "-C" root "config" "--get" key))
+      (string-trim (buffer-string)))))
+
+(defun drgnx-git--daemon-p (root)
+  "Non-nil when this git has its built-in file system monitor: `git fsmonitor--daemon status' answers 0 (running) or
+1 (not running); on a platform without the daemon it fails with 128."
+  (memq (call-process "git" nil nil nil "-C" root "fsmonitor--daemon" "status") '(0 1)))
+
+(defun drgnx-git--speedups (untracked fsmonitor daemon)
+  "What to offer: `untracked-cache' unless UNTRACKED (its setting now) is on, `fsmonitor' unless FSMONITOR (its setting
+now) is set to something but false, and only when DAEMON says git has the built-in monitor."
+  (append (unless (member untracked '("true" "1" "yes" "on")) '(untracked-cache))
+          (unless (or (not daemon) (and fsmonitor (not (equal fsmonitor "false")))) '(fsmonitor))))
+
+(defun drgnx-git-enable-speedups (root untracked-cache fsmonitor)
+  "Set `core.untrackedCache' (UNTRACKED-CACHE non-nil) and `core.fsmonitor' (FSMONITOR non-nil) to true in the
+repository at ROOT.  The action of the notice `drgnx-git--offer' posts; nothing is remembered about the choice."
+  (dolist (key (append (and untracked-cache '("core.untrackedCache")) (and fsmonitor '("core.fsmonitor"))))
+    (call-process "git" nil nil nil "-C" root "config" key "true"))
+  (drgnx-notify 'wb 'info (format "git: %s turned on in %s" (if fsmonitor "untracked cache and fsmonitor" "untracked cache")
+                                  (abbreviate-file-name root))
+                :id (list 'git-speedups root)))
+
+(defun drgnx-git--offer (root)
+  "Offer, once per session, git's untracked cache and file system monitor for the repository at ROOT when its index
+has more than `drgnx-git-speedup-entries' entries: a notice with an action, never a prompt.  Choosing is not recorded,
+and neither is not choosing."
+  (when-let* (((not (member root drgnx-git--offered)))
+              (n (drgnx-git--index-entries root)) ((> n drgnx-git-speedup-entries)))
+    (setq drgnx-git--offered (seq-take (cons root drgnx-git--offered) 64))
+    (let ((todo (drgnx-git--speedups (drgnx-git--config root "core.untrackedCache") (drgnx-git--config root "core.fsmonitor")
+                                     (drgnx-git--daemon-p root))))
+      (when todo
+        (drgnx-notify 'wb 'info (format "%s tracks %d files: git status can be faster" (abbreviate-file-name root) n)
+                      :id (list 'git-speedups root)
+                      :fix (format "Turn on %s" (mapconcat (lambda (s) (if (eq s 'fsmonitor) "core.fsmonitor" "core.untrackedCache"))
+                                                           todo " and "))
+                      :command (list 'drgnx-git-enable-speedups root (and (memq 'untracked-cache todo) t)
+                                     (and (memq 'fsmonitor todo) t)))))))
 
 (provide 'drgnx-git)
 ;;; drgnx-git.el ends here

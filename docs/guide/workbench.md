@@ -119,7 +119,10 @@ a new folder itself shows `U`), and so does a root; ignored files are dimmed. On
 repository on screen (never holding your git lock), repositories nested inside the tree included; a repository made
 after the tree was shown (`git init`) is picked up at the next refresh (a save, or Emacs getting the focus back).
 The status of at most 16 repositories is kept, so the Explorer reads at most the top 16 it shows; a repository
-scrolled into view, or one that was pushed out, is read when its rows are drawn. `drgnx-explorer-git` turns it off. What git complains
+scrolled into view, or one that was pushed out, is read when its rows are drawn. A repository whose index holds more
+than 50,000 entries gets one notice per session offering `core.untrackedCache` and, where your git has its built-in
+file system monitor (`git fsmonitor--daemon status` answers), `core.fsmonitor`; the button sets them in that
+repository, and drgnx never remembers that you declined. `drgnx-explorer-git` turns it off. What git complains
 about is kept in the hidden buffer ` *drgnx git errors*` (its last `drgnx-git-errors-max` characters).
 
 ### Buffers panel
