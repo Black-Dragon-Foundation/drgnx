@@ -47,6 +47,7 @@
 (defvar drgnx-work-board--card)
 (defvar drgnx-work-board--cards)
 (defvar drgnx-work-timeline--sel)
+(defvar drgnx-work-review--session)
 
 (defcustom drgnx-work-trail-first-page 60
   "How many steps a trail opens with: the last screenful."
@@ -489,6 +490,7 @@ its diff.  BESIDE: without moving focus.  Returns the buffer when it is there at
 (defun drgnx-work-trail--agent-sid ()
   "The hub session of the agent selected in the current Work view, or an error saying there is none."
   (or (cond ((derived-mode-p 'drgnx-work-trail-mode) drgnx-work-trail--session)
+            ((derived-mode-p 'drgnx-work-review-mode) (bound-and-true-p drgnx-work-review--session))
             ((derived-mode-p 'drgnx-work-timeline-mode)
              (when-let* ((lane (car (bound-and-true-p drgnx-work-timeline--sel)))) (drgnx-work-trail--sid lane)))
             ((derived-mode-p 'drgnx-work-board-mode)

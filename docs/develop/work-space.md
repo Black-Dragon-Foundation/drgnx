@@ -530,6 +530,20 @@ title, and `drgnx-work-trail-row-text` its row (the gap before the time is a `di
   Pause is `agents/pause`; resume is `agents/send` with `drgnx-work-resume-text`; stop asks `y-or-n-p` and is not
   bound to anything automatic.
 
+### The review view and the second reviewer
+
+`modules/tools/drgnx-work-review.el`. `drgnx-work-review-open` asks `work/conclusions`, then `decisions/effects` for each
+decision (alist `drgnx-work-review--effects`), `work/files` and `work/hunks` for each file; every answer draws the view
+again with `drgnx-work-review-install`. Row keys: `(:decisions)`, `(:decision N)` (origin order: from the brief, own,
+needs you), `(:summary)`, `(:files)`, `(:file PATH)`, `(:hunk PATH I)`; `drgnx-work-review-parse-hunks` splits a
+unified diff at its `@@` lines. `a` is a `review/mark` `accepted` with the sha1 of the file's whole diff (what the merge
+gate compares); `D` is a `review/mark` `pending` and an `agents/send` naming the hunk (the hub has no hunk revert until
+the edit history lands). `V` writes a plan (`<state>/work-space/reviews/SESSION-TIME.md`, **Role:** review, the files
+changed, no conclusions) and calls `job/propose`; it never calls `agents/start`.
+
+The merge queue is not inferred: a branch item's `queue` (`[N, M]`) and `conflicts` fields are drawn when the hub sends
+them (`drgnx-work-map--chip-line`, a `:queue` section of the side panel). The hub sends none yet, so no chip shows.
+
 ### Live agents' files
 
 `drgnx-work-live-file-mode` (in `drgnx-work-space.el`) is turned on by the module's `find-file-hook` function in a file

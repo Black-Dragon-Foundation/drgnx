@@ -472,7 +472,12 @@ argument): without moving focus."
          (glyph (pcase kind ("ask" "❝") ("spec" "◫") ("plan" "☰") ("branch" "⑂") ("file" "▭") ("machine" "▣") (_ "·")))
          (extra (pcase kind
                   ("plan" (when-let* ((p (funcall f :progress))) (format "%d/%d" (car p) (cadr p))))
-                  ("branch" (when-let* ((e (funcall f :edits))) (format "edits %d" (car e))))
+                  ("branch" (let ((bits (delq nil (list (when-let* ((e (funcall f :edits))) (format "edits %d" (car e)))
+                                                        ;; only what the hub sent: the merge queue is its fact
+                                                        (when-let* ((q (funcall f :queue))) (format "queue %d/%d" (car q) (cadr q)))
+                                                        (when-let* ((c (funcall f :conflicts)))
+                                                          (format "conflicts with %s" (string-join c ", ")))))))
+                              (and bits (string-join bits " · "))))
                   ("file" (when-let* ((c (funcall f :change))) (format "+%d −%d" (car c) (cadr c))))
                   ("machine" (when-let* ((s (funcall f :slots))) (format "%d/%d" (car s) (cadr s)))))))
     (concat (if (plist-get item :needs_you) (propertize "⚑ " 'face 'drgnx-work-needs-you) "")

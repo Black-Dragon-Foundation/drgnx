@@ -10,6 +10,7 @@
 (require 'seq)
 (require 'drgnx)
 (require 'drgnx-hub-client)
+(require 'drgnx-keys)
 (require 'drgnx-work-client)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/unit/agents-mirror-test" drgnx-dir) nil t)   ; its helpers and the hub fixtures
@@ -296,6 +297,128 @@ connected to it, and `workspace' the workspace of the test's home folder."
         (should (string-search "paused by you" text))
         (should (string-search "resumed by you" text))
         (should (< (string-search "paused by you" text) (string-search "resumed by you" text)))))))
+
+;;;; The review view, the merge queue and the second reviewer
+
+(declare-function drgnx-work-review-install "drgnx-work-review")
+(declare-function drgnx-work-review-decision-text "drgnx-work-review")
+(declare-function drgnx-work-review--accept "drgnx-work-review")
+(declare-function drgnx-work-review--reject "drgnx-work-review")
+(declare-function drgnx-work-review-second "drgnx-work-review")
+(declare-function drgnx-work-map--chip-line "drgnx-work-map")
+(declare-function drgnx-work-detail-sections "drgnx-work-detail")
+(declare-function drgnx-keys-load-profiles "drgnx-keys")
+(defvar drgnx-work-review--keys)
+(defvar drgnx-work-lens--map)
+
+(defconst drgnx-work-views-test--decisions
+  '((:n 1 :id "decision:1" :kind "decision" :text "keep the lock" :origin "own" :at 1.0 :links nil)
+    (:n 2 :id "decision:2" :kind "decision" :text "use SQLite" :origin "from-brief" :at 2.0 :links nil)
+    (:n 3 :id "decision:3" :kind "decision" :text "drop the cache?" :origin "needs-user" :at 3.0 :links nil)
+    (:n 4 :id "note:9" :kind "finding" :text "the cache is unused" :origin "own" :at 4.0 :links nil))
+  "Three decisions of three origins, made in the order own, from the brief, needs your call; and a finding.")
+
+(defconst drgnx-work-views-test--diff
+  "--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1,2 +1,2 @@\n keep\n-old\n+new\n@@ -9,1 +9,2 @@\n tail\n+more\n")
+
+(ert-deftest drgnx-work-review/decisions-first-with-computed-dependents ()
+  ;; pattern D: the review lists the decisions before the work, those from the brief first, then its own, then those
+  ;; that need you; each says what git computed of it, and a finding is not a decision
+  (let ((buf (generate-new-buffer " *work-review-test*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (drgnx-work-review-install
+           buf "s1" :decisions drgnx-work-views-test--decisions
+           :effects '(("decision:1" . (:decision "decision:1" :label "computed" :commits ("abc1234def")
+                                                 :later_hunks ((:commit "9f3e1c2aa" :path "src/a.rs" :lines (10 20))))))
+           :files '((:path "src/a.rs" :plus 2 :minus 1 :untracked nil))
+           :diffs (list (cons "src/a.rs" drgnx-work-views-test--diff)))
+          (should (equal '((:decisions) (:decision 2) (:decision 1) (:decision 3) (:summary) (:files)
+                           (:file "src/a.rs") (:hunk "src/a.rs" 0) (:hunk "src/a.rs" 1))
+                         drgnx-work-review--keys))
+          (let ((text (substring-no-properties
+                       (drgnx-work-review-decision-text (nth 0 drgnx-work-views-test--decisions)
+                                                        (cdr (assoc "decision:1" '(("decision:1" . (:commits ("abc1234def")
+                                                                                                             :later_hunks ((:commit "9f3e1c2aa" :path "src/a.rs" :lines (10 20))))))))))))
+            (should (string-search "computed: 1 commit (abc1234)" text))
+            (should (string-search "1 later hunk overlaps: src/a.rs:10–20 (9f3e1c2)" text))))
+      (kill-buffer buf))))
+
+(defmacro drgnx-work-views-test--calls (&rest body)
+  "BODY with every call of the hub recorded, not made: `calls', newest first, of (METHOD . PARAMS)."
+  (declare (indent 0))
+  `(let (calls)
+     (cl-letf (((symbol-function 'drgnx-hub-call)
+                (lambda (method params &rest _) (push (cons method params) calls) 1)))
+       ,@body)
+     calls))
+
+(ert-deftest drgnx-work-review/hunk-reject-is-D ()
+  ;; `a' accepts and `D' rejects, in every profile; a rejection marks the file pending and tells the agent, queued
+  (let ((profiles (drgnx-keys-load-profiles (expand-file-name "keys" drgnx-dir))))
+    (dolist (p profiles)
+      (let ((rows (plist-get (cdr p) :bind)))
+        (should (member "D" (flatten-tree (assq 'work-review-reject rows))))
+        (should (member "a" (flatten-tree (assq 'work-review-accept rows)))))))
+  (let ((buf (generate-new-buffer " *work-review-test*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (drgnx-work-review-install buf "s1" :files '((:path "src/a.rs" :plus 2 :minus 1 :untracked nil))
+                                     :diffs (list (cons "src/a.rs" drgnx-work-views-test--diff)))
+          (let ((calls (drgnx-work-views-test--calls (drgnx-work-review--reject "src/a.rs" 1))))
+            (should (= 2 (length calls)))
+            (let ((mark (cdr (assoc "review/mark" calls))) (send (cdr (assoc "agents/send" calls))))
+              (should (equal '("s1" "src/a.rs" "pending") (list (plist-get mark :agent) (plist-get mark :path) (plist-get mark :state))))
+              (should (equal "s1" (plist-get send :id)))
+              (should (string-search "src/a.rs" (plist-get send :text)))
+              (should (string-search "@@ -9,1 +9,2 @@" (plist-get send :text)))))
+          (let* ((calls (drgnx-work-views-test--calls (drgnx-work-review--accept "src/a.rs")))
+                 (mark (cdr (assoc "review/mark" calls))))
+            (should (equal "accepted" (plist-get mark :state)))
+            (should (equal (secure-hash 'sha1 drgnx-work-views-test--diff) (plist-get mark :hash)))
+            (should (equal "accept" (plist-get (plist-get mark :event) :kind)))))
+      (kill-buffer buf))))
+
+(ert-deftest drgnx-work-review/v-goes-through-propose ()
+  ;; the second reviewer is a proposed job, never an agent started on the spot; its plan names the files and holds none of
+  ;; the author's conclusions
+  (let ((buf (generate-new-buffer " *work-review-test*")) file)
+    (unwind-protect
+        (with-current-buffer buf
+          (drgnx-work-review-install buf "s1" :decisions drgnx-work-views-test--decisions
+                                     :files '((:path "src/a.rs" :plus 2 :minus 1 :untracked nil))
+                                     :diffs (list (cons "src/a.rs" drgnx-work-views-test--diff)))
+          (setq default-directory temporary-file-directory)
+          (let ((calls (drgnx-work-views-test--calls (drgnx-work-review-second))))
+            (should (equal '("job/propose") (mapcar #'car calls)))
+            (setq file (plist-get (cdr (car calls)) :plan))
+            (should (file-name-absolute-p file))
+            (let ((text (with-temp-buffer (insert-file-contents file) (buffer-string))))
+              (should (string-search "**Role:** review" text))
+              (should (string-search "src/a.rs" text))
+              (dolist (c drgnx-work-views-test--decisions)
+                (should-not (string-search (plist-get c :text) text))))))
+      (when (and file (file-exists-p file)) (delete-file file))
+      (kill-buffer buf))))
+
+(ert-deftest drgnx-work-review/merge-queue-chip ()
+  ;; a queued branch says where it stands in the queue and what it conflicts with; the integration branch's panel too.
+  ;; Only what the hub sent shows: a branch with no queue fields has no chip
+  (let* ((frame (drgnx-work-fixture-frame))
+         (queued (drgnx-work-fixture-changed frame "branch:drgnx/rp-df-hub" :queue '(2 3) :conflicts '("rp-x")))
+         (plain (drgnx-work-fixture-item frame "branch:drgnx/rp-fx-sess")))
+    (let ((line (substring-no-properties (drgnx-work-map--chip-line queued))))
+      (should (string-search "queue 2/3" line))
+      (should (string-search "conflicts with rp-x" line)))
+    (should-not (string-search "queue" (drgnx-work-map--chip-line plain)))
+    (setf (plist-get frame :items) (mapcar (lambda (it) (if (equal (plist-get it :id) "branch:drgnx/rp-df-hub") queued it))
+                                           (plist-get frame :items)))
+    (let* ((state (drgnx-work-client-init frame))
+           (sections (drgnx-work-detail-sections state '(branch . "branch:drgnx/rp-df-hub"))))
+      (should (string-search "2 of 3" (cdr (assq :queue sections))))
+      (should (string-search "rp-x" (cdr (assq :queue sections)))))
+    (should-not (assq :queue (drgnx-work-detail-sections (drgnx-work-client-init (drgnx-work-fixture-frame))
+                                                         '(branch . "branch:drgnx/rp-df-hub"))))))
 
 (provide 'work-views-test)
 ;;; work-views-test.el ends here

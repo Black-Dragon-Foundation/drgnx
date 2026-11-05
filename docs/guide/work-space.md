@@ -120,6 +120,24 @@ The steering keys work in every Work view, on the agent selected there:
 | `x` | stop it, after a confirmation line |
 | `?` | this view's keys |
 
+### The review view, the merge queue and a second reviewer
+
+`v` on an agent opens its **review**. It starts with the agent's decisions: those from the brief, then its own, then
+those it needs your call on. Under each is what git computed of it ("computed": the commits that implement it, and the
+later hunks that overlap its lines), never a guess. Then come where the plan stands, what the agent did and what it
+spent, and every file it edited as hunks against the branch it was cut from. On a hunk:
+
+- `a` accepts the file's change as it is now: a review mark for the merge gate. Nothing is merged.
+- `D` rejects it: the file goes back to pending and the agent is told, in a queued message, to take the change back. The
+  agent is not cancelled.
+
+`V` starts a **second reviewer**. It is given the code (the files changed) and none of the author's conclusions, and it
+starts an agent, so it goes through `job/propose` like every dispatch from the Work space.
+
+A branch in the merge queue shows "queue 2/3" on its card, and "conflicts with rp-x" when a trial merge failed; selected,
+its side panel says the same in words. These come from the hub's own record; a branch the hub sent no queue for shows
+nothing. Merging and pushing stay on their cards.
+
 ### Files an agent is editing
 
 A file in the worktree of an agent that is still alive (running, waiting, waiting for you, or paused) opens **read-only**,
