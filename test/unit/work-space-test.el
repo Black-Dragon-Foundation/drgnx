@@ -14,6 +14,7 @@
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/unit/agents-mirror-test" drgnx-dir) nil t)   ; its helpers and the hub fixtures
 (load (expand-file-name "test/fixtures/work-space-fixture" drgnx-dir) nil t)
+(drgnx-test-modules-preload '(tools/work-space))
 
 (declare-function drgnx-work-space-open "drgnx-work-space")
 (declare-function drgnx-work-space-sync-shown "drgnx-work-space")
@@ -25,16 +26,19 @@
 `workspace' the workspace of the test's home folder.  The modules come first so the hub and this Emacs share their
 directories."
   (declare (indent 0))
-  `(drgnx-test-with-modules '(tools/work-space)
-     (drgnx-agents-mirror-test--with '()
-       ;; the hub fixture binds the client's event and disconnect hooks to nil: the module's functions go on again
-       (add-hook 'drgnx-hub-event-functions #'drgnx-work-client-event)
-       (add-hook 'drgnx-hub-disconnect-functions #'drgnx-work-client-disconnected)
-       ;; the map's events come back on the subscribed connection: this Emacs has one before a map opens
-       (drgnx-hub-connect)
-       (drgnx-agents-mirror-test--settle (lambda () (process-live-p drgnx-hub--events)) "the subscribed connection")
-       (let ((workspace (list :id "workspace:000000000001" :roots (list (getenv "HOME")))))
-         ,@body))))
+  ;; the clock is entered first, so the timers the modules' setups arm (the bus's idle flush) are on its lists and the
+  ;; clock's end drops them; entered after them, the gate's clock would leave them in the real list
+  `(drgnx-test-with-clock (:allow-pending t)
+     (drgnx-test-with-modules '(tools/work-space)
+       (drgnx-agents-mirror-test--with '()
+         ;; the hub fixture binds the client's event and disconnect hooks to nil: the module's functions go on again
+         (add-hook 'drgnx-hub-event-functions #'drgnx-work-client-event)
+         (add-hook 'drgnx-hub-disconnect-functions #'drgnx-work-client-disconnected)
+         ;; the map's events come back on the subscribed connection: this Emacs has one before a map opens
+         (drgnx-hub-connect)
+         (drgnx-agents-mirror-test--settle (lambda () (process-live-p drgnx-hub--events)) "the subscribed connection")
+         (let ((workspace (list :id "workspace:000000000001" :roots (list (getenv "HOME")))))
+           ,@body)))))
 
 (defun drgnx-work-space-test--start-agent ()
   "A session of the mock profile in the workspace's folder; its id."

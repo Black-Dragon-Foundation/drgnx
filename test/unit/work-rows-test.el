@@ -11,6 +11,7 @@
 (load (expand-file-name "test/fixtures/work-space-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-work-map" drgnx-dir) nil t)
+(drgnx-test-modules-preload '(tools/work-space))
 
 (declare-function drgnx-work-map-row-text "drgnx-work-map")
 (declare-function drgnx-work-map-outline "drgnx-work-map")
@@ -63,7 +64,7 @@
            (drgnx-work-client-change-functions '(drgnx-work-map--changed)))
       (puthash id (drgnx-work-client--make-view :id id :state (drgnx-work-client-init frame) :status 'live)
                drgnx-work-client--views)
-      (with-temp-buffer
+      (drgnx-work-fixture-with-buffer
         (drgnx-work-map-mode)
         (setq drgnx-work-space--view id drgnx-work-map--outline 'off)      ; a batch Emacs has no graphic frame
         (drgnx-view-attach 'work-map)

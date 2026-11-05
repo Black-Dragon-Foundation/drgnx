@@ -13,6 +13,7 @@
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-work-map" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-work-detail" drgnx-dir) nil t)
+(drgnx-test-modules-preload '(tools/work-space))
 
 (declare-function drgnx-work-nav-chain "drgnx-work-detail")
 (declare-function drgnx-work-nav-move "drgnx-work-detail")
@@ -74,7 +75,7 @@
             (drgnx-work-client--views (make-hash-table :test #'equal)) (state (drgnx-work-client-init frame))
             (drgnx-work-client-change-functions '(drgnx-work-map--changed)))
        (puthash id (drgnx-work-client--make-view :id id :state state :status 'live) drgnx-work-client--views)
-       (with-temp-buffer
+       (drgnx-work-fixture-with-buffer
          (drgnx-work-map-mode)
          (setq drgnx-work-space--view id drgnx-work-map--outline 'off)
          (drgnx-view-attach 'work-map)

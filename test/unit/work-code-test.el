@@ -11,6 +11,7 @@
 (require 'drgnx-hub-client)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/unit/agents-mirror-test" drgnx-dir) nil t)   ; its helpers and the hub fixtures
+(drgnx-test-modules-preload '(tools/work-space))
 
 (defvar drgnx-work-live-file-mode)
 (defvar drgnx-work-live-file--lighter)
@@ -20,16 +21,18 @@
   "BODY with the module `tools/work-space' set up, a gated hub, this Emacs mirroring its sessions, and `wt' a linked
 worktree (its .git is a file) and `own' a checkout of the user's (its .git is a directory) under the test's home."
   (declare (indent 0))
-  `(drgnx-test-with-modules '(tools/work-space)
-     (drgnx-agents-mirror-test--with '()
-       (drgnx-agents-mirror-sync)
-       (let* ((home (file-name-as-directory (getenv "HOME")))
-              (wt (file-name-as-directory (expand-file-name "agent-worktree" home)))
-              (own (file-name-as-directory (expand-file-name "own-checkout" home))))
-         (make-directory wt t) (make-directory (concat own ".git") t)
-         (with-temp-file (concat wt ".git") (insert "gitdir: /elsewhere/.git/worktrees/agent\n"))
-         (dolist (d (list wt own)) (with-temp-file (concat d "a.txt") (insert "one\n")))
-         ,@body))))
+  ;; the clock first: the timers the modules' setups arm are then on its lists, and its end drops them
+  `(drgnx-test-with-clock (:allow-pending t)
+     (drgnx-test-with-modules '(tools/work-space)
+       (drgnx-agents-mirror-test--with '()
+         (drgnx-agents-mirror-sync)
+         (let* ((home (file-name-as-directory (getenv "HOME")))
+                (wt (file-name-as-directory (expand-file-name "agent-worktree" home)))
+                (own (file-name-as-directory (expand-file-name "own-checkout" home))))
+           (make-directory wt t) (make-directory (concat own ".git") t)
+           (with-temp-file (concat wt ".git") (insert "gitdir: /elsewhere/.git/worktrees/agent\n"))
+           (dolist (d (list wt own)) (with-temp-file (concat d "a.txt") (insert "one\n")))
+           ,@body)))))
 
 (defun drgnx-work-code-test--start (cwd)
   "A mock session in CWD; its mirror once it is idle."

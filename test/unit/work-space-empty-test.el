@@ -7,6 +7,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-work-client)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(drgnx-test-modules-preload '(tools/work-space))
 
 (declare-function drgnx-work-space-open "drgnx-work-space")
 

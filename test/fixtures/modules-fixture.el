@@ -209,6 +209,13 @@ snapshot, so no leak is hidden.  A library that cannot be found or does not load
         (unless (or (featurep f) (not (locate-library (symbol-name f))))
           (ignore-errors (require f)))))))
 
+(defun drgnx-test-modules-preload (modules)
+  "Load the files of MODULES and the libraries their setups load, as a test file does at its top.
+The leak census reads the state around each test: a library first loaded by a test's `drgnx-test-with-modules'
+shows its top-level registrations (rules, places, view types, config definitions) as that test's leaks.  A file
+whose tests set MODULES up calls this once at load, so the first test finds them loaded like the rest."
+  (drgnx-test-modules--preload (drgnx-test-modules--closure (drgnx-test-modules--load modules))))
+
 (defun drgnx-test-modules--without-emacs-timers (fp)
   "FP without the timers the recorder leaves alone too: those whose function drgnx does not define
 \(`drgnx-modules--undoable-timer-p'), such as Emacs's own lazy singletons (undo's boundary timer…) and an ELPA

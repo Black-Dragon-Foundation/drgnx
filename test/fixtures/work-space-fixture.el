@@ -13,6 +13,16 @@
     (insert-file-contents (expand-file-name "test/fixtures/work-space/frame.json" drgnx-dir))
     (json-parse-buffer :object-type 'plist :array-type 'list :null-object nil :false-object nil)))
 
+(defmacro drgnx-work-fixture-with-buffer (&rest body)
+  "BODY in a fresh buffer that runs its kill hooks when it goes.
+`with-temp-buffer' makes a buffer that does not (inhibit-buffer-hooks), so a layer timer a map buffer owns would
+outlive it; the timer layer cancels the timers of a killed buffer through `kill-buffer-hook'."
+  (declare (indent 0) (debug t))
+  (let ((buf (make-symbol "buf")))
+    `(let ((,buf (generate-new-buffer " *work-map-test*")))
+       (unwind-protect (with-current-buffer ,buf ,@body)
+         (when (buffer-live-p ,buf) (kill-buffer ,buf))))))
+
 (defun drgnx-work-fixture-item (frame id)
   "The item ID of FRAME (a plist)."
   (seq-find (lambda (it) (equal (plist-get it :id) id)) (plist-get frame :items)))
