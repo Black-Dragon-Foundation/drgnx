@@ -852,6 +852,7 @@ while a step waits; until each end comes no virtual time passes."
 ;; wait, which moves no virtual time, so "at most once a minute" is not reached by waiting.
 
 (ert-deftest drgnx-ai/ensure-local-starts-the-runner-when-it-is-down ()
+  :tags '(:frozen)
   (drgnx-ai-onboard-test--with-mac-jobs drgnx-ai-onboard-test--ollama-answers
     (let ((serve (list (concat bin "fake-serve") "serve")) started serving stopped later)
       (cl-letf (((symbol-function 'message) #'ignore))
@@ -885,6 +886,7 @@ while a step waits; until each end comes no virtual time passes."
           (should-not later))))))
 
 (ert-deftest drgnx-ai/a-refused-request-starts-the-runner-at-most-once-a-minute ()
+  :tags '(:frozen)
   (drgnx-ai-onboard-test--with-mac-jobs drgnx-ai-onboard-test--ollama-answers
     (let ((serve (list (concat bin "fake-serve") "serve"))
           (ask (lambda () (let ((done nil))
@@ -917,6 +919,7 @@ while a step waits; until each end comes no virtual time passes."
           (should-not other))))))
 
 (ert-deftest drgnx-ai/ensure-local-never-waits-for-the-job ()
+  :tags '(:frozen)
   ;; the probe's callback runs in a curl sentinel: it starts nothing itself, and the start does not wait for the hub
   (drgnx-ai-onboard-test--with-mac-jobs drgnx-ai-onboard-test--ollama-answers
     (let ((serve (list (concat bin "fake-serve") "serve")) (in-callback 'unset) started)

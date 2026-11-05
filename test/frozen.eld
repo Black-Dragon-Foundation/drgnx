@@ -313,7 +313,10 @@
           drgnx-onboard/a-failed-download-says-how-to-retry
           drgnx-onboard/non-interactive-installs-nothing
           drgnx-onboard/chat-needs-its-module
-          drgnx-onboard/chat-turned-on-installs-its-package)
+          drgnx-onboard/chat-turned-on-installs-its-package
+          drgnx-ai/ensure-local-starts-the-runner-when-it-is-down
+          drgnx-ai/a-refused-request-starts-the-runner-at-most-once-a-minute
+          drgnx-ai/ensure-local-never-waits-for-the-job)
   :keep (drgnx-onboard/openrouter-key-goes-to-the-keychain
          drgnx-ai-onboard/typed-key-cleared-and-env-noted))
  ("test/unit/mod-extras-teardown-test.el"
