@@ -477,6 +477,10 @@ tested over a socket pair in `conn/tests.rs`:
 - the client's EOF is the last read event;
 - the writer reports at most one of a refused and a stuck write, then ends.
 
+The client in these tests leaves with a `shutdown`, never by closing its end alone: a child another test of the same
+binary is spawning holds a copy of every descriptor from its fork to its exec, so a close ends the stream only once
+that copy is gone too. `a_drain_reads_what_the_socket_holds_before_the_reactor_saw_it` holds such a copy throughout.
+
 ### hello and versions
 
 Ratatoskr's `hello` (protocol v1, `runtime/crates/drgnx-ratatoskr/src/hello.rs`) closes SB-T12-6: a hello line is

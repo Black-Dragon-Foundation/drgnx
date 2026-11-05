@@ -28,12 +28,17 @@ async fn a_drain_reads_what_the_socket_holds_before_the_reactor_saw_it() {
     tokio::task::yield_now().await;
     let d = drain(&r, &mut reader.codec, &mut reader.buf, &out, false);
     assert!(d.lines.is_empty() && d.end.is_none());
-    // EOF after the last line
+    // EOF after the last line.  A child another test spawns holds a copy of every open descriptor from its fork to its
+    // exec, THEIRS included (held here, as such a child would): closing THEIRS ends nothing while a copy is open, so
+    // the client's end is a shutdown, which ends the stream whatever copies there are
+    let forked = theirs.try_clone().unwrap();
     theirs.write_all(b"{\"id\":3,\"__seq\":9}\n").unwrap();
+    theirs.shutdown(std::net::Shutdown::Write).unwrap();
     drop(theirs);
     let d = drain(&r, &mut reader.codec, &mut reader.buf, &out, false);
     assert_eq!(d.lines.len(), 1);
     assert_eq!(d.end, Some(crate::sequencer::End::Eof));
+    drop(forked);
 }
 
 #[tokio::test]
@@ -71,6 +76,9 @@ async fn a_write_is_reported_after_its_push() {
 #[tokio::test]
 async fn a_refused_write_is_reported_once_and_reading_goes_on() {
     let (ours, theirs) = UnixStream::pair().unwrap();
+    // the client leaves: a shutdown, so a copy a child another test is spawning holds cannot keep it open
+    let theirs = theirs.into_std().unwrap();
+    theirs.shutdown(std::net::Shutdown::Both).unwrap();
     drop(theirs);
     let (_r, w) = ours.into_split();
     let out = Arc::new(Outbox::new(1));
