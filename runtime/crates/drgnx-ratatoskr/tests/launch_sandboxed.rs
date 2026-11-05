@@ -69,6 +69,7 @@ impl Fx {
             login_dir: Some(self.p("home/.claude")),
             enforced: Enforced::Yes,
             gateway: false,
+            trace: None,
         }
     }
 

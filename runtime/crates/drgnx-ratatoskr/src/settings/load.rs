@@ -343,6 +343,9 @@ fn decode_default(name: &str, default: &RuntimeValues, values: &mut RuntimeValue
         "drgnx-agents-start-env-names" => {
             values.agents_start_env_names = default.agents_start_env_names.clone();
         }
+        "drgnx-agents-trace-opens" => {
+            values.agents_trace_opens = default.agents_trace_opens.clone()
+        }
         "drgnx-ai-providers" => values.ai_providers = default.ai_providers.clone(),
         "drgnx-ai-roles" => values.ai_roles = default.ai_roles.clone(),
         "drgnx-agents-matrix" => values.agents_matrix = default.agents_matrix.clone(),

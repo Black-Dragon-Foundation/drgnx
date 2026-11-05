@@ -540,6 +540,7 @@ fn a_reduced_run_end_to_end() {
         tmp: Some(root.join("t")),
         layers: Layers::for_target(Target::LinuxReduced),
         extra_tcp_ports: vec![],
+        trace: Default::default(),
     };
     let valid = gleipnir::validate::validate(s, &ctx, Target::LinuxReduced).unwrap();
     let inner = reduced::inner_spec(&valid, Path::new(HELPER), &["relay".into()]).unwrap();

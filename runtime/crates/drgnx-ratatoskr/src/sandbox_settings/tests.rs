@@ -67,6 +67,7 @@ fn spec(write: Vec<PathBuf>, binds: Vec<Bind>, target: Target) -> Spec {
         tmp: None,
         layers: Layers::for_target(target),
         extra_tcp_ports: vec![],
+        trace: Default::default(),
     }
 }
 

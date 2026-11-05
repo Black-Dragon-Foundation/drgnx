@@ -56,6 +56,8 @@ pub struct Core {
     pub presence: std::sync::Arc<crate::work::presence::Live>,
     /// The Work map's views and the model behind them ([`crate::work::map`]).
     pub map: std::sync::Arc<crate::work::map::Map>,
+    /// The files shell steps opened, from Gleipnir's tracer ([`crate::work::trace`]).
+    pub traces: std::sync::Arc<crate::work::trace::Traces>,
 }
 
 fn answer<T: Serialize>(r: Result<T, Error>) -> Result<Value, Error> {

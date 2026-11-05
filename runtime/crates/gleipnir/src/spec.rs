@@ -131,7 +131,45 @@ pub struct Spec {
     /// TCP ports the program may connect to besides the relay's, under `Net::Isolated` (Landlock's port rule).
     #[serde(default)]
     pub extra_tcp_ports: Vec<u16>,
+    /// Whether the files the program's shell steps open are seen ([`crate::trace`]): off unless asked.
+    #[serde(default, skip_serializing_if = "Trace::is_off")]
+    pub trace: Trace,
 }
+
+/// Seeing opens ([`crate::trace`]): `"off"`, `{"per_step": {"socket": …}}` or `{"tree": {"socket": …}}`. `socket`
+/// is the supervisor's hand-off socket, as a path inside; it must be one of the spec's `sockets`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum Trace {
+    /// Nothing is traced.
+    #[default]
+    Off,
+    /// Per shell step: the program runs each shell command through [`TRACE_INSIDE`] (`gleipnir-trace`), which
+    /// offers the command at `socket` (in `GLEIPNIR_TRACE_SOCK`). The full tier only: the wrapper lives at a reserved
+    /// dest.
+    PerStep { socket: PathBuf },
+    /// The program's whole tree: the inner helper installs the listener on itself after seccomp, so on everything
+    /// the program starts, and offers it at `socket`. Linux only.
+    Tree { socket: PathBuf },
+}
+
+impl Trace {
+    pub fn is_off(&self) -> bool {
+        *self == Trace::Off
+    }
+
+    /// The hand-off socket, when there is one.
+    pub fn socket(&self) -> Option<&PathBuf> {
+        match self {
+            Trace::Off => None,
+            Trace::PerStep { socket } | Trace::Tree { socket } => Some(socket),
+        }
+    }
+}
+
+/// Where `gleipnir-trace`, the per-step wrapper, is seen inside bwrap: a link to the helper, which runs as the wrapper
+/// when it is started by this name ([`crate::trace::wrapper_main`]).
+pub const TRACE_INSIDE: &str = "/run/gleipnir/gleipnir-trace";
 
 /// A path seen inside at `dest`, from `source` outside.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -422,11 +460,35 @@ mod tests {
 
     #[test]
     fn the_helper_lies_under_a_reserved_dest() {
-        assert!(
-            RESERVED_DESTS
-                .iter()
-                .any(|r| HELPER_INSIDE.starts_with(&format!("{r}/")))
+        for p in [HELPER_INSIDE, TRACE_INSIDE] {
+            assert!(
+                RESERVED_DESTS
+                    .iter()
+                    .any(|r| p.starts_with(&format!("{r}/"))),
+                "{p}"
+            );
+        }
+    }
+
+    /// Off is the default and is left out of the wire form; the other two carry their socket.
+    #[test]
+    fn trace_is_off_unless_asked() {
+        let spec = decode(full()).unwrap();
+        assert_eq!(spec.trace, Trace::Off);
+        assert!(serde_json::to_value(&spec).unwrap().get("trace").is_none());
+        let per = decode(with(
+            "/trace",
+            Some(json!({"per_step": {"socket": "/run/drgnx/trace.sock"}})),
+        ))
+        .unwrap();
+        assert_eq!(
+            per.trace.socket(),
+            Some(&PathBuf::from("/run/drgnx/trace.sock"))
         );
+        let tree = decode(with("/trace", Some(json!({"tree": {"socket": "/s"}})))).unwrap();
+        assert!(matches!(tree.trace, Trace::Tree { .. }));
+        assert!(decode(with("/trace", Some(json!({"tree": {}})))).is_err());
+        assert!(decode(with("/trace", Some(json!("everything")))).is_err());
     }
 
     /// The lists are the plan's, entry for entry; a change here is a change of the sandbox's rules.

@@ -10,7 +10,7 @@
 //! everywhere.
 
 use crate::landlock::{LandlockPlan, Tier, plan_for};
-use crate::spec::{Net, ValidSpec};
+use crate::spec::{Net, Trace, ValidSpec};
 use crate::validate::{Refusal, Rule};
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
@@ -57,6 +57,11 @@ pub struct InnerSpec {
     pub new_session: bool,
     /// The relay, started after both layers and ready before the program.
     pub relay: Option<RelayPlan>,
+    /// Whole-tree tracing ([`crate::Trace::Tree`]): after seccomp and the relay, the helper installs the open
+    /// listener on itself, so on everything the program starts, and offers it at this socket
+    /// ([`crate::trace::offer`]). A refusal or a supervisor that is not there leaves the program untraced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_tree: Option<PathBuf>,
     /// Test hook (Task 15's row `landlock-layer-2`): removed from the write roots.
     #[cfg(feature = "test-hooks")]
     #[serde(default)]
@@ -119,6 +124,7 @@ impl InnerSpec {
             new_session: landlock.tier == Tier::Reduced,
             landlock,
             relay: None,
+            trace_tree: None,
             #[cfg(feature = "test-hooks")]
             landlock_omit: vec![],
             #[cfg(feature = "test-hooks")]
@@ -127,13 +133,25 @@ impl InnerSpec {
     }
 
     /// The inner spec for `spec` in `tier`: its Landlock plan ([`plan_for`]), its environment and `chdir`, and
-    /// `relay`.
+    /// `relay`. Per-step tracing adds `GLEIPNIR_TRACE_SOCK` (the wrapper's socket) to the environment, last; whole-tree
+    /// tracing sets [`InnerSpec::trace_tree`].
     pub fn for_spec(spec: &ValidSpec, tier: Tier, relay: Option<RelayPlan>) -> InnerSpec {
         let s = spec.spec();
+        let mut env = s.env.clone();
+        let mut trace_tree = None;
+        match &s.trace {
+            Trace::Off => {}
+            Trace::PerStep { socket } => env.push((
+                crate::trace::SOCK_ENV.into(),
+                socket.to_string_lossy().into_owned(),
+            )),
+            Trace::Tree { socket } => trace_tree = Some(socket.clone()),
+        }
         InnerSpec {
-            env: s.env.clone(),
+            env,
             chdir: Some(s.chdir.clone()),
             relay,
+            trace_tree,
             ..InnerSpec::new(plan_for(spec, tier))
         }
     }
@@ -551,6 +569,21 @@ mod linux {
         let relay = spec.relay.as_ref().map(start_relay).transpose()?;
         if plan.tcp_bind_ports.is_some() {
             landlock::forbid_tcp_bind().map_err(|e| format!("Landlock (no TCP bind): {e}"))?;
+        }
+        // 6a. Whole-tree tracing: the listener after Gleipnir's own filter and after the relay (which it must not
+        // cover), offered to the supervisor. Whatever the answer, the program runs, traced or not; only a listener that
+        // is installed but never reached the supervisor (every open would then fail) stops the setup.
+        if let Some(sock) = &spec.trace_tree {
+            let words: Vec<String> = cmd
+                .iter()
+                .map(|w| w.to_string_lossy().into_owned())
+                .collect();
+            let scope = crate::trace::Scope::Tree;
+            if let crate::trace::Offered::Lost(why) =
+                crate::trace::offer(sock, scope, &words.join(" "))
+            {
+                return Err(format!("trace: {why}"));
+            }
         }
         // 7. The status line.
         let report = LayersReport {

@@ -32,3 +32,33 @@ one file's changes, and show a file as it was after an earlier step. Every numbe
 was when the session started (or when the hub made its worktree). A file the agent created is listed as new. Nothing is
 asked of the agent's own folder: the hub compares its own snapshots of it. Before the agent's first edit the list is
 empty.
+
+## Reads through shell commands
+
+When an agent reads files with shell commands (`cat`, `sed -n`, `rg`, a script) rather than its own read tool, the
+Work space still shows them, in two ways:
+
+- **From the command:** the files a command names (`cat a`, `sed -n 1,5p b > c`), read from its text. This works for
+  every agent and every machine. What a command builds at run time (`$(…)`, variables, `xargs`) is never guessed.
+- **Seen open** (Linux): the files the command's processes actually opened, seen by the sandbox as they open them. It
+  only watches: it never blocks or changes anything, and the command's output is the same. Writes seen this way are
+  shown as "written by a command".
+
+What "seen open" keeps:
+
+- only files in the agent's folder, by their real names (a link that leads elsewhere is dropped);
+- never what git ignores (build output such as `target/`), toolchain files (`~/.cargo`, `~/.rustup`, the mise
+  caches) or system files (`/usr`, `/etc`, `/proc`);
+- a file the command looked for that does not exist is left out.
+
+Some commands are not watched, and their step says why:
+
+- **"opens not traced for this build"**: builds and test runs (`cargo`, `make`, `ninja`, `cmake`, `npm`, `pnpm`,
+  `yarn`, `go build`, `go test`, `pytest`, `podman`, `emacs`, `nidhogg` and every `bin/drgnx` command), and any command
+  that once made its step more than a little slower (more than 5 % or 50 ms, whichever is more, and never more than
+  250 ms). Such a command is not watched again in that folder while the hub runs.
+- **"opens not traced for Codex: turned off in settings"** (or Gemini): Codex and Gemini can only be watched as a whole
+  (every command they run pays for it), so they are off unless you list them in `drgnx-agents-trace-opens`, for
+  example `("claude" "codex")`. Claude Code is watched one shell command at a time and is on by default.
+- **"opens are not traced on macOS"**: macOS has no way to watch opens without root, so there you see the files
+  commands name only.

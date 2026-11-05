@@ -3,7 +3,7 @@
 
 use crate::spec::{
     BASE_ENV_DENY, Bind, HELPER_INSIDE, LANDLOCK_ABI_MAX, Mode, Net, RESERVED_DESTS, RelayPort,
-    SYSTEM_CLOSED, Spec, Target, ValidSpec,
+    SYSTEM_CLOSED, Spec, Target, Trace, ValidSpec,
 };
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -622,6 +622,25 @@ fn malformed(spec: &Spec, target: Target) -> Result<(), Refusal> {
     if spec.run.as_ref().is_some_and(|r| r.mode == Mode::Rw) {
         return bad("run: the session dir is bound read-only; its mode must be ro".into());
     }
+    match (&spec.trace, target) {
+        (Trace::Off, _) => {}
+        (_, Target::Macos) => return bad("trace: opens are not traced on macOS".into()),
+        (Trace::PerStep { .. }, Target::LinuxReduced) => {
+            return bad(
+                "trace: per_step needs the full tier (its wrapper lives under /run/gleipnir)"
+                    .into(),
+            );
+        }
+        _ => {}
+    }
+    if let Some(sock) = spec.trace.socket()
+        && !spec.sockets.contains(sock)
+    {
+        return bad(format!(
+            "trace: the socket {} is not one of the spec's sockets",
+            sock.display()
+        ));
+    }
     Ok(())
 }
 
@@ -819,6 +838,7 @@ mod tests {
                 tmp: Some(self.p("state/sandbox/J1/tmp")),
                 layers: Layers::for_target(target),
                 extra_tcp_ports: vec![8080],
+                trace: Default::default(),
             }
         }
     }
@@ -1515,6 +1535,60 @@ mod tests {
             let v = validate(s, &fx.ctx(), t).unwrap();
             assert_eq!(v.spec().home.as_ref().unwrap().mode, Mode::Ro);
         }
+    }
+
+    /// Tracing opens: per step needs the full tier, whole tree any Linux tier, never macOS; its socket must be one of
+    /// the spec's sockets.
+    #[test]
+    fn trace_needs_its_socket_and_a_linux_tier() {
+        let fx = Fx::new();
+        base_passes(&fx);
+        let sock = fx.p("rt/drgnx/s/S1/proxy.sock");
+        let per = Trace::PerStep {
+            socket: sock.clone(),
+        };
+        let tree = Trace::Tree {
+            socket: sock.clone(),
+        };
+        let with = |t: Target, trace: &Trace| Spec {
+            trace: trace.clone(),
+            ..fx.spec(t)
+        };
+        validate(
+            with(Target::LinuxBwrap, &per),
+            &fx.ctx(),
+            Target::LinuxBwrap,
+        )
+        .expect("per step in the full tier");
+        for t in [Target::LinuxBwrap, Target::LinuxReduced] {
+            validate(with(t, &tree), &fx.ctx(), t).expect("the whole tree on Linux");
+        }
+        refused(
+            &fx,
+            "per step reduced",
+            Target::LinuxReduced,
+            with(Target::LinuxReduced, &per),
+            Rule::Malformed,
+        );
+        for trace in [&per, &tree] {
+            refused(
+                &fx,
+                "trace on macOS",
+                Target::Macos,
+                with(Target::Macos, trace),
+                Rule::Malformed,
+            );
+        }
+        let stray = Trace::Tree {
+            socket: fx.p("rt/drgnx/s/S1/trace.sock"),
+        };
+        refused(
+            &fx,
+            "a socket not listed",
+            Target::LinuxBwrap,
+            with(Target::LinuxBwrap, &stray),
+            Rule::Malformed,
+        );
     }
 
     #[test]

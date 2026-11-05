@@ -99,6 +99,7 @@ pub fn from_json(name: &str, v: &Value, values: &mut RuntimeValues) -> Result<()
         }
         "drgnx-agents-allow-unsandboxed" => values.agents_allow_unsandboxed = de(v)?,
         "drgnx-agents-start-env-names" => values.agents_start_env_names = de(v)?,
+        "drgnx-agents-trace-opens" => values.agents_trace_opens = de(v)?,
         "drgnx-ai-providers" => {
             let Alist(pairs) = de::<Alist<ProviderEntry>>(v)?;
             let mut out = Vec::with_capacity(pairs.len());
@@ -183,6 +184,7 @@ pub fn to_json(name: &str, values: &RuntimeValues) -> Option<Value> {
         "drgnx-agents-openrouter" => json!(values.agents_openrouter),
         "drgnx-agents-allow-unsandboxed" => json!(values.agents_allow_unsandboxed),
         "drgnx-agents-start-env-names" => json!(values.agents_start_env_names),
+        "drgnx-agents-trace-opens" => json!(values.agents_trace_opens),
         "drgnx-ai-providers" => object(
             values
                 .ai_providers

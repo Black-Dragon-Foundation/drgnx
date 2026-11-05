@@ -265,6 +265,10 @@ pub const SESSION_GATEWAY_SOCKET: &str = "gateway.sock";
 /// The session's provider proxy in a session dir: the sandbox's relay port reaches it (`agents::net` in Ratatoskr).
 pub const SESSION_PROXY_SOCKET: &str = "proxy.sock";
 
+/// The trace supervisor's hand-off socket in a session dir: Gleipnir's open tracer offers its listener there
+/// (`work::trace` in Ratatoskr).
+pub const SESSION_TRACE_SOCKET: &str = "trace.sock";
+
 /// A browser session's web proxy in a session dir.
 pub const SESSION_WEB_SOCKET: &str = "web.sock";
 
@@ -272,7 +276,7 @@ pub const SESSION_WEB_SOCKET: &str = "web.sock";
 pub const SESSION_CDP_SOCKET: &str = "cdp.sock";
 
 /// The longest socket name a session dir holds (`hub.sock`, `mcp.sock`, `search.sock`, `gateway.sock`, `proxy.sock`,
-/// `web.sock`, `cdp.sock`): it sizes the fallback.
+/// `trace.sock`, `web.sock`, `cdp.sock`): it sizes the fallback.
 const SESSION_LONGEST_SOCKET: &str = SESSION_GATEWAY_SOCKET;
 
 /// Where session dirs are made, for the hub SOCKET names: `<socket dir>/s` and `<tmp>/drgnx-hub-UID/s` (the
@@ -572,6 +576,7 @@ mod tests {
             SESSION_MCP_SOCKET,
             SESSION_GATEWAY_SOCKET,
             SESSION_PROXY_SOCKET,
+            SESSION_TRACE_SOCKET,
             SESSION_WEB_SOCKET,
             SESSION_CDP_SOCKET,
         ] {

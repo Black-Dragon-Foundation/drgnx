@@ -80,6 +80,7 @@ impl Fx {
             tmp: (!full).then(|| self.p("t")),
             layers: Layers::for_target(target),
             extra_tcp_ports: vec![],
+            trace: Default::default(),
         };
         ValidSpec::assume_valid(spec, target)
     }
