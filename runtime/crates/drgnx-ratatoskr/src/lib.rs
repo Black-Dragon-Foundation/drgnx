@@ -56,6 +56,8 @@
 //! - [`brief`]: briefs built from the graph.
 //! - [`manager`]: the manager role.
 //! - [`records`]: the records importer and their views.
+//!
+//! Runners (other machines that run jobs): [`runners`], the generated ssh config and the transport.
 
 pub mod agent_core;
 pub mod agents;
@@ -87,6 +89,7 @@ pub mod matrix_gate;
 pub mod peer;
 pub mod records;
 pub mod runner;
+pub mod runners;
 pub mod runtime_db;
 pub mod sandbox;
 pub mod sandbox_settings;

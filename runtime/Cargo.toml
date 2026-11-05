@@ -46,6 +46,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "json"] }
 tracing-appender = "0.2"
 lexopt = "0.3"
+# the hub's runner transport drives the user's own ssh (runners design 6.4; one addition to section 17): native mux
+# only, never the process mux
+openssh = { version = "0.11.6", default-features = false, features = ["native-mux"] }
 landlock = "0.4"
 seccompiler = "=0.5.0"
 insta = { version = "1.49", features = ["json"] }

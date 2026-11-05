@@ -1706,6 +1706,63 @@ optional; an older file with numbers reads as before), the `ExecRow` has no `tim
 a time box of 0. The editor side is `core/drgnx-exec.el` (a cache fed by `exec/list` and `exec-done`; see
 `docs/guide/jobs.md`, "The editor's jobs").
 
+## Runners: the transport
+
+`drgnx-ratatoskr/src/runners/` reaches the user's other machines (runners) over the user's own OpenSSH
+(`docs/guide/runners.md`, "How drgnx reaches your machines"). A runner is a `RunnerCfg {name, host, linger, cloud,
+remote}`: the registry's name (letters, digits, `_`, `-`, at most 32 bytes), the host as the user's ssh knows it, a
+cloud machine's agent, certificate and pinned host key (`CloudSsh`), and the argv of its three sessions (`Remote`).
+`RunnerCfg::check` refuses a host or name that would read as an ssh option or holds a space, a path in the config
+that ssh would expand (`%`) or that would break its line, and an empty argv; `grace()` is an attempt's grace there
+(600 s with linger, 0 without).
+
+**The generated config** (`ssh_config.rs`). `render` writes the forced options first, because ssh keeps the first value
+it reads for an option: `ForwardAgent no`, `ForwardX11 no`, `ClearAllForwardings yes`, `PermitLocalCommand no`,
+`BatchMode yes`, `StrictHostKeyChecking yes`, `UpdateHostKeys no`, `ServerAliveInterval 15`, `ServerAliveCountMax 4`,
+`Compression yes`, `ControlPersist 10m`, `RemoteCommand none` and `RequestTTY no` (`FORCED`). A cloud runner adds
+`IdentityAgent`, `CertificateFile`, `IdentitiesOnly yes` and `UserKnownHostsFile` (paths quoted) and reads no user
+config; an SSH runner ends with `Include ~/.ssh/config`, so its host name, user, port, keys and `ProxyJump` /
+`ProxyCommand` stay the user's. `write` puts it at `$XDG_RUNTIME_DIR/drgnx-runners/<name>/ssh_config`, mode 0600, its
+folders 0700 (made, or narrowed), replaced in one rename; a runner folder that is a link or someone else's is refused.
+ssh expands `~` from the password database, not `$HOME`, so a test's `Include` reaches its own home only in a
+container.
+
+**The transport** (`transport.rs`). `trait Transport` (methods return `BoxFuture`, so a link can hold a `dyn
+Transport`):
+
+- `open(r) -> Channels`: R's master (the one it has if its socket answers, else one a previous hub left in the runner's
+  folder, resumed with `Session::resume_mux`, else a new one through `connect_mux`), then `true` on it, so a dead link
+  or a login banner shows before any session of ours starts, then three sessions: control, bulk in, bulk out. Each
+  `Channel` has `tx`, `rx` and `err`; `Channel::new(tx, rx)` makes one over any pipe, for a link's tests. At most
+  `SESSIONS` (3) per runner, kept by a semaphore: a second `open` while they are open is refused.
+- `round_trip(r) -> Duration`, within `ROUND_TRIP_DEADLINE` (60 s, the keep-alive's 15 s × 4): `true` while a session
+  is free, else the next bytes on the control channel (both ends ping every 10 s), so the check never needs a fourth
+  session. `-O check` only asks the master's local socket, which still answers after its link died: it is
+  `OpensshTransport::check_master`, never health.
+- `replace_master(r)` stops the master listening (the crate's `close`, which is `-O stop`) and dials a new one;
+  sessions on the old master finish or end through the keep-alive. `stop(r)` stops it the same way and forgets R.
+  **The hub never sends `-O exit`**, and dropping an `OpensshTransport` detaches its masters, which stay up for
+  `ControlPersist 10m` so the next hub resumes them. Sessions are opened from a handle that owns nothing (dropping it
+  never touches the master); one owner per master stops or detaches it.
+
+`OpensshTransport` and `effective` are `cfg(all(unix, not(target_os = "android")))`: the `openssh` crate (native mux
+only, no process mux) with `config_file`, `KnownHosts::Strict` and `ControlPersist::IdleFor(600)` on the master's
+command line too (the crate's defaults, `accept-new` and `yes`, would win over the file there), the control folder in
+the runner's folder. `LinkError {Lost, NeedsLogin(Login), HostKeyChanged, Refused(String)}` is never a job's result.
+`classify_stderr` reads ssh's error output: Tailscale's "requires an additional check" (its URL kept for the card,
+never opened), a passphrase, a host key not known yet (`Login`), a changed host key (`HostKeyChanged`, never
+accepted); `link_error` makes the machine down or out of reach `Lost` and the rest `Refused` in ssh's words.
+`Redial::delay(n)` is 5, 15, 45, then 120 s. `effective(config, host)` runs `ssh -G -F <generated> host` and reads
+`forwardagent`, the forwards and the proxy (`Effective`), for the onboarding probe and the runner list.
+
+Tests: unit rows `runners::` [D]; the fleet rows `tests/fleet_link.rs` [C] (`#[ignore = "fleet"]`) run in a fleet's
+harness against real sshd (its header has the commands). They need sshd set two ways, through
+`DRGNX_FLEET_RUNNER_OPTS` mounting `test/runners/link/*.conf` as `05-link.conf` (read before the image's
+`10-fleet.conf`): agent forwarding allowed with `--max-sessions 3`, and a `ForceCommand` that prints Tailscale's
+banner. Each row first shows the user's own ssh doing what the hub must not (forwarding the agent, running the user's
+`RemoteCommand` on a terminal and their `LocalCommand`, opening their `LocalForward`). The dead-link row stops the
+runner's sshd for the master's connection (`kill -STOP` over a second connection), which a network cut would do too.
+
 ## The timeline
 
 Every step of an agent's work is a row of the `step` table (`norn::write::steps`), written when it closes by the
