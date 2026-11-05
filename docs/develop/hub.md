@@ -1598,7 +1598,10 @@ other profile gets no gateway relay. A test build's launch is the unsandboxed te
   unregistered.
 - **Across a restart** the rows are read back (a row that does not read is dropped and logged), owners checked again,
   the sessions' sockets bound again, and the gateway's port too: `runtime.db`'s `kv.gateway_port` is tried first,
-  else a free one (logged), and the one used is kept.
+  else a free one, and the one used is kept. When the kept port is taken, the hub logs a warning and drops every
+  loopback registration at start (the editor's tokens and agents' on 127.0.0.1; a session's `gateway.sock` ones
+  stay): their holders still know the old port, so a process squatting it would collect live tokens. Each holder asks
+  again: the editor does on its next proven connect and learns the new port.
 - **Budget.** A registration's `budget` (USD), else its job's `data.budget` in work.db. `gateway/set-budget {job,
   budget}` sets it for every registration of the job, in memory and in `runtime.db` (the editor's `job resume
   --budget`).
@@ -1703,8 +1706,8 @@ a token of their own, so the editor need not hold the keys.
 - **One per owner.** A second call from the same process deletes its earlier editor token first, so a reconnecting
   editor rotates; another process (a batch job such as the search indexer, the `drgnx` CLI) takes its own.
 - **Kept across a restart.** It is a `registration` row like an agent's: read back at start, pruned with its owner,
-  and good again as long as the port is the same (`kv.gateway_port`). The editor asks for its token again on every
-  proven reconnect, so it learns a new port.
+  and good again only while the port is the same (`kv.gateway_port`): a moved port drops it. The editor asks for its
+  token again on every proven reconnect, so it learns a new port.
 
 **Which keys the hub holds.** `gateway/keys-held {}` (user) answers `{providers: [Id]}`, the ids whose key is held, and
 user subscribers get the event `gateway/keys-changed {providers}` whenever that set changes (`gateway/keys`, a
