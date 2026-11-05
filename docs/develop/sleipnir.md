@@ -10,8 +10,11 @@ The scheduling decisions are [`forseti`](forseti.md)'s; sleipnir reads the machi
 |---|---|---|
 | `linux` | the machine probe, the reservation files, the executor | std, rustix, libc, serde, `forseti`; blocking, never tokio |
 | `sync` | a job's inputs, the hardened git, checkout slots | std, rustix, `sha2`, `forseti`; blocking, never tokio |
-| `proto` | the wire protocol | pure |
+| `proto` | the hub–runner protocol: the frames and their wire | pure: serde, serde_json, `forseti`'s types, `secrecy` and `zeroize` for a key's value |
 | `runner` (default) | the binary's modes | all of the above |
+
+`linux` turns on `proto`: the probe's `Facts` and `Missing` are the protocol's types, since `hello-ok` and
+`probe-result` carry them.
 | `test-hooks` | test-only entry points | compiled away otherwise |
 
 jobq depends with `default-features = false, features = ["linux", "sync"]`, so no async runtime reaches it. The
@@ -289,13 +292,62 @@ planted program would write is absent and the planted `.git` is gone:
 
 All are `[D]`: temp repositories and real git, no clock, no waits.
 
+## The protocol (`proto`)
+
+The hub and a runner talk over the hub's SSH sessions to the runner: the control channel (`sleipnir serve`'s stdin
+and stdout) carries every job's frames, its logs and its keys; the bulk channels carry `blob` and `bundle` frames in
+the same format. `PROTO_VERSION` is checked at `hello`: a runner of another version answers with its own, and the
+hub copies its bundle before it sends work.
+
+**The wire** (`FrameReader`, `FrameWriter`). One JSON line per frame, tagged by `t`. A frame with bytes (`log`,
+`blob`, `bundle`) adds `"len": N` to its line, and the bytes follow the line as one chunk: a 4-byte big-endian length,
+then the bytes, at most 1 MiB (`MAX_CHUNK`). A writer refuses a bigger chunk before it sends anything, and a reader
+refuses one before it reads it. Any frame may carry a chunk, so a side skips the bytes of a frame it doesn't know and
+stays in step. A line is at most 16 MiB (`MAX_LINE`, a `finished` frame's `result.json`). An error ends the channel.
+
+**Changes between versions.** Fields a side doesn't know are ignored, fields a side misses take their defaults, and a
+`t` it doesn't know reads as `Frame::Unknown`. A `refuse` frame's structured reason that this side can't read is
+`None`; its `why` text still arrives. So a new hub talks to the runner it just updated while the old bundle's
+attempts run to their end.
+
+**Every job frame carries a `JobRef`**: job, attempt and nonce. The nonce is 16 random bytes the hub makes when it
+places the attempt, written as 32 hex digits; `Debug` shows only the first 8. A job frame without its whole `JobRef`
+does not parse.
+
+| Frame | Direction | Fields |
+|---|---|---|
+| `hello` / `hello-ok` | hub → runner / back | the version, the hub id; the bundle version, the runner id, the boot id, linger, the attempts in the runner's folder (`{r, state, log_offset}`, state `running`, `finished` or `lost`), what the contract finds missing (re-probed at every hello) |
+| `probe` / `probe-result` | hub → runner / back | the facts (`linux::probe::Facts`), what is missing, why container caps don't hold (`check_limits`), the features |
+| `ready` | runner → hub | free memory and CPU, PSI, running attempts, slots and images present |
+| `offer` / `admit` / `refuse` | hub → runner / back | the job spec, its priority, the frozen input key, the grant hint and expected time; the grant; why not (text, and `forseti`'s `WaitReason`) |
+| `sync-have` / `sync-need` / `blob` / `bundle` / `origin-fetch` | both | the commit, tree and overlay manifest (paths as raw bytes); the missing blobs and commit; a blob; a bundle chunk at its offset (the last with the bundle's hash); a fetch from the project's origin |
+| `start` / `started` | hub → runner / back | the image, plain variables, the allowed hosts, the row parser; the unit |
+| `log` | runner → hub | the offset, then the bytes, read from the attempt's log file, never from a pipe |
+| `row` | runner → hub | a test row's name and verdict |
+| `key` | hub → runner | a key's name and value (below) |
+| `key-use` | runner → hub | the key a job asked for, and when |
+| `finished` | runner → hub | the attempt's `result.json`: the only source of a verdict |
+| `cancel`, `fetch`, `attach`, `done` | hub → runner | stop the attempt; send a file of it; after a reconnect, stream its log from the hub's offset and its end; the hub has the result, so the attempt's folder may go |
+| `preempting`, `draining`, `idle` | runner → hub | when, since when |
+| `ping` / `pong` | both | every 10 s |
+| `bye` | both | a clean end: an EOF without it is `link-lost` |
+
+**A key's value** (`KeyValue`, a `secrecy::SecretString`) has no `Clone`, and its `Debug` shows `<redacted>`.
+`Frame::loggable()`, the only form of a frame a log line takes, is `None` for a `key` frame. The value serializes only
+while the codec writes a frame (a thread-local flag the writer sets); anywhere else serde fails on it, so it can't
+reach a log or a file by way of `serde_json`. The writer's and the reader's line buffers are zeroed after a key frame,
+and the value is zeroed when the frame drops.
+
 ## Tests
 
 `cargo test -p sleipnir --no-default-features --features linux` runs the pure rows: the contract's refusals from
 `podman info` fixtures, the kernel's file formats, the reservation round trip and the presence of another scheduler,
 the argv's fixed flags and the runner mount set, the shim, the unit's properties, the parsers, `result.json` and the
 kill reason's precedence. `--features proto,sync` (the Android shape) runs sync's rows: the capture, the hardened
-git, the slots and their escape rows, each with temp repositories and real git.
+git, the slots and their escape rows, each with temp repositories and real git. `--features proto` alone runs the
+protocol's rows `[D]`: every frame round-trips, unknown fields and frames are ignored, a key frame is never loggable
+or printed, chunks over 1 MiB are refused, a job frame without its nonce doesn't parse, and a property that the reader
+never panics on any bytes.
 
 `tests/runner_host.rs` holds the rows that need a real user manager, cgroups and podman. They are
 `#[ignore = "runner-host"]` and run only inside a fake runner (`test/runners/README.md`), never on a developer's
