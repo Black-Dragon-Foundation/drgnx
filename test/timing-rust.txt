@@ -11,3 +11,5 @@ gleipnir lib slow_head_is_refused_only_after_the_head_timeout
 saga records a_1600_row_table_parses_under_50_ms
 drgnx-ratatoskr work_timing shell_parse_within_200_us release
 urdr lib a_lone_write_waits_max_wait_for_company
+vegvisir timing core_step_within_50_us release
+vegvisir timing layout_200_items_within_2_ms release
