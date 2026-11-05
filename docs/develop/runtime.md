@@ -888,6 +888,92 @@ mock's answers are `fixtures/llm-*.json` or a `write_file` in the row. All rows 
   scheme, so it proves the `NO_PROXY` rule without TLS). A kill -9 between a registration's row write and its answer is
   declined (phase 6's `op` rows are the target).
 
+## Hrafn
+
+`runtime/crates/hrafn` is the code-search indexer. It is generic: it has no hub types, and the binary passes in its
+paths. Its git and file-watcher doors sit behind the traits `Git` and `Watch` under the default feature `host`.
+
+### The code store
+
+`CodeStore::open(<state>/code/<project-id>.db)` opens one SQLite file through `urdr` (one owning thread, WAL, mode
+0600, migrations as data). Schema v1:
+
+| Table | Holds |
+|---|---|
+| `file` | path, git blob, class, language, generated flag, size, indexed time |
+| `chunk` | byte and line span, symbol, content `key`, `embed` flag, and `embed_text` (the only copy of a chunk's text, because `chunk_fts` is contentless) |
+| `chunk_fts` | FTS5 over `path, symbols, doc, body`, contentless with `contentless_delete=1`; rowid = `chunk.id`; a trigger removes the row, and the chunk's symbols, with the chunk |
+| `symbol`, `symbol_fts` | defined names with kind, span, chunk and definer; a trigram FTS over the names |
+| `vec` | one quantized vector per `(model, key)` |
+| `meta` | `urdr`'s table: the schema version, `chunker_version`, `built_from` and the like |
+
+`vec_key(chunker, embed_text)` is sha256 over the length-prefixed chunker version and text. A chunk has one key; each
+model that embeds it adds a `vec` row, so a branch switch back embeds nothing.
+
+FTS5 has one tokenizer per table, and `tokenchars '-'` would hide `timer` in `drgnx-timer--fire` from the `body`
+column. So the `symbols` column holds names encoded by `encode_symbol`, which maps each ASCII punctuation character to a
+private-use character (a token character in `unicode61`): a whole name matches only the whole name, and `body`
+still splits it. Queries encode the same way.
+
+### The file list and coverage
+
+`files::list(root, git, config, allow)` is the one place a path enters the index. Git sits behind the `Git` trait
+(`GitCli` runs the `git` executable; `blobs` hashes the working tree with `hash-object --stdin-paths`, so an
+uncommitted edit changes the blob), file bytes are read through `eitri` (a link, FIFO, missing or over-1-MiB file is
+skipped), and `allow` is the hub's deny-list check on the relative path. A path is listed unless:
+
+- a component starts with a dot, or the basename looks like a key, certificate, secret or credential file;
+- it is inside a nested repository (an untracked clone or a submodule);
+- it has a NUL byte in its first 8,000 bytes;
+- the project's `include`/`exclude` globs (the rules of `drgnx-search-config`) leave it out, or `off` is set.
+
+`.drgnx/search.eld` that is there but cannot be read (a directory, a link, empty, over 64 KiB) is an error that
+stops the listing, never the defaults. Each file gets a class (`code`, `test`, `docs`) and a language, from its extension, or
+from a `#!` line when it has none. A file is marked `generated` (listed, not dropped) by `.gitattributes`
+`linguist-generated`/`linguist-vendored`, by "generated" or "DO NOT EDIT" in its first five lines, or by a name like
+`*-autoloads.el`, `loaddefs.el`, `*.lock` or `*.min.*`.
+
+`coverage(listed, chunks_per_file)` reports a class with files but no chunks, and any non-empty file with no chunk.
+
+### Chunks and symbols
+
+`chunk::chunk_file(path, lang, generated, text, budget)` returns the file's chunks and symbols. A file's chunks put
+together give back the file, byte for byte (offsets are bytes). The budget is 1,800 non-whitespace characters
+(`BUDGET`); `CHUNKER_VERSION` is part of every vector's content key.
+
+For Emacs Lisp (`tree-sitter` 0.25, ABI 15, with `tree-sitter-elisp` 1.7; 0.26 and later need Rust 1.90, above the
+workspace's 1.88) the units are the top-level forms, each with the comments right above it, and the stretches between
+them. Adjacent units merge greedily up to the budget and never across a section heading (a `;;;` line with text, at
+column 0). A form over the budget splits at its child forms; every part's header repeats the signature, the first
+docstring line and "part i/n". A `defconst`, `defvar` or `defcustom` whose value is a literal list or vector and
+which is over the budget is one chunk that embeds only its first line and docstring (the FTS body keeps all of it).
+The header (path, title line, section, defined symbols and kinds) is in `embed_text` and the FTS `path` and `symbols`
+columns, never in `body`; a generated file gets `embed = false`.
+
+The definer table (`chunk/definers.rs`) is closed: it names `defun`, `defvar`, `defcustom`, `defmacro`, `cl-defun`,
+`defconst`, `defvar-local`, `defface`, `defgroup`, `defsubst`, `cl-defmacro`, `defvar-keymap`, `defalias`,
+`define-obsolete-function-alias`, `define-error`, `cl-defgeneric`, `cl-defmethod`, `cl-defstruct` (type, constructors,
+predicate, accessors), `define-minor-mode` and `define-derived-mode` (mode, `-hook`, `-map`), and drgnx's
+`drgnx-defsetting`, `drgnx-memo-define`, `drgnx-module-define`, `drgnx-doctor-define`, `drgnx-config-define` and
+`drgnx-command-define`. Project code is read, never evaluated.
+
+Rust, C and shell (`tree-sitter-rust` 0.24, `tree-sitter-c` 0.24, `tree-sitter-bash` 0.25, all ABI 15) use the same
+pipeline over their top-level items. Definitions are `function_item`, `impl_item`, `struct_item`, `enum_item`,
+`trait_item`, `mod_item` and `macro_definition` (and type, const, static and union items) in Rust, with the
+methods of an `impl`, trait or module as symbols of their own; `function_definition`, the struct, union and enum
+specifiers, typedefs and `#define`s in C; `function_definition` in shell. The comment lines directly above an item
+(`///`, `//`, `#`) are its docstring. An oversized item is cut before the members of its body.
+
+Org and Markdown chunk by the heading tree (`chunk/outline.rs`): a chunk's header is its outline path (`A > B`), a
+heading with nothing under it joins the next one, source blocks and fences stay whole under the budget, property
+drawers and logbooks are left out of `embed_text` (the FTS body keeps them), and a table over the budget splits by
+rows with its header rows repeated in `embed_text`. Plain text is line windows under the budget, with no symbols
+(`chunk/text.rs`); a line over the budget is cut inside.
+
+The test fixtures' form spans come from the Emacs reader: `tests/fixtures/elisp/gen.el` writes `NAME.forms.json` for
+each `NAME.el` next to it (run it once in a Nidhogg 31 container, `emacs --batch -Q -l …/gen.el`), and the test holds
+the grammar's top-level spans to them.
+
 ## Building and installing Ratatoskr
 
 Users get the binary from install.sh and `drgnx update`; both call `drgnx runtime` (bin/drgnx, plain bash):

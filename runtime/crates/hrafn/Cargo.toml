@@ -1,0 +1,29 @@
+[package]
+name = "hrafn"
+description = "Code search: the code store (files, chunks, FTS columns, symbols, content-keyed vectors), the file list and the chunker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# The host-side doors (git CLI, file watcher) behind the `Git` and `Watch` traits.
+default = ["host"]
+host = []
+
+[dependencies]
+eitri = { path = "../eitri", version = "0.1.0" }
+urdr = { path = "../urdr", version = "0.1.0" }
+rusqlite.workspace = true
+sha2.workspace = true
+tree-sitter.workspace = true
+tree-sitter-elisp.workspace = true
+tree-sitter-rust.workspace = true
+tree-sitter-c.workspace = true
+tree-sitter-bash.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "macros"] }
