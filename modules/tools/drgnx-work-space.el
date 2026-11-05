@@ -44,6 +44,7 @@
 (defvar drgnx-hub--events)
 (declare-function drgnx-hub-running-p "drgnx-hub-client")
 (declare-function drgnx-hub-connect "drgnx-hub-client")
+(declare-function drgnx-hub-call "drgnx-hub-client")
 (defvar drgnx-hub-event-functions)
 (defvar drgnx-hub-connected-functions)
 (defvar drgnx-hub-disconnect-functions)
@@ -87,7 +88,7 @@ it (a notes repository with the code repositories inside it)."
               work-needs-you-7 work-needs-you-8 work-needs-you-9 work-view-map work-focus work-overlaps
               work-collapse-layer-1 work-collapse-layer-2 work-collapse-layer-3 work-collapse-layer-4
               work-collapse-layer-5 work-collapse-layer-6 work-expand-layers work-show-finished work-search
-              work-escape)
+              work-escape work-take-wheel)
   "The commands of this module, each with a row in every key profile (keys/*.eld).")
 
 ;;;; The workspace of a frame
@@ -208,7 +209,7 @@ and subscribes to nothing."
   "Select the next thing that needs you in the Work space: in the map a window shows, else the newest, else a map
 opened now.  It selects; it never approves, pushes or answers."
   (interactive)
-  (let ((buffer (or (seq-find (lambda (b) (get-buffer-window b t)) (drgnx-work-map-buffers))
+  (let ((buffer (or (seq-find (lambda (b) (get-buffer-window-list b nil t)) (drgnx-work-map-buffers))
                     (car (drgnx-work-map-buffers)) (drgnx-work-space-open))))
     (pop-to-buffer buffer)
     (with-current-buffer buffer (drgnx-work-map-needs-you-here-next))))
@@ -259,6 +260,70 @@ workbench state store's window events (and by hand in tests); only calls the hub
   (ignore state buffer)
   nil)
 
+;;;; Files an agent is still editing open read-only; take the wheel
+
+(require 'drgnx-agents)
+
+(defvar-local drgnx-work-live-file--agent nil "The mirrored session whose worktree holds this buffer's file.")
+(defvar-local drgnx-work-live-file--lighter "" "The mode line chip of `drgnx-work-live-file-mode': live · NAME.")
+(defvar-local drgnx-work-live-file--was-read-only nil "The buffer's read-only state before the mode.")
+
+(defvar drgnx-work-live-file-mode-map
+  (let ((m (make-sparse-keymap)))
+    (define-key m [remap read-only-mode] #'drgnx-work-take-wheel)
+    (define-key m [remap View-exit] #'drgnx-work-take-wheel)
+    (define-key m [remap View-exit-and-edit] #'drgnx-work-take-wheel)
+    m)
+  "Keys of a live agent's file.  The key profiles bind `work-take-wheel' (W) here.")
+
+(defun drgnx-work-live-file--session (file)
+  "The mirrored session that holds FILE: alive (not exited), and FILE is in its linked worktree.  A linked
+worktree has a `.git' file; the user's own checkout has a `.git' directory, and an agent in it locks nothing."
+  (seq-find (lambda (s)
+              (let ((cwd (drgnx-agent-session-cwd s)))
+                (and cwd (drgnx-agent-session-remote s) (not (eq (drgnx-agent-session-status s) 'exited))
+                     (file-in-directory-p file cwd)
+                     (file-regular-p (expand-file-name ".git" cwd)))))
+            drgnx-agents--sessions))
+
+(define-minor-mode drgnx-work-live-file-mode
+  "An agent is still editing in this file's worktree: it is read-only, and \\[drgnx-work-take-wheel] takes the wheel."
+  :lighter drgnx-work-live-file--lighter :keymap drgnx-work-live-file-mode-map
+  (if drgnx-work-live-file-mode
+      (progn (setq drgnx-work-live-file--was-read-only buffer-read-only
+                   drgnx-work-live-file--lighter
+                   (format " live · %s" (if drgnx-work-live-file--agent (drgnx-agent-session-name drgnx-work-live-file--agent) "")))
+             (view-mode 1))
+    (view-mode -1)
+    (remove-hook 'after-save-hook #'drgnx-work-live-file--saved t)
+    (setq buffer-read-only drgnx-work-live-file--was-read-only)))
+
+(defun drgnx-work-live-file--maybe ()
+  "`find-file-hook': lock the file when an agent still holds its worktree."
+  (when-let* ((file buffer-file-name) ((not (file-remote-p file))) (s (drgnx-work-live-file--session file)))
+    (setq drgnx-work-live-file--agent s)
+    (drgnx-work-live-file-mode 1)))
+
+(defun drgnx-work-live-file--saved ()
+  "`after-save-hook' of a file whose wheel was taken: the agent is told which file changed (queued; part 3's protocol
+replaces this later)."
+  (when-let* ((s drgnx-work-live-file--agent) (id (drgnx-agent-session-remote s)) (file buffer-file-name))
+    (drgnx-hub-call "agents/send"
+                    (list :id id :text (format "I edited %s while you were paused. Read it again before you change it."
+                                               (file-name-nondirectory file)))
+                    #'ignore)))
+
+(defun drgnx-work-take-wheel ()
+  "Take the wheel of the agent holding this file: it is paused after its current tool call, the buffer becomes editable,
+and saving tells the agent which file you changed."
+  (interactive)
+  (let ((s (or drgnx-work-live-file--agent (user-error "No live agent holds this file"))))
+    (when-let* ((id (drgnx-agent-session-remote s))) (drgnx-hub-call "agents/pause" (list :id id) #'ignore))
+    (view-mode -1)
+    (setq buffer-read-only nil)
+    (add-hook 'after-save-hook #'drgnx-work-live-file--saved nil t)
+    (message "Work: %s is paused and this file is yours; save to tell it" (drgnx-agent-session-name s))))
+
 ;;;; The module
 
 (defun drgnx-work-space--setup ()
@@ -270,6 +335,10 @@ follows the windows; the commands."
   (drgnx-module-hook 'drgnx-work-client-change-functions changed (view marks) (drgnx-work-map--changed view marks))
   (drgnx-module-hook 'drgnx-work-client-status-functions status (view status) (drgnx-work-space--show-status view status))
   (drgnx-module-hook 'drgnx-work-map-select-functions selected (buffer) (drgnx-work-detail-update buffer))
+  (drgnx-module-hook 'find-file-hook live-file () (drgnx-work-live-file--maybe))
+  (drgnx-command-define 'work-take-wheel :category "Work" :title "Take the Wheel from the Agent"
+                        :command #'drgnx-work-take-wheel :map 'drgnx-work-live-file-mode-map
+                        :doc "Pause the agent that is editing here and make this file editable; saving tells the agent")
   (drgnx-state-subscribe 'windows-changed #'drgnx-work-space--windows-changed)
   (when (fboundp 'drgnx-wb-place) (drgnx-wb-place 'drgnx-work-map-mode 'editor))
   (when (fboundp 'drgnx-pane-define-kind)
@@ -327,6 +396,9 @@ follows the windows; the commands."
   (dolist (b (drgnx-work-map-buffers))
     (with-current-buffer b (remove-hook 'kill-buffer-hook #'drgnx-work-space--killed t))
     (kill-buffer b))
+  (dolist (b (buffer-list))
+    (when (buffer-local-value 'drgnx-work-live-file-mode b)
+      (with-current-buffer b (drgnx-work-live-file-mode -1))))
   (dolist (b (drgnx-work-detail-buffers)) (kill-buffer b))
   (when-let* ((b (get-buffer "*drgnx work: none*"))) (kill-buffer b)))
 

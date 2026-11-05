@@ -73,6 +73,17 @@ arrives with the files picker.
 - `Esc` clears the search; then the filters and collapsed layers; then closes the pane.
 - When an agent records a new conclusion, its card shows a **new** chip for four seconds.
 
+### Files an agent is editing
+
+A file in the worktree of an agent that is still alive (running, waiting, waiting for you, or paused) opens **read-only**,
+with a "live · NAME" chip in the mode line, so you cannot write over what the agent is changing. Your own checkout,
+and the worktree of an agent that has finished, stay editable.
+
+**`W`** (or the keys that would make the buffer editable) takes the wheel: the agent is paused after the tool call it is
+in, the buffer becomes editable, and when you save, a message tells the agent which file you changed, so it reads it
+again before touching it. Resume the agent when you are done. Turning the Work space module off gives every such
+buffer back its old read-only state.
+
 ### The outline
 
 **Show the Map as an Outline** (`work-outline`, `O`) draws one block per agent instead: the agent's line, why it

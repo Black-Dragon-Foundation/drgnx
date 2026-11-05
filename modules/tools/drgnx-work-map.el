@@ -600,7 +600,7 @@ and its latest conclusion.  The form of terminals, of a map that does not fit an
 ;;;; The view type
 
 (defun drgnx-work-map--columns ()
-  (if-let* ((w (get-buffer-window (current-buffer) t))) (max 40 (window-body-width w)) 80))
+  (if-let* ((w (car (get-buffer-window-list (current-buffer) nil t)))) (max 40 (window-body-width w)) 80))
 
 (defun drgnx-work-map--render (key)
   "The text of row KEY in the current buffer's map."

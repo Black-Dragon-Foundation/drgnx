@@ -447,6 +447,16 @@ chain, the edge selection, the item that finished) and the commands are in `drgn
 - The client calls the hub on the subscribed connection (`drgnx-work-client--call`): the hub sends a view's events to
   the connection that subscribed it, and only that connection's events reach `drgnx-hub-event-functions`.
 
+### Live agents' files
+
+`drgnx-work-live-file-mode` (in `drgnx-work-space.el`) is turned on by the module's `find-file-hook` function in a file
+under the `cwd` of a mirrored hub session that is not `exited` and whose `cwd` is a linked worktree (its `.git` is a
+file, not a directory: the user's own checkout has a directory). It sets `view-mode`, keeps the buffer's old read-only
+state, and shows " live · NAME" (`drgnx-work-live-file--lighter`). `drgnx-work-take-wheel` (`W`, and the remaps of
+`read-only-mode` and `View-exit`) calls `agents/pause`, makes the buffer editable and adds a local `after-save-hook`
+that sends `agents/send` naming the file. The module's `:teardown` turns the mode off in every buffer, restoring the
+read-only state each had.
+
 ### The view core
 
 `drgnx-view-draw-now VIEW &optional KEYS` draws only the rows named by KEYS (the keypress's own redisplay for a
