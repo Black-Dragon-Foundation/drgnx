@@ -615,8 +615,11 @@ rewritten at every start, the index file stopped being stat'ed for every setting
 parsed again (budget 2: the rest is the bounded reader's token scan, about 1.8 ms for 200 entries, the per-entry
 value check, about 1.7 ms, and the pushes, about 1.7 ms); `settings-page` open 90.6 then 49 ms (budget 100, met), a
 search keystroke 209 then 70 ms at most (budget 16: the search itself is at most 32 ms for the first key, which looks
-at every setting, then a few ms for the keys that narrow the last result; a forced redisplay of the page is the other
-40 ms); `settings-prov` 114 ms against a plain load of 0.8 ms before, 54 to 78 ms against 2 to 4 ms after provenance
+at every setting, then a few ms for the keys that narrow the last result; a forced redisplay of the page was the other
+40 ms: the workload's `(redisplay t)' runs the ripe timers first, and the page's view drew every listed row again,
+each worked out through provenance, because each search moved the rows' signature; a search now keeps the rows, and
+on the island the keystroke went from p50 23.9 / 19.8, max 66.1 / 68.5 ms to p50 12.3 / 12.3, max 26.7 / 29.4 ms, the
+worst key now the first key's own search, and the open from 31 to 19 ms); `settings-prov` 114 ms against a plain load of 0.8 ms before, 54 to 78 ms against 2 to 4 ms after provenance
 stopped re-judging the file at every write and counting lines from the top for every form (budget 5 %: 97 watchers
 installed at 160 µs and more each are most of it, so the gate cannot be met while every managed variable is watched
 before the load); `settings-sync` 510 to 860 ms for 200 packages (budget 2 s, met); `settings-open` 3.1 then 2.4 ms per
