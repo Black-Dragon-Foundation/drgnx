@@ -621,7 +621,8 @@ paths no WM serves."
     (unwind-protect
         (progn
           (make-directory path)
-          (write-region (format "#!/bin/sh\necho --- >> %s\nfor a in \"$@\"; do printf '%%s\\n' \"$a\" >> %s; done\n" log log)
+          ;; an empty store and no GHCR copy (`image inspect' and `pull' fail, unlogged): the image is built
+          (write-region (format "#!/bin/sh\ncase \"$1\" in image|pull) exit 1 ;; esac\necho --- >> %s\nfor a in \"$@\"; do printf '%%s\\n' \"$a\" >> %s; done\n" log log)
                         nil (expand-file-name "podman" path) nil 'silent)
           (set-file-modes (expand-file-name "podman" path) #o755)
           (dolist (c '("kwin" "niri"))

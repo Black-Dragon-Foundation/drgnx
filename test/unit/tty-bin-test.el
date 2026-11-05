@@ -315,7 +315,9 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
 (ert-deftest drgnx-bin/container-tty-builds-and-runs-the-tty-image ()
   (tty-bin-test--with
     (let ((log (expand-file-name "rt.log" dir)))
-      (tty-bin-test--script (expand-file-name "fake-rt" dir) (format "echo \"$*\" >> %s" log))
+      ;; an empty store and no GHCR copy (`image inspect' and `pull' fail, unlogged): the image is built
+      (tty-bin-test--script (expand-file-name "fake-rt" dir)
+                            (format "case \"$1\" in image|pull) exit 1 ;; esac\necho \"$*\" >> %s" log))
       (dolist (case '((nil "45") (("--fedora" "45") "45")))
         (when (file-exists-p log) (delete-file log))
         (let ((env `(("DRGNX_CONTAINER" . ,(expand-file-name "fake-rt" dir)) ("DRGNX_TEST_TTY_IMAGE")

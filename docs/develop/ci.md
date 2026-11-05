@@ -362,6 +362,11 @@ repository's manual runs publish. The prebuilt images:
   read its one layer with curl (`ghcr.sh file`, the manifest and the layer checked against their digests) and need
   no podman; without one they run the same `build.sh` on the runner.
 
+A local `bin/drgnx test --container` uses the same tags: the local store first, then a pull of
+`ghcr.io/black-dragon-foundation/NAME:TAG` (public, anonymous), a build only when both miss
+(`test/container/image.sh`; `DRGNX_TEST_IMAGE_PULL=0` for offline). A local run therefore builds an image only for
+inputs `Test images` has not published yet.
+
 `bin/drgnx test --container` uses `DRGNX_TEST_IMAGE` (and `--ui`
 `DRGNX_TEST_GUI_IMAGE`; `--ui --compositor kwin|niri` `DRGNX_TEST_WM_IMAGE`, from `Containerfile.wm`, which no CI job
 builds or runs yet) instead of building when set — locally too:
