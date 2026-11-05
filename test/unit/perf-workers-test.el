@@ -32,6 +32,25 @@
     (should-not (drgnx-perf--workers-env))
     (should (equal (drgnx-perf--workers-end) '(:workers nil)))))
 
+(defvar perf-workers-test--order nil "What the session did, newest first: (apply SPEC) and (setup).")
+
+(ert-deftest drgnx-perf-workers/switch-applied-before-the-setup ()
+  "A workload's `:setup' runs with $DRGNX_PERF_WORKERS applied.  lsp-burst's setup opens its jsonrpc connections,
+and Nidhogg frames a connection only if the switch is on when it opens: with the switch applied at the first
+recording, the first workload of a session ran unframed in both arms of an A/B.  Pattern D: the session is this
+Emacs (each form is read and evaluated here), `nidhogg-workers-apply' records."
+  (let ((process-environment (cons "DRGNX_PERF_WORKERS=+nidhogg-workers-framing" process-environment))
+        (features (cons 'nidhogg-workers features))
+        (drgnx-perf--workers-applied nil)
+        (perf-workers-test--order nil))
+    (cl-letf (((symbol-function 'nidhogg-workers-apply) (lambda (spec) (push (list 'apply spec) perf-workers-test--order)))
+              ((symbol-function 'drgnx-ui-call) (lambda (_sess form &optional _timeout) (eval (read form) t)))
+              ((symbol-function 'drgnx-uitest--json) #'identity)
+              ((symbol-function 'drgnx-ui-measure) #'ignore))
+      (drgnx-perf-run-workload 'sess '(:setup "(progn (push '(setup) perf-workers-test--order) t)"
+                                              :measure "(list :x 1)" :repeat 1)))
+    (should (equal (reverse perf-workers-test--order) '((apply "+nidhogg-workers-framing") (setup))))))
+
 (ert-deftest drgnx-perf-workers/worker-wait-is-judged ()
   ;; Nidhogg's phase-ms: symbol keys, worker-wait by reason.  The probe gives numbers only (worker-wait's total and
   ;; each reason), :wait-ms sums treesit-wait and worker-wait, and the A/B judges worker-wait like a phase

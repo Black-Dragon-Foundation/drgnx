@@ -1054,7 +1054,11 @@ INIT-DIR: drgnx's init/ (default).  (:server_ms STATS :modules_ms N)."
     (list :server_ms (mapcar #'drgnx-perf--round (drgnx-perf-stats times)) :modules_ms modules)))
 
 (defun drgnx-perf-run--call (sess form &optional timeout)
-  (drgnx-ui-call sess (format "(progn (require 'drgnx-perf) (drgnx-uitest--json %s))" form) (or timeout 60)))
+  "FORM (a string) in SESS, its value as JSON.  $DRGNX_PERF_WORKERS is applied first (once per session), so a
+workload's `:setup' already runs under it: a connection Nidhogg would frame is framed only if the switch is on when it
+opens (lsp-burst's servers), and applied at the first recording the first workload of a session ran without it."
+  (drgnx-ui-call sess (format "(progn (require 'drgnx-perf) (drgnx-perf--workers-env) (drgnx-uitest--json %s))" form)
+                 (or timeout 60)))
 
 (defun drgnx-perf-run--median (runs path)
   (plist-get (drgnx-perf-stats (delq nil (mapcar (lambda (r) (let ((v r)) (dolist (k path) (setq v (plist-get v k))) (and (numberp v) v))) runs)))

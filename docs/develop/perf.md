@@ -570,7 +570,11 @@ on). A measurement of framing under drgnx's config compares the framed path only
 **The switch.** `DRGNX_PERF_WORKERS` is read once per session, before any workload, and handed unchanged to
 `(nidhogg-workers-apply SPEC)`: `default` (also unset), `on`, `off`, `inline`, or `+SW`/`-SW` items such as
 `+nidhogg-workers-treesit+nidhogg-treesit-defer` (they have no commas, so `--ab-env` takes them). A step's gate is
-`--ab-env DRGNX_PERF_WORKERS=+SW1+SW2,default`. Sessions and containers pass it on.
+`--ab-env DRGNX_PERF_WORKERS=+SW1+SW2,default`. Sessions and containers pass it on. The lab applies it with its
+first call into a session, so a workload's `:setup` already runs under it: a connection is framed only if
+`nidhogg-workers-framing` is on when it opens, and lsp-burst's servers open in its setup
+(`drgnx-perf-workers/switch-applied-before-the-setup`). Each LSP row reports `:lsp :framed`, the connections Nidhogg
+frames; a framing A/B whose framed arm shows 0 compared the unframed path twice.
 
 **The probe.** `drgnx-perf-begin` resets `nidhogg-workers-stats`, `drgnx-perf-end` reports
 `:workers (:phase-ms PLIST :wait-ms F :fallbacks N :deferrals PLIST)`: busy ms by phase (`worker-wait` as its total
