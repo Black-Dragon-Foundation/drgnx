@@ -17,6 +17,11 @@ gh run list --branch ci/my-change          # wait for all of them, then read eve
 git push origin <green sha>:main           # only when CI gate, macOS gate and GUI tier gate are green on it
 ```
 
+A pull request to `main` works the same way: `main` fast-forwards to the pull request's head, so every job a pull
+request runs checks out the head (`github.event.pull_request.head.sha`), never GitHub's merge commit
+(`refs/pull/N/merge`), and the path filter diffs the head. CI's `changes` job fails, and with it the gate, unless the
+head descends from `main`'s tip: merge or rebase onto it first.
+
 ## Gates
 
 Each workflow that gates `main` ends in a job `gate`, which runs always (`if: always()`), `needs:` every job that runs

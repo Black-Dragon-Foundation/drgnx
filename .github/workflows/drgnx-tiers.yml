@@ -43,7 +43,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ inputs.drgnx_ref && 'Black-Dragon-Foundation/drgnx' || '' }}
-          ref: ${{ inputs.drgnx_ref }}
+          ref: ${{ inputs.drgnx_ref || github.event.pull_request.head.sha }}
           path: drgnx
           persist-credentials: false
       - name: drgnx_ref is a commit on one of drgnx's own branches
@@ -85,7 +85,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ inputs.drgnx_ref && 'Black-Dragon-Foundation/drgnx' || '' }}
-          ref: ${{ inputs.drgnx_ref }}
+          ref: ${{ inputs.drgnx_ref || github.event.pull_request.head.sha }}
           path: drgnx
           persist-credentials: false
       - name: drgnx_ref is a commit on one of drgnx's own branches
@@ -141,7 +141,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ inputs.drgnx_ref && 'Black-Dragon-Foundation/drgnx' || '' }}
-          ref: ${{ inputs.drgnx_ref }}
+          ref: ${{ inputs.drgnx_ref || github.event.pull_request.head.sha }}
           path: drgnx
           persist-credentials: false
       - name: drgnx_ref is a commit on one of drgnx's own branches
@@ -192,7 +192,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ inputs.drgnx_ref && 'Black-Dragon-Foundation/drgnx' || '' }}
-          ref: ${{ inputs.drgnx_ref }}
+          ref: ${{ inputs.drgnx_ref || github.event.pull_request.head.sha }}
           path: drgnx
           persist-credentials: false
       - name: drgnx_ref is a commit on one of drgnx's own branches
@@ -265,7 +265,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ inputs.drgnx_ref && 'Black-Dragon-Foundation/drgnx' || '' }}
-          ref: ${{ inputs.drgnx_ref }}
+          ref: ${{ inputs.drgnx_ref || github.event.pull_request.head.sha }}
           path: drgnx
           persist-credentials: false
       - name: drgnx_ref is a commit on one of drgnx's own branches
@@ -313,7 +313,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ inputs.drgnx_ref && 'Black-Dragon-Foundation/drgnx' || '' }}
-          ref: ${{ inputs.drgnx_ref }}
+          ref: ${{ inputs.drgnx_ref || github.event.pull_request.head.sha }}
           path: drgnx
           persist-credentials: false
       - name: drgnx_ref is a commit on one of drgnx's own branches
@@ -355,7 +355,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ inputs.drgnx_ref && 'Black-Dragon-Foundation/drgnx' || '' }}
-          ref: ${{ inputs.drgnx_ref }}
+          ref: ${{ inputs.drgnx_ref || github.event.pull_request.head.sha }}
           path: drgnx
           persist-credentials: false
       - name: drgnx_ref is a commit on one of drgnx's own branches
@@ -404,7 +404,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ inputs.drgnx_ref && 'Black-Dragon-Foundation/drgnx' || '' }}
-          ref: ${{ inputs.drgnx_ref }}
+          ref: ${{ inputs.drgnx_ref || github.event.pull_request.head.sha }}
           path: drgnx
           persist-credentials: false
       - name: drgnx_ref is a commit on one of drgnx's own branches
@@ -448,7 +448,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ inputs.drgnx_ref && 'Black-Dragon-Foundation/drgnx' || '' }}
-          ref: ${{ inputs.drgnx_ref }}
+          ref: ${{ inputs.drgnx_ref || github.event.pull_request.head.sha }}
           path: drgnx
           persist-credentials: false
       - name: drgnx_ref is a commit on one of drgnx's own branches
@@ -508,7 +508,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ inputs.drgnx_ref && 'Black-Dragon-Foundation/drgnx' || '' }}
-          ref: ${{ inputs.drgnx_ref }}
+          ref: ${{ inputs.drgnx_ref || github.event.pull_request.head.sha }}
           path: drgnx
           persist-credentials: false
       - name: drgnx_ref is a commit on one of drgnx's own branches

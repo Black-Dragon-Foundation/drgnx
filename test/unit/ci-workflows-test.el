@@ -57,7 +57,7 @@
     (let ((count (lambda (needle) (length (drgnx-ci-test--matches (concat "\\(" (regexp-quote needle) "\\)") tiers)))))
       (should (= 10 (funcall count "runs-on:")))
       (should (= 10 (funcall count "          path: drgnx\n")))
-      (should (= 10 (funcall count "          ref: ${{ inputs.drgnx_ref }}\n"))))
+      (should (= 10 (funcall count "          ref: ${{ inputs.drgnx_ref || github.event.pull_request.head.sha }}\n"))))
     ;; the Linux jobs that run Ratatoskr fetch the binaries the run built once; macOS builds its own
     (dolist (job '("unit" "no-lisp-writes" "hub-chaos" "ui" "perf"))
       (drgnx-ci-test--has (drgnx-ci-test--job tiers job) "needs: bins-linux" "uses: ./drgnx/.github/actions/fetch-test-bins"))
@@ -353,12 +353,27 @@
     (drgnx-ci-test--has rt "CACHE_SAVE: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/ci/')) }}"
                         "CARGO_INCREMENTAL: \"0\"")))
 
+(ert-deftest drgnx-ci/a-pull-request-runs-its-head-not-the-merge-commit ()
+  ;; main moves to a pull request's head by fast-forward: every checkout of the workflows a pull request runs takes the
+  ;; head (on other events the expression is empty: the event's own commit), the path filter diffs the head, and the
+  ;; head must descend from main's tip
+  (dolist (name '("ci.yml" "macos.yml" "runtime.yml" "drgnx-tiers.yml"))
+    (let ((yml (drgnx-ci-test--yml name)))
+      (skip-unless yml)
+      (should (= (length (drgnx-ci-test--matches "\\(uses: actions/checkout@\\)" yml))
+                 (length (drgnx-ci-test--matches "\\(ref: \\${{ \\(?:inputs\\.drgnx_ref || \\)?github\\.event\\.pull_request\\.head\\.sha }}\\)" yml))))))
+  (dolist (name '("ci.yml" "macos.yml"))
+    (should (string-search "SHA: ${{ github.event.pull_request.head.sha || github.sha }}" (drgnx-ci-test--yml name))))
+  (drgnx-ci-test--has (drgnx-ci-test--yml "ci.yml")
+                      "name: The pull request's head descends from the default branch's tip"
+                      "compare/$tip...$HEAD_SHA"))
+
 (ert-deftest drgnx-ci/a-drgnx-ref-is-checked-before-its-checkout-runs ()
   ;; a checkout of drgnx_ref (Nidhogg's run names it) is followed at once by the check that it is a commit on one of
   ;; drgnx's own branches, before any of the checkout's actions run: a pull request's or a fork's commit is refused
   (let ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")))
     (skip-unless tiers)
-    (let ((checkouts (drgnx-ci-test--matches "ref: \\${{ inputs\\.drgnx_ref }}\n\\(\\(?:.*\n\\)\\{3\\}\\)" tiers)))
+    (let ((checkouts (drgnx-ci-test--matches "ref: \\${{ inputs\\.drgnx_ref || github\\.event\\.pull_request\\.head\\.sha }}\n\\(\\(?:.*\n\\)\\{3\\}\\)" tiers)))
       (should (= (length checkouts) (length (drgnx-ci-test--matches "\\(uses: actions/checkout@\\)" tiers))))
       (dolist (c checkouts)
         (should (string-match-p "persist-credentials: false\n *- name: drgnx_ref is a commit on one of drgnx's own branches\n" c))))

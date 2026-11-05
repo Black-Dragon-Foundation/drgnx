@@ -51,13 +51,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
           sparse-checkout: .github/ci
       - id: c
         env:
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref }}
-          SHA: ${{ github.sha }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           REPO: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           BASE: ${{ github.event.pull_request.base.sha }}
@@ -68,6 +69,22 @@ jobs:
           SELECTOR: ${{ inputs.selector }}
           GH_TOKEN: ${{ github.token }}
         run: bash .github/ci/changes.sh .github/ci/paths.txt | tee -a "$GITHUB_OUTPUT"
+      # main moves to a pull request's head by fast-forward, so the head (never GitHub's merge commit) is what runs, and
+      # it must descend from main's tip: a failed changes job fails the gate
+      - name: The pull request's head descends from the default branch's tip
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        env:
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tip=$(gh api "repos/$REPO/branches/$DEFAULT_BRANCH" --jq .commit.sha)
+          status=$(gh api "repos/$REPO/compare/$tip...$HEAD_SHA" --jq .status)
+          case "$status" in
+            ahead|identical) echo "$HEAD_SHA descends from $DEFAULT_BRANCH's tip $tip" ;;
+            *) echo "::error::$HEAD_SHA does not descend from $DEFAULT_BRANCH's tip $tip ($status): merge or rebase onto it, so $DEFAULT_BRANCH can fast-forward"; exit 1 ;;
+          esac
 
   # Ratatoskr's CI (a `needs:` cannot reach a job of another workflow file, so the call is the job)
   runtime:
@@ -104,6 +121,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
       - name: shellcheck
         run: shellcheck --severity=warning install.sh bin/drgnx .githooks/pre-commit test/container/nidhogg.sh .github/ci/changes.sh .github/ci/cargo-prune.sh
@@ -127,6 +145,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
           sparse-checkout: .github/actions
       - uses: ./.github/actions/gate
