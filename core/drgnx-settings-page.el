@@ -352,20 +352,44 @@ the variables are read again (`drgnx-settings-page-refresh' without KEEP); at mo
   "Whether every one of TERMS is in VAR's name, title, documentation or value.  The value is only looked at for a
 term the rest of the text does not hold."
   (or (null terms)
-      (let ((hay (drgnx-settings-page--static-hay var)) (value nil))
-        (cl-every (lambda (term)
-                    (or (string-search term hay)
-                        (string-search term (or value (setq value (downcase (if (default-boundp var)
-                                                                                (drgnx-settings-page--value-text (default-value var))
-                                                                              "")))))))
-                  terms))))
+      (let ((hay (drgnx-settings-page--static-hay var)) (value nil) (ok t))
+        (while (and ok terms)                 ; a loop, not a closure: this runs for every setting on a keystroke
+          (let ((term (car terms)))
+            (unless (or (string-search term hay)
+                        (string-search term (or value (setq value (drgnx-settings-page--value-hay var)))))
+              (setq ok nil)))
+          (setq terms (cdr terms)))
+        ok)))
+
+(defvar drgnx-settings-page--value-hay (make-hash-table :test 'eq)
+  "Variable -> (VALUE . TEXT): the lower-case text of VALUE, the default value last seen, kept while the value is the
+same object.  Emptied with `drgnx-settings-page--hay'.")
+
+(defun drgnx-settings-page--value-hay (var)
+  "The lower-case text of VAR's default value (\"\" when it has none), printed again only when the value changed."
+  (let ((value (and (default-boundp var) (default-value var))) (hit (gethash var drgnx-settings-page--value-hay)))
+    (if (and hit (eq (car hit) value))
+        (cdr hit)
+      (cdr (puthash var (cons value (downcase (if (default-boundp var) (drgnx-settings-page--value-text value) "")))
+                    drgnx-settings-page--value-hay)))))
+
+(defvar-local drgnx-settings-page--prior nil
+  "(QUERY . VARIABLES) of the last search of this page that had words and no filter; a longer query starts from them.
+Cleared when the variables are read again.")
 
 (defun drgnx-settings-page-select (group query tab root &optional buffer)
   "The variables to list: GROUP's (or, with a QUERY, all customizable ones) that match QUERY, sorted by name.
 TAB is the explicit tab (nil: each row's default).  Cheap text terms first, then the filters."
   (let* ((q (drgnx-settings-page-parse-query query))
-         (vars (drgnx-settings-page-vars (if (and (or (car q) (cdr q)) t) 'all group) root))
+         (in-page (derived-mode-p 'drgnx-settings-page-mode))
+         ;; typing on: a query that continues the last one (words only) can only keep some of what it found
+         (words-only (and (car q) (null (cdr q)) (not (string-search "@" query))))
+         (prior (and in-page words-only drgnx-settings-page--prior
+                     (string-prefix-p (car drgnx-settings-page--prior) query)
+                     (cdr drgnx-settings-page--prior)))
+         (vars (or prior (drgnx-settings-page-vars (if (and (or (car q) (cdr q)) t) 'all group) root)))
          (vars (cl-remove-if-not (lambda (v) (drgnx-settings-page--text-match-p v (car q))) vars)))
+    (when in-page (setq drgnx-settings-page--prior (and words-only (cons query vars))))
     (if (null (cdr q)) vars
       (cl-remove-if-not
        (lambda (v)
@@ -603,6 +627,8 @@ With KEEP (a search typing on), the list of variables and their search text are 
     (clrhash drgnx-settings-page--docs)
     (unless keep
       (clrhash drgnx-settings-page--hay)
+      (clrhash drgnx-settings-page--value-hay)
+      (setq drgnx-settings-page--prior nil)
       (setq drgnx-settings-page--all nil))
     (setq drgnx-settings-page--rows (make-hash-table :test 'eq))
     (setq drgnx-settings-page--keys
