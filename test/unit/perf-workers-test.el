@@ -195,6 +195,7 @@ form and a digest, and a setup form that reads."
   "lsp-burst puts no advice on jsonrpc's reader (it would keep Nidhogg's framing off, so the A/B's two sides would run
 the same path): each handler is measured from the time the replay server wrote its answer's last byte, which the
 server sends after the answer, and the A/B judges the slowest one."
+  :tags '(:cond)
   (skip-unless (eq system-type 'gnu/linux))   ; the stub reads its stdin through /proc
   (perf-workers-test--session)
   (let ((conn (drgnx-perf-w--lsp-start "rust" '("LSP_REPLAY_STAMP=1"))))
@@ -384,6 +385,7 @@ period, so work finishing later in the pause after the keys was never seen."
 
 (ert-deftest drgnx-perf-workers/capture-is-replayable ()
   "Each recorded corpus replays through the stub: the messages and bytes it sends equal the capture's manifest."
+  :tags '(:cond)
   (skip-unless (eq system-type 'gnu/linux))   ; the stub reads its stdin through /proc
   (let* ((dir (expand-file-name "test/fixtures/workers" drgnx-dir))
          (manifest (with-temp-buffer (insert-file-contents (expand-file-name "manifest.eld" dir)) (read (current-buffer))))

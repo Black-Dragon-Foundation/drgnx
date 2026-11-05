@@ -521,7 +521,7 @@ newest first), returning a judged entry that carries the A/A fields."
                  ((symbol-function 'drgnx-perf-ab--start)
                   (lambda (_tree &optional env) (list :name (if (member "DRGNX_PERF_GLITNIR=on" env) 'sess-b 'sess-a))))
                  ((symbol-function 'drgnx-perf-ab--workload)
-                  (lambda (name _spec sa sb _n)
+                  (lambda (name _spec sa sb _n &optional _others)
                     (push (list name sa sb) wcalls)
                     (list :name name :status 'judged :wall-rounds nil :run-rounds nil
                           :verdict (list :verdict 'no-regression :diff 0.0 :lo 0.0 :hi 0.0 :threshold 1.0)
