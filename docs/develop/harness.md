@@ -1511,7 +1511,7 @@ skips unless Glitnir (the compositor) is active and the packages are present, so
 as skipped. Active, they set `child-frame-chrome` to drgnx's defaults and `glitnir-debug` to `verify`, and compare
 snapshots in device pixels: inside a popup away from its corners equals the Glitnir-off picture, a corner pixel equals
 the no-popup picture, 4 px outside the right edge is darker than the no-popup picture, and after the hide the popup
-plus its shadow margin equals the no-popup picture; the verifier must report no violations.
+plus its shadow margin equals the no-popup picture.
 
 The same file holds the rest of the design's §3.4 package matrix, as `drgnx-ui-chrome/<package>-<check>`, each at
 scale 1 and 2 with the verifier on:
@@ -1549,7 +1549,6 @@ of their own kind and skip in any other, so the file runs once per kind (`DRGNX_
 | `fractional-1-5`: the core rows (the four scenarios above) at 1.5, with the root's scale checked as GTK 3 shows it | `DRGNX_UI_SCALE=1.5` (e.g. `DRGNX_UI_SIZE=2880x1800`) |
 | `fractional-1-25-u1` … `-u5`: the core rows at the 125 % setups | `DRGNX_UI_SCALE=1.25` and `DRGNX_UI_SIZE` 2560x1440, 1920x1080, 2560x1600, 2880x1800, 3840x2160 |
 | `kwin-core-rows`: the core rows under KWin | `--compositor kwin` (the window managers' image), scales 1 and 2 |
-| `mixed-dpi-move`: the root moved to a monitor of another scale with a popup shown: gdctl takes the first monitor out of mutter's layout, so mutter moves the root; after 1.5 s the picture outside the popup is the stock one (full damage), the popup equals one shown afresh at the new scale, and `:scale-mismatch` counts no paint after the wait | `DRGNX_UI_MONITORS=2 DRGNX_UI_SCALES="1 2"` (mutter) |
 | `nested-make-frame-visible`, `focus-taking-child` (vertico-posframe, mini-frame), `ime-preedit-in-child`, `shadow-beside-scroll-bars-and-tool-bar`, `xwidget-under-popup` (skipped: Nidhogg builds no xwidgets yet) | any mutter session; run at scales 1 and 2 |
 
 The IME test types through mutter's RemoteDesktop service (`NotifyKeyboardKeysym` on the session bus), so the keys go
