@@ -86,7 +86,8 @@ impl LocalRunner {
         }
         #[cfg(target_os = "linux")]
         if let Some(Ok(cpus)) = self.probe.as_ref().map(|p| p.cpus_usable()) {
-            return Limits::for_profile(Profile::Workstation, 0, cpus.len() as u32).cores_usable as usize;
+            return Limits::for_profile(Profile::Workstation, 0, cpus.len() as u32).cores_usable
+                as usize;
         }
         FIXED_SLOTS as usize
     }
@@ -285,7 +286,10 @@ mod tests {
     // [D] pure: by count, the machines list shows the count
     #[test]
     fn the_local_runner_shows_its_slots() {
-        assert_eq!(LocalRunner::new(Admission::Fixed(3), Path::new("/")).slots(), 3);
+        assert_eq!(
+            LocalRunner::new(Admission::Fixed(3), Path::new("/")).slots(),
+            3
+        );
     }
 
     // [D] pure: by count, the slots; live, the machine's own figures under the workstation profile
