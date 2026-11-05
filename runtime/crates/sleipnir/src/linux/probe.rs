@@ -183,6 +183,15 @@ impl Probe {
         )?)
     }
 
+    /// The CPUs our jobs may use: the user manager's `cpuset.cpus.effective`, which is narrower than the CPUs online
+    /// when the machine (a container, a pinned session) is itself confined; the CPUs online when it can't be read.
+    pub fn cpus_usable(&self) -> io::Result<Vec<u32>> {
+        match fs::read_to_string(self.manager.join("cpuset.cpus.effective")) {
+            Ok(s) if !s.trim().is_empty() => parse_cpu_list(&s),
+            _ => self.cpus_online(),
+        }
+    }
+
     /// Free space of the runner folder's filesystem, in whole GB (10⁹ bytes), and its size.
     pub fn disk(&self) -> io::Result<Disk> {
         let s = rustix::fs::statvfs(&self.folder)?;
@@ -235,7 +244,7 @@ impl Probe {
         FileFacts {
             arch: std::env::consts::ARCH.to_string(),
             os: os_release(&fs::read_to_string("/etc/os-release").unwrap_or_default()),
-            cores: self.cpus_online().map(|c| c.len() as u32).unwrap_or(0),
+            cores: self.cpus_usable().map(|c| c.len() as u32).unwrap_or(0),
             mem_mib: mem.total_mib,
             disk_free_gb: self.disk().map(|d| d.free_gb).unwrap_or(0),
             landlock_abi: landlock_abi(),
@@ -251,11 +260,11 @@ impl Probe {
     /// `user@.service`'s `cgroup.subtree_control` still says `cpuset`), so only the read-back tells.
     pub fn cpuset_by_systemd(&self) -> Result<bool, String> {
         let first = self
-            .cpus_online()
-            .map_err(|e| format!("the CPUs online: {e}"))?
+            .cpus_usable()
+            .map_err(|e| format!("the CPUs usable: {e}"))?
             .first()
             .copied()
-            .ok_or("no CPU online")?;
+            .ok_or("no CPU usable")?;
         let slice = format!("{}-probe.slice", self.slice_root);
         run::systemctl_ok(&["start", &slice])?;
         let set = run::systemctl_ok(&[
@@ -897,7 +906,9 @@ mod tests {
         assert!(parse_cpu_list("3-1").is_err());
         assert_eq!(
             slice_path("drgnx-runner-work-a3f.slice"),
-            Path::new("drgnx.slice/drgnx-runner.slice/drgnx-runner-work.slice/drgnx-runner-work-a3f.slice")
+            Path::new(
+                "drgnx.slice/drgnx-runner.slice/drgnx-runner-work.slice/drgnx-runner-work-a3f.slice"
+            )
         );
         assert_eq!(slice_path("app.slice"), Path::new("app.slice"));
         assert_eq!(

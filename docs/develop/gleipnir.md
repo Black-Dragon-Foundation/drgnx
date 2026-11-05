@@ -1253,9 +1253,13 @@ and each has a DEFERRED row:
 A container job is not run by Gleipnir: the container is its sandbox (`exec/container.rs`, `docs/guide/jobs.md`). The
 hub builds the one `podman run` line from a fixed spec: `--rm`, `--name drgnx-job-<job id>`, `--pull=never`,
 `--userns=keep-id`, `--cap-drop=all`, `--security-opt=no-new-privileges`, `--read-only`, `--tmpfs /tmp`, the process,
-memory and CPU limits, `--network=none`, the worktree as the only `-v`, `-w /work`, the digest-pinned image, then the
-agent's command, which podman never reads as options. The request has no field that adds anything; extra fields are
-ignored.
+memory and CPU limits with `--memory-swap` equal to `--memory` (a job never swaps), `--oom-score-adj=1000` and
+`--cgroup-conf=memory.oom.group=1` (the kernel's first OOM victim, killed whole), `--network=none`, the worktree as the
+only `-v`, `-w /work`, the digest-pinned image, then the agent's command, which podman never reads as options. The
+request has no field that adds anything; extra fields are ignored.
+
+The builder is `sleipnir::linux::podman::argv`, shared with the runners ([sleipnir.md](sleipnir.md#the-podman-argv));
+`exec/container.rs` calls it with the hub's own placement and re-exports its types.
 
 - **Name and leftovers.** The name lets the hub find what a killed podman client left: at hub start it removes every
   `drgnx-job-*` container whose job is not running (through the same podman path; other names are never touched).

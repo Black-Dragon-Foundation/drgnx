@@ -27,6 +27,12 @@ forseti = { path = "../forseti", version = "0.1.0", optional = true }
 rustix = { workspace = true, features = ["event"], optional = true }
 libc = { workspace = true, optional = true }
 
+# job-exec, the mode a job's unit runs; the runner's other modes join it
+[[bin]]
+name = "sleipnir"
+path = "src/main.rs"
+required-features = ["linux"]
+
 # run inside a fake runner (tests/runner_host.rs)
 [[test]]
 name = "runner_host"

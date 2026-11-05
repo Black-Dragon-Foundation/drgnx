@@ -9,7 +9,8 @@ fleet.sh up --runners N [--max-sessions K] [--no-linger] [--sshd-opt OPT]...
 fleet.sh exec I -- CMD...      # in runner I (1-based), as `runner`, with its user manager's environment
 fleet.sh put FILE...           # copy files to /fleet/share in every runner (read-only there)
 fleet.sh test FILTER           # $DRGNX_FLEET_TEST_BIN --ignored FILTER, in the harness
-fleet.sh s1                    # build test/runners/s1/s1.rs and run it in every runner
+fleet.sh host BIN [FILTER]...  # a runner-host test binary in every runner, as `runner`, with --ignored
+fleet.sh s1                    # build sleipnir's runner-host tests and run the fake runner's own checks
 fleet.sh check-linger          # ssh in, start a unit, ssh in again: the unit is still active
 fleet.sh status | down
 ```
@@ -43,6 +44,18 @@ subuid range for `runner` inside the 65536 ids the outer container maps (`20000:
 `/etc/systemd/system/user@.service.d` drop-in `Delegate=memory pids cpu cpuset io`.
 
 A container started by `podman run` inside a unit lands under `user.slice`, not under the unit's slice, unless it is
-given `--cgroup-parent=<slice>`; the checks in `s1/s1.rs` pin that.
+given `--cgroup-parent=<slice>`; `a_capped_container_runs_in_a_transient_slice` pins that.
 
-`s1/s1.rs` is plain std (no crate); build it with `rustc --test`.
+## Runner-host tests
+
+`sleipnir`'s `tests/runner_host.rs` holds the rows that need a real user manager, cgroups and podman
+(`#[ignore = "runner-host"]`): the fake runner's own checks (what `fleet.sh s1` runs), the slice tree, job-exec, OOM
+and the reservation files. They run only inside a runner:
+
+```
+cargo test -p sleipnir --no-default-features --features linux --test runner_host --no-run   # in the dev container
+fleet.sh host runtime/target/debug/deps/runner_host-HASH [FILTER]...
+```
+
+`host` copies the binary (and the `sleipnir` binary beside its `deps/`, which the job-exec rows start) into
+`/fleet/share` and runs it in every runner with `--ignored --test-threads=1`.

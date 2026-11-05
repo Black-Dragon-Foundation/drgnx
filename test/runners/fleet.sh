@@ -5,6 +5,7 @@
 #   fleet.sh up --runners N [--max-sessions K] [--no-linger] [--sshd-opt OPT]...
 #   fleet.sh exec I -- CMD...        as `runner` in runner I (1-based)
 #   fleet.sh test FILTER             the test binary $DRGNX_FLEET_TEST_BIN in the harness, with --ignored FILTER
+#   fleet.sh host BIN [FILTER...]    a runner-host test binary in every runner, with --ignored
 #   fleet.sh down                    removes this run's containers, network and state
 #   fleet.sh status                  prints this run's containers
 set -euo pipefail
@@ -88,6 +89,21 @@ exec_runner() {
     DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "$@"
 }
 
+# host BIN [FILTER...]: a runner-host test binary (`#[ignore = "runner-host"]` rows), run with --ignored in every
+# runner as `runner`; a `sleipnir` binary next to BIN goes along, and the tests find it as SLEIPNIR_TEST_BIN
+host_tests() {
+  local bin=$1 rc=0 c; shift
+  cp "$bin" "$STATE/share/runner_host"
+  [ ! -x "$(dirname "$bin")/../sleipnir" ] || cp "$(dirname "$bin")/../sleipnir" "$STATE/share/sleipnir"
+  for c in $(mine | grep -- '-r[0-9]*$'); do
+    echo "== $c"
+    podman exec -i "$c" runuser -u runner -- env XDG_RUNTIME_DIR=/run/user/1000 \
+      DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus SLEIPNIR_TEST_BIN=/fleet/share/sleipnir \
+      /fleet/share/runner_host --ignored --test-threads=1 "$@" || rc=1
+  done
+  return $rc
+}
+
 # --container: the slot scripts wrap a command in the dev container unless its words say it handles its own
 # containers; this script starts podman itself, so the heavy slot must run it on the host: `$HEAVY fleet.sh --container up`
 [ "${1:-}" = --container ] && shift
@@ -101,20 +117,21 @@ case "${1:-}" in
         h=$(name hub)
         podman exec -e HOME="$STATE/home" "$h" ssh -F "$STATE/home/.ssh/config" r1 'systemd-run --user --unit=s1-linger --collect sleep 600'
         podman exec -e HOME="$STATE/home" "$h" ssh -F "$STATE/home/.ssh/config" r1 'systemctl --user is-active s1-linger' ;;
-  s1)   # the spike's checks: build them in the dev container, run them in every runner
-        ctr="${DRGNX_CTR:-$ORG/.claude/tmp/ctr.sh}"
+  host) shift; host_tests "$@" ;;
+  s1)   # the fake runner's own checks (sleipnir's runner-host tests that pin the image): build, run in every runner
+        args=(test -p sleipnir --no-default-features --features linux --test runner_host --no-run --message-format=json)
         if [ -n "${DRGNX_FLEET_HOST_RUSTC:-}" ]; then   # CI: the runner's own toolchain
-          (cd "$top" && rustc --edition 2021 --test -o "$STATE/share/s1" test/runners/s1/s1.rs)
+          out=$(cd "$top" && cargo "${args[@]}" --locked --manifest-path runtime/Cargo.toml)
         else
-          (cd "$top" && DRGNX_BUILDER=local "$ctr" -- rustc --edition 2021 --test -o "$STATE/share/s1" test/runners/s1/s1.rs)
+          out=$(cd "$top" && DRGNX_BUILDER=local "$ORG/.claude/tmp/ratatoskr-cargo.sh" "${args[@]}")
         fi
-        for c in $(mine | grep -- '-r[0-9]*$'); do
-          echo "== $c"; podman exec -i "$c" runuser -u runner -- env XDG_RUNTIME_DIR=/run/user/1000 \
-            DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus /fleet/share/s1 --ignored --test-threads=1
-        done ;;
+        bin=$(printf '%s\n' "$out" | grep -o '"executable":"[^"]*runner_host-[^"]*"' | tail -1 | cut -d'"' -f4)
+        [ -n "$bin" ] || die "s1: the runner_host test binary was not built"
+        host_tests "$bin" check_limits_passes_inside_a_fake_runner a_capped_container_runs_in_a_transient_slice \
+          the_container_gets_its_caps linger_keeps_a_unit_after_the_session_ends ;;
   status) mine ;;
   down) for c in $(mine); do podman rm -f -v "$c" >/dev/null; done
         podman network rm -f "$NET" >/dev/null 2>&1 || true
         rm -r "$STATE" 2>/dev/null || true ;;
-  *) die "usage: fleet.sh up|exec|test|status|down" ;;
+  *) die "usage: fleet.sh up|exec|test|host|s1|put|check-linger|status|down" ;;
 esac

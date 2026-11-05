@@ -557,6 +557,7 @@ dependencies = [
  "serde_path_to_error",
  "sha2",
  "skuld",
+ "sleipnir",
  "tempfile",
  "tokio",
  "tokio-util",

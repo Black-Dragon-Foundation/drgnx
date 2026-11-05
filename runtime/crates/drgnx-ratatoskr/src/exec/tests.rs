@@ -865,7 +865,8 @@ fn a_container_job_in_a_subfolder_mounts_the_worktree() {
         worktree: "/work/tree".into(),
         subdir: "crates/x".into(),
         job: "x1a".into(),
-        net: None,
+        net: false,
+        runner: None,
     };
     let caps = container::Caps {
         images: vec![crate::settings::ContainerImage {

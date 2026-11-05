@@ -1,7 +1,7 @@
 # sleipnir: the runner
 
 `runtime/crates/sleipnir` is what runs jobs on a machine: the hub's own (local) machine, the user's other machines
-over SSH, and jobq's. It is a library, shared by the hub, the runners and jobq, and (later) the `sleipnir` binary.
+over SSH, and jobq's. It is a library, shared by the hub, the runners and jobq, and the `sleipnir` binary (its `job-exec` mode so far).
 The scheduling decisions are [`forseti`](forseti.md)'s; sleipnir reads the machine for them and carries them out.
 
 ## Features
@@ -73,12 +73,126 @@ start time, job, reserve, current, expiry), written by rename, mode 0600 in a 07
 - **Liveness**: a file counts only while its process is the one that wrote it (`alive(pid, start_time)`, by
   `/proc/<pid>/stat` field 22, so a reused pid doesn't count) and on the boot it was written in.
 
+## The podman argv
+
+`linux::podman::argv(req, caps, runner_args)` is the one builder of a `podman run` line, used by the hub's own container
+jobs (`exec/container.rs` calls it with `RunnerArgs::local()`) and by the runners. It is pure and builds on every
+target, so a hub on macOS uses it too. Fixed for every job: `--rm`, `--pull=never`, `--userns=keep-id`,
+`--cap-drop=all`, `--security-opt=no-new-privileges`, `--read-only`, `--tmpfs /tmp`, the pids, memory and CPU limits,
+`--memory-swap` equal to `--memory`, `--oom-score-adj=1000`, `--cgroup-conf=memory.oom.group=1`, `--network=none`, a
+digest-pinned image from the allow-list, and the command after the image, where podman reads no options. A granted
+network is the proxy socket and `drgnx-fwd`, mounted read-only, as the entrypoint ([gleipnir.md](gleipnir.md)).
+
+On a runner (`RunnerArgs::runner(prefix, hub_id, slice)`) the container is named `<prefix>-<id>`, labelled
+`drgnx.runner=<hub id>` (the runner removes only containers with both), and placed with `--cgroup-parent=<job slice>`:
+without it, podman puts a container started from a unit under `user.slice`, outside the job's slice. Its mounts are
+exactly this set (`RunnerMounts`), nothing else:
+
+| Mount | Inside | Mode |
+|---|---|---|
+| the source: the slot, or a writer's private copy | `/work` | `ro,z` (`rw,Z` for a `writes_tree` copy) |
+| the slot's target dir | `/target` (`CARGO_TARGET_DIR`) | `rw,Z` |
+| each cache the suite declares | its own absolute path, never under `/work`, `/target`, `/tmp` or `/run/drgnx` | `rw,Z` |
+| the key socket and `drgnx-key` | `/run/drgnx/key.sock`, `/run/drgnx/key` | `ro,Z` |
+| the proxy socket and `drgnx-fwd` (a granted network) | `/run/drgnx/proxy.sock`, `/run/drgnx/fwd` | `ro,Z` |
+
+`check_limits(podman, env, limit)` asks `podman info` and refuses container jobs unless the caps hold (cgroup v2, the
+systemd manager, `memory pids cpu` delegated); `limits_enforced(info)` is its pure half.
+
+## The executor
+
+### The slice tree (`linux::slices`)
+
+```text
+<root>.slice                 MemoryHigh / MemoryMax (the cap); workstation: CPUWeight=20 IOWeight=20
+  <root>-work.slice          AllowedCPUs
+    <root>-work-<id>.slice   one job: accounting, stop, kill
+      <unit>.service         job-exec (OOM score 900), with the podman client and conmon
+      libpod-<ctr>.scope     its containers (OOM score 1000, memory.oom.group=1)
+```
+
+`ensure_tree(root, profile)` starts the tree (`drgnx-runner` on runners; jobq uses its own root);
+`set(unit, props)` changes properties with `set-property --runtime` only, so nothing outlives a reboot;
+`job_slice(root, id)` names a job's slice; `stop(slice)` stops a job with everything in it.
+
+`set_cpus(manager, slice, cpus, by_systemd)` pins a slice's CPUs; every running and new container under it follows at
+once. Where the probe found that systemd doesn't write cpusets, it also writes the delegated files directly: `+cpuset`
+into each ancestor's `cgroup.subtree_control` from the user manager down, then the slice's `cpuset.cpus`
+(`direct_cpus`). systemd keeps that write when it realizes the tree again.
+
+### A job's unit (`linux::unit`)
+
+Each attempt is a transient user service in its job slice: `unit::start(UnitReq)` runs `systemd-run --user --collect`
+with `OOMScoreAdjust=900`, `OOMPolicy=kill`, `MemorySwapMax=0`, `RuntimeMaxSec` and `StandardOutput=append:` /
+`StandardError=append:` the attempt's log, optionally `BindsTo=` another unit. The unit outlives its starter (the
+runner's `serve`, jobq's daemon, a dropped link), and nothing passes through a pipe that could break. Its environment
+(`--setenv`) is visible in `systemctl show`, so no secret ever goes there. `stop`, `active` and `list(prefix)` read and
+end units.
+
+### job-exec (`linux::jobexec`)
+
+The unit runs `sleipnir job-exec <attempt folder>`, which reads the folder's `job.json` (`JobExec`) and runs the job's
+command **inside its own service**, so the podman client and conmon land there too, at job-exec's OOM score. The
+containers sit beside it in the job slice at 1000.
+
+- **Why 900 and not 1000.** The job slice holds the service and the containers side by side, and systemd has no slice
+  property for `memory.oom.group`, so the job is not one OOM group. At equal scores the kernel picks by size, and it
+  has killed job-exec first, which then never writes a verdict. At 900 job-exec is still above every process of the
+  user's, and a container goes first.
+- **An OOM takes the whole job.** job-exec watches the job slice's `memory.events`; when `oom_kill` (or
+  `oom_group_kill`) grows, it writes the verdict `oom` and then stops the whole job slice, with the job's other
+  containers and itself in it. The timeout does the same with `timeout`. conmon goes with the slice, so podman's
+  `--rm` never runs for those containers: they stay exited, labelled, for the runner's cleanup at the job's end.
+- **Keyed jobs.** Before a keyed job's command starts (and so before its first key), job-exec reads its own service's
+  `memory.swap.max`; anything but `0` refuses the job as `infra: setup`, and the command never runs.
+- **The folder.** `offsets.json` records where each state dir's `check.log` stood at the start (only this attempt's
+  part is read). A scheduler that kills a job writes the reason first (`kill_reason(dir, reason)`; `evicted` for an
+  eviction), and the reason names the verdict. `result.json` is written by rename.
+
+The verdict is `forseti::classify` over what job-exec saw: the kill reason, `oom_kill`, the exit code or signal, the
+timeout and the row parser's judgement.
+
+### `result.json` (`linux::result`)
+
+`ResultJson { verdict, infra, counts { ran, passed, failed, skipped, crashed }, rows [{ name, verdict, attempt,
+machine }], failing, machine, grant, wall_s, cpu_s, mem_peak_mib, disturbed, log }`. The CPU time and the memory peak
+are the job slice's (`cpu.stat`, `memory.peak`).
+
+### Row parsers (`linux::parse`)
+
+| Parser | Reads |
+|---|---|
+| `ert` | ERT's batch lines (`passed`, `FAILED`, `skipped`, `failed` for an expected failure, with `N/M`) and `Ran N tests`; `Running N tests` with no `Ran` line is one crash |
+| `cargo-test` | libtest's `test NAME ... ok / FAILED / ignored`; a test binary that died on a signal is a crash |
+| `plist` | one row per line, `(:name "NAME" :verdict pass\|fail\|skip\|crash …)` |
+| `exit` | no rows: the exit code decides |
+
+`judge(parsed, expect)`: a failed row is red, a crashed one a crash; fewer rows than `expect.min_ran`, or more skips
+than `expect.max_skipped`, is `suspect` (a set that silently ran nothing never passes), and the `exit` parser can't
+claim `min_ran` at all.
+
+### jobq's shim (`linux::shim`)
+
+jobq's binary answers to `argv[0] == "podman"` and calls `shim::rewrite(argv, env)`: on the first `run` or `create`
+(also `container run|create`; global options before it, with their values, are skipped) it inserts
+`--cgroup-parent=<the job's slice> --oom-score-adj=1000 --cgroup-conf=memory.oom.group=1 --label <k>=<v>` right
+after the subcommand, and `--memory-swap` equal to `--memory` when only the latter is given (it reads podman's run
+options up to the image, so the image's own `-m` is never taken for podman's). Without a slice in the environment it
+changes nothing. A score given on the command line stays after ours and wins; ours is the highest, so the shim never
+lowers one.
+
 ## Tests
 
 `cargo test -p sleipnir --no-default-features --features linux` runs the pure rows: the contract's refusals from
-`podman info` fixtures, the kernel's file formats, the reservation round trip and the presence of another scheduler.
+`podman info` fixtures, the kernel's file formats, the reservation round trip and the presence of another scheduler,
+the argv's fixed flags and the runner mount set, the shim, the unit's properties, the parsers, `result.json` and the
+kill reason's precedence.
 
 `tests/runner_host.rs` holds the rows that need a real user manager, cgroups and podman. They are
 `#[ignore = "runner-host"]` and run only inside a fake runner (`test/runners/README.md`), never on a developer's
-machine: build the test binary, then `fleet.sh host <binary> [FILTER]` runs it with `--ignored` in every runner. A
-child process such a test needs is the test binary again, running one of the file's `child_*` entries.
+machine: build the test binary, then `fleet.sh host <binary> [FILTER]` runs it with `--ignored` in every runner (and
+takes the `sleipnir` binary along for the job-exec rows). A child process such a test needs is the test binary again,
+running one of the file's `child_*` entries. The rows: the fake runner's own checks (`fleet.sh s1`), two admissions
+against one budget, a dead pid's reservation, the slice tree taking a container (cgroup path, cpusets both ways, the
+cap, OOM scores), the cap's step ending in a kernel OOM below oomd's limit, a job in its own slice, an OOM as `oom`, a
+keyed job without `memory.swap.max` 0, and a job outliving its starter.

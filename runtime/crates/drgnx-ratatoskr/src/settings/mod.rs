@@ -153,12 +153,9 @@ pub struct RuntimeValues {
     pub agents_manager_context: f64,
 }
 
-/// One entry of `drgnx-agents-container-images`: a name and its image reference pinned by digest.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct ContainerImage {
-    pub name: String,
-    pub image: String,
-}
+/// One entry of `drgnx-agents-container-images`: a name and its image reference pinned by digest (the shared podman
+/// argv's type).
+pub use sleipnir::linux::podman::ContainerImage;
 
 /// `drgnx-agents-net-hosts`: the hosts (`host:port`) a granted network reaches, per tier name, in order.
 pub type NetHosts = Vec<(String, Vec<String>)>;
