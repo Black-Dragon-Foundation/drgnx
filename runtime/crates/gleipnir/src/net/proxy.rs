@@ -1087,10 +1087,11 @@ mod tests {
     async fn listed_but_unreachable_is_502() {
         // a listed public name whose addresses refuse, one that does not resolve, and one whose answer is empty
         // (no address at all is unreachable, not private)
-        let closed_port = {
-            let l = std::net::TcpListener::bind((LOOP, 0)).unwrap();
-            l.local_addr().unwrap()
-        };
+        // a socket bound but never listening: a connection to it is refused, and the port stays held for the test (a
+        // dropped listener's port went back to the kernel, which could hand it to another test's listener: 200)
+        let closed = tokio::net::TcpSocket::new_v4().unwrap();
+        closed.bind(SocketAddr::new(IpAddr::V4(LOOP), 0)).unwrap();
+        let closed_port = closed.local_addr().unwrap();
         let cfg = ProxyConfig {
             allow: vec![
                 t("gone.test:443"),
