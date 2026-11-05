@@ -6,11 +6,17 @@
 //!   the parts that talk to systemd and the cgroup files build on `target_os = "linux"` only.
 //! - `sync`: a job's inputs frozen at submit, the hardened git (the only way sleipnir runs git), and the checkout
 //!   slots, whose git dirs live outside anything a job can write. Blocking, never tokio.
-//! - `proto`: the wire protocol.
+//! - `proto`: the hub–runner protocol: the frames and their wire. Pure.
 //! - `runner` (default): the binary's modes.
 //! - `test-hooks`: test-only entry points, compiled away otherwise.
 
+#[cfg(all(feature = "runner", target_os = "linux"))]
+pub mod bench;
 #[cfg(feature = "linux")]
 pub mod linux;
+#[cfg(feature = "proto")]
+pub mod proto;
+#[cfg(all(feature = "runner", target_os = "linux"))]
+pub mod serve;
 #[cfg(feature = "sync")]
 pub mod sync;

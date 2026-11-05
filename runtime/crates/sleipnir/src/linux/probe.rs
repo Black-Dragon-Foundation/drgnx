@@ -568,33 +568,9 @@ pub struct FileFacts {
     pub others_present: Vec<String>,
 }
 
-/// What a host is, once it meets the contract.
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct Facts {
-    pub arch: String,
-    pub os: String,
-    pub cores: u32,
-    pub mem_mib: u64,
-    pub disk_free_gb: u64,
-    pub podman_version: String,
-    pub linger: bool,
-    pub landlock_abi: u32,
-    pub graphical: bool,
-    pub battery: bool,
-    pub swap_max_settable: bool,
-    /// systemd writes `AllowedCPUs` into our slices' `cpuset.cpus`; when false the executor writes the delegated files
-    /// itself ([`Probe::cpuset_by_systemd`]).
-    pub cpuset_by_systemd: bool,
-    /// Other schedulers with a live reservation here (`jobq`, another hub).
-    pub others_present: Vec<String>,
-}
-
-/// One thing the host lacks, and what the user runs there to fix it.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct Missing {
-    pub what: String,
-    pub fix: String,
-}
+/// What a host is once it meets the contract, and one thing it lacks with its fix: the protocol's types, since the
+/// `probe-result` and `hello-ok` frames carry them.
+pub use crate::proto::{Facts, Missing};
 
 /// What the contract's tools answered on a host.
 #[derive(Clone, Debug)]
