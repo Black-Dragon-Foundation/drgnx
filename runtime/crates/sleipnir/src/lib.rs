@@ -1,0 +1,12 @@
+//! `sleipnir`, the runner: a library shared by the hub, the runners and jobq, and the `sleipnir` binary.
+//!
+//! Features (`docs/develop/sleipnir.md`):
+//! - `linux`: the machine probe, the reservation files and the executor (`linux`). Blocking, std, rustix and serde
+//!   only, never tokio. The pure parts (the podman argv, the shim, the parsers, `result.json`) build on every target;
+//!   the parts that talk to systemd and the cgroup files build on `target_os = "linux"` only.
+//! - `proto`, `sync`: the wire protocol and input sync.
+//! - `runner` (default): the binary's modes.
+//! - `test-hooks`: test-only entry points, compiled away otherwise.
+
+#[cfg(feature = "linux")]
+pub mod linux;

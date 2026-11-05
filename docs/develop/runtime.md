@@ -45,6 +45,7 @@ runtime/
 | `hermod` | an ACP client on `agent-client-protocol-schema`'s types and runstav's line codec (no SDK role framework): stamped updates, message ids, fork at a message, exactly-once exit; generic (agent system part 1, Task 1) |
 | `saga` | the org folder's record formats (plans, ledgers, DEFERRED, the build board, `board.org`) parsed and rendered back byte-exact, turned into graph operations; pure, `pulldown-cmark` for Markdown (agent system part 1, Tasks 5, 6, 14) |
 | `forseti` | the scheduler core: the job model, priority, admission, the memory cap and ladder, kill classes, expected times, placement and fairness; pure, `serde` only, shared by the hub, the runners and jobq ([forseti.md](forseti.md)) |
+| `sleipnir` | the runner: the Linux machine probe and runner contract, the reservation files two schedulers share, the executor; its `linux` and `sync` features are blocking, never tokio, so jobq takes them ([sleipnir.md](sleipnir.md)) |
 | `skuld` | test support, never shipped: every order of a pure core, and the one real-time wait Rust tests may use ([below](#every-order-skuld)); crates name it under `[dev-dependencies]` only |
 | `domr` (formerly `drgnx-conformance`; lives in `runtime/conformance/`) | the conformance harness (this page) |
 
