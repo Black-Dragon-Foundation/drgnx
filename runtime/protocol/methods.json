@@ -3478,6 +3478,11 @@
                 "type": "string"
               },
               {
+                "const": "findings",
+                "description": "How to record what the agent establishes (findings with sources, decisions).",
+                "type": "string"
+              },
+              {
                 "const": "view-path",
                 "description": "The view's path, for an agent without drgnx's tools.",
                 "type": "string"
@@ -14919,10 +14924,28 @@
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
+          "before": {
+            "description": "Steps before this one (a session's `seq`, else a step id); with `limit`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "id": {
             "description": "The session's id, or the task's, plan's or project's entity id.",
             "maxLength": 4352,
             "type": "string"
+          },
+          "limit": {
+            "description": "Page backwards: the last `limit` steps (1 to 500), newest last; with `before`, those before it.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "rollup": {
             "description": "The rollup only, no steps.",

@@ -3141,7 +3141,9 @@ impl Session {
             let stepped = st.turn_step(ev);
             (stepped, st.core.ending())
         };
-        if let Some(m) = message.filter(|m| m.contains("drgnx-report") && self.task.is_some()) {
+        if let Some(m) = message.filter(|m| {
+            (m.contains("drgnx-report") || m.contains("drgnx-conclusion")) && self.task.is_some()
+        }) {
             let (w, sid, task, job) = (
                 self.writer.clone(),
                 self.id.clone(),
@@ -3159,6 +3161,17 @@ impl Session {
                 .await
                 {
                     tracing::warn!(sid, "fallback report not submitted: {e}");
+                }
+                if let Some(Err(e)) = crate::runner::effects::record_conclusion_fallback(
+                    &w,
+                    &sid,
+                    task.as_deref(),
+                    job.as_deref(),
+                    &m,
+                )
+                .await
+                {
+                    tracing::warn!(sid, "fallback conclusion not recorded: {e}");
                 }
             });
         }

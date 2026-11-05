@@ -134,6 +134,12 @@ pub struct TimelineParams {
     /// The rollup only, no steps.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rollup: Option<bool>,
+    /// Page backwards: the last `limit` steps (1 to 500), newest last; with `before`, those before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    /// Steps before this one (a session's `seq`, else a step id); with `limit`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]

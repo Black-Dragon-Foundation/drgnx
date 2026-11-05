@@ -1,0 +1,12 @@
+{"scenario": "timeline/paging-reaches-the-first-step", "requires": ["v1"], "doc": "timeline/get pages backwards: 450 steps seeded into a running hub's step table; the newest 200 (limit alone), the 200 before seq 251 (251 excluded), and the last page, which reaches seq 1 (counts and order are the norn unit test's); a limit over 500 is invalid-params. Pattern D (a pure read of fixed rows)."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql": ["insert into step (session, seq, class, start, end) with recursive n(i) as (select 1 union all select i + 1 from n where i < 450) select 'session:s1', i, 'tool', i, i + 1 from n"]}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "timeline/get", "params": {"scope": "session", "id": "s1", "limit": 200}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"steps": {"$contains": [{"seq": 251}, {"seq": 450}]}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "timeline/get", "params": {"scope": "session", "id": "s1", "limit": 200, "before": 251}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"steps": {"$contains": [{"seq": 51}, {"seq": 250}]}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "timeline/get", "params": {"scope": "session", "id": "s1", "limit": 200, "before": 51}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"steps": {"$contains": [{"seq": 1}, {"seq": 50}]}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "timeline/get", "params": {"scope": "session", "id": "s1", "limit": 501}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "error": {"code": "invalid-params"}}, "within_ms": 10000}
