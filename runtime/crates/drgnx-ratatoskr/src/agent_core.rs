@@ -22,6 +22,7 @@
 //! | `records/{import,status}` | [`crate::records`] | 14 |
 //! | `records/{proposals,decide}` | [`crate::records`] | 14b |
 //! | `machines/{report,list}` | [`crate::work::machines`] | P2 5 |
+//! | `work/{files,hunks,file-at}` | [`crate::work::edits`] | Work space |
 
 use crate::dispatch::Caller;
 use crate::front::Front;
@@ -112,6 +113,9 @@ pub async fn serve(
         Params::RecordsDecide(p) => answer(records::decide(f, c, p).await),
         Params::MachinesReport(p) => answer(work::machines::report(f, c, p).await),
         Params::MachinesList(p) => answer(work::machines::list(f, c, p).await),
+        Params::WorkFiles(p) => answer(work::edits::files(f, c, p).await),
+        Params::WorkHunks(p) => answer(work::edits::hunks(f, c, p).await),
+        Params::WorkFileAt(p) => answer(work::edits::file_at(f, c, p).await),
         other => return Err(Box::new(other)),
     })
 }

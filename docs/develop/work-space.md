@@ -193,6 +193,23 @@ worktree the hub makes branched from: its repository, the branch, the commit, an
 - `bases::ancestry_of(rows, roots)` and `bases::ancestry(front, workspace)` answer "based on" pairs of
   `BranchRef {repo, branch}` for the workspace's roots, computed from the rows when asked.
 
+### Edited files, counts and hunks (interim)
+
+`work::edits` answers three user methods from snapshots alone, until the edit history serves them (their shapes stay):
+
+- `work/files {session} -> {files: [{path, plus, minus, untracked, read_at?}]}`: the session's newest step snapshot
+  tree against the worktree's `base_tree`, through `snapshot::numstat`. Step snapshots are written with `add -A`, so a
+  file the agent created is in the tree and comes back `untracked: true`. No snapshot yet: an empty list. `read_at` is
+  not filled yet.
+- `work/hunks {session, path} -> {diff}`: the unified diff of one path between the same two trees
+  (`snapshot::patch`), empty before the first snapshot.
+- `work/file-at {session, path, seq} -> {bytes, seq}`: the file's bytes (base64) in the newest snapshot at or before
+  step `seq`; `seq` is the step that snapshot belongs to. A missing path or a path leaving the worktree is
+  `invalid-params`.
+
+Only sessions the hub holds are served. `edits::changed(front, session)` gives the same counts to the map's `Changed`
+fact. Git runs in the shadow repository only, never in an agent's tree.
+
 ### Live specs
 
 `work::specs` stores a spec an agent's edit step wrote: a Markdown file under `docs/specs/` (a path tail from

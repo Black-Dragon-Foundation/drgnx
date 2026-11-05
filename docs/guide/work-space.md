@@ -24,3 +24,11 @@ has no slots. The command exits 0 when the hub took the report, 1 when the hub r
 the hub's own), and 2 when the arguments or the slots do not parse.
 
 Only you can report machines: an agent's connection to the hub is refused (`not-allowed`).
+
+## What an agent changed
+
+For a session the hub is running, the Work space can list the files it edited, with the lines added and removed, show
+one file's changes, and show a file as it was after an earlier step. Every number is measured against the folder as it
+was when the session started (or when the hub made its worktree). A file the agent created is listed as new. Nothing is
+asked of the agent's own folder: the hub compares its own snapshots of it. Before the agent's first edit the list is
+empty.

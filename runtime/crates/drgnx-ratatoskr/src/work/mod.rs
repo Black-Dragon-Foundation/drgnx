@@ -10,6 +10,7 @@
 
 pub mod bases;
 pub mod detail;
+pub mod edits;
 pub mod machines;
 pub mod shell_read;
 pub mod specs;

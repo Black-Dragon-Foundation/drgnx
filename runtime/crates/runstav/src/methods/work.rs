@@ -5,7 +5,7 @@
 
 use super::{Empty, invalid, method};
 use crate::registry::Method;
-use crate::types::null_as_empty;
+use crate::types::{Bounded, Id, null_as_empty};
 use crate::wire::Error;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -63,6 +63,72 @@ pub struct MachinesList {
     pub machines: Vec<Machine>,
 }
 
+/// `work/files`: the files session `session` edited.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EditedFiles {
+    pub session: Id,
+}
+
+/// One edited file: its added and removed lines against the worktree's base.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EditedFile {
+    /// Relative to the worktree.
+    pub path: String,
+    pub plus: u32,
+    pub minus: u32,
+    /// The file is not in the base at all (the agent made it).
+    pub untracked: bool,
+    /// When the agent last read it (seconds); absent until the edit history supplies it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_at: Option<f64>,
+}
+
+/// `work/files`' answer.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EditedFilesList {
+    pub files: Vec<EditedFile>,
+}
+
+/// `work/hunks`: one file's changes.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HunksParams {
+    pub session: Id,
+    /// Relative to the worktree.
+    pub path: Bounded<String, 4096>,
+}
+
+/// `work/hunks`' answer: the unified diff against the base.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Hunks {
+    pub diff: String,
+}
+
+/// `work/file-at`: a file as a step's snapshot had it.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileAtParams {
+    pub session: Id,
+    /// Relative to the worktree.
+    pub path: Bounded<String, 4096>,
+    /// The step; the newest snapshot at or before it answers.
+    pub seq: u64,
+}
+
+/// `work/file-at`'s answer.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileAt {
+    /// The file's bytes, base64.
+    pub bytes: String,
+    /// The step whose snapshot this is.
+    pub seq: u64,
+}
+
 /// The longest machine name, in bytes.
 pub const NAME_MAX: usize = 64;
 /// Most slots one report may hold.
@@ -111,6 +177,21 @@ pub(crate) fn methods() -> Vec<Method> {
             "machines/list", MachinesList(Empty) -> MachinesList,
             classes: [User], writes: false,
             doc: "the machines the hub knows: local, and those reported and not yet expired",
+        ),
+        method!(
+            "work/files", WorkFiles(EditedFiles) -> EditedFilesList,
+            classes: [User], writes: false,
+            doc: "the files a session edited, with added and removed lines against its worktree's base (new files included)",
+        ),
+        method!(
+            "work/hunks", WorkHunks(HunksParams) -> Hunks,
+            classes: [User], writes: false,
+            doc: "one edited file's unified diff against its worktree's base",
+        ),
+        method!(
+            "work/file-at", WorkFileAt(FileAtParams) -> FileAt,
+            classes: [User], writes: false,
+            doc: "a file's bytes (base64) as the newest step snapshot at or before seq had them",
         ),
     ]
 }

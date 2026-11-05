@@ -217,6 +217,9 @@ params! {
     RecordsDecide(records::DecideParams),
     MachinesReport(work::MachineReport),
     MachinesList(Empty),
+    WorkFiles(work::EditedFiles),
+    WorkHunks(work::HunksParams),
+    WorkFileAt(work::FileAtParams),
 }
 
 /// Every method, in no order.

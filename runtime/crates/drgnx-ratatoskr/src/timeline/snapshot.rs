@@ -49,6 +49,17 @@ fn git(
     index: Option<&Path>,
     args: &[&str],
 ) -> Result<String, String> {
+    let out = git_bytes(repo, worktree, index, args)?;
+    Ok(String::from_utf8_lossy(&out).trim().to_string())
+}
+
+/// [`git`]'s output as it is: not trimmed, not decoded.
+fn git_bytes(
+    repo: &Path,
+    worktree: Option<&Path>,
+    index: Option<&Path>,
+    args: &[&str],
+) -> Result<Vec<u8>, String> {
     let mut c = Command::new("git");
     c.env("GIT_DIR", repo)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -72,7 +83,44 @@ fn git(
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    Ok(out.stdout)
+}
+
+/// PATH's bytes in TREE of WORKTREE's shadow repository (the worktree is not looked at).
+pub fn blob(root: &Path, worktree: &Path, tree: &str, path: &str) -> Result<Vec<u8>, String> {
+    let repo = repo_of(root, worktree);
+    git_bytes(
+        &repo,
+        None,
+        None,
+        &["cat-file", "blob", &format!("{tree}:{path}")],
+    )
+}
+
+/// The unified diff of PATH between FROM_TREE and TO_TREE of WORKTREE's shadow repository.
+pub fn patch(
+    root: &Path,
+    worktree: &Path,
+    from_tree: &str,
+    to_tree: &str,
+    path: &str,
+) -> Result<String, String> {
+    let repo = repo_of(root, worktree);
+    let out = git_bytes(
+        &repo,
+        None,
+        None,
+        &[
+            "diff-tree",
+            "-p",
+            "--no-renames",
+            from_tree,
+            to_tree,
+            "--",
+            path,
+        ],
+    )?;
+    Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
 /// The pathspecs that leave the secret files out: the fixed names, EXTRA (the secrets table's paths, relative to
