@@ -3,10 +3,14 @@
 //! - [`ssh_config`]: the ssh config the hub writes for each runner: the forced options first, then the user's own.
 //! - [`transport`]: how the hub reaches a runner: [`transport::Transport`], one OpenSSH master per runner, at most
 //!   three sessions, a real round trip for health, redial with backoff, logins classified and never answered.
+//! - [`link`]: a runner's link session over those sessions: frames, pings, a lost link, logs at the hub's offset.
+//! - [`attempts`]: the attempt state machine (nonces, `detached`, grace, reattach, requeue, late results), pure.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+pub mod attempts;
+pub mod link;
 pub mod ssh_config;
 pub mod transport;
 

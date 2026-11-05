@@ -1763,6 +1763,53 @@ banner. Each row first shows the user's own ssh doing what the hub must not (for
 `RemoteCommand` on a terminal and their `LocalCommand`, opening their `LocalForward`). The dead-link row stops the
 runner's sshd for the master's connection (`kill -STOP` over a second connection), which a network cut would do too.
 
+## Runners: attempts
+
+Every placement of a job on a runner is an **attempt** with a nonce the hub made (`sleipnir::proto::JobRef {job,
+attempt, nonce}`), and every frame about it carries all three.
+
+**The attempt state machine** (`runners/attempts.rs`) is pure: `Core::step(now, Event) -> Vec<Effect>`, no I/O and no
+clock, so `tests/runners_orders.rs` runs it in every order of what can happen to an attempt. Events: `Placed {job,
+attempt, nonce, runner, grace_s, restartable}`, `Started`, `Finished {runner, r, result}`, `FrameFrom {runner, r}`,
+`LinkLost {runner}`, `Hello {runner, listed}`, `GraceEnded {job, attempt}`, `CloudGone {runner}`, `Preempting
+{runner}`, `HubRestarted`, `Cancel {job}`. Effects: `Verdict {job, attempt, result}`, `Requeue {job, reason}`, `Lost
+{job}`, `Ignore {notice}`, `ResumeLog {job, attempt, offset}` (send `attach`), `KeepLate {job, attempt}` and
+`SendCancel {runner, r}`. States: `offered`, `running`, `detached {since, grace_until}`, `finished`, `requeued`,
+`lost`.
+
+- A frame counts only from the runner the attempt was placed on and with its nonce (`frame_ok`); anything else is an
+  `Ignore` with a notice and changes nothing.
+- **`detached`** is exactly the design's (§6.9): no verdict, and the runner's control link is down (`LinkLost`), or the
+  hub restarted (`HubRestarted`) and the runner's `hello` hasn't listed it yet. It is a state, never a verdict. It ends
+  `running` when the `hello` lists it running or finished (the log resumes from the hub's offset, and a finished one
+  then sends its `finished`); requeued (`infra: runner lost`) when the `hello` doesn't list it or lists it lost, when
+  the grace ends (`graces_due(now)`, read at each tick), or when the cloud says the machine is gone; `lost` instead
+  when the job isn't restartable.
+- **The grace** is the runner's, `RunnerCfg::grace()`, passed in at `Placed`: 600 s with linger, 0 without, where a lost
+  link ends the attempt at once (the runner's jobs die with the login).
+- **Only `finished` gives a verdict.** A preemption requeues at once (`infra: preempted`), never a verdict and never an
+  eviction. A cancel sends `cancel` to a running attempt and waits for its `finished`; an attempt whose runner can't be
+  told (offered, detached) ends `cancelled` at once, and its runner is told when it lists the attempt again.
+- **Late results** (L8): an attempt whose job was requeued that still finishes is `KeepLate`: its log, patch, outputs
+  and rows are kept as that attempt's, never applied, and never replace the current attempt's verdict.
+- `restore` puts the database's attempts back after a restart, before `HubRestarted` detaches the open ones; `forget`
+  drops a job once its verdict is recorded and no late attempt is open.
+
+**The link session** (`runners/link.rs`). `Session::start(runner, Channels, route, events)` reads and writes the control
+channel with the protocol's codec (a frame's line, then the chunk its `len` announces), pings every 10 s
+(`PING_EVERY`), answers the runner's pings, and reports the link lost (`LinkEvent::Lost`) after 45 s without a frame
+(`LOST_AFTER`), at an EOF without `bye`, or at a channel error; a `bye` is `LinkEvent::Bye`. A `log` frame is appended
+to the file `Route::log_path(runner, r)` names, only for an attempt the route accepts (placed there, with its nonce),
+through `append_at(path, offset, bytes)`: only the bytes the hub's copy lacks, so a chunk sent again after a
+reconnect is never doubled and a gap is refused; `LinkEvent::Logged {r, upto}` says where the copy ends, which the
+next `attach` sends as its `log_offset`. Every other frame is a `LinkEvent::Frame`. A `key` frame's encoded bytes are
+zeroed once written. Dropping the session ends it; the runner's attempts run on.
+
+Tests: `runners::attempts::` and `runners::link::` [D]; `tests/runners_orders.rs` [A] (every order of a lost link, a
+reattaching and a non-listing `hello`, a restart, the grace, a preemption and a wrong nonce around a `finished`,
+exhaustively, then 2000 drawn orders with a cancel); `tests/fleet_runners.rs` [C] (`#[ignore = "fleet"]`, its header
+has the commands): a job's log cut mid-stream and reattached equals the runner's file byte for byte.
+
 ## The timeline
 
 Every step of an agent's work is a row of the `step` table (`norn::write::steps`), written when it closes by the
