@@ -142,13 +142,16 @@ plain data: an `eval' form may hold a backquote)."
   (cons (car drgnx-settings-trust--data) (default-value 'drgnx-trust-parents)))
 
 (defun drgnx-settings-trust--memoized (kind key extra compute)
-  "COMPUTE's result for KIND and KEY, kept while the token and EXTRA stay the same."
-  (let ((token (drgnx-settings-trust--token)) (hit (gethash (cons kind key) drgnx-settings-trust--memo)))
-    (if (and hit (equal (car (nth 0 hit)) (car token)) (eq (cdr (nth 0 hit)) (cdr token)) (equal (nth 1 hit) extra))
+  "COMPUTE's result for KIND and KEY, kept while the token and EXTRA stay the same.  EXTRA is a value, or a function
+giving it (looked at again after COMPUTE, which may change what it looks at)."
+  (let* ((token (drgnx-settings-trust--token)) (hit (gethash (cons kind key) drgnx-settings-trust--memo))
+         (now (if (functionp extra) (funcall extra) extra)))
+    (if (and hit (equal (car (nth 0 hit)) (car token)) (eq (cdr (nth 0 hit)) (cdr token)) (equal (nth 1 hit) now))
         (nth 2 hit)
       (when (> (hash-table-count drgnx-settings-trust--memo) 256) (clrhash drgnx-settings-trust--memo))
       (let ((result (funcall compute)))
-        (puthash (cons kind key) (list token extra result) drgnx-settings-trust--memo)
+        (puthash (cons kind key) (list token (if (functionp extra) (funcall extra) extra) result)
+                 drgnx-settings-trust--memo)
         result))))
 
 (defun drgnx-settings-trust-root (dir)
@@ -380,7 +383,21 @@ result (stock behaviour), with a config notice."
 (defun drgnx-settings-trust-filter (root file entries)
   "The `drgnx-settings-workspace-filter-function' of workspace trust: which ENTRIES of the shared FILE of ROOT apply.
 Untrusted: safe values only.  Trusted by location or Trust This Folder: safe values, data, and code (`:eval' sections,
-`:workspace code' settings) whose pair is allowed.  `everything': all.  What waits is remembered."
+`:workspace code' settings) whose pair is allowed.  `everything': all.  What waits is remembered.
+The answer for the same ENTRIES (the same objects: a file read once) is kept while what it rests on is the same:
+trusted-folders.eld, `drgnx-trust-parents', the settings declared, `ignored-local-variables',
+`safe-local-variable-values', and what waits in ROOT (so an emptied register asks again)."
+  (drgnx-settings-trust--memoized
+   'filter (cons root file)
+   (lambda ()
+     (list entries (default-value 'ignored-local-variables) safe-local-variable-values
+           (length drgnx-setting--names) drgnx-setting-meta-functions
+           (gethash (or (drgnx-settings-trust-root root) root) drgnx-settings-trust--waiting)
+           drgnx-settings-trust--announced))
+   (lambda () (drgnx-settings-trust--filter-1 root file entries))))
+
+(defun drgnx-settings-trust--filter-1 (root file entries)
+  "`drgnx-settings-trust-filter' worked out now."
   (let* ((root (or (drgnx-settings-trust-root root) root))
          (state (drgnx-settings-trust-state root))
          (rel (drgnx-settings-trust--rel file root))

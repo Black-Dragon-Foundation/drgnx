@@ -543,5 +543,29 @@
       (let ((drgnx-trust-parents nil))                                        ; the setting changes
         (should (eq (drgnx-settings-trust-state drgnx-stt--ws) 'untrusted))))))
 
+(ert-deftest drgnx-settings-trust/a-repeat-open-in-a-judged-root-classes-nothing ()
+  ;; the shared file's entries are classed once per read of the file and per state of trust
+  (drgnx-stt--with nil
+    (drgnx-stt--put ".drgnx/settings.el"
+                    "(drgnx-workspace-settings\n :version 1\n (fill-column 77)\n (drgnx-stt-data \"w1\"))\n")
+    (let ((classes 0) (orig (symbol-function 'drgnx-settings-trust-class)))
+      (cl-letf (((symbol-function 'drgnx-settings-trust-class) (lambda (&rest args) (cl-incf classes) (apply orig args))))
+        (drgnx-stt--in "a.txt" (should (= fill-column 77)))
+        (should (> classes 0))
+        (setq classes 0)
+        (drgnx-stt--in "b.txt" (should (= fill-column 77)))
+        (drgnx-stt--in "c.txt" (should (= fill-column 77)))
+        (should (= classes 0))
+        ;; the file changes: classed again
+        (drgnx-stt--put ".drgnx/settings.el"
+                        "(drgnx-workspace-settings\n :version 1\n (fill-column 78)\n (drgnx-stt-data \"w1\"))\n")
+        (drgnx-stt--in "d.txt" (should (= fill-column 78)))
+        (should (> classes 0))
+        ;; trust changes: judged again, and the data now applies
+        (setq classes 0)
+        (let ((inhibit-message t)) (drgnx-trust-folder drgnx-stt--proj))
+        (drgnx-stt--in "e.txt" (should (equal drgnx-stt-data "w1")))
+        (should (> classes 0))))))
+
 (provide 'settings-trust-test)
 ;;; settings-trust-test.el ends here
