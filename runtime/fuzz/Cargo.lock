@@ -400,6 +400,7 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "sha2",
+ "sleipnir",
  "tokio",
  "tokio-util",
  "tracing",
@@ -482,6 +483,13 @@ name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+
+[[package]]
+name = "forseti"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "futures-channel"
@@ -1584,6 +1592,17 @@ name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
+
+[[package]]
+name = "sleipnir"
+version = "0.1.0"
+dependencies = [
+ "forseti",
+ "libc",
+ "rustix",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "smallvec"

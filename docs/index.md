@@ -14,6 +14,7 @@ Using drgnx.
 - [Packages](guide/packages.md): `drgnx sync`, the lock, the cache, generations, rollback, upgrade, safe mode, bisect.
 - [Agents](guide/agents.md): agents over ACP, input that queues and never cancels, the Agents tab, edit review, durable jobs, what a job's Claude ignores of your settings, agents outside drgnx that report to it, plans ↔ board.
 - [AI](guide/ai.md): one provider registry (OpenRouter and local runners), roles with fallback, keys read from the environment or auth-source, stored only in your Keychain or keyring when you ask, agent profiles.
+- [Runners](guide/runners.md): your other machines run jobs; how drgnx reaches them through your own ssh (the options it always sets, one connection per runner, a lost link never a result), logins it never answers, host keys it never accepts.
 - [Jobs](guide/jobs.md): agents through a plan — proposal, approval, worktrees, a policy, review and merge (with an optional accept gate: every file accepted), budget, fallback; `drgnx job`.
 - [Semantic Search](guide/search.md): find code by meaning — `#` in the palette, the index, what is never indexed, `.drgnx/search.eld`, privacy.
 - [Editing](guide/editing.md): language support (tree-sitter grammars), and the editor's amenities.
@@ -59,6 +60,8 @@ How drgnx is built, tested and measured.
 - [bin/drgnx check](develop/check.md): build and every test tier in one parallel run; shards, GUI slots, phases, the leak census, the shuffled test order and the polluter bisect.
 - [CI](develop/ci.md): the GitHub Actions workflows — Emacs 31.1 suite, shellcheck, leak scan, nightly GUI tier.
 - [The runtime workspace](develop/runtime.md): `runtime/`, the Cargo workspace (MSRV, deny policy, locked builds), the crate names, and the conformance harness: scenario files run against a hub binary, one socket-path fixture for Lisp and Rust.
+- [forseti](develop/forseti.md): the scheduler core the hub, its runners and jobq share — the job model, priority and the queue order, admission and grants, eviction and drains, two schedulers on one machine, the memory cap and ladder, kill classes, expected times, placement by finish time, the trust filter, fairness; pure.
+- [sleipnir](develop/sleipnir.md): the runner — the machine probe and the runner contract, the reservation files two schedulers share, the one podman argv, the slice tree, job units, job-exec and `result.json`, the row parsers, jobq's shim; a job's inputs frozen at submit, the hardened git (no hook, fsmonitor or outside config ever runs), and checkout slots whose git dirs no job can reach.
 - [Settings](develop/settings.md): the settings files' data subset and its two readers (Lisp and `huginn`), the start-up order, testing in a child Emacs.
 - [The hub and the gateway](develop/hub.md): Ratatoskr, the one durable process behind agents (Ratatoskr phase 7 is done: no Lisp runtime, no backend, one writer), its socket protocol, the traffic gateway.
 - [The store (Urdr)](develop/store.md): `work.db` schema 8 — one knowledge graph with history, written by Ratatoskr only.

@@ -739,7 +739,8 @@ impl Inner {
             worktree,
             subdir,
             job: id.to_string(),
-            net: job.net,
+            net: job.net.is_some(),
+            runner: None,
         };
         let args = container::argv(&req, &caps)?;
         let (p, reference) = (

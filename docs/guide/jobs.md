@@ -81,7 +81,9 @@ tmpfs `/tmp`), and the only folder it sees is the starting session's worktree, a
 from the session, never from the request; the command runs in the job's `cwd` inside it, which must be the worktree or
 a folder in it). The worktree is mounted writable as a whole: the protected files above are pinned for jobs that run
 in the sandbox, not for a container job. It has a process limit, and
-`agents-job-memory` and `agents-job-cpus` as its memory and CPU limits. Those limits are enforced or the job does not
+`agents-job-memory` and `agents-job-cpus` as its memory and CPU limits; it never swaps (its swap limit is its memory
+limit), and when the machine runs out of memory it is the first thing the kernel stops, the whole container at once,
+before anything of yours. Those limits are enforced or the job does not
 run: before each container job the hub asks `podman info`, and unless podman uses cgroup v2 with the systemd cgroup
 manager and the memory, pids and cpu controllers, the job is refused with the reason. Rootless podman needs a systemd
 user session for that (a login, or `loginctl enable-linger`); without one it would run the container with no limits.

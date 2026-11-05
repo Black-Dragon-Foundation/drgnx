@@ -1253,9 +1253,13 @@ and each has a DEFERRED row:
 A container job is not run by Gleipnir: the container is its sandbox (`exec/container.rs`, `docs/guide/jobs.md`). The
 hub builds the one `podman run` line from a fixed spec: `--rm`, `--name drgnx-job-<job id>`, `--pull=never`,
 `--userns=keep-id`, `--cap-drop=all`, `--security-opt=no-new-privileges`, `--read-only`, `--tmpfs /tmp`, the process,
-memory and CPU limits, `--network=none`, the worktree as the only `-v`, `-w /work`, the digest-pinned image, then the
-agent's command, which podman never reads as options. The request has no field that adds anything; extra fields are
-ignored.
+memory and CPU limits with `--memory-swap` equal to `--memory` (a job never swaps), `--oom-score-adj=1000` and
+`--cgroup-conf=memory.oom.group=1` (the kernel's first OOM victim, killed whole), `--network=none`, the worktree as the
+only `-v`, `-w /work`, the digest-pinned image, then the agent's command, which podman never reads as options. The
+request has no field that adds anything; extra fields are ignored.
+
+The builder is `sleipnir::linux::podman::argv`, shared with the runners ([sleipnir.md](sleipnir.md#the-podman-argv));
+`exec/container.rs` calls it with the hub's own placement and re-exports its types.
 
 - **Name and leftovers.** The name lets the hub find what a killed podman client left: at hub start it removes every
   `drgnx-job-*` container whose job is not running (through the same podman path; other names are never touched).
@@ -1273,11 +1277,14 @@ ignored.
   the user's systemd through `DBUS_SESSION_BUS_ADDRESS`, else `$XDG_RUNTIME_DIR/bus`, so a hub whose
   `XDG_RUNTIME_DIR` is not the session's (the conformance runner's) needs the former. Fix for a refused host: log
   in to a user session, or `loginctl enable-linger`.
-- **No network yet.** A granted network needs a podman network whose only route is the Gleipnir proxy. Gleipnir's proxy
-  can listen on TCP (`net::proxy::Listener::Tcp`), but nothing routes a podman network to a host listener: a rootless
-  internal network lives in podman's own network namespace, where the hub's loopback and the per-session proxy sockets
-  are not reachable. Until that is designed (a proxy listener on an address the network can reach, owned by the hub),
-  a job is never given a network and a grant is refused.
+- **Network through the proxy.** A job the matrix granted a network keeps `--network=none`; there is no podman
+  network. The argv gains the job's own Gleipnir proxy socket (`-v <socket>:/run/drgnx/proxy.sock:ro,Z`), a private
+  copy of the forwarder `drgnx-fwd` (`-v <copy>:/run/drgnx/fwd:ro,Z`), `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy` and
+  `https_proxy` set to `http://127.0.0.1:3128`, and `--entrypoint /run/drgnx/fwd`. The image name is followed by
+  `3128 /run/drgnx/proxy.sock --` and then the command: the forwarder gives the container's own loopback port 3128 in
+  front of the socket, then runs the command in its place. The only route out is the proxy, whose allow-list is the
+  setting `agents-net-hosts` (by default the package hosts of crates.io, npm and PyPI, port 443). A job granted a
+  network with no proxy or no forwarder is refused.
 - **Escape rows.** `test/conformance/container-escape/*.jsonl` (15 rows, `requires: podman`) each run a probe inside the
   container: extra mounts, `-v` in argv, a privileged or cap-add field, devices, host network, no network (only `lo`),
   no podman socket, no home, a symlink out of the worktree, the memory cap, the process cap, the git common dir. The

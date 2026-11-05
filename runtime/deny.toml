@@ -1,6 +1,8 @@
 [graph]
 targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu",
-           "aarch64-apple-darwin", "x86_64-apple-darwin"]
+           "aarch64-apple-darwin", "x86_64-apple-darwin",
+           # the runner bundle (static musl) and the Android door
+           "x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl", "aarch64-linux-android"]
 
 [advisories]
 version = 2
