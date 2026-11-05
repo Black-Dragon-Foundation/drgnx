@@ -353,6 +353,18 @@
     (drgnx-ci-test--has rt "CACHE_SAVE: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/ci/')) }}"
                         "CARGO_INCREMENTAL: \"0\"")))
 
+(ert-deftest drgnx-ci/a-restored-target-sees-unchanged-files-as-old ()
+  ;; every job that restores runtime/target gives the files their last commit's time before cargo runs (and has the
+  ;; history for it), and records the commit its saved target was built from
+  (dolist (yml (list (drgnx-ci-test--yml "runtime.yml") (drgnx-ci-test--action "build-test-bins")))
+    (skip-unless yml)
+    (let ((restores (length (drgnx-ci-test--matches "uses: actions/cache/restore@[^\n]*\n *with:\n *path: |\n\\(?:.*\n\\)\\{2\\} *\\(\\(?:\\${{ inputs\\.dir }}/\\)?runtime/target\\)\n" yml))))
+      (should (> restores 0))
+      (should (= restores (length (drgnx-ci-test--matches "\\(commit-times\\.sh runtime/target/\\.drgnx-built-from\\)" yml))))
+      (should (= restores (length (drgnx-ci-test--matches "\\(rev-parse HEAD > [^\n]*runtime/target/\\.drgnx-built-from\\)" yml))))))
+  (should (string-search "fetch-depth: 0" (drgnx-ci-test--yml "runtime.yml")))
+  (should (= 2 (length (drgnx-ci-test--matches "\\(fetch-depth: 0\\)" (drgnx-ci-test--yml "drgnx-tiers.yml"))))))
+
 (ert-deftest drgnx-ci/a-pull-request-runs-its-head-not-the-merge-commit ()
   ;; main moves to a pull request's head by fast-forward: every checkout of the workflows a pull request runs takes the
   ;; head (on other events the expression is empty: the event's own commit), the path filter diffs the head, and the

@@ -17,6 +17,7 @@ runs:
     # (.github/ci/cargo-prune.sh), by a push or a manual run of `main` or a `ci/*` branch, and only when the checkout is
     # the workflow's own commit; never by a pull request, and never for another repository's run (Nidhogg's calls
     # drgnx-tiers.yml with a drgnx commit of its choosing: it restores, it never writes).
+    # `mt1` in the key: the entries carry the commit they were built from (.drgnx-built-from, for commit-times.sh).
     - id: own
       shell: bash
       env:
@@ -32,14 +33,20 @@ runs:
           ~/.cargo/registry/index
           ~/.cargo/registry/cache
           ${{ inputs.dir }}/runtime/target
-        key: cargo-${{ runner.os }}-drgnx-test-bins-${{ steps.rv.outputs.v }}-${{ hashFiles(format('{0}/runtime/Cargo.lock', inputs.dir), format('{0}/runtime/Cargo.toml', inputs.dir), format('{0}/runtime/*/Cargo.toml', inputs.dir), format('{0}/runtime/crates/*/Cargo.toml', inputs.dir)) }}
-        restore-keys: cargo-${{ runner.os }}-drgnx-test-bins-${{ steps.rv.outputs.v }}-
+        key: cargo-${{ runner.os }}-drgnx-test-bins-mt1-${{ steps.rv.outputs.v }}-${{ hashFiles(format('{0}/runtime/Cargo.lock', inputs.dir), format('{0}/runtime/Cargo.toml', inputs.dir), format('{0}/runtime/*/Cargo.toml', inputs.dir), format('{0}/runtime/crates/*/Cargo.toml', inputs.dir)) }}
+        restore-keys: cargo-${{ runner.os }}-drgnx-test-bins-mt1-${{ steps.rv.outputs.v }}-
+    # what the cached build was built from stays as old as its last commit, so cargo rebuilds only what changed
+    - name: Each tracked file at its last commit's time
+      shell: bash
+      working-directory: ${{ inputs.dir }}
+      run: bash .github/ci/commit-times.sh runtime/target/.drgnx-built-from
     - name: Ratatoskr (test hooks), ratatoskr-mock, huginn's dump example
       id: build
       shell: bash
       env:
         DIR: ${{ inputs.dir }}
         CARGO_INCREMENTAL: "0"
+        CARGO_PROFILE_DEV_DEBUG: line-tables-only   # as runtime.yml: half the kept build
       run: |
         cargo build --locked --manifest-path "$DIR/runtime/Cargo.toml" -p drgnx-ratatoskr -p domr \
           --features drgnx-ratatoskr/test-hooks --bin ratatoskr --bin ratatoskr-mock
@@ -53,7 +60,9 @@ runs:
       shell: bash
       env:
         DIR: ${{ inputs.dir }}
-      run: bash "$DIR/.github/ci/cargo-prune.sh" "$DIR/runtime/Cargo.toml" "$DIR/runtime/target" --keep-bins
+      run: |
+        bash "$DIR/.github/ci/cargo-prune.sh" "$DIR/runtime/Cargo.toml" "$DIR/runtime/target" --keep-bins
+        git -C "$DIR" rev-parse HEAD > "$DIR/runtime/target/.drgnx-built-from"
     - if: ${{ steps.prune.outcome == 'success' }}
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:

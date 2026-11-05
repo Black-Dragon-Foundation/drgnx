@@ -370,16 +370,27 @@ a job never runs on an image from another Containerfile; a cold cache (no image)
 
 A cargo entry is safe to restore when older than the checkout: cargo checks every output against its inputs and
 rebuilds what is stale, and the key names the toolchain, whose change would rebuild everything (a new key, so the
-stale entry is never saved again under the same name). The workspace's own crates are always rebuilt (a fresh
-checkout's sources are newer than any cached output), so before a save `.github/ci/cargo-prune.sh` drops their
-artifacts, the top-level binaries (but `build-test-bins` keeps them for the upload), incremental data (CI builds with
-`CARGO_INCREMENTAL=0`) and the registry's unpacked sources: the cache holds the dependencies only. It finds the local
-packages offline without downloading anything (`cargo metadata --no-deps`, and `Cargo.lock`'s packages without a
-source), and it never fails a job: what it cannot work out it leaves, with a warning. A job saves at its
-end when its build passed, whatever its tests said (a red test keeps the dependencies), and only when its key was not
+stale entry is never saved again under the same name). Cargo rebuilds a local crate when one of its sources is newer
+than its last build, and a fresh checkout gives every file the checkout's time. So each entry carries the commit it
+was built from (`runtime/target/.drgnx-built-from`, written before the save), and after the restore
+`.github/ci/commit-times.sh` gives each tracked file its last commit's time. A file that differs from that commit keeps
+the checkout's time: its last commit can be older than the cached build (a branch committed before `main`'s run), and
+it must still rebuild. Untracked files keep theirs too. The checkouts fetch the whole history for it (`fetch-depth: 0`,
+`filter: blob:none`, so no old file contents: about 1 MB and 5 s). Only the crates that changed since the cache's
+commit, and the crates above them, rebuild: with one integration test of `drgnx-ratatoskr` changed, only
+`drgnx-ratatoskr` compiles, against all 13 local crates without it. An entry is saved once per key, so its commit ages
+until the lock or the toolchain moves, and more crates rebuild as `main` moves on. Before a save,
+`.github/ci/cargo-prune.sh` drops the top-level copies of the binaries (but `build-test-bins` keeps them for the upload;
+cargo copies them out of `deps/` again), incremental data (CI builds with `CARGO_INCREMENTAL=0`) and the registry's
+unpacked sources. It never fails a job: what it cannot work out it leaves, with a warning. A job saves at its
+end when its build passed, whatever its tests said (a red test keeps the build), and only when its key was not
 already there. Who saves (`CACHE_SAVE` in `runtime.yml`): pushes and manual runs of `main` and `ci/*`, never a pull
 request, so an untrusted change never writes what a trusted run reads; GitHub scopes a `ci/*` branch's entries to
-itself (it reads its own and `main`'s), and the fuzz corpora are grown by the daily run and `main` only. More inputs
+itself (it reads its own and `main`'s), and the fuzz corpora are grown by the daily run and `main` only. A `ci/*`
+branch whose lock matches `main`'s restores `main`'s entry under the exact key and saves nothing. CI builds
+with line tables only (`CARGO_PROFILE_DEV_DEBUG=line-tables-only`: backtraces keep file and line), which halves the
+kept build: the `linux` job's test build is 2.6 GB on disk and 0.6 GB compressed, against 5.3 GB and 1.1 GB with full
+debug info. So `main`'s entries stay well inside the 10 GB with room for one branch's. More inputs
 in a corpus only reach further: no corpus turns a crash into a pass. The repository's limit is 10 GB; GitHub evicts the
 least recently used entries first, so a finished `ci/*` branch's go before `main`'s, which every run reads.
 
@@ -399,7 +410,8 @@ Deliberately not cached:
 A new `actions/cache` step needs a `key` with `hashFiles(...)` of its inputs (a save takes its restore's
 `cache-primary-key`) and `restore-keys` only where a partial match cannot change a result (cargo's, with the toolchain
 in it; the corpora); `drgnx-ci/every-actions-cache-key-hashes-its-inputs` checks it,
-`drgnx-ci/no-pull-request-writes-a-cache` the saves' conditions, and
+`drgnx-ci/no-pull-request-writes-a-cache` the saves' conditions,
+`drgnx-ci/a-restored-target-sees-unchanged-files-as-old` the commit times, and
 `drgnx-ci/prebuilt-images-are-addressed-by-their-containerfile-hash` checks the image tags.
 
 ## Rules for workflows
