@@ -240,5 +240,77 @@ file into it), session a1 in wt1 and a2 in wt2 as the mirror's sessions, each ho
           (should-not selected)
           (should (equal "No agent in this file" (car said))))))))
 
+;;;; Side-by-side diffs
+
+(declare-function drgnx-work-code-diffs "drgnx-work-code")
+(declare-function drgnx-work-diff-quit "drgnx-work-code")
+(defun drgnx-work-code-test--diff-buffer-p (b)
+  (eq 'drgnx-work-diff-mode (buffer-local-value 'major-mode b)))
+
+(defun drgnx-work-code-test--diff-answers (names)
+  "Hub answers for `work/files' (NAMES, each with +1 −1) and `work/hunks' (a one-hunk diff naming the path)."
+  `(("work/files" . ,(lambda (_) (list :files (mapcar (lambda (n) (list :path n :plus 1 :minus 1 :untracked :false)) names))))
+    ("work/hunks" . ,(lambda (p) (list :diff (format "--- a/%s\n+++ b/%s\n@@ -1 +1 @@\n-old\n+new\n"
+                                                     (plist-get p :path) (plist-get p :path)))))))
+
+(defmacro drgnx-work-code-test--windows (&rest body)
+  "BODY in a frame with two windows (`a-buf' and `b-buf'), the window configuration given back after it and the
+diff buffers killed."
+  (declare (indent 0))
+  `(let ((orig (current-window-configuration)) (a-buf (generate-new-buffer " *a*")) (b-buf (generate-new-buffer " *b*")))
+     (unwind-protect
+         (progn (delete-other-windows)
+                (set-window-buffer (selected-window) a-buf)
+                (set-window-buffer (split-window-right) b-buf)
+                ,@body)
+       (set-window-configuration orig)
+       (dolist (b (buffer-list))
+         (when (drgnx-work-code-test--diff-buffer-p b) (kill-buffer b)))
+       (kill-buffer a-buf) (kill-buffer b-buf))))
+
+(defun drgnx-work-code-test--diff-windows ()
+  (seq-filter (lambda (w) (drgnx-work-code-test--diff-buffer-p (window-buffer w))) (window-list nil 'never)))
+
+(ert-deftest drgnx-work-code/diffs-at-most-three-wide ()
+  (drgnx-work-code-test--ws
+    (drgnx-work-code-test--windows
+      (drgnx-work-code-test--answering (drgnx-work-code-test--diff-answers '("a.el" "b.el" "c.el" "d.el" "e.el"))
+        (let ((buffers (drgnx-work-code-diffs state '(agent . "agent:a1"))))
+          (should (= 5 (length buffers)))
+          (let ((wins (drgnx-work-code-test--diff-windows)))
+            (should (= 3 (length wins)))
+            ;; the first two files have a window each, the other three are tabs of the third
+            (should (equal '("a.el" "b.el") (mapcar (lambda (w) (string-remove-suffix "*" (cadr (split-string (buffer-name (window-buffer w)) ": ")))) (seq-take wins 2))))
+            (should (= 3 (length (window-parameter (nth 2 wins) 'drgnx-work-diff-tabs))))
+            (should (equal (window-parameter (nth 2 wins) 'drgnx-work-diff-tabs)
+                           (with-selected-window (nth 2 wins) (funcall tab-line-tabs-function))))))))))
+
+(ert-deftest drgnx-work-code/q-restores-the-windows ()
+  (drgnx-work-code-test--ws
+    (drgnx-work-code-test--windows
+      (let ((before (mapcar #'window-buffer (window-list nil 'never))))
+        (drgnx-work-code-test--answering (drgnx-work-code-test--diff-answers '("a.el" "b.el" "c.el"))
+          (drgnx-work-code-diffs state '(agent . "agent:a1"))
+          (should (= 3 (length (drgnx-work-code-test--diff-windows))))
+          ;; opening them again keeps the first saved arrangement
+          (drgnx-work-code-diffs state '(agent . "agent:a1"))
+          (with-selected-window (car (drgnx-work-code-test--diff-windows)) (drgnx-work-diff-quit))
+          (should (equal before (mapcar #'window-buffer (window-list nil 'never))))
+          (should-not (seq-some #'drgnx-work-code-test--diff-buffer-p (buffer-list))))))))
+
+(ert-deftest drgnx-work-code/diffs-are-against-the-base ()
+  (drgnx-work-code-test--ws
+    (drgnx-work-code-test--windows
+      (drgnx-work-code-test--answering (drgnx-work-code-test--diff-answers '("src/session.rs"))
+        (let ((buffers (drgnx-work-code-diffs state '(agent . "agent:a1"))))
+          ;; the hub's diff against the recorded base is the whole content; nothing else is asked
+          (with-current-buffer (car buffers)
+            (should (derived-mode-p 'diff-mode))
+            (should buffer-read-only)
+            (should (string-search "@@ -1 +1 @@\n-old\n+new\n" (buffer-string))))
+          (should (equal '("work/files" "work/hunks") (sort (delete-dups (mapcar #'car calls)) #'string<)))
+          (should (equal "a1" (plist-get (cdr (assoc "work/hunks" calls)) :session)))
+          (should (equal "src/session.rs" (plist-get (cdr (assoc "work/hunks" calls)) :path))))))))
+
 (provide 'work-code-test)
 ;;; work-code-test.el ends here

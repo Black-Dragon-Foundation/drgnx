@@ -514,6 +514,16 @@ in every mirrored worktree of the same repository (found from the `.git` file), 
 `file:REPO/REL` when the cached frame holds it and echoes the agents. A file the frame shows only as a count chip is not
 given a node: the hub has no way to add one for a selection yet.
 
+`work-diffs` (`d`, `drgnx-work-code-diffs`) asks `work/files {session}`, then `work/hunks {session, path}` for each file: the
+hub's diff against the worktree's recorded base (the interim source, the base snapshot; part 4's edit history replaces
+it behind the same methods). Each answer becomes a `drgnx-work-diff-mode` buffer (a read-only `diff-mode`, killed and
+made again each time). `drgnx-work-code--diff-layout` saves `current-window-configuration` in
+`drgnx-work-code--saved-windows` unless one is already saved, then splits the window into at most three side by side;
+files from the third on are the third window's tabs: the window parameter `drgnx-work-diff-tabs` holds them and each
+buffer's `tab-line-tabs-function` reads it. `work-diff-quit` (`q`) restores the saved configuration and kills the
+diff buffers; the module's teardown does the same without restoring. `a` and `D` are registered so the keys are
+reserved for hunks, and say the review view decides them (no review view exists in this phase).
+
 ### The view core
 
 `drgnx-view-draw-now VIEW &optional KEYS` draws only the rows named by KEYS (the keypress's own redisplay for a

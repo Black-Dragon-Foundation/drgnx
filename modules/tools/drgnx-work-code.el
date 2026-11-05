@@ -16,7 +16,10 @@
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-work-client)
+(require 'diff-mode)
 
+(declare-function tab-line-mode "tab-line")
+(defvar tab-line-tabs-function)
 (declare-function drgnx-hub-call "drgnx-hub-client")
 (declare-function drgnx-work-nav-chain "drgnx-work-detail")
 (declare-function drgnx-work-map-buffers "drgnx-work-map")
@@ -320,6 +323,115 @@ the popup lane unless NO-DISPLAY.  Returns the picker buffer, filled when the hu
       (when-let* ((state (drgnx-work-map--state)) ((drgnx-work-client-item state id)))
         (drgnx-work-map-select (cons 'file id))))
     (pop-to-buffer map)))
+
+;;;; Side-by-side diffs
+
+(defvar drgnx-work-code--saved-windows nil
+  "The window configuration from before the diffs opened; nil while no diffs are open.  The first one is kept: opening
+the diffs again never replaces it.")
+
+(define-derived-mode drgnx-work-diff-mode diff-mode "Work diff"
+  "One file of an agent's work as a diff against the base its worktree was cut from.  The keys come from the key
+profiles: q puts the windows back, a and D belong to the review view."
+  (setq-local buffer-read-only t))
+
+(defun drgnx-work-code--diff-buffer (path diff)
+  "A fresh read-only diff buffer for PATH holding DIFF."
+  (let ((name (format "*drgnx work diff: %s*" path)))
+    (when-let* ((old (get-buffer name))) (kill-buffer old))
+    (with-current-buffer (get-buffer-create name)
+      (let ((inhibit-read-only t))
+        (drgnx-work-diff-mode)
+        (insert diff))
+      (goto-char (point-min))
+      (current-buffer))))
+
+(defun drgnx-work-code--diff-tabs ()
+  "`tab-line-tabs-function' of the third diff window: the buffers stacked in it."
+  (window-parameter (selected-window) 'drgnx-work-diff-tabs))
+
+(defun drgnx-work-code--diff-layout (buffers)
+  "Show BUFFERS: at most three windows side by side, the files beyond the second as tab-line tabs in the third.  The
+window configuration is saved first."
+  (unless drgnx-work-code--saved-windows
+    (setq drgnx-work-code--saved-windows (current-window-configuration)))
+  (delete-other-windows)
+  (let ((wins (list (selected-window))))
+    (dotimes (_ (1- (min 3 (length buffers))))
+      (push (condition-case nil (split-window (car wins) nil 'right) (error (car wins))) wins))
+    (setq wins (nreverse wins))
+    (let ((last-index (1- (length wins))))
+      (cl-loop for w in wins for i from 0
+               do (if (< i last-index)
+                      (set-window-buffer w (nth i buffers))
+                    (let ((tabs (nthcdr i buffers)))
+                      (set-window-parameter w 'drgnx-work-diff-tabs tabs)
+                      (dolist (b tabs)
+                        (with-current-buffer b
+                          (setq-local tab-line-tabs-function #'drgnx-work-code--diff-tabs)
+                          (tab-line-mode 1)))
+                      (set-window-buffer w (car tabs))))))
+    buffers))
+
+(defun drgnx-work-code--show-diffs (files diffs)
+  (drgnx-work-code--diff-layout
+   (mapcar (lambda (p) (drgnx-work-code--diff-buffer p (gethash p diffs ""))) files)))
+
+(defun drgnx-work-code-diffs (state sel)
+  "Open the files the agent SEL stands for in STATE edited, each as its diff against the base its worktree was cut
+from (`work/hunks'): one window per file, three side by side at most, the rest as tabs in the third.  The window
+configuration is saved first; \\[drgnx-work-diff-quit] puts it back.  Returns the diff buffers when the hub answered at once."
+  (let* ((sid (or (drgnx-work-code--selected-sid state sel) (user-error "Select an agent or its branch first")))
+         (result nil))
+    (condition-case err
+        (drgnx-hub-call
+         "work/files" (list :session sid)
+         (lambda (res _err)
+           (let* ((files (mapcar (lambda (f) (plist-get f :path)) (drgnx-work-code--list (plist-get res :files))))
+                  (left (length files)) (diffs (make-hash-table :test #'equal)))
+             (if (null files)
+                 (message "Work: %s has edited no files" (drgnx-work-code--agent-name sid))
+               (dolist (p files)
+                 (drgnx-hub-call "work/hunks" (list :session sid :path p)
+                                 (lambda (r _e)
+                                   (puthash p (or (plist-get r :diff) "") diffs)
+                                   (when (zerop (cl-decf left))
+                                     (setq result (drgnx-work-code--show-diffs files diffs))))))))))
+      (error (message "Work: could not fetch the diffs: %s" (error-message-string err))))
+    result))
+
+(defun drgnx-work-code-diffs-command ()
+  "The diffs of the selected agent (or branch)."
+  (interactive)
+  (let ((state (drgnx-work-map--state)))
+    (unless (and state (bound-and-true-p drgnx-work-map--selection)) (user-error "Nothing is selected"))
+    (drgnx-work-code-diffs state drgnx-work-map--selection)))
+
+(defun drgnx-work-code--diff-buffers ()
+  (seq-filter (lambda (b) (eq (buffer-local-value 'major-mode b) 'drgnx-work-diff-mode)) (buffer-list)))
+
+(defun drgnx-work-diff-quit ()
+  "Close the diffs and put the windows back the way they were."
+  (interactive)
+  (let ((config drgnx-work-code--saved-windows))
+    (setq drgnx-work-code--saved-windows nil)
+    (when config (set-window-configuration config))
+    (mapc #'kill-buffer (drgnx-work-code--diff-buffers))))
+
+(defun drgnx-work-diff-accept-hunk ()
+  "Accept the hunk at point: not here, the review view decides it."
+  (interactive)
+  (user-error "Accepting a hunk is done in the review view"))
+
+(defun drgnx-work-diff-reject-hunk ()
+  "Reject the hunk at point: not here, the review view decides it."
+  (interactive)
+  (user-error "Rejecting a hunk is done in the review view"))
+
+(defun drgnx-work-code-teardown ()
+  "The module is off: the diffs close and the saved window configuration is dropped."
+  (setq drgnx-work-code--saved-windows nil)
+  (mapc #'kill-buffer (drgnx-work-code--diff-buffers)))
 
 (provide 'drgnx-work-code)
 ;;; drgnx-work-code.el ends here

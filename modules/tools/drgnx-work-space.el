@@ -27,6 +27,12 @@
   (load (expand-file-name "drgnx-work-code" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (declare-function drgnx-work-code-files-command "drgnx-work-code")
 (declare-function drgnx-work-who-is-here "drgnx-work-code")
+(declare-function drgnx-work-code-diffs-command "drgnx-work-code")
+(declare-function drgnx-work-diff-quit "drgnx-work-code")
+(declare-function drgnx-work-diff-accept-hunk "drgnx-work-code")
+(declare-function drgnx-work-diff-reject-hunk "drgnx-work-code")
+(declare-function drgnx-work-code-teardown "drgnx-work-code")
+(defvar drgnx-work-diff-mode-map)
 (declare-function drgnx-work-detail-buffer "drgnx-work-detail")
 (declare-function drgnx-work-detail-update "drgnx-work-detail")
 (declare-function drgnx-work-detail-buffers "drgnx-work-detail")
@@ -92,7 +98,8 @@ it (a notes repository with the code repositories inside it)."
               work-needs-you-7 work-needs-you-8 work-needs-you-9 work-view-map work-focus work-overlaps
               work-collapse-layer-1 work-collapse-layer-2 work-collapse-layer-3 work-collapse-layer-4
               work-collapse-layer-5 work-collapse-layer-6 work-expand-layers work-show-finished work-search
-              work-escape work-take-wheel work-files work-who-is-here)
+              work-escape work-take-wheel work-files work-who-is-here
+              work-diffs work-diff-quit work-diff-accept-hunk work-diff-reject-hunk)
   "The commands of this module, each with a row in every key profile (keys/*.eld).")
 
 ;;;; The workspace of a frame
@@ -349,6 +356,18 @@ follows the windows; the commands."
   (drgnx-command-define 'work-files :category "Work" :title "List the Agent's Files"
                         :command #'drgnx-work-code-files-command :map 'drgnx-work-map-mode-map
                         :doc "The files the selected agent edited, one key each; the key opens the file at the agent's line")
+  (drgnx-command-define 'work-diffs :category "Work" :title "Show the Agent's Diffs Side by Side"
+                        :command #'drgnx-work-code-diffs-command :map 'drgnx-work-map-mode-map
+                        :doc "The files the selected agent edited, one window each (three at most), against their base; q puts the windows back")
+  (drgnx-command-define 'work-diff-quit :category "Work" :title "Close the Diffs"
+                        :command #'drgnx-work-diff-quit :map 'drgnx-work-diff-mode-map
+                        :doc "Close the side-by-side diffs and restore the windows as they were")
+  (drgnx-command-define 'work-diff-accept-hunk :category "Work" :title "Accept the Hunk"
+                        :command #'drgnx-work-diff-accept-hunk :map 'drgnx-work-diff-mode-map
+                        :doc "Accept the hunk at point; the review view decides hunks")
+  (drgnx-command-define 'work-diff-reject-hunk :category "Work" :title "Reject the Hunk"
+                        :command #'drgnx-work-diff-reject-hunk :map 'drgnx-work-diff-mode-map
+                        :doc "Reject the hunk at point; the review view decides hunks")
   (drgnx-command-define 'work-who-is-here :category "Work" :title "Who Is in This File"
                         :command #'drgnx-work-who-is-here
                         :doc "Name the agents in the file you are visiting, with their lines, and select it on the map")
@@ -411,6 +430,7 @@ follows the windows; the commands."
     (when (buffer-local-value 'drgnx-work-live-file-mode b)
       (with-current-buffer b (drgnx-work-live-file-mode -1))))
   (dolist (b (drgnx-work-detail-buffers)) (kill-buffer b))
+  (drgnx-work-code-teardown)
   (dolist (b (buffer-list))
     (when (eq (buffer-local-value 'major-mode b) 'drgnx-work-files-mode) (kill-buffer b)))
   (when-let* ((b (get-buffer "*drgnx work: none*"))) (kill-buffer b)))

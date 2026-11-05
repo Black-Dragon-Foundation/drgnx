@@ -95,6 +95,13 @@ line) it opens at the top and says "file only". **Shift-Enter** opens it beside 
 Every row has a hint key: `1` to `9`, then `a`, `b`, … without the picker's own keys (`q`, `n`, `p`, `j`, `k`, `g`).
 One key opens that file at the agent's line; Enter opens the one at point and `q` closes the list.
 
+**`d`** on an agent (or its branch) opens the files it edited side by side with their diffs: one window per file, three
+side by side at most, and the rest stacked as tabs in the third window. Each diff is against the commit the agent's
+worktree was cut from, as the hub recorded it, so a file the agent made shows whole. The window arrangement is saved
+first; **`q`** in a diff closes them all and puts the windows back, and opening the diffs again never replaces the
+arrangement that was saved. `a` (accept) and `D` (reject) are the hunk keys of the review view; in these windows they
+only say so.
+
 **Who Is in This File** (`work-who-is-here`: `C-k h` in the VS Code profile, `C-c w h` in Emacs, `SPC a h` in Vim) works
 from any buffer that visits a file. It names the agents in the file, the way they are in it and their lines, selects the
 file on the map when the map shows it, and focuses the map. With nobody in it, the echo area says "No agent in this
