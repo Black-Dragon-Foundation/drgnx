@@ -151,6 +151,11 @@ const RAW_SPAWNS: &[(&str, usize, &str)] = &[
         "the accept loops and the connections: a connection's writes are serving steps",
     ),
     ("agents/mod.rs", 1, "the hub's shutdown"),
+    (
+        "work/trace/shell.rs",
+        1,
+        "a session's trace socket: the accept loop; what a step opened goes out from its blocking thread",
+    ),
     // write to clients: not on the clock yet; the gated tests do not reach them
     ("server.rs", 3, "the resume, the embedder and the backup"),
     ("sessions.rs", 2, "a session's MCP sockets"),

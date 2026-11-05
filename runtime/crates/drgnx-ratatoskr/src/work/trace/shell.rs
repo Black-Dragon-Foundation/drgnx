@@ -10,7 +10,6 @@ use std::collections::{HashMap, HashSet};
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
-use std::time::Instant;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
@@ -389,7 +388,8 @@ impl SessionTrace {
         let Ok(listener) = gt::listen(fd, ListenOptions::default(), tx) else {
             return self.apply(TraceEv::Ended { trace });
         };
-        let begun = Instant::now();
+        // a blocking thread's budget on the traced command, outside the hub: real time
+        let begun = crate::clock::real_now();
         let mut misses = HashSet::new();
         let mut over = false;
         // the channel ends with the answering thread: every process of the command is gone
