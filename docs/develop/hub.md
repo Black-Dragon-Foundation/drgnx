@@ -2333,7 +2333,9 @@ browser-host --hub-fd 3 --ready-fd 4 --program P --dir D --web-port N [--max-mes
 layer: `NoNewPrivs: 1` in `/proc/self/status`, and a TCP bind on loopback refused (`EACCES`). The browser layer binds no
 port at all, while the agent's own layer and an unsandboxed process may, so the bind tells the layers apart without a
 path. Otherwise it exits 1. Only a `test-hooks` build has `--unconfined`, which skips the check for the container tests
-that run it with a real Chromium and no sandbox.
+that run it with a real Chromium and no sandbox ([the real browser tests](runtime.md#the-real-browser-tests)); the
+sandboxed path with a real Chromium is the `real-start/the-agent-drives-its-browser` row
+([the real-start rows](runtime.md#the-real-start-rows)).
 
 **Start.** The host makes `D/profile` and `D/downloads` (0700), writes `ready\n` on fd 4, closes it, and reads frames
 from fd 3 (`heimdall::codec`, `[kind u8][len u32 BE][payload]`; the largest is the message limit plus 64 bytes). A

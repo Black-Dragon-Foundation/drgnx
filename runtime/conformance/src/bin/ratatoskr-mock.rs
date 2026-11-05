@@ -20,6 +20,13 @@
 //!   with `--location`), and M serves the files of DIR and honours `Range: bytes=START-` (unless `--no-range`). The first
 //!   response for FILE stops after BYTES with `--cut`; a last byte is flipped with `--bad`. The log is JSONL: `{server, path,
 //!   range, credentials}`.
+//! - `http-serve PORT TEXT` prints `MOCK-HTTP-PORT N` and serves on 127.0.0.1:PORT (0: any free port) a page whose
+//!   title and text are TEXT, for every path but `/download`, which is TEXT as an attachment (`TEXT.txt`): an agent's
+//!   dev server, a site on the host.
+//! - `cdp-drive URL…` is an outside agent's browser tool: it runs Playwright MCP (`node` and the test image's
+//!   `/opt/pw-mcp`) over stdio with this process's environment, so it reaches the browser the session's
+//!   `PLAYWRIGHT_MCP_CDP_ENDPOINT` names, and for each URL calls `browser_navigate` and `browser_snapshot` and prints
+//!   `TITLE <the page's title>`, or `ERROR <url>: <why>` (exit 1 when any failed).
 //!
 //! - `embed [--dims N] [--log FILE] [--parent PID]` prints `MOCK-EMBED-PORT N` and serves, on 127.0.0.1 only, TEI's `POST
 //!   /embed {"inputs"}` (a list of vectors) and Ollama's `POST /api/embed {"model", "input"}` (`{"model", "embeddings",
@@ -53,8 +60,10 @@ fn main() {
         Some("acp") => mock_acp::run(&args[1..]),
         Some("hf") => hf(&args[1..]),
         Some("embed") => embed(&args[1..]),
+        Some("http-serve") => http_serve(&args[1..]),
+        Some("cdp-drive") => cdp_drive(&args[1..]),
         _ => die(
-            "usage: ratatoskr-mock embed [--dims N] [--log FILE] [--parent PID] | llm --script FILE [--log FILE] [--tls CA_FILE] [--parent PID] | proxy [--log FILE] | acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] | hf --dir DIR [--log FILE] [--cut FILE BYTES] [--bad FILE] [--location URL] [--no-range]",
+            "usage: ratatoskr-mock embed [--dims N] [--log FILE] [--parent PID] | llm --script FILE [--log FILE] [--tls CA_FILE] [--parent PID] | proxy [--log FILE] | acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] | hf --dir DIR [--log FILE] [--cut FILE BYTES] [--bad FILE] [--location URL] [--no-range] | http-serve PORT TEXT | cdp-drive URL...",
         ),
     }
 }
@@ -743,4 +752,199 @@ fn hf(args: &[String]) {
         let host = host.clone();
         std::thread::spawn(move || host.resolve(sock));
     }
+}
+
+// ------------------------------------------------------------------------------------------ http-serve
+
+fn http_serve(args: &[String]) {
+    let [port, text] = args else {
+        die("usage: http-serve PORT TEXT")
+    };
+    let port: u16 = port
+        .parse()
+        .unwrap_or_else(|_| die("http-serve: PORT is a number"));
+    let listener = TcpListener::bind(("127.0.0.1", port))
+        .unwrap_or_else(|e| die(&format!("cannot listen on 127.0.0.1:{port}: {e}")));
+    announce("MOCK-HTTP-PORT", &listener);
+    let text: Arc<str> = text.as_str().into();
+    for sock in listener.incoming().flatten() {
+        let text = text.clone();
+        std::thread::spawn(move || page(sock, &text));
+    }
+}
+
+/// One request: `/download` is TEXT as an attachment, any other path the page.
+fn page(mut c: TcpStream, text: &str) {
+    // a browser's spare connection may never send a request
+    let _ = c.set_read_timeout(Some(Duration::from_secs(10)));
+    let Some(head) = read_head(&mut c) else {
+        return;
+    };
+    let path = head.split(' ').nth(1).unwrap_or("/");
+    let (content_type, extra, body) = if path == "/download" {
+        (
+            "text/plain",
+            format!("Content-Disposition: attachment; filename=\"{text}.txt\"\r\n"),
+            text.to_string(),
+        )
+    } else {
+        let t = text
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        (
+            "text/html; charset=utf-8",
+            String::new(),
+            format!("<!doctype html><html><head><title>{t}</title></head><body><p>{t}</p></body></html>"),
+        )
+    };
+    let _ = c.write_all(
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n{extra}Connection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .as_bytes(),
+    );
+}
+
+// ------------------------------------------------------------------------------------------ cdp-drive
+
+/// Playwright MCP in the test image (`test/container/browser/Containerfile`).
+const PW_MCP: &str = "/opt/pw-mcp/node_modules/@playwright/mcp/cli.js";
+/// How long one MCP call may take (a navigation through the session's proxy included).
+const CALL_WITHIN: Duration = Duration::from_secs(60);
+
+struct Mcp {
+    to: std::process::ChildStdin,
+    from: std::sync::mpsc::Receiver<Value>,
+    next: u64,
+}
+
+impl Mcp {
+    fn send(&mut self, v: &Value) {
+        if writeln!(self.to, "{v}").and_then(|()| self.to.flush()).is_err() {
+            die("cdp-drive: Playwright MCP closed its stdin");
+        }
+    }
+
+    /// A request and its answer (the result, or the error as `Err`).
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        self.next += 1;
+        let id = self.next;
+        self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
+        let end = std::time::Instant::now() + CALL_WITHIN;
+        loop {
+            let left = end.saturating_duration_since(std::time::Instant::now());
+            let v = self.from.recv_timeout(left).map_err(|_| {
+                format!(
+                    "no answer to {method} within {} s",
+                    CALL_WITHIN.as_secs()
+                )
+            })?;
+            if v["id"] == id {
+                return match v.get("error") {
+                    Some(e) => Err(e.to_string()),
+                    None => Ok(v["result"].clone()),
+                };
+            }
+        }
+    }
+
+    /// A tool's text, or its error text as `Err`.
+    fn tool(&mut self, name: &str, arguments: Value) -> Result<String, String> {
+        let r = self.call(
+            "tools/call",
+            json!({"name": name, "arguments": arguments}),
+        )?;
+        let text = r["content"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|c| c["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if r["isError"] == true {
+            Err(text)
+        } else {
+            Ok(text)
+        }
+    }
+}
+
+/// The title Playwright MCP reports in a tool's text (`- Page Title: T`).
+fn page_title(text: &str) -> Option<&str> {
+    text.lines()
+        .find_map(|l| l.trim_start_matches(['-', ' ']).strip_prefix("Page Title:"))
+        .map(str::trim)
+}
+
+fn cdp_drive(urls: &[String]) {
+    if urls.is_empty() {
+        die("usage: cdp-drive URL...");
+    }
+    let mut child = std::process::Command::new("node")
+        .arg(PW_MCP)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .unwrap_or_else(|e| die(&format!("cannot run node {PW_MCP}: {e}")));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let out = child.stdout.take().expect("piped");
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        for line in std::io::BufReader::new(out).lines().map_while(Result::ok) {
+            if let Ok(v) = serde_json::from_str::<Value>(&line)
+                && tx.send(v).is_err()
+            {
+                break;
+            }
+        }
+    });
+    let mut mcp = Mcp {
+        to: child.stdin.take().expect("piped"),
+        from: rx,
+        next: 0,
+    };
+    let init = json!({"protocolVersion": "2025-06-18", "capabilities": {},
+                      "clientInfo": {"name": "ratatoskr-mock cdp-drive", "version": "1"}});
+    if let Err(e) = mcp.call("initialize", init) {
+        let _ = child.kill();
+        die(&format!("cdp-drive: initialize: {e}"));
+    }
+    mcp.send(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
+    let mut failed = false;
+    let mut out = std::io::stdout();
+    for url in urls {
+        let got = mcp
+            .tool("browser_navigate", json!({"url": url}))
+            .and_then(|nav| {
+                let snap = mcp.tool("browser_snapshot", json!({}))?;
+                Ok(page_title(&snap)
+                    .or_else(|| page_title(&nav))
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| {
+                        eprintln!("cdp-drive: no page title in the snapshot:\n{snap}");
+                        "?".into()
+                    }))
+            });
+        let line = match got {
+            Ok(title) => format!("TITLE {title}"),
+            Err(e) => {
+                failed = true;
+                let why = e.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+                format!("ERROR {url}: {why}")
+            }
+        };
+        let _ = writeln!(out, "{line}").and_then(|()| out.flush());
+    }
+    // closing its stdin ends Playwright MCP, which disconnects from the browser
+    drop(mcp);
+    let end = std::time::Instant::now() + Duration::from_secs(10);
+    while matches!(child.try_wait(), Ok(None)) && std::time::Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    std::process::exit(i32::from(failed));
 }
