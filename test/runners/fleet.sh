@@ -16,7 +16,8 @@ top=$(cd "$here/../.." && pwd)
 RUN=${DRGNX_FLEET_RUN:-$(basename "$top" | tr -c 'a-zA-Z0-9' '-' | cut -c1-20 | sed 's/-*$//')}
 STATE=${DRGNX_FLEET_DIR:-$top/.claude/tmp/fleet}/$RUN
 NET=fleet-$RUN
-IMAGE=localhost/drgnx-fake-runner:f45
+# tagged by the hash of its Containerfile and what it copies (test/container/image-tag.sh): built once per content
+IMAGE=localhost/drgnx-fake-runner:$(bash "$top/test/container/image-tag.sh" "$here/fake-runner/Containerfile")
 BASE=registry.fedoraproject.org/fedora:45
 HUB_IMAGE=${DRGNX_FLEET_HUB_IMAGE:-localhost/drgnx-dev:f45}
 ORG=${DRGNX_ORG:-${top%%/drgnx/*}}   # the org folder: a worktree lives in <org>/drgnx/.claude/worktrees/NAME
@@ -47,7 +48,7 @@ up() {
   podman image exists "$BASE" || podman pull -q "$BASE" >/dev/null
   echo "base image digest: $(podman image inspect "$BASE" --format '{{.Digest}}')"
   rm -f "$STATE/base.tar"; podman save -q -o "$STATE/base.tar" "$BASE"
-  podman build -q -t "$IMAGE" -f "$here/fake-runner/Containerfile" "$here/fake-runner" >/dev/null
+  podman image exists "$IMAGE" || podman build -q -t "$IMAGE" -f "$here/fake-runner/Containerfile" "$here/fake-runner" >/dev/null
   podman network exists "$NET" || podman network create "$NET" >/dev/null
   {
     printf 'MaxSessions %s\n' "${max_sessions:-10}"

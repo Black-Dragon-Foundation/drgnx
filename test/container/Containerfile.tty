@@ -1,13 +1,9 @@
-# Terminal test tiers in a container: tmux for the tty tier; kitty under headless mutter for the exit test.
-# Emacs is Nidhogg 31.1 from its release tarball for FEDORA (nidhogg.sh; 45 is the default, 44 is built too).
-# Run with --security-opt seccomp=unconfined --security-opt label=disable, as Containerfile.gui.
-# Docs on (tsflags=): the Emacs and Elisp manuals; findutils for project search; ncurses for infocmp and terminfo.
+# Terminal test tiers in a container, on the base image (base/Containerfile.tty; the line `# base:` names it, image.sh
+# and image-tag.sh read it).  Emacs is Nidhogg 31.1 from its release tarball for FEDORA (nidhogg.sh; 45, the only one).
+# base: drgnx-base-tty base/Containerfile.tty
+ARG BASE
+FROM ${BASE}
 ARG FEDORA=45
-FROM registry.fedoraproject.org/fedora:${FEDORA}
-ARG FEDORA
-RUN dnf -y --setopt=tsflags= install info diffutils findutils git tmux kitty kitty-terminfo wl-clipboard \
-        mutter dbus-daemon mesa-dri-drivers procps-ng util-linux binutils ncurses \
-    && dnf clean all
 COPY nidhogg.sh /tmp/nidhogg.sh
 RUN bash /tmp/nidhogg.sh fedora-${FEDORA} && rm /tmp/nidhogg.sh
 ENV DRGNX_EMACS=/opt/nidhogg/31.1-nidhogg.5/bin/nidhogg

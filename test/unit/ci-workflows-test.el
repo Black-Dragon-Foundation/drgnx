@@ -590,6 +590,30 @@
                         "image: ${{ needs.images.outputs.rust || 'registry.fedoraproject.org/fedora:45' }}"
                         "run: sh test/container/rust-packages.sh" "if: ${{ env.PREBUILT == '' }}")))
 
+(ert-deftest drgnx-ci/test-images-are-built-on-published-bases ()
+  ;; each test image adds Nidhogg and a few small files to a base of only the Fedora packages (test/container/base/);
+  ;; images.yml publishes the bases first, then the images FROM the one it pulled, and the base's tag is part of the
+  ;; image's (image-tag.sh reads the `# base:' line)
+  (let ((images (drgnx-ci-test--yml "images.yml")))
+    (skip-unless images)
+    (dolist (c '(("Containerfile" "drgnx-base-test" "base/Containerfile")
+                 ("Containerfile.gui" "drgnx-base-gui" "base/Containerfile.gui")
+                 ("Containerfile.tty" "drgnx-base-tty" "base/Containerfile.tty")))
+      (let ((top (drgnx-ci-test--file (concat "test/container/" (car c))))
+            (base (drgnx-ci-test--file (concat "test/container/" (nth 2 c)))))
+        (should top)
+        (should base)
+        (drgnx-ci-test--has top (format "# base: %s %s\n" (nth 1 c) (nth 2 c)) "ARG BASE\n" "FROM ${BASE}\n"
+                            "COPY nidhogg.sh")
+        (should-not (string-search "dnf" top))
+        (drgnx-ci-test--has base "FROM registry.fedoraproject.org/fedora:" "dnf -y")
+        (should-not (string-search "nidhogg" base))
+        (should (string-match-p (format "- name: %s\n *file: test/container/%s\n" (regexp-quote (nth 1 c)) (regexp-quote (nth 2 c)))
+                                images))))
+    ;; the images are built after the bases, on the base GHCR holds for the checkout's base tag
+    (drgnx-ci-test--has images "needs: bases" "BASE_FILE: ${{ matrix.base-file }}"
+                        "--build-arg \"BASE=$base\"")))
+
 (ert-deftest drgnx-ci/images-are-published-only-by-main-and-manual-runs ()
   ;; a pull request or a ci/* push never publishes: a run whose inputs have no image yet builds its own
   (let ((images (drgnx-ci-test--yml "images.yml")))

@@ -125,7 +125,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
       - name: shellcheck
-        run: shellcheck --severity=warning install.sh bin/drgnx .githooks/pre-commit test/container/nidhogg.sh .github/ci/changes.sh .github/ci/cargo-prune.sh .github/ci/commit-times.sh .github/ci/ghcr.sh .github/ci/bwrap/build.sh test/container/image-tag.sh test/container/rust-packages.sh
+        run: shellcheck --severity=warning install.sh bin/drgnx .githooks/pre-commit test/container/nidhogg.sh .github/ci/changes.sh .github/ci/cargo-prune.sh .github/ci/commit-times.sh .github/ci/ghcr.sh .github/ci/bwrap/build.sh test/container/image-tag.sh test/container/image.sh test/container/rust-packages.sh
       - name: The path filter's rules and table (changes.sh --self-test)
         if: ${{ !cancelled() }}
         run: bash .github/ci/changes.sh .github/ci/paths.txt --self-test

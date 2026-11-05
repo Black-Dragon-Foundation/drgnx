@@ -1155,6 +1155,26 @@ macOS (no /proc there)."
             (should (member "DRGNX_EMACS=/opt/nidhogg-built/bin/nidhogg" args))))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-bin/container-nidhogg-prefix-applies-to-every-tier ()
+  ;; A branch's Nidhogg is tested by mounting it, never by building an image per prefix: the batch, GUI, scenario,
+  ;; perf, soak and terminal tiers all run the mounted Emacs, in the image they use without it.
+  (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
+         (pfx (file-truename (expand-file-name "nid" dir))))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "bin" pfx) t)
+          (dolist (c '((nil "cpu-image") ("--ui" "gui-image") ("--scenario" "gui-image") ("--perf" "gui-image")
+                       ("--soak" "gui-image") ("--tty" "tty-image")))
+            (let ((args (apply #'drgnx-bin-test--container-argv dir
+                               (list (concat "DRGNX_CONTAINER_NIDHOGG=" pfx) "DRGNX_TEST_GUI_IMAGE=gui-image"
+                                     "DRGNX_TEST_TTY_IMAGE=tty-image")
+                               (and (car c) (list (car c))))))
+              (should (member (concat pfx ":" pfx ":ro") args))
+              (should (member (concat "DRGNX_EMACS=" pfx "/bin/nidhogg") args))
+              (should-not (member "DRGNX_EMACS=/usr/local/bin/emacs" args))
+              (should (member (cadr c) args)))))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-bin/container-soak-accepted ()
   ;; --soak [MIN] runs the soak in the GUI image, memory-capped like --ui; combined with another tier it is refused.
   (let ((dir (make-temp-file "drgnx-bin-tmp" t)))

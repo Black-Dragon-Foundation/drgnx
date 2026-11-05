@@ -57,10 +57,10 @@ runs:
           if [ -n "$base" ]; then echo "$VAR=$base" >> "$GITHUB_ENV"; fi
           exit 0
         fi
-        # the overlay needs a base: build the image here when there is no prebuilt one (capped, as bin/drgnx builds it)
+        # the overlay needs a base: make the image here when there is no prebuilt one, as bin/drgnx does (its base from
+        # GHCR or built; the image built, capped)
         if [ -z "$base" ]; then
-          base="localhost/$NAME-base:run"
-          podman build --memory 3g --memory-swap 3g -q -t "$base" -f "test/container/$FILE" test/container >/dev/null
+          base="$(bash test/container/image.sh podman "$NAME" "test/container/$FILE")"
         fi
         tarballs=("$RUNNER_TEMP"/nidhogg-dist/*.tar.xz)
         [ "${#tarballs[@]}" = 1 ] && [ -f "${tarballs[0]}" ] || { echo "::error::expected one Nidhogg tarball in $OVERLAY"; exit 1; }

@@ -638,6 +638,16 @@ session launcher         systemd         # or detached (process group, no system
   util-linux`, ~2.3 GB; `kwin_wayland` and `sway` lose their `cap_sys_nice` file capability, which the container does
   not grant), with the same cap and security options. `DRGNX_UI_COMPOSITOR=kwin|niri` without `--compositor` picks it
   too. `DRGNX_TEST_WM_IMAGE` uses a prebuilt one (`DRGNX_TEST_GUI_IMAGE` does not apply: that image has neither).
+- **A local run builds an image only when it must.** `bin/drgnx test --container` takes the image `NAME:TAG` (TAG as
+  above) from the local store when it is there; else pulls `ghcr.io/black-dragon-foundation/NAME:TAG` (CI's copy of the
+  same tag; anonymous, `DRGNX_TEST_IMAGE_PULL_TIMEOUT` seconds, default 180) and tags it as `NAME:TAG`; else builds it.
+  Stderr says which: `image: NAME:TAG (local|pulled|built)` (`test/container/image.sh`). `DRGNX_TEST_IMAGE_PULL=0`
+  never pulls (offline). A prebuilt override (below) skips all of it and prints `(prebuilt)`.
+- **A branch's Nidhogg is mounted, never baked.** `DRGNX_CONTAINER_NIDHOGG=PREFIX` (an unpacked Nidhogg build) mounts
+  it read-only at the prefix its `share/nidhogg/BUILDINFO` names and runs it as the Emacs, in every tier (batch,
+  `--ui`, `--scenario`, `--perf`, `--soak`, `--day`, `--tty`) and in the image the tier uses without it. To test a
+  branch's Nidhogg, build it (or take CI's tarball), unpack it and set the variable; no image
+  is built per prefix, so a run costs no image build and leaves none behind.
 - **Image builds are capped** like the runs: with podman, `podman build --memory 3g --memory-swap 3g`
   (`DRGNX_TEST_BUILD_MEMORY` sets another size; docker's buildx ignores `--memory`, so it gets none). A prebuilt image
   override (`DRGNX_TEST_IMAGE`, `DRGNX_TEST_GUI_IMAGE`, `DRGNX_TEST_WM_IMAGE`) must be an image reference (letters, digits,

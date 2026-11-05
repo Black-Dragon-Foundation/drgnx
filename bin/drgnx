@@ -513,15 +513,10 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=
     [[ $prebuilt =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ ]] || { echo "drgnx: '$prebuilt' is not an image reference" >&2; return 2; }
     image="$prebuilt"; echo "image: $image (prebuilt)" >&2
   else
-    # tagged with the hash of its inputs (the Containerfile and every file it copies), as CI's images: worktrees with
-    # other inputs build other tags and never race for one
-    local tag; tag="$(bash "$here/test/container/image-tag.sh" "$here/test/container/$file")" || return 1
-    image="$image:$tag"
-    # an image build is capped too: an uncapped one once pushed the host into the OOM killer
-    # (DRGNX_TEST_BUILD_MEMORY, default 3g; podman only, as docker's buildx ignores --memory)
-    local bmem="${DRGNX_TEST_BUILD_MEMORY:-3g}" bargs=()
-    [ "$rt" = podman ] && bargs=(--memory "$bmem" --memory-swap "$bmem")
-    "$rt" build ${bargs[@]+"${bargs[@]}"} -q -t "$image" ${build[@]+"${build[@]}"} -f "$here/test/container/$file" "$here/test/container" >/dev/null
+    # tagged with the hash of its inputs (the Containerfile and every file it copies), as CI's images, so worktrees with
+    # other inputs never race for one tag; used from the local store, else pulled from GHCR (CI's copy of the same tag),
+    # else built, capped (image.sh; DRGNX_TEST_IMAGE_PULL=0 never pulls, DRGNX_TEST_BUILD_MEMORY sizes the build)
+    image="$(bash "$here/test/container/image.sh" "$rt" "$image" "$here/test/container/$file" ${build[@]+"${build[@]}"})" || return 1
   fi
   # the run-control variables go in with their values when set: a narrowed run stays narrow, the files run at once
   # (CI: the runner's cores), a failed file reruns once, wall clock is skipped, the perf run's results and factors,
