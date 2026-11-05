@@ -36,6 +36,8 @@ pub enum LinkEvent {
         r: JobRef,
         upto: u64,
     },
+    /// The runner's clock read AT (seconds since the epoch) when it sent its `ping`: the health check's clock reading.
+    Clock { runner: String, at: u64 },
     /// The link is lost (no frame for 45 s, an EOF without `bye`, a channel error): never a job's result.
     Lost { runner: String, why: String },
     /// The runner said `bye`.
@@ -153,6 +155,12 @@ async fn read_loop(
         match f {
             Frame::Ping { at } => {
                 let _ = out.send(Frame::Pong { at });
+                if at > 0 {
+                    let _ = events.send(LinkEvent::Clock {
+                        runner: runner.clone(),
+                        at,
+                    });
+                }
             }
             Frame::Pong { .. } | Frame::Unknown => {}
             Frame::Bye { .. } => {

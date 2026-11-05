@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub mod attempts;
+pub mod health;
 pub mod link;
 pub mod local;
 pub mod queue;

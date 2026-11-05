@@ -9,6 +9,7 @@
 //! go to the job layer as [`Outcome`]s.
 
 use super::attempts::{self, Effect, Event as AEvent, Listed};
+use super::health::{self, Facts, StrikeCtx, Strikes};
 use super::link::{LinkEvent, Route, Session};
 use super::local::LocalRunner;
 use crate::exec::Starter;
@@ -213,6 +214,16 @@ pub struct RemoteRunner {
     pub accept: Accept,
     /// An attempt's grace there (`RunnerCfg::grace`).
     pub grace_s: u64,
+    /// The image its health check's canary runs `true` in, by digest.
+    pub image: Option<String>,
+}
+
+/// A runner as the queue sees it: `ready`, `benched: REASON (HH:MM, HH:MM)`, …; its strikes and the last one's reason.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunnerRow {
+    pub state: String,
+    pub strikes: u32,
+    pub last: Option<String>,
 }
 
 /// What the queue tells the job layer.
@@ -292,6 +303,32 @@ struct Remote {
     r: RemoteRunner,
     session: Session,
     state: RunnerState,
+    strikes: Strikes,
+    /// When the next health check is due (0: not yet set).
+    next_check: u64,
+    check: Option<Check>,
+    /// The runner's clock minus the hub's at its last `ping`.
+    skew_s: Option<i64>,
+}
+
+/// A health check under way: its canary's attempt, and what it found.
+struct Check {
+    started: u64,
+    /// The canary's job id, once offered; none until then, and again after a refusal.
+    canary: Option<String>,
+    last_offer: u64,
+    facts: Facts,
+}
+
+/// A health check's canary job id on RUNNER: letters and digits, as a runner takes a job id, and never a job of the
+/// job layer's (theirs start with `x`).
+fn canary_id(runner: &str, now: u64) -> String {
+    let name: String = runner.chars().filter(char::is_ascii_alphanumeric).collect();
+    format!("health{name}{now}")
+}
+
+fn is_canary(job: &str) -> bool {
+    job.starts_with("health")
 }
 
 /// A write to `runtime.db`, in order.
@@ -483,6 +520,37 @@ impl Queue {
         self.lock().runners.contains_key(name)
     }
 
+    /// Runner NAME's row.
+    pub fn runner(&self, name: &str) -> Option<RunnerRow> {
+        let st = self.lock();
+        let r = st.runners.get(name)?;
+        let state = match &r.state {
+            RunnerState::Ready => "ready".to_string(),
+            RunnerState::Benched(why) => r
+                .strikes
+                .text()
+                .unwrap_or_else(|| format!("benched: {why}")),
+            RunnerState::NeedsLogin(cmd) => format!("needs a login: {cmd}"),
+            RunnerState::NeedsKeys => "needs keys".into(),
+            RunnerState::AwaitingConfirm => "waits for your confirm".into(),
+            RunnerState::Unreachable { .. } => "unreachable".into(),
+            RunnerState::Draining => "draining".into(),
+            RunnerState::Preempting => "preempting".into(),
+        };
+        Some(RunnerRow {
+            state,
+            strikes: r.strikes.count(),
+            last: r.strikes.last().map(String::from),
+        })
+    }
+
+    /// Runner NAME's health check is due at the next tick.
+    pub fn check_now(&self, name: &str) {
+        if let Some(r) = self.lock().runners.get_mut(name) {
+            r.next_check = 1;
+        }
+    }
+
     /// How many runners are known.
     pub fn runners(&self) -> usize {
         self.lock().runners.len()
@@ -491,7 +559,7 @@ impl Queue {
     /// Whether a tick has work: a job waits, or an attempt is on a runner (its grace may end).
     pub fn busy(&self) -> bool {
         let st = self.lock();
-        st.jobs.values().any(|j| j.state != QState::Local)
+        !st.runners.is_empty() || st.jobs.values().any(|j| j.state != QState::Local)
     }
 
     /// Returns once the queue may have become busy (a job entered it) since the last call.
@@ -520,8 +588,22 @@ impl Queue {
                 r,
                 session,
                 state: RunnerState::Unreachable { since: 0 },
+                strikes: Strikes::default(),
+                next_check: 0,
+                check: None,
+                skew_s: None,
             },
         );
+    }
+
+    /// The user's `runners/unbench`: NAME back in rotation, with no strikes.
+    pub fn unbench(&self, name: &str) {
+        if let Some(r) = self.lock().runners.get_mut(name) {
+            r.strikes.clear();
+            if matches!(r.state, RunnerState::Benched(_)) {
+                r.state = RunnerState::Ready;
+            }
+        }
     }
 
     fn put_job(&self, j: &QJob, eff: Priority) {
@@ -845,6 +927,10 @@ impl Queue {
             self.apply(&mut st, effects, now, &mut t.outcomes);
             self.put_attempts(&st, &job);
         }
+        let names: Vec<String> = st.runners.keys().cloned().collect();
+        for name in names {
+            self.health(&mut st, &name, now);
+        }
         let queued: Vec<Job> = st
             .jobs
             .values()
@@ -1031,12 +1117,140 @@ impl Queue {
         }));
     }
 
+    /// Runner NAME's health check at NOW: started when due (its probe asked, its canary offered, offered again after a
+    /// refusal), judged once every answer is in or its wait has run out. A pass clears its strikes and returns it to
+    /// rotation; a failure is a strike, which may bench it.
+    fn health(&self, st: &mut St, name: &str, now: u64) {
+        let Some(r) = st.runners.get_mut(name) else {
+            return;
+        };
+        if r.next_check == 0 {
+            r.next_check = now + health::CHECK_EVERY_S;
+        }
+        let up = matches!(r.state, RunnerState::Ready | RunnerState::Benched(_));
+        if r.check.is_none() && up && now >= r.next_check {
+            r.session.send(Frame::Probe);
+            r.check = Some(Check {
+                started: now,
+                canary: None,
+                last_offer: 0,
+                facts: Facts::default(),
+            });
+        }
+        let Some(c) = r.check.as_mut() else {
+            return;
+        };
+        c.facts.skew_s = r.skew_s;
+        let offer = c.canary.is_none() && now >= c.last_offer + 2 && c.facts.canary.is_none();
+        let done = c.facts.complete() || now >= c.started + health::CHECK_WAIT_S;
+        if offer && !done {
+            let id = canary_id(name, now);
+            c.canary = Some(id.clone());
+            c.last_offer = now;
+            let r = JobRef {
+                job: id.clone(),
+                attempt: 1,
+                nonce: nonce(),
+            };
+            let mut spec = blank_spec("health check");
+            spec.command = vec!["true".into()];
+            spec.tree = PathBuf::from("/src/health");
+            spec.cwd = PathBuf::from(".");
+            spec.mem_mib = Range { min: 64, max: 256 };
+            spec.timeout_s = 60;
+            spec.restartable = false;
+            st.attempts.step(
+                now,
+                AEvent::Placed {
+                    job: id,
+                    attempt: 1,
+                    nonce: r.nonce,
+                    runner: name.into(),
+                    grace_s: 0,
+                    restartable: false,
+                },
+            );
+            if let Some(rr) = st.runners.get(name) {
+                rr.session.send(Frame::Offer {
+                    r,
+                    spec: Box::new(spec),
+                    priority: Priority::P1,
+                    input_key: String::new(),
+                    grant_hint: None,
+                    expected: None,
+                });
+            }
+            return;
+        }
+        if !done {
+            return;
+        }
+        let Some(c) = r.check.take() else {
+            return;
+        };
+        r.next_check = now + health::CHECK_EVERY_S;
+        match health::judge(&c.facts) {
+            Ok(()) => {
+                r.strikes.clear();
+                if matches!(r.state, RunnerState::Benched(_)) {
+                    r.state = RunnerState::Ready;
+                }
+                tracing::info!("runners: {name}: the health check passed");
+            }
+            Err(why) => {
+                tracing::info!("runners: {name}: the health check failed: {why}");
+                let reason = format!("{}: {why}", health::CHECK);
+                if r.strikes.strike(now, &reason) {
+                    r.state = RunnerState::Benched(reason);
+                }
+            }
+        }
+        if let Some(job) = c.canary {
+            st.attempts.forget(&job);
+        }
+    }
+
+    /// The canary of a check on RUNNER ended: VERDICT, or none when it never ran (refused: offered again).
+    fn canary_ended(st: &mut St, job: &str, verdict: Option<forseti::Verdict>) {
+        for r in st.runners.values_mut() {
+            if let Some(c) = r.check.as_mut()
+                && c.canary.as_deref() == Some(job)
+            {
+                match verdict {
+                    Some(v) => c.facts.canary = Some(v),
+                    None => c.canary = None,
+                }
+                return;
+            }
+        }
+    }
+
+    /// The strike a verdict of RUNNER's is, if any: counted, and the runner benched at its second.
+    fn strike_of(st: &mut St, runner: &str, v: &forseti::Verdict, now: u64) {
+        let Some(r) = st.runners.get_mut(runner) else {
+            return;
+        };
+        let ctx = StrikeCtx {
+            link_lost_today: 0,
+            link_stayed_up: !matches!(r.state, RunnerState::Unreachable { .. }),
+        };
+        if r.strikes.record(now, v, &ctx) {
+            r.state = RunnerState::Benched(v.to_string());
+            tracing::warn!("runners: {runner} is benched: {v}");
+        }
+    }
+
     /// A runner's link event at NOW: frames into the attempt state machine, its effects carried out.
     pub fn on_link(&self, ev: LinkEvent, now: u64) -> Vec<Outcome> {
         let mut st = self.lock();
         let mut out = vec![];
         match ev {
             LinkEvent::Logged { r, upto, .. } => st.attempts.logged(&r, upto),
+            LinkEvent::Clock { runner, at } => {
+                if let Some(r) = st.runners.get_mut(&runner) {
+                    r.skew_s = Some(at as i64 - now as i64);
+                }
+            }
             LinkEvent::Lost { runner, why } => {
                 tracing::info!("runners: {runner}: the link is lost ({why})");
                 self.link_lost(&mut st, &runner, now, &mut out);
@@ -1050,8 +1264,26 @@ impl Queue {
     }
 
     fn link_lost(&self, st: &mut St, runner: &str, now: u64, out: &mut Vec<Outcome>) {
+        // a link lost while jobs ran is a strike the second time in a day
+        let ran = st
+            .attempts
+            .attempts()
+            .any(|(_, a)| a.runner == runner && a.state.open());
         if let Some(r) = st.runners.get_mut(runner) {
-            r.state = RunnerState::Unreachable { since: now };
+            if ran {
+                let ctx = StrikeCtx {
+                    link_lost_today: r.strikes.lost_link(now),
+                    link_stayed_up: false,
+                };
+                let lost = forseti::Verdict::Infra(forseti::classify::infra::RUNNER_LOST.into());
+                if r.strikes.record(now, &lost, &ctx) {
+                    tracing::warn!("runners: {runner} is benched: its link was lost twice today");
+                }
+            }
+            r.state = match r.strikes.benched() {
+                Some(why) => RunnerState::Benched(why.to_string()),
+                None => RunnerState::Unreachable { since: now },
+            };
         }
         let effects = st.attempts.step(
             now,
@@ -1077,7 +1309,11 @@ impl Queue {
         let ev = match f {
             Frame::HelloOk { attempts, .. } => {
                 if let Some(r) = st.runners.get_mut(runner) {
-                    r.state = RunnerState::Ready;
+                    // a benched runner stays out of rotation until a check passes or the user unbenches it
+                    r.state = match r.strikes.benched() {
+                        Some(why) => RunnerState::Benched(why.to_string()),
+                        None => RunnerState::Ready,
+                    };
                 }
                 AEvent::Hello {
                     runner: runner.into(),
@@ -1086,7 +1322,12 @@ impl Queue {
             }
             Frame::Admit { r, grant } => {
                 if st.attempts.frame_ok(runner, &r) == Some(false) {
-                    let image = st.jobs.get(&r.job).and_then(|j| j.s.place.image.clone());
+                    // a health check's canary runs in the runner's own image
+                    let image = if is_canary(&r.job) {
+                        st.runners.get(runner).and_then(|rr| rr.r.image.clone())
+                    } else {
+                        st.jobs.get(&r.job).and_then(|j| j.s.place.image.clone())
+                    };
                     if let Some(rr) = st.runners.get(runner) {
                         rr.session.send(Frame::Start {
                             r: r.clone(),
@@ -1124,8 +1365,31 @@ impl Queue {
                 );
                 self.apply(st, effects, now, out);
                 self.put_attempts(st, &job);
+                if is_canary(&job) {
+                    // a check's canary refused (the runner busy): offered again
+                    st.attempts.forget(&job);
+                    Self::canary_ended(st, &job, None);
+                    return;
+                }
                 if current && let Some(j) = st.jobs.get_mut(&job) {
                     j.waiting = Some(format!("{runner}: {why}"));
+                }
+                return;
+            }
+            Frame::ProbeResult {
+                facts,
+                missing,
+                limits,
+                ..
+            } => {
+                if let Some(c) = st.runners.get_mut(runner).and_then(|r| r.check.as_mut()) {
+                    c.facts.probed = true;
+                    c.facts.missing = missing.iter().map(|m| m.what.clone()).collect();
+                    c.facts.limits = limits;
+                    // the probe's facts carry the free space only: the floor is its 20 GB part
+                    if let Some(f) = facts {
+                        c.facts.disk_free_gb = f.disk_free_gb;
+                    }
                 }
                 return;
             }
@@ -1212,6 +1476,16 @@ impl Queue {
                     attempt,
                     result,
                 } => {
+                    let runner = st.attempts.attempt(&job, attempt).map(|a| a.runner.clone());
+                    let verdict = verdict_of(&result)
+                        .unwrap_or_else(|| forseti::Verdict::Infra("no verdict".into()));
+                    if is_canary(&job) {
+                        Self::canary_ended(st, &job, Some(verdict));
+                        continue;
+                    }
+                    if let Some(r) = runner {
+                        Self::strike_of(st, &r, &verdict, now);
+                    }
                     st.jobs.remove(&job);
                     st.attempts.forget(&job);
                     self.drop_job(&job);
@@ -1235,6 +1509,11 @@ impl Queue {
                         let j = j.clone();
                         self.put_job(&j, j.s.own);
                     }
+                }
+                Effect::Lost { job } if is_canary(&job) => {
+                    let lost =
+                        forseti::Verdict::Infra(forseti::classify::infra::RUNNER_LOST.into());
+                    Self::canary_ended(st, &job, Some(lost));
                 }
                 Effect::Lost { job } => {
                     st.jobs.remove(&job);
@@ -1271,7 +1550,6 @@ impl Queue {
                 }
             }
         }
-        let _ = now;
     }
 }
 
