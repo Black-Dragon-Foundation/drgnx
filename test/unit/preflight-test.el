@@ -96,7 +96,8 @@ $PF_TESTS, default 3, tests); ENV (\"K=V\" strings) goes first, ARGS after the o
     (unwind-protect
         (progn
           (should (eql 0 (car (drgnx-preflight-test--run
-                               "echo \"$DRGNX_TEST_HUB_CHAOS|$DRGNX_TEST_SELECTOR\" >> \"$PF_LOG\"; exit 0"))))
+                               ;; printf, not echo: macOS's /bin/sh echo turns the selector's backslashes into escapes
+                               "printf '%s|%s\\n' \"$DRGNX_TEST_HUB_CHAOS\" \"$DRGNX_TEST_SELECTOR\" >> \"$PF_LOG\"; exit 0"))))
           (let ((lines (with-temp-buffer (insert-file-contents log) (split-string (buffer-string) "\n" t))))
             (should (equal (seq-remove (lambda (l) (string-prefix-p "|" l)) lines)
                            '("1|\"^drgnx-\\\\(hub-client\\\\|ai-gateway\\\\)/\"")))))

@@ -67,10 +67,11 @@ jobs:
         working-directory: runtime
     steps:
       # root in this container: the `sudo` rows (another uid on the socket) run, through setpriv. setpriv is in
-      # util-linux; the fedora image has only util-linux-core (draugr's pdeathsig test runs it too)
+      # util-linux; the fedora image has only util-linux-core (draugr's pdeathsig test runs it too); diffutils for the
+      # rows that compare files with cmp (the fedora:45 image no longer carries it)
       - name: Tools
         working-directory: /
-        run: dnf -y install git cargo rust gcc clippy rustfmt tar zstd gzip procps-ng util-linux bubblewrap jq
+        run: dnf -y install git cargo rust gcc clippy rustfmt tar zstd gzip procps-ng util-linux bubblewrap jq diffutils
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
