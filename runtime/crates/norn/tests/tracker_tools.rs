@@ -865,6 +865,63 @@ mod tools {
         );
     }
 
+    /// Pattern D: the sources are in the decision view and the finding's data.
+    #[tokio::test]
+    async fn record_decision_keeps_sources() {
+        let w = World::new().await;
+        let h = w.place("pa");
+        let a = w.agent("a1", &h);
+        let sources =
+            json!([{"path": "src/a.rs", "lines": [3, 9]}, {"url": "https://example.test/x"}]);
+        let o = w
+            .call(&a, "record_decision", json!({"kind": "build", "subject": "use x", "reason": "because", "seen_version": 0, "sources": sources}))
+            .await;
+        assert!(!o.err, "{}", o.text);
+        assert_eq!(
+            w.count("select count(*) from decision where json_array_length(sources) = 2 and json_extract(sources, '$[0].lines[1]') = 9"),
+            1
+        );
+        let many: Vec<_> = (0..13).map(|i| json!({"path": format!("f{i}")})).collect();
+        let bad = w
+            .call(&a, "record_decision", json!({"kind": "build", "subject": "use y", "reason": "because", "seen_version": 1, "sources": many}))
+            .await;
+        assert!(bad.err && bad.text.contains("at most 12"), "{}", bad.text);
+        assert_eq!(w.count("select count(*) from decision"), 1);
+    }
+
+    #[tokio::test]
+    async fn note_add_sources_only_on_a_finding() {
+        let w = World::new().await;
+        let h = w.place("pa");
+        let a = w.agent("a1", &h);
+        let id = id_of(&create(&w, &a, "subject").await);
+        let sources = json!([{"path": "src/a.rs"}]);
+        let ok = w
+            .call(
+                &a,
+                "note_add",
+                json!({"about": id, "text": "it is so", "kind": "finding", "sources": sources}),
+            )
+            .await;
+        assert!(!ok.err, "{}", ok.text);
+        assert_eq!(
+            w.count("select count(*) from entity where kind = 'note' and json_extract(data, '$.sources[0].path') = 'src/a.rs'"),
+            1
+        );
+        let bad = w
+            .call(
+                &a,
+                "note_add",
+                json!({"about": id, "text": "progress", "kind": "progress", "sources": sources}),
+            )
+            .await;
+        assert!(bad.err && bad.text.contains("finding"), "{}", bad.text);
+        assert_eq!(
+            w.count("select count(*) from entity where kind = 'note'"),
+            1
+        );
+    }
+
     #[tokio::test]
     async fn who_touched_resolves_moved_and_gone() {
         let w = World::new().await;

@@ -15,6 +15,7 @@ pub mod kinds;
 pub mod matrix;
 pub mod migrate7;
 pub mod migrate8;
+pub mod migrate9;
 pub mod options;
 pub mod parsed;
 pub mod privacy;

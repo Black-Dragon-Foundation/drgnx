@@ -261,6 +261,8 @@ struct RecordDecisionArgs {
     step: Option<i64>,
     /// Where it came from: from-brief, own or needs-user
     origin: Option<String>,
+    /// What it rests on: up to 12 of `{path, lines?: [first, last]}` or `{url}`
+    sources: Option<Vec<crate::write::work::Source>>,
 }
 
 #[derive(Serialize)]
@@ -303,6 +305,10 @@ async fn record_decision(
             "origin is from-brief, own or needs-user, not {o:?}"
         ));
     }
+    if let Some(s) = &args.sources {
+        crate::write::work::check_sources(s).map_err(|e| e.to_string())?;
+    }
+    let sources = args.sources.clone().filter(|s| !s.is_empty());
     let (step, origin) = (args.step, args.origin.clone());
     let sid = match who {
         Identity::Session { sid, .. } => Some(sid.clone()),
@@ -340,11 +346,13 @@ async fn record_decision(
                 _ => None,
             };
             note_held(tx, &me, held)?;
-            if let (DecideResult::Ok { n, .. }, true) =
-                (&r, step.is_some() || origin.is_some() || sid.is_some())
-                && let Some(e) = entity::by_id(tx.sql(), &format!("decision:{n}"))?
+            if let (DecideResult::Ok { n, .. }, true) = (
+                &r,
+                step.is_some() || origin.is_some() || sid.is_some() || sources.is_some(),
+            ) && let Some(e) = entity::by_id(tx.sql(), &format!("decision:{n}"))?
             {
-                let patch = json!({"step": step, "origin": origin, "session": sid});
+                let patch =
+                    json!({"step": step, "origin": origin, "session": sid, "sources": sources});
                 entity::update(
                     tx,
                     e.n,

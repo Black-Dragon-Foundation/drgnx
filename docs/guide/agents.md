@@ -622,8 +622,18 @@ run it, with the plan's own encoding and line endings — and leaves alone a pla
 When a plan run starts a task, its worker gets a brief built from the graph: the task's section of the plan (found
 by its number in the plan file), the AGENTS.md at the run's repository root, the permissions matrix as it applies to
 a worker (one line for every action that is not Never), the base branch, the interfaces that the reports of the
-tasks it waits on list, the check to run (the plan's own line when it names one) and, for an agent without drgnx's
-tools, the plan file's path and the `drgnx-report` block to end with. A part with nothing to say is left empty.
+tasks it waits on list, the check to run (the plan's own line when it names one), a paragraph on recording what it
+learns (a `note_add` of kind `finding` that names its sources; `record_decision` for a choice between ways) and, for an
+agent without drgnx's tools, the plan file's path and the `drgnx-report` block to end with. A part with nothing to say
+is left empty.
+
+**Conclusions and their sources.** `record_decision` and `note_add` (kind `finding` only) take `sources`: up to 12 of
+`{path, lines?: [first, last]}` or `{url}`; more is refused. An agent without drgnx's tools can end a message with a
+fenced `drgnx-conclusion` block, `{"kind": "finding" | "decision", "text": "...", "sources": [...]}`; the hub records it
+as that task's finding or decision, labelled "from text". A block that is not valid is ignored.
+
+`timeline/get` pages backwards with `limit` (1 to 500) and `before` (a session's `seq`, else a step id): the newest
+`limit` steps before it, newest last.
 
 A brief is at most 16 KiB. Over that, the plan section is cut at a heading and a note says where; AGENTS.md and the
 interfaces have smaller caps of their own.
