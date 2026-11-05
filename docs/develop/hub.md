@@ -2231,7 +2231,10 @@ In the fallback it instead turns the root's auto-attach and target discovery off
 
 Tests: unit tests in each module. `route`'s tests play transcripts written by hand from the protocol JSON
 (`crates/heimdall/tests/data/*.jsonl`: an input line, then what it must give), and the fuzz target `cdp_envelope`
-([runtime.md](runtime.md#fuzzing)) seeds from them.
+([runtime.md](runtime.md#fuzzing)) seeds from them. `real-full.jsonl` and `real-headless-shell.jsonl` are recorded
+from real runs (the browser side only, long strings as their length; [runtime.md](runtime.md)'s `browser_real`):
+a test checks that the router's first command is the one sent there and that everything the browser said goes
+through a router as well-formed output.
 
 **The fallback's late replies.** In the fallback the agent owns the root session, so a reply there could outlive its
 agent and reach the next one. The router remembers the root commands an agent left unanswered when it went, and drops

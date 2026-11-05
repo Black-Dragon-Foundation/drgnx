@@ -8,6 +8,8 @@ const PLAYWRIGHT_CONNECT: &str = include_str!("../../tests/data/playwright-conne
 const CLOSE: &str = include_str!("../../tests/data/close.jsonl");
 const DOWNLOADS: &str = include_str!("../../tests/data/downloads.jsonl");
 const ATTACH_FAILS: &str = include_str!("../../tests/data/attach-fails.jsonl");
+const REAL_FULL: &str = include_str!("../../tests/data/real-full.jsonl");
+const REAL_HEADLESS_SHELL: &str = include_str!("../../tests/data/real-headless-shell.jsonl");
 
 #[derive(Debug, PartialEq)]
 enum Got {
@@ -431,4 +433,27 @@ fn a_gone_agents_late_root_reply_never_reaches_the_next() {
         r.from_browser(reply(5).as_bytes()),
         Step::ToAgent(_)
     ));
+}
+
+/// The browser side of real runs (drgnx-ratatoskr's tests/browser_real.rs, Fedora's Chromium as the full browser and
+/// as its headless shell): the router's first command is the one the broker sent there, and everything the browser
+/// said goes through a router as well-formed output (the agent side is not recorded, so its answers are not checked).
+#[test]
+fn real_recordings_go_through_the_router() {
+    for (name, rec) in [("full", REAL_FULL), ("headless-shell", REAL_HEADLESS_SHELL)] {
+        let lines: Vec<Value> = rec
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("{name}: {e}")))
+            .collect();
+        let (mut r, first) = Router::new();
+        let sent = lines.iter().find_map(|v| v.get("to_browser"));
+        assert_eq!(first.first().map(|b| json_of(b)).as_ref(), sent, "{name}");
+        let mut n = 0;
+        for m in lines.iter().filter_map(|v| v.get("browser")) {
+            gots(r.from_browser(&serde_json::to_vec(m).unwrap()));
+            n += 1;
+        }
+        assert!(n > 100, "{name}: only {n} browser messages");
+    }
 }
