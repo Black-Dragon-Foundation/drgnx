@@ -9,7 +9,7 @@ The scheduling decisions are [`forseti`](forseti.md)'s; sleipnir reads the machi
 | Feature | What | Dependencies |
 |---|---|---|
 | `linux` | the machine probe, the reservation files, the executor | std, rustix, libc, serde, `forseti`; blocking, never tokio |
-| `sync` | a job's inputs, the hardened git, checkout slots | std, rustix, `sha2`, `forseti`; blocking, never tokio |
+| `sync` | a job's inputs, the hardened git, checkout slots, mirrors, bundles, blobs | std, rustix, `sha2`, `secrecy`, `forseti`; blocking, never tokio |
 | `proto` | the wire protocol | pure |
 | `runner` (default) | the binary's modes | all of the above |
 | `test-hooks` | test-only entry points | compiled away otherwise |
@@ -289,6 +289,55 @@ planted program would write is absent and the planted `.git` is gone:
 
 All are `[D]`: temp repositories and real git, no clock, no waits.
 
+### Mirrors (`sync::mirror`)
+
+`Mirror::ensure(root, repo_id)` is the runner's bare mirror of one repository, `<root>/git/<id>/`. It is made with no
+template (so it has no sample hooks) and its config gets `core.hooksPath=/dev/null` every time, besides the hardened
+git's own `-c`. A repository id is letters, digits, `.`, `_` and `-`, at most 64, and never starts with `.` or `-`.
+Jobs never see a mirror; slots borrow its objects through `objects/info/alternates`. Refs land under `refs/origin/`
+(the origin's branches and tags) and `refs/hub/` (what the hub sent).
+
+A mirror gets its objects three ways (design 6.2):
+
+- **`fetch_origin(url, cred)`**, at the runner's own bandwidth. The URL is `https://` with no user or password in it,
+  `ssh://`, or `user@host:path`; never a local path, `file://`, a remote helper (`ext::`) or anything starting with
+  `-`. Git is told the same (`protocol.allow=never`, then `https` and `ssh` only; plain `http` only under
+  `test-hooks`), and any configured credential helper is reset. The fetch writes no `FETCH_HEAD`.
+- **A bundle** (below).
+- **The hub's `git push`.** Its `--receive-pack` is `sleipnir git-receive --root ROOT REPO`, which execs `git
+  receive-pack` on the mirror REPO names (its id, or its path under `ROOT/git/`, never anything else), through the
+  hardened git. No hook runs, whatever the mirror's config says, and every object received is checked.
+
+`has_commit(commit)` answers whether the mirror holds a commit, for the hub's choice between these.
+
+**The origin's credential** (`sync::cred`) is a token or deploy key the user named for the project. It is held only in
+`serve`'s memory and never written to a file:
+
+- `OriginCred::Https(token)`: for one fetch, a socket in `<root>/run/` (mode 0700, the socket 0600) hands the token
+  to `sleipnir credential-helper SOCKET get`, which git runs as its only helper and which prints it to git's pipe.
+  The socket and its thread end with the fetch.
+- `OriginCred::SshKey(key)`: a per-fetch `ssh-agent` (with a 600 s key lifetime besides) gets the key on stdin from
+  `ssh-add -`; git's ssh is pointed at it with `IdentityAgent`, and the agent is killed after the fetch.
+
+### Bundles and blobs (`sync::bundle`, `sync::blobs`)
+
+When the mirror lacks more than 8 MiB, the hub sends one git bundle in 1 MiB chunks. `bundle::Receiver::open(root,
+repo, BundleRef { sha256, size })` appends them to `<root>/bundles/<repo>.<sha256>.part`, under an exclusive lock, so a
+leftover process from a dropped link and the reconnect's receiver never write at once. The file survives a drop, and
+`offset()` (its size) is where the hub resumes. A partial of another bundle of the same repository is stale and goes.
+`append` refuses bytes past the declared size. `finish()` checks the size and the sha256, then fetches the bundle's
+refs into `refs/hub/` with every object checked. A bundle that fails either check never reaches the mirror, and its
+file is removed.
+
+`blobs::Store` is the overlay's content-addressed store, `<root>/blobs/<sha256 hex>`. `missing(hashes)` names the
+blobs the hub must send (each once); `put(sha, bytes)` keeps a blob only when its bytes hash to its name, written
+aside and renamed. It is the `Blobs` a slot update reads.
+
+**The frames** (`sync-have`, `sync-need`, `blob`, `bundle {offset}`, `origin-fetch`) map onto these calls:
+`Store::missing` and `Mirror::has_commit` answer a `sync-have`, `Receiver::offset` and `append` take a `bundle`, and
+`fetch_origin` serves an `origin-fetch`. Until `serve` handles them, `sleipnir sync-bundle` (`test-hooks` only) takes
+one bundle on stdin and announces `at OFFSET` after every chunk, for the fleet row.
+
 ## Tests
 
 `cargo test -p sleipnir --no-default-features --features linux` runs the pure rows: the contract's refusals from
@@ -305,3 +354,16 @@ running one of the file's `child_*` entries. The rows: the fake runner's own che
 against one budget, a dead pid's reservation, the slice tree taking a container (cgroup path, cpusets both ways, the
 cap, OOM scores), the cap's step ending in a kernel OOM below oomd's limit, a job in its own slice, an OOM as `oom`, a
 keyed job without `memory.swap.max` 0, and a job outliving its starter.
+
+`tests/runner_host_sync.rs` holds sync's runner-host rows, built with `--features test-hooks` and run the same way:
+
+- `origin_fetch_with_a_token_leaves_no_file`: a fetch from a smart-HTTP origin (git's `http-backend` behind a small
+  server in the test) that answers only with the token; afterwards no file under the runner folder, `/tmp` or the
+  runner's home holds the token or its Authorization header;
+- `push_into_the_mirror_runs_no_hook`: a push through `sleipnir git-receive` into a mirror with every receive hook
+  planted, and a planted `core.hooksPath`, runs none of them; a path outside the mirrors is refused.
+
+`tests/fleet_sync.rs` holds sync's fleet rows (`#[ignore = "fleet"]`), run from the fleet's harness over real SSH
+(`fleet.sh test 'sync::'`, with the `sleipnir` binary in `/fleet/share`). `sync::a_dropped_bundle_resumes_not_restarts`
+sends a 10 MiB bundle, cuts the link at 40 % once the runner has announced that offset, reconnects, and checks that the
+runner resumes there: at most 60 % plus 1 MiB is sent again, and the commit arrives in the mirror.

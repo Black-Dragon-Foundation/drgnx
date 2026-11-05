@@ -2048,6 +2048,7 @@ dependencies = [
  "forseti",
  "libc",
  "rustix",
+ "secrecy",
  "serde",
  "serde_json",
  "sha2",
