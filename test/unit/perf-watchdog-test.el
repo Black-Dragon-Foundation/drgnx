@@ -44,6 +44,7 @@
   (should (equal (perf-watchdog-test--env "on") '(t . 1)))
   (should (equal (perf-watchdog-test--env nil) '(t . 100)))
   (should (equal (perf-watchdog-test--env "default") '(t . 100)))
+  (should (equal (perf-watchdog-test--env "16") '(t . 16)))
   (should (null (car (perf-watchdog-test--env "off")))))
 
 (ert-deftest drgnx-perf/watchdog-env-off-is-fully-off ()

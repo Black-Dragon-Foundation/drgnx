@@ -623,7 +623,8 @@ session launcher         systemd         # or detached (process group, no system
   containerd mode). `--podman` is short for `DRGNX_CONTAINER=podman … --container`.
 - **GUI tier in a container:** `test/container/Containerfile.gui` (fedora:45 + `emacs-pgtk mutter sway i3
   xorg-x11-server-Xvfb xrandr xprop emacs-lucid dbus-daemon mesa-dri-drivers ImageMagick procps-ng util-linux`, ~2.15 GB),
-  run with `--memory 3g --memory-swap 3g` (`DRGNX_TEST_GUI_MEMORY` overrides). mutter falls back to a surfaceless software renderer, so no GPU is
+  run with `--memory 3g --memory-swap 3g` (6g for `--perf --ab-env`, which runs two sessions; `DRGNX_TEST_GUI_MEMORY`
+  overrides). mutter falls back to a surfaceless software renderer, so no GPU is
   needed. The container needs `--security-opt seccomp=unconfined --security-opt label=disable`: GTK loads icons
   through glycin, whose `bwrap` sandbox cannot create namespaces under the default policy, and Emacs aborts.
 - **Window managers' image:** `--compositor kwin` and `--compositor niri` run in `drgnx-test-wm:f45`, built from

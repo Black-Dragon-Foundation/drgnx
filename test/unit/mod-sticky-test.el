@@ -124,6 +124,31 @@
     (drgnx-sticky-test--start-at-line 20)
     (should (equal (substring-no-properties (drgnx-sticky--segment (selected-window))) " › class Shape: › def area(self):"))))
 
+(ert-deftest drgnx-sticky/a-parse-not-ready-is-never-waited-for ()
+  ;; On Nidhogg a parse job (a large file's first parse) may still run when the header is drawn: the scopes come from
+  ;; indentation then, a poll redraws once the tree is ready, and the next build reads tree-sitter
+  (drgnx-sticky-test--in (drgnx-sticky-test--elisp 40) #'emacs-lisp-mode
+    (let ((ready nil) (polls nil) (b (current-buffer)) (epoch (drgnx-epoch 'sticky (current-buffer))))
+      (cl-letf (((symbol-function 'treesit-parser-list) (lambda (&rest _) '(parser)))
+                ((symbol-function 'treesit-parser-p) (lambda (p) (eq p 'parser)))
+                ((symbol-function 'nidhogg-treesit-parser-ready-p) (lambda (_p) ready))
+                ((symbol-function 'drgnx-sticky--treesit-scopes) (lambda (_pos) '(treesit)))
+                ((symbol-function 'drgnx-sticky--indent-scopes) (lambda (_pos) '(indent)))
+                ((symbol-function 'drgnx-timer-poll) (lambda (&rest args) (push args polls))))
+        (should (equal (drgnx-sticky-scopes 100) '(indent)))
+        (should (equal (car (car polls)) (cons 'sticky-parse b)))
+        (should (eq (nth 2 (car polls)) 'drgnx-sticky--parse-landed))
+        (should-not (drgnx-sticky--parse-landed b))          ; still parsing: the poll goes on, the header stays
+        (should (equal (drgnx-epoch 'sticky b) epoch))
+        (setq ready t)
+        (should (drgnx-sticky--parse-landed b))              ; ready: one redraw, the poll ends
+        (should-not (equal (drgnx-epoch 'sticky b) epoch))
+        (should (equal (drgnx-sticky-scopes 100) '(treesit)))
+        (should (= (length polls) 1))
+        (let ((dead (generate-new-buffer " sticky-dead")))   ; a buffer killed meanwhile ends the poll
+          (kill-buffer dead)
+          (should (drgnx-sticky--parse-landed dead)))))))
+
 (ert-deftest drgnx-sticky/comments-and-preprocessor-lines-are-no-scopes ()
   (drgnx-sticky-test--in (concat "def f():\n    x = 1\n# TODO remove\n"
                                  (mapconcat (lambda (i) (format "    y%d = %d" i i)) (number-sequence 1 30) "\n") "\n")

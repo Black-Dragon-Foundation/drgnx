@@ -1188,17 +1188,27 @@ macOS (no /proc there)."
       (delete-directory dir t))))
 
 (ert-deftest drgnx-bin/container-perf-ab-env-passed ()
-  ;; --perf --ab-env VAR=JUDGED,REF [--n N] reaches the command inside the GUI image; a malformed pair is a usage
-  ;; error; --ab-env without --perf is refused.
+  ;; --perf --ab-env VAR=JUDGED,REF [--n N] reaches the command inside the GUI image, capped at two sessions' memory
+  ;; (6g, swap equal; a plain --perf run gets one session's 3g; DRGNX_TEST_GUI_MEMORY overrides both); a malformed
+  ;; pair is a usage error; --ab-env without --perf is refused.
   (let ((dir (make-temp-file "drgnx-bin-tmp" t)))
     (unwind-protect
         (progn
-          (let ((args (drgnx-bin-test--container-argv
-                       dir '("DRGNX_TEST_GUI_IMAGE=gui-image" "DRGNX_PERF_WORKLOADS=popup-typing")
-                       "--perf" "--ab-env" "DRGNX_PERF_GLITNIR=on,off" "--n" "20")))
+          (let* ((args (drgnx-bin-test--container-argv
+                        dir '("DRGNX_TEST_GUI_IMAGE=gui-image" "DRGNX_PERF_WORKLOADS=popup-typing")
+                        "--perf" "--ab-env" "DRGNX_PERF_GLITNIR=on,off" "--n" "20"))
+                 (opts (butlast args (length (member "gui-image" args)))))
             (should (equal (cdr (member "gui-image" args))
                            '("bin/drgnx" "test" "--perf" "--ab-env" "DRGNX_PERF_GLITNIR=on,off" "--n" "20")))
-            (should (member "DRGNX_PERF_WORKLOADS=popup-typing" args)))
+            (should (member "DRGNX_PERF_WORKLOADS=popup-typing" args))
+            (should (equal (cadr (member "--memory" opts)) "6g"))
+            (should (equal (cadr (member "--memory-swap" opts)) "6g")))
+          (let ((args (drgnx-bin-test--container-argv dir '("DRGNX_TEST_GUI_IMAGE=gui-image") "--perf")))
+            (should (equal (cadr (member "--memory" args)) "3g")))
+          (let ((args (drgnx-bin-test--container-argv
+                       dir '("DRGNX_TEST_GUI_IMAGE=gui-image" "DRGNX_TEST_GUI_MEMORY=8g")
+                       "--perf" "--ab-env" "DRGNX_PERF_GLITNIR=on,off")))
+            (should (equal (cadr (member "--memory" args)) "8g")))
           (should (drgnx-bin-test--container-refused-p dir nil "--perf" "--ab-env" "X=on"))
           (should (drgnx-bin-test--container-refused-p dir nil "--perf" "--ab-env"))
           (should (drgnx-bin-test--container-refused-p dir nil "--ab-env" "X=a,b")))

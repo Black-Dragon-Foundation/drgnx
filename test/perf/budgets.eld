@@ -3,6 +3,8 @@
 ;; Input (set from the first measurements, 2026-10-17: p95 0.4–7.9 ms, max ≤ 25 ms): p95 within one 60 Hz frame
 ;; (16 ms), max 50 ms; redisplay p95 16 ms; GC while typing 100 ms; a GC pause p95 50 ms (spec).
 ;; Any hook function p95 2 ms (spec): judged by `drgnx test --perf --audit'.
+;; A row may end in `:report-only STEP': it is reported, never failed, until $DRGNX_PERF_LANDED names STEP (the workers'
+;; rows, Task 8; docs/develop/perf.md, "The workers probe").
 ((frames (:frame :p95) 500)
  (startup (:server_ms :p50) 1000)
  (startup (:modules_ms) 1800)
@@ -116,4 +118,27 @@
  (motions-evil (:stalls) 0) (motions-evil (:gc :max) 250) (motions-evil (:gc :p95) 50)
  (explorer-evil (:stalls) 0) (explorer-evil (:gc :max) 250) (explorer-evil (:gc :p95) 50)
  (terminal-typing (:stalls) 0) (terminal-typing (:gc :max) 250) (terminal-typing (:gc :p95) 50)
- (terminal-output (:stalls) 0) (terminal-output (:gc :max) 250) (terminal-output (:gc :p95) 50))
+ (terminal-output (:stalls) 0) (terminal-output (:gc :max) 250) (terminal-output (:gc :p95) 50)
+ ;; The off-the-main-thread workloads (Task 8; off-the-main-thread design §17.6, harness/drgnx-perf-workloads.el).  Every
+ ;; budget is the design's table (V2 §1: 16 ms a key, 50 ms the worst key, 100 ms a stall; or drgnx's existing row), fixed
+ ;; here, never taken from a first run.  Report-only until the step that moves the work lands (DRGNX_PERF_LANDED names it).
+ ;; :stalls-ge16 / :stalls-ge100 count the watchdog's stalls (DRGNX_PERF_WATCHDOG=16 or on for the 16 ms ones); :ts, :lsp, :image
+ ;; and :expand_ms are the workload's own measures.
+ (lsp-burst (:input :p95) 16 :report-only ot4) (lsp-burst (:stalls-ge16) 0 :report-only ot4)
+ (lsp-burst (:lsp :handler_ms :max) 50 :report-only ot4)       ; a response's handler within 50 ms of its last byte
+ (lsp-typing (:input :p95) 16 :report-only ot4) (lsp-typing (:input :max) 50 :report-only ot4)
+ (ts-open (:ts :draw_ms) 16 :report-only ot2)                  ; first draw within one frame of the visit's end
+ (ts-open (:ts :colored_ms) 500 :report-only ot2)              ; last visible region coloured within 500 ms
+ (ts-open (:stalls-ge100) 0 :report-only ot2)
+ (ts-paste (:input :p95) 16 :report-only ot2) (ts-paste (:complete-ms) 300 :report-only ot2)
+ (ts-typing (:input :p95) 16 :report-only ot2) (ts-typing-unclosed (:input :p95) 16 :report-only ot2)
+ (compile-flood (:input :p95) 16 :report-only ot3) (compile-flood (:input :p99) 50 :report-only ot3)
+ (compile-flood (:input :max) 50 :report-only ot3)
+ (image-open (:stalls-ge16) 0 :report-only ot6)
+ (image-open (:image :screenshot_ms) 16 :report-only ot6)      ; first draw within one frame
+ (image-open (:image :preview_drawn_ms) 500 :report-only ot6)  ; every picture drawn within 500 ms
+ (explorer-expand (:expand_ms) 80 :report-only ot8) (explorer-expand (:stalls-ge16) 0 :report-only ot8)
+ (explorer-git (:input :p95) 16 :report-only ot5) (explorer-git (:stalls-ge16) 0 :report-only ot5)
+ (quick-open-large (:complete-ms) 100 :report-only ot5)        ; first candidates within 100 ms
+ (quick-open-large (:stalls-ge16) 0 :report-only ot5)
+ (autosave-typing (:input :max) 50 :report-only ot8) (autosave-typing (:complete-ms) 1000 :report-only ot8))
