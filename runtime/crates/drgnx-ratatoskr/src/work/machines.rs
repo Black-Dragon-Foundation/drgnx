@@ -133,6 +133,12 @@ fn refresh(f: &Front) -> Vec<Machine> {
     list
 }
 
+/// The local slots the hub starts with, read once the job pool is open and before anything is served: they are the
+/// list's first state, not a change, so the first sweep sends no `machines-changed`.
+pub fn seed(f: &Front) {
+    f.core.machines.lock().set_local(local_slots(f));
+}
+
 /// The machines now (the registry brought up to date first): the Work map's seed.
 pub(crate) fn list_now(f: &Front) -> Vec<Machine> {
     refresh(f)
