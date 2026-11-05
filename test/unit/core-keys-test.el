@@ -890,7 +890,7 @@ keys); every binding is undone after."
     (search-semantic "C-k C-f" nil) (terminal-new "C-S-`" nil) (scm-view "C-S-g" nil)
     (view-zen "C-k z" nil)
     (view-zen "<f11>" nil) (view-zoom-in "C-=" nil) (view-zoom-in "C-+" nil) (view-zoom-out "C--" nil)
-    (view-zoom-reset "C-0" nil) (agents-view "C-k a" nil) (agents-stop "C-c C-c" drgnx-agents-transcript-mode-map)
+    (view-zoom-reset "C-0" nil) (decor-activate "RET" drgnx-decor-button-map) (agents-view "C-k a" nil) (agents-stop "C-c C-c" drgnx-agents-transcript-mode-map)
     (agents-deliver "C-c C-d" drgnx-agents-transcript-mode-map) (agents-open "RET" drgnx-agents-list-mode-map)
     (agents-reply "RET" drgnx-agents-transcript-mode-map)
     (agents-review-done "C-c C-c" drgnx-agents-review-mode-map)
