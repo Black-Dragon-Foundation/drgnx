@@ -626,7 +626,8 @@ session launcher         systemd         # or detached (process group, no system
   run with `--memory 3g --memory-swap 3g` (`DRGNX_TEST_GUI_MEMORY` overrides). mutter falls back to a surfaceless software renderer, so no GPU is
   needed. The container needs `--security-opt seccomp=unconfined --security-opt label=disable`: GTK loads icons
   through glycin, whose `bwrap` sandbox cannot create namespaces under the default policy, and Emacs aborts.
-- **Window managers' image:** `--compositor kwin` and `--compositor niri` run in `drgnx-test-wm:f45`, built from
+- **Window managers' image:** `--compositor kwin` and `--compositor niri` run in `drgnx-test-wm:TAG` (TAG: `test/container/image-tag.sh`, a hash of the Containerfile and every file it
+  copies, as for every local test image, so worktrees with other inputs never share a tag), built from
   `test/container/Containerfile.wm` (fedora:45 + `emacs-pgtk kwin niri sway dbus-daemon mesa-dri-drivers procps-ng
   util-linux`, ~2.3 GB; `kwin_wayland` and `sway` lose their `cap_sys_nice` file capability, which the container does
   not grant), with the same cap and security options. `DRGNX_UI_COMPOSITOR=kwin|niri` without `--compositor` picks it
@@ -979,7 +980,7 @@ bin/drgnx test --container --tty              # in a Fedora 45 container, Emacs 
 
 `bin/drgnx test --tty` is `drgnx-run-ert-batch` on `test/tty`, every file in an Emacs of its own like the unit tier,
 SIGPIPE ignored, in a temp directory of its own; the environment is the caller's (the sessions start theirs with
-`env -i`). `DRGNX_TEST_SELECTOR` narrows it. In a container the image `drgnx-test-tty:fNN` is built from
+`env -i`). `DRGNX_TEST_SELECTOR` narrows it. In a container the image `drgnx-test-tty:TAG` (`test/container/image-tag.sh`) is built from
 `test/container/Containerfile.tty` with `--build-arg FEDORA=NN`; the image has tmux, plus kitty and mutter for the exit
 test. It runs with the GUI tier's security options (`seccomp=unconfined`, `label=disable`) and `--memory 3g`.
 `DRGNX_USER_ELPA` (a directory holding the pinned kkp, and corfu, unpacked) is mounted read-only as `/elpa`, so the

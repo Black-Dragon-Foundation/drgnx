@@ -17,7 +17,8 @@
 # Exit 0 always while the lane is report-only (2 on a usage error).
 # A sample is EXE TARGET (--runner), which prints the seconds the run took and exits 0 when it passed; the default runs
 # bin/drgnx.  TARGET `calibration` is the workload: DRGNX_TIMING_CALIB_CMD, else a batch Emacs in the image the tests
-# run in (DRGNX_TEST_IMAGE, which CI's test-image step sets, else drgnx-test:f45; DRGNX_CONTAINER, else podman), so the
+# run in (DRGNX_TEST_IMAGE, which CI's test-image step sets, else the local drgnx-test:TAG `bin/drgnx test --container`
+# builds, TAG from test/container/image-tag.sh; DRGNX_CONTAINER, else podman), so the
 # calibration and the samples share one Emacs and one runtime; the workload times itself, the container's start is out.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
@@ -46,7 +47,8 @@ default_sample() {
   local t=$1 sel log rc secs
   if [ "$t" = calibration ]; then
     if [ -n "${DRGNX_TIMING_CALIB_CMD:-}" ]; then bash -c "$DRGNX_TIMING_CALIB_CMD"
-    else "${DRGNX_CONTAINER:-podman}" run --rm --memory 1g --memory-swap 1g "${DRGNX_TEST_IMAGE:-drgnx-test:f45}" \
+    else "${DRGNX_CONTAINER:-podman}" run --rm --memory 1g --memory-swap 1g \
+           "${DRGNX_TEST_IMAGE:-drgnx-test:$(bash "$root/test/container/image-tag.sh" "$root/test/container/Containerfile")}" \
            /usr/local/bin/emacs --batch -Q --eval "$workload" </dev/null; fi
     return $?
   fi

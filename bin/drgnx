@@ -421,9 +421,9 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=
   rt="${DRGNX_CONTAINER:-$(env_eval '(drgnx-env-container-runtime)')}"   # set: no host Emacs needed (CI)
   [ -n "$rt" ] || { echo "drgnx: no container runtime found (podman, docker, nerdctl); set DRGNX_CONTAINER" >&2; return 1; }
   mount="$here:/src:ro"; [ "$rt" = podman ] && mount="$mount,Z"
-  image=drgnx-test:f45; file=Containerfile
+  image=drgnx-test; file=Containerfile   # a local build is tagged below with test/container/image-tag.sh
   if [ "$tier" = ui ] || [ "$tier" = scenario ] || [ "$tier" = perf ] || [ "$tier" = soak ] || [ "$tier" = day ]; then   # the GUI image: sessions under headless mutter
-    image=drgnx-test-gui:f45; file=Containerfile.gui; cmd=(bin/drgnx test --ui); prebuilt="${DRGNX_TEST_GUI_IMAGE:-}"
+    image=drgnx-test-gui; file=Containerfile.gui; cmd=(bin/drgnx test --ui); prebuilt="${DRGNX_TEST_GUI_IMAGE:-}"
     [ "$tier" = scenario ] && cmd=(bin/drgnx test --scenario --config drgnx)
     [ "$tier" = perf ] && cmd=(bin/drgnx test --perf)
     if [ -n "$abenv" ]; then cmd+=(--ab-env "$abenv"); [ -z "$abn" ] || cmd+=(--n "$abn"); fi
@@ -432,7 +432,7 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=
     local comp="${DRGNX_UI_COMPOSITOR:-}"
     if [ -n "$compositor" ]; then cmd+=(--compositor "$compositor"); comp="$compositor"; fi
     # KWin and niri are in an image of their own (Containerfile.wm); DRGNX_TEST_WM_IMAGE: a prebuilt one
-    case "$comp" in kwin|niri) image=drgnx-test-wm:f45; file=Containerfile.wm; prebuilt="${DRGNX_TEST_WM_IMAGE:-}" ;; esac
+    case "$comp" in kwin|niri) image=drgnx-test-wm; file=Containerfile.wm; prebuilt="${DRGNX_TEST_WM_IMAGE:-}" ;; esac
     # --memory: a GUI run (sessions, compositors, the X11 Emacs) must never push the host into the OOM killer;
     # --memory-swap the same: no swap on top.  DRGNX_TEST_GUI_MEMORY (default 3g) for a bigger run
     local mem="${DRGNX_TEST_GUI_MEMORY:-3g}"
@@ -447,7 +447,7 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=
     if [ -n "${DRGNX_UI_COMPOSITOR:-}" ]; then args+=(-e "DRGNX_UI_COMPOSITOR=$DRGNX_UI_COMPOSITOR"); fi
   elif [ "$tier" = tty ]; then
     fedora="${fedora:-45}"
-    image="drgnx-test-tty:f$fedora"; file=Containerfile.tty; cmd=(bin/drgnx test --tty); prebuilt="${DRGNX_TEST_TTY_IMAGE:-}"
+    image=drgnx-test-tty; file=Containerfile.tty; cmd=(bin/drgnx test --tty); prebuilt="${DRGNX_TEST_TTY_IMAGE:-}"
     build=(--build-arg "FEDORA=$fedora")
     args=(--security-opt seccomp=unconfined --security-opt label=disable --memory 3g)   # the GUI tier's options; tmux and Emacs sessions
     mount="$here:/src:ro"
@@ -471,6 +471,10 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=
     [[ $prebuilt =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ ]] || { echo "drgnx: '$prebuilt' is not an image reference" >&2; return 2; }
     image="$prebuilt"; echo "image: $image (prebuilt)" >&2
   else
+    # tagged with the hash of its inputs (the Containerfile and every file it copies), as CI's images: worktrees with
+    # other inputs build other tags and never race for one
+    local tag; tag="$(bash "$here/test/container/image-tag.sh" "$here/test/container/$file")" || return 1
+    image="$image:$tag"
     # an image build is capped too: an uncapped one once pushed the host into the OOM killer
     # (DRGNX_TEST_BUILD_MEMORY, default 3g; podman only, as docker's buildx ignores --memory)
     local bmem="${DRGNX_TEST_BUILD_MEMORY:-3g}" bargs=()
