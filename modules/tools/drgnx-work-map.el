@@ -22,6 +22,17 @@
 (unless (featurep 'drgnx-decor)
   (load (expand-file-name "../ui/drgnx-decor" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 
+(unless (featurep 'drgnx-work-edges)
+  (load (expand-file-name "drgnx-work-edges" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+
+(declare-function drgnx-work-edges-geometry "drgnx-work-edges")
+(declare-function drgnx-work-edges-colours "drgnx-work-edges")
+(declare-function drgnx-work-edges-key "drgnx-work-edges")
+(declare-function drgnx-work-edges-band-text "drgnx-work-edges")
+(declare-function drgnx-work-edges-band-tiles "drgnx-work-edges")
+(declare-function drgnx-work-edges-lane-parts "drgnx-work-edges")
+(declare-function drgnx-work-edges-flush "drgnx-work-edges")
+
 (defvar-local drgnx-work-space--view nil
   "The id of the map view this buffer shows (`drgnx-work-client-open'), or nil for an empty map.")
 (defvar-local drgnx-work-space--message nil
@@ -35,6 +46,8 @@
   "The chain of the selection, cached: (SELECTION EDGES UP DOWN CHAIN-EDGES), EDGES the frame's edge list it came from.")
 (defvar-local drgnx-work-map--edge-selection nil
   "The selection the edge tiles show: it follows `drgnx-work-map--selection' one frame later.")
+(defvar-local drgnx-work-map--edge-chain-edges nil
+  "The chain edges the band tiles and lanes are drawn with: the edges of `drgnx-work-map--edge-selection''s chain.")
 (defvar-local drgnx-work-map--finished nil
   "The id of the item that finished while it was selected; the side panel says so until the selection moves.")
 (defvar-local drgnx-work-map--search nil
@@ -259,6 +272,54 @@ own redisplay, the rest by the view's own draw."
     (with-current-buffer buffer
       (setq drgnx-work-map--edge-selection drgnx-work-map--selection)
       (run-hook-with-args 'drgnx-work-map-edges-functions drgnx-work-space--view drgnx-work-map--selection))))
+
+(defun drgnx-work-map--edge-keys-of (edges)
+  (mapcar #'drgnx-work-edges-key edges))
+
+(defun drgnx-work-map--rows-of-edges (state keys)
+  "The row keys whose bands or lanes draw an edge named in KEYS (edge keys), and the layout's rows indexes of its bands:
+((ROW-KEY …) . (BAND-INDEX …))."
+  (let* ((layout (drgnx-work-client-layout state)) (rows (plist-get layout :rows)) out bands)
+    (dolist (b (plist-get layout :bands))
+      (when (seq-some (lambda (s) (member (drgnx-work-edges-key s) keys)) (plist-get b :segs))
+        (push (cons :band (cdr (drgnx-work-map--row-key (nth (plist-get b :row) rows)))) out)
+        (push (plist-get b :row) bands)))
+    (dolist (l (plist-get layout :lanes))
+      (when (member (drgnx-work-edges-key l) keys)
+        (push (drgnx-work-map--row-key (nth (plist-get l :row) rows)) out)))
+    (cons (delete-dups out) bands)))
+
+(defun drgnx-work-map--edges-update (view-id selection)
+  "`drgnx-work-map-edges-functions': the tiles and lanes of the edges that joined or left the chain of SELECTION take
+their colours, and the rows that hold them are drawn again; the images they replace are flushed.  The tiles no edge
+of which changed are the very images they were."
+  (when-let* ((buffer (drgnx-work-map-buffer view-id)))
+    (with-current-buffer buffer
+      (let ((state (drgnx-work-map--state)))
+        (when (and state (drgnx-view-p drgnx-view) (not (drgnx-work-map--outline-p state)))
+          (let* ((old drgnx-work-map--edge-chain-edges)
+                 (new (and selection (nth 2 (drgnx-work-nav-chain state selection))))
+                 (old-keys (drgnx-work-map--edge-keys-of old)) (new-keys (drgnx-work-map--edge-keys-of new))
+                 (changed (append (seq-remove (lambda (k) (member k new-keys)) old-keys)
+                                  (seq-remove (lambda (k) (member k old-keys)) new-keys)))
+                 (found (drgnx-work-map--rows-of-edges state changed))
+                 (colours (drgnx-work-edges-colours))
+                 (before (drgnx-work-map--edge-geometry state old)) (after (drgnx-work-map--edge-geometry state new)))
+            (dolist (i (cdr found))
+              (when-let* ((band (drgnx-work-map--band-of state i)))
+                (cl-mapc #'drgnx-work-edges-flush
+                         (drgnx-work-edges-band-tiles band before colours)
+                         (drgnx-work-edges-band-tiles band after colours))))
+            (setq drgnx-work-map--edge-chain-edges new)
+            (when (car found)
+              (drgnx-view-dirty drgnx-view (car found))
+              (drgnx-view-draw-now drgnx-view (drgnx-work-map--visible-keys (car found))))))))))
+
+(defun drgnx-work-map-theme-changed ()
+  "Draw every map again: the edge tiles hold colours the faces had."
+  (dolist (b (drgnx-work-map-buffers))
+    (with-current-buffer b
+      (when (and (drgnx-view-p drgnx-view) (drgnx-work-map--state)) (drgnx-view-touch drgnx-view)))))
 
 (defun drgnx-work-map--place-point (sel)
   "Point, and the point of every window showing the buffer, on SEL's card (or its outline block)."
@@ -511,25 +572,63 @@ argument): without moving focus."
                 (propertize " " 'display `(space :align-to (,right)) 'face (if class (list class face) face)
                             'drgnx-work-id id))))))
 
+(defun drgnx-work-map--edge-geometry (state &optional chain-edges)
+  "The geometry the edge tiles and lanes of STATE are made from, with the chain CHAIN-EDGES (default: the shown one)."
+  (drgnx-work-edges-geometry state (or chain-edges drgnx-work-map--edge-chain-edges) (drgnx-work-map--scale)
+                             (drgnx-work-map--margin-px)))
+
+(defun drgnx-work-map--band-of (state row-index)
+  "The band above the layout's row ROW-INDEX with the port chips that belong in it, or nil: a plist :row
+:height_units :segs :ports."
+  (let* ((layout (drgnx-work-client-layout state)) (rows (plist-get layout :rows))
+         (band (seq-find (lambda (b) (eql (plist-get b :row) row-index)) (plist-get layout :bands)))
+         (ports (delq nil
+                      (mapcar (lambda (p)
+                                (let ((rect (drgnx-work-client-rect state (plist-get p :target)))
+                                      (rk (car (drgnx-work-client-rows-of state (plist-get p :target)))))
+                                  (when (and rect rk (eql row-index (cl-position rk rows :test
+                                                                                 (lambda (k r) (equal k (drgnx-work-map--row-key r))))))
+                                    (cons (+ (plist-get rect :x) (/ (plist-get rect :w) 2)) (length (plist-get p :parents))))))
+                              (plist-get layout :ports)))))
+    (and band (append band (list :ports ports)))))
+
 (defun drgnx-work-map-row-text (state key)
-  "The text of row KEY of STATE's layout: a band (blank, as high as its tile), or the lines of a row's cards."
+  "The text of row KEY of STATE's layout: a band (its edge tiles, else blank, as high as its tile), or the lines of a
+row's cards with the lanes that pass through them."
   (let* ((index (drgnx-work-map--index-of state)) (row-key (cons :row (cdr key)))
-         (row (gethash row-key (cdr index))))
+         (row (gethash row-key (cdr index))) (layout (drgnx-work-client-layout state))
+         (i (cl-position row (plist-get layout :rows) :test #'eq)))
     (if (eq (car key) :band)
-        (let* ((layout (drgnx-work-client-layout state))
-               (i (cl-position row (plist-get layout :rows) :test #'eq))
-               (band (seq-find (lambda (b) (eql (plist-get b :row) i)) (plist-get layout :bands)))
-               (px (drgnx-work-map--px (or (plist-get band :height_units) 1))))
-          (concat (propertize " " 'face 'drgnx-work-band)
-                  (propertize "\n" 'face 'drgnx-work-band 'line-height (list (max 0 (1- px))))))
+        (let* ((band (drgnx-work-map--band-of state i))
+               (px (drgnx-work-map--px (or (plist-get band :height_units) 1)))
+               (tiles (and band (drgnx-work-edges-band-text band (drgnx-work-map--edge-geometry state)
+                                                            (drgnx-work-edges-colours)))))
+          (if tiles
+              (concat tiles (propertize "\n" 'face 'drgnx-work-band 'line-height t))
+            (concat (propertize " " 'face 'drgnx-work-band)
+                    (propertize "\n" 'face 'drgnx-work-band 'line-height (list (max 0 (1- px)))))))
       (let* ((ids (gethash row-key (car index))) (n (drgnx-work-map--row-lines row))
              (px (/ (drgnx-work-map--px (plist-get row :height_units)) n))
-             (label (drgnx-work-map--layer-label state key row)) lines)
-        (dotimes (i n)
-          (push (concat (if (and (= i 0) (not (string-empty-p label)))
+             (label (drgnx-work-map--layer-label state key row)) lines
+             (lanes (and i (seq-some (lambda (l) (eql (plist-get l :row) i)) (plist-get layout :lanes))
+                         (drgnx-work-edges-lane-parts i (plist-get layout :lanes) (drgnx-work-map--edge-geometry state)
+                                                      (drgnx-work-edges-colours)))))
+        (dotimes (line n)
+          (push (concat (if (and (= line 0) (not (string-empty-p label)))
                             (propertize (drgnx-work-map--fit label (- (drgnx-work-map--margin-px) 8)) 'face 'drgnx-work-label)
                           "")
-                        (mapconcat (lambda (id) (drgnx-work-map--segment state id i)) ids "")
+                        (if lanes
+                            ;; the cards and the lanes in order of their columns
+                            (mapconcat #'cdr
+                                       (sort (append (mapcar (lambda (id)
+                                                               (cons (+ (drgnx-work-map--margin-px)
+                                                                        (drgnx-work-map--px (plist-get (drgnx-work-client-rect state id) :x)))
+                                                                     (drgnx-work-map--segment state id line)))
+                                                             ids)
+                                                     lanes)
+                                             (lambda (a b) (< (car a) (car b))))
+                                       "")
+                          (mapconcat (lambda (id) (drgnx-work-map--segment state id line)) ids ""))
                         (propertize "\n" 'line-height (list (max 0 (1- px)))))
                 lines))
         (apply #'concat (nreverse lines))))))

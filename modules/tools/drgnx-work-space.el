@@ -39,6 +39,8 @@
 (declare-function drgnx-work-map-needs-you-here-next "drgnx-work-map")
 (declare-function drgnx-work-map-collapse-layer "drgnx-work-map")
 (declare-function drgnx-work-map--changed "drgnx-work-map")
+(declare-function drgnx-work-map--edges-update "drgnx-work-map")
+(declare-function drgnx-work-map-theme-changed "drgnx-work-map")
 (defvar drgnx-work-space--view)
 (defvar drgnx-work-space--message)
 (defvar drgnx-hub--events)
@@ -335,6 +337,9 @@ follows the windows; the commands."
   (drgnx-module-hook 'drgnx-work-client-change-functions changed (view marks) (drgnx-work-map--changed view marks))
   (drgnx-module-hook 'drgnx-work-client-status-functions status (view status) (drgnx-work-space--show-status view status))
   (drgnx-module-hook 'drgnx-work-map-select-functions selected (buffer) (drgnx-work-detail-update buffer))
+  (drgnx-module-hook 'drgnx-work-map-edges-functions edges (view selection) (drgnx-work-map--edges-update view selection))
+  (drgnx-module-hook 'enable-theme-functions edge-colours (_theme) (drgnx-work-map-theme-changed))
+  (drgnx-module-hook 'disable-theme-functions edge-colours-off (_theme) (drgnx-work-map-theme-changed))
   (drgnx-module-hook 'find-file-hook live-file () (drgnx-work-live-file--maybe))
   (drgnx-command-define 'work-take-wheel :category "Work" :title "Take the Wheel from the Agent"
                         :command #'drgnx-work-take-wheel :map 'drgnx-work-live-file-mode-map
