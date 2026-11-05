@@ -183,6 +183,23 @@
     (should (nth 2 r))
     (should-not (nth 3 r))))
 
+(ert-deftest drgnx-settings-page/typing-a-search-keeps-the-variable-list ()
+  ;; a keystroke narrows the list it already has; a refresh reads the variables again; a term may match a value only
+  (let ((r (drgnx-settings-page-test--run
+            nil
+            '((progn
+                (eval '(defcustom sat-ks-a 4242 "Width." :type 'integer :group 'tools) t)
+                (with-current-buffer (drgnx-settings-page)
+                  (drgnx-settings-page-search "sat-ks")
+                  (let ((all drgnx-settings-page--all))
+                    (drgnx-settings-page-search "sat-ks-a")
+                    (let ((kept (eq all drgnx-settings-page--all)) (keys drgnx-settings-page--keys))
+                      (drgnx-settings-page-search "4242")
+                      (let ((by-value (and (memq 'sat-ks-a drgnx-settings-page--keys) t)))
+                        (drgnx-settings-page-refresh)
+                        (list kept keys by-value (eq all drgnx-settings-page--all)))))))))))
+    (should (equal r '(t (sat-ks-a) t nil)))))
+
 (ert-deftest drgnx-settings-page/works-in-safe-mode ()
   (let ((r (drgnx-settings-page-test--run
             drgnx-settings-page-test--files
