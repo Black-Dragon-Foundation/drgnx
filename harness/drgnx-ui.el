@@ -48,7 +48,7 @@ this at an exported REF.")
   "The MCP client's token (`drgnx-ui-mcp--token') while it starts a session: session.json's :owner :client.")
 (defconst drgnx-ui-keep-env
   '("USER" "LOGNAME" "LANG" "LC_ALL" "PATH" "GRYPHN_EMACS_DIR" "DRGNX_STARTUP_TRACE"
-    "DRGNX_UITEST_SETTLE_SCALE" "DRGNX_MODAL_ELPA" "DRGNX_CHILDFRAME_ELPA" "DRGNX_CHILDFRAME_REQUIRED" "DRGNX_LEASE_HELD" "DRGNX_PERF_GLITNIR"
+    "DRGNX_UITEST_SETTLE_SCALE" "DRGNX_UITEST_TICK" "DRGNX_MODAL_ELPA" "DRGNX_CHILDFRAME_ELPA" "DRGNX_CHILDFRAME_REQUIRED" "DRGNX_LEASE_HELD" "DRGNX_PERF_GLITNIR"
     "DRGNX_PERF_WATCHDOG" "DRGNX_PERF_WORKERS")
   "The only variables a session inherits; everything else (keys, tokens) stays out.  Not HOME: a session's is
 RUN/home (`drgnx-ui-session-env').")
