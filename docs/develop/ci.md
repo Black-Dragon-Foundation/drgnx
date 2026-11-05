@@ -383,6 +383,7 @@ isolation test and kitty's kkp tests run instead of skipping. So the caches are 
 |---|---|---|---|
 | the prebuilt images (`Test images`, GHCR; the GUI one also holds the pinned child-frame packages, checked out at pinned upstream commits at build, so the tier fetches none) | tag = `test/container/image-tag.sh`: the Containerfile and every file it copies (and `f45` for the test images); pulled by digest | an install of Emacs and the GUI/terminal stack into Fedora per job: about 1.5–2 min; the Rust job's dnf installs and Nidhogg; the escape legs' bubblewrap build | change an input, or run `Test images` by hand (the weekly run refreshes every tag with Fedora's and Ubuntu's updates) |
 | cargo: `target/` of every Rust job (`runtime.yml`'s `linux`, `msrv`, `escape-host` per architecture, `agent-containers`, `android`, `fuzz`, `macos`; `build-test-bins` per OS), and the registry's index and `.crate` files once per OS and lock for all of them (`fuzz` keeps its own, with its own lock) | target: `cargo-OS-JOB-mt1-TOOLCHAIN-HASH` (TOOLCHAIN: `rustc -V`, the pinned nightly or 1.88.0; HASH: `Cargo.lock` and every `Cargo.toml`), restored from the newest `cargo-OS-JOB-mt1-TOOLCHAIN-` entry when the hash moved; registry: `cargo-registry-OS-HASH(Cargo.lock)`, else the newest `cargo-registry-OS-` | the dependencies' compile (the unpruned `linux` cache was 3.5 GB, and every `Cargo.lock` change, a workspace version bump included, missed it whole) | a toolchain or dependency change makes a new key; delete the entries in the repository's Actions caches |
+| Nidhogg's pinned release tarball on macOS (`runtime.yml`'s and the tiers' `macos` jobs share one entry, about 90 MB) | `nidhogg-release-OS-ARCH-HASH(test/container/nidhogg.sh)`, exact; `NIDHOGG_DOWNLOADS` points `nidhogg.sh` at it, which checks it against the pinned sha256 on every use and downloads instead when it fails | the download (the tarball never changes for a pin) | a pin bump makes a new key; saved by `main` only, never in Nidhogg's run (its own tarball) |
 | the fuzz corpora the fuzzers grew (`runtime/fuzz/corpus`, per shard) | `fuzz-corpus-SHARD-HASH-RUN`, restored from the newest of its shard | a run starts where the last stopped | delete the entries |
 
 An image is addressed by the hash of the files it is built from, and a job whose hash has no image builds it itself,
@@ -434,8 +435,9 @@ Deliberately not cached:
   --bootstrap` and the macOS `install` job, both weekly), the point is a fresh machine, and a `actions/cache` entry
   not read for 7 days is evicted, which a weekly job never beats ([GitHub's cache rules](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching)). drgnx's own package cache
   (`cache/packages`) is checked against the lock's sha256 on every use, so it would be safe to add if a job ever needs it.
-- **Homebrew and Nidhogg on macOS.** `brew install ripgrep` and Nidhogg's tarball (about 70 MB, plus its Homebrew
-  dependencies) are a short step on the runner, less than restoring a cache.
+- **Homebrew on macOS.** `brew install ripgrep` and Nidhogg's Homebrew dependencies are a short step on the runner,
+  and a download cache of them (Nidhogg's, 775 MB) saved under a minute: not worth its share of the 10 GB. Rust
+  comes from the image's `rustup`.
 - **Image layers of `Test images`.** It builds with `--pull=always` on purpose (the weekly run is the refresh).
 
 A new `actions/cache` step needs a `key` with `hashFiles(...)` of its inputs (a save takes its restore's
