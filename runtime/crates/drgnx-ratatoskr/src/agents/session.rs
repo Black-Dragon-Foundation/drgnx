@@ -1917,29 +1917,28 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
         }
     };
     let (s, done) = assemble(ident, &profile, l, front, hub.step_bus());
-    if fresh {
-        // a manager's restart or rotation is told FIRST; any other fresh start the notice and the summary handoff
-        let told = match (first, handoff) {
-            (Some(f), _) => f,
-            (None, Some(h)) => format!("{RESTART_NOTICE}\n\n{h}"),
-            (None, None) => RESTART_NOTICE.to_string(),
-        };
-        lock(&s.state)
-            .core
-            .queue_mut()
-            .push(told, Origin::Hub, false);
-        if let Some(db) = hub.db() {
-            insert_row(db, &s).await;
+    // a manager's restart or rotation is told FIRST; any other fresh start the notice and the summary handoff
+    let told = fresh.then(|| match (first, handoff) {
+        (Some(f), _) => f,
+        (None, Some(h)) => format!("{RESTART_NOTICE}\n\n{h}"),
+        (None, None) => RESTART_NOTICE.to_string(),
+    });
+    if fresh && let Some(db) = hub.db() {
+        insert_row(db, &s).await;
+    }
+    // the queue on disk as it was, with what the agent is told at its front
+    let (queue, paused) = match &s.store {
+        Some(store) => {
+            let entries = store.load(&sid);
+            let mut st = lock(&s.state);
+            st.flushed = entries.len();
+            st.entries = entries;
+            drop(st);
+            store.load_queue(&sid)
         }
-    }
-    if let Some(store) = &s.store {
-        let entries = store.load(&sid);
-        let (queue, paused) = store.load_queue(&sid);
-        let mut st = lock(&s.state);
-        st.flushed = entries.len();
-        st.entries = entries;
-        st.core.restore(queue, paused);
-    }
+        None => Default::default(),
+    };
+    lock(&s.state).core.resume(queue, paused, told);
     // a job it started still runs (re-attached before the sessions): it waits for it as before the restart
     let waiting = s.has_jobs();
     {
@@ -2644,9 +2643,10 @@ impl Session {
                             .and_then(Value::as_f64)
                             .filter(|_| v.get("sessionUpdate") == Some(&json!("usage_update")))
                         {
-                            let hits = self.budgets.spend_total(
+                            let hits = self.budgets.spend_total_in(
                                 &self.scope(),
                                 "usd-est",
+                                &self.acp.0,
                                 Unit::UsdEst,
                                 total,
                             );

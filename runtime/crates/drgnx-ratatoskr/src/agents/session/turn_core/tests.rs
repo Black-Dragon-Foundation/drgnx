@@ -1437,6 +1437,30 @@ fn the_event_pair_waits_for_its_timer() {
     assert_eq!(c.step(TurnEvent::Changed), [TurnEffect::ArmEmit]);
 }
 
+/// Pure (D): a session started afresh after a restart (or a manager's rotation) keeps the prompts its queue on disk
+/// holds and is told first what happened, in a turn of its own.
+#[test]
+fn a_fresh_start_is_told_first_and_keeps_its_queue() {
+    let mut disk = crate::agents::queue::Queue::default();
+    disk.push("u1".into(), Origin::User, false);
+    disk.push("p1".into(), Origin::Peer("w".into()), false);
+    let mut c = TurnCore::new();
+    c.resume(disk.clone(), false, Some("told".into()));
+    c.ready(false);
+    assert_eq!(c.queue().texts(), ["told", "u1", "p1"]);
+    let fx = c.next();
+    assert!(
+        matches!(&fx[..], [TurnEffect::StartTurn { item, .. }] if item.text == "told" && item.origin == Origin::Hub),
+        "{fx:?}"
+    );
+    // a session that resumed its conversation is told nothing, and a held queue stays held
+    let mut c = TurnCore::new();
+    c.resume(disk, true, None);
+    c.ready(false);
+    assert_eq!(c.queue().texts(), ["u1", "p1"]);
+    assert!(c.next().is_empty() && c.paused());
+}
+
 #[test]
 fn a_send_while_the_hub_ends_waits_in_the_queue() {
     let mut c = TurnCore::new();

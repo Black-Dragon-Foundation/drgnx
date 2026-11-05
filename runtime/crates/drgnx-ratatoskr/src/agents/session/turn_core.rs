@@ -381,13 +381,22 @@ impl TurnCore {
         };
     }
 
-    /// The queue and pause kept on disk, for a session not yet shared.
-    pub(crate) fn restore(&mut self, queue: Queue, paused: bool) {
+    /// A session back after a restart, not yet shared: QUEUE and PAUSED as kept on disk, and TOLD (a fresh start's
+    /// notice, a manager's brief) at the queue's front, so its agent reads it first and the queue stays as it was.
+    pub(crate) fn resume(&mut self, queue: Queue, paused: bool, told: Option<String>) {
         self.queue = queue;
         self.paused = paused;
+        if let Some(text) = told {
+            self.queue.push_front(Queued {
+                text,
+                origin: Origin::Hub,
+                steer: false,
+                key: None,
+            });
+        }
     }
 
-    /// The queue, for a session not yet shared (a resume's first prompt).
+    #[cfg(test)]
     pub(crate) fn queue_mut(&mut self) -> &mut Queue {
         &mut self.queue
     }

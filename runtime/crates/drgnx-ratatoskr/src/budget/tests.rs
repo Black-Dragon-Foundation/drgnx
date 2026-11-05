@@ -164,3 +164,22 @@ fn state_survives_a_save() {
     c.restore(serde_json::from_str(&text).unwrap());
     assert_eq!(left(&c, &w, Unit::Usd), Some(3.0));
 }
+
+/// Pure (D): a session's agent that starts a new conversation under the same session (a manager's rotation, a fresh
+/// start after a restart) reports its cumulative cost from zero again; that is spent too.
+#[test]
+fn a_new_conversation_under_one_session_counts_its_cost_from_zero() {
+    let b = Budgets::default();
+    let s = sc(json!({"worker": "w1"}));
+    b.spend_total_in(&s, "usd-est", "conv-1", Unit::UsdEst, 5.0);
+    b.spend_total_in(&s, "usd-est", "conv-1", Unit::UsdEst, 7.0);
+    b.spend_total_in(&s, "usd-est", "conv-2", Unit::UsdEst, 2.0);
+    b.spend_total_in(&s, "usd-est", "conv-2", Unit::UsdEst, 3.0);
+    let spent = b
+        .view(&s)
+        .spent
+        .iter()
+        .find(|l| l.unit == Unit::UsdEst)
+        .map(|l| l.amount);
+    assert_eq!(spent, Some(10.0), "7 in the first conversation, 3 in the second");
+}

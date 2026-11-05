@@ -861,7 +861,9 @@ resume, the tick goes on from the store with the same workers, and the wakes sti
   its job is still running.
 - **If the agent can neither resume nor load**: a fresh session on the same transcript, told so by a hub prompt (`RESTART_NOTICE`, followed by the
   summary handoff when there is one). A manager is restarted from the graph (`restart_manager_from_graph`): a new
-  session told its digest and open decisions, its conversation not restored.
+  session told its digest and open decisions, its conversation not restored. What it is told goes at the front of the
+  queue kept on disk (`TurnCore::resume`), which stays as it was, so the agent reads it first and then the prompts
+  that waited (a rotated manager's brief included). Its cost, `usd-est`, counts from zero in the new conversation.
 - **A job's end wakes once.** `runtime.db` table `wake` (migration 7): a row `pending` when the end is announced,
   `sending` while it is delivered, `done` once the session has the prompt (the mark; pruned with the job). After the
   sessions are back (`agents::wake::recover`) a `pending` row is delivered, a `sending` one only when the session's

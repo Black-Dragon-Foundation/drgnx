@@ -706,7 +706,8 @@ grants are gone gets nothing and you get a card.
 ## Budgets
 
 A budget is a limit with a unit, set on a project, a plan, a manager or a worker (`budget/set`, read back with
-`budget/get`). Units never mix: `usd` is what the gateway measured, `usd-est` what an agent reported at API prices,
+`budget/get`). Units never mix: `usd` is what the gateway measured, `usd-est` what an agent reported at API prices
+(counted per conversation, so a manager's rotation or a fresh start after a restart adds to what the session spent),
 `tokens` and `count` are what they say, and `limit-share` is a share (0 to 1) of a subscription's usage window.
 `usd-est` and `limit-share` are estimates and are labelled so, in the budget card and in `pace/get`. A limit in one
 unit is only ever used up by spending in that unit.
