@@ -309,6 +309,31 @@ async fn vector_route_and_lag_line() {
     let _ = collect(&store, MODEL).await;
 }
 
+/// Pattern D. The vector scan reads each vector once and looks its chunk up by key: its plan has no scan of `chunk` and
+/// no list built from a subquery (that plan took 37 s on a 16,000-chunk project, 55 ms the other way).
+#[tokio::test]
+async fn the_vector_scan_plan_is_one_pass_over_the_vectors() {
+    let (_dir, store, _texts) = indexed().await;
+    let plan: Vec<String> = store
+        .handle()
+        .read(|c| {
+            let mut st = c.prepare(&format!("explain query plan {}", hrafn::query::NEAREST_SQL))?;
+            let rows = st
+                .query_map([MODEL], |r| r.get::<_, String>(3))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .await
+        .unwrap();
+    let text = plan.join("\n");
+    assert!(!text.contains("LIST SUBQUERY"), "{text}");
+    assert!(!text.contains("SCAN chunk"), "{text}");
+    assert!(
+        text.contains("SCAN v") || text.contains("SEARCH v"),
+        "{text}"
+    );
+}
+
 /// Pattern D. The file grew three lines at its top since it was indexed: the hit's lines are found again and move.
 #[tokio::test]
 async fn reanchors_moved_hit() {

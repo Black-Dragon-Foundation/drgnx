@@ -289,15 +289,19 @@ fn paths(c: &Connection, token: &str) -> rusqlite::Result<Vec<i64>> {
     }
 }
 
+/// The vectors the scan reads: MODEL's, each with the first live chunk of its content key. (A join of `chunk` with
+/// `vec` and `c.id in (select min(id) … group by key)` made SQLite probe a list once per vector: 37 s for 16,000
+/// chunks; one lookup of the key's first chunk is 55 ms.)
+pub const NEAREST_SQL: &str = "select id, dims, vec from (
+       select (select min(c.id) from chunk c where c.key = v.key and c.embed = 1) as id, v.dims, v.vec
+       from vec v where v.model = ?1) where id is not null";
+
 /// The nearest chunks of MODEL to the query vector V: Hamming over the sign bits, then the int8 dot product.
 fn nearest(c: &Connection, model: &str, v: &[f32]) -> rusqlite::Result<Vec<i64>> {
     let (qbits, qints, _) = urdr::graph::search::vec::quantize(v);
     let mut heap: BinaryHeap<(u32, i64)> = BinaryHeap::with_capacity(SCAN + 1);
     {
-        let mut st = c.prepare(
-            "select c.id, v.dims, v.vec from chunk c join vec v on v.key = c.key and v.model = ?1
-             where c.id in (select min(id) from chunk where embed = 1 group by key)",
-        )?;
+        let mut st = c.prepare(NEAREST_SQL)?;
         let mut rows = st.query([model])?;
         while let Some(r) = rows.next()? {
             let (id, dims, blob): (i64, i64, Vec<u8>) = (r.get(0)?, r.get(1)?, r.get(2)?);
