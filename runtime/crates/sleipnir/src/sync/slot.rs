@@ -520,7 +520,7 @@ mod tests {
         let p = paths(&t.path().join("runner"), &key("w"));
         sync(t.path(), &repo, &p);
 
-        let old = SystemTime::now() - Duration::from_secs(86_400);
+        let old = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
         for f in ["a", "b", "c", "d", "x"] {
             backdate(&p.slot.join(f), old);
         }
@@ -824,7 +824,7 @@ mod tests {
             sync(t.path(), &repo, p);
             fs::create_dir_all(p.target.join("debug")).unwrap();
         }
-        let now = SystemTime::now();
+        let now = testutil::fs_now(t.path());
         for p in [&old, &held, &busy] {
             backdate(
                 &p.git_dir.join("used"),

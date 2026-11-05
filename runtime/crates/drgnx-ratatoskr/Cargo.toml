@@ -67,6 +67,7 @@ openssh.workspace = true
 # `test-hooks`: `urdr::graph::Tx::for_test` for the manager's unit tests (a `-p drgnx-ratatoskr` test build alone has no
 # other crate turning it on)
 urdr = { path = "../urdr", version = "0.1.0", features = ["test-hooks"] }
+tokio = { workspace = true, features = ["test-util"] }  # paused time: the pacer's tests take their instants from it
 skuld = { path = "../skuld", version = "0.1.0" }  # waits in tests; every order of a pure core (the connection's, a session's turn)
 tempfile.workspace = true
 proptest.workspace = true  # the shell-command parser never panics and is deterministic (work::shell_read)

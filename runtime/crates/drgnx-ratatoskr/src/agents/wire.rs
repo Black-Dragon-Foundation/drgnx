@@ -126,6 +126,7 @@ impl Pacer {
 mod tests {
     use super::*;
     use serde_json::json;
+    use tokio::time::Instant;
 
     fn tool(raw: Value) -> Entry {
         serde_json::from_value(json!({
@@ -160,10 +161,10 @@ mod tests {
 
     /// [D] The 31st snapshot in a window waits, the latest of a session replaces its older one, and the window
     /// opening sends them, cap again.
-    #[test]
-    fn pacer_caps_a_window_and_keeps_the_latest() {
+    #[tokio::test(start_paused = true)]
+    async fn pacer_caps_a_window_and_keeps_the_latest() {
         let mut p = Pacer::default();
-        let t0 = tokio::time::Instant::now();
+        let t0 = Instant::now();
         for i in 0..SNAPSHOTS_PER_WINDOW {
             let o = p.offer(t0, &format!("s{i:02}"), line("a"));
             assert!(o.send.is_some() && o.arm.is_none());
@@ -196,10 +197,10 @@ mod tests {
     }
 
     /// [D] A session shown to the connection drops what waited for it.
-    #[test]
-    fn pacer_forgets_a_shown_session() {
+    #[tokio::test(start_paused = true)]
+    async fn pacer_forgets_a_shown_session() {
         let mut p = Pacer::default();
-        let t0 = tokio::time::Instant::now();
+        let t0 = Instant::now();
         for i in 0..SNAPSHOTS_PER_WINDOW {
             let _ = p.offer(t0, &format!("s{i:02}"), line("a"));
         }
