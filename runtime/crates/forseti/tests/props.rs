@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use forseti::safety::{MAX_ABOVE_HIGH_MIB, STEP_MIB};
 use forseti::*;
 use proptest::prelude::*;
 
@@ -416,6 +417,30 @@ fn admissions_in_every_order_stay_in_the_budget() {
 }
 
 proptest! {
+    /// Tick after tick from the ceiling, whatever the machine does: `MemoryHigh` never passes the static ceiling,
+    /// `MemoryMax` never passes it by more than 512 MiB, and `MemoryHigh ≤ MemoryMax` at every write.
+    #[test]
+    fn cap_never_exceeds_the_static_ceiling(
+        dedicated in any::<bool>(),
+        total in 8192u64..131_072,
+        ticks in prop::collection::vec((0u64..131_072, 0u64..131_072), 1..40),
+    ) {
+        let profile = if dedicated { Profile::Dedicated } else { Profile::Workstation };
+        let lim = Limits::for_profile(profile, total, 16);
+        let ceiling = static_ceiling(profile, total);
+        let (mut high, mut max) = (ceiling, ceiling);
+        for (ours, avail) in ticks {
+            let target = cap_target(ours, avail, lim.reserve_user_mib, lim.floor_mib, ceiling);
+            prop_assert!(target <= ceiling);
+            let w = cap_step(high, max, target, STEP_MIB);
+            prop_assert!(w.high <= ceiling, "high {} over {ceiling}", w.high);
+            prop_assert!(w.max <= ceiling + MAX_ABOVE_HIGH_MIB, "max {} over {ceiling} + 512", w.max);
+            prop_assert!(w.high <= w.max);
+            prop_assert!(w.max + STEP_MIB >= max, "max came down more than one step");
+            (high, max) = (w.high, w.max);
+        }
+    }
+
     #[test]
     fn a_job_is_evicted_at_most_once(
         jobs in prop::collection::vec((1u8..=5, 0u64..1200, 1u32..30, any::<bool>(), prop::bool::weighted(0.2), 256u64..4096), 1..12),

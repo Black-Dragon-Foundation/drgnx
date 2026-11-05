@@ -135,3 +135,66 @@ each admission).
 `admitted_reservations_never_exceed_the_budget` (a property) and `admissions_in_every_order_stay_in_the_budget` ([A],
 every interleaving of two schedulers' admissions under the lock) check that what both reserve stays within one
 machine's budget; `a_job_is_evicted_at_most_once` checks the eviction limit over repeated rounds.
+
+## Memory safety (`safety`)
+
+The pure half of jobq §5.5's four layers; the shell writes the top slice's `MemoryHigh` and `MemoryMax` every 2 s
+and reads the PSI files every second.
+
+- **The cap.** `static_ceiling(profile, mem_total)` bounds it while no scheduler runs (dedicated `MemTotal − 3 GiB`,
+  workstation `MemTotal − 8 GiB`). `cap_target(ours_used, MemAvailable, reserve_user, floor, ceiling)` is
+  `ours_used + MemAvailable − reserve_user − floor`, never above the ceiling. `cap_step(high, max, target, step)`:
+  raising writes `MemoryMax = target + 512 MiB` first, then `MemoryHigh = target`; lowering writes `MemoryHigh =
+  target` at once, then brings `MemoryMax` down by at most one step toward `target + 512 MiB`. The step is
+  `STEP_MIB`, 1 GiB per tick: the oomd spike found nothing against it (lowering `MemoryMax` past use gives a kernel
+  OOM within the tick, which classifies cleanly).
+- **The ladder.** `ladder_level(m, limits)`:
+
+  | Level | Dedicated | Workstation |
+  |---|---|---|
+  | tight: stop admitting | `MemAvailable < floor + 2 GiB`, or memory PSI above the admission limit | `< reserve_user + floor + 2 GiB`, PSI above its limit, or the user's apps above theirs |
+  | pressure | `< floor + 1 GiB`, or PSI above 20 % | (none) |
+  | danger | `< floor`, or PSI above 40 % | `< reserve_user + floor`, or the apps above 5 % |
+
+  `ladder_actions(level, profile, running, since_level2_s, last_kill)`: a dedicated machine at pressure pauses the
+  lowest-priority long builds and evicts the lowest-priority short jobs (under 5 minutes), and after 10 s without
+  relief acts as at danger, which evicts one job per tick, lowest priority first, newest first. A workstation stops
+  admitting until danger, then kills our newest job, again every 5 s while it holds; it never pauses. At level 2 or
+  higher only the `ladder_actor` acts.
+- **The throttle rules** (both profiles; the oomd spike). Without swap a job over `MemoryHigh` freezes, and it reaches
+  oomd's 80 % `full` in 18–25 s; the user's pressure never shows it. So `throttle_actions(over_high_s, ours_full_s,
+  running)` evicts the newest job over its reservation (else the newest) once our slice has been over `MemoryHigh`
+  for 10 s, or its memory `full avg10` above 50 % for 10 s: the throttle is resolved within 20 s.
+
+`cap_never_exceeds_the_static_ceiling` (a property) runs the cap tick after tick from the ceiling: `MemoryHigh`
+never passes it, `MemoryMax` never by more than 512 MiB, and `MemoryMax` never comes down more than a step.
+
+## Kill classes (`classify`)
+
+`classify(&ExitEvidence)` tells kills apart, so a kill never reads as red. First match wins:
+
+1. we evicted it: `Evicted`;
+2. a reason written before our kill (`kill_reason`: the disk guard, the ladder, a setup refusal, a key not
+   delivered): `Infra(reason)`;
+3. the job slice's `oom_kill` grew: `Oom` (re-run once at × 1.5);
+4. an oomd line that killed or marked it (`oomd_line_matches`: systemd 259 logs "Killed …", 262 "Marked … for
+   killing" and may leave the job frozen until its timeout), or a SIGKILL (exit 137) with no `oom_kill`:
+   `Infra("oomd/killed")`;
+5. SIGSEGV or SIGABRT (exit 139 or 134): `Crash`, the only verdict the crash splitter takes;
+6. the timeout: `Timeout`;
+7. the row parser's verdict, else the exit code; a parser's pass without exit 0 is `Red`.
+
+The named reasons are in `classify::infra`: `runner lost`, `preempted`, `disk`, `key not delivered`, `setup`,
+`killed` and `oomd/killed`. The hub records `runner lost` and `preempted` itself; they leave no exit evidence.
+
+## History (`history`)
+
+Every finished run leaves a `HistRow { key, machine, grant, wall_s, cpu_s, mem_peak_mib, verdict, disturbed, at,
+warm }`.
+
+- **`history_key(spec)`**: the kind, then the suite and the rows selected, or else the command with paths
+  normalised (the job's tree and any `.claude/worktrees/<name>` path become `{tree}`, a `.claude/tmp` path `{tmp}`),
+  so one command run from two worktrees has one history.
+- **`expected(rows, other, speed_ratio, suite_default)`**: the median time of the last 5 undisturbed runs on this
+  machine, with their mean CPU and the p95 of their peak memory; else the same from other machines' rows, the time ×
+  the static speed ratio; else the suite's default; else 10 minutes. The last two know no CPU or memory.
