@@ -12,7 +12,7 @@ default = ["runner"]
 # the wire protocol: pure
 proto = []
 # input capture, the hardened git and slots: blocking, no tokio
-sync = []
+sync = ["dep:sha2", "dep:rustix"]
 # the probe, the reservation files and the executor: blocking, std, rustix and serde only, no tokio
 linux = ["dep:forseti", "dep:serde_json", "dep:rustix", "dep:libc"]
 # the binary's modes
@@ -26,6 +26,7 @@ serde_json = { workspace = true, optional = true }
 forseti = { path = "../forseti", version = "0.1.0", optional = true }
 rustix = { workspace = true, features = ["event"], optional = true }
 libc = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
 
 # job-exec, the mode a job's unit runs; the runner's other modes join it
 [[bin]]
