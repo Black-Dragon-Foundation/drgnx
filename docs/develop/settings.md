@@ -671,7 +671,7 @@ after `drgnx-settings-live-start` get their watcher at the next sync.
 - **The old files.** `drgnx-config-define 'agents` and `'ai` stay, for the migration only (it reads the old files
   through them). `agents` and `ai` are out of `drgnx-settings-shim-areas`, so a file that stayed is no longer read.
   The project's `.drgnx/ai.eld` (`ai-project`) is unchanged until the workspace layers fold it in.
-- **Batch entry points.** A batch Emacs that loads no init (the hub, `search index`, `search mcp`/`query`, `onboard`)
+- **Batch entry points.** A batch Emacs that loads no init (the hub, `onboard`)
   calls `drgnx-settings-defaults-apply`: it applies drgnx's own entries of settings.el, so the profiles, routes,
   providers and roles are the user's there too.
 - **Tests.** `test/fixtures/runtime-settings-fixture.el`: `drgnx-test-with-runtime-settings` (the eight settings at
@@ -746,7 +746,8 @@ when it loads (`drgnx-settings-workspace-enable`, undone by `-disable`).
 - **`(drgnx-setting-for-root VAR ROOT)`**: the global value, then W1 (the old `.drgnx/{search,ai,large-files}.eld`
   through the config layer, `drgnx-settings-workspace-old-files`, ai.eld's roles through W1's filter, then `.drgnx/settings.el`'s filtered entries), then
   W2, each over the one below by its `:merge` (`replace`, `alist`, `append`, `lower-only`: the lower of two numbers,
-  anything else keeps the lower layer). `drgnx-search-config` reads `drgnx-search-{include,exclude,off}` this way.
+  anything else keeps the lower layer). `drgnx-setting-for-root` reads `drgnx-search-{include,exclude,off}` this way, and the editor sends the resolved values
+  per project to the hub.
 - **`(drgnx-settings-workspace-file ROOT &optional CREATE)`**: by root, else by `:project` through
   `drgnx-settings-workspace-project`, which returns nil until the Urdr gate (matching a moved folder by its project id
   is a post-gate row). CREATE writes `<slug>.el` (then `-2`, `-3` …) under the file's lock, with `:roots` and

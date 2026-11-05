@@ -185,8 +185,8 @@ it. Its `owner` file holds `(:pid :host :started :time)`. `(drgnx-file-lock-hold
 - A stale lock is renamed to `.NAME.lock.stale-PID-RANDOM` and deleted, then `make-directory` decides again. A lock
   is released only while its owner file is still the holder's.
 - **Limits.** Two processes stealing one stale lock within milliseconds can both hold it: the second renames the
-  first's fresh lock away. Plain files cannot compare-and-swap; the search index's lock takeover has the same
-  limit. A holder that keeps the lock over 10 s loses it, so FN must stay a quick change of data. A call to
+  first's fresh lock away. Plain files cannot compare-and-swap.
+  A holder that keeps the lock over 10 s loses it, so FN must stay a quick change of data. A call to
   `drgnx-file-update` inside FN on the same file waits for itself and ends busy. On a network filesystem the
   rename and `make-directory` are only as atomic as the server makes them.
 - The clock and the wait go through `drgnx-file--now` and `drgnx-file--sleep`, which tests replace.
@@ -358,8 +358,8 @@ header doc)` returns NAME:
   has a mistake or is newer, so call it before the flow's first side effect (Import, Save Layout As…, a settings page
   that asks questions first) and a refusal changes nothing.
 - A project file is untrusted data: it is read, never evaluated. `search-project` (`.drgnx/search.eld`, in
-  `core/drgnx-search-chunk.el`) is the first: `drgnx-search-config` asks `drgnx-config-problem` and turns a mistake into
-  `(:error …)`, because a search must fail closed rather than fall back to the defaults the layer applies.
+  `core/drgnx-settings-runtime.el`) is the first: Hrafn, in the hub, reads the file itself as data and fails closed (a file
+  that does not read turns the project's search off) rather than fall back to the defaults the layer applies.
 - `:last-good` (t) applies the last good copy on a mistake. `:max-bytes` (1 MiB) caps reads and writes.
 - `:on-mistake` is a string saying what happens instead of using the file when it is not the last good copy or the
   defaults ("drgnx sync stops until it is fixed; nothing is changed"). The mistake notice and the reference's "On a

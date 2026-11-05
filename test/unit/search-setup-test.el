@@ -222,5 +222,12 @@ ANSWERS (a list, one per question, nil past its end)."
       (should (string-match-p "test query \"where does the program start\": core/a.el:7" (cadr r))))
     (should-not (member "search/index" (drgnx-search-setup-test--methods)))))
 
+(ert-deftest drgnx-search-setup/the-command-has-a-key-entry-in-every-profile ()
+  (should (commandp 'drgnx-search-set-up))
+  (dolist (profile '("vscode" "emacs" "vim"))
+    (with-temp-buffer
+      (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir))
+      (should (search-forward "(search-set-up :none \"in the palette\")" nil t)))))
+
 (provide 'search-setup-test)
 ;;; search-setup-test.el ends here

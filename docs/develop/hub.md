@@ -1596,7 +1596,7 @@ a token of their own, so the editor need not hold the keys.
 - **Loopback only.** The token is good on the loopback listener and nowhere else: on a session's `gateway.sock` it is
   401. A `runtime.db` row of class `editor` that names another listener, or no owner, is dropped at start.
 - **One per owner.** A second call from the same process deletes its earlier editor token first, so a reconnecting
-  editor rotates; another process (a batch job such as the search indexer, the `drgnx` CLI) takes its own.
+  editor rotates; another process (a batch job, the `drgnx` CLI) takes its own.
 - **Kept across a restart.** It is a `registration` row like an agent's: read back at start, pruned with its owner,
   and good again as long as the port is the same (`kv.gateway_port`). The editor asks for its token again on every
   proven reconnect, so it learns a new port.

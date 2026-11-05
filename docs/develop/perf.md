@@ -39,7 +39,7 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | live-view | the typing workload's 186 characters while the Live view, beside the file, shows a mock browser's JPEG frames as wide as the view asked for (as Chrome sends them), 30 a second, each sent once the last was acknowledged (the mock runs in the same Emacs, so its message and websocket frame are made once; without ImageMagick the frames are a few bytes no decoder takes, so drawing costs less) (checked: frames were drawn) | input latency |
 | agent-settings-open | the Claude Code settings page opened and drawn (`redisplay`) against a fixture home: a 5 MB `.claude.json` (300 projects with history), 50 MCP servers and 200 skills; three runs | milliseconds until drawn (budget 150) and the processes started (budget 0: opening the page starts nothing) |
 | remote-typing | the typing workload's 186 characters in a local file while the Explorer lists a mock-method root (test/fixtures/tramp-mock.el: a real TRAMP connection to a local `sh`) and its connection is dead, the segment showing it lost (checked: nothing was sent to the remote, the connection stayed dead) | input latency |
-| typing-with-index | the typing workload's 186 characters with the search module on and the drgnx repo's semantic index loaded: the repo indexed into the session's own state dir by a stub embedder (384 numbers per chunk; no provider, no network), read into memory by one query before the keys (checked: the query cache still holds it); the index file is deleted after | input latency |
+| typing-with-index | the typing workload's 186 characters with the search module on and the drgnx repo indexed by the hub (Hrafn): tier 1 is finished before the keys, tier 2 runs while they are typed (checked: the hub still holds the chunks) | input latency |
 | typing-evil | the typing workload with Vim keys: `i`, the same six strings, `<escape>` (checked: typed, back in normal state) | input latency |
 | motions-evil | a 5000-line copy of the fixture, normal state, from the middle: `j`×20, `w`×20, `}`×10, `C-d`×5, `C-u`×5 (checked: point moved) | input latency |
 | explorer-evil | the explorer workload with Vim keys: `SPC E`, `j`×10, `<escape>` | input latency |
@@ -459,7 +459,7 @@ terminal-typing's p95 is 7 ms: the worst of 16 runs with the module active (1.9 
     (gcmh's own mode function sets its low threshold after the watcher ran, so `gcmh-mode-off-hook` restores
     them too). A `let` of `gcmh-mode` changes nothing.
   - **Batch Emacs** (workers): `drgnx-gc-batch-setup` sets 32 MB (`drgnx-gc-batch-threshold`) and
-    `gc-cons-percentage` 0.2. It is the first form of `drgnx-search-index-cli` and `drgnx-search-mcp-main`; short CLI
+    `gc-cons-percentage` 0.2. It is the first form of a worker's batch entry; short CLI
     commands keep Emacs's defaults.
   - **Harness sessions** of the minimal configuration run at the same settings (`drgnx-ui-gc-early` and
     `drgnx-ui-gc-setup` in `harness/init/prelude.el`); a session of an external configuration brings its own.

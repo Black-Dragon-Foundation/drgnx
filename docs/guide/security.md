@@ -163,8 +163,7 @@ The hub holds your provider keys, in its memory only (above). What else gets nea
   again replaces it); it goes when that process does, and it survives a restart of the hub. A keyless provider on
   your machine (a local Ollama, llama.cpp, TEI) needs no key and is reached directly. Chat, completion, edits, commit
   messages, embeddings and gptel all take this route ([ai.md](ai.md#where-requests-go)); the editor fetches its token
-  again on every reconnect and keeps it in memory only. The search indexer job asks for a token of its own, so it goes
-  with the job. A background request that has no token yet fails with "drgnx hub is starting; try again" and never
+  again on every reconnect and keeps it in memory only. A background request that has no token yet fails with "drgnx hub is starting; try again" and never
   waits.
 - **The editor keeps no key once the hub has one.** AI: Load Keys (and onboarding, the Store key button of Agent
   Settings, a command that finds a key in your Keychain or keyring) reads a key, hands it to the hub over the proven
@@ -232,7 +231,7 @@ path after resolving links, so a link from a project into `~/org`, or `..` in a 
 - **The work scan's own door.** The scan that reads your plans (`drgnx work scan`) applies the same rules in Lisp
   (`core/drgnx-deny.el`, held to the same table of cases as the hub's check) before it sends anything: it skips
   files the rules deny, and drops a plan's `**Spec:**` that names one, even through a link. The hub checks again
-  (defence in depth). The code indexer asks the same check with the opt-ins ignored: a file you opened for the store
+  (defence in depth). The code indexer (Hrafn, in the hub) asks the same check with the opt-ins ignored: a file you opened for the store
   is not opened for the code index. A scan root inside `~/org` (or `~/org` itself) is refused the same way, opt-ins
   ignored, with "the work tracker never reads a project inside ~/org (personal notes)": nothing under it is read and
   git never runs there (nor in a repository inside `~/org` that a project contains); the other roots are scanned.
@@ -240,9 +239,8 @@ path after resolving links, so a link from a project into `~/org`, or `..` in a 
   in your providers), an entity whose source, path or id the rules deny is never sent, even one stored before you
   added its folder to your deny list. A text you excise (or a file you revoke) while the provider is answering gets
   no vector of what was sent.
-- **The code search index never reads `~/org`.** `drgnx search index` refuses a project whose root is inside
-  `~/org` (or reaches it through a link) with "the search index never reads ~/org (personal notes)", before it
-  reads anything there. For a project that contains `~/org` (your home folder as a git repository), every file whose
+- **The code search index never reads `~/org`.** The hub refuses to index a project whose root is inside
+  `~/org` (or reaches it through a link), before it reads anything there. For a project that contains `~/org` (your home folder as a git repository), every file whose
   real path is under `~/org` is left out, the board excepted; nothing of it is read, sent to an embedding provider
   or stored.
 - **Every other way in is checked too.** Importing an export (`graph/import`) drops a record that names a denied

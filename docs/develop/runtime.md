@@ -931,7 +931,7 @@ skipped), and `allow` is the hub's deny-list check on the relative path. A path 
 - a component starts with a dot, or the basename looks like a key, certificate, secret or credential file;
 - it is inside a nested repository (an untracked clone or a submodule);
 - it has a NUL byte in its first 8,000 bytes;
-- the project's `include`/`exclude` globs (the rules of `drgnx-search-config`) leave it out, or `off` is set.
+- the project's `include`/`exclude` globs (the editor sends `drgnx-search-{include,exclude,off}` per project) leave it out, or `off` is set.
 
 `.drgnx/search.eld` that is there but cannot be read (a directory, a link, empty, over 64 KiB) is an error that
 stops the listing, never the defaults. Each file gets a class (`code`, `test`, `docs`) and a language, from its extension, or

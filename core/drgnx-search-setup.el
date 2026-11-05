@@ -16,6 +16,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
+(require 'drgnx-frame-kind)
 (declare-function project-current "project")
 (declare-function project-root "project")
 (declare-function drgnx-hub-call-sync "drgnx-hub-client")
@@ -88,9 +89,7 @@ never asks and changes nothing."
 
 (defun drgnx-search-setup--frame-p ()
   "Non-nil when a frame of a terminal or a window system exists to ask in (a daemon's own is not one)."
-  (seq-some (lambda (f) (or (display-graphic-p f)
-                            (not (equal (terminal-name (frame-terminal f)) "initial_terminal"))))
-            (frame-list)))
+  (seq-some #'drgnx-state-workbench-frame-p (frame-list)))
 
 (defun drgnx-search-setup--may-ask-p (interactive)
   "Non-nil when the wizard may ask and start things: INTERACTIVE (a command the user ran), not in batch, and in a
