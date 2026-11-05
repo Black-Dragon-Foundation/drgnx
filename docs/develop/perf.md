@@ -580,6 +580,30 @@ Budget p95 22 ms, max 50 ms, **provisional**. The ruled target is `typing`'s 16 
 the load. `typing` alone reads 3.5 ms on a quiet machine, so the loaded index is not shown to cost anything yet.
 A quiet-machine `bin/drgnx test --perf` run pins the number: set the p95 to 16 if it holds, and drop this note.
 
+The workload's setup starts a hub of its own (`$DRGNX_RATATOSKR_BIN`, a test-hooks build, as the agent workloads do),
+makes a git project of the checkout's `core/` and `wb/` in a temporary folder (the container's `/src` is not a git
+project) and waits for tier 1. It runs tier 1 only: tier 2 needs an embedder, and the container has no model, so the
+real-model variant on the perf island is still to be added.
+
+### Hrafn's rows
+
+The Rust rows are `#[ignore]` tests that print their figures and assert the budget table's constants. They are not in
+`budgets.eld`: a row there without a workload in a `--perf` run fails as "not measured". Each runs alone on the
+desktop's pinned island (`perf-exclusive.sh` as the outer wrapper, `DRGNX_PERF_CPUS=4`).
+
+| Row | Where | Budget |
+|---|---|---|
+| tier 1 of a drgnx checkout; one saved file searchable | `drgnx-ratatoskr/tests/search_bench.rs` (`tier1_of_a_checkout_and_one_saved_file`) | 60 s; 1 s |
+| `search/query` p95, 50,000 and 100,000 synthetic chunks, vectors on | the same file (`query_p95_at_50k_chunks`, `…_100k_…`) | 100 ms |
+| built-in embedding tokens/s (GPU), VRAM at 4,096 tokens | `hrafn-embed/tests/timing.rs` (`bench_tokens_per_s`) | 20,000; 800 MB |
+| CPU fallback tokens/s on 4 cores | `bench_cpu` | 680 |
+| one query embedding p95 | `query_p95` and `bench_cpu` | 50 ms |
+| stall probe: no copy over 16.6 ms, worst 16 ms | `stall_probe` | a stand-in for the compositor (a second process copying 64 KB every 8 ms on the same card), not a real frame |
+
+The GPU rows run through `hrafn-gpu.sh` on the Radeon; the RTX 2060's row (0.8 times its first AC figure) runs on the
+laptop on AC. The synthetic stores are made of the fixture's chunk shapes, with every word common, so a keyword list
+ranks nearly every chunk: a worst case for the full-text route.
+
 ## Settings (design §16)
 
 The settings gates (start, provenance, watchers, page open, `drgnx sync`'s index) are not perf rows yet: the perf

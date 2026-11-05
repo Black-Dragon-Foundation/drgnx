@@ -1,4 +1,5 @@
-//! Figures on a real GPU, for the budgets: `#[ignore]` rows that print and assert nothing. Through the GPU script, from a
+//! Figures on a real GPU, for the budgets: `#[ignore]` rows that print their figures and assert the budget table's
+//! constants (the desktop's: the Radeon, and the CPU row on 4 pinned cores). Through the GPU script, from a
 //! worktree: `hrafn-gpu.sh BIN --ignored --test-threads=1 --nocapture`. They read `core/*.el` from the checkout: 512 chunks cut
 //! at 1,800 non-whitespace characters, the corpus of the spike and its judgement.
 
@@ -8,6 +9,18 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 const WANT: usize = 512;
+
+/// Built-in embedding on the desktop's Radeon, tokens per second at the default token budget.
+const GPU_TOKENS_PER_S: f64 = 20_000.0;
+/// The CPU fallback on 4 cores.
+const CPU_TOKENS_PER_S: f64 = 680.0;
+/// One built-in query embedding (95th percentile).
+const QUERY_P95: Duration = Duration::from_millis(50);
+/// Video memory the embedder holds at the 4,096-token budget, net of the desktop's.
+const VRAM_MB: u64 = 800;
+/// The stall probe (a stand-in for the compositor): no copy over a frame, the worst within 16 ms.
+const FRAME_MS: f64 = 16.6;
+const WORST_STALL_MS: f64 = 16.0;
 
 fn adapter() -> String {
     std::env::var("DRGNX_TEST_ADAPTER").expect("DRGNX_TEST_ADAPTER names the adapter")
@@ -118,6 +131,15 @@ fn row(name: &str, budget: usize, tuning: Tuning) {
         peak.saturating_sub(before),
         peak_rss(),
     );
+    if name == "default" && budget == TOKEN_CAP {
+        let rate = tokens as f64 / s;
+        assert!(
+            rate >= GPU_TOKENS_PER_S,
+            "{rate:.0} tokens/s under {GPU_TOKENS_PER_S}"
+        );
+        let vram = peak.saturating_sub(before);
+        assert!(vram <= VRAM_MB, "{vram} MB of video memory over {VRAM_MB}");
+    }
 }
 
 #[test]
@@ -163,8 +185,13 @@ fn bench_cpu() {
         tokens as f64 / s,
         peak_rss(),
     );
+    let rate = tokens as f64 / s;
     query_times(&mut model, "cpu");
     println!("after queries {}", peak_rss());
+    assert!(
+        rate >= CPU_TOKENS_PER_S,
+        "{rate:.0} tokens/s under {CPU_TOKENS_PER_S}"
+    );
 }
 
 #[test]
@@ -193,6 +220,11 @@ fn query_times(model: &mut LocalEmbedder, name: &str) {
         times[times.len() / 2],
         times[times.len() * 95 / 100],
         times[times.len() - 1]
+    );
+    let p95 = times[times.len() * 95 / 100];
+    assert!(
+        p95 <= QUERY_P95,
+        "{name} query embedding p95 {p95:?} over {QUERY_P95:?}"
     );
 }
 
@@ -295,5 +327,20 @@ fn stall_probe() {
         let line = String::from_utf8_lossy(&output.stdout);
         let probe = line.lines().find(|l| l.starts_with("PROBE")).unwrap_or("?");
         println!("budget {budget}: worst submit {worst:?}; {probe}");
+        if budget == TOKEN_CAP {
+            let over: usize = probe
+                .rsplit("over 16.6 ms: ")
+                .next()
+                .and_then(|n| n.trim().parse().ok())
+                .expect("the probe's count of stalls over a frame");
+            let max: f64 = probe
+                .split("max=")
+                .nth(1)
+                .and_then(|n| n.split_whitespace().next())
+                .and_then(|n| n.parse().ok())
+                .expect("the probe's worst stall");
+            assert_eq!(over, 0, "{probe} (frame {FRAME_MS} ms)");
+            assert!(max <= WORST_STALL_MS, "{probe}");
+        }
     }
 }
