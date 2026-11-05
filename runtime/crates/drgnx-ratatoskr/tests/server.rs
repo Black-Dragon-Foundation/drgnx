@@ -539,6 +539,28 @@ fn a_second_sigterm_during_the_store_wait_abandons_it() {
     );
 }
 
+/// The image PID runs: `/proc/PID/exe` on Linux; macOS has no `/proc`, so `proc_pidpath`.
+#[cfg(target_os = "linux")]
+fn image_of(pid: u32) -> std::path::PathBuf {
+    std::fs::read_link(format!("/proc/{pid}/exe")).unwrap()
+}
+
+#[cfg(target_os = "macos")]
+fn image_of(pid: u32) -> std::path::PathBuf {
+    use std::os::unix::ffi::OsStringExt;
+    let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    // SAFETY: the buffer is valid for the length passed.
+    let n = unsafe { libc::proc_pidpath(pid as i32, buf.as_mut_ptr().cast(), buf.len() as u32) };
+    assert!(
+        n > 0,
+        "proc_pidpath({pid}): {}",
+        std::io::Error::last_os_error()
+    );
+    buf.truncate(n as usize);
+    std::ffi::OsString::from_vec(buf).into()
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn a_child_is_its_image_once_the_exec_handshake_ends() {
     use support::ExecHandshake;
@@ -552,7 +574,7 @@ fn a_child_is_its_image_once_the_exec_handshake_ends() {
                     cmd.arg("60");
                     let (mut child, exec) = ExecHandshake::spawn(&mut cmd).unwrap();
                     exec.wait();
-                    let exe = std::fs::read_link(format!("/proc/{}/exe", child.id())).unwrap();
+                    let exe = image_of(child.id());
                     early += usize::from(exe.file_name().unwrap() != "sleep");
                     let _ = child.kill();
                     let _ = child.wait();
