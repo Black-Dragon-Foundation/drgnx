@@ -193,10 +193,14 @@ pub(crate) fn build_chunk(
     let body = &text[start..end];
     let head = header.render();
     let last = text[start..end].trim_end_matches('\n').len().max(1) + start - 1;
+    // chunks are cut where the previous one ended, on its last newline: the chunk's first line is the one its first
+    // non-blank character is on
+    let first = body.len() - body.trim_start().len();
+    let first = if first == body.len() { 0 } else { first };
     Chunk {
         start: start as u32,
         end: end as u32,
-        line_start: lines.line_of(start),
+        line_start: lines.line_of(start + first),
         line_end: lines.line_of(last.min(text.len().saturating_sub(1))),
         symbol: header.defs.first().map(|(n, _)| n.clone()),
         embed_text: format!("{head}\n{}", embed_body.unwrap_or(body)),

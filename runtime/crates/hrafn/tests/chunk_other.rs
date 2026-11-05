@@ -183,3 +183,26 @@ fn text_windows_cover_file() {
         assert_eq!(c.symbol, None);
     }
 }
+
+/// Pattern D. A chunk's `line_start` is the line its text begins on, not the line before: chunks are cut where the
+/// previous one ended (on its last newline), and a hit opens at `line_start`. Two real shapes: a `#[derive]` above a
+/// struct after a comment banner, and constants after a doc comment.
+#[test]
+fn a_chunk_starts_on_its_first_line_of_text() {
+    let derive = "use serde::Deserialize;\n\n// ---------------- task_write\n\n#[derive(Deserialize, JsonSchema)]\nstruct TaskWriteArgs {\n    /// create, update, claim\n    op: String,\n    id: Option<String>,\n}\n\nfn valid_req() {}\n";
+    let consts = "pub const CARD_CHOICES: [&str; 3] = [\"once\", \"session\", \"refuse\"];\n\n/// The longest value and name taken.\nconst MAX_VALUE: usize = 16_384;\nconst MAX_NAME: usize = 256;\n/// The most names one `settings_get` asks for.\nconst MAX_NAMES: usize = 64;\n\n/// This file's tools.\npub fn tools() {}\n";
+    for text in [derive, consts] {
+        let lines: Vec<&str> = text.lines().collect();
+        let (cs, _) = run(Lang::Rust, text, 60);
+        assert!(cs.len() > 2, "{} chunks", cs.len());
+        for c in &cs {
+            let first = c.fts.body.lines().find(|l| !l.trim().is_empty()).unwrap();
+            assert_eq!(
+                lines[c.line_start as usize - 1].trim_end(),
+                first.trim_end(),
+                "chunk at line {} of {text:?}",
+                c.line_start
+            );
+        }
+    }
+}
