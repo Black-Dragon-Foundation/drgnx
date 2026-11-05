@@ -11,6 +11,7 @@
 #![cfg(feature = "test-hooks")]
 
 use drgnx_ratatoskr::clock;
+use drgnx_ratatoskr::search::DocEmbedder;
 use drgnx_ratatoskr::search::project::{
     Project, ProjectError, ProjectSpec, Status, Tier2, project_id,
 };
@@ -410,7 +411,10 @@ fn project_spec(f: &Fixture, embedders: Vec<Arc<WorkerEmbedder>>, power: &Path) 
         home: f.home.path().to_path_buf(),
         config_dir: f.home.path().join(".config/drgnx"),
         config: hrafn::Config::default(),
-        embedders,
+        embedders: embedders
+            .into_iter()
+            .map(|e| e as Arc<dyn DocEmbedder>)
+            .collect(),
         power_root: power.to_path_buf(),
         test_permits: None,
     }

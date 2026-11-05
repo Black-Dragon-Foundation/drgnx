@@ -113,6 +113,7 @@ pub const RUNTIME: &[RuntimeSetting] = &[
         "Option<String>",
         OnError::Strict,
     ),
+    setting("drgnx-search-builtin", "bool", OnError::Strict),
 ];
 
 /// The names of [`RUNTIME`].
@@ -158,6 +159,8 @@ pub struct RuntimeValues {
     pub agents_manager_context: f64,
     /// Where models come from instead of the Hugging Face host.
     pub search_model_mirror: Option<String>,
+    /// Whether the built-in embedding model indexes (the floor under any server).
+    pub search_builtin: bool,
 }
 
 /// One entry of `drgnx-agents-container-images`: a name and its image reference pinned by digest.
@@ -270,6 +273,7 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-agents-no-progress-tokens" => values.agents_no_progress_tokens = de(node)?,
         "drgnx-agents-manager-context" => values.agents_manager_context = de(node)?,
         "drgnx-search-model-mirror" => values.search_model_mirror = de(node)?,
+        "drgnx-search-builtin" => values.search_builtin = de(node)?,
         other => {
             return Err(Bad::at(
                 node,

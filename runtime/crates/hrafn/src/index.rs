@@ -37,6 +37,8 @@ pub struct Refresh {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Lag {
     pub model: Option<String>,
+    /// The chunks that are embedded at all (the live set a model's coverage is judged against).
+    pub chunks_total: u32,
     pub chunks_behind: u32,
     pub files_behind: u32,
     pub dirty_files: u32,
@@ -316,7 +318,12 @@ pub async fn lag(store: &CodeStore, model: Option<&str>) -> Result<Lag, StoreErr
                     )
                 }
             };
+            let total: i64 =
+                c.query_row("select count(*) from chunk where embed = 1", [], |r| {
+                    r.get(0)
+                })?;
             Ok(Lag {
+                chunks_total: u32::try_from(total).unwrap_or(u32::MAX),
                 chunks_behind,
                 files_behind,
                 dirty_files: urdr::meta(c, META_DIRTY)?

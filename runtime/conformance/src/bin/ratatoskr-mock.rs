@@ -21,7 +21,12 @@
 //!   response for FILE stops after BYTES with `--cut`; a last byte is flipped with `--bad`. The log is JSONL: `{server, path,
 //!   range, credentials}`.
 //!
-//! `llm` ends when `--parent` is gone.
+//! - `embed [--dims N] [--log FILE] [--parent PID]` prints `MOCK-EMBED-PORT N` and serves, on 127.0.0.1 only, TEI's `POST
+//!   /embed {"inputs"}` (a list of vectors) and Ollama's `POST /api/embed {"model", "input"}` (`{"model", "embeddings",
+//!   "prompt_eval_count"}`, the words of the inputs). A vector is made from its text's bytes, so equal texts give equal
+//!   vectors. The log is JSONL like `llm`'s.
+//!
+//! `llm` and `embed` end when `--parent` is gone.
 
 #[path = "../mock_acp/mod.rs"]
 mod mock_acp;
@@ -47,8 +52,9 @@ fn main() {
         Some("proxy") => proxy(&args[1..]),
         Some("acp") => mock_acp::run(&args[1..]),
         Some("hf") => hf(&args[1..]),
+        Some("embed") => embed(&args[1..]),
         _ => die(
-            "usage: ratatoskr-mock llm --script FILE [--log FILE] [--tls CA_FILE] [--parent PID] | proxy [--log FILE] | acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] | hf --dir DIR [--log FILE] [--cut FILE BYTES] [--bad FILE] [--location URL] [--no-range]",
+            "usage: ratatoskr-mock embed [--dims N] [--log FILE] [--parent PID] | llm --script FILE [--log FILE] [--tls CA_FILE] [--parent PID] | proxy [--log FILE] | acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] | hf --dir DIR [--log FILE] [--cut FILE BYTES] [--bad FILE] [--location URL] [--no-range]",
         ),
     }
 }
@@ -607,6 +613,102 @@ impl Host {
         let _ = c.write_all(body);
         let _ = c.flush();
         let _ = c.shutdown(Shutdown::Both);
+    }
+}
+
+// ------------------------------------------------------------------------------------------ embed
+
+/// The vector of TEXT: DIMS numbers in 0..1 from an FNV-1a hash of its bytes, so equal texts give equal vectors and
+/// different texts differ.
+fn embed_vector(text: &str, dims: usize) -> Vec<f64> {
+    let h = text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    });
+    (0..dims)
+        .map(|i| (h.rotate_left(i as u32 * 7) % 1000) as f64 / 1000.0)
+        .collect()
+}
+
+/// One request of the embedding server: TEI's `POST /embed {"inputs": [...]}` answers a list of vectors, Ollama's
+/// `POST /api/embed {"model", "input": TEXT|[TEXT...]}` answers `{"model", "embeddings", "prompt_eval_count"}` (the
+/// words of the inputs, which the gateway counts as input tokens). Anything else is 404.
+fn embed_serve(mut sock: TcpStream, dims: usize, log: &Option<Mutex<File>>) {
+    let Some(req) = read_request(&mut sock) else {
+        return;
+    };
+    let body = String::from_utf8_lossy(&req.body).into_owned();
+    log_line(
+        log,
+        &json!({"request": {"method": req.method, "path": req.path, "headers": req.headers, "body": body}}),
+    );
+    let parsed: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+    let texts = |v: &Value| -> Vec<String> {
+        match v {
+            Value::String(s) => vec![s.clone()],
+            Value::Array(a) => a
+                .iter()
+                .filter_map(|t| t.as_str().map(str::to_owned))
+                .collect(),
+            _ => vec![],
+        }
+    };
+    let answer = match req.path.as_str() {
+        "/embed" => {
+            let inputs = texts(&parsed["inputs"]);
+            Some(json!(
+                inputs
+                    .iter()
+                    .map(|t| embed_vector(t, dims))
+                    .collect::<Vec<_>>()
+            ))
+        }
+        "/api/embed" => {
+            let inputs = texts(&parsed["input"]);
+            let words: usize = inputs.iter().map(|t| t.split_whitespace().count()).sum();
+            Some(json!({
+                "model": parsed["model"],
+                "embeddings": inputs.iter().map(|t| embed_vector(t, dims)).collect::<Vec<_>>(),
+                "prompt_eval_count": words,
+            }))
+        }
+        _ => None,
+    };
+    let (status, text) = match answer {
+        Some(v) => (200, v.to_string()),
+        None => (404, "{}".to_string()),
+    };
+    let _ = sock
+        .write_all(head(status, "application/json", Some(text.len()), &[]).as_bytes())
+        .and_then(|()| sock.write_all(text.as_bytes()))
+        .and_then(|()| sock.flush());
+    let _ = sock.shutdown(Shutdown::Write);
+}
+
+/// `embed [--dims N] [--log FILE] [--parent PID]`: prints `MOCK-EMBED-PORT N` and serves TEI's and Ollama's embedding
+/// requests on 127.0.0.1 only (a client that resolves `localhost` to `::1` first must fall back).
+fn embed(args: &[String]) {
+    let dims = flag(args, "--dims", 1).map_or(8, |d| {
+        d[0].parse()
+            .unwrap_or_else(|_| die("--dims is a number of dimensions"))
+    });
+    if let Some(p) = flag(args, "--parent", 1) {
+        let pid: i32 = p[0].parse().unwrap_or_else(|_| die("--parent is a pid"));
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_secs(1));
+                if parent_gone(pid) {
+                    std::process::exit(0);
+                }
+            }
+        });
+    }
+    let log = Arc::new(open_log(args));
+    let listener =
+        TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| die(&format!("cannot listen: {e}")));
+    announce("MOCK-EMBED-PORT", &listener);
+    for sock in listener.incoming().flatten() {
+        let log = log.clone();
+        std::thread::spawn(move || embed_serve(sock, dims, &log));
     }
 }
 

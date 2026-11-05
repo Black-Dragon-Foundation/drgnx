@@ -732,6 +732,24 @@ hidden in the sandbox.  npm's global config is PREFIX/etc/npmrc.
 | `:agents` | `never` |
 | `:schema` | - |
 
+## drgnx-search-builtin
+
+Non-nil: the built-in embedding model indexes every project's code and your tasks and notes, whatever servers are
+running.  Nil: only a running server (TEI, Ollama) makes vectors, and with none, search is keyword and symbol only.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"bool"` |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
+
 ## drgnx-search-exclude
 
 Files matching one of these globs are not indexed; a workspace's are added to yours (see `drgnx-search-config').

@@ -816,6 +816,24 @@ fn answer(pending: &Mutex<Pending>, facts: &Mutex<WorkerFacts>, v: Value) {
     }
 }
 
+impl super::DocEmbedder for WorkerEmbedder {
+    fn model(&self) -> &str {
+        &self.spec.model
+    }
+
+    fn dims(&self) -> usize {
+        super::model(&self.spec.model).map_or(0, |s| s.dims)
+    }
+
+    fn embed_docs<'a>(
+        &'a self,
+        texts: &'a [String],
+        overriding: bool,
+    ) -> BoxFuture<'a, Result<Vec<Vec<f32>>, EmbedError>> {
+        Box::pin(WorkerEmbedder::embed_docs(self, texts, overriding))
+    }
+}
+
 impl Embedder for WorkerEmbedder {
     fn embed<'a>(
         &'a self,

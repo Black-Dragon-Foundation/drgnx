@@ -55,6 +55,12 @@ job's allowlist."
   :type '(choice (const :tag "Hugging Face" nil) string) :group 'drgnx :scope 'global :workspace 'never
   :on-error 'strict :agents 'never :runtime "Option<String>" :schema '(or null string))
 
+(drgnx-defsetting drgnx-search-builtin t
+  "Non-nil: the built-in embedding model indexes every project's code and your tasks and notes, whatever servers are
+running.  Nil: only a running server (TEI, Ollama) makes vectors, and with none, search is keyword and symbol only."
+  :type 'boolean :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "bool" :schema 'boolean)
+
 ;;;; Encoding: Lisp values as the runtime types' JSON
 
 (defun drgnx-settings-runtime--str (x)
@@ -134,6 +140,7 @@ job's allowlist."
                    (cons :data_collection (drgnx-settings-runtime--str (plist-get v :data-collection)))
                    (cons :zdr (and (plist-member v :zdr) (drgnx-settings-runtime--bool (plist-get v :zdr)))))))))
     (drgnx-agents-allow-unsandboxed . drgnx-settings-runtime--bool)
+    (drgnx-search-builtin . drgnx-settings-runtime--bool)
     (drgnx-agents-start-env-names . drgnx-settings-runtime--strings))
   "Runtime setting → the function that turns its Lisp value into the JSON of its runtime type.")
 

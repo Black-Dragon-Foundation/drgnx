@@ -9,9 +9,97 @@ pub mod worker;
 pub use download::{Consent, DownloadError, download};
 
 use bifrost::Uri;
-use hrafn_embed::{MODELS, ModelSpec};
+use hrafn::Lag;
+use hrafn_embed::cache::{ModelState, model_dir, state};
+use hrafn_embed::{MODELS, ModelSpec, default_model};
 use runstav::paths::{Env, cache_dir};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use urdr::graph::search::{BoxFuture, EmbedError};
+
+/// What a server's vectors must cover of the live chunks, in percent, for a query to use the server's model.
+const SERVER_COVERAGE: u64 = 95;
+
+/// Which model a query uses: BUILTIN is the built-in model's lag (none: the model is off in the settings or not
+/// downloaded), SERVERS each server's model, lag and whether it answers now.  A server that answers and covers at least
+/// [`SERVER_COVERAGE`] percent of the live chunks wins (the first such one); else the built-in model; with no built-in
+/// model, the answering server that covers most.  None: no vector model can answer, so the answer is keyword and symbol
+/// results with the lag said.
+pub fn prefer(builtin: Option<&Lag>, servers: &[(String, Lag, bool)]) -> Option<String> {
+    let covered = |l: &Lag| u64::from(l.chunks_total.saturating_sub(l.chunks_behind));
+    let answering = servers.iter().filter(|(_, _, up)| *up);
+    match builtin {
+        Some(b) => answering
+            .clone()
+            .find(|(_, l, _)| covered(l) * 100 >= u64::from(l.chunks_total) * SERVER_COVERAGE)
+            .map(|(m, _, _)| m.clone())
+            .or_else(|| b.model.clone()),
+        None => answering
+            .max_by_key(|(_, l, _)| covered(l))
+            .map(|(m, _, _)| m.clone()),
+    }
+}
+
+/// Something tier 2 sends document texts to: the built-in model's worker, or a server through the gateway.
+pub trait DocEmbedder: Send + Sync {
+    /// The model's name, the key of its `vec` rows.
+    fn model(&self) -> &str;
+
+    /// Its dimensions when known; 0 when it has not answered yet.
+    fn dims(&self) -> usize;
+
+    /// Vectors for TEXTS, in order. OVERRIDING (`search/index` with `now`) lets the built-in worker run on battery.
+    fn embed_docs<'a>(
+        &'a self,
+        texts: &'a [String],
+        overriding: bool,
+    ) -> BoxFuture<'a, Result<Vec<Vec<f32>>, EmbedError>>;
+}
+
+/// The hub's Hrafn state that is not one project's: the built-in model's worker, shared by every project and by the
+/// entity embedder.
+pub struct Search {
+    /// `<cache>/models`.
+    models: PathBuf,
+    exe: PathBuf,
+    builtin: Mutex<Option<Arc<worker::WorkerEmbedder>>>,
+}
+
+impl Search {
+    pub fn new(env: &Env) -> Search {
+        Search {
+            models: models_root(env),
+            exe: std::env::current_exe().unwrap_or_else(|_| PathBuf::from("ratatoskr")),
+            builtin: Mutex::new(None),
+        }
+    }
+
+    /// The built-in model's worker, once the model is `Ready` in the cache (never before, and never a download); none
+    /// while it is missing, partial or corrupt.
+    pub fn builtin(&self) -> Option<Arc<worker::WorkerEmbedder>> {
+        let spec = default_model();
+        let dir = model_dir(&self.models, spec);
+        if state(spec, &dir) != ModelState::Ready {
+            return None;
+        }
+        let mut held = self.builtin.lock().ok()?;
+        Some(
+            held.get_or_insert_with(|| {
+                Arc::new(worker::WorkerEmbedder::new(worker::WorkerSpec {
+                    exe: self.exe.clone(),
+                    model: spec.id.to_string(),
+                    dir,
+                    device_cache: self.models.join("device.json"),
+                    threads: worker::threads(),
+                    idle_ms: None,
+                    power_root: PathBuf::from(power::SYS),
+                    test_args: Vec::new(),
+                }))
+            })
+            .clone(),
+        )
+    }
+}
 
 /// The `kv` key of the consent, in `runtime.db`.
 const KV_CONSENT: &str = "search.consent";

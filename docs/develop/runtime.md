@@ -1064,7 +1064,18 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   refuses is refused before anything is listed; inside an allowed root every file is checked again. Tier 2 sends requests
   of 8 missing keys to each embedder; between requests it waits while typing holds (3 s from the last `note_typing`) and,
   on battery, until AC or `index_now`. Its state (`Stopped`, `Idle`, `Running`, `Typing`, `Battery`, `Failed`) and the
-  vectors written are published for `search/status`.
+  vectors written are published for `search/status`. Its embedders are `DocEmbedder`s: the built-in model's worker and
+  each server that answers, every one filling its own model's `vec` rows.
+- **Servers as embedders (`embed.rs`, `Gate::embedders`).** The providers of kind `tei` and `ollama` with the `embed`
+  capability embed through the hub's own gateway listener (`/p/ID/embed`, `/p/ID/api/embed`), so each request is in
+  `spend`. An Ollama provider needs the model the `embed` role names for it, and its model name is
+  `ollama:<provider>:<model>` (TEI's is `tei:<provider>`). A query to a server carries `Instruct: <task>\nQuery:<q>`;
+  documents go plain. `search::prefer` picks the model a query uses: an answering server with at least 95 % of the live
+  chunks covered, else the built-in model (unless `drgnx-search-builtin` is nil), else an answering server whatever it
+  covers. `embed::answered_family` is the doctor's probe of which address family answers; `localhost` of a local
+  server's URL is used as `127.0.0.1`. The hub never starts a server. The entity embedder (`embed::run`) fills with the
+  first embedder in line that answers, a server before the built-in model, because `entity_vec` holds one vector per
+  entity. `ratatoskr-mock embed` is the test stand-in for TEI and Ollama (`tests/search_prefer.rs`).
 
 Tests read the real models from a read-only volume (`DRGNX_TEST_MODELS`) and **fail** when it's unset; they never skip.
 `tests/fixtures/<model>.json` holds what CI can't make: reference vectors for token-id lists of 1, 2, 128, 129, 130, 1,023

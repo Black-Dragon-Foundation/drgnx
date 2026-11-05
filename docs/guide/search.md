@@ -220,5 +220,11 @@ keep the secrets out with `:exclude`, or turn search off for that project with `
 `.drgnx/` files can only choose roles among the providers you configured, never add a provider of their own ([ai.md](ai.md)).
 The vectors and the chunks' text stay in the local index.
 
+A running TEI or Ollama server is optional and is never started for you by a daemon. When one answers and its vectors
+cover at least 95 % of the project's chunks, a search uses its model; otherwise it uses the built-in model, and every
+answer names the model that made it. The built-in model keeps indexing either way, unless you set
+`drgnx-search-builtin` to nil. Ollama needs the model named in the `embed` role (`(ollama . "qwen3-embedding:0.6b")`).
+An address written as `localhost` is used as `127.0.0.1` for these local servers.
+
 Models are only ever downloaded after you agree to the model and its size, from Hugging Face, or from the mirror you name in
 `drgnx-search-model-mirror`, which is laid out as that host. Every file is checked against its pinned sum.

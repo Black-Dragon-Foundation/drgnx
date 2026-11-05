@@ -373,6 +373,7 @@ fn decode_default(name: &str, default: &RuntimeValues, values: &mut RuntimeValue
         "drgnx-search-model-mirror" => {
             values.search_model_mirror = default.search_model_mirror.clone();
         }
+        "drgnx-search-builtin" => values.search_builtin = default.search_builtin,
         _ => {}
     }
 }

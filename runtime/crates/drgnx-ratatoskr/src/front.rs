@@ -79,6 +79,8 @@ pub struct Front {
     pub settings: Arc<crate::settings::Settings>,
     /// The subscribers: the editors the agents' settings tools ask ([`crate::settings::agents`]).
     pub editors: Arc<crate::settings::agents::Editors>,
+    /// Hrafn's hub-wide state (the built-in model's worker), once the server knows its folders.
+    pub search: OnceLock<Arc<crate::search::Search>>,
     /// Test hooks (`--test-ignore-shutdown`): `shutdown` is answered and ignored, so `stop` reaches its signal.
     pub ignore_shutdown: AtomicBool,
     /// The store's other folders (home, config, `<state>/hub`), once the server opened it.
@@ -161,6 +163,7 @@ impl Front {
             gate,
             settings,
             editors,
+            search: OnceLock::new(),
             ignore_shutdown: AtomicBool::new(false),
             dirs: OnceLock::new(),
             shell_env: crate::shell_env::ShellEnv::default(),

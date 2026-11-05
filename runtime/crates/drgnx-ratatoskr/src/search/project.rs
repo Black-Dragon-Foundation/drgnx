@@ -13,8 +13,7 @@
 //!   holds ([`TYPING_HOLD`] from the last [`Project::note_typing`]) and, on battery, until AC or
 //!   [`Project::index_now`]. What it does is published as a [`Status`].
 
-use super::worker::WorkerEmbedder;
-use super::{model, power};
+use super::{DocEmbedder, power};
 use crate::clock;
 use hrafn::fresh::{Due, Fresh, Settle};
 use hrafn::{CodeStore, Config, Git, GitCli, Lag, Listed, Refresh, StoreError, WatchEvent};
@@ -82,8 +81,9 @@ pub struct ProjectSpec {
     pub config_dir: PathBuf,
     /// The project's `drgnx-search-*` settings and `.drgnx/search.eld`, as the hub resolved them.
     pub config: Config,
-    /// Tier 2's embedders: each fills its own model's vectors.
-    pub embedders: Vec<Arc<WorkerEmbedder>>,
+    /// Tier 2's embedders (the built-in model's worker, and the servers that answer): each fills its own model's
+    /// vectors.
+    pub embedders: Vec<Arc<dyn DocEmbedder>>,
     /// The sysfs root for the battery gate (`/sys`).
     pub power_root: PathBuf,
     /// Test-hooks: tier 2 takes one permit before each request.
@@ -162,7 +162,7 @@ struct Inner {
     store: CodeStore,
     deny: DenyList,
     config: Config,
-    embedders: Vec<Arc<WorkerEmbedder>>,
+    embedders: Vec<Arc<dyn DocEmbedder>>,
     power_root: PathBuf,
     gate: Mutex<Gate>,
     wake: Notify,
@@ -410,7 +410,7 @@ impl Inner {
     fn models(&self) -> Vec<(String, usize)> {
         self.embedders
             .iter()
-            .filter_map(|e| model(e.model()).map(|s| (s.id.to_string(), s.dims)))
+            .map(|e| (e.model().to_string(), e.dims()))
             .collect()
     }
 
