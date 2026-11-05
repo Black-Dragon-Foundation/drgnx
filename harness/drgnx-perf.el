@@ -293,7 +293,9 @@ without the watchdog."
     (remove-hook 'nidhogg-watchdog-record-functions #'drgnx-perf--stall-record)
     (let ((d (drgnx-perf-watchdog-delta drgnx-perf--stalls-snapshot (drgnx-perf-watchdog-snapshot)))
           (walls (delq nil (mapcar (lambda (s) (plist-get s :wall-ms)) drgnx-perf--stalls))))
-      (list :stalls (length drgnx-perf--stalls)
+      ;; the count is the C counter's delta: the watchdog keeps only its newest 32 records and the ring is not drained
+      ;; during a workload, so the records give the stacks, the felt count and the longest wall time, not the number
+      (list :stalls (max (plist-get d :stalls) (length drgnx-perf--stalls))
             :stalls-felt (length (seq-filter (lambda (s) (plist-get s :felt)) drgnx-perf--stalls))
             :stall-max-ms (drgnx-perf--round (if walls (apply #'max walls) 0.0))
             :watchdog (list :missed (plist-get d :missed) :spans (plist-get d :spans) :samples (plist-get d :samples)
