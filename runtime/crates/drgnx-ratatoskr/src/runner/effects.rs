@@ -134,7 +134,7 @@ pub(crate) async fn scope_of_session(f: &Front, sid: &str) -> Result<Scope, Erro
             jobs.extend(s.job_id().map(str::to_owned));
         }
     }
-    let found = tokio::task::spawn_blocking(move || norn::project::resolve(&cwd))
+    let found = crate::clock::blocking(move || norn::project::resolve(&cwd))
         .await
         .ok()
         .flatten();
@@ -1003,7 +1003,7 @@ pub async fn link_new_commits(writer: &Writer, session: &str, task: &str, cwd: &
         return;
     };
     let (dir, base) = (cwd.to_path_buf(), format!("job/{}", job.0));
-    let commits = tokio::task::spawn_blocking(move || commits_since(&dir, &base))
+    let commits = crate::clock::blocking(move || commits_since(&dir, &base))
         .await
         .unwrap_or_default();
     if commits.is_empty() {
@@ -1154,7 +1154,7 @@ pub async fn decision_effects(f: &Front, _: &Caller, p: EffectsParams) -> Result
     let later_hunks = match repo {
         Some(repo) => {
             let shas = shas.clone();
-            tokio::task::spawn_blocking(move || later_hunks(&repo, &shas))
+            crate::clock::blocking(move || later_hunks(&repo, &shas))
                 .await
                 .map_err(|e| internal(e.to_string()))?
         }

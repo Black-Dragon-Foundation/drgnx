@@ -219,7 +219,7 @@ pub async fn detect() -> Result<Sandbox, Refusal> {
         None => {
             // the probe's status is read blocking: on a thread and a runtime of its own, never a hub worker
             let t = pick(|tier| async move {
-                tokio::task::spawn_blocking(move || {
+                crate::clock::blocking(move || {
                     sandbox::check_blocking(tier, None, sandbox::CHECK_TIMEOUT)
                 })
                 .await

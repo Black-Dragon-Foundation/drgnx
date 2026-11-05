@@ -185,7 +185,7 @@ pub async fn run(args: ServeArgs) -> Exit {
     }
     // what the Lisp hub left in the state dir, moved aside (never deleted), before anything is served
     let moving = env.clone();
-    match tokio::task::spawn_blocking(move || crate::legacy::migrate(&moving)).await {
+    match crate::clock::blocking(move || crate::legacy::migrate(&moving)).await {
         Ok(Ok(m)) => {
             if !m.moved.is_empty() || !m.left.is_empty() {
                 tracing::info!(moved = ?m.moved, left = ?m.left, "what the Lisp hub left");
@@ -723,7 +723,7 @@ async fn open_store(
         pool: urdr::graph::ReadPool::open(&path, 4),
         deny,
     };
-    let db = tokio::task::spawn_blocking(move || norn::store::CoordDb::with_graph(handle))
+    let db = crate::clock::blocking(move || norn::store::CoordDb::with_graph(handle))
         .await
         .map_err(|e| e.to_string())?;
     Ok((writer, graph, db, home))
@@ -753,7 +753,7 @@ async fn watch_schema(front: Arc<Front>) {
             front.note_migration(report.as_deref());
         }
         let db = front.writer.db.clone();
-        let _ = tokio::task::spawn_blocking(move || db.tick()).await;
+        let _ = crate::clock::blocking(move || db.tick()).await;
         // the personal-notes opt-ins: applied when their file changed (norn::privacy, Task 9b)
         if let (Some(g), Some(d)) = (front.tools.graph(), front.dirs.get())
             && let Some(r) =

@@ -1526,7 +1526,7 @@ async fn launch(
     // before the helper speaks says why on stderr (bwrap's own message).
     if let Some(fd) = prep.status {
         let stderr = conn.stderr();
-        let read = tokio::task::spawn_blocking(move || {
+        let read = crate::clock::blocking(move || {
             gleipnir::read_status(fd, &|| stderr.get(), Duration::from_secs(20))
         })
         .await;
@@ -2190,7 +2190,7 @@ async fn write_steps(
             && (c.detail.is_some() || c.command.is_some())
         {
             let (d, cmd, dir) = (c.detail.clone(), c.command.clone(), ctx.cwd.clone());
-            let files = tokio::task::spawn_blocking(move || {
+            let files = crate::clock::blocking(move || {
                 crate::work::presence::touches_of_step(d.as_ref(), cmd.as_deref(), &dir)
             })
             .await

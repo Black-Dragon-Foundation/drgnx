@@ -147,7 +147,7 @@ impl Backend for ClientBackend {
     ) -> mimir::BoxFuture<'a, Result<w::QueryAnswer, String>> {
         Box::pin(async move {
             let (env, root, text) = (self.env.clone(), root.to_path_buf(), text.to_string());
-            tokio::task::spawn_blocking(move || {
+            crate::clock::blocking(move || {
                 let mut params = json!({"root": root, "text": text});
                 if let Some(s) = scope {
                     params["scope"] = json!(s);

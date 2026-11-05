@@ -247,7 +247,8 @@ file:line. Its `no_raw_spawn_outside_the_clock` counts each file's raw `tokio::s
 with a reason per entry: the tasks that never write to a client (the gateway's listeners, the accept loops and the
 connections, whose writes are serving steps), and those that do and are not on the clock yet (a session's run and
 turns, a job's start and wake, a plan task's start). A new raw spawn, or one that goes, changes the count and fails
-it. The blocking command-line code (`client`, `supervise`, `doctor`) has no virtual clock; its deadlines read
+it. Its `no_raw_blocking_outside_the_clock` does the same for `spawn_blocking` against `RAW_BLOCKINGS`: a hub task's
+blocking call is `clock::blocking`, a real wait a test's barrier sees. The blocking command-line code (`client`, `supervise`, `doctor`) has no virtual clock; its deadlines read
 `clock::real_now()`.
 
 **`serve --test-clock`** installs a virtual clock before any task starts. It stands still, whatever real time passes,
@@ -313,21 +314,33 @@ sends, counting across its connections in the order it wrote them). The stamp is
 lowest pending line:
 
 1. Every connection's socket is read to `WouldBlock` or EOF, and every line read is served.
-2. The tasks inside a **real wait** are waited for, up to 5 s of real time, until each has left it and finished the
-   poll that left it; those whose origin `waiting_ok` lists are not waited for. A real wait is one the hub's code marks
-   with `clock::real`: a wait on something outside the clock that ends by itself. Marked today: a job's watcher
-   (`exec:watch`), from the child's start to its recorded end.
+2. The hub settles, up to 5 s of real time: every task started by `clock::spawn` is parked (no wake pending, not in a
+   poll) and outside any **real wait**, and nothing outside the tasks is in flight. Tasks whose origin `waiting_ok`
+   lists are not waited for. So a task another task wakes through a channel (a job's end waking its session, an event
+   bifrost put on `gateway:events`) has run before the barrier goes on. A real wait is a wait on something outside the
+   clock that ends by itself:
+   - `clock::real(f)`: a DNS lookup or connect, a download, the embed worker's answer, and every blocking call of the
+     hub's tasks (`clock::blocking`, the one door to `spawn_blocking`; `tests/hub_reads_its_clock.rs` counts the raw
+     ones against a list).
+   - a store thread's answer (runtime.db, work.db's writer and read pools): urdr marks the waiting task itself
+     (`urdr::wait`, with its `test-hooks`).
+   - `clock::real_long(f)`: a job's watcher (`exec:watch`), from the child's start to its recorded end.
+   - outside the tasks, `gateway:requests`: the gateway's requests from their send until their `request` (and
+     `budget`) event is on the channel, so a client that read its whole answer sees the event before the marker.
 3. The tasks spawned since then are run once (an advance of 0 ms), and the held writes are released.
 4. `{"event": "__test_marker", "data": {"marker": M}}` is written on every live connection. M counts from 1 per hub.
 5. The answer: `{"marker": M, "unnamed": n, "busy": [origins], "waiting": [origins]}`. `n` counts the writes from
    tasks without an origin since the last barrier. The gate fails a test when n > 0, since such writes are released
    here and not by the test's own advance. `busy` names tasks still running after 5 s. `waiting` names the tasks
-   still inside a real wait: the allowed ones, and those still inside after the 5 s. The gate fails a test on any its
-   `drgnx-test-gate-waiting-ok` does not list, since what they write later is not ordered by the test.
+   still inside a real wait (and `gateway:requests` while requests are in flight): the allowed ones, and those still
+   inside after the 5 s. The gate fails a test on any its `drgnx-test-gate-waiting-ok` does not list, since what they
+   write later is not ordered by the test.
 
-A real wait the code does not mark is not seen: a clock task waiting on a store thread's answer, on bifrost's events
-channel (`gateway:events`), or on a channel another task fills after its own real wait. A barrier there answers as if
-the task were parked.
+An advance waits for a woken task's `clock::real` waits too (it is not parked inside one, whatever clock timer it also
+holds), but not for a `clock::real_long` one: the advance may be what ends it (a job's time box). A job's kill after
+its time box is a `clock::real` wait, so an advance past the time box answers after the job's end. A wait the code does
+not mark, on something outside the hub that has not answered yet (a raw thread, a raw-spawned task's work), is still
+not seen: a barrier there answers as if the task were parked.
 
 A hub without the sequencer refuses `__test_barrier` (`not-allowed`). A release build has none of these: `__test_advance`
 and `__test_barrier` are unknown methods (`no-method`), `__seq` is dropped and listed in the answer's `ignored`, and

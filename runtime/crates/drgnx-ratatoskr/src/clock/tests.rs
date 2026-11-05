@@ -168,30 +168,100 @@ fn a_real_wait_is_waited_for_and_one_that_lasts_is_named() {
         let l = log();
         let (go, rx) = tokio::sync::oneshot::channel::<()>();
         let mine = l.clone();
-        // the clock's timeout around it: the task counts as parked, but it waits on the channel
+        // a job's watcher: the child's end, under the clock's time box
         spawn("job:watch", async move {
-            let _ = timeout(ms(5000), real(rx)).await;
+            let _ = timeout(ms(5000), real_long(rx)).await;
             mine.lock().unwrap().push("after");
         });
-        advance(Duration::ZERO).await;
-        assert_eq!(settle_real(ms(100), &[]).await, ["job:watch"]);
+        // an advance counts it parked: the advance may be what ends it
+        let a = advance(Duration::ZERO).await;
+        assert!(a.busy.is_empty(), "{a:?}");
+        assert_eq!(waiting(ms(100), &[]).await, ["job:watch"]);
         // an allowed origin is not waited for (the bound would fail the test's own), and is still named
         let allowed = tokio::time::timeout(
             Duration::from_secs(10),
-            settle_real(Duration::from_secs(60), &["job:watch".into()]),
+            waiting(Duration::from_secs(60), &["job:watch".into()]),
         )
         .await;
         assert_eq!(allowed.as_deref(), Ok(&["job:watch".to_string()][..]));
         // the wait ends: the settle returns once the poll that left it is done
         go.send(()).unwrap();
-        assert!(settle_real(Duration::from_secs(30), &[]).await.is_empty());
+        assert!(waiting(Duration::from_secs(30), &[]).await.is_empty());
         assert_eq!(seen(&l), ["after"]);
     });
 }
 
 /// What a barrier's settle names `waiting`.
 async fn waiting(within: Duration, ok: &[String]) -> Vec<String> {
-    settle_real(within, ok).await
+    settle_real(within, ok).await.waiting
+}
+
+#[test]
+fn a_blocking_call_is_a_real_wait() {
+    // Pattern C: the blocking thread is held by the test: the task that awaits it is inside a real wait from the call
+    // on; once the thread returns, the settle returns after what the task did with it
+    on_virtual(async {
+        let (hold, held) = std::sync::mpsc::channel::<()>();
+        let l = log();
+        let mine = l.clone();
+        spawn("work:edits", async move {
+            let _ = blocking(move || held.recv()).await;
+            mine.lock().unwrap().push("done");
+        });
+        advance(Duration::ZERO).await;
+        assert_eq!(waiting(ms(100), &[]).await, ["work:edits"]);
+        hold.send(()).unwrap();
+        assert!(waiting(Duration::from_secs(30), &[]).await.is_empty());
+        assert_eq!(seen(&l), ["done"]);
+    });
+}
+
+#[test]
+fn what_is_in_flight_outside_is_waited_for() {
+    // Pattern C: something outside the tasks (the gateway's answered requests) counts one in flight: a settle names
+    // it after its limit; at zero it returns at once
+    on_virtual(async {
+        let n = Arc::new(std::sync::atomic::AtomicUsize::new(1));
+        let probe = n.clone();
+        outside("gateway:requests", move || {
+            probe.load(std::sync::atomic::Ordering::SeqCst)
+        });
+        assert_eq!(
+            settle_real(ms(50), &[]).await,
+            Settled {
+                waiting: vec!["gateway:requests".into()],
+                busy: vec![]
+            }
+        );
+        n.store(0, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                settle_real(Duration::from_secs(60), &[])
+            )
+            .await,
+            Ok(Settled::default())
+        );
+    });
+}
+
+#[test]
+fn a_task_still_running_after_the_settle_is_named_busy() {
+    on_virtual(async {
+        spawn("t", async move {
+            loop {
+                tokio::task::yield_now().await;
+            }
+        });
+        advance(Duration::ZERO).await;
+        assert_eq!(
+            settle_real(ms(100), &[]).await,
+            Settled {
+                waiting: vec![],
+                busy: vec!["t".into()]
+            }
+        );
+    });
 }
 
 #[test]

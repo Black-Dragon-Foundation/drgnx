@@ -129,7 +129,7 @@ async fn changed_in(g: Ground) -> Result<Option<(Ground, Changed)>, Error> {
         return Ok(None);
     };
     let (root, wt, base) = (g.root.clone(), g.worktree.clone(), g.base.clone());
-    let files = tokio::task::spawn_blocking(move || changed_files(&root, &wt, &base, &tree))
+    let files = crate::clock::blocking(move || changed_files(&root, &wt, &base, &tree))
         .await
         .map_err(|e| fail(e.to_string()))?
         .map_err(fail)?;
@@ -171,7 +171,7 @@ pub async fn hunks(f: &Front, _: &Caller, p: HunksParams) -> Result<Hunks, Error
             diff: String::new(),
         });
     };
-    let diff = tokio::task::spawn_blocking(move || {
+    let diff = crate::clock::blocking(move || {
         snapshot::patch(&g.root, &g.worktree, &g.base, &tree, &path)
     })
     .await
@@ -188,7 +188,7 @@ pub async fn file_at(f: &Front, _: &Caller, p: FileAtParams) -> Result<FileAt, E
     let Some((seq, tree)) = g.snaps.iter().rev().find(|(s, _)| *s <= p.seq).cloned() else {
         return Err(fail(format!("no snapshot at or before step {}", p.seq)));
     };
-    let bytes = tokio::task::spawn_blocking(move || file_blob(&g.root, &g.worktree, &tree, &path))
+    let bytes = crate::clock::blocking(move || file_blob(&g.root, &g.worktree, &tree, &path))
         .await
         .map_err(|e| fail(e.to_string()))?
         .map_err(fail)?;

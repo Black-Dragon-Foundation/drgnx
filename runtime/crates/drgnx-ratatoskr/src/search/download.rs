@@ -90,7 +90,7 @@ fn file_url(base: &Uri, spec: &ModelSpec, name: &str) -> Result<Uri, DownloadErr
 }
 
 async fn sum_of(path: PathBuf) -> Result<String, DownloadError> {
-    tokio::task::spawn_blocking(move || sha256_file(&path))
+    crate::clock::blocking(move || sha256_file(&path))
         .await
         .map_err(|e| disk(io::Error::other(e)))?
         .map_err(disk)

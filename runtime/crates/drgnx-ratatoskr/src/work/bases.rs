@@ -171,7 +171,7 @@ pub async fn record(
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     let Ok(r) =
-        tokio::task::spawn_blocking(move || row(&root, &repo, &wt, &key, branch, Some(commit)))
+        crate::clock::blocking(move || row(&root, &repo, &wt, &key, branch, Some(commit)))
             .await
     else {
         return;
@@ -197,7 +197,7 @@ pub async fn session_started(writer: Writer, hub: PathBuf, session: String, cwd:
     }
     let root = hub.join("checkpoints");
     if let Ok(Some(r)) =
-        tokio::task::spawn_blocking(move || session_base(&root, &cwd, &session)).await
+        crate::clock::blocking(move || session_base(&root, &cwd, &session)).await
     {
         put(&writer, r).await;
     }

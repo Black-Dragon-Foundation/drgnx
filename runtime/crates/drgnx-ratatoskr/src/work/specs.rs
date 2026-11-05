@@ -77,7 +77,7 @@ pub async fn on_written(
         return;
     }
     let owned = path.to_path_buf();
-    let read = tokio::task::spawn_blocking(move || {
+    let read = crate::clock::blocking(move || {
         let meta = std::fs::metadata(&owned).ok()?;
         if !meta.is_file() || meta.len() > READ_MAX {
             return None;

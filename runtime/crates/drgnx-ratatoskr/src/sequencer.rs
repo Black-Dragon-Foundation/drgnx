@@ -497,10 +497,13 @@ impl Sequencer {
             .iter()
             .flat_map(|(_, l)| waiting_ok(&l.text))
             .collect();
-        let waiting = clock::settle_real(clock::BUSY_AFTER, &ok).await;
+        let clock::Settled { waiting, busy } = clock::settle_real(clock::BUSY_AFTER, &ok).await;
         let settled = clock::advance(Duration::ZERO).await;
         self.release();
         let unnamed = self.order().take_unnamed() + settled.unnamed;
+        let mut busy: Vec<String> = busy.into_iter().chain(settled.busy).collect();
+        busy.sort();
+        busy.dedup();
         for (c, l) in barriers {
             let marker = self.markers.fetch_add(1, Ordering::SeqCst) + 1;
             let event: Arc<str> = format!(
@@ -527,7 +530,7 @@ impl Sequencer {
                 result: json!({
                     "marker": marker,
                     "unnamed": unnamed,
-                    "busy": settled.busy,
+                    "busy": busy,
                     "waiting": waiting
                 }),
                 ignored: vec![],

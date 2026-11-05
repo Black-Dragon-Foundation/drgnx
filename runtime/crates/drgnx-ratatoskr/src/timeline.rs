@@ -89,7 +89,7 @@ impl Snap {
             return None;
         }
         let (root, wt, sid_) = (self.root.clone(), worktree.to_path_buf(), sid.to_string());
-        let tree = tokio::task::spawn_blocking(move || snapshot::take(&root, &wt, &sid_, seq, &[]))
+        let tree = crate::clock::blocking(move || snapshot::take(&root, &wt, &sid_, seq, &[]))
             .await
             .ok()?
             .map_err(|e| tracing::warn!(sid, "snapshot not taken: {e}"))
@@ -99,7 +99,7 @@ impl Snap {
             self.root.clone(),
             self.state.finished.lock().expect("timeline").clone(),
         );
-        let pruned = tokio::task::spawn_blocking(move || {
+        let pruned = crate::clock::blocking(move || {
             let repos: Vec<PathBuf> = std::fs::read_dir(&root)
                 .into_iter()
                 .flatten()

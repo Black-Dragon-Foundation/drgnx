@@ -238,7 +238,7 @@ impl Traces {
             }
             return;
         }
-        let _ = tokio::task::spawn_blocking(move || {
+        let _ = crate::clock::blocking(move || {
             st.apply(TraceEv::StepClosed { step, command, at })
         })
         .await;

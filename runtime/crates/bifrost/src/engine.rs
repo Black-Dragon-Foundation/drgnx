@@ -130,6 +130,39 @@ pub struct Gateway {
     /// Request body bytes taken, and provider body bytes passed on, since start ([`Gateway::traffic`]).
     bytes_in: AtomicU64,
     bytes_out: Arc<AtomicU64>,
+    /// The requests sent whose [`GatewayEvent::Request`] is not sent yet (test-hooks: [`Gateway::in_flight`]).
+    #[cfg(feature = "test-hooks")]
+    in_flight: InFlight,
+}
+
+/// How many requests the gateway sent whose [`GatewayEvent::Request`] (and [`GatewayEvent::Budget`]) is not sent yet
+/// (test-hooks).  A request counts from its send to the event, so a test that waits for zero has every event of the
+/// requests it saw answered in the channel: the hub's barrier waits for it.
+#[cfg(feature = "test-hooks")]
+#[derive(Clone, Default)]
+pub struct InFlight(Arc<std::sync::atomic::AtomicUsize>);
+
+#[cfg(feature = "test-hooks")]
+impl InFlight {
+    pub fn get(&self) -> usize {
+        self.0.load(Ordering::SeqCst)
+    }
+
+    fn count(&self) -> Counted {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Counted(self.0.clone())
+    }
+}
+
+/// One request counted in [`InFlight`] until this is dropped.
+#[cfg(feature = "test-hooks")]
+struct Counted(Arc<std::sync::atomic::AtomicUsize>);
+
+#[cfg(feature = "test-hooks")]
+impl Drop for Counted {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 /// What one step came to.
@@ -159,7 +192,15 @@ impl Gateway {
             told: Mutex::new(HashMap::new()),
             bytes_in: AtomicU64::new(0),
             bytes_out: Arc::new(AtomicU64::new(0)),
+            #[cfg(feature = "test-hooks")]
+            in_flight: InFlight::default(),
         })
+    }
+
+    /// The requests sent whose events are not sent yet (test-hooks).
+    #[cfg(feature = "test-hooks")]
+    pub fn in_flight(&self) -> InFlight {
+        self.in_flight.clone()
     }
 
     /// The bytes taken from clients' request bodies and passed on from providers' bodies since start (the hub's
@@ -425,6 +466,8 @@ impl Gateway {
             ledger: self.ledger.clone(),
             events: self.events.clone(),
             armed: true,
+            #[cfg(feature = "test-hooks")]
+            counted: Some(self.in_flight.count()),
         }
     }
 
@@ -649,6 +692,9 @@ struct Spend {
     ledger: Arc<dyn Ledger>,
     events: mpsc::UnboundedSender<GatewayEvent>,
     armed: bool,
+    /// Counted in flight until its events are sent, or until it is dropped disarmed (test-hooks).
+    #[cfg(feature = "test-hooks")]
+    counted: Option<Counted>,
 }
 
 impl Spend {
@@ -676,7 +722,11 @@ impl Drop for Spend {
             return;
         };
         let (ledger, events, limit) = (self.ledger.clone(), self.events.clone(), self.budget);
+        #[cfg(feature = "test-hooks")]
+        let counted = self.counted.take();
         runtime.spawn(async move {
+            #[cfg(feature = "test-hooks")]
+            let _counted = counted;
             ledger.record(row.clone()).await;
             let job = row.job.clone();
             let _ = events.send(GatewayEvent::Request(row));

@@ -223,24 +223,106 @@ pub(crate) fn origin() -> Option<(String, u64)> {
     virt::origin()
 }
 
-/// F, a wait on something outside the hub's clock that ends by itself (a child's exit, a blocking thread, another
-/// process's answer).  With the `test-hooks` feature, on the virtual clock, a [`spawn`]ed task inside one is waited for
-/// by a barrier, and named `waiting` when it stays inside ([`settle_real`]).
+/// F, a wait on something outside the hub's clock that ends by itself, soon (a blocking thread, another process's
+/// answer, a download).  With the `test-hooks` feature, on the virtual clock, a [`spawn`]ed task inside one is not
+/// parked: an advance that woke it waits for it, and so does a barrier, which names it `waiting` when it stays inside
+/// ([`settle_real`]).  A store thread's answer is one too, marked by urdr itself (`urdr::wait`).
 #[inline]
 pub(crate) async fn real<F: Future>(f: F) -> F::Output {
     #[cfg(feature = "test-hooks")]
-    let f = virt::real(f);
+    let f = virt::real(f, false);
     f.await
 }
 
-/// Wait, at most WITHIN of real time, until no [`spawn`]ed task whose origin OK does not list is inside a [`real`] wait
-/// or in the poll that left one; then the origins of the tasks still inside one (sorted, once each): those OK lists,
-/// and after WITHIN the others.  Empty on the real clock (test-hooks).
+/// F, a wait outside the hub's clock that may last until the clock ends it (a job's child, under its time box): a
+/// barrier waits for it as for a [`real`] wait, but an advance counts the task parked on it, since the advance may be
+/// what ends it (test-hooks).
+#[inline]
+pub(crate) async fn real_long<F: Future>(f: F) -> F::Output {
+    #[cfg(feature = "test-hooks")]
+    let f = virt::real(f, true);
+    f.await
+}
+
+/// `tokio::task::spawn_blocking` of F, the task that awaits it inside a [`real`] wait from now until it has the
+/// result (test-hooks).  Every blocking call of the hub's tasks goes through here (`tests/hub_reads_its_clock.rs`).
+#[inline]
+pub(crate) fn blocking<F, R>(f: F) -> Blocking<R>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    Blocking {
+        _inside: inside(),
+        join: tokio::task::spawn_blocking(f),
+    }
+}
+
+/// See [`blocking`]: tokio's `JoinHandle`, awaited.
+pub(crate) struct Blocking<R> {
+    join: tokio::task::JoinHandle<R>,
+    /// The awaiting task inside its real wait, until the result is taken (test-hooks; nothing in a release build).
+    _inside: Option<Inside>,
+}
+
 #[cfg(feature = "test-hooks")]
-pub(crate) async fn settle_real(within: Duration, ok: &[String]) -> Vec<String> {
+type Inside = virt::InReal;
+#[cfg(not(feature = "test-hooks"))]
+type Inside = ();
+
+#[cfg(feature = "test-hooks")]
+fn inside() -> Option<Inside> {
+    virt::enter(false)
+}
+
+#[cfg(not(feature = "test-hooks"))]
+#[inline]
+fn inside() -> Option<Inside> {
+    None
+}
+
+impl<R> Future for Blocking<R> {
+    type Output = Result<R, tokio::task::JoinError>;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let r = std::pin::Pin::new(&mut self.join).poll(cx);
+        if r.is_ready() {
+            self._inside = None;
+        }
+        r
+    }
+}
+
+/// Something outside the hub's tasks that a barrier waits for, by NAME: PENDING says how much of it is still in flight
+/// (the gateway's requests whose events are not sent yet).  Once per name, on the virtual clock only (test-hooks).
+#[cfg(feature = "test-hooks")]
+pub(crate) fn outside(name: &'static str, pending: impl Fn() -> usize + Send + Sync + 'static) {
+    if let Some(v) = virt::current() {
+        v.outside(name, Box::new(pending));
+    }
+}
+
+/// What a settle left: the origins (and outside names) still inside a real wait, and the tasks still running.
+#[cfg(feature = "test-hooks")]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Settled {
+    pub waiting: Vec<String>,
+    pub busy: Vec<String>,
+}
+
+/// Wait, at most WITHIN of real time, until every [`spawn`]ed task whose origin OK does not list is parked and outside
+/// any real wait ([`real`], [`real_long`], a store thread's answer), and nothing [`outside`] is in flight; then what is
+/// left (sorted, once each): in `waiting` the origins of the tasks still inside a real wait (those OK lists, and after
+/// WITHIN the others) and the outside names still in flight, in `busy` the other tasks still running after WITHIN.
+/// Empty on the real clock (test-hooks).
+#[cfg(feature = "test-hooks")]
+pub(crate) async fn settle_real(within: Duration, ok: &[String]) -> Settled {
     match virt::current() {
         Some(v) => v.settle_real(within, ok).await,
-        None => vec![],
+        None => Settled::default(),
     }
 }
 
@@ -262,6 +344,7 @@ pub(crate) fn virtual_ms() -> u64 {
 /// F on a two-worker runtime whose threads (and this one) read a fresh virtual clock (unit tests).
 #[cfg(all(test, feature = "test-hooks"))]
 pub(crate) fn on_virtual<F: Future>(f: F) -> F::Output {
+    urdr::wait::set(virt::store_wait);
     let clock = std::sync::Arc::new(virt::Virtual::new());
     let theirs = clock.clone();
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -311,6 +394,15 @@ mod virt {
 
     pub(super) fn install() {
         let _ = GLOBAL.set(Arc::new(Virtual::new()));
+        urdr::wait::set(store_wait);
+    }
+
+    /// urdr's hook: the task that waits for a store thread's answer is inside a real wait until it has it.
+    pub(super) fn store_wait() -> Box<dyn std::any::Any + Send> {
+        match enter(false) {
+            Some(inside) => Box::new(inside),
+            None => Box::new(()),
+        }
     }
 
     pub(super) fn origin() -> Option<(String, u64)> {
@@ -352,8 +444,19 @@ mod virt {
         /// Wakes the clock gave it, and the count its last finished poll began after.
         fired: u64,
         seen: u64,
-        /// The [`super::real`] waits it is inside.
+        /// The [`super::real`] waits it is inside (a store thread's answer, a blocking thread).
         real: u32,
+        /// The [`super::real_long`] waits it is inside (a job's child).
+        long: u32,
+    }
+
+    impl Flags {
+        /// Runs nothing and will not until something wakes it: ended, or between polls with no wake pending (every
+        /// wake it was given seen by a poll) and outside a [`super::real`] wait.  What else it waits on (the clock, a
+        /// channel nothing fills) does not matter.
+        fn parked(&self) -> bool {
+            self.ended || (!self.polling && !self.woken && self.seen == self.fired && self.real == 0)
+        }
     }
 
     impl Task {
@@ -361,11 +464,15 @@ mod virt {
             lock(&self.flags)
         }
 
-        /// Runs nothing and will not until something wakes it: ended, or between polls with no wake pending (every
-        /// wake it was given seen by a poll).  What it waits on (the clock, a channel nothing fills) does not matter.
+        /// See [`Flags::parked`]: what an advance waits for.
         fn parked(&self) -> bool {
+            self.flags().parked()
+        }
+
+        /// Parked and outside a [`super::real_long`] wait too: what a barrier waits for.
+        fn settled(&self) -> bool {
             let f = self.flags();
-            f.ended || (!f.polling && !f.woken && f.seen == f.fired)
+            f.parked() && (f.ended || f.long == 0)
         }
 
         /// Run once (its first sleeper, if any, registered at the time it was spawned).
@@ -392,9 +499,13 @@ mod virt {
         /// During an advance: the tasks the woken ones spawned.
         born: Vec<Arc<Task>>,
         advancing: bool,
-        /// Tasks that went into a real wait, until a settle sees them out of it and its poll.
-        real: Vec<Arc<Task>>,
+        /// Every task spawned, until a settle or a spawn sees it ended.
+        live: Vec<Arc<Task>>,
+        /// What a barrier waits for outside the tasks ([`super::outside`]): a name and how much is in flight.
+        outside: Vec<(&'static str, Pending)>,
     }
+
+    type Pending = Box<dyn Fn() -> usize + Send + Sync>;
 
     pub(crate) struct Virtual {
         base: tokio::time::Instant,
@@ -418,7 +529,8 @@ mod virt {
                     fresh: Vec::new(),
                     born: Vec::new(),
                     advancing: false,
-                    real: Vec::new(),
+                    live: Vec::new(),
+                    outside: Vec::new(),
                 }),
                 changed: Notify::new(),
                 one_at_a_time: tokio::sync::Mutex::new(()),
@@ -633,67 +745,118 @@ mod virt {
         .await
     }
 
-    /// Inside a [`super::real`] wait: counted in its task's flags while it lasts.
-    struct InReal {
+    /// Inside a [`super::real`] (or [`super::real_long`]) wait: counted in its task's flags while it lasts.
+    pub(crate) struct InReal {
         clock: Arc<Virtual>,
         task: Arc<Task>,
+        long: bool,
     }
 
     impl Drop for InReal {
         fn drop(&mut self) {
-            self.task.flags().real -= 1;
+            {
+                let mut f = self.task.flags();
+                if self.long {
+                    f.long -= 1;
+                } else {
+                    f.real -= 1;
+                }
+            }
             self.clock.changed.notify_waiters();
         }
     }
 
-    pub(super) async fn real<F: Future>(f: F) -> F::Output {
+    /// The task running now inside a real wait (LONG: a [`super::real_long`] one) until what this returns is dropped;
+    /// none outside a [`super::spawn`]ed task or on the real clock.
+    pub(super) fn enter(long: bool) -> Option<InReal> {
         let (Some(clock), Ok(task)) = (current(), TASK.try_with(Arc::clone)) else {
-            return f.await;
+            return None;
         };
         {
-            let mut st = clock.state();
-            task.flags().real += 1;
-            if !st.real.iter().any(|t| Arc::ptr_eq(t, &task)) {
-                st.real.push(task.clone());
+            let mut f = task.flags();
+            if long {
+                f.long += 1;
+            } else {
+                f.real += 1;
             }
         }
-        let _inside = InReal { clock, task };
+        Some(InReal { clock, task, long })
+    }
+
+    pub(super) async fn real<F: Future>(f: F, long: bool) -> F::Output {
+        let _inside = enter(long);
         f.await
     }
 
     impl Virtual {
-        pub(super) async fn settle_real(&self, within: Duration, ok: &[String]) -> Vec<String> {
+        pub(super) fn outside(&self, name: &'static str, pending: Pending) {
+            let mut st = self.state();
+            if !st.outside.iter().any(|(n, _)| *n == name) {
+                st.outside.push((name, pending));
+            }
+        }
+
+        pub(super) async fn settle_real(&self, within: Duration, ok: &[String]) -> super::Settled {
             let give_up = tokio::time::Instant::now() + within;
             loop {
                 let note = self.changed.notified();
                 let mut note = std::pin::pin!(note);
                 note.as_mut().enable();
-                let waited: Vec<Arc<Task>> = {
+                let (outside, waited) = {
                     let mut st = self.state();
-                    // inside a real wait, or in the poll that left one
-                    st.real.retain(|t| {
-                        let f = t.flags();
-                        !f.ended && (f.real > 0 || f.polling)
-                    });
-                    st.real
+                    // what is in flight outside first: what it sends wakes a task, which the look below then sees
+                    let outside = st.outside.iter().any(|(_, pending)| pending() > 0);
+                    st.live.retain(|t| !t.flags().ended);
+                    let waited = st
+                        .live
                         .iter()
-                        .filter(|t| !ok.iter().any(|o| o == t.origin.as_str()))
-                        .cloned()
-                        .collect()
+                        .any(|t| !ok.iter().any(|o| o == t.origin.as_str()) && !t.settled());
+                    (outside, waited)
                 };
-                if waited.is_empty() || tokio::time::timeout_at(give_up, note).await.is_err() {
-                    let st = self.state();
-                    let mut inside: Vec<String> = st
-                        .real
-                        .iter()
-                        .filter(|t| t.flags().real > 0)
-                        .map(|t| t.origin.as_str().to_string())
-                        .collect();
-                    inside.sort();
-                    inside.dedup();
-                    return inside;
+                if !outside && !waited {
+                    return self.left(ok, false);
+                }
+                // nothing outside tells the clock it is done: looked at again each millisecond while it is in flight
+                let next = if outside {
+                    give_up.min(tokio::time::Instant::now() + Duration::from_millis(1))
+                } else {
+                    give_up
+                };
+                if tokio::time::timeout_at(next, note).await.is_err()
+                    && tokio::time::Instant::now() >= give_up
+                {
+                    return self.left(ok, true);
                 }
             }
+        }
+
+        /// What a settle leaves: the tasks inside a real wait and what is in flight outside; after its limit (LATE),
+        /// the other tasks OK does not list that still run.
+        fn left(&self, ok: &[String], late: bool) -> super::Settled {
+            let st = self.state();
+            let mut out = super::Settled::default();
+            for (name, pending) in &st.outside {
+                if pending() > 0 {
+                    out.waiting.push((*name).to_string());
+                }
+            }
+            for t in &st.live {
+                let f = t.flags();
+                if f.ended {
+                    continue;
+                }
+                let origin = t.origin.as_str().to_string();
+                if f.real > 0 || f.long > 0 {
+                    out.waiting.push(origin);
+                } else if late && !f.parked() && !ok.contains(&origin) {
+                    out.busy.push(origin);
+                }
+            }
+            for v in [&mut out.waiting, &mut out.busy] {
+                v.sort();
+                v.dedup();
+            }
+            out
         }
     }
 
@@ -720,6 +883,8 @@ mod virt {
                 st.fresh.retain(|t| !t.started());
                 st.fresh.push(task.clone());
             }
+            st.live.retain(|t| !t.flags().ended);
+            st.live.push(task.clone());
         }
         let wake = Arc::new(TaskWaker {
             task: task.clone(),
