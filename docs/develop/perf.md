@@ -38,6 +38,11 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | replace-retype | the same 10k matches listed and drawn, then the string `pi` typed 5 times into the Replace field: after the pause each match row is patched with its new preview, in slices, the visible rows first (checked: no full draw, the rows equal a fresh render of the view's keys) | input latency, and `:slice_ms`: the wall time of each view draw (`drgnx-view--draw-buffer`, timed by a harness-side advice; budget: max 6 ms) |
 | live-view | the typing workload's 186 characters while the Live view, beside the file, shows a mock browser's JPEG frames as wide as the view asked for (as Chrome sends them), 30 a second, each sent once the last was acknowledged (the mock runs in the same Emacs, so its message and websocket frame are made once; without ImageMagick the frames are a few bytes no decoder takes, so drawing costs less) (checked: frames were drawn) | input latency |
 | agent-settings-open | the Claude Code settings page opened and drawn (`redisplay`) against a fixture home: a 5 MB `.claude.json` (300 projects with history), 50 MCP servers and 200 skills; three runs | milliseconds until drawn (budget 150) and the processes started (budget 0: opening the page starts nothing) |
+| settings-start | `settings.el` with 200 entries (100 of defined options, 100 of packages not loaded; no `:set` functions) read and applied as at a second start; three runs | milliseconds (`:read_ms`, budget 2) |
+| settings-page | the Settings page opened and drawn with 5,000 customizable variables added to the session's own, then the name of one typed into the search a character at a time | `:open_ms` (budget 100), `:key_p50_ms` and `:key_max_ms` (the worst keystroke, budget 16) |
+| settings-prov | a 500-line `config.el` (a header, ten `load`s of small libraries, 97 blocks of a function, a managed variable's `setq` and an `add-hook`) loaded plain and with provenance, interleaved, nine rounds | `:prov_pct` (budget 5), `:load_ms`, `:prov_load_ms`, and `:cold_extra_ms` (what the first, uncached load adds) |
+| settings-sync | the settings index written for 200 fixture packages of three files each | `:index_ms` (budget 2000) |
+| settings-open | 30 files in a project with a shared and a private workspace file and a language override, opened with the workspace and language layers in and out, interleaved (the layers are checked to have applied) | `:open_on_ms`, `:open_off_ms` (medians per open) and `:delta_ms`, what the layers add (budget 1) |
 | remote-typing | the typing workload's 186 characters in a local file while the Explorer lists a mock-method root (test/fixtures/tramp-mock.el: a real TRAMP connection to a local `sh`) and its connection is dead, the segment showing it lost (checked: nothing was sent to the remote, the connection stayed dead) | input latency |
 | typing-with-index | the typing workload's 186 characters with the search module on and the drgnx repo's semantic index loaded: the repo indexed into the session's own state dir by a stub embedder (384 numbers per chunk; no provider, no network), read into memory by one query before the keys (checked: the query cache still holds it); the index file is deleted after | input latency |
 | typing-evil | the typing workload with Vim keys: `i`, the same six strings, `<escape>` (checked: typed, back in normal state) | input latency |
@@ -582,8 +587,17 @@ A quiet-machine `bin/drgnx test --perf` run pins the number: set the p95 to 16 i
 
 ## Settings (design §16)
 
-The settings gates (start, provenance, watchers, page open, `drgnx sync`'s index) are not perf rows yet: the perf
-deferral stands, so there is no `test/perf/settings-*.el`.
+The settings gates are the five `settings-*` workloads of the table above (`harness/drgnx-perf-settings.el`, which
+builds each fixture in the session under a temp config, state and cache directory and puts the environment back).
+They are wall clock, so they are reported against their budgets and judged in a pinned run:
+`DRGNX_PERF_WORKLOADS='settings-start settings-page settings-prov settings-sync settings-open' bin/drgnx test --container --perf`.
+The two gates that are not timings are tests: no provenance watcher sits on a variable that typing writes more than
+1,000 times (`test/unit/settings-watch-test.el`), and applying settings adds only the custom loads of the variables it
+names to `features` (`drgnx-settings-apply/applying-adds-only-the-named-custom-loads`).
+
+Installing a variable watcher costs about 160 µs: `add-variable-watcher` walks the whole obarray. Provenance installs
+one for each managed variable and each variable the static index finds your Lisp setting, once per start, so a
+`settings.el` with 100 entries costs 16 ms of the start, and `settings-prov` shows it.
 
 Ratatoskr's reader is timed by `runtime/crates/huginn/tests/timing.rs`: 64 KiB of settings-shaped data, median of 200
 reads at most 1 ms. It is `#[ignore]`, run once and alone on a pinned host, optimized:
