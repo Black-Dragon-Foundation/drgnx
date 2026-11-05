@@ -1523,6 +1523,15 @@ use the same record reader, so they give the same status (`test/unit/git-records
 is got on every render and stays recent; a tree with more than 64 expanded folders re-lists the oldest on each
 render (an `mtime` check, then a directory read).
 
+`core/drgnx-file-stream.el` lists a local folder's files in batches (`git ls-files -z` through the same `records`
+framing in a repository, `nidhogg-directory-files-async` elsewhere), only with the feature and the switch on; Quick Open
+(`core/drgnx-quick-open.el`) and Find in Explorer (`drgnx-explorer--find-load`, one generation per listing, a
+late batch is dropped) use it, and keep their synchronous path otherwise and for a remote folder. Quick Open's list and
+highlight are a pure core (`drgnx-quick-open--step`; events `batch`, `input`, `move`, `done`; the highlight is kept by the
+file's name and moves only on `input` and `move`), tested in every order (`test/unit/quick-open-stream-test.el`). The shell
+touches vertico's `vertico--input`, `vertico--candidates`, `vertico--index` and `vertico--exhibit` to show a batch with the
+highlight where the core says; a vertico update can break them, and it was not checked under `vertico-buffer`.
+
 ### Declarations, activation and ownership
 
 `drgnx-epoch-define`, `drgnx-memo-define` and `drgnx-cache-define` are **declarations, like `defvar`**: they go at

@@ -106,7 +106,11 @@ but never watched for changes (a remote watch starts a process that blocks); ref
 
 **Typing** in the Explorer jumps to the next row starting with what you typed (letters a profile does not use).
 **Find** filters the tree live to the files whose names contain the text — also inside collapsed folders — and the
-title shows it; an empty text (or `C-g`) brings back the tree, its open folders, the view and the selection.
+title shows it; an empty text (or `C-g`) brings back the tree, its open folders, the view and the selection. In a big
+project the files are listed in the background and the tree fills in while they arrive (with Nidhogg's framing on,
+`nidhogg-workers-framing`; a remote folder, or no framing, lists them first as before). **Quick Open** (`C-p` in the VS
+Code profile) does the same: the list grows while the project is still being listed, and the file you have highlighted
+stays highlighted wherever the new ones sort; it moves when you type or move it.
 
 **Live**: files created, deleted or renamed outside Emacs appear within ~150 ms (only the changed folder is read
 again; the view and selection stay; nothing changes while a mouse button is held — a press whose release never

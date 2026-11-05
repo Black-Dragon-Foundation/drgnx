@@ -27,6 +27,7 @@
 (require 'drgnx-view)                   ; `drgnx-view-with-kept-windows'
 (require 'drgnx-git)
 (require 'drgnx-timer)
+(require 'drgnx-file-stream)
 
 (defgroup drgnx-explorer nil "The drgnx Explorer." :group 'drgnx)
 
@@ -558,7 +559,7 @@ A remote file is never revealed: this runs from the change bus, where remote I/O
 
 (defun drgnx-explorer-set-roots (roots)
   "Show ROOTS (directories) in the Explorer (this ends Find)."
-  (when drgnx-explorer--find (setq drgnx-explorer--find nil) (drgnx-explorer--plain-title))
+  (when drgnx-explorer--find (drgnx-explorer--find-stop) (setq drgnx-explorer--find nil) (drgnx-explorer--plain-title))
   (setq drgnx-explorer--roots (mapcar (lambda (r) (file-name-as-directory (expand-file-name r))) roots))
   ;; a command of the user lists a remote root now; `drgnx open' (emacsclient -e, in the server's process filter) and
   ;; other automatic callers do not
@@ -712,21 +713,70 @@ host."
       (seq-remove (lambda (f) (and re (string-match-p re (file-name-nondirectory f))))
                   (let ((grep-find-ignored-files nil)) (project-files p))))))
 
+(defun drgnx-explorer--check-find-root (root)
+  "Refuse ROOT when it is your home or / and not a project (far too many files)."
+  (when (and (not (project-current nil root))
+             (member (directory-file-name root) (list (directory-file-name (expand-file-name "~")) "" "/")))
+    (user-error "Find needs a project folder here, not %s" (abbreviate-file-name root))))
+
+(defun drgnx-explorer--excluded-p (name)
+  "Non-nil when a part of NAME (relative to its root) is a name the Explorer never shows."
+  (seq-some (lambda (part) (string-match-p drgnx-explorer-exclude part)) (split-string name "/" t)))
+
+(defun drgnx-explorer--root-files (root)
+  "Every file under ROOT, read now (see `drgnx-explorer--all-files')."
+  (let ((default-directory root))
+    (seq-remove (lambda (f) (drgnx-explorer--excluded-p (string-remove-prefix root f)))
+                (if-let* ((p (project-current nil root)))
+                    (seq-filter (lambda (f) (string-prefix-p root f)) (drgnx-explorer--project-files p root))
+                  (drgnx-explorer--check-find-root root)
+                  (directory-files-recursively
+                   root "" nil (lambda (d) (not (string-match-p drgnx-explorer-exclude (file-name-nondirectory d)))))))))
+
 (defun drgnx-explorer--all-files ()
   "Every file under the roots — the project's files (only those under the root) when there is a project;
 excluded names left out.  A root that is your home or / and not a project is refused (far too many files)."
-  (seq-mapcat (lambda (root)
-                (let ((default-directory root))
-                  (seq-remove (lambda (f) (seq-some (lambda (part) (string-match-p drgnx-explorer-exclude part))
-                                                    (split-string (string-remove-prefix root f) "/" t)))
-                              (if-let* ((p (project-current nil root)))
-                                  (seq-filter (lambda (f) (string-prefix-p root f)) (drgnx-explorer--project-files p root))
-                                (when (member (directory-file-name root)
-                                              (list (directory-file-name (expand-file-name "~")) "" "/"))
-                                  (user-error "Find needs a project folder here, not %s" (abbreviate-file-name root)))
-                                (directory-files-recursively
-                                 root "" nil (lambda (d) (not (string-match-p drgnx-explorer-exclude (file-name-nondirectory d)))))))))
-              drgnx-explorer--roots))
+  (seq-mapcat #'drgnx-explorer--root-files drgnx-explorer--roots))
+
+;; Find's file list, streamed: with Nidhogg's framing on, a local root is listed in batches (core/drgnx-file-stream.el)
+;; that land in the Find state's :files while the tree is already filtered by them; a remote root, or no framing, reads
+;; the list now as before.  A listing belongs to one generation: Find ending or starting over bumps it, and a batch of an
+;; older one is dropped.
+(defvar drgnx-explorer--find-gen 0 "Which Find listing is current.")
+(defvar drgnx-explorer--find-streams nil "The listings Find is reading.")
+
+(defun drgnx-explorer--find-stop ()
+  "End the listings Find is reading; their late batches are dropped."
+  (cl-incf drgnx-explorer--find-gen)
+  (mapc #'drgnx-file-stream-stop drgnx-explorer--find-streams)
+  (setq drgnx-explorer--find-streams nil))
+
+(defun drgnx-explorer--find-batch (gen root names)
+  "NAMES (relative to ROOT) of the Find listing generation GEN: add them to :files, and filter again once input pauses."
+  (when (and drgnx-explorer--find (eql gen drgnx-explorer--find-gen))
+    (let ((new nil))
+      (dolist (n names) (unless (drgnx-explorer--excluded-p n) (push (concat root n) new)))
+      (setq drgnx-explorer--find
+            (plist-put drgnx-explorer--find :files (nconc (plist-get drgnx-explorer--find :files) (nreverse new)))))
+    (drgnx-timer-debounce 'explorer-find-batch 0.1 #'drgnx-explorer--find-refilter :idle t
+                          :owner (or (get-buffer drgnx-explorer-buffer-name) :core))))
+
+(defun drgnx-explorer--find-refilter ()
+  "Show the files read so far that match Find's query."
+  (when-let* ((find drgnx-explorer--find) (query (plist-get find :query)))
+    (drgnx-explorer--find-apply query)))
+
+(defun drgnx-explorer--find-load ()
+  "Start reading Find's files, and return those read at once: all of them, or nil while local roots stream in."
+  (drgnx-explorer--find-stop)
+  (let ((gen drgnx-explorer--find-gen) (files nil))
+    (dolist (root drgnx-explorer--roots)
+      (let ((stream (and (drgnx-file-stream-available-p root)
+                         (progn (drgnx-explorer--check-find-root root) t)
+                         (drgnx-file-stream-start root (lambda (names) (drgnx-explorer--find-batch gen root names)) #'ignore))))
+        (if stream (push stream drgnx-explorer--find-streams)
+          (setq files (nconc files (drgnx-explorer--root-files root))))))
+    files))
 
 (defconst drgnx-explorer--find-limit 5000 "Find shows at most this many matching files.")
 
@@ -734,7 +784,7 @@ excluded names left out.  A root that is your home or / and not a project is ref
   "Show only the files whose name contains QUERY (any case), with their folders — collapsed or not."
   (with-current-buffer (let ((drgnx-explorer--remote-reads t)) (drgnx-explorer--buffer)) ; Find is a command of the user
     (unless drgnx-explorer--find
-      (setq drgnx-explorer--find (list :files (drgnx-explorer--all-files)
+      (setq drgnx-explorer--find (list :files (drgnx-explorer--find-load)
                                        :expanded (copy-hash-table drgnx-explorer--expanded)
                                        :views (drgnx-view-save-places #'drgnx-explorer-node-at))))
     (setq drgnx-explorer--find (plist-put drgnx-explorer--find :query query))
@@ -773,12 +823,14 @@ excluded names left out.  A root that is your home or / and not a project is ref
 
 (defun drgnx-explorer--forget-find ()
   "The Explorer was killed: its Find goes too (else the live updates would wait for it forever)."
+  (drgnx-explorer--find-stop)
   (setq drgnx-explorer--find nil))
 
 (defun drgnx-explorer-find-clear ()
   "Leave Find: the tree, its open folders, the view and the selection come back as they were."
   (interactive)
   (when-let* ((state drgnx-explorer--find))
+    (drgnx-explorer--find-stop)
     (setq drgnx-explorer--find nil drgnx-explorer--expanded (plist-get state :expanded))
     (with-current-buffer (drgnx-explorer--buffer)
       (let ((drgnx-explorer--remote-reads t))              ; a command of the user
@@ -847,7 +899,7 @@ inside another one selected goes: the folder carries it."
 
 (defun drgnx-explorer--find-again ()
   "Filter again with fresh files (a file operation or a refresh during Find)."
-  (setq drgnx-explorer--find (plist-put drgnx-explorer--find :files (drgnx-explorer--all-files)))
+  (setq drgnx-explorer--find (plist-put drgnx-explorer--find :files (drgnx-explorer--find-load)))
   (drgnx-explorer--find-apply (plist-get drgnx-explorer--find :query)))
 
 (defun drgnx-explorer--show-folder-1 (dir)

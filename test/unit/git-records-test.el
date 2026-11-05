@@ -9,6 +9,7 @@
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/orders-fixture" drgnx-dir) nil t)
 (require 'drgnx-git)
+(defvar nidhogg-workers-framing)        ; a `let' of it binds it dynamically, also on an Emacs without the feature
 
 (defconst drgnx-git-records-test--status
   (concat "# branch.oid 0123456789abcdef\0# branch.head feature/é\0# branch.upstream origin/main\0# branch.ab +2 -1\0"
