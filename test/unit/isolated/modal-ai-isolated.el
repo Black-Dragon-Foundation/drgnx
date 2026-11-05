@@ -125,6 +125,7 @@ so what clears a suggestion is the keys pressed."
 ;;;; Ghost text
 
 (ert-deftest drgnx-modal-ai/no-suggestion-outside-insert ()
+  :tags '(:frozen)
   (drgnx-modal-ai-test--with
     (drgnx-modal-ai-test--buffer "(defun greet (name)\n  )\n"
       (should (eq evil-state 'normal))
@@ -149,6 +150,7 @@ so what clears a suggestion is the keys pressed."
       (should (= drgnx-modal-ai-test--asked 2)))))
 
 (ert-deftest drgnx-modal-ai/one-escape-dismisses-and-leaves-insert ()
+  :tags '(:frozen)
   (drgnx-modal-ai-test--with
     (drgnx-modal-ai-test--buffer "(defun greet (name)\n  )\n"
       (drgnx-modal-ai-test--suggest)
@@ -160,6 +162,7 @@ so what clears a suggestion is the keys pressed."
         (should (equal (buffer-string) before))))))
 
 (ert-deftest drgnx-modal-ai/tab-accepts-in-insert ()
+  :tags '(:frozen)
   (drgnx-modal-ai-test--with
     (drgnx-modal-ai-test--buffer "(defun greet (name)\n  )\n"
       (drgnx-modal-ai-test--suggest)
@@ -172,6 +175,7 @@ so what clears a suggestion is the keys pressed."
 ;;;; The selection
 
 (ert-deftest drgnx-modal-ai/visual-line-edits-whole-lines ()
+  :tags '(:frozen)
   (drgnx-modal-ai-test--with
     (drgnx-modal-ai-test--buffer "one\ntwo\nthree\nfour\n"
       (forward-line 1)
@@ -200,6 +204,7 @@ so what clears a suggestion is the keys pressed."
     (advice-eval-interactive-spec (cadr (interactive-form 'drgnx-ai-edit)))))
 
 (ert-deftest drgnx-modal-ai/visual-block-edits-the-lines-it-touches ()
+  :tags '(:frozen)
   ;; one region cannot be a rectangle: the stream between the corners would send text outside the columns
   (drgnx-modal-ai-test--with
     (drgnx-modal-ai-test--buffer "one\ntwo\nthree\nfour\n"
@@ -211,6 +216,7 @@ so what clears a suggestion is the keys pressed."
         (should (equal (drgnx-modal-ai-test--spec) (list "shorter" beg end)))))))
 
 (ert-deftest drgnx-modal-ai/visual-edits-the-characters-under-both-ends ()
+  :tags '(:frozen)
   (drgnx-modal-ai-test--with
     (drgnx-modal-ai-test--buffer "one\ntwo\nthree\nfour\n"
       (forward-line 1)

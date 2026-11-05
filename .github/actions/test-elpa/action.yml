@@ -1,0 +1,34 @@
+# The packages the modal and kitty tests load, at the versions etc/drgnx.lock.eld pins (evil, goto-chg, evil-collection,
+# kkp): unpacked by test/container/modal-elpa.sh (each tarball's sha256 is checked before it is unpacked) into one
+# directory, cached by the lock's hash. Sets DRGNX_MODAL_ELPA and DRGNX_USER_ELPA to it, which `bin/drgnx test
+# --container` mounts read-only. docs/develop/ci.md
+name: drgnx test packages
+description: The lock's pinned evil and kkp, unpacked for DRGNX_MODAL_ELPA and DRGNX_USER_ELPA
+inputs:
+  dir:
+    description: The drgnx checkout
+    default: drgnx
+runs:
+  using: composite
+  steps:
+    - id: cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/test-elpa
+        key: test-elpa-${{ hashFiles(format('{0}/etc/drgnx.lock.eld', inputs.dir), format('{0}/test/container/modal-elpa.sh', inputs.dir)) }}
+    - name: Unpack the pinned packages
+      if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+      shell: bash
+      env:
+        DIR: ${{ inputs.dir }}
+      run: sh "$DIR/test/container/modal-elpa.sh" "$RUNNER_TEMP/test-elpa"
+    - if: ${{ steps.cache.outputs.cache-hit != 'true' && (github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) }}
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/test-elpa
+        key: ${{ steps.cache.outputs.cache-primary-key }}
+    - name: The directory, for the tests
+      shell: bash
+      run: |
+        echo "DRGNX_MODAL_ELPA=$RUNNER_TEMP/test-elpa" >> "$GITHUB_ENV"
+        echo "DRGNX_USER_ELPA=$RUNNER_TEMP/test-elpa" >> "$GITHUB_ENV"

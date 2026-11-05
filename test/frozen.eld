@@ -279,6 +279,15 @@
   :by "2026-10-24-agent-system-design:8; 2026-11-01-agent-system-p4:45" :since "2026-11-04"
   :tests (drgnx-ai/own-gptel-api-key-keeps-default-backend)
   :keep ())
+ ("test/unit/isolated/modal-ai-isolated.el"
+  :by "2026-10-24-agent-system-design:8; 2026-11-01-agent-system-p4:44" :since "2026-11-05"
+  :tests (drgnx-modal-ai/no-suggestion-outside-insert
+          drgnx-modal-ai/one-escape-dismisses-and-leaves-insert
+          drgnx-modal-ai/tab-accepts-in-insert
+          drgnx-modal-ai/visual-line-edits-whole-lines
+          drgnx-modal-ai/visual-block-edits-the-lines-it-touches
+          drgnx-modal-ai/visual-edits-the-characters-under-both-ends)
+  :keep ())
  ("test/unit/ai-onboard-test.el"
   :by "2026-10-24-agent-system-design:8; 2026-11-01-agent-system-p4:45; onboarding rebuilt on the Rust runtime (2026-11-05): 2026-11-04-race-proof-tests.ledger:137"
   :since "2026-11-04"

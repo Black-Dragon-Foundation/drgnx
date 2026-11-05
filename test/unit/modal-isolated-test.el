@@ -14,6 +14,10 @@
   (should (null (drgnx-test-run-isolated "test/unit/isolated/mod-evil-more-isolated.el"
                                          "^drgnx-evil-more/"))))
 
+(ert-deftest drgnx-evil-setq/own-process ()
+  (should (null (drgnx-test-run-isolated "test/unit/isolated/mod-evil-setq-isolated.el"
+                                         "^drgnx-evil-setq/"))))
+
 (ert-deftest drgnx-evil-flag/own-process ()
   (should (null (drgnx-test-run-isolated "test/unit/isolated/mod-evil-flag-isolated.el"
                                          "^drgnx-evil-flag/"))))

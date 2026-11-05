@@ -88,6 +88,9 @@ jobs:
           image: drgnx-test
           variable: DRGNX_TEST_IMAGE
           nidhogg-artifact: ${{ inputs.nidhogg == 'artifact' && 'tarball-fedora-45' || '' }}
+      - name: The pinned evil and kkp, for the modal and kitty tests (they skip without them)
+        if: ${{ !cancelled() }}
+        uses: ./drgnx/.github/actions/test-elpa
       - name: Unit suite in test/container/Containerfile, the files in parallel (no :timing tests)
         if: ${{ !cancelled() }}
         working-directory: drgnx
@@ -235,6 +238,9 @@ jobs:
           nidhogg-artifact: ${{ inputs.nidhogg == 'artifact' && 'tarball-fedora-45' || '' }}
       # the pinned child-frame packages (test/container/childframe-packages.eld) are baked into this image, so the tier
       # reaches no archive; a row that finds them missing fails (bin/drgnx sets DRGNX_CHILDFRAME_REQUIRED)
+      - name: The pinned evil and kkp, for the live tier's Vim-key tests (they skip without them)
+        if: ${{ !cancelled() }}
+        uses: ./drgnx/.github/actions/test-elpa
       - name: GUI tier in test/container/Containerfile.gui (the :timing tests left out by name)
         if: ${{ !cancelled() }}
         working-directory: drgnx
@@ -338,17 +344,7 @@ jobs:
           variable: DRGNX_TEST_TTY_IMAGE
           nidhogg-artifact: ${{ inputs.nidhogg == 'artifact' && 'tarball-fedora-45' || '' }}
       - name: The pinned kkp, for the kitty and keys tests (they skip without it)
-        working-directory: drgnx
-        run: |
-          block=$(grep -A3 '^[[:space:]]*(kkp :version' etc/drgnx.lock.eld)
-          version=$(printf '%s' "$block" | grep -o ':version "[^"]*"' | head -1 | cut -d'"' -f2)
-          sha=$(printf '%s' "$block" | grep -o '"[0-9a-f]\{64\}"' | head -1 | tr -d '"')
-          [ -n "$version" ] && [ -n "$sha" ] || { echo "kkp is not pinned in etc/drgnx.lock.eld"; exit 1; }
-          mkdir -p "$RUNNER_TEMP/user-elpa"
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/kkp.tar" "https://melpa.org/packages/kkp-$version.tar"
-          echo "$sha  $RUNNER_TEMP/kkp.tar" | sha256sum -c -
-          tar -xf "$RUNNER_TEMP/kkp.tar" -C "$RUNNER_TEMP/user-elpa"
-          echo "DRGNX_USER_ELPA=$RUNNER_TEMP/user-elpa" >> "$GITHUB_ENV"
+        uses: ./drgnx/.github/actions/test-elpa
       - name: Terminal tier in test/container/Containerfile.tty
         working-directory: drgnx
         env:
