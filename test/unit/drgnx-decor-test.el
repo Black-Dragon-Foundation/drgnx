@@ -5,6 +5,7 @@
 (require 'drgnx)
 (require 'drgnx-timer)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-decor" drgnx-dir) nil t)
 
 (defmacro drgnx-decor-test--glitnir (on &rest body)
@@ -59,7 +60,35 @@
     (should (eq 'drgnx-button (get-text-property 0 'face b)))
     (should (eq 'drgnx-button-hover (get-text-property 0 'mouse-face b)))
     (should (eq #'drgnx-decor--press (lookup-key (get-text-property 0 'keymap b) [down-mouse-1])))
-    (should (functionp (lookup-key (get-text-property 0 'keymap b) [remap newline])))))
+    (should-not (lookup-key (get-text-property 0 'keymap b) (kbd "RET")))))   ; keys come from the profiles
+
+(ert-deftest drgnx-decor/enter-activates-a-button-in-a-read-only-buffer-under-every-profile ()
+  (dolist (profile '(vscode emacs vim))
+    (drgnx-test-with-modules '(ui/look)
+      (let* ((spec (with-temp-buffer
+                     (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir))
+                     (goto-char (point-min)) (read (current-buffer))))
+             (row (assq 'decor-activate (plist-get spec :bind)))
+             (drgnx-keys--applied nil) (drgnx-keys-problems nil) (drgnx-keys-last nil)
+             (drgnx-keys--session-layers `((,profile app)))
+             (drgnx-keys-profiles `((,profile :name "Test" :bind (,row))))
+             (ran 0))
+        (should row)
+        (unwind-protect
+            (progn
+              (drgnx-keys-apply)
+              (with-temp-buffer
+                (insert (drgnx-decor-button "Go" (lambda () (cl-incf ran))) " tail")
+                (setq buffer-read-only t)
+                (goto-char 2)
+                (let ((cmd (lookup-key (get-text-property (point) 'keymap) (kbd "RET"))))
+                  (should cmd)
+                  (call-interactively cmd))
+                (should (= 1 ran))
+                (goto-char (point-max))
+                (call-interactively #'drgnx-decor-activate)   ; off a button: nothing runs
+                (should (= 1 ran))))
+          (drgnx-keys--restore))))))
 
 (ert-deftest drgnx-decor/cursor-face-bar-when-unboxed ()
   (drgnx-decor-test--glitnir t

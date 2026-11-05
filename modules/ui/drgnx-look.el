@@ -152,6 +152,9 @@ refuses (`drgnx-settings-refused') before the theme changes."
                        (pcase-dolist (`(,id ,title ,fn) '((view-zoom-in "Zoom In" drgnx-look-zoom-in) (view-zoom-out "Zoom Out" drgnx-look-zoom-out)
                                                           (view-zoom-reset "Reset Zoom" drgnx-look-zoom-reset)))
                          (drgnx-command-define id :category "View" :title title :command fn :doc "The text size in every window; then +, - or 0"))
+                       (drgnx-command-define 'decor-activate :category "View" :title "Activate Button" :command #'drgnx-decor-activate
+                                             :map 'drgnx-decor-button-map :when (lambda () (get-text-property (point) 'drgnx-decor-action))
+                                             :doc "Run the decoration button at point")
                        ;; last, and guarded: a theme that errors leaves the commands (Color Theme picks another)
                        (when-let* ((theme (drgnx-look--saved-theme)))
                          (when (memq theme (custom-available-themes))
