@@ -93,7 +93,7 @@ pub(crate) enum TurnEffect {
     /// Turn TURN starts with ITEM: its prompt is to go to the agent ([`TurnEvent::Sending`] says whether it still
     /// does).
     StartTurn { turn: u64, item: Queued },
-    /// Turn TURN's prompt goes to the agent now.
+    /// Turn TURN's prompt goes to the agent now (with a `Persist`: it leaves the queue on disk).
     Prompt { turn: u64 },
     /// Turn TURN's prompt never reached the agent and is back at the front of the queue (the hub's end): what the
     /// turn began (its entry, its step) is undone.
@@ -118,7 +118,7 @@ pub(crate) enum TurnEffect {
     Answer { request: u64 },
     /// The request is answered cancelled.
     Cancel { request: u64 },
-    /// The queue and the pause are kept on disk.
+    /// The queue and the pause are kept on disk ([`TurnCore::kept`]).
     Persist,
     /// The snapshot changed: its change number goes up and an event pair is due.
     Announce,
@@ -277,9 +277,10 @@ impl TurnCore {
                 fx
             }
             TurnEvent::Sending { turn } => {
-                // the turn is still to send: not put back by the hub's end, not on a process being ended
+                // the turn is still to send: not put back by the hub's end, not on a process being ended; from now on
+                // its prompt is the agent's, and no longer on disk
                 if turn == self.turn && !self.killed && self.unsent.take().is_some() {
-                    vec![E::Prompt { turn }]
+                    vec![E::Prompt { turn }, E::Persist]
                 } else {
                     Vec::new()
                 }
@@ -470,6 +471,16 @@ impl TurnCore {
 
     pub(crate) fn queue(&self) -> &Queue {
         &self.queue
+    }
+
+    /// What the queue on disk holds: the waiting prompts, behind the prompt of a turn that has not reached the agent
+    /// yet (a hub that dies before the send finds it there at the next start).
+    pub(crate) fn kept(&self) -> Queue {
+        let mut q = self.queue.clone();
+        if let Some(item) = &self.unsent {
+            q.push_front(item.clone());
+        }
+        q
     }
 
     pub(crate) fn paused(&self) -> bool {

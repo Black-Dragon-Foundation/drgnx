@@ -219,7 +219,7 @@ impl Shell {
             .iter()
             .any(|e| matches!(e, TurnEffect::Persist | TurnEffect::StartTurn { .. }))
         {
-            self.disk = (self.core.queue().texts(), self.core.paused());
+            self.disk = (self.core.kept().texts(), self.core.paused());
         }
         self.after_step();
         if fx.contains(&TurnEffect::NotRunning) {
@@ -249,8 +249,9 @@ impl Shell {
                 ));
             }
         }
-        // a restart finds what the core holds (the hub's end keeps the queue as it was; its pause may move)
-        let now = (self.core.queue().texts(), self.core.paused());
+        // a restart finds what the core holds, a prompt not yet sent included (the hub's end keeps the queue as it
+        // was; its pause may move)
+        let now = (self.core.kept().texts(), self.core.paused());
         if self.disk.0 != now.0 || (!self.core.ending() && self.disk.1 != now.1) {
             self.note(format!(
                 "on disk {:?}, but the core holds {now:?}",
@@ -846,6 +847,86 @@ fn every_order_the_hubs_end_keeps_a_prompt_that_has_not_reached_the_agent() {
     );
     assert_eq!(r.mode, Mode::Exhaustive);
     assert_eq!(r.orders, 2_520);
+}
+
+// ---- the queue on disk keeps a prompt until it reaches the agent ----
+
+/// The user sends two prompts; the turn's task sends each turn's prompt in a step of its own; the agent answers what
+/// it works on; the hub dies with no end step (a SIGKILL, a crash), and nothing of it runs after.  The next start
+/// runs what the queue on disk holds.
+#[derive(Clone, Debug)]
+enum DieEv {
+    Send(&'static str),
+    Prompt,
+    Done,
+    Dies,
+}
+skuld::events!(DieEv {
+    Send,
+    Prompt,
+    Done,
+    Dies
+});
+
+struct DieShell {
+    s: Shell,
+    dead: bool,
+}
+
+impl Core for DieShell {
+    type Event = DieEv;
+
+    fn step(&mut self, ev: DieEv) -> Vec<DieEv> {
+        if self.dead {
+            return Vec::new();
+        }
+        let s = &mut self.s;
+        match ev {
+            DieEv::Send(t) => s.send(t),
+            DieEv::Prompt => s.send_prompt(),
+            DieEv::Done => s.done(),
+            DieEv::Dies => self.dead = true,
+        }
+        Vec::new()
+    }
+}
+
+fn check_die(d: &DieShell, _: &[DieEv]) -> Result<(), String> {
+    let s = &d.s;
+    s.settled()?;
+    // every prompt sent reached the agent, or the next start finds it on disk
+    let mut seen = s.reached.clone();
+    seen.extend(s.disk.0.iter().cloned());
+    seen.sort();
+    let mut sent = s.sent.clone();
+    sent.sort();
+    if seen != sent {
+        return Err(format!(
+            "sent {sent:?}; reached the agent {:?}, on disk {:?}: the rest is lost",
+            s.reached, s.disk.0
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn every_order_the_queue_on_disk_keeps_a_prompt_until_it_reaches_the_agent() {
+    let mut p = Partial::new();
+    p.source("user", vec![DieEv::Send("u1"), DieEv::Send("u2")]);
+    p.source("turn", vec![DieEv::Prompt, DieEv::Prompt]);
+    p.source("agent", vec![DieEv::Done, DieEv::Done]);
+    p.source("hub", vec![DieEv::Dies]);
+    let r = every_order(
+        &p,
+        Bound::default(),
+        || DieShell {
+            s: Shell::with_gap(),
+            dead: false,
+        },
+        check_die,
+    );
+    assert_eq!(r.mode, Mode::Exhaustive);
+    assert_eq!(r.orders, 630);
 }
 
 // ---- a delivered peer message a user's kill discards goes back to the store's queue ----

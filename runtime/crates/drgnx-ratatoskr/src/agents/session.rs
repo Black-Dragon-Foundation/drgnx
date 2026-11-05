@@ -2442,12 +2442,13 @@ impl Session {
         }
     }
 
-    /// The held queue and the pause, kept for a restart.  Written under the state's lock: two writes from different
-    /// tasks (a turn's end, the hub's end) land in the order of the states they read, so the file ends as the last.
+    /// The held queue and the pause, kept for a restart, with a turn's prompt that has not reached the agent at its
+    /// front ([`TurnCore::kept`]).  Written under the state's lock: two writes from different tasks (a turn's end, the
+    /// hub's end) land in the order of the states they read, so the file ends as the last.
     fn persist_queue(&self) {
         let Some(store) = &self.store else { return };
         let st = lock(&self.state);
-        if let Err(e) = store.save_queue(&self.id, st.core.queue(), st.core.paused()) {
+        if let Err(e) = store.save_queue(&self.id, &st.core.kept(), st.core.paused()) {
             tracing::warn!(sid = self.id, "queue not kept: {e}");
         }
     }
@@ -3349,8 +3350,10 @@ impl Session {
         if !send {
             return;
         }
-        // its entry is the agent's now: in the transcript file too
+        // its entry is the agent's now: in the transcript file first, then off the queue on disk (a hub that dies
+        // between the two runs the prompt again at the next start; it never loses it)
         self.flush_transcript();
+        self.persist_queue();
         // the user's words reach the agent: its current ask from here on (told before the agent can write)
         if item.origin == Origin::User {
             let (session, text, at) = (self.id.clone(), item.text.clone(), now());

@@ -1288,7 +1288,8 @@ event and performs what it answers; the entries, steps and transcript stay with 
   Stop's deadline, end the process group, hold a permission request for the user, answer it or answer it cancelled,
   keep the queue on disk, announce a change, arm and send the event pair; and the refusals (exited, not free, no
   turn running, no such queued prompt, no such request).
-- The shell asks it `status()`, `queue()`, `paused()`, `turn()`, `ending()` and `is_free()`.
+- The shell asks it `status()`, `queue()`, `kept()` (what the queue on disk holds), `paused()`, `turn()`, `ending()`
+  and `is_free()`.
 
 What the core keeps:
 
@@ -1297,9 +1298,12 @@ What the core keeps:
 - A prompt sent while the process is being ended for good (`agents/kill`, `agents/stop` with no turn running, a
   Stop's deadline) is refused as exited, and the session is not free then: the sender keeps it (a peer's message goes
   back to `queued`, a wake stays pending). A prompt sent while the hub ends waits on disk for the next start.
-- A turn's prompt reaches the agent only through its `Sending` step. When the hub ends between a turn's start and that
-  step, the turn is put back: its prompt goes back to the front of the queue, which is kept on disk, and the shell
-  drops the turn's entries (the transcript file holds a turn's entries only once its prompt was sent). When the
+- A turn's prompt reaches the agent only through its `Sending` step. Until then the queue on disk holds it at its
+  front (`kept()`: the waiting prompts behind the prompt not yet sent), so a hub that dies in between, with no end
+  step, runs it at the next start; the shell writes the turn's entries to the transcript file first and then the
+  queue without it (a hub that dies between the two runs the prompt again rather than losing it). When the hub ends
+  between a turn's start and that step, the turn is put back: its prompt goes back to the front of the queue, and the
+  shell drops the turn's entries (the transcript file holds a turn's entries only once its prompt was sent). When the
   user's kill comes there instead, the prompt is dropped with the queue, and `Discard` names both, so a peer's
   message among them goes back to `queued` in the store.
 - A turn ends once, at its agent's answer. A second Stop of a stopped turn changes nothing; a Stop's deadline ends
@@ -1326,6 +1330,8 @@ again after it.
   crash;
 - two senders, the turn's task that sends each prompt in a step of its own, an agent, and the hub's end, then the exit
   (every prompt reached the agent or waits in the queue on disk);
+- the same, but the hub dies with no end step and nothing of it runs after (every prompt reached the agent or is in
+  the queue on disk);
 - a sender, the hub's delivery (`sending`, the prompt, the mark), an agent, and the user's kill, then the exit (a
   message marked delivered ran; one the kill discarded is `queued` again).
 
