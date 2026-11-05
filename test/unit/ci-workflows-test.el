@@ -81,7 +81,7 @@
   (let ((gui (drgnx-ci-test--yml "gui.yml")) (tiers (drgnx-ci-test--yml "drgnx-tiers.yml")))
     (skip-unless (and gui tiers))
     (drgnx-ci-test--has gui "push:\n    branches: [main, \"ci/**\", \"!ci/joint/**\"]" "schedule:" "workflow_dispatch:"
-                        "group: gui-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}")
+                        "group: gui-${{ github.event_name }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}")
     (drgnx-ci-test--has tiers "bin/drgnx test --container --ui" "bin/drgnx test --container --scenario"
                         "bin/drgnx test --container --perf" "DRGNX_PERF_CPU_FACTOR: \"2\""
                         "DRGNX_PERF_RESULTS: perf-results.json" "if: always()" "name: perf-results")
@@ -462,13 +462,17 @@
   ;; main moves to a pull request's head by fast-forward: every checkout of the workflows a pull request runs takes the
   ;; head (on other events the expression is empty: the event's own commit), the path filter diffs the head, and the
   ;; head must descend from main's tip
-  (dolist (name '("ci.yml" "macos.yml" "runtime.yml" "drgnx-tiers.yml"))
+  (dolist (name '("ci.yml" "macos.yml" "gui.yml" "runtime.yml" "drgnx-tiers.yml"))
     (let ((yml (drgnx-ci-test--yml name)))
       (skip-unless yml)
       (should (= (length (drgnx-ci-test--matches "\\(uses: actions/checkout@\\)" yml))
                  (length (drgnx-ci-test--matches "\\(ref: \\${{ \\(?:inputs\\.drgnx_ref || \\)?github\\.event\\.pull_request\\.head\\.sha }}\\)" yml))))))
-  (dolist (name '("ci.yml" "macos.yml"))
+  (dolist (name '("ci.yml" "macos.yml" "gui.yml"))
     (should (string-search "SHA: ${{ github.event.pull_request.head.sha || github.sha }}" (drgnx-ci-test--yml name))))
+  ;; main's protection requires each of the three gates, and only a pull request's own run of a workflow counts
+  ;; there (a dispatched run's gate does not), so every gated workflow runs on pull requests
+  (dolist (name '("ci.yml" "macos.yml" "gui.yml"))
+    (should (string-match-p "^  pull_request:" (drgnx-ci-test--yml name))))
   (drgnx-ci-test--has (drgnx-ci-test--yml "ci.yml")
                       "name: The pull request's head descends from the default branch's tip"
                       "compare/$tip...$HEAD_SHA"))
