@@ -7,6 +7,7 @@ and rootless podman inside. A fleet is N of them plus one harness container on o
 ```
 fleet.sh up --runners N [--max-sessions K] [--no-linger] [--sshd-opt OPT]...
 fleet.sh exec I -- CMD...      # in runner I (1-based), as `runner`, with its user manager's environment
+fleet.sh check I               # runner I's controllers are delegated as the caps need (`up` checks every runner)
 fleet.sh put FILE...           # copy files to /fleet/share in every runner (read-only there)
 fleet.sh test FILTER           # $DRGNX_FLEET_TEST_BIN --ignored FILTER, in the harness
 fleet.sh host BIN [FILTER]...  # a runner-host test binary in every runner, as `runner`, with --ignored
@@ -45,6 +46,22 @@ subuid range for `runner` inside the 65536 ids the outer container maps (`20000:
 
 A container started by `podman run` inside a unit lands under `user.slice`, not under the unit's slice, unless it is
 given `--cgroup-parent=<slice>`; `a_capped_container_runs_in_a_transient_slice` pins that.
+
+## When `up` returns
+
+`up` waits on announced states, never on time: the runner's system has booted (`systemctl is-system-running
+--wait`; the base image is loaded by then), and `runner`'s own user manager says it is running (`systemctl --user
+is-system-running --wait`). Then `check I` must pass for every runner, or `up` fails naming it:
+
+- `runner`'s user manager is `running` (or `degraded`);
+- `user@1000.service`'s `cgroup.subtree_control` hands `memory pids cpu` to its units;
+- rootless podman, as `runner`, is on the systemd cgroup manager and sees `memory pids cpu`.
+
+On a failure it prints where the controllers stop: the runner's root `cgroup.controllers` and
+`cgroup.subtree_control`, and the user manager's `cgroup.subtree_control`. Runners have been seen (about 1 boot in
+70) that booted with the user manager running and the base image loaded, yet with no controller delegated to the user
+manager (its `cgroup.subtree_control` empty, and no `pids` for system services), for their whole boot: waiting never
+changes that state, so `up` refuses such a runner instead of handing it to tests whose caps would then fail.
 
 ## Runner-host tests
 

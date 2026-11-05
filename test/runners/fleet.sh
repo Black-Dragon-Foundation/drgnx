@@ -4,6 +4,7 @@
 # $DRGNX_FLEET_PREFIX-<run>-*.
 #   fleet.sh up --runners N [--max-sessions K] [--no-linger] [--sshd-opt OPT]...
 #   fleet.sh exec I -- CMD...        as `runner` in runner I (1-based)
+#   fleet.sh check I                 runner I's podman has the controllers the caps need (`up` checks every runner)
 #   fleet.sh test FILTER             the test binary $DRGNX_FLEET_TEST_BIN in the harness, with --ignored FILTER
 #   fleet.sh host BIN [FILTER...]    a runner-host test binary in every runner, with --ignored
 #   fleet.sh down                    removes this run's containers, network and state
@@ -62,9 +63,13 @@ up() {
       "$IMAGE" >/dev/null
   done
   for i in $(seq 1 "$n"); do
-    # wait on the announced state: the user manager of `runner` is up (the unit is active), not a sleep
+    # wait on the announced states, not a sleep: the system has booted (the base image is loaded then), and the
+    # runner's own user manager says it is running
     podman exec "$(name r$i)" systemctl is-system-running --wait >/dev/null 2>&1 || true
     podman exec "$(name r$i)" systemctl is-active --quiet sshd.service || die "runner $i: sshd is not active"
+    exec_runner "$i" systemctl --user is-system-running --wait >/dev/null 2>&1 || true
+    # then what the tests need of it: rootless podman with the controllers delegated
+    check "$i" || die "runner $i: the cgroup controllers are not delegated; the tests would fail on caps (see above)"
     [ "$linger" = 1 ] || podman exec "$(name r$i)" rm -f /var/lib/systemd/linger/runner
   done
   # the harness: the org folder mounted as ctr.sh does, a temporary HOME with the ssh config and known_hosts
@@ -89,6 +94,34 @@ exec_runner() {
     DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "$@"
 }
 
+# check I: rootless podman in runner I is on the systemd cgroup manager with memory, pids and cpu delegated, as the
+# caps need. A runner whose PID 1 enabled no controllers below its root keeps that state for its whole boot (no wait
+# changes it), so `up` refuses it; the readings name where the controllers stop.
+check() {
+  local i=$1 c got list um w ok=1
+  c=$(name r$i)
+  # the user manager runs, its service's cgroup hands memory pids cpu to its units, and podman (its last line,
+  # "systemd [cpuset cpu io memory pids]", after any warning) sees them on the systemd manager
+  case "$(exec_runner "$i" systemctl --user is-system-running 2>/dev/null)" in running | degraded) ;; *) ok=0 ;; esac
+  um=$(podman exec "$c" cat /sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/cgroup.subtree_control 2>/dev/null)
+  got=$(exec_runner "$i" podman info --format '{{.Host.CgroupManager}} {{.Host.CgroupControllers}}' 2>&1)
+  list=$(printf '%s\n' "$got" | tail -1); [ "${list%% *}" = systemd ] || ok=0
+  list=${list#*[}; list=${list%]}
+  for w in memory pids cpu; do
+    case " $list " in *" $w "*) ;; *) ok=0 ;; esac
+    case " $um " in *" $w "*) ;; *) ok=0 ;; esac
+  done
+  [ "$ok" = 0 ] || return 0
+  echo "fleet.sh: runner $i: podman reports: $got" >&2
+  echo "fleet.sh: runner $i: system $(podman exec "$c" systemctl is-system-running 2>&1);" \
+    "user manager $(exec_runner "$i" systemctl --user is-system-running 2>&1)" >&2
+  local f
+  for f in cgroup.controllers cgroup.subtree_control user.slice/user-1000.slice/user@1000.service/cgroup.subtree_control; do
+    echo "fleet.sh: runner $i: /sys/fs/cgroup/$f: [$(podman exec "$c" cat "/sys/fs/cgroup/$f" 2>&1)]" >&2
+  done
+  return 1
+}
+
 # host BIN [FILTER...]: a runner-host test binary (`#[ignore = "runner-host"]` rows), run with --ignored in every
 # runner as `runner`; a `sleipnir` binary next to BIN goes along, and the tests find it as SLEIPNIR_TEST_BIN
 host_tests() {
@@ -110,6 +143,7 @@ host_tests() {
 case "${1:-}" in
   up) shift; up "$@" ;;
   exec) shift; i=$1; shift; exec_runner "$i" "$@" ;;
+  check) shift; check "$1" ;;
   test) shift; bin=${DRGNX_FLEET_TEST_BIN:?set DRGNX_FLEET_TEST_BIN to the container-built test binary}
         podman exec -e HOME="$STATE/home" "$(name hub)" "$bin" --ignored "$@" ;;
   put) shift; for f in "$@"; do cp "$f" "$STATE/share/"; done ;;   # files appear in every runner at /fleet/share
@@ -133,5 +167,5 @@ case "${1:-}" in
   down) for c in $(mine); do podman rm -f -v "$c" >/dev/null; done
         podman network rm -f "$NET" >/dev/null 2>&1 || true
         rm -r "$STATE" 2>/dev/null || true ;;
-  *) die "usage: fleet.sh up|exec|test|host|s1|put|check-linger|status|down" ;;
+  *) die "usage: fleet.sh up|exec|check|test|host|s1|put|check-linger|status|down" ;;
 esac
