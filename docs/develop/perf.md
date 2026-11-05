@@ -87,6 +87,13 @@ when its `gc-cons-threshold` is not `drgnx-gc-cons-threshold`.
 Every workload runs three times (each with its own setup, its typing fixture reused, everything it opened closed
 after it) and the median of each number is kept, so one noisy run never decides.
 
+The typing fixture is `core/` three times, so its middle moves whenever a core file is added. The keys go to the
+first line at or after the middle that starts inside a form two deep, outside strings and comments
+(`drgnx-perf-run--visit-fixture-form`): when the middle fell at column 0 of a top-level form, the typed `(let ((x 1`
+left a list open at top level and Emacs Lisp's font-lock (`lisp--el-funcall-position-p`, through `forward-sexp`)
+scanned the rest of the 4 MB file at every key, about one key in five costing 190 to 370 ms, in every workload that
+types into the fixture.
+
 ## Vim keys (evil)
 
 The three `-evil` workloads switch the session to the Vim key stack (`editor/evil` on, the engine started, `(vim app
