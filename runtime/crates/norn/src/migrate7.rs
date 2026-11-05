@@ -153,25 +153,25 @@ pub fn open_rule(opts: MigrateOpts) -> OpenRule {
     Arc::new(move |conn: &mut Connection, path: &Path| open(conn, path, &opts))
 }
 
+/// One schema move after 7: `Ok(false)` when the file was not at the move's starting schema.
+type Upgrade = fn(&mut Connection) -> Result<bool, urdr::SqliteError>;
+
 fn open(conn: &mut Connection, path: &Path, opts: &MigrateOpts) -> OpenOutcome {
     // schema 7, 8 or 9 now (made, migrated or already): the step table moves it to 8 (`migrate8`), the hub's facts
     // to 9 (`migrate9`), the keyed vector table to 10 (`migrate10`)
-    let step =
-        |conn: &mut Connection,
-         to: u32,
-         f: fn(&mut Connection) -> Result<bool, urdr::SqliteError>| match f(conn) {
-            Ok(_) => None,
-            Err(e) => {
-                let reason = format!("the move of work.db to schema {to} failed: {e}");
-                Some(if urdr::is_busy(&urdr::Error::Sqlite(e)) {
-                    OpenOutcome::NotReady(BUSY_TEXT.into())
-                } else {
-                    tracing::error!("{reason}");
-                    OpenOutcome::Failed(reason)
-                })
-            }
-        };
-    let steps: [(u32, fn(&mut Connection) -> Result<bool, urdr::SqliteError>); 3] = [
+    let step = |conn: &mut Connection, to: u32, f: Upgrade| match f(conn) {
+        Ok(_) => None,
+        Err(e) => {
+            let reason = format!("the move of work.db to schema {to} failed: {e}");
+            Some(if urdr::is_busy(&urdr::Error::Sqlite(e)) {
+                OpenOutcome::NotReady(BUSY_TEXT.into())
+            } else {
+                tracing::error!("{reason}");
+                OpenOutcome::Failed(reason)
+            })
+        }
+    };
+    let steps: [(u32, Upgrade); 3] = [
         (migrate8::SCHEMA, migrate8::upgrade),
         (migrate9::SCHEMA, migrate9::upgrade),
         (migrate10::SCHEMA, migrate10::upgrade),
