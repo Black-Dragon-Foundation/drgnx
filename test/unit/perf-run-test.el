@@ -222,6 +222,28 @@ without them would pass unjudged), unless `drgnx-perf-run-unseeded' says why it 
         (should-not (string-match-p "\\.bashrc\\|\\.zshrc\\|SHELL" setup))))
     (should (string-match-p "seq 1 2000" (plist-get (cdr (assq 'terminal-output ws)) :setup)))))
 
+(ert-deftest drgnx-perf-run/the-keys-go-inside-a-form-wherever-the-middle-of-the-fixture-falls ()
+  "Pattern D (pure: a buffer and the visit form, no session).  The fixture is core/ three times, so a new core file
+moves its middle; when the middle fell at column 0 of a top-level form, the typed `(let ((x 1' left a list open at
+top level, and Emacs Lisp's font-lock (`lisp--el-funcall-position-p') scanned the rest of the file at every key.  The
+keys go to the first line at or after the middle that starts inside a form two deep, outside strings and comments."
+  (let* ((form "(defun a ()\n  \"Doc.\"\n  (let ((x 1))\n    (message \"%s\"\n             x)))\n")
+         ;; (/ (point-max) 2) is the first character of the second defun: column 0, outside every form
+         (file (make-temp-file "drgnx-perf-fixture" nil ".el" (concat form form "\n")))
+         (drgnx-perf-run--fixture file))
+    (unwind-protect
+        (progn
+          (should (eq t (eval (read (drgnx-perf-run--visit-fixture-form)) t)))
+          (with-current-buffer (find-buffer-visiting file)
+            (let ((s (syntax-ppss)))
+              (should (>= (car s) 2))
+              (should-not (nth 3 s))
+              (should-not (nth 4 s)))
+            (should (bolp))
+            (should (> (point) (/ (point-max) 2)))))
+      (when-let* ((b (find-buffer-visiting file))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))
+      (delete-file file))))
+
 
 ;;; perf-run-test.el ends here
 

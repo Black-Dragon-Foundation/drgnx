@@ -32,8 +32,15 @@
   (let ((e (getenv "DRGNX_UI_SIZE"))) (if (member e '(nil "")) "1400x800" e)))
 
 (defun drgnx-perf-run--visit-fixture-form ()
+  "The form that visits the fixture and puts point where the keys go: the first line at or after the middle that
+starts inside a form two deep, outside strings and comments.  The fixture is core/ three times, so its middle moves
+whenever a core file is added; at column 0 of a top-level form, the typed `(let ((x 1' left a list open at top level
+and Emacs Lisp's font-lock (`lisp--el-funcall-position-p') scanned the rest of the file at every key."
   (format "(let ((f %S)) (when-let* ((b (find-buffer-visiting f))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))
-                         (find-file f) (goto-char (/ (point-max) 2)) (forward-line 0) t)"
+                         (find-file f) (goto-char (/ (point-max) 2)) (forward-line 0)
+                         (while (and (not (eobp)) (let ((s (syntax-ppss))) (or (< (car s) 2) (nth 3 s) (nth 4 s))))
+                           (forward-line 1))
+                         t)"
           drgnx-perf-run--fixture))
 
 (defun drgnx-perf-run--replace-setup-form ()
