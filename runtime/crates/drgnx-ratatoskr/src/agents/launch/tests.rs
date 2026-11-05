@@ -220,7 +220,13 @@ fn each_cli_keeps_its_sessions_in_a_folder_of_its_own() {
         assert_eq!(gemini.write, vec![fx.p("wt"), g.join("oauth_creds.json")]);
         assert!(gemini.read.contains(&g.join("settings.json")));
         for (spec, dir, folder) in [(&codex, &c, "sessions"), (&gemini, &g, "tmp")] {
-            assert!(!spec.read.iter().chain(&spec.write).any(|p| dir.starts_with(p)));
+            assert!(
+                !spec
+                    .read
+                    .iter()
+                    .chain(&spec.write)
+                    .any(|p| dir.starts_with(p))
+            );
             assert!(!spec.read.contains(&dir.join(folder)));
             let bound = spec.binds.iter().find(|b| b.dest == dir.join(folder));
             match tier {

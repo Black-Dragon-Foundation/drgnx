@@ -469,10 +469,12 @@ fn claude_folder(project: &Path) -> String {
         .collect()
 }
 
-/// Pattern D (one run, its exit code), on the full tier and on the reduced one where the kernel has ABI 9.  An agent
-/// must never plant what your own, unsandboxed CLI runs or reads later: `settings.json` and its hooks, commands, the
-/// shell snapshots its Bash tool sources.  The CLI still refreshes its token in place and keeps its session's
-/// transcript, and it never sees another CLI's login.
+/// Pattern D (one run, its exit code, then the files on the host), on the full tier and on the reduced one where the
+/// kernel has ABI 9.  An agent must never plant what your own, unsandboxed CLI runs or reads later: `settings.json`
+/// and its hooks, commands, the shell snapshots its Bash tool sources.  The CLI still refreshes its token in place and
+/// keeps its session's transcript, and it never sees another CLI's login.  (The fixture's home lies under `/tmp`, the
+/// full tier's private one: a new file in a folder the sandbox shows only as a path may land there, never on the
+/// host, so the host's files are what is checked.)
 #[test]
 #[ignore = "needs the real sandbox (bwrap with user namespaces): the sandbox lane"]
 fn the_login_dir_takes_only_the_token_and_the_sessions_state() {
@@ -482,14 +484,16 @@ fn the_login_dir_takes_only_the_token_and_the_sessions_state() {
         std::fs::create_dir_all(c.join(d)).unwrap();
     }
     std::fs::write(c.join("settings.json"), "{}").unwrap();
+    std::fs::write(c.join("commands/c.md"), "orig").unwrap();
     std::fs::write(c.join(".credentials.json"), "old").unwrap();
     std::fs::write(c.join("shell-snapshots/snapshot-zsh-1.sh"), "orig").unwrap();
     let project = c.join("projects").join(claude_folder(&fx.p("wt")));
     let script = format!(
         "cat {c}/settings.json >/dev/null || exit 10; \
-         for f in settings.json settings.local.json CLAUDE.md hooks/h.sh commands/c.md \
-           shell-snapshots/snapshot-zsh-1.sh; do echo x >> {c}/$f 2>/dev/null && exit 13; done; \
-         mv {c}/settings.json {c}/moved 2>/dev/null && exit 14; mkdir {c}/plugins 2>/dev/null && exit 15; \
+         for f in settings.json commands/c.md; do echo x >> {c}/$f 2>/dev/null && exit 13; done; \
+         for f in settings.local.json CLAUDE.md hooks/h.sh shell-snapshots/snapshot-zsh-1.sh; do \
+           echo x >> {c}/$f 2>/dev/null; done; \
+         mv {c}/settings.json {c}/moved 2>/dev/null && exit 14; mkdir {c}/plugins 2>/dev/null; \
          cat {x}/auth.json 2>/dev/null && exit 16; \
          echo new > {c}/.credentials.json || exit 11; echo t >> {p}/s.jsonl || exit 12; exit 0",
         c = c.display(),
@@ -504,15 +508,22 @@ fn the_login_dir_takes_only_the_token_and_the_sessions_state() {
         let code = fx.run(tier, &fx.plan(&script), &fx.shape(NetCell::ProviderOnly));
         assert_eq!(code, 0, "{tier:?}");
     }
-    assert_eq!(
-        std::fs::read_to_string(c.join("settings.json")).unwrap(),
-        "{}"
-    );
-    assert_eq!(
-        std::fs::read_to_string(c.join("shell-snapshots/snapshot-zsh-1.sh")).unwrap(),
-        "orig"
-    );
-    assert!(!c.join("hooks/h.sh").exists() && !c.join("plugins").exists());
+    for (f, was) in [
+        ("settings.json", "{}"),
+        ("commands/c.md", "orig"),
+        ("shell-snapshots/snapshot-zsh-1.sh", "orig"),
+    ] {
+        assert_eq!(std::fs::read_to_string(c.join(f)).unwrap(), was, "{f}");
+    }
+    for f in [
+        "settings.local.json",
+        "CLAUDE.md",
+        "hooks/h.sh",
+        "plugins",
+        "moved",
+    ] {
+        assert!(!c.join(f).exists(), "{f} was made");
+    }
     assert_eq!(
         std::fs::read_to_string(c.join(".credentials.json")).unwrap(),
         "new\n"
@@ -687,11 +698,12 @@ fn the_login_dir_shows_only_what_the_cli_loads() {
     }
     std::fs::create_dir_all(fx.p("home/dotfiles")).unwrap();
     std::fs::write(fx.p("home/dotfiles/settings.json"), "dotfile").unwrap();
-    std::os::unix::fs::symlink(fx.p("home/dotfiles/settings.json"), c.join("settings.json")).unwrap();
+    std::os::unix::fs::symlink(fx.p("home/dotfiles/settings.json"), c.join("settings.json"))
+        .unwrap();
     let script = format!(
         "for f in daemon/control.key sessions/9.key projects/-other/t.jsonl projects/-other/memory/MEMORY.md \
            history.jsonl shell-snapshots/snapshot-zsh-1.sh; do cat {c}/$f >/dev/null 2>&1 && exit 13; done; \
-         ls {c}/projects >/dev/null 2>&1 && exit 14; \
+         ls -A {c} {c}/projects 2>/dev/null | grep -qx -- '-other\\|daemon\\|history.jsonl' && exit 14; \
          grep -q dotfile {c}/settings.json || exit 11; cat {c}/commands/c.md >/dev/null || exit 12; exit 0",
         c = c.display()
     );

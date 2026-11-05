@@ -960,7 +960,10 @@ fn login_grants(
     target: gleipnir::Target,
 ) -> Result<LoginGrants, Refusal> {
     use crate::agents::lock::LoginUse;
-    let real = |p: &Path| p.symlink_metadata().is_ok_and(|m| !m.file_type().is_symlink());
+    let real = |p: &Path| {
+        p.symlink_metadata()
+            .is_ok_and(|m| !m.file_type().is_symlink())
+    };
     let mut g = LoginGrants::default();
     for &(name, used) in crate::agents::lock::login_entries(dir) {
         let p = dir.join(name);
