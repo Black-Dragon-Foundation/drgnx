@@ -116,11 +116,29 @@ pub struct CacheMount {
     pub inside: String,
 }
 
-/// The job's key socket and the `drgnx-key` binary on the host.
+/// The job's key socket and its own copy of the `drgnx-key` binary on the host, and the keys it reads: each
+/// `(key name, variable)`. The command then runs as `drgnx-key exec NAME=VAR… -- CMD`, so podman's argv and stored
+/// config hold the names only, never a value.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeyMounts {
     pub socket: PathBuf,
     pub helper: PathBuf,
+    pub vars: Vec<(String, String)>,
+}
+
+/// A key name `drgnx-key` asks for, and a variable a shell can name.
+fn key_var_ok(name: &str, var: &str) -> bool {
+    let name_ok = !name.is_empty()
+        && name.len() <= 128
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_-.".contains(&b));
+    let var_ok = var
+        .bytes()
+        .next()
+        .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+        && var.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
+    name_ok && var_ok
 }
 
 /// Where the container goes and what it is called: the hub's own jobs, or a runner's.
@@ -348,12 +366,38 @@ pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsSt
         a.push("--entrypoint".into());
         a.push(FORWARDER.into());
     }
+    // a keyed job's command runs under drgnx-key, which reads each key from the socket into its own environment and
+    // execs the command; the job's request has no field to put anything around it
+    let keyed: Vec<OsString> = match req.runner.as_ref().and_then(|m| m.keys.as_ref()) {
+        Some(k) if !k.vars.is_empty() => {
+            let mut w: Vec<OsString> = vec![KEY_HELPER.into(), "exec".into()];
+            for (name, var) in &k.vars {
+                if !key_var_ok(name, var) {
+                    return Err(refuse(format!(
+                        "a key's name or variable is not a plain name: {name:?} {var:?}"
+                    )));
+                }
+                w.push(format!("{name}={var}").into());
+            }
+            w.push("--".into());
+            w
+        }
+        _ => vec![],
+    };
+    if proxy.is_none() && !keyed.is_empty() {
+        a.push("--entrypoint".into());
+        a.push(KEY_HELPER.into());
+    }
     a.push(image.into());
     if proxy.is_some() {
         // the entrypoint binds the port, then runs the command in its place
         a.push(PROXY_PORT.to_string().into());
         a.push(PROXY_SOCKET.into());
         a.push("--".into());
+        a.extend(keyed);
+    } else {
+        // the entrypoint is drgnx-key itself
+        a.extend(keyed.into_iter().skip(1));
     }
     a.extend(req.argv.iter().map(OsString::from));
     Ok(a)
@@ -503,9 +547,73 @@ mod tests {
                 keys: Some(KeyMounts {
                     socket: "/r/jobs/x1a.1/key.sock".into(),
                     helper: "/r/bin/0.1.0/drgnx-key".into(),
+                    vars: vec![],
                 }),
             }),
             ..req(argv)
+        }
+    }
+
+    /// [D] A keyed job's command runs as `drgnx-key exec NAME=VAR… -- CMD`: drgnx-key is the entrypoint, or follows
+    /// the forwarder with network; the argv holds the names only, and a name podman or a shell would misread is
+    /// refused.
+    #[test]
+    fn a_keyed_job_runs_under_drgnx_key_exec_with_names_only() {
+        let mut r = runner_req(&["cargo", "publish"]);
+        r.runner.as_mut().unwrap().keys.as_mut().unwrap().vars = vec![
+            ("CRATES_IO".into(), "CARGO_REGISTRY_TOKEN".into()),
+            ("gh-token".into(), "GH_TOKEN".into()),
+        ];
+        let a = on_runner(&r, &caps()).unwrap();
+        let image = a.iter().position(|s| s == REF).unwrap();
+        assert_eq!(a[image - 2..image], ["--entrypoint", "/run/drgnx/key"]);
+        assert_eq!(
+            a[image + 1..],
+            [
+                "exec",
+                "CRATES_IO=CARGO_REGISTRY_TOKEN",
+                "gh-token=GH_TOKEN",
+                "--",
+                "cargo",
+                "publish"
+            ]
+        );
+        assert!(
+            !a.iter()
+                .any(|s| s.starts_with("--env") || s.starts_with("--secret"))
+        );
+        // with network: the forwarder first, then drgnx-key, then the command
+        r.net = true;
+        let a = on_runner(&r, &caps()).unwrap();
+        let image = a.iter().position(|s| s == REF).unwrap();
+        assert_eq!(a[image - 2..image], ["--entrypoint", "/run/drgnx/fwd"]);
+        assert_eq!(
+            a[image + 1..],
+            [
+                "3128",
+                "/run/drgnx/proxy.sock",
+                "--",
+                "/run/drgnx/key",
+                "exec",
+                "CRATES_IO=CARGO_REGISTRY_TOKEN",
+                "gh-token=GH_TOKEN",
+                "--",
+                "cargo",
+                "publish"
+            ]
+        );
+        for (name, var) in [
+            ("A B", "V"),
+            ("A", "1V"),
+            ("A=B", "V"),
+            ("A", "V-W"),
+            ("", "V"),
+            ("A", ""),
+        ] {
+            let mut r = runner_req(&["ls"]);
+            r.runner.as_mut().unwrap().keys.as_mut().unwrap().vars =
+                vec![(name.into(), var.into())];
+            assert!(on_runner(&r, &caps()).is_err(), "{name:?} {var:?}");
         }
     }
 

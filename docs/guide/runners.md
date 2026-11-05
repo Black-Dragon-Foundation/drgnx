@@ -34,3 +34,29 @@ terminal". That covers:
 
 **A changed host key is never accepted.** The runner stops until you have found out why the key changed and fixed your
 `known_hosts` yourself.
+
+## Keys
+
+Some jobs need a secret: a registry token to publish, a deploy key to fetch a private dependency. A job names the
+keys it needs (names only); drgnx gets them to the job on the runner without writing them anywhere there:
+
+- **Only in memory.** The key travels inside drgnx's own connection and goes straight to a small helper that lives
+  exactly as long as the job. The helper keeps it in memory that is never swapped, never in a core dump and not
+  readable by other programs, and wipes it when the job ends. Nothing is written to the runner's disk, and podman's
+  own records (`podman inspect`) show the key's name, never its value.
+- **Into the job's own environment.** The job's command runs as `drgnx-key exec NAME=VARIABLE -- your command`
+  (drgnx sets that up, the job can't change it): `drgnx-key` reads each key and starts the command with the variable
+  set, in that process only. A tool that reads a secret from a pipe can use `drgnx-key get NAME` instead.
+- **A key that never arrives is drgnx's problem, not the job's.** `drgnx-key` waits up to 60 s for a key; if it
+  doesn't come (the connection dropped before drgnx could send it), the job ends as "key not delivered", never as a
+  failed test.
+- **Network goes through drgnx's proxy.** A job that may use the network reaches only the hosts it was allowed, through
+  a proxy beside it; cloud metadata services and link-local addresses are never reachable, even by a name you allowed.
+
+If the runner's disk gets low (below 20 GB, or 10 % of the runner folder's disk), the job that grew most since it
+started is stopped and ends as "disk", not as a failure.
+
+**The runner bundle.** drgnx copies three small programs to a runner: `sleipnir` (the runner itself), `drgnx-key` and
+`drgnx-fwd` (the job's way to the proxy). They are built static, so they start on any Linux and in any image.
+`install.sh` builds them for this machine's processor; for a runner of the other kind, run
+`drgnx build runner-bundle --arch aarch64` (or `x86_64`).

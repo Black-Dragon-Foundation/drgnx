@@ -18,6 +18,8 @@ pub mod admit;
 pub mod attempts;
 pub mod cleanup;
 
+use crate::helper::keys::{self as helper_keys, HELPER_SOCK, KEY_SOCK, KEY_USE};
+use crate::linux::jobexec::HelperSpec;
 use crate::linux::jobexec::{self, JobExec};
 use crate::linux::parse::Parser;
 use crate::linux::podman::{self, Caps, ContainerImage, ContainerReq, RunnerArgs, RunnerMounts};
@@ -26,7 +28,7 @@ use crate::linux::reserve::{self, Reservation};
 use crate::linux::result::{RESULT, ResultJson};
 use crate::linux::{run, slices, unit};
 use crate::proto::{
-    AttemptState, Frame, FrameReader, FrameWriter, JobRef, MAX_CHUNK, PROTO_VERSION,
+    AttemptState, Frame, FrameReader, FrameWriter, JobRef, Key, MAX_CHUNK, PROTO_VERSION,
 };
 use attempts::{CANCELLED, COLLECTED, LOG, Meta};
 use forseti::classify::infra;
@@ -151,7 +153,26 @@ struct Live {
     meta: Meta,
     /// The log offset sent up to; none until the hub attaches (a new attempt attaches at 0).
     pump: Option<u64>,
+    /// Keys the hub sent that the job's helper hasn't taken yet (it is still coming up); in memory only.
+    keys: Vec<Key>,
 }
+
+impl Live {
+    fn new(dir: PathBuf, meta: Meta) -> Live {
+        Live {
+            dir,
+            meta,
+            pump: None,
+            keys: vec![],
+        }
+    }
+}
+
+/// How many of the attempt's `key-use` lines went up as `key-use` frames (kept beside them, so a reconnect sends
+/// each read once).
+const KEY_USE_SENT: &str = "key-use.sent";
+/// The hub's allow-list for the attempt's proxy.
+const NET_ALLOW: &str = "net-allow";
 
 enum Event {
     Frame(Frame),
@@ -293,11 +314,7 @@ impl<W: Write> Serve<W> {
             self.last_start = self.last_start.max(f.meta.started);
             if f.state == AttemptState::Running {
                 let key = (f.meta.r.job.clone(), f.meta.r.attempt);
-                self.live.entry(key).or_insert(Live {
-                    dir: f.dir,
-                    meta: f.meta,
-                    pump: None,
-                });
+                self.live.entry(key).or_insert(Live::new(f.dir, f.meta));
             }
         }
     }
@@ -347,14 +364,7 @@ impl<W: Write> Serve<W> {
             Frame::Attach { r, log_offset } => self.attach(&r, log_offset),
             Frame::Cancel { r } => self.cancel(&r),
             Frame::Done { r } => self.done(&r),
-            Frame::Key(k) => {
-                // keys reach a job through its helper, which this runner doesn't start yet: never stored, never logged
-                eprintln!(
-                    "sleipnir serve: key {} for {:?}: no job helper to hand it to",
-                    k.name, k.r
-                );
-                Next::Go
-            }
+            Frame::Key(k) => self.key(k),
             other => {
                 if let Some(line) = other.loggable() {
                     eprintln!("sleipnir serve: not handled here: {line}");
@@ -624,14 +634,8 @@ impl<W: Write> Serve<W> {
                     self.unreserve(&r);
                     return self.refuse(r, format!("the attempt's folder: {e}"));
                 }
-                self.live.insert(
-                    (r.job.clone(), r.attempt),
-                    Live {
-                        dir,
-                        meta,
-                        pump: None,
-                    },
-                );
+                self.live
+                    .insert((r.job.clone(), r.attempt), Live::new(dir, meta));
                 self.send(&Frame::Admit { r, grant })
             }
         }
@@ -711,16 +715,48 @@ impl<W: Write> Serve<W> {
         parser: &str,
     ) -> Result<(String, u32), String> {
         let id = &meta.r.job;
-        if !net_hosts.is_empty() {
-            return Err("a job with network goes through its job helper, which this runner doesn't start yet".into());
-        }
-        if !meta.spec.keys.is_empty() {
-            return Err("a job with keys gets them from its job helper, which this runner doesn't start yet".into());
-        }
         if !env.is_empty() {
             return Err("variables for the container aren't carried yet".into());
         }
         let image = image.ok_or("a runner job is a container job: it needs an image")?;
+        // the job's own copies of the bundle's drgnx-key and drgnx-fwd: each container relabels its mounts (`Z`)
+        let own_copy = |name: &str| -> Result<PathBuf, String> {
+            let from = self.exe.with_file_name(name);
+            let to = dir.join(name);
+            fs::copy(&from, &to)
+                .map(|_| to)
+                .map_err(|e| format!("{name} from the bundle ({}): {e}", from.display()))
+        };
+        let keys = if meta.spec.keys.is_empty() {
+            None
+        } else {
+            Some(podman::KeyMounts {
+                socket: dir.join(KEY_SOCK),
+                helper: own_copy("drgnx-key")?,
+                vars: meta
+                    .spec
+                    .keys
+                    .iter()
+                    .map(|k| (k.clone(), k.clone()))
+                    .collect(),
+            })
+        };
+        let hub_allow = if net_hosts.is_empty() {
+            None
+        } else {
+            let text = net_hosts.join("\n") + "\n";
+            crate::helper::net::allow_list(&text)?;
+            let f = dir.join(NET_ALLOW);
+            fs::write(&f, text).map_err(|e| format!("{NET_ALLOW}: {e}"))?;
+            Some(f)
+        };
+        let proxy = match &hub_allow {
+            None => None,
+            Some(_) => Some(podman::Proxy {
+                socket: dir.join(crate::helper::PROXY_SOCK),
+                forwarder: own_copy("drgnx-fwd")?,
+            }),
+        };
         let parser: Parser =
             serde_json::from_value(serde_json::Value::String(if parser.is_empty() {
                 "exit".into()
@@ -738,9 +774,10 @@ impl<W: Write> Serve<W> {
             memory: format!("{}M", meta.grant.mem_cap_mib.max(6)),
             cpus: meta.grant.cores.max(1),
             pids: podman::PIDS,
-            proxy: None,
+            proxy,
             net_hosts: vec![],
         };
+        let keyed = keys.is_some();
         let req = ContainerReq {
             image: "job".into(),
             argv: meta.spec.command.clone(),
@@ -751,15 +788,16 @@ impl<W: Write> Serve<W> {
                 meta.spec.cwd.clone()
             },
             job: id.clone(),
-            net: false,
+            net: hub_allow.is_some(),
             runner: Some(RunnerMounts {
                 writes_tree: meta.spec.writes_tree,
                 target: dir.join("target"),
                 caches: vec![],
-                keys: None,
+                keys,
             }),
         };
         let ra = RunnerArgs::runner(&self.cfg.prefix, &self.cfg.hub_id, &slice);
+        let container = podman::name_of(&ra.name_prefix, id).map_err(|r| r.message)?;
         let mut argv = vec!["podman".to_string()];
         for a in podman::argv(&req, &caps, &ra).map_err(|r| r.message)? {
             argv.push(
@@ -778,11 +816,18 @@ impl<W: Write> Serve<W> {
             cwd: None,
             log: log.clone(),
             state_logs: vec![],
-            keyed: false,
+            keyed,
             parser,
             expect: meta.spec.expect,
             grant: meta.grant,
             timeout_s: meta.spec.timeout_s,
+            // every runner job has its helper: the disk watch, and its keys and proxy when it has them
+            helper: Some(HelperSpec {
+                root: self.cfg.root.clone(),
+                keys: meta.spec.keys.clone(),
+                hub_allow,
+                container: Some(container),
+            }),
         }
         .write(dir)
         .map_err(|e| format!("job.json: {e}"))?;
@@ -875,14 +920,7 @@ impl<W: Write> Serve<W> {
             let dir = attempts::dir(&self.cfg.root, &r.job, r.attempt);
             match attempts::read_meta(&dir) {
                 Ok(meta) if meta.hub_id == self.cfg.hub_id && meta.r == *r => {
-                    self.live.insert(
-                        key.clone(),
-                        Live {
-                            dir,
-                            meta,
-                            pump: None,
-                        },
-                    );
+                    self.live.insert(key.clone(), Live::new(dir, meta));
                 }
                 _ => {
                     eprintln!(
@@ -926,6 +964,74 @@ impl<W: Write> Serve<W> {
                 self.cleanup();
             }
             _ => eprintln!("sleipnir serve: done for an attempt this runner doesn't hold: {r:?}"),
+        }
+        Next::Go
+    }
+
+    /// A key for a started attempt of ours goes to its job helper, now or once the helper listens; it is never
+    /// written, logged or kept past the attempt. Only its name is ever said.
+    fn key(&mut self, k: Key) -> Next {
+        let key = (k.r.job.clone(), k.r.attempt);
+        match self.live.get_mut(&key) {
+            Some(l) if l.meta.r == k.r && l.meta.started.is_some() => {
+                l.keys.push(k);
+                self.hand_keys(&key);
+            }
+            _ => eprintln!(
+                "sleipnir serve: key {} for {:?}: not a started attempt of this hub's",
+                k.name, k.r
+            ),
+        }
+        Next::Go
+    }
+
+    /// Hands the attempt's waiting keys to its helper; a key stays while the helper isn't listening yet, and goes
+    /// once the helper took or refused it.
+    fn hand_keys(&mut self, key: &(String, u32)) {
+        let Some(l) = self.live.get_mut(key) else {
+            return;
+        };
+        let sock = l.dir.join(HELPER_SOCK);
+        l.keys.retain(
+            |k| match helper_keys::hand(&sock, &k.name, k.value.expose().as_bytes()) {
+                Ok(()) => false,
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+                    ) =>
+                {
+                    true
+                }
+                Err(e) => {
+                    eprintln!("sleipnir serve: key {} for {}: {e}", k.name, k.r.job);
+                    false
+                }
+            },
+        );
+    }
+
+    /// Sends the attempt's new `key-use` lines (names and times only) as `key-use` frames, each once.
+    fn send_key_uses(&mut self, dir: &Path, r: &JobRef) -> Next {
+        let Ok(text) = fs::read_to_string(dir.join(KEY_USE)) else {
+            return Next::Go;
+        };
+        let sent: usize = fs::read_to_string(dir.join(KEY_USE_SENT))
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0);
+        let lines: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
+        for (i, line) in lines.iter().enumerate().skip(sent) {
+            let v: serde_json::Value = serde_json::from_str(line).unwrap_or_default();
+            let frame = Frame::KeyUse {
+                r: r.clone(),
+                name: v["name"].as_str().unwrap_or_default().to_string(),
+                at: v["at"].as_u64().unwrap_or(0),
+            };
+            if self.send(&frame) == Next::Stop {
+                return Next::Stop;
+            }
+            let _ = fs::write(dir.join(KEY_USE_SENT), (i + 1).to_string());
         }
         Next::Go
     }
@@ -1009,9 +1115,15 @@ impl<W: Write> Serve<W> {
                 self.write_result(&dir, &meta, Verdict::Infra(infra::KILLED.into()));
             }
         }
+        if self.live.get(key).is_some_and(|l| !l.keys.is_empty()) {
+            self.hand_keys(key);
+        }
         let Some(mut offset) = self.live.get(key).and_then(|l| l.pump) else {
             return Ok(false);
         };
+        if self.send_key_uses(&dir, &meta.r) == Next::Stop {
+            return Err(());
+        }
         let has_result = dir.join(RESULT).exists();
         let mut sent = 0;
         let mut at_end = false;

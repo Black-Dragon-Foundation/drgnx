@@ -126,11 +126,15 @@ check() {
 }
 
 # host BIN [FILTER...]: a runner-host test binary (`#[ignore = "runner-host"]` rows), run with --ignored in every
-# runner as `runner`; a `sleipnir` binary next to BIN goes along, and the tests find it as SLEIPNIR_TEST_BIN
+# runner as `runner`; the `sleipnir` and `drgnx-key` binaries next to BIN go along, and the tests find them as
+# SLEIPNIR_TEST_BIN and its sibling
 host_tests() {
   local bin=$1 rc=0 c; shift
   cp "$bin" "$STATE/share/runner_host"
-  [ ! -x "$(dirname "$bin")/../sleipnir" ] || cp "$(dirname "$bin")/../sleipnir" "$STATE/share/sleipnir"
+  local b
+  for b in sleipnir drgnx-key; do
+    [ ! -x "$(dirname "$bin")/../$b" ] || cp "$(dirname "$bin")/../$b" "$STATE/share/$b"
+  done
   for c in $(mine | grep -- '-r[0-9]*$'); do
     echo "== $c"
     podman exec -i "$c" runuser -u runner -- env XDG_RUNTIME_DIR=/run/user/1000 \

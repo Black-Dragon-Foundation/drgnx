@@ -119,6 +119,37 @@ impl Probe {
         Ok(m)
     }
 
+    /// The runner folder's disk as [`Probe::machine`] sees it: [`Probe::disk`], or in a test build the
+    /// [`TEST_MACHINE`] file's figures when there is one.
+    pub fn disk_seen(&self) -> io::Result<Disk> {
+        #[allow(unused_mut)]
+        let mut d = self.disk()?;
+        #[cfg(feature = "test-hooks")]
+        if self.folder.join(TEST_MACHINE).exists() {
+            let mut m = MachineState {
+                name: String::new(),
+                profile: self.profile,
+                now: 0,
+                boot_id: String::new(),
+                mem_total_mib: 0,
+                mem_available_mib: 0,
+                psi: Psi::default(),
+                disk_free_gb: d.free_gb,
+                disk_total_gb: d.size_gb,
+                on_ac: true,
+                last_start: None,
+                running: vec![],
+                features: vec![],
+                reachable: true,
+                others: vec![],
+            };
+            m = self.test_machine(m)?;
+            d.free_gb = m.disk_free_gb;
+            d.size_gb = m.disk_total_gb;
+        }
+        Ok(d)
+    }
+
     /// Test builds only: a fake runner shares its host's `/proc/pressure`, `/proc/meminfo` and disk, so the folder's
     /// [`TEST_MACHINE`] file, when there is one, sets the machine's pressure, disk and available memory. A file that
     /// can't be read as one is an error, never the host's figures.
