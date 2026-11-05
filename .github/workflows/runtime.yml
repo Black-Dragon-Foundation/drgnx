@@ -20,7 +20,7 @@ on:
         type: string
         default: "10"
       only:
-        description: "Narrowed: the jobs to run, of rt-linux rt-msrv rt-escape rt-containers rt-android rt-deny rt-fuzz rt-macos (empty: all)"
+        description: "Narrowed: the jobs to run, of rt-linux rt-msrv rt-escape rt-containers rt-fleet rt-android rt-deny rt-fuzz rt-macos (empty: all)"
         type: string
         default: ""
   workflow_call:
@@ -494,6 +494,34 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
           key: ${{ steps.registry.outputs.cache-primary-key }}
+
+  # The fake fleet (test/runners/README.md): containers with sshd and rootless podman inside, as SSH runners. On demand
+  # only until the spike's verdict is in (`only: rt-fleet`); it is never part of a push's gate.
+  fleet:
+    name: fake runner fleet
+    if: ${{ github.event_name == 'workflow_dispatch' && contains(format(' {0} ', inputs.only), ' rt-fleet ') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      DRGNX_ORG: ${{ github.workspace }}
+      DRGNX_FLEET_HOST_RUSTC: "1"
+      DRGNX_FLEET_HUB_IMAGE: localhost/drgnx-fake-runner:f45   # built by `up`; has the ssh client
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - run: podman --version
+      - run: rustup toolchain install stable --profile minimal
+      - name: runners up
+        run: bash test/runners/fleet.sh up --runners 2
+      - name: the spike's checks in every runner
+        run: bash test/runners/fleet.sh s1
+      - name: linger over ssh
+        run: bash test/runners/fleet.sh check-linger
+      - name: down
+        if: ${{ always() }}
+        run: bash test/runners/fleet.sh down
 
   # The Android type-check (Android is not a target; the door stays open: docs/develop/runtime.md). The fake C compiler
   # is for urdr's bundled SQLite: a type-check does not link.

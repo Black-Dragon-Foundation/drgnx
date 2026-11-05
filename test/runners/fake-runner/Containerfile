@@ -1,0 +1,41 @@
+# A fake SSH runner: Fedora 45 with sshd (certificate and key login), systemd as PID 1, the user `runner` with linger,
+# the memory/pids/cpu controllers delegated to user@.service, and rootless podman on the systemd cgroup manager.
+# Built and run only by test/runners/fleet.sh (see test/runners/README.md).
+FROM registry.fedoraproject.org/fedora:45
+
+RUN dnf -y install systemd openssh-server openssh-clients podman git fuse-overlayfs slirp4netns shadow-utils \
+        iproute procps-ng passwd util-linux crun \
+    && dnf clean all
+
+# the user, with a subuid range inside the 65536 ids a rootless outer container maps
+RUN useradd -m -u 1000 -s /bin/bash runner \
+    && echo 'runner:20000:30000' > /etc/subuid && echo 'runner:20000:30000' > /etc/subgid \
+    && mkdir -p /var/lib/systemd/linger && touch /var/lib/systemd/linger/runner \
+    && passwd -l runner
+
+# a rootless image build drops the file capabilities the package sets on newuidmap/newgidmap; podman then refuses to
+# start ("should have setuid or have filecaps"), so make them setuid
+RUN chmod 4755 /usr/bin/newuidmap /usr/bin/newgidmap
+
+# controllers delegated to the user manager
+RUN mkdir -p /etc/systemd/system/user@.service.d \
+    && printf '[Service]\nDelegate=memory pids cpu cpuset io\n' > /etc/systemd/system/user@.service.d/delegate.conf
+
+# podman: systemd cgroup manager, fuse-overlayfs under an overlay container
+RUN h=$(getent passwd runner | cut -d: -f6) && mkdir -p "$h/.config/containers" \
+    && printf '[containers]\ncgroup_manager="systemd"\nevents_logger="file"\n[engine]\ncgroup_manager="systemd"\n' > "$h/.config/containers/containers.conf" \
+    && printf '[storage]\ndriver="overlay"\n[storage.options.overlay]\nmount_program="/usr/bin/fuse-overlayfs"\n' > "$h/.config/containers/storage.conf" \
+    && chown -R runner:runner "$h/.config"
+
+# sshd: key or user-CA certificate login for `runner` only; the keys are mounted at /fleet by fleet.sh. Options added
+# by `fleet.sh up --sshd-opt` go to /etc/ssh/sshd_config.d/50-fleet.conf at start.
+RUN ssh-keygen -A \
+    && printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\nAllowUsers runner\nTrustedUserCAKeys /fleet/ca.pub\nAuthorizedKeysFile /fleet/authorized_keys\nAllowAgentForwarding no\nUsePAM yes\n' > /etc/ssh/sshd_config.d/10-fleet.conf \
+    && systemctl enable sshd.service
+
+# the same digest-pinned base image the container jobs use, loaded from the archive at /fleet/base.tar at first boot
+COPY fleet-load-base.service /etc/systemd/system/fleet-load-base.service
+RUN systemctl enable fleet-load-base.service
+
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

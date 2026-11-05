@@ -1,0 +1,14 @@
+[Unit]
+Description=Load the pinned base image into the runner's podman store
+After=user@1000.service
+Wants=user@1000.service
+ConditionPathExists=/fleet/base.tar
+
+[Service]
+Type=oneshot
+User=runner
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+ExecStart=/usr/bin/podman load -i /fleet/base.tar
+
+[Install]
+WantedBy=multi-user.target
