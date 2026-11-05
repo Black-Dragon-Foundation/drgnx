@@ -235,6 +235,8 @@ pub async fn run(args: ServeArgs) -> Exit {
     crate::clock::spawn("deliver:run", crate::agents::deliver::run(front.clone()));
     // reported machines expire; the local slots follow the job pool
     crate::clock::spawn("machines:run", crate::work::machines::run(front.clone()));
+    // the sessions' writes and starts link to the asks behind them
+    crate::clock::spawn("asks:run", crate::work::asks::run(front.clone()));
     // settings.el and the shipped defaults, as data, before anything is served (its last good values in runtime.db)
     front
         .settings

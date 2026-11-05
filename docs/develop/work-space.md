@@ -197,8 +197,34 @@ worktree the hub makes branched from: its repository, the branch, the commit, an
 
 `work::specs` stores a spec an agent's edit step wrote: a Markdown file under `docs/specs/` (a path tail from
 `DEFAULT_DIRS`) is read after the step is written, its title is the first `# ` heading (the file's name if none), and
-it goes in through `graph/put-parsed` as `spec:<path>`, as a scanned spec does. A spec written by a shell command is not
-seen here (the scan finds it).
+it goes in through `graph/put-parsed` as `spec:<path>`, as a scanned spec does, and links `asked` to the writer's
+current ask (below). A spec written by a shell command is not seen here (the scan finds it).
+
+### Asks
+
+`work::asks` links the work a session does to the user's words behind it: an `ask` entity (`{text, at, by: user,
+channel, session, message_id?}`) and `asked` links from it to specs, plans, tasks and sessions, written by the hub as
+`("hub", System)` (`norn::write::work::{new_ask, link_asked}`).
+
+- **The current ask** of a session is its latest user message, from the moment its turn's prompt goes to the agent,
+  until the next one. A steer is current from its delivery. Every spec, plan or task the session writes, in that turn
+  or any later one (a turn the hub woke on a job, a batched wake), and every agent it starts, links to it. A worker
+  inherits its starter's current ask at its start: the manager that started it (`parent`), or the session whose
+  transaction made its plan run (`job.tx`). The channel is `manager` for a manager, `brainstorm` for a session with a
+  design document, else `chat`.
+- **Lazily made:** the ask entity is made at its first link, so a message that leads to no work leaves nothing. Writes
+  the hub did not see a session make (an import, the scan, the user's own) get no ask.
+- `AskCore` is pure (`step(AskEv) -> Vec<AskOut>`, events `UserMessage`, `SteerDelivered`, `GraphWrite`, `AgentStart`,
+  `SessionGone`). The shell, `work::asks::run` (task `asks:run`), takes its inputs in order on one channel: a session's
+  turn sends the user message just before its prompt, `agents/start` the start, `agents/stop` and `agents/kill` the end.
+  Before each input it reads the spec, plan and task versions written since the last look from the store's `tx` log
+  (the entity scan runs only when a session wrote), so a write is always seen before the message after it.
+- A session's tool call answers only after its writes are linked: every tool on a session's socket is wrapped
+  (`sessions::AfterTool`) to call `norn::tools::Hub::after_tool`, which waits for the shell to read the log. A live
+  spec (`work::specs`) goes in as the scan, so its write is sent to the shell directly.
+- Current asks are kept in memory: after a hub restart a session has none until its next user message.
+- Tests: `work::asks::tests` (`every_order_links_every_write`, pattern A over a manager, its worker, a chat and the
+  ends; the rest pattern D) and conformance `work/a-managers-later-turns-link-to-the-ask` (pattern B).
 
 ### Machines
 

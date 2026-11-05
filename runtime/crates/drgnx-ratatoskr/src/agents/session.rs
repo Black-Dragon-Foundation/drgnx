@@ -667,6 +667,8 @@ pub struct Session {
     steps: tokio::sync::mpsc::UnboundedSender<ClosedStep>,
     /// How a turn ended, to the reader task.
     done: tokio::sync::mpsc::UnboundedSender<TurnEnd>,
+    /// The user's messages as they reach the agent: its current ask ([`crate::work::asks`]).
+    asks: crate::work::asks::AskTx,
 }
 
 /// What `Conn::prompt` answered.
@@ -684,6 +686,8 @@ pub(crate) struct StepSink {
     pub scopes: Option<crate::runner::Scopes>,
     /// The graph store a spec an edit step wrote is stored in (none: a test).
     pub tools: Option<Arc<norn::tools::Coord>>,
+    /// Where a spec it wrote is linked to the session's current ask (none: a test).
+    pub asks: Option<crate::work::asks::AskTx>,
 }
 
 /// What `open` and `resume` know of a session before its agent is running.
@@ -1274,6 +1278,8 @@ pub(crate) async fn open_as(
         insert_row(db, &s).await;
     }
     record_entities(front, caller, &s).await;
+    // its starter's ask is its own: the manager that started it, or the session that made its plan run
+    s.asks.started(&s.id, s.parent.as_deref(), s.job.as_deref());
     s.changed();
     Ok(Started { id: sid, name })
 }
@@ -1477,6 +1483,7 @@ fn assemble(
             snap: crate::timeline::Snap::of(front),
             scopes: Some(front.core.runs.scopes()),
             tools: Some(front.tools.clone()),
+            asks: Some(front.core.asks.handle()),
         },
         ctx,
     ));
@@ -1539,6 +1546,7 @@ fn assemble(
         store: front.dirs.get().map(|d| transcript::Store::new(&d.hub)),
         steps,
         done,
+        asks: front.core.asks.handle(),
     });
     (s, done_rx)
 }
@@ -1654,6 +1662,15 @@ impl Session {
     }
     pub(crate) fn cwd(&self) -> &Path {
         &self.cwd
+    }
+
+    /// Where the user's messages to this session come from, as an ask records it.
+    fn ask_channel(&self) -> &'static str {
+        match (self.role, &self.document) {
+            (Role::Manager, _) => "manager",
+            (_, Some(_)) => "brainstorm",
+            _ => "chat",
+        }
     }
 
     /// The transcript entries that carry one of MIDS as their `messageId`, at most CAP.
@@ -1981,8 +1998,14 @@ async fn write_steps(
             && d.kind.as_deref() == Some("edit")
             && let Some(p) = &d.path
         {
-            crate::work::specs::on_written(&sink.writer, tools, &ctx.session, &ctx.cwd.join(p))
-                .await;
+            crate::work::specs::on_written(
+                &sink.writer,
+                tools,
+                sink.asks.as_ref(),
+                &ctx.session,
+                &ctx.cwd.join(p),
+            )
+            .await;
         }
         // a shell step may have committed: link the new commits to the decisions this session recorded
         if let Some(task) = &ctx.task
@@ -3135,6 +3158,21 @@ impl Session {
         }
         // its entry is the agent's now: in the transcript file too
         self.flush_transcript();
+        // the user's words reach the agent: its current ask from here on (told before the agent can write)
+        if item.origin == Origin::User {
+            let (session, text, at) = (self.id.clone(), item.text.clone(), now());
+            self.asks.send(if item.steer {
+                crate::work::asks::AskEv::SteerDelivered { session, text, at }
+            } else {
+                crate::work::asks::AskEv::UserMessage {
+                    session,
+                    text,
+                    channel: self.ask_channel().into(),
+                    message_id: item.key.clone(),
+                    at,
+                }
+            });
+        }
         let block = json!({"type": "text", "text": item.origin.frame(&item.text)});
         let blocks = serde_json::from_value(json!([block])).unwrap_or_default();
         let out = self.conn.prompt(&self.acp, blocks, None).await;
@@ -3432,6 +3470,7 @@ pub async fn stop(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
     if r.is_ok() && ends {
         gateway_gone(f, p.id.as_str()).await;
         let _ = f.mcp.close(p.id.as_str()).await;
+        asks_gone(f, p.id.as_str());
     }
     r
 }
@@ -3484,9 +3523,20 @@ pub async fn kill(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
     let r = f.core.agents.kill(p.id.as_str()).await;
     if r.is_ok() {
         gateway_gone(f, p.id.as_str()).await;
+        asks_gone(f, p.id.as_str());
     }
     let _ = f.mcp.close(p.id.as_str()).await;
     r
+}
+
+/// Session SID ended: it has no current ask any more (the workers it started keep theirs).
+fn asks_gone(f: &Front, sid: &str) {
+    f.core
+        .asks
+        .handle()
+        .send(crate::work::asks::AskEv::SessionGone {
+            session: sid.to_string(),
+        });
 }
 
 /// Session SID is gone: its gateway token no longer forwards and its jobs are no longer booked.
@@ -3849,6 +3899,7 @@ mod tests {
             snap: None,
             scopes: None,
             tools: None,
+            asks: None,
         };
         tokio::spawn(write_steps(rx, sink, ctx));
         let open = |class, tool: Option<&str>| OpenStep {
@@ -3932,6 +3983,7 @@ mod tests {
             snap: Some(crate::timeline::Snap::for_test(dir.join("cp"), settings)),
             scopes: None,
             tools: None,
+            asks: None,
         };
         let ctx = StepCtx {
             session: "a1".into(),

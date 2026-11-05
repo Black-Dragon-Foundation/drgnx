@@ -4,7 +4,8 @@
 //! A file under `docs/specs/` (a folder named by `drgnx-work-space-spec-dirs`, default [`DEFAULT_DIRS`]) written by an
 //! agent's edit step is read after the write: its title is the first `# ` heading, and the entity goes in through the
 //! scan's own door (`graph/put-parsed`, id `spec:<path>`), so the deny-list and the content compare apply as they do
-//! for a scanned spec. Specs written by a shell command are seen by the scan, not here.
+//! for a scanned spec. Specs written by a shell command are seen by the scan, not here. The spec links `asked` to the
+//! writer's current ask ([`crate::work::asks`]).
 
 use runstav::methods::graph::PutParsedParams;
 use serde_json::json;
@@ -63,10 +64,12 @@ pub fn params_for(path: &Path, text: &str, mtime: f64) -> PutParsedParams {
     .expect("a put-parsed request")
 }
 
-/// SESSION wrote PATH: when it is a spec, store it. Best effort, never blocks the step writer for long.
+/// SESSION wrote PATH: when it is a spec, store it, linked to the session's current ask (through ASKS). Best effort,
+/// never blocks the step writer for long.
 pub async fn on_written(
     writer: &crate::coord::Writer,
     tools: &Arc<norn::tools::Coord>,
+    asks: Option<&crate::work::asks::AskTx>,
     session: &str,
     path: &Path,
 ) {
@@ -91,8 +94,18 @@ pub async fn on_written(
     let Ok(Some((text, mtime))) = read else {
         return;
     };
-    if let Err(e) = crate::graph::put_parsed(writer, tools, params_for(path, &text, mtime)).await {
-        tracing::warn!(session, "spec not stored: {}", e.message);
+    match crate::graph::put_parsed(writer, tools, params_for(path, &text, mtime)).await {
+        // the scan's door writes it as the scan: the session's ask is linked here
+        Ok(_) => {
+            if let Some(a) = asks {
+                a.send(crate::work::asks::AskEv::GraphWrite {
+                    session: session.to_string(),
+                    entity: format!("spec:{}", path.to_string_lossy()),
+                    kind: "spec".into(),
+                });
+            }
+        }
+        Err(e) => tracing::warn!(session, "spec not stored: {}", e.message),
     }
 }
 

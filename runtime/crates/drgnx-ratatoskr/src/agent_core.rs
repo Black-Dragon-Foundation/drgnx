@@ -45,6 +45,8 @@ pub struct Core {
     pub manager: crate::manager::Managers,
     pub records: crate::records::Views,
     pub machines: crate::work::machines::Machines,
+    /// The sessions' current asks and what links to them ([`crate::work::asks`]).
+    pub asks: crate::work::asks::Asks,
 }
 
 fn answer<T: Serialize>(r: Result<T, Error>) -> Result<Value, Error> {
