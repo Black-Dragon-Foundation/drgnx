@@ -484,6 +484,32 @@ proptest! {
     }
 }
 
+/// [D] The case proptest found: a chip pushed against the right edge by the added agent keeps its clamped target, so
+/// on the way back its hysteresis compared the new target with the clamped one and held it there.
+#[test]
+fn removing_it_restores_a_chip_held_at_the_right_edge() {
+    let agent = |plan| Gen {
+        plan: Some(plan),
+        subs: 0,
+        files: vec![],
+        needs_you: false,
+        machine: None,
+    };
+    let w = World {
+        plans: 3,
+        machines: 0,
+        agents: vec![agent(2), agent(1), agent(0), agent(0)],
+    };
+    let width = 273;
+    let base = world_events(&w);
+    let m0 = model_of(base.clone());
+    let l0 = layout(&m0, &view(width), None);
+    let mut more = base;
+    more.extend(agent_events(w.agents.len(), &agent(0), w.plans, w.machines));
+    let l1 = layout(&model_of(more), &view(width), Some(&l0));
+    assert_eq!(layout(&m0, &view(width), Some(&l1)), l0);
+}
+
 fn golden_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/golden")
