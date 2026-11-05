@@ -13,6 +13,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-wb)
+(require 'drgnx-state)                  ; the cards follow the windows and the frame's scale through the store
 ;; the decorations module sits beside this file (modules are not on the load path)
 (unless (featurep 'drgnx-decor)
   (load (expand-file-name "drgnx-decor" (file-name-directory (or load-file-name buffer-file-name))) nil t))
@@ -99,6 +100,14 @@ on the native shell)."
   "Give FRAME's dividers the gap again when its scale changed under it (a frame that is a card frame only)."
   (when (and (frame-live-p frame) (frame-parameter frame 'drgnx-look-card-saved))
     (drgnx-look--card-frame frame)))
+
+(defun drgnx-look--cards-windows-changed (_data)
+  "The store's `windows-changed': the windows that came or changed role become cards (or stop being ones)."
+  (drgnx-look-cards-apply))
+
+(defun drgnx-look--cards-frame-resized (data)
+  "The store's `frame-resized': a scale change resizes the frame, so the gap is given again in its pixels."
+  (drgnx-look--card-follow-scale (plist-get data :frame)))
 
 (defun drgnx-look--card-frame (frame)
   "Make the docked panes of FRAME cards and widen the dividers to the gap; the frame's own widths are kept.  The
@@ -244,10 +253,10 @@ refuses (`drgnx-settings-refused') before the theme changes."
                        (setq drgnx-look--taken (list :previous (copy-sequence custom-enabled-themes) :ours nil))
                        (drgnx-look--chrome-on)
                        (drgnx-modules-push-undo "docked panes as cards" #'drgnx-look-cards-clear)
-                       (drgnx-module-hook window-configuration-change-hook cards-follow-windows ()
-                         (drgnx-look-cards-apply))
-                       (drgnx-module-hook window-size-change-functions cards-follow-scale (frame)
-                         (drgnx-look--card-follow-scale frame))
+                       ;; window parameters only, at once (before the frame is drawn); the gap's frame parameters
+                       ;; change only with the scale, which comes idle
+                       (drgnx-state-subscribe 'windows-changed #'drgnx-look--cards-windows-changed :lane 'now)
+                       (drgnx-state-subscribe 'frame-resized #'drgnx-look--cards-frame-resized)
                        (drgnx-look-cards-apply)
                        (drgnx-command-define 'preferences-theme :category "Preferences" :title "Color Theme"
                                              :command #'drgnx-look-choose-theme :menu '("Options") :doc "Pick the colour theme (remembered)")
