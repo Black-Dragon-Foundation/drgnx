@@ -215,16 +215,18 @@
             '((progn
                 (eval '(defcustom sat-wm-a 4242 "Width." :type 'integer :group 'tools) t)
                 (with-current-buffer (drgnx-settings-page)
-                  (let ((total (length (drgnx-settings-page--all-vars))) (pending (and drgnx-settings-page--warm t)))
+                  (let* ((total (length (drgnx-settings-page--all-vars))) (pending (and drgnx-settings-page--warm t))
+                         ;; the open itself builds the text of the rows it draws, not of the settings it lists
+                         (at-open (< (hash-table-count drgnx-settings-page--hay) (/ total 10))))
                     (while (drgnx-settings-page--warm-step))
                     (let ((text (hash-table-count drgnx-settings-page--hay))
                           (values (hash-table-count drgnx-settings-page--value-hay)))
                       (drgnx-settings-page-search "sat-wm")
-                      (list pending (= text total) (= values total)
+                      (list pending at-open (= text total) (= values total)
                             (= (hash-table-count drgnx-settings-page--hay) text)
                             (= (hash-table-count drgnx-settings-page--value-hay) values)
                             (and (memq 'sat-wm-a drgnx-settings-page--keys) t))))))))))
-    (should (equal r '(t t t t t t)))))
+    (should (equal r '(t t t t t t t)))))
 
 (ert-deftest drgnx-settings-page/works-in-safe-mode ()
   (let ((r (drgnx-settings-page-test--run

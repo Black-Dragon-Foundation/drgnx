@@ -613,6 +613,12 @@ before the load); `settings-sync` 510 to 860 ms for 200 packages (budget 2 s, me
 open added by the workspace and language layers (budget 1: the trust resolution of the shared file's root, about
 0.9 ms, and the private file's, about 0.5 ms, run at every open).
 
+Third round (2026-11-05): `settings-start` resets the config layer's state of `settings.el` before each run, since a
+start has none, and the file is then scanned and read once for both readers (`drgnx-file--read-share`): 5.2 ms. The
+shared file's usable entries and the trust filter's classification are kept per read of the file and state of trust
+(`settings-open` 1.3 ms). Opening the page starts the warming in 0.1 ms (`:warm_start_ms`) and builds no search text
+(a test holds that); `:open_ms` of 57 ms is the page itself.
+
 Second round: the trust root and state are kept per folder (`settings-open` 1.5 to 1.7 ms, from 2.4), the token scan
 steps over plain atoms by regexp (`test/unit/file-scan-fast-test.el` holds it to the full scan's results), a type is
 converted once for all the settings that share it, and the applied-values file is read once per start
