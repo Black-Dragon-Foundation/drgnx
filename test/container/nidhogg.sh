@@ -40,7 +40,19 @@ fetch() { # download and verify the tarball into $work (TARBALL given: copy it, 
     NIDHOGG_VERSION=${NIDHOGG_VERSION#nidhogg-}
     return
   fi
+  # NIDHOGG_DOWNLOADS=DIR (CI's macOS jobs cache it): the release tarball is kept there, and a kept one that still
+  # matches the pinned checksum is used instead of a download
+  if [ -n "${NIDHOGG_DOWNLOADS:-}" ] && [ -f "$NIDHOGG_DOWNLOADS/$tarball" ]; then
+    cp "$NIDHOGG_DOWNLOADS/$tarball" "$work/$tarball"
+    if verify >/dev/null 2>&1; then echo "nidhogg.sh: $tarball from $NIDHOGG_DOWNLOADS"; return; fi
+    echo "nidhogg.sh: the kept $tarball does not match its checksum: downloading it" >&2
+  fi
   curl -fsSL --retry 3 -o "$work/$tarball" "$NIDHOGG_URL/v$NIDHOGG_VERSION/$tarball"
+  verify
+  if [ -n "${NIDHOGG_DOWNLOADS:-}" ]; then mkdir -p "$NIDHOGG_DOWNLOADS" && cp "$work/$tarball" "$NIDHOGG_DOWNLOADS/$tarball"; fi
+}
+
+verify() { # the downloaded tarball against the pinned checksum
   if command -v sha256sum >/dev/null 2>&1; then
     echo "$sha  $work/$tarball" | sha256sum -c -
   else

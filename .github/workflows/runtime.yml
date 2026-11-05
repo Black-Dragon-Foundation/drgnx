@@ -782,10 +782,25 @@ jobs:
       - id: build
         if: ${{ !cancelled() }}
         run: cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr -p gleipnir-escape --features drgnx-ratatoskr/test-hooks
+      # the pinned release tarball, kept by the hash of nidhogg.sh (which holds the version and the checksums; the
+      # tarball is checked against them on every use); main saves it once per pin, every run restores it
+      - id: nidhogg-tarball
+        if: ${{ !cancelled() }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/nidhogg-downloads
+          key: nidhogg-release-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('test/container/nidhogg.sh') }}
       - name: Nidhogg 31.1 (writes DRGNX_EMACS to the environment)
         id: nidhogg
         if: ${{ !cancelled() }}
+        env:
+          NIDHOGG_DOWNLOADS: ${{ runner.temp }}/nidhogg-downloads
         run: /bin/bash test/container/nidhogg.sh macos
+      - if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.nidhogg.outcome == 'success' && steps.nidhogg-tarball.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/nidhogg-downloads
+          key: ${{ steps.nidhogg-tarball.outputs.cache-primary-key }}
       # as the runner user; the `sudo` rows reach the socket as nobody through passwordless `sudo -n -u nobody`, so
       # security/another-uid-is-refused covers tokio's getpeereid path. --require-all fails it if it is skipped
       - name: conformance

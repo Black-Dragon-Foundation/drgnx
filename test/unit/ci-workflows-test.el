@@ -352,6 +352,8 @@
     (skip-unless yml)
     (dolist (c (drgnx-ci-test--matches "if: \\(.*\\)\n *uses: actions/cache/save@" yml))
       (should (or (string-search "steps.prune.outcome == 'success'" c)
+                  ;; runtime.yml's main-only flag (no pull request): the Nidhogg tarball
+                  (and (string-search "env.CACHE_SAVE == 'true'" c) (not (string-search "CACHE_SAVE_PR" c)))
                   (string-search "github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')" c))))
     ;; an action the tiers run on another commit than the workflow's own (Nidhogg's drgnx_ref) saves only its own
     (when (string-search "inputs.dir" yml)
@@ -380,6 +382,51 @@
       (should (string-search "env.CACHE_SAVE_PR == 'true'" (drgnx-ci-test--job rt job))))
     (dolist (job '("msrv" "escape-host" "agent-containers" "android" "fuzz"))
       (should-not (string-search "env.CACHE_SAVE_PR" (drgnx-ci-test--job rt job))))))
+
+(ert-deftest drgnx-ci/the-macos-jobs-keep-the-nidhogg-release-tarball ()
+  ;; both macOS jobs restore the pinned release by the hash of nidhogg.sh into NIDHOGG_DOWNLOADS, which nidhogg.sh
+  ;; checks against the pin on every use; only main saves it, and Nidhogg's run (its own tarball) never touches it
+  (let ((rt (drgnx-ci-test--yml "runtime.yml")) (tiers (drgnx-ci-test--yml "drgnx-tiers.yml"))
+        (sh (drgnx-ci-test--file "test/container/nidhogg.sh")))
+    (skip-unless (and rt tiers sh))
+    (dolist (job (list (drgnx-ci-test--job rt "macos") (drgnx-ci-test--job tiers "macos")))
+      (drgnx-ci-test--has job "path: ${{ runner.temp }}/nidhogg-downloads"
+                          "key: nidhogg-release-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('"
+                          "NIDHOGG_DOWNLOADS: ${{ runner.temp }}/nidhogg-downloads"
+                          "key: ${{ steps.nidhogg-tarball.outputs.cache-primary-key }}"))
+    (drgnx-ci-test--has (drgnx-ci-test--job tiers "macos") "if: ${{ !cancelled() && inputs.nidhogg == 'release' }}")
+    (drgnx-ci-test--has sh "\"$NIDHOGG_DOWNLOADS/$tarball\"" "if verify >/dev/null 2>&1; then")))
+
+(ert-deftest drgnx-ci/nidhogg-sh-never-uses-a-kept-tarball-that-fails-the-pin ()
+  :tags '(:cond)
+  ;; a kept tarball that does not match the pinned checksum is not used: nidhogg.sh downloads (curl, a stub that
+  ;; fails here) and stops, never unpacking the kept one
+  (skip-unless (executable-find "bash"))
+  (let* ((sh (drgnx-ci-test--file "test/container/nidhogg.sh"))
+         (version (and sh (string-match "^NIDHOGG_VERSION=\\([^ \n]+\\)" sh) (match-string 1 sh)))
+         (tmp (make-temp-file "drgnx-nh-kept" t)) (bin (expand-file-name "bin" tmp))
+         (kept (expand-file-name "kept" tmp)))
+    (unwind-protect
+        (progn
+          (should version)
+          (make-directory bin t) (make-directory kept t)
+          (with-temp-file (expand-file-name (format "nidhogg-%s-macos-arm64.tar.xz" version) kept) (insert "not it"))
+          (dolist (stub '("brew" "curl"))
+            (with-temp-file (expand-file-name stub bin)
+              (insert (if (equal stub "curl") "#!/bin/sh\necho curl-called >&2\nexit 7\n" "#!/bin/sh\nexit 0\n")))
+            (set-file-modes (expand-file-name stub bin) #o755))
+          (with-temp-buffer
+            (let ((process-environment
+                   (append (list (concat "PATH=" bin ":" (getenv "PATH")) (concat "RUNNER_TEMP=" tmp)
+                                 (concat "TMPDIR=" tmp) (concat "NIDHOGG_DOWNLOADS=" kept) "GITHUB_ENV=")
+                           process-environment)))
+              (should-not (eq 0 (call-process "bash" nil t nil
+                                              (expand-file-name "test/container/nidhogg.sh" drgnx-ci-test--root)
+                                              "macos"))))
+            (should (string-search "does not match its checksum: downloading it" (buffer-string)))
+            (should (string-search "curl-called" (buffer-string)))
+            (should-not (file-exists-p (expand-file-name "nidhogg" tmp)))))
+      (delete-directory tmp t))))
 
 (ert-deftest drgnx-ci/a-restored-target-sees-unchanged-files-as-old ()
   ;; every job that restores runtime/target gives the files their last commit's time before cargo runs (and has the

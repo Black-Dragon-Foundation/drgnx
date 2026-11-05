@@ -556,12 +556,21 @@ jobs:
         with:
           name: tarball-macos
           path: ${{ runner.temp }}/nidhogg-dist
+      # the pinned release tarball, kept by the hash of nidhogg.sh (runtime.yml's macos job uses the same entry; the
+      # tarball is checked against the pin on every use); saved by main's own run only
+      - id: nidhogg-tarball
+        if: ${{ !cancelled() && inputs.nidhogg == 'release' }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/nidhogg-downloads
+          key: nidhogg-release-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('drgnx/test/container/nidhogg.sh') }}
       - name: Nidhogg for the suite (the pinned release, or this run's tarball)
         id: nidhogg
         if: ${{ !cancelled() }}
         working-directory: drgnx
         env:
           MODE: ${{ inputs.nidhogg }}
+          NIDHOGG_DOWNLOADS: ${{ runner.temp }}/nidhogg-downloads
         run: |
           if [ "$MODE" = artifact ]; then
             tarball="$(ls "$RUNNER_TEMP"/nidhogg-dist/*.tar.xz)"   # none: the step fails (never the release instead)
@@ -569,6 +578,11 @@ jobs:
           else
             /bin/bash test/container/nidhogg.sh macos
           fi
+      - if: ${{ !cancelled() && inputs.nidhogg == 'release' && steps.nidhogg.outcome == 'success' && steps.nidhogg-tarball.outputs.cache-hit != 'true' && steps.commit.outputs.commit == (github.event.pull_request.head.sha || github.sha) && github.repository == 'Black-Dragon-Foundation/drgnx' && (github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/nidhogg-downloads
+          key: ${{ steps.nidhogg-tarball.outputs.cache-primary-key }}
       # the files a core each at once, a failed file rerun once, the :timing tests left out by name (docs/develop/ci.md).
       # Whatever the steps before said, once there is an Emacs: without Ratatoskr only the tests that need it fail
       - name: Unit suite, the files in parallel (no :timing tests)
