@@ -19,6 +19,7 @@
 ;; the session's agent code, which the replay workloads drive
 (defvar drgnx-agents--sessions)
 (declare-function drgnx-agents-ui-transcript-buffer "drgnx-agents-ui")
+(declare-function drgnx-timer-now "drgnx-timer")
 (declare-function drgnx-timer-cancel "drgnx-timer")
 (declare-function drgnx-timer-start "drgnx-timer")
 (declare-function drgnx-agents--changed "drgnx-agents")
