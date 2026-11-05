@@ -318,6 +318,15 @@ pub async fn reset(store: &CodeStore) -> Result<(), StoreError> {
         .await?)
 }
 
+/// The queries `lag` asks on every answer: one pass over the chunks that is a pass over an index (the chunk rows hold
+/// their text, so a scan of the table reads the whole store: 100 ms of every query at 50,000 chunks).
+pub const LAG_TOTAL_SQL: &str = "select count(*) from chunk where embed = 1";
+pub const LAG_BEHIND_SQL: &str = "select count(*) from chunk c where c.embed = 1 and not exists
+     (select 1 from vec v where v.model = ?1 and v.key = c.key)";
+pub const LAG_FILES_SQL: &str =
+    "select count(distinct c.path) from chunk c where c.embed = 1 and not exists
+     (select 1 from vec v where v.model = ?1 and v.key = c.key)";
+
 /// How far behind the index is for MODEL (none: no model fills tier 2, so nothing is behind on vectors).
 pub async fn lag(store: &CodeStore, model: Option<&str>) -> Result<Lag, StoreError> {
     let model = model.map(str::to_string);
@@ -327,18 +336,19 @@ pub async fn lag(store: &CodeStore, model: Option<&str>) -> Result<Lag, StoreErr
             let (chunks_behind, files_behind) = match &model {
                 None => (0, 0),
                 Some(m) => {
-                    let behind = "from chunk c where c.embed = 1 and not exists
-                       (select 1 from vec v where v.model = ?1 and v.key = c.key)";
+                    let chunks = count(c, LAG_BEHIND_SQL, m)?;
+                    // the files are counted only when something is behind
                     (
-                        count(c, &format!("select count(*) {behind}"), m)?,
-                        count(c, &format!("select count(distinct c.path) {behind}"), m)?,
+                        chunks,
+                        if chunks == 0 {
+                            0
+                        } else {
+                            count(c, LAG_FILES_SQL, m)?
+                        },
                     )
                 }
             };
-            let total: i64 =
-                c.query_row("select count(*) from chunk where embed = 1", [], |r| {
-                    r.get(0)
-                })?;
+            let total: i64 = c.query_row(LAG_TOTAL_SQL, [], |r| r.get(0))?;
             Ok(Lag {
                 chunks_total: u32::try_from(total).unwrap_or(u32::MAX),
                 chunks_behind,

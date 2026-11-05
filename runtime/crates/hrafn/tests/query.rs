@@ -334,6 +334,66 @@ async fn the_vector_scan_plan_is_one_pass_over_the_vectors() {
     );
 }
 
+/// Pattern D. The scan touches the vectors and nothing else: a chunk is looked up only for a vector that enters the
+/// best 200, not for each of the 50,000 (a subquery per vector was 160 ms of the 180 at 50,000 chunks).
+#[tokio::test]
+async fn the_vector_scan_reads_no_chunk_per_vector() {
+    let (_dir, store, _texts) = indexed().await;
+    let plan = plan_of(&store, hrafn::query::NEAREST_SQL, 1).await;
+    assert!(!plan.contains("SUBQUERY"), "{plan}");
+    assert!(!plan.contains("chunk"), "{plan}");
+}
+
+/// Pattern D. The lag every answer carries is counted on an index: a scan of the chunk table reads every chunk's text
+/// (100 ms of each query at 50,000 chunks, twice more with a model).
+#[tokio::test]
+async fn the_lag_counts_are_passes_over_an_index() {
+    let (_dir, store, _texts) = indexed().await;
+    for sql in [
+        hrafn::index::LAG_TOTAL_SQL,
+        hrafn::index::LAG_BEHIND_SQL,
+        hrafn::index::LAG_FILES_SQL,
+    ] {
+        let plan = plan_of(&store, sql, usize::from(sql.contains("?1"))).await;
+        for line in plan.lines().filter(|l| l.starts_with("SCAN")) {
+            assert!(line.contains("COVERING INDEX"), "{line}\n{plan}");
+        }
+    }
+}
+
+/// Pattern D. A path or symbol-name question reads the small tables (`file`, an index of symbol names), not the chunk
+/// table with its text or a scan of every symbol: 7 ms per path token and 18 ms per name at 50,000 chunks.
+#[tokio::test]
+async fn path_and_name_routes_do_not_scan_chunks_or_symbols() {
+    let (_dir, store, _texts) = indexed().await;
+    for sql in [hrafn::query::PATH_ANY_SQL, hrafn::query::PATH_NAME_SQL] {
+        let plan = plan_of(&store, sql, if sql.contains("?2") { 2 } else { 1 }).await;
+        assert!(plan.contains("SCAN f"), "{plan}");
+        assert!(!plan.contains("SCAN c"), "{plan}");
+    }
+    let plan = plan_of(&store, hrafn::query::NAME_PREFIX_SQL, 1).await;
+    assert!(plan.contains("symbol_name_nc"), "{plan}");
+    assert!(!plan.contains("SCAN"), "{plan}");
+}
+
+/// The plan of SQL with BINDS parameters bound, one line per step.
+async fn plan_of(store: &CodeStore, sql: &str, binds: usize) -> String {
+    let sql = format!("explain query plan {sql}");
+    store
+        .handle()
+        .read(move |c| {
+            let mut st = c.prepare(&sql)?;
+            let rows = st
+                .query_map(rusqlite::params_from_iter(vec![MODEL; binds]), |r| {
+                    r.get::<_, String>(3)
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows.join("\n"))
+        })
+        .await
+        .unwrap()
+}
+
 /// Pattern D. In a file that has not changed, no hit moves, whatever the chunk starts with (a blank line, an attribute):
 /// the hit's lines are the chunk's own, and it is not marked as found again.
 #[tokio::test]

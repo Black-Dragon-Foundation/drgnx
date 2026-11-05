@@ -236,6 +236,11 @@ fn pinned(c: &Connection, name: &str) -> rusqlite::Result<Vec<i64>> {
     Ok(rows.into_iter().map(|r| r.0).collect())
 }
 
+/// The symbols whose name starts with ?1 (a `like` pattern), on the `symbol_name_nc` index: `like` ignores case, so
+/// only an index of the same collation serves it (a scan of `symbol` was 18 ms at 50,000 chunks).
+pub const NAME_PREFIX_SQL: &str =
+    "select chunk from symbol where name like ?1 escape '\\' order by length(name) limit 30";
+
 fn names(c: &Connection, token: &str) -> rusqlite::Result<Vec<i64>> {
     let mut out = ids(
         c,
@@ -249,11 +254,7 @@ fn names(c: &Connection, token: &str) -> rusqlite::Result<Vec<i64>> {
             .replace('%', "\\%")
             .replace('_', "\\_")
     );
-    out.extend(ids(
-        c,
-        "select chunk from symbol where name like ?1 escape '\\' order by length(name) limit 30",
-        [like],
-    )?);
+    out.extend(ids(c, NAME_PREFIX_SQL, [like])?);
     if token.chars().count() >= 3 {
         out.extend(ids(
             c,
@@ -264,6 +265,18 @@ fn names(c: &Connection, token: &str) -> rusqlite::Result<Vec<i64>> {
     Ok(out)
 }
 
+/// The first chunk of each file whose path holds ?1 (the `file` table has a row per file; the `chunk` table has one per
+/// chunk, each with its text: a scan of it for a `like` was 7 ms per token at 50,000 chunks).
+pub const PATH_ANY_SQL: &str = "select id from (
+       select (select min(c.id) from chunk c where c.path = f.path) as id, f.path as p
+       from file f where lower(f.path) like ?1 escape '\\')
+     where id is not null order by length(p) limit 30";
+/// The same for a path whose file name is ?1 or starts with it (`/name.` in ?1, `name.` in ?2).
+pub const PATH_NAME_SQL: &str = "select id from (
+       select (select min(c.id) from chunk c where c.path = f.path) as id, f.path as p
+       from file f where lower(f.path) like ?1 escape '\\' or lower(f.path) like ?2 escape '\\')
+     where id is not null order by length(p) limit 30";
+
 fn paths(c: &Connection, token: &str) -> rusqlite::Result<Vec<i64>> {
     let t = token.to_lowercase();
     let like = |s: &str| {
@@ -272,15 +285,9 @@ fn paths(c: &Connection, token: &str) -> rusqlite::Result<Vec<i64>> {
             .replace('_', "\\_")
     };
     let (sql, arg) = if t.contains('/') || t.contains('.') {
-        (
-            "select min(c.id) from chunk c where lower(c.path) like ?1 escape '\\' group by c.path order by length(c.path) limit 30",
-            format!("%{}%", like(&t)),
-        )
+        (PATH_ANY_SQL, format!("%{}%", like(&t)))
     } else {
-        (
-            "select min(c.id) from chunk c where lower(c.path) like ?1 escape '\\' or lower(c.path) like ?2 escape '\\' group by c.path order by length(c.path) limit 30",
-            format!("%/{}.%", like(&t)),
-        )
+        (PATH_NAME_SQL, format!("%/{}.%", like(&t)))
     };
     if sql.contains("?2") {
         ids(c, sql, params![arg, format!("{}.%", like(&t))])
@@ -289,12 +296,14 @@ fn paths(c: &Connection, token: &str) -> rusqlite::Result<Vec<i64>> {
     }
 }
 
-/// The vectors the scan reads: MODEL's, each with the first live chunk of its content key. (A join of `chunk` with
-/// `vec` and `c.id in (select min(id) … group by key)` made SQLite probe a list once per vector: 37 s for 16,000
-/// chunks; one lookup of the key's first chunk is 55 ms.)
-pub const NEAREST_SQL: &str = "select id, dims, vec from (
-       select (select min(c.id) from chunk c where c.key = v.key and c.embed = 1) as id, v.dims, v.vec
-       from vec v where v.model = ?1) where id is not null";
+/// The vectors the scan reads: MODEL's, and nothing else. The chunk of a key is looked up (`FIRST_CHUNK_SQL`) only for
+/// a vector that can enter the best SCAN, not for each of them: a lookup per vector was 160 ms of the 180 at 50,000
+/// chunks. (A join of `chunk` with `vec` and `c.id in (select min(id) … group by key)` made SQLite probe a list once
+/// per vector: 37 s for 16,000 chunks.)
+pub const NEAREST_SQL: &str = "select key, dims, vec from vec where model = ?1";
+
+/// The first live chunk of a content key (none: the vector is kept for a file that is gone).
+const FIRST_CHUNK_SQL: &str = "select min(id) from chunk where key = ?1 and embed = 1";
 
 /// The nearest chunks of MODEL to the query vector V: Hamming over the sign bits, then the int8 dot product.
 fn nearest(c: &Connection, model: &str, v: &[f32]) -> rusqlite::Result<Vec<i64>> {
@@ -302,9 +311,11 @@ fn nearest(c: &Connection, model: &str, v: &[f32]) -> rusqlite::Result<Vec<i64>>
     let mut heap: BinaryHeap<(u32, i64)> = BinaryHeap::with_capacity(SCAN + 1);
     {
         let mut st = c.prepare(NEAREST_SQL)?;
+        let mut first = c.prepare(FIRST_CHUNK_SQL)?;
         let mut rows = st.query([model])?;
         while let Some(r) = rows.next()? {
-            let (id, dims, blob): (i64, i64, Vec<u8>) = (r.get(0)?, r.get(1)?, r.get(2)?);
+            let dims: i64 = r.get(1)?;
+            let blob = r.get_ref(2)?.as_blob()?;
             if usize::try_from(dims).ok() != Some(v.len()) || blob.len() < qbits.len() {
                 continue;
             }
@@ -313,7 +324,15 @@ fn nearest(c: &Connection, model: &str, v: &[f32]) -> rusqlite::Result<Vec<i64>>
                 .zip(&qbits)
                 .map(|(a, b)| (a ^ b).count_ones())
                 .sum();
-            if heap.len() < SCAN {
+            let full = heap.len() >= SCAN;
+            if full && heap.peek().is_some_and(|w| d > w.0) {
+                continue;
+            }
+            let key = r.get_ref(0)?.as_blob()?;
+            let Some(id) = first.query_row([key], |r| r.get::<_, Option<i64>>(0))? else {
+                continue;
+            };
+            if !full {
                 heap.push((d, id));
             } else if heap.peek().is_some_and(|w| (d, id) < *w) {
                 heap.pop();

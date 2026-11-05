@@ -85,7 +85,13 @@ create index vec_used on vec(model, last_used);
 ";
 
 /// The migrations for `urdr::StoreSpec`.
-pub const MIGRATIONS: &[(u32, &str)] = &[(1, V1)];
+pub const MIGRATIONS: &[(u32, &str)] = &[(1, V1), (2, V2)];
+
+/// The indexes of a query's own passes: the lag's counts run on the first (the chunk rows hold their text, so counting
+/// them through the table reads the whole store on every query); the second serves the symbol-name prefix, which `like`
+/// matches without regard to case.
+const V2: &str = "create index chunk_embed on chunk(embed, key, path);
+create index symbol_name_nc on symbol(name collate nocase);";
 
 /// A Lisp symbol made one `unicode61` token. `unicode61` splits on every character that is not a letter, a number or
 /// a private-use character (category Co), so `drgnx-timer--fire` would be three tokens. Each ASCII punctuation

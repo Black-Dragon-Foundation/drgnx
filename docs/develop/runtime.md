@@ -1079,6 +1079,10 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   its score. Hits in files changed since indexing are looked for again by their first line, else their symbol (20 files,
   50 ms). The scope (`code`, which holds tests below it, `tests`, `docs`, `all`) filters by file class. Every answer has
   the lag line.
+  A query reads indexes and small tables, never the `chunk` table (its rows hold their text): the lag's counts run on
+  `chunk_embed`, name prefixes on `symbol_name_nc` (`like` ignores case, so the index has the same collation), path
+  tokens on `file`, and the vector scan reads `vec` alone, looking a chunk up only for a vector that can enter the best
+  200. Each is a plan test in `hrafn/tests/query.rs`. Store schema 2 adds the two indexes.
 - **The methods (`search/methods.rs`).** `Hub` (`Front::search`) opens a project on first use of its root and runs its
   driver (`Project::tick` every 500 ms on the hub clock, dropped with the project); `search/query` refreshes tier 1 when
   the files changed (the watcher's events, else a blob diff), picks the model (`search::prefer`), embeds the question
