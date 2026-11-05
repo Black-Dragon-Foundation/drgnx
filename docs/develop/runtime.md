@@ -41,6 +41,7 @@ runtime/
 | `norn` | `work.db`'s coordination writer, its readers and the 16 coordination tools on `mimir` ([coordination.md](coordination.md)); drgnx's policy over `urdr::graph` (closed kinds and links, the personal-notes deny-list, scopes, grants, trust marking, projects), the schema 6 → 7 migration, the tracker and its tools ([store.md](store.md)); pure Rust but for urdr's bundled SQLite, so off the Android cross-check |
 | `bifrost` | the gateway: admission, tokens, chain fallback, the SSE usage scanner, budget, the HTTP/1.1 upstream client over rustls; self-contained (certificate checks behind its default feature `platform-verifier`). Rust but for `ring`'s C and assembly, so its cross-checks stub the C compiler as urdr's do (below) |
 | `hrafn` | search and the indexer |
+| `hrafn-embed` | Hrafn's embedding side: the pinned model table, the model cache's checks and the built-in embedder; pure Rust, no C, builds for Android ("Hrafn" below) |
 | `huginn` | a reader for the data subset of Emacs Lisp: literal values with byte spans, never evaluated, every reader macro refused; settings files and a serde deserializer (feature `serde`); generic ([settings.md](settings.md#the-data-subset)). `drgnx-ratatoskr` reads `settings.el` and the shipped `runtime-defaults.el` with it ([hub.md](hub.md#settings)) |
 | `hermod` | an ACP client on `agent-client-protocol-schema`'s types and runstav's line codec (no SDK role framework): stamped updates, message ids, fork at a message, exactly-once exit; generic (agent system part 1, Task 1) |
 | `saga` | the org folder's record formats (plans, ledgers, DEFERRED, the build board, `board.org`) parsed and rendered back byte-exact, turned into graph operations; pure, `pulldown-cmark` for Markdown (agent system part 1, Tasks 5, 6, 14) |
@@ -666,6 +667,11 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
   wait on). It ends when `--parent` is gone.
 - `proxy [--log FILE]` prints `MOCK-PROXY-PORT N`; `CONNECT host:port` is logged (`{"connect": "host:port"}`) and
   tunnelled, anything else gets 405 (`{"refused": "METHOD TARGET"}`).
+- `hf --dir DIR [--log FILE] [--cut FILE BYTES] [--bad FILE] [--location URL] [--no-range]` is the model host. It prints
+  `MOCK-HF-PORT N` and `MOCK-HF-CDN-PORT M`: `/…/resolve/REV/FILE` on N answers 302 to `FILE?sig=1` on M, as the real host
+  sends a download to its CDN, or to URL with `--location`; M serves DIR's files and honours `Range: bytes=START-` unless
+  `--no-range`. `--cut` stops the first response for FILE after BYTES, `--bad` flips FILE's last byte. The log is JSONL:
+  `{server, path, range, credentials}` per request.
 
 **Variables** in strings: `$MOCK $ROOT $HOME $RUN $STATE $DATA $CONFIG $SOCKET $SOCKET_DIR $BACKEND_SOCKET $CAP $LOCK $PID(hub)
 $HARNESS_PID` (of the step's `hub`, else the latest started; `$BACKEND_SOCKET` is where an older hub's Emacs child
@@ -973,6 +979,68 @@ rows with its header rows repeated in `embed_text`. Plain text is line windows u
 The test fixtures' form spans come from the Emacs reader: `tests/fixtures/elisp/gen.el` writes `NAME.forms.json` for
 each `NAME.el` next to it (run it once in a Nidhogg 31 container, `emacs --batch -Q -l …/gen.el`), and the test holds
 the grammar's top-level spans to them.
+
+### The embedder
+
+Hrafn is the code search behind `search/*` and the MCP `search` tool. `hrafn-embed` holds its embedding side, in pure Rust
+with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-android`.
+
+- **The model table (`models.rs`).** `MODELS` lists gte-modernbert-base (the default until the eval rules), Granite small
+  r2 and CodeRankEmbed, each at a pinned revision. A row names exactly four files with their sizes and sums:
+  `model.safetensors`, `tokenizer.json`, `config.json` and `1_Pooling/config.json`. There is no ONNX file and no GGUF.
+  `ModelConfig::read` takes the network's shape from the model's own `config.json`, so a model of the same family needs
+  a table row and nothing else. All three pool on CLS.
+- **The cache (`cache.rs`).** A model lives in `<root>/<id>-<revision[..12]>/`. `<file>.part` is a transfer in progress; a file
+  under its real name has passed its sum. `state` is `Missing`, `Partial`, `Ready` or `Corrupt`, and `Ready` means every byte was
+  hashed (about a second). `import` copies a model from a directory, for an air-gapped machine.
+- **Weights and tokens.** `Weights` reads F16, BF16 and F32 tensors, drops the `model.` prefix, and gives a tensor as f32 or as
+  f16 bytes, transposed on request. `Tokens` truncates at `max_tokens` (1,024), never pads, and applies the model's prefixes.
+
+- **The embedder (`local.rs`).** `LocalEmbedder` is one interface over a private `Engine` trait, with one impl per path, so a
+  different engine replaces an impl and nothing else. `embed_ids` takes one batch of at most `TOKEN_CAP` (4,096) tokens and
+  returns unit vectors; it checks every id against the vocabulary before anything reaches an engine. `embed_docs` and
+  `embed_query` are conveniences at a 2,048-token budget. Tokens are flat, with no padding: token t of the batch is row t,
+  and the softmax is streamed, so no S × S matrix exists. Word embeddings are gathered on the CPU, so the table costs no
+  VRAM and fits any adapter's largest binding.
+- **The GPU path (`gpu/`).** ModernBERT's forward pass in WGSL on raw `wgpu`: `lineart`, `norm`, `rope`, `attn`, `glu` and `add`.
+  Weights stay f16 where the adapter has `SHADER_F16`, with an f32 sum (`kernels-f16.wgsl`); otherwise f32, at about 0.7× the
+  speed and 2× the weights' VRAM. Linear weights are always transposed. Sizes come from `ModelConfig`: the model's shape
+  is written in front of `kernels.wgsl` as constants, because WGSL sizes a function's arrays with constants only, and a
+  kernel's input and output widths are pipeline overrides. There is one submit per layer, each waited for up to 10 s, so
+  there is a pause point between any two layers and no submit can run into a driver's watchdog (Forward's `worst_submit`
+  reports the longest). The shaders run without `wgpu`'s bounds checks, which cost 14 to 29 % on the Radeon; `embed_ids`
+  bounds every id and length, and `load` checks each weight's shape. `load` refuses an adapter whose limits don't fit a
+  buffer. A timeout, the device-lost callback, any
+  uncaptured error, or the panic `wgpu` raises out of `poll` on a lost device all end in `EmbedFail::DeviceLost`, so the
+  caller can take the CPU path. `libvulkan` is opened at run time, so a machine with no loader has no adapters.
+- **The CPU path (`cpu/`).** The same forward pass in pure Rust, for machines with no usable GPU and for a lost device, and it
+  must agree with the GPU path because vectors from both land in one index. `gemm` does the matmuls and the rest runs row by
+  row, on a `rayon` pool of `threads` that the embedder owns. The non-linear kernels are built twice on x86-64, baseline and
+  AVX2 + FMA, and chosen at run time; the build itself stays baseline. aarch64 uses baseline NEON. No AVX-512: it ran slower
+  here. `worst_submit` is zero on this path.
+
+- **The download (`drgnx-ratatoskr/src/search/`).** `download` fetches exactly a table row's files into `<cache>/models`, from
+  `drgnx-search-model-mirror` or the Hugging Face host at `{base}/{repo}/resolve/{revision}/{file}`, and only with a `Consent`
+  whose model and bytes match; the consent is kept in `runtime.db`'s `kv` (`search.consent`). The target of `resolve/` is a
+  signed URL on another host, so redirects are followed by hand: at most 3, to https only (plain http only between loopback
+  addresses, for a local mirror and the test host), with no credentials in the URL. Each file is written to `<file>.part`,
+  verified and renamed. A failed run keeps its parts, and the next one asks `resolve/` again and resumes with `Range`. Nothing
+  retries: `Offline` is reported once, and the hub tries again at its next start or on `search/model-download`. Proxies come
+  from the environment, through `bifrost::upstream::Upstream::get`. `test-tiny` (test-hooks builds, `test/fixtures/test-tiny/`)
+  is a model of no weights for the flows that need no inference.
+
+Tests read the real models from a read-only volume (`DRGNX_TEST_MODELS`) and **fail** when it's unset; they never skip.
+`tests/fixtures/<model>.json` holds what CI can't make: reference vectors for token-id lists of 1, 2, 128, 129, 130, 1,023
+and 1,024 tokens (the edges of the 129-token local span and of the 1,024 cap), and for 4 chunks and 2 queries. Those come
+from a direct forward pass in Transformers, f32, batch 1, CLS, L2-normalised. `data/<model>.selfcheck.json` is one fixed
+text of 167 tokens, longer than the local span so both attention paths run, with its vector.
+
+GPU tests name their adapter in `DRGNX_TEST_ADAPTER` (a substring of its name) and fail when it's unset or matches nothing;
+production skips software adapters, a test's named adapter doesn't. `tests/parity_gpu.rs` runs the real shaders on llvmpipe, Mesa's
+software Vulkan, so no GPU is needed; `full_references_*` (`#[ignore]`) are for a real GPU, as are the rows of `tests/gpu_bench.rs`,
+which print throughput, query time and the stall a second process sees on the same card, and assert nothing. Its `bench_cpu`
+row prints the CPU path's figures and needs no GPU. `tests/parity_cpu.rs` holds the CPU path against the references, and
+`cpu_and_gpu_agree` in `parity_gpu.rs` holds the two paths against each other.
 
 ## Building and installing Ratatoskr
 

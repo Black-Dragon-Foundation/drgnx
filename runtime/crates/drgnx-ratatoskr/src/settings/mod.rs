@@ -108,6 +108,11 @@ pub const RUNTIME: &[RuntimeSetting] = &[
     setting("drgnx-agents-repeat-limit", "u32", OnError::Strict),
     setting("drgnx-agents-no-progress-tokens", "u64", OnError::Strict),
     setting("drgnx-agents-manager-context", "f64", OnError::Strict),
+    setting(
+        "drgnx-search-model-mirror",
+        "Option<String>",
+        OnError::Strict,
+    ),
 ];
 
 /// The names of [`RUNTIME`].
@@ -151,6 +156,8 @@ pub struct RuntimeValues {
     pub agents_repeat_limit: u32,
     pub agents_no_progress_tokens: u64,
     pub agents_manager_context: f64,
+    /// Where models come from instead of the Hugging Face host.
+    pub search_model_mirror: Option<String>,
 }
 
 /// One entry of `drgnx-agents-container-images`: a name and its image reference pinned by digest.
@@ -262,6 +269,7 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-agents-repeat-limit" => values.agents_repeat_limit = de(node)?,
         "drgnx-agents-no-progress-tokens" => values.agents_no_progress_tokens = de(node)?,
         "drgnx-agents-manager-context" => values.agents_manager_context = de(node)?,
+        "drgnx-search-model-mirror" => values.search_model_mirror = de(node)?,
         other => {
             return Err(Bad::at(
                 node,

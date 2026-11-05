@@ -89,4 +89,5 @@
  (drgnx-agents-silent-after ((task . 600) (brainstorm . 1800)))
  (drgnx-agents-repeat-limit 3)
  (drgnx-agents-no-progress-tokens 20000)
- (drgnx-agents-manager-context 0.7))
+ (drgnx-agents-manager-context 0.7)
+ (drgnx-search-model-mirror nil))

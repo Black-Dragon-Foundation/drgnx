@@ -142,6 +142,7 @@ pub fn from_json(name: &str, v: &Value, values: &mut RuntimeValues) -> Result<()
         "drgnx-agents-repeat-limit" => values.agents_repeat_limit = de(v)?,
         "drgnx-agents-no-progress-tokens" => values.agents_no_progress_tokens = de(v)?,
         "drgnx-agents-manager-context" => values.agents_manager_context = de(v)?,
+        "drgnx-search-model-mirror" => values.search_model_mirror = de(v)?,
         other => return Err(refused("", format!("{other} is not a runtime setting"))),
     }
     Ok(())
@@ -222,6 +223,7 @@ pub fn to_json(name: &str, values: &RuntimeValues) -> Option<Value> {
         "drgnx-agents-repeat-limit" => json!(values.agents_repeat_limit),
         "drgnx-agents-no-progress-tokens" => json!(values.agents_no_progress_tokens),
         "drgnx-agents-manager-context" => json!(values.agents_manager_context),
+        "drgnx-search-model-mirror" => json!(values.search_model_mirror),
         _ => return None,
     })
 }

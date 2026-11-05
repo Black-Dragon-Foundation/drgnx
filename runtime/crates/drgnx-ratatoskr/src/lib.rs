@@ -90,6 +90,7 @@ pub mod runner;
 pub mod runtime_db;
 pub mod sandbox;
 pub mod sandbox_settings;
+pub mod search;
 #[cfg(feature = "test-hooks")]
 pub mod sequencer;
 pub mod server;
