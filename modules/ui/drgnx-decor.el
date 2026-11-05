@@ -111,12 +111,12 @@ the run's edge."
               (funcall action))))))))
 
 (defun drgnx-decor-button (text action)
-  "A button: TEXT that calls ACTION (a function of no arguments) on a click or RET.
+  "A button: TEXT that calls ACTION (a function of no arguments) on a click or Enter (a remap of `newline').
 It shows `drgnx-button-hover' under the pointer and `drgnx-button-pressed' while the mouse button is down."
   (let ((map (make-sparse-keymap)) (run (lambda () (interactive) (funcall action))))
     (define-key map [down-mouse-1] #'drgnx-decor--press)
     (define-key map [mouse-1] #'ignore)
-    (define-key map (kbd "RET") run)
+    (define-key map [remap newline] run)   ; Enter on the button; the key itself stays the profiles' (a remap)
     (propertize text 'face 'drgnx-button 'mouse-face 'drgnx-button-hover 'keymap map
                 'drgnx-decor-button t 'drgnx-decor-action action 'follow-link t)))
 

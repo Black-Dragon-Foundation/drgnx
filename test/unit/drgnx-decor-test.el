@@ -58,7 +58,8 @@
   (let ((b (drgnx-decor-button "Go" #'ignore)))
     (should (eq 'drgnx-button (get-text-property 0 'face b)))
     (should (eq 'drgnx-button-hover (get-text-property 0 'mouse-face b)))
-    (should (eq #'drgnx-decor--press (lookup-key (get-text-property 0 'keymap b) [down-mouse-1])))))
+    (should (eq #'drgnx-decor--press (lookup-key (get-text-property 0 'keymap b) [down-mouse-1])))
+    (should (functionp (lookup-key (get-text-property 0 'keymap b) [remap newline])))))
 
 (ert-deftest drgnx-decor/cursor-face-bar-when-unboxed ()
   (drgnx-decor-test--glitnir t
