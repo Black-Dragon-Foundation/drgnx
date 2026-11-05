@@ -174,6 +174,23 @@ fn a_scenario_against_a_scripted_hub() {
     assert_eq!(out.matches("FAIL ").count(), 1, "{out}");
     assert!(out.contains("FAIL bad/wrong: step 4 (expect)"), "{out}");
     assert!(out.contains("0 passed, 0 skipped, 1 failed"), "{out}");
+    // the failure keeps when each step ran and how long it took, and the end of the hub's logs
+    assert!(
+        out.contains("the steps (from the scenario's start):"),
+        "{out}"
+    );
+    for (n, verb) in [(1, "start"), (2, "connect"), (3, "send"), (4, "expect")] {
+        let line = out
+            .lines()
+            .find(|l| l.trim_start().starts_with(&format!("{n} {verb} ")))
+            .unwrap_or_else(|| panic!("no timing for step {n}: {out}"));
+        assert!(
+            line.contains(" ms, took ") && line.ends_with(" ms"),
+            "{line}"
+        );
+    }
+    assert!(out.contains("hub h (pid "), "{out}");
+    assert!(out.contains("its log's last lines:"), "{out}");
 }
 
 const FILES_ROW: &str = r#"{"scenario": "ok/files-and-eof", "requires": ["v1"], "doc": "file globs and contains; send with eof"}

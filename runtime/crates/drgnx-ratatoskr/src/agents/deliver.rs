@@ -179,11 +179,11 @@ pub(crate) async fn pass(front: &Front, told: &mut HashMap<String, u64>) {
         }
         super::die_at("after-queue-before-mark");
         let now = crate::clock::wall_secs();
+        // only while it is still `sending`: the user's kill may have discarded the prompt and put it back meanwhile
         let marked = front
             .writer
             .write(&hub_caller(), "coord/deliver", move |tx| {
-                messages::mark(tx, id, "delivered", now)?;
-                messages::mark(tx, id, "read", now)
+                messages::delivered(tx, id, now)
             })
             .await;
         if let Err(e) = marked {
@@ -215,6 +215,30 @@ pub async fn run(front: Arc<Front>) {
             () = crate::clock::sleep(EVERY) => {}
         }
         pass(&front, &mut told).await;
+    }
+}
+
+/// The prompts a user's kill discarded (they never reached the agent): each message among them (its key,
+/// `message:ID`) goes back to `queued`, so the next pass gives it to the recipient's next session.  A message is never
+/// lost to a kill that came between its delivery and its turn.
+pub(crate) async fn put_back(w: &crate::coord::Writer, dropped: &[super::queue::Queued]) {
+    let ids: Vec<i64> = dropped
+        .iter()
+        .filter_map(|q| q.key.as_deref()?.strip_prefix("message:")?.parse().ok())
+        .collect();
+    if ids.is_empty() {
+        return;
+    }
+    let r = w
+        .write(&hub_caller(), "coord/deliver", move |tx| {
+            for id in &ids {
+                messages::undeliver(tx, *id)?;
+            }
+            Ok(())
+        })
+        .await;
+    if let Err(e) = r {
+        tracing::warn!("discarded messages not queued again: {e}");
     }
 }
 

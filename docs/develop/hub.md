@@ -64,7 +64,8 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   It stops on SIGTERM, on SIGINT, or one second after the `--parent-pid` process is gone (`kill(pid, 0)`; the last
   `--parent-pid` counts). It stops accepting, ends its own sessions, then removes the socket and the cap while the
   lock is still held. It then closes every connection, after what is queued for each is written (at most 1 s for all
-  of them), so its clients see the end before the hub waits on anything that can hang. Last, it stops its store
+  of them), and the outside bridges' connections `mcp/attach` handed to MCP, so its clients see the end before the hub
+  waits on anything that can hang. Last, it stops its store
   threads (runtime.db's and work.db's writer). Each writes what is queued to it first: no queued write is dropped,
   and that wait has no limit. Every 5 s while a thread is still stopping, the log names it as an error, with how many
   requests it still has queued. A second SIGTERM or SIGINT during that wait ends the hub at once, and the log says
@@ -77,7 +78,8 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   method, `--idle-tick-ms N` (the restart-when-idle tick), `--test-clock`, `__test_advance`, `--test-sequencer` and
   `__test_barrier` ([Test hooks](#test-hooks)), `--test-hold-store` (at the hub's end runtime.db's thread is held by a
   job until the hub gets SIGUSR1, with one write queued behind it, so a test sees the end close its connections first
-  and then write that queue), and `--agent-socket SID[:JOB]`, which is refused without `--foreground`. `DRGNX_HUB_PARENT_PID` does what `--parent-pid` does when the flag is absent, so a hub a test starts through `ensure` ends with the test.
+  and then write that queue, or a second SIGTERM abandon it; only SIGUSR1 releases the job, never the runtime's end),
+  and `--agent-socket SID[:JOB]`, which is refused without `--foreground`. `DRGNX_HUB_PARENT_PID` does what `--parent-pid` does when the flag is absent, so a hub a test starts through `ensure` ends with the test.
 - **The gateway** (`drgnx-ratatoskr/src/gateway.rs`, forwarding by `bifrost`) runs inside the hub: never in the
   editing Emacs, so streaming cannot touch the keystroke budget. Besides the 127.0.0.1 port it listens on **per-session
   Unix sockets** (`gateway.sock` in the session's private directory beside `mcp.sock` and `hub.sock`, for agents in a
@@ -848,7 +850,10 @@ resume, the tick goes on from the store with the same workers, and the wakes sti
   queue and transcript do not hold the `[job ID finished` prompt, one of a job that is gone is dropped, and a finished
   job of a live session with no row and no such prompt (the hub died between its result and the row) is woken.
 - **A message is `sending` before its prompt is queued**; at the next start (`deliver::recover`) a `sending` one whose
-  prompt the session holds is marked `read`, else it is `queued` again: delivered once across a crash.
+  prompt the session holds is marked `read`, else it is `queued` again: delivered once across a crash. The delivery
+  marks it `delivered` and `read` only while it is still `sending`; a message whose prompt was queued behind a turn
+  and discarded by the user's kill (`agents/kill`, or `agents/stop` with no turn running) goes back to `queued`
+  (`deliver::put_back`), so its recipient's next session gets it.
 - **A queued message stays in the store** and is delivered after the sessions are back
   ([coordination.md](coordination.md#delivery-the-hub)); a prompt queued in a session is read back from its
   `<sid>.queue.json`.
@@ -1240,9 +1245,10 @@ event and performs what it answers; the entries, steps and transcript stay with 
 - Events: `Send` (a prompt, with the profile's steer mode and `if_free`), `PromptDone` (cancelled or not),
   `PromptFailed` (closed or not), `Stop` (or the pause after a tool call), `Kill` (`agents/kill`, the hub ending, or
   a Stop's deadline for its turn), `PermissionAsked` (with the turn it came in), `PermissionAnswered`,
-  `ToolCompleted`, `EmitTick`, `QueueEdited` (deliver, unqueue, requeue, the freshness gate's notice), `Changed` and
-  `Exited`.
-- Effects: start a turn with the next prompt, end it (waiting on a job, or held), tell the agent to cancel, arm a
+  `ToolCompleted`, `EmitTick`, `QueueEdited` (deliver, unqueue, requeue, the freshness gate's notice), `Changed`,
+  `Exited`, and `Sending` (the turn's task is about to hand its prompt to the agent).
+- Effects: start a turn with the next prompt, send its prompt now (`Prompt`) or put it back (`PutBack`, the hub's
+  end), name what a user's kill drops (`Discard`), end it (waiting on a job, or held), tell the agent to cancel, arm a
   Stop's deadline, end the process group, hold a permission request for the user, answer it or answer it cancelled,
   keep the queue on disk, announce a change, arm and send the event pair; and the refusals (exited, not free, no
   turn running, no such queued prompt, no such request).
@@ -1255,6 +1261,11 @@ What the core keeps:
 - A prompt sent while the process is being ended for good (`agents/kill`, `agents/stop` with no turn running, a
   Stop's deadline) is refused as exited, and the session is not free then: the sender keeps it (a peer's message goes
   back to `queued`, a wake stays pending). A prompt sent while the hub ends waits on disk for the next start.
+- A turn's prompt reaches the agent only through its `Sending` step. When the hub ends between a turn's start and that
+  step, the turn is put back: its prompt goes back to the front of the queue, which is kept on disk, and the shell
+  drops the turn's entries (the transcript file holds a turn's entries only once its prompt was sent). When the
+  user's kill comes there instead, the prompt is dropped with the queue, and `Discard` names both, so a peer's
+  message among them goes back to `queued` in the store.
 - A turn ends once, at its agent's answer. A second Stop of a stopped turn changes nothing; a Stop's deadline ends
   the process only if the turn it stopped still runs.
 - Each permission request is answered or answered cancelled once. A Stop, the pause after a tool call, the turn's end,
@@ -1276,7 +1287,11 @@ again after it.
 - a user who answers and stops, an agent that asks twice, completes a tool call and answers, a pause after the tool
   call, and the cockpit settling a card;
 - two senders, an agent that asks in each turn, the matrix deciding late, and the user's kill, the hub's end or a
-  crash.
+  crash;
+- two senders, the turn's task that sends each prompt in a step of its own, an agent, and the hub's end, then the exit
+  (every prompt reached the agent or waits in the queue on disk);
+- a sender, the hub's delivery (`sending`, the prompt, the mark), an agent, and the user's kill, then the exit (a
+  message marked delivered ran; one the kill discarded is `queued` again).
 
 After every step the tests check that a turn starts only when none runs, once per prompt, never while the queue is
 held or on a process being ended; that a turn ends at its agent's answer; that a request waits only while its turn
@@ -1322,6 +1337,9 @@ process per connection (`runtime/crates/drgnx-ratatoskr/src/sessions.rs`). Two d
 an identity from the agent: not from a tool's arguments, and never from `DRGNX_AGENT` (the hub's own is ignored).
 
 - **A session's socket (`mcp/session`, user).** `{agent, sid?, job?, task?, cwd?, owner}` answers `{sid, socket}`.
+  One that takes longer than 1 s (real time) logs a warning with each stage's time (the owner's check, the serial
+  lock, the directory, the runtime.db row, the bind, the tools, the listener), and the settings' refresh before it
+  one of its own when that alone took longer.
   - Without `sid` the hub mints one (12 hex digits of `getrandom`) and makes its directory with
     `runstav::paths::make_session_dir` (Gleipnir's session directory: `s/SID` beside the main socket, or under
     `<tmp>/drgnx-hub-UID/` when the longest socket name, `gateway.sock`, would not fit 103 bytes; each level 0700, the

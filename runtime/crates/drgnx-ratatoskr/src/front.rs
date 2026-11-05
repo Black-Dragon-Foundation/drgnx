@@ -3,7 +3,8 @@
 //! the store's methods of [`crate::graph`] (`graph/*`, `tasks/*`), the MCP hosting of [`crate::sessions`] (`mcp/*`),
 //! the gateway of [`crate::gateway`] (`gateway/*`, `spend`), the settings' (`config/settings`, `config/changed`) and
 //! the agent core's of [`crate::agent_core`] (`agents/*`, `job/*`, `exec/*`, `matrix/*`, …).  One `match` over
-//! `Params` with no catch-all arm routes them, so a method without a handler does not compile.
+//! `Params` with no catch-all arm routes them, so a method without a handler does not compile; a group it hands to
+//! another module's `serve` is checked against that `serve`'s arms by a test (a variant with none reaches no handler).
 //!
 //! [`Front::line`] is one line of one connection: [`dispatch::prelude`], the refusal noted, the handler, the answer
 //! queued.
@@ -208,6 +209,8 @@ impl Front {
         for out in all {
             out.close("closed a connection: the hub ends");
         }
+        // and those `mcp/attach` handed to MCP, which left the registry then
+        self.mcp.end_outside();
     }
 
     /// work.db's schema is SCHEMA now (0: no file): read-only while it is newer than this hub's.  Logged when that
@@ -508,7 +511,12 @@ impl Front {
             }
             // a session starts on the settings as the file says now
             Params::McpSession(p) => {
+                let t = crate::clock::real_now();
                 self.refresh_settings().await;
+                if t.elapsed() > sessions::SLOW_OPEN {
+                    let ms = t.elapsed().as_millis() as u64;
+                    tracing::warn!(ms, "mcp/session: the settings took {ms} ms to refresh");
+                }
                 self.mcp.open(p).await.map(|a| json!(a))
             }
             Params::McpSessionClose(p) => self.mcp.close(p.sid.as_str()).await.map(|b| json!(b)),
@@ -1074,5 +1082,102 @@ mod tests {
         f.line(&mut t, &out, &line.to_string()).await;
         assert_eq!(answers(&out)[0]["error"]["code"], "not-allowed");
         assert_eq!(f.status().refusals.map(|r| r.count), Some(1));
+    }
+
+    #[tokio::test]
+    async fn the_hubs_end_closes_a_connection_handed_to_mcp() {
+        use tokio::io::AsyncReadExt;
+        let dir = tempfile::tempdir().unwrap();
+        let f = Arc::new(front(dir.path()));
+        // a connection `mcp/attach` handed on: no longer in the front's registry, served as MCP
+        let (hub_side, mut bridge) = tokio::net::UnixStream::pair().unwrap();
+        let (r, w) = hub_side.into_split();
+        let who = norn::tools::Identity::outside("claude", std::process::id(), None, None).unwrap();
+        let served = {
+            let f = f.clone();
+            tokio::spawn(async move { f.mcp.serve_outside(who, r, w).await })
+        };
+        f.end_connections().await;
+        // the bridge reads its end of file at the hub's end, not at the process's exit (the bound is only the failure)
+        let mut buf = [0u8; 64];
+        let n = tokio::time::timeout(Duration::from_secs(10), bridge.read(&mut buf))
+            .await
+            .expect("the hub's end closes the bridge's connection")
+            .unwrap();
+        assert_eq!(n, 0, "{:?}", &buf[..n]);
+        served.await.unwrap();
+        assert_eq!(f.mcp.status().outside, 0);
+    }
+
+    /// The `Params` variants `Front::line` (in FRONT, its source) hands to the handler it calls as CALL: the
+    /// `p @ (Params::A(_) | …)` group whose arm calls it.
+    fn routed<'a>(front: &'a str, call: &str) -> Vec<&'a str> {
+        let at = front
+            .find(call)
+            .unwrap_or_else(|| panic!("front.rs calls no {call}"));
+        let group = front[..at]
+            .rfind("p @ (")
+            .unwrap_or_else(|| panic!("no group before {call}"));
+        variants(&front[group..at])
+    }
+
+    /// Each `Params::NAME` TEXT names, in order.
+    fn variants(text: &str) -> Vec<&str> {
+        text.match_indices("Params::")
+            .map(|(i, m)| {
+                let rest = &text[i + m.len()..];
+                let end = rest
+                    .find(|c: char| !c.is_ascii_alphanumeric())
+                    .unwrap_or(rest.len());
+                &rest[..end]
+            })
+            .collect()
+    }
+
+    /// The variants of ROUTED that the `serve` in HANDLER (a module's source) has no arm for: they would reach no
+    /// handler at run time.
+    fn unarmed<'a>(routed: &[&'a str], handler: &str) -> Vec<&'a str> {
+        let start = handler
+            .find("pub async fn serve(")
+            .expect("the module has its serve");
+        let body = &handler[start..];
+        let body = &body[..body.find("\n}\n").unwrap_or(body.len())];
+        routed
+            .iter()
+            .copied()
+            .filter(|v| !body.contains(&format!("Params::{v}(")))
+            .collect()
+    }
+
+    #[test]
+    fn every_method_the_front_hands_on_has_an_arm_where_it_goes() {
+        let front = include_str!("front.rs");
+        let (front, _) = front
+            .split_once("#[cfg(test)]\nmod tests")
+            .expect("front.rs has its tests");
+        let handlers = [
+            ("crate::agent_core::serve(", include_str!("agent_core.rs")),
+            ("crate::graph::serve(", include_str!("graph.rs")),
+            ("coord::serve(&self.writer", include_str!("coord.rs")),
+        ];
+        let mut all = Vec::new();
+        for (call, src) in handlers {
+            let routed = routed(front, call);
+            assert!(routed.len() > 10, "{call}: {routed:?}");
+            assert_eq!(unarmed(&routed, src), Vec::<&str>::new(), "{call}");
+            all.extend(routed);
+        }
+        // every method of the registry decodes to a variant `line` names (its match is exhaustive: the compiler
+        // checks the rest)
+        for v in Params::VARIANTS {
+            assert!(
+                all.contains(v) || front.contains(&format!("Params::{v}(")),
+                "{v}"
+            );
+        }
+        // the check bites: a variant routed to a handler with no arm for it
+        let doctored =
+            "pub async fn serve(\n    Ok(match p {\n        Params::A(p) => 1,\n    })\n}\n";
+        assert_eq!(unarmed(&["A", "B"], doctored), ["B"]);
     }
 }

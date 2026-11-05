@@ -287,6 +287,11 @@ impl Hub {
 
     /// The last lines of the hub's own log (`<state>/hub/log/hub-*.jsonl`), for a failure message.
     pub fn jsonl_tail(&self) -> String {
+        self.jsonl_tail_n(12)
+    }
+
+    /// The last N lines of the hub's own log.
+    pub fn jsonl_tail_n(&self, n: usize) -> String {
         let dir = self.state_dir().join("hub").join("log");
         let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
             .into_iter()
@@ -300,13 +305,18 @@ impl Hub {
             .and_then(|f| std::fs::read_to_string(f).ok())
             .unwrap_or_default();
         let lines: Vec<&str> = text.lines().collect();
-        lines[lines.len().saturating_sub(12)..].join("\n")
+        lines[lines.len().saturating_sub(n)..].join("\n")
     }
 
     pub fn log_tail(&self) -> String {
+        self.log_tail_n(15)
+    }
+
+    /// The last N lines of what the hub wrote to its stderr and stdout.
+    pub fn log_tail_n(&self, n: usize) -> String {
         let text = std::fs::read_to_string(&self.log).unwrap_or_default();
         let lines: Vec<&str> = text.lines().collect();
-        let from = lines.len().saturating_sub(15);
+        let from = lines.len().saturating_sub(n);
         lines[from..].join("\n")
     }
 

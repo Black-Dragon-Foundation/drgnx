@@ -6,7 +6,10 @@
 //!
 //! The edges the shell keeps: a turn's `PromptDone` or `PromptFailed` comes after its `StartTurn`, and after every
 //! update the agent sent in that turn (the reader drains them first); a `PermissionAsked` names the turn that was
-//! running when the reader received the request; a `Kill` for a stop's deadline names the turn that Stop stopped.
+//! running when the reader received the request; a `Kill` for a stop's deadline names the turn that Stop stopped; a
+//! turn's prompt goes to the agent only when its `Sending` step answers `Prompt` (the hub's end, or the user's kill,
+//! may come between the turn's start and its send: the hub's end then puts the prompt back at the front of the queue,
+//! the user's kill names it with what it discards).
 
 use super::super::queue::{Origin, Queue, Queued};
 use runstav::methods::agents::SessionStatus;
@@ -45,6 +48,8 @@ pub(crate) enum TurnEvent {
     Changed,
     /// The agent's process exited.
     Exited,
+    /// The shell is about to hand turn TURN's prompt to the agent (`Session::turn`).
+    Sending { turn: u64 },
 }
 
 /// Why the agent's process ends.
@@ -85,8 +90,16 @@ pub(crate) enum TurnEffect {
     NoSuchItem,
     /// Refused: no such permission request waits (answered or cancelled already).
     NoSuchRequest,
-    /// Turn TURN starts with ITEM: its prompt goes to the agent.
+    /// Turn TURN starts with ITEM: its prompt is to go to the agent ([`TurnEvent::Sending`] says whether it still
+    /// does).
     StartTurn { turn: u64, item: Queued },
+    /// Turn TURN's prompt goes to the agent now.
+    Prompt { turn: u64 },
+    /// Turn TURN's prompt never reached the agent and is back at the front of the queue (the hub's end): what the
+    /// turn began (its entry, its step) is undone.
+    PutBack { turn: u64 },
+    /// The user's kill drops these prompts, which never reached the agent (the queue, and a turn not yet sent).
+    Discard(Vec<Queued>),
     /// Turn TURN ended.  WAITING: on a job (no model request until the wake); PAUSED: the queue is held.
     EndTurn {
         turn: u64,
@@ -128,6 +141,8 @@ pub(crate) struct TurnCore {
     hold: bool,
     /// The turn running, counting from 1.
     turn: u64,
+    /// The prompt of the turn running while the shell has not handed it to the agent.
+    unsent: Option<Queued>,
     /// The agent was told to cancel this turn.
     cancelling: bool,
     /// A Stop armed its deadline for this turn.
@@ -151,6 +166,7 @@ impl Default for TurnCore {
             paused: false,
             hold: false,
             turn: 0,
+            unsent: None,
             cancelling: false,
             stopped: false,
             killed: false,
@@ -239,10 +255,34 @@ impl TurnCore {
             }
             TurnEvent::Kill { why } => {
                 self.killed = true;
+                let mut fx = self.cancel_held();
+                let unsent = self.unsent.take();
                 if why == KillWhy::HubEnding {
                     self.ending = true;
+                    // a turn whose prompt has not reached the agent never ran: the prompt waits on disk for the next
+                    // start, at the front of the queue, where it was
+                    if let Some(item) = unsent {
+                        self.queue.push_front(item);
+                        self.status = SessionStatus::Idle;
+                        fx.extend([E::PutBack { turn: self.turn }, E::Persist]);
+                    }
+                } else {
+                    // the session ends for good: what never reached the agent goes with it
+                    let mut dropped: Vec<Queued> = unsent.into_iter().collect();
+                    dropped.extend(self.queue.items().cloned());
+                    if !dropped.is_empty() {
+                        fx.push(E::Discard(dropped));
+                    }
                 }
-                self.cancel_held()
+                fx
+            }
+            TurnEvent::Sending { turn } => {
+                // the turn is still to send: not put back by the hub's end, not on a process being ended
+                if turn == self.turn && !self.killed && self.unsent.take().is_some() {
+                    vec![E::Prompt { turn }]
+                } else {
+                    Vec::new()
+                }
             }
             TurnEvent::PermissionAsked { request, turn } => {
                 let asked = self.status == SessionStatus::Busy
@@ -316,6 +356,7 @@ impl TurnCore {
             }
             TurnEvent::Exited => {
                 self.status = SessionStatus::Exited;
+                self.unsent = None;
                 self.cancel_held()
             }
         }
@@ -353,6 +394,7 @@ impl TurnCore {
         self.turn += 1;
         self.cancelling = false;
         self.stopped = false;
+        self.unsent = Some(item.clone());
         vec![TurnEffect::StartTurn {
             turn: self.turn,
             item,

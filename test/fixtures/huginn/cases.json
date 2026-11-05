@@ -32,6 +32,8 @@
   {"id": "floats-infinity-and-nan", "text": "1.0e+INF -1.0e+INF 1e+INF 0.0e+NaN -0.0e+NaN 1.5e+NaN", "expect": "accept",
    "dump": [["float", "1.0e+INF"], ["float", "-1.0e+INF"], ["float", "1.0e+INF"], ["float", "0.0e+NaN"],
             ["float", "-0.0e+NaN"], ["float", "1.0e+NaN"]]},
+  {"id": "floats-nan-payload-wraps", "text": "18446744073709551621.0e+NaN 340282366920938463463374607431768211461.0e+NaN -7e+NaN", "expect": "accept",
+   "dump": [["float", "5.0e+NaN"], ["float", "5.0e+NaN"], ["float", "-7.0e+NaN"]]},
   {"id": "floats-large-and-small", "text": "1e100 1e-5 123456789012345678901234567890.0 1e400", "expect": "accept",
    "dump": [["float", "1e+100"], ["float", "1e-05"], ["float", "1.2345678901234568e+29"], ["float", "1.0e+INF"]]},
   {"id": "string-escapes", "text": "\"\\a\\b\\f\\n\\r\\t\\v\\e\\d\\z\\(\\\"\\\\\"", "expect": "accept",

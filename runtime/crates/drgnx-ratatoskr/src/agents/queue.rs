@@ -95,6 +95,16 @@ impl Queue {
         self.items.pop_front()
     }
 
+    /// ITEM back at the front, where [`Queue::pop`] took it from (a turn that never reached the agent).
+    pub fn push_front(&mut self, item: Queued) {
+        self.items.push_front(item);
+    }
+
+    /// The waiting prompts, front first.
+    pub fn items(&self) -> impl Iterator<Item = &Queued> {
+        self.items.iter()
+    }
+
     /// Remove the Nth waiting prompt (counting from 0).
     pub fn remove(&mut self, n: usize) -> Option<Queued> {
         self.items.remove(n)
