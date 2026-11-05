@@ -461,6 +461,10 @@ project).
 and says OK while all of the guards above are on, or WARN naming the ones that are off. If it warns, restart drgnx:
 its startup turns the guards on.
 
+On Nidhogg the list is shorter: Nidhogg 31.1-nidhogg.4 and later carry the fixes for the TRAMP user-name issue
+(CVE-2026-108976) and the Flymake issue (CVE-2026-96442), so the doctor no longer names them. The shorthands issue
+(CVE-2026-96269) stays listed as partly fixed: its full fix is only in Emacs 32.
+
 ## What each provider obeys
 
 drgnx starts every agent's CLI with a lock: options that make it ask drgnx for each permission instead of deciding

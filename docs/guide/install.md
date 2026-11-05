@@ -244,7 +244,7 @@ records whatever Emacs you point it at). On a system with a Nidhogg recipe the i
 - Emacs 31.1 has known issues that are fixed in 31.2 (not yet released): command injection through crafted TRAMP
   user names (CVE-2026-108976), Flymake running code from files being edited (CVE-2026-96442) and code execution
   through `read-symbol-shorthands` when opening a file (CVE-2026-96269; only partly fixed in 31.1). `drgnx doctor`'s `security` line names
-  the ones that apply to your Emacs. It says OK while drgnx's own guards for them are on (see
+  the ones that apply to your Emacs (Nidhogg 31.1-nidhogg.4 and later already carry the fixes for the first two). It says OK while drgnx's own guards for them are on (see
   [Trusted folders](security.md)) and WARN when one is off, so a warning that stays means a guard is missing, not
   that you must upgrade. Until you run 31.2, avoid opening files you do not trust.
 - The installer checks that the Nidhogg tag is the exact commit it pins before building anything, prints every root

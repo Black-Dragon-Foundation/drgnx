@@ -40,12 +40,14 @@
   "How to get Nidhogg, drgnx's own Emacs build.")
 
 (defconst drgnx-doctor-security-issues
-  '(("CVE-2026-108976" "TRAMP: the first fix left user names with ! # & , and control characters" "31.2")
-    ("CVE-2026-96442" "Flymake backends run code from the file being edited" "31.2")
+  '(("CVE-2026-108976" "TRAMP: the first fix left user names with ! # & , and control characters" "31.2" nil "31.1-nidhogg.4")
+    ("CVE-2026-96442" "Flymake backends run code from the file being edited" "31.2" nil "31.1-nidhogg.4")
     ("CVE-2026-96269" "read-symbol-shorthands in a file's local variables redirect symbol lookup" "31.2" "31.1"))
-  "The Emacs issues the `security' check names: (ID WHAT FIXED-IN [PARTLY-FROM]).
-An issue applies below FIXED-IN; from PARTLY-FROM on, only some of its ways in are closed.  The elisp Flymake
-backend (CVE-2024-53920) is not here: every supported Emacs (31.1 and later) closes it with `trusted-content'.")
+  "The Emacs issues the `security' check names: (ID WHAT FIXED-IN [PARTLY-FROM [NIDHOGG-FIXED]]).
+An issue applies below FIXED-IN; from PARTLY-FROM on, only some of its ways in are closed.
+NIDHOGG-FIXED is the first Nidhogg release (\"31.1-nidhogg.4\") that backports the fix:
+from it on, Nidhogg is free of the issue.  The elisp Flymake backend (CVE-2024-53920) is not here: every supported
+Emacs (31.1 and later) closes it with `trusted-content'.")
 
 (defvar drgnx-doctor--checks nil "Alist NAME → plist (:group :doc :check :dev :platform), in definition order.")
 
@@ -679,10 +681,13 @@ severity, the fix the first `:fix'."
                               (if-let* ((g (plist-get f :gui))) (list 'ok (format "graphical build (%s)" g) nil)
                                 (list 'ok "terminal-only Emacs: drgnx runs in terminals (no images, one font size)" nil))))
 
-(defun drgnx-doctor--security-issues (version)
-  "The `drgnx-doctor-security-issues' that apply to Emacs VERSION, as \"ID\" or \"ID (partly fixed here)\" strings."
-  (cl-loop for (id _what fixed partly) in drgnx-doctor-security-issues
-           when (drgnx-doctor--version< version fixed)
+(defun drgnx-doctor--security-issues (version &optional nidhogg)
+  "The `drgnx-doctor-security-issues' that apply to Emacs VERSION, as \"ID\" or \"ID (partly fixed here)\" strings.
+NIDHOGG is the Nidhogg version (\"31.1-nidhogg.4\") when this Emacs is one:
+the issues it backports a fix for are left out."
+  (cl-loop for (id _what fixed partly backport) in drgnx-doctor-security-issues
+           when (and (drgnx-doctor--version< version fixed)
+                     (not (and nidhogg backport (not (drgnx-doctor--nidhogg< nidhogg backport)))))
            collect (if (and partly (not (drgnx-doctor--version< version partly))) (format "%s (partly fixed here)" id) id)))
 
 (defun drgnx-doctor--guards-off (g)
@@ -702,7 +707,7 @@ severity, the fix the first `:fix'."
 (drgnx-doctor-define 'security :group "Emacs" :doc "Known security issues of this Emacs version, and whether drgnx's guards are on"
                      :check (lambda (f)
                               (let* ((v (plist-get f :version))
-                                     (issues (drgnx-doctor--security-issues v))
+                                     (issues (drgnx-doctor--security-issues v (plist-get f :nidhogg)))
                                      (known (if issues (format "Emacs %s has %d known issue%s, fixed in 31.2: %s (docs/guide/security.md)"
                                                                v (length issues) (if (cdr issues) "s" "") (string-join issues ", "))
                                               "no known issues for this version"))

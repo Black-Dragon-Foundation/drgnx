@@ -2335,7 +2335,8 @@ OK    git                  git found
 ```
 
 `security` lists the CVEs that apply to this Emacs version (`drgnx-doctor-security-issues`: below each issue's fixed-in
-version, with a "partly fixed" note from the version that closes some ways in) and reads the guards from the
+version, with a "partly fixed" note from the version that closes some ways in; an issue's optional last element is the
+first Nidhogg release that backports its fix, compared with the `:nidhogg` fact) and reads the guards from the
 `:trust-guards` fact, `drgnx-trust-guards-status`. In a batch doctor (a bare Emacs where drgnx's startup has not run)
 the fact gatherer switches `drgnx-trust-mode` on, reads the status and switches it off again, so the answer is about the
 guards drgnx's startup installs (Flymake's check, added when Flymake loads, is then marked "not verified in a batch
