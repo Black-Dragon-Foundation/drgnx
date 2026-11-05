@@ -1089,9 +1089,9 @@ mod tests {
         // (no address at all is unreachable, not private)
         // a socket bound but never listening: a connection to it is refused, and the port stays held for the test (a
         // dropped listener's port went back to the kernel, which could hand it to another test's listener: 200)
-        let closed = tokio::net::TcpSocket::new_v4().unwrap();
-        closed.bind(SocketAddr::new(IpAddr::V4(LOOP), 0)).unwrap();
-        let closed_port = closed.local_addr().unwrap();
+        let held = tokio::net::TcpSocket::new_v4().unwrap();
+        held.bind(SocketAddr::new(IpAddr::V4(LOOP), 0)).unwrap();
+        let closed_port = held.local_addr().unwrap();
         let cfg = ProxyConfig {
             allow: vec![
                 t("gone.test:443"),
