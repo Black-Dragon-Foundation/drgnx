@@ -120,7 +120,17 @@ mod tests {
     fn why(r: Result<TrustedProgram, FsError>) -> &'static str {
         match r {
             Err(FsError::Untrusted { why, .. }) => why,
-            other => panic!("expected Untrusted, got {other:?}"),
+            other => panic!("expected Untrusted, got {}", outcome(&other)),
+        }
+    }
+
+    /// What a result was, without its paths (a failing test names the case, never prints the value).
+    fn outcome(r: &Result<TrustedProgram, FsError>) -> &'static str {
+        match r {
+            Ok(_) => "a trusted program",
+            Err(FsError::Untrusted { .. }) => "Untrusted",
+            Err(FsError::Unsupported(_)) => "Unsupported",
+            Err(_) => "another error",
         }
     }
 
@@ -203,7 +213,7 @@ mod tests {
                         "{bad}"
                     );
                 }
-                other => panic!("{bad}: {other:?}"),
+                other => panic!("{bad}: {}", outcome(&other)),
             }
         }
     }
