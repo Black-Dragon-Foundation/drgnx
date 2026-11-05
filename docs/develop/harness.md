@@ -1288,7 +1288,10 @@ the client half of the `gated` pattern; the hub half is Ratatoskr's test clock a
 - **Gated connections are unframed.** The gate replaces the connection's filter (`set-process-filter`), which turns
   Nidhogg's framing off ([hub.md](hub.md#the-clients-core)): a gated test always runs the client's filter path, whatever
   `nidhogg-workers-framing` says. The framed path has its own rows (`hub-client-frame-test.el`, and the framed rows of
-  `hub-client-shell-test.el`, whose peers use `drgnx-test-peer-send`).
+  `hub-client-shell-test.el`, whose peers use `drgnx-test-peer-send`), and `hub-client-framed-test.el` runs the framed
+client against the real Ratatoskr (a subscription and a burst of calls; `handshake`, waiting on the hub's answers).
+`NIDHOGG_WORKERS` (for example `+nidhogg-workers-framing`) is passed into the test container, so a run can set the
+switches for the whole suite.
 - **The schedule** is given up front: `(CONN :answer METHOD)`, `(CONN :event NAME)`, `(CONN :line)`, `(CONN :eof)`
   and `(:pause LABEL)`. A step releases its connection's lines up to its own, in order: the gate reorders lines across
   connections, never within one. A connection's challenge and the answers to its first `ping` and its `hello` are
