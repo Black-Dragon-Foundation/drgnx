@@ -95,7 +95,8 @@ chrome takes no text."
 
 (ert-deftest drgnx-ui-card-panels/editor-card-keeps-corners-when-scrolled ()
   "An editor card has its corners cut at rest, and the four outermost corner pixels are the same after the
-text scrolls (a full-window scroll puts the window on its own layer; the card's corners go with it)."
+text scrolls one line at a time: a full-window scroll puts the window on its own layer, which the row asserts, and
+the card's corners go with it."
   (drgnx-card-panels-ui-test--with-explorer
     (let* ((editor (drgnx-card-panels-ui-test--editor)))
       (should (equal (window-parameter editor 'corner-radius) (alist-get 'corner-radius drgnx-look-card)))
@@ -112,9 +113,16 @@ text scrolls (a full-window scroll puts the window on its own layer; the card's 
              (inside (drgnx-uitest-pixel rest (+ (nth 0 r) 60) (+ (nth 1 r) 60))))
         (dolist (s spots)               ; cut away: not the window's own background
           (should-not (equal (drgnx-uitest-pixel rest (car s) (cdr s)) inside)))
-        (dotimes (_ 3)                  ; whole-window scrolls, then settle
-          (with-selected-window editor (scroll-up (- (window-body-height) 2)))
+        ;; one line at a time: a whole-window scroll run, which promotes the window to a layer of its own (a scroll
+        ;; of almost a screen is drawn again instead, in the frame); the snapshot is taken while it is promoted
+        (dotimes (_ 3)
+          (with-selected-window editor (scroll-up 1))
           (drgnx-test-wait-presented))
+        (when (fboundp 'nhwl--scroll-layers)
+          ;; `nhwl--scroll-layers' counts the frame's own outputs and its cards
+          (should (> (- (nhwl--scroll-layers)
+                        (seq-count (lambda (w) (window-parameter w 'glitnir--card)) (window-list nil t)))
+                     0)))
         (let ((after (drgnx-uitest-snapshot)))
           (dolist (s spots)
             (should (equal (drgnx-uitest-pixel rest (car s) (cdr s)) (drgnx-uitest-pixel after (car s) (cdr s))))))))))
