@@ -407,6 +407,9 @@ is virtual and not recorded; a process or a socket is real work under the fixtur
   (when (drgnx-run-ert--audit-wait-p prim args) (drgnx-run-ert--audit-record prim))
   (apply fn args))
 
+(defvar drgnx-run-ert--audit-child-env nil
+  "The audit switches of this run as \"K=V\" strings, for a child Emacs a test starts (the runner removes them from the
+environment): `drgnx-test-run-isolated' passes them on, so the audit reaches the files under test/unit/isolated/.")
 (defvar drgnx-run-ert--audit-all nil "Non-nil: audit every test, not only :det ones (DRGNX_TEST_AUDIT_ALL=1).")
 (defvar drgnx-run-ert--audit-fail nil "Non-nil: a :det test the audit saw use real time fails (DRGNX_TEST_AUDIT_FAIL=1).")
 
@@ -547,7 +550,10 @@ fixtures' own tests (`drgnx-run-ert--audit-skip-files') are not audited."
 from the environment, so a test about the environment (or a child it starts) never sees the runner's own switches."
   (setq drgnx-run-ert--audit-file file
         drgnx-run-ert--audit-all (equal (drgnx-run-ert--env "DRGNX_TEST_AUDIT_ALL") "1")
-        drgnx-run-ert--audit-fail (equal (drgnx-run-ert--env "DRGNX_TEST_AUDIT_FAIL") "1"))
+        drgnx-run-ert--audit-fail (equal (drgnx-run-ert--env "DRGNX_TEST_AUDIT_FAIL") "1")
+        drgnx-run-ert--audit-child-env (append (list "DRGNX_TEST_AUDIT=1")
+                                               (and drgnx-run-ert--audit-all (list "DRGNX_TEST_AUDIT_ALL=1"))
+                                               (and drgnx-run-ert--audit-fail (list "DRGNX_TEST_AUDIT_FAIL=1"))))
   (dolist (v '("DRGNX_TEST_AUDIT" "DRGNX_TEST_AUDIT_ALL" "DRGNX_TEST_AUDIT_FAIL")) (setenv v nil))
   (advice-add 'ert-run-test :around #'drgnx-run-ert--audit-test '((name . drgnx-run-ert-audit))))
 
@@ -1350,6 +1356,9 @@ passes after all the tests before it, 2 when it cannot run."
 
 (defvar project-list-file)
 
+(defconst drgnx-run-ert--one-process-tmp-max 40
+  "The longest run directory (bytes) a one-Emacs run uses as given: /tmp/drgnx-run.XXXXXX is 22.")
+
 (defun drgnx-run-ert--given-tmp ()
   "The directory bin/drgnx made for this run (DRGNX_RUN_TMP), or nil: it must be absolute, named
 drgnx-run.XXXXXX, a real directory (no symlink) of the user's."
@@ -1459,8 +1468,11 @@ exit 0 or 1."
          ;; directory), a symlink, a directory of another name or owner — is ignored.  A user-owned one of the right
          ;; name is used but, like the given one, never deleted.  Else the runner makes a directory and
          ;; deletes exactly that one.
-         (given (drgnx-run-ert--given-tmp))
-         (own (unless given (make-temp-file "drgnx-unit" t)))
+         ;; …one Emacs for every file has no short root of a file's own, so a long one (macOS's TMPDIR, any deep
+         ;; one) would leave no room for a socket path: such a run makes its directory in the short root instead
+         (given (let ((g (drgnx-run-ert--given-tmp)))
+                  (unless (and g one-process (> (length g) drgnx-run-ert--one-process-tmp-max)) g)))
+         (own (unless given (if one-process (drgnx-run-ert--short-root) (make-temp-file "drgnx-unit" t))))
          (tmp (or given own))
          ;; Everything a test makes with `make-temp-file' (and every child process) lands in TMP too, so
          ;; removing OWN below, or from `kill-emacs-hook' when the run dies, leaves nothing in /tmp.

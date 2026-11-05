@@ -2004,7 +2004,15 @@ a boolean flag (`drgnx-ui--boolean-flags') becomes :name t."
 (defun drgnx-ui--dispatch (cmd args)
   "Run CLI command CMD with ARGS; return a value to print as JSON, or an exit code."
   (pcase-let* ((`(,pos . ,opts) (drgnx-ui--parse-args args))
-               (name (car pos)))
+               (name (car pos))
+               ;; a test command runs in a directory of its own (bin/drgnx's DRGNX_RUN_TMP, removed when it ends): its
+               ;; sessions' run directories go there, never into the caller's state; a root the caller names stays theirs
+               (run-tmp (getenv "DRGNX_RUN_TMP"))
+               (process-environment
+                (if (and (string-prefix-p "test-" cmd) run-tmp (not (string-empty-p run-tmp))
+                         (member (getenv "DRGNX_UI_STATE") '(nil "")))
+                    (cons (concat "DRGNX_UI_STATE=" (expand-file-name "ui" run-tmp)) process-environment)
+                  process-environment)))
     (pcase cmd
       ("start" (drgnx-ui-start (plist-get opts :config) (plist-get opts :size) nil (plist-get opts :daemon)
                                (let ((m (plist-get opts :monitors)))

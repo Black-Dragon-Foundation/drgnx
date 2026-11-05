@@ -295,17 +295,39 @@
                                                     (symbol-function 'drgnx-modules-fingerprint--scan)))))))
     (should (string-search "bytecomp=t compiled=t" (buffer-string)))))
 
+(defun drgnx-fingerprint-test--child-alloc (form)
+  "What FORM allocates in a fresh Emacs that has loaded only the fingerprint library and the measure fixture.
+An absolute bound holds for one obarray, so it is measured in an Emacs of its own, whatever else this one loaded."
+  (with-temp-buffer
+    (call-process (expand-file-name invocation-name invocation-directory) nil t nil
+                  "--batch" "-Q" "-L" (expand-file-name "core" drgnx-dir)
+                  "--eval" (prin1-to-string
+                            `(progn (load ,(expand-file-name "test/fixtures/measure-fixture" drgnx-dir) nil t)
+                                    (load ,(expand-file-name "core/drgnx-modules-fingerprint.el" drgnx-dir) nil t t)
+                                    (drgnx-test-compile "drgnx-modules-fingerprint")
+                                    (princ (format "\nALLOC=%d" (drgnx-test-alloc ,form))))))
+    (if (string-match "ALLOC=\\([0-9]+\\)" (buffer-string))
+        (string-to-number (match-string 1 (buffer-string)))
+      (error "No measurement: %s" (buffer-string)))))
+
 (ert-deftest drgnx-fingerprint/the-full-scan-allocates-what-it-did ()
-  ;; 89245 measured (Emacs 31.1, this file's own Emacs); the wall-clock form, 50 ms, missed under load.  A scan that
-  ;; reads every hook twice, or builds a list per hook, passes 111557 only by shrinking the hooks.
-  (drgnx-test-compile "drgnx-modules-fingerprint")
-  (should (<= (drgnx-test-alloc (drgnx-modules-fingerprint t)) 111557)))
+  ;; A scan that reads every hook twice, or builds a list per hook, passes the bound only by shrinking the hooks.
+  (should (<= (drgnx-fingerprint-test--child-alloc '(drgnx-modules-fingerprint t)) 111557)))
 
 (ert-deftest drgnx-fingerprint/the-first-scan-of-drgnx-symbols-allocates-what-it-did ()
-  ;; One `apropos-internal' over the obarray: 180 measured (Emacs 31.1, this file's own Emacs); the wall-clock form,
-  ;; 20 ms, missed under load.
-  (drgnx-test-compile "drgnx-modules-fingerprint")
-  (should (<= (drgnx-test-alloc (let ((drgnx-modules-fingerprint--own nil)) (drgnx-modules-fingerprint--hook-names))) 225)))
+  ;; One `apropos-internal' over the obarray.
+  (should (<= (drgnx-fingerprint-test--child-alloc
+               '(let ((drgnx-modules-fingerprint--own nil)) (drgnx-modules-fingerprint--hook-names)))
+              225)))
+
+(ert-deftest drgnx-fingerprint/the-bounds-hold-in-an-emacs-that-loaded-more ()
+  ;; The measurement is of a fresh Emacs: symbols interned here (as a one-process run of many files does) change nothing.
+  (dotimes (i 3000) (set (intern (format "drgnx-fpbloat-%d-hook" i)) nil))
+  (unwind-protect
+      (should (<= (drgnx-fingerprint-test--child-alloc
+                   '(let ((drgnx-modules-fingerprint--own nil)) (drgnx-modules-fingerprint--hook-names)))
+                  225))
+    (dotimes (i 3000) (unintern (format "drgnx-fpbloat-%d-hook" i) obarray))))
 
 (provide 'modules-fingerprint-test)
 ;;; modules-fingerprint-test.el ends here
