@@ -1,0 +1,24 @@
+[package]
+name = "sleipnir"
+description = "the runner: inputs frozen at submit, git that never runs inside a job's tree, checkout slots"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# proto is pure; sync and linux are blocking (std, rustix, serde; never tokio); runner holds the binary's modes.
+[features]
+default = ["runner"]
+proto = []
+sync = ["dep:sha2", "dep:rustix"]
+linux = []
+runner = ["proto", "sync", "linux"]
+test-hooks = []
+
+[dependencies]
+sha2 = { workspace = true, optional = true }
+rustix = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true
