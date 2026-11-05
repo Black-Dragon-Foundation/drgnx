@@ -230,19 +230,19 @@ queues, and no virtual time passes meanwhile."
 ;;;; A hub task inside a real wait
 
 (defun drgnx-delivery-gate-test--start-held-job (go)
-  "Start a job that runs until a line is written to the named pipe GO (made here); its id once the hub answered (the
-schedule names `exec/start' and `exec/get')."
+  "Start a job that runs until the file GO exists; its id once the hub answered (the schedule names `exec/start' and
+`exec/get')."
   (let ((id nil))
-    (call-process "mkfifo" nil nil nil go)
-    (drgnx-exec-start "gate-held-job" (list "sh" "-c" (concat "read x < " (shell-quote-argument go)))
+    (drgnx-exec-start "gate-held-job"
+                      (list "sh" "-c" (concat "until [ -e " (shell-quote-argument go) " ]; do sleep 0.05; done"))
                       :cwd (file-name-directory go) :callback (lambda (i _why) (setq id i)))
     (drgnx-test-wait (lambda () id) :what "the job's start")
     id))
 
 (defun drgnx-delivery-gate-test--end-held-job (go)
-  "End the job of `drgnx-delivery-gate-test--start-held-job' (bounded: a job that is not reading lets it go)."
-  (when (file-exists-p go)
-    (call-process "timeout" nil nil nil "5" "sh" "-c" (concat "echo go > " (shell-quote-argument go)))))
+  "End the job of `drgnx-delivery-gate-test--start-held-job': make GO, which never blocks (a named pipe's writer waits
+for a reader, and macOS has no `timeout' to bound it)."
+  (write-region "go\n" nil go nil 'silent))
 
 (ert-deftest drgnx-delivery-gate/a-job-still-running-at-a-barrier-fails-naming-its-watcher ()
   "A job runs on through a barrier: its watcher waits on the child's end, a real wait, so what it writes later is not
@@ -344,6 +344,23 @@ lines: that order is real time's, not the schedule's, and the transcript says so
       (setq transcript (drgnx-test-gate-transcript))
       (drgnx-test-deliver-all))
     (should (equal (car said) "answered\n"))
+    (should (cl-find-if (lambda (e) (and (eq (car e) :child) (string-prefix-p "drgnx-gate-child" (cdr e)))) transcript))))
+
+(ert-deftest drgnx-delivery-gate/a-child-that-ended-before-its-output-was-read-is-still-waited-on ()
+  "A child that printed and exited before Emacs read its output: Emacs sees the exit first, the output only at its next
+read.  That read is still a real look, no virtual time moves, and the transcript names the child."
+  (let ((said (list nil)) child now transcript)
+    (drgnx-test-gated nil
+      (setq child (drgnx-delivery-gate-test--child "echo answered" said))
+      ;; the exit seen, the output not read: `call-process' reads no other process's output
+      (while (process-live-p child) (call-process "true"))
+      (should-not (car said))
+      (drgnx-onboard--wait (lambda () (car said)) 0.1)
+      (setq now (drgnx-test-clock-now)
+            transcript (drgnx-test-gate-transcript))
+      (drgnx-test-deliver-all))
+    (should (equal (car said) "answered\n"))
+    (should (= now 0))
     (should (cl-find-if (lambda (e) (and (eq (car e) :child) (string-prefix-p "drgnx-gate-child" (cdr e)))) transcript))))
 
 (ert-deftest drgnx-delivery-gate/a-wait-on-a-network-client-moves-no-virtual-time ()

@@ -436,12 +436,17 @@ handshake or `(:answers ...)' ones), on connections the client has not seen end:
   "The body's live children the code under test may wait on, started inside the body: real processes, and network
 clients (a connection to a peer server, as url.el's to the mock LLM; not a server, not the gate's own connections).
 Not peers (a hub, a mock server or a handshake child the test drives: `:drgnx-test-peer'; a server's accepted
-connections inherit its properties).  The hub's jobs are its children, not these."
+connections inherit its properties).  The hub's jobs are its children, not these.
+A child that ended is one until Emacs has read the rest of its output: the end is seen at once, the output at the
+next read, which also takes the process out of `process-list' (`delete-exited-processes').  A child that prints and
+exits at once is still waited on for real, so its output never comes through a look that moves virtual time."
   (cl-remove-if-not (lambda (p) (and (pcase (process-type p)
                                        ('real t)
                                        ('network (not (or (process-contact p :server) (drgnx-test-gate--of p)
                                                           (eq p drgnx-test-gate--control)))))
-                                     (process-live-p p)
+                                     (or (process-live-p p)
+                                         (and delete-exited-processes
+                                              (memq (process-status p) '(exit signal closed))))
                                      (not (memq p drgnx-test-gate--before))
                                      (not (process-get p :drgnx-test-peer))))
                     (process-list)))

@@ -72,7 +72,8 @@ budget allows.
 leak from one file into another (run the files in question this way; a test that fails only here depends on what an
 earlier file left). The GUI tiers' sessions, `--find-polluter` and the runner's own file children use the same mode.
 A one-Emacs run makes its temp directory in the short root (`/tmp/drgnx-t-XXXXXX`), as a file's Emacs does, when the
-caller's run directory is longer than 40 bytes (macOS's `$TMPDIR`): the hub's socket paths then fit. `bin/drgnx check`'s `unit-timing` job does not: it runs a file per Emacs, as CI does, and the
+caller's run directory is longer than 45 bytes (macOS's `$TMPDIR`): the hub's socket paths then fit. A file's own
+directory in the short root (`/private/tmp/drgnx-t-XXXXXX/drgnx-run.XXXXXX/` on macOS, 45 bytes) is used as given. `bin/drgnx check`'s `unit-timing` job does not: it runs a file per Emacs, as CI does, and the
 tag prefilter starts one only for the files that hold a `:timing` test (a test that scans what is loaded, as the
 fingerprint's does, measures its own file's load, not every test file's). The runner unsets
 the variable for the tests themselves, so a test that runs the runner gets one Emacs per file unless it sets it. The
@@ -1331,7 +1332,10 @@ the client half of the `gated` pattern; the hub half is Ratatoskr's test clock a
     A timed wait in the code under test, with nothing to release, while such a child of the body is alive, moves no
     virtual time. It is a real look of up to 50 ms instead, so the loop asks its condition again once output came or
     a child ended. The loop's deadline is reached only when no such child is alive, so the answer counts however slow
-    the machine is. No output and no end for `drgnx-test-gate-block-secs` (30 s) of real time fails the test, naming
+    the machine is. A child that has ended counts as alive until Emacs has read the rest of its output: Emacs sees the
+    exit at once but reads the output later, and that read takes the process out of `process-list`
+    (`delete-exited-processes`). So a child that prints and exits at once is still waited on for real, and its output
+    never arrives through a look that moves virtual time. No output and no end for `drgnx-test-gate-block-secs` (30 s) of real time fails the test, naming
     the children and the waiting function. A deadline never passes silently. Processes there before the body began,
     and peers the test drives (`(process-put PROC :drgnx-test-peer t)`: a hub the test starts, the mock LLM
     (`drgnx-ai-test-mock-llm`), a handshake child; a server's accepted connections inherit its mark), are never waited

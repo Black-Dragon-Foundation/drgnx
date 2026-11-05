@@ -1362,8 +1362,11 @@ passes after all the tests before it, 2 when it cannot run."
 
 (defvar project-list-file)
 
-(defconst drgnx-run-ert--one-process-tmp-max 40
-  "The longest run directory (bytes) a one-Emacs run uses as given: /tmp/drgnx-run.XXXXXX is 22.")
+(defconst drgnx-run-ert--one-process-tmp-max 45
+  "The longest run directory (bytes) a one-Emacs run uses as given: the directory a file's Emacs gets in the short
+root, /private/tmp/drgnx-t-XXXXXX/drgnx-run.XXXXXX/ on macOS (45; 37 under Linux's /tmp), leaves room for the hub's
+socket (`drgnx-run-ert--short-root'), and /tmp/drgnx-run.XXXXXX is 22.  A file's Emacs that refused its directory
+would make a root of its own, which the run neither sees nor removes.")
 
 (defun drgnx-run-ert--given-tmp ()
   "The directory bin/drgnx made for this run (DRGNX_RUN_TMP), or nil: it must be absolute, named
