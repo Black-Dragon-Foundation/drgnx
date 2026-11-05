@@ -275,10 +275,13 @@ no `forward-sexp' of the font-lock goes past the form that holds it."
 
 ;;; perf-run-test.el ends here
 
-(ert-deftest drgnx-perf-run/the-typing-workloads-gate-a-normal-keys-cpu-too ()
-  "p90 sits on the 1-in-10 key spike (PERF-KEYSPIKE-1); the p50 row gates the keys that are not spikes."
+(ert-deftest drgnx-perf-run/the-typing-workloads-cpu-rows-catch-a-key-spike ()
+  "Pattern D.  The typing workloads' CPU rows were 350-420 ms at p90 while one key in ten cost 100-200 ms; with that
+gone (seeded 2026-11-05: p90 5-8.5 ms in the GUI container) a key that costs 20 ms at p90, or 15 at p50, fails the
+run, also before `DRGNX_PERF_CPU_FACTOR'."
   (let ((budgets (drgnx-perf-run--budgets)))
     (dolist (w '(typing typing-with-ghost remote-typing))
-      (let ((b (seq-find (lambda (b) (and (eq (car b) w) (equal (cadr b) '(:cpu_ms :p50)))) budgets)))
-        (should b)
-        (should (<= (nth 2 b) 30))))))
+      (dolist (row '(((:cpu_ms :p50) . 15) ((:cpu_ms :p90) . 20)))
+        (let ((b (seq-find (lambda (b) (and (eq (car b) w) (equal (cadr b) (car row)))) budgets)))
+          (should b)
+          (should (<= (nth 2 b) (cdr row))))))))

@@ -81,25 +81,28 @@
 ;; Gated budgets (Task 16 of the determinism plan), seeded 2026-10-20 from two runs of the perf tier in the Emacs 31.1 GUI
 ;; container (source, not built: compiled code allocates less): :alloc :p50 = the larger of the runs x 1.25, rounded up;
 ;; :rows = exact (equal in both runs); :cpu_ms :p90 = the larger of the runs' p90 x 2 (scaled by DRGNX_PERF_CPU_FACTOR; 2
-;; on hosted runners).  The CPU rows of the typing workloads are large because about one key in ten spends 100-200 ms of
-;; CPU in these runs (DEFERRED PERF-KEYSPIKE-1); they tighten when that is fixed.  Workloads that could not run in the
-;; container are in `drgnx-perf-run-unseeded'.  Raise a row only in the commit that needs it, with the reason.
+;; on hosted runners).  Workloads that could not run in the container are in `drgnx-perf-run-unseeded'.  Raise a row only
+;; in the commit that needs it, with the reason.
 ;; replace-typing :alloc :p50 41340 = 33072 x 1.25 (CI's GUI-container run of 83e460be; the seed run was 25252): the number is
 ;; timing-coupled, not a code cost (docs/develop/perf.md, "Allocation that follows the wall clock").
-;; :cpu_ms :p50 (typing, typing-with-ghost, remote-typing) ~30 ms: a normal key, which the p90 (the 1-in-10 spike, PERF-KEYSPIKE-1) does not gate.
- (typing (:alloc :p50) 13757) (typing (:cpu_ms :p50) 30) (typing (:cpu_ms :p90) 420.1) (typing (:rows) 1)
+;; The typing workloads' CPU rows (typing, typing-with-ghost, remote-typing) were 350-420 ms at p90 while one key in ten
+;; spent 100-200 ms (the typing fixture's open list scanned to the end of the file, and Nidhogg's full redisplay after an
+;; insertion, both fixed).  Seeded again 2026-11-05 from two source runs in the GUI container on the desktop island
+;; (4 CPUs, Nidhogg 31.1-nidhogg.5): cpu p50 3.9 / 5.9, 4.0 / 6.0, 3.9 / 4.0 ms and p90 5.1 / 7.8, 5.2 / 8.4, 5.2 / 5.3
+;; ms; the rows are the larger run x 2, rounded up, so a key spike fails the run again.
+ (typing (:alloc :p50) 13757) (typing (:cpu_ms :p50) 12) (typing (:cpu_ms :p90) 16) (typing (:rows) 1)
  (scrolling (:alloc :p50) 14840) (scrolling (:cpu_ms :p90) 28.4) (scrolling (:rows) 0)
  (tabs (:alloc :p50) 6234) (tabs (:cpu_ms :p90) 11.2) (tabs (:rows) 0)
  (explorer (:alloc :p50) 5115) (explorer (:cpu_ms :p90) 6.0) (explorer (:rows) 0)
  (agent-typing (:alloc :p50) 15008) (agent-typing (:cpu_ms :p90) 23.1) (agent-typing (:rows) 1)
  (code-scrolling (:alloc :p50) 15439) (code-scrolling (:cpu_ms :p90) 26.9) (code-scrolling (:rows) 0)
  (diff-scrolling (:alloc :p50) 6027) (diff-scrolling (:cpu_ms :p90) 26.7) (diff-scrolling (:rows) 0)
- (typing-with-ghost (:alloc :p50) 18385) (typing-with-ghost (:cpu_ms :p50) 30) (typing-with-ghost (:cpu_ms :p90) 402.9) (typing-with-ghost (:rows) 1)
+ (typing-with-ghost (:alloc :p50) 18385) (typing-with-ghost (:cpu_ms :p50) 12) (typing-with-ghost (:cpu_ms :p90) 17) (typing-with-ghost (:rows) 1)
  (replace-typing (:alloc :p50) 41340) (replace-typing (:cpu_ms :p90) 183.7) (replace-typing (:rows) 1)
  ;; replace-retype seeded 2026-10-20 from two GUI-container runs at --cpus 2 (alloc 4097 / 4097, cpu p90 4.97 / 5.93,
  ;; rows 0 / 0; a third at --cpus 1 gave 4097, 6.22, 0): the keys only edit the field, the rows are patched by timers
  (replace-retype (:alloc :p50) 5122) (replace-retype (:cpu_ms :p90) 11.9) (replace-retype (:rows) 0)
- (remote-typing (:alloc :p50) 17300) (remote-typing (:cpu_ms :p50) 30) (remote-typing (:cpu_ms :p90) 349.0) (remote-typing (:rows) 1)
+ (remote-typing (:alloc :p50) 17300) (remote-typing (:cpu_ms :p50) 8) (remote-typing (:cpu_ms :p90) 11) (remote-typing (:rows) 1)
  (window-switch (:alloc :p50) 29638) (window-switch (:cpu_ms :p90) 43.6) (window-switch (:rows) 0)
  ;; Watchdog rows, REPORTED until seeded (`drgnx-perf-watchdog-gated'): no stall in any input
  ;; workload; a collection at most 250 ms; the GC p95 at most 50 ms, judged only over >= 20 collections.

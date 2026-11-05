@@ -137,7 +137,7 @@ not move. A broken one fails the run (`drgnx-perf-verdict`; `--perf` exits 1):
 | Path | Limit | Seeded as |
 |---|---|---|
 | `(:alloc :p50)` | objects allocated per command | measured x 1.25, rounded up |
-| `(:cpu_ms :p50)` (typing, typing-with-ghost, remote-typing) | a normal key: about 30 ms (the p90 sits on the 1-in-10 spike, PERF-KEYSPIKE-1) | the measured p50 with the same headroom |
+| `(:cpu_ms :p50)` (typing, typing-with-ghost, remote-typing) | a normal key: 8-12 ms. These rows and the p90 ones were 30 and 350-420 ms while one key in ten cost 100-200 ms (the fixture's open list and a Nidhogg redisplay, both fixed); seeded again 2026-11-05, so a key spike fails the run | the measured p50 with the same headroom |
 | `(:cpu_ms :p90)` | CPU ms per command, times `DRGNX_PERF_CPU_FACTOR` (default 1; 2 on hosted runners) | the container's p90 x 2 |
 | `(:rows)` | rows drawn during the run, exact | measured |
 | `(:processes)`, `(:rss_kb)` | as before | the design |
