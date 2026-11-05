@@ -549,6 +549,7 @@ dependencies = [
  "libc",
  "mimir",
  "norn",
+ "proptest",
  "runstav",
  "rustix",
  "saga",

@@ -65,6 +65,7 @@ How drgnx is built, tested and measured.
 - [Records (saga)](develop/records.md): reading and writing a project's plan, ledger, deferred-list and board files without changing a byte.
 - [Agent coordination](develop/coordination.md): jobs, tasks and leases, the decision log, messages, the MCP tools (and the identity and limits of agents outside drgnx), delivery.
 - [The Work cockpit's model](develop/cockpit.md): one model of specs, plans, tasks, agents, jobs and reviews from the live store; what happened, the timeline; each agent's edits (async git, regular files only); the Work graph's redraws, cost and tests; an agent's edits pane: live patches, accept, revert, comment; what happened, the timeline and answers: appends, routes, cost and tests; what needs you and the decisions: the job window's parts, the job filter, its saved state.
+- [The Work space: the hub's side](develop/work-space.md): shell reads (the files a command names), more per task.
 - [The job sandbox](develop/sandbox.md): where the job sandbox's documentation is, and the VC guard (no git of yours runs in a task's folder).
 - [Gleipnir](develop/gleipnir.md): the Rust sandbox in `runtime/` that every agent session runs in — its spec and what it refuses, bwrap, the inner helper, Landlock, seccomp, Seatbelt, the relay and the proxy, the check, and the escape rows that prove it.
 

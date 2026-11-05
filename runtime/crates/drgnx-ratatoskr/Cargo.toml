@@ -55,3 +55,4 @@ zeroize.workspace = true  # the line that carries provider keys to the backend i
 urdr = { path = "../urdr", version = "0.1.0", features = ["test-hooks"] }
 skuld = { path = "../skuld", version = "0.1.0" }  # waits in tests; every order of a pure core (the connection's, a session's turn)
 tempfile.workspace = true
+proptest.workspace = true  # the shell-command parser never panics and is deterministic (work::shell_read)
