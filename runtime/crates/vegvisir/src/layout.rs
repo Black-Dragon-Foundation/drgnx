@@ -125,7 +125,7 @@ pub struct Layout {
     pub crossings: u32,
     pub width_units: u32,
     pub height_units: u32,
-    /// Each placed item's target x, the next layout's hysteresis.
+    /// Each placed item's target x, before it is pulled inside the width: the next layout's hysteresis.
     #[serde(skip)]
     want: BTreeMap<ItemId, u32>,
 }
@@ -814,6 +814,11 @@ fn place_chips(
                 (Some(t), Some(&p)) if t.abs_diff(p) <= HYSTERESIS => Some(p),
                 (t, _) => t,
             };
+            // kept before it is pulled inside the width: a target held against the edge would otherwise come back
+            // nearer to its old place than it went, and stay
+            if let Some(t) = t {
+                want_out.insert(y, t);
+            }
             (
                 y,
                 t.map(|t| t.min(width.saturating_sub(w))),
@@ -822,11 +827,6 @@ fn place_chips(
             )
         })
         .collect();
-    for &(y, t, _, _) in &items {
-        if let Some(t) = t {
-            want_out.insert(y, t);
-        }
-    }
     if sweep {
         // targetless items go last, by id
         items.sort_by(|a, b| (a.1.is_none(), a.1, &a.3).cmp(&(b.1.is_none(), b.1, &b.3)));
@@ -1104,7 +1104,7 @@ fn finish(
             (k, first, anchor(k)(first))
         })
         .collect();
-    order.sort_by(|a, b| (a.1, a.2, a.0).cmp(&(b.1, b.2, b.0)));
+    order.sort_by_key(|a| (a.1, a.2, a.0));
     let mut slot: BTreeMap<(Key, usize), Option<u32>> = BTreeMap::new();
     for (k, _, _) in order {
         let rs = &bundles[&k];

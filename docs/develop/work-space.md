@@ -124,8 +124,9 @@ The look's 19 px card lines round to 20 px on the grid. Compact and roomy densit
    that cut crossings by more than the stability penalty (1).
 4. **x.** A plan's target is its block's centre; a spec's, an ask's, a file's or a machine's is the mean centre of
    what it links to. An item keeps its previous target while the new one stays within 32 units of it (hysteresis),
-   so a new card does not shift the others. Overlaps resolve left to right with the gaps, then back from the right
-   edge.
+   so a new card does not shift the others. The target kept is the one before it is pulled inside the width, so a
+   card held against the right edge returns to its old place when what moved it goes. Overlaps resolve left to right
+   with the gaps, then back from the right edge.
 5. **Lanes.** An edge longer than one row takes a lane in each row it crosses, a 2 px segment at a free slot of the
    nearest gap. A gap of `g` units holds `g − 1` lanes (`floor((gap − 4 px) / 4 px)`: 2 in a 12 px gap). Edges from
    one source (a plan to its agents, an ask to what it led to) or to one target (agents to a machine, branches to a
@@ -316,12 +317,14 @@ it was recorded in, and computes the steps it rests on. `work/conclusions {sessi
   busy ones held by `job` (the pool does not say which job). The hub refreshes it, and drops expired reports, on every
   `machines/report` and `machines/list`, and every 2 s (`work::machines::run`, which waits on the clock only, a task named
   `machines:run` on the hub's clock, so `__test_advance` moves it). `machines-changed` carries the whole list, and only
-  when it changed.
+  when it changed. The start seeds the local slots (`work::machines::seed`, once the job runner is open and before
+  anything is served), so the slots a hub starts with are its first list, not a change: a quiet hub sends none.
 - The CLI is `ratatoskr machines report --machine M --ttl S [--json FILE|-]` (`machines_cli`): exit 0, 1 on a hub
   error, 2 on bad arguments. jobq calls it; its side is jobq's plan.
 - Tests: `registry::*` (pattern D), `machines_cli::parses_and_reports` (D), conformance
   `work/machines-report-from-a-user`, `work/machines-report-from-an-agent-is-refused`,
-  `work/machines-expire-after-ttl` (virtual clock) and `cli/machines-report` (the CLI as a child, exit read).
+  `work/machines-expire-after-ttl` and `work/machines-changed-only-on-a-change` (virtual clock) and
+  `cli/machines-report` (the CLI as a child, exit read).
 
 ### Shell reads
 

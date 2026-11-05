@@ -249,6 +249,7 @@ pub async fn run(args: ServeArgs) -> Exit {
     // The jobs a hub before this one left running are watched again first (a session resumed then knows it waits),
     // and a job end that reached no session is delivered once they are back.
     crate::exec::ensure_open(&front);
+    crate::work::machines::seed(&front);
     front.core.runs.set_recovering(true);
     {
         let f = front.clone();

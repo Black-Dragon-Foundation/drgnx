@@ -1,0 +1,8 @@
+{"scenario": "work/machines-changed-only-on-a-change", "requires": ["v1", "test-hooks"], "doc": "Pattern B, on the hub's virtual clock. A hub that nobody reports to and that runs no job sends no machines-changed: past a sweep of the machines (2 s) a subscriber hears none. The local slots the hub starts with are no change."}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "__test_advance", "params": {"ms": 2500}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "count_events", "conn": "c", "for_ms": 300, "none": ["machines-changed"]}
