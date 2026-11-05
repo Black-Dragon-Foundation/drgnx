@@ -34,3 +34,20 @@ terminal". That covers:
 
 **A changed host key is never accepted.** The runner stops until you have found out why the key changed and fixed your
 `known_hosts` yourself.
+
+## Which jobs go where
+
+All jobs wait in one queue, this machine's and your runners' alike, and each goes to the allowed machine that finishes
+it first (ties stay here). A job you start has priority 1; an agent's has 3, or 5 when it marks it `background`; only
+you can set or bump a priority. A job's row says where it runs and, while it waits, why. Each project chooses, in its
+settings:
+
+- `drgnx-runners-send`: which of its jobs may leave this machine: `"heavy"` (the default: only jobs marked heavy),
+  `"all"` or `"none"`;
+- `drgnx-runners-heavy`: suite or command patterns whose jobs count as heavy;
+- `drgnx-runners-image`: the image (pinned by digest) a runner runs its command jobs in;
+- `drgnx-runners-weight`: its share against other projects within a priority (default 1);
+- `drgnx-runners-project-visibility`: `"private"` (the default) or `"public"`.
+
+A job marked `local_only`, or started with `machine: local`, never leaves this machine; `machine: NAME` pins it to one
+runner.

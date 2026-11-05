@@ -135,5 +135,33 @@ The hub pulls them; a job names one of them and nothing else.  Only you can set 
   :type 'number :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
   :runtime "f64" :schema 'number)
 
+;; The runners' per-project settings: the hub's queue reads them (docs/guide/jobs.md, "The queue and priority").
+
+(drgnx-defsetting drgnx-runners-send "heavy"
+  "Which of the project's jobs may leave this machine for a runner: \"all\", \"heavy\" (only jobs marked heavy) or
+\"none\"."
+  :type '(choice (const "all") (const "heavy") (const "none")) :group 'drgnx :scope 'project :workspace 'data
+  :on-error 'strict :agents 'never :runtime "String" :schema '(string :match "\\`\\(?:all\\|heavy\\|none\\)\\'"))
+
+(drgnx-defsetting drgnx-runners-heavy nil
+  "Suite or command patterns whose jobs are heavy in this project (a job is heavy only when marked so)."
+  :type '(repeat string) :group 'drgnx :scope 'project :workspace 'data :on-error 'strict :agents 'never
+  :runtime "Vec<String>" :schema '(list-of string))
+
+(drgnx-defsetting drgnx-runners-image nil
+  "The image a runner runs the project's command jobs in, pinned by digest (\"registry/name@sha256:…\"), or nil."
+  :type '(choice (const nil) string) :group 'drgnx :scope 'project :workspace 'data :on-error 'strict
+  :agents 'never :runtime "Option<String>" :schema '(or null string))
+
+(drgnx-defsetting drgnx-runners-weight 1.0
+  "The project's weight when projects share the machines within a priority (2: twice the share of a project at 1)."
+  :type 'number :group 'drgnx :scope 'project :workspace 'data :on-error 'strict :agents 'never
+  :runtime "f64" :schema 'number)
+
+(drgnx-defsetting drgnx-runners-project-visibility "private"
+  "\"public\" or \"private\": a public project's job whose commit the public origin has may run on a shared runner."
+  :type '(choice (const "public") (const "private")) :group 'drgnx :scope 'project :workspace 'data
+  :on-error 'strict :agents 'never :runtime "String" :schema '(string :match "\\`\\(?:public\\|private\\)\\'"))
+
 (provide 'drgnx-agents-matrix)
 ;;; drgnx-agents-matrix.el ends here

@@ -36,9 +36,15 @@ pub struct Meta {
     /// A user's job's name.
     #[serde(default)]
     pub name: Option<String>,
-    /// The job waits for a machine slot (`pending.json` holds what to start); it has no process yet.
+    /// The job is in the queue (`runtime.db`'s `rq_job` holds what to start); it has no process here yet.
     #[serde(default)]
     pub queued: bool,
+    /// Where it runs: `local`, or a runner's name; none while it waits.
+    #[serde(default)]
+    pub machine: Option<String>,
+    /// Its priority, 1 to 5, as the hub set it.
+    #[serde(default)]
+    pub priority: Option<u8>,
 }
 
 /// The shell that wraps the command: `sh -c SCRIPT sh DIR PROGRAM ARGS…`.

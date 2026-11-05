@@ -15,8 +15,13 @@
 #![cfg(target_os = "linux")]
 
 use drgnx_ratatoskr::runners::link::{LinkEvent, Route, Session};
+use drgnx_ratatoskr::runners::local::{Admission, LocalRunner};
+use drgnx_ratatoskr::runners::queue::{
+    Outcome, Placement, Queue, QueueCfg, RemoteRunner, SendMode, Submit,
+};
 use drgnx_ratatoskr::runners::transport::{Channel, Channels};
 use forseti::{Expect, JobSpec, JobTrust, Kind, Lane, Priority, Range, Weight};
+use serde_json::json;
 use sleipnir::proto::{AttemptState, Frame, JobRef, Nonce, PROTO_VERSION};
 use std::path::PathBuf;
 use std::process::Command;
@@ -145,7 +150,19 @@ struct Link {
 
 impl Link {
     fn open(runner: &str, root: &str, prefix: &str, hub: &str, route: Arc<dyn Route>) -> Link {
-        let mut child = tokio::process::Command::new("ssh")
+        let (channels, child) = serve(runner, root, prefix, hub);
+        let (tx, events) = tokio::sync::mpsc::unbounded_channel();
+        Link {
+            session: Session::start(runner, channels, route, tx),
+            events,
+            child,
+        }
+    }
+}
+
+/// `serve` in ROOT on RUNNER over one `ssh`: its stdin and stdout are the control channel.
+fn serve(runner: &str, root: &str, prefix: &str, hub: &str) -> (Channels, tokio::process::Child) {
+    let mut child = tokio::process::Command::new("ssh")
             .args(["-F", &ssh_config(), "-o", "BatchMode=yes", runner])
             .arg(format!(
                 "{root}/bin/test/sleipnir serve --root {root} --prefix {prefix} --hub-id {hub} --profile dedicated"
@@ -155,24 +172,20 @@ impl Link {
             .kill_on_drop(true)
             .spawn()
             .expect("ssh");
-        let control = Channel::new(
-            Box::new(child.stdin.take().unwrap()),
-            Box::new(child.stdout.take().unwrap()),
-        );
-        let idle = || Channel::new(Box::new(tokio::io::sink()), Box::new(tokio::io::empty()));
-        let channels = Channels {
-            control,
-            bulk_in: idle(),
-            bulk_out: idle(),
-        };
-        let (tx, events) = tokio::sync::mpsc::unbounded_channel();
-        Link {
-            session: Session::start(runner, channels, route, tx),
-            events,
-            child,
-        }
-    }
+    let control = Channel::new(
+        Box::new(child.stdin.take().unwrap()),
+        Box::new(child.stdout.take().unwrap()),
+    );
+    let idle = || Channel::new(Box::new(tokio::io::sink()), Box::new(tokio::io::empty()));
+    let channels = Channels {
+        control,
+        bulk_in: idle(),
+        bulk_out: idle(),
+    };
+    (channels, child)
+}
 
+impl Link {
     fn send(&self, f: Frame) {
         assert!(self.session.send(f), "the link has ended");
     }
@@ -218,6 +231,137 @@ impl Link {
     /// Cuts the channel: ssh killed, so `serve` sees an EOF without `bye`.
     async fn cut(mut self) {
         let _ = self.child.kill().await;
+    }
+}
+
+/// Drains the queue's link events into it, ticks it, and returns what CHECK makes of it, within the wait. The queue's
+/// own loop does this in the hub.
+async fn drive<T>(
+    q: &Queue,
+    events: &mut UnboundedReceiver<LinkEvent>,
+    outcomes: &mut Vec<Outcome>,
+    what: &str,
+    mut check: impl FnMut(&Queue, &[Outcome]) -> Option<T>,
+) -> T {
+    skuld::wait_until_async(what, WAIT, || {
+        while let Ok(ev) = events.try_recv() {
+            if let LinkEvent::Lost { why, .. } = &ev {
+                panic!("the link was lost waiting for {what}: {why}");
+            }
+            outcomes.extend(q.on_link(ev, now()));
+        }
+        q.tick(now());
+        std::future::ready(check(q, outcomes))
+    })
+    .await
+}
+
+/// The wall clock as the queue takes it: a value, never waited on.
+fn now() -> u64 {
+    skuld::host_now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
+mod queue {
+    use super::*;
+
+    /// [C] The project sends only heavy jobs (`drgnx-runners-send heavy`), and this machine's one slot is taken: the
+    /// heavy job is offered to the runner and runs there, the light one waits here, saying why. A real `serve` admits
+    /// and runs the heavy one; its result comes back through the link.
+    #[tokio::test]
+    #[ignore = "fleet"]
+    async fn a_job_marked_heavy_goes_to_the_runner_with_send_heavy() {
+        let (r1, prefix, hub) = ("r1", "flheavy", "hubheavy");
+        let root = root(r1, "fl-heavy");
+        let img = image(r1);
+        let dir = tempfile::tempdir().unwrap();
+        let (q, mut events) = Queue::new(QueueCfg {
+            hub_id: hub.into(),
+            exec_root: dir.path().to_path_buf(),
+            local: LocalRunner::new(Admission::Fixed(1), dir.path()),
+            db: None,
+        });
+        q.adopt("xbusy", Priority::P1, now());
+        let (channels, _child) = serve(r1, &root, prefix, hub);
+        let session = Session::start(r1, channels, q.route(), q.link_events());
+        q.add_runner(
+            RemoteRunner {
+                name: r1.into(),
+                trust: forseti::RunnerTrust::Mine,
+                accept: forseti::Accept::All,
+                grace_s: 600,
+            },
+            session,
+        );
+        let place = |heavy: bool| Placement {
+            heavy,
+            send: SendMode::Heavy,
+            image: Some(img.clone()),
+            ..Placement::default()
+        };
+        let mut heavy = spec("echo heavy");
+        heavy.weight = Weight::Heavy;
+        for (id, spec, heavy) in [
+            ("xheavy", heavy, true),
+            ("xlight", spec("echo light"), false),
+        ] {
+            q.submit(
+                Submit {
+                    id: id.into(),
+                    session: Some("s1".into()),
+                    own: Priority::P3,
+                    spec,
+                    place: place(heavy),
+                    pending: serde_json::Value::Null,
+                },
+                now(),
+            );
+        }
+        let mut outcomes = vec![];
+        let heavy = drive(
+            &q,
+            &mut events,
+            &mut outcomes,
+            "the heavy job offered to r1",
+            |q, _| q.row("xheavy").filter(|r| r.machine.is_some()),
+        )
+        .await;
+        assert_eq!(
+            (heavy.machine.as_deref(), heavy.attempt),
+            (Some("r1"), Some(1))
+        );
+        let (attempt, result) = drive(
+            &q,
+            &mut events,
+            &mut outcomes,
+            "the heavy job's result",
+            |_, o| {
+                o.iter().find_map(|o| match o {
+                    Outcome::Done {
+                        id,
+                        attempt,
+                        result,
+                    } if id == "xheavy" => Some((*attempt, result.clone())),
+                    _ => None,
+                })
+            },
+        )
+        .await;
+        assert_eq!(
+            (attempt, &result["verdict"]),
+            (1, &json!("Pass")),
+            "{result}"
+        );
+        let light = q.row("xlight").expect("the light job's row");
+        assert_eq!(light.machine, None, "the light job left this machine");
+        assert!(
+            light.waiting.as_deref().is_some_and(|w| !w.is_empty()),
+            "{light:?}"
+        );
+        let log = std::fs::read_to_string(dir.path().join("xheavy/log")).unwrap_or_default();
+        assert!(log.contains("heavy"), "{log}");
     }
 }
 

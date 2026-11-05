@@ -370,6 +370,13 @@ fn decode_default(name: &str, default: &RuntimeValues, values: &mut RuntimeValue
         "drgnx-agents-manager-context" => {
             values.agents_manager_context = default.agents_manager_context;
         }
+        "drgnx-runners-send" => values.runners_send = default.runners_send.clone(),
+        "drgnx-runners-heavy" => values.runners_heavy = default.runners_heavy.clone(),
+        "drgnx-runners-image" => values.runners_image = default.runners_image.clone(),
+        "drgnx-runners-weight" => values.runners_weight = default.runners_weight,
+        "drgnx-runners-project-visibility" => {
+            values.runners_project_visibility = default.runners_project_visibility.clone();
+        }
         _ => {}
     }
 }
