@@ -159,6 +159,7 @@
         (code-quick-fix "SPC c a")
         (code-problems "SPC c x")
         (code-format "SPC c f")
+        (code-show-lsp-log :none "in the palette")
         (view-zoom-in :none "in the palette")
         (view-zoom-out :none "in the palette")
         (view-zoom-reset :none "in the palette")
