@@ -349,16 +349,17 @@ lines: that order is real time's, not the schedule's, and the transcript says so
 (ert-deftest drgnx-delivery-gate/a-child-that-ended-before-its-output-was-read-is-still-waited-on ()
   "A child that printed and exited before Emacs read its output: Emacs sees the exit first, the output only at its next
 read.  That read is still a real look, no virtual time moves, and the transcript names the child."
-  (let ((said (list nil)) child now transcript)
+  (let ((said (list nil)) child read-early now transcript)
     (drgnx-test-gated nil
       (setq child (drgnx-delivery-gate-test--child "echo answered" said))
       ;; the exit seen, the output not read: `call-process' reads no other process's output
       (while (process-live-p child) (call-process "true"))
-      (should-not (car said))
+      (setq read-early (car said))
       (drgnx-onboard--wait (lambda () (car said)) 0.1)
       (setq now (drgnx-test-clock-now)
             transcript (drgnx-test-gate-transcript))
       (drgnx-test-deliver-all))
+    (should-not read-early)
     (should (equal (car said) "answered\n"))
     (should (= now 0))
     (should (cl-find-if (lambda (e) (and (eq (car e) :child) (string-prefix-p "drgnx-gate-child" (cdr e)))) transcript))))
