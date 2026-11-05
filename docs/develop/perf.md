@@ -55,7 +55,9 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 user's editor does: `$DRGNX_RATATOSKR_BIN` (a build with the `test-hooks` feature, `ratatoskr-mock` in the same folder;
 without it the workloads fail and say so) is started with a settings file of its own whose profile `mock` is
 `ratatoskr-mock acp --as claude --script FILE`. The script's n-th line is the program of the n-th prompt (`say TEXT`,
-`silent SECONDS`: docs/develop/runtime.md), so a turn is the same whatever the prompt says. The session holds
+`silent SECONDS`: docs/develop/runtime.md), so a turn is the same whatever the prompt says. A prompt past the last
+line runs its own words and ends at once, so `agent-stream`'s script has a line for every run one mock serves: an A/A's
+warm-ups and rounds on both sides (`drgnx-perf-workers/agent-stream-has-a-turn-for-every-run`). The session holds
 mirrors (`drgnx-agents-mirror-start`). The hub tells of a session's state at most every 50 ms, so a short turn can go
 by with no `busy` status: the workloads count the `stop` entries of the transcript to know that a turn has ended (the
 check "typed while it streamed" is a turn that has not ended), never the status. `cockpit-cards` stubs only the job's
