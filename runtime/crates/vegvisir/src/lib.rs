@@ -6,11 +6,12 @@
 //! and returns [`Effect`]s: a delta for a shown view, a stale mark for a hidden one, a relayout when the user changed
 //! a view. It never does I/O and never reads a clock, so its tests run it in every order of its inputs.
 //!
-//! The layout (`layout`) runs in the same crate on a [`Model`] and a view's state.
+//! The layout ([`layout::layout`]) runs in the same crate on a [`Model`] and a view's state.
 
 mod chain;
 #[cfg(feature = "fixture")]
 pub mod fixture;
+pub mod layout;
 pub mod model;
 mod overlap;
 mod view;

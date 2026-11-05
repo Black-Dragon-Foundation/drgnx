@@ -86,6 +86,72 @@ Live events never return `Relayout`: the hub's coalescing decides when accumulat
 - `tests/timing.rs` holds the budget, `core_step_within_50_us` (p95 over the 30-agent fixture's live traffic), run
   by the timing lane on the optimized build.
 
+## The layout
+
+`vegvisir::layout::layout(model, view_state, prev) -> Layout` lays one view out. It runs in the hub when the
+structure changes (the user's filters, a collapse, a resize, a reflow), never per frame. It works in **units of
+4 px** (the look's grid) and never in font metrics: every card and chip has a fixed width per kind and form, and the
+editor truncates labels to it by pixel width. `ViewState.width_units` is the drawing width, without the 84 px layer
+labels' margin; a 1000 px tile is 226 units (1000 − 84 − 12 px of padding).
+
+### Sizes (comfortable density)
+
+| Thing | Units | px |
+|---|---|---|
+| rich agent card | 58 × 25 (5 lines) | 232 × 100 |
+| compact agent card | 42 × 10 (2 lines) | 168 × 40 |
+| chip row (asks, specs, plans, branches, files, machines) | 7 high | 28 |
+| chip widths: ask, spec, plan, branch, file, machine | 48, 44, 44, 40, 36, 32 | 192 … 128 |
+| gap between cards | 3 | 12 |
+| band between rows | 8 | 32 |
+| gap between blocks | 6 | 24 |
+| a collapsed layer's row | 5 | 20 |
+
+The look's 19 px card lines round to 20 px on the grid. Compact and roomy densities scale these (`Metrics::of`).
+
+### The steps
+
+1. **The layer is the kind's.** Rows go: you asked, specs, plans, then the agents and branches by block line, then
+   files and machines.
+2. **Blocks by plan.** Agents and branches sit in one block per plan, in plan order, with "No plan" last. Inside a
+   block, agents wrap into sub-rows, and each agent sub-row is followed by its branches' sub-row, each branch under
+   its agent. So plan → agent → branch edges stay short. Whole blocks wrap into block lines. A block's agents go
+   compact rather than take a third sub-row, except agents that need you or are on the focused chain. Subagents are
+   compact and follow their parent. A branch that is only a base sits after its block's branches.
+3. **Order.** Inside a block, agents keep the previous layout's order (a new one goes at the end), else their start
+   order. Plans keep plan order. Specs, asks, files and machines are ordered by their targets, then adjacent swaps
+   that cut crossings by more than the stability penalty (1).
+4. **x.** A plan's target is its block's centre; a spec's, an ask's, a file's or a machine's is the mean centre of
+   what it links to. An item keeps its previous target while the new one stays within 32 units of it (hysteresis),
+   so a new card does not shift the others. Overlaps resolve left to right with the gaps, then back from the right
+   edge.
+5. **Lanes.** An edge longer than one row takes a lane in each row it crosses, a 2 px segment at a free slot of the
+   nearest gap. A gap of `g` units holds `g − 1` lanes (`floor((gap − 4 px) / 4 px)`: 2 in a 12 px gap). Edges from
+   one source (a plan to its agents, an ask to what it led to) or to one target (agents to a machine, branches to a
+   file) share one lane, a trunk. The row's right end is a gap like the others, so a full row's lanes spread into its
+   slack; cards never move for a lane. A row with no free slot left bundles the edge into a **port** on its target
+   ("↑ N"; the side panel names the parents).
+6. **Bands.** The band above each row holds its curves: from a card's bottom centre to a lane, lane to lane, a lane
+   to a card's top centre. Same-row arcs (overlaps, "based on", a manager) go in the band above their row.
+   `crossings` counts crossing curve pairs per band.
+7. **Fits.** Below 120 units (480 px), or with a card wider than the tile, `fits` is false and the editor shows the
+   outline form.
+
+Filters: `focus` keeps the item's chain and draws its reads; `overlaps` keeps the flagged agents and branches, what
+they came from, every file they edit and the machines they run on, and draws read-versus-edit lines; `finished`
+brings back what is not live. Otherwise a file is a node only while it is shared (an overlap). A collapsed layer is
+one thin row; edges through it join the items on either side.
+
+### Layout tests
+
+`tests/layout.rs` checks properties over generated workspaces (`proptest`, 128 cases each): no two cards overlap,
+layers never move, blocks and siblings are contiguous, the same input gives the same output, adding an agent leaves
+the blocks before it in place and moves the blocks after it only as a whole, removing it again restores the
+previous layout, the width is respected, every long edge has a lane in every row it crosses or a port, and no lane
+leaves its gap or shares a slot with another bundle. Three goldens (`tests/golden/`) hold the prototype's data at
+226 units and the 30-agent fixture at 226 and 576 units (2400 px); `UPDATE_VEGVISIR_GOLDEN=1` rewrites them, and
+refuses one whose crossings are above the golden it replaces. `tests/timing.rs` holds `layout_200_items_within_2_ms`.
+
 ### The 30-agent fixture
 
 `test/fixtures/work-space/thirty.json` is one description of a busy workspace: 6 asks, 3 specs, 4 plans with their

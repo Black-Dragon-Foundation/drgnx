@@ -82,3 +82,34 @@ fn core_step_within_50_us() {
     let p = p95(times);
     assert!(p <= 50_000, "core step p95 {p} ns");
 }
+
+/// The layout of the 30-agent model (about 200 items) at 1000 px stays within 2 ms at p95: the default view, the
+/// overlaps filter (every edited file of the overlapping branches) and a relayout with the previous layout.
+#[test]
+#[ignore = "timing: the layout of the 30-agent model within 2 ms at p95"]
+fn layout_200_items_within_2_ms() {
+    let mut core = Core::new();
+    for e in fixture::thirty() {
+        core.step(e);
+    }
+    let m = core.model();
+    let plain = ViewState {
+        width_units: 226,
+        ..ViewState::default()
+    };
+    let mut overlaps = plain.clone();
+    overlaps.filters.overlaps = true;
+    let mut prev = vegvisir::layout::layout(m, &plain, None);
+    let mut times = Vec::new();
+    for i in 0..300 {
+        let v = if i % 3 == 1 { &overlaps } else { &plain };
+        let start = Instant::now();
+        let l = vegvisir::layout::layout(m, v, if i % 3 == 2 { Some(&prev) } else { None });
+        times.push(start.elapsed().as_nanos());
+        if i % 3 == 0 {
+            prev = l;
+        }
+    }
+    let p = p95(times);
+    assert!(p <= 2_000_000, "layout p95 {p} ns");
+}
