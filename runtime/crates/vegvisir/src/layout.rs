@@ -1104,7 +1104,7 @@ fn finish(
             (k, first, anchor(k)(first))
         })
         .collect();
-    order.sort_by(|a, b| (a.1, a.2, a.0).cmp(&(b.1, b.2, b.0)));
+    order.sort_by_key(|a| (a.1, a.2, a.0));
     let mut slot: BTreeMap<(Key, usize), Option<u32>> = BTreeMap::new();
     for (k, _, _) in order {
         let rs = &bundles[&k];
