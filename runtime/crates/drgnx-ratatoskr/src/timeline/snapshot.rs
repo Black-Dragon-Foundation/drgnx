@@ -105,12 +105,26 @@ pub fn take(
     seq: u64,
     extra: &[String],
 ) -> Result<String, String> {
+    let (repo, tree) = write_tree(root, worktree, sid, extra)?;
+    let name = format!("refs/drgnx/s/{}/{seq}", safe(sid));
+    git(&repo, None, None, &["update-ref", &name, &tree])?;
+    Ok(tree)
+}
+
+/// The tree of WORKTREE with the persistent index of KEY, written into its shadow repository; the repository and the
+/// tree id.
+fn write_tree(
+    root: &Path,
+    worktree: &Path,
+    key: &str,
+    extra: &[String],
+) -> Result<(PathBuf, String), String> {
     let repo = repo_of(root, worktree);
     if !repo.join("HEAD").exists() {
         std::fs::create_dir_all(&repo).map_err(|e| format!("{}: {e}", repo.display()))?;
         git(&repo, None, None, &["init", "--bare", "-q", "."])?;
     }
-    let index = repo.join(format!("index-{}", safe(sid)));
+    let index = repo.join(format!("index-{}", safe(key)));
     let mut add: Vec<String> = ["add", "-A", "--ignore-errors", "--", "."]
         .iter()
         .map(|s| (*s).to_string())
@@ -119,9 +133,79 @@ pub fn take(
     let add: Vec<&str> = add.iter().map(String::as_str).collect();
     git(&repo, Some(worktree), Some(&index), &add)?;
     let tree = git(&repo, Some(worktree), Some(&index), &["write-tree"])?;
-    let name = format!("refs/drgnx/s/{}/{seq}", safe(sid));
-    git(&repo, None, None, &["update-ref", &name, &tree])?;
-    Ok(tree)
+    Ok((repo, tree))
+}
+
+/// The tree of WORKTREE as it is when it is made, kept as `refs/drgnx/base/<hash>` in its shadow repository: the base
+/// the interim diffs measure from (an agent's own tree never runs git for it). KEY names the index it is written
+/// through (its branch or session). None when it cannot be taken.
+pub fn take_base(root: &Path, worktree: &Path, key: &str) -> Option<String> {
+    let (repo, tree) = write_tree(root, worktree, &format!("base-{key}"), &[])
+        .map_err(|e| tracing::warn!("base snapshot not taken: {e}"))
+        .ok()?;
+    let stem = repo.file_stem()?.to_string_lossy().into_owned();
+    git(
+        &repo,
+        None,
+        None,
+        &["update-ref", &format!("refs/drgnx/base/{stem}"), &tree],
+    )
+    .ok()?;
+    Some(tree)
+}
+
+/// What one file changed between two trees.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileCount {
+    pub path: String,
+    pub plus: u32,
+    pub minus: u32,
+    /// The file is not in FROM_TREE at all (a new file).
+    pub untracked: bool,
+}
+
+/// The files that differ between FROM_TREE and TO_TREE of WORKTREE's shadow repository, with their added and removed
+/// lines. Git runs in the shadow repository only: the worktree is never looked at (it may be gone).
+pub fn numstat(
+    root: &Path,
+    worktree: &Path,
+    from_tree: &str,
+    to_tree: &str,
+) -> Result<Vec<FileCount>, String> {
+    let repo = repo_of(root, worktree);
+    let diff = |args: &[&str]| -> Result<String, String> {
+        let mut a = vec!["diff-tree", "-r", "--no-renames", "-z"];
+        a.extend_from_slice(args);
+        a.extend_from_slice(&[from_tree, to_tree]);
+        git(&repo, None, None, &a)
+    };
+    // `-z`: "A\0path\0" per file in one listing, "plus\tminus\tpath\0" per file in the other
+    let status = diff(&["--name-status"])?;
+    let added: BTreeSet<&str> = {
+        let mut it = status.split('\0');
+        let mut set = BTreeSet::new();
+        while let (Some(s), Some(p)) = (it.next(), it.next()) {
+            if s == "A" {
+                set.insert(p);
+            }
+        }
+        set
+    };
+    let counts = diff(&["--numstat"])?;
+    let mut out = Vec::new();
+    for rec in counts.split('\0').filter(|r| !r.is_empty()) {
+        let mut f = rec.splitn(3, '\t');
+        let (Some(plus), Some(minus), Some(path)) = (f.next(), f.next(), f.next()) else {
+            continue;
+        };
+        out.push(FileCount {
+            path: path.to_string(),
+            plus: plus.parse().unwrap_or(0),
+            minus: minus.parse().unwrap_or(0),
+            untracked: added.contains(path),
+        });
+    }
+    Ok(out)
 }
 
 /// Bytes under DIR (files only).
@@ -235,6 +319,67 @@ mod tests {
         assert_eq!(listing(&repo, &t2), ["a.txt"]);
         // the same content again is the same tree
         assert_eq!(take(&root, &wt, "s1", 3, &[]).unwrap(), t2);
+    }
+
+    /// Pattern D: a new file is counted and marked, an edited one has plus and minus, an untouched one is not listed.
+    #[test]
+    fn numstat_counts_an_untracked_new_file() {
+        let d = tempfile::tempdir().unwrap();
+        let (root, wt) = (d.path().join("cp"), d.path().join("wt"));
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+        std::fs::write(wt.join("same.txt"), "x\n").unwrap();
+        let base = take_base(&root, &wt, "job/1-1").unwrap();
+        std::fs::write(wt.join("a.txt"), "one\n2\nthree\nfour\n").unwrap();
+        std::fs::write(wt.join("new.txt"), "a\nb\n").unwrap();
+        let now = take(&root, &wt, "s1", 1, &[]).unwrap();
+        let got = numstat(&root, &wt, &base, &now).unwrap();
+        assert_eq!(
+            got,
+            [
+                FileCount {
+                    path: "a.txt".into(),
+                    plus: 2,
+                    minus: 1,
+                    untracked: false
+                },
+                FileCount {
+                    path: "new.txt".into(),
+                    plus: 2,
+                    minus: 0,
+                    untracked: true
+                },
+            ]
+        );
+        // the base is kept as a ref of its own, which a prune leaves alone
+        let repo = repo_of(&root, &wt);
+        let stem = repo.file_stem().unwrap().to_string_lossy().into_owned();
+        assert_eq!(
+            git(
+                &repo,
+                None,
+                None,
+                &["rev-parse", &format!("refs/drgnx/base/{stem}")]
+            )
+            .unwrap(),
+            base
+        );
+    }
+
+    /// Pattern D: with the worktree gone (its git, its files, its PATH out of reach) the counts still come, because
+    /// only the shadow repository is asked.
+    #[test]
+    fn numstat_runs_no_git_in_the_tree() {
+        let d = tempfile::tempdir().unwrap();
+        let (root, wt) = (d.path().join("cp"), d.path().join("wt"));
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join("a.txt"), "one\n").unwrap();
+        let base = take_base(&root, &wt, "k").unwrap();
+        std::fs::write(wt.join("a.txt"), "one\ntwo\n").unwrap();
+        let now = take(&root, &wt, "s1", 1, &[]).unwrap();
+        std::fs::remove_dir_all(&wt).unwrap();
+        let got = numstat(&root, &wt, &base, &now).unwrap();
+        assert_eq!((got.len(), got[0].plus, got[0].minus), (1, 1, 0));
     }
 
     #[test]

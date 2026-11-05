@@ -15,7 +15,7 @@ use runstav::methods::matrix::Facts;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::process::Command;
 
@@ -74,7 +74,12 @@ pub struct HubGit {
     /// Held while a run store is cloned, fetched or copied: a run's tasks start at once, and two clones (or a fetch
     /// into a half-made clone) of one store fail.
     stores: tokio::sync::Mutex<()>,
+    /// Where each new tree branched from (`work::bases`): the folder of the base snapshots and who is told.
+    bases: Option<(PathBuf, BaseSink)>,
 }
+
+/// Told, once per tree the hub makes, where it branched from.
+pub type BaseSink = Arc<dyn Fn(norn::write::work::WorktreeBase) + Send + Sync>;
 
 fn err(what: impl Into<String>, stderr: impl Into<String>) -> GitError {
     GitError {
@@ -129,7 +134,14 @@ impl HubGit {
             shell: crate::shell_env::ShellEnv::default(),
             checked: Mutex::new(HashMap::new()),
             stores: tokio::sync::Mutex::new(()),
+            bases: None,
         }
+    }
+
+    /// Tell SINK where each tree made from now on branched from; the base snapshots go under SNAP_ROOT.
+    pub fn with_bases(mut self, snap_root: PathBuf, sink: BaseSink) -> Self {
+        self.bases = Some((snap_root, sink));
+        self
     }
 
     /// Extra environment for every git process (tests point HOME at a temp folder).
@@ -678,7 +690,24 @@ impl HubGit {
                 self.git_in(&path, &["reset", "-q", "--hard"]).await?;
             }
         }
+        self.note_base(repo, &tree).await;
         Ok(tree)
+    }
+
+    /// A tree was just made: where it branched from, and a snapshot of it, go to the sink (`work::bases`).
+    async fn note_base(&self, repo: &Path, tree: &TaskTree) {
+        let Some((root, sink)) = &self.bases else {
+            return;
+        };
+        let (root, repo, path) = (root.clone(), repo.to_path_buf(), tree.path.clone());
+        let (base, branch) = (tree.base.clone(), tree.branch.clone());
+        let row = tokio::task::spawn_blocking(move || {
+            crate::work::bases::row_for(&root, &repo, &path, &base, &branch)
+        })
+        .await;
+        if let Ok(row) = row {
+            sink(row);
+        }
     }
 
     async fn trial(&self, repo: &Path, branches: &[String]) -> Result<TrialResult, GitError> {

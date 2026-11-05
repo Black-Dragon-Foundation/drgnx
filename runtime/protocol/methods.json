@@ -1224,6 +1224,78 @@
     },
     {
       "data": {
+        "$defs": {
+          "Machine": {
+            "additionalProperties": false,
+            "description": "A machine as the hub lists it.",
+            "properties": {
+              "local": {
+                "description": "The hub's own machine: always listed, never expires.",
+                "type": "boolean"
+              },
+              "machine": {
+                "type": "string"
+              },
+              "slots": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/Slot"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "machine",
+              "local"
+            ],
+            "type": "object"
+          },
+          "Slot": {
+            "additionalProperties": false,
+            "description": "One slot of a machine: where one agent job runs.",
+            "properties": {
+              "holder": {
+                "description": "Who holds it now (a job or a session id); none when free.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "description": "What the slot is for: `agent-job`, `build`, `test`, `gpu`, ...",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`machines/list`'s answer, and the data of `machines-changed`.",
+        "properties": {
+          "machines": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Machine"
+            },
+            "type": "array"
+          }
+        },
+        "title": "MachinesList",
+        "type": "object"
+      },
+      "doc": "the machines the hub lists changed (a report, an expiry, a local slot): the whole list",
+      "name": "machines-changed"
+    },
+    {
+      "data": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "description": "A message for the user from the hub itself (the notices' shape).",
@@ -11147,6 +11219,205 @@
         "type": "object"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the machines the hub knows: local, and those reported and not yet expired",
+      "name": "machines/list",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Machine": {
+            "additionalProperties": false,
+            "description": "A machine as the hub lists it.",
+            "properties": {
+              "local": {
+                "description": "The hub's own machine: always listed, never expires.",
+                "type": "boolean"
+              },
+              "machine": {
+                "type": "string"
+              },
+              "slots": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/Slot"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "machine",
+              "local"
+            ],
+            "type": "object"
+          },
+          "Slot": {
+            "additionalProperties": false,
+            "description": "One slot of a machine: where one agent job runs.",
+            "properties": {
+              "holder": {
+                "description": "Who holds it now (a job or a session id); none when free.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "description": "What the slot is for: `agent-job`, `build`, `test`, `gpu`, ...",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`machines/list`'s answer, and the data of `machines-changed`.",
+        "properties": {
+          "machines": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Machine"
+            },
+            "type": "array"
+          }
+        },
+        "title": "MachinesList",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a machine's slots and who holds them, valid for ttl seconds (jobq reports; an agent may not)",
+      "name": "machines/report",
+      "params": {
+        "$defs": {
+          "Slot": {
+            "additionalProperties": false,
+            "description": "One slot of a machine: where one agent job runs.",
+            "properties": {
+              "holder": {
+                "description": "Who holds it now (a job or a session id); none when free.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "description": "What the slot is for: `agent-job`, `build`, `test`, `gpu`, ...",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What a reporter (jobq) says about one machine: its slots, valid for `ttl` seconds.",
+        "properties": {
+          "machine": {
+            "type": "string"
+          },
+          "slots": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Slot"
+            },
+            "type": "array"
+          },
+          "ttl": {
+            "description": "Seconds the report stands; after that the machine is gone from the list until it reports again.",
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "machine",
+          "ttl"
+        ],
+        "title": "MachineReport",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Slot": {
+            "additionalProperties": false,
+            "description": "One slot of a machine: where one agent job runs.",
+            "properties": {
+              "holder": {
+                "description": "Who holds it now (a job or a session id); none when free.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "description": "What the slot is for: `agent-job`, `build`, `test`, `gpu`, ...",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A machine as the hub lists it.",
+        "properties": {
+          "local": {
+            "description": "The hub's own machine: always listed, never expires.",
+            "type": "boolean"
+          },
+          "machine": {
+            "type": "string"
+          },
+          "slots": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Slot"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "machine",
+          "local"
+        ],
+        "title": "Machine",
+        "type": "object"
+      },
+      "writes": false
     },
     {
       "classes": [

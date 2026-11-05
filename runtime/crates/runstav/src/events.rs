@@ -234,6 +234,11 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "a session's step opened or closed, with its class, stamps and anchors (to subscribers that asked)"
         ),
         event!(
+            "machines-changed",
+            crate::methods::work::MachinesList,
+            "the machines the hub lists changed (a report, an expiry, a local slot): the whole list"
+        ),
+        event!(
             "exec-done",
             crate::methods::exec::ExecDone,
             "a job ended: its status, exit and summary"
@@ -311,6 +316,8 @@ mod tests {
                     "supervisor",
                     "view-written",
                     "view-proposal",
+                    // agent system part 2
+                    "machines-changed",
                 ]
                 .contains(&n.as_str())
             })
@@ -325,7 +332,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 20);
+        assert_eq!(events().len(), 21);
         assert!(event("settings/proposed").is_some());
         // ids only: a key-shaped value is no id, and nothing but `providers` is taken
         let changed = event("gateway/keys-changed").unwrap();

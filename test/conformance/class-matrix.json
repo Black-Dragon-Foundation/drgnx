@@ -77,6 +77,8 @@
   "job/stop": ["user"],
   "job/unblock": ["user"],
   "matrix/check": ["user"],
+  "machines/list": ["user"],
+  "machines/report": ["user"],
   "matrix/get": ["user"],
   "mcp/attach": ["service"],
   "mcp/session": ["user"],
