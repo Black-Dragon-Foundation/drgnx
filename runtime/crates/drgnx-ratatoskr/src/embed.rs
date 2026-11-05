@@ -5,8 +5,9 @@
 //!   Texts go to the hub's own loopback listener as the editor's `POST /p/PROVIDER/embed` (TEI) or `/api/embed`
 //!   (Ollama), with an in-memory editor token and no key, so the gateway counts the request in `spend` like any
 //!   other.  The hub **never starts** a provider: one that does not answer is passed over.
-//! - **One model per entity.**  `entity_vec` holds one vector per entity (its key is `n`), so a round ([`run`]) fills
-//!   with the first embedder in line that answers, a server before the built-in model.
+//! - **One embedder per round.**  A round ([`run`]) fills with the first embedder in line that answers, a server before
+//!   the built-in model; `entity_vec` is keyed `(n, model)`, so each model keeps its own vectors and a server that comes
+//!   back finds them still there.
 //! - **A round** ([`fill`]) takes at most [`BATCH`] stale entities (no vector of the model, [`urdr::graph::search::vec_stale`])
 //!   at a time.  An entity whose source, id or `data.path` the personal-notes deny-list denies (an unknown source form
 //!   too) is never sent, even when the scan's door let it in (door 4).  A batch that fails is tried once more; failing
@@ -554,8 +555,8 @@ pub async fn run_one(db: &CoordDb, e: &dyn Embedder, deny: &DenyList, probe: boo
 }
 
 /// A round over the embedders in order of preference (a server before the built-in model): the first that answers
-/// fills, and a round that ends `Filled` or `Nothing` is the round (`entity_vec` has one vector per entity, so a
-/// second model would only replace the first's).  An embedder that stops is passed over; when all stop, the round
+/// fills, and a round that ends `Filled` or `Nothing` is the round (one model's vectors per round keeps the work to
+/// one embedder; the others' vectors stay).  An embedder that stops is passed over; when all stop, the round
 /// stopped, with every reason.
 pub async fn run(
     db: &CoordDb,

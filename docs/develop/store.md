@@ -185,16 +185,18 @@ one `ReadPool::with` call (one connection, given back before the next level), ne
   lower is better). A contentless table cannot make snippets, so they come from `entity.body` (about 160 characters
   around the first matching word; the title when there is no body).
 - **Vectors.** `vec::quantize` is `drgnx-search-quantize`: sign bits (bit `i % 8` of byte `i / 8`), int8 values
-  `round(v / scale)` (halves to even) and `scale = max|v| / 127`. `entity_vec(n, bits, vec, scale, model)` holds them;
-  `model` is a departure from the design's §5.2 table, needed by `vec_stale`. `hamming_scan` ranks fingerprints by
+  `round(v / scale)` (halves to even) and `scale = max|v| / 127`. `entity_vec(n, model, bits, vec, scale)` holds them,
+  keyed `(n, model)` so each embedder keeps its own vector of an entity (a server's and the built-in model's side by
+  side; switching between them embeds nothing again); `model` is a departure from the design's §5.2 table, needed by
+  `vec_stale`. `hamming_scan` ranks fingerprints by
   Hamming distance (u64 popcount, a bounded heap) and `rerank` orders the candidates by the integer dot product
   of the int8 vectors times both scales. Fixtures: `test/fixtures/quantize/cases.json`, regenerated with `gen.el`
   from the Lisp quantizer.
 - **Fusion.** `rrf(lists, 60)` sums `1 / (k + rank)` over the lists (rank from 1), best first.
-- **Staleness.** `vec_put` replaces an entity's vector; `vec_stale(conn, model, limit)` lists live entities with
+- **Staleness.** `vec_put` replaces an entity's vector of that model; `vec_stale(conn, model, limit)` lists live entities with
   text and no vector of that model (the indexer's work list; Task 12b supplies the `Embedder`). A vector is always
   of its entity's current text: `fts_put`, which every write of a new title or body goes through, deletes the
-  entity's `entity_vec` row in the same tx, so `vec_stale` lists it again and no vector of an old text is kept.
+  entity's `entity_vec` rows (of every model) in the same tx, so `vec_stale` lists it again and no vector of an old text is kept.
   (Chosen over a vector that records the version it was made from and a `vec_stale` that lists mismatches: that
   needs a column and leaves the old text's vector in the file until the embedder runs, which may be never when no
   provider answers.)
