@@ -208,6 +208,24 @@
     ;; a longer query starts from the last one's matches; a refresh searches again from all of them
     (should (equal r '(t (sat-ks-a) ("sat-ks-a" sat-ks-a) t t nil nil ("4242"))))))
 
+(ert-deftest drgnx-settings-page/the-search-text-is-built-before-the-first-key ()
+  ;; opening the page warms every setting's search text in idle time; the first character builds none of it
+  (let ((r (drgnx-settings-page-test--run
+            nil
+            '((progn
+                (eval '(defcustom sat-wm-a 4242 "Width." :type 'integer :group 'tools) t)
+                (with-current-buffer (drgnx-settings-page)
+                  (let ((total (length (drgnx-settings-page--all-vars))) (pending (and drgnx-settings-page--warm t)))
+                    (while (drgnx-settings-page--warm-step))
+                    (let ((text (hash-table-count drgnx-settings-page--hay))
+                          (values (hash-table-count drgnx-settings-page--value-hay)))
+                      (drgnx-settings-page-search "sat-wm")
+                      (list pending (= text total) (= values total)
+                            (= (hash-table-count drgnx-settings-page--hay) text)
+                            (= (hash-table-count drgnx-settings-page--value-hay) values)
+                            (and (memq 'sat-wm-a drgnx-settings-page--keys) t))))))))))
+    (should (equal r '(t t t t t t)))))
+
 (ert-deftest drgnx-settings-page/works-in-safe-mode ()
   (let ((r (drgnx-settings-page-test--run
             drgnx-settings-page-test--files

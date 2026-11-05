@@ -134,6 +134,9 @@
 
      (defun drgnx-perf-settings-page-measure ()
        (let* ((open (drgnx-perf-settings--ms (lambda () (pop-to-buffer (drgnx-settings-page)) (redisplay t))))
+              ;; the page warms every setting's search text in idle time; here the idle time is spent on it at once
+              (warm (progn (drgnx-timer-cancel 'settings-page-warm)
+                           (drgnx-perf-settings--ms (lambda () (while (drgnx-settings-page--warm-step))))))
               (rows (with-current-buffer "*drgnx settings*" (length drgnx-settings-page--keys)))
               (query "") keys searches)
          (unless (>= rows (drgnx-perf-settings--size 'page)) (error "the page lists %d settings" rows))
@@ -145,7 +148,7 @@
                  (draw (drgnx-perf-settings--ms (lambda () (redisplay t)))))
              (push search searches)
              (push (+ search draw) keys)))
-         (list :open_ms (drgnx-perf-settings--r open)
+         (list :open_ms (drgnx-perf-settings--r open) :warm_ms (drgnx-perf-settings--r warm)
                :key_search_max_ms (drgnx-perf-settings--r (apply #'max searches))
                :key_p50_ms (drgnx-perf-settings--r (drgnx-perf-settings--median keys))
                :key_max_ms (drgnx-perf-settings--r (apply #'max keys)))))

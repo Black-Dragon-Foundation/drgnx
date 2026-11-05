@@ -613,6 +613,14 @@ before the load); `settings-sync` 510 to 860 ms for 200 packages (budget 2 s, me
 open added by the workspace and language layers (budget 1: the trust resolution of the shared file's root, about
 0.9 ms, and the private file's, about 0.5 ms, run at every open).
 
+Second round: the trust root and state are kept per folder (`settings-open` 1.5 to 1.7 ms, from 2.4), the token scan
+steps over plain atoms by regexp (`test/unit/file-scan-fast-test.el` holds it to the full scan's results), a type is
+converted once for all the settings that share it, and the applied-values file is read once per start
+(`settings-start` 5.1 to 5.5 ms from 5.8: still two reads of `settings.el` by the config layer and the settings
+reader, and about 1.9 ms of pushes). Opening the page now builds every setting's search text in idle time (the
+workload drains those steps, `:warm_ms` about 30 ms, outside `:open_ms`), so the search of the first key is at most
+5 ms (`:key_search_max_ms`, from 32).
+
 Ratatoskr's reader is timed by `runtime/crates/huginn/tests/timing.rs`: 64 KiB of settings-shaped data, median of 200
 reads at most 1 ms. It is `#[ignore]`, run once and alone on a pinned host, optimized:
 `perf-exclusive.sh env DRGNX_PERF_CPUS=2 … cargo test --release -p huginn --test timing -- --ignored --nocapture`
