@@ -843,10 +843,9 @@ fn nightly_backup(front: &Front) {
         return;
     }
     let g = g.clone();
-    tokio::spawn(async move {
+    tokio::spawn(crate::backup_timer::guarded(async move {
         crate::graph::run_backup(&g).await;
-        crate::backup_timer::finish();
-    });
+    }));
 }
 
 /// Under the lock: agent socket A at `hub.sock` in its session dir, `<socket dir>/s/SID/` (`paths::make_session_dir`:
