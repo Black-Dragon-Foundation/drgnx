@@ -1105,7 +1105,7 @@ text of 167 tokens, longer than the local span so both attention paths run, with
 
 GPU tests name their adapter in `DRGNX_TEST_ADAPTER` (a substring of its name) and fail when it's unset or matches nothing;
 production skips software adapters, a test's named adapter doesn't. `tests/parity_gpu.rs` runs the real shaders on llvmpipe, Mesa's
-software Vulkan, so no GPU is needed; `full_references_*` (`#[ignore]`) are for a real GPU, as are the rows of `tests/gpu_bench.rs`,
+software Vulkan, so no GPU is needed; `full_references_*` (`#[ignore]`) are for a real GPU, as are the rows of `tests/timing.rs` (a timing file: the real-time lint exempts it),
 which print throughput, query time and the stall a second process sees on the same card, and assert nothing. Its `bench_cpu`
 row prints the CPU path's figures and needs no GPU. `tests/parity_cpu.rs` holds the CPU path against the references, and
 `cpu_and_gpu_agree` in `parity_gpu.rs` holds the two paths against each other.
