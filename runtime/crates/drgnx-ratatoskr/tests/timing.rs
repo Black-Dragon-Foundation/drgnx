@@ -1,6 +1,6 @@
 //! Hrafn's budgets on the hub side (Task 15): the index time of a checkout, one saved file, and the query on synthetic
 //! stores of 50,000 and 100,000 chunks. Each row is `#[ignore = "timing: …"]`: it runs by itself on the pinned
-//! island of the desktop (`cargo test -p drgnx-ratatoskr --test search_bench --release -- --ignored --nocapture
+//! island of the desktop (`cargo test -p drgnx-ratatoskr --test timing --release -- --ignored --nocapture
 //! --test-threads 1`), prints its figures, and asserts the constants below, which are the budget table's.
 //!
 //! The embedding rows (tokens per second, one question's embedding, VRAM, the stall) are `hrafn-embed/tests/timing.rs`.
@@ -302,7 +302,6 @@ async fn tier1_of_a_checkout_and_one_saved_file() {
         b"\n(defun drgnx-bench-brand-new-symbol () \"A brand new function.\" 1)\n",
     );
     texts.insert(target.clone(), text);
-    let mut list = list;
     for l in &mut list {
         if l.path == target {
             l.blob = "changed".into();

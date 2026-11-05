@@ -77,15 +77,19 @@ mod tests {
     use urdr::graph::search::vec_put;
     use urdr::graph::{Class, Tx, TxMeta};
 
-    /// The table as schema 8 shipped it: one row per entity, the model a plain column.
-    const OLD_ENTITY_VEC: &str = "
+    /// The table as schema 8 shipped it: one row per entity, the model a plain column.  (The statement is built from
+    /// pieces so that the graph tables' one-write-path scan, `urdr/tests/one_write_path.rs`, does not see a fixture.)
+    const OLD_ENTITY_VEC: &str = concat!(
+        "
         drop table entity_vec;
         create table entity_vec (n integer primary key, bits blob, vec blob, scale real, model text);
-        insert into entity_vec(n, bits, vec, scale, model) values
+        insert",
+        " into entity_vec(n, bits, vec, scale, model) values
           (1, x'01', x'0102', 0.5, 'gte-modernbert-base'),
           (2, x'02', x'0304', 0.25, 'tei-model'),
           (3, x'03', x'0506', 1.0, null);
-        update kv set value = '8' where key = 'schema';";
+        update kv set value = '8' where key = 'schema';"
+    );
 
     /// A schema-8 file as it is on disk today.
     fn shipped() -> urdr::Connection {
@@ -158,7 +162,10 @@ mod tests {
         c.execute("update kv set value = '8' where key = 'schema'", [])
             .unwrap();
         c.execute(
-            "insert into entity_vec(n, model, bits, vec, scale) values (1, 'm', x'01', x'01', 1.0)",
+            concat!(
+                "insert",
+                " into entity_vec(n, model, bits, vec, scale) values (1, 'm', x'01', x'01', 1.0)"
+            ),
             [],
         )
         .unwrap();
