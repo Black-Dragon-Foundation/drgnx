@@ -886,6 +886,7 @@ moves, so other packages' entries are formatted again, once per buffer the bars 
     (drgnx-timer-cancel 'statusbar-misc-report)
     (drgnx-memo-forget 'statusbar-bar)
     (drgnx-statusbar--misc-forget)
+    (drgnx-statusbar--forget-edits)
     (clrhash drgnx-statusbar--git-branches)
     (when (fboundp 'drgnx-modal-indicator-on) (drgnx-modal-indicator-on)))
   (drgnx-statusbar--bump)
@@ -904,11 +905,26 @@ the glyph table has no NAME."
   "What goes between the left segments: the glyph `sep' (` · ', or ` | ' in ASCII)."
   (let ((s (drgnx-statusbar--glyph 'sep))) (if (string-empty-p s) " · " s)))
 
+(defvar-local drgnx-statusbar--git-root nil
+  "[PATH COUNT ROOT]: the repository ROOT (or nil) the git cache gave for PATH, this buffer's file or folder (compared
+with `eq'), when its root table held COUNT folders (`drgnx-git-roots-known').")
+
+(defun drgnx-statusbar--cached-root (path)
+  "This buffer's repository root for PATH from drgnx's git cache, looked up again only when PATH is another string or
+the cache found a folder's root since (the lookup builds file names: on every bar it allocated more than the rest of
+the segments together)."
+  (let ((c drgnx-statusbar--git-root) (count (drgnx-git-roots-known)))
+    (if (and c (eq (aref c 0) path) (eql (aref c 1) count))
+        (aref c 2)
+      (let ((root (drgnx-git-cached-root path)))
+        (setq drgnx-statusbar--git-root (vector path count root))
+        root))))
+
 (defun drgnx-statusbar--git-branch ()
   "The branch of this buffer's repository from drgnx's git cache, or nil: not a local repository, or not read yet.
 Reads the cache only (a remote buffer has no entry)."
   (when-let* ((file (or buffer-file-name default-directory))
-              (root (drgnx-git-cached-root file)))
+              (root (drgnx-statusbar--cached-root file)))
     (drgnx-git-branch root)))
 
 (defun drgnx-statusbar--seg-branch ()
@@ -1072,19 +1088,51 @@ redisplay)."
                     (t (drgnx-statusbar--glyph 'dot)))))))
 
 (defvar-local drgnx-statusbar--line-cache nil
-  "[TICK POINT-MIN LINE-START LINE]: the line number the position segment last worked out in this buffer.")
+  "[TICK POINT-MIN LINE-START LINE LOW]: the line number the position segment last worked out in this buffer, and LOW,
+the lowest position an edit touched since (nil: none seen; `drgnx-statusbar--note-edit').")
+
+(defvar-local drgnx-statusbar--indent-cache nil
+  "[TICK TABS SPACES MIN-SPACES END LOW]: what the start of this buffer's text indents with, as of the buffer's change
+TICK; END is where the scan stopped (nil: at the end of the text), LOW as in `drgnx-statusbar--line-cache'.")
+
+(defun drgnx-statusbar--note-edit (beg _end _len)
+  "A local `after-change-functions' entry of a buffer whose bar keeps a line number or an indentation scan: each
+cache's LOW falls to BEG, so an edit below what it read keeps it.  Allocates nothing."
+  (let ((c drgnx-statusbar--line-cache))
+    (when (and c (or (null (aref c 4)) (< beg (aref c 4)))) (aset c 4 beg)))
+  (let ((c drgnx-statusbar--indent-cache))
+    (when (and c (or (null (aref c 5)) (< beg (aref c 5)))) (aset c 5 beg))))
+
+(defun drgnx-statusbar--watch-edits ()
+  "Have this buffer's edits move its caches' LOW (`drgnx-statusbar--note-edit'), once; `drgnx-statusbar-mode' off
+takes the entry out of every buffer."
+  (unless (memq #'drgnx-statusbar--note-edit after-change-functions)
+    (add-hook 'after-change-functions #'drgnx-statusbar--note-edit nil t)))
+
+(defun drgnx-statusbar--forget-edits ()
+  "Every buffer's caches and edit watch go (`drgnx-statusbar-mode' off)."
+  (dolist (b (buffer-list))
+    (with-current-buffer b
+      (when (or drgnx-statusbar--line-cache drgnx-statusbar--indent-cache)
+        (remove-hook 'after-change-functions #'drgnx-statusbar--note-edit t)
+        (setq drgnx-statusbar--line-cache nil drgnx-statusbar--indent-cache nil)))))
 
 (defun drgnx-statusbar--line-at (bol)
-  "The line number of the line starting at BOL.  Moving point costs the lines between the last answer and here; only
-a change of the text (or of the narrowing) counts again from the top."
+  "The line number of the line starting at BOL.  Moving point costs the lines between the last answer and here.  An
+edit counts again from the top only when it touched the text above the last answer's line (or no after-change hook saw
+it: LOW is nil), as does a change of the narrowing: typing on a line counts nothing."
   (let* ((c drgnx-statusbar--line-cache) (tick (buffer-chars-modified-tick)) (pmin (point-min))
-         (line (if (and c (eql (aref c 0) tick) (eql (aref c 1) pmin))
+         (line (if (and c (eql (aref c 1) pmin)
+                        (or (eql (aref c 0) tick) (and (aref c 4) (>= (aref c 4) (aref c 2)))))
                    (let ((cb (aref c 2)) (cl (aref c 3)))
                      (cond ((= bol cb) cl)
                            ((> bol cb) (+ cl (count-lines cb bol)))
                            (t (- cl (count-lines bol cb)))))
                  (line-number-at-pos bol))))
-    (setq drgnx-statusbar--line-cache (vector tick pmin bol line))
+    (if (not c)
+        (progn (setq drgnx-statusbar--line-cache (vector tick pmin bol line nil))
+               (drgnx-statusbar--watch-edits))
+      (aset c 0 tick) (aset c 1 pmin) (aset c 2 bol) (aset c 3 line) (aset c 4 nil))
     line))
 
 (defun drgnx-statusbar--selected-p (w)
@@ -1106,38 +1154,40 @@ real one."
                     (format " (%d selected)" (abs (- (mark t) pt)))
                   ""))))))
 
-(defvar-local drgnx-statusbar--indent-cache nil
-  "(TICK TABS SPACES MIN-SPACES): what the start of this buffer's text indents with, as of the buffer's change TICK.")
-
 (defun drgnx-statusbar--indent-scan ()
-  "The indentation the first 300 lines use, as (TICK TABS SPACES MIN-SPACES): lines that start with a tab, lines that
-start with two or more spaces, and the least number of those spaces (a lone space is alignment).  Cached on the buffer's
-change tick, so redisplay scans again only after an edit; reads the buffer only."
+  "The indentation the first 300 lines use, as [TICK TABS SPACES MIN-SPACES END LOW]: lines that start with a tab,
+lines that start with two or more spaces, and the least number of those spaces (a lone space is alignment).  Scanned
+again only after an edit among those lines (or one no after-change hook saw, or any edit of a shorter text: END is
+nil), so typing below them scans nothing; reads the buffer only."
   (let ((tick (buffer-chars-modified-tick)) (c drgnx-statusbar--indent-cache))
-    (if (eql (car c) tick)
-        c
-      (setq drgnx-statusbar--indent-cache
-            (save-match-data
-              (save-excursion
-                (save-restriction
-                  (widen)
-                  (goto-char (point-min))
-                  (let ((n 0) (tabs 0) (spaces 0) (least nil))
-                    (while (and (< n 300) (not (eobp)))
-                      (let ((ch (char-after)))
-                        (cond ((eq ch ?\t) (setq tabs (1+ tabs)))
-                              ((and (eq ch ?\s) (looking-at " \\{2,\\}[^ \t\n]"))
-                               (let ((w (- (match-end 0) (point) 1)))
-                                 (setq spaces (1+ spaces) least (if least (min least w) w))))))
-                      (forward-line 1)
-                      (setq n (1+ n)))
-                    (list tick tabs spaces least)))))))))
+    (cond ((and c (eql (aref c 0) tick)) c)
+          ((and c (aref c 4) (aref c 5) (>= (aref c 5) (aref c 4)))   ; every edit since was below the scan
+           (aset c 0 tick) (aset c 5 nil)
+           c)
+          (t
+           (unless c (drgnx-statusbar--watch-edits))
+           (setq drgnx-statusbar--indent-cache
+                 (save-match-data
+                   (save-excursion
+                     (save-restriction
+                       (widen)
+                       (goto-char (point-min))
+                       (let ((n 0) (tabs 0) (spaces 0) (least nil))
+                         (while (and (< n 300) (not (eobp)))
+                           (let ((ch (char-after)))
+                             (cond ((eq ch ?\t) (setq tabs (1+ tabs)))
+                                   ((and (eq ch ?\s) (looking-at " \\{2,\\}[^ \t\n]"))
+                                    (let ((w (- (match-end 0) (point) 1)))
+                                      (setq spaces (1+ spaces) least (if least (min least w) w))))))
+                           (forward-line 1)
+                           (setq n (1+ n)))
+                         (vector tick tabs spaces least (and (not (eobp)) (point)) nil))))))))))
 
 (defun drgnx-statusbar--indent-tabs-p ()
   "Non-nil when this buffer is indented with tabs: what its first lines use, else `indent-tabs-mode'."
   (let ((c (drgnx-statusbar--indent-scan)))
-    (cond ((> (nth 1 c) (nth 2 c)) t)
-          ((> (nth 2 c) 0) nil)
+    (cond ((> (aref c 1) (aref c 2)) t)
+          ((> (aref c 2) 0) nil)
           (t indent-tabs-mode))))
 
 (defun drgnx-statusbar--indent-width ()
@@ -1147,7 +1197,7 @@ bumps the epoch `buffer-look'; an edit changes the text's count): no allocation 
 is not scanned: `tab-width'."
   (if (or (drgnx-large-file-p) (drgnx-statusbar--indent-tabs-p))
       tab-width
-    (or (nth 3 (drgnx-statusbar--indent-scan))
+    (or (aref (drgnx-statusbar--indent-scan) 3)
         (let ((vars drgnx-statusbar-indent-vars) (found nil))
           (while (and vars (not found))
             (let ((v (car vars)))

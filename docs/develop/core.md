@@ -1492,6 +1492,18 @@ the mode) moves `flymake` like a report does. Tests: `drgnx-statusbar/` (`a-memo
 `a-buffer-dependent-entry-shows-each-buffers-own-value`, `a-let-of-global-mode-string-is-seen`,
 `a-slow-entry-falls-back-alone`) and `drgnx-doctor/statusbar-*`.
 
+**A keystroke's bar.** Point and the change tick are keys, so every keystroke builds the bar again; what that build
+reads is kept so that it costs the segments, not the buffer. The line number (`drgnx-statusbar--line-cache`) and the
+indentation scan of the first 300 lines (`drgnx-statusbar--indent-cache`) each keep LOW, the lowest position an edit
+touched since they were made: a buffer-local `after-change-functions` entry (`drgnx-statusbar--note-edit`, added with
+the first cache, taken out of every buffer when the mode turns off) lowers it, allocating nothing. An edit at or below
+the line (below the 300 lines) keeps the answer; one above it, or a change no hook saw (LOW stays nil), counts again
+from the top. The branch segment keeps its buffer's repository root (`drgnx-statusbar--git-root`) until the buffer's
+file name is another string or the git cache finds a folder's root (`drgnx-git-roots-known`): the lookup builds file
+names, and on every bar it allocated more than the other segments together. Tests:
+`a-keystroke-counts-no-lines-from-the-top`, `an-edit-below-the-first-lines-scans-nothing`,
+`the-branch-segment-finds-its-root-once-per-buffer`.
+
 Each module activates its memo in its `:setup` (`drgnx-memo-activate`), so turning the module off empties it. The Live
 view bumps by hand rather than by `:watch`: its tests and its use do not wait for the module's setup, and the sites are
 all in one file. The segment and the header are read per redisplay; a hit allocates 0 (tests: `mod-sticky-test.el`,

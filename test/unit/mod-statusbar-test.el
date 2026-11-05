@@ -796,6 +796,68 @@ active (`drgnx-statusbar-test--epochs')."
       (drgnx-statusbar--seg-indent)
       (should-not (eq cache drgnx-statusbar--indent-cache)))))
 
+(defmacro drgnx-statusbar-test--long-buffer (&rest body)
+  "BODY in a buffer of 30,000 lines shown in the selected window, point on line 20,000, the status bar's window."
+  (declare (indent 0))
+  `(with-temp-buffer
+     (dotimes (i 30000) (insert (format "  line %d\n" (1+ i))))
+     (goto-char (point-min)) (forward-line 19999)
+     (let ((w (selected-window)) (old (window-buffer (selected-window))))
+       (set-window-buffer w (current-buffer))
+       (set-window-point w (point))
+       (unwind-protect (let ((drgnx-statusbar--window w)) ,@body)
+         (set-window-buffer w old)))))
+
+(ert-deftest drgnx-statusbar/a-keystroke-counts-no-lines-from-the-top ()
+  "Pattern D.  Typing on line 20,000 of 30,000: the line number comes from the cache (the text above the line did not
+change), with no count from the top; an edit above it, or one no after-change hook saw, counts again."
+  (drgnx-statusbar-test--long-buffer
+    (should (equal (drgnx-statusbar--seg-position) "Ln 20000, Col 1"))
+    (let ((counted 0) (orig (symbol-function 'line-number-at-pos)))
+      (cl-letf (((symbol-function 'line-number-at-pos) (lambda (&rest a) (cl-incf counted) (apply orig a))))
+        (dotimes (_ 5) (insert "x") (set-window-point (selected-window) (point)))
+        (should (equal (drgnx-statusbar--seg-position) "Ln 20000, Col 6"))
+        (should (= counted 0))
+        (save-excursion (goto-char (point-min)) (insert "new\n"))   ; above: the line moved down
+        (should (equal (drgnx-statusbar--seg-position) "Ln 20001, Col 6"))
+        (should (= counted 1))
+        (let ((inhibit-modification-hooks t)) (save-excursion (goto-char (point-min)) (insert "unseen\n")))
+        (should (equal (drgnx-statusbar--seg-position) "Ln 20002, Col 6"))
+        (should (= counted 2))))))
+
+(ert-deftest drgnx-statusbar/an-edit-below-the-first-lines-scans-nothing ()
+  "Pattern D.  The indentation scan reads the first 300 lines: an edit below them keeps its answer (the same cache, no
+scan); an edit among them scans again."
+  (drgnx-statusbar-test--long-buffer
+    (should (equal (drgnx-statusbar--seg-indent) "Spaces: 2"))
+    (let ((cache drgnx-statusbar--indent-cache))
+      (insert "x")
+      (should (equal (drgnx-statusbar--seg-indent) "Spaces: 2"))
+      (should (eq cache drgnx-statusbar--indent-cache))
+      (save-excursion (goto-char (point-min)) (insert "\t\t\tdeep\n"))
+      (drgnx-statusbar--seg-indent)
+      (should-not (eq cache drgnx-statusbar--indent-cache)))))
+
+(ert-deftest drgnx-statusbar/the-branch-segment-finds-its-root-once-per-buffer ()
+  "Pattern D.  The branch segment looks its repository up in the git cache once per buffer (the lookup builds file
+names), again only when the cache learns of a root or the buffer's file changes."
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar-test--git-cache root
+      (drgnx-cache-put 'git-status root (list :branch '(:head "main")))
+      (with-temp-buffer
+        (setq buffer-file-name "/tmp/drgnx-sb-repo/src/a.el")
+        (let ((looked 0) (orig (symbol-function 'drgnx-git-cached-root)))
+          (cl-letf (((symbol-function 'drgnx-git-cached-root) (lambda (p) (cl-incf looked) (funcall orig p))))
+            (dotimes (_ 3) (should (equal (substring-no-properties (drgnx-statusbar--seg-branch)) "⑂ main")))
+            (should (= looked 1))
+            (puthash "/tmp/drgnx-sb-other/" "/tmp/drgnx-sb-other/" drgnx-git--roots)   ; a root found: asked again
+            (drgnx-statusbar--seg-branch)
+            (should (= looked 2))
+            (setq buffer-file-name "/tmp/drgnx-sb-other/b.el")
+            (drgnx-cache-put 'git-status "/tmp/drgnx-sb-other/" (list :branch '(:head "dev")))
+            (should (equal (substring-no-properties (drgnx-statusbar--seg-branch)) "⑂ dev"))
+            (should (= looked 3))))))))
+
 (ert-deftest drgnx-statusbar/restricted-mode-is-a-labelled-segment-with-a-click ()
   (drgnx-statusbar-test--with
     (drgnx-statusbar--define-defaults)
@@ -1440,6 +1502,7 @@ own cache), evil's state tag, other entries of `mode-line-misc-info'; each chang
 
 (ert-deftest drgnx-statusbar/hooks-and-timers-are-owned-by-the-mode ()
   (let ((drgnx-chrome-editor-mode-line drgnx-chrome-editor-mode-line)
+        (edited (generate-new-buffer " *drgnx-statusbar-test*"))
         (was drgnx-statusbar-mode)                     ; the process's other tests keep what they had
         (hooks '((post-command-hook . drgnx-statusbar--post-command)
                  (drgnx-hub-event-functions . drgnx-statusbar--hub-tests)
@@ -1467,7 +1530,13 @@ own cache), evil's state tag, other entries of `mode-line-misc-info'; each chang
               (puthash (selected-window) [x] (drgnx-memo--def-table (get 'statusbar-bar 'drgnx-memo--def)))
               (should (> (nth 2 (assq 'statusbar-bar (drgnx-memo-census))) 0))
               (setq drgnx-statusbar--misc-made -1)
+              (with-current-buffer edited                  ; a line number cached: its buffer's edits are watched
+                (drgnx-statusbar--line-at (point-min))
+                (should (memq #'drgnx-statusbar--note-edit after-change-functions)))
               (drgnx-statusbar-mode -1)
+              (with-current-buffer edited                  ; mode off: the watch and the cache are gone
+                (should-not (memq #'drgnx-statusbar--note-edit after-change-functions))
+                (should-not drgnx-statusbar--line-cache))
               (should-not (drgnx-timer-active-p 'statusbar-refresh))
               (dolist (h hooks) (should-not (memq (cdr h) (default-value (car h)))))
               (should-not (memq #'drgnx-statusbar--ask-git (alist-get 'editor-changed drgnx-signal--subscribers)))
@@ -1476,6 +1545,7 @@ own cache), evil's state tag, other entries of `mode-line-misc-info'; each chang
               (should-not (drgnx-timer-active-p 'statusbar-refresh))
               (should (= 0 (nth 2 (assq 'statusbar-bar (drgnx-memo-census)))))   ; the memo is empty
               (should-not drgnx-statusbar--misc-made))                         ; the entries are read afresh
+          (kill-buffer edited)
           (drgnx-statusbar-mode (if was 1 -1)))))))
 
 (ert-deftest drgnx-statusbar/the-modal-indicator-moves-into-the-bar ()
