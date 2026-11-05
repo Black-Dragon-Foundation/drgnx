@@ -78,6 +78,19 @@ impl LocalRunner {
         self.admission
     }
 
+    /// How many jobs this machine takes at once, as the machines list shows it: the count, or live the workstation
+    /// profile's threads (the CPUs usable less the user's four); the fallback count when the probe can't say.
+    pub fn slots(&self) -> usize {
+        if let Admission::Fixed(n) = self.admission {
+            return n as usize;
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(Ok(cpus)) = self.probe.as_ref().map(|p| p.cpus_usable()) {
+            return Limits::for_profile(Profile::Workstation, 0, cpus.len() as u32).cores_usable as usize;
+        }
+        FIXED_SLOTS as usize
+    }
+
     /// Whether JOB may start here now (EFF its effective priority, RUNNING the queue's jobs running here, LAST_START
     /// when the last of them started): its grant, or why it waits.
     pub fn admit(
@@ -267,6 +280,12 @@ mod tests {
             evicted_once: false,
             long_build: false,
         }
+    }
+
+    // [D] pure: by count, the machines list shows the count
+    #[test]
+    fn the_local_runner_shows_its_slots() {
+        assert_eq!(LocalRunner::new(Admission::Fixed(3), Path::new("/")).slots(), 3);
     }
 
     // [D] pure: by count, the slots; live, the machine's own figures under the workstation profile

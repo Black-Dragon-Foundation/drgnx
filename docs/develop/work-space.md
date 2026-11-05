@@ -313,8 +313,10 @@ it was recorded in, and computes the steps it rests on. `work/conclusions {sessi
   and never expires. `Machines` holds one behind a lock in `Core`.
 - `machines/report` takes user connections only (`classes: [User]`, in `test/conformance/class-matrix.json`); a report
   for `local`, a ttl outside 0..86400, more than 256 slots or a slot without id and kind is `invalid-params`.
-- The local pool is read from the job runner (`exec::Runner::slot_counts`): one `local-N` slot per agent-job slot, the
-  busy ones held by `job` (the pool does not say which job). The hub refreshes it, and drops expired reports, on every
+- The local pool is read from the job runner (`exec::Runner::slot_counts`, the queue's `local_slots`): one `local-N`
+  slot per job this machine takes at once (an admission by count: the count; live: the workstation profile's threads,
+  the usable CPUs less the user's four; never fewer than the queue's jobs running here), the busy ones held by `job`
+  (the pool does not say which job). The hub refreshes it, and drops expired reports, on every
   `machines/report` and `machines/list`, and every 2 s (`work::machines::run`, which waits on the clock only, a task named
   `machines:run` on the hub's clock, so `__test_advance` moves it). `machines-changed` carries the whole list, and only
   when it changed. The start seeds the local slots (`work::machines::seed`, once the job runner is open and before

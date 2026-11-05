@@ -431,11 +431,9 @@ impl Runner {
         self.events.subscribe()
     }
 
-    /// This machine's agent-job slots: `(all, free)`; none before the runner is open.
+    /// This machine's job slots in the queue: `(all, free)` ([`Queue::local_slots`]); none before the runner is open.
     pub fn slot_counts(&self) -> Option<(usize, usize)> {
-        self.inner
-            .get()
-            .map(|i| (i.hooks.slots.max(1), i.slots.available_permits()))
+        self.inner.get().map(|i| i.queue.local_slots())
     }
 
     fn inner(&self) -> Result<&Arc<Inner>, Refusal> {

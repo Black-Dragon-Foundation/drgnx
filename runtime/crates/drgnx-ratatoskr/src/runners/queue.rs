@@ -556,6 +556,14 @@ impl Queue {
         self.lock().runners.len()
     }
 
+    /// This machine's job slots, `(all, free)`: what it takes at once ([`LocalRunner::slots`], never fewer than run
+    /// here now) and how many of them no queued job here holds.
+    pub fn local_slots(&self) -> (usize, usize) {
+        let running = self.lock().local_running.len();
+        let all = self.local.slots().max(running);
+        (all, all - running)
+    }
+
     /// Whether a tick has work: a job waits, or an attempt is on a runner (its grace may end).
     pub fn busy(&self) -> bool {
         let st = self.lock();
