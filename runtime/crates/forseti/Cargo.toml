@@ -10,6 +10,7 @@ publish = false
 # Pure: serde only, so it builds for every target (Android's included) and jobq takes no runtime with it.
 [dependencies]
 serde.workspace = true
+sha2.workspace = true  # the result cache's key (cachekey): pure Rust, builds for Android
 
 [dev-dependencies]
 proptest.workspace = true

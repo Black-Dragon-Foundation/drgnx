@@ -5,6 +5,8 @@
 //! and carry out what they return. `docs/develop/forseti.md` describes each rule and where its numbers come from.
 
 pub mod admit;
+pub mod bisect;
+pub mod cachekey;
 pub mod classify;
 pub mod drain;
 pub mod evict;
@@ -15,6 +17,8 @@ pub mod place;
 pub mod priority;
 pub mod reserve;
 pub mod safety;
+pub mod sim;
+pub mod split;
 
 #[cfg(test)]
 mod testkit;
