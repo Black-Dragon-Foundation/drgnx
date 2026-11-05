@@ -405,7 +405,8 @@ While `ui/look` runs under Glitnir, the Explorer, the panel, the right dock and 
 1 px ring just outside in the divider colour (60 % opaque) and a soft shadow, on a 6 px gap. `drgnx-look-card` holds
 the numbers (logical pixels; the ring is a face and an opacity, never a colour). The gap is the frame's
 `right-divider-width` and `bottom-divider-width` (set in device pixels, so the gap is 6 logical pixels at any display
-scale, and set again when the scale changes), so the ring and shadow have room and never cover text. Turning the
+scale, and set again when the scale changes); the frame's edge gets the same gap (`internal-border-width`, painted in
+the divider colour), so the outer cards have their corners, ring and shadow against a margin and not the frame's edge or the top line. So the ring and shadow have room and never cover text. Turning the
 module off takes the cards away and gives the frame its divider widths back. An editor card keeps its corners while it scrolls. Without
 Glitnir nothing changes.
 

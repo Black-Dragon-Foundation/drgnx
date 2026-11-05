@@ -88,23 +88,30 @@ on the native shell)."
     (drgnx-look--card-frame frame)))
 
 (defun drgnx-look--card-frame (frame)
-  "Make the docked panes of FRAME cards and widen the dividers to the gap; the frame's own widths are kept."
+  "Make the docked panes of FRAME cards and widen the dividers to the gap; the frame's own widths are kept.  The
+frame's edge gets the same gap (`internal-border-width'), in the dividers' colour."
   (let ((gap (drgnx-look--card-gap-px frame)))
     (unless (frame-parameter frame 'drgnx-look-card-saved)
       (set-frame-parameter frame 'drgnx-look-card-saved
                            (list (frame-parameter frame 'right-divider-width)
-                                 (frame-parameter frame 'bottom-divider-width))))
-    (dolist (p '(right-divider-width bottom-divider-width))
+                                 (frame-parameter frame 'bottom-divider-width)
+                                 (frame-parameter frame 'internal-border-width))))
+    (dolist (p '(right-divider-width bottom-divider-width internal-border-width))
       (unless (eql (frame-parameter frame p) gap) (set-frame-parameter frame p gap)))
+    (let ((colour (face-foreground 'window-divider frame t)))
+      (when (and colour (not (equal colour (face-background 'internal-border frame))))
+        (set-face-background 'internal-border colour frame)))
     (dolist (w (window-list frame 'nomini))
       (if (drgnx-look--card-window-p w) (drgnx-look--card-set w) (drgnx-look--card-unset w)))))
 
 (defun drgnx-look--card-restore (frame)
-  "Take the cards off FRAME and give its divider widths back."
+  "Take the cards off FRAME and give its divider widths and edge gap back."
   (dolist (w (window-list frame 'nomini)) (drgnx-look--card-unset w))
   (when-let* ((saved (frame-parameter frame 'drgnx-look-card-saved)))
     (set-frame-parameter frame 'right-divider-width (car saved))
     (set-frame-parameter frame 'bottom-divider-width (cadr saved))
+    (set-frame-parameter frame 'internal-border-width (or (nth 2 saved) 0))
+    (set-face-background 'internal-border nil frame)
     (set-frame-parameter frame 'drgnx-look-card-saved nil)))
 
 (defun drgnx-look-cards-apply ()

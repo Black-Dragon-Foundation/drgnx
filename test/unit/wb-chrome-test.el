@@ -387,12 +387,16 @@ window gets none.  Taking the cards off gives back the parameters and the divide
   "The gap is logical: at a frame scale of 2 the dividers are twice the gap, in device pixels, and a change of the
 scale re-applies it.  Race-proof pattern D (pure: the scale is stubbed)."
   (drgnx-chrome-test--with _dir
-    (let* ((f (selected-frame)) (gap (alist-get 'gap drgnx-look-card)) (scale 2))
+    (let* ((f (selected-frame)) (gap (alist-get 'gap drgnx-look-card)) (scale 2)
+           (border (frame-parameter f 'internal-border-width)))
       (cl-letf (((symbol-function 'frame-scale-factor) (lambda (&optional _frame) scale)))
         (drgnx-look--card-frame f)
         (should (eql (frame-parameter f 'right-divider-width) 12))
         (should (eql (frame-parameter f 'bottom-divider-width) 12))
+        (should (eql (frame-parameter f 'internal-border-width) 12)) ; the frame's outer gap
         (setq scale 1.25)
         (drgnx-look--card-follow-scale f)
         (should (eql (frame-parameter f 'right-divider-width) (round (* gap 1.25))))
-        (drgnx-look--card-restore f)))))
+        (should (eql (frame-parameter f 'internal-border-width) (round (* gap 1.25))))
+        (drgnx-look--card-restore f)
+        (should (eql (frame-parameter f 'internal-border-width) (or border 0)))))))

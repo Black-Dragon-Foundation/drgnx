@@ -158,5 +158,21 @@ bar are other modules')."
       (should (eql (frame-parameter nil 'right-divider-width) want))
       (should (eql (frame-parameter nil 'bottom-divider-width) want)))))
 
+(ert-deftest drgnx-ui-card-panels/frame-edge ()
+  "The frame has an outer gap like the one between cards: the first card starts one gap in from the frame's edge,
+and the margin is painted in the divider's colour, the one between the cards.  Pattern D."
+  (drgnx-card-panels-ui-test--with-explorer
+    (let* ((dock (car (drgnx-wb--dock-windows)))
+           (want (round (* (alist-get 'gap drgnx-look-card) (frame-scale-factor))))
+           (snap (drgnx-uitest-snapshot))
+           (r (drgnx-card-panels-ui-test--rect dock))
+           (between (drgnx-uitest-pixel snap (- (nth 2 r) (/ want 2)) (/ (+ (nth 1 r) (nth 3 r)) 2))))
+      (should (eql (frame-parameter nil 'internal-border-width) want))
+      (should (>= (nth 0 r) want))
+      (should (>= (nth 1 r) want))
+      (should (equal (drgnx-uitest-pixel snap 0 0) between))
+      (should (equal (drgnx-uitest-pixel snap (1- want) (1- want)) between))
+      (should (equal (drgnx-uitest-pixel snap (/ (+ (nth 0 r) (nth 2 r)) 2) (/ want 2)) between)))))
+
 (provide 'card-panels-test)
 ;;; card-panels-test.el ends here
