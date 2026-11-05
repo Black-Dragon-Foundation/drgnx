@@ -162,8 +162,12 @@ real HOME (macOS CI's Nidhogg.app, a local build in ~/.local/opt) — never unse
                                        "-L" (expand-file-name "core" drgnx-test-env-test--root)
                                        "-l" (expand-file-name "harness/run-ert.el" drgnx-test-env-test--root)
                                        "-f" "drgnx-run-ert-batch" suite))))
+          ;; the run directory the child used: RUN when it is short, else one it made in the short root (a one-Emacs
+          ;; run under a long directory leaves no room for socket paths); the unit tier's TMPDIR is that directory
           (pcase-let* ((`(,pid ,child) (with-temp-buffer (insert-file-contents out) (read (current-buffer))))
-                       (expected (let ((process-environment nil)) (drgnx-test-env 'unit run))))
+                       (used (cl-loop for e in child when (string-prefix-p "TMPDIR=" e) return (substring e 7)))
+                       (expected (let ((process-environment nil)) (drgnx-test-env 'unit used))))
+            (should (or (equal used run) (string-match-p "\\`/.*/drgnx-t-[^/]+\\'" used)))
             (dolist (e expected)
               (unless (string-prefix-p "DRGNX_HUB_PARENT_PID=" e)
                 (should (member e child))))
