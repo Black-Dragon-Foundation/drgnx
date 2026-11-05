@@ -72,7 +72,11 @@
 (ert-deftest drgnx-live/package-modules-with-the-users-elpa ()
   ;; The user's ELPA, read-only, on the load path: the waiting modules run, their keys are bound, and
   ;; vertico's growing minibuffer gives the layout back.
-  (skip-unless (file-directory-p (drgnx-live-mod--elpa)))
+  ;; the packages it checks in the user's ELPA, not merely the directory (CI's DRGNX_USER_ELPA holds only the pinned
+  ;; evil and kkp): extra/jump's avy, extra/completion's vertico, orderless, marginalia and corfu
+  (skip-unless (and (file-directory-p (drgnx-live-mod--elpa))
+                    (seq-every-p (lambda (pkg) (directory-files (drgnx-live-mod--elpa) nil (format "\\`%s-[0-9]" pkg)))
+                                 '("avy" "vertico" "orderless" "marginalia" "corfu"))))
   (drgnx-live-mod--with sess
     (drgnx-ui-call sess (format "(progn (dolist (d (directory-files %S t \"\\\\`[^.]\"))
                                    (when (file-directory-p d) (add-to-list 'load-path d t)))
