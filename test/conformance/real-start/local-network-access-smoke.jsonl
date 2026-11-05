@@ -1,0 +1,14 @@
+{"scenario": "real-start/local-network-access-smoke", "requires": ["v1", "linux", "real-sandbox", "chromium", "playwright-mcp", "internet"], "doc": "Once, at the gate, with DRGNX_TEST_INTERNET=1: under Autonomous (browser.web allowed) the agent's Playwright MCP opens http://example.com/ through the session's web proxy. It records whether Chromium's Local Network Access blocked the proxied fetch (review B12): drive.out holds TITLE and the page's title, or ERROR and Chromium's reason. A block is a DEFERRED row, not a red: the row only needs cdp-drive to have answered."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "set -e; mkdir -p $ROOT/project $HOME/.local/bin $HOME/.local/share/claude/versions/9.9.9; cp $MOCK $HOME/.local/share/claude/versions/9.9.9/ratatoskr-mock; ln -s $HOME/.local/share/claude/versions/9.9.9/ratatoskr-mock $HOME/.local/bin/ratatoskr-mock"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-matrix (:preset autonomous)) (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"ratatoskr-mock\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "env": {"PATH": "$HOME/.local/bin:/usr/bin:/bin"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/project"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "tool:exec ratatoskr-mock cdp-drive http://example.com/ > drive.out 2>&1; echo answered >> drive.out"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "file", "path": "$ROOT/project/drive.out", "contains": "answered", "within_ms": 180000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/stop", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": "$any"}, "within_ms": 10000}

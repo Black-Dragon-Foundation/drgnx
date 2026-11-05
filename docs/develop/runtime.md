@@ -601,8 +601,13 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 **Tags** (`requires`): `v1` (hello v1: every row), `sudo` (euid 0, or `sudo -n true` succeeds), `test-hooks` (the
 binary's `version --json` says `"test_hooks": true`), `linux`, `macos`, `perf`, `agent-locks`, `podman` (`podman` is on
 the PATH; an excused skip otherwise), `real-sandbox` (the binary has **no** test hooks and its `sandbox check --json`
-says `ok`; an excused skip otherwise, with the reason: [the real-start rows](#the-real-start-rows)). A tag that is not in
-this list is a parse error naming it. A row whose requirement is missing is skipped.
+says `ok`; an excused skip otherwise, with the reason: [the real-start rows](#the-real-start-rows)), `chromium` (the hub
+gives sessions a browser here: its `sandbox check` reports Landlock ABI 9 or later, and `browser list --json` resolves a
+Chromium), `playwright-mcp` (`node` on the PATH and Playwright MCP in `/opt/pw-mcp`, as the browser test image has them),
+`internet` (the row reaches the outside network; it runs only with `DRGNX_TEST_INTERNET=1`). `chromium` and
+`playwright-mcp` are excused skips where they are missing, except with `DRGNX_TEST_REAL_BROWSER=1` in domr's
+environment: real browsers were asked for, so a missing one fails `--require-all`. A tag that is not in this list is a
+parse error naming it. A row whose requirement is missing is skipped.
 
 **Known reds** (`"pending": "REASON"` in the header, REASON naming the task that turns it green): the row runs, and a
 failure is listed as `PENDING` and counted apart (`N pending` in the summary), never as a failure; a row that passes
@@ -658,6 +663,14 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
   `_claude/rateLimit`), codex (same set; logs `-c` overrides of argv; forks at a turn; `usage_update` and
   `_codex/rateLimits`), gemini (`loadSession` only; the rest answers -32601). `--refuse-mode MODE` refuses `session/set_mode` to MODE (a lock that does not hold; the `agent-locks` rows); other modes are accepted. `--log` is JSONL; `--llm URL` POSTs
   to a `ratatoskr-mock llm` once per turn, so its log counts requests.
+- `http-serve PORT TEXT` prints `MOCK-HTTP-PORT N` and serves on 127.0.0.1:PORT (0: any free port) a page whose title
+  and text are TEXT, and `/download`, TEXT as an attachment: an agent's dev server inside its sandbox, or a site on the
+  host's loopback.
+- `cdp-drive URL…` is an outside agent's browser tool: it runs Playwright MCP (`node
+  /opt/pw-mcp/node_modules/@playwright/mcp/cli.js`, the browser test image's) over stdio with its own environment, so
+  Playwright reaches the browser that `PLAYWRIGHT_MCP_CDP_ENDPOINT` names (never in an argv), and for each URL calls
+  `browser_navigate` and `browser_snapshot` and prints `TITLE <the page's title>` or `ERROR <url>: <why>`; it exits 1
+  when any failed.
 - `llm --script FILE [--log FILE] [--tls CA_FILE] [--parent PID]` prints `MOCK-LLM-PORT N` and serves a scripted
   provider on 127.0.0.1 (a port of `test/fixtures/mock-llm.el`). With `--tls` it makes a certificate authority and a
   leaf for `localhost` and 127.0.0.1 at start (`rcgen`), writes the CA's certificate (no key) to CA_FILE, prints
@@ -807,6 +820,29 @@ excused skips that name the reason.
 | Row | Proves |
 |---|---|
 | `an-agent-starts-sandboxed` | the editor's shape (a project cwd, no task) through `launch::spawn_chat`, Gleipnir's validation and the sandbox: the mock agent is a link in `~/.local/bin` to a versioned install under `~/.local/share/claude/versions` (Claude's own layout), so the [toolchain roots](gleipnir.md#toolchain-roots) must be bound for it to exec; it answers a prompt, cannot write the home, `agents/get` says `enforced: true`, and `agents/stop` leaves no process and no session dir |
+| `the-agent-drives-its-browser` | (also `chromium`, `playwright-mcp`: Landlock ABI 9, the browser test image) the agent browser as a user gets it: under Autonomous the agent runs `ratatoskr-mock cdp-drive` with the endpoint from its environment and reaches its own `http-serve` on local port 5173 inside the sandbox; a server on the host's loopback, as `host.drgnx.internal:PORT`, is refused with one `browser.private` card offering `session`; settled `session`, the retry reaches it and a second retry makes no card; `agents/stop` leaves no Chromium, no session dir and no `drgnx-session-SID` scope |
+| `no-browser-below-abi9` | [OD1](hub.md#the-cdp-broker): a session whose host cannot give it a browser starts without one: a notice with the fix, `browser_why` in `agents/get`, no endpoint variable in the agent's environment. Below ABI 9 the kernel is the reason; on ABI 9 the row's setting names a missing program, so it holds on every kernel |
+| `local-network-access-smoke` | (also `internet`: the gate only, once) Playwright opens `http://example.com/` through the web proxy under Autonomous; whether Chromium's Local Network Access blocked the proxied fetch is in the agent's `drive.out` (a block is a deferred item, not a red) |
+
+CI's sandbox lane (`escape-host` in `runtime.yml`) runs these on its runner: the first and the third run there (bwrap,
+user namespaces, a kernel below ABI 9), the browser rows are excused skips. The Fedora VM runs all four at the gate.
+
+### The real browser tests
+
+`drgnx-ratatoskr/tests/browser_real.rs` (`test-hooks`) runs the CDP broker against real browsers, one test per kind:
+Fedora's `chromium-headless` (the headless shell) and the full `chromium`. Each starts `ratatoskr browser-host
+--unconfined` with the real program, a broker over it, and `ratatoskr-mock cdp-drive` as the agent, which navigates a
+`data:` page and an `http-serve` page; a raw CDP client of the test then checks that `Target.exposeDevToolsProtocol` is
+refused, that a download lands in the browser's own `downloads/` with its `Browser.downloadProgress` event and the
+broker's `Download`, and that a page the agent left paused (`waitForDebuggerOnStart`) loads once the agent's websocket
+closes. It prints whether the hub's `Target.attachToBrowserTarget` worked on that Chromium, or the fallback ran.
+
+It runs only with `DRGNX_TEST_REAL_BROWSER=1`, in the browser test image (`test/container/browser/Containerfile`: the
+image the Rust tests run in, plus Chromium, Node and Playwright MCP pinned in `/opt/pw-mcp`), with `ratatoskr-mock`
+built beside `ratatoskr`; with the variable set, a missing browser, Node or Playwright MCP fails the test.
+`DRGNX_TEST_RECORD_DIR=DIR` writes the browser side of each run to `DIR/real-KIND.jsonl`, which `heimdall`'s tests read
+from its `tests/data`. No page comes from the network: `http-serve` serves them on loopback, which Chromium reaches
+without its proxy.
 
 ### The perf rows
 

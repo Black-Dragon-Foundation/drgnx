@@ -1,0 +1,40 @@
+{"scenario": "real-start/the-agent-drives-its-browser", "requires": ["v1", "linux", "real-sandbox", "chromium", "playwright-mcp"], "doc": "A release hub starts a sandboxed agent with its browser (Landlock ABI 9 and a Chromium the hub resolves; the browser test image's Playwright MCP). The agent, as an outside agent's browser tool would, runs Playwright MCP with the capability URL from its environment: it reaches its own dev server on a local port inside the sandbox; a server on the host's loopback, reached as host.drgnx.internal, is refused until the user answers the one browser.private card with session, and then reached with no second card; agents/stop leaves no Chromium, no session dir and no scope. Autonomous, so browser and browser.web are allowed and browser.private still asks."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "set -e; mkdir -p $ROOT/project $HOME/.local/bin $HOME/.local/share/claude/versions/9.9.9; cp $MOCK $HOME/.local/share/claude/versions/9.9.9/ratatoskr-mock; ln -s $HOME/.local/share/claude/versions/9.9.9/ratatoskr-mock $HOME/.local/bin/ratatoskr-mock; echo readme > $ROOT/project/README"], "expect_code": 0}
+{"do": "spawn", "capture": "site", "argv": ["$MOCK", "http-serve", "0", "host-ok"], "capture_stdout": {"regex": "MOCK-HTTP-PORT (\\d+)", "name": "port"}}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-matrix (:preset autonomous)) (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"ratatoskr-mock\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "env": {"PATH": "$HOME/.local/bin:/usr/bin:/bin"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/project"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/get", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"session": {"id": "$sid", "enforced": true, "browser_why": "$absent"}}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "tool:exec ratatoskr-mock http-serve 5173 dev-ok > srv.out 2>&1 & until grep -q MOCK-HTTP-PORT srv.out; do :; done; ratatoskr-mock cdp-drive http://127.0.0.1:5173/ 2>&1 | tee drive1.out"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "file", "path": "$ROOT/project/drive1.out", "contains": "TITLE dev-ok", "within_ms": 180000}
+{"do": "expect", "conn": "e", "json": {"event": "agent-entries", "data": {"id": "$sid", "seq": "$number", "entries": {"$contains": [["$any", {"type": "stop"}]]}}}, "within_ms": 60000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/send", "params": {"id": "$sid", "text": "tool:exec ratatoskr-mock cdp-drive http://host.drgnx.internal:$port/ 2>&1 | tee drive2.out"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "card", "data": {"id": "$capture:card", "kind": "matrix"}}, "within_ms": 120000}
+{"do": "file", "path": "$ROOT/project/drive2.out", "contains": "ERROR http://host.drgnx.internal:$port/", "within_ms": 180000}
+{"do": "sql_expect", "sql": "select json_extract(card.data, '$.action'), count(*) from card, json_each(card.data, '$.choices') where card.id = $card and json_extract(json_each.value, '$.id') = 'session'", "rows": [["browser.private", 1]]}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "cards/settle", "params": {"card": "$card", "choice": "session"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"settled": true}}}
+{"do": "expect", "conn": "e", "json": {"event": "events", "data": {"since": "$number", "last": "$number", "events": {"$contains": [{"kind": "status", "agent": "$sid", "data": {"browser-net": true, "session": "$sid"}}]}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "agents/send", "params": {"id": "$sid", "text": "tool:exec ratatoskr-mock cdp-drive http://host.drgnx.internal:$port/ 2>&1 | tee drive3.out"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": true}}
+{"do": "file", "path": "$ROOT/project/drive3.out", "contains": "TITLE host-ok", "within_ms": 180000}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "agents/send", "params": {"id": "$sid", "text": "tool:exec ratatoskr-mock cdp-drive http://host.drgnx.internal:$port/ 2>&1 | tee drive4.out"}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": true}}
+{"do": "file", "path": "$ROOT/project/drive4.out", "contains": "TITLE host-ok", "within_ms": 180000}
+{"do": "sql_expect", "sql": "select count(*) from card where kind = 'matrix' and json_extract(data, '$.action') = 'browser.private'", "rows": [[1]]}
+{"do": "send", "conn": "c", "json": {"id": 8, "method": "agents/stop", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 8, "result": "$any"}, "within_ms": 10000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "pgrep -u $(id -u) -f chromiu[m]"], "expect_code": 1, "retry_ms": 15000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "pgrep -f '$HOME/.local/bin/ratatoskr-moc[k]'"], "expect_code": 1, "retry_ms": 10000}
+{"do": "file", "path": "$SOCKET_DIR/s/$sid", "exists": false}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "! systemctl --user is-active --quiet drgnx-session-$sid.scope"], "expect_code": 0, "retry_ms": 10000}

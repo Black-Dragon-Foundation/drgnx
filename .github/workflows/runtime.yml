@@ -438,6 +438,16 @@ jobs:
       - name: agent core, sandbox lane (--ignored)
         if: ${{ !cancelled() && steps.core-build.outcome == 'success' }}
         run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks -- --ignored --test-threads 1
+      # The real-start rows (docs/develop/runtime.md, "The real-start rows"): a release hub, no test hooks, so each
+      # agents/start goes through the real launch, Gleipnir's validation and bwrap. --require-all: a row that cannot
+      # start sandboxed fails here; the browser row is an excused skip on this runner (no Chromium, and a Landlock ABI
+      # below 9), as is the internet row.
+      - name: real-start rows (release hub)
+        if: ${{ !cancelled() && steps.core-build.outcome == 'success' }}
+        run: |
+          cargo build --locked --release --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr
+          runtime/target/release/domr --hub-bin runtime/target/release/ratatoskr \
+            --scenarios test/conformance --only 'real-start/*' --require-all
       # last, whatever the tests said
       - id: prune
         if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && (steps.build.outcome == 'success' || steps.core-build.outcome == 'success') }}
