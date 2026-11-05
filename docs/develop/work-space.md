@@ -371,12 +371,14 @@ Layer 2 (the files a command's processes opened; labelled "seen open") is Gleipn
   arrives (one per session as the hub sees it), and an open while N run is labelled "one of N parallel commands".
 - **What goes out** (`touches`): each path by its true name, under the session's folder (as layer 1's), never under
   the system's or the home's toolchain and cache dirs, not git-ignored (`git check-ignore`, cached per path); a write
-  is looked at now, at its step's close. The files go to the presence model as `opened` on the step; a label goes to
-  the step's detail (origin `opened`, the label as `title`) when the step has no detail of its own, and so does an
-  `Off` session's label on each of its shell steps.
+  is looked at now, at its step's close. The files go to the presence model as `opened` on the step, and the files
+  that changed there go on to the Work map as `Presence` facts, like any other read (when they land after the step's
+  close, they reach the map then); a label goes to the step's detail (origin `opened`, the label as `title`) when the
+  step has no detail of its own, and so does an `Off` session's label on each of its shell steps.
 - **Not kept:** a step's opens are not stored (like layer 1's, they come back only with the session's next steps after
   a restart); the learned skip list is lost with the hub; whole-tree mode has no budget of its own (it is opt-in).
 - Tests: `work::trace::tests` (pattern A: a step's close before or after its listener's last notifications; pattern
   D: the rules through a fake probe, the budget, the skip list, the labels), and the rows
-  `trace/claude-bash-reads-are-seen-open` (the mock's `provider:bash` through the wrapper) and
+  `trace/claude-bash-reads-are-seen-open` (the mock's `provider:bash` through the wrapper),
+  `trace/a-file-seen-open-shows-on-the-map` (a read only the tracer sees, counted on the agent's card) and
   `trace/macos-says-not-traced` (`DRGNX_TEST_TRACE_PLATFORM=macos`, test hubs only), in the sandbox container.
