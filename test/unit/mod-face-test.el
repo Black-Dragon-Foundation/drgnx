@@ -5,6 +5,7 @@
 (load (expand-file-name "modules/ui/drgnx-face" drgnx-dir) nil t)
 (load (expand-file-name "modules/core/drgnx-basics" drgnx-dir) nil t)   ; New Untitled
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/measure-fixture" drgnx-dir) nil t)
 (defvar drgnx-untitled-p)
 
 (defvar drgnx-face-test--state nil "The temp directory that is the state directory while a test runs.")
@@ -285,6 +286,27 @@ too, no stubs — and turned off after, strictly: the state after equals the sta
   (with-temp-buffer
     (setq major-mode 'drgnx-start-mode)
     (should (equal (drgnx-face-frame-title) "drgnx"))))
+
+(ert-deftest drgnx-face/a-redisplay-that-changes-nothing-reuses-the-frame-title ()
+  "Pattern D.  The title is formatted on every redisplay: with the same buffer, file, folder and project cache it is
+the string made last, and allocates nothing; a renamed buffer or another project makes it again."
+  (drgnx-test-compile "drgnx-face-")
+  (with-temp-buffer
+    (setq buffer-file-name "/x/proj/src/main.rs" default-directory "/x/proj/src/")
+    (setq-local drgnx-chrome--root (cons "/x/proj/src/" "/x/proj/"))
+    (let ((title (drgnx-face-frame-title)))
+      (should (equal title "main.rs — proj — drgnx"))
+      (should (eq title (drgnx-face-frame-title)))
+      (should (= 0 (drgnx-test-alloc (drgnx-face-frame-title))))
+      (setq-local drgnx-chrome--root (cons "/x/proj/src/" "/x/other/"))
+      (should (equal (drgnx-face-frame-title) "main.rs — other — drgnx"))
+      (setq buffer-file-name "/x/proj/src/lib.rs")
+      (should (equal (drgnx-face-frame-title) "lib.rs — other — drgnx"))))
+  (with-temp-buffer
+    (rename-buffer "one" t)
+    (let ((title (drgnx-face-frame-title)))
+      (rename-buffer "two" t)
+      (should-not (equal title (drgnx-face-frame-title))))))
 
 (ert-deftest drgnx-face/the-frame-title-setting-leaves-your-own-alone ()
   (let ((frame-title-format drgnx-face--stock-title))

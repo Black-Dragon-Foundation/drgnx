@@ -394,17 +394,30 @@ nil gives back what it replaced."
 
 ;;;; The frame's title
 
+(defvar drgnx-face--title-last (make-vector 7 nil)
+  "[BUFFER FILE-NAME BUFFER-NAME FOLDER ROOT-CACHE MODE TITLE]: the title made last and what it was made from
+\(compared with `eq'): a redisplay of the same buffer, file, name, folder, project cache and major mode gives back
+TITLE.  One entry: it keeps at most one buffer that may since have been killed.")
+
 (defun drgnx-face-frame-title ()
   "`FILE — PROJECT — drgnx' for the selected window's buffer: the file's name (else the buffer's), the project from the
-breadcrumb's cache (no lookup: this runs in redisplay), then the framework's name.  The start page is just `drgnx'."
-  (let* ((b (current-buffer))
-         (name (cond ((derived-mode-p 'drgnx-start-mode) nil)
-                     (buffer-file-name (file-name-nondirectory buffer-file-name))
-                     (t (string-trim (buffer-name b)))))
-         (cache (and (boundp 'drgnx-chrome--root) drgnx-chrome--root))
-         (project (and name (consp cache) (stringp (cdr cache)) (equal (car cache) default-directory)
-                       (file-name-nondirectory (directory-file-name (cdr cache))))))
-    (string-join (delq nil (list (and name (not (string-empty-p name)) name) project "drgnx")) " — ")))
+breadcrumb's cache (no lookup: this runs in redisplay), then the framework's name.  The start page is just `drgnx'.
+It runs on every redisplay: when nothing it reads changed, the title made last comes back and nothing is allocated."
+  (let ((b (current-buffer)) (cache (and (boundp 'drgnx-chrome--root) drgnx-chrome--root))
+        (last drgnx-face--title-last))
+    (if (and (eq (aref last 0) b) (eq (aref last 1) buffer-file-name) (eq (aref last 2) (buffer-name b))
+             (eq (aref last 3) default-directory) (eq (aref last 4) cache) (eq (aref last 5) major-mode)
+             (aref last 6))
+        (aref last 6)
+      (let* ((name (cond ((derived-mode-p 'drgnx-start-mode) nil)
+                         (buffer-file-name (file-name-nondirectory buffer-file-name))
+                         (t (string-trim (buffer-name b)))))
+             (project (and name (consp cache) (stringp (cdr cache)) (equal (car cache) default-directory)
+                           (file-name-nondirectory (directory-file-name (cdr cache)))))
+             (title (string-join (delq nil (list (and name (not (string-empty-p name)) name) project "drgnx")) " — ")))
+        (aset last 0 b) (aset last 1 buffer-file-name) (aset last 2 (buffer-name b))
+        (aset last 3 default-directory) (aset last 4 cache) (aset last 5 major-mode) (aset last 6 title)
+        title))))
 
 (defconst drgnx-face--frame-title-construct '(:eval (drgnx-face-frame-title)) "Our value of `frame-title-format'.")
 
