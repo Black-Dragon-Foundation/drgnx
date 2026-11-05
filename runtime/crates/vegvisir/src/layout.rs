@@ -6,8 +6,8 @@
 //! 1. The layer is the kind's.
 //! 2. Agents and branches sit in one block per plan, in plan order, the "No plan" block last; a block wraps into
 //!    sub-rows inside itself (an agent sub-row, then its branches' sub-row, alternating), and whole blocks wrap into
-//!    block lines. A block's agents go compact before it needs a third sub-row, except those that need you or are on
-//!    the focused chain; subagents are always compact and follow their parent.
+//!    block lines. A block's agents go compact before it needs a second sub-row, except those that need you or are
+//!    on the focused chain; subagents are always compact and follow their parent.
 //! 3. Inside a block, agents keep the previous layout's order (new ones at the end), else start order. Other rows are
 //!    ordered by their items' targets, then adjacent swaps that cut crossings by more than a stability penalty.
 //! 4. A plan's target is its block's centre; a spec's, an ask's, a file's or a machine's is the mean centre of what it
@@ -19,8 +19,11 @@
 //!    so a full row's lanes widen into its slack; a row with no free slot left bundles the edge into a port on its
 //!    target.
 //! 6. Bands hold the curves between consecutive rows: from a card's bottom centre to a lane, lane to lane, a lane to
-//!    a card's top centre; same-row arcs in the band above the row.
-//! 7. Below 480 px (120 units), or with a card wider than the tile, the map does not fit: the editor shows the outline.
+//!    a card's top centre; same-row arcs in the band above the row. "Runs on" and "based on" edges are drawn on the
+//!    focused chain only (machines carry their load, branches their base, the side panel says both).
+//! 7. The map fits at 480 px (120 units) or wider with no lane overflow (no port) and every card inside the width;
+//!    otherwise the editor shows the outline. The height is not part of the rule: the map scrolls vertically, its
+//!    needs-you strip stays pinned, and the selection scrolls into view.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -242,6 +245,12 @@ pub fn layout(m: &Model, v: &ViewState, prev: Option<&Layout>) -> Layout {
         chain.extend(up);
         chain.extend(down);
         chain.insert(f);
+        // the bases the chain's branches were cut from, for its "based on" edges
+        for &(a, b, k) in &d.edges {
+            if k == EdgeKind::BasedOn && chain.contains(&a) {
+                chain.insert(b);
+            }
+        }
         vis.retain(|y| chain.contains(y));
     }
     if v.filters.overlaps {
@@ -271,6 +280,8 @@ pub fn layout(m: &Model, v: &ViewState, prev: Option<&Layout>) -> Layout {
     let shown_kind = |k: EdgeKind| match k {
         EdgeKind::Reads => focus.is_some(),
         EdgeKind::ReadVsEdit => v.filters.overlaps,
+        // slots and bases: the machine's chip and the branch's caption say them; the edge only on the focused chain
+        EdgeKind::RunsOn | EdgeKind::BasedOn => focus.is_some(),
         _ => true,
     };
     let mut drawn: Vec<(Sym, Sym, EdgeKind)> = d
@@ -618,7 +629,8 @@ fn pack_block(
     } else {
         Vec::new()
     };
-    if agents.len() > 2 {
+    // compact before a second sub-row
+    if agents.len() > 1 {
         for (&a, f) in forms.iter_mut() {
             if !protected(a) {
                 *f = Form::Compact;
@@ -1179,6 +1191,8 @@ fn finish(
         })
         .collect();
     let widest = rect.values().map(|r| r.1).max().unwrap_or(0);
+    // the fit rule: wide enough, every card inside, no lane overflow; the height never counts (the map scrolls)
+    let fits = width >= MIN_WIDTH_UNITS && widest <= width && ports.is_empty();
     Layout {
         rows: out_rows,
         form: form
@@ -1190,7 +1204,7 @@ fn finish(
         lanes,
         ports,
         bands,
-        fits: width >= MIN_WIDTH_UNITS && widest <= width,
+        fits,
         crossings,
         width_units: width,
         height_units: height,

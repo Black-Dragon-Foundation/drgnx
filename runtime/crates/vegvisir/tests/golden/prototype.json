@@ -125,19 +125,19 @@
       "h": 7
     },
     "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs": {
-      "x": 48,
+      "x": 41,
       "y": 131,
       "w": 36,
       "h": 7
     },
     "machine:desktop": {
-      "x": 87,
+      "x": 80,
       "y": 131,
       "w": 32,
       "h": 7
     },
     "machine:laptop": {
-      "x": 13,
+      "x": 115,
       "y": 131,
       "w": 32,
       "h": 7
@@ -189,20 +189,6 @@
     },
     {
       "row": 4,
-      "x": 111,
-      "from": "agent:a1",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 4,
-      "x": 111,
-      "from": "agent:a3",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 4,
       "x": 201,
       "from": "plan:jobq",
       "to": "agent:a4",
@@ -210,66 +196,31 @@
     },
     {
       "row": 5,
-      "x": 66,
+      "x": 59,
       "from": "branch:drgnx/rp-df-hub",
       "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
       "kind": "edits"
     },
     {
       "row": 5,
-      "x": 66,
+      "x": 59,
       "from": "branch:drgnx/rp-fx-sess",
       "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
       "kind": "edits"
     },
     {
-      "row": 5,
-      "x": 103,
-      "from": "agent:a1",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 5,
-      "x": 103,
-      "from": "agent:a3",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
       "row": 6,
-      "x": 8,
-      "from": "agent:a4",
-      "to": "machine:laptop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 6,
-      "x": 66,
+      "x": 59,
       "from": "branch:drgnx/rp-df-hub",
       "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
       "kind": "edits"
     },
     {
       "row": 6,
-      "x": 66,
+      "x": 59,
       "from": "branch:drgnx/rp-fx-sess",
       "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
       "kind": "edits"
-    },
-    {
-      "row": 6,
-      "x": 103,
-      "from": "agent:a1",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 6,
-      "x": 103,
-      "from": "agent:a3",
-      "to": "machine:desktop",
-      "kind": "runs-on"
     }
   ],
   "ports": [],
@@ -394,33 +345,11 @@
           "arc": true
         },
         {
-          "from": "agent:a1",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 29,
-          "x1": 111
-        },
-        {
-          "from": "branch:drgnx/rp-fx-sess",
-          "to": "branch:drgnx/rp-df-hub",
-          "kind": "based-on",
-          "x0": 90,
-          "x1": 29,
-          "arc": true
-        },
-        {
           "from": "agent:a2",
           "to": "branch:drgnx/rp-fx-sess",
           "kind": "came-from",
           "x0": 90,
           "x1": 90
-        },
-        {
-          "from": "agent:a3",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 111
         },
         {
           "from": "agent:a3",
@@ -448,28 +377,14 @@
           "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
           "kind": "edits",
           "x0": 29,
-          "x1": 66
+          "x1": 59
         },
         {
           "from": "branch:drgnx/rp-fx-sess",
           "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
           "kind": "edits",
           "x0": 90,
-          "x1": 66
-        },
-        {
-          "from": "agent:a1",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 111,
-          "x1": 103
-        },
-        {
-          "from": "agent:a3",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 111,
-          "x1": 103
+          "x1": 59
         },
         {
           "from": "plan:jobq",
@@ -487,13 +402,6 @@
       "segs": [
         {
           "from": "agent:a4",
-          "to": "machine:laptop",
-          "kind": "runs-on",
-          "x0": 29,
-          "x1": 8
-        },
-        {
-          "from": "agent:a4",
           "to": "branch:org/docs-plans-tooling",
           "kind": "came-from",
           "x0": 29,
@@ -503,29 +411,15 @@
           "from": "branch:drgnx/rp-df-hub",
           "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
           "kind": "edits",
-          "x0": 66,
-          "x1": 66
+          "x0": 59,
+          "x1": 59
         },
         {
           "from": "branch:drgnx/rp-fx-sess",
           "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
           "kind": "edits",
-          "x0": 66,
-          "x1": 66
-        },
-        {
-          "from": "agent:a1",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 103,
-          "x1": 103
-        },
-        {
-          "from": "agent:a3",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 103,
-          "x1": 103
+          "x0": 59,
+          "x1": 59
         }
       ]
     },
@@ -535,45 +429,24 @@
       "height_units": 8,
       "segs": [
         {
-          "from": "agent:a4",
-          "to": "machine:laptop",
-          "kind": "runs-on",
-          "x0": 8,
-          "x1": 29
-        },
-        {
           "from": "branch:drgnx/rp-df-hub",
           "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
           "kind": "edits",
-          "x0": 66,
-          "x1": 66
+          "x0": 59,
+          "x1": 59
         },
         {
           "from": "branch:drgnx/rp-fx-sess",
           "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
           "kind": "edits",
-          "x0": 66,
-          "x1": 66
-        },
-        {
-          "from": "agent:a1",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 103,
-          "x1": 103
-        },
-        {
-          "from": "agent:a3",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 103,
-          "x1": 103
+          "x0": 59,
+          "x1": 59
         }
       ]
     }
   ],
   "fits": true,
-  "crossings": 5,
+  "crossings": 2,
   "width_units": 226,
   "height_units": 138
 }

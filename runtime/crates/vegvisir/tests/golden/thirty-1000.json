@@ -124,55 +124,55 @@
       "block_line": 2,
       "sub": 1,
       "y": 303,
-      "height_units": 25
+      "height_units": 10
     },
     {
       "layer": 5,
       "block_line": 2,
       "sub": 1,
-      "y": 331,
+      "y": 316,
       "height_units": 7
     },
     {
       "layer": 4,
       "block_line": 3,
       "sub": 0,
-      "y": 346,
+      "y": 331,
       "height_units": 25
     },
     {
       "layer": 5,
       "block_line": 3,
+      "sub": 0,
+      "y": 359,
+      "height_units": 7
+    },
+    {
+      "layer": 4,
+      "block_line": 4,
       "sub": 0,
       "y": 374,
-      "height_units": 7
-    },
-    {
-      "layer": 4,
-      "block_line": 4,
-      "sub": 0,
-      "y": 389,
       "height_units": 25
     },
     {
       "layer": 5,
       "block_line": 4,
       "sub": 0,
-      "y": 417,
+      "y": 402,
       "height_units": 7
     },
     {
       "layer": 6,
       "block_line": 0,
       "sub": 0,
-      "y": 432,
+      "y": 417,
       "height_units": 7
     },
     {
       "layer": 6,
       "block_line": 1,
       "sub": 0,
-      "y": 447,
+      "y": 432,
       "height_units": 7
     }
   ],
@@ -300,23 +300,23 @@
     "agent:s18": {
       "x": 0,
       "y": 260,
-      "w": 58,
-      "h": 25
+      "w": 42,
+      "h": 10
     },
     "agent:s18/toolu_d": {
-      "x": 61,
+      "x": 45,
       "y": 260,
       "w": 42,
       "h": 10
     },
     "agent:s19": {
-      "x": 106,
+      "x": 90,
       "y": 260,
-      "w": 58,
-      "h": 25
+      "w": 42,
+      "h": 10
     },
     "agent:s20": {
-      "x": 167,
+      "x": 135,
       "y": 260,
       "w": 58,
       "h": 25
@@ -324,36 +324,36 @@
     "agent:s21": {
       "x": 0,
       "y": 303,
-      "w": 58,
-      "h": 25
+      "w": 42,
+      "h": 10
     },
     "agent:s22": {
-      "x": 61,
+      "x": 45,
       "y": 303,
-      "w": 58,
-      "h": 25
+      "w": 42,
+      "h": 10
     },
     "agent:s23": {
       "x": 0,
-      "y": 346,
+      "y": 331,
       "w": 58,
       "h": 25
     },
     "agent:s24": {
       "x": 61,
-      "y": 346,
+      "y": 331,
       "w": 58,
       "h": 25
     },
     "agent:s25": {
       "x": 0,
-      "y": 389,
+      "y": 374,
       "w": 58,
       "h": 25
     },
     "agent:s26": {
       "x": 61,
-      "y": 389,
+      "y": 374,
       "w": 58,
       "h": 25
     },
@@ -460,37 +460,37 @@
       "h": 7
     },
     "branch:drgnx/main": {
-      "x": 113,
-      "y": 331,
+      "x": 89,
+      "y": 316,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/rp-core": {
-      "x": 9,
+      "x": 1,
       "y": 288,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/rp-hub": {
-      "x": 115,
+      "x": 91,
       "y": 288,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/rp-install": {
-      "x": 70,
-      "y": 331,
+      "x": 46,
+      "y": 316,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/rp-mods": {
-      "x": 9,
-      "y": 331,
+      "x": 1,
+      "y": 316,
       "w": 40,
       "h": 7
     },
     "branch:drgnx/rp-sweep": {
-      "x": 176,
+      "x": 144,
       "y": 288,
       "w": 40,
       "h": 7
@@ -545,72 +545,72 @@
     },
     "branch:org/docs-brainstorm": {
       "x": 9,
-      "y": 417,
+      "y": 402,
       "w": 40,
       "h": 7
     },
     "branch:org/docs-chat": {
       "x": 70,
-      "y": 417,
+      "y": 402,
       "w": 40,
       "h": 7
     },
     "branch:org/jobq-plan": {
       "x": 9,
-      "y": 374,
+      "y": 359,
       "w": 40,
       "h": 7
     },
     "branch:org/jobq-report": {
       "x": 70,
-      "y": 374,
+      "y": 359,
       "w": 40,
       "h": 7
     },
     "branch:org/main": {
       "x": 113,
-      "y": 417,
+      "y": 402,
       "w": 40,
       "h": 7
     },
     "file:drgnx/core/drgnx-hub-core.el": {
-      "x": 150,
-      "y": 447,
+      "x": 120,
+      "y": 417,
       "w": 36,
       "h": 7
     },
     "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs": {
-      "x": 155,
-      "y": 432,
+      "x": 81,
+      "y": 417,
       "w": 36,
       "h": 7
     },
     "file:drgnx/runtime/crates/vegvisir/src/layout.rs": {
       "x": 3,
-      "y": 432,
+      "y": 417,
       "w": 36,
       "h": 7
     },
     "file:nidhogg/src/xdisp.c": {
-      "x": 81,
-      "y": 432,
+      "x": 42,
+      "y": 417,
       "w": 36,
       "h": 7
     },
     "machine:desktop": {
-      "x": 120,
-      "y": 432,
+      "x": 159,
+      "y": 417,
       "w": 32,
       "h": 7
     },
     "machine:laptop": {
       "x": 194,
-      "y": 432,
+      "y": 417,
       "w": 32,
       "h": 7
     },
     "machine:local": {
-      "x": 46,
+      "x": 0,
       "y": 432,
       "w": 32,
       "h": 7
@@ -679,12 +679,12 @@
     "agent:s15": "compact",
     "agent:s16": "compact",
     "agent:s17": "compact",
-    "agent:s18": "rich",
+    "agent:s18": "compact",
     "agent:s18/toolu_d": "compact",
-    "agent:s19": "rich",
+    "agent:s19": "compact",
     "agent:s20": "rich",
-    "agent:s21": "rich",
-    "agent:s22": "rich",
+    "agent:s21": "compact",
+    "agent:s22": "compact",
     "agent:s23": "rich",
     "agent:s24": "rich",
     "agent:s25": "rich",
@@ -1050,27 +1050,6 @@
     },
     {
       "row": 5,
-      "x": 135,
-      "from": "agent:s01",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 5,
-      "x": 135,
-      "from": "agent:s02",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 5,
-      "x": 135,
-      "from": "agent:s03",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 5,
       "x": 177,
       "from": "plan:race-proof",
       "to": "agent:s18",
@@ -1156,23 +1135,9 @@
     {
       "row": 6,
       "x": 104,
-      "from": "agent:s01",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 6,
-      "x": 104,
-      "from": "agent:s02",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 6,
-      "x": 104,
-      "from": "agent:s03",
-      "to": "machine:desktop",
-      "kind": "runs-on"
+      "from": "branch:drgnx/as2-map",
+      "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+      "kind": "edits"
     },
     {
       "row": 6,
@@ -1275,8 +1240,8 @@
     {
       "row": 6,
       "x": 195,
-      "from": "branch:drgnx/as2-map",
-      "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+      "from": "branch:drgnx/as2-data",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
       "kind": "edits"
     },
     {
@@ -1289,23 +1254,16 @@
     {
       "row": 6,
       "x": 197,
-      "from": "branch:drgnx/as2-data",
-      "to": "branch:drgnx/as2",
-      "kind": "based-on"
-    },
-    {
-      "row": 6,
-      "x": 197,
-      "from": "branch:drgnx/as2-map",
-      "to": "branch:drgnx/as2",
-      "kind": "based-on"
-    },
-    {
-      "row": 6,
-      "x": 197,
       "from": "branch:drgnx/as2-sources",
-      "to": "branch:drgnx/as2",
-      "kind": "based-on"
+      "to": "file:drgnx/core/drgnx-hub-core.el",
+      "kind": "edits"
+    },
+    {
+      "row": 6,
+      "x": 198,
+      "from": "branch:drgnx/as2-sources",
+      "to": "branch:drgnx/rp-hub",
+      "kind": "overlap"
     },
     {
       "row": 6,
@@ -1355,6 +1313,13 @@
       "from": "plan:agent-system-p2",
       "to": "agent:s10",
       "kind": "came-from"
+    },
+    {
+      "row": 7,
+      "x": 103,
+      "from": "branch:drgnx/as2-data",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
     },
     {
       "row": 7,
@@ -1415,72 +1380,9 @@
     {
       "row": 7,
       "x": 149,
-      "from": "agent:s01",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 7,
-      "x": 149,
-      "from": "agent:s02",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 7,
-      "x": 149,
-      "from": "agent:s03",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 7,
-      "x": 149,
-      "from": "agent:s04",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 7,
-      "x": 149,
-      "from": "agent:s05",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 7,
-      "x": 149,
-      "from": "agent:s06",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 7,
-      "x": 149,
-      "from": "agent:s07",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 7,
-      "x": 150,
-      "from": "branch:drgnx/as2-data",
-      "to": "branch:drgnx/as2",
-      "kind": "based-on"
-    },
-    {
-      "row": 7,
-      "x": 150,
-      "from": "branch:drgnx/as2-map",
-      "to": "branch:drgnx/as2",
-      "kind": "based-on"
-    },
-    {
-      "row": 7,
-      "x": 150,
       "from": "branch:drgnx/as2-sources",
-      "to": "branch:drgnx/as2",
-      "kind": "based-on"
+      "to": "file:drgnx/core/drgnx-hub-core.el",
+      "kind": "edits"
     },
     {
       "row": 7,
@@ -1526,6 +1428,13 @@
     },
     {
       "row": 7,
+      "x": 194,
+      "from": "branch:drgnx/as2-sources",
+      "to": "branch:drgnx/rp-hub",
+      "kind": "overlap"
+    },
+    {
+      "row": 7,
       "x": 204,
       "from": "plan:jobq",
       "to": "agent:s23",
@@ -1550,6 +1459,20 @@
       "x": 44,
       "from": "branch:drgnx/as2-map",
       "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+      "kind": "edits"
+    },
+    {
+      "row": 8,
+      "x": 88,
+      "from": "branch:drgnx/as2-data",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
+    },
+    {
+      "row": 8,
+      "x": 88,
+      "from": "branch:drgnx/as2-step",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
       "kind": "edits"
     },
     {
@@ -1610,101 +1533,10 @@
     },
     {
       "row": 8,
-      "x": 136,
-      "from": "agent:s01",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 8,
-      "x": 136,
-      "from": "agent:s02",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 8,
-      "x": 136,
-      "from": "agent:s03",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 8,
-      "x": 136,
-      "from": "agent:s04",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 8,
-      "x": 136,
-      "from": "agent:s05",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 8,
-      "x": 136,
-      "from": "agent:s06",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 8,
-      "x": 136,
-      "from": "agent:s07",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 8,
-      "x": 154,
-      "from": "branch:drgnx/as2-data",
-      "to": "branch:drgnx/as2",
-      "kind": "based-on"
-    },
-    {
-      "row": 8,
-      "x": 154,
-      "from": "branch:drgnx/as2-map",
-      "to": "branch:drgnx/as2",
-      "kind": "based-on"
-    },
-    {
-      "row": 8,
-      "x": 154,
-      "from": "branch:drgnx/as2-s1",
-      "to": "branch:drgnx/as2",
-      "kind": "based-on"
-    },
-    {
-      "row": 8,
-      "x": 154,
-      "from": "branch:drgnx/as2-s4",
-      "to": "branch:drgnx/as2",
-      "kind": "based-on"
-    },
-    {
-      "row": 8,
-      "x": 154,
+      "x": 138,
       "from": "branch:drgnx/as2-sources",
-      "to": "branch:drgnx/as2",
-      "kind": "based-on"
-    },
-    {
-      "row": 8,
-      "x": 154,
-      "from": "branch:drgnx/as2-step",
-      "to": "branch:drgnx/as2",
-      "kind": "based-on"
-    },
-    {
-      "row": 8,
-      "x": 154,
-      "from": "branch:drgnx/as2-wire",
-      "to": "branch:drgnx/as2",
-      "kind": "based-on"
+      "to": "file:drgnx/core/drgnx-hub-core.el",
+      "kind": "edits"
     },
     {
       "row": 8,
@@ -1743,9 +1575,16 @@
     },
     {
       "row": 8,
-      "x": 177,
+      "x": 169,
       "from": "agent:s03",
       "to": "agent:s19",
+      "kind": "overlap"
+    },
+    {
+      "row": 8,
+      "x": 177,
+      "from": "branch:drgnx/as2-sources",
+      "to": "branch:drgnx/rp-hub",
       "kind": "overlap"
     },
     {
@@ -1774,6 +1613,20 @@
       "x": 43,
       "from": "branch:drgnx/as2-map",
       "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+      "kind": "edits"
+    },
+    {
+      "row": 9,
+      "x": 89,
+      "from": "branch:drgnx/as2-data",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
+    },
+    {
+      "row": 9,
+      "x": 89,
+      "from": "branch:drgnx/as2-step",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
       "kind": "edits"
     },
     {
@@ -1835,72 +1688,9 @@
     {
       "row": 9,
       "x": 133,
-      "from": "agent:s01",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 9,
-      "x": 133,
-      "from": "agent:s02",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 9,
-      "x": 133,
-      "from": "agent:s03",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 9,
-      "x": 133,
-      "from": "agent:s04",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 9,
-      "x": 133,
-      "from": "agent:s05",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 9,
-      "x": 133,
-      "from": "agent:s06",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 9,
-      "x": 133,
-      "from": "agent:s07",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 9,
-      "x": 133,
-      "from": "agent:s08",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 9,
-      "x": 133,
-      "from": "agent:s09",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 9,
-      "x": 133,
-      "from": "agent:s10",
-      "to": "machine:desktop",
-      "kind": "runs-on"
+      "from": "branch:drgnx/as2-sources",
+      "to": "file:drgnx/core/drgnx-hub-core.el",
+      "kind": "edits"
     },
     {
       "row": 9,
@@ -1946,6 +1736,13 @@
     },
     {
       "row": 9,
+      "x": 177,
+      "from": "branch:drgnx/as2-sources",
+      "to": "branch:drgnx/rp-hub",
+      "kind": "overlap"
+    },
+    {
+      "row": 9,
       "x": 204,
       "from": "plan:jobq",
       "to": "agent:s23",
@@ -1975,72 +1772,16 @@
     {
       "row": 10,
       "x": 88,
-      "from": "agent:s01",
-      "to": "machine:desktop",
-      "kind": "runs-on"
+      "from": "branch:drgnx/as2-data",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
     },
     {
       "row": 10,
       "x": 88,
-      "from": "agent:s02",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 10,
-      "x": 88,
-      "from": "agent:s03",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 10,
-      "x": 88,
-      "from": "agent:s04",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 10,
-      "x": 88,
-      "from": "agent:s05",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 10,
-      "x": 88,
-      "from": "agent:s06",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 10,
-      "x": 88,
-      "from": "agent:s07",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 10,
-      "x": 88,
-      "from": "agent:s08",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 10,
-      "x": 88,
-      "from": "agent:s09",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 10,
-      "x": 88,
-      "from": "agent:s10",
-      "to": "machine:desktop",
-      "kind": "runs-on"
+      "from": "branch:drgnx/as2-step",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
     },
     {
       "row": 10,
@@ -2121,6 +1862,20 @@
     },
     {
       "row": 10,
+      "x": 195,
+      "from": "branch:drgnx/as2-sources",
+      "to": "file:drgnx/core/drgnx-hub-core.el",
+      "kind": "edits"
+    },
+    {
+      "row": 10,
+      "x": 196,
+      "from": "branch:drgnx/as2-sources",
+      "to": "branch:drgnx/rp-hub",
+      "kind": "overlap"
+    },
+    {
+      "row": 10,
       "x": 204,
       "from": "plan:jobq",
       "to": "agent:s23",
@@ -2153,6 +1908,20 @@
       "from": "agent:s12",
       "to": "agent:s14",
       "kind": "overlap"
+    },
+    {
+      "row": 11,
+      "x": 97,
+      "from": "branch:drgnx/as2-data",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
+    },
+    {
+      "row": 11,
+      "x": 97,
+      "from": "branch:drgnx/as2-step",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
     },
     {
       "row": 11,
@@ -2192,99 +1961,22 @@
     {
       "row": 11,
       "x": 141,
-      "from": "agent:s01",
-      "to": "machine:desktop",
-      "kind": "runs-on"
+      "from": "branch:drgnx/as2-sources",
+      "to": "file:drgnx/core/drgnx-hub-core.el",
+      "kind": "edits"
     },
     {
       "row": 11,
-      "x": 141,
-      "from": "agent:s02",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 11,
-      "x": 141,
+      "x": 144,
       "from": "agent:s03",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 11,
-      "x": 141,
-      "from": "agent:s04",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 11,
-      "x": 141,
-      "from": "agent:s05",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 11,
-      "x": 141,
-      "from": "agent:s06",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 11,
-      "x": 141,
-      "from": "agent:s07",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 11,
-      "x": 141,
-      "from": "agent:s08",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 11,
-      "x": 141,
-      "from": "agent:s09",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 11,
-      "x": 141,
-      "from": "agent:s10",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 11,
-      "x": 141,
-      "from": "agent:s11",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 11,
-      "x": 141,
-      "from": "agent:s12",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 11,
-      "x": 141,
-      "from": "agent:s13",
-      "to": "machine:desktop",
-      "kind": "runs-on"
+      "to": "agent:s19",
+      "kind": "overlap"
     },
     {
       "row": 11,
       "x": 150,
-      "from": "agent:s03",
-      "to": "agent:s19",
+      "from": "branch:drgnx/as2-sources",
+      "to": "branch:drgnx/rp-hub",
       "kind": "overlap"
     },
     {
@@ -2352,94 +2044,24 @@
     },
     {
       "row": 12,
-      "x": 105,
-      "from": "agent:s01",
-      "to": "machine:desktop",
-      "kind": "runs-on"
+      "x": 104,
+      "from": "branch:drgnx/as2-data",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
     },
     {
       "row": 12,
-      "x": 105,
-      "from": "agent:s02",
-      "to": "machine:desktop",
-      "kind": "runs-on"
+      "x": 104,
+      "from": "branch:drgnx/as2-step",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
     },
     {
       "row": 12,
       "x": 105,
       "from": "agent:s03",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 12,
-      "x": 105,
-      "from": "agent:s04",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 12,
-      "x": 105,
-      "from": "agent:s05",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 12,
-      "x": 105,
-      "from": "agent:s06",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 12,
-      "x": 105,
-      "from": "agent:s07",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 12,
-      "x": 105,
-      "from": "agent:s08",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 12,
-      "x": 105,
-      "from": "agent:s09",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 12,
-      "x": 105,
-      "from": "agent:s10",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 12,
-      "x": 105,
-      "from": "agent:s11",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 12,
-      "x": 105,
-      "from": "agent:s12",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 12,
-      "x": 105,
-      "from": "agent:s13",
-      "to": "machine:desktop",
-      "kind": "runs-on"
+      "to": "agent:s19",
+      "kind": "overlap"
     },
     {
       "row": 12,
@@ -2486,34 +2108,27 @@
     {
       "row": 12,
       "x": 194,
-      "from": "agent:s03",
-      "to": "agent:s19",
+      "from": "branch:drgnx/as2-sources",
+      "to": "file:drgnx/core/drgnx-hub-core.el",
+      "kind": "edits"
+    },
+    {
+      "row": 12,
+      "x": 195,
+      "from": "branch:drgnx/as2-sources",
+      "to": "branch:drgnx/rp-hub",
       "kind": "overlap"
     },
     {
       "row": 12,
-      "x": 198,
-      "from": "branch:nidhogg/gl-cards",
-      "to": "branch:nidhogg/nidhogg-31",
-      "kind": "based-on"
-    },
-    {
-      "row": 12,
-      "x": 198,
+      "x": 196,
       "from": "branch:nidhogg/gl-leg",
-      "to": "branch:nidhogg/nidhogg-31",
-      "kind": "based-on"
+      "to": "file:nidhogg/src/xdisp.c",
+      "kind": "edits"
     },
     {
       "row": 12,
-      "x": 198,
-      "from": "branch:nidhogg/gl-mask",
-      "to": "branch:nidhogg/nidhogg-31",
-      "kind": "based-on"
-    },
-    {
-      "row": 12,
-      "x": 199,
+      "x": 197,
       "from": "branch:nidhogg/gl-leg",
       "to": "branch:nidhogg/gl-scroll",
       "kind": "overlap"
@@ -2534,27 +2149,6 @@
     },
     {
       "row": 13,
-      "x": 6,
-      "from": "branch:nidhogg/gl-cards",
-      "to": "branch:nidhogg/nidhogg-31",
-      "kind": "based-on"
-    },
-    {
-      "row": 13,
-      "x": 6,
-      "from": "branch:nidhogg/gl-leg",
-      "to": "branch:nidhogg/nidhogg-31",
-      "kind": "based-on"
-    },
-    {
-      "row": 13,
-      "x": 6,
-      "from": "branch:nidhogg/gl-mask",
-      "to": "branch:nidhogg/nidhogg-31",
-      "kind": "based-on"
-    },
-    {
-      "row": 13,
       "x": 7,
       "from": "branch:drgnx/as2-map",
       "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
@@ -2569,6 +2163,34 @@
     },
     {
       "row": 13,
+      "x": 60,
+      "from": "branch:nidhogg/gl-leg",
+      "to": "file:nidhogg/src/xdisp.c",
+      "kind": "edits"
+    },
+    {
+      "row": 13,
+      "x": 103,
+      "from": "branch:drgnx/as2-data",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
+    },
+    {
+      "row": 13,
+      "x": 103,
+      "from": "branch:drgnx/as2-step",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
+    },
+    {
+      "row": 13,
+      "x": 106,
+      "from": "branch:drgnx/as2-sources",
+      "to": "branch:drgnx/rp-hub",
+      "kind": "overlap"
+    },
+    {
+      "row": 13,
       "x": 148,
       "from": "ask:6",
       "to": "agent:s26",
@@ -2577,121 +2199,16 @@
     {
       "row": 13,
       "x": 149,
-      "from": "agent:s01",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 13,
-      "x": 149,
-      "from": "agent:s02",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 13,
-      "x": 149,
       "from": "agent:s03",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 13,
-      "x": 149,
-      "from": "agent:s04",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 13,
-      "x": 149,
-      "from": "agent:s05",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 13,
-      "x": 149,
-      "from": "agent:s06",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 13,
-      "x": 149,
-      "from": "agent:s07",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 13,
-      "x": 149,
-      "from": "agent:s08",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 13,
-      "x": 149,
-      "from": "agent:s09",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 13,
-      "x": 149,
-      "from": "agent:s10",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 13,
-      "x": 149,
-      "from": "agent:s11",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 13,
-      "x": 149,
-      "from": "agent:s12",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 13,
-      "x": 149,
-      "from": "agent:s13",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 13,
-      "x": 149,
-      "from": "agent:s14",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 13,
-      "x": 149,
-      "from": "agent:s15",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 13,
-      "x": 149,
-      "from": "agent:s17",
-      "to": "machine:desktop",
-      "kind": "runs-on"
+      "to": "agent:s19",
+      "kind": "overlap"
     },
     {
       "row": 13,
       "x": 150,
-      "from": "agent:s03",
-      "to": "agent:s19",
-      "kind": "overlap"
+      "from": "branch:drgnx/as2-sources",
+      "to": "file:drgnx/core/drgnx-hub-core.el",
+      "kind": "edits"
     },
     {
       "row": 13,
@@ -2758,6 +2275,48 @@
     },
     {
       "row": 14,
+      "x": 60,
+      "from": "branch:nidhogg/gl-leg",
+      "to": "file:nidhogg/src/xdisp.c",
+      "kind": "edits"
+    },
+    {
+      "row": 14,
+      "x": 60,
+      "from": "branch:nidhogg/gl-scroll",
+      "to": "file:nidhogg/src/xdisp.c",
+      "kind": "edits"
+    },
+    {
+      "row": 14,
+      "x": 99,
+      "from": "branch:drgnx/as2-data",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
+    },
+    {
+      "row": 14,
+      "x": 99,
+      "from": "branch:drgnx/as2-step",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
+    },
+    {
+      "row": 14,
+      "x": 120,
+      "from": "agent:s03",
+      "to": "agent:s19",
+      "kind": "overlap"
+    },
+    {
+      "row": 14,
+      "x": 128,
+      "from": "branch:drgnx/as2-sources",
+      "to": "branch:drgnx/rp-hub",
+      "kind": "overlap"
+    },
+    {
+      "row": 14,
       "x": 131,
       "from": "ask:6",
       "to": "agent:s26",
@@ -2765,122 +2324,10 @@
     },
     {
       "row": 14,
-      "x": 136,
-      "from": "agent:s01",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 14,
-      "x": 136,
-      "from": "agent:s02",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 14,
-      "x": 136,
-      "from": "agent:s03",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 14,
-      "x": 136,
-      "from": "agent:s04",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 14,
-      "x": 136,
-      "from": "agent:s05",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 14,
-      "x": 136,
-      "from": "agent:s06",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 14,
-      "x": 136,
-      "from": "agent:s07",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 14,
-      "x": 136,
-      "from": "agent:s08",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 14,
-      "x": 136,
-      "from": "agent:s09",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 14,
-      "x": 136,
-      "from": "agent:s10",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 14,
-      "x": 136,
-      "from": "agent:s11",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 14,
-      "x": 136,
-      "from": "agent:s12",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 14,
-      "x": 136,
-      "from": "agent:s13",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 14,
-      "x": 136,
-      "from": "agent:s14",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 14,
-      "x": 136,
-      "from": "agent:s15",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 14,
-      "x": 136,
-      "from": "agent:s17",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 14,
-      "x": 141,
-      "from": "agent:s03",
-      "to": "agent:s19",
-      "kind": "overlap"
+      "x": 138,
+      "from": "branch:drgnx/as2-sources",
+      "to": "file:drgnx/core/drgnx-hub-core.el",
+      "kind": "edits"
     },
     {
       "row": 14,
@@ -2933,374 +2380,220 @@
     },
     {
       "row": 15,
-      "x": 59,
+      "x": 43,
       "from": "ask:5",
       "to": "agent:s25",
       "kind": "came-from"
     },
     {
       "row": 15,
-      "x": 60,
+      "x": 44,
       "from": "branch:drgnx/as2-map",
       "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
       "kind": "edits"
     },
     {
       "row": 15,
-      "x": 104,
-      "from": "agent:s01",
-      "to": "machine:desktop",
-      "kind": "runs-on"
+      "x": 88,
+      "from": "branch:drgnx/as2-sources",
+      "to": "file:drgnx/core/drgnx-hub-core.el",
+      "kind": "edits"
     },
     {
       "row": 15,
-      "x": 104,
-      "from": "agent:s02",
-      "to": "machine:desktop",
-      "kind": "runs-on"
+      "x": 89,
+      "from": "branch:drgnx/as2-data",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
     },
     {
       "row": 15,
-      "x": 104,
-      "from": "agent:s03",
-      "to": "machine:desktop",
-      "kind": "runs-on"
+      "x": 89,
+      "from": "branch:drgnx/as2-step",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
     },
     {
       "row": 15,
-      "x": 104,
-      "from": "agent:s04",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 15,
-      "x": 104,
-      "from": "agent:s05",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 15,
-      "x": 104,
-      "from": "agent:s06",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 15,
-      "x": 104,
-      "from": "agent:s07",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 15,
-      "x": 104,
-      "from": "agent:s08",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 15,
-      "x": 104,
-      "from": "agent:s09",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 15,
-      "x": 104,
-      "from": "agent:s10",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 15,
-      "x": 104,
-      "from": "agent:s11",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 15,
-      "x": 104,
-      "from": "agent:s12",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 15,
-      "x": 104,
-      "from": "agent:s13",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 15,
-      "x": 104,
-      "from": "agent:s14",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 15,
-      "x": 104,
-      "from": "agent:s15",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 15,
-      "x": 104,
-      "from": "agent:s17",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 15,
-      "x": 105,
+      "x": 133,
       "from": "ask:6",
       "to": "agent:s26",
       "kind": "came-from"
     },
     {
       "row": 15,
-      "x": 165,
+      "x": 134,
       "from": "plan:race-proof",
       "to": "agent:s21",
       "kind": "came-from"
     },
     {
       "row": 15,
-      "x": 165,
+      "x": 134,
       "from": "plan:race-proof",
       "to": "agent:s22",
       "kind": "came-from"
     },
     {
       "row": 15,
-      "x": 166,
+      "x": 194,
+      "from": "branch:drgnx/as2-sources",
+      "to": "branch:drgnx/rp-hub",
+      "kind": "overlap"
+    },
+    {
+      "row": 15,
+      "x": 195,
+      "from": "branch:nidhogg/gl-leg",
+      "to": "file:nidhogg/src/xdisp.c",
+      "kind": "edits"
+    },
+    {
+      "row": 15,
+      "x": 195,
+      "from": "branch:nidhogg/gl-scroll",
+      "to": "file:nidhogg/src/xdisp.c",
+      "kind": "edits"
+    },
+    {
+      "row": 15,
+      "x": 204,
       "from": "plan:jobq",
       "to": "agent:s23",
       "kind": "came-from"
     },
     {
       "row": 15,
-      "x": 166,
+      "x": 204,
       "from": "plan:jobq",
       "to": "agent:s24",
       "kind": "came-from"
     },
     {
       "row": 16,
-      "x": 7,
-      "from": "branch:drgnx/as2-map",
-      "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
-      "kind": "edits"
-    },
-    {
-      "row": 16,
-      "x": 8,
+      "x": 42,
       "from": "ask:5",
       "to": "agent:s25",
       "kind": "came-from"
     },
     {
       "row": 16,
-      "x": 62,
-      "from": "agent:s18",
-      "to": "machine:local",
-      "kind": "runs-on"
+      "x": 43,
+      "from": "branch:drgnx/as2-map",
+      "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+      "kind": "edits"
     },
     {
       "row": 16,
-      "x": 62,
-      "from": "agent:s19",
-      "to": "machine:local",
-      "kind": "runs-on"
+      "x": 60,
+      "from": "branch:nidhogg/gl-leg",
+      "to": "file:nidhogg/src/xdisp.c",
+      "kind": "edits"
     },
     {
       "row": 16,
-      "x": 114,
+      "x": 60,
+      "from": "branch:nidhogg/gl-scroll",
+      "to": "file:nidhogg/src/xdisp.c",
+      "kind": "edits"
+    },
+    {
+      "row": 16,
+      "x": 90,
+      "from": "branch:drgnx/as2-data",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
+    },
+    {
+      "row": 16,
+      "x": 90,
+      "from": "branch:drgnx/as2-step",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
+    },
+    {
+      "row": 16,
+      "x": 132,
       "from": "ask:6",
       "to": "agent:s26",
       "kind": "came-from"
     },
     {
       "row": 16,
-      "x": 156,
-      "from": "agent:s01",
-      "to": "machine:desktop",
-      "kind": "runs-on"
+      "x": 138,
+      "from": "branch:drgnx/as2-sources",
+      "to": "file:drgnx/core/drgnx-hub-core.el",
+      "kind": "edits"
     },
     {
       "row": 16,
-      "x": 156,
-      "from": "agent:s02",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 16,
-      "x": 156,
-      "from": "agent:s03",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 16,
-      "x": 156,
-      "from": "agent:s04",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 16,
-      "x": 156,
-      "from": "agent:s05",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 16,
-      "x": 156,
-      "from": "agent:s06",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 16,
-      "x": 156,
-      "from": "agent:s07",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 16,
-      "x": 156,
-      "from": "agent:s08",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 16,
-      "x": 156,
-      "from": "agent:s09",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 16,
-      "x": 156,
-      "from": "agent:s10",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 16,
-      "x": 156,
-      "from": "agent:s11",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 16,
-      "x": 156,
-      "from": "agent:s12",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 16,
-      "x": 156,
-      "from": "agent:s13",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 16,
-      "x": 156,
-      "from": "agent:s14",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 16,
-      "x": 156,
-      "from": "agent:s15",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 16,
-      "x": 156,
-      "from": "agent:s17",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 16,
-      "x": 156,
-      "from": "agent:s20",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 16,
-      "x": 157,
+      "x": 143,
       "from": "plan:race-proof",
       "to": "agent:s21",
       "kind": "came-from"
     },
     {
       "row": 16,
-      "x": 157,
+      "x": 143,
       "from": "plan:race-proof",
       "to": "agent:s22",
       "kind": "came-from"
     },
     {
       "row": 16,
-      "x": 217,
+      "x": 204,
       "from": "plan:jobq",
       "to": "agent:s23",
       "kind": "came-from"
     },
     {
       "row": 16,
-      "x": 217,
+      "x": 204,
       "from": "plan:jobq",
       "to": "agent:s24",
       "kind": "came-from"
     },
     {
       "row": 17,
-      "x": 59,
+      "x": 43,
       "from": "ask:5",
       "to": "agent:s25",
       "kind": "came-from"
     },
     {
       "row": 17,
-      "x": 60,
+      "x": 44,
       "from": "branch:drgnx/as2-map",
       "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
       "kind": "edits"
     },
     {
       "row": 17,
-      "x": 121,
-      "from": "agent:s18",
-      "to": "machine:local",
-      "kind": "runs-on"
+      "x": 88,
+      "from": "branch:nidhogg/gl-leg",
+      "to": "file:nidhogg/src/xdisp.c",
+      "kind": "edits"
     },
     {
       "row": 17,
-      "x": 121,
-      "from": "agent:s19",
-      "to": "machine:local",
-      "kind": "runs-on"
+      "x": 88,
+      "from": "branch:nidhogg/gl-scroll",
+      "to": "file:nidhogg/src/xdisp.c",
+      "kind": "edits"
+    },
+    {
+      "row": 17,
+      "x": 99,
+      "from": "branch:drgnx/as2-data",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
+    },
+    {
+      "row": 17,
+      "x": 99,
+      "from": "branch:drgnx/as2-step",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
     },
     {
       "row": 17,
@@ -3311,147 +2604,14 @@
     },
     {
       "row": 17,
-      "x": 133,
-      "from": "branch:drgnx/rp-core",
-      "to": "branch:drgnx/main",
-      "kind": "based-on"
+      "x": 138,
+      "from": "branch:drgnx/as2-sources",
+      "to": "file:drgnx/core/drgnx-hub-core.el",
+      "kind": "edits"
     },
     {
       "row": 17,
-      "x": 133,
-      "from": "branch:drgnx/rp-hub",
-      "to": "branch:drgnx/main",
-      "kind": "based-on"
-    },
-    {
-      "row": 17,
-      "x": 133,
-      "from": "branch:drgnx/rp-sweep",
-      "to": "branch:drgnx/main",
-      "kind": "based-on"
-    },
-    {
-      "row": 17,
-      "x": 136,
-      "from": "agent:s01",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 17,
-      "x": 136,
-      "from": "agent:s02",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 17,
-      "x": 136,
-      "from": "agent:s03",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 17,
-      "x": 136,
-      "from": "agent:s04",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 17,
-      "x": 136,
-      "from": "agent:s05",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 17,
-      "x": 136,
-      "from": "agent:s06",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 17,
-      "x": 136,
-      "from": "agent:s07",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 17,
-      "x": 136,
-      "from": "agent:s08",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 17,
-      "x": 136,
-      "from": "agent:s09",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 17,
-      "x": 136,
-      "from": "agent:s10",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 17,
-      "x": 136,
-      "from": "agent:s11",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 17,
-      "x": 136,
-      "from": "agent:s12",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 17,
-      "x": 136,
-      "from": "agent:s13",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 17,
-      "x": 136,
-      "from": "agent:s14",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 17,
-      "x": 136,
-      "from": "agent:s15",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 17,
-      "x": 136,
-      "from": "agent:s17",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 17,
-      "x": 136,
-      "from": "agent:s20",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 17,
-      "x": 168,
+      "x": 138,
       "from": "branch:drgnx/rp-hub",
       "to": "file:drgnx/core/drgnx-hub-core.el",
       "kind": "edits"
@@ -3472,168 +2632,63 @@
     },
     {
       "row": 18,
-      "x": 7,
-      "from": "branch:drgnx/as2-map",
-      "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
-      "kind": "edits"
-    },
-    {
-      "row": 18,
-      "x": 8,
+      "x": 42,
       "from": "ask:5",
       "to": "agent:s25",
       "kind": "came-from"
     },
     {
       "row": 18,
-      "x": 62,
-      "from": "agent:s18",
-      "to": "machine:local",
-      "kind": "runs-on"
+      "x": 43,
+      "from": "branch:drgnx/as2-map",
+      "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+      "kind": "edits"
     },
     {
       "row": 18,
-      "x": 62,
-      "from": "agent:s19",
-      "to": "machine:local",
-      "kind": "runs-on"
+      "x": 45,
+      "from": "branch:nidhogg/gl-leg",
+      "to": "file:nidhogg/src/xdisp.c",
+      "kind": "edits"
     },
     {
       "row": 18,
-      "x": 112,
+      "x": 45,
+      "from": "branch:nidhogg/gl-scroll",
+      "to": "file:nidhogg/src/xdisp.c",
+      "kind": "edits"
+    },
+    {
+      "row": 18,
+      "x": 88,
+      "from": "branch:drgnx/as2-data",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
+    },
+    {
+      "row": 18,
+      "x": 88,
+      "from": "branch:drgnx/as2-step",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
+    },
+    {
+      "row": 18,
+      "x": 131,
       "from": "ask:6",
       "to": "agent:s26",
       "kind": "came-from"
     },
     {
       "row": 18,
-      "x": 154,
-      "from": "agent:s01",
-      "to": "machine:desktop",
-      "kind": "runs-on"
+      "x": 138,
+      "from": "branch:drgnx/as2-sources",
+      "to": "file:drgnx/core/drgnx-hub-core.el",
+      "kind": "edits"
     },
     {
       "row": 18,
-      "x": 154,
-      "from": "agent:s02",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 18,
-      "x": 154,
-      "from": "agent:s03",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 18,
-      "x": 154,
-      "from": "agent:s04",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 18,
-      "x": 154,
-      "from": "agent:s05",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 18,
-      "x": 154,
-      "from": "agent:s06",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 18,
-      "x": 154,
-      "from": "agent:s07",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 18,
-      "x": 154,
-      "from": "agent:s08",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 18,
-      "x": 154,
-      "from": "agent:s09",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 18,
-      "x": 154,
-      "from": "agent:s10",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 18,
-      "x": 154,
-      "from": "agent:s11",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 18,
-      "x": 154,
-      "from": "agent:s12",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 18,
-      "x": 154,
-      "from": "agent:s13",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 18,
-      "x": 154,
-      "from": "agent:s14",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 18,
-      "x": 154,
-      "from": "agent:s15",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 18,
-      "x": 154,
-      "from": "agent:s17",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 18,
-      "x": 154,
-      "from": "agent:s20",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 18,
-      "x": 154,
-      "from": "agent:s21",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 18,
-      "x": 168,
+      "x": 138,
       "from": "branch:drgnx/rp-hub",
       "to": "file:drgnx/core/drgnx-hub-core.el",
       "kind": "edits"
@@ -3668,17 +2723,31 @@
     },
     {
       "row": 19,
-      "x": 121,
-      "from": "agent:s18",
-      "to": "machine:local",
-      "kind": "runs-on"
+      "x": 120,
+      "from": "branch:drgnx/as2-data",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
+    },
+    {
+      "row": 19,
+      "x": 120,
+      "from": "branch:drgnx/as2-step",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
     },
     {
       "row": 19,
       "x": 121,
-      "from": "agent:s19",
-      "to": "machine:local",
-      "kind": "runs-on"
+      "from": "branch:nidhogg/gl-leg",
+      "to": "file:nidhogg/src/xdisp.c",
+      "kind": "edits"
+    },
+    {
+      "row": 19,
+      "x": 121,
+      "from": "branch:nidhogg/gl-scroll",
+      "to": "file:nidhogg/src/xdisp.c",
+      "kind": "edits"
     },
     {
       "row": 19,
@@ -3689,133 +2758,14 @@
     },
     {
       "row": 19,
-      "x": 136,
-      "from": "agent:s01",
-      "to": "machine:desktop",
-      "kind": "runs-on"
+      "x": 138,
+      "from": "branch:drgnx/as2-sources",
+      "to": "file:drgnx/core/drgnx-hub-core.el",
+      "kind": "edits"
     },
     {
       "row": 19,
-      "x": 136,
-      "from": "agent:s02",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 19,
-      "x": 136,
-      "from": "agent:s03",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 19,
-      "x": 136,
-      "from": "agent:s04",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 19,
-      "x": 136,
-      "from": "agent:s05",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 19,
-      "x": 136,
-      "from": "agent:s06",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 19,
-      "x": 136,
-      "from": "agent:s07",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 19,
-      "x": 136,
-      "from": "agent:s08",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 19,
-      "x": 136,
-      "from": "agent:s09",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 19,
-      "x": 136,
-      "from": "agent:s10",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 19,
-      "x": 136,
-      "from": "agent:s11",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 19,
-      "x": 136,
-      "from": "agent:s12",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 19,
-      "x": 136,
-      "from": "agent:s13",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 19,
-      "x": 136,
-      "from": "agent:s14",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 19,
-      "x": 136,
-      "from": "agent:s15",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 19,
-      "x": 136,
-      "from": "agent:s17",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 19,
-      "x": 136,
-      "from": "agent:s20",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 19,
-      "x": 136,
-      "from": "agent:s21",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 19,
-      "x": 168,
+      "x": 138,
       "from": "branch:drgnx/rp-hub",
       "to": "file:drgnx/core/drgnx-hub-core.el",
       "kind": "edits"
@@ -3836,31 +2786,31 @@
     },
     {
       "row": 20,
-      "x": 62,
-      "from": "agent:s18",
-      "to": "machine:local",
-      "kind": "runs-on"
+      "x": 60,
+      "from": "branch:nidhogg/gl-leg",
+      "to": "file:nidhogg/src/xdisp.c",
+      "kind": "edits"
     },
     {
       "row": 20,
-      "x": 62,
-      "from": "agent:s19",
-      "to": "machine:local",
-      "kind": "runs-on"
+      "x": 60,
+      "from": "branch:nidhogg/gl-scroll",
+      "to": "file:nidhogg/src/xdisp.c",
+      "kind": "edits"
     },
     {
       "row": 20,
-      "x": 62,
-      "from": "agent:s23",
-      "to": "machine:local",
-      "kind": "runs-on"
+      "x": 111,
+      "from": "branch:drgnx/as2-data",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
     },
     {
       "row": 20,
-      "x": 62,
-      "from": "agent:s24",
-      "to": "machine:local",
-      "kind": "runs-on"
+      "x": 111,
+      "from": "branch:drgnx/as2-step",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
     },
     {
       "row": 20,
@@ -3871,133 +2821,14 @@
     },
     {
       "row": 20,
-      "x": 136,
-      "from": "agent:s01",
-      "to": "machine:desktop",
-      "kind": "runs-on"
+      "x": 138,
+      "from": "branch:drgnx/as2-sources",
+      "to": "file:drgnx/core/drgnx-hub-core.el",
+      "kind": "edits"
     },
     {
       "row": 20,
-      "x": 136,
-      "from": "agent:s02",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 20,
-      "x": 136,
-      "from": "agent:s03",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 20,
-      "x": 136,
-      "from": "agent:s04",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 20,
-      "x": 136,
-      "from": "agent:s05",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 20,
-      "x": 136,
-      "from": "agent:s06",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 20,
-      "x": 136,
-      "from": "agent:s07",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 20,
-      "x": 136,
-      "from": "agent:s08",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 20,
-      "x": 136,
-      "from": "agent:s09",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 20,
-      "x": 136,
-      "from": "agent:s10",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 20,
-      "x": 136,
-      "from": "agent:s11",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 20,
-      "x": 136,
-      "from": "agent:s12",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 20,
-      "x": 136,
-      "from": "agent:s13",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 20,
-      "x": 136,
-      "from": "agent:s14",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 20,
-      "x": 136,
-      "from": "agent:s15",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 20,
-      "x": 136,
-      "from": "agent:s17",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 20,
-      "x": 136,
-      "from": "agent:s20",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 20,
-      "x": 136,
-      "from": "agent:s21",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 20,
-      "x": 168,
+      "x": 138,
       "from": "branch:drgnx/rp-hub",
       "to": "file:drgnx/core/drgnx-hub-core.el",
       "kind": "edits"
@@ -4012,167 +2843,41 @@
     {
       "row": 21,
       "x": 60,
-      "from": "agent:s18",
-      "to": "machine:local",
-      "kind": "runs-on"
+      "from": "branch:nidhogg/gl-leg",
+      "to": "file:nidhogg/src/xdisp.c",
+      "kind": "edits"
     },
     {
       "row": 21,
       "x": 60,
-      "from": "agent:s19",
-      "to": "machine:local",
-      "kind": "runs-on"
+      "from": "branch:nidhogg/gl-scroll",
+      "to": "file:nidhogg/src/xdisp.c",
+      "kind": "edits"
     },
     {
       "row": 21,
-      "x": 60,
-      "from": "agent:s23",
-      "to": "machine:local",
-      "kind": "runs-on"
+      "x": 120,
+      "from": "branch:drgnx/as2-data",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
     },
     {
       "row": 21,
-      "x": 60,
-      "from": "agent:s24",
-      "to": "machine:local",
-      "kind": "runs-on"
+      "x": 120,
+      "from": "branch:drgnx/as2-step",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
     },
     {
       "row": 21,
-      "x": 133,
-      "from": "branch:org/jobq-plan",
-      "to": "branch:org/main",
-      "kind": "based-on"
+      "x": 138,
+      "from": "branch:drgnx/as2-sources",
+      "to": "file:drgnx/core/drgnx-hub-core.el",
+      "kind": "edits"
     },
     {
       "row": 21,
-      "x": 136,
-      "from": "agent:s01",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 21,
-      "x": 136,
-      "from": "agent:s02",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 21,
-      "x": 136,
-      "from": "agent:s03",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 21,
-      "x": 136,
-      "from": "agent:s04",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 21,
-      "x": 136,
-      "from": "agent:s05",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 21,
-      "x": 136,
-      "from": "agent:s06",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 21,
-      "x": 136,
-      "from": "agent:s07",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 21,
-      "x": 136,
-      "from": "agent:s08",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 21,
-      "x": 136,
-      "from": "agent:s09",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 21,
-      "x": 136,
-      "from": "agent:s10",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 21,
-      "x": 136,
-      "from": "agent:s11",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 21,
-      "x": 136,
-      "from": "agent:s12",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 21,
-      "x": 136,
-      "from": "agent:s13",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 21,
-      "x": 136,
-      "from": "agent:s14",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 21,
-      "x": 136,
-      "from": "agent:s15",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 21,
-      "x": 136,
-      "from": "agent:s17",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 21,
-      "x": 136,
-      "from": "agent:s20",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 21,
-      "x": 136,
-      "from": "agent:s21",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 21,
-      "x": 168,
+      "x": 138,
       "from": "branch:drgnx/rp-hub",
       "to": "file:drgnx/core/drgnx-hub-core.el",
       "kind": "edits"
@@ -4186,213 +2891,48 @@
     },
     {
       "row": 22,
-      "x": 62,
-      "from": "agent:s18",
-      "to": "machine:local",
-      "kind": "runs-on"
+      "x": 60,
+      "from": "branch:nidhogg/gl-leg",
+      "to": "file:nidhogg/src/xdisp.c",
+      "kind": "edits"
     },
     {
       "row": 22,
-      "x": 62,
-      "from": "agent:s19",
-      "to": "machine:local",
-      "kind": "runs-on"
+      "x": 60,
+      "from": "branch:nidhogg/gl-scroll",
+      "to": "file:nidhogg/src/xdisp.c",
+      "kind": "edits"
     },
     {
       "row": 22,
-      "x": 62,
-      "from": "agent:s23",
-      "to": "machine:local",
-      "kind": "runs-on"
+      "x": 111,
+      "from": "branch:drgnx/as2-data",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
     },
     {
       "row": 22,
-      "x": 62,
-      "from": "agent:s24",
-      "to": "machine:local",
-      "kind": "runs-on"
-    },
-    {
-      "row": 22,
-      "x": 154,
-      "from": "agent:s01",
-      "to": "machine:desktop",
-      "kind": "runs-on"
+      "x": 111,
+      "from": "branch:drgnx/as2-step",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
     },
     {
       "row": 22,
       "x": 154,
-      "from": "agent:s02",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 22,
-      "x": 154,
-      "from": "agent:s03",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 22,
-      "x": 154,
-      "from": "agent:s04",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 22,
-      "x": 154,
-      "from": "agent:s05",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 22,
-      "x": 154,
-      "from": "agent:s06",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 22,
-      "x": 154,
-      "from": "agent:s07",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 22,
-      "x": 154,
-      "from": "agent:s08",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 22,
-      "x": 154,
-      "from": "agent:s09",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 22,
-      "x": 154,
-      "from": "agent:s10",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 22,
-      "x": 154,
-      "from": "agent:s11",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 22,
-      "x": 154,
-      "from": "agent:s12",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 22,
-      "x": 154,
-      "from": "agent:s13",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 22,
-      "x": 154,
-      "from": "agent:s14",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 22,
-      "x": 154,
-      "from": "agent:s15",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 22,
-      "x": 154,
-      "from": "agent:s17",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 22,
-      "x": 154,
-      "from": "agent:s20",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 22,
-      "x": 154,
-      "from": "agent:s21",
-      "to": "machine:desktop",
-      "kind": "runs-on"
-    },
-    {
-      "row": 22,
-      "x": 168,
-      "from": "branch:drgnx/rp-hub",
+      "from": "branch:drgnx/as2-sources",
       "to": "file:drgnx/core/drgnx-hub-core.el",
       "kind": "edits"
     },
     {
-      "row": 23,
+      "row": 22,
       "x": 154,
       "from": "branch:drgnx/rp-hub",
       "to": "file:drgnx/core/drgnx-hub-core.el",
       "kind": "edits"
     }
   ],
-  "ports": [
-    {
-      "target": "branch:drgnx/main",
-      "parents": [
-        "branch:drgnx/as2"
-      ]
-    },
-    {
-      "target": "branch:drgnx/rp-hub",
-      "parents": [
-        "branch:drgnx/as2-sources"
-      ]
-    },
-    {
-      "target": "file:drgnx/core/drgnx-hub-core.el",
-      "parents": [
-        "branch:drgnx/as2-sources"
-      ]
-    },
-    {
-      "target": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
-      "parents": [
-        "branch:drgnx/as2-data",
-        "branch:drgnx/as2-step"
-      ]
-    },
-    {
-      "target": "file:nidhogg/src/xdisp.c",
-      "parents": [
-        "branch:nidhogg/gl-leg",
-        "branch:nidhogg/gl-scroll"
-      ]
-    },
-    {
-      "target": "machine:laptop",
-      "parents": [
-        "agent:s16"
-      ]
-    }
-  ],
+  "ports": [],
   "bands": [
     {
       "row": 1,
@@ -4774,13 +3314,6 @@
           "x1": 21
         },
         {
-          "from": "agent:s01",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 21,
-          "x1": 135
-        },
-        {
           "from": "ask:5",
           "to": "agent:s25",
           "kind": "came-from",
@@ -4901,13 +3434,6 @@
         },
         {
           "from": "agent:s02",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 156,
-          "x1": 135
-        },
-        {
-          "from": "agent:s02",
           "to": "branch:drgnx/as2-data",
           "kind": "came-from",
           "x0": 156,
@@ -4950,13 +3476,6 @@
         },
         {
           "from": "agent:s03",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 201,
-          "x1": 135
-        },
-        {
-          "from": "agent:s03",
           "to": "agent:s19",
           "kind": "overlap",
           "x0": 201,
@@ -4995,14 +3514,7 @@
           "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
           "kind": "edits",
           "x0": 21,
-          "x1": 195
-        },
-        {
-          "from": "branch:drgnx/as2-map",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 21,
-          "x1": 197
+          "x1": 104
         },
         {
           "from": "ask:5",
@@ -5124,25 +3636,11 @@
           "x1": 149
         },
         {
-          "from": "agent:s01",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 135,
-          "x1": 104
-        },
-        {
-          "from": "agent:s02",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 135,
-          "x1": 104
-        },
-        {
-          "from": "agent:s03",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 135,
-          "x1": 104
+          "from": "branch:drgnx/as2-data",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 156,
+          "x1": 195
         },
         {
           "from": "branch:drgnx/as2-data",
@@ -5150,13 +3648,6 @@
           "kind": "overlap",
           "x0": 156,
           "x1": 196
-        },
-        {
-          "from": "branch:drgnx/as2-data",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 156,
-          "x1": 197
         },
         {
           "from": "plan:race-proof",
@@ -5202,10 +3693,17 @@
         },
         {
           "from": "branch:drgnx/as2-sources",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
+          "to": "file:drgnx/core/drgnx-hub-core.el",
+          "kind": "edits",
           "x0": 201,
           "x1": 197
+        },
+        {
+          "from": "branch:drgnx/as2-sources",
+          "to": "branch:drgnx/rp-hub",
+          "kind": "overlap",
+          "x0": 201,
+          "x1": 198
         },
         {
           "from": "plan:jobq",
@@ -5234,13 +3732,6 @@
           "kind": "came-from",
           "x0": 29,
           "x1": 29
-        },
-        {
-          "from": "agent:s04",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 29,
-          "x1": 149
         },
         {
           "from": "ask:5",
@@ -5278,32 +3769,11 @@
           "x1": 82
         },
         {
-          "from": "agent:s05",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 82,
-          "x1": 149
-        },
-        {
-          "from": "agent:s01",
-          "to": "machine:desktop",
-          "kind": "runs-on",
+          "from": "branch:drgnx/as2-map",
+          "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+          "kind": "edits",
           "x0": 104,
-          "x1": 149
-        },
-        {
-          "from": "agent:s02",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 104,
-          "x1": 149
-        },
-        {
-          "from": "agent:s03",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 104,
-          "x1": 149
+          "x1": 7
         },
         {
           "from": "plan:glitnir-p2-p4",
@@ -5362,13 +3832,6 @@
           "x1": 127
         },
         {
-          "from": "agent:s06",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 127,
-          "x1": 149
-        },
-        {
           "from": "ask:6",
           "to": "agent:s26",
           "kind": "came-from",
@@ -5412,13 +3875,6 @@
         },
         {
           "from": "agent:s07",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 172,
-          "x1": 149
-        },
-        {
-          "from": "agent:s07",
           "to": "branch:drgnx/as2-s1",
           "kind": "came-from",
           "x0": 172,
@@ -5432,11 +3888,11 @@
           "x1": 193
         },
         {
-          "from": "branch:drgnx/as2-map",
-          "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+          "from": "branch:drgnx/as2-data",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
           "kind": "edits",
           "x0": 195,
-          "x1": 7
+          "x1": 103
         },
         {
           "from": "branch:drgnx/as2-data",
@@ -5446,25 +3902,18 @@
           "x1": 82
         },
         {
-          "from": "branch:drgnx/as2-data",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
+          "from": "branch:drgnx/as2-sources",
+          "to": "file:drgnx/core/drgnx-hub-core.el",
+          "kind": "edits",
           "x0": 197,
-          "x1": 150
-        },
-        {
-          "from": "branch:drgnx/as2-map",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 197,
-          "x1": 150
+          "x1": 149
         },
         {
           "from": "branch:drgnx/as2-sources",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 197,
-          "x1": 150
+          "to": "branch:drgnx/rp-hub",
+          "kind": "overlap",
+          "x0": 198,
+          "x1": 194
         },
         {
           "from": "plan:jobq",
@@ -5502,13 +3951,6 @@
           "x1": 43
         },
         {
-          "from": "branch:drgnx/as2-wire",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 29,
-          "x1": 154
-        },
-        {
           "from": "plan:agent-system-p2",
           "to": "agent:s08",
           "kind": "came-from",
@@ -5531,10 +3973,17 @@
         },
         {
           "from": "branch:drgnx/as2-step",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
           "x0": 82,
-          "x1": 154
+          "x1": 88
+        },
+        {
+          "from": "branch:drgnx/as2-data",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 103,
+          "x1": 88
         },
         {
           "from": "plan:glitnir-p2-p4",
@@ -5586,13 +4035,6 @@
           "x1": 89
         },
         {
-          "from": "branch:drgnx/as2-s4",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 127,
-          "x1": 154
-        },
-        {
           "from": "ask:6",
           "to": "agent:s26",
           "kind": "came-from",
@@ -5600,74 +4042,11 @@
           "x1": 133
         },
         {
-          "from": "agent:s01",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 149,
-          "x1": 136
-        },
-        {
-          "from": "agent:s02",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 149,
-          "x1": 136
-        },
-        {
-          "from": "agent:s03",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 149,
-          "x1": 136
-        },
-        {
-          "from": "agent:s04",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 149,
-          "x1": 136
-        },
-        {
-          "from": "agent:s05",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 149,
-          "x1": 136
-        },
-        {
-          "from": "agent:s06",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 149,
-          "x1": 136
-        },
-        {
-          "from": "agent:s07",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 149,
-          "x1": 136
-        },
-        {
-          "from": "branch:drgnx/as2-data",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 150,
-          "x1": 154
-        },
-        {
-          "from": "branch:drgnx/as2-map",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 150,
-          "x1": 154
-        },
-        {
           "from": "branch:drgnx/as2-sources",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 150,
-          "x1": 154
+          "to": "file:drgnx/core/drgnx-hub-core.el",
+          "kind": "edits",
+          "x0": 149,
+          "x1": 138
         },
         {
           "from": "plan:race-proof",
@@ -5705,17 +4084,17 @@
           "x1": 157
         },
         {
-          "from": "branch:drgnx/as2-s1",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 172,
-          "x1": 154
-        },
-        {
           "from": "agent:s03",
           "to": "agent:s19",
           "kind": "overlap",
           "x0": 193,
+          "x1": 169
+        },
+        {
+          "from": "branch:drgnx/as2-sources",
+          "to": "branch:drgnx/rp-hub",
+          "kind": "overlap",
+          "x0": 194,
           "x1": 177
         },
         {
@@ -5747,21 +4126,6 @@
           "x1": 21
         },
         {
-          "from": "agent:s08",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 21,
-          "x1": 133
-        },
-        {
-          "from": "branch:drgnx/as2-edits",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 21,
-          "x1": 154,
-          "arc": true
-        },
-        {
           "from": "ask:5",
           "to": "agent:s25",
           "kind": "came-from",
@@ -5783,19 +4147,18 @@
           "x1": 66
         },
         {
-          "from": "agent:s09",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 66,
-          "x1": 133
+          "from": "branch:drgnx/as2-data",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 88,
+          "x1": 89
         },
         {
-          "from": "branch:drgnx/as2-core",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 66,
-          "x1": 154,
-          "arc": true
+          "from": "branch:drgnx/as2-step",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 88,
+          "x1": 89
         },
         {
           "from": "plan:glitnir-p2-p4",
@@ -5854,21 +4217,6 @@
           "x1": 111
         },
         {
-          "from": "agent:s10",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 111,
-          "x1": 133
-        },
-        {
-          "from": "branch:drgnx/as2-trace",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 111,
-          "x1": 154,
-          "arc": true
-        },
-        {
           "from": "ask:6",
           "to": "agent:s26",
           "kind": "came-from",
@@ -5876,102 +4224,11 @@
           "x1": 132
         },
         {
-          "from": "agent:s01",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 133
-        },
-        {
-          "from": "agent:s02",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 133
-        },
-        {
-          "from": "agent:s03",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 133
-        },
-        {
-          "from": "agent:s04",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 133
-        },
-        {
-          "from": "agent:s05",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 133
-        },
-        {
-          "from": "agent:s06",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 133
-        },
-        {
-          "from": "agent:s07",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 133
-        },
-        {
-          "from": "branch:drgnx/as2-data",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 154,
-          "x1": 154
-        },
-        {
-          "from": "branch:drgnx/as2-map",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 154,
-          "x1": 154
-        },
-        {
-          "from": "branch:drgnx/as2-s1",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 154,
-          "x1": 154
-        },
-        {
-          "from": "branch:drgnx/as2-s4",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 154,
-          "x1": 154
-        },
-        {
           "from": "branch:drgnx/as2-sources",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 154,
-          "x1": 154
-        },
-        {
-          "from": "branch:drgnx/as2-step",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 154,
-          "x1": 154
-        },
-        {
-          "from": "branch:drgnx/as2-wire",
-          "to": "branch:drgnx/as2",
-          "kind": "based-on",
-          "x0": 154,
-          "x1": 154
+          "to": "file:drgnx/core/drgnx-hub-core.el",
+          "kind": "edits",
+          "x0": 138,
+          "x1": 133
         },
         {
           "from": "plan:race-proof",
@@ -6012,8 +4269,15 @@
           "from": "agent:s03",
           "to": "agent:s19",
           "kind": "overlap",
-          "x0": 177,
+          "x0": 169,
           "x1": 176
+        },
+        {
+          "from": "branch:drgnx/as2-sources",
+          "to": "branch:drgnx/rp-hub",
+          "kind": "overlap",
+          "x0": 177,
+          "x1": 177
         },
         {
           "from": "plan:jobq",
@@ -6057,6 +4321,20 @@
           "kind": "edits",
           "x0": 43,
           "x1": 44
+        },
+        {
+          "from": "branch:drgnx/as2-data",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 89,
+          "x1": 88
+        },
+        {
+          "from": "branch:drgnx/as2-step",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 89,
+          "x1": 88
         },
         {
           "from": "plan:glitnir-p2-p4",
@@ -6115,74 +4393,11 @@
           "x1": 149
         },
         {
-          "from": "agent:s01",
-          "to": "machine:desktop",
-          "kind": "runs-on",
+          "from": "branch:drgnx/as2-sources",
+          "to": "file:drgnx/core/drgnx-hub-core.el",
+          "kind": "edits",
           "x0": 133,
-          "x1": 88
-        },
-        {
-          "from": "agent:s02",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 133,
-          "x1": 88
-        },
-        {
-          "from": "agent:s03",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 133,
-          "x1": 88
-        },
-        {
-          "from": "agent:s04",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 133,
-          "x1": 88
-        },
-        {
-          "from": "agent:s05",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 133,
-          "x1": 88
-        },
-        {
-          "from": "agent:s06",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 133,
-          "x1": 88
-        },
-        {
-          "from": "agent:s07",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 133,
-          "x1": 88
-        },
-        {
-          "from": "agent:s08",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 133,
-          "x1": 88
-        },
-        {
-          "from": "agent:s09",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 133,
-          "x1": 88
-        },
-        {
-          "from": "agent:s10",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 133,
-          "x1": 88
+          "x1": 195
         },
         {
           "from": "plan:race-proof",
@@ -6227,6 +4442,13 @@
           "x1": 194
         },
         {
+          "from": "branch:drgnx/as2-sources",
+          "to": "branch:drgnx/rp-hub",
+          "kind": "overlap",
+          "x0": 177,
+          "x1": 196
+        },
+        {
           "from": "plan:jobq",
           "to": "agent:s23",
           "kind": "came-from",
@@ -6255,13 +4477,6 @@
           "x1": 21
         },
         {
-          "from": "agent:s11",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 21,
-          "x1": 141
-        },
-        {
           "from": "ask:5",
           "to": "agent:s25",
           "kind": "came-from",
@@ -6276,74 +4491,18 @@
           "x1": 43
         },
         {
-          "from": "agent:s01",
-          "to": "machine:desktop",
-          "kind": "runs-on",
+          "from": "branch:drgnx/as2-data",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
           "x0": 88,
-          "x1": 141
+          "x1": 97
         },
         {
-          "from": "agent:s02",
-          "to": "machine:desktop",
-          "kind": "runs-on",
+          "from": "branch:drgnx/as2-step",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
           "x0": 88,
-          "x1": 141
-        },
-        {
-          "from": "agent:s03",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 88,
-          "x1": 141
-        },
-        {
-          "from": "agent:s04",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 88,
-          "x1": 141
-        },
-        {
-          "from": "agent:s05",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 88,
-          "x1": 141
-        },
-        {
-          "from": "agent:s06",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 88,
-          "x1": 141
-        },
-        {
-          "from": "agent:s07",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 88,
-          "x1": 141
-        },
-        {
-          "from": "agent:s08",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 88,
-          "x1": 141
-        },
-        {
-          "from": "agent:s09",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 88,
-          "x1": 141
-        },
-        {
-          "from": "agent:s10",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 88,
-          "x1": 141
+          "x1": 97
         },
         {
           "from": "plan:glitnir-p2-p4",
@@ -6386,13 +4545,6 @@
           "kind": "came-from",
           "x0": 119,
           "x1": 119
-        },
-        {
-          "from": "agent:s12",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 119,
-          "x1": 141
         },
         {
           "from": "ask:6",
@@ -6438,13 +4590,6 @@
         },
         {
           "from": "agent:s13",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 172,
-          "x1": 141
-        },
-        {
-          "from": "agent:s13",
           "to": "branch:nidhogg/gl-cards",
           "kind": "came-from",
           "x0": 172,
@@ -6455,6 +4600,20 @@
           "to": "agent:s19",
           "kind": "overlap",
           "x0": 194,
+          "x1": 144
+        },
+        {
+          "from": "branch:drgnx/as2-sources",
+          "to": "file:drgnx/core/drgnx-hub-core.el",
+          "kind": "edits",
+          "x0": 195,
+          "x1": 141
+        },
+        {
+          "from": "branch:drgnx/as2-sources",
+          "to": "branch:drgnx/rp-hub",
+          "kind": "overlap",
+          "x0": 196,
           "x1": 150
         },
         {
@@ -6479,13 +4638,6 @@
       "height_units": 8,
       "segs": [
         {
-          "from": "branch:nidhogg/gl-mask",
-          "to": "branch:nidhogg/nidhogg-31",
-          "kind": "based-on",
-          "x0": 21,
-          "x1": 198
-        },
-        {
           "from": "ask:5",
           "to": "agent:s25",
           "kind": "came-from",
@@ -6505,6 +4657,20 @@
           "kind": "overlap",
           "x0": 74,
           "x1": 29
+        },
+        {
+          "from": "branch:drgnx/as2-data",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 97,
+          "x1": 104
+        },
+        {
+          "from": "branch:drgnx/as2-step",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 97,
+          "x1": 104
         },
         {
           "from": "plan:glitnir-p2-p4",
@@ -6536,17 +4702,17 @@
         },
         {
           "from": "branch:nidhogg/gl-leg",
-          "to": "branch:nidhogg/nidhogg-31",
-          "kind": "based-on",
+          "to": "file:nidhogg/src/xdisp.c",
+          "kind": "edits",
           "x0": 119,
-          "x1": 198
+          "x1": 196
         },
         {
           "from": "branch:nidhogg/gl-leg",
           "to": "branch:nidhogg/gl-scroll",
           "kind": "overlap",
           "x0": 119,
-          "x1": 199
+          "x1": 197
         },
         {
           "from": "ask:6",
@@ -6556,102 +4722,25 @@
           "x1": 149
         },
         {
-          "from": "agent:s01",
-          "to": "machine:desktop",
-          "kind": "runs-on",
+          "from": "branch:drgnx/as2-sources",
+          "to": "file:drgnx/core/drgnx-hub-core.el",
+          "kind": "edits",
           "x0": 141,
-          "x1": 105
-        },
-        {
-          "from": "agent:s02",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 141,
-          "x1": 105
-        },
-        {
-          "from": "agent:s03",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 141,
-          "x1": 105
-        },
-        {
-          "from": "agent:s04",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 141,
-          "x1": 105
-        },
-        {
-          "from": "agent:s05",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 141,
-          "x1": 105
-        },
-        {
-          "from": "agent:s06",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 141,
-          "x1": 105
-        },
-        {
-          "from": "agent:s07",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 141,
-          "x1": 105
-        },
-        {
-          "from": "agent:s08",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 141,
-          "x1": 105
-        },
-        {
-          "from": "agent:s09",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 141,
-          "x1": 105
-        },
-        {
-          "from": "agent:s10",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 141,
-          "x1": 105
-        },
-        {
-          "from": "agent:s11",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 141,
-          "x1": 105
-        },
-        {
-          "from": "agent:s12",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 141,
-          "x1": 105
-        },
-        {
-          "from": "agent:s13",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 141,
-          "x1": 105
+          "x1": 194
         },
         {
           "from": "agent:s03",
           "to": "agent:s19",
           "kind": "overlap",
+          "x0": 144,
+          "x1": 105
+        },
+        {
+          "from": "branch:drgnx/as2-sources",
+          "to": "branch:drgnx/rp-hub",
+          "kind": "overlap",
           "x0": 150,
-          "x1": 194
+          "x1": 195
         },
         {
           "from": "plan:race-proof",
@@ -6689,13 +4778,6 @@
           "x1": 150
         },
         {
-          "from": "branch:nidhogg/gl-cards",
-          "to": "branch:nidhogg/nidhogg-31",
-          "kind": "based-on",
-          "x0": 172,
-          "x1": 198
-        },
-        {
           "from": "plan:jobq",
           "to": "agent:s23",
           "kind": "came-from",
@@ -6724,13 +4806,6 @@
           "x1": 29
         },
         {
-          "from": "agent:s14",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 29,
-          "x1": 149
-        },
-        {
           "from": "ask:5",
           "to": "agent:s25",
           "kind": "came-from",
@@ -6752,100 +4827,23 @@
           "x1": 82
         },
         {
-          "from": "agent:s15",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 82,
-          "x1": 149
+          "from": "branch:drgnx/as2-data",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 104,
+          "x1": 103
         },
         {
-          "from": "agent:s01",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 105,
-          "x1": 149
-        },
-        {
-          "from": "agent:s02",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 105,
-          "x1": 149
+          "from": "branch:drgnx/as2-step",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 104,
+          "x1": 103
         },
         {
           "from": "agent:s03",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 105,
-          "x1": 149
-        },
-        {
-          "from": "agent:s04",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 105,
-          "x1": 149
-        },
-        {
-          "from": "agent:s05",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 105,
-          "x1": 149
-        },
-        {
-          "from": "agent:s06",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 105,
-          "x1": 149
-        },
-        {
-          "from": "agent:s07",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 105,
-          "x1": 149
-        },
-        {
-          "from": "agent:s08",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 105,
-          "x1": 149
-        },
-        {
-          "from": "agent:s09",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 105,
-          "x1": 149
-        },
-        {
-          "from": "agent:s10",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 105,
-          "x1": 149
-        },
-        {
-          "from": "agent:s11",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 105,
-          "x1": 149
-        },
-        {
-          "from": "agent:s12",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 105,
-          "x1": 149
-        },
-        {
-          "from": "agent:s13",
-          "to": "machine:desktop",
-          "kind": "runs-on",
+          "to": "agent:s19",
+          "kind": "overlap",
           "x0": 105,
           "x1": 149
         },
@@ -6900,51 +4898,37 @@
         },
         {
           "from": "agent:s17",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 172,
-          "x1": 149
-        },
-        {
-          "from": "agent:s17",
           "to": "branch:nidhogg/gl-fonts",
           "kind": "came-from",
           "x0": 172,
           "x1": 172
         },
         {
-          "from": "agent:s03",
-          "to": "agent:s19",
-          "kind": "overlap",
+          "from": "branch:drgnx/as2-sources",
+          "to": "file:drgnx/core/drgnx-hub-core.el",
+          "kind": "edits",
           "x0": 194,
           "x1": 150
         },
         {
-          "from": "branch:nidhogg/gl-cards",
-          "to": "branch:nidhogg/nidhogg-31",
-          "kind": "based-on",
-          "x0": 198,
-          "x1": 6
+          "from": "branch:drgnx/as2-sources",
+          "to": "branch:drgnx/rp-hub",
+          "kind": "overlap",
+          "x0": 195,
+          "x1": 106
         },
         {
           "from": "branch:nidhogg/gl-leg",
-          "to": "branch:nidhogg/nidhogg-31",
-          "kind": "based-on",
-          "x0": 198,
-          "x1": 6
-        },
-        {
-          "from": "branch:nidhogg/gl-mask",
-          "to": "branch:nidhogg/nidhogg-31",
-          "kind": "based-on",
-          "x0": 198,
-          "x1": 6
+          "to": "file:nidhogg/src/xdisp.c",
+          "kind": "edits",
+          "x0": 196,
+          "x1": 60
         },
         {
           "from": "branch:nidhogg/gl-leg",
           "to": "branch:nidhogg/gl-scroll",
           "kind": "overlap",
-          "x0": 199,
+          "x0": 197,
           "x1": 29
         },
         {
@@ -6969,27 +4953,6 @@
       "height_units": 8,
       "segs": [
         {
-          "from": "branch:nidhogg/gl-cards",
-          "to": "branch:nidhogg/nidhogg-31",
-          "kind": "based-on",
-          "x0": 6,
-          "x1": 20
-        },
-        {
-          "from": "branch:nidhogg/gl-leg",
-          "to": "branch:nidhogg/nidhogg-31",
-          "kind": "based-on",
-          "x0": 6,
-          "x1": 20
-        },
-        {
-          "from": "branch:nidhogg/gl-mask",
-          "to": "branch:nidhogg/nidhogg-31",
-          "kind": "based-on",
-          "x0": 6,
-          "x1": 20
-        },
-        {
           "from": "branch:drgnx/as2-map",
           "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
           "kind": "edits",
@@ -7005,24 +4968,38 @@
         },
         {
           "from": "branch:nidhogg/gl-scroll",
-          "to": "branch:nidhogg/nidhogg-31",
-          "kind": "based-on",
+          "to": "file:nidhogg/src/xdisp.c",
+          "kind": "edits",
           "x0": 29,
-          "x1": 20
+          "x1": 60
         },
         {
-          "from": "branch:nidhogg/gl-pacer",
-          "to": "branch:nidhogg/nidhogg-31",
-          "kind": "based-on",
-          "x0": 82,
-          "x1": 20
+          "from": "branch:nidhogg/gl-leg",
+          "to": "file:nidhogg/src/xdisp.c",
+          "kind": "edits",
+          "x0": 60,
+          "x1": 60
         },
         {
-          "from": "branch:nidhogg/gl-shell",
-          "to": "branch:nidhogg/nidhogg-31",
-          "kind": "based-on",
-          "x0": 127,
-          "x1": 20
+          "from": "branch:drgnx/as2-data",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 103,
+          "x1": 99
+        },
+        {
+          "from": "branch:drgnx/as2-step",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 103,
+          "x1": 99
+        },
+        {
+          "from": "branch:drgnx/as2-sources",
+          "to": "branch:drgnx/rp-hub",
+          "kind": "overlap",
+          "x0": 106,
+          "x1": 128
         },
         {
           "from": "ask:6",
@@ -7032,123 +5009,18 @@
           "x1": 131
         },
         {
-          "from": "agent:s01",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 149,
-          "x1": 136
-        },
-        {
-          "from": "agent:s02",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 149,
-          "x1": 136
-        },
-        {
-          "from": "agent:s03",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 149,
-          "x1": 136
-        },
-        {
-          "from": "agent:s04",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 149,
-          "x1": 136
-        },
-        {
-          "from": "agent:s05",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 149,
-          "x1": 136
-        },
-        {
-          "from": "agent:s06",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 149,
-          "x1": 136
-        },
-        {
-          "from": "agent:s07",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 149,
-          "x1": 136
-        },
-        {
-          "from": "agent:s08",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 149,
-          "x1": 136
-        },
-        {
-          "from": "agent:s09",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 149,
-          "x1": 136
-        },
-        {
-          "from": "agent:s10",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 149,
-          "x1": 136
-        },
-        {
-          "from": "agent:s11",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 149,
-          "x1": 136
-        },
-        {
-          "from": "agent:s12",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 149,
-          "x1": 136
-        },
-        {
-          "from": "agent:s13",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 149,
-          "x1": 136
-        },
-        {
-          "from": "agent:s14",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 149,
-          "x1": 136
-        },
-        {
-          "from": "agent:s15",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 149,
-          "x1": 136
-        },
-        {
-          "from": "agent:s17",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 149,
-          "x1": 136
-        },
-        {
           "from": "agent:s03",
           "to": "agent:s19",
           "kind": "overlap",
+          "x0": 149,
+          "x1": 120
+        },
+        {
+          "from": "branch:drgnx/as2-sources",
+          "to": "file:drgnx/core/drgnx-hub-core.el",
+          "kind": "edits",
           "x0": 150,
-          "x1": 141
+          "x1": 138
         },
         {
           "from": "plan:race-proof",
@@ -7184,13 +5056,6 @@
           "kind": "came-from",
           "x0": 151,
           "x1": 157
-        },
-        {
-          "from": "branch:nidhogg/gl-fonts",
-          "to": "branch:nidhogg/nidhogg-31",
-          "kind": "based-on",
-          "x0": 172,
-          "x1": 20
         },
         {
           "from": "plan:jobq",
@@ -7217,8 +5082,8 @@
           "from": "agent:s18",
           "to": "agent:s18/toolu_d",
           "kind": "came-from",
-          "x0": 29,
-          "x1": 82,
+          "x0": 21,
+          "x1": 66,
           "arc": true
         },
         {
@@ -7226,189 +5091,119 @@
           "to": "agent:s25",
           "kind": "came-from",
           "x0": 41,
-          "x1": 59
+          "x1": 43
         },
         {
           "from": "branch:drgnx/as2-map",
           "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
           "kind": "edits",
           "x0": 42,
-          "x1": 60
+          "x1": 44
+        },
+        {
+          "from": "branch:nidhogg/gl-leg",
+          "to": "file:nidhogg/src/xdisp.c",
+          "kind": "edits",
+          "x0": 60,
+          "x1": 195
+        },
+        {
+          "from": "branch:nidhogg/gl-scroll",
+          "to": "file:nidhogg/src/xdisp.c",
+          "kind": "edits",
+          "x0": 60,
+          "x1": 195
+        },
+        {
+          "from": "branch:drgnx/as2-data",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 99,
+          "x1": 89
+        },
+        {
+          "from": "branch:drgnx/as2-step",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 99,
+          "x1": 89
+        },
+        {
+          "from": "agent:s03",
+          "to": "agent:s19",
+          "kind": "overlap",
+          "x0": 120,
+          "x1": 111
+        },
+        {
+          "from": "branch:drgnx/as2-sources",
+          "to": "branch:drgnx/rp-hub",
+          "kind": "overlap",
+          "x0": 128,
+          "x1": 194
         },
         {
           "from": "ask:6",
           "to": "agent:s26",
           "kind": "came-from",
           "x0": 131,
-          "x1": 105
+          "x1": 133
         },
         {
-          "from": "agent:s01",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 104
-        },
-        {
-          "from": "agent:s02",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 104
-        },
-        {
-          "from": "agent:s03",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 104
-        },
-        {
-          "from": "agent:s04",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 104
-        },
-        {
-          "from": "agent:s05",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 104
-        },
-        {
-          "from": "agent:s06",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 104
-        },
-        {
-          "from": "agent:s07",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 104
-        },
-        {
-          "from": "agent:s08",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 104
-        },
-        {
-          "from": "agent:s09",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 104
-        },
-        {
-          "from": "agent:s10",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 104
-        },
-        {
-          "from": "agent:s11",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 104
-        },
-        {
-          "from": "agent:s12",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 104
-        },
-        {
-          "from": "agent:s13",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 104
-        },
-        {
-          "from": "agent:s14",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 104
-        },
-        {
-          "from": "agent:s15",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 104
-        },
-        {
-          "from": "agent:s17",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 104
-        },
-        {
-          "from": "agent:s03",
-          "to": "agent:s19",
-          "kind": "overlap",
-          "x0": 141,
-          "x1": 135
+          "from": "branch:drgnx/as2-sources",
+          "to": "file:drgnx/core/drgnx-hub-core.el",
+          "kind": "edits",
+          "x0": 138,
+          "x1": 88
         },
         {
           "from": "plan:race-proof",
           "to": "agent:s18",
           "kind": "came-from",
           "x0": 157,
-          "x1": 29
+          "x1": 21
         },
         {
           "from": "plan:race-proof",
           "to": "agent:s19",
           "kind": "came-from",
           "x0": 157,
-          "x1": 135
+          "x1": 111
         },
         {
           "from": "plan:race-proof",
           "to": "agent:s21",
           "kind": "came-from",
           "x0": 157,
-          "x1": 165
+          "x1": 134
         },
         {
           "from": "plan:race-proof",
           "to": "agent:s22",
           "kind": "came-from",
           "x0": 157,
-          "x1": 165
+          "x1": 134
         },
         {
           "from": "plan:race-proof",
           "to": "agent:s20",
           "kind": "came-from",
           "x0": 157,
-          "x1": 196
+          "x1": 164
         },
         {
           "from": "plan:jobq",
           "to": "agent:s23",
           "kind": "came-from",
           "x0": 204,
-          "x1": 166
+          "x1": 204
         },
         {
           "from": "plan:jobq",
           "to": "agent:s24",
           "kind": "came-from",
           "x0": 204,
-          "x1": 166
+          "x1": 204
         }
       ]
     },
@@ -7421,204 +5216,113 @@
           "from": "agent:s18",
           "to": "branch:drgnx/rp-core",
           "kind": "came-from",
-          "x0": 29,
-          "x1": 29
-        },
-        {
-          "from": "agent:s18",
-          "to": "machine:local",
-          "kind": "runs-on",
-          "x0": 29,
-          "x1": 62
+          "x0": 21,
+          "x1": 21
         },
         {
           "from": "ask:5",
           "to": "agent:s25",
           "kind": "came-from",
-          "x0": 59,
-          "x1": 8
+          "x0": 43,
+          "x1": 42
         },
         {
           "from": "branch:drgnx/as2-map",
           "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
           "kind": "edits",
-          "x0": 60,
-          "x1": 7
+          "x0": 44,
+          "x1": 43
         },
         {
-          "from": "agent:s01",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 104,
-          "x1": 156
+          "from": "branch:drgnx/as2-sources",
+          "to": "file:drgnx/core/drgnx-hub-core.el",
+          "kind": "edits",
+          "x0": 88,
+          "x1": 138
         },
         {
-          "from": "agent:s02",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 104,
-          "x1": 156
+          "from": "branch:drgnx/as2-data",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 89,
+          "x1": 90
         },
         {
-          "from": "agent:s03",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 104,
-          "x1": 156
-        },
-        {
-          "from": "agent:s04",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 104,
-          "x1": 156
-        },
-        {
-          "from": "agent:s05",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 104,
-          "x1": 156
-        },
-        {
-          "from": "agent:s06",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 104,
-          "x1": 156
-        },
-        {
-          "from": "agent:s07",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 104,
-          "x1": 156
-        },
-        {
-          "from": "agent:s08",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 104,
-          "x1": 156
-        },
-        {
-          "from": "agent:s09",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 104,
-          "x1": 156
-        },
-        {
-          "from": "agent:s10",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 104,
-          "x1": 156
-        },
-        {
-          "from": "agent:s11",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 104,
-          "x1": 156
-        },
-        {
-          "from": "agent:s12",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 104,
-          "x1": 156
-        },
-        {
-          "from": "agent:s13",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 104,
-          "x1": 156
-        },
-        {
-          "from": "agent:s14",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 104,
-          "x1": 156
-        },
-        {
-          "from": "agent:s15",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 104,
-          "x1": 156
-        },
-        {
-          "from": "agent:s17",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 104,
-          "x1": 156
-        },
-        {
-          "from": "ask:6",
-          "to": "agent:s26",
-          "kind": "came-from",
-          "x0": 105,
-          "x1": 114
-        },
-        {
-          "from": "agent:s19",
-          "to": "machine:local",
-          "kind": "runs-on",
-          "x0": 135,
-          "x1": 62
+          "from": "branch:drgnx/as2-step",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 89,
+          "x1": 90
         },
         {
           "from": "agent:s19",
           "to": "branch:drgnx/rp-hub",
           "kind": "came-from",
-          "x0": 135,
-          "x1": 135
+          "x0": 111,
+          "x1": 111
+        },
+        {
+          "from": "ask:6",
+          "to": "agent:s26",
+          "kind": "came-from",
+          "x0": 133,
+          "x1": 132
         },
         {
           "from": "plan:race-proof",
           "to": "agent:s21",
           "kind": "came-from",
-          "x0": 165,
-          "x1": 157
+          "x0": 134,
+          "x1": 143
         },
         {
           "from": "plan:race-proof",
           "to": "agent:s22",
           "kind": "came-from",
-          "x0": 165,
-          "x1": 157
-        },
-        {
-          "from": "plan:jobq",
-          "to": "agent:s23",
-          "kind": "came-from",
-          "x0": 166,
-          "x1": 217
-        },
-        {
-          "from": "plan:jobq",
-          "to": "agent:s24",
-          "kind": "came-from",
-          "x0": 166,
-          "x1": 217
-        },
-        {
-          "from": "agent:s20",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 196,
-          "x1": 156
+          "x0": 134,
+          "x1": 143
         },
         {
           "from": "agent:s20",
           "to": "branch:drgnx/rp-sweep",
           "kind": "came-from",
-          "x0": 196,
-          "x1": 196
+          "x0": 164,
+          "x1": 164
+        },
+        {
+          "from": "branch:drgnx/as2-sources",
+          "to": "branch:drgnx/rp-hub",
+          "kind": "overlap",
+          "x0": 194,
+          "x1": 111
+        },
+        {
+          "from": "branch:nidhogg/gl-leg",
+          "to": "file:nidhogg/src/xdisp.c",
+          "kind": "edits",
+          "x0": 195,
+          "x1": 60
+        },
+        {
+          "from": "branch:nidhogg/gl-scroll",
+          "to": "file:nidhogg/src/xdisp.c",
+          "kind": "edits",
+          "x0": 195,
+          "x1": 60
+        },
+        {
+          "from": "plan:jobq",
+          "to": "agent:s23",
+          "kind": "came-from",
+          "x0": 204,
+          "x1": 204
+        },
+        {
+          "from": "plan:jobq",
+          "to": "agent:s24",
+          "kind": "came-from",
+          "x0": 204,
+          "x1": 204
         }
       ]
     },
@@ -7628,440 +5332,179 @@
       "height_units": 8,
       "segs": [
         {
-          "from": "branch:drgnx/as2-map",
-          "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
-          "kind": "edits",
-          "x0": 7,
-          "x1": 60
-        },
-        {
           "from": "ask:5",
           "to": "agent:s25",
           "kind": "came-from",
-          "x0": 8,
-          "x1": 59
+          "x0": 42,
+          "x1": 43
         },
         {
-          "from": "branch:drgnx/rp-core",
-          "to": "branch:drgnx/main",
-          "kind": "based-on",
-          "x0": 29,
-          "x1": 133
+          "from": "branch:drgnx/as2-map",
+          "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+          "kind": "edits",
+          "x0": 43,
+          "x1": 44
         },
         {
-          "from": "agent:s18",
-          "to": "machine:local",
-          "kind": "runs-on",
-          "x0": 62,
-          "x1": 121
+          "from": "branch:nidhogg/gl-leg",
+          "to": "file:nidhogg/src/xdisp.c",
+          "kind": "edits",
+          "x0": 60,
+          "x1": 88
         },
         {
-          "from": "agent:s19",
-          "to": "machine:local",
-          "kind": "runs-on",
-          "x0": 62,
-          "x1": 121
+          "from": "branch:nidhogg/gl-scroll",
+          "to": "file:nidhogg/src/xdisp.c",
+          "kind": "edits",
+          "x0": 60,
+          "x1": 88
         },
         {
-          "from": "ask:6",
-          "to": "agent:s26",
-          "kind": "came-from",
-          "x0": 114,
-          "x1": 131
+          "from": "branch:drgnx/as2-data",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 90,
+          "x1": 99
         },
         {
-          "from": "branch:drgnx/rp-hub",
-          "to": "branch:drgnx/main",
-          "kind": "based-on",
-          "x0": 135,
-          "x1": 133
+          "from": "branch:drgnx/as2-step",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 90,
+          "x1": 99
         },
         {
           "from": "branch:drgnx/rp-hub",
           "to": "file:drgnx/core/drgnx-hub-core.el",
           "kind": "edits",
-          "x0": 135,
-          "x1": 168
+          "x0": 111,
+          "x1": 138
         },
         {
-          "from": "agent:s01",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 156,
-          "x1": 136
+          "from": "ask:6",
+          "to": "agent:s26",
+          "kind": "came-from",
+          "x0": 132,
+          "x1": 131
         },
         {
-          "from": "agent:s02",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 156,
-          "x1": 136
-        },
-        {
-          "from": "agent:s03",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 156,
-          "x1": 136
-        },
-        {
-          "from": "agent:s04",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 156,
-          "x1": 136
-        },
-        {
-          "from": "agent:s05",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 156,
-          "x1": 136
-        },
-        {
-          "from": "agent:s06",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 156,
-          "x1": 136
-        },
-        {
-          "from": "agent:s07",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 156,
-          "x1": 136
-        },
-        {
-          "from": "agent:s08",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 156,
-          "x1": 136
-        },
-        {
-          "from": "agent:s09",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 156,
-          "x1": 136
-        },
-        {
-          "from": "agent:s10",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 156,
-          "x1": 136
-        },
-        {
-          "from": "agent:s11",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 156,
-          "x1": 136
-        },
-        {
-          "from": "agent:s12",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 156,
-          "x1": 136
-        },
-        {
-          "from": "agent:s13",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 156,
-          "x1": 136
-        },
-        {
-          "from": "agent:s14",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 156,
-          "x1": 136
-        },
-        {
-          "from": "agent:s15",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 156,
-          "x1": 136
-        },
-        {
-          "from": "agent:s17",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 156,
-          "x1": 136
-        },
-        {
-          "from": "agent:s20",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 156,
-          "x1": 136
+          "from": "branch:drgnx/as2-sources",
+          "to": "file:drgnx/core/drgnx-hub-core.el",
+          "kind": "edits",
+          "x0": 138,
+          "x1": 138
         },
         {
           "from": "plan:race-proof",
           "to": "agent:s21",
           "kind": "came-from",
-          "x0": 157,
-          "x1": 29
+          "x0": 143,
+          "x1": 21
         },
         {
           "from": "plan:race-proof",
           "to": "agent:s22",
           "kind": "came-from",
-          "x0": 157,
-          "x1": 90
-        },
-        {
-          "from": "branch:drgnx/rp-sweep",
-          "to": "branch:drgnx/main",
-          "kind": "based-on",
-          "x0": 196,
-          "x1": 133
+          "x0": 143,
+          "x1": 66
         },
         {
           "from": "plan:jobq",
           "to": "agent:s23",
           "kind": "came-from",
-          "x0": 217,
+          "x0": 204,
           "x1": 204
         },
         {
           "from": "plan:jobq",
           "to": "agent:s24",
           "kind": "came-from",
-          "x0": 217,
+          "x0": 204,
           "x1": 204
         }
       ]
     },
     {
       "row": 18,
-      "y": 328,
+      "y": 313,
       "height_units": 3,
       "segs": [
         {
           "from": "agent:s21",
           "to": "branch:drgnx/rp-mods",
           "kind": "came-from",
-          "x0": 29,
-          "x1": 29
-        },
-        {
-          "from": "branch:drgnx/rp-mods",
-          "to": "branch:drgnx/main",
-          "kind": "based-on",
-          "x0": 29,
-          "x1": 133,
-          "arc": true
-        },
-        {
-          "from": "agent:s21",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 29,
-          "x1": 154
+          "x0": 21,
+          "x1": 21
         },
         {
           "from": "ask:5",
           "to": "agent:s25",
           "kind": "came-from",
-          "x0": 59,
-          "x1": 8
+          "x0": 43,
+          "x1": 42
         },
         {
           "from": "branch:drgnx/as2-map",
           "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
           "kind": "edits",
-          "x0": 60,
-          "x1": 7
+          "x0": 44,
+          "x1": 43
         },
         {
           "from": "agent:s22",
           "to": "branch:drgnx/rp-install",
           "kind": "came-from",
-          "x0": 90,
-          "x1": 90
+          "x0": 66,
+          "x1": 66
         },
         {
-          "from": "branch:drgnx/rp-install",
-          "to": "branch:drgnx/main",
-          "kind": "based-on",
-          "x0": 90,
-          "x1": 133,
-          "arc": true
+          "from": "branch:nidhogg/gl-leg",
+          "to": "file:nidhogg/src/xdisp.c",
+          "kind": "edits",
+          "x0": 88,
+          "x1": 45
         },
         {
-          "from": "agent:s18",
-          "to": "machine:local",
-          "kind": "runs-on",
-          "x0": 121,
-          "x1": 62
+          "from": "branch:nidhogg/gl-scroll",
+          "to": "file:nidhogg/src/xdisp.c",
+          "kind": "edits",
+          "x0": 88,
+          "x1": 45
         },
         {
-          "from": "agent:s19",
-          "to": "machine:local",
-          "kind": "runs-on",
-          "x0": 121,
-          "x1": 62
+          "from": "branch:drgnx/as2-data",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 99,
+          "x1": 88
+        },
+        {
+          "from": "branch:drgnx/as2-step",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 99,
+          "x1": 88
         },
         {
           "from": "ask:6",
           "to": "agent:s26",
           "kind": "came-from",
           "x0": 131,
-          "x1": 112
+          "x1": 131
         },
         {
-          "from": "branch:drgnx/rp-core",
-          "to": "branch:drgnx/main",
-          "kind": "based-on",
-          "x0": 133,
-          "x1": 133
-        },
-        {
-          "from": "branch:drgnx/rp-hub",
-          "to": "branch:drgnx/main",
-          "kind": "based-on",
-          "x0": 133,
-          "x1": 133
-        },
-        {
-          "from": "branch:drgnx/rp-sweep",
-          "to": "branch:drgnx/main",
-          "kind": "based-on",
-          "x0": 133,
-          "x1": 133
-        },
-        {
-          "from": "agent:s01",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s02",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s03",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s04",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s05",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s06",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s07",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s08",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s09",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s10",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s11",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s12",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s13",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s14",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s15",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s17",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s20",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
+          "from": "branch:drgnx/as2-sources",
+          "to": "file:drgnx/core/drgnx-hub-core.el",
+          "kind": "edits",
+          "x0": 138,
+          "x1": 138
         },
         {
           "from": "branch:drgnx/rp-hub",
           "to": "file:drgnx/core/drgnx-hub-core.el",
           "kind": "edits",
-          "x0": 168,
-          "x1": 168
+          "x0": 138,
+          "x1": 138
         },
         {
           "from": "plan:jobq",
@@ -8081,23 +5524,9 @@
     },
     {
       "row": 19,
-      "y": 338,
+      "y": 323,
       "height_units": 8,
       "segs": [
-        {
-          "from": "branch:drgnx/as2-map",
-          "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
-          "kind": "edits",
-          "x0": 7,
-          "x1": 60
-        },
-        {
-          "from": "ask:5",
-          "to": "agent:s25",
-          "kind": "came-from",
-          "x0": 8,
-          "x1": 59
-        },
         {
           "from": "agent:s23",
           "to": "agent:s24",
@@ -8107,158 +5536,67 @@
           "arc": true
         },
         {
-          "from": "agent:s18",
-          "to": "machine:local",
-          "kind": "runs-on",
-          "x0": 62,
+          "from": "ask:5",
+          "to": "agent:s25",
+          "kind": "came-from",
+          "x0": 42,
+          "x1": 59
+        },
+        {
+          "from": "branch:drgnx/as2-map",
+          "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+          "kind": "edits",
+          "x0": 43,
+          "x1": 60
+        },
+        {
+          "from": "branch:nidhogg/gl-leg",
+          "to": "file:nidhogg/src/xdisp.c",
+          "kind": "edits",
+          "x0": 45,
           "x1": 121
         },
         {
-          "from": "agent:s19",
-          "to": "machine:local",
-          "kind": "runs-on",
-          "x0": 62,
+          "from": "branch:nidhogg/gl-scroll",
+          "to": "file:nidhogg/src/xdisp.c",
+          "kind": "edits",
+          "x0": 45,
           "x1": 121
+        },
+        {
+          "from": "branch:drgnx/as2-data",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 88,
+          "x1": 120
+        },
+        {
+          "from": "branch:drgnx/as2-step",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 88,
+          "x1": 120
         },
         {
           "from": "ask:6",
           "to": "agent:s26",
           "kind": "came-from",
-          "x0": 112,
+          "x0": 131,
           "x1": 131
         },
         {
-          "from": "agent:s01",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s02",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s03",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s04",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s05",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s06",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s07",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s08",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s09",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s10",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s11",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s12",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s13",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s14",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s15",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s17",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s20",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s21",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
+          "from": "branch:drgnx/as2-sources",
+          "to": "file:drgnx/core/drgnx-hub-core.el",
+          "kind": "edits",
+          "x0": 138,
+          "x1": 138
         },
         {
           "from": "branch:drgnx/rp-hub",
           "to": "file:drgnx/core/drgnx-hub-core.el",
           "kind": "edits",
-          "x0": 168,
-          "x1": 168
+          "x0": 138,
+          "x1": 138
         },
         {
           "from": "plan:jobq",
@@ -8278,7 +5616,7 @@
     },
     {
       "row": 20,
-      "y": 371,
+      "y": 356,
       "height_units": 3,
       "segs": [
         {
@@ -8287,13 +5625,6 @@
           "kind": "came-from",
           "x0": 29,
           "x1": 29
-        },
-        {
-          "from": "agent:s23",
-          "to": "machine:local",
-          "kind": "runs-on",
-          "x0": 29,
-          "x1": 62
         },
         {
           "from": "ask:5",
@@ -8310,21 +5641,6 @@
           "x1": 7
         },
         {
-          "from": "branch:org/jobq-report",
-          "to": "branch:org/jobq-plan",
-          "kind": "based-on",
-          "x0": 90,
-          "x1": 29,
-          "arc": true
-        },
-        {
-          "from": "agent:s24",
-          "to": "machine:local",
-          "kind": "runs-on",
-          "x0": 90,
-          "x1": 62
-        },
-        {
           "from": "agent:s24",
           "to": "branch:org/jobq-report",
           "kind": "came-from",
@@ -8332,18 +5648,32 @@
           "x1": 90
         },
         {
-          "from": "agent:s18",
-          "to": "machine:local",
-          "kind": "runs-on",
-          "x0": 121,
-          "x1": 62
+          "from": "branch:drgnx/as2-data",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 120,
+          "x1": 111
         },
         {
-          "from": "agent:s19",
-          "to": "machine:local",
-          "kind": "runs-on",
+          "from": "branch:drgnx/as2-step",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 120,
+          "x1": 111
+        },
+        {
+          "from": "branch:nidhogg/gl-leg",
+          "to": "file:nidhogg/src/xdisp.c",
+          "kind": "edits",
           "x0": 121,
-          "x1": 62
+          "x1": 60
+        },
+        {
+          "from": "branch:nidhogg/gl-scroll",
+          "to": "file:nidhogg/src/xdisp.c",
+          "kind": "edits",
+          "x0": 121,
+          "x1": 60
         },
         {
           "from": "ask:6",
@@ -8353,143 +5683,24 @@
           "x1": 131
         },
         {
-          "from": "agent:s01",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s02",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s03",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s04",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s05",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s06",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s07",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s08",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s09",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s10",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s11",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s12",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s13",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s14",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s15",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s17",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s20",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s21",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
+          "from": "branch:drgnx/as2-sources",
+          "to": "file:drgnx/core/drgnx-hub-core.el",
+          "kind": "edits",
+          "x0": 138,
+          "x1": 138
         },
         {
           "from": "branch:drgnx/rp-hub",
           "to": "file:drgnx/core/drgnx-hub-core.el",
           "kind": "edits",
-          "x0": 168,
-          "x1": 168
+          "x0": 138,
+          "x1": 138
         }
       ]
     },
     {
       "row": 21,
-      "y": 381,
+      "y": 366,
       "height_units": 8,
       "segs": [
         {
@@ -8507,39 +5718,32 @@
           "x1": 29
         },
         {
-          "from": "branch:org/jobq-plan",
-          "to": "branch:org/main",
-          "kind": "based-on",
-          "x0": 29,
-          "x1": 133
-        },
-        {
-          "from": "agent:s18",
-          "to": "machine:local",
-          "kind": "runs-on",
-          "x0": 62,
+          "from": "branch:nidhogg/gl-leg",
+          "to": "file:nidhogg/src/xdisp.c",
+          "kind": "edits",
+          "x0": 60,
           "x1": 60
         },
         {
-          "from": "agent:s19",
-          "to": "machine:local",
-          "kind": "runs-on",
-          "x0": 62,
+          "from": "branch:nidhogg/gl-scroll",
+          "to": "file:nidhogg/src/xdisp.c",
+          "kind": "edits",
+          "x0": 60,
           "x1": 60
         },
         {
-          "from": "agent:s23",
-          "to": "machine:local",
-          "kind": "runs-on",
-          "x0": 62,
-          "x1": 60
+          "from": "branch:drgnx/as2-data",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 111,
+          "x1": 120
         },
         {
-          "from": "agent:s24",
-          "to": "machine:local",
-          "kind": "runs-on",
-          "x0": 62,
-          "x1": 60
+          "from": "branch:drgnx/as2-step",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 111,
+          "x1": 120
         },
         {
           "from": "ask:6",
@@ -8549,143 +5753,24 @@
           "x1": 90
         },
         {
-          "from": "agent:s01",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s02",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s03",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s04",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s05",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s06",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s07",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s08",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s09",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s10",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s11",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s12",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s13",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s14",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s15",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s17",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s20",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
-        },
-        {
-          "from": "agent:s21",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 136
+          "from": "branch:drgnx/as2-sources",
+          "to": "file:drgnx/core/drgnx-hub-core.el",
+          "kind": "edits",
+          "x0": 138,
+          "x1": 138
         },
         {
           "from": "branch:drgnx/rp-hub",
           "to": "file:drgnx/core/drgnx-hub-core.el",
           "kind": "edits",
-          "x0": 168,
-          "x1": 168
+          "x0": 138,
+          "x1": 138
         }
       ]
     },
     {
       "row": 22,
-      "y": 414,
+      "y": 399,
       "height_units": 3,
       "segs": [
         {
@@ -8696,14 +5781,6 @@
           "x1": 29
         },
         {
-          "from": "branch:org/docs-brainstorm",
-          "to": "branch:org/main",
-          "kind": "based-on",
-          "x0": 29,
-          "x1": 133,
-          "arc": true
-        },
-        {
           "from": "branch:drgnx/as2-map",
           "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
           "kind": "edits",
@@ -8711,32 +5788,18 @@
           "x1": 8
         },
         {
-          "from": "agent:s18",
-          "to": "machine:local",
-          "kind": "runs-on",
+          "from": "branch:nidhogg/gl-leg",
+          "to": "file:nidhogg/src/xdisp.c",
+          "kind": "edits",
           "x0": 60,
-          "x1": 62
+          "x1": 60
         },
         {
-          "from": "agent:s19",
-          "to": "machine:local",
-          "kind": "runs-on",
+          "from": "branch:nidhogg/gl-scroll",
+          "to": "file:nidhogg/src/xdisp.c",
+          "kind": "edits",
           "x0": 60,
-          "x1": 62
-        },
-        {
-          "from": "agent:s23",
-          "to": "machine:local",
-          "kind": "runs-on",
-          "x0": 60,
-          "x1": 62
-        },
-        {
-          "from": "agent:s24",
-          "to": "machine:local",
-          "kind": "runs-on",
-          "x0": 60,
-          "x1": 62
+          "x1": 60
         },
         {
           "from": "agent:s26",
@@ -8746,158 +5809,38 @@
           "x1": 90
         },
         {
-          "from": "branch:org/docs-chat",
-          "to": "branch:org/main",
-          "kind": "based-on",
-          "x0": 90,
-          "x1": 133,
-          "arc": true
+          "from": "branch:drgnx/as2-data",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 120,
+          "x1": 111
         },
         {
-          "from": "branch:org/jobq-plan",
-          "to": "branch:org/main",
-          "kind": "based-on",
-          "x0": 133,
-          "x1": 133
+          "from": "branch:drgnx/as2-step",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 120,
+          "x1": 111
         },
         {
-          "from": "agent:s01",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s02",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s03",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s04",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s05",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s06",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s07",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s08",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s09",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s10",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s11",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s12",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s13",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s14",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s15",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s17",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s20",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
-          "x1": 154
-        },
-        {
-          "from": "agent:s21",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 136,
+          "from": "branch:drgnx/as2-sources",
+          "to": "file:drgnx/core/drgnx-hub-core.el",
+          "kind": "edits",
+          "x0": 138,
           "x1": 154
         },
         {
           "from": "branch:drgnx/rp-hub",
           "to": "file:drgnx/core/drgnx-hub-core.el",
           "kind": "edits",
-          "x0": 168,
-          "x1": 168
+          "x0": 138,
+          "x1": 154
         }
       ]
     },
     {
       "row": 23,
-      "y": 424,
+      "y": 409,
       "height_units": 8,
       "segs": [
         {
@@ -8908,185 +5851,58 @@
           "x1": 21
         },
         {
-          "from": "agent:s18",
-          "to": "machine:local",
-          "kind": "runs-on",
-          "x0": 62,
-          "x1": 62
+          "from": "branch:nidhogg/gl-leg",
+          "to": "file:nidhogg/src/xdisp.c",
+          "kind": "edits",
+          "x0": 60,
+          "x1": 60
         },
         {
-          "from": "agent:s19",
-          "to": "machine:local",
-          "kind": "runs-on",
-          "x0": 62,
-          "x1": 62
+          "from": "branch:nidhogg/gl-scroll",
+          "to": "file:nidhogg/src/xdisp.c",
+          "kind": "edits",
+          "x0": 60,
+          "x1": 60
         },
         {
-          "from": "agent:s23",
-          "to": "machine:local",
-          "kind": "runs-on",
-          "x0": 62,
-          "x1": 62
+          "from": "branch:drgnx/as2-data",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 111,
+          "x1": 99
         },
         {
-          "from": "agent:s24",
-          "to": "machine:local",
-          "kind": "runs-on",
-          "x0": 62,
-          "x1": 62
+          "from": "branch:drgnx/as2-step",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 111,
+          "x1": 99
         },
         {
-          "from": "agent:s01",
-          "to": "machine:desktop",
-          "kind": "runs-on",
+          "from": "branch:drgnx/as2-sources",
+          "to": "file:drgnx/core/drgnx-hub-core.el",
+          "kind": "edits",
           "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s02",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s03",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s04",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s05",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s06",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s07",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s08",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s09",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s10",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s11",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s12",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s13",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s14",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s15",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s17",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s20",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
-        },
-        {
-          "from": "agent:s21",
-          "to": "machine:desktop",
-          "kind": "runs-on",
-          "x0": 154,
-          "x1": 136
+          "x1": 138
         },
         {
           "from": "branch:drgnx/rp-hub",
           "to": "file:drgnx/core/drgnx-hub-core.el",
           "kind": "edits",
-          "x0": 168,
-          "x1": 154
+          "x0": 154,
+          "x1": 138
         }
       ]
     },
     {
       "row": 24,
-      "y": 439,
+      "y": 424,
       "height_units": 8,
-      "segs": [
-        {
-          "from": "branch:drgnx/rp-hub",
-          "to": "file:drgnx/core/drgnx-hub-core.el",
-          "kind": "edits",
-          "x0": 154,
-          "x1": 168
-        }
-      ]
+      "segs": []
     }
   ],
   "fits": true,
-  "crossings": 1128,
+  "crossings": 393,
   "width_units": 226,
-  "height_units": 454
+  "height_units": 439
 }

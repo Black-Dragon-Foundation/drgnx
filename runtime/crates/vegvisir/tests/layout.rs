@@ -308,8 +308,11 @@ fn check_lanes(m: &Model, l: &Layout) -> Result<(), String> {
             .insert(lane.row);
     }
     for e in m.edges() {
-        if matches!(e.kind, EdgeKind::Reads | EdgeKind::ReadVsEdit)
-            || !l.at.contains_key(&e.from)
+        // an unfocused view draws no reads, read-versus-edit, runs-on or based-on edges
+        if matches!(
+            e.kind,
+            EdgeKind::Reads | EdgeKind::ReadVsEdit | EdgeKind::RunsOn | EdgeKind::BasedOn
+        ) || !l.at.contains_key(&e.from)
             || !l.at.contains_key(&e.to)
         {
             continue;
@@ -577,4 +580,146 @@ fn golden_thirty_at_1000() {
 #[test]
 fn golden_thirty_at_2400() {
     golden("thirty-2400", fixture::thirty(), 576);
+}
+
+/// Every edge kind a layout draws, in its bands.
+fn drawn_kinds(l: &Layout) -> BTreeSet<EdgeKind> {
+    l.bands
+        .iter()
+        .flat_map(|b| b.segs.iter().map(|s| s.kind))
+        .collect()
+}
+
+fn focused(width: u32, on: &str) -> ViewState {
+    let mut v = view(width);
+    v.filters.focus = Some(ItemId(on.to_string()));
+    v
+}
+
+/// [D] Runs-on edges are drawn on the focused chain only; the machine stays on the map with its load.
+#[test]
+fn runs_on_edges_only_on_the_focused_chain() {
+    let w = World {
+        plans: 1,
+        machines: 1,
+        agents: vec![
+            Gen {
+                plan: Some(0),
+                subs: 0,
+                files: vec![],
+                needs_you: false,
+                machine: Some(0),
+            };
+            2
+        ],
+    };
+    let m = model_of(world_events(&w));
+    assert!(m.edges().iter().any(|e| e.kind == EdgeKind::RunsOn));
+    let plain = layout(&m, &view(226), None);
+    assert!(plain.at.contains_key(&ItemId("machine:m0".into())));
+    assert!(!drawn_kinds(&plain).contains(&EdgeKind::RunsOn));
+    assert!(plain.lanes.iter().all(|x| x.kind != EdgeKind::RunsOn));
+    let f = layout(&m, &focused(226, "agent:s00"), None);
+    assert!(drawn_kinds(&f).contains(&EdgeKind::RunsOn));
+}
+
+/// [D] Based-on edges are drawn on the focused chain only; focusing a branch shows the branch it was cut from.
+#[test]
+fn based_on_edges_only_on_the_focused_chain() {
+    let w = World {
+        plans: 1,
+        machines: 0,
+        agents: vec![Gen {
+            plan: Some(0),
+            subs: 0,
+            files: vec![],
+            needs_you: false,
+            machine: None,
+        }],
+    };
+    let mut events = world_events(&w);
+    events.push(Event::Refs(vec![vegvisir::RefFact {
+        branch: "drgnx/b00".into(),
+        based_on: Some("drgnx/main".into()),
+        merged: false,
+    }]));
+    let m = model_of(events);
+    let plain = layout(&m, &view(226), None);
+    assert!(plain.at.contains_key(&ItemId("branch:drgnx/main".into())));
+    assert!(!drawn_kinds(&plain).contains(&EdgeKind::BasedOn));
+    let f = layout(&m, &focused(226, "branch:drgnx/b00"), None);
+    assert!(
+        f.at.contains_key(&ItemId("branch:drgnx/main".into())),
+        "the base is shown with the focused branch"
+    );
+    assert!(drawn_kinds(&f).contains(&EdgeKind::BasedOn));
+}
+
+/// [D] A block goes compact rather than take a second sub-row; an agent that needs you stays rich.
+#[test]
+fn a_block_compacts_before_its_second_sub_row() {
+    let agent = |needs_you| Gen {
+        plan: Some(0),
+        subs: 0,
+        files: vec![],
+        needs_you,
+        machine: None,
+    };
+    // at 150 units two rich cards (58 + 3 + 58) fit a sub-row, three compact ones (3 × 42 + 2 × 3) too
+    let w = World {
+        plans: 1,
+        machines: 0,
+        agents: vec![agent(false), agent(false), agent(false)],
+    };
+    let m = model_of(world_events(&w));
+    let l = layout(&m, &view(150), None);
+    assert!(
+        l.form
+            .values()
+            .all(|f| *f == vegvisir::layout::Form::Compact),
+        "{:?}",
+        l.form
+    );
+    assert_eq!(l.rows.iter().filter(|r| r.layer == 4).count(), 1);
+    // two rich cards fit one sub-row: they stay rich
+    let two = model_of(world_events(&World {
+        agents: vec![agent(false), agent(false)],
+        ..w.clone()
+    }));
+    let l = layout(&two, &view(150), None);
+    assert!(
+        l.form.values().all(|f| *f == vegvisir::layout::Form::Rich),
+        "{:?}",
+        l.form
+    );
+    // an agent that needs you stays rich in a compact block
+    let m = model_of(world_events(&World {
+        agents: vec![agent(true), agent(false), agent(false)],
+        ..w
+    }));
+    let l = layout(&m, &view(150), None);
+    assert_eq!(
+        l.form[&ItemId("agent:s00".into())],
+        vegvisir::layout::Form::Rich
+    );
+    assert_eq!(
+        l.form[&ItemId("agent:s01".into())],
+        vegvisir::layout::Form::Compact
+    );
+}
+
+/// [D] The fit rule: at least 480 px and no lane overflow; the height never counts.
+#[test]
+fn fits_is_width_and_lanes_not_height() {
+    let l = layout(&model_of(fixture::thirty()), &view(226), None);
+    assert!(
+        l.ports.is_empty() && l.fits,
+        "the 30-agent fixture fits 1000 px: {:?}",
+        l.ports
+    );
+    assert!(
+        l.height_units * 4 > 900,
+        "it is taller than the tile, and still fits"
+    );
+    assert!(!layout(&model_of(fixture::thirty()), &view(119), None).fits);
 }

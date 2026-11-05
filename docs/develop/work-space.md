@@ -117,7 +117,7 @@ The look's 19 px card lines round to 20 px on the grid. Compact and roomy densit
 2. **Blocks by plan.** Agents and branches sit in one block per plan, in plan order, with "No plan" last. Inside a
    block, agents wrap into sub-rows, and each agent sub-row is followed by its branches' sub-row, each branch under
    its agent. So plan → agent → branch edges stay short. Whole blocks wrap into block lines. A block's agents go
-   compact rather than take a third sub-row, except agents that need you or are on the focused chain. Subagents are
+   compact rather than take a second sub-row, except agents that need you or are on the focused chain. Subagents are
    compact and follow their parent. A branch that is only a base sits after its block's branches.
 3. **Order.** Inside a block, agents keep the previous layout's order (a new one goes at the end), else their start
    order. Plans keep plan order. Specs, asks, files and machines are ordered by their targets, then adjacent swaps
@@ -129,17 +129,22 @@ The look's 19 px card lines round to 20 px on the grid. Compact and roomy densit
 5. **Lanes.** An edge longer than one row takes a lane in each row it crosses, a 2 px segment at a free slot of the
    nearest gap. A gap of `g` units holds `g − 1` lanes (`floor((gap − 4 px) / 4 px)`: 2 in a 12 px gap). Edges from
    one source (a plan to its agents, an ask to what it led to) or to one target (agents to a machine, branches to a
-   file or to the branch they were cut from) share one lane, a trunk. The row's right end is a gap like the others, so a full row's lanes spread into its
-   slack; cards never move for a lane. A row with no free slot left bundles the edge into a **port** on its target
+   file or to the branch they were cut from) share one lane, a trunk. The row's right end is a gap like the others,
+   so a full row's lanes spread into its slack; cards never move for a lane. A row with no free slot left bundles the edge into a **port** on its target
    ("↑ N"; the side panel names the parents).
 6. **Bands.** The band above each row holds its curves (12 px under an agent sub-row, where only its branches'
    short edges run; 32 px elsewhere): from a card's bottom centre to a lane, lane to lane, a lane
    to a card's top centre. Same-row arcs (overlaps, "based on", a manager) go in the band above their row.
-   `crossings` counts crossing curve pairs per band.
-7. **Fits.** Below 120 units (480 px), or with a card wider than the tile, `fits` is false and the editor shows the
-   outline form.
+   `crossings` counts crossing curve pairs per band. "Runs on" and "based on" edges are drawn on the focused chain
+   only: a machine's chip shows its load and a branch's caption its base, and the side panel names both.
+7. **Fits.** The map fits at 120 units (480 px) or wider, with no lane overflow (no port) and every card inside the
+   width. Otherwise `fits` is false and the editor shows the outline form. **The height is not part of the rule:**
+   the map scrolls vertically (the 30-agent fixture is about 1750 px tall at 1000 px wide), the needs-you strip
+   stays pinned as the header line, and navigation scrolls the selection into view. The view wave builds the
+   scrolling.
 
-Filters: `focus` keeps the item's chain and draws its reads; `overlaps` keeps the flagged agents and branches, what
+Filters: `focus` keeps the item's chain, with the bases its branches were cut from, and draws its reads, slots and
+bases; `overlaps` keeps the flagged agents and branches, what
 they came from, every file they edit and the machines they run on, and draws read-versus-edit lines; `finished`
 brings back what is not live. Otherwise a file is a node only while it is shared (an overlap). A collapsed layer is
 one thin row; edges through it join the items on either side.
@@ -150,7 +155,9 @@ one thin row; edges through it join the items on either side.
 layers never move, blocks and siblings are contiguous, the same input gives the same output, adding an agent leaves
 the blocks before it in place and moves the blocks after it only as a whole, removing it again restores the
 previous layout, the width is respected, every long edge has a lane in every row it crosses or a port, and no lane
-leaves its gap or shares a slot with another bundle. Three goldens (`tests/golden/`) hold the prototype's data at
+leaves its gap or shares a slot with another bundle. Single cases pin the rules: runs-on and based-on edges only on
+the focused chain, a block compacting before its second sub-row, and the fit rule (width and lanes, never the
+height). Three goldens (`tests/golden/`) hold the prototype's data at
 226 units and the 30-agent fixture at 226 and 576 units (2400 px); `UPDATE_VEGVISIR_GOLDEN=1` rewrites them, and
 refuses one whose crossings are above the golden it replaces. `tests/timing.rs` holds `layout_200_items_within_2_ms`.
 
