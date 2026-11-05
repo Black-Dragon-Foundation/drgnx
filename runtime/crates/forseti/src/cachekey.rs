@@ -136,7 +136,9 @@ pub fn verdict_of(c: &Counts, expect: &Expect) -> Verdict {
     }
     if let Some(min) = expect.min_ran {
         if !c.counts_rows {
-            return Verdict::Suspect(format!("expected at least {min} rows, and this parser counts none"));
+            return Verdict::Suspect(format!(
+                "expected at least {min} rows, and this parser counts none"
+            ));
         }
         if c.ran < min {
             return Verdict::Suspect(format!("ran {} rows, expected at least {min}", c.ran));
@@ -145,7 +147,10 @@ pub fn verdict_of(c: &Counts, expect: &Expect) -> Verdict {
     if let Some(max) = expect.max_skipped
         && c.skipped > max
     {
-        return Verdict::Suspect(format!("skipped {} rows, expected at most {max}", c.skipped));
+        return Verdict::Suspect(format!(
+            "skipped {} rows, expected at most {max}",
+            c.skipped
+        ));
     }
     Verdict::Pass
 }
@@ -216,8 +221,14 @@ mod tests {
         assert!(lookup(&store, "k", 200, &want).is_some());
         for w in [
             Want { gate: true, ..want },
-            Want { fresh: true, ..want },
-            Want { timing: true, ..want },
+            Want {
+                fresh: true,
+                ..want
+            },
+            Want {
+                timing: true,
+                ..want
+            },
         ] {
             assert_eq!(lookup(&store, "k", 200, &w), None, "{w:?}");
         }
@@ -230,7 +241,11 @@ mod tests {
         let want = Want::default();
         assert!(lookup(&store, "k", 1_000 + MAX_AGE_S, &want).is_some());
         assert_eq!(lookup(&store, "k", 1_000 + MAX_AGE_S + 1, &want), None);
-        assert_eq!(lookup(&store, "k", 500, &want), None, "a result from the future is no result");
+        assert_eq!(
+            lookup(&store, "k", 500, &want),
+            None,
+            "a result from the future is no result"
+        );
         assert_eq!(lookup(&store, "other", 1_100, &want), None);
     }
 
@@ -253,17 +268,28 @@ mod tests {
     fn verdict_recomputed_with_new_expect() {
         let store = [stored(100, false, 10)];
         let mut want = Want::default();
-        assert_eq!(lookup(&store, "k", 200, &want).unwrap().verdict, Verdict::Pass);
+        assert_eq!(
+            lookup(&store, "k", 200, &want).unwrap().verdict,
+            Verdict::Pass
+        );
         // a stricter threshold than the stored run met: never reuses the old verdict
         want.expect.min_ran = Some(11);
         assert_eq!(lookup(&store, "k", 200, &want), None);
         want.expect.min_ran = Some(10);
         assert!(lookup(&store, "k", 200, &want).is_some());
         let skipped = [Stored {
-            counts: Counts { ran: 10, skipped: 3, counts_rows: true, ..Counts::default() },
+            counts: Counts {
+                ran: 10,
+                skipped: 3,
+                counts_rows: true,
+                ..Counts::default()
+            },
             ..stored(100, false, 10)
         }];
-        want.expect = Expect { min_ran: None, max_skipped: Some(2) };
+        want.expect = Expect {
+            min_ran: None,
+            max_skipped: Some(2),
+        };
         assert_eq!(lookup(&skipped, "k", 200, &want), None);
     }
 

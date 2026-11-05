@@ -66,7 +66,12 @@ pub fn replay(
             let mut free = vec![0u64; (*n).max(1) as usize];
             for i in &order {
                 let (at, _, e) = &arrivals[*i];
-                let s = free.iter().enumerate().min_by_key(|(_, f)| **f).map(|(s, _)| s).unwrap_or(0);
+                let s = free
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, f)| **f)
+                    .map(|(s, _)| s)
+                    .unwrap_or(0);
                 let start = (*at).max(free[s]).max(floor);
                 let end = start + secs(e);
                 free[s] = end;
@@ -83,7 +88,10 @@ pub fn replay(
                 let (at, spec, e) = &arrivals[*i];
                 let cores = e.cpu.ceil().max(1.0) as u32;
                 let mem = e.mem_p95_mib.unwrap_or(spec.mem_mib.max);
-                if !machines.iter().any(|m| m.cores >= cores && m.mem_mib >= mem) {
+                if !machines
+                    .iter()
+                    .any(|m| m.cores >= cores && m.mem_mib >= mem)
+                {
                     unplaced += 1;
                     continue;
                 }
@@ -122,7 +130,11 @@ pub fn replay(
     }
     ReplayReport {
         makespan_s: last_end - first,
-        mean_wait_s: if placed == 0 { 0.0 } else { wait_sum as f64 / placed as f64 },
+        mean_wait_s: if placed == 0 {
+            0.0
+        } else {
+            wait_sum as f64 / placed as f64
+        },
         cache_saved_s: cache_saved(arrivals, &order),
         unplaced,
     }
@@ -139,7 +151,10 @@ fn cache_saved(arrivals: &[(u64, JobSpec, Expected)], order: &[usize]) -> u64 {
             continue;
         }
         let key = format!("{}\u{1f}{}", history_key(spec), spec.tree.display());
-        if seen.iter().any(|(k, t)| *k == key && at - t <= CACHE_MAX_AGE_S) {
+        if seen
+            .iter()
+            .any(|(k, t)| *k == key && at - t <= CACHE_MAX_AGE_S)
+        {
             saved += secs(e);
         }
         seen.push((key, *at));
@@ -171,7 +186,9 @@ mod tests {
     // [D] pure: the queues of 4 and of 10 slots, worked out by hand
     #[test]
     fn fixed_slots_4_and_10_reproduce_their_queues() {
-        let jobs = at_zero(&[10.0, 10.0, 10.0, 10.0, 5.0, 5.0, 5.0, 5.0, 2.0, 2.0, 2.0, 2.0]);
+        let jobs = at_zero(&[
+            10.0, 10.0, 10.0, 10.0, 5.0, 5.0, 5.0, 5.0, 2.0, 2.0, 2.0, 2.0,
+        ]);
         // 4 slots: four 10 min jobs at 0, the 5 min jobs at 600, the 2 min jobs at 900 (ends 1020)
         let four = replay(&jobs, &[], &Policy::FixedSlots(4));
         assert_eq!(four.makespan_s, 1020);
@@ -181,10 +198,7 @@ mod tests {
         assert_eq!(ten.makespan_s, 600);
         assert_eq!(ten.mean_wait_s, 20.0);
         // arrivals are taken in time order, and a lone job waits for nothing
-        let late = vec![
-            (500, spec("b"), exp(1.0)),
-            (100, spec("a"), exp(1.0)),
-        ];
+        let late = vec![(500, spec("b"), exp(1.0)), (100, spec("a"), exp(1.0))];
         let r = replay(&late, &[], &Policy::FixedSlots(1));
         assert_eq!((r.makespan_s, r.mean_wait_s), (460, 0.0));
         assert_eq!(replay(&[], &[], &Policy::FixedSlots(4)).makespan_s, 0);
@@ -193,7 +207,12 @@ mod tests {
     // [D] pure
     #[test]
     fn capacity_places_by_cores_and_memory_first_come_first_served() {
-        let m = |name: &str, cores, speed| SimMachine { name: name.into(), cores, mem_mib: 4096, speed };
+        let m = |name: &str, cores, speed| SimMachine {
+            name: name.into(),
+            cores,
+            mem_mib: 4096,
+            speed,
+        };
         let machines = [m("small", 2, 1.0), m("fast", 2, 2.0)];
         let jobs = at_zero(&[10.0, 10.0, 10.0]);
         let r = replay(&jobs, &machines, &Policy::Capacity);

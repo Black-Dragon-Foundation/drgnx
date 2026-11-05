@@ -101,7 +101,9 @@ mod tests {
 
     /// Whether RUN crashes when ROW and the suspect are both in it, in that order (the planted pair).
     fn crashes(run: &[String], row: &str, suspect: &str) -> bool {
-        run.iter().position(|r| r == row).is_some_and(|a| run.iter().position(|r| r == suspect).is_some_and(|b| a < b))
+        run.iter()
+            .position(|r| r == row)
+            .is_some_and(|a| run.iter().position(|r| r == suspect).is_some_and(|b| a < b))
     }
 
     // [D] pure
@@ -112,7 +114,10 @@ mod tests {
             for culprit in &done {
                 let plan = bisect_plan(&done, "suspect", BUDGET);
                 assert!(plan.len() <= BUDGET, "{n}: {} runs", plan.len());
-                let crashed: Vec<bool> = plan.iter().map(|r| crashes(r, culprit, "suspect")).collect();
+                let crashed: Vec<bool> = plan
+                    .iter()
+                    .map(|r| crashes(r, culprit, "suspect"))
+                    .collect();
                 assert_eq!(
                     find(&done, "suspect", BUDGET, &crashed),
                     Culprit::Row(culprit.clone()),
@@ -131,7 +136,10 @@ mod tests {
         // no run crashed: nothing to name
         assert_eq!(find(&done, "suspect", BUDGET, &[false; 4]), Culprit::None);
         // every run ends with the suspect, after the done rows' order
-        assert!(plan.iter().all(|r| r.last().map(String::as_str) == Some("suspect")));
+        assert!(
+            plan.iter()
+                .all(|r| r.last().map(String::as_str) == Some("suspect"))
+        );
     }
 
     // [D] pure
@@ -153,7 +161,10 @@ mod tests {
             let (mut depth, mut out) = (0, vec![]);
             singles(rows.clone(), 0, &mut depth, &mut out);
             assert_eq!(out, rows, "every row once, in order");
-            assert!(depth <= (n as f64).log2().ceil() as usize, "{n}: depth {depth}");
+            assert!(
+                depth <= (n as f64).log2().ceil() as usize,
+                "{n}: depth {depth}"
+            );
         }
         assert!(bisect_plan(&[], "s", BUDGET).is_empty());
     }

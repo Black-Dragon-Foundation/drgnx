@@ -49,7 +49,12 @@ pub fn selector(rows: &[String]) -> String {
 
 /// How many chunks the rest is cut into: `clamp(set_minutes / max(8 min, 4 × overhead), 1, rows)`, raised to the free
 /// parallel capacity when the machine is quiet (`quiet_parallel`), and to what [`MAX_NAMES`] needs.
-pub fn chunk_count(rows: usize, set_minutes: f64, overhead_s: u64, quiet_parallel: Option<u32>) -> usize {
+pub fn chunk_count(
+    rows: usize,
+    set_minutes: f64,
+    overhead_s: u64,
+    quiet_parallel: Option<u32>,
+) -> usize {
     if rows == 0 {
         return 0;
     }
@@ -96,7 +101,11 @@ pub fn chunks(
         })
         .collect();
     let n = chunk_count(rest.len(), set_minutes, overhead_s, quiet_parallel);
-    let (base, extra) = if n == 0 { (0, 0) } else { (rest.len() / n, rest.len() % n) };
+    let (base, extra) = if n == 0 {
+        (0, 0)
+    } else {
+        (rest.len() / n, rest.len() % n)
+    };
     let mut at = 0;
     for i in 0..n {
         let len = base + usize::from(i < extra);
@@ -263,7 +272,12 @@ mod tests {
         let rows = names(100);
         let out = chunks(&rows, 80.0, 60, None, &s(&["t50"]), &s(&["t70", "nope"]));
         assert!(out[0].probe);
-        assert_eq!(out[0].rows, s(&["t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9", "t50", "t70"]));
+        assert_eq!(
+            out[0].rows,
+            s(&[
+                "t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9", "t50", "t70"
+            ])
+        );
         assert!(out[1..].iter().all(|c| !c.probe));
         // a small suite: the first 5 and nothing else is a probe unless marked
         let small = chunks(&names(20), 80.0, 60, None, &[], &[]);
@@ -285,7 +299,10 @@ mod tests {
         assert_eq!(chunk_count(50, 1.0, 60, None), 2);
         assert_eq!(chunk_count(0, 80.0, 60, None), 0);
         let rest = chunks(&names(105), 80.0, 300, None, &[], &[]);
-        assert_eq!(rest.iter().filter(|c| !c.probe).count(), chunk_count(94, 80.0, 300, None));
+        assert_eq!(
+            rest.iter().filter(|c| !c.probe).count(),
+            chunk_count(94, 80.0, 300, None)
+        );
     }
 
     // [D] pure
@@ -298,7 +315,11 @@ mod tests {
         assert_eq!(c.selector(), "^\\(a\\|b\\.c\\|d\\+e\\)$");
         assert!(!c.selector().contains('|') || c.selector().contains("\\|"));
         let all = chunks(&names(500), 800.0, 60, None, &[], &[]);
-        assert!(all.iter().all(|c| c.rows.len() <= MAX_NAMES), "{:?}", all.iter().map(|c| c.rows.len()).collect::<Vec<_>>());
+        assert!(
+            all.iter().all(|c| c.rows.len() <= MAX_NAMES),
+            "{:?}",
+            all.iter().map(|c| c.rows.len()).collect::<Vec<_>>()
+        );
     }
 
     // [D] pure
@@ -323,10 +344,18 @@ mod tests {
     #[test]
     fn the_suspect_is_the_first_row_without_a_result() {
         let listed = names(6);
-        let chunk = Chunk { rows: listed.clone(), probe: false };
+        let chunk = Chunk {
+            rows: listed.clone(),
+            probe: false,
+        };
         let (iso, rest) = split_on_crash(&chunk, &s(&["t0", "t1"]), &listed);
         assert_eq!(iso, Some(IsolateJob { row: "t2".into() }));
-        assert_eq!(rest, Some(RestJob { rows: s(&["t3", "t4", "t5"]) }));
+        assert_eq!(
+            rest,
+            Some(RestJob {
+                rows: s(&["t3", "t4", "t5"])
+            })
+        );
         let (iso, rest) = split_on_crash(&chunk, &s(&["t0", "t1", "t2", "t3", "t4"]), &listed);
         assert_eq!((iso, rest), (Some(IsolateJob { row: "t5".into() }), None));
         assert_eq!(split_on_crash(&chunk, &listed, &listed), (None, None));
@@ -341,7 +370,10 @@ mod tests {
         assert_eq!(split_budget(30), 3);
         assert_eq!(split_budget(100), 10);
         let listed = names(30);
-        let chunk = Chunk { rows: listed.clone(), probe: false };
+        let chunk = Chunk {
+            rows: listed.clone(),
+            probe: false,
+        };
         let mut b = SplitBudget::new(30);
         let mut done: Vec<String> = vec![];
         // each crash costs 2 jobs (isolate + rest): one split fits in 3, the second doesn't
@@ -360,8 +392,14 @@ mod tests {
         }
         assert_eq!(b.left(), 1, "a refused split charges nothing");
         // a last row alone costs one job
-        let last = Chunk { rows: s(&["z"]), probe: false };
-        assert!(matches!(b.split(&last, &[], &s(&["z"])), Split::Jobs { rest: None, .. }));
+        let last = Chunk {
+            rows: s(&["z"]),
+            probe: false,
+        };
+        assert!(matches!(
+            b.split(&last, &[], &s(&["z"])),
+            Split::Jobs { rest: None, .. }
+        ));
         assert_eq!(b.left(), 0);
         assert_eq!(b.split(&last, &s(&["z"]), &s(&["z"])), Split::Nothing);
     }
@@ -371,8 +409,14 @@ mod tests {
     fn a_requeue_plan_skips_done_rows() {
         let listed = names(5);
         let done = vec![
-            RowResult { row: "t1".into(), pass: true },
-            RowResult { row: "t3".into(), pass: false },
+            RowResult {
+                row: "t1".into(),
+                pass: true,
+            },
+            RowResult {
+                row: "t3".into(),
+                pass: false,
+            },
         ];
         assert_eq!(remaining_rows(&listed, &done), s(&["t0", "t2", "t4"]));
     }
