@@ -59,6 +59,7 @@ How drgnx is built, tested and measured.
 - [bin/drgnx check](develop/check.md): build and every test tier in one parallel run; shards, GUI slots, phases, the leak census, the shuffled test order and the polluter bisect.
 - [CI](develop/ci.md): the GitHub Actions workflows — Emacs 31.1 suite, shellcheck, leak scan, nightly GUI tier.
 - [The runtime workspace](develop/runtime.md): `runtime/`, the Cargo workspace (MSRV, deny policy, locked builds), the crate names, and the conformance harness: scenario files run against a hub binary, one socket-path fixture for Lisp and Rust.
+- [forseti](develop/forseti.md): the scheduler core the hub, its runners and jobq share — the job model, priority and the queue order; pure.
 - [Settings](develop/settings.md): the settings files' data subset and its two readers (Lisp and `huginn`), the start-up order, testing in a child Emacs.
 - [The hub and the gateway](develop/hub.md): Ratatoskr, the one durable process behind agents (Ratatoskr phase 7 is done: no Lisp runtime, no backend, one writer), its socket protocol, the traffic gateway.
 - [The store (Urdr)](develop/store.md): `work.db` schema 8 — one knowledge graph with history, written by Ratatoskr only.
