@@ -215,6 +215,8 @@ struct ClosedStep {
     cost: Option<f64>,
     /// What a tool step read, searched or fetched, taken as the step closed (its `rawInput` is final then).
     detail: Option<norn::write::work::StepDetail>,
+    /// A shell step's command, taken then too: the files it names are its presence ([`crate::work::presence`]).
+    command: Option<String>,
 }
 
 /// What a provider says of a tool call beyond ACP's fields: Claude's `_meta.claudeCode`.
@@ -272,8 +274,10 @@ impl State {
         if let Some(open) = self.cur.take() {
             let u = turn_use.unwrap_or_default();
             let detail = open.tool_id.as_deref().and_then(|id| self.tool_detail(id));
+            let command = open.tool_id.as_deref().and_then(|id| self.tool_command(id));
             self.closed.push(ClosedStep {
                 detail,
+                command,
                 open,
                 end,
                 turn_id: u.turn_id,
@@ -301,6 +305,28 @@ impl State {
             locations,
             rest.get("rawInput"),
         )
+    }
+
+    /// The command of tool call ID when it is a shell step (kind `execute`, or Claude's `Bash`): `rawInput.command`, a
+    /// string or a list of words.
+    fn tool_command(&self, id: &str) -> Option<String> {
+        let rest = &self.entries.get(*self.tools.get(id)?)?.rest;
+        let shell = rest.get("kind").and_then(Value::as_str) == Some("execute")
+            || self.tool_meta.get(id).and_then(|m| m.name.as_deref()) == Some("Bash");
+        if !shell {
+            return None;
+        }
+        match rest.get("rawInput")?.get("command")? {
+            Value::String(s) => Some(s.clone()),
+            Value::Array(words) => Some(
+                words
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ),
+            _ => None,
+        }
     }
 
     /// The running step ends and a step of CLASS begins.
@@ -720,6 +746,8 @@ pub(crate) struct StepSink {
     pub asks: Option<crate::work::asks::AskTx>,
     /// The conclusions' stamps: a conclusion's tool step written, a turn ended (none: a test).
     pub stamps: Option<Arc<crate::work::conclusions::Stamps>>,
+    /// The presence model: the files each step was in (none: a test).
+    pub presence: Option<Arc<crate::work::presence::Live>>,
 }
 
 /// What `open` and `resume` know of a session before its agent is running.
@@ -1517,6 +1545,7 @@ fn assemble(
             tools: Some(front.tools.clone()),
             asks: Some(front.core.asks.handle()),
             stamps: Some(front.core.stamps.clone()),
+            presence: Some(front.core.presence.clone()),
         },
         ctx,
     ));
@@ -2027,6 +2056,26 @@ async fn write_steps(
             cost_unit: None,
             detail: c.detail.as_ref().map(crate::work::detail::wire),
         };
+        // the files the step was in: the presence model (a shell step's command looked up off the async threads)
+        if let Some(live) = &sink.presence
+            && id != 0
+            && (c.detail.is_some() || c.command.is_some())
+        {
+            let (d, cmd, dir) = (c.detail.clone(), c.command.clone(), ctx.cwd.clone());
+            let files = tokio::task::spawn_blocking(move || {
+                crate::work::presence::touches_of_step(d.as_ref(), cmd.as_deref(), &dir)
+            })
+            .await
+            .unwrap_or_default();
+            if !files.is_empty() {
+                live.apply(crate::work::presence::PresenceEv::Step {
+                    session: ctx.session.clone(),
+                    step: id,
+                    at: step.start,
+                    files,
+                });
+            }
+        }
         // a conclusion's tool step is written, or the turn ended: the stamps that are due
         if let Some(stamps) = &sink.stamps {
             use crate::work::conclusions::StampEv;
@@ -3602,7 +3651,7 @@ pub async fn kill(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
     r
 }
 
-/// Session SID ended: it has no current ask any more (the workers it started keep theirs).
+/// Session SID ended: it has no current ask any more (the workers it started keep theirs), and it is in no file now.
 fn asks_gone(f: &Front, sid: &str) {
     f.core
         .asks
@@ -3610,6 +3659,20 @@ fn asks_gone(f: &Front, sid: &str) {
         .send(crate::work::asks::AskEv::SessionGone {
             session: sid.to_string(),
         });
+    f.core
+        .presence
+        .apply(crate::work::presence::PresenceEv::SessionEnd {
+            session: sid.to_string(),
+        });
+}
+
+/// The sessions the hub recorded, with their folders (the presence model's rebuild at start).
+pub(crate) async fn recorded(hub: &super::Hub) -> Vec<(String, PathBuf)> {
+    read_rows(hub, None)
+        .await
+        .into_iter()
+        .map(|r| (r.0, PathBuf::from(r.4)))
+        .collect()
 }
 
 /// Session SID is gone: its gateway token no longer forwards and its jobs are no longer booked.
@@ -3974,6 +4037,7 @@ mod tests {
             tools: None,
             asks: None,
             stamps: None,
+            presence: None,
         };
         tokio::spawn(write_steps(rx, sink, ctx));
         let open = |class, tool: Option<&str>| OpenStep {
@@ -4000,6 +4064,7 @@ mod tests {
                 cache_write: 0,
                 cost: None,
                 detail: None,
+                command: None,
             })
             .unwrap();
         }
@@ -4061,6 +4126,7 @@ mod tests {
             tools: None,
             asks: None,
             stamps: None,
+            presence: None,
         };
         let ctx = StepCtx {
             session: "a1".into(),
@@ -4096,6 +4162,7 @@ mod tests {
                 cache_write: 0,
                 cost: None,
                 detail: None,
+                command: None,
             })
             .unwrap();
         }

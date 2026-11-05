@@ -8,6 +8,8 @@
   "agents/move": ["user"],
   "agents/pause": ["user"],
   "agents/permission": ["user"],
+  "agents/presence/get": ["user"],
+  "agents/presence/subscribe": ["user"],
   "agents/probe": ["user"],
   "agents/role": ["user"],
   "agents/send": ["user"],

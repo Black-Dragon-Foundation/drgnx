@@ -442,6 +442,132 @@
     {
       "data": {
         "$defs": {
+          "PresenceEntry": {
+            "additionalProperties": false,
+            "description": "One session in one file: the presence model's entry.",
+            "properties": {
+              "at": {
+                "description": "The hub's time of the step (seconds since the epoch).",
+                "format": "double",
+                "type": "number"
+              },
+              "file": {
+                "description": "An absolute path in one of the workspace's repositories.",
+                "type": "string"
+              },
+              "line": {
+                "description": "The last line known; absent: the file only.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "mode": {
+                "$ref": "#/$defs/PresenceMode"
+              },
+              "session": {
+                "type": "string"
+              },
+              "source": {
+                "$ref": "#/$defs/PresenceSource"
+              },
+              "step": {
+                "description": "The timeline step it came from.",
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "session",
+              "file",
+              "mode",
+              "source",
+              "step",
+              "at"
+            ],
+            "type": "object"
+          },
+          "PresenceMode": {
+            "description": "How a session is in a file.",
+            "oneOf": [
+              {
+                "enum": [
+                  "read"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "listed",
+                "description": "A directory listing or a recursive search over it.",
+                "type": "string"
+              },
+              {
+                "const": "write",
+                "description": "Written by a shell command.",
+                "type": "string"
+              },
+              {
+                "const": "edit",
+                "description": "Changed by an edit tool.",
+                "type": "string"
+              }
+            ]
+          },
+          "PresenceSource": {
+            "description": "Where the hub saw it.",
+            "oneOf": [
+              {
+                "const": "acp",
+                "description": "A read or search step's ACP fields.",
+                "type": "string"
+              },
+              {
+                "const": "edit",
+                "description": "An edit step.",
+                "type": "string"
+              },
+              {
+                "const": "command",
+                "description": "A file a shell step's command names (\"from the command\").",
+                "type": "string"
+              },
+              {
+                "const": "opened",
+                "description": "A file a shell step's processes opened (\"seen open\").",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "Who is in FILE now; the data of `agent-presence`.",
+        "properties": {
+          "entries": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/PresenceEntry"
+            },
+            "type": "array"
+          },
+          "file": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "FilePresence",
+        "type": "object"
+      },
+      "doc": "who is in a file now changed: its entries, at most once per file per 100 ms, to the connections that asked (agents/presence/subscribe)",
+      "name": "agent-presence"
+    },
+    {
+      "data": {
+        "$defs": {
           "Step": {
             "additionalProperties": false,
             "description": "One row of the `step` table.",
@@ -2813,6 +2939,343 @@
         "type": "boolean"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "who is in a file now: each session's last mode, line, source and step there",
+      "name": "agents/presence/get",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`agents/presence/get`'s params.",
+        "properties": {
+          "file": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "PresenceGet",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "PresenceEntry": {
+            "additionalProperties": false,
+            "description": "One session in one file: the presence model's entry.",
+            "properties": {
+              "at": {
+                "description": "The hub's time of the step (seconds since the epoch).",
+                "format": "double",
+                "type": "number"
+              },
+              "file": {
+                "description": "An absolute path in one of the workspace's repositories.",
+                "type": "string"
+              },
+              "line": {
+                "description": "The last line known; absent: the file only.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "mode": {
+                "$ref": "#/$defs/PresenceMode"
+              },
+              "session": {
+                "type": "string"
+              },
+              "source": {
+                "$ref": "#/$defs/PresenceSource"
+              },
+              "step": {
+                "description": "The timeline step it came from.",
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "session",
+              "file",
+              "mode",
+              "source",
+              "step",
+              "at"
+            ],
+            "type": "object"
+          },
+          "PresenceMode": {
+            "description": "How a session is in a file.",
+            "oneOf": [
+              {
+                "enum": [
+                  "read"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "listed",
+                "description": "A directory listing or a recursive search over it.",
+                "type": "string"
+              },
+              {
+                "const": "write",
+                "description": "Written by a shell command.",
+                "type": "string"
+              },
+              {
+                "const": "edit",
+                "description": "Changed by an edit tool.",
+                "type": "string"
+              }
+            ]
+          },
+          "PresenceSource": {
+            "description": "Where the hub saw it.",
+            "oneOf": [
+              {
+                "const": "acp",
+                "description": "A read or search step's ACP fields.",
+                "type": "string"
+              },
+              {
+                "const": "edit",
+                "description": "An edit step.",
+                "type": "string"
+              },
+              {
+                "const": "command",
+                "description": "A file a shell step's command names (\"from the command\").",
+                "type": "string"
+              },
+              {
+                "const": "opened",
+                "description": "A file a shell step's processes opened (\"seen open\").",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "Who is in FILE now; the data of `agent-presence`.",
+        "properties": {
+          "entries": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/PresenceEntry"
+            },
+            "type": "array"
+          },
+          "file": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "FilePresence",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "this connection gets agent-presence for the files under a workspace's roots, or for one file; the answer is who is in them now",
+      "name": "agents/presence/subscribe",
+      "params": {
+        "$defs": {
+          "Workspace": {
+            "additionalProperties": false,
+            "description": "The workspace a Work view shows: one id, the roots (repositories or folders) it spans. The editor sends it with\nevery subscription; the hub never decides what a workspace is.",
+            "properties": {
+              "id": {
+                "description": "`workspace:` and 12 hex digits.",
+                "type": "string"
+              },
+              "roots": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`agents/presence/subscribe`'s params: a workspace (every file under its roots) or one file.",
+        "properties": {
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workspace": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Workspace"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "PresenceSubscribe",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "FilePresence": {
+            "additionalProperties": false,
+            "description": "Who is in FILE now; the data of `agent-presence`.",
+            "properties": {
+              "entries": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/PresenceEntry"
+                },
+                "type": "array"
+              },
+              "file": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "file"
+            ],
+            "type": "object"
+          },
+          "PresenceEntry": {
+            "additionalProperties": false,
+            "description": "One session in one file: the presence model's entry.",
+            "properties": {
+              "at": {
+                "description": "The hub's time of the step (seconds since the epoch).",
+                "format": "double",
+                "type": "number"
+              },
+              "file": {
+                "description": "An absolute path in one of the workspace's repositories.",
+                "type": "string"
+              },
+              "line": {
+                "description": "The last line known; absent: the file only.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "mode": {
+                "$ref": "#/$defs/PresenceMode"
+              },
+              "session": {
+                "type": "string"
+              },
+              "source": {
+                "$ref": "#/$defs/PresenceSource"
+              },
+              "step": {
+                "description": "The timeline step it came from.",
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "session",
+              "file",
+              "mode",
+              "source",
+              "step",
+              "at"
+            ],
+            "type": "object"
+          },
+          "PresenceMode": {
+            "description": "How a session is in a file.",
+            "oneOf": [
+              {
+                "enum": [
+                  "read"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "listed",
+                "description": "A directory listing or a recursive search over it.",
+                "type": "string"
+              },
+              {
+                "const": "write",
+                "description": "Written by a shell command.",
+                "type": "string"
+              },
+              {
+                "const": "edit",
+                "description": "Changed by an edit tool.",
+                "type": "string"
+              }
+            ]
+          },
+          "PresenceSource": {
+            "description": "Where the hub saw it.",
+            "oneOf": [
+              {
+                "const": "acp",
+                "description": "A read or search step's ACP fields.",
+                "type": "string"
+              },
+              {
+                "const": "edit",
+                "description": "An edit step.",
+                "type": "string"
+              },
+              {
+                "const": "command",
+                "description": "A file a shell step's command names (\"from the command\").",
+                "type": "string"
+              },
+              {
+                "const": "opened",
+                "description": "A file a shell step's processes opened (\"seen open\").",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The files with someone in them now, each with its entries.",
+        "properties": {
+          "files": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/FilePresence"
+            },
+            "type": "array"
+          }
+        },
+        "title": "PresenceFiles",
+        "type": "object"
+      },
+      "writes": false
     },
     {
       "classes": [

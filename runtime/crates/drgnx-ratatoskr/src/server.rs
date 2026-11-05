@@ -251,6 +251,8 @@ pub async fn run(args: ServeArgs) -> Exit {
     {
         let f = front.clone();
         tokio::spawn(async move {
+            // who was in which file, from the recorded sessions' steps, before they run again
+            f.core.presence.rebuild_from_store(&f).await;
             f.core.agents.resume_all(&f).await;
             f.core.runs.set_recovering(false);
             crate::agents::wake::recover(&f).await;

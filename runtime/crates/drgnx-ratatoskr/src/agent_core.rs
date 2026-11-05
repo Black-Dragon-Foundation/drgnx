@@ -23,6 +23,7 @@
 //! | `records/{proposals,decide}` | [`crate::records`] | 14b |
 //! | `machines/{report,list}` | [`crate::work::machines`] | P2 5 |
 //! | `work/conclusions` | [`crate::work::conclusions`] | P2 14 |
+//! | `agents/presence/{subscribe,get}` | [`crate::work::presence`] | P2 15 |
 
 use crate::dispatch::Caller;
 use crate::front::Front;
@@ -50,6 +51,8 @@ pub struct Core {
     pub asks: crate::work::asks::Asks,
     /// The conclusions' step stamps ([`crate::work::conclusions`]).
     pub stamps: std::sync::Arc<crate::work::conclusions::Stamps>,
+    /// Who is in which file now ([`crate::work::presence`]).
+    pub presence: std::sync::Arc<crate::work::presence::Live>,
 }
 
 fn answer<T: Serialize>(r: Result<T, Error>) -> Result<Value, Error> {
@@ -124,6 +127,8 @@ pub async fn serve(
         Params::MachinesReport(p) => answer(work::machines::report(f, c, p).await),
         Params::MachinesList(p) => answer(work::machines::list(f, c, p).await),
         Params::WorkConclusions(p) => answer(work::conclusions::get(f, c, p).await),
+        Params::AgentsPresenceSubscribe(p) => answer(work::presence::subscribe(f, c, p).await),
+        Params::AgentsPresenceGet(p) => answer(work::presence::get(f, c, p).await),
         other => return Err(Box::new(other)),
     })
 }

@@ -252,6 +252,22 @@ it was recorded in, and computes the steps it rests on. `work/conclusions {sessi
 - Tests: `work::conclusions::tests` (`both_arrival_orders_stamp_the_same_step`, pattern A over two sessions; the
   rest pattern D) and norn's `the_agents_step_argument_is_ignored` (D).
 
+### Presence
+
+`work::presence` is the hub's presence model; its contract is in `docs/develop/hub.md`, "The presence model".
+
+- `Presence` is pure: `apply(PresenceEv) -> Vec<PresenceOut>` (events `Step {session, step, at, files}` and
+  `SessionEnd`; outs `Changed {file}`, every file whose "now" may read differently, including the file a session's
+  latest entry left), `now(file, at)`, `files_under(root, at)`, `rebuild(steps, details)`.
+- The session's step writer feeds it after each step is written, before `agent-step` goes out: the files of the step's
+  detail (`touches_of_detail`) and, for a shell step (ACP kind `execute` or Claude's `Bash`), of its command
+  (`touches_of_step`: `shell_read::parse` and `resolve` with the session's folder as the only root, off the async
+  threads). `Live` holds the model, the subscriptions by connection and the files waiting for the next flush.
+- Tests: `work::presence::tests` (`every_order_same_now_set`, pattern A over two sessions, a third that only listed a
+  file long ago and an end, checking after every event that each file whose "now" changed was named; the rest
+  pattern D) and conformance `work/presence-goes-only-to-subscribers`, `work/presence-coalesces-per-file` (pattern B,
+  virtual clock).
+
 ### Machines
 
 `work::machines` keeps the list `machines/list` and the event `machines-changed` carry (types in

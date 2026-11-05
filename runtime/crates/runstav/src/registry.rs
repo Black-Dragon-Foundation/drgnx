@@ -369,7 +369,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 115, "{names:?}");
+        assert_eq!(names.len(), 117, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -609,6 +609,7 @@ mod tests {
             let schema = (m.params)().to_value();
             let req = required(&schema);
             if [
+                "agents/presence/subscribe",
                 "coord/agent",
                 "graph/revert",
                 "graph/grants",
@@ -638,7 +639,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 79);
+        assert_eq!(with, 80);
     }
 
     #[test]

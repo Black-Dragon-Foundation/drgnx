@@ -4,6 +4,9 @@
 //! time) and `machines/list`; the event `machines-changed` carries the list again when it changed.
 //!
 //! Conclusions: `work/conclusions` (a session's decisions and findings, with their steps and links).
+//!
+//! The presence model: `agents/presence/subscribe`, `agents/presence/get` and the event `agent-presence` (who is in
+//! which file, at which line, now). The `agents/` names keep clear of `presence/set`, the user's own away state.
 
 use super::{Empty, invalid, method};
 use crate::registry::Method;
@@ -131,6 +134,106 @@ pub struct Conclusions {
     pub conclusions: Vec<Conclusion>,
 }
 
+/// How a session is in a file.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize, JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum PresenceMode {
+    /// A directory listing or a recursive search over it.
+    Listed,
+    Read,
+    /// Written by a shell command.
+    Write,
+    /// Changed by an edit tool.
+    Edit,
+}
+
+/// Where the hub saw it.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize, JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum PresenceSource {
+    /// A read or search step's ACP fields.
+    Acp,
+    /// An edit step.
+    Edit,
+    /// A file a shell step's command names ("from the command").
+    Command,
+    /// A file a shell step's processes opened ("seen open").
+    Opened,
+}
+
+/// One session in one file: the presence model's entry.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PresenceEntry {
+    pub session: String,
+    /// An absolute path in one of the workspace's repositories.
+    pub file: String,
+    pub mode: PresenceMode,
+    /// The last line known; absent: the file only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    pub source: PresenceSource,
+    /// The timeline step it came from.
+    pub step: i64,
+    /// The hub's time of the step (seconds since the epoch).
+    pub at: f64,
+}
+
+/// Who is in FILE now; the data of `agent-presence`.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FilePresence {
+    pub file: String,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub entries: Vec<PresenceEntry>,
+}
+
+/// `agents/presence/subscribe`'s params: a workspace (every file under its roots) or one file.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PresenceSubscribe {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<Workspace>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+}
+
+/// `agents/presence/get`'s params.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PresenceGet {
+    pub file: String,
+}
+
+/// The files with someone in them now, each with its entries.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PresenceFiles {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub files: Vec<FilePresence>,
+}
+
+fn check_presence_subscribe(p: &PresenceSubscribe) -> Result<(), Error> {
+    match (&p.workspace, &p.file) {
+        (Some(_), None) => Ok(()),
+        (None, Some(f)) if f.starts_with('/') => Ok(()),
+        (None, Some(_)) => Err(invalid("file", "an absolute path")),
+        _ => Err(invalid("workspace", "one of workspace or file")),
+    }
+}
+
+fn check_presence_get(p: &PresenceGet) -> Result<(), Error> {
+    if p.file.starts_with('/') {
+        Ok(())
+    } else {
+        Err(invalid("file", "an absolute path"))
+    }
+}
+
 fn check_conclusions(p: &ConclusionsParams) -> Result<(), Error> {
     if p.session.is_empty() || p.session.len() > NAME_MAX {
         return Err(invalid("session", "a session id"));
@@ -176,6 +279,18 @@ fn check_report(p: &MachineReport) -> Result<(), Error> {
 
 pub(crate) fn methods() -> Vec<Method> {
     vec![
+        method!(
+            "agents/presence/subscribe", AgentsPresenceSubscribe(PresenceSubscribe) -> PresenceFiles,
+            classes: [User], writes: false,
+            doc: "this connection gets agent-presence for the files under a workspace's roots, or for one file; the answer is who is in them now",
+            check: check_presence_subscribe,
+        ),
+        method!(
+            "agents/presence/get", AgentsPresenceGet(PresenceGet) -> FilePresence,
+            classes: [User], writes: false,
+            doc: "who is in a file now: each session's last mode, line, source and step there",
+            check: check_presence_get,
+        ),
         method!(
             "machines/report", MachinesReport(MachineReport) -> Machine,
             classes: [User], writes: false,

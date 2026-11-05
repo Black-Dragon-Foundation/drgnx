@@ -997,6 +997,8 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `agents/move` | user | `{id: Id, profile: string}` | `{id: string, name: string}` | yes |
 | `agents/pause` | user | `{id: Id}` | `boolean` | yes |
 | `agents/permission` | user | `{id: Id, option?: string, request: RequestId}` | `boolean` | yes |
+| `agents/presence/get` | user | `{file: string}` | `{entries?: [PresenceEntry], file: string}` | no |
+| `agents/presence/subscribe` | user | `{file?: string, workspace?: {id: string, roots?: [string]}}` | `{files?: [FilePresence]}` | no |
 | `agents/probe` | user | `{profile: string, wait_s?: natnum}` | `{agent?: AgentInfo, ok: boolean, stderr_tail?: string, why?: string}` | no |
 | `agents/role` | user | `{id: Id, role: "manager" \| "worker" \| "chat"}` | `boolean` | yes |
 | `agents/send` | user | `{id: Id, if_free?: boolean, text: Prompt}` | `boolean` | yes |
@@ -1190,6 +1192,7 @@ result is (`event(NAME).check`):
 | `agent-step` | sessions (the front) | `{session, step: Step}`: a step opened or closed, with its class, the hub's stamps and its anchors |
 | `exec-done` | jobs (the front) | `{id, session?, status, exit?, summary: {exit?, failing, lines, log}}` |
 | `machines-changed` | machines (the front) | `{machines: [{machine, slots: [{id, holder?, kind}], local}]}`: the whole list, sent when a report, an expiry or the local slots changed it |
+| `agent-presence` | the presence model (to the connections that asked) | `{file, entries: [{session, file, mode, line?, source, step, at}]}`: who is in the file now, at most once per file per 100 ms ("The presence model") |
 | `supervisor` | the supervisor | `{rule, session?, exec?, task?, card?, text}` |
 | `view-written` | records | `{path, kind, hash}`: a view file written (never committed) |
 | `view-proposal` | records | `{id, path, by?}`: a hand edit to a view became a proposal |
@@ -1357,6 +1360,33 @@ Content is never kept and no text field is longer than 4 KiB. A shell call has n
 write `command` and `opened` details). The detail is the step's `detail` on `agent-step` and `timeline/get`
 (`runstav::methods::timeline::StepDetail`). The mock agent's `provider:read|grep|web-search|web-fetch|write` words
 send each personality's real shapes.
+
+### The presence model
+
+Who is in which file, at which line, now (`work::presence`; agent system part 2 builds it, part 3's cursors, gutter
+and badges build on it). This is its contract.
+
+- **An entry** is one session's latest `{session, file, mode, line?, source, step, at}` in one file
+  (`runstav::methods::work::PresenceEntry`). `file` is an absolute path (links followed when the file exists); `mode`
+  is `read`, `edit`, `listed` (a listing, a recursive search) or `write` (a shell command's); `line` is the last line
+  known, or absent ("file only"); `source` is `acp` (a read or search step's fields), `edit` (an edit step), `command`
+  (a file a shell step's command names, from `work::shell_read`, only inside the session's folder) or `opened` (a file
+  its processes opened; Gleipnir's tracer, not yet); `step` is the timeline step it came from, `at` the hub's time.
+  Of one session's entries in one file the later step wins, then the stronger mode (`edit` > `write` > `read` >
+  `listed`).
+- **Now:** an entry is now while its session is live and it is younger than 120 s (`presence-stale-after`) or it is
+  its session's latest entry. Older entries stay as history. A session ended with `agents/stop` or `agents/kill` is in
+  no file.
+- **Methods** (user connections): `agents/presence/subscribe {workspace: {id, roots}} | {file}` makes the connection
+  get `agent-presence` for the files under the roots (or that file) from then on, and answers `{files: [{file,
+  entries}]}`, who is in them now; `agents/presence/get {file} -> {file, entries}`. The names keep clear of
+  `presence/set`, the user's away state. A connection's subscriptions end with it.
+- **The event** `agent-presence {file, entries}` goes only to the connections that asked (`Front::send_to`), at most
+  once per file per 100 ms of the hub's clock: a change arms one flush 100 ms later (task `presence:flush`), and every
+  file changed meanwhile goes out once, with its entries then.
+- **Durability:** none of its own. At start, before the recorded sessions resume, it is rebuilt from their steps'
+  details (reads, searches, edits); a shell step's command is not stored, so its files come back with its next step.
+- New sources (Gleipnir's opens, part 3's own refinements) add a `source` value without changing this contract.
 
 ### After a restart
 

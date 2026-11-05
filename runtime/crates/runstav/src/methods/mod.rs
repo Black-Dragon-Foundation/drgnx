@@ -222,6 +222,8 @@ params! {
     MachinesReport(work::MachineReport),
     MachinesList(Empty),
     WorkConclusions(work::ConclusionsParams),
+    AgentsPresenceSubscribe(work::PresenceSubscribe),
+    AgentsPresenceGet(work::PresenceGet),
 }
 
 /// Every method, in no order.
