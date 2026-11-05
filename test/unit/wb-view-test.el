@@ -118,6 +118,35 @@ with ARGS), attached at `point-min', and an empty model."
     (should (string-match-p "^60: also changed$" (drgnx-view-test--text v)))
     (drgnx-view-test--ok v)))
 
+;; pattern D: pure, no pattern line
+(ert-deftest drgnx-view/draw-now-with-keys-draws-only-them ()
+  (drgnx-view-test--with (v :render #'drgnx-view-test--render :key-test 'eq)
+    (drgnx-view-append v (number-sequence 0 9))
+    (drgnx-view-draw-now v)
+    (let ((drawn (drgnx-view-test--stat v :rows-drawn)))
+      (puthash 3 "three" drgnx-view-test--model)
+      (puthash 7 "seven" drgnx-view-test--model)
+      (drgnx-view-dirty v '(3 7))
+      (should (= 1 (drgnx-view-draw-now v '(3))))
+      (should (= 1 (- (drgnx-view-test--stat v :rows-drawn) drawn)))
+      (should (string-match-p "^3: three$" (drgnx-view-test--text v)))
+      (should-not (string-match-p "^7: seven$" (drgnx-view-test--text v)))
+      (should (drgnx-view-pending-p v))
+      (should-not (drgnx-view--check v))
+      ;; the row left marked is drawn by the next whole draw
+      (should (= 1 (drgnx-view-draw-now v)))
+      (should (string-match-p "^7: seven$" (drgnx-view-test--text v)))
+      (should-not (drgnx-view-pending-p v))
+      (drgnx-view-test--ok v))))
+
+(ert-deftest drgnx-view/draw-now-counts-its-draw-time ()
+  (drgnx-view-test--with (v :render #'drgnx-view-test--render)
+    (should (= 0 (drgnx-view-test--stat v :draw-ms)))
+    (drgnx-view-append v '(a b c))
+    (drgnx-view-draw-now v)
+    (should (numberp (drgnx-view-test--stat v :draw-ms)))
+    (should (>= (drgnx-view-test--stat v :draw-ms) 0))))
+
 (ert-deftest drgnx-view/dirty-t-redraws-all-without-erasing ()
   (drgnx-view-test--with (v :render #'drgnx-view-test--render :key-test 'eq)
     (drgnx-view-append v (number-sequence 0 99))
@@ -467,7 +496,7 @@ fresh slice."
           (should (= 4 (drgnx-view-test--stat v2 :appended)))
           (should (= (+ base 7) (plist-get (drgnx-view-stats) :appended)))
           (should (equal '(:rows-drawn :rows-grown :appended :removed :slices :max-slice-rows :full-draws
-                                       :stale-skips)
+                                       :stale-skips :draw-ms)
                          (cl-loop for (k _) on (drgnx-view-stats) by #'cddr collect k))))))))
 
 ;;;; Ownership

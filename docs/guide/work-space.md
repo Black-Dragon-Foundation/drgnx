@@ -1,7 +1,101 @@
 # The Work space
 
-The Work space shows what your agents are doing in one place. This page grows with the feature; today it covers the
-machines the hub knows about.
+The Work space shows what your agents are doing in one place. This page grows with the feature; today it covers
+opening the map, and the machines and files the hub knows about.
+
+## Opening the map
+
+**Open the Work Space** (`work-view`; VS Code `C-k t`, Emacs `C-c w w`, Vim `SPC a w`) opens the map of the project
+of the frame you are in. A *workspace* is the project's repository and, when it lies inside another repository (a
+notes repository with the code repositories inside it), that repository and the repositories directly inside it. To name
+the repositories yourself, set `drgnx-work-space-roots`.
+
+The map is a read-only buffer, `*drgnx work: NAME*`, in six layers: you asked, specs, plans, agents, branches, and
+files and machines. The hub keeps what the map shows and sends changes as they happen; the map never asks again until
+the hub restarts. If the hub goes away the map keeps what it showed and says "reconnecting" in its mode line, and it
+subscribes again by itself when the hub is back. A map no window shows costs nothing: the hub sends it no changes, and
+it is drawn again when you show it.
+
+Outside a project (a scratch buffer, a folder that is not in git) the map is empty and says so.
+
+### What the cards show
+
+- An **agent** is a card of five lines: its state dot, a badge (the model's initial in the agent's colour), the model
+  and its name; the task it works on; how it is going (what it is doing or its state, how long, what it has cost with
+  its unit, its progress, its context use once it is over 80 %); its latest conclusion; and either "⚠ shares files
+  with …" or how much it has read and changed. When a plan has more agents than fit, the cards become **compact**: two
+  lines, the second still carrying the ⚠ mark. An agent that needs you, and the agents on the selection's chain, stay
+  rich.
+- A **subagent** (Claude Code's own) is a compact card under its parent.
+- Asks, specs, plans, branches, files and machines are one-line chips: a plan shows its progress, a branch its
+  edits, a file its changed lines, a machine how many of its slots are taken.
+- The layers' names stand in the left margin. A collapsed layer is one thin row with its name and a count.
+
+Text that does not fit a card is cut with an ellipsis, by its width on screen; a long ask, or one with emoji in it,
+never makes its row taller than the others.
+
+### Moving around
+
+Everything here is computed in your Emacs from what the hub already sent, so a key never waits.
+
+| Key | Does |
+|---|---|
+| `←` `→` (Vim `h` `l`) | along the layer: the previous or next item |
+| `↑` (Vim `k`) | follow *why* up: what the selection came from |
+| `↓` (Vim `j`) | follow *touches* down: the branch an agent works on, the machine it runs on, the files a branch edits |
+| `Tab` / `Shift-Tab` | the next or previous agent, plans in their order, a subagent right after its parent |
+| `Enter` | open: an agent's transcript (today's Agents view), a branch's repository (Magit when it is there), a file, a spec or plan document |
+| `Shift-Enter` | the same, beside the map, without moving focus |
+
+The **selected** card is raised; its **chain** (everything it came from, up, and everything it touches, down) keeps
+its normal look; everything else is dimmed. From any item, `↑` reaches the ask it came from in a handful of keys. If
+the selected item goes (its agent finishes, its branch merges), the selection moves to the nearest thing it came from
+that is left, and the side panel says what finished; nothing pops up.
+
+The **side panel** (a window of the right dock) follows the selection and says in words everything a line on the map
+says: *why* (you › spec › plan › task), what it *touches* (what it edits, reads, runs on, overlaps with), its latest
+conclusion, and what you can do with it. Reads show as a count here; the list of each file with how it was seen
+arrives with the files picker.
+
+### The strip, the lens and the filters
+
+- The **strip** is the map's header line and stays when you scroll. On the left, one chip for each thing that needs
+  you, with its jump key (`g 1` to `g 9`, `+N` for more): permission asks, pushes, questions, clashes, budget pauses,
+  and every agent that waits on you. On the right, the machines' load ("desktop 3/16"). `n` and `N` cycle the chips,
+  and `C-k n` / `C-c w n` / `SPC a n` do it from anywhere. **A jump only selects.** Allowing, pushing and answering stay
+  on the card's own keys; no key of the map settles anything.
+- The **lens** (the tab line) names the views: Map, Board, Timeline. Only the map exists so far.
+- `f` hides everything not on the selection's chain; while it is on, the arrow keys move inside the chain and ask the
+  hub for nothing. `o` shows only the agents and branches that overlap. `1` to `6` collapse a layer to one thin row
+  with its name and a count, `0` opens them all, `.` brings finished items back. Each of these is a layout you asked
+  for, so the hub lays the map out again at once.
+- `/` narrows the map to the items matching your text: they keep their look, the rest dim, and Enter selects the first.
+- `Esc` clears the search; then the filters and collapsed layers; then closes the pane.
+- When an agent records a new conclusion, its card shows a **new** chip for four seconds.
+
+### Files an agent is editing
+
+A file in the worktree of an agent that is still alive (running, waiting, waiting for you, or paused) opens **read-only**,
+with a "live · NAME" chip in the mode line, so you cannot write over what the agent is changing. Your own checkout,
+and the worktree of an agent that has finished, stay editable.
+
+**`W`** (or the keys that would make the buffer editable) takes the wheel: the agent is paused after the tool call it is
+in, the buffer becomes editable, and when you save, a message tells the agent which file you changed, so it reads it
+again before touching it. Resume the agent when you are done. Turning the Work space module off gives every such
+buffer back its old read-only state.
+
+### The outline
+
+**Show the Map as an Outline** (`work-outline`, `O`) draws one block per agent instead: the agent's line, why it
+exists (you › spec › plan › task), what it touches (its branch, machine, edits and reads) and its latest conclusion.
+It is what a terminal frame shows, what a screen reader reads best, and what the map falls back to when it cannot fit
+a window ("Too many to draw at this width · O back to the map, at a wider tile"). `O` again goes back.
+
+The colours are the theme's: the map's faces (`drgnx-work-dim`, `drgnx-work-card`, `drgnx-work-selected`,
+`drgnx-work-chain`, `drgnx-work-overlap`, `drgnx-work-needs-you`, `drgnx-work-edge`, `drgnx-work-edge-strong`,
+`drgnx-work-label`, `drgnx-work-chip`, `drgnx-work-new` and `drgnx-work-agent-1` to `-6`) inherit stock faces and carry
+no colour of their own. The Work tab that used to sit in the right dock (`work-view` as "Show Work") is gone; the Work
+graph (`work-graph`) stays until the cockpit retires.
 
 ## Machines
 
