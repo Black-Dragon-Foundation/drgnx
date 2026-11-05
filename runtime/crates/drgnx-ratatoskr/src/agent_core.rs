@@ -76,6 +76,7 @@ pub async fn serve(
         Params::ExecList(p) => answer(exec::list(f, c, p).await),
         Params::ExecStop(p) => answer(exec::stop(f, c, p).await),
         Params::ExecLog(p) => answer(exec::log(f, c, p).await),
+        Params::ExecBump(p) => answer(exec::bump(f, c, p).await),
         Params::JobPropose(p) => answer(runner::propose(f, c, p).await),
         Params::JobStartTask(p) => answer(runner::start_task(f, c, p).await),
         Params::JobApprove(p) => answer(runner::approve(f, c, p).await),

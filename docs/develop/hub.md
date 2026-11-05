@@ -1006,10 +1006,11 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `env/set` | user | `{env: [{name: EnvName, value: string}]}` | `{applied?: [string]}` | no |
 | `events/add` | user | `{agent?: AgentName, best_effort?: boolean, data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text, task?: TaskRef}` | `{id?: natnum}` | yes |
 | `events/since` | user | `{limit?: natnum, since?: natnum}` | `{events?: [EventRow], last: natnum, since: natnum}` | no |
+| `exec/bump` | user | `{id: Id}` | `ExecRow` | yes |
 | `exec/get` | user | `{id: Id}` | `ExecRow` | no |
 | `exec/list` | user | `{running?: boolean, session?: Id}` | `{jobs?: [ExecRow]}` | no |
 | `exec/log` | user | `{from?: natnum, id: Id, n?: natnum, tail_bytes?: natnum}` | `{from?: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no |
-| `exec/start` | user | `{argv: [string], cwd?: AbsPath, env?: [{name: EnvName, value: string}], image?: string, kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, timebox_s?: natnum}` | `{id: string, text: string}` | yes |
+| `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, priority?: natnum, timebox_s?: natnum, writes?: [string]}` | `{id: string, text: string}` | yes |
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
 | `gateway/editor-token` | user | `{}` | `{token: string, url: string}` | no |
 | `gateway/keys` | user | `{keys: ProviderKeys}` | `boolean` | no |
@@ -1671,9 +1672,9 @@ not UTF-8). A job's folder
 `result.json` is running. A session's job is launched with `launch::launch` (its sandbox spec) and the status pipe is
 read with `gleipnir::read_status`; the user's runs with the user's rights. The command is wrapped by a shell that logs
 and records the exit, and (Linux with a user systemd) by `systemd-run --user --scope -p MemoryMax=…`, a scope so the
-command stays the hub's child. `Runner::open` re-attaches every folder without a result. The machine's slots
-(`Hooks::slots`, 4) are the sessions' jobs': `Inner::start` gives a `Starter::User` job no permit, so the editor's
-servers (`no_timebox`, up for days) never fill them and a user's job never queues. `exec/get`, `exec/log` and
+command stays the hub's child. `Runner::open` re-attaches every folder without a result. Every job but the editor's
+servers (a user's `no_timebox` job, up for days, started at once) goes through the queue ("Runners: the queue"), whose
+local runner admits it here (`Hooks::admission`). `exec/get`, `exec/log` and
 `exec/stop` answer an agent caller (`Class::Agent`, the job tools through `Coord::exec`) only for its own session's
 jobs (`exec::visible`: "not yours", `not-allowed`); the norn tools refuse the same (row
 `exec/an-agent-cannot-read-another-callers-job`). The graph record is
@@ -1693,7 +1694,7 @@ every provider's `key_env` (`user_env`; `Hooks::key_envs` reads the providers fr
 session's job run unsandboxed (the conformance lane) keeps a short list (`agent_plain_env`), and a sandboxed one the
 tool paths (`tool_env`). `unit::wrap` hands the spec's environment to `systemd-run --scope` (the scope's command gets
 the caller's environment) or to the plain shell (macOS, no user systemd). They travel in `ExecSpec.user` (`UserJob`, also in a queued job's
-`pending.json`); the name is in `meta.json` and on the `ExecRow`. The unit takes `memory_max` as its `MemoryMax=`;
+`Pending`, kept in `rq_job`); the name is in `meta.json` and on the `ExecRow`. The unit takes `memory_max` as its `MemoryMax=`;
 `nice` is `nice -n N` in front of the command inside the logging shell (a scope takes no `Nice=`), the same line with
 and without a unit, and the form BSD's `nice` (macOS) takes too.
 
@@ -1762,6 +1763,131 @@ harness against real sshd (its header has the commands). They need sshd set two 
 banner. Each row first shows the user's own ssh doing what the hub must not (forwarding the agent, running the user's
 `RemoteCommand` on a terminal and their `LocalCommand`, opening their `LocalForward`). The dead-link row stops the
 runner's sshd for the master's connection (`kill -STOP` over a second connection), which a network cut would do too.
+
+## Runners: attempts
+
+Every placement of a job on a runner is an **attempt** with a nonce the hub made (`sleipnir::proto::JobRef {job,
+attempt, nonce}`), and every frame about it carries all three.
+
+**The attempt state machine** (`runners/attempts.rs`) is pure: `Core::step(now, Event) -> Vec<Effect>`, no I/O and no
+clock, so `tests/runners_orders.rs` runs it in every order of what can happen to an attempt. Events: `Placed {job,
+attempt, nonce, runner, grace_s, restartable}`, `Started`, `Finished {runner, r, result}`, `FrameFrom {runner, r}`,
+`Refused {runner, r}` (an offer the runner refused: back to the queue, never lost), `LinkLost {runner}`, `Hello
+{runner, listed}`, `GraceEnded {job, attempt}`, `CloudGone {runner}`, `Preempting {runner}`, `HubRestarted`, `Cancel
+{job}`. Effects: `Verdict {job, attempt, result}`, `Requeue {job, reason}`, `Lost
+{job}`, `Ignore {notice}`, `ResumeLog {job, attempt, offset}` (send `attach`), `KeepLate {job, attempt}` and
+`SendCancel {runner, r}`. States: `offered`, `running`, `detached {since, grace_until}`, `finished`, `requeued`,
+`lost`.
+
+- A frame counts only from the runner the attempt was placed on and with its nonce (`frame_ok`); anything else is an
+  `Ignore` with a notice and changes nothing.
+- **`detached`** is exactly the design's (§6.9): no verdict, and the runner's control link is down (`LinkLost`), or the
+  hub restarted (`HubRestarted`) and the runner's `hello` hasn't listed it yet. It is a state, never a verdict. It ends
+  `running` when the `hello` lists it running or finished (the log resumes from the hub's offset, and a finished one
+  then sends its `finished`); requeued (`infra: runner lost`) when the `hello` doesn't list it or lists it lost, when
+  the grace ends (`graces_due(now)`, read at each tick), or when the cloud says the machine is gone; `lost` instead
+  when the job isn't restartable.
+- **The grace** is the runner's, `RunnerCfg::grace()`, passed in at `Placed`: 600 s with linger, 0 without, where a lost
+  link ends the attempt at once (the runner's jobs die with the login).
+- **Only `finished` gives a verdict.** A preemption requeues at once (`infra: preempted`), never a verdict and never an
+  eviction. A cancel sends `cancel` to a running attempt and waits for its `finished`; an attempt whose runner can't be
+  told (offered, detached) ends `cancelled` at once, and its runner is told when it lists the attempt again.
+- **Late results** (L8): an attempt whose job was requeued that still finishes is `KeepLate`: its log, patch, outputs
+  and rows are kept as that attempt's, never applied, and never replace the current attempt's verdict.
+- `restore` puts the database's attempts back after a restart, before `HubRestarted` detaches the open ones; `forget`
+  drops a job once its verdict is recorded and no late attempt is open.
+
+**The link session** (`runners/link.rs`). `Session::start(runner, Channels, route, events)` reads and writes the control
+channel with the protocol's codec (a frame's line, then the chunk its `len` announces), pings every 10 s
+(`PING_EVERY`), answers the runner's pings, and reports the link lost (`LinkEvent::Lost`) after 45 s without a frame
+(`LOST_AFTER`), at an EOF without `bye`, or at a channel error; a `bye` is `LinkEvent::Bye`. A `log` frame is appended
+to the file `Route::log_path(runner, r)` names, only for an attempt the route accepts (placed there, with its nonce),
+through `append_at(path, offset, bytes)`: only the bytes the hub's copy lacks, so a chunk sent again after a
+reconnect is never doubled and a gap is refused; `LinkEvent::Logged {r, upto}` says where the copy ends, which the
+next `attach` sends as its `log_offset`. Every other frame is a `LinkEvent::Frame`. A `key` frame's encoded bytes are
+zeroed once written. Dropping the session ends it; the runner's attempts run on.
+
+Tests: `runners::attempts::` and `runners::link::` [D]; `tests/runners_orders.rs` [A] (every order of a lost link, a
+reattaching and a non-listing `hello`, a restart, the grace, a preemption and a wrong nonce around a `finished`,
+exhaustively, then 2000 drawn orders with a cancel); `tests/fleet_runners.rs` [C] (`#[ignore = "fleet"]`, its header
+has the commands): a job's log cut mid-stream and reattached equals the runner's file byte for byte.
+
+## Runners: the queue
+
+One queue holds every job but the user's servers (`runners/queue.rs`), for this machine and the runners alike. The
+job layer (`exec/`) records a job's folder and meta as before, then `Queue::submit`s it: its forseti `JobSpec`, its
+`Placement {machine (auto | local | runner), heavy, keys, local_only, background, writes, priority, send, machines_cell,
+image, weight}` and what to start it from (`Pending`). `exec/start` lost `check_machine` and the agents' semaphore:
+`machine` names `auto` (the default), `local` or a runner the queue knows (else `invalid-params`); `priority` (1–5) is
+honoured on the user's connections only (a session's is `invalid-params`); `job_start` takes `JobStartParams`,
+`exec/start`'s fields without `priority`, so an agent's request that names one is refused as an unknown field.
+`exec/bump {id}` (classes `[User]`) sets a queued job's priority to 1. `ExecRow` gained `machine`, `attempt`,
+`waiting` and `priority`.
+
+**Priority** (`priority_of(starter, background, from: Origin)`, design §6.8.1): 1 for the user's request, 2 for the
+splitter's (`Origin::Splitter`), 3 for an agent's `job_start`, 4 for a plan's or gate's bulk (`Origin::Bulk`), 5 for
+`background` and the hub's upkeep (`Origin::Upkeep`); `background` only lowers.
+
+**A tick** (`Queue::tick(now)`, every 2 s on the hub's clock, at every start and on every link event): the detached
+attempts whose grace ended; then the queued jobs in `forseti`'s order (`effective_priorities`, `queue_order`, then
+`Drr::order` by project, weighted by `drgnx-runners-weight`); each placed by `forseti::pick` over this machine and every
+runner (trust, pin, features, state, the project's send mode, the `machines` cell). `Pick::Local` asks the local
+runner's admission: admitted, the job starts (`Ticked.starts`; the job layer holds a `Slot` until it ends, and dropping
+it frees the room); refused, the pick is made again without this machine, so the job may still go to a runner.
+`Pick::Runner` offers it there (a new attempt, a random nonce, `Placed` into the attempt state machine, an `offer`
+frame); `Pick::Wait` writes the reason's words (`wait_text`) on the job's row. A runner's `admit` is answered with
+`start`; a `refuse` puts the job back with the runner's reason; `finished`, a lost link, a `hello` and a preemption go
+through the attempt state machine, whose verdicts, losses and late results become `Outcome`s: the job layer writes the
+verdict as the job's `exit` (or `why`) and ends it as a job here ends. The session's `Route` writes a runner's log
+frames to `<id>/log` for the current attempt and `<id>/log.<n>` for a late one; a requeue moves the log aside as
+`log.<n>`.
+
+**The local runner** (`runners/local.rs`, Calls 6 and 7): `Admission::Live` on Linux, `forseti::admit` over
+`sleipnir::linux::probe` under the `workstation` profile, with a reservation per admitted job in the reservation
+protocol (scheduler `drgnx-hub`, under the admission lock, removed when it ends); `Admission::Fixed(n)` admits by count,
+a macOS hub's `Limits::fixed_slots(4)`, and what a probe that can't read the machine falls back to (one warning). The
+user's servers (`no_timebox`) bypass the queue and count in the memory the probe reads. Tests and `test-hooks` builds
+admit by count (4; `DRGNX_TEST_JOB_SLOTS=N`), so no row depends on the machine it runs on.
+
+**`runtime.db`** (migration 9): `rq_job` (the spec column holds the forseti spec, the placement, the session and the
+`Pending`), `rq_attempt`, `rq_offer`, `rq_admission`, `rq_detached` (an attempt's grace while it is detached),
+`rq_input`, `rq_history` and `rq_rows` (§7.4's columns; `rq_input.commit_sha` is §7.4's `commit`). The queue writes
+them in order on a task of its own (`Queue::flush` waits for what is queued); a restart reads them back
+(`queue::stored`, `Queue::restore`): queued jobs wait again, jobs on runners keep their attempts, detached until the
+runner's `hello` lists them, and jobs running here are adopted by the job layer, holding their room. A queued
+`pending.json` an older hub left is read into `rq_job` once, and the file removed.
+
+Tests: `runners::queue::`, `runners::local::`, `runtime_db::`, `exec::tests::a_queued_pending_json_is_read_once` [D];
+`test/conformance/runners/*.jsonl` [B]; `tests/fleet_runners.rs` `queue::` [C] (a heavy job goes to the runner under
+`send heavy` while the light one waits here).
+
+## Runners: health
+
+`runners/health.rs` (design §6.9). `is_strike(verdict, StrikeCtx {link_lost_today, link_stayed_up})` is the strike
+table: `infra: setup`, `sync`, `image`, `disk`, `killed` and `health check` always; `runner lost` the second time in a day
+(`Strikes::lost_link`); `key not delivered` only on a link that stayed up; nothing else (reds, crashes, `oom`, `oomd/killed`,
+timeouts, `preempted`, evictions, cancels). `Strikes` keeps a runner's strikes since its last passing check: `record(now,
+verdict, ctx)` (a job that ran ends a run of strikes, a non-strike infra end doesn't), `strike(now, reason)`; two in a row
+or two within 3600 s (`BENCH_WINDOW_S`) bench it; `clear` (a pass, the user's `unbench`), `text` for the runner list
+(`benched: REASON (HH:MM, HH:MM)`, UTC).
+
+The queue counts a strike at each runner verdict (`Queue::strike_of`) and at a link lost with attempts open, and holds a
+benched runner as `RunnerState::Benched`, which `forseti`'s filter keeps every job off; its `hello` doesn't put it back.
+**The check** runs every 300 s per runner (`CHECK_EVERY_S`; `Queue::check_now` makes it due), on a ready or benched one:
+a `probe` frame (its `probe-result`: the contract's missing items, `check_limits`, the free disk), a canary attempt
+offered straight to the runner (job `health<runner><at>`, letters and digits as a runner takes a job id, `true` in
+`RemoteRunner.image`, priority 1, no grace;
+offered again 2 s after a refusal; its verdict never reaches the job layer), and the runner's clock from its last `ping`
+(`LinkEvent::Clock`, the runner's `at` against the hub's time). `judge(Facts)` passes only when all hold: the probe
+answered with nothing missing and no `check_limits` failure, 20 GB free (and 10 % where the size is known), the canary
+`Pass`, the clock within 2 s (`CLOCK_SKEW_S`); else it names every part that failed. It judges once every answer is in,
+or after 120 s (`CHECK_WAIT_S`) with what it has. A pass clears the strikes and returns a benched runner to rotation; a
+failure is a strike (`health check: …`). `Queue::runner(name)` gives the row (`state`, `strikes`, `last`) and
+`Queue::unbench(name)` is the user's override (the `runners/unbench` method is the registry's).
+
+Tests: `runners::health::` [D] (the strike table, two in an hour, the check's parts); `tests/fleet_runners.rs` `health::`
+[C]: two jobs a runner can't start bench it and the next job runs here; a passing check returns a benched runner with no
+strikes; a hub clock 5 s off the runner's fails the check, saying so.
 
 ## The timeline
 
