@@ -1125,7 +1125,11 @@ fn kept_env(front: &Front, sid: &str, meta: &Value) -> Vec<(String, String)> {
             |var| match module_env(front, Some(std::slice::from_ref(var))) {
                 Ok(mut one) => one.pop(),
                 Err(e) => {
-                    tracing::warn!(sid, "a kept module variable is not passed on: {}", e.message);
+                    tracing::warn!(
+                        sid,
+                        "a kept module variable is not passed on: {}",
+                        e.message
+                    );
                     None
                 }
             },
