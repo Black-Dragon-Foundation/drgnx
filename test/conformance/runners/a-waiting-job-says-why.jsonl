@@ -1,0 +1,20 @@
+{"scenario": "runners/a-waiting-job-says-why", "requires": ["v1", "test-hooks"], "doc": "[B] Every queued job's row says why it waits (a non-empty waiting); a running one has none. One job slot (DRGNX_TEST_JOB_SLOTS=1), held by a job parked on a FIFO; when it ends the next starts."}
+{"do": "root"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkfifo $ROOT/gate"], "expect_code": 0}
+{"do": "start", "hub": "h", "env": {"DRGNX_TEST_JOB_SLOTS": "1"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "exec/start", "params": {"argv": ["sh", "-c", "cat $ROOT/gate"], "cwd": "$ROOT"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:first", "text": "$string"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "exec/start", "params": {"argv": ["true"], "cwd": "$ROOT"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:second", "text": "$string"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "exec/start", "params": {"argv": ["true"], "cwd": "$ROOT", "background": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$capture:third", "text": "$string"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "exec/get", "params": {"id": "$second"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"id": "$second", "status": "queued", "waiting": "$string"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "exec/get", "params": {"id": "$third"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"id": "$third", "status": "queued", "waiting": "$string", "priority": 5}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "exec/get", "params": {"id": "$first"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"id": "$first", "status": "running", "waiting": "$absent", "machine": "local"}}, "within_ms": 10000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "echo go > $ROOT/gate"], "expect_code": 0}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "exec/stop", "params": {"id": "$third"}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"id": "$third"}}, "within_ms": 10000}

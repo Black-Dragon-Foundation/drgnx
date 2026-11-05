@@ -542,6 +542,7 @@ dependencies = [
  "bytes",
  "draugr",
  "eitri",
+ "forseti",
  "gleipnir",
  "hermod",
  "huginn",

@@ -60,3 +60,35 @@ started is stopped and ends as "disk", not as a failure.
 `drgnx-fwd` (the job's way to the proxy). They are built static, so they start on any Linux and in any image.
 `install.sh` builds them for this machine's processor; for a runner of the other kind, run
 `drgnx build runner-bundle --arch aarch64` (or `x86_64`).
+
+## Which jobs go where
+
+All jobs wait in one queue, this machine's and your runners' alike, and each goes to the allowed machine that finishes
+it first (ties stay here). A job you start has priority 1; an agent's has 3, or 5 when it marks it `background`; only
+you can set or bump a priority. A job's row says where it runs and, while it waits, why. Each project chooses, in its
+settings:
+
+- `drgnx-runners-send`: which of its jobs may leave this machine: `"heavy"` (the default: only jobs marked heavy),
+  `"all"` or `"none"`;
+- `drgnx-runners-heavy`: suite or command patterns whose jobs count as heavy;
+- `drgnx-runners-image`: the image (pinned by digest) a runner runs its command jobs in;
+- `drgnx-runners-weight`: its share against other projects within a priority (default 1);
+- `drgnx-runners-project-visibility`: `"private"` (the default) or `"public"`.
+
+A job marked `local_only`, or started with `machine: local`, never leaves this machine; `machine: NAME` pins it to one
+runner.
+
+## When a machine fails
+
+A lost link is never a job's result: a job on a runner whose link drops is *detached*, and comes back when the runner
+answers again (a runner that lingers keeps its jobs for 10 minutes), or goes back to the queue. A **strike** is a
+failure that is the runner's, not the job's: setup or sync failed, the job's image is missing, the disk guard couldn't
+free room, the runner's own guard killed jobs, its link was lost while jobs ran (the second time in a day), its health
+check failed, or a key didn't arrive although the link stayed up. A red test, a crash, a job's own out-of-memory, a
+time-out, a preemption or an eviction never is.
+
+**Two strikes in a row, or two within an hour, bench the runner**: no job is placed there, and the runner list shows
+`benched: REASON (HH:MM, HH:MM)`, the reason of the strike that benched it and the times of its last two (UTC). Every
+5 minutes the hub checks each runner: its probe and the runner contract, a canary `true` in its image under the job
+caps, its free disk above the floor, and its clock within 2 s of this machine's. A pass brings a benched runner back
+with no strikes; a failure is one more strike. `drgnx runner unbench NAME` brings it back at once.
