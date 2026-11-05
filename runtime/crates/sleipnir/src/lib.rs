@@ -8,11 +8,15 @@
 //!   slots, whose git dirs live outside anything a job can write; the runner's mirrors, the origin's credential,
 //!   resumable bundles and the blob store; caches by trust and the disk guard. Blocking, never tokio.
 //! - `proto`: the hub–runner protocol: the frames and their wire. Pure.
+//! - the job helper (`helper`, Linux): a job's keys in locked memory behind its key socket, and its disk watch, with
+//!   `linux`; its network proxy (Gleipnir's, on tokio) with `runner`.
 //! - `runner` (default): the binary's modes.
 //! - `test-hooks`: test-only entry points, compiled away otherwise.
 
 #[cfg(all(feature = "runner", target_os = "linux"))]
 pub mod bench;
+#[cfg(all(feature = "linux", target_os = "linux"))]
+pub mod helper;
 #[cfg(feature = "linux")]
 pub mod linux;
 #[cfg(feature = "proto")]

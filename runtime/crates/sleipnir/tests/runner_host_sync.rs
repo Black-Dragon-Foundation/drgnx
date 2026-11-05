@@ -354,6 +354,186 @@ fn push_into_the_mirror_runs_no_hook() {
     assert!(!out.status.success());
 }
 
+/// The fake origin's `ssh`, first on PATH for the fetch: it records what the per-fetch agent holds (`ssh-add -L`) and
+/// where it listens, says `ready`, waits on the FIFO `go` while the test looks at the disk, then runs the remote
+/// command here (`git-upload-pack` on the local origin), or fails when `FAKE_SSH_FAIL` is set.
+const FAKE_SSH: &str = r#"#!/bin/sh
+d="$FAKE_SSH_DIR"
+printf '%s\n' "$SSH_AUTH_SOCK" > "$d/agent.path"
+ssh-add -L > "$d/agent.keys" 2>&1
+: > "$d/ssh.ready"
+read go < "$d/go"
+[ -z "$FAKE_SSH_FAIL" ] || exit 128
+for last; do :; done
+exec sh -c "$last"
+"#;
+
+/// The processes whose command line holds NEEDLE.
+fn processes_naming(needle: &str) -> Vec<u32> {
+    let mut found = vec![];
+    for e in fs::read_dir("/proc").unwrap().flatten() {
+        let Some(pid) = e.file_name().to_str().and_then(|p| p.parse::<u32>().ok()) else {
+            continue;
+        };
+        if fs::read(e.path().join("cmdline"))
+            .is_ok_and(|c| c.windows(needle.len()).any(|w| w == needle.as_bytes()))
+        {
+            found.push(pid);
+        }
+    }
+    found
+}
+
+/// [C] An origin fetch over SSH with a deploy key: real `sleipnir sync-fetch` children (the test-hooks mode an
+/// `origin-fetch` frame's key drives), a real git and ssh-agent, and a fake `ssh` that announces `ready` and parks on
+/// a FIFO. While git talks to the origin the key is in the per-fetch agent and in no file on the runner; after the
+/// fetch the agent is gone, and so it is after a fetch that fails at the origin and after a key the agent can't load.
+#[test]
+#[ignore = "runner-host"]
+fn origin_fetch_with_a_deploy_key_leaves_no_file_and_no_agent() {
+    let home = PathBuf::from(std::env::var_os("HOME").expect("HOME"));
+    let work = tempfile::tempdir().unwrap();
+    let w = work.path();
+    let src = w.join("src");
+    let commit = repo(&src);
+    user_git(w, &["clone", "-q", "--bare", "src", "origin.git"]);
+    // a generated deploy key, read into memory; its files go before any fetch
+    let out = Command::new("ssh-keygen")
+        .args(["-q", "-t", "ed25519", "-N", "", "-C", "deploy", "-f"])
+        .arg(w.join("k"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let private = fs::read_to_string(w.join("k")).unwrap();
+    let public = fs::read_to_string(w.join("k.pub")).unwrap();
+    fs::remove_file(w.join("k")).unwrap();
+    fs::remove_file(w.join("k.pub")).unwrap();
+    let blob = public.split_whitespace().nth(1).unwrap().to_string();
+    // the key's base64 body, line by line: none may be in any file
+    let body: Vec<String> = private
+        .lines()
+        .filter(|l| !l.starts_with("-----") && l.len() >= 32)
+        .map(String::from)
+        .collect();
+    assert!(!body.is_empty());
+    let bin = w.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    fs::write(bin.join("ssh"), FAKE_SSH).unwrap();
+    fs::set_permissions(bin.join("ssh"), fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let root = home.join(format!("sync-deploy-{}", std::process::id()));
+    let url = format!("ssh://origin.invalid{}", w.join("origin.git").display());
+    let fetch = |key: &str, fail: bool| {
+        let _ = fs::remove_file(w.join("ssh.ready"));
+        let _ = fs::remove_file(w.join("go"));
+        let ok = Command::new("mkfifo").arg(w.join("go")).status().unwrap();
+        assert!(ok.success());
+        let mut c = Command::new(sleipnir_bin());
+        c.args(["sync-fetch", "--root"])
+            .arg(&root)
+            .args(["--repo", "o", "--url", &url])
+            .env("PATH", &path)
+            .env("FAKE_SSH_DIR", w)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        if fail {
+            c.env("FAKE_SSH_FAIL", "1");
+        }
+        let mut child = c.spawn().unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(key.as_bytes())
+            .unwrap();
+        child
+    };
+    let scan = |found: &mut Vec<PathBuf>| {
+        for line in &body {
+            for d in [root.as_path(), Path::new("/tmp"), home.as_path()] {
+                files_holding(d, &[line.as_bytes()], found);
+            }
+        }
+    };
+    let agent_gone = |sock: &str| {
+        assert!(
+            !Path::new(sock).exists(),
+            "the agent's socket is still there"
+        );
+        assert_eq!(
+            processes_naming(sock),
+            Vec::<u32>::new(),
+            "the agent still runs"
+        );
+    };
+
+    for fail in [false, true] {
+        let child = fetch(&private, fail);
+        skuld::wait_until("the fake ssh ready", 120, || {
+            w.join("ssh.ready").exists().then_some(())
+        });
+        let sock = fs::read_to_string(w.join("agent.path"))
+            .unwrap()
+            .trim()
+            .to_string();
+        assert!(
+            sock.starts_with(root.to_str().unwrap()),
+            "the agent listens in the runner folder"
+        );
+        let held = fs::read_to_string(w.join("agent.keys")).unwrap();
+        assert!(
+            held.contains(&blob),
+            "the per-fetch agent doesn't hold the deploy key"
+        );
+        let mut found = vec![];
+        scan(&mut found);
+        assert!(
+            found.is_empty(),
+            "the deploy key is in {found:?} during the fetch"
+        );
+        fs::write(w.join("go"), "go\n").unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert_eq!(
+            out.status.success(),
+            !fail,
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        if !fail {
+            let m = Mirror::ensure(&root, "o").unwrap();
+            assert!(m.has_commit(&commit).unwrap(), "the fetch arrived");
+        }
+        agent_gone(&sock);
+    }
+
+    // a key the agent can't load: the fetch fails before git runs, and no agent of ours is left
+    let child = fetch("not a key\n", false);
+    let out = child.wait_with_output().unwrap();
+    assert!(!out.status.success());
+    assert!(!w.join("ssh.ready").exists(), "git ran without the key");
+    assert_eq!(
+        processes_naming(root.join("run").to_str().unwrap()),
+        Vec::<u32>::new(),
+        "an agent of this runner folder still runs"
+    );
+    let mut found = vec![];
+    scan(&mut found);
+    let _ = fs::remove_dir_all(&root);
+    assert!(
+        found.is_empty(),
+        "the deploy key is in {found:?} after the fetches"
+    );
+}
+
 mod guard {
     use super::*;
     use sleipnir::sync::guard::{self, Df, Item, Needs, What};

@@ -430,6 +430,7 @@ fn spec(id: &str, j: &JobDir, argv: Vec<String>) -> JobExec {
             reserve_mib: 128,
         },
         timeout_s: 300,
+        helper: None,
     }
 }
 

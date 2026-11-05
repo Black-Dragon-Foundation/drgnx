@@ -1,7 +1,7 @@
 # sleipnir: the runner
 
 `runtime/crates/sleipnir` is what runs jobs on a machine: the hub's own (local) machine, the user's other machines
-over SSH, and jobq's. It is a library, shared by the hub, the runners and jobq, and the `sleipnir` binary (its modes: `serve`, `job-exec`, `bench`, `git-receive`, `credential-helper`).
+over SSH, and jobq's. It is a library, shared by the hub, the runners and jobq, and the `sleipnir` binary (its modes: `serve`, `job-exec`, `job-helper`, `bench`, `git-receive`, `credential-helper`), with `drgnx-key` beside it.
 The scheduling decisions are [`forseti`](forseti.md)'s; sleipnir reads the machine for them and carries them out.
 
 ## Features
@@ -11,7 +11,7 @@ The scheduling decisions are [`forseti`](forseti.md)'s; sleipnir reads the machi
 | `linux` | the machine probe, the reservation files, the executor | std, rustix, libc, serde, `forseti`; blocking, never tokio |
 | `sync` | a job's inputs, the hardened git, checkout slots, mirrors, bundles, blobs, caches, the disk guard | std, rustix, `sha2`, `secrecy`, `forseti`; blocking, never tokio |
 | `proto` | the hub–runner protocol: the frames and their wire | pure: serde, serde_json, `forseti`'s types, `secrecy` and `zeroize` for a key's value |
-| `runner` (default) | the binary's modes | all of the above |
+| `runner` (default) | the binary's modes, the job helper's proxy | all of the above, `gleipnir` and tokio (the proxy only) |
 | `test-hooks` | test-only entry points | compiled away otherwise |
 
 `linux` turns on `proto`: the probe's `Facts` and `Missing` are the protocol's types, since `hello-ok` and
@@ -103,6 +103,11 @@ exactly this set (`RunnerMounts`), nothing else:
 | the key socket and `drgnx-key` | `/run/drgnx/key.sock`, `/run/drgnx/key` | `ro,Z` |
 | the proxy socket and `drgnx-fwd` (a granted network) | `/run/drgnx/proxy.sock`, `/run/drgnx/fwd` | `ro,Z` |
 
+A keyed job (`KeyMounts.vars`, each `(key name, variable)`) runs as `drgnx-key exec NAME=VAR… -- CMD`: `drgnx-key` is
+the entrypoint, or, with network, the forwarder's command (`drgnx-fwd PORT SOCKET -- /run/drgnx/key exec … -- CMD`).
+The argv names the keys and variables only; a name or variable that isn't plain is refused. The job's request has no
+field to put anything around the command.
+
 `check_limits(podman, env, limit)` asks `podman info` and refuses container jobs unless the caps hold (cgroup v2, the
 systemd manager, `memory pids cpu` delegated); `limits_enforced(info)` is its pure half.
 
@@ -155,9 +160,76 @@ containers sit beside it in the job slice at 1000.
 - **The folder.** `offsets.json` records where each state dir's `check.log` stood at the start (only this attempt's
   part is read). A scheduler that kills a job writes the reason first (`kill_reason(dir, reason)`; `evicted` for an
   eviction), and the reason names the verdict. `result.json` is written by rename.
+- **A kill reason stops the job.** When a reason appears while the command runs (the scheduler's ladder, a cancel,
+  the helper's disk watch), job-exec ends the command, writes the verdict the reason names and stops the job slice.
+- **The helper.** A spec with `helper` (`HelperSpec { root, keys, hub_allow, container }`; every runner job has one)
+  gets `sleipnir job-helper` started after the swap check and before the command, inside job-exec's own service, and
+  waited for by its `ready` line. It ends when job-exec closes its stdin, and with the unit in any case (below).
 
 The verdict is `forseti::classify` over what job-exec saw: the kill reason, `oom_kill`, the exit code or signal, the
-timeout and the row parser's judgement.
+timeout and the row parser's judgement. The helper's `key-timeout` record (a key request that got no key) makes it
+`infra: key not delivered`, never the job's own failure; a written kill reason still comes first.
+
+## The job helper (`helper`)
+
+```
+sleipnir job-helper --dir D [--hub-allow FILE]
+```
+
+One per attempt, owning what the job may use and must never keep. job-exec starts it inside the job's unit (so in
+its slice, capped at no swap), and it reads job-exec's pipe: when job-exec ends, or the unit stops, the helper goes
+with it. Nothing outlives the job, so no daemon is left behind, and `serve` may end with the link while it runs. It:
+
+- sets `PR_SET_DUMPABLE=0` and `RLIMIT_CORE` 0 first: no core dump (a piped `core_pattern` ignores `RLIMIT_CORE`),
+  and no other process of the user can read its memory or `/proc` files;
+- serves the job's keys on `D/key.sock` and takes them from `serve` on `D/helper.sock` (both 0600, this user only;
+  "Keys" below);
+- with `--hub-allow`, runs Gleipnir's CONNECT proxy on `D/proxy.sock` with the hub's allow-list (`helper::net`). An
+  entry naming `metadata.google.internal`, `169.254.169.254`, `fd00:ec2::254` or any address that isn't public is
+  refused, no name is pinned, and the proxy connects only to public addresses, so a listed name that resolves to
+  `169.254.x` gets `403` too. (The agent browser's `METADATA_NEVER` replaces this list once both are on one line.)
+- watches the runner folder's disk every 10 s (`helper::disk`). Below the floor (the larger of 20 GB and 10 % of its
+  filesystem, `forseti`'s disk guard) the job that grew most since its start is stopped: its helper writes
+  `kill_reason("infra: disk")` and kills its container. A job's growth is its attempt folder's size less its size
+  when its helper started (`disk-start`); every helper sums the same running attempts, so only one acts per reading
+  and they agree which. In a test build the floor reads the folder's `test-machine.json` too.
+
+Its sockets appear at once (bound under a temporary name, then renamed); then it writes `helper.pid` and prints
+`ready <pid>`. Its own messages go to `D/helper.log`, never a key's value.
+
+## Keys
+
+A key reaches a job without touching disk (design 6.6):
+
+1. The hub sends one `key` frame per key after `started`. `serve` hands each to the attempt's helper over
+   `helper.sock` (`helper::keys::hand`: `key NAME LEN` and the bytes), now or, while the helper is still coming up, at
+   its next tick; until then it is only in `serve`'s memory. A key for an attempt that hasn't started here is dropped
+   and only its name is said.
+2. The helper takes only the names the job's spec lists, and holds each value in a `Locked` buffer: an anonymous
+   mapping, `mlock`ed and `MADV_DONTDUMP`, zeroed and unmapped when it goes (at the job's end, or when the store is
+   cleared). A test build's probe (`keys::probe::last_zeroed`) reads the buffer just before it is unmapped.
+3. `drgnx-key` (std only, so its static build starts in any image) asks on `/run/drgnx/key.sock` (`DRGNX_KEY_SOCK`
+   names another socket, as for a job that stays on the hub's machine):
+   - `drgnx-key exec NAME=VAR… -- CMD` reads each key into VAR, in its own environment only, and execs CMD;
+   - `drgnx-key get NAME` writes one key to stdout.
+   A request waits for its key up to 60 s. When it doesn't come, the helper records the name in `D/key-timeout`
+   first, then answers `timeout`, and `drgnx-key` exits 75; `result.json` reads the record as `infra: key not
+   delivered`. A name the job doesn't list is refused at once (exit 64).
+4. Each delivered read is a line in `D/key-use` (the name and the time); `serve` sends each line once as a `key-use`
+   frame (`key-use.sent` counts them, across reconnects).
+5. Podman's argv, its stored config and `podman inspect` show the names only. Neither `podman run --env` nor podman
+   secrets are used: both end up in podman's stored config or in files.
+
+`serve` gives every keyed job its own copy of the bundle's `drgnx-key` (and a networked one its own `drgnx-fwd`) in
+its attempt folder, since each container relabels what it mounts (`Z`).
+
+## The runner bundle
+
+`bin/drgnx build runner-bundle [--arch x86_64|aarch64]` builds `sleipnir`, `drgnx-key` and `drgnx-fwd` static (Rust's
+self-contained musl targets, release) into `runtime/target/bundle/<arch>/`, and checks each with `file`. The host's
+architecture is the default; `install.sh` builds that one, and CI's container lane builds both. `tests/bundle_host.rs`
+(`#[ignore = "bundle"]`, with `DRGNX_TEST_BUNDLE` and a musl image in `DRGNX_TEST_FOREIGN_IMAGE`) runs the bundle's
+forwarder and `drgnx-key` in an image of another libc.
 
 ### `result.json` (`linux::result`)
 
@@ -324,7 +396,8 @@ A mirror gets its objects three ways (design 6.2):
   to `sleipnir credential-helper SOCKET get`, which git runs as its only helper and which prints it to git's pipe.
   The socket and its thread end with the fetch.
 - `OriginCred::SshKey(key)`: a per-fetch `ssh-agent` (with a 600 s key lifetime besides) gets the key on stdin from
-  `ssh-add -`; git's ssh is pointed at it with `IdentityAgent`, and the agent is killed after the fetch.
+  `ssh-add -`; git's ssh is pointed at it with `IdentityAgent`, and the agent is killed after the fetch, whether it
+  went through or failed, and when the key couldn't be loaded.
 
 ### Bundles and blobs (`sync::bundle`, `sync::blobs`)
 
@@ -460,6 +533,8 @@ and threaded (one thread reads frames, the main loop handles them and ticks ever
 |---|---|
 | `attempt.json` | the hub id, the `JobRef` with its nonce, the spec, priority, grant and expected figures, the bundle its job-exec runs from, its unit |
 | `job.json`, `log`, `result.json`, `kill_reason` | job-exec's (above) |
+| `helper.sock`, `key.sock`, `proxy.sock`, `helper.pid`, `helper.log`, `disk-start`, `key-use`, `key-timeout` | the job helper's (above) |
+| `drgnx-key`, `drgnx-fwd`, `net-allow`, `key-use.sent` | the job's own copies of the bundle's binaries, the hub's allow-list, the `key-use` lines sent |
 | `src/`, `target/` | the job's source (mounted `ro,z`) and target dir, until slots come from sync |
 | `cancelled`, `collected` | the hub cancelled it; the hub has its result (`done`), so the folder may go |
 
@@ -480,9 +555,13 @@ holds across `serve` processes.
 **`start`** writes `job.json` (the shared podman argv, `RunnerArgs::runner(prefix, hub id, slice)`, in the job's
 slice `drgnx-runner-work-<id>.slice`) and starts the unit `<prefix>-<id>-<attempt>` running `sleipnir job-exec` with
 `RuntimeMaxSec` = the timeout + 60 s (job-exec's own timeout writes the verdict first). The reservation passes to the
-unit's main pid, so it outlives `serve`. Then `started`. What can't start (no image, a parser it doesn't know, and
-for now network, keys and container variables, which wait for the job helper) ends `infra: setup`, with the reason
-in the attempt's log; it is never run another way.
+unit's main pid, so it outlives `serve`. Then `started`. Every attempt gets its job helper (the disk watch); a keyed
+one also its key mounts and `drgnx-key exec` (its spec's key names, each into the variable of that name), and one
+with `net_hosts` its proxy, the hosts written to `net-allow` and checked first ("The job helper", "Keys"). What can't
+start (no image, a parser it doesn't know, an allow-list entry that is never reached, a bundle without `drgnx-key` or
+`drgnx-fwd`, and for now container variables) ends `infra: setup`, with the reason in the attempt's log; it is never
+run another way. `key` frames go to the helper ("Keys"), and the helper's `key-use` lines come back as `key-use`
+frames.
 
 **Logs** are read from the attempt's log file by offset, never from a pipe: a new attempt streams from 0, and after a
 reconnect the hub sends `attach {r, log_offset}` with where its own copy ends. When the attempt has its
@@ -570,7 +649,23 @@ keyed job without `memory.swap.max` 0, and a job outliving its starter.
   where a cache or project folder belongs; after a scan, plan and apply below the floor the cache is gone, the
   sentinel is untouched, and a prune through a planted link is refused;
 - `guard::never_removes_an_image_we_did_not_pull`: the fake runner's base image (not ours) and an imported image
-  recorded as ours; only ours goes, and not while a queued job names it.
+  recorded as ours; only ours goes, and not while a queued job names it;
+- `origin_fetch_with_a_deploy_key_leaves_no_file_and_no_agent`: real `sleipnir sync-fetch` children (a test-hooks
+  mode taking the deploy key on stdin) fetch over `ssh://` through a fake `ssh` first on PATH, which records what the
+  per-fetch agent holds, parks on a FIFO while the test scans the runner folder, `/tmp` and the home for the key, then
+  runs `git-upload-pack` on a local origin. The agent holds the key, no file does, and after the fetch the agent's
+  socket and process are gone; the same after a fetch the origin fails and after a key the agent can't load.
+
+`tests/runner_host_helper.rs` holds the job helper's runner-host rows (`--features test-hooks`, default features),
+each `[C]`: the helper is not dumpable (its `/proc` files aren't its user's, unlike a plain child's); `drgnx-key`
+waits for a key, exits 75 having printed nothing and finds the helper's record there, then gets the key once it is
+handed over; a keyed container's command has the variable in its own `/proc/<pid>/environ` while `podman inspect`, the
+container's stored config and runtime state hold the names only; the helper started by job-exec runs in the job's
+unit and slice and dies with the unit; and below the floor (the folder's `test-machine.json`) the job that grew most is
+stopped `infra: disk` before any other. The unit rows `[D]`: a key frame's value held in a locked buffer that is all
+zeros just before it is unmapped, only listed names taken or served, the allow-list's metadata and link-local refusals
+and the proxy's `403` for a listed name that resolves link-local, the disk watch's pick, the key-timeout record's
+verdict, and `drgnx-key exec` in the argv with names only.
 
 `tests/fleet_sync.rs` holds sync's fleet rows (`#[ignore = "fleet"]`), run from the fleet's harness over real SSH
 (`fleet.sh test 'sync::'`, with the `sleipnir` binary in `/fleet/share`). `sync::a_dropped_bundle_resumes_not_restarts`
