@@ -31,3 +31,60 @@ pub fn after_turn(sid: &str, turn: u64, prompt_len: usize) -> Vec<(&'static str,
         ),
     ]
 }
+
+/// A subagent as claude-agent-acp reports it: the `Task` tool call TASK (pending, its input the description ARG),
+/// then the subagent's own `Read` tool call CHILD, nested (`_meta.claudeCode.parentToolUseId` is TASK) and completed,
+/// then the `Task` call completed. The `session/update` payloads, in order.
+pub fn task_updates(task: &str, child: &str, arg: &str) -> Vec<Value> {
+    let nested = json!({"claudeCode": {"toolName": "Read", "parentToolUseId": task}});
+    vec![
+        json!({"sessionUpdate": "tool_call", "toolCallId": task, "title": "Task", "kind": "think",
+            "status": "pending",
+            "rawInput": {"description": arg, "subagent_type": "general-purpose", "prompt": arg},
+            "_meta": {"claudeCode": {"toolName": "Task"}}}),
+        json!({"sessionUpdate": "tool_call", "toolCallId": child, "title": "Read README.md", "kind": "read",
+            "status": "pending", "locations": [{"path": "README.md", "line": 1}],
+            "rawInput": {"file_path": "README.md"}, "_meta": nested}),
+        json!({"sessionUpdate": "tool_call_update", "toolCallId": child, "status": "completed",
+            "content": [{"type": "content", "content": {"type": "text", "text": "ok"}}], "_meta": nested}),
+        json!({"sessionUpdate": "tool_call_update", "toolCallId": task, "status": "completed",
+            "content": [{"type": "content", "content": {"type": "text", "text": "the subagent's report"}}],
+            "_meta": {"claudeCode": {"toolName": "Task"}}}),
+    ]
+}
+
+/// The `tool_call` fields claude-agent-acp sends for WHAT (`read FILE [OFFSET LIMIT]`, `grep PATTERN`,
+/// `web-search QUERY`, `web-fetch URL`, `write FILE`), with the tool name in `_meta.claudeCode.toolName`: a `Read` has
+/// `locations [{path, line}]` and the end line only from `limit`, a `Grep` has no `locations`, and `WebSearch` is
+/// kind `fetch` like `WebFetch`.
+pub fn tool_shape(what: &str, arg: &str) -> Option<Value> {
+    let meta = |name: &str| json!({"claudeCode": {"toolName": name}});
+    Some(match what {
+        "read" => {
+            let mut w = arg.split_whitespace();
+            let file = w.next().unwrap_or("");
+            let offset: Option<u64> = w.next().and_then(|n| n.parse().ok());
+            let limit: Option<u64> = w.next().and_then(|n| n.parse().ok());
+            let mut raw = json!({"file_path": file});
+            if let Some(o) = offset {
+                raw["offset"] = json!(o);
+            }
+            if let Some(l) = limit {
+                raw["limit"] = json!(l);
+            }
+            json!({"title": format!("Read {file}"), "kind": "read",
+                "locations": [{"path": file, "line": offset.unwrap_or(1)}],
+                "rawInput": raw, "_meta": meta("Read")})
+        }
+        "grep" => json!({"title": format!("grep \"{arg}\" ."), "kind": "search",
+            "rawInput": {"pattern": arg, "path": "."}, "_meta": meta("Grep")}),
+        "web-search" => json!({"title": arg, "kind": "fetch",
+            "rawInput": {"query": arg}, "_meta": meta("WebSearch")}),
+        "web-fetch" => json!({"title": format!("Fetch {arg}"), "kind": "fetch",
+            "rawInput": {"url": arg}, "_meta": meta("WebFetch")}),
+        "write" => json!({"title": format!("Write {arg}"), "kind": "edit",
+            "locations": [{"path": arg}],
+            "rawInput": {"file_path": arg, "content": "written by the mock\n"}, "_meta": meta("Write")}),
+        _ => return None,
+    })
+}

@@ -378,6 +378,22 @@ agent, from, to, why); from sessions `agent` (id, seq, session — the snapshot)
 in place: chunks appended, tool calls updated), at most one of each per session per 50 ms; `lease-released` (task,
 agent, job); `events` (below).
 
+**Who gets what.** `agent` goes to every subscribed connection, and carries no tool call's `rawInput` (a permission
+request's tool call included). A connection gets a session's snapshots at once (at most one per 50 ms) only while it
+shows the session (it subscribed to its entries); for every other session it gets at most 30 snapshots a second on the
+hub's clock, and when that is reached only the latest state of each session waits for the next second. The snapshot's
+`turns` counts the turns the hub process started for the session, so an editor that saw it rise with no `busy` in
+between knows whole turns went by (a turn can be shorter than the update throttle). `agent-entries` goes only to the connections that called `agents/entries/subscribe`
+for that session (the answer is the change number to continue from; the connection's subscriptions end with it, and
+`agents/entries/unsubscribe` ends one), and its tool entries have no `rawInput` either (a string `url` of the input
+stays as `url`). An editor that needs a tool call's input asks `agents/tool-input` (at most 256 KiB of its JSON text;
+a larger one comes back cut, as a string, with `truncated`). The hub keeps the whole input. `agents/pause` cancels a
+busy session's turn once the tool call running now completes, and holds its queue. A mirror (below) subscribes while a
+transcript of its session is shown (`drgnx-agents-mirror-show` and `-hide`, run from `window-buffer-change-functions`
+for transcript buffers only) and fetches the transcript then; a session nobody shows has its turns told by the
+snapshots' `status` and `turns`. `agents/get` still returns whole entries, `rawInput` included: it is one editor
+asking for one session on demand, not a broadcast.
+
 **Mirrors** (`core/drgnx-agents-mirror.el`): the editing Emacs keeps a `drgnx-agent-session` per hub session (`remote`
 = its id) filled from these events; an action on a mirror goes to the hub (`drgnx-agents--remote`, never waiting).
 A new Emacs fetches each transcript once (`agents/get`, which answers the session's change number `seq`) and keeps
@@ -495,8 +511,8 @@ the same directory.
 
 **The store at start.** Before it serves anything the hub opens `<data>/work.db` with the graph writer and
 `norn::migrate7`'s opening rule ([store.md](store.md#migration-from-schema-6-task-11)), and waits for its answer: a
-missing file is made at schema 8, a schema-6 one is copied to `<data>/backup/work-pre7-<unix>.db`, checked, and
-migrated in one transaction, so the first request sees schema 8. A newer file (above 8) makes the hub read-only; a
+missing file is made at schema 9, a schema-6 one is copied to `<data>/backup/work-pre7-<unix>.db`, checked, and
+migrated in one transaction, so the first request sees schema 9. A newer file (above 9) makes the hub read-only; a
 file below 6, or a migration that failed, leaves the writer not ready (writes answer its text) and the hub serves
 the rest. A failed migration is not tried again until the hub restarts. The coordination writer
 (`norn::store::CoordDb`) and the coordination tools' graph store run on the same file.
@@ -862,7 +878,7 @@ resume, the tick goes on from the store with the same workers, and the wakes sti
 
 ## The store
 
-The front serves the store (`work.db`, schema 8) itself: `graph/*` (reads and walks, history, revert, excise, grants,
+The front serves the store (`work.db`, schema 9) itself: `graph/*` (reads and walks, history, revert, excise, grants,
 proposed txs, read-only SQL, export, import, backup, settings, the personal-notes opt-ins) and `tasks/*` (the tracker
 for the editor), all class `user`. `cards/settle` of an `access` card makes a grant (or refuses) and of a `close`
 card closes the task (or rejects), in the settle's tx. `mcp/session` takes the session's `profile` and its tool sets (`tools: {tracker}`), and
@@ -973,17 +989,23 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | Method | Class | Params | Result | Writes |
 |---|---|---|---|---|
 | `agents/do` | user | `{id: Id, item?: RequestId, n?: natnum, op: "deliver-queue" \| "unqueue" \| "requeue" \| "review", reject?: boolean, text?: Prompt}` | `boolean` | yes |
+| `agents/entries/subscribe` | user | `{session: Id}` | `{seq: natnum}` | no |
+| `agents/entries/unsubscribe` | user | `{session: Id}` | `boolean` | no |
 | `agents/get` | user | `{id: Id}` | `{entries?: [Entry], seq: natnum, session: Snapshot}` | no |
 | `agents/kill` | user | `{id: Id}` | `boolean` | yes |
 | `agents/list` | user, agent, service | `{}` | `{sessions?: [Snapshot]}` | no |
 | `agents/move` | user | `{id: Id, profile: string}` | `{id: string, name: string}` | yes |
+| `agents/pause` | user | `{id: Id}` | `boolean` | yes |
 | `agents/permission` | user | `{id: Id, option?: string, request: RequestId}` | `boolean` | yes |
+| `agents/presence/get` | user | `{file: string}` | `{entries?: [PresenceEntry], file: string}` | no |
+| `agents/presence/subscribe` | user | `{file?: string, workspace?: {id: string, roots?: [string]}}` | `{files?: [FilePresence]}` | no |
 | `agents/probe` | user | `{profile: string, wait_s?: natnum}` | `{agent?: AgentInfo, ok: boolean, stderr_tail?: string, why?: string}` | no |
 | `agents/role` | user | `{id: Id, role: "manager" \| "worker" \| "chat"}` | `boolean` | yes |
 | `agents/send` | user | `{id: Id, if_free?: boolean, text: Prompt}` | `boolean` | yes |
 | `agents/slice` | user | `{from_step: natnum, id: Id, n?: natnum}` | `{entries?: [[natnum, Entry]], id: string, next?: natnum, steps?: [Step]}` | no |
 | `agents/start` | user | `{about?: string, cwd?: AbsPath, document?: AbsPath, env?: [{name: EnvName, value: string}], job?: Id, profile: string, role?: "manager" \| "worker" \| "chat", task?: TaskRef}` | `{id: string, name: string}` | yes |
 | `agents/stop` | user | `{id: Id}` | `boolean` | yes |
+| `agents/tool-input` | user | `{session: Id, tool_call: string}` | `{raw_input: any, truncated: boolean}` | no |
 | `brief/build` | user | `{task: string}` | `{cut: boolean, edited: boolean, parts?: [BriefPartText], task: string, text: string}` | no |
 | `brief/set` | user | `{task: string, text: string}` | `{note: string}` | yes |
 | `budget/get` | user | `{scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | no |
@@ -1049,6 +1071,8 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `job/status` | user | `{decisions?: boolean, id?: Id}` | `JobSummary \| {jobs?: [JobSummary]}` | no |
 | `job/stop` | user | `{id: Id}` | `JobSummary` | yes |
 | `job/unblock` | user | `{task: TaskRef}` | `JobSummary` | yes |
+| `machines/list` | user | `{}` | `{machines?: [Machine]}` | no |
+| `machines/report` | user | `{machine: string, slots?: [{holder?: string, id: string, kind: string}], ttl: number}` | `{local: boolean, machine: string, slots?: [Slot]}` | no |
 | `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "network" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no |
 | `matrix/get` | user | `{plan?: string, project?: string, who?: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `MatrixView` | no |
 | `mcp/attach` | service | `{kind: AgentKind}` | `{identity: string}` | no |
@@ -1079,7 +1103,14 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `tasks/find` | user | `{assignee?: string, cursor?: natnum, labels?: [string], project?: string, query?: Text, status?: Status}` | `{cursor?: natnum, tasks?: [any]}` | no |
 | `tasks/ready` | user | `{labels?: [string], limit?: natnum, project?: string}` | `{cursor?: natnum, tasks?: [any]}` | no |
 | `tasks/write` | user | `{acceptance?: Text, add?: [string], body?: Text, cwd?: AbsPath, dst?: string, id?: string, kind?: string, labels?: [string], lease?: integer, mode?: "children" \| "replace", note?: Text, op: "create" \| "update" \| "claim" \| "heartbeat" \| "release" \| "handoff" \| "reassign" \| "split" \| "complete" \| "link" \| "unlink" \| "label" \| "tools", parent?: string, parts?: [Text], priority?: integer, project?: string, remove?: [string], src?: string, status?: Status, title?: Text, to?: string, tracker?: boolean, ver?: integer}` | `any` | yes |
-| `timeline/get` | user | `{id: string, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
+| `timeline/get` | user | `{before?: natnum, id: string, limit?: natnum, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
+| `work/conclusions` | user | `{session: string}` | `{conclusions?: [Conclusion]}` | no |
+| `work/file-at` | user | `{path: string, seq: natnum, session: Id}` | `{bytes: string, seq: natnum}` | no |
+| `work/files` | user | `{session: Id}` | `{files: [EditedFile]}` | no |
+| `work/hunks` | user | `{path: string, session: Id}` | `{diff: string}` | no |
+| `work/map/close` | user | `{view: string}` | `boolean` | no |
+| `work/map/set` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
+| `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `MapFrame` | no |
 <!-- hub-methods:end -->
 
 ### Classes
@@ -1166,6 +1197,9 @@ result is (`event(NAME).check`):
 | `settings/explain` | the front (`settings_get`) | `{req, scope, names?, root?}`: the editor answers `settings/explained` with the same `req` |
 | `agent-step` | sessions (the front) | `{session, step: Step}`: a step opened or closed, with its class, the hub's stamps and its anchors |
 | `exec-done` | jobs (the front) | `{id, session?, status, exit?, summary: {exit?, failing, lines, log}}` |
+| `machines-changed` | machines (the front) | `{machines: [{machine, slots: [{id, holder?, kind}], local}]}`: the whole list, sent when a report, an expiry or the local slots changed it |
+| `agent-presence` | the presence model (to the connections that asked) | `{file, entries: [{session, file, mode, line?, source, step, at}]}`: who is in the file now, at most once per file per 100 ms ("The presence model") |
+| `work-map` | the Work map (to the view's connection only) | `{view, version, base, full?, changed: [Item], removed: [Id], entered: [Id], places?, edges?, layout?, needs_you?, chips?, stale?}`: what changed in one map view since version `base` ("The Work map") |
 | `supervisor` | the supervisor | `{rule, session?, exec?, task?, card?, text}` |
 | `view-written` | records | `{path, kind, hash}`: a view file written (never committed) |
 | `view-proposal` | records | `{id, path, by?}`: a hand edit to a view became a proposal |
@@ -1322,6 +1356,83 @@ queue is held) and writes each closed step to schema 8's `step` table (`norn::wr
 writer task per session; the last step of a turn carries its tokens and `turn_id` (`_meta.turnId`). Each write is
 announced as an `agent-step` event (`{session, step}`) and on `Hub::subscribe_steps()`. A store that is not ready
 loses the row (logged), not the event.
+
+**Step detail** (`work::detail::of`, schema 9's `step_detail`): a tool step also records what it read, searched or
+fetched, in the same transaction as the step, taken when the call completes because `rawInput` is refined while it
+streams. The hub keeps `_meta.claudeCode.toolName` and `.parentToolUseId` of each tool call beside the entries (the
+entries' wire shape is unchanged) and classifies by tool name, never by ACP kind alone: Claude's `WebSearch` is kind
+`fetch`, like `WebFetch`. A provider that sends no name (Codex's parsed calls, Gemini) is classified by kind; Gemini's
+query or URL, which is only in the title, is labelled `acp-title`. A `Read` has `line_end` only from `rawInput.limit`.
+Content is never kept and no text field is longer than 4 KiB. A shell call has no detail yet (the shell-read layers
+write `command` and `opened` details). The detail is the step's `detail` on `agent-step` and `timeline/get`
+(`runstav::methods::timeline::StepDetail`). The mock agent's `provider:read|grep|web-search|web-fetch|write` words
+send each personality's real shapes. A Claude Code subagent's steps (the `Task` tool's nested calls) keep the
+`Task` call's id as `detail.parent_tool` (`work::subagents`); the mock's `provider:task DESCRIPTION` sends one.
+
+### The presence model
+
+Who is in which file, at which line, now (`work::presence`; agent system part 2 builds it, part 3's cursors, gutter
+and badges build on it). This is its contract.
+
+- **An entry** is one session's latest `{session, file, mode, line?, source, step, at}` in one file
+  (`runstav::methods::work::PresenceEntry`). `file` is an absolute path (links followed when the file exists); `mode`
+  is `read`, `edit`, `listed` (a listing, a recursive search) or `write` (a shell command's); `line` is the last line
+  known, or absent ("file only"); `source` is `acp` (a read or search step's fields), `edit` (an edit step), `command`
+  (a file a shell step's command names, from `work::shell_read`, only inside the session's folder) or `opened` (a file
+  its processes opened; Gleipnir's tracer, not yet); `step` is the timeline step it came from, `at` the hub's time.
+  Of one session's entries in one file the later step wins, then the stronger mode (`edit` > `write` > `read` >
+  `listed`).
+- **Now:** an entry is now while its session is live and it is younger than 120 s (`presence-stale-after`) or it is
+  its session's latest entry. Older entries stay as history. A session ended with `agents/stop` or `agents/kill` is in
+  no file.
+- **Methods** (user connections): `agents/presence/subscribe {workspace: {id, roots}} | {file}` makes the connection
+  get `agent-presence` for the files under the roots (or that file) from then on, and answers `{files: [{file,
+  entries}]}`, who is in them now; `agents/presence/get {file} -> {file, entries}`. The names keep clear of
+  `presence/set`, the user's away state. A connection's subscriptions end with it.
+- **The event** `agent-presence {file, entries}` goes only to the connections that asked (`Front::send_to`), at most
+  once per file per 100 ms of the hub's clock: a change arms one flush 100 ms later (task `presence:flush`), and every
+  file changed meanwhile goes out once, with its entries then.
+- **Durability:** none of its own. At start, before the recorded sessions resume, it is rebuilt from their steps'
+  details (reads, searches, edits); a shell step's command is not stored, so its files come back with its next step.
+- New sources (Gleipnir's opens, part 3's own refinements) add a `source` value without changing this contract.
+
+### The Work map
+
+The Work space's map (`work::map`): the hub feeds the pure map core `vegvisir` from its sources and sends each map
+view only what changed, to the connection that shows it.
+
+- **Methods** (user connections). `work/map/subscribe {view, workspace: {id, roots}, width_units, density?, filters?,
+  collapsed?, selected?}` opens one view of the connection (again, if it is open) and answers its full frame `{version,
+  items, edges, layout, needs_you, chips}`. `view` is the editor's id for it: one editor can show two workspaces, or one
+  at two widths, so the hub keeps state per (connection, view). `work/map/set {view, filters? | collapsed? |
+  width_units? | density? | shown? | selected?}` answers `{version}`; an unknown view is `invalid-params`.
+  `work/map/close {view}` ends one; a connection's views end with it. A workspace no view shows is dropped.
+- **The event** `work-map` goes by `Front::send_to` to the view's connection only. `version` counts the view's events
+  from the frame's 1, and `base` names the version it applies to: an editor drops an older one and subscribes again on
+  a gap. A full frame (`full`) carries every item shown in `changed` and the new `layout`; a delta carries the items
+  new or changed (whole), `removed` ids, and `edges` (all, among the items shown) when the edge set changed.
+- **Coalescing** (design §11.3 step 5; `work::map::Coalescer`, pure, tested in every order). Field changes go out at
+  most once per 100 ms per view: the first change arms a flush 100 ms later on the hub's clock. A live arrival takes a
+  free place at the end of its layer's last row (or a row of its own at the bottom) and fades in (`entered`, with its
+  rectangle and form in `places`); a departure fades out and leaves its place empty; nothing else moves
+  (`vegvisir::layout::place_live`). What arrived and went reflows after a quiet second (no change and no
+  `work/map/set` with `selected` for 1 s) as one full frame, unless that would move an item of the selection's chain:
+  then it waits for the user. The user's own change (filters, collapsed layers, width, density, shown again)
+  relayouts at once. The clock's minute is one delta (time fields are minutes).
+- **Hidden:** `shown: false` gets no deltas: one `work-map` with `stale: true` at the next change, then nothing;
+  `shown: true` sends one full frame.
+- **Sources.** Each session's snapshot and subagents at its `agent` emit (state, spend, context; its branch and tree
+  read from its folder's `.git` at first sight: `branch:REPO/NAME`, REPO being the main tree's folder name, so a linked
+  worktree is a branch of its repository); each closed step (the card's activity); the presence model's changed files
+  (edits in flight and reads, keyed `file:REPO/PATH` through the session's tree or a workspace root); after each step
+  that took a snapshot (an edit, or a turn's first step), the worktree's changed files against its base
+  (`work::edits::changed`, the interim before the edit history) as its changed set; the machine registry; and, re-read after each write while a map is open (task `map:run`), the store's asks, specs, plans,
+  tasks, `asked` and `derives` links, open cards and the worktree bases' "based on" pairs. A session belongs to a
+  workspace when its folder, its tree or its repository is under one of the roots. Overlaps are the core's: two live
+  agents on two branches changing one file, from their edits in flight and from their worktrees' changed sets, so a
+  finished edit still overlaps.
+- **Restart:** nothing is kept. The editor's re-subscription after a restart gets a full frame from the new hub's
+  sessions and store.
 
 ### After a restart
 

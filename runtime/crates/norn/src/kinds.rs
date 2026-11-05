@@ -19,7 +19,7 @@ pub struct LinkKind {
 pub const ENTITY_KINDS: &[&str] = &[
     "task", "decision", "note", "grant", "agent", "session", "commit", "branch", "file", "symbol",
     "spec", "plan", "step", "ruling", "todo", "worktree", "project", "option", "exec", "report",
-    "proposal",
+    "proposal", "ask",
 ];
 
 const ANY: &[&str] = &["*"];
@@ -94,6 +94,13 @@ pub const LINKS: &[LinkKind] = &[
         false,
     ),
     link("narrows", &["grant"], &["grant"], false),
+    // schema 9: what the user asked, and the work it led to
+    link(
+        "asked",
+        &["ask"],
+        &["spec", "plan", "task", "session"],
+        false,
+    ),
 ];
 
 /// Whether KIND is one of [`ENTITY_KINDS`].
@@ -126,7 +133,7 @@ mod tests {
             [
                 "task", "decision", "note", "grant", "agent", "session", "commit", "branch",
                 "file", "symbol", "spec", "plan", "step", "ruling", "todo", "worktree", "project",
-                "option", "exec", "report", "proposal"
+                "option", "exec", "report", "proposal", "ask"
             ]
         );
         let rows: Vec<(&str, Vec<&str>, Vec<&str>, bool)> = LINKS
@@ -191,6 +198,12 @@ mod tests {
                 false,
             ),
             ("narrows", vec!["grant"], vec!["grant"], false),
+            (
+                "asked",
+                vec!["ask"],
+                vec!["spec", "plan", "task", "session"],
+                false,
+            ),
         ];
         assert_eq!(rows, expect);
         // Every named end is an entity kind, and only the two readiness links affect ready.
@@ -214,6 +227,8 @@ mod tests {
         assert!(link_allowed("narrows", "grant", "grant"));
         assert!(link_allowed("proposes", "proposal", "report"));
         assert!(!link_allowed("report_of", "report", "plan"));
+        assert!(link_allowed("asked", "ask", "session"));
+        assert!(!link_allowed("asked", "task", "ask"));
     }
 
     #[test]

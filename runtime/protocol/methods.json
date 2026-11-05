@@ -265,6 +265,15 @@
                   "null"
                 ]
               },
+              "turns": {
+                "description": "How many turns this hub process has started for the session: an editor that saw the count rise and no `busy`\nknows whole turns went by between two snapshots (a turn can be shorter than the update throttle).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "usage": {
                 "anyOf": [
                   {
@@ -427,8 +436,134 @@
         "title": "AgentEntries",
         "type": "object"
       },
-      "doc": "a session's entries new or changed since the last time",
+      "doc": "a session's entries new or changed since the last time, without `rawInput`, only to the connections that subscribed to the session (`agents/entries/subscribe`)",
       "name": "agent-entries"
+    },
+    {
+      "data": {
+        "$defs": {
+          "PresenceEntry": {
+            "additionalProperties": false,
+            "description": "One session in one file: the presence model's entry.",
+            "properties": {
+              "at": {
+                "description": "The hub's time of the step (seconds since the epoch).",
+                "format": "double",
+                "type": "number"
+              },
+              "file": {
+                "description": "An absolute path in one of the workspace's repositories.",
+                "type": "string"
+              },
+              "line": {
+                "description": "The last line known; absent: the file only.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "mode": {
+                "$ref": "#/$defs/PresenceMode"
+              },
+              "session": {
+                "type": "string"
+              },
+              "source": {
+                "$ref": "#/$defs/PresenceSource"
+              },
+              "step": {
+                "description": "The timeline step it came from.",
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "session",
+              "file",
+              "mode",
+              "source",
+              "step",
+              "at"
+            ],
+            "type": "object"
+          },
+          "PresenceMode": {
+            "description": "How a session is in a file.",
+            "oneOf": [
+              {
+                "enum": [
+                  "read"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "listed",
+                "description": "A directory listing or a recursive search over it.",
+                "type": "string"
+              },
+              {
+                "const": "write",
+                "description": "Written by a shell command.",
+                "type": "string"
+              },
+              {
+                "const": "edit",
+                "description": "Changed by an edit tool.",
+                "type": "string"
+              }
+            ]
+          },
+          "PresenceSource": {
+            "description": "Where the hub saw it.",
+            "oneOf": [
+              {
+                "const": "acp",
+                "description": "A read or search step's ACP fields.",
+                "type": "string"
+              },
+              {
+                "const": "edit",
+                "description": "An edit step.",
+                "type": "string"
+              },
+              {
+                "const": "command",
+                "description": "A file a shell step's command names (\"from the command\").",
+                "type": "string"
+              },
+              {
+                "const": "opened",
+                "description": "A file a shell step's processes opened (\"seen open\").",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "Who is in FILE now; the data of `agent-presence`.",
+        "properties": {
+          "entries": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/PresenceEntry"
+            },
+            "type": "array"
+          },
+          "file": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "FilePresence",
+        "type": "object"
+      },
+      "doc": "who is in a file now changed: its entries, at most once per file per 100 ms, to the connections that asked (agents/presence/subscribe)",
+      "name": "agent-presence"
     },
     {
       "data": {
@@ -478,6 +613,17 @@
                     "type": "null"
                   }
                 ]
+              },
+              "detail": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/StepDetail"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "What the step read, searched or fetched (tool steps)."
               },
               "end": {
                 "format": "double",
@@ -630,6 +776,82 @@
                 "type": "string"
               }
             ]
+          },
+          "StepDetail": {
+            "additionalProperties": false,
+            "description": "What a step read, searched or fetched (the `step_detail` table); never the content.",
+            "properties": {
+              "kind": {
+                "description": "`read`, `search`, `fetch`, `edit` or `execute`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "line_end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "line_start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "origin": {
+                "description": "How the hub learned it: `acp`, `acp-title` (parsed from the title), `browser`, `command` or `opened`.",
+                "type": "string"
+              },
+              "parent_tool": {
+                "description": "The `Task` tool call of the subagent that made the step (Claude's `parentToolUseId`); absent: the session's\nown step.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "query": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "title": {
+                "description": "A page's title (the agent browser's).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tool": {
+                "description": "The tool's name as the provider sent it, when it sent one.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "origin"
+            ],
+            "type": "object"
           },
           "Unit": {
             "description": "What a limit counts.  Limits compare only in the same unit.",
@@ -1144,6 +1366,78 @@
     },
     {
       "data": {
+        "$defs": {
+          "Machine": {
+            "additionalProperties": false,
+            "description": "A machine as the hub lists it.",
+            "properties": {
+              "local": {
+                "description": "The hub's own machine: always listed, never expires.",
+                "type": "boolean"
+              },
+              "machine": {
+                "type": "string"
+              },
+              "slots": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/Slot"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "machine",
+              "local"
+            ],
+            "type": "object"
+          },
+          "Slot": {
+            "additionalProperties": false,
+            "description": "One slot of a machine: where one agent job runs.",
+            "properties": {
+              "holder": {
+                "description": "Who holds it now (a job or a session id); none when free.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "description": "What the slot is for: `agent-job`, `build`, `test`, `gpu`, ...",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`machines/list`'s answer, and the data of `machines-changed`.",
+        "properties": {
+          "machines": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Machine"
+            },
+            "type": "array"
+          }
+        },
+        "title": "MachinesList",
+        "type": "object"
+      },
+      "doc": "the machines the hub lists changed (a report, an expiry, a local slot): the whole list",
+      "name": "machines-changed"
+    },
+    {
+      "data": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "description": "A message for the user from the hub itself (the notices' shape).",
@@ -1502,6 +1796,96 @@
       },
       "doc": "the hub wrote a record view file (never committed)",
       "name": "view-written"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The data of `work-map`: what changed in one view since version `base`.",
+        "properties": {
+          "base": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "changed": {
+            "default": [],
+            "description": "Items new or changed, whole.",
+            "items": true,
+            "type": "array"
+          },
+          "chips": {
+            "items": true,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "edges": {
+            "description": "Every edge between the items shown, when the edge set changed.",
+            "items": true,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "entered": {
+            "default": [],
+            "description": "Ids that arrived live: they fade in at their place in `places`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "full": {
+            "description": "A full frame (a relayout): `changed` is every item shown, `layout` the new one.",
+            "type": "boolean"
+          },
+          "layout": true,
+          "needs_you": {
+            "items": true,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "places": {
+            "description": "The free places the arrivals took (id → rect), and their forms."
+          },
+          "removed": {
+            "default": [],
+            "description": "Ids no longer shown: they fade out and leave their place empty.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "stale": {
+            "description": "The view is hidden and its frame is out of date: shown again, it gets a full frame.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "version",
+          "base"
+        ],
+        "title": "WorkMap",
+        "type": "object"
+      },
+      "doc": "what changed in one Work map view since its version base, to that view's connection only (work/map/subscribe): at most one delta per 100 ms, a full frame on a relayout, a stale mark for a hidden view",
+      "name": "work-map"
     }
   ],
   "methods": [
@@ -1603,6 +1987,88 @@
         "type": "boolean"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "this connection gets the session's `agent-entries` events from now on (they go to no one else); the change number to continue from",
+      "name": "agents/entries/subscribe",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A session, for the entry subscription.",
+        "properties": {
+          "session": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "session"
+        ],
+        "title": "SessionRef",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The change number a subscription to a session's entries continues from.",
+        "properties": {
+          "seq": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq"
+        ],
+        "title": "EntriesSubscribed",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "this connection no longer gets the session's `agent-entries` events",
+      "name": "agents/entries/unsubscribe",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A session, for the entry subscription.",
+        "properties": {
+          "session": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "session"
+        ],
+        "title": "SessionRef",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
     },
     {
       "classes": [
@@ -1921,6 +2387,15 @@
               "task": {
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "turns": {
+                "description": "How many turns this hub process has started for the session: an editor that saw the count rise and no `busy`\nknows whole turns went by between two snapshots (a turn can be shorter than the update throttle).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
                   "null"
                 ]
               },
@@ -2328,6 +2803,15 @@
                   "null"
                 ]
               },
+              "turns": {
+                "description": "How many turns this hub process has started for the session: an editor that saw the count rise and no `busy`\nknows whole turns went by between two snapshots (a turn can be shorter than the update throttle).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "usage": {
                 "anyOf": [
                   {
@@ -2464,6 +2948,40 @@
       "classes": [
         "user"
       ],
+      "doc": "the session's turn is cancelled once the tool call running now completes, and its queue is held",
+      "name": "agents/pause",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ById",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the user's answer to a permission request: the only way one is answered",
       "name": "agents/permission",
       "params": {
@@ -2518,6 +3036,343 @@
         "type": "boolean"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "who is in a file now: each session's last mode, line, source and step there",
+      "name": "agents/presence/get",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`agents/presence/get`'s params.",
+        "properties": {
+          "file": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "PresenceGet",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "PresenceEntry": {
+            "additionalProperties": false,
+            "description": "One session in one file: the presence model's entry.",
+            "properties": {
+              "at": {
+                "description": "The hub's time of the step (seconds since the epoch).",
+                "format": "double",
+                "type": "number"
+              },
+              "file": {
+                "description": "An absolute path in one of the workspace's repositories.",
+                "type": "string"
+              },
+              "line": {
+                "description": "The last line known; absent: the file only.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "mode": {
+                "$ref": "#/$defs/PresenceMode"
+              },
+              "session": {
+                "type": "string"
+              },
+              "source": {
+                "$ref": "#/$defs/PresenceSource"
+              },
+              "step": {
+                "description": "The timeline step it came from.",
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "session",
+              "file",
+              "mode",
+              "source",
+              "step",
+              "at"
+            ],
+            "type": "object"
+          },
+          "PresenceMode": {
+            "description": "How a session is in a file.",
+            "oneOf": [
+              {
+                "enum": [
+                  "read"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "listed",
+                "description": "A directory listing or a recursive search over it.",
+                "type": "string"
+              },
+              {
+                "const": "write",
+                "description": "Written by a shell command.",
+                "type": "string"
+              },
+              {
+                "const": "edit",
+                "description": "Changed by an edit tool.",
+                "type": "string"
+              }
+            ]
+          },
+          "PresenceSource": {
+            "description": "Where the hub saw it.",
+            "oneOf": [
+              {
+                "const": "acp",
+                "description": "A read or search step's ACP fields.",
+                "type": "string"
+              },
+              {
+                "const": "edit",
+                "description": "An edit step.",
+                "type": "string"
+              },
+              {
+                "const": "command",
+                "description": "A file a shell step's command names (\"from the command\").",
+                "type": "string"
+              },
+              {
+                "const": "opened",
+                "description": "A file a shell step's processes opened (\"seen open\").",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "Who is in FILE now; the data of `agent-presence`.",
+        "properties": {
+          "entries": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/PresenceEntry"
+            },
+            "type": "array"
+          },
+          "file": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "FilePresence",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "this connection gets agent-presence for the files under a workspace's roots, or for one file; the answer is who is in them now",
+      "name": "agents/presence/subscribe",
+      "params": {
+        "$defs": {
+          "Workspace": {
+            "additionalProperties": false,
+            "description": "The workspace a Work view shows: one id, the roots (repositories or folders) it spans. The editor sends it with\nevery subscription; the hub never decides what a workspace is.",
+            "properties": {
+              "id": {
+                "description": "`workspace:` and 12 hex digits.",
+                "type": "string"
+              },
+              "roots": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`agents/presence/subscribe`'s params: a workspace (every file under its roots) or one file.",
+        "properties": {
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workspace": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Workspace"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "PresenceSubscribe",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "FilePresence": {
+            "additionalProperties": false,
+            "description": "Who is in FILE now; the data of `agent-presence`.",
+            "properties": {
+              "entries": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/PresenceEntry"
+                },
+                "type": "array"
+              },
+              "file": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "file"
+            ],
+            "type": "object"
+          },
+          "PresenceEntry": {
+            "additionalProperties": false,
+            "description": "One session in one file: the presence model's entry.",
+            "properties": {
+              "at": {
+                "description": "The hub's time of the step (seconds since the epoch).",
+                "format": "double",
+                "type": "number"
+              },
+              "file": {
+                "description": "An absolute path in one of the workspace's repositories.",
+                "type": "string"
+              },
+              "line": {
+                "description": "The last line known; absent: the file only.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "mode": {
+                "$ref": "#/$defs/PresenceMode"
+              },
+              "session": {
+                "type": "string"
+              },
+              "source": {
+                "$ref": "#/$defs/PresenceSource"
+              },
+              "step": {
+                "description": "The timeline step it came from.",
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "session",
+              "file",
+              "mode",
+              "source",
+              "step",
+              "at"
+            ],
+            "type": "object"
+          },
+          "PresenceMode": {
+            "description": "How a session is in a file.",
+            "oneOf": [
+              {
+                "enum": [
+                  "read"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "listed",
+                "description": "A directory listing or a recursive search over it.",
+                "type": "string"
+              },
+              {
+                "const": "write",
+                "description": "Written by a shell command.",
+                "type": "string"
+              },
+              {
+                "const": "edit",
+                "description": "Changed by an edit tool.",
+                "type": "string"
+              }
+            ]
+          },
+          "PresenceSource": {
+            "description": "Where the hub saw it.",
+            "oneOf": [
+              {
+                "const": "acp",
+                "description": "A read or search step's ACP fields.",
+                "type": "string"
+              },
+              {
+                "const": "edit",
+                "description": "An edit step.",
+                "type": "string"
+              },
+              {
+                "const": "command",
+                "description": "A file a shell step's command names (\"from the command\").",
+                "type": "string"
+              },
+              {
+                "const": "opened",
+                "description": "A file a shell step's processes opened (\"seen open\").",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The files with someone in them now, each with its entries.",
+        "properties": {
+          "files": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/FilePresence"
+            },
+            "type": "array"
+          }
+        },
+        "title": "PresenceFiles",
+        "type": "object"
+      },
+      "writes": false
     },
     {
       "classes": [
@@ -2828,6 +3683,17 @@
                   }
                 ]
               },
+              "detail": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/StepDetail"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "What the step read, searched or fetched (tool steps)."
+              },
               "end": {
                 "format": "double",
                 "type": [
@@ -2979,6 +3845,82 @@
                 "type": "string"
               }
             ]
+          },
+          "StepDetail": {
+            "additionalProperties": false,
+            "description": "What a step read, searched or fetched (the `step_detail` table); never the content.",
+            "properties": {
+              "kind": {
+                "description": "`read`, `search`, `fetch`, `edit` or `execute`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "line_end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "line_start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "origin": {
+                "description": "How the hub learned it: `acp`, `acp-title` (parsed from the title), `browser`, `command` or `opened`.",
+                "type": "string"
+              },
+              "parent_tool": {
+                "description": "The `Task` tool call of the subagent that made the step (Claude's `parentToolUseId`); absent: the session's\nown step.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "query": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "title": {
+                "description": "A page's title (the agent browser's).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tool": {
+                "description": "The tool's name as the provider sent it, when it sent one.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "origin"
+            ],
+            "type": "object"
           },
           "Unit": {
             "description": "What a limit counts.  Limits compare only in the same unit.",
@@ -3265,6 +4207,58 @@
       "classes": [
         "user"
       ],
+      "doc": "a tool call's raw input, which no event carries (at most 256 KiB, else its JSON text cut and `truncated`)",
+      "name": "agents/tool-input",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "session": {
+            "$ref": "#/$defs/Id"
+          },
+          "tool_call": {
+            "description": "The tool call's id (the `id` of its `tool` entry).",
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "tool_call"
+        ],
+        "title": "ToolInputParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A tool call's raw input: the input, or (when `truncated`) its JSON text cut at 256 KiB.",
+        "properties": {
+          "raw_input": true,
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "raw_input",
+          "truncated"
+        ],
+        "title": "ToolInput",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a task's brief from the graph (plan section, AGENTS.md, the matrix as it applies, base branch, earlier interfaces, the check), or the user's edited one",
       "name": "brief/build",
       "params": {
@@ -3315,6 +4309,11 @@
               {
                 "const": "check",
                 "description": "The check to run before reporting.",
+                "type": "string"
+              },
+              {
+                "const": "findings",
+                "description": "How to record what the agent establishes (findings with sources, decisions).",
                 "type": "string"
               },
               {
@@ -10987,6 +11986,205 @@
       "classes": [
         "user"
       ],
+      "doc": "the machines the hub knows: local, and those reported and not yet expired",
+      "name": "machines/list",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Machine": {
+            "additionalProperties": false,
+            "description": "A machine as the hub lists it.",
+            "properties": {
+              "local": {
+                "description": "The hub's own machine: always listed, never expires.",
+                "type": "boolean"
+              },
+              "machine": {
+                "type": "string"
+              },
+              "slots": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/Slot"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "machine",
+              "local"
+            ],
+            "type": "object"
+          },
+          "Slot": {
+            "additionalProperties": false,
+            "description": "One slot of a machine: where one agent job runs.",
+            "properties": {
+              "holder": {
+                "description": "Who holds it now (a job or a session id); none when free.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "description": "What the slot is for: `agent-job`, `build`, `test`, `gpu`, ...",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`machines/list`'s answer, and the data of `machines-changed`.",
+        "properties": {
+          "machines": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Machine"
+            },
+            "type": "array"
+          }
+        },
+        "title": "MachinesList",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a machine's slots and who holds them, valid for ttl seconds (jobq reports; an agent may not)",
+      "name": "machines/report",
+      "params": {
+        "$defs": {
+          "Slot": {
+            "additionalProperties": false,
+            "description": "One slot of a machine: where one agent job runs.",
+            "properties": {
+              "holder": {
+                "description": "Who holds it now (a job or a session id); none when free.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "description": "What the slot is for: `agent-job`, `build`, `test`, `gpu`, ...",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What a reporter (jobq) says about one machine: its slots, valid for `ttl` seconds.",
+        "properties": {
+          "machine": {
+            "type": "string"
+          },
+          "slots": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Slot"
+            },
+            "type": "array"
+          },
+          "ttl": {
+            "description": "Seconds the report stands; after that the machine is gone from the list until it reports again.",
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "machine",
+          "ttl"
+        ],
+        "title": "MachineReport",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Slot": {
+            "additionalProperties": false,
+            "description": "One slot of a machine: where one agent job runs.",
+            "properties": {
+              "holder": {
+                "description": "Who holds it now (a job or a session id); none when free.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "description": "What the slot is for: `agent-job`, `build`, `test`, `gpu`, ...",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A machine as the hub lists it.",
+        "properties": {
+          "local": {
+            "description": "The hub's own machine: always listed, never expires.",
+            "type": "boolean"
+          },
+          "machine": {
+            "type": "string"
+          },
+          "slots": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Slot"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "machine",
+          "local"
+        ],
+        "title": "Machine",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "what the matrix decides for who doing action (no card is made)",
       "name": "matrix/check",
       "params": {
@@ -14759,10 +15957,28 @@
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
+          "before": {
+            "description": "Steps before this one (a session's `seq`, else a step id); with `limit`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "id": {
             "description": "The session's id, or the task's, plan's or project's entity id.",
             "maxLength": 4352,
             "type": "string"
+          },
+          "limit": {
+            "description": "Page backwards: the last `limit` steps (1 to 500), newest last; with `before`, those before it.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "rollup": {
             "description": "The rollup only, no steps.",
@@ -14900,6 +16116,17 @@
                     "type": "null"
                   }
                 ]
+              },
+              "detail": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/StepDetail"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "What the step read, searched or fetched (tool steps)."
               },
               "end": {
                 "format": "double",
@@ -15053,6 +16280,82 @@
               }
             ]
           },
+          "StepDetail": {
+            "additionalProperties": false,
+            "description": "What a step read, searched or fetched (the `step_detail` table); never the content.",
+            "properties": {
+              "kind": {
+                "description": "`read`, `search`, `fetch`, `edit` or `execute`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "line_end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "line_start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "origin": {
+                "description": "How the hub learned it: `acp`, `acp-title` (parsed from the title), `browser`, `command` or `opened`.",
+                "type": "string"
+              },
+              "parent_tool": {
+                "description": "The `Task` tool call of the subagent that made the step (Claude's `parentToolUseId`); absent: the session's\nown step.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "query": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "title": {
+                "description": "A page's title (the agent browser's).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tool": {
+                "description": "The tool's name as the provider sent it, when it sent one.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "origin"
+            ],
+            "type": "object"
+          },
           "Tokens": {
             "additionalProperties": false,
             "properties": {
@@ -15151,10 +16454,704 @@
         "type": "object"
       },
       "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a session's decisions and findings, numbered, each with the step the hub stamped and the steps it rests on",
+      "name": "work/conclusions",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/conclusions`'s params: a session id.",
+        "properties": {
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session"
+        ],
+        "title": "ConclusionsParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Conclusion": {
+            "additionalProperties": false,
+            "description": "A decision or a finding, as the Work space shows it.",
+            "properties": {
+              "at": {
+                "description": "When it was recorded (seconds since the epoch).",
+                "format": "double",
+                "type": "number"
+              },
+              "id": {
+                "description": "`decision:N`, or the finding's note id.",
+                "type": "string"
+              },
+              "kind": {
+                "description": "`decision` or `finding`.",
+                "type": "string"
+              },
+              "links": {
+                "$ref": "#/$defs/ConclusionLinks"
+              },
+              "n": {
+                "description": "Its number in the session, from 1.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "origin": {
+                "description": "`own`, `from-brief`, `needs-user`, or `from-text` (a fenced block in a message).",
+                "type": "string"
+              },
+              "sources": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/ConclusionSource"
+                },
+                "type": "array"
+              },
+              "step": {
+                "description": "The timeline step the hub stamped; absent: step unknown.",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "n",
+              "id",
+              "kind",
+              "text",
+              "at",
+              "origin",
+              "links"
+            ],
+            "type": "object"
+          },
+          "ConclusionLinks": {
+            "additionalProperties": false,
+            "description": "The steps a conclusion links back to (timeline step ids).",
+            "properties": {
+              "named": {
+                "default": [],
+                "description": "The steps its named sources match (\"named\").",
+                "items": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "since_last": {
+                "default": [],
+                "description": "The reads, searches, pages and thoughts since the previous conclusion.",
+                "items": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "unmatched": {
+                "default": [],
+                "description": "Named sources no step of the session matches (\"named, not read in this session\").",
+                "items": {
+                  "$ref": "#/$defs/ConclusionSource"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "ConclusionSource": {
+            "additionalProperties": false,
+            "description": "What a conclusion rests on: a file with optional lines, or a page.",
+            "properties": {
+              "lines": {
+                "description": "First and last line, 1-based.",
+                "items": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/conclusions`'s answer.",
+        "properties": {
+          "conclusions": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Conclusion"
+            },
+            "type": "array"
+          }
+        },
+        "title": "Conclusions",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a file's bytes (base64) as the newest step snapshot at or before seq had them",
+      "name": "work/file-at",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/file-at`: a file as a step's snapshot had it.",
+        "properties": {
+          "path": {
+            "description": "Relative to the worktree.",
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "seq": {
+            "description": "The step; the newest snapshot at or before it answers.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "session": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "session",
+          "path",
+          "seq"
+        ],
+        "title": "FileAtParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/file-at`'s answer.",
+        "properties": {
+          "bytes": {
+            "description": "The file's bytes, base64.",
+            "type": "string"
+          },
+          "seq": {
+            "description": "The step whose snapshot this is.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "bytes",
+          "seq"
+        ],
+        "title": "FileAt",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the files a session edited, with added and removed lines against its worktree's base (new files included)",
+      "name": "work/files",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/files`: the files session `session` edited.",
+        "properties": {
+          "session": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "session"
+        ],
+        "title": "EditedFiles",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "EditedFile": {
+            "additionalProperties": false,
+            "description": "One edited file: its added and removed lines against the worktree's base.",
+            "properties": {
+              "minus": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "description": "Relative to the worktree.",
+                "type": "string"
+              },
+              "plus": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "read_at": {
+                "description": "When the agent last read it (seconds); absent until the edit history supplies it.",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "untracked": {
+                "description": "The file is not in the base at all (the agent made it).",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "path",
+              "plus",
+              "minus",
+              "untracked"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/files`' answer.",
+        "properties": {
+          "files": {
+            "items": {
+              "$ref": "#/$defs/EditedFile"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "files"
+        ],
+        "title": "EditedFilesList",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "one edited file's unified diff against its worktree's base",
+      "name": "work/hunks",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/hunks`: one file's changes.",
+        "properties": {
+          "path": {
+            "description": "Relative to the worktree.",
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "session": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "session",
+          "path"
+        ],
+        "title": "HunksParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/hunks`' answer: the unified diff against the base.",
+        "properties": {
+          "diff": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "diff"
+        ],
+        "title": "Hunks",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "end one map view of this connection (a connection's views end with it)",
+      "name": "work/map/close",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/map/close`'s params.",
+        "properties": {
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "MapClose",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "change one map view (filters, collapsed layers, width, density, shown, the selection): a change the user made relayouts at once",
+      "name": "work/map/set",
+      "params": {
+        "$defs": {
+          "MapDensity": {
+            "description": "A map view's density (the look's).",
+            "enum": [
+              "compact",
+              "comfortable",
+              "roomy"
+            ],
+            "type": "string"
+          },
+          "MapFilters": {
+            "additionalProperties": false,
+            "description": "A map view's filters: `f` (only an item's chain), `o` (only overlaps and clashes), `.` (finished items too).",
+            "properties": {
+              "finished": {
+                "default": false,
+                "type": "boolean"
+              },
+              "focus": {
+                "description": "An item id: only its chain.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "overlaps": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/map/set`'s params: what changes in one view (each absent field stays).",
+        "properties": {
+          "collapsed": {
+            "items": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "density": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MapDensity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "filters": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MapFilters"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "selected": {
+            "description": "The selection moved (a map key).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "shown": {
+            "description": "False: hidden (no deltas, one stale mark); true again: a full frame.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "view": {
+            "type": "string"
+          },
+          "width_units": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "MapSet",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/map/set`'s answer: the view's version after it.",
+        "properties": {
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "MapVersion",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "open (or open again) one map view of this connection: the answer is its full frame, and work-map events follow, to this connection only",
+      "name": "work/map/subscribe",
+      "params": {
+        "$defs": {
+          "MapDensity": {
+            "description": "A map view's density (the look's).",
+            "enum": [
+              "compact",
+              "comfortable",
+              "roomy"
+            ],
+            "type": "string"
+          },
+          "MapFilters": {
+            "additionalProperties": false,
+            "description": "A map view's filters: `f` (only an item's chain), `o` (only overlaps and clashes), `.` (finished items too).",
+            "properties": {
+              "finished": {
+                "default": false,
+                "type": "boolean"
+              },
+              "focus": {
+                "description": "An item id: only its chain.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "overlaps": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "Workspace": {
+            "additionalProperties": false,
+            "description": "The workspace a Work view shows: one id, the roots (repositories or folders) it spans. The editor sends it with\nevery subscription; the hub never decides what a workspace is.",
+            "properties": {
+              "id": {
+                "description": "`workspace:` and 12 hex digits.",
+                "type": "string"
+              },
+              "roots": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/map/subscribe`'s params: one map view of this connection (VIEW is the editor's id for it), the workspace it\nshows, and how.",
+        "properties": {
+          "collapsed": {
+            "default": [],
+            "description": "Collapsed layers, 1 to 6.",
+            "items": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "density": {
+            "$ref": "#/$defs/MapDensity",
+            "default": "comfortable"
+          },
+          "filters": {
+            "$ref": "#/$defs/MapFilters",
+            "default": {
+              "finished": false,
+              "overlaps": false
+            }
+          },
+          "selected": {
+            "description": "The selected item: a quiet reflow that would move its chain waits for the user.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "view": {
+            "type": "string"
+          },
+          "width_units": {
+            "description": "The drawing width, in units of 4 px.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "workspace": {
+            "$ref": "#/$defs/Workspace"
+          }
+        },
+        "required": [
+          "view",
+          "workspace",
+          "width_units"
+        ],
+        "title": "MapSubscribe",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A map view's full frame: `work/map/subscribe`'s answer.",
+        "properties": {
+          "chips": {
+            "default": [],
+            "description": "The mission chips (the machines' load).",
+            "items": true,
+            "type": "array"
+          },
+          "edges": {
+            "default": [],
+            "description": "The edges between them.",
+            "items": true,
+            "type": "array"
+          },
+          "items": {
+            "default": [],
+            "description": "The items the view shows, each with its kind, label, flags and card fields.",
+            "items": true,
+            "type": "array"
+          },
+          "layout": {
+            "description": "Rows, positions and forms, lanes, ports and bands, in units of 4 px."
+          },
+          "needs_you": {
+            "default": [],
+            "description": "The needs-you strip.",
+            "items": true,
+            "type": "array"
+          },
+          "version": {
+            "description": "The frame's version; every `work-map` after it names the version it applies to (`base`).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "layout"
+        ],
+        "title": "MapFrame",
+        "type": "object"
+      },
+      "writes": false
     }
   ],
   "proto": 1,
   "proto_min": 1,
   "records": 2,
-  "schema": 8
+  "schema": 9
 }

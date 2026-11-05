@@ -1,0 +1,11 @@
+{"scenario": "cli/machines-report", "requires": ["v1"], "doc": "Pattern C (the CLI as a real child against a real hub, its exit read). ratatoskr machines report sends machines/report as a user: exit 0 and the machine is listed; a ttl that is not a number is a usage error (exit 2); slots that are not JSON are exit 2; the hub refusing the report (the machine local) is exit 1."}
+{"do": "start", "hub": "h"}
+{"do": "write_file", "path": "$ROOT/slots.json", "text": "[{\"id\": \"d1\", \"kind\": \"agent-job\", \"holder\": \"job-7\"}, {\"id\": \"d2\", \"kind\": \"build\"}]"}
+{"do": "write_file", "path": "$ROOT/bad.json", "text": "not json"}
+{"do": "run", "args": ["machines", "report", "--machine", "desktop", "--ttl", "60", "--json", "$ROOT/slots.json"], "expect_code": 0, "expect_stdout": {"machine": "desktop", "local": false, "slots": [{"id": "d1", "kind": "agent-job", "holder": "job-7"}, {"id": "d2", "kind": "build"}]}}
+{"do": "run", "args": ["machines", "report", "--machine", "desktop", "--ttl", "soon"], "expect_code": 2, "expect_stderr": "--ttl"}
+{"do": "run", "args": ["machines", "report", "--machine", "desktop", "--ttl", "60", "--json", "$ROOT/bad.json"], "expect_code": 2, "expect_stderr": "ratatoskr machines:"}
+{"do": "run", "args": ["machines", "report", "--machine", "local", "--ttl", "60"], "expect_code": 1, "expect_stderr": "ratatoskr machines:"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "machines/list", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"machines": [{"machine": "local"}, {"machine": "desktop"}]}}}

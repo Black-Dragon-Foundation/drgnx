@@ -1,0 +1,27 @@
+{"scenario": "work/two-views-on-one-connection", "requires": ["v1", "test-hooks"], "doc": "One connection opens two Work maps (two frames at two widths): each subscription answers its own full frame, and a session that starts reaches each view as its own work-map delta, the new agent among its changed items. A closed view is gone: setting it is refused. Pattern B on the hub's virtual clock: the start's answer is the gate, __test_advance for the deltas."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "work/map/subscribe", "params": {"view": "a", "workspace": {"id": "workspace:000000000000", "roots": ["$ROOT/work"]}, "width_units": 250}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"version": 1, "items": "$any", "layout": {"width_units": 250}}}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "work/map/subscribe", "params": {"view": "b", "workspace": {"id": "workspace:000000000000", "roots": ["$ROOT/work"]}, "width_units": 150, "density": "compact"}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"version": 1, "items": "$any", "layout": {"width_units": 150}}}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "__test_advance", "params": {"ms": 250}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "work-map", "data": {"view": "a", "base": "$number", "entered": {"$contains": ["$string"]}, "changed": {"$contains": [{"kind": "agent", "live": true}]}}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "work-map", "data": {"view": "b", "base": "$number", "entered": {"$contains": ["$string"]}, "changed": {"$contains": [{"kind": "agent", "live": true}]}}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "work/map/close", "params": {"view": "b"}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "work/map/set", "params": {"view": "b", "width_units": 200}}}
+{"do": "expect", "conn": "e", "json": {"id": 5, "error": {"code": "$any"}}}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "work/map/set", "params": {"view": "a", "width_units": 200}}}
+{"do": "expect", "conn": "e", "json": {"id": 6, "result": {"version": "$number"}}}
+{"do": "expect", "conn": "e", "json": {"event": "work-map", "data": {"view": "a", "full": true, "layout": {"width_units": 200}, "changed": {"$contains": [{"kind": "agent"}]}}}, "within_ms": 10000}

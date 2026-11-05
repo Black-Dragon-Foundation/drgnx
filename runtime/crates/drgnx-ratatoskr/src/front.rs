@@ -281,12 +281,19 @@ impl Front {
     pub fn gone(&self, conn: u64) {
         lock_conns(&self.conns).remove(&conn);
         self.editors.gone(conn);
+        self.core.presence.gone(conn);
+        self.core.map.gone(conn);
     }
 
     /// EVENT with DATA to every subscribed connection: queued for each before any is written (a queue never waits),
     /// so a newer event never reaches one subscriber before an older one.
     pub fn broadcast(&self, event: &str, data: Value) {
         self.editors.broadcast(event, data);
+    }
+
+    /// EVENT with DATA to connection CONN only (it must be subscribed); false when it took nothing.
+    pub fn send_to(&self, conn: u64, event: &str, data: Value) -> bool {
+        self.editors.send_to(conn, event, data)
     }
 
     /// `gateway/keys-changed` to the subscribers when the held keys' ids are no longer BEFORE (ids only).  A
@@ -594,6 +601,10 @@ impl Front {
             | Params::AgentsMove(_)
             | Params::AgentsRole(_)
             | Params::AgentsSlice(_)
+            | Params::AgentsEntriesSubscribe(_)
+            | Params::AgentsEntriesUnsubscribe(_)
+            | Params::AgentsToolInput(_)
+            | Params::AgentsPause(_)
             | Params::AgentsProbe(_)
             | Params::MessagesRetract(_)
             | Params::ExecStart(_)
@@ -630,7 +641,18 @@ impl Front {
             | Params::RecordsImport(_)
             | Params::RecordsStatus(_)
             | Params::RecordsProposals(_)
-            | Params::RecordsDecide(_)) => crate::agent_core::serve(self, &caller, p)
+            | Params::RecordsDecide(_)
+            | Params::MachinesReport(_)
+            | Params::MachinesList(_)
+            | Params::WorkConclusions(_)
+            | Params::AgentsPresenceSubscribe(_)
+            | Params::AgentsPresenceGet(_)
+            | Params::WorkMapSubscribe(_)
+            | Params::WorkMapSet(_)
+            | Params::WorkMapClose(_)
+            | Params::WorkFiles(_)
+            | Params::WorkHunks(_)
+            | Params::WorkFileAt(_)) => crate::agent_core::serve(self, &caller, p)
                 .await
                 .unwrap_or_else(|_| unserved(method)),
             // the graph store's (`graph/*`, `tasks/*`); a settled card too (an access card becomes a grant)
@@ -847,12 +869,12 @@ mod tests {
         let f = front(dir.path());
         f.set_schema(6);
         assert_eq!(f.read_only(), None);
-        f.set_schema(9);
-        assert_eq!(f.read_only(), Some(9));
+        f.set_schema(99);
+        assert_eq!(f.read_only(), Some(99));
         let v = serde_json::to_value(f.status()).unwrap();
         assert_eq!(
             (v["read_only"].clone(), v["schema"].clone()),
-            (json!(9), json!(9))
+            (json!(99), json!(99))
         );
         f.set_schema(6);
         assert_eq!(f.read_only(), None);

@@ -257,10 +257,13 @@ struct RecordDecisionArgs {
     seen_version: u64,
     /// Entities it is about (ids): `about` links from the decision
     about: Option<Vec<String>>,
-    /// The step (your timeline's step number) the decision was made in
+    /// Ignored: the hub records the step the call was made in itself
+    #[allow(dead_code)]
     step: Option<i64>,
     /// Where it came from: from-brief, own or needs-user
     origin: Option<String>,
+    /// What it rests on (at most 12)
+    sources: Option<Vec<crate::write::work::Source>>,
 }
 
 #[derive(Serialize)]
@@ -303,7 +306,12 @@ async fn record_decision(
             "origin is from-brief, own or needs-user, not {o:?}"
         ));
     }
-    let (step, origin) = (args.step, args.origin.clone());
+    if let Some(s) = &args.sources {
+        crate::write::work::check_sources(s).map_err(|e| e.to_string())?;
+    }
+    let sources = args.sources.clone().filter(|s| !s.is_empty());
+    // the step is the hub's stamp (the MCP call's own timeline step), never the agent's claim: `args.step` is ignored
+    let origin = args.origin.clone();
     let sid = match who {
         Identity::Session { sid, .. } => Some(sid.clone()),
         _ => None,
@@ -341,10 +349,10 @@ async fn record_decision(
             };
             note_held(tx, &me, held)?;
             if let (DecideResult::Ok { n, .. }, true) =
-                (&r, step.is_some() || origin.is_some() || sid.is_some())
+                (&r, origin.is_some() || sid.is_some() || sources.is_some())
                 && let Some(e) = entity::by_id(tx.sql(), &format!("decision:{n}"))?
             {
-                let patch = json!({"step": step, "origin": origin, "session": sid});
+                let patch = json!({"origin": origin, "session": sid, "sources": sources});
                 entity::update(
                     tx,
                     e.n,

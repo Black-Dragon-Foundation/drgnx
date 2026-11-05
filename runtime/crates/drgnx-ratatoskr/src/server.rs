@@ -233,6 +233,12 @@ pub async fn run(args: ServeArgs) -> Exit {
     );
     // a queued message reaches its session once that is free
     crate::clock::spawn("deliver:run", crate::agents::deliver::run(front.clone()));
+    // reported machines expire; the local slots follow the job pool
+    crate::clock::spawn("machines:run", crate::work::machines::run(front.clone()));
+    // the sessions' writes and starts link to the asks behind them
+    crate::clock::spawn("asks:run", crate::work::asks::run(front.clone()));
+    // the Work map follows the store's records and the clock's minutes while a map is open
+    crate::clock::spawn("map:run", crate::work::map::run(front.clone()));
     // settings.el and the shipped defaults, as data, before anything is served (its last good values in runtime.db)
     front
         .settings
@@ -247,6 +253,8 @@ pub async fn run(args: ServeArgs) -> Exit {
     {
         let f = front.clone();
         tokio::spawn(async move {
+            // who was in which file, from the recorded sessions' steps, before they run again
+            f.core.presence.rebuild_from_store(&f).await;
             f.core.agents.resume_all(&f).await;
             f.core.runs.set_recovering(false);
             crate::agents::wake::recover(&f).await;
@@ -285,15 +293,27 @@ pub async fn run(args: ServeArgs) -> Exit {
     );
     crate::records::install_tool(&front);
     crate::clock::spawn("records:follow", crate::records::follow(front.clone()));
-    front.core.runs.set_git(Arc::new(
-        crate::runner::git::HubGit::new(
-            crate::sandbox::runs_root(&env),
-            crate::runner::TreeMode::Snapshot,
-            Box::new(crate::runner::git::HubPolicy(Arc::downgrade(&front))),
-            Some(runtime.clone()),
-        )
-        .with_shell_env(front.shell_env.clone()),
-    ));
+    let mut git = crate::runner::git::HubGit::new(
+        crate::sandbox::runs_root(&env),
+        crate::runner::TreeMode::Snapshot,
+        Box::new(crate::runner::git::HubPolicy(Arc::downgrade(&front))),
+        Some(runtime.clone()),
+    )
+    .with_shell_env(front.shell_env.clone());
+    // each tree the hub makes records where it branched from (work.db's worktree_base)
+    if let Some(dirs) = front.dirs.get() {
+        let writer = front.writer.clone();
+        git = git.with_bases(
+            dirs.hub.join("checkpoints"),
+            Arc::new(move |row| {
+                let w = writer.clone();
+                crate::clock::spawn("bases:put", async move {
+                    crate::work::bases::put(&w, row).await;
+                });
+            }),
+        );
+    }
+    front.core.runs.set_git(Arc::new(git));
     front
         .core
         .runs

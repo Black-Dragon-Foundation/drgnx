@@ -232,6 +232,7 @@
         (window-move-to-previous-monitor :none "the palette")
         (focus-outline "SPC o")
         (outline-open "RET" "o")
+        (decor-activate "RET")
         (wb-save-layout :none "in the palette (also on exit)")
         (wb-restore-layout :none "in the palette (also at start)")
         (split-editor-right "SPC w v")

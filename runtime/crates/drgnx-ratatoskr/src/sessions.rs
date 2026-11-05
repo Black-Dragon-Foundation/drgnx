@@ -56,6 +56,49 @@ const SID_HEX: usize = 12;
 /// The coordination tools, shared by every connection.
 pub type ToolList = Arc<[Box<dyn Tool<Ctx>>]>;
 
+/// A tool on a session's socket: once its call ends, the hub reads what it wrote ([`norn::tools::Hub::after_tool`]),
+/// then it answers.
+struct AfterTool(Box<dyn Tool<Ctx>>);
+
+impl Tool<Ctx> for AfterTool {
+    fn name(&self) -> &'static str {
+        self.0.name()
+    }
+    fn description(&self) -> &'static str {
+        self.0.description()
+    }
+    fn input_schema(&self) -> serde_json::Value {
+        self.0.input_schema()
+    }
+    fn output_schema(&self) -> Option<serde_json::Value> {
+        self.0.output_schema()
+    }
+    fn check(&self, args: &serde_json::Value) -> Result<(), mimir::ArgsError> {
+        self.0.check(args)
+    }
+    fn call<'a>(
+        &'a self,
+        ctx: &'a Ctx,
+        args: serde_json::Value,
+    ) -> mimir::BoxFuture<'a, mimir::ToolResult> {
+        Box::pin(async move {
+            let r = self.0.call(ctx, args).await;
+            if let Identity::Session { sid, .. } = &ctx.1 {
+                ctx.0.hub().after_tool(sid, self.0.name()).await;
+            }
+            r
+        })
+    }
+}
+
+/// LIST, each tool behind [`AfterTool`].
+fn after_each(list: Vec<Box<dyn Tool<Ctx>>>) -> ToolList {
+    list.into_iter()
+        .map(|t| Box::new(AfterTool(t)) as Box<dyn Tool<Ctx>>)
+        .collect::<Vec<_>>()
+        .into()
+}
+
 /// A session as `runtime.db` keeps it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Row {
@@ -557,12 +600,12 @@ impl Sessions {
                 .get_or_init(|| {
                     let mut all = norn::tools::tools_for(norn::tools::ToolSets::default());
                     all.extend(norn::tools::manager_tools());
-                    all.into()
+                    after_each(all)
                 })
                 .clone();
         }
         self.by_sets[usize::from(sets.tracker)]
-            .get_or_init(|| norn::tools::tools_for(sets).into())
+            .get_or_init(|| after_each(norn::tools::tools_for(sets)))
             .clone()
     }
 

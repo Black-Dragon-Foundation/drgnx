@@ -61,6 +61,7 @@ the answer to `agents/start', and this Emacs mirrors the hub (`drgnx-agents-mirr
   (drgnx-agents-mirror-test--with '()
     (drgnx-agents-mirror-sync)
     (let* ((m (drgnx-agents-mirror-test--start :profile "mock")) (was (drgnx-agent-session-status m)))
+      (drgnx-agents-mirror-show (drgnx-agent-session-remote m))   ; the entries go to the editor that shows the transcript
       (drgnx-agents-send m "hello mirror")
       (drgnx-agents-mirror-test--settle (lambda () (string-search "You said: hello mirror" (drgnx-agents-mirror-test--text m)))
                                         "the answer in the mirror")
@@ -88,6 +89,7 @@ hub hands that permission request to the editor."
     (drgnx-agents-mirror-test--asking root)
     (drgnx-agents-mirror-sync)
     (let ((m (drgnx-agents-mirror-test--start :profile "asks" :role "worker")) request option)
+      (drgnx-agents-mirror-show (drgnx-agent-session-remote m))
       (drgnx-agents-send m "ask:permission edit")
       (drgnx-agents-mirror-test--settle (lambda () (drgnx-agent-session-permissions m)) "the permission request in the mirror")
       (setq request (car (drgnx-agent-session-permissions m))
@@ -131,10 +133,12 @@ hub hands that permission request to the editor."
   (drgnx-agents-mirror-test--with '()
     (drgnx-agents-mirror-sync)
     (let* ((m (drgnx-agents-mirror-test--start :profile "mock")) (id (drgnx-agent-session-remote m)) hub again)
+      (drgnx-agents-mirror-show id)
       (drgnx-agents-mirror-test--ask "agents/send" (list :id id :text "slow work"))       ; it streams while this Emacs goes away
       (drgnx-agents-mirror-test--settle (lambda () (string-search "part 1" (drgnx-agents-mirror-test--text m))) "the stream under way")
       (drgnx-agents-mirror-stop) (drgnx-hub-disconnect) (setq drgnx-agents--sessions nil)
       (drgnx-agents-mirror-sync)                                             ; a new editor
+      (drgnx-agents-mirror-show id)                                          ; whose window shows the transcript
       (setq m (drgnx-agents-mirror-test--settle
                (lambda () (let ((m (drgnx-agents-mirror-test--mirror id)))
                             (and m (eq (drgnx-agent-session-status m) 'idle) (string-search "part 10" (drgnx-agents-mirror-test--text m)) m)))
@@ -146,6 +150,7 @@ hub hands that permission request to the editor."
       ;; and once the session is quiet (no event will come): a new editor still gets the whole transcript
       (drgnx-agents-mirror-stop) (drgnx-hub-disconnect) (setq drgnx-agents--sessions nil)
       (drgnx-agents-mirror-sync)
+      (drgnx-agents-mirror-show id)
       (drgnx-agents-mirror-test--settle
        (lambda () (let ((m (drgnx-agents-mirror-test--mirror id))) (and m (setq again m) (equal (drgnx-agent-session-entries m) hub))))
        "the whole transcript in a third editor's mirror")
@@ -262,6 +267,7 @@ hub hands that permission request to the editor."
   (drgnx-agents-mirror-test--with '()
     (drgnx-agents-mirror-sync)
     (let* ((m (drgnx-agents-mirror-test--start :profile "mock")) (id (drgnx-agent-session-remote m)))
+      (drgnx-agents-mirror-show id)
       (drgnx-agents-mirror-test--ask "agents/send" (list :id id :text "hello json"))
       (drgnx-agents-mirror-test--settle (lambda () (string-search "You said: hello json" (drgnx-agents-mirror-test--text m)))
                                         "the answer in the mirror")
@@ -463,6 +469,7 @@ hub hands that permission request to the editor."
            (listed (seq-find (lambda (s) (equal (plist-get s :id) id))
                              (plist-get (drgnx-agents-mirror-test--ask "agents/list" nil) :sessions))))
       (drgnx-agents-mirror-test--settle (lambda () (eq (drgnx-agent-session-status m) 'idle)) "the mirror is idle")
+      (drgnx-agents-mirror-show id)
       (drgnx-agents-send m "hello hub")
       (drgnx-agents-mirror-test--settle (lambda () (string-search "hello hub" (drgnx-agents-mirror-test--text m)))
                                         "the mirror follows the session")

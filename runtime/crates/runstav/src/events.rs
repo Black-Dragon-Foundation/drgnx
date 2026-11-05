@@ -177,7 +177,7 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
         event!(
             "agent-entries",
             AgentEntries,
-            "a session's entries new or changed since the last time"
+            "a session's entries new or changed since the last time, without `rawInput`, only to the connections that subscribed to the session (`agents/entries/subscribe`)"
         ),
         event!(
             "events",
@@ -232,6 +232,21 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "agent-step",
             crate::methods::timeline::AgentStep,
             "a session's step opened or closed, with its class, stamps and anchors (to subscribers that asked)"
+        ),
+        event!(
+            "machines-changed",
+            crate::methods::work::MachinesList,
+            "the machines the hub lists changed (a report, an expiry, a local slot): the whole list"
+        ),
+        event!(
+            "agent-presence",
+            crate::methods::work::FilePresence,
+            "who is in a file now changed: its entries, at most once per file per 100 ms, to the connections that asked (agents/presence/subscribe)"
+        ),
+        event!(
+            "work-map",
+            crate::methods::work::WorkMap,
+            "what changed in one Work map view since its version base, to that view's connection only (work/map/subscribe): at most one delta per 100 ms, a full frame on a relayout, a stale mark for a hidden view"
         ),
         event!(
             "exec-done",
@@ -311,6 +326,10 @@ mod tests {
                     "supervisor",
                     "view-written",
                     "view-proposal",
+                    // agent system part 2
+                    "machines-changed",
+                    "agent-presence",
+                    "work-map",
                 ]
                 .contains(&n.as_str())
             })
@@ -325,7 +344,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 20);
+        assert_eq!(events().len(), 23);
         assert!(event("settings/proposed").is_some());
         // ids only: a key-shaped value is no id, and nothing but `providers` is taken
         let changed = event("gateway/keys-changed").unwrap();

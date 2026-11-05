@@ -149,6 +149,8 @@ pub enum BriefPart {
     Interfaces,
     /// The check to run before reporting.
     Check,
+    /// How to record what the agent establishes (findings with sources, decisions).
+    Findings,
     /// The view's path, for an agent without drgnx's tools.
     ViewPath,
 }

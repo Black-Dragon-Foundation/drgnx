@@ -24,7 +24,8 @@ pub const USAGE: &str = "usage: ratatoskr serve [--foreground] [--parent-pid PID
     \x20      ratatoskr graph export|import|backup|revert|excise|scrub|grants|sql|compact|proposed ...   (the store, from a terminal)\n\
     \x20      ratatoskr job propose PLAN [--repo DIR] [--budget USD] [--auto] [--json]   (plan runs, from a terminal)\n\
     \x20      ratatoskr job approve ID [--budget USD] | status [ID] | stop ID | resume ID [--budget USD]   [--json]\n\
-    \x20      ratatoskr mcp-bridge --socket PATH   (an agent's coordination tools: stdio to its session's mcp.sock)\n\
+    \x20      ratatoskr machines report --machine M --ttl SECS [--json FILE|-]   (a machine's slots, from jobq)\n\
+    \x20      ratatoskr mcp-bridge --socket PATH  (an agent's coordination tools: stdio to its session's mcp.sock)\n\
     \x20      ratatoskr mcp-bridge --outside --kind KIND [--cwd DIR]   (an agent outside drgnx: stdio to the hub)\n\
     \x20      ratatoskr sandbox run --spec FILE --result FILE [--tier full|reduced] [--bwrap PATH]\n\
     \x20          [--pause-before-spawn FIFO] [--landlock-omit PATH]... [--landlock-abi-cap N] [--settings-guards]\n\
@@ -85,6 +86,8 @@ pub enum Command {
     Graph(crate::graph_cli::GraphCommand),
     /// `job …`: plan runs, a client of the running hub (`crate::job_cli`).
     Job(crate::job_cli::JobCommand),
+    /// `machines report …`: a machine's slots, from jobq (`crate::machines_cli`).
+    Machines(crate::machines_cli::MachinesCommand),
 }
 
 /// `store`'s subcommands.
@@ -361,6 +364,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
         "store" => store(&mut p).map(Command::Store),
         "graph" => crate::graph_cli::parse(p.raw_args().map_err(e)?).map(Command::Graph),
         "job" => crate::job_cli::parse(p.raw_args().map_err(e)?).map(Command::Job),
+        "machines" => crate::machines_cli::parse(p.raw_args().map_err(e)?).map(Command::Machines),
         other => Err(format!("unknown command {other:?}")),
     }
 }

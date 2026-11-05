@@ -1143,6 +1143,8 @@ struct NoteAddArgs {
     kind: Option<String>,
     /// A request key (1-64 of A-Za-z0-9._-): retrying with the same key returns the first answer
     req: Option<String>,
+    /// A finding's sources (at most 12)
+    sources: Option<Vec<crate::write::work::Source>>,
 }
 
 struct NoteAdd;
@@ -1188,6 +1190,13 @@ async fn note_add(coord: &Coord, who: &Identity, a: NoteAddArgs) -> Result<Answe
             "kind is progress, finding, question or handoff, not {kind:?}"
         ));
     }
+    if let Some(s) = &a.sources {
+        if kind != "finding" {
+            return Err("sources go on a finding (note_add kind finding)".into());
+        }
+        crate::write::work::check_sources(s).map_err(|e| e.to_string())?;
+    }
+    let sources = a.sources.clone().filter(|s| !s.is_empty());
     let code = a.about.starts_with("file:") || a.about.starts_with("sym:");
     let at = if code {
         head_of(who.home()).await
@@ -1254,7 +1263,10 @@ async fn note_add(coord: &Coord, who: &Identity, a: NoteAddArgs) -> Result<Answe
                     body: Some(body),
                     priority: None,
                     assignee: None,
-                    data: json!({ "kind": kind }),
+                    data: match &sources {
+                        Some(s) => json!({ "kind": kind, "sources": s }),
+                        None => json!({ "kind": kind }),
+                    },
                     origin: Origin::Recorded,
                     source: None,
                 },

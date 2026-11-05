@@ -20,7 +20,7 @@ pub const PROTO_MIN: u32 = 1;
 /// The records layout: 2 is JSON (design 4.5).
 pub const RECORDS: u32 = 2;
 /// The work.db schema this code knows (7: the hub makes it, or migrates a schema-6 file to it at start).
-pub const SCHEMA: u32 = 8;
+pub const SCHEMA: u32 = 9;
 
 /// What a connection proved (design 4.2): `user` a valid `hello` proof, `agent` the agent socket it came in on,
 /// `service` nothing.
@@ -369,7 +369,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 108, "{names:?}");
+        assert_eq!(names.len(), 123, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -381,6 +381,7 @@ mod tests {
         let mut want = vec![
             "agents/do",
             "agents/kill",
+            "agents/pause",
             "agents/permission",
             "agents/send",
             "agents/start",
@@ -608,6 +609,7 @@ mod tests {
             let schema = (m.params)().to_value();
             let req = required(&schema);
             if [
+                "agents/presence/subscribe",
                 "coord/agent",
                 "graph/revert",
                 "graph/grants",
@@ -637,7 +639,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 73);
+        assert_eq!(with, 86);
     }
 
     #[test]

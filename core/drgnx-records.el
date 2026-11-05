@@ -294,7 +294,9 @@ never called."
                        "Requests the agent waits on")
          (:reviews (list-of (plist (:id drgnx-records-rpc-id) (:path string) (:content string))) "Writes held for review")
          (:usage (plist (:used number) (:size number) (:cost any))) (:commands (list-of any)) (:capabilities any)
-         (:exit integer "The agent process's exit status") (:stderr string) (:entries-count natnum) (:enforced boolean)
+         (:exit integer "The agent process's exit status") (:stderr string) (:entries-count natnum)
+         (:turns natnum "Turns the hub has started for it: whole turns between two snapshots are counted")
+         (:enforced boolean)
          (:enforced_why string "Why the provider's lock is not enforced"))
  "What an editor mirrors of an agent session, everything but its transcript: the keys of the hub's `agents/get' answer.")
 

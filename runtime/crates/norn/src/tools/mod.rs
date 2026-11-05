@@ -132,6 +132,12 @@ pub trait Hub: Send + Sync {
     /// The session SID waited on a job that runs (refused): the hub counts it and cancels the turn at the limit.
     fn wait_refused(&self, _sid: &str) {}
 
+    /// Session SID's call of the tool TOOL ended; its answer goes out once this returns.  The hub reads what the call
+    /// wrote first (the ask it links to).  The default: nothing.
+    fn after_tool(&self, _sid: &str, _tool: &'static str) -> BoxFuture<'_, ()> {
+        Box::pin(async {})
+    }
+
     /// The runtime settings the hub read itself (`settings.el`, the shipped defaults, the editor's overrides) as rows
     /// `{name, value, source}`: NAMES only, or all.
     fn known_settings(&self, _names: Option<&[String]>) -> Vec<serde_json::Value> {

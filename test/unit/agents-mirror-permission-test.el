@@ -73,6 +73,7 @@ this Emacs mirrors the hub."
       (setq m (drgnx-agents-mirror-permission-test--settle
                (lambda () (let ((m (drgnx-agents-mirror-permission-test--mirror id))) (and m (drgnx-agent-session-permissions m) m)))
                "the request in the new editor"))
+      (drgnx-agents-mirror-show id)
       (setq request (car (drgnx-agent-session-permissions m)))
       (when (and (plist-get request :id) (plist-get request :options))
         (drgnx-agents-answer-permission m request "allow_once"))

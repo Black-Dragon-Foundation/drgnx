@@ -7,6 +7,8 @@
 //! | line | what the turn does |
 //! |---|---|
 //! | `tool:read PATH` / `tool:edit PATH` / `tool:exec CMD` | a tool call (pending, then completed) that does it in the session's cwd (edit appends a line) |
+//! | `provider:read FILE [OFFSET LIMIT]` / `provider:grep PAT` / `provider:web-search Q` / `provider:web-fetch URL` / `provider:write FILE` | a tool call in the personality's own shape (Claude: `_meta.claudeCode.toolName`, `locations`, `rawInput`; Codex: kind and `action`; Gemini: kind and title only); nothing runs |
+//! | `tool:write N` | a tool call (pending, then completed) whose raw input is a Write of N bytes (nothing is written) |
 //! | `ask:permission KIND` | `session/request_permission` for a tool call of KIND (read, edit, execute, ...); says `permission: OPTION` |
 //! | `call:TOOL JSON` | calls the hub's MCP tool TOOL through the first stdio server of `mcpServers`; says `call: TEXT` |
 //! | `decide TEXT` | `call:record_decision {"text": TEXT}` |
@@ -533,6 +535,30 @@ impl Agent {
                     &out,
                 );
             }
+            // a subagent, in the shape only Claude sends
+            "provider:task" if self.kind == Kind::Claude => {
+                let task = format!("tc-{turn}-{}", self.next_out_id);
+                let child = format!("tc-{turn}-{}", self.next_out_id + 1);
+                self.next_out_id += 2;
+                for u in claude::task_updates(&task, &child, rest) {
+                    self.update(sid, u);
+                }
+            }
+            _ if head.starts_with("provider:") => {
+                self.provider_tool(sid, turn, &head[9..], rest);
+            }
+            "tool:write" => {
+                // a Write whose input is N bytes of file (no file is written)
+                let n: usize = rest.parse().unwrap_or(0);
+                self.tool(
+                    sid,
+                    turn,
+                    "edit",
+                    "Write big.txt",
+                    json!({"file_path": "big.txt", "content": "x".repeat(n)}),
+                    "written",
+                );
+            }
             "tool:exec" => {
                 let out = sh(&cwd, rest);
                 self.tool(sid, turn, "execute", rest, json!({"command": rest}), &out);
@@ -659,6 +685,31 @@ impl Agent {
             sid,
             json!({"sessionUpdate": "tool_call_update", "toolCallId": tid, "status": "completed",
             "content": [{"type": "content", "content": {"type": "text", "text": out}}]}),
+        );
+    }
+
+    /// A tool call in the provider's own shape (`provider:read|grep|web-search|web-fetch|write ARG`): pending with
+    /// the shape's fields, then completed.  Nothing runs; an unknown WHAT says so.
+    fn provider_tool(&mut self, sid: &str, turn: u64, what: &str, arg: &str) {
+        let shape = match self.kind {
+            Kind::Claude => claude::tool_shape(what, arg),
+            Kind::Codex => codex::tool_shape(what, arg),
+            Kind::Gemini => gemini::tool_shape(what, arg),
+        };
+        let Some(Value::Object(mut fields)) = shape else {
+            self.say(sid, turn, &format!("no provider tool {what}\n"));
+            return;
+        };
+        let tid = format!("tc-{turn}-{}", self.next_out_id);
+        self.next_out_id += 1;
+        fields.insert("sessionUpdate".into(), json!("tool_call"));
+        fields.insert("toolCallId".into(), json!(tid));
+        fields.insert("status".into(), json!("pending"));
+        self.update(sid, Value::Object(fields));
+        self.update(
+            sid,
+            json!({"sessionUpdate": "tool_call_update", "toolCallId": tid, "status": "completed",
+            "content": [{"type": "content", "content": {"type": "text", "text": "ok"}}]}),
         );
     }
 

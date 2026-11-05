@@ -2,7 +2,8 @@
 
 use serde_json::{Map, Value};
 
-pub const VERBS: [&str; 34] = [
+pub const VERBS: [&str; 35] = [
+    "count_events",
     "start",
     "root",
     "rename",
@@ -336,6 +337,7 @@ mod tests {
 {"do": "poll", "conn": "c", "json": {"id": 3, "method": "ping"}, "expect": {"id": 3, "result": "$any"}, "within_ms": 100, "every_ms": 10}
 {"do": "expect_closed", "conn": "c"}
 {"do": "expect_silent", "conn": "c", "for_ms": 50}
+{"do": "count_events", "conn": "c", "for_ms": 50, "at_most": {"agent": 30}, "none": ["agent-entries"], "lacks": "rawInput"}
 {"do": "kill", "hub": "h", "signal": "TERM"}
 {"do": "expect_exit", "hub": "h", "code": 0}
 {"do": "file", "path": "$CAP", "exists": true, "mode": "0600"}

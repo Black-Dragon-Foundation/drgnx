@@ -1,0 +1,25 @@
+{"scenario": "work/presence-coalesces-per-file", "requires": ["v1", "test-hooks"], "doc": "The presence model, on the hub's virtual clock: 20 reads of one file inside 100 ms of hub time make one agent-presence event for it, with the latest read's line, and nothing before the 100 ms or after. Pattern B: the turn's last step is the gate for the reads, __test_advance for the event."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "agents/presence/subscribe", "params": {"file": "$ROOT/work/src/a.rs"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"files": []}}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "provider:read src/a.rs 1 1\nprovider:read src/a.rs 2 1\nprovider:read src/a.rs 3 1\nprovider:read src/a.rs 4 1\nprovider:read src/a.rs 5 1\nprovider:read src/a.rs 6 1\nprovider:read src/a.rs 7 1\nprovider:read src/a.rs 8 1\nprovider:read src/a.rs 9 1\nprovider:read src/a.rs 10 1\nprovider:read src/a.rs 11 1\nprovider:read src/a.rs 12 1\nprovider:read src/a.rs 13 1\nprovider:read src/a.rs 14 1\nprovider:read src/a.rs 15 1\nprovider:read src/a.rs 16 1\nprovider:read src/a.rs 17 1\nprovider:read src/a.rs 18 1\nprovider:read src/a.rs 19 1\nprovider:read src/a.rs 20 1\nsay done"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"turn_id": "t1"}}}, "within_ms": 30000}
+{"do": "count_events", "conn": "e", "for_ms": 300, "none": ["agent-presence"]}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "__test_advance", "params": {"ms": 100}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "agent-presence", "data": {"file": "$ROOT/work/src/a.rs", "entries": [{"session": "$sid", "file": "$ROOT/work/src/a.rs", "mode": "read", "line": 20, "source": "acp", "step": "$number", "at": "$number"}]}}, "within_ms": 10000}
+{"do": "count_events", "conn": "e", "for_ms": 300, "none": ["agent-presence"]}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "__test_advance", "params": {"ms": 200}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "count_events", "conn": "e", "for_ms": 300, "none": ["agent-presence"]}

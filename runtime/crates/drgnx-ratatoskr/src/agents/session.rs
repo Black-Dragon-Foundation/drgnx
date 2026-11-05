@@ -136,6 +136,9 @@ struct State {
     entries: Vec<Entry>,
     /// Tool call id → index in `entries`.
     tools: HashMap<String, usize>,
+    /// Tool call id → the provider's tool name and its parent tool call (`_meta.claudeCode`), kept beside the
+    /// entries, whose wire shape stays as it was.
+    tool_meta: HashMap<String, ToolMeta>,
     /// The entry the next text chunk of that kind extends.
     open: Option<(EntryType, usize)>,
     /// Entries changed since the last event.
@@ -165,6 +168,12 @@ struct State {
     max_repeat: u32,
     /// Tokens the finished turns used.
     tokens: u64,
+    /// Turns started by this hub process (the snapshot's `turns`).
+    turns: u64,
+    /// The steps begun so far (each step's key).
+    steps_begun: i64,
+    /// Tool steps of a conclusion's drgnx tool begun since the reader last looked: (key, tool name).
+    mcp_begun: Vec<(i64, String)>,
 }
 
 /// What a turn core step decided, with the permission requests it took out of the snapshot.
@@ -186,6 +195,12 @@ struct OpenStep {
     tool_kind: Option<String>,
     tool_id: Option<String>,
     message_id: Option<String>,
+    /// Its place among the steps the session began (a step a wait cut in two keeps it).
+    key: i64,
+    /// A call of a drgnx tool that records a conclusion ([`crate::work::conclusions`]).
+    mcp: bool,
+    /// The `Task` tool call of the subagent that made it ([`crate::work::subagents`]).
+    parent_tool: Option<String>,
 }
 
 /// A step that ended, waiting to be written to the `step` table and announced.
@@ -200,6 +215,17 @@ struct ClosedStep {
     cache_read: i64,
     cache_write: i64,
     cost: Option<f64>,
+    /// What a tool step read, searched or fetched, taken as the step closed (its `rawInput` is final then).
+    detail: Option<norn::write::work::StepDetail>,
+    /// A shell step's command, taken then too: the files it names are its presence ([`crate::work::presence`]).
+    command: Option<String>,
+}
+
+/// What a provider says of a tool call beyond ACP's fields: Claude's `_meta.claudeCode`.
+#[derive(Clone, Debug, Default)]
+struct ToolMeta {
+    name: Option<String>,
+    parent: Option<String>,
 }
 
 /// What a turn used (the last step carries it).
@@ -227,10 +253,14 @@ impl State {
             cmd_counts: HashMap::new(),
             max_repeat: 0,
             tokens: 0,
+            turns: 0,
+            steps_begun: 0,
+            mcp_begun: Vec::new(),
             closed: Vec::new(),
             seq: 0,
             entries: Vec::new(),
             tools: HashMap::new(),
+            tool_meta: HashMap::new(),
             open: None,
             dirty: BTreeSet::new(),
             permissions: Vec::new(),
@@ -245,7 +275,26 @@ impl State {
     fn step_close(&mut self, end: f64, turn_use: Option<TurnUse>) {
         if let Some(open) = self.cur.take() {
             let u = turn_use.unwrap_or_default();
+            let mut detail = open.tool_id.as_deref().and_then(|id| self.tool_detail(id));
+            // a subagent's step keeps its parent, with a detail of its own if it has none
+            if let Some(p) = &open.parent_tool {
+                let name = open
+                    .tool_id
+                    .as_deref()
+                    .and_then(|id| self.tool_meta.get(id))
+                    .and_then(|m| m.name.clone());
+                detail
+                    .get_or_insert_with(|| norn::write::work::StepDetail {
+                        tool: name,
+                        origin: "acp".into(),
+                        ..Default::default()
+                    })
+                    .parent_tool = Some(p.clone());
+            }
+            let command = open.tool_id.as_deref().and_then(|id| self.tool_command(id));
             self.closed.push(ClosedStep {
+                detail,
+                command,
                 open,
                 end,
                 turn_id: u.turn_id,
@@ -258,10 +307,50 @@ impl State {
         }
     }
 
+    /// The detail of tool call ID from what the entry holds now.
+    fn tool_detail(&self, id: &str) -> Option<norn::write::work::StepDetail> {
+        let rest = &self.entries.get(*self.tools.get(id)?)?.rest;
+        let s = |k: &str| rest.get(k).and_then(Value::as_str);
+        let locations = rest
+            .get("locations")
+            .and_then(Value::as_array)
+            .map_or(&[][..], Vec::as_slice);
+        crate::work::detail::of(
+            self.tool_meta.get(id).and_then(|m| m.name.as_deref()),
+            s("kind"),
+            s("title"),
+            locations,
+            rest.get("rawInput"),
+        )
+    }
+
+    /// The command of tool call ID when it is a shell step (kind `execute`, or Claude's `Bash`): `rawInput.command`, a
+    /// string or a list of words.
+    fn tool_command(&self, id: &str) -> Option<String> {
+        let rest = &self.entries.get(*self.tools.get(id)?)?.rest;
+        let shell = rest.get("kind").and_then(Value::as_str) == Some("execute")
+            || self.tool_meta.get(id).and_then(|m| m.name.as_deref()) == Some("Bash");
+        if !shell {
+            return None;
+        }
+        match rest.get("rawInput")?.get("command")? {
+            Value::String(s) => Some(s.clone()),
+            Value::Array(words) => Some(
+                words
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ),
+            _ => None,
+        }
+    }
+
     /// The running step ends and a step of CLASS begins.
     fn step_begin(&mut self, class: StepClass, tool: Option<(&str, Option<&str>, Option<&str>)>) {
         let at = now();
         self.step_close(at, None);
+        self.steps_begun += 1;
         self.cur = Some(OpenStep {
             class,
             start: at,
@@ -269,6 +358,12 @@ impl State {
             tool_kind: tool.and_then(|t| t.1).map(str::to_string),
             tool_id: tool.and_then(|t| t.2).map(str::to_string),
             message_id: self.last_mid.clone(),
+            key: self.steps_begun,
+            mcp: false,
+            parent_tool: tool
+                .and_then(|t| t.2)
+                .and_then(|id| self.tool_meta.get(id))
+                .and_then(|m| m.parent.clone()),
         });
     }
 
@@ -478,6 +573,20 @@ impl State {
                         i
                     }
                 };
+                if let Some(cc) = u.pointer("/_meta/claudeCode") {
+                    let m = self
+                        .tool_meta
+                        .entry(
+                            u.get("toolCallId")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string(),
+                        )
+                        .or_default();
+                    let s = |k: &str| cc.get(k).and_then(Value::as_str).map(str::to_string);
+                    m.name = s("toolName").or(m.name.take());
+                    m.parent = s("parentToolUseId").or(m.parent.take());
+                }
                 let e = &mut self.entries[idx];
                 for k in [
                     "title",
@@ -509,6 +618,21 @@ impl State {
                             Some(id),
                         )),
                     );
+                    // a call of a tool that records a conclusion: its step is that conclusion's
+                    let name = self
+                        .tool_meta
+                        .get(id)
+                        .and_then(|m| m.name.clone())
+                        .filter(|n| crate::work::conclusions::mcp_tool_of(n).is_some())
+                        .or_else(|| {
+                            title
+                                .clone()
+                                .filter(|t| crate::work::conclusions::mcp_tool_of(t).is_some())
+                        });
+                    if let (Some(n), Some(c)) = (name, self.cur.as_mut()) {
+                        c.mcp = true;
+                        self.mcp_begun.push((c.key, n));
+                    }
                     let command = self.entries[idx].rest.get("rawInput").map(Value::to_string);
                     let key = format!(
                         "{}\n{}",
@@ -591,6 +715,8 @@ pub struct Session {
     conn: Conn,
     acp: SessionId,
     editors: Arc<crate::settings::agents::Editors>,
+    /// The Work map: each snapshot reaches it too ([`crate::work::map`]).
+    map: Arc<crate::work::map::Map>,
     /// What the matrix decides at the permission seam: the gate, the settings it reads, the store its cards go to.
     gate: MatrixGate,
     settings: Arc<crate::settings::Settings>,
@@ -618,6 +744,10 @@ pub struct Session {
     steps: tokio::sync::mpsc::UnboundedSender<ClosedStep>,
     /// How a turn ended, to the reader task.
     done: tokio::sync::mpsc::UnboundedSender<TurnEnd>,
+    /// The user's messages as they reach the agent: its current ask ([`crate::work::asks`]).
+    asks: crate::work::asks::AskTx,
+    /// Where its conclusions' tool steps go ([`crate::work::conclusions`]).
+    stamps: Arc<crate::work::conclusions::Stamps>,
 }
 
 /// What `Conn::prompt` answered.
@@ -633,6 +763,16 @@ pub(crate) struct StepSink {
     pub snap: Option<crate::timeline::Snap>,
     /// The plan and project a plan run's session works under (none: not a plan run, or a test).
     pub scopes: Option<crate::runner::Scopes>,
+    /// The graph store a spec an edit step wrote is stored in (none: a test).
+    pub tools: Option<Arc<norn::tools::Coord>>,
+    /// Where a spec it wrote is linked to the session's current ask (none: a test).
+    pub asks: Option<crate::work::asks::AskTx>,
+    /// The conclusions' stamps: a conclusion's tool step written, a turn ended (none: a test).
+    pub stamps: Option<Arc<crate::work::conclusions::Stamps>>,
+    /// The presence model: the files each step was in (none: a test).
+    pub presence: Option<Arc<crate::work::presence::Live>>,
+    /// The Work map: each closed step, and the presence it changed (none: a test).
+    pub map: Option<Arc<crate::work::map::Map>>,
 }
 
 /// What `open` and `resume` know of a session before its agent is running.
@@ -1223,6 +1363,8 @@ pub(crate) async fn open_as(
         insert_row(db, &s).await;
     }
     record_entities(front, caller, &s).await;
+    // its starter's ask is its own: the manager that started it, or the session that made its plan run
+    s.asks.started(&s.id, s.parent.as_deref(), s.job.as_deref());
     s.changed();
     Ok(Started { id: sid, name })
 }
@@ -1425,9 +1567,23 @@ fn assemble(
             bus,
             snap: crate::timeline::Snap::of(front),
             scopes: Some(front.core.runs.scopes()),
+            tools: Some(front.tools.clone()),
+            asks: Some(front.core.asks.handle()),
+            stamps: Some(front.core.stamps.clone()),
+            presence: Some(front.core.presence.clone()),
+            map: Some(front.core.map.clone()),
         },
         ctx,
     ));
+    // a folder the hub made no tree for is measured from its head now (a docs agent in the org folder)
+    if let Some(d) = front.dirs.get() {
+        tokio::spawn(crate::work::bases::session_started(
+            front.writer.clone(),
+            d.hub.clone(),
+            i.id.clone(),
+            i.cwd.clone(),
+        ));
+    }
     let scope = scope_of(i.role, &i.id);
     front.core.budgets.enroll(&scope);
     if let Some(m) = &i.parent {
@@ -1462,6 +1618,7 @@ fn assemble(
         conn: l.conn,
         acp: l.acp,
         editors: front.editors.clone(),
+        map: front.core.map.clone(),
         gate: front.core.matrix.clone(),
         settings: front.settings.clone(),
         writer: front.writer.clone(),
@@ -1478,6 +1635,8 @@ fn assemble(
         store: front.dirs.get().map(|d| transcript::Store::new(&d.hub)),
         steps,
         done,
+        asks: front.core.asks.handle(),
+        stamps: front.core.stamps.clone(),
     });
     (s, done_rx)
 }
@@ -1593,6 +1752,36 @@ impl Session {
     }
     pub(crate) fn cwd(&self) -> &Path {
         &self.cwd
+    }
+
+    /// The subagents this session ran (Claude Code's `Task` tool), from its tool calls so far.
+    pub fn subagents(&self) -> Vec<crate::work::subagents::Child> {
+        let st = lock(&self.state);
+        let calls: Vec<crate::work::subagents::ToolCall> = st
+            .entries
+            .iter()
+            .filter(|e| e.kind == EntryType::Tool)
+            .filter_map(|e| {
+                let id = e.rest.get("id").and_then(Value::as_str)?.to_string();
+                let meta = st.tool_meta.get(&id);
+                Some(crate::work::subagents::ToolCall {
+                    name: meta.and_then(|m| m.name.clone()),
+                    parent: meta.and_then(|m| m.parent.clone()),
+                    raw_input: e.rest.get("rawInput").cloned(),
+                    id,
+                })
+            })
+            .collect();
+        crate::work::subagents::group(&self.id, &calls)
+    }
+
+    /// Where the user's messages to this session come from, as an ask records it.
+    fn ask_channel(&self) -> &'static str {
+        match (self.role, &self.document) {
+            (Role::Manager, _) => "manager",
+            (_, Some(_)) => "brainstorm",
+            _ => "chat",
+        }
     }
 
     /// The transcript entries that carry one of MIDS as their `messageId`, at most CAP.
@@ -1852,6 +2041,7 @@ async fn write_steps(
             snapshot: None,
             log_version: None,
         };
+        let detail = c.detail.clone();
         let (id, seq, log_version) = match sink
             .writer
             .write(&caller, "agents/step", move |tx| {
@@ -1859,6 +2049,10 @@ async fn write_steps(
                 end.log_version = Some(norn::write::meta::version(tx.sql())? as i64);
                 let log_version = end.log_version;
                 table::close(tx, id, end)?;
+                if let Some(mut d) = detail {
+                    d.step = id;
+                    norn::write::work::put_step_detail(tx, d)?;
+                }
                 let seq: i64 =
                     tx.sql()
                         .query_row("select seq from step where id = ?1", [id], |r| r.get(0))?;
@@ -1908,7 +2102,76 @@ async fn write_steps(
             cache_write: Some(c.cache_write as u64),
             cost: c.cost,
             cost_unit: None,
+            detail: c.detail.as_ref().map(crate::work::detail::wire),
         };
+        // the files the step was in: the presence model (a shell step's command looked up off the async threads)
+        if let Some(live) = &sink.presence
+            && id != 0
+            && (c.detail.is_some() || c.command.is_some())
+        {
+            let (d, cmd, dir) = (c.detail.clone(), c.command.clone(), ctx.cwd.clone());
+            let files = tokio::task::spawn_blocking(move || {
+                crate::work::presence::touches_of_step(d.as_ref(), cmd.as_deref(), &dir)
+            })
+            .await
+            .unwrap_or_default();
+            if !files.is_empty() {
+                let changed = live.apply(crate::work::presence::PresenceEv::Step {
+                    session: ctx.session.clone(),
+                    step: id,
+                    at: step.start,
+                    files,
+                });
+                if let Some(map) = &sink.map {
+                    map.presence(&live.now_in(&changed));
+                }
+            }
+        }
+        // the step's class is the agent card's activity
+        if let Some(map) = &sink.map
+            && id != 0
+        {
+            map.step(&ctx.session, id, &step.class, step.start);
+        }
+        // a snapshot was taken (an edit, or the turn's first step): the worktree's changed files reach the map's
+        // overlaps, also once the edit is no longer in flight
+        if let Some(map) = &sink.map
+            && step.snapshot.is_some()
+        {
+            map.edited(&ctx.session).await;
+        }
+        // a conclusion's tool step is written, or the turn ended: the stamps that are due
+        if let Some(stamps) = &sink.stamps {
+            use crate::work::conclusions::StampEv;
+            let mut due = Vec::new();
+            if c.open.mcp && id != 0 {
+                due.extend(stamps.step(StampEv::StepClosed {
+                    session: ctx.session.clone(),
+                    step: c.open.key,
+                    id,
+                }));
+            }
+            if step.turn_id.is_some() {
+                due.extend(stamps.step(StampEv::TurnEnd {
+                    session: ctx.session.clone(),
+                }));
+            }
+            crate::work::conclusions::put(&sink.writer, due).await;
+        }
+        // a spec an agent just wrote is stored at once, not at the next scan
+        if let (Some(tools), Some(d)) = (&sink.tools, &c.detail)
+            && d.kind.as_deref() == Some("edit")
+            && let Some(p) = &d.path
+        {
+            crate::work::specs::on_written(
+                &sink.writer,
+                tools,
+                sink.asks.as_ref(),
+                &ctx.session,
+                &ctx.cwd.join(p),
+            )
+            .await;
+        }
         // a shell step may have committed: link the new commits to the decisions this session recorded
         if let Some(task) = &ctx.task
             && step.class == StepClass::Tool
@@ -2233,16 +2496,45 @@ impl Session {
                 .collect();
             (st.seq, entries)
         };
-        self.editors.broadcast(
-            "agent",
-            json!({"id": self.id, "seq": seq, "session": self.snapshot()}),
-        );
-        if !entries.is_empty() {
-            self.editors.broadcast(
-                "agent-entries",
-                json!({"id": self.id, "seq": seq, "entries": entries}),
-            );
+        let snapshot = self.snapshot();
+        if self.map.open() {
+            self.map.session(&snapshot, &self.subagents());
         }
+        self.editors.broadcast_agent(
+            &self.id,
+            json!({"id": self.id, "seq": seq, "session": snapshot}),
+        );
+        if entries.is_empty() {
+            return;
+        }
+        let subscribers = self.editors.entry_subscribers(&self.id);
+        if subscribers.is_empty() {
+            return;
+        }
+        let entries: Vec<(u64, Entry)> = entries
+            .iter()
+            .map(|(i, e)| (*i, super::wire::public_entry(e)))
+            .collect();
+        let data = json!({"id": self.id, "seq": seq, "entries": entries});
+        for conn in subscribers {
+            self.editors.send_to(conn, "agent-entries", data.clone());
+        }
+    }
+
+    /// Connection CONN gets this session's entries from now on; the change number they continue from.
+    pub(crate) fn subscribe_entries(&self, conn: u64) -> u64 {
+        // the number is read under the same lock the dirty set is drained under, so no entry falls between
+        let st = lock(&self.state);
+        self.editors.subscribe_entries(&self.id, conn);
+        st.seq
+    }
+
+    /// The raw input of tool call TOOL_CALL, capped.
+    pub(crate) fn tool_input(&self, tool_call: &str) -> Option<(Value, bool)> {
+        let st = lock(&self.state);
+        let idx = *st.tools.get(tool_call)?;
+        let raw = st.entries.get(idx)?.rest.get("rawInput")?;
+        Some(super::wire::capped_tool_input(raw))
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -2267,6 +2559,7 @@ impl Session {
             exit: st.exit,
             stderr: st.stderr.clone(),
             entries_count: Some(st.entries.len() as u64),
+            turns: Some(st.turns),
             enforced: Some(self.enforced),
             enforced_why: self.enforced_why.clone(),
             role: Some(self.role),
@@ -2353,12 +2646,33 @@ impl Session {
                             );
                             self.budgets.notify(hits);
                         }
-                        let stepped = {
+                        let (stepped, begun) = {
                             let mut st = lock(&self.state);
                             st.apply(&v);
-                            std::mem::take(&mut st.tool_ended)
-                                .then(|| st.turn_step(TurnEvent::ToolCompleted))
+                            let begun = std::mem::take(&mut st.mcp_begun);
+                            (
+                                std::mem::take(&mut st.tool_ended)
+                                    .then(|| st.turn_step(TurnEvent::ToolCompleted)),
+                                begun,
+                            )
                         };
+                        // a conclusion's tool step began: the stamp core pairs it with its MCP call
+                        for (key, tool_name) in begun {
+                            let s = self
+                                .stamps
+                                .step(crate::work::conclusions::StampEv::ToolStep {
+                                    session: self.id.clone(),
+                                    step: key,
+                                    tool_name,
+                                    at: now(),
+                                });
+                            if !s.is_empty() {
+                                let w = self.writer.clone();
+                                tokio::spawn(
+                                    async move { crate::work::conclusions::put(&w, s).await },
+                                );
+                            }
+                        }
                         self.drain_steps();
                         if let Some(s) = stepped {
                             // the pause after a tool call: the turn ends here, the queue waits
@@ -2523,7 +2837,13 @@ impl Session {
         card: Option<i64>,
         turn: u64,
     ) {
-        let tool = req.get("toolCall").cloned();
+        // an editor never gets a tool call's raw input (a Write carries the file)
+        let tool = req.get("toolCall").cloned().map(|mut t| {
+            if let Some(o) = t.as_object_mut() {
+                o.remove("rawInput");
+            }
+            t
+        });
         let request = self.next_request.fetch_add(1, Ordering::Relaxed);
         let public = Permission {
             id: Some(match card {
@@ -3008,6 +3328,7 @@ impl Session {
     /// Turn TURN of ITEM began (its entry and step are in the state): its prompt goes to the agent.
     fn start_turn(self: &Arc<Self>, turn: u64, item: Queued) {
         self.wait_refusals.store(0, Ordering::Relaxed);
+        lock(&self.state).turns += 1;
         self.persist_queue();
         self.flush_transcript();
         self.changed();
@@ -3027,6 +3348,21 @@ impl Session {
         }
         // its entry is the agent's now: in the transcript file too
         self.flush_transcript();
+        // the user's words reach the agent: its current ask from here on (told before the agent can write)
+        if item.origin == Origin::User {
+            let (session, text, at) = (self.id.clone(), item.text.clone(), now());
+            self.asks.send(if item.steer {
+                crate::work::asks::AskEv::SteerDelivered { session, text, at }
+            } else {
+                crate::work::asks::AskEv::UserMessage {
+                    session,
+                    text,
+                    channel: self.ask_channel().into(),
+                    message_id: item.key.clone(),
+                    at,
+                }
+            });
+        }
         let block = json!({"type": "text", "text": item.origin.frame(&item.text)});
         let blocks = serde_json::from_value(json!([block])).unwrap_or_default();
         let out = self.conn.prompt(&self.acp, blocks, None).await;
@@ -3089,7 +3425,9 @@ impl Session {
             let stepped = st.turn_step(ev);
             (stepped, st.core.ending())
         };
-        if let Some(m) = message.filter(|m| m.contains("drgnx-report") && self.task.is_some()) {
+        if let Some(m) = message.filter(|m| {
+            (m.contains("drgnx-report") || m.contains("drgnx-conclusion")) && self.task.is_some()
+        }) {
             let (w, sid, task, job) = (
                 self.writer.clone(),
                 self.id.clone(),
@@ -3107,6 +3445,17 @@ impl Session {
                 .await
                 {
                     tracing::warn!(sid, "fallback report not submitted: {e}");
+                }
+                if let Some(Err(e)) = crate::runner::effects::record_conclusion_fallback(
+                    &w,
+                    &sid,
+                    task.as_deref(),
+                    job.as_deref(),
+                    &m,
+                )
+                .await
+                {
+                    tracing::warn!(sid, "fallback conclusion not recorded: {e}");
                 }
             });
         }
@@ -3311,17 +3660,89 @@ pub async fn stop(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
     if r.is_ok() && ends {
         gateway_gone(f, p.id.as_str()).await;
         let _ = f.mcp.close(p.id.as_str()).await;
+        asks_gone(f, p.id.as_str());
     }
     r
+}
+
+/// `agents/entries/subscribe`: the caller's connection gets the session's entries from now on.
+pub fn entries_subscribe(
+    f: &Front,
+    c: &Caller,
+    p: runstav::methods::agents::SessionRef,
+) -> Result<runstav::methods::agents::EntriesSubscribed, Error> {
+    let s = f.core.agents.find(p.session.as_str())?;
+    Ok(runstav::methods::agents::EntriesSubscribed {
+        seq: s.subscribe_entries(c.conn_id),
+    })
+}
+
+/// `agents/entries/unsubscribe`.
+pub fn entries_unsubscribe(
+    f: &Front,
+    c: &Caller,
+    p: runstav::methods::agents::SessionRef,
+) -> Result<bool, Error> {
+    f.editors.unsubscribe_entries(p.session.as_str(), c.conn_id);
+    Ok(true)
+}
+
+/// `agents/tool-input`: a tool call's raw input, capped.
+pub fn tool_input(
+    f: &Front,
+    _: &Caller,
+    p: runstav::methods::agents::ToolInputParams,
+) -> Result<runstav::methods::agents::ToolInput, Error> {
+    let s = f.core.agents.find(p.session.as_str())?;
+    let (raw_input, truncated) = s
+        .tool_input(&p.tool_call)
+        .ok_or_else(|| invalid("tool_call", "a tool call of this session with a raw input"))?;
+    Ok(runstav::methods::agents::ToolInput {
+        raw_input,
+        truncated,
+    })
+}
+
+/// `agents/pause`: the turn is cancelled once the tool call running now completes.
+pub fn pause(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
+    f.core.agents.cancel_after_tool(p.id.as_str())?;
+    Ok(true)
 }
 
 pub async fn kill(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
     let r = f.core.agents.kill(p.id.as_str()).await;
     if r.is_ok() {
         gateway_gone(f, p.id.as_str()).await;
+        asks_gone(f, p.id.as_str());
     }
     let _ = f.mcp.close(p.id.as_str()).await;
     r
+}
+
+/// Session SID ended: it has no current ask any more (the workers it started keep theirs), and it is in no file now.
+fn asks_gone(f: &Front, sid: &str) {
+    f.core
+        .asks
+        .handle()
+        .send(crate::work::asks::AskEv::SessionGone {
+            session: sid.to_string(),
+        });
+    let changed = f
+        .core
+        .presence
+        .apply(crate::work::presence::PresenceEv::SessionEnd {
+            session: sid.to_string(),
+        });
+    f.core.map.presence(&f.core.presence.now_in(&changed));
+}
+
+/// The sessions the hub recorded, with their folders (the presence model's rebuild at start).
+pub(crate) async fn recorded(hub: &super::Hub) -> Vec<(String, PathBuf)> {
+    read_rows(hub, None)
+        .await
+        .into_iter()
+        .map(|r| (r.0, PathBuf::from(r.4)))
+        .collect()
 }
 
 /// Session SID is gone: its gateway token no longer forwards and its jobs are no longer booked.
@@ -3683,6 +4104,11 @@ mod tests {
             bus,
             snap: None,
             scopes: None,
+            tools: None,
+            asks: None,
+            stamps: None,
+            presence: None,
+            map: None,
         };
         tokio::spawn(write_steps(rx, sink, ctx));
         let open = |class, tool: Option<&str>| OpenStep {
@@ -3692,6 +4118,9 @@ mod tests {
             tool_kind: None,
             tool_id: None,
             message_id: None,
+            key: 0,
+            mcp: false,
+            parent_tool: None,
         };
         for (class, tool, turn) in [
             (StepClass::Think, None, None),
@@ -3706,6 +4135,8 @@ mod tests {
                 cache_read: 0,
                 cache_write: 0,
                 cost: None,
+                detail: None,
+                command: None,
             })
             .unwrap();
         }
@@ -3764,6 +4195,11 @@ mod tests {
             bus: tokio::sync::broadcast::channel(16).0,
             snap: Some(crate::timeline::Snap::for_test(dir.join("cp"), settings)),
             scopes: None,
+            tools: None,
+            asks: None,
+            stamps: None,
+            presence: None,
+            map: None,
         };
         let ctx = StepCtx {
             session: "a1".into(),
@@ -3781,6 +4217,9 @@ mod tests {
             tool_kind: kind.map(str::to_string),
             tool_id: None,
             message_id: Some("m1".into()),
+            key: 0,
+            mcp: false,
+            parent_tool: None,
         };
         for (o, end, turn) in [
             (open(StepClass::Think, None, 1.0), 2.0, None),
@@ -3796,6 +4235,8 @@ mod tests {
                 cache_read: 0,
                 cache_write: 0,
                 cost: None,
+                detail: None,
+                command: None,
             })
             .unwrap();
         }
