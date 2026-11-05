@@ -45,7 +45,9 @@ concurrency:
 # The cargo caches (docs/develop/ci.md, "What is cached"): keyed by the job, the toolchain and the hash of Cargo.lock
 # and the manifests, restored from the newest entry of the same job and toolchain when the lock moved (cargo rebuilds
 # whatever is stale); saved at the end of a job whose build passed, after .github/ci/cargo-prune.sh dropped what every
-# run rebuilds. Saved by main and ci/* runs, never a pull request's. No incremental data: CI never reuses it. Each entry carries the commit it was built from (runtime/target/.drgnx-built-from): after the
+# run rebuilds. Saved by main and ci/* runs, and by a pull request from a branch of this repository (GitHub scopes its
+# cache to the pull request's merge ref: main never restores it); never by a fork's pull request. No incremental data:
+# CI never reuses it. Each entry carries the commit it was built from (runtime/target/.drgnx-built-from): after the
 # restore, .github/ci/commit-times.sh gives each tracked file its last commit's time and leaves what changed since
 # then new, so cargo rebuilds only that (a checkout's files all carry its time); the checkouts fetch the whole history
 # for it (fetch-depth 0, no old file contents). `mt1` in the keys: the entries that carry that commit.
@@ -56,7 +58,7 @@ env:
   CARGO_TERM_COLOR: never
   CARGO_INCREMENTAL: "0"
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
-  CACHE_SAVE: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/ci/')) }}
+  CACHE_SAVE: ${{ (github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/ci/'))) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
 
 jobs:
   linux:

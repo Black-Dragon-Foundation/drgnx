@@ -331,9 +331,12 @@
                              (string-match-p "steps\\.rv\\.outputs\\.v\\|1\\.88\\.0\\|env\\.NIGHTLY" rk))
                         (string-prefix-p "fuzz-corpus-" rk)))))))))
 
-;; A cache is written only by a trusted run (a push or a manual run of main, ci/* or, from Nidhogg, nidhogg-31; the
-;; daily run), never by a pull request, and the cargo caches are pruned first (.github/ci/cargo-prune.sh).
-(ert-deftest drgnx-ci/no-pull-request-writes-a-cache ()
+;; A cache is written only by a trusted run (a push or a manual run of main or ci/*, the daily run, or a pull request
+;; from a branch of this repository, whose cache GitHub scopes to its merge ref), never by a fork's pull request, and
+;; the cargo caches are pruned first (.github/ci/cargo-prune.sh).
+(defconst drgnx-ci-test--own-pr "github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository")
+
+(ert-deftest drgnx-ci/no-fork-pull-request-writes-a-cache ()
   (dolist (yml (drgnx-ci-test--workflows-and-actions
                 '("ci.yml" "macos.yml" "gui.yml" "drgnx-tiers.yml" "tty.yml" "images.yml" "bootstrap.yml" "runtime.yml")))
     (skip-unless yml)
@@ -342,15 +345,23 @@
                   (string-search "github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')" c))))
     ;; an action the tiers run on another commit than the workflow's own (Nidhogg's drgnx_ref) saves only its own
     (when (string-search "inputs.dir" yml)
-      (dolist (c (drgnx-ci-test--matches "if: \\(.*\\)\n *uses: actions/cache/save@" yml))
+      (dolist (c (append (drgnx-ci-test--matches "if: \\(.*\\)\n *uses: actions/cache/save@" yml)
+                         (drgnx-ci-test--matches "id: prune\n *if: \\(.*\\)\n" yml)))
         (unless (string-search "steps.prune.outcome == 'success'" c)
-          (should (string-search "steps.own.outputs.commit == github.sha" c)))))
+          (should (string-search "steps.own.outputs.commit == (github.event.pull_request.head.sha || github.sha)" c))
+          (should (string-search "github.repository == 'Black-Dragon-Foundation/drgnx'" c)))))
+    ;; a pull request saves only when its head is a branch of this repository
+    (dolist (c (append (drgnx-ci-test--matches "if: \\(.*\\)\n *uses: actions/cache/save@" yml)
+                       (drgnx-ci-test--matches "id: prune\n *if: \\(.*\\)\n" yml)))
+      (when (string-search "'pull_request'" c)
+        (should (string-search drgnx-ci-test--own-pr c))))
     (dolist (c (drgnx-ci-test--matches "id: prune\n *if: \\(.*\\)\n" yml))
       (should (or (string-search "env.CACHE_SAVE == 'true'" c)
                   (string-search "github.event_name != 'pull_request' && (" c)))))
   (let ((rt (drgnx-ci-test--yml "runtime.yml")))
     (skip-unless rt)
-    (drgnx-ci-test--has rt "CACHE_SAVE: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/ci/')) }}"
+    (drgnx-ci-test--has rt (concat "CACHE_SAVE: ${{ (github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/ci/'))) || ("
+                                   drgnx-ci-test--own-pr ") }}")
                         "CARGO_INCREMENTAL: \"0\"")))
 
 (ert-deftest drgnx-ci/a-restored-target-sees-unchanged-files-as-old ()
@@ -401,9 +412,10 @@
     (should (= 1 (length (drgnx-ci-test--matches "uses: \\(actions/cache/restore@\\)" bins))))
     (should (string-match "id: prune\n *if: \\(.*\\)\n" bins))
     (let ((cond (match-string 1 bins)))
-      (dolist (s '("github.event_name != 'pull_request'" "github.ref == 'refs/heads/main'"
-                   "startsWith(github.ref, 'refs/heads/ci/')" "steps.own.outputs.commit == github.sha"
-                   "github.repository == 'Black-Dragon-Foundation/drgnx'"))
+      (dolist (s (list "github.event_name != 'pull_request'" "github.ref == 'refs/heads/main'"
+                       "startsWith(github.ref, 'refs/heads/ci/')" drgnx-ci-test--own-pr
+                       "steps.own.outputs.commit == (github.event.pull_request.head.sha || github.sha)"
+                       "github.repository == 'Black-Dragon-Foundation/drgnx'"))
         (should (string-search s cond)))
       (should-not (string-search "nidhogg-31" cond)))
     ;; the binaries stay for the upload; the save takes the restore's key

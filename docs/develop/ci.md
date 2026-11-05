@@ -177,7 +177,8 @@ commit (`github.sha`), never for a `drgnx_ref` another repository's run names:
 
 - `build-test-bins`: Ratatoskr with the test hooks, `ratatoskr-mock` and huginn's `dump`, with a cargo cache
   (`cargo-OS-drgnx-test-bins-TOOLCHAIN-HASH`, [What is cached](#what-is-cached)) saved by a push or manual run of `main`
-  or a `ci/*` branch, never by a pull request (Nidhogg's run restores it and never writes). `bins-linux` runs it once, for `unit`, `no-lisp-writes`, `hub-chaos`, `ui` and `perf` (whose agent workloads start a hub with
+  or a `ci/*` branch, or a pull request from a branch of this repository, never by a fork's (Nidhogg's run restores
+  it and never writes). `bins-linux` runs it once, for `unit`, `no-lisp-writes`, `hub-chaos`, `ui` and `perf` (whose agent workloads start a hub with
   `ratatoskr-mock` beside it), and uploads the binaries (`drgnx-test-bins-linux`, kept a day); `macos` runs it itself (one macOS job, so no second macOS runner for it: GitHub's free plan runs 5 at once).
 - `fetch-test-bins`: puts them back under the checkout's `runtime/target/debug` (so `bin/drgnx test --container` sees
   them at `/src`, `ratatoskr-mock` beside Ratatoskr) and sets `DRGNX_RATATOSKR_BIN` and `DRGNX_HUGINN_DUMP`.
@@ -384,10 +385,12 @@ until the lock or the toolchain moves, and more crates rebuild as `main` moves o
 cargo copies them out of `deps/` again), incremental data (CI builds with `CARGO_INCREMENTAL=0`) and the registry's
 unpacked sources. It never fails a job: what it cannot work out it leaves, with a warning. A job saves at its
 end when its build passed, whatever its tests said (a red test keeps the build), and only when its key was not
-already there. Who saves (`CACHE_SAVE` in `runtime.yml`): pushes and manual runs of `main` and `ci/*`, never a pull
-request, so an untrusted change never writes what a trusted run reads; GitHub scopes a `ci/*` branch's entries to
-itself (it reads its own and `main`'s), and the fuzz corpora are grown by the daily run and `main` only. A `ci/*`
-branch whose lock matches `main`'s restores `main`'s entry under the exact key and saves nothing. CI builds
+already there. Who saves (`CACHE_SAVE` in `runtime.yml`, and the actions' own conditions): pushes and manual runs of
+`main` and `ci/*`, and pull requests from a branch of this repository. A fork's pull request never saves, so an
+untrusted change never writes what a trusted run reads, and neither does a `drgnx_ref` another repository's run names.
+GitHub scopes a `ci/*` branch's entries to itself and a pull request's to its merge ref (each reads its own and
+`main`'s, and `main` reads neither), and the fuzz corpora are grown by the daily run and `main` only. A pull request or
+a `ci/*` branch whose lock matches `main`'s restores `main`'s entry under the exact key and saves nothing. CI builds
 with line tables only (`CARGO_PROFILE_DEV_DEBUG=line-tables-only`: backtraces keep file and line), which halves the
 kept build: the `linux` job's test build is 2.6 GB on disk and 0.6 GB compressed, against 5.3 GB and 1.1 GB with full
 debug info. So `main`'s entries stay well inside the 10 GB with room for one branch's. More inputs
@@ -410,7 +413,7 @@ Deliberately not cached:
 A new `actions/cache` step needs a `key` with `hashFiles(...)` of its inputs (a save takes its restore's
 `cache-primary-key`) and `restore-keys` only where a partial match cannot change a result (cargo's, with the toolchain
 in it; the corpora); `drgnx-ci/every-actions-cache-key-hashes-its-inputs` checks it,
-`drgnx-ci/no-pull-request-writes-a-cache` the saves' conditions,
+`drgnx-ci/no-fork-pull-request-writes-a-cache` the saves' conditions,
 `drgnx-ci/a-restored-target-sees-unchanged-files-as-old` the commit times, and
 `drgnx-ci/prebuilt-images-are-addressed-by-their-containerfile-hash` checks the image tags.
 

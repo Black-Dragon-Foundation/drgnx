@@ -14,9 +14,10 @@ runs:
   steps:
     # Keyed by the toolchain and the hash of Cargo.lock and the manifests, restored from the newest entry of the same
     # toolchain when they moved (cargo rebuilds whatever is stale). Saved, without what every run rebuilds
-    # (.github/ci/cargo-prune.sh), by a push or a manual run of `main` or a `ci/*` branch, and only when the checkout is
-    # the workflow's own commit; never by a pull request, and never for another repository's run (Nidhogg's calls
-    # drgnx-tiers.yml with a drgnx commit of its choosing: it restores, it never writes).
+    # (.github/ci/cargo-prune.sh), by a push or a manual run of `main` or a `ci/*` branch, or a pull request from a
+    # branch of this repository (GitHub scopes its cache to the pull request's merge ref: main never restores it), and
+    # only when the checkout is the run's own commit; never by a fork's pull request, and never for another
+    # repository's run (Nidhogg's calls drgnx-tiers.yml with a drgnx commit of its choosing: it restores, never writes).
     # `mt1` in the key: the entries carry the commit they were built from (.drgnx-built-from, for commit-times.sh).
     - id: own
       shell: bash
@@ -56,7 +57,7 @@ runs:
         echo "DRGNX_HUGINN_DUMP=$t/examples/dump" >> "$GITHUB_ENV"
     # --keep-bins: the job uploads or runs them next
     - id: prune
-      if: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/ci/')) && steps.own.outputs.commit == github.sha && github.repository == 'Black-Dragon-Foundation/drgnx' && steps.bins-cache.outputs.cache-hit != 'true' }}
+      if: ${{ ((github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/ci/'))) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && steps.own.outputs.commit == (github.event.pull_request.head.sha || github.sha) && github.repository == 'Black-Dragon-Foundation/drgnx' && steps.bins-cache.outputs.cache-hit != 'true' }}
       shell: bash
       env:
         DIR: ${{ inputs.dir }}
