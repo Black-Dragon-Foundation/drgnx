@@ -1053,7 +1053,7 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   out (`{"id", "vectors"}` or `{"id", "error"}`), first `{"ready": {"device", "name", "why"}}`, and `{"fallback": {"from",
   "reason"}}` when a lost GPU sends the batch again on the CPU path. A query that arrives during a request is answered
   before its next batch. It runs at nice 10, caps its address space at 2 GiB on the CPU path (llvmpipe could not start a
-  thread under the cap, so the GPU path runs without it). On the GPU path it reads its peak resident memory (`VmHWM`)
+  thread under the cap, so the GPU path runs without it). On the GPU path it reads its peak resident memory (`getrusage`'s `ru_maxrss`, so on macOS too)
   before each batch instead: over 1.5 GiB it answers the request with the reason and `"exit": true` and exits, and the hub
   starts a fresh worker for the next request (no crash is counted, nothing is retried). It also exits after 300 s idle and
   at the end of its stdin. The hub
@@ -1091,6 +1091,14 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   is pulled. Nothing in the hub's idle paths reaches a start. With test-hooks the runner only records the commands in
   `$XDG_STATE_HOME/drgnx/servers-test.log`. The macOS Ollama start (`launchctl start com.ollama.ollama`) is unverified
   on a Mac.
+- **The eval (`hrafn::eval`, `ratatoskr search eval`).** `eval gen ROOT` makes questions from the project's own history
+  (commit subjects without ticket ids, dropping those that name an identifier; the answer is the top-level forms the
+  commit changed, found again at HEAD by name) into `runtime/crates/hrafn/eval/<project>/{dev,test}.jsonl`, which are
+  frozen once written. `eval run ROOT --model ID --device cpu|gpu:ADAPTER` indexes the project into a scratch store,
+  embeds it in-process with the model, asks the set and prints MRR@10 and nDCG@10 (chunk level) and recall@5/@10 (file
+  level) with bootstrap intervals per stratum, and writes the run as JSON. `eval compare A.json B.json` is the gate:
+  the lower bound of the paired MRR@10 difference must be at least -0.01 overall and -0.03 per stratum, the index has no
+  coverage error and exact-symbol recall@1 is 1.0. It needs no hub.
 - **The MCP tool (`search/mcp.rs`).** A session whose `mcp/session` came while `drgnx-agents-mcp` holds `search` gets
   `search.sock` beside `mcp.sock` (recorded in the session's row, so it is bound again at a restart and closed with the
   session): the `search` tool (`query`, `scope`, `k`), pinned to the session's `cwd`. The agent's `mcpServers` list it
@@ -1104,8 +1112,9 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   chunks covered, else the built-in model (unless `drgnx-search-builtin` is nil), else an answering server whatever it
   covers. `embed::answered_family` is the doctor's probe of which address family answers; `localhost` of a local
   server's URL is used as `127.0.0.1`. The hub never starts a server. The entity embedder (`embed::run`) fills with the
-  first embedder in line that answers, a server before the built-in model, because `entity_vec` holds one vector per
-  entity. `ratatoskr-mock embed` is the test stand-in for TEI and Ollama (`tests/search_prefer.rs`).
+  first embedder in line that answers, a server before the built-in model, and each model keeps its own vector
+  (`entity_vec` is keyed `(n, model)`), so a server that comes back finds its vectors still there.
+  `ratatoskr-mock embed` is the test stand-in for TEI and Ollama (`tests/search_prefer.rs`).
 
 Tests read the real models from a read-only volume (`DRGNX_TEST_MODELS`) and **fail** when it's unset; they never skip.
 `tests/fixtures/<model>.json` holds what CI can't make: reference vectors for token-id lists of 1, 2, 128, 129, 130, 1,023
