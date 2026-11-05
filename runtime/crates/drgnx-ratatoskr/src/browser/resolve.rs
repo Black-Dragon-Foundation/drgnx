@@ -5,7 +5,7 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::settings::RuntimeValues;
 
@@ -184,11 +184,12 @@ fn version_output(program: &Path) -> Option<String> {
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
-    let deadline = Instant::now() + VERSION_TIMEOUT;
+    // a blocking wait on a program outside the hub: real time, which a virtual clock would never end
+    let deadline = crate::clock::real_now() + VERSION_TIMEOUT;
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
-            Ok(None) if Instant::now() < deadline => {
+            Ok(None) if crate::clock::real_now() < deadline => {
                 std::thread::sleep(Duration::from_millis(20));
             }
             _ => {

@@ -11,7 +11,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use fastwebsockets::{FragmentCollector, Frame, OpCode, Payload, Role, WebSocket};
 use norn::matrix::{Verdict, Who};
@@ -24,6 +24,7 @@ use tokio::sync::mpsc;
 use crate::agents::launch;
 use crate::agents::lock::{Enforced, LaunchPlan};
 use crate::agents::net::{BrowserHub, CheckHooks, SessionNet, pins, start_browser_with};
+use crate::clock;
 use crate::front::Front;
 use crate::matrix_gate::Gate;
 
@@ -73,7 +74,7 @@ fn failed(browser: Option<Value>, why: String) -> CheckResult {
 }
 
 fn now() -> u64 {
-    std::time::SystemTime::now()
+    crate::clock::wall()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
 }
@@ -92,10 +93,10 @@ fn names_sys(line: &str) -> bool {
 /// Run the check, keep its result for the doctor and answer it.  Never fails: a check that could not run is a result
 /// with `ok: false` and `why`.
 pub async fn run(front: &Front) -> CheckResult {
-    let started = Instant::now();
+    let started = clock::now();
     let mut pid = None;
     let mut browser = None;
-    let outcome = tokio::time::timeout(DEADLINE, attempt(front, &mut pid, &mut browser)).await;
+    let outcome = clock::timeout(DEADLINE, attempt(front, &mut pid, &mut browser)).await;
     if let Some(pid) = pid {
         draugr::kill_group(pid, Duration::ZERO, &draugr::RealSignaller).await;
     }
@@ -106,7 +107,7 @@ pub async fn run(front: &Front) -> CheckResult {
             browser,
             format!(
                 "the check did not finish within {} s",
-                started.elapsed().as_secs()
+                clock::now().saturating_duration_since(started).as_secs()
             ),
         ),
     };
@@ -271,7 +272,7 @@ async fn session(
 
 /// The scope's peak memory, when its manager says (`systemctl --user show -P MemoryPeak`, within 2 s).
 async fn peak(unit: &str) -> Option<u64> {
-    let out = tokio::time::timeout(
+    let out = clock::timeout(
         Duration::from_secs(2),
         tokio::process::Command::new("systemctl")
             .args(["--user", "show", "-P", "MemoryPeak", unit])
@@ -291,7 +292,7 @@ async fn screenshot(
     sock: &std::path::Path,
     secret: &crate::browser::Secret,
 ) -> Result<(u64, u64), String> {
-    let t0 = Instant::now();
+    let t0 = clock::now();
     let mut s = UnixStream::connect(sock)
         .await
         .map_err(|e| format!("the broker's socket: {e}"))?;
@@ -307,7 +308,7 @@ async fn screenshot(
     let mut got = Vec::new();
     while !got.ends_with(b"\r\n\r\n") {
         let mut b = [0u8; 1];
-        let n = tokio::time::timeout(STEP, s.read(&mut b))
+        let n = clock::timeout(STEP, s.read(&mut b))
             .await
             .map_err(|_| "the broker did not answer".to_owned())?
             .map_err(|e| format!("the broker: {e}"))?;
@@ -332,7 +333,8 @@ async fn screenshot(
         None,
     )
     .await?;
-    let start_ms = u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let start_ms =
+        u64::try_from(clock::now().saturating_duration_since(t0).as_millis()).unwrap_or(u64::MAX);
     let target_id = target["targetId"].as_str().ok_or("no target id")?;
     let attached = call(
         &mut ws,
@@ -371,10 +373,10 @@ async fn call(
     ws.write_frame(Frame::text(Payload::Owned(msg.to_string().into_bytes())))
         .await
         .map_err(|e| format!("{method}: {e}"))?;
-    let deadline = Instant::now() + STEP;
+    let deadline = clock::now() + STEP;
     loop {
-        let left = deadline.saturating_duration_since(Instant::now());
-        let f = tokio::time::timeout(left, ws.read_frame())
+        let left = deadline.saturating_duration_since(clock::now());
+        let f = clock::timeout(left, ws.read_frame())
             .await
             .map_err(|_| format!("{method}: no answer within {} s", STEP.as_secs()))?
             .map_err(|e| format!("{method}: {e}"))?;

@@ -32,8 +32,8 @@ impl Nevers {
     /// [`emacs_server_dirs`]).  Call it inside a tokio runtime.
     pub fn start(&self, dirs: Vec<PathBuf>) {
         self.never.set_server_dirs(dirs);
-        tokio::spawn(self.host_addrs.clone().run());
-        tokio::spawn(self.never.clone().run());
+        crate::clock::spawn("browser:host-addrs", self.host_addrs.clone().run());
+        crate::clock::spawn("browser:nevers", self.never.clone().run());
     }
 }
 
@@ -77,7 +77,7 @@ impl HostAddrsWatch {
     pub async fn run(self) {
         loop {
             self.refresh();
-            tokio::time::sleep(HOST_ADDRS_EVERY).await;
+            crate::clock::sleep(HOST_ADDRS_EVERY).await;
         }
     }
 }
@@ -175,7 +175,7 @@ impl NeverSetWatch {
     pub async fn run(self) {
         loop {
             self.read_emacs();
-            tokio::time::sleep(EMACS_EVERY).await;
+            crate::clock::sleep(EMACS_EVERY).await;
         }
     }
 }

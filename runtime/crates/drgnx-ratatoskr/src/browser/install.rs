@@ -294,7 +294,7 @@ pub(crate) async fn install_with(
         version: pin.version.clone(),
         released: pin.released.clone(),
         sha256: expected.clone(),
-        at: std::time::SystemTime::now()
+        at: crate::clock::wall()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs()),
         binary: binary_rel.clone(),
@@ -488,7 +488,7 @@ async fn over_http(
     }
     let mut body = resp.into_body();
     loop {
-        let frame = tokio::time::timeout(STALL, body.frame())
+        let frame = crate::clock::timeout(STALL, body.frame())
             .await
             .map_err(|_| InstallError::Network("the server stopped sending".into()))?;
         match frame {

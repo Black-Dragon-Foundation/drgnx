@@ -399,7 +399,8 @@ impl StderrSink {
         let over = tail.len().saturating_sub(STDERR_TAIL_MAX);
         tail.drain(..over);
         if last.is_none_or(|t| t.elapsed() >= STDERR_EVERY) {
-            *last = Some(Instant::now());
+            // the browser host is its own process, outside the hub's clock
+            *last = Some(crate::clock::real_now());
             // the file first: whoever reads the event finds the line in it
             write_tail(&self.path, tail);
             self.out

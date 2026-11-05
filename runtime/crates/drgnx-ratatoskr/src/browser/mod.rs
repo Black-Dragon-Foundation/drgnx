@@ -81,7 +81,7 @@ pub fn over_high(current: u64, cap: u64, high: u32) -> bool {
 /// percent of CAP, STOP is called (`BrokerHandle::stop("memory")`, which does nothing while the browser is not
 /// running). It ends when the cgroup goes, or when STOP says the session is gone (false).
 pub async fn memory_watch(unit: String, cap: u64, high: u32, stop: impl Fn() -> bool) {
-    let cg = tokio::time::timeout(
+    let cg = crate::clock::timeout(
         std::time::Duration::from_secs(2),
         tokio::process::Command::new("systemctl")
             .args(["--user", "show", "-P", "ControlGroup", &unit])
@@ -119,7 +119,7 @@ pub async fn watch_memory_file(
 ) {
     let mut above = false;
     loop {
-        tokio::time::sleep(every).await;
+        crate::clock::sleep(every).await;
         let Some(current) = tokio::fs::read_to_string(file)
             .await
             .ok()

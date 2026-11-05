@@ -286,7 +286,7 @@ async fn run(mut a: Asker, mut rx: mpsc::Receiver<ProxyEvent>, mut answers: watc
             .map(|e| Duration::from_secs_f64((e - now).clamp(0.0, 86_400.0) + 0.05));
         let expired = async {
             match wake {
-                Some(d) => tokio::time::sleep(d).await,
+                Some(d) => crate::clock::sleep(d).await,
                 None => std::future::pending().await,
             }
         };
@@ -647,9 +647,7 @@ async fn status_event(w: &Writer, sid: &str, method: &'static str, summary: Stri
 }
 
 fn now_secs() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0.0, |d| d.as_secs_f64())
+    crate::clock::wall_secs()
 }
 
 #[cfg(test)]

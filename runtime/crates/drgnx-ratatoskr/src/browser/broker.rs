@@ -43,6 +43,7 @@ use tokio::sync::{Notify, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
+use crate::clock;
 use crate::conn::peer_allowed;
 use crate::matrix_gate::Gate;
 
@@ -206,8 +207,11 @@ fn spawn(cfg: BrokerCfg, listener: UnixListener, host: Option<UnixStream>) -> Br
         Some(h) => {
             let (rd, wr) = h.into_split();
             let (tx, rx) = mpsc::channel::<Vec<u8>>(64);
-            tokio::spawn(host_writer(wr, rx));
-            tokio::spawn(host_reader(rd, cfg.max_message + FRAME_SLACK, host_ev));
+            clock::spawn("browser:host-writer", host_writer(wr, rx));
+            clock::spawn(
+                "browser:host-reader",
+                host_reader(rd, cfg.max_message + FRAME_SLACK, host_ev),
+            );
             (Some(tx), State::Stopped)
         }
         None => {
@@ -231,7 +235,7 @@ fn spawn(cfg: BrokerCfg, listener: UnixListener, host: Option<UnixStream>) -> Br
         held_bytes: 0,
         idle_at: None,
     };
-    tokio::spawn(actor.run(ctl_rx, data_rx, host_rx));
+    clock::spawn("browser:broker", actor.run(ctl_rx, data_rx, host_rx));
     let shared = Arc::new(Shared {
         sid: cfg.sid,
         path: format!("{PATH_PREFIX}{hex}"),
@@ -241,7 +245,7 @@ fn spawn(cfg: BrokerCfg, listener: UnixListener, host: Option<UnixStream>) -> Br
         max_message: cfg.max_message,
     });
     tracing::info!("cdp://{}: the browser endpoint is served", shared.sid);
-    let accept = tokio::spawn(accept(listener, shared));
+    let accept = clock::spawn("browser:accept", accept(listener, shared));
     BrokerHandle {
         ctl,
         connected,
@@ -312,7 +316,7 @@ struct Actor {
 
 async fn until(t: Option<Instant>) {
     match t {
-        Some(t) => tokio::time::sleep_until(t).await,
+        Some(t) => clock::sleep(t.saturating_duration_since(clock::now())).await,
         None => std::future::pending().await,
     }
 }
@@ -425,7 +429,7 @@ impl Actor {
             }
         }
         if self.active() {
-            self.idle_at = Some(Instant::now() + self.idle);
+            self.idle_at = Some(clock::now() + self.idle);
         }
         tracing::info!("cdp://{}: the agent's websocket closed", self.sid);
     }
@@ -678,7 +682,7 @@ async fn accept(listener: UnixListener, sh: Arc<Shared>) {
             Ok((s, _)) => s,
             Err(e) => {
                 tracing::warn!("cdp://{}: accept: {e}", sh.sid);
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                clock::sleep(Duration::from_millis(100)).await;
                 continue;
             }
         };
@@ -690,7 +694,7 @@ async fn accept(listener: UnixListener, sh: Arc<Shared>) {
             }
         }
         let sh = sh.clone();
-        tokio::spawn(async move {
+        clock::spawn("browser:http", async move {
             let svc = service_fn(move |req| {
                 let sh = sh.clone();
                 async move { Ok::<_, Infallible>(handle(sh, req).await) }
@@ -766,7 +770,7 @@ async fn handle(sh: Arc<Shared>, mut req: Request<Incoming>) -> Response<Full<By
             return status(StatusCode::NOT_FOUND, "");
         }
     };
-    tokio::spawn(agent_conn(sh, conn, fut));
+    clock::spawn("browser:agent", agent_conn(sh, conn, fut));
     resp.map(|_| Full::new(Bytes::new()))
 }
 
@@ -801,14 +805,14 @@ async fn agent_conn(sh: Arc<Shared>, conn: u64, fut: fastwebsockets::upgrade::Up
     }
     let done = Arc::new(Notify::new());
     let finished = done.clone();
-    tokio::spawn(async move {
+    clock::spawn("browser:agent-writer", async move {
         while let Some(m) = rx.recv().await {
             let r = match m {
                 ToAgent::Text(b) => wr.write_frame(Frame::text(Payload::Owned(b))).await,
                 ToAgent::Frame(f) => wr.write_frame(f).await,
                 ToAgent::Close(code, why) => {
                     let _ = wr.write_frame(Frame::close(code, why.as_bytes())).await;
-                    tokio::time::sleep(CLOSE_WAIT).await;
+                    clock::sleep(CLOSE_WAIT).await;
                     break;
                 }
             };
