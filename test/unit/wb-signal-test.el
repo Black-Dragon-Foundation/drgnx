@@ -6,6 +6,7 @@
 (require 'drgnx-timer)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/measure-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-signal-test--with (events-var &rest body)
   "BODY with a fresh bus; every emission is pushed onto EVENTS-VAR as (EVENT . DATA)."
@@ -242,6 +243,17 @@ and only when it differs from the last one it got."
       (drgnx-signal--flush)
       (should (memq w (drgnx-state-windows (selected-frame))))
       (should (memq w (plist-get (car drgnx-signal-test--store) :windows))))))
+
+(ert-deftest drgnx-signal/a-quiet-flush-allocates-nothing ()
+  "Pattern D.  The bus's `post-command-hook' arms the flush after every command, so it runs at every pause in typing.
+A flush that finds nothing changed allocates nothing: it observes the selected frame without copying the frame's
+parameters or its record (their writers sync themselves), and keeps the state it has."
+  (drgnx-signal-test--with-store
+    (drgnx-test-compile "drgnx-signal-" "drgnx-state-" "drgnx-timer-")
+    (let ((drgnx-signal-mode t))                      ; the bus on: the flush rebuilds only what its hooks marked
+      (drgnx-signal--flush)
+      (should (drgnx-state-windows (selected-frame)))   ; the frame is the store's
+      (should (= 0 (drgnx-test-alloc (drgnx-signal--flush)))))))
 
 (ert-deftest drgnx-signal/one-idle-flush ()
   (drgnx-signal-test--with-store

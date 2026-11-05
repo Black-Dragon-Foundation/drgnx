@@ -2013,8 +2013,13 @@ editor with `drgnx-state-use-editor`.
 `drgnx-signal-mode` listens to the raw buffer hooks, and on the store's `now` lane to `windows-changed`,
 `editor-changed` and `selected-changed` (`drgnx-signal--store-events`); it emits deduplicated edges after an idle
 delay (`drgnx-signal-delay`). There is one idle flush, `drgnx-signal--flush`, for the bus and the store: the store's
-idle lane arms it too, and its timer (`signal-flush`) is cancelled only when both modes are off. It observes the selected frame (`drgnx-state-sync`), makes the store's waiting idle calls
-(`drgnx-state--deliver-idle`), then compares the buffer state:
+idle lane arms it too, and its timer (`signal-flush`) is cancelled only when both modes are off. It observes the
+selected frame as `drgnx-state-sync` does, but without comparing the frame parameters the record copies (their
+writers sync themselves; `frame-parameter` copies them all) and without copying the record, makes the store's waiting
+idle calls (`drgnx-state--deliver-idle`), then compares the buffer state, which it keeps when nothing changed. The
+bus's `post-command-hook` arms the flush after every command, so it runs at every pause in typing: a flush that finds
+nothing changed allocates nothing (`drgnx-signal/a-quiet-flush-allocates-nothing`; it was 157 objects on a batch
+frame, more on a graphical frame, whose parameter list is longer).
 
 - `editor-changed` gets the *buffer* of the selected frame's MRU editor, only when it is not the one it sent last
   (`drgnx-signal--editor`): `C-x o` between two windows on one buffer is the store's `editor-changed`, not the bus's,

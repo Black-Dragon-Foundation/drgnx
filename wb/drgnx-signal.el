@@ -134,9 +134,12 @@ then compare the buffer state with the last flush and emit the edges.
 `editor-changed' gets the buffer of the selected frame's MRU editor window, only when it is not the one sent
 last: two windows on one buffer are one edge.  Only the parts in `drgnx-signal--dirty' are rebuilt: `set'
 \(the user buffers and their names), `modified' (their flags; a new set needs them too).  The mode off, no hook
-says what changed, so all of it is rebuilt."
+says what changed, so all of it is rebuilt.  It runs at every pause in typing (the bus's `post-command-hook' arms
+it), so a flush that finds nothing changed allocates nothing: the frame is observed as `drgnx-state-sync' does but
+without comparing the frame parameters (their writers sync themselves; `frame-parameter' copies them all) or copying
+the record, and the state is kept when it is the same."
   (drgnx-timer-cancel 'signal-flush)    ; called directly, this flush is the pending one
-  (drgnx-state-sync)
+  (let ((drgnx-state--watching nil)) (drgnx-state--observe (selected-frame)))
   (drgnx-state--deliver-idle)
   (let* ((window (drgnx-signal-editor-window))
          (editor (and window (window-buffer window)))
@@ -151,10 +154,11 @@ says what changed, so all of it is rebuilt."
          (modified (if modified-dirty
                        (mapcar (lambda (b) (cons b (buffer-modified-p b))) set)
                      (plist-get old :modified)))
-         (names (if set-dirty (mapcar (lambda (b) (cons b (buffer-name b))) set) (plist-get old :names))))
-    (setq drgnx-signal--state (list :set set :modified modified :names names
-                                    :point (and window (window-point window)))
-          drgnx-signal--editor editor)
+         (names (if set-dirty (mapcar (lambda (b) (cons b (buffer-name b))) set) (plist-get old :names)))
+         (point (and window (window-point window))))
+    (unless (and old (null dirty) (eql point (plist-get old :point)))
+      (setq drgnx-signal--state (list :set set :modified modified :names names :point point)))
+    (setq drgnx-signal--editor editor)
     (unless (eq editor last)
       (drgnx-signal--emit 'editor-changed editor))
     (when (and old editor (eq editor last)
