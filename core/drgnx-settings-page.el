@@ -527,7 +527,8 @@ Ends with a blank line."
 (defvar-local drgnx-settings-page--query "" "The search text with its filters.")
 (defvar-local drgnx-settings-page--keys nil "The variables listed now.")
 (defvar-local drgnx-settings-page--rev 0 "Counts refreshes: a row's signature, so each is drawn again.")
-(defvar-local drgnx-settings-page--rows nil "Var → row data of this refresh (a hash table).")
+(defvar-local drgnx-settings-page--rows nil
+  "Var → row data of this refresh (a hash table), kept while a search types on; at most one entry per variable.")
 
 (defun drgnx-settings-page--row-data (var)
   "VAR's row data for this page, once per refresh."
@@ -621,7 +622,9 @@ Ends with a blank line."
 
 (defun drgnx-settings-page-refresh (&optional keep)
   "Read the files and the variables again and redraw: the header and the rows (the visible ones first).
-With KEEP (a search typing on), the list of variables and their search text are kept."
+With KEEP (a search typing on), the list of variables and their search text are kept, and so are the rows: a search
+changes which rows are listed, not what a row shows, so a row that stays is not drawn again and one that comes back
+takes its kept data (each is a provenance lookup).  Without KEEP every row is worked out and drawn again."
   (interactive)
   (when (derived-mode-p 'drgnx-settings-page-mode)
     (clrhash drgnx-settings-page--docs)
@@ -630,13 +633,14 @@ With KEEP (a search typing on), the list of variables and their search text are 
       (clrhash drgnx-settings-page--value-hay)
       (setq drgnx-settings-page--prior nil)
       (setq drgnx-settings-page--all nil))
-    (setq drgnx-settings-page--rows (make-hash-table :test 'eq))
+    (unless (and keep drgnx-settings-page--rows)
+      (setq drgnx-settings-page--rows (make-hash-table :test 'eq))
+      (cl-incf drgnx-settings-page--rev))
     (setq drgnx-settings-page--keys
           (condition-case err
               (drgnx-settings-page-select drgnx-settings-page--group drgnx-settings-page--query drgnx-settings-page--tab
                                           drgnx-settings-page--root drgnx-settings-page--origin)
             (error (message "Settings: %s" (error-message-string err)) nil)))
-    (cl-incf drgnx-settings-page--rev)
     (drgnx-settings-page--draw-header)
     (when (drgnx-view-p drgnx-view) (drgnx-view-touch drgnx-view))
     (current-buffer)))
