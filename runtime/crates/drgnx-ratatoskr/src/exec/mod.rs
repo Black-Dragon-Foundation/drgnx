@@ -969,7 +969,15 @@ impl Inner {
                 .parent()
                 .map(Path::to_path_buf)
                 .unwrap_or_else(std::env::temp_dir);
-            let jp = container::prepare_proxy(id, dir, &run_dir, &forwarder, n, &caps.net_hosts)?;
+            let jp = container::prepare_proxy(
+                id,
+                dir,
+                &run_dir,
+                &forwarder,
+                n,
+                &caps.net_hosts,
+                &caps.pins,
+            )?;
             caps.proxy = Some(jp.mounts.clone());
             proxy = Some(jp);
         }

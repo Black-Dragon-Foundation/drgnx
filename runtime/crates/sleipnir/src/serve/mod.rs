@@ -359,8 +359,9 @@ impl<W: Write> Serve<W> {
                 image,
                 env,
                 net_hosts,
+                pins,
                 parser,
-            } => self.start(&r, image, env, net_hosts, &parser),
+            } => self.start(&r, image, env, (net_hosts, pins), &parser),
             Frame::Attach { r, log_offset } => self.attach(&r, log_offset),
             Frame::Cancel { r } => self.cancel(&r),
             Frame::Done { r } => self.done(&r),
@@ -660,7 +661,7 @@ impl<W: Write> Serve<W> {
         r: &JobRef,
         image: Option<String>,
         env: Vec<(String, String)>,
-        net_hosts: Vec<String>,
+        (net_hosts, pins): (Vec<String>, Pins),
         parser: &str,
     ) -> Next {
         let Some(l) = self.find(r) else {
@@ -671,7 +672,14 @@ impl<W: Write> Serve<W> {
             return Next::Go;
         }
         let (dir, meta) = (l.dir.clone(), l.meta.clone());
-        match self.launch(&dir, &meta, image, &env, &net_hosts, parser) {
+        match self.launch(
+            &dir,
+            &meta,
+            image,
+            &env,
+            (net_hosts.as_slice(), pins),
+            parser,
+        ) {
             Ok((unit, pid)) => {
                 let at = now_s();
                 let mut meta = meta;
@@ -711,7 +719,7 @@ impl<W: Write> Serve<W> {
         meta: &Meta,
         image: Option<String>,
         env: &[(String, String)],
-        net_hosts: &[String],
+        (net_hosts, pins): (&[String], Pins),
         parser: &str,
     ) -> Result<(String, u32), String> {
         let id = &meta.r.job;
@@ -767,15 +775,8 @@ impl<W: Write> Serve<W> {
         slices::ensure_tree(SLICE_ROOT, self.cfg.profile)?;
         let slice = slices::job_slice(SLICE_ROOT, id)?;
         let caps = Caps {
-            images: vec![ContainerImage {
-                name: "job".into(),
-                image,
-            }],
-            memory: format!("{}M", meta.grant.mem_cap_mib.max(6)),
-            cpus: meta.grant.cores.max(1),
-            pids: podman::PIDS,
             proxy,
-            net_hosts: vec![],
+            ..job_caps(&meta.grant, image, pins)
         };
         let keyed = keys.is_some();
         let req = ContainerReq {
@@ -1219,6 +1220,25 @@ fn read_some(f: &mut fs::File, buf: &mut [u8]) -> io::Result<usize> {
 }
 
 /// The grant a test fixture uses.
+/// Names a job's proxy resolves to a fixed address (`Frame::Start`'s `pins`).
+type Pins = Vec<(String, std::net::IpAddr)>;
+
+/// The caps of a container job in IMAGE under GRANT, its proxy pinning PINS.
+fn job_caps(grant: &forseti::Grant, image: String, pins: Pins) -> Caps {
+    Caps {
+        images: vec![ContainerImage {
+            name: "job".into(),
+            image,
+        }],
+        memory: format!("{}M", grant.mem_cap_mib.max(6)),
+        cpus: grant.cores.max(1),
+        pids: podman::PIDS,
+        proxy: None,
+        net_hosts: vec![],
+        pins,
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn tests_spec() -> forseti::JobSpec {
     use forseti::{Expect, JobTrust, Kind, Lane, Range, Weight};
@@ -1256,5 +1276,40 @@ pub(crate) fn tests_spec() -> forseti::JobSpec {
         keys: vec![],
         local_only: false,
         writes: vec![],
+    }
+}
+
+#[cfg(test)]
+mod caps_tests {
+    use super::*;
+    use crate::proto::Nonce;
+
+    /// Pattern D.  The pins the hub sends with a start reach the job's caps, which its proxy pins by; a start from an
+    /// older hub, which has no `pins`, still reads, with none.
+    #[test]
+    fn a_starts_pins_reach_the_jobs_caps() {
+        let pins: Pins = vec![("registry.corp".into(), "10.0.0.5".parse().unwrap())];
+        let grant = forseti::Grant {
+            cores: 1,
+            mem_cap_mib: 256,
+            reserve_mib: 128,
+        };
+        assert_eq!(job_caps(&grant, "img".into(), pins.clone()).pins, pins);
+        let start = Frame::Start {
+            r: JobRef {
+                job: "a3f".into(),
+                attempt: 1,
+                nonce: Nonce([1; 16]),
+            },
+            image: None,
+            env: vec![],
+            net_hosts: vec![],
+            pins,
+            parser: String::new(),
+        };
+        let mut v = serde_json::to_value(&start).unwrap();
+        v.as_object_mut().unwrap().remove("pins");
+        let old: Frame = serde_json::from_value(v).unwrap();
+        assert!(matches!(old, Frame::Start { pins, .. } if pins.is_empty()));
     }
 }

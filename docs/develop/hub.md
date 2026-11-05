@@ -1522,8 +1522,12 @@ makes: the hub never grants `Open`) has no network but its sandbox's relay port,
   job) the proxy closes its listener and every tunnel and removes the socket; a resume binds a new one. A start that
   fails after the bind drops it the same way. The removal checks the socket's inode, so an old session's end never
   removes a newer socket at the same path.
-- **Test hook.** A `test-hooks` build reads `DRGNX_TEST_PROXY_PINS` (`NAME=ADDR,…`): names the proxy resolves to a
-  fixed address, so a row reaches the mock LLM on loopback under a name. A shipped build pins nothing.
+- **Pinned names.** The proxy resolves the names of `drgnx-sandbox-proxy-pinned-addresses` (a runtime setting,
+  `ProxyPins`, from `settings.el` or the editor's `config/settings`; `agents::net::pins`) to their address instead of
+  asking DNS; a pinned name may lead to a private address and must still be on the allowlist. A container job's
+  proxy pins the same names (`Caps.pins`, from `settings::containers::caps`; the runner protocol's `start` frame has
+  room for them, [sleipnir.md](sleipnir.md), for the hub's runner client to fill). A `test-hooks` build adds
+  `DRGNX_TEST_PROXY_PINS` (`NAME=ADDR,…`), so a row reaches the mock LLM on loopback under a name.
 
 Rows: `test/conformance/sandbox-net/`. The real launch: `tests/launch_sandboxed.rs`
 (`a_session_reaches_its_provider_through_the_proxy`, the sandbox lane).
@@ -1599,7 +1603,10 @@ other profile gets no gateway relay. A test build's launch is the unsandboxed te
   unregistered.
 - **Across a restart** the rows are read back (a row that does not read is dropped and logged), owners checked again,
   the sessions' sockets bound again, and the gateway's port too: `runtime.db`'s `kv.gateway_port` is tried first,
-  else a free one (logged), and the one used is kept.
+  else a free one, and the one used is kept. When the kept port is taken, the hub logs a warning and drops every
+  loopback registration at start (the editor's tokens and agents' on 127.0.0.1; a session's `gateway.sock` ones
+  stay): their holders still know the old port, so a process squatting it would collect live tokens. Each holder asks
+  again: the editor does on its next proven connect and learns the new port.
 - **Budget.** A registration's `budget` (USD), else its job's `data.budget` in work.db. `gateway/set-budget {job,
   budget}` sets it for every registration of the job, in memory and in `runtime.db` (the editor's `job resume
   --budget`).
@@ -1704,8 +1711,8 @@ a token of their own, so the editor need not hold the keys.
 - **One per owner.** A second call from the same process deletes its earlier editor token first, so a reconnecting
   editor rotates; another process (a batch job such as the search indexer, the `drgnx` CLI) takes its own.
 - **Kept across a restart.** It is a `registration` row like an agent's: read back at start, pruned with its owner,
-  and good again as long as the port is the same (`kv.gateway_port`). The editor asks for its token again on every
-  proven reconnect, so it learns a new port.
+  and good again only while the port is the same (`kv.gateway_port`): a moved port drops it. The editor asks for its
+  token again on every proven reconnect, so it learns a new port.
 
 **Which keys the hub holds.** `gateway/keys-held {}` (user) answers `{providers: [Id]}`, the ids whose key is held, and
 user subscribers get the event `gateway/keys-changed {providers}` whenever that set changes (`gateway/keys`, a

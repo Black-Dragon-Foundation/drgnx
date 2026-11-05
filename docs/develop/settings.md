@@ -650,7 +650,16 @@ after `drgnx-settings-live-start` get their watcher at the next sync.
   `:runtime`, `:on-error last-good`. `drgnx-agents-allow-unsandboxed` is new (nothing reads it before the sandbox
   tasks). The sandbox's `drgnx-sandbox-memory-max`, `drgnx-sandbox-secret-files` and
   `drgnx-sandbox-proxy-pinned-addresses` (`core/drgnx-settings-runtime.el`) are settings too: `:scope global`,
-  `:workspace never`, `:agents never` (design §13).
+  `:workspace never`, `:agents never` (design §13). The pins are `:runtime "ProxyPins"` (last good on a mistake): the
+  hub pins them in every session's provider proxy and container job's proxy, from `settings.el` or, when your Lisp
+  or Customize sets them, from the editor's `config/settings` (their encoder is an object NAME → address).
+- **Every runtime setting has an encoder but the matrix.** `drgnx-settings-runtime--encoders` turns each `:runtime`
+  setting's Lisp value into its runtime type's JSON, so a value only your Lisp or Customize sets reaches the hub
+  (`drgnx-settings-runtime/every-runtime-setting-but-the-matrix-has-an-encoder`). The agent limits of
+  `drgnx-agents-matrix.el` go as they are (numbers, a string) or as objects (`drgnx-agents-net-hosts`, NAME → list of
+  hosts; `drgnx-agents-container-images`, `drgnx-agents-silent-after`). `drgnx-agents-matrix` itself has none: its
+  plist would need the wire's own shape (the hub decodes settings.el's plist through huginn), so a matrix set only in
+  your Lisp or Customize does not reach the hub; set it in Settings → User (settings.el).
 - **Callers read `default-value`.** `drgnx-agents-profile`, `-profile-names`, `-default-profile`, `-mcp-names`,
   `drgnx-ai-providers` (the function), `drgnx-ai-role` and `drgnx-ai-user-role` read the global
   value, so a buffer-local value (a `.dir-locals.el`, a `setq-local`) never reaches them. Tests bind the variable with

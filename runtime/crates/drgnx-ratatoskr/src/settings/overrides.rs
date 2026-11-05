@@ -160,6 +160,10 @@ pub fn from_json(name: &str, v: &Value, values: &mut RuntimeValues) -> Result<()
             }
             values.runners_project_visibility = s;
         }
+        "drgnx-sandbox-proxy-pinned-addresses" => {
+            let Alist(pairs) = de::<Alist<std::net::IpAddr>>(v)?;
+            values.sandbox_proxy_pins = pairs;
+        }
         other => return Err(refused("", format!("{other} is not a runtime setting"))),
     }
     Ok(())
@@ -246,6 +250,13 @@ pub fn to_json(name: &str, values: &RuntimeValues) -> Option<Value> {
         "drgnx-runners-image" => json!(values.runners_image),
         "drgnx-runners-weight" => json!(values.runners_weight),
         "drgnx-runners-project-visibility" => json!(values.runners_project_visibility),
+        "drgnx-sandbox-proxy-pinned-addresses" => object(
+            values
+                .sandbox_proxy_pins
+                .iter()
+                .map(|(k, a)| (k.as_str(), json!(a)))
+                .collect(),
+        ),
         _ => return None,
     })
 }

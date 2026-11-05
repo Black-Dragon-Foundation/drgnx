@@ -345,6 +345,35 @@ that is allowed to write in a folder still cannot change what your Emacs loads a
   `ratatoskr sandbox check` and the doctor say so. There, as for a new file, [workspace trust](#workspace-trust)
   guards them: a folder's settings code runs only after you review it.
 
+## Agents and your CLI's login folder
+
+An agent's CLI needs its login folder (`~/.claude`, `~/.codex` or `~/.gemini`), and your own CLI, outside any sandbox,
+uses the same folder: its settings and their hooks, commands, skills, plugins, `CLAUDE.md`, and also the keys of your
+Claude Code's daemon and live sessions, your prompt history and every project's transcripts. So a session sees only
+the parts of its own CLI's login folder that the CLI uses (never another CLI's, never the folder itself), and writes
+only some of them:
+
+| CLI | Readable only | Writable |
+|---|---|---|
+| Claude Code | `settings.json`, `CLAUDE.md`, `agents/`, `commands/`, `skills/`, `plugins/`, `output-styles/`, `keybindings.json` | `.credentials.json` (the token, refreshed in place), `todos/`, and `projects/<the session's folder>/` (its transcript) |
+| Codex | `config.toml`, `AGENTS.md`, `prompts/`, `skills/`, `rules/` | `auth.json`, `log/`, and a `sessions/` of its own |
+| Gemini CLI | `google_accounts.json`, `settings.json`, `GEMINI.md`, `commands/`, `extensions/` | `oauth_creds.json`, and a `tmp/` of its own |
+
+A missing writable folder is made first; a file that does not exist is not made (a login that keeps its token
+elsewhere, such as the macOS keychain, has none). One of the readable files that is a link, into your dotfiles say,
+is read where it really is. Everything else (`hooks/`, `shell-snapshots/`, which Claude Code's Bash tool sources,
+Claude Code's `daemon/` and `sessions/` with their keys, `history.jsonl`, the other projects' folders) cannot be
+read, written or added to.
+
+A chat in your project runs in the folder your own Claude Code uses there, so its `projects/` folder would be yours:
+your transcripts and the project's auto memory. On the full tier the chat gets an empty folder of its own (in its
+scratch folder) in that place, and sees nothing of yours; on the reduced tier and on macOS it gets none, and Claude Code
+keeps no transcript of that chat. Codex's `sessions/` and Gemini's `tmp/` hold every session of that CLI, yours too, so
+no session gets yours: on the full tier each gets an empty folder of its own (in its scratch folder) in that place,
+which keeps what it records while that folder lasts; on the reduced tier and on macOS it gets none, so Codex and
+Gemini CLI there cannot keep or resume a session of their own (if the CLI cannot start without one, use the full
+tier).
+
 ## Secrets in the store
 
 An agent's write to the store that looks like a credential is refused ("looks like a secret; do not store

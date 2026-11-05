@@ -44,11 +44,12 @@ hidden in the sandbox.  npm's global config is PREFIX/etc/npmrc."
   :type '(repeat string) :group 'drgnx :scope 'global :workspace 'never :agents 'never)
 
 (drgnx-defsetting drgnx-sandbox-proxy-pinned-addresses nil
-  "Names the job proxies resolve to a fixed address instead of asking DNS: ((NAME . ADDRESS)…), ADDRESS an IPv4 or
-IPv6 literal.  A pinned name may lead to a private or loopback address (a registry on the company's network, a
+  "Names the agents' proxies resolve to a fixed address instead of asking DNS: ((NAME . ADDRESS)…), ADDRESS an IPv4
+or IPv6 literal.  A pinned name may lead to a private or loopback address (a registry on the company's network, a
 test's local upstream); a name resolved through DNS never does.  Pinning only resolves: the name must still be on the
-job's allowlist."
-  :type '(alist :key-type string :value-type string) :group 'drgnx :scope 'global :workspace 'never :agents 'never)
+allowlist.  The hub pins them in each session's provider proxy and each container job's proxy."
+  :type '(alist :key-type string :value-type string) :group 'drgnx :scope 'global :workspace 'never :agents 'never
+  :runtime "ProxyPins")
 
 ;;;; Encoding: Lisp values as the runtime types' JSON
 
@@ -130,8 +131,23 @@ job's allowlist."
                    (cons :zdr (and (plist-member v :zdr) (drgnx-settings-runtime--bool (plist-get v :zdr)))))))))
     (drgnx-agents-allow-unsandboxed . drgnx-settings-runtime--bool)
     (drgnx-agents-start-env-names . drgnx-settings-runtime--strings)
-    (drgnx-agents-trace-opens . drgnx-settings-runtime--strings))
-  "Runtime setting → the function that turns its Lisp value into the JSON of its runtime type.")
+    (drgnx-agents-trace-opens . drgnx-settings-runtime--strings)
+    ;; the agent limits (`drgnx-agents-matrix.el'); the matrix itself is read from settings.el alone
+    (drgnx-agents-away-after . identity)
+    (drgnx-agents-wait-refusals . identity)
+    (drgnx-agents-close-idle-after . identity)
+    (drgnx-agents-checkpoint-cap . identity)
+    (drgnx-agents-job-memory . identity)
+    (drgnx-agents-job-cpus . identity)
+    (drgnx-agents-net-hosts . ,(lambda (v) (drgnx-settings-runtime--alist v #'drgnx-settings-runtime--strings)))
+    (drgnx-agents-container-images . ,(lambda (v) (drgnx-settings-runtime--alist v #'identity)))
+    (drgnx-agents-silent-after . ,(lambda (v) (drgnx-settings-runtime--alist v #'identity)))
+    (drgnx-agents-repeat-limit . identity)
+    (drgnx-agents-no-progress-tokens . identity)
+    (drgnx-agents-manager-context . identity)
+    (drgnx-sandbox-proxy-pinned-addresses . ,(lambda (v) (drgnx-settings-runtime--alist v #'identity))))
+  "Runtime setting → the function that turns its Lisp value into the JSON of its runtime type.  `drgnx-agents-matrix'
+has none: the hub reads its plist from settings.el alone.")
 
 (defun drgnx-settings-runtime--vars ()
   "The settings declared `:runtime' that this editor can encode."

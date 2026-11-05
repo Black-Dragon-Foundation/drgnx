@@ -13,6 +13,7 @@ use crate::shell_env::ShellEnv;
 use gleipnir::{Refusal, Rule};
 use sleipnir::linux::podman;
 use std::ffi::OsString;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -114,8 +115,8 @@ pub fn socket_for(job: &str, run_dir: &Path) -> PathBuf {
 }
 
 /// Makes job JOB's proxy: its own copy of FORWARDER in DIR (the job's folder; the copy is what gets relabelled, never
-/// the installed binary) and its proxy on a socket under RUN_DIR with the allow-list of NET under HOSTS.  An error means the job
-/// was granted a network it cannot be given.
+/// the installed binary) and its proxy on a socket under RUN_DIR with the allow-list of NET under HOSTS and the names
+/// PINS pins.  An error means the job was granted a network it cannot be given.
 pub fn prepare_proxy(
     job: &str,
     dir: &Path,
@@ -123,6 +124,7 @@ pub fn prepare_proxy(
     forwarder: &Path,
     net: NetCell,
     hosts: &[(String, Vec<String>)],
+    pins: &[(String, IpAddr)],
 ) -> Result<JobProxy, Refusal> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     let copy = dir.join("fwd");
@@ -142,7 +144,7 @@ pub fn prepare_proxy(
             .create(parent)
             .map_err(|e| refuse(format!("{}: {e}", parent.display())))?;
     }
-    let handle = start_proxy(&socket, net, hosts)?;
+    let handle = start_proxy(&socket, net, hosts, pins)?;
     Ok(JobProxy {
         _handle: handle,
         mounts: Proxy {
@@ -152,12 +154,14 @@ pub fn prepare_proxy(
     })
 }
 
-/// Starts a proxy listening on the Unix socket SOCKET with the allow-list of NET under HOSTS (`agents-net-hosts`).  Dropping the handle closes the
-/// listener and every connection.
+/// Starts a proxy listening on the Unix socket SOCKET with the allow-list of NET under HOSTS (`agents-net-hosts`) and
+/// the names PINS pins (`sandbox-proxy-pinned-addresses`).  Dropping the handle closes the listener and every
+/// connection.
 pub fn start_proxy(
     socket: &Path,
     net: NetCell,
     hosts: &[(String, Vec<String>)],
+    pins: &[(String, IpAddr)],
 ) -> Result<gleipnir::net::proxy::ProxyHandle, Refusal> {
     use gleipnir::net::{host, proxy};
     let allow = crate::sandbox::allowed_hosts(net, hosts)
@@ -174,6 +178,7 @@ pub fn start_proxy(
     let handle = proxy::start(
         proxy::ProxyConfig {
             allow,
+            pinned: pins.to_vec(),
             ..Default::default()
         },
         std::sync::Arc::new(proxy::SystemResolver),
@@ -291,6 +296,7 @@ mod tests {
                 socket: "/run/h/job.sock".into(),
                 forwarder: "/opt/drgnx-fwd".into(),
             }),
+            pins: vec![],
         }
     }
 
@@ -348,6 +354,7 @@ mod tests {
             &installed,
             NetCell::ProviderAndPackages,
             &test_hosts(),
+            &[],
         )
         .unwrap();
         // the socket path stays short; the copy is the job's own; the installed file is never a mount source
@@ -391,7 +398,8 @@ mod tests {
                 &run_dir,
                 &d.path().join("none"),
                 NetCell::Open,
-                &test_hosts()
+                &test_hosts(),
+                &[]
             )
             .is_err()
         );
@@ -401,7 +409,7 @@ mod tests {
     async fn the_job_proxy_listens_on_its_socket() {
         let d = tempfile::tempdir().unwrap();
         let sock = d.path().join("proxy.sock");
-        let handle = start_proxy(&sock, NetCell::ProviderAndPackages, &test_hosts()).unwrap();
+        let handle = start_proxy(&sock, NetCell::ProviderAndPackages, &test_hosts(), &[]).unwrap();
         // not on the allow-list: refused by the proxy itself
         let mut c = tokio::net::UnixStream::connect(&sock).await.unwrap();
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -411,6 +419,29 @@ mod tests {
         let mut buf = [0u8; 12];
         let n = c.read(&mut buf).await.unwrap_or(0);
         assert!(!buf[..n].starts_with(b"HTTP/1.1 200"), "{:?}", &buf[..n]);
+        drop(handle);
+    }
+
+    /// Pattern D (the proxy's answer is the only wait).  A name the setting pins, on the job's allow-list, reaches
+    /// its address: here a listener on loopback, which DNS would never give.
+    #[tokio::test]
+    async fn the_job_proxy_resolves_a_pinned_name() {
+        use std::net::{IpAddr, Ipv4Addr};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let d = tempfile::tempdir().unwrap();
+        let sock = d.path().join("proxy.sock");
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let host = format!("pinned.test:{}", upstream.local_addr().unwrap().port());
+        let hosts = vec![("packages".to_string(), vec![host.clone()])];
+        let pins = vec![("pinned.test".to_string(), IpAddr::V4(Ipv4Addr::LOCALHOST))];
+        let handle = start_proxy(&sock, NetCell::ProviderAndPackages, &hosts, &pins).unwrap();
+        let mut c = tokio::net::UnixStream::connect(&sock).await.unwrap();
+        c.write_all(format!("CONNECT {host} HTTP/1.1\r\nHost: {host}\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
+        let mut head = [0u8; 12];
+        c.read_exact(&mut head).await.unwrap();
+        assert_eq!(&head, b"HTTP/1.1 200", "{:?}", head.escape_ascii());
         drop(handle);
     }
 
@@ -431,6 +462,12 @@ mod tests {
         v.agents_job_memory = "4G --privileged".into();
         let c = crate::settings::containers::caps(&v);
         assert!(argv(&req(&["ls"]), &c).is_err());
+        // the job's proxy pins what the setting pins
+        v.sandbox_proxy_pins = vec![("registry.corp".into(), "10.0.0.5".parse().unwrap())];
+        assert_eq!(
+            crate::settings::containers::caps(&v).pins,
+            v.sandbox_proxy_pins
+        );
     }
 
     /// AS1-NET-HOSTS-1: the hosts a granted network reaches are the setting's, per tier; the shipped default is the

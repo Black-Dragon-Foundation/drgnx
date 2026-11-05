@@ -206,6 +206,7 @@ mod tests {
                 image: Some("fedora@sha256:00".into()),
                 env: vec![("CI".into(), "1".into())],
                 net_hosts: vec!["crates.io:443".into()],
+                pins: vec![("registry.corp".into(), "10.0.0.5".parse().unwrap())],
                 parser: "cargo-test".into(),
             },
             Frame::Started {

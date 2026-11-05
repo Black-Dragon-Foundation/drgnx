@@ -118,6 +118,11 @@ pub const RUNTIME: &[RuntimeSetting] = &[
         "String",
         OnError::Strict,
     ),
+    setting(
+        "drgnx-sandbox-proxy-pinned-addresses",
+        "ProxyPins",
+        OnError::LastGood,
+    ),
 ];
 
 /// The names of [`RUNTIME`].
@@ -173,6 +178,7 @@ pub struct RuntimeValues {
     pub runners_weight: f64,
     /// `public` or `private` (per project): with the commit on the public origin, what makes a job `public`.
     pub runners_project_visibility: String,
+    pub sandbox_proxy_pins: ProxyPins,
 }
 
 /// One entry of `drgnx-agents-container-images`: a name and its image reference pinned by digest (the shared podman
@@ -184,6 +190,10 @@ pub type NetHosts = Vec<(String, Vec<String>)>;
 
 /// `drgnx-agents-silent-after`: seconds without an update per kind of work, in order.
 pub type SilentAfter = Vec<(String, u64)>;
+
+/// `drgnx-sandbox-proxy-pinned-addresses`: the names the proxies (a session's provider proxy, a container job's)
+/// resolve to a fixed address instead of asking DNS, in order.
+pub type ProxyPins = Vec<(String, std::net::IpAddr)>;
 
 /// An `agents-matrix` value that is valid, as a message when it is not.
 pub(crate) fn check_matrix(v: &Value) -> Result<(), String> {
@@ -298,6 +308,10 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
                 return Err(Bad::at(node, None, "\"public\" or \"private\""));
             }
             values.runners_project_visibility = v;
+        }
+        "drgnx-sandbox-proxy-pinned-addresses" => {
+            let profiles::Alist(pairs) = de::<profiles::Alist<std::net::IpAddr>>(node)?;
+            values.sandbox_proxy_pins = pairs;
         }
         other => {
             return Err(Bad::at(

@@ -644,9 +644,8 @@ impl HubGit {
                 .await
                 .is_ok(),
             TreeMode::Snapshot => {
-                let dot = path.join(".git");
-                dot.join("refs/heads").join(&branch).is_file()
-                    || std::fs::read_to_string(dot.join("packed-refs")).is_ok_and(|t| {
+                agent_text(&path, &format!(".git/refs/heads/{branch}")).is_some()
+                    || agent_text(&path, ".git/packed-refs").is_some_and(|t| {
                         t.lines()
                             .any(|l| l.ends_with(&format!(" refs/heads/{branch}")))
                     })
@@ -770,15 +769,32 @@ impl HubGit {
     }
 }
 
-/// BRANCH's tip in the snapshot tree at PATH, from its ref files (the agent writes that `.git`: no git runs there).
+/// The most of a ref file [`agent_text`] reads.
+const REF_FILE_MAX: u64 = 64 << 20;
+
+/// The file REL beneath the task folder TREE as text, read as a file the agent wrote is: no link followed below TREE,
+/// a FIFO or a device refused at once without blocking (`eitri::read_regular`), at most [`REF_FILE_MAX`] bytes.  None
+/// when it is missing, is not a regular file, is larger or is not UTF-8.  TREE itself is the hub's (its runs root).
+fn agent_text(tree: &Path, rel: &str) -> Option<String> {
+    use rustix::fs::{Mode, OFlags};
+    use std::os::fd::AsFd;
+    let dir = rustix::fs::open(
+        tree,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .ok()?;
+    let bytes = eitri::read_regular(dir.as_fd(), Path::new(rel), REF_FILE_MAX).ok()?;
+    String::from_utf8(bytes).ok()
+}
+
+/// BRANCH's tip in the snapshot tree at PATH, from its ref files (the agent writes that `.git`: no git runs there, and
+/// each file is read as [`agent_text`] reads).
 fn snapshot_tip(path: &Path, branch: &str) -> Option<String> {
-    let dot = path.join(".git");
     let is_sha = |s: &str| matches!(s.len(), 40 | 64) && s.bytes().all(|b| b.is_ascii_hexdigit());
-    let loose = std::fs::read_to_string(dot.join("refs/heads").join(branch))
-        .ok()
-        .map(|t| t.trim().to_owned());
+    let loose = agent_text(path, &format!(".git/refs/heads/{branch}")).map(|t| t.trim().to_owned());
     let packed = || {
-        let t = std::fs::read_to_string(dot.join("packed-refs")).ok()?;
+        let t = agent_text(path, ".git/packed-refs")?;
         let name = format!("refs/heads/{branch}");
         t.lines().find_map(|l| match l.split_once(' ') {
             Some((sha, n)) if n == name => Some(sha.to_owned()),

@@ -290,6 +290,7 @@ impl Link {
             image: Some(image.into()),
             env: vec![],
             net_hosts: vec![],
+            pins: vec![],
             parser: "exit".into(),
         });
         self.next("started", |f| match f {

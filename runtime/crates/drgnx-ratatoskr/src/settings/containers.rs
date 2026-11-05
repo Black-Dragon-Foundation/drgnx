@@ -1,5 +1,6 @@
 //! The limits and the image allow-list of container jobs (Task 11b), read from the decoded runtime settings:
-//! `agents-container-images` (`mod.rs` decodes it), `agents-job-memory` and `agents-job-cpus`.
+//! `agents-container-images` (`mod.rs` decodes it), `agents-job-memory` and `agents-job-cpus`; and what a granted
+//! network's proxy reaches: `agents-net-hosts` and `sandbox-proxy-pinned-addresses`.
 
 use super::RuntimeValues;
 use crate::exec::container::{Caps, PIDS};
@@ -13,5 +14,6 @@ pub fn caps(values: &RuntimeValues) -> Caps {
         pids: PIDS,
         proxy: None,
         net_hosts: values.agents_net_hosts.clone(),
+        pins: values.sandbox_proxy_pins.clone(),
     }
 }

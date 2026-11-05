@@ -96,11 +96,37 @@ fn only_runtime_names_decode() {
     // what is not a runtime setting has no place to go: RUNTIME is the whole list
     // (8, and agent system part 1's 13: the matrix, the away signal, the job and container limits, the net hosts; and
     // the names a module may add to a session's environment; and part 2's providers whose shell steps are traced; and
-    // the runners' five per-project settings)
-    assert_eq!(RUNTIME_NAMES.len(), 28);
+    // the runners' five per-project settings; and the proxies' pinned names)
+    assert_eq!(RUNTIME_NAMES.len(), 29);
     assert!(RUNTIME_NAMES.iter().all(|n| n.starts_with("drgnx-agents-")
         || n.starts_with("drgnx-ai-")
-        || n.starts_with("drgnx-runners-")));
+        || n.starts_with("drgnx-runners-")
+        || n.starts_with("drgnx-sandbox-")));
+}
+
+/// Pattern D. `drgnx-sandbox-proxy-pinned-addresses` is read: each name with its address literal, IPv4 or IPv6.  A
+/// value that is no address is a problem naming the setting, and the setting falls back alone (no last good: none).
+#[test]
+fn the_proxy_pins_are_read() {
+    let dir = config(
+        r#" (drgnx-sandbox-proxy-pinned-addresses (("registry.corp" . "10.0.0.5") ("v6.test" . "::1")))
+"#,
+    );
+    let l = Settings::load(dir.path(), &Kv::default());
+    assert_eq!(l.problems, []);
+    let want: ProxyPins = vec![
+        ("registry.corp".into(), "10.0.0.5".parse().unwrap()),
+        ("v6.test".into(), "::1".parse().unwrap()),
+    ];
+    assert_eq!(l.values.sandbox_proxy_pins, want);
+    let bad = config(" (drgnx-sandbox-proxy-pinned-addresses ((\"x.test\" . \"no-address\")))\n");
+    let l = Settings::load(bad.path(), &Kv::default());
+    assert!(l.values.sandbox_proxy_pins.is_empty());
+    assert_eq!(l.problems.len(), 1, "{:?}", l.problems);
+    assert_eq!(
+        l.problems[0].setting,
+        Some("drgnx-sandbox-proxy-pinned-addresses")
+    );
 }
 
 #[test]
