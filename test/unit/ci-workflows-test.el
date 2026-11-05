@@ -90,8 +90,8 @@
                             (drgnx-ci-test--job tiers "ui")))))
 
 (ert-deftest drgnx-ci/the-gui-image-bakes-the-pinned-child-frame-packages ()
-  ;; The image's tag is the hash of Containerfile.gui, so the pins' sha256 is written in it: a bump of the pins that
-  ;; forgets it would leave the old image in use.
+  ;; The pins' sha256 is written in Containerfile.gui and checked at build: a pins file other than the one reviewed
+  ;; fails the build (the image's tag hashes both files: test/container/image-tag.sh).
   (let ((file (drgnx-ci-test--file "test/container/Containerfile.gui"))
         (pins (drgnx-ci-test--file "test/container/childframe-packages.eld")))
     (skip-unless (and file pins))
@@ -133,8 +133,12 @@
 (ert-deftest drgnx-ci/the-escape-suite-also-runs-on-26.04-without-the-sysctl ()
   (let* ((rt (drgnx-ci-test--yml "runtime.yml")) (job (and rt (drgnx-ci-test--job rt "escape-host"))))
     (skip-unless job)
-    (drgnx-ci-test--has job "ubuntu-26.04, ubuntu-26.04-arm"
-                        "/usr/bin/bwrap" "-Dtests=false")
+    (drgnx-ci-test--has job "ubuntu-26.04, ubuntu-26.04-arm" "sudo install -m 0755 \"$RUNNER_TEMP/bwrap/bwrap\" /usr/bin/bwrap"
+                        ;; this architecture's prebuilt bubblewrap, else the image's own recipe here
+                        "bash .github/ci/ghcr.sh file \"$REF\" bwrap \"$RUNNER_TEMP/bwrap\""
+                        "sh .github/ci/bwrap/build.sh \"$RUNNER_TEMP/bwrap\"")
+    (drgnx-ci-test--has (drgnx-ci-test--file ".github/ci/bwrap/build.sh") "-Dtests=false" "bubblewrap-0.12.0.tar.xz")
+    (drgnx-ci-test--has (drgnx-ci-test--file ".github/ci/bwrap/Containerfile") "RUN sh /tmp/build.sh /out" "FROM scratch")
     ;; the sysctl step is for the 24.04 legs only
     (let ((step (string-search "AppArmor's restriction lifted" job)))
       (should step)
@@ -466,23 +470,75 @@
 
 (ert-deftest drgnx-ci/prebuilt-images-are-addressed-by-their-containerfile-hash ()
   (let ((images (drgnx-ci-test--yml "images.yml")) (tty (drgnx-ci-test--yml "tty.yml"))
-        (action (drgnx-ci-test--action "test-image")) (tiers (drgnx-ci-test--yml "drgnx-tiers.yml")))
-    (skip-unless (and images tty action tiers))
-    ;; the tiers' image: the one images.yml publishes for that Containerfile, tagged by the same hash
-    (drgnx-ci-test--has action "image=\"ghcr.io/black-dragon-foundation/$NAME:$(sha256sum \"test/container/$FILE\" | cut -c1-16)\""
+        (action (drgnx-ci-test--action "test-image")) (tiers (drgnx-ci-test--yml "drgnx-tiers.yml"))
+        (rt (drgnx-ci-test--yml "runtime.yml")))
+    (skip-unless (and images tty action tiers rt))
+    ;; the tiers' image: the one images.yml publishes for that Containerfile, under the same tag (image-tag.sh), pulled
+    ;; by the digest GHCR holds for it
+    (drgnx-ci-test--has action "tag=\"$(bash test/container/image-tag.sh \"test/container/$FILE\")\""
+                        "image=\"$(bash .github/ci/ghcr.sh ref \"$NAME\" \"$tag\")\""
                         "podman pull -q \"$image\"" "echo \"$VAR=$base\"")
     (let ((pairs (drgnx-ci-test--matches "containerfile: \\([A-Za-z.]+\n *image: [a-z-]+\n *variable: [A-Z_]+\\)" tiers)))
-      (should (= 8 (length pairs)))
+      (should (= 9 (length pairs)))
       (dolist (p pairs)
         (should (string-match "\\`\\([A-Za-z.]+\\)\n *image: \\([a-z-]+\\)\n *variable: \\([A-Z_]+\\)\\'" p))
         (let ((file (match-string 1 p)) (name (match-string 2 p)) (var (match-string 3 p)))
-          (should (string-match-p (format "- name: %s\n *file: %s\n" (regexp-quote name) (regexp-quote file)) images))
+          (should (string-match-p (format "- name: %s\n *file: test/container/%s\n" (regexp-quote name) (regexp-quote file))
+                                  images))
           (should (equal var (pcase file ("Containerfile" "DRGNX_TEST_IMAGE") ("Containerfile.tty" "DRGNX_TEST_TTY_IMAGE")
-                                    (_ "DRGNX_TEST_GUI_IMAGE")))))))
+                                    ("Containerfile.rust" "DRGNX_TEST_RUST_IMAGE") (_ "DRGNX_TEST_GUI_IMAGE")))))))
     ;; the terminal tier pulls its own through the same action
     (drgnx-ci-test--has (drgnx-ci-test--job tiers "tty") "containerfile: Containerfile.tty" "image: drgnx-test-tty"
                         "variable: DRGNX_TEST_TTY_IMAGE")
-    (drgnx-ci-test--has images "tag=\"$(sha256sum \"test/container/$FILE\" | cut -c1-16)\"" "podman push \"$image:$tag\"")))
+    (drgnx-ci-test--has images "tag=\"$(bash test/container/image-tag.sh \"$FILE\")${ARCH:+-$ARCH}\""
+                        "podman push \"$image:$tag\"")
+    ;; the runtime's Fedora 45 job runs in the Rust image (by digest) when there is one, else installs what it holds
+    (drgnx-ci-test--has (drgnx-ci-test--job rt "images")
+                        "ghcr.sh ref drgnx-test-rust \"$(bash test/container/image-tag.sh test/container/Containerfile.rust)\""
+                        "ghcr.sh ref drgnx-bwrap \"$bwrap-x64\"" "ghcr.sh ref drgnx-bwrap \"$bwrap-arm64\"")
+    (drgnx-ci-test--has (drgnx-ci-test--job rt "linux")
+                        "image: ${{ needs.images.outputs.rust || 'registry.fedoraproject.org/fedora:45' }}"
+                        "run: sh test/container/rust-packages.sh" "if: ${{ env.PREBUILT == '' }}")))
+
+(ert-deftest drgnx-ci/images-are-published-only-by-main-and-manual-runs ()
+  ;; a pull request or a ci/* push never publishes: a run whose inputs have no image yet builds its own
+  (let ((images (drgnx-ci-test--yml "images.yml")))
+    (skip-unless images)
+    (drgnx-ci-test--has images "push:\n    branches: [main]\n" "workflow_dispatch:" "schedule:")
+    (should-not (string-search "pull_request" images))
+    (should-not (string-search "ci/**" images))
+    ;; a push or a manual run builds only the tags GHCR lacks; the weekly run rebuilds them all
+    (drgnx-ci-test--has images "if [ \"$EVENT\" != schedule ] && [ -n \"$(bash .github/ci/ghcr.sh ref \"$NAME\" \"$tag\")\" ]")))
+
+(ert-deftest drgnx-ci/an-image-tag-hashes-every-file-it-copies ()
+  :tags '(:cond)
+  ;; image-tag.sh over a made-up context: an edit of a copied file (one named, one in a copied directory) is a new
+  ;; tag, an edit of a file nothing copies is not, and a missing source is an error, never a tag
+  (let ((script (expand-file-name "test/container/image-tag.sh" drgnx-ci-test--root)))
+    (skip-unless (and (file-exists-p script) (executable-find "bash")))
+    (let* ((tmp (make-temp-file "drgnx-image-tag" t)) (cf (expand-file-name "Containerfile" tmp))
+           (put (lambda (rel text) (with-temp-file (expand-file-name rel tmp) (insert text))))
+           (tag (lambda ()
+                  (with-temp-buffer
+                    (list (call-process "bash" nil t nil script cf) (string-trim (buffer-string)))))))
+      (unwind-protect
+          (progn
+            (make-directory (expand-file-name "d" tmp))
+            (funcall put "Containerfile" "FROM x\nCOPY a \\\n  d /tmp/\nCOPY --from=build /y /z\n")
+            (funcall put "a" "1") (funcall put "d/b" "2") (funcall put "other" "3")
+            (let ((first (funcall tag)))
+              (should (equal 0 (car first)))
+              (should (string-match-p "\\`[0-9a-f]\\{16\\}\\'" (cadr first)))
+              (funcall put "other" "4")
+              (should (equal first (funcall tag)))
+              (funcall put "d/b" "5")
+              (let ((second (funcall tag)))
+                (should-not (equal first second))
+                (funcall put "a" "6")
+                (should-not (equal second (funcall tag)))))
+            (delete-file (expand-file-name "a" tmp))
+            (should (equal 1 (car (funcall tag)))))
+        (delete-directory tmp t)))))
 
 ;; The overlay (`nidhogg-artifact'): the run's own Nidhogg goes into the test image the same way the pinned release
 ;; goes into it, through test/container/nidhogg.sh, and never quietly falls back to the release.

@@ -1,15 +1,19 @@
-# The test images, prebuilt so CI pulls them instead of installing packages every run: built from
-# test/container/Containerfile{,.gui,.tty} and tagged with the Containerfile's hash (CI pulls the tag of the
-# Containerfile it checked out, else builds it itself). Weekly too, so distribution updates arrive. A push to a ci/*
-# branch publishes only the hash tag (a Containerfile not on main never moves `f45`). No gate: it makes a cache, not a
-# verdict (a job without its image builds it), and its paths filter means most pushes never run it.
+# The prebuilt CI images, so jobs pull them instead of installing packages every run: the three test images
+# (test/container/Containerfile{,.gui,.tty}), the Rust job's (Containerfile.rust) and bubblewrap for the escape suite's
+# runner jobs (.github/ci/bwrap, one per architecture). Each is tagged with test/container/image-tag.sh: a hash of the
+# Containerfile and every file it copies. CI looks the tag of its checkout up (.github/ci/ghcr.sh ref) and pulls that
+# digest, else builds the image itself. Published only by `main` (a push that changes their inputs, the weekly
+# rebuild) and this repository's manual runs, never by a pull request or a ci/* push: a run whose inputs have no image
+# yet builds its own and pushes nothing. A push or a manual run builds only the tags GHCR lacks; the weekly run
+# rebuilds every one, so distribution updates arrive (each run pins the digest it looked up). No gate: it makes a
+# cache, not a verdict (a job without its image builds it), and its paths filter means most pushes never run it.
 # docs/develop/ci.md
 name: Test images
 
 on:
   push:
-    branches: [main, "ci/**"]
-    paths: ["test/container/**", ".github/workflows/images.yml"]
+    branches: [main]
+    paths: ["test/container/**", ".github/ci/bwrap/**", ".github/workflows/images.yml"]
   schedule:
     - cron: "41 2 * * 1"
   workflow_dispatch:
@@ -18,27 +22,35 @@ permissions:
   contents: read
   packages: write
 
-# one run at a time per ref (a ci/* run never queues behind or replaces main's), none cancelled
+# one run at a time per ref, none cancelled
 concurrency:
   group: images-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   build:
-    name: ${{ matrix.name }}
-    runs-on: ubuntu-24.04
+    name: ${{ matrix.name }}${{ matrix.arch && format(' ({0})', matrix.arch) || '' }}
+    runs-on: ${{ matrix.runs-on || 'ubuntu-24.04' }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: drgnx-test
-            file: Containerfile
+            file: test/container/Containerfile
           - name: drgnx-test-gui
-            file: Containerfile.gui
+            file: test/container/Containerfile.gui
           - name: drgnx-test-tty
-            file: Containerfile.tty
-            args: --build-arg FEDORA=45
+            file: test/container/Containerfile.tty
+          - name: drgnx-test-rust
+            file: test/container/Containerfile.rust
+          - name: drgnx-bwrap
+            file: .github/ci/bwrap/Containerfile
+            arch: x64
+          - name: drgnx-bwrap
+            file: .github/ci/bwrap/Containerfile
+            arch: arm64
+            runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -49,15 +61,21 @@ jobs:
           ACTOR: ${{ github.actor }}
           NAME: ${{ matrix.name }}
           FILE: ${{ matrix.file }}
-          BUILD_ARGS: ${{ matrix.args }}
+          ARCH: ${{ matrix.arch }}
+          EVENT: ${{ github.event_name }}
           SOURCE: ${{ github.server_url }}/${{ github.repository }}
           REF: ${{ github.ref }}
         run: |
           image="ghcr.io/black-dragon-foundation/$NAME"
-          tag="$(sha256sum "test/container/$FILE" | cut -c1-16)"
+          tag="$(bash test/container/image-tag.sh "$FILE")${ARCH:+-$ARCH}"
+          if [ "$EVENT" != schedule ] && [ -n "$(bash .github/ci/ghcr.sh ref "$NAME" "$tag")" ]; then
+            echo "$image:$tag is on GHCR already"; exit 0
+          fi
           printf '%s' "$TOKEN" | podman login ghcr.io -u "$ACTOR" --password-stdin
-          # shellcheck disable=SC2086
-          podman build --pull=always $BUILD_ARGS --label "org.opencontainers.image.source=$SOURCE" \
-            -t "$image:$tag" -t "$image:f45" -f "test/container/$FILE" test/container
+          podman build --pull=always --label "org.opencontainers.image.source=$SOURCE" \
+            -t "$image:$tag" -f "$FILE" "$(dirname "$FILE")"
           podman push "$image:$tag"
-          if [ "$REF" = refs/heads/main ]; then podman push "$image:f45"; fi
+          # the moving name of the test images, for a local `DRGNX_TEST_IMAGE=…:f45` (main only)
+          case "$NAME" in drgnx-test|drgnx-test-gui|drgnx-test-tty)
+            if [ "$REF" = refs/heads/main ]; then podman tag "$image:$tag" "$image:f45"; podman push "$image:f45"; fi ;;
+          esac

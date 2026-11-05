@@ -1,5 +1,6 @@
-# The test image for a tier: the prebuilt one tagged with its Containerfile's hash (Test images), else none (`bin/drgnx
-# test --container` builds it). With `nidhogg-artifact`, the run's own Nidhogg build goes in on top: a thin image FROM
+# The test image for a tier: the prebuilt one (Test images) whose tag is the checkout's test/container/image-tag.sh (a
+# hash of the Containerfile and every file it copies), pulled by its digest, else none (`bin/drgnx test --container`
+# builds it). With `nidhogg-artifact`, the run's own Nidhogg build goes in on top: a thin image FROM
 # the prebuilt one (or one built here) that runs test/container/nidhogg.sh with that tarball, the same install the
 # images make of the pinned release. Writes the image to the variable `bin/drgnx test --container` reads.
 # docs/develop/ci.md
@@ -45,10 +46,13 @@ runs:
         ACTOR: ${{ github.actor }}
       run: |
         cd "$DIR"
-        image="ghcr.io/black-dragon-foundation/$NAME:$(sha256sum "test/container/$FILE" | cut -c1-16)"
+        # the digest GHCR holds for this checkout's tag (a hash of the Containerfile and every file it copies), pulled
+        # by that digest; none: the inputs changed and have no image yet
+        tag="$(bash test/container/image-tag.sh "test/container/$FILE")"
+        image="$(bash .github/ci/ghcr.sh ref "$NAME" "$tag")"
         printf '%s' "$TOKEN" | podman login ghcr.io -u "$ACTOR" --password-stdin || true
         base=""
-        if podman pull -q "$image"; then base="$image"; else echo "no $image yet: building"; fi
+        if [ -n "$image" ] && podman pull -q "$image"; then base="$image"; echo "$NAME:$tag is $image"; else echo "no $NAME:$tag to pull: building"; fi
         if [ -z "$OVERLAY" ]; then
           if [ -n "$base" ]; then echo "$VAR=$base" >> "$GITHUB_ENV"; fi
           exit 0

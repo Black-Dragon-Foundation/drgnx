@@ -63,12 +63,57 @@ env:
   CACHE_SAVE_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
 
 jobs:
+  # The prebuilt images of the jobs below (`Test images`, images.yml), by digest: the Fedora 45 job's container
+  # (test/container/Containerfile.rust) and the escape suite's bubblewrap per architecture (.github/ci/bwrap). Each is
+  # looked up by the tag of this checkout's inputs (test/container/image-tag.sh); an output is empty when GHCR has no
+  # image for them (a change not yet on main), and that job then installs or builds what the image holds itself.
+  images:
+    name: Prebuilt images
+    if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-linux ') || contains(format(' {0} ', inputs.only), ' rt-escape ')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      rust: ${{ steps.ref.outputs.rust }}
+      bwrap_x64: ${{ steps.ref.outputs.bwrap_x64 }}
+      bwrap_arm64: ${{ steps.ref.outputs.bwrap_arm64 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            .github/ci
+            test/container
+      - id: ref
+        env:
+          TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          rust="$(bash .github/ci/ghcr.sh ref drgnx-test-rust "$(bash test/container/image-tag.sh test/container/Containerfile.rust)")"
+          bwrap="$(bash test/container/image-tag.sh .github/ci/bwrap/Containerfile)"
+          {
+            echo "rust=$rust"
+            echo "bwrap_x64=$(bash .github/ci/ghcr.sh ref drgnx-bwrap "$bwrap-x64")"
+            echo "bwrap_arm64=$(bash .github/ci/ghcr.sh ref drgnx-bwrap "$bwrap-arm64")"
+          } | tee -a "$GITHUB_OUTPUT"
+
   linux:
     name: fmt, clippy, tests, conformance, perf (Fedora 45)
-    if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-linux ')) }}
+    needs: images
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-linux ')) }}
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    # the prebuilt image (Fedora 45 with rust-packages.sh and Nidhogg), else plain Fedora 45 and the steps install them
     container:
-      image: registry.fedoraproject.org/fedora:45
+      image: ${{ needs.images.outputs.rust || 'registry.fedoraproject.org/fedora:45' }}
+      credentials:
+        username: ${{ needs.images.outputs.rust && github.actor || '' }}
+        password: ${{ needs.images.outputs.rust && github.token || '' }}
       # a real PID 1 that reaps orphans: draugr's reap tests check a killed group is gone, and an unreaped zombie
       # still answers kill(-pgid, 0) (the same reason ctr.sh runs podman with --init)
       options: --init
@@ -76,19 +121,24 @@ jobs:
     defaults:
       run:
         working-directory: runtime
+    env:
+      PREBUILT: ${{ needs.images.outputs.rust }}
     steps:
-      # root in this container: the `sudo` rows (another uid on the socket) run, through setpriv. setpriv is in
-      # util-linux; the fedora image has only util-linux-core (draugr's pdeathsig test runs it too); diffutils for the
-      # rows that compare files with cmp (the fedora:45 image no longer carries it)
-      - name: Tools
+      # root in this container: the `sudo` rows (another uid on the socket) run, through setpriv
+      - name: git for the checkout (in the prebuilt image already)
+        if: ${{ env.PREBUILT == '' }}
         working-directory: /
-        run: dnf -y install git cargo rust gcc clippy rustfmt tar zstd gzip procps-ng util-linux bubblewrap jq diffutils
+        run: dnf -y install git
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0          # the whole history, for commit-times.sh
           filter: blob:none       # without old file contents
           persist-credentials: false
+      - name: Tools (in the prebuilt image already)
+        if: ${{ env.PREBUILT == '' }}
+        working-directory: ${{ github.workspace }}
+        run: sh test/container/rust-packages.sh
       - id: rv
         run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
       - id: registry
@@ -162,13 +212,13 @@ jobs:
           path: ${{ runner.temp }}/escape/escape-container.json
           if-no-files-found: warn
       # the editor's own CLIs that the personal-notes canary row runs need Emacs
-      - name: Nidhogg 31.1 (the Emacs drgnx ships on)
+      - name: Nidhogg 31.1 (the Emacs drgnx ships on; in the prebuilt image already)
         id: nidhogg
         if: ${{ !cancelled() }}
         working-directory: ${{ github.workspace }}
         run: |
-          dnf -y install curl tar xz
-          bash test/container/nidhogg.sh fedora-45
+          if [ -z "$PREBUILT" ]; then bash test/container/nidhogg.sh fedora-45; fi
+          /usr/local/bin/nidhogg --version | head -n 1
       # every row against Ratatoskr. --require-all: a skipped row fails the job, except a macOS-only row here and the
       # perf rows (they run below)
       - name: conformance
@@ -281,12 +331,17 @@ jobs:
   # The escape suite on the runner itself, no container: the full tier (bubblewrap with user namespaces) and, on the arm64
   # runner (free for public repositories), a real arm64 Linux run of the seccomp tests (GL-T4-2: the aarch64 syscall
   # numbers). Ubuntu 24.04 turns unprivileged user namespaces off through AppArmor, so the job lifts the restriction
-  # with sudo (the runner user has passwordless sudo) and builds bubblewrap 0.12.0 (gleipnir's floor; apt has 0.9.0).
+  # with sudo (the runner user has passwordless sudo) and installs bubblewrap 0.12.0 (gleipnir's floor; apt has 0.9.0),
+# prebuilt per architecture (the `images` job) or built here.
   # It gates (green on both runners since 74be75cf; a failure here fails the CI gate: docs/develop/ci.md).
   escape-host:
     name: escape suite on the runner (${{ matrix.os }})
-    if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-escape ')) }}
+    needs: images
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-escape ')) }}
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      packages: read
     timeout-minutes: 45
     # Every runner is pinned (never `ubuntu-latest`, which moves to 26.04 by 2026-11-19). The 24.04 legs lift AppArmor's
     # userns restriction with a global sysctl; the 26.04 legs do not: they test the configuration Gleipnir recommends
@@ -302,19 +357,21 @@ jobs:
           fetch-depth: 0          # the whole history, for commit-times.sh
           filter: blob:none       # without old file contents
           persist-credentials: false
-      - name: bubblewrap 0.12.0 (checksum verified, built from source)
+      # the prebuilt one of this architecture (its one layer, by digest), else built here (.github/ci/bwrap/build.sh,
+      # the image's own recipe: checksum verified, from source). /usr/bin: Gleipnir trusts a bwrap only where root alone
+      # can change it, and the runner image makes /usr/local group-writable (Gleipnir rightly refuses /usr/local/bin/bwrap)
+      - name: bubblewrap 0.12.0 (prebuilt, or built from source)
+        env:
+          REF: ${{ runner.arch == 'ARM64' && needs.images.outputs.bwrap_arm64 || needs.images.outputs.bwrap_x64 }}
+          TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends meson ninja-build pkg-config libcap-dev
-          curl -fsSL -o "$RUNNER_TEMP/bwrap.tar.xz" https://github.com/containers/bubblewrap/releases/download/v0.12.0/bubblewrap-0.12.0.tar.xz
-          echo "9760d007363e3abba7c747489910f9f82d9fca53ba3bd3282e396fa3c97a3314  $RUNNER_TEMP/bwrap.tar.xz" | sha256sum -c -
-          tar -xJf "$RUNNER_TEMP/bwrap.tar.xz" -C "$RUNNER_TEMP"
-          cd "$RUNNER_TEMP/bubblewrap-0.12.0"
-          # --prefix=/usr: Gleipnir trusts a bwrap only where root alone can change it, and the runner image makes
-          # /usr/local group-writable (Gleipnir rightly refuses /usr/local/bin/bwrap there)
-          meson setup _build --prefix=/usr -Dman=disabled -Dbash_completion=disabled -Dzsh_completion=disabled -Dselinux=disabled -Dtests=false
-          ninja -C _build
-          sudo ninja -C _build install
+          if [ -n "$REF" ]; then
+            bash .github/ci/ghcr.sh file "$REF" bwrap "$RUNNER_TEMP/bwrap"
+          else
+            sh .github/ci/bwrap/build.sh "$RUNNER_TEMP/bwrap"
+          fi
+          sudo install -m 0755 "$RUNNER_TEMP/bwrap/bwrap" /usr/bin/bwrap
           ls -l /usr/bin/bwrap; /usr/bin/bwrap --version
       - name: user namespaces for unprivileged processes (AppArmor's restriction lifted)
         if: ${{ !startsWith(matrix.os, 'ubuntu-26.04') }}
