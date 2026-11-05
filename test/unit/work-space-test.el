@@ -30,6 +30,9 @@ directories."
        ;; the hub fixture binds the client's event and disconnect hooks to nil: the module's functions go on again
        (add-hook 'drgnx-hub-event-functions #'drgnx-work-client-event)
        (add-hook 'drgnx-hub-disconnect-functions #'drgnx-work-client-disconnected)
+       ;; the map's events come back on the subscribed connection: this Emacs has one before a map opens
+       (drgnx-hub-connect)
+       (drgnx-agents-mirror-test--settle (lambda () (process-live-p drgnx-hub--events)) "the subscribed connection")
        (let ((workspace (list :id "workspace:000000000001" :roots (list (getenv "HOME")))))
          ,@body))))
 
@@ -96,8 +99,8 @@ directories."
 
 (ert-deftest drgnx-work-space/module-off-closes-views-and-kills-buffers ()
   (let (calls name)
-    (cl-letf (((symbol-function 'drgnx-hub-call)
-               (lambda (method params &rest _) (push (cons method params) calls) 1)))
+    (cl-letf (((symbol-function 'drgnx-work-client--call)
+               (lambda (method params &rest _) (push (cons method params) calls) t)))
       (drgnx-test-with-modules '(tools/work-space) :strict t
                                (setq name (buffer-name (drgnx-work-space-open (list :id "workspace:000000000002" :roots (list temporary-file-directory)))))
                                (should (get-buffer name))
@@ -105,6 +108,112 @@ directories."
     (should-not (get-buffer name))
     (should (assoc "work/map/close" calls))
     (should-not (drgnx-work-client-views))))
+
+;;;; Selection, filters, search and Esc against a real hub
+
+(defvar drgnx-work-space-test--calls nil "The hub methods (and params) called since the last reset, newest first.")
+
+(defun drgnx-work-space-test--record (method params &rest _)
+  (push (cons method params) drgnx-work-space-test--calls))
+
+(defmacro drgnx-work-space-test--recording (&rest body)
+  "BODY with every call the map client makes of the hub recorded in `drgnx-work-space-test--calls'."
+  (declare (indent 0))
+  `(progn (setq drgnx-work-space-test--calls nil)
+          (advice-add 'drgnx-work-client--call :before #'drgnx-work-space-test--record)
+          (unwind-protect (progn ,@body) (advice-remove 'drgnx-work-client--call #'drgnx-work-space-test--record))))
+
+(defun drgnx-work-space-test--map-ready (buf n)
+  "Settle until BUF's map holds N agents in a live frame."
+  (drgnx-agents-mirror-test--settle
+   (lambda () (let ((s (drgnx-work-space-test--state buf)))
+                (and (drgnx-work-client-live-p s)
+                     (>= (cl-count-if (lambda (id) (string-prefix-p "agent:" id)) (drgnx-work-client-ids s)) n))))
+   (format "the map holds %d agents" n)))
+
+(ert-deftest drgnx-work-space/jumping-never-settles-a-card ()
+  ;; a card about a real agent in the map's frame is a needs-you chip; its jump key selects the agent and decides
+  ;; nothing: the editor makes no call that answers, allows or denies, and the card stays
+  (drgnx-work-space-test--with
+    (let* ((buf (drgnx-work-space-open workspace t)) (id (drgnx-work-space-test--start-agent))
+           (item-id (concat "agent:" id)))
+      (drgnx-work-space-test--map-ready buf 1)
+      (let* ((state (drgnx-work-space-test--state buf)) (v (drgnx-work-client-version state))
+             (view (buffer-local-value 'drgnx-work-space--view buf)))
+        ;; the hub's next delta, as it sends one when a permission is asked: the agent needs you, and a card says so
+        (drgnx-work-client-event
+         "work-map"
+         (list :view view :version (1+ v) :base v
+               :changed (list (plist-put (copy-sequence (drgnx-work-client-item state item-id)) :needs_you t))
+               :needs_you (list (list :card "card:1" :kind "permission" :text "Mock asks to edit" :about (list item-id)))))
+        (should (equal 1 (length (drgnx-work-client-needs-you (drgnx-work-space-test--state buf)))))
+        (drgnx-work-space-test--recording
+          (with-current-buffer buf (drgnx-work-map-needs-you 1))
+          (should (equal (cons 'agent item-id) (buffer-local-value 'drgnx-work-map--selection buf)))
+          (drgnx-test-hub-advance 200)
+          (should-not (seq-some (lambda (c) (string-match-p "permission\\|answer\\|allow\\|deny\\|card" (car c)))
+                                drgnx-work-space-test--calls))
+          (should (equal 1 (length (drgnx-work-client-needs-you (drgnx-work-space-test--state buf))))))))))
+
+(ert-deftest drgnx-work-space/focus-arrows-send-no-relayout ()
+  (drgnx-work-space-test--with
+    (let* ((buf (drgnx-work-space-open workspace t)) (a (drgnx-work-space-test--start-agent)))
+      (drgnx-work-space-test--start-agent)
+      (drgnx-work-space-test--map-ready buf 2)
+      (with-current-buffer buf
+        (drgnx-work-map-select (cons 'agent (concat "agent:" a)))
+        (drgnx-work-map-focus))
+      (let ((view (buffer-local-value 'drgnx-work-space--view buf)))
+        (drgnx-agents-mirror-test--settle
+         (lambda () (< (cl-count-if (lambda (id) (string-prefix-p "agent:" id))
+                                    (drgnx-work-client-ids (drgnx-work-space-test--state buf)))
+                       2))
+         "the focused frame holds only the chain")
+        (let ((frames (drgnx-work-client-counter view :frames)))
+          (drgnx-work-space-test--recording
+            (with-current-buffer buf
+              (dolist (move '(drgnx-work-map-touches drgnx-work-map-why drgnx-work-map-right drgnx-work-map-left
+                                                     drgnx-work-map-touches drgnx-work-map-why))
+                (funcall move)))
+            (drgnx-test-hub-advance 300)
+            (should-not (seq-some (lambda (c) (and (equal (car c) "work/map/set")
+                                                   (or (plist-member (cdr c) :filters) (plist-member (cdr c) :collapsed)
+                                                       (plist-member (cdr c) :width_units))))
+                                  drgnx-work-space-test--calls))
+            (should (= frames (drgnx-work-client-counter view :frames)))))))))
+
+(ert-deftest drgnx-work-space/collapse-and-expand ()
+  (drgnx-work-space-test--with
+    (let ((buf (drgnx-work-space-open workspace t)))
+      (drgnx-work-space-test--start-agent)
+      (drgnx-work-space-test--map-ready buf 1)
+      (let ((collapsed-p (lambda (layer)
+                           (seq-some (lambda (r) (and (eql layer (plist-get r :layer)) (plist-get r :collapsed)))
+                                     (plist-get (drgnx-work-client-layout (drgnx-work-space-test--state buf)) :rows)))))
+        (should-not (funcall collapsed-p 4))
+        (with-current-buffer buf (drgnx-work-map-collapse-layer 4))
+        (drgnx-agents-mirror-test--settle (lambda () (funcall collapsed-p 4)) "layer 4 is one thin row")
+        (with-current-buffer buf (drgnx-work-map-expand-layers))
+        (drgnx-agents-mirror-test--settle (lambda () (not (funcall collapsed-p 4))) "layer 4 is back")))))
+
+(ert-deftest drgnx-work-space/escape-clears-search-then-filters ()
+  (drgnx-work-space-test--with
+    (let ((buf (drgnx-work-space-open workspace t)) (closed 0))
+      (drgnx-work-space-test--start-agent)
+      (drgnx-work-space-test--map-ready buf 1)
+      (cl-letf (((symbol-function 'drgnx-close-pane) (lambda () (cl-incf closed))))
+        (with-current-buffer buf
+          (drgnx-work-map-overlaps)
+          (drgnx-work-map--set-search "mock")
+          (should (plist-get drgnx-work-map--filters :overlaps))
+          (drgnx-work-map-escape)                                   ; the search first
+          (should-not drgnx-work-map--search)
+          (should (plist-get drgnx-work-map--filters :overlaps))
+          (drgnx-work-map-escape)                                   ; then the filters
+          (should-not (plist-get drgnx-work-map--filters :overlaps))
+          (should (= 0 closed))
+          (drgnx-work-map-escape)                                   ; then the pane
+          (should (= 1 closed)))))))
 
 (defun drgnx-work-space-test--bound-ids (profile)
   "The command ids PROFILE (an alist entry of the loaded profiles) has a row for."

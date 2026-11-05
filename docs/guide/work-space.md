@@ -57,6 +57,22 @@ says: *why* (you › spec › plan › task), what it *touches* (what it edits, 
 conclusion, and what you can do with it. Reads show as a count here; the list of each file with how it was seen
 arrives with the files picker.
 
+### The strip, the lens and the filters
+
+- The **strip** is the map's header line and stays when you scroll. On the left, one chip for each thing that needs
+  you, with its jump key (`g 1` to `g 9`, `+N` for more): permission asks, pushes, questions, clashes, budget pauses,
+  and every agent that waits on you. On the right, the machines' load ("desktop 3/16"). `n` and `N` cycle the chips,
+  and `C-k n` / `C-c w n` / `SPC a n` do it from anywhere. **A jump only selects.** Allowing, pushing and answering stay
+  on the card's own keys; no key of the map settles anything.
+- The **lens** (the tab line) names the views: Map, Board, Timeline. Only the map exists so far.
+- `f` hides everything not on the selection's chain; while it is on, the arrow keys move inside the chain and ask the
+  hub for nothing. `o` shows only the agents and branches that overlap. `1` to `6` collapse a layer to one thin row
+  with its name and a count, `0` opens them all, `.` brings finished items back. Each of these is a layout you asked
+  for, so the hub lays the map out again at once.
+- `/` narrows the map to the items matching your text: they keep their look, the rest dim, and Enter selects the first.
+- `Esc` clears the search; then the filters and collapsed layers; then closes the pane.
+- When an agent records a new conclusion, its card shows a **new** chip for four seconds.
+
 ### The outline
 
 **Show the Map as an Outline** (`work-outline`, `O`) draws one block per agent instead: the agent's line, why it

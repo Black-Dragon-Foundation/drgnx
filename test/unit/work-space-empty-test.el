@@ -14,7 +14,7 @@
   ;; a scratch buffer, a folder outside git: an empty map that says so, and no subscription
   (let ((calls nil) (dir (make-temp-file "work-space-none" t)))
     (unwind-protect
-        (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (method &rest _) (push method calls) 1)))
+        (cl-letf (((symbol-function 'drgnx-work-client--call) (lambda (method &rest _) (push method calls) t)))
           (drgnx-test-with-modules '(tools/work-space)
             (with-temp-buffer
               (setq default-directory (file-name-as-directory dir))

@@ -428,6 +428,25 @@ chain, the edge selection, the item that finished) and the commands are in `drgn
   `work-detail` with one row per section (`:head :why :touches :conclusions :actions`); its text is
   `drgnx-work-detail-sections`. The pane kind `work-detail` (home right) shows it.
 
+### The strip, the lens, the filters, search and Esc
+
+- `header-line-format` is `("" drgnx-work-map--strip)` and `tab-line-format` `("" drgnx-work-map--lens)`: variables
+  holding strings, made by `drgnx-work-map--refresh-strip` when the client marks the strip (a frame or a delta with
+  `needs_you` or `chips`). There is no `:eval` and so no work in redisplay. The entries are the hub's needs-you cards
+  and the agents in the needs-you state that no card is about.
+- `g 1` to `g 9`, `n`, `N` and the global `work-needs-you-next` select the item a chip is about
+  (`drgnx-work-map-needs-you`); the module calls no method that settles a card (a test records the client's calls).
+  The mode-local `n`/`N` are the commands `work-needs-you-here-next` and `-previous`, because a command has one keymap
+  and `work-needs-you-next` is the global one.
+- Filters are buffer-local (`drgnx-work-map--filters`, `--collapsed`) and sent with `work/map/set` (`f`, `o`, `.`, `1`
+  to `6`, `0`); the hub answers with a full frame. The selection and the arrow keys never send those fields.
+- Search is a local class: `drgnx-work-map--class` dims what the text does not match, with the same text properties
+  the selection uses.
+- A conclusion that differs from the frame before (`:old` in the marks) puts its id in `drgnx-work-map--new`; one
+  `drgnx-timer-start` keyed `(work-new . VIEW)` clears it after 4 s and draws those cards again.
+- The client calls the hub on the subscribed connection (`drgnx-work-client--call`): the hub sends a view's events to
+  the connection that subscribed it, and only that connection's events reach `drgnx-hub-event-functions`.
+
 ### The view core
 
 `drgnx-view-draw-now VIEW &optional KEYS` draws only the rows named by KEYS (the keypress's own redisplay for a

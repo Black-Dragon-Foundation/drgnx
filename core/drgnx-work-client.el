@@ -24,7 +24,6 @@
 (require 'seq)
 (require 'subr-x)
 
-(declare-function drgnx-hub-call "drgnx-hub-client")
 
 ;;;; The state
 
@@ -265,12 +264,24 @@ for a frame.")
 (defun drgnx-work-client--changed (view marks)
   (when marks (drgnx-work-client--run 'drgnx-work-client-change-functions (drgnx-work-client--view-id view) marks)))
 
+(defvar drgnx-hub--events)
+(declare-function drgnx-hub--call-on "drgnx-hub-client")
+
+(defun drgnx-work-client--call (method params callback)
+  "Ask the hub METHOD with PARAMS on this Emacs's subscribed connection, the one the map's events come back on (the hub
+sends a view's events to the connection that subscribed it).  Non-nil when it was asked; nil while the connection is
+down: the views subscribe again when it is up (`drgnx-work-client-connected')."
+  (when (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))
+    (drgnx-hub--call-on drgnx-hub--events method params callback)
+    t))
+
 (defun drgnx-work-client--subscribe (view)
   "Ask the hub for VIEW's frame.  The answer counts only for the subscription it was asked in (a later one, or a
-close, makes it stale)."
+close, makes it stale).  Without a connection the view waits, keeping what it has."
   (let ((gen (cl-incf (drgnx-work-client--view-gen view))) (id (drgnx-work-client--view-id view)))
-    (drgnx-hub-call "work/map/subscribe" (append (list :view id) (drgnx-work-client--view-params view))
-                    (lambda (result err) (drgnx-work-client--subscribed id gen result err)))))
+    (unless (drgnx-work-client--call "work/map/subscribe" (append (list :view id) (drgnx-work-client--view-params view))
+                                     (lambda (result err) (drgnx-work-client--subscribed id gen result err)))
+      (drgnx-work-client--status view 'reconnecting))))
 
 (defun drgnx-work-client--subscribed (id gen result err)
   (let ((view (drgnx-work-client--get id)))
@@ -307,7 +318,7 @@ kept for the next subscription.  Never signals: a hub that is not there is the r
       (setf (drgnx-work-client--view-params view) saved))
     (when (plist-member params :shown)
       (setf (drgnx-work-client--view-shown view) (not (memq (plist-get params :shown) '(nil :false)))))
-    (ignore-errors (drgnx-hub-call "work/map/set" (append (list :view id) params) #'ignore))
+    (ignore-errors (drgnx-work-client--call "work/map/set" (append (list :view id) params) #'ignore))
     id))
 
 (defun drgnx-work-client-close (id)
@@ -315,7 +326,7 @@ kept for the next subscription.  Never signals: a hub that is not there is the r
   (when-let* ((view (drgnx-work-client--get id)))
     (cl-incf (drgnx-work-client--view-gen view))          ; a pending answer is stale now
     (remhash id drgnx-work-client--views)
-    (ignore-errors (drgnx-hub-call "work/map/close" (list :view id) #'ignore))
+    (ignore-errors (drgnx-work-client--call "work/map/close" (list :view id) #'ignore))
     t))
 
 (defun drgnx-work-client-close-all ()
@@ -334,7 +345,8 @@ kept for the next subscription.  Never signals: a hub that is not there is the r
         (pcase-let* ((old (drgnx-work-client--view-state view))
                      (`(,new . ,marks) (drgnx-work-client-step old data)))
           (setf (drgnx-work-client--view-state view) new)
-          (when (plist-get marks :removed) (setq marks (plist-put (copy-sequence marks) :old old)))   ; to resolve the selection
+          ;; what the frame was before: the selection that went resolves against it, a new conclusion differs from it
+          (when marks (setq marks (plist-put (copy-sequence marks) :old old)))
           (when (plist-get data :full) (drgnx-work-client--bump view :frames))
           (when (and (plist-get data :full) (drgnx-work-client--view-shown view))
             (drgnx-work-client--status view 'live))

@@ -127,5 +127,35 @@
       (goto-char (point-min))
       (should-not (re-search-forward "\"#[0-9a-fA-F]\\{3,8\\}\"\\|:\\(foreground\\|background\\|color\\) +\"" nil t)))))
 
+;;;; The strip and the lens (header line and tab line)
+
+(declare-function drgnx-work-map--strip-string "drgnx-work-map")
+(declare-function drgnx-work-map--lens-string "drgnx-work-map")
+
+(ert-deftest drgnx-work-rows/strip-has-no-eval-work ()
+  (let* ((state (drgnx-work-rows-test--state)) (strip (substring-no-properties (drgnx-work-map--strip-string state))))
+    ;; needs you: a chip with its jump key; the machines' load on the right
+    (should (string-search "⚑ Codex asks: cargo clippy" strip))
+    (should (string-search "g1" strip))
+    (should (string-search "desktop 3/16" strip))
+    ;; the card covers the agent that needs you, so no chip of its own; more than nine: a +N
+    (let ((many (copy-sequence (drgnx-work-fixture-frame))))
+      (setq many (plist-put many :needs_you
+                            (cl-loop for i from 1 to 11
+                                     collect (list :card (format "card:%d" i) :kind "push" :text (format "push %d" i)
+                                                   :about '("agent:a1")))))
+      (let ((s (substring-no-properties (drgnx-work-map--strip-string (drgnx-work-client-init many)))))
+        (should (string-search "g9" s))
+        (should-not (string-search "g10" s))
+        (should (string-search "+3" s))))                       ; 11 cards + the one agent without a card, less 9
+    ;; the lines hold variables the draw fills: nothing is worked out while redisplay reads them
+    (with-temp-buffer
+      (drgnx-work-map-mode)
+      (should-not (memq :eval (flatten-tree header-line-format)))
+      (should-not (memq :eval (flatten-tree tab-line-format)))
+      (should (string-search "Map" (substring-no-properties (drgnx-work-map--lens-string))))
+      (should (string-search "Board" (substring-no-properties (drgnx-work-map--lens-string))))
+      (should (string-search "Timeline" (substring-no-properties (drgnx-work-map--lens-string)))))))
+
 (provide 'work-rows-test)
 ;;; work-rows-test.el ends here

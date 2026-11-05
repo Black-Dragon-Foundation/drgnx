@@ -40,6 +40,16 @@
 (defvar-local drgnx-work-map--search nil
   "The text `work-search' narrows the map to, or nil: items that do not match are dimmed.")
 
+(defvar-local drgnx-work-map--strip ""
+  "The needs-you strip, the buffer's header line: drawn when the frame's strip changes, so redisplay only reads it.")
+(defvar-local drgnx-work-map--lens ""
+  "The lens (Map · Board · Timeline), the buffer's tab line.")
+(defvar-local drgnx-work-map--filters nil
+  "The filters sent to the hub: a plist (:focus ITEM-ID :overlaps BOOL :finished BOOL).")
+(defvar-local drgnx-work-map--collapsed nil "The collapsed layers (1 to 6).")
+(defvar-local drgnx-work-map--new nil "The ids with a new conclusion, marked until the highlight timer clears them.")
+(defvar-local drgnx-work-map--needs-at 0 "The index of the strip entry `n' selected last.")
+
 (defvar drgnx-work-map-select-functions nil
   "Called with the map buffer after its selection changed (the side panel draws again).")
 (defvar drgnx-work-map-edges-functions nil
@@ -57,7 +67,8 @@
 
 (define-derived-mode drgnx-work-map-mode special-mode "Work map"
   "The Work space's map: layers of asks, specs, plans, agents, branches and files, and the edges between them."
-  (setq-local truncate-lines t cursor-type nil))
+  (setq-local truncate-lines t cursor-type nil
+              header-line-format '("" drgnx-work-map--strip) tab-line-format '("" drgnx-work-map--lens)))
 
 (defconst drgnx-work-map--layer-names
   ["You asked" "Specs" "Plans" "Agents" "Branches" "Files"]
@@ -390,13 +401,17 @@ argument): without moving focus."
               (it (drgnx-work-client-item state other)))
     (if-let* ((m (drgnx-work-map--field it :model))) (format "%s · %s" m (plist-get it :label)) (plist-get it :label))))
 
+(defun drgnx-work-map--new-chip (id)
+  "The `new' chip of an item with a new conclusion (see `drgnx-work-map--new'), else nothing."
+  (if (member id drgnx-work-map--new) (propertize " new " 'face 'drgnx-work-new) ""))
+
 (defun drgnx-work-map--rich-lines (state id)
   "The five lines of the rich agent card ID: who, its task, how it is going, its latest conclusion, the flag."
   (let* ((it (drgnx-work-client-item state id)) (f (lambda (k) (drgnx-work-map--field it k)))
          (model (funcall f :model)) (edits (funcall f :edits)) (progress (funcall f :progress))
          (ctx (funcall f :context)) (partner (drgnx-work-map--partner state id)))
     (list (concat (drgnx-work-map--dot it) " " (drgnx-work-map--badge it) "  "
-                  (if model (concat model " · ") "") (plist-get it :label))
+                  (if model (concat model " · ") "") (plist-get it :label) (drgnx-work-map--new-chip id))
           (or (funcall f :task) "")
           (mapconcat #'identity
                      (delq nil (list (or (funcall f :activity) (drgnx-work-map--state-word (funcall f :state)))
@@ -419,7 +434,8 @@ argument): without moving focus."
   "The two lines of a compact agent card: who, and how it is going (with the overlap mark)."
   (let* ((f (lambda (k) (drgnx-work-map--field item k))) (model (funcall f :model)))
     (list (concat (drgnx-work-map--dot item) " " (drgnx-work-map--badge item) " "
-                  (if (and model (equal (plist-get item :kind) "agent")) (concat model " · ") "") (plist-get item :label))
+                  (if (and model (equal (plist-get item :kind) "agent")) (concat model " · ") "") (plist-get item :label)
+                  (drgnx-work-map--new-chip (plist-get item :id)))
           (concat (mapconcat #'identity
                              (delq nil (list (or (funcall f :activity) (drgnx-work-map--state-word (funcall f :state)))
                                              (and (funcall f :minutes) (format "%dm" (funcall f :minutes)))))
@@ -622,12 +638,182 @@ and its latest conclusion.  The form of terminals, of a map that does not fit an
   (setq drgnx-work-map--outline (if (eq drgnx-work-map--outline t) 'off t))
   (drgnx-view-touch drgnx-view))
 
+;;;; The strip and the lens: header line and tab line, strings drawn when the frame changes
+
+(defun drgnx-work-map--needs-you (state)
+  "The strip's entries in STATE, ((TEXT . ITEM-IDS) …): the cards, then the agents that need you with no card."
+  (let* ((cards (mapcar (lambda (c) (cons (plist-get c :text) (plist-get c :about))) (drgnx-work-client-needs-you state)))
+         (covered (apply #'append (mapcar #'cdr cards)))
+         (agents (seq-filter (lambda (id) (let ((it (drgnx-work-client-item state id)))
+                                            (and (equal (plist-get it :kind) "agent")
+                                                 (equal (drgnx-work-map--field it :state) "needs-you")
+                                                 (not (member id covered)))))
+                             (drgnx-work-client-ids state))))
+    (append cards (mapcar (lambda (id) (cons (format "%s needs you" (plist-get (drgnx-work-client-item state id) :label))
+                                             (list id)))
+                          (sort agents #'string<)))))
+
+(defun drgnx-work-map--strip-string (state)
+  "The needs-you strip of STATE: a chip with its jump key for each of the first nine entries, +N for the rest, and the
+mission chips (the machines' load) at the right."
+  (let* ((entries (drgnx-work-map--needs-you state)) (i 0))
+    (concat (mapconcat (lambda (e) (cl-incf i) (propertize (format " ⚑ %s  g%d " (car e) i) 'face 'drgnx-work-needs-you))
+                       (seq-take entries 9) " ")
+            (if (> (length entries) 9) (propertize (format " +%d " (- (length entries) 9)) 'face 'drgnx-work-needs-you) "")
+            (propertize " " 'display '(space :align-to right))
+            (mapconcat (lambda (c) (propertize (format " %s %d/%d " (plist-get c :label) (or (plist-get c :used) 0)
+                                                       (or (plist-get c :total) 0))
+                                               'face 'drgnx-work-chip))
+                       (drgnx-work-client-chips state) " "))))
+
+(defun drgnx-work-map--lens-string ()
+  "The lens: Map · Board · Timeline, the one shown in bold (the Board and the Timeline arrive with their views)."
+  (concat (propertize " Map " 'face 'bold) " · " (propertize "Board" 'face 'drgnx-work-dim) " · "
+          (propertize "Timeline" 'face 'drgnx-work-dim)))
+
+(defun drgnx-work-map--refresh-strip ()
+  "Make the strip of the current buffer's frame; redisplay then only reads the variable."
+  (setq drgnx-work-map--strip (if-let* ((state (drgnx-work-map--state))) (drgnx-work-map--strip-string state) "")
+        drgnx-work-map--lens (drgnx-work-map--lens-string))
+  (force-mode-line-update))
+
+(defun drgnx-work-map-needs-you (n)
+  "Select the item the strip's Nth chip (g N) is about.  It selects; nothing is approved, pushed or answered."
+  (let* ((state (drgnx-work-map--require-state)) (entry (nth (1- n) (drgnx-work-map--needs-you state)))
+         (id (and entry (seq-find (lambda (i) (drgnx-work-client-item state i)) (cdr entry)))))
+    (if id
+        (progn (setq drgnx-work-map--needs-at (1- n)) (drgnx-work-map-select (drgnx-work-nav-sel state id)))
+      (message "Work: nothing needs you at g%d" n))))
+
+(defun drgnx-work-map-needs-you-here-next (&optional back)
+  "Select the next (BACK: previous) thing that needs you, cycling."
+  (interactive)
+  (let* ((state (drgnx-work-map--require-state)) (n (length (drgnx-work-map--needs-you state))))
+    (if (zerop n)
+        (message "Work: nothing needs you")
+      (setq drgnx-work-map--needs-at (mod (+ drgnx-work-map--needs-at (if back -1 1)) n))
+      (drgnx-work-map-needs-you (1+ drgnx-work-map--needs-at)))))
+
+(defun drgnx-work-map-needs-you-here-previous ()
+  "Select the previous thing that needs you."
+  (interactive)
+  (drgnx-work-map-needs-you-here-next t))
+
+;;;; Filters: the user's own layouts, which the hub makes at once
+
+(defun drgnx-work-map--send-filters ()
+  "Tell the hub the filters and collapsed layers: it answers with a full frame, laid out again."
+  (when drgnx-work-space--view
+    (drgnx-work-client-set drgnx-work-space--view
+                           :filters (list :focus (plist-get drgnx-work-map--filters :focus)
+                                          :overlaps (if (plist-get drgnx-work-map--filters :overlaps) t :false)
+                                          :finished (if (plist-get drgnx-work-map--filters :finished) t :false))
+                           :collapsed (vconcat drgnx-work-map--collapsed))))
+
+(defun drgnx-work-map-focus ()
+  "Hide what is not on the selection's chain; again, or with nothing selected, show everything.  While focused, the
+arrow keys move inside the chain and send nothing."
+  (interactive)
+  (let ((sel drgnx-work-map--selection) (cur (plist-get drgnx-work-map--filters :focus)))
+    (cond ((and cur (or (null sel) (equal cur (cdr sel)))) (setq drgnx-work-map--filters (plist-put drgnx-work-map--filters :focus nil)))
+          (sel (setq drgnx-work-map--filters (plist-put drgnx-work-map--filters :focus (cdr sel))))
+          (t (user-error "Select an item first")))
+    (drgnx-work-map--send-filters)))
+
+(defun drgnx-work-map-overlaps ()
+  "Show only the agents and branches that overlap, and what they share; again for everything."
+  (interactive)
+  (setq drgnx-work-map--filters (plist-put drgnx-work-map--filters :overlaps (not (plist-get drgnx-work-map--filters :overlaps))))
+  (drgnx-work-map--send-filters))
+
+(defun drgnx-work-map-show-finished ()
+  "Show finished items too; again to hide them."
+  (interactive)
+  (setq drgnx-work-map--filters (plist-put drgnx-work-map--filters :finished (not (plist-get drgnx-work-map--filters :finished))))
+  (drgnx-work-map--send-filters))
+
+(defun drgnx-work-map-collapse-layer (n)
+  "Collapse layer N to one thin row, or expand it."
+  (setq drgnx-work-map--collapsed (if (memq n drgnx-work-map--collapsed) (delq n (copy-sequence drgnx-work-map--collapsed))
+                                    (cons n drgnx-work-map--collapsed)))
+  (drgnx-work-map--send-filters))
+
+(defun drgnx-work-map-expand-layers ()
+  "Expand every layer."
+  (interactive)
+  (setq drgnx-work-map--collapsed nil)
+  (drgnx-work-map--send-filters))
+
+(defun drgnx-work-map--restyle-all (fn)
+  "Call FN, then draw again the rows whose items changed class because of it (the search text, say)."
+  (let* ((state (drgnx-work-map--state)) (before (and state (drgnx-work-map--classes state))))
+    (funcall fn)
+    (when state (drgnx-work-map--restyle state before))))
+
+(defun drgnx-work-map--set-search (text)
+  "Narrow the map to TEXT (nil or empty: no narrowing): items that do not match are dimmed."
+  (drgnx-work-map--restyle-all
+   (lambda () (setq drgnx-work-map--search (and text (not (string-empty-p text)) text)))))
+
+(defun drgnx-work-map-search (text)
+  "Narrow the map to the items matching TEXT, dim the rest, and select the first match."
+  (interactive (list (read-string "Narrow the map to: " drgnx-work-map--search)))
+  (drgnx-work-map--set-search text)
+  (when-let* ((state (drgnx-work-map--state)) (text (and text (not (string-empty-p text)) text))
+              (first (car (seq-filter (lambda (id) (drgnx-work-map--matches-p state id))
+                                      (mapcar #'car (sort (mapcar (lambda (id) (cons id (drgnx-work-client-rect state id)))
+                                                                  (seq-filter (lambda (i) (drgnx-work-client-rect state i))
+                                                                              (drgnx-work-client-ids state)))
+                                                          (lambda (a b) (< (plist-get (cdr a) :y) (plist-get (cdr b) :y)))))))))
+    (drgnx-work-map-select (drgnx-work-nav-sel state first))))
+
+(declare-function drgnx-close-pane "drgnx-close")
+
+(defun drgnx-work-map-escape ()
+  "Clear the search; with none, clear the filters and the collapsed layers; with none of those, close the pane."
+  (interactive)
+  (cond ((and drgnx-work-map--search (not (string-empty-p drgnx-work-map--search)))
+         (drgnx-work-map--set-search nil))
+        ((or (plist-get drgnx-work-map--filters :focus) (plist-get drgnx-work-map--filters :overlaps)
+             (plist-get drgnx-work-map--filters :finished) drgnx-work-map--collapsed)
+         (setq drgnx-work-map--filters nil drgnx-work-map--collapsed nil)
+         (drgnx-work-map--send-filters))
+        (t (drgnx-close-pane))))
+
+;;;; A new conclusion shows for 4 s
+
+(defun drgnx-work-map--clear-new (buffer)
+  "The timer function of the highlight: BUFFER's new marks go and their cards are drawn again."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (let ((state (drgnx-work-map--state)) (ids drgnx-work-map--new))
+        (setq drgnx-work-map--new nil)
+        (when (and state ids (drgnx-view-p drgnx-view) (not (drgnx-work-map--outline-p state)))
+          (drgnx-view-dirty drgnx-view (delete-dups (apply #'append (mapcar (lambda (id) (drgnx-work-client-rows-of state id)) ids)))))))))
+
+(defun drgnx-work-map--note-new (marks)
+  "Items whose latest conclusion MARKS (with the frame before them in :old) changed get a `new' mark for 4 s: one timer
+for the whole map."
+  (let* ((state (drgnx-work-map--state)) (old (plist-get marks :old))
+         (fresh (and state old
+                     (seq-filter (lambda (id)
+                                   (let ((n (drgnx-work-map--field (drgnx-work-client-item state id) :conclusion))
+                                         (o (drgnx-work-map--field (drgnx-work-client-item old id) :conclusion)))
+                                     (and n (not (equal n o)))))
+                                 (plist-get marks :items)))))
+    (when fresh
+      (setq drgnx-work-map--new (delete-dups (append fresh drgnx-work-map--new)))
+      (drgnx-timer-start (cons 'work-new drgnx-work-space--view) 4 #'drgnx-work-map--clear-new
+                         :args (list (current-buffer)) :owner (current-buffer)))))
+
 ;;;; Marks from the client
 
 (defun drgnx-work-map--changed (view-id marks)
   "`drgnx-work-client-change-functions': draw what MARKS name in the buffer of VIEW-ID."
   (when-let* ((buffer (drgnx-work-map-buffer view-id)))
     (with-current-buffer buffer
+      (drgnx-work-map--note-new marks)
+      (when (or (plist-get marks :strip) (eq (plist-get marks :rows) t)) (drgnx-work-map--refresh-strip))
       (when (drgnx-view-p drgnx-view)
         (if (or (eq (plist-get marks :rows) t) (plist-get marks :keys) (plist-get marks :layout)
                 (drgnx-work-map--outline-p (drgnx-work-map--state)))

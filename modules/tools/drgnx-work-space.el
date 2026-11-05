@@ -35,9 +35,15 @@
 (declare-function drgnx-work-map-buffer "drgnx-work-map")
 (declare-function drgnx-work-map-mode "drgnx-work-map")
 (declare-function drgnx-work-map-toggle-outline "drgnx-work-map")
+(declare-function drgnx-work-map-needs-you "drgnx-work-map")
+(declare-function drgnx-work-map-needs-you-here-next "drgnx-work-map")
+(declare-function drgnx-work-map-collapse-layer "drgnx-work-map")
 (declare-function drgnx-work-map--changed "drgnx-work-map")
 (defvar drgnx-work-space--view)
 (defvar drgnx-work-space--message)
+(defvar drgnx-hub--events)
+(declare-function drgnx-hub-running-p "drgnx-hub-client")
+(declare-function drgnx-hub-connect "drgnx-hub-client")
 (defvar drgnx-hub-event-functions)
 (defvar drgnx-hub-connected-functions)
 (defvar drgnx-hub-disconnect-functions)
@@ -76,7 +82,12 @@ it (a notes repository with the code repositories inside it)."
 
 (defconst drgnx-work-space-command-ids
   '(work-view work-outline work-left work-right work-why work-touches work-next-agent work-previous-agent work-open
-              work-open-beside)
+              work-open-beside work-needs-you-next work-needs-you-here-next work-needs-you-here-previous
+              work-needs-you-1 work-needs-you-2 work-needs-you-3 work-needs-you-4 work-needs-you-5 work-needs-you-6
+              work-needs-you-7 work-needs-you-8 work-needs-you-9 work-view-map work-focus work-overlaps
+              work-collapse-layer-1 work-collapse-layer-2 work-collapse-layer-3 work-collapse-layer-4
+              work-collapse-layer-5 work-collapse-layer-6 work-expand-layers work-show-finished work-search
+              work-escape)
   "The commands of this module, each with a row in every key profile (keys/*.eld).")
 
 ;;;; The workspace of a frame
@@ -182,12 +193,25 @@ labels' margin (84 px) and 12 px of padding, in logical pixels.  A terminal fram
 an editor window unless NO-DISPLAY.  Returns the map buffer.  Outside a project it opens an empty map that says so
 and subscribes to nothing."
   (interactive)
+  ;; the map's events come back on the subscribed connection: dial it when this Emacs has none and a hub is there
+  (when (and (fboundp 'drgnx-hub-running-p) (not (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events)))
+             (drgnx-hub-running-p))
+    (ignore-errors (drgnx-hub-connect)))
   (let ((buffer (drgnx-work-space--buffer (or workspace (drgnx-work-space-workspace)))))
     (unless no-display
       (pop-to-buffer buffer)
       (when (and (display-graphic-p) (buffer-local-value 'drgnx-work-space--view buffer))
         (drgnx-work-space--show-detail buffer)))
     buffer))
+
+(defun drgnx-work-space-needs-you-next ()
+  "Select the next thing that needs you in the Work space: in the map a window shows, else the newest, else a map
+opened now.  It selects; it never approves, pushes or answers."
+  (interactive)
+  (let ((buffer (or (seq-find (lambda (b) (get-buffer-window b t)) (drgnx-work-map-buffers))
+                    (car (drgnx-work-map-buffers)) (drgnx-work-space-open))))
+    (pop-to-buffer buffer)
+    (with-current-buffer buffer (drgnx-work-map-needs-you-here-next))))
 
 (defun drgnx-work-space--show-detail (map-buffer)
   "The side panel of MAP-BUFFER in a window of the right dock (pane kind `work-detail'), the map keeping focus."
@@ -262,6 +286,35 @@ follows the windows; the commands."
                               "An agent's transcript, a branch's repository, a file or a document")
                    (work-open-beside "Open Beside" drgnx-work-map-open-beside "Open it without moving focus")))
     (drgnx-command-define id :category "Work" :title title :command fn :map 'drgnx-work-map-mode-map :doc doc))
+  (pcase-dolist (`(,id ,title ,fn ,doc)
+                 '((work-needs-you-here-next "Select the Next Thing That Needs You" drgnx-work-map-needs-you-here-next
+                                             "Cycle the strip's chips; it selects, it never approves")
+                   (work-needs-you-here-previous "Select the Previous Thing That Needs You"
+                                                 drgnx-work-map-needs-you-here-previous "Cycle the strip's chips backwards")
+                   (work-view-map "Show the Map" drgnx-work-space-open "The map, keeping the selection")
+                   (work-focus "Focus on the Chain" drgnx-work-map-focus "Hide what is not on the selection's chain; again for all")
+                   (work-overlaps "Show Overlaps Only" drgnx-work-map-overlaps "Only the agents and branches that overlap")
+                   (work-expand-layers "Expand All Layers" drgnx-work-map-expand-layers "Every layer open again")
+                   (work-show-finished "Show Finished Items" drgnx-work-map-show-finished "Finished items too; again to hide them")
+                   (work-search "Narrow the Map" drgnx-work-map-search "Dim what does not match; Enter selects the first match")
+                   (work-escape "Clear Search, Filters, then Close" drgnx-work-map-escape
+                                "Esc: the search first, then the filters, then the pane")))
+    (drgnx-command-define id :category "Work" :title title :command fn :map 'drgnx-work-map-mode-map :doc doc))
+  (drgnx-command-define 'work-needs-you-next :category "Work" :title "Next Thing That Needs You"
+                        :command #'drgnx-work-space-needs-you-next
+                        :doc "Select the next thing that needs you in the Work space, opening the map")
+  (dotimes (i 9)
+    (let ((n (1+ i)))
+      (drgnx-command-define (intern (format "work-needs-you-%d" n)) :category "Work"
+                            :title (format "Select Thing %d That Needs You" n)
+                            :command (lambda () (interactive) (drgnx-work-map-needs-you n))
+                            :map 'drgnx-work-map-mode-map :doc "Jump to it; nothing is approved or answered")))
+  (dotimes (i 6)
+    (let ((n (1+ i)))
+      (drgnx-command-define (intern (format "work-collapse-layer-%d" n)) :category "Work"
+                            :title (format "Collapse or Expand Layer %d" n)
+                            :command (lambda () (interactive) (drgnx-work-map-collapse-layer n))
+                            :map 'drgnx-work-map-mode-map :doc "One thin row with its name and count; again to expand")))
   (drgnx-command-define 'work-view :category "Work" :title "Open the Work Space" :command #'drgnx-work-space-open
                         :doc "The map of every live piece of agent work: asks, specs, plans, agents, branches, files and machines")
   (drgnx-command-define 'work-outline :category "Work" :title "Show the Map as an Outline"

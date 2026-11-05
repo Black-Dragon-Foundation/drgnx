@@ -114,6 +114,26 @@
         (should (equal '(agent . "agent:a2") drgnx-work-map--edge-selection))
         (should (equal '((agent . "agent:a2")) ran))))))                    ; once, for the last selection
 
+(ert-deftest drgnx-work-space/new-finding-shows-within-1s-and-clears-after-4s ()
+  ;; a new conclusion marks its card `new' at once and a timer clears it 4 s later: one for the whole map
+  (drgnx-test-with-clock (:allow-pending t)
+    (drgnx-work-nav-test--with-map
+      (drgnx-work-client-event
+       "work-map" (plist-put (drgnx-work-fixture-delta
+                              4 3 :changed (list (drgnx-work-fixture-changed frame "agent:a2" :conclusion "found the leak")))
+                             :view id))
+      (drgnx-view-draw-now drgnx-view)
+      (should (string-search "found the leak" (buffer-string)))
+      (should (string-search " new " (buffer-string)))
+      (should (drgnx-timer-active-p (cons 'work-new id)))
+      (drgnx-test-advance 3)
+      (drgnx-view-draw-now drgnx-view)
+      (should (string-search " new " (buffer-string)))                      ; still within the 4 s
+      (drgnx-test-advance 2)
+      (drgnx-view-draw-now drgnx-view)
+      (should-not (string-search " new " (buffer-string)))
+      (should (string-search "found the leak" (buffer-string))))))          ; the conclusion stays; the chip goes
+
 (ert-deftest drgnx-work-nav/a-removed-selection-moves-to-its-parent ()
   (let* ((frame (drgnx-work-fixture-frame)) (state (drgnx-work-client-init frame))
          (gone (car (drgnx-work-client-step state (drgnx-work-fixture-delta 4 3 :removed '("agent:a1/t1"))))))
