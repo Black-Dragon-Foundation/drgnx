@@ -1,31 +1,30 @@
-//! The agent core's methods, routed (agent system part 1, Task 0): every method the plan adds, and `agents/*` and
-//! `job/*` (which the hub now serves itself), go to the function of the module whose task fills it.  Until then each
-//! answers `internal`, "not yet".  This file's arms are Task 0's: a task fills its own module's functions and state
+//! The agent core's methods, routed: every method of the agent system, and `agents/*` and `job/*` (which the hub now
+//! serves itself), go to the function of the module that serves it.  A module fills its own functions and state
 //! ([`Core`]'s field), never this match.
 //!
-//! | Methods | Module | Task |
-//! |---|---|---|
-//! | `agents/{list,start,get,stop,kill,permission,do}` | [`crate::agents::session`] | 8a |
-//! | `agents/send` | [`crate::agents::session`] | 8b |
-//! | `agents/move` | [`crate::agents::session`] | 26 |
-//! | `agents/probe` | [`crate::agents::probe`] | P7 |
-//! | `messages/retract` | [`crate::agents::deliver`] | 24 |
-//! | `agents/role`, `agents/slice` | [`crate::manager`] | 25 |
-//! | `exec/*` | [`crate::exec`] | 11 |
-//! | `job/{propose,start-task,approve,order,block,unblock,stop,status}` | [`crate::runner`] | 16a |
-//! | `job/{card,reply,dismiss,reassign,resume}` | [`crate::runner`] | 16b |
-//! | `matrix/*`, `presence/set` | [`crate::matrix_gate`] | 12 |
-//! | `plans/*`, `reports/get`, `decisions/effects` | [`crate::runner::effects`] | 21 |
-//! | `brief/*` | [`crate::brief`] | 22 |
-//! | `timeline/get` | [`crate::timeline`] | 19 |
-//! | `budget/*`, `pace/get` | [`crate::budget`] | 20 |
-//! | `records/{import,status}` | [`crate::records`] | 14 |
-//! | `records/{proposals,decide}` | [`crate::records`] | 14b |
-//! | `machines/{report,list}` | [`crate::work::machines`] | P2 5 |
-//! | `work/conclusions` | [`crate::work::conclusions`] | P2 14 |
-//! | `agents/presence/{subscribe,get}` | [`crate::work::presence`] | P2 15 |
-//! | `work/{files,hunks,file-at}` | [`crate::work::edits`] | Work space |
-//! | `work/map/{subscribe,set,close}` | [`crate::work::map`] | P2 18 |
+//! | Methods | Module |
+//! |---|---|
+//! | `agents/{list,start,get,stop,kill,permission,do}` | [`crate::agents::session`] |
+//! | `agents/send` | [`crate::agents::session`] |
+//! | `agents/move` | [`crate::agents::session`] |
+//! | `agents/probe` | [`crate::agents::probe`] |
+//! | `messages/retract` | [`crate::agents::deliver`] |
+//! | `agents/role`, `agents/slice` | [`crate::manager`] |
+//! | `exec/*` | [`crate::exec`] |
+//! | `job/{propose,start-task,approve,order,block,unblock,stop,status}` | [`crate::runner`] |
+//! | `job/{card,reply,dismiss,reassign,resume}` | [`crate::runner`] |
+//! | `matrix/*`, `presence/set` | [`crate::matrix_gate`] |
+//! | `plans/*`, `reports/get`, `decisions/effects` | [`crate::runner::effects`] |
+//! | `brief/*` | [`crate::brief`] |
+//! | `timeline/get` | [`crate::timeline`] |
+//! | `budget/*`, `pace/get` | [`crate::budget`] |
+//! | `records/{import,status}` | [`crate::records`] |
+//! | `records/{proposals,decide}` | [`crate::records`] |
+//! | `machines/{report,list}` | [`crate::work::machines`] |
+//! | `work/conclusions` | [`crate::work::conclusions`] |
+//! | `agents/presence/{subscribe,get}` | [`crate::work::presence`] |
+//! | `work/{files,hunks,file-at}` | [`crate::work::edits`] |
+//! | `work/map/{subscribe,set,close}` | [`crate::work::map`] |
 
 use crate::dispatch::Caller;
 use crate::front::Front;
