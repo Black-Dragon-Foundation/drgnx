@@ -13931,6 +13931,244 @@
       "classes": [
         "user"
       ],
+      "doc": "what starting TEI or Ollama would run, shown before the user agrees; runs and writes nothing",
+      "name": "search/server-plan",
+      "params": {
+        "$defs": {
+          "ServerKind": {
+            "description": "A server the wizard can start on request.",
+            "enum": [
+              "tei",
+              "ollama"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "$ref": "#/$defs/ServerKind"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "ServerKindParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What a start would do, shown before the user agrees. A plan runs and writes nothing.",
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "bytes": {
+            "description": "About what the model weighs.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "commands": {
+            "description": "The commands a start runs, in order.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "gpu": {
+            "description": "The GPU image would run.",
+            "type": "boolean"
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "memory_cap": {
+            "description": "The memory cap of the container (TEI) as podman writes it, e.g. `4g`; empty for Ollama.",
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "unit_path": {
+            "description": "The Quadlet file a start writes (TEI).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "why": {
+            "description": "Why not, when it is not available.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "available",
+          "gpu",
+          "memory_cap",
+          "model",
+          "commands"
+        ],
+        "title": "ServerPlan",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "start TEI (a capped podman Quadlet) or Ollama after the user confirmed the plan; the hub never starts one by itself",
+      "name": "search/server-start",
+      "params": {
+        "$defs": {
+          "ServerKind": {
+            "description": "A server the wizard can start on request.",
+            "enum": [
+              "tei",
+              "ollama"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "description": "The user agreed to what `search/server-plan` showed; a start without it is refused.",
+            "type": "boolean"
+          },
+          "kind": {
+            "$ref": "#/$defs/ServerKind"
+          }
+        },
+        "required": [
+          "kind",
+          "confirm"
+        ],
+        "title": "ServerStartParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ProviderEntry": {
+            "additionalProperties": false,
+            "description": "An entry for the settings' provider table; the editor's settings writer adds it, the hub never does.",
+            "properties": {
+              "auth": {
+                "type": "string"
+              },
+              "base": {
+                "type": "string"
+              },
+              "caps": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "base",
+              "auth",
+              "caps"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "$ref": "#/$defs/ProviderEntry"
+          },
+          "started": {
+            "type": "boolean"
+          },
+          "unit": {
+            "description": "The service that runs it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "started",
+          "unit",
+          "provider"
+        ],
+        "title": "ServerStarted",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "stop the server a start began",
+      "name": "search/server-stop",
+      "params": {
+        "$defs": {
+          "ServerKind": {
+            "description": "A server the wizard can start on request.",
+            "enum": [
+              "tei",
+              "ollama"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "$ref": "#/$defs/ServerKind"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "ServerKindParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "stopped": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "stopped"
+        ],
+        "title": "ServerStopped",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a project's index: files and chunks per class, coverage errors, the lag, the models that have vectors, tier 2's state and the embed worker's device",
       "name": "search/status",
       "params": {

@@ -1081,6 +1081,16 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   against the model's size; the projects open again once it lands) and `search/typing` are the others. All are the
   user's: an agent has no search method. A project's globs are `.drgnx/search.eld` (a file that does not read turns
   its search off) and the editor's per-project `drgnx-search-{include,exclude,off}` (`overrides::PER_PROJECT`).
+- **Servers on request (`search/servers.rs`).** `search/server-plan` shows what starting TEI or Ollama would run (it
+  writes and runs nothing); `search/server-start` needs `confirm: true` and answers the provider entry for the settings'
+  provider table (the hub writes no settings: the editor's writer adds it); `search/server-stop` stops it. TEI is a
+  podman Quadlet `drgnx-tei.container` under `$XDG_CONFIG_HOME/containers/systemd/` (CPU image, or the GPU tag of the
+  card when the NVIDIA CDI device is present; 4 GiB or 2 GiB memory cap, loopback port 8087, a named cache volume, no
+  `[Install]`): Linux with podman and a systemd user session, and not inside a container. Ollama needs `ollama` on the
+  PATH; its service starts only when it does not answer (`systemctl --user`, or `launchctl` on macOS), then the model
+  is pulled. Nothing in the hub's idle paths reaches a start. With test-hooks the runner only records the commands in
+  `$XDG_STATE_HOME/drgnx/servers-test.log`. The macOS Ollama start (`launchctl start com.ollama.ollama`) is unverified
+  on a Mac.
 - **The MCP tool (`search/mcp.rs`).** A session whose `mcp/session` came while `drgnx-agents-mcp` holds `search` gets
   `search.sock` beside `mcp.sock` (recorded in the session's row, so it is bound again at a restart and closed with the
   session): the `search` tool (`query`, `scope`, `k`), pinned to the session's `cwd`. The agent's `mcpServers` list it

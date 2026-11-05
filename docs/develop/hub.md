@@ -1073,6 +1073,9 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/index` | user | `{now?: boolean, rebuild?: boolean, root: AbsPath}` | `{started: boolean}` | yes |
 | `search/model-download` | user | `{consent: {bytes: natnum}, model: Id}` | `{started: boolean}` | yes |
 | `search/query` | user | `{k?: natnum, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code", text: Prompt}` | `{hits: [Hit], lag: Lag, lag_line: string, model?: string, notice?: string}` | no |
+| `search/server-plan` | user | `{kind: "tei" \| "ollama"}` | `ServerPlan` | no |
+| `search/server-start` | user | `{confirm: boolean, kind: "tei" \| "ollama"}` | `{provider: ProviderEntry, started: boolean, unit: string}` | no |
+| `search/server-stop` | user | `{kind: "tei" \| "ollama"}` | `{stopped: boolean}` | no |
 | `search/status` | user | `{root: AbsPath}` | `StatusAnswer` | no |
 | `search/typing` | user | `{}` | `{}` | no |
 | `settings/confirm` | user | `{error?: string, ok: boolean, tx: natnum}` | `{state: "accepted" \| "reverted" \| "blocked"}` | yes |

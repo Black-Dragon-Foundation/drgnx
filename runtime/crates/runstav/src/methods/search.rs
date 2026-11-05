@@ -211,6 +211,79 @@ pub struct DownloadParams {
     pub consent: ConsentParam,
 }
 
+/// A server the wizard can start on request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ServerKind {
+    Tei,
+    Ollama,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ServerKindParams {
+    pub kind: ServerKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ServerStartParams {
+    pub kind: ServerKind,
+    /// The user agreed to what `search/server-plan` showed; a start without it is refused.
+    pub confirm: bool,
+}
+
+/// What a start would do, shown before the user agrees. A plan runs and writes nothing.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ServerPlan {
+    pub available: bool,
+    /// Why not, when it is not available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+    /// The GPU image would run.
+    pub gpu: bool,
+    /// The memory cap of the container (TEI) as podman writes it, e.g. `4g`; empty for Ollama.
+    pub memory_cap: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    pub model: String,
+    /// About what the model weighs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
+    /// The Quadlet file a start writes (TEI).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit_path: Option<String>,
+    /// The commands a start runs, in order.
+    pub commands: Vec<String>,
+}
+
+/// An entry for the settings' provider table; the editor's settings writer adds it, the hub never does.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderEntry {
+    pub id: String,
+    pub kind: String,
+    pub base: String,
+    pub auth: String,
+    pub caps: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ServerStarted {
+    pub started: bool,
+    /// The service that runs it.
+    pub unit: String,
+    pub provider: ProviderEntry,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ServerStopped {
+    pub stopped: bool,
+}
+
 pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
@@ -242,6 +315,21 @@ pub(crate) fn methods() -> Vec<Method> {
             "search/typing", SearchTyping(Empty) -> Empty,
             classes: [User], writes: false,
             doc: "the editor's keystroke signal: the vectors wait between requests while typing holds",
+        ),
+        method!(
+            "search/server-plan", SearchServerPlan(ServerKindParams) -> ServerPlan,
+            classes: [User], writes: false,
+            doc: "what starting TEI or Ollama would run, shown before the user agrees; runs and writes nothing",
+        ),
+        method!(
+            "search/server-start", SearchServerStart(ServerStartParams) -> ServerStarted,
+            classes: [User], writes: false,
+            doc: "start TEI (a capped podman Quadlet) or Ollama after the user confirmed the plan; the hub never starts one by itself",
+        ),
+        method!(
+            "search/server-stop", SearchServerStop(ServerKindParams) -> ServerStopped,
+            classes: [User], writes: false,
+            doc: "stop the server a start began",
         ),
     ]
 }

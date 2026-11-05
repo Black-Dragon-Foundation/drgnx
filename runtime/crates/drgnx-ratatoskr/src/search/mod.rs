@@ -6,6 +6,7 @@ pub mod mcp;
 pub mod methods;
 pub mod power;
 pub mod project;
+pub mod servers;
 pub mod worker;
 
 pub use download::{Consent, DownloadError, download};

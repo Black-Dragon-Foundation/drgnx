@@ -14,7 +14,7 @@
 
 use super::project::{Project, ProjectError, ProjectSpec, Tier2, project_id};
 use super::worker::WorkerEmbedder;
-use super::{DocEmbedder, Search, download, power, prefer};
+use super::{DocEmbedder, Search, download, power, prefer, servers};
 use crate::clock;
 use crate::dispatch::Caller;
 use crate::embed::ProviderEmbedder;
@@ -675,6 +675,62 @@ impl Hub {
         Ok(w::Started { started: true })
     }
 
+    /// `search/server-plan`: what a start would run. The host is read, nothing runs.
+    async fn server_plan(&self, kind: w::ServerKind) -> Result<w::ServerPlan, Error> {
+        let env = self.dirs()?.env.clone();
+        let host = tokio::task::spawn_blocking(move || servers::Host::probe(&env))
+            .await
+            .map_err(internal)?;
+        Ok(servers::plan(&host, kind))
+    }
+
+    /// `search/server-start`: the only door to [`servers::start`].
+    async fn server_start(&self, p: w::ServerStartParams) -> Result<w::ServerStarted, Error> {
+        self.server_job(move |host, run| servers::start(host, run, p.kind, p.confirm))
+            .await
+    }
+
+    /// `search/server-stop`: the only door to [`servers::stop`].
+    async fn server_stop(&self, kind: w::ServerKind) -> Result<w::ServerStopped, Error> {
+        let stopped = self
+            .server_job(move |host, run| servers::stop(host, run, kind))
+            .await?;
+        Ok(w::ServerStopped { stopped })
+    }
+
+    /// F on a probed host and the runner (the real tools; with test-hooks one that records and runs nothing), off the
+    /// async threads.
+    async fn server_job<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&servers::Host, &dyn servers::Run) -> Result<T, servers::Refused>
+        + Send
+        + 'static,
+    ) -> Result<T, Error> {
+        let env = self.dirs()?.env.clone();
+        tokio::task::spawn_blocking(move || {
+            let host = servers::Host::probe(&env);
+            #[cfg(feature = "test-hooks")]
+            let run = servers::Record(
+                PathBuf::from(env.vars.get("XDG_STATE_HOME").cloned().unwrap_or_default())
+                    .join("drgnx/servers-test.log"),
+            );
+            #[cfg(not(feature = "test-hooks"))]
+            let run = servers::System;
+            f(&host, &run)
+        })
+        .await
+        .map_err(internal)?
+        .map_err(|r| match r {
+            servers::Refused::Confirm => error(
+                ErrorCode::InvalidParams,
+                "starting a server needs the user's confirmation (confirm: true)",
+                Some("confirm"),
+            ),
+            servers::Refused::Unavailable(why) => error(ErrorCode::NotAllowed, why, Some("kind")),
+            servers::Refused::Failed(why) => internal(why),
+        })
+    }
+
     async fn typing(&self) {
         for o in self.projects.lock().await.values() {
             o.project.note_typing();
@@ -747,6 +803,9 @@ pub async fn serve(
         Params::SearchIndex(i) => hub.index(front, i).await.map(|s| json!(s)),
         Params::SearchEmbedders(_) => hub.embedders(front).await.map(|e| json!(e)),
         Params::SearchModelDownload(d) => hub.model_download(front, d).await.map(|s| json!(s)),
+        Params::SearchServerPlan(k) => hub.server_plan(k.kind).await.map(|p| json!(p)),
+        Params::SearchServerStart(s) => hub.server_start(s).await.map(|r| json!(r)),
+        Params::SearchServerStop(k) => hub.server_stop(k.kind).await.map(|r| json!(r)),
         Params::SearchTyping(_) => {
             hub.typing().await;
             Ok(json!({}))

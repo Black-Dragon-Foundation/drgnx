@@ -221,6 +221,9 @@ params! {
     SearchEmbedders(Empty),
     SearchModelDownload(search::DownloadParams),
     SearchTyping(Empty),
+    SearchServerPlan(search::ServerKindParams),
+    SearchServerStart(search::ServerStartParams),
+    SearchServerStop(search::ServerKindParams),
 }
 
 /// Every method, in no order.
