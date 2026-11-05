@@ -458,22 +458,101 @@ fn network_is_provider_only_under_balanced() {
     assert_eq!(code, 0, "a live listener outside was reachable");
 }
 
+/// The folder Claude Code keeps a project's sessions in, under `~/.claude/projects`: its path with every character
+/// that is not an ASCII letter or digit made `-`.
+fn claude_folder(project: &Path) -> String {
+    project
+        .to_str()
+        .unwrap()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
+/// Pattern D (one run, its exit code), on the full tier and on the reduced one where the kernel has ABI 9.  An agent
+/// must never plant what your own, unsandboxed CLI runs or reads later: `settings.json` and its hooks, commands, the
+/// shell snapshots its Bash tool sources.  The CLI still refreshes its token in place and keeps its session's
+/// transcript, and it never sees another CLI's login.
 #[test]
 #[ignore = "needs the real sandbox (bwrap with user namespaces): the sandbox lane"]
-fn the_login_token_dir_is_bound_for_its_own_cli_only() {
+fn the_login_dir_takes_only_the_token_and_the_sessions_state() {
     let fx = Fx::new();
+    let c = fx.p("home/.claude");
+    for d in ["hooks", "commands", "shell-snapshots"] {
+        std::fs::create_dir_all(c.join(d)).unwrap();
+    }
+    std::fs::write(c.join("settings.json"), "{}").unwrap();
+    std::fs::write(c.join(".credentials.json"), "old").unwrap();
+    std::fs::write(c.join("shell-snapshots/snapshot-zsh-1.sh"), "orig").unwrap();
+    let project = c.join("projects").join(claude_folder(&fx.p("wt")));
     let script = format!(
-        "echo t > {c}/token || exit 11; cat {x}/auth.json 2>/dev/null && exit 12; exit 0",
-        c = fx.p("home/.claude").display(),
+        "cat {c}/settings.json >/dev/null || exit 10; \
+         for f in settings.json settings.local.json CLAUDE.md hooks/h.sh commands/c.md \
+           shell-snapshots/snapshot-zsh-1.sh; do echo x >> {c}/$f 2>/dev/null && exit 13; done; \
+         mv {c}/settings.json {c}/moved 2>/dev/null && exit 14; mkdir {c}/plugins 2>/dev/null && exit 15; \
+         cat {x}/auth.json 2>/dev/null && exit 16; \
+         echo new > {c}/.credentials.json || exit 11; echo t >> {p}/s.jsonl || exit 12; exit 0",
+        c = c.display(),
+        p = project.display(),
         x = fx.p("home/.codex").display()
     );
-    let code = fx.run(
-        reduced(),
-        &fx.plan(&script),
-        &fx.shape(NetCell::ProviderOnly),
+    let mut tiers = vec![Tier::Full];
+    if reduced() == Tier::Reduced {
+        tiers.push(Tier::Reduced);
+    }
+    for tier in tiers {
+        let code = fx.run(tier, &fx.plan(&script), &fx.shape(NetCell::ProviderOnly));
+        assert_eq!(code, 0, "{tier:?}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(c.join("settings.json")).unwrap(),
+        "{}"
     );
+    assert_eq!(
+        std::fs::read_to_string(c.join("shell-snapshots/snapshot-zsh-1.sh")).unwrap(),
+        "orig"
+    );
+    assert!(!c.join("hooks/h.sh").exists() && !c.join("plugins").exists());
+    assert_eq!(
+        std::fs::read_to_string(c.join(".credentials.json")).unwrap(),
+        "new\n"
+    );
+    assert!(project.join("s.jsonl").exists());
+}
+
+/// Pattern D (one run, its exit code).  A chat in your project, on the full tier: Claude's folder for that project is
+/// the chat's own, bound over yours, so the chat cannot read your transcripts or plant auto memory your own CLI loads,
+/// and what it writes there lands in its scratch.
+#[test]
+#[ignore = "needs the real sandbox (bwrap with user namespaces): the sandbox lane"]
+fn a_project_chat_has_a_claude_project_folder_of_its_own() {
+    let fx = Fx::new();
+    let env = fx.env();
+    let project = fx.p("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    let yours = fx.p("home/.claude/projects").join(claude_folder(&project));
+    std::fs::create_dir_all(yours.join("memory")).unwrap();
+    std::fs::write(yours.join("you.jsonl"), "yours").unwrap();
+    std::fs::write(yours.join("memory/MEMORY.md"), "yours").unwrap();
+    let script = format!(
+        "cat {y}/you.jsonl 2>/dev/null && exit 11; echo x >> {y}/memory/MEMORY.md 2>/dev/null; \
+         echo t > {y}/chat.jsonl || exit 12; exit 0",
+        y = yours.display()
+    );
+    let (plan, shape) = chat_launch(&env, &fx.plan(&script), "C1", &project).unwrap();
+    let code = fx.run(Tier::Full, &plan, &shape);
     assert_eq!(code, 0);
-    assert!(fx.p("home/.claude/token").exists());
+    assert_eq!(
+        std::fs::read_to_string(yours.join("memory/MEMORY.md")).unwrap(),
+        "yours"
+    );
+    assert!(!yours.join("chat.jsonl").exists());
+    assert!(
+        scratch_dir(&env, "C1")
+            .unwrap()
+            .join("claude-project/chat.jsonl")
+            .exists()
+    );
 }
 
 #[test]

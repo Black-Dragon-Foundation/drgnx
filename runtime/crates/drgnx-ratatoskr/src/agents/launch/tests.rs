@@ -75,36 +75,96 @@ impl Fx {
     /// The spec for `shape`, validated for the reduced tier, in `launch_on`'s order: nothing has made the session dir
     /// before the spec is built.
     fn spec(&self, plan: &LaunchPlan, shape: &SessionShape) -> gleipnir::Spec {
+        self.spec_on(plan, shape, Tier::Reduced, Target::LinuxReduced)
+    }
+
+    /// [`Fx::spec`] for TIER and TARGET.
+    fn spec_on(
+        &self,
+        plan: &LaunchPlan,
+        shape: &SessionShape,
+        tier: Tier,
+        target: Target,
+    ) -> gleipnir::Spec {
         let env = self.env();
         let ctx = context_for(&env, None);
         let scratch = scratch_dir(&env, &shape.sid).unwrap();
-        let spec = session_spec(
-            &env,
-            &ctx,
-            plan,
-            shape,
-            &scratch,
-            Tier::Reduced,
-            Target::LinuxReduced,
-        )
-        .unwrap()
-        .spec;
-        let valid = gleipnir::validate(spec, &ctx, Target::LinuxReduced).unwrap();
+        let spec = session_spec(&env, &ctx, plan, shape, &scratch, tier, target)
+            .unwrap()
+            .spec;
+        let valid = gleipnir::validate(spec, &ctx, target).unwrap();
         valid.spec().clone()
     }
 }
 
+/// The folder Claude Code keeps a project's sessions in, under `~/.claude/projects`: its path with every character
+/// that is not an ASCII letter or digit made `-`.
+fn claude_folder(project: &Path) -> String {
+    project
+        .to_str()
+        .unwrap()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
+/// Pattern D. The login dir is read-only: the CLI writes only its token file and its own session's state there
+/// (Claude's `.credentials.json`, `todos` and the project folder of its cwd), never `settings.json`, hooks, commands or
+/// anything else your own, unsandboxed CLI runs or reads later.
 #[test]
-fn a_worker_writes_its_worktree_and_its_login_dir_only() {
+fn a_worker_reads_its_login_dir_and_writes_only_its_token_and_state() {
     let fx = Fx::new();
+    let login = fx.p("home/.claude");
+    fs::write(login.join(".credentials.json"), "{}").unwrap();
     let spec = fx.spec(&fx.plan(".claude"), &fx.shape(NetCell::ProviderOnly));
-    assert_eq!(spec.write, vec![fx.p("wt"), fx.p("home/.claude")]);
+    assert_eq!(
+        spec.write,
+        vec![
+            fx.p("wt"),
+            login.join(".credentials.json"),
+            login.join("todos"),
+            login.join("projects").join(claude_folder(&fx.p("wt"))),
+        ]
+    );
+    assert!(spec.read.contains(&login), "{:?}", spec.read);
     assert!(spec.home.is_none());
     let all: Vec<&PathBuf> = spec.read.iter().chain(&spec.write).collect();
     for never in ["home", "home/.ssh", "home/.codex"] {
         assert!(!all.contains(&&fx.p(never)), "{never} is bound");
     }
     assert_eq!(spec.chdir, fx.p("wt"));
+}
+
+/// Pattern D. Codex and Gemini get the same shape: their login dir read-only, their token file and their sessions'
+/// folders writable, and nothing of another CLI's.
+#[test]
+fn each_cli_writes_its_token_and_its_sessions_alone() {
+    let fx = Fx::new();
+    fs::write(fx.p("home/.codex/auth.json"), "{}").unwrap();
+    fs::create_dir_all(fx.p("home/.gemini")).unwrap();
+    fs::write(fx.p("home/.gemini/oauth_creds.json"), "{}").unwrap();
+    let shape = fx.shape(NetCell::ProviderOnly);
+    let codex = fx.spec(&fx.plan(".codex"), &shape);
+    let c = fx.p("home/.codex");
+    assert_eq!(
+        codex.write,
+        vec![
+            fx.p("wt"),
+            c.join("auth.json"),
+            c.join("sessions"),
+            c.join("log")
+        ]
+    );
+    let gemini = fx.spec(&fx.plan(".gemini"), &shape);
+    let g = fx.p("home/.gemini");
+    assert_eq!(
+        gemini.write,
+        vec![fx.p("wt"), g.join("oauth_creds.json"), g.join("tmp")]
+    );
+    for (spec, dir) in [(&codex, &c), (&gemini, &g)] {
+        assert!(spec.read.contains(dir), "{:?}", spec.read);
+        assert!(!spec.write.contains(dir));
+    }
 }
 
 #[test]
@@ -121,10 +181,18 @@ fn the_login_dir_is_the_plans_own_alone() {
     let fx = Fx::new();
     let claude = fx.spec(&fx.plan(".claude"), &fx.shape(NetCell::ProviderOnly));
     let codex = fx.spec(&fx.plan(".codex"), &fx.shape(NetCell::ProviderOnly));
-    assert!(claude.write.contains(&fx.p("home/.claude")));
-    assert!(!claude.write.contains(&fx.p("home/.codex")));
-    assert!(codex.write.contains(&fx.p("home/.codex")));
-    assert!(!codex.write.contains(&fx.p("home/.claude")));
+    let under = |spec: &gleipnir::Spec, d: &str| {
+        spec.read
+            .iter()
+            .chain(&spec.write)
+            .any(|p| p.starts_with(fx.p(d)))
+    };
+    assert!(claude.read.contains(&fx.p("home/.claude")));
+    assert!(!claude.write.contains(&fx.p("home/.claude")));
+    assert!(!under(&claude, "home/.codex"));
+    assert!(codex.read.contains(&fx.p("home/.codex")));
+    assert!(!codex.write.contains(&fx.p("home/.codex")));
+    assert!(!under(&codex, "home/.claude"));
 }
 
 #[test]
@@ -254,7 +322,15 @@ fn a_plain_chat_works_in_a_scratch_dir_with_no_home() {
     };
     let spec = fx.spec(&fx.plan(".claude"), &shape);
     assert_eq!(spec.chdir, scratch);
-    assert_eq!(spec.write, vec![scratch, fx.p("home/.claude")]);
+    let login = fx.p("home/.claude");
+    assert_eq!(
+        spec.write,
+        vec![
+            scratch.clone(),
+            login.join("todos"),
+            login.join("projects").join(claude_folder(&scratch)),
+        ]
+    );
     assert!(spec.read.iter().all(|p| p != &fx.p("home")));
     assert!(matches!(spec.net, Net::Isolated { .. }));
 }
@@ -296,7 +372,14 @@ fn a_chat_in_a_project_reads_it_and_writes_only_its_scratch() {
     let scratch = scratch_path(&env, "C1");
     assert_eq!(spec.chdir, project);
     assert!(spec.read.contains(&project), "{:?}", spec.read);
-    assert_eq!(spec.write, vec![scratch, fx.p("home/.claude")]);
+    // the project's folder in `~/.claude/projects` is yours (its transcripts, its auto memory): never the chat's here
+    let login = fx.p("home/.claude");
+    assert_eq!(spec.write, vec![scratch, login.join("todos")]);
+    assert!(
+        spec.binds.iter().all(|b| !b.dest.starts_with(&login)),
+        "{:?}",
+        spec.binds
+    );
     for w in &spec.write {
         assert!(
             !w.starts_with(&project) && !project.starts_with(w),
@@ -318,11 +401,11 @@ fn a_chat_in_a_project_reads_it_and_writes_only_its_scratch() {
             assert!(!project.join(rel).exists(), "{rel} was made in the project");
         }
     }
-    // a plain checkout's git folder is inside the project: nothing more is bound
+    // a plain checkout's git folder is inside the project: nothing more is bound but the login dir
     assert_eq!(
         spec.read
             .iter()
-            .filter(|r| !r.starts_with(&project))
+            .filter(|r| !r.starts_with(&project) && **r != login)
             .count(),
         0,
         "{:?}",
@@ -343,10 +426,13 @@ fn a_chat_in_a_project_reads_it_and_writes_only_its_scratch() {
     let (plan, shape) = chat_launch(&env, &fx.plan(".claude"), "C2", &linked).unwrap();
     let spec = fx.spec(&plan, &shape);
     assert_eq!(spec.chdir, linked);
-    assert_eq!(spec.read, vec![linked.clone(), common.clone()]);
+    assert_eq!(
+        spec.read,
+        vec![linked.clone(), common.clone(), login.clone()]
+    );
     assert_eq!(
         spec.write,
-        vec![scratch_path(&env, "C2"), fx.p("home/.claude")]
+        vec![scratch_path(&env, "C2"), login.join("todos")]
     );
     for w in &spec.write {
         assert!(
@@ -370,6 +456,43 @@ fn a_chat_in_a_project_reads_it_and_writes_only_its_scratch() {
         kind(Role::Chat, &project, &scratch_path(&env, "C1")),
         Kind::Chat
     );
+}
+
+/// Pattern D. A chat in your project runs where your own Claude Code keeps that project's transcripts and auto memory
+/// (`projects/<the project's path>` in Claude's login dir): on the full tier the chat gets an empty folder of its own,
+/// in its scratch, bound over that one, so it neither reads nor writes yours.  The reduced tier cannot bind: it gives
+/// none.
+#[test]
+fn a_project_chat_keeps_its_claude_project_folder_apart_from_yours() {
+    let fx = Fx::new();
+    let env = fx.env();
+    let project = fx.p("proj");
+    fs::create_dir_all(&project).unwrap();
+    let yours = fx.p("home/.claude/projects").join(claude_folder(&project));
+    fs::create_dir_all(yours.join("memory")).unwrap();
+    let (plan, shape) = chat_launch(&env, &fx.plan(".claude"), "C1", &project).unwrap();
+    let full = fx.spec_on(&plan, &shape, Tier::Full, Target::LinuxBwrap);
+    let own = scratch_path(&env, "C1").join("claude-project");
+    assert!(
+        full.binds
+            .iter()
+            .any(|b| b.mode == Mode::Rw && b.source == own && b.dest == yours),
+        "{:?}",
+        full.binds
+    );
+    assert!(own.is_dir());
+    let reduced = fx.spec(&plan, &shape);
+    for spec in [&full, &reduced] {
+        assert!(
+            !spec
+                .write
+                .iter()
+                .any(|w| yours.starts_with(w) || w.starts_with(&yours)),
+            "{:?}",
+            spec.write
+        );
+    }
+    assert!(reduced.binds.iter().all(|b| b.dest != yours));
 }
 
 /// B3: the lock's real list is relative; it is pinned inside the worktree, missing entries included.

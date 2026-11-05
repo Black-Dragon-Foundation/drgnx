@@ -87,8 +87,17 @@ this returns.
   `gleipnir::read_status` after spawning (an unread status means the start is unknown: kill the session). No path
   starts a session unsandboxed. The spec:
   - writable: the worktree (a chat: its scratch dir `<tmp>/drgnx-scratch-UID/SID`, not in the session dir, which is
-    read-only and takes nothing else) and the CLI's own login dir (`LaunchPlan.login_dir`, for that CLI alone); no
-    home, no other login dir; `HOME` is told but unreadable beyond it;
+    read-only and takes nothing else); no home, no other login dir; `HOME` is told but unreadable beyond it;
+  - the CLI's own login dir (`LaunchPlan.login_dir`, for that CLI alone) is read-only (`read`), since your own CLI
+    runs and loads what is in it (settings and hooks, commands, skills, plugins, shell snapshots): only what
+    `lock::login_writes` names is in `write`, each that exists (a missing folder made 0700 first, never through a
+    link): Claude's `.credentials.json` and `todos`, Codex's `auth.json`, `sessions` and `log`, Gemini's
+    `oauth_creds.json` and `tmp` (a file bind or Landlock file rule; a token file is rewritten in place, not renamed
+    over). Claude's folder for the cwd, `projects/<the cwd, each non-alphanumeric UTF-16 unit as ->`
+    (`lock::claude_project`; none past 200 characters, where Claude Code adds a hash), is writable when the cwd is the
+    session's own (a worktree, a plain chat's scratch). A project chat's cwd is your project, whose folder holds your
+    transcripts and auto memory: on the full tier (`sandbox::login_grants`) an rw bind of `<scratch>/claude-project`
+    covers it, elsewhere nothing is granted;
   - a chat in a project: the project (its true name: no trailing slash, links resolved) is its cwd and is
     read-only (`read`), never in the write set; nothing in it can be written, so its git folder's hooks and config are
     out of reach too, and the lock's protected paths are not pinned (nothing is made in your project). A linked

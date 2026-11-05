@@ -52,7 +52,7 @@ pub struct LaunchPlan {
     pub session_meta: Option<Value>,
     pub protected_ro: Vec<PathBuf>,
     /// The one place under the home where the CLI keeps its login token (`~/.claude`, `~/.codex`, `~/.gemini`): the
-    /// sandbox binds it for this CLI alone (Task 10).
+    /// sandbox shows it to this CLI alone, read-only but for what [`login_writes`] names (Task 10).
     pub login_dir: Option<PathBuf>,
     pub enforced: Enforced,
     /// The session's gateway token is good on its `gateway.sock`: the sandbox relays a port to that socket and points
@@ -193,6 +193,42 @@ pub fn plan(p: &AgentProfile, role: Role, _e: &Effective) -> LaunchPlan {
         enforced,
         gateway: false,
     }
+}
+
+/// What a CLI writes in its login dir LOGIN_DIR during a session, relative to it, each with whether it is a folder: the
+/// token file it refreshes in place, and its sessions' state.  Never what your own CLI runs or reads as instructions
+/// later (settings and their hooks, commands, agents, skills, plugins, `CLAUDE.md`/`AGENTS.md`/`GEMINI.md`, Codex's
+/// `config.toml` and rules, Claude's shell snapshots and session environments, which its Bash tool sources): the rest
+/// of the login dir is read-only.  Claude's project folder is [`claude_project`]'s.
+pub fn login_writes(login_dir: &Path) -> &'static [(&'static str, bool)] {
+    match login_dir.file_name().and_then(|n| n.to_str()) {
+        Some(".claude") => &[(".credentials.json", false), ("todos", true)],
+        Some(".codex") => &[("auth.json", false), ("sessions", true), ("log", true)],
+        Some(".gemini") => &[("oauth_creds.json", false), ("tmp", true)],
+        _ => &[],
+    }
+}
+
+/// The longest folder name Claude Code uses as it is under `projects`; a longer one it cuts and gives a hash.
+const CLAUDE_PROJECT_MAX: usize = 200;
+
+/// The folder under Claude's login dir LOGIN_DIR (`projects/NAME`) where Claude Code keeps the sessions it runs in CWD:
+/// NAME is CWD with every UTF-16 unit that is not an ASCII letter or digit made `-` (`/srv/u/p.x` →
+/// `-srv-u-p-x`).  None for another CLI's login dir, a CWD that is not UTF-8, or a name over
+/// [`CLAUDE_PROJECT_MAX`] (Claude Code's own hash is not repeated here: such a session keeps no transcript).
+pub fn claude_project(login_dir: &Path, cwd: &Path) -> Option<PathBuf> {
+    if login_dir.file_name()? != ".claude" {
+        return None;
+    }
+    let mut name = String::new();
+    for c in cwd.to_str()?.chars() {
+        if c.is_ascii_alphanumeric() {
+            name.push(c);
+        } else {
+            name.extend(std::iter::repeat_n('-', c.len_utf16()));
+        }
+    }
+    (name.len() <= CLAUDE_PROJECT_MAX).then(|| login_dir.join("projects").join(name))
 }
 
 /// The deny and ask rules of one Claude settings file, `(deny, ask)`; none when it is not a regular file (a link is

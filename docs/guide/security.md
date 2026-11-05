@@ -345,6 +345,28 @@ that is allowed to write in a folder still cannot change what your Emacs loads a
   `ratatoskr sandbox check` and the doctor say so. There, as for a new file, [workspace trust](#workspace-trust)
   guards them: a folder's settings code runs only after you review it.
 
+## Agents and your CLI's login folder
+
+An agent's CLI needs its login folder (`~/.claude`, `~/.codex` or `~/.gemini`), and your own CLI, outside any sandbox,
+reads the same folder: its settings and their hooks, commands, skills, plugins, `CLAUDE.md`. So the sandbox shows a
+session its own CLI's login folder **read-only** (and never another CLI's), and lets it write only these:
+
+| CLI | Writable in its login folder |
+|---|---|
+| Claude Code | `.credentials.json` (the token, refreshed in place), `todos/`, and `projects/<the session's folder>/` (its transcript) |
+| Codex | `auth.json`, `sessions/`, `log/` |
+| Gemini CLI | `oauth_creds.json`, `tmp/` |
+
+A missing folder of these is made first; a file that does not exist is not made (a login that keeps its token
+elsewhere, such as the macOS keychain, has none). Everything else, `settings.json`, `hooks/`, `commands/`,
+`shell-snapshots/` (which Claude Code's Bash tool sources) included, cannot be written, renamed or added to.
+
+A chat in your project runs in the folder your own Claude Code uses there, so its `projects/` folder would be yours:
+your transcripts and the project's auto memory. On the full tier the chat gets an empty folder of its own (in its
+scratch folder) in that place, and sees nothing of yours; on the reduced tier and on macOS it gets none, and Claude Code
+keeps no transcript of that chat. Codex's `sessions/` and Gemini's `tmp/` hold every session of that CLI, yours too:
+an agent can read them and change them, so resuming one of your own sessions there trusts what it says.
+
 ## Secrets in the store
 
 An agent's write to the store that looks like a credential is refused ("looks like a secret; do not store
