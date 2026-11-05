@@ -1399,7 +1399,7 @@ update_steal() { # LOCK OWNER — remove a stale lock, but only the one seen (OW
 }
 
 update_lock() { # one update at a time (the timer and a person): a directory holding the owner's pid
-  local lock owner="" tries waited
+  local lock owner="" tries
   lock="$(update_state_dir)/lock"
   mkdir -p "$(update_state_dir)"
   # The pid file is the lock, made with O_EXCL (noclobber), as the open lock's owner file is: uutils' mkdir lets two
@@ -1408,7 +1408,7 @@ update_lock() { # one update at a time (the timer and a person): a directory hol
     if mkdir "$lock" 2>/dev/null && (set -C; printf '%s\n' "$$" >"$lock/pid") 2>/dev/null; then break; fi
     # held, or its owner is between mkdir and writing the pid: give that one a moment to write it before judging
     owner=""
-    for waited in $(seq 1 30); do
+    for _ in $(seq 1 30); do
       owner="$(cat "$lock/pid" 2>/dev/null || true)"
       [[ -n "$owner" ]] && break
       sleep 0.1
