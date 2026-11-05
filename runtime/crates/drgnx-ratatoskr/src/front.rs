@@ -862,12 +862,12 @@ mod tests {
         let f = front(dir.path());
         f.set_schema(6);
         assert_eq!(f.read_only(), None);
-        f.set_schema(9);
-        assert_eq!(f.read_only(), Some(9));
+        f.set_schema(10);
+        assert_eq!(f.read_only(), Some(10));
         let v = serde_json::to_value(f.status()).unwrap();
         assert_eq!(
             (v["read_only"].clone(), v["schema"].clone()),
-            (json!(9), json!(9))
+            (json!(10), json!(10))
         );
         f.set_schema(6);
         assert_eq!(f.read_only(), None);

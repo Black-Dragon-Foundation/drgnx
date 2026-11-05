@@ -1,4 +1,4 @@
-# The store (Urdr): `work.db` schema 8
+# The store (Urdr): `work.db` schema 9
 
 `work.db` holds one knowledge graph across projects: entities and immutable links with transaction-time history,
 written by Ratatoskr only. The graph layer is the generic `urdr::graph` (kinds, link names and policy are the
@@ -622,11 +622,12 @@ result. What the rule answers for the file it finds:
 
 | The file | The answer |
 |---|---|
-| missing (or empty) | made at schema 7 and moved to 8: schema 6's tables, then shaped as a migrated file is, so both have the same schema |
-| schema 6 | migrated (below), then moved to 8, then `Ready { 8 }` |
-| schema 7 | moved to 8 (next section), then `Ready { 8 }` |
-| schema 8 | `Ready { 8 }` |
-| above 8 | `ReadOnly { schema }`: writes answer `schema`; nothing is changed or copied |
+| missing (or empty) | made at schema 7 and moved to 9: schema 6's tables, then shaped as a migrated file is, so both have the same schema |
+| schema 6 | migrated (below), then moved to 9, then `Ready { 9 }` |
+| schema 7 | moved to 8 and 9 (the next sections), then `Ready { 9 }` |
+| schema 8 | moved to 9, then `Ready { 9 }` |
+| schema 9 | `Ready { 9 }` |
+| above 9 | `ReadOnly { schema }`: writes answer `schema`; nothing is changed or copied |
 | below 6 | `NotReady`: "work.db is schema N; open it once with drgnx 6 first, or remove it (installs are disposable)" |
 | a migration that failed | `Failed { reason }`, never tried again in this process (call 18) |
 
@@ -710,7 +711,17 @@ schema 7 is made, migrated or found, so schema 6 and a fresh file arrive at 8 to
   `end` is null while the step runs. `write::steps::{open, close}` write it; `read::steps::for_session(conn, sid,
   since_seq)` lists a session's steps and `rollup(conn, Scope::{Session, Task, Plan, Project}, id)` sums seconds by
   class (closed steps only), cost by unit (units never mix) and tokens.
-- `status.schema`, `store.schema` and the hub's read-only rule now say 8; a file of schema 9 or above is read-only.
+- `status.schema`, `store.schema` and the hub's read-only rule said 8 here; they say 9 now (next section).
+
+## Schema 9: `entity_vec` keyed by `(n, model)` (Hrafn)
+
+Schema 8 shipped `entity_vec` keyed by `n` alone, so a second embedder's vector replaced the first's. `norn::migrate9`
+moves a schema-8 file to 9 in one `BEGIN IMMEDIATE` transaction (the opening rule runs it after 8, so older files and
+fresh ones arrive at 9 too; a crash leaves 8): it builds the table keyed `(n, model)` with `without rowid`, copies every
+row with its model (a row with no model keeps the empty name, which no embedder asks for), drops the old table and sets
+`schema = 9`. A table that already has the key (a file made from today's DDL) only gets the number. A second move does
+nothing. Tests: `rebuild_keeps_every_row_and_its_model`, `a_second_model_sits_beside_the_first`,
+`a_table_with_the_key_is_left_alone`, `a_failed_move_changes_nothing`. A file of schema 10 or above is read-only.
 
 ## Parsed entities (Task 15a)
 

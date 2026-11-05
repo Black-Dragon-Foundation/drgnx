@@ -853,7 +853,7 @@ mod tests {
         urdr::Connection::open(dir.path().join("work.db"))
             .unwrap()
             .execute_batch(
-                "create table meta (key text primary key, value text); insert into meta values ('schema', '9');",
+                "create table meta (key text primary key, value text); insert into meta values ('schema', '10');",
             )
             .unwrap();
         let w = writer(dir.path());
@@ -864,7 +864,7 @@ mod tests {
             (e.code, e.message.as_str()),
             (
                 ErrorCode::Schema,
-                "work.db is schema 9, newer than this drgnx: read-only"
+                "work.db is schema 10, newer than this drgnx: read-only"
             )
         );
     }

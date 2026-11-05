@@ -274,7 +274,7 @@ mod tests {
     #[test]
     fn the_steps_come_in_the_contracts_order() {
         use Class::*;
-        let ro = Some(9);
+        let ro = Some(10);
         // 1 before 2: an unknown method is no-method for every class
         assert_eq!(
             code(prelude(Service, 0, ro, r#"{"id":1,"method":"no/such"}"#)),
@@ -337,7 +337,7 @@ mod tests {
         assert_eq!(r.error.code, ErrorCode::Schema);
         assert_eq!(
             r.error.message,
-            "work.db is schema 9, newer than this hub's 8: update drgnx"
+            "work.db is schema 10, newer than this hub's 9: update drgnx"
         );
         // a method that only reads still runs on a read-only hub, and its dropped keys are listed
         let c = prelude(
