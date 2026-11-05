@@ -33,7 +33,8 @@ mimir = { path = "../mimir", version = "0.1.0" }
 norn = { path = "../norn", version = "0.1.0" }
 hermod = { path = "../hermod", version = "0.1.0" }  # the ACP client of every session (agents::session)
 bifrost = { path = "../bifrost", version = "0.1.0" }
-hrafn-embed = { path = "../hrafn-embed", version = "0.1.0" }  # the model table and the cache's checks
+hrafn-embed = { path = "../hrafn-embed", version = "0.1.0" }  # the model table, the cache's checks, the embed worker's engine
+hrafn = { path = "../hrafn", version = "0.1.0" }  # each project's code store, tier 1 and the store side of tier 2
 huginn = { path = "../huginn", version = "0.1.0", features = ["serde"] }  # settings.el and runtime-defaults.el, as data
 serde_path_to_error.workspace = true  # where in a setting's value a mistake is
 tokio = { workspace = true, features = ["io-std"] }  # mcp-bridge's stdio (a feature, no new crate)

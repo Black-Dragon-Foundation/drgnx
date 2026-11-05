@@ -2,7 +2,7 @@
 //! `urdr` (one owning thread, WAL, migrations as data).
 
 use crate::schema::{MIGRATIONS, encode_symbol};
-use rusqlite::params;
+use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::path::Path;
@@ -101,6 +101,70 @@ pub fn vec_key(chunker: u32, embed_text: &str) -> [u8; 32] {
     h.finalize().into()
 }
 
+/// A file's row, inside the caller's transaction.
+pub(crate) fn write_file_row(c: &Connection, f: &FileRow) -> urdr::Result<()> {
+    c.execute(
+        "insert or replace into file(path, blob, class, lang, generated, size, indexed_at)
+         values (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            f.path,
+            f.blob,
+            f.class,
+            f.lang,
+            f.generated,
+            f.size as i64,
+            f.indexed_at
+        ],
+    )?;
+    Ok(())
+}
+
+/// `path`'s chunks, FTS rows and symbols in place of what it had, inside the caller's transaction. The new chunk ids,
+/// in order.
+pub(crate) fn write_chunks(
+    c: &Connection,
+    path: &str,
+    chunks: &[ChunkIn],
+    symbols: &[SymbolIn],
+) -> urdr::Result<Vec<i64>> {
+    c.execute("delete from chunk where path = ?1", [path])?;
+    let mut ids = Vec::with_capacity(chunks.len());
+    for ch in chunks {
+        c.execute(
+            "insert into chunk(path, start, end, line_start, line_end, symbol, key, embed, embed_text)
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                path,
+                ch.start,
+                ch.end,
+                ch.line_start,
+                ch.line_end,
+                ch.symbol,
+                ch.key.as_slice(),
+                ch.embed,
+                ch.embed_text
+            ],
+        )?;
+        let id = c.last_insert_rowid();
+        c.execute(
+            "insert into chunk_fts(rowid, path, symbols, doc, body) values (?1, ?2, ?3, ?4, ?5)",
+            params![id, path, encode_symbol(&ch.symbols), ch.doc, ch.body],
+        )?;
+        ids.push(id);
+    }
+    for s in symbols {
+        let chunk = ids.get(s.chunk).copied().ok_or(urdr::Error::Aborted)?;
+        c.execute(
+            "insert into symbol(name, kind, path, start, end, chunk, definer, doc1)
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                s.name, s.kind, path, s.start, s.end, chunk, s.definer, s.doc1
+            ],
+        )?;
+    }
+    Ok(ids)
+}
+
 pub struct CodeStore {
     store: Option<Store>,
     handle: Handle,
@@ -131,25 +195,7 @@ impl CodeStore {
 
     /// Insert or replace a file's row.
     pub async fn put_file(&self, f: FileRow) -> Result<(), StoreError> {
-        Ok(self
-            .handle
-            .write(move |c| {
-                c.execute(
-                    "insert or replace into file(path, blob, class, lang, generated, size, indexed_at)
-                     values (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    params![
-                        f.path,
-                        f.blob,
-                        f.class,
-                        f.lang,
-                        f.generated,
-                        f.size as i64,
-                        f.indexed_at
-                    ],
-                )?;
-                Ok(())
-            })
-            .await?)
+        Ok(self.handle.write(move |c| write_file_row(c, &f)).await?)
     }
 
     /// Replace everything stored for `path`'s chunks and symbols in one transaction. Returns the new chunk ids, in
@@ -163,42 +209,7 @@ impl CodeStore {
         let path = path.to_string();
         Ok(self
             .handle
-            .write(move |c| {
-                c.execute("delete from chunk where path = ?1", [&path])?;
-                let mut ids = Vec::with_capacity(chunks.len());
-                for ch in &chunks {
-                    c.execute(
-                        "insert into chunk(path, start, end, line_start, line_end, symbol, key, embed, embed_text)
-                         values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                        params![
-                            path,
-                            ch.start,
-                            ch.end,
-                            ch.line_start,
-                            ch.line_end,
-                            ch.symbol,
-                            ch.key.as_slice(),
-                            ch.embed,
-                            ch.embed_text
-                        ],
-                    )?;
-                    let id = c.last_insert_rowid();
-                    c.execute(
-                        "insert into chunk_fts(rowid, path, symbols, doc, body) values (?1, ?2, ?3, ?4, ?5)",
-                        params![id, path, encode_symbol(&ch.symbols), ch.doc, ch.body],
-                    )?;
-                    ids.push(id);
-                }
-                for s in &symbols {
-                    let chunk = ids.get(s.chunk).copied().ok_or(urdr::Error::Aborted)?;
-                    c.execute(
-                        "insert into symbol(name, kind, path, start, end, chunk, definer, doc1)
-                         values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                        params![s.name, s.kind, path, s.start, s.end, chunk, s.definer, s.doc1],
-                    )?;
-                }
-                Ok(ids)
-            })
+            .write(move |c| write_chunks(c, &path, &chunks, &symbols))
             .await?)
     }
 

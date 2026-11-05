@@ -1,6 +1,10 @@
-//! Hrafn in the hub. So far the model cache's other half: where models live, the user's consent, the download.
+//! Hrafn in the hub: where models live, the user's consent and the download; the embed worker and the hub's handle on
+//! it (`worker`); one project's index, its tiers and gates (`project`); and the battery rule (`power`).
 
 pub mod download;
+pub mod power;
+pub mod project;
+pub mod worker;
 
 pub use download::{Consent, DownloadError, download};
 

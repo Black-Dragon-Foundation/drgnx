@@ -1027,7 +1027,41 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   verified and renamed. A failed run keeps its parts, and the next one asks `resolve/` again and resumes with `Range`. Nothing
   retries: `Offline` is reported once, and the hub tries again at its next start or on `search/model-download`. Proxies come
   from the environment, through `bifrost::upstream::Upstream::get`. `test-tiny` (test-hooks builds, `test/fixtures/test-tiny/`)
-  is a model of no weights for the flows that need no inference.
+  is a model of no weights for the flows that need no inference. The download's stall limit runs on the hub's clock.
+
+### The index: tier 1, tier 2 and the embed worker
+
+- **Tier 1 (`hrafn::index::refresh`).** The file list against the store's blobs: rows (chunks, FTS, symbols) are rebuilt
+  only for files whose blob changed, all of them after a chunker change, 64 files to a transaction; files gone from the
+  list leave the store. Vectors are keyed by content, so a branch switch back embeds nothing. `vec.last_used` is a
+  logical clock (one past the store's highest), moved when a vector is written and when tier 1 writes a chunk that
+  refers to its key; `collect` keeps unreferenced keys up to twice the live set, the least recently referenced going
+  first. A vector row holds the sign bits and then the int8 values of `urdr`'s `quantize` (`bits` = 8).
+- **When tier 1 runs (`hrafn::fresh`).** `Settle` is a pure core over the watcher's events: a change under the gitdir is
+  due once `index.lock` is gone and the gitdir has been quiet for 2 s; a saved file once it has been quiet for 30 s.
+  `NotifyWatch` (feature `host`, the `notify` crate) feeds it. A project without watches diffs the blobs at query time
+  (`fresh::diff`, at most 2,000 differences named).
+- **The device (`hrafn_embed::device`).** A cached choice whose key (model, `ENGINE_VERSION`, each adapter's name and
+  driver) matches; on battery the CPU path with nothing measured or cached; otherwise the first adapter of `order`
+  (software adapters dropped, discrete and Metal before integrated) that passes its self-check and the CPU path are
+  probed on the model's `data/<model>.selfcheck.json`, and the faster wins. A cosine under 0.999 puts a device out; when
+  the CPU path misses too, nothing embeds and only keyword and symbol results remain.
+- **Pacing (`hrafn_embed::pace`).** A batch's worst submit over 8 ms halves the token budget, under 4 ms doubles it, up to
+  `TOKEN_CAP`; it starts at 2,048 and never stays below the chunk that leads the next batch.
+- **The embed worker (`ratatoskr embed-worker`, `drgnx-ratatoskr/src/search/worker.rs`).** A child process, the only one
+  that opens a GPU, started by `WorkerEmbedder` on demand: JSON lines in (`{"id", "kind": "doc"|"query", "texts"}`) and
+  out (`{"id", "vectors"}` or `{"id", "error"}`), first `{"ready": {"device", "name", "why"}}`, and `{"fallback": {"from",
+  "reason"}}` when a lost GPU sends the batch again on the CPU path. A query that arrives during a request is answered
+  before its next batch. It runs at nice 10, caps its address space at 2 GiB on the CPU path (llvmpipe could not start a
+  thread under the cap, so the GPU path runs without it), and exits after 300 s idle and at the end of its stdin. The hub
+  starts it with `--device auto` on AC and `--device cpu` on battery; a query uses whatever worker runs. A worker that dies
+  inside a request is started again and the request sent again, once.
+- **A project (`search/project.rs`).** The store is `<state>/code/<id>.db`, `id` the first 16 hex characters of the
+  sha256 of the main checkout's real path, so a linked worktree shares its main checkout's store. A root the deny-list
+  refuses is refused before anything is listed; inside an allowed root every file is checked again. Tier 2 sends requests
+  of 8 missing keys to each embedder; between requests it waits while typing holds (3 s from the last `note_typing`) and,
+  on battery, until AC or `index_now`. Its state (`Stopped`, `Idle`, `Running`, `Typing`, `Battery`, `Failed`) and the
+  vectors written are published for `search/status`.
 
 Tests read the real models from a read-only volume (`DRGNX_TEST_MODELS`) and **fail** when it's unset; they never skip.
 `tests/fixtures/<model>.json` holds what CI can't make: reference vectors for token-id lists of 1, 2, 128, 129, 130, 1,023
