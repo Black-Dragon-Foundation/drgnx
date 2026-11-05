@@ -1112,6 +1112,27 @@ fn module_env(front: &Front, env: Option<&[EnvVar]>) -> Result<Vec<(String, Stri
     Ok(out)
 }
 
+/// The module env session SID was started with, from its notes META, as the settings allow it now: a name taken off
+/// `drgnx-agents-start-env-names` since, or one that is now a provider's key variable, is left out (and logged).
+fn kept_env(front: &Front, sid: &str, meta: &Value) -> Vec<(String, String)> {
+    let vars: Vec<EnvVar> = meta
+        .get("env")
+        .cloned()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+    vars.iter()
+        .filter_map(
+            |var| match module_env(front, Some(std::slice::from_ref(var))) {
+                Ok(mut one) => one.pop(),
+                Err(e) => {
+                    tracing::warn!(sid, "a kept module variable is not passed on: {}", e.message);
+                    None
+                }
+            },
+        )
+        .collect()
+}
+
 /// Everything before the process: the matrix's cells, the provider's lock plan, the refusal of a lock that is not
 /// enforced for a worker or a manager under any preset but the autonomous one, and the spawn spec.
 pub(super) async fn prepare(
@@ -1403,7 +1424,15 @@ pub(crate) async fn open_as(
     };
     let (s, done) = assemble(ident, &profile, l, front, hub.step_bus());
     if let Some(store) = &s.store {
-        store.save_meta(&s.id, &json!({"about": s.about, "document": s.document}));
+        // the module env too: a restart or resume of the session passes it again (`kept_env`)
+        let env: Vec<Value> = module_env
+            .iter()
+            .map(|(name, value)| json!({"name": name, "value": value}))
+            .collect();
+        store.save_meta(
+            &s.id,
+            &json!({"about": s.about, "document": s.document, "env": env}),
+        );
     }
     lock(&s.state).core.ready(false);
     hub.insert(s.clone());
@@ -1932,14 +1961,17 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
             .map(PathBuf::from),
     };
     let role_of = serde_json::from_value(json!(role)).unwrap_or(Role::Chat);
+    // what the editor's modules added at its start goes again
+    let env = kept_env(front, &sid, &meta);
     let again = |existing: Option<String>| {
-        let (front, profile, sid, cwd, task, job) = (
+        let (front, profile, sid, cwd, task, job, env) = (
             front,
             profile.clone(),
             sid.clone(),
             cwd.clone(),
             task.clone(),
             job.clone(),
+            env.clone(),
         );
         async move {
             launch(
@@ -1949,7 +1981,7 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
                 &sid,
                 Path::new(&cwd),
                 existing.as_deref(),
-                (task.as_deref(), job.as_deref(), &[]),
+                (task.as_deref(), job.as_deref(), &env),
             )
             .await
         }

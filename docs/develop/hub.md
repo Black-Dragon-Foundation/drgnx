@@ -1248,8 +1248,9 @@ and name. The session is recorded in `runtime.db` (`asession`, migration 5) and 
   `drgnx-agents-env-functions` (the Live browser's `PLAYWRIGHT_MCP_CDP_ENDPOINT`). Each name must be on the runtime
   setting `drgnx-agents-start-env-names` and must not be `refused_env_name` (a name with KEY, TOKEN, SECRET, PASSWORD,
   PASSPHRASE or CREDENTIAL in it) nor a provider's `key_env` (as `env/set`), else `invalid-params` at `env[i].name`; the values are added to the launch plan's
-  environment last, so they win over the profile's and the lock's. They belong to that start only: a session the hub
-  restarts or resumes does not get them again. The mirror (`drgnx-agents-mirror-start`) fills `env` from the hook and
+  environment last, so they win over the profile's and the lock's. The hub keeps them in the session's notes
+  (`meta.json`, 0600 in its own folder): a session it restarts or resumes gets them again, checked against the settings
+  as they are then (a name taken off the list since, or now a provider's `key_env`, is left out and logged). The mirror (`drgnx-agents-mirror-start`) fills `env` from the hook and
   drops, with one notice, the names the hub would refuse. The mirror also runs `drgnx-agents-task-functions` for hub
   sessions that have a task: `start` when a session is first seen, `turn-start` when a turn begins and `turn-end` when
   it ends. A turn begins when the status becomes `busy` and ends when it stops being busy or when its `stop` entry
