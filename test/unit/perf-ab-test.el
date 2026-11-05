@@ -557,6 +557,51 @@ newest first), returning a judged entry that carries the A/A fields."
         (should (= (length wcalls) 1))            ; the A/A only: no A/B for any workload
         (should (string-match-p "^w1 +A/A failed: p95 regressed (forward)" out))))))
 
+(ert-deftest drgnx-perf-ab/results-carry-each-rounds-tail ()
+  "The results file keeps every round's input p95/p99/max and stall counts per arm, so a tail in the pooled samples can
+be traced to the rounds that carry it.  Pattern D: an entry with two rounds."
+  (let* ((run (lambda (p99 max s100)
+                (list :input (list :p50 5.0 :p95 40.3 :p99 p99 :max max) :stalls-ge16 4 :stalls-ge100 s100)))
+         (e (list :name 'w :status 'judged
+                  :run-rounds (list (list :a (funcall run 90.0 120.0 0) :b (funcall run 188.0 360.0 2))
+                                    (list :a (funcall run 91.0 130.0 1) :b (funcall run 95.0 140.0 0)))))
+         (rounds (plist-get (cdr (drgnx-perf-ab--result-entry e)) :run_rounds)))
+    (should (= (length rounds) 2))
+    (should (equal (plist-get (plist-get (aref rounds 0) :b) :input_p99) 188.0))
+    (should (equal (plist-get (plist-get (aref rounds 0) :b) :input_max) 360.0))
+    (should (equal (plist-get (plist-get (aref rounds 0) :b) :stalls_ge100) 2))
+    (should (equal (plist-get (plist-get (aref rounds 1) :a) :input_p95) 40.3))
+    (should (equal (plist-get (plist-get (aref rounds 1) :a) :stalls_ge16) 4))))
+
+(ert-deftest drgnx-perf-ab/calibration-waits-for-both-sessions-to-be-quiet ()
+  "A calibration spins a fixed loop and calls the core loaded when the wall clock is longer than the CPU: the other
+session's stream, still running from its last run, took the core and voided the A/A.  The calibration of a session is
+preceded by the wait for every session (its own included) to be quiet.  Pattern D: the order of the calls."
+  (let (calls)
+    (drgnx-perf-ab--calibrate (lambda (s form) (push (cons s form) calls) (list :loaded nil)) 'sa 'sb)
+    (setq calls (nreverse calls))
+    (should (equal (mapcar #'car calls) '(sa sb sa)))
+    (should (equal (cdr (nth 0 calls)) drgnx-perf-ab--quiet-form))
+    (should (equal (cdr (nth 1 calls)) drgnx-perf-ab--quiet-form))
+    (should (equal (cdr (nth 2 calls)) "(drgnx-perf-calibrate)"))))
+
+(ert-deftest drgnx-perf-ab/void-aa-refuses-every-workload ()
+  "An A/A that is loaded (not judged), errored or not comparable proves nothing about the lab: no A/B runs and the
+exit code is 4 with a line saying why.  Pattern D: each void status, with stubbed sessions."
+  (dolist (status '(not-judged error not-comparable))
+    (drgnx-perf-ab-test--three-workloads
+      (let ((judged (symbol-function 'drgnx-perf-ab--workload)))
+        (cl-letf (((symbol-function 'drgnx-perf-ab--workload)
+                   (lambda (name spec sa sb &rest more)
+                     (if (eq sa sb)
+                         (progn (push (list name sa sb) wcalls) (list :name name :status status :why "x"))
+                       (apply judged name spec sa sb more)))))
+          (let (code out)
+            (setq out (with-output-to-string (setq code (drgnx-perf-ab-env "DRGNX_PERF_GLITNIR=on,off" :n 50))))
+            (should (eql code 4))
+            (should (= (length wcalls) 1))
+            (should (string-match-p (format "^w1 +A/A failed: .*%s" status) out))))))))
+
 (ert-deftest drgnx-perf-ab/phase-sum-checks-arms-and-the-difference ()
   (let ((run (lambda (ph busy) (drgnx-perf-ab-test--run ph busy))))
     (should-not (drgnx-perf-ab-phase-sum (funcall run (list 'json 40.0) 100.0) (funcall run (list 'json 40.0) 100.0)))

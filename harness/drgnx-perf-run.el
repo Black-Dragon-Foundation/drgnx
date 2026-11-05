@@ -1783,6 +1783,22 @@ workloads judged before this one (e.g. scroll-under-popup against scrolling); a 
                       out))))))))
     (nreverse out)))
 
+(defconst drgnx-perf-ab--quiet-form
+  "(if (and (fboundp 'drgnx-perf--running-p) (boundp 'drgnx-perf--hub) (process-live-p drgnx-perf--hub))
+     (drgnx-perf--wait 60 (lambda ()
+       (not (or (and (boundp 'drgnx-perf--stream) drgnx-perf--stream (drgnx-perf--running-p drgnx-perf--stream))
+                (and (boundp 'drgnx-perf--agent) drgnx-perf--agent (drgnx-perf--running-p drgnx-perf--agent))
+                (and (boundp 'drgnx-perf--agents) (seq-some #'drgnx-perf--running-p drgnx-perf--agents))))))
+   t)"
+  "Waits (at most 60 s) until the session's agent workloads have no turn running: a stream that outlives its run is the
+session's own background work, and a calibration taken beside it reads loaded.")
+
+(defun drgnx-perf-ab--calibrate (call s &rest others)
+  "The calibration of session S through CALL (session, form), taken once S and every session in OTHERS are quiet
+(`drgnx-perf-ab--quiet-form'): the other side's stream, still running from its last run, shares the host's cores."
+  (dolist (x (cons s others)) (funcall call x drgnx-perf-ab--quiet-form))
+  (funcall call s "(drgnx-perf-calibrate)"))
+
 (defun drgnx-perf-ab--workload (name spec sa sb n &optional others)
   "A/B workload NAME between sessions SA (the REF) and SB (the work tree): an entry plist, :status one of
 judged, not-comparable, error, not-judged.  OTHERS: the work tree's runs of the workloads judged before it, an alist
@@ -1800,7 +1816,7 @@ judged, not-comparable, error, not-judged.  OTHERS: the work tree's runs of the 
                     (condition-case e (funcall call sa (plist-get spec :setup))
                       (error (signal 'drgnx-perf-ab-ref-error (list (error-message-string e)))))
                     (funcall call sb (plist-get spec :setup)))
-                  (setq cal-a (list (funcall call sa "(drgnx-perf-calibrate)")) cal-b (list (funcall call sb "(drgnx-perf-calibrate)")))
+                  (setq cal-a (list (drgnx-perf-ab--calibrate call sa sb)) cal-b (list (drgnx-perf-ab--calibrate call sb sa)))
                   ;; one run each, discarded: the same warm-up for both (the first run pays for lazy loading and eln)
                   (setq warm (list (plist-get (drgnx-perf-stats (plist-get (condition-case e (drgnx-perf-ab--one sa spec)
                                                                              (error (signal 'drgnx-perf-ab-ref-error (list (error-message-string e)))))
@@ -1811,8 +1827,8 @@ judged, not-comparable, error, not-judged.  OTHERS: the work tree's runs of the 
                                                         (push (plist-get one :run) (if (eq side 'a) runs-a runs-b))
                                                         (plist-get one :samples)))))
                          (a (plist-get r :a)) (b (plist-get r :b)))
-                    (push (funcall call sa "(drgnx-perf-calibrate)") cal-a)
-                    (push (funcall call sb "(drgnx-perf-calibrate)") cal-b)
+                    (push (drgnx-perf-ab--calibrate call sa sb) cal-a)
+                    (push (drgnx-perf-ab--calibrate call sb sa) cal-b)
                     (let* ((loaded (seq-some (lambda (c) (plist-get c :loaded)) (append cal-a cal-b)))
                            (sa-stats (drgnx-perf-stats a)) (sb-stats (drgnx-perf-stats b)))
                       (append (list :name name :status (if loaded 'not-judged 'judged) :a sa-stats :b sb-stats
@@ -1855,6 +1871,17 @@ The :a-run and :b-run medians keep one run's digest and a median blank count; th
                                          (plist-get e :run-rounds)))))
     (and (plist-get e :run-rounds) (list key (list :a (arm :a) :b (arm :b))))))
 
+(defun drgnx-perf-ab--round-data (e)
+  "A vector, one element per round of entry E: (:a ARM :b ARM), each arm's input p95/p99/max and stall counts in that
+round's run (null where the run has none)."
+  (when (plist-get e :run-rounds)
+    (cl-flet ((arm (run)
+                (let ((in (plist-get run :input)))
+                  (list :input_p95 (plist-get in :p95) :input_p99 (plist-get in :p99) :input_max (plist-get in :max)
+                        :stalls_ge16 (plist-get run :stalls-ge16) :stalls_ge100 (plist-get run :stalls-ge100)))))
+      (vconcat (mapcar (lambda (r) (list :a (arm (plist-get r :a)) :b (arm (plist-get r :b))))
+                       (plist-get e :run-rounds))))))
+
 (defun drgnx-perf-ab--result-entry (e)
   "The results-file record of entry E: (NAME . PLIST)."
   (let ((v (plist-get e :verdict)))
@@ -1871,6 +1898,7 @@ The :a-run and :b-run medians keep one run's digest and a median blank count; th
                                           (plist-get e :metric-verdicts))
                  :a (plist-get e :a) :b (plist-get e :b)
                  :a_run (plist-get e :a-run) :b_run (plist-get e :b-run) :order (mapcar (function symbol-name) (plist-get e :order)) :why (plist-get e :why))
+           (and (plist-get e :run-rounds) (list :run_rounds (drgnx-perf-ab--round-data e)))
            (drgnx-perf-ab--per-round e :digests '(:digest))
            (drgnx-perf-ab--per-round e :blanks '(:live :blank))))))
 
@@ -1976,11 +2004,17 @@ is `drgnx-perf-ab--aa-labelled' of E when the caller has it."
 
 (defun drgnx-perf-ab--aa (name spec s n)
   "The A/A before an A/B: workload NAME run against itself on the session S (the same build, the same setting; the
-rounds alternate as in an A/B).  nil when there is nothing to check (not comparable, an error, a loaded calibration:
-the A/B reports those itself); else an entry with `:status' `aa-passed' or, when `drgnx-perf-ab-aa-problems' finds
-any, `aa-failed' and `:why' naming them."
+rounds alternate as in an A/B).  An entry with `:status' `aa-passed' or, when `drgnx-perf-ab-aa-problems' finds
+any, `aa-failed' and `:why' naming them.  An A/A that was not judged (a loaded calibration, an error, not comparable)
+proves nothing about the lab, so it is `aa-failed' too, with the status and its reason."
   (let ((e (drgnx-perf-ab--workload name spec s s n)))
-    (when (eq (plist-get e :status) 'judged)
+    (if (not (eq (plist-get e :status) 'judged))
+        (list :name name :status 'aa-failed
+              :why (format "the A/A was %s%s" (plist-get e :status)
+                           (cond ((plist-get e :why) (format " (%s)" (plist-get e :why)))
+                                 ((eq (plist-get e :status) 'not-judged) " (loaded calibration)")
+                                 (t "")))
+              :notes nil)
       (let* ((labelled (drgnx-perf-ab--aa-labelled e))
              (problems (drgnx-perf-ab-aa-problems e labelled)))
         (list :name name :status (if problems 'aa-failed 'aa-passed)

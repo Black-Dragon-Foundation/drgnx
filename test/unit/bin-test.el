@@ -1059,7 +1059,7 @@ macOS (no /proc there)."
   ;; inside; the perf results file goes through a writable /out mount, since the checkout is read-only.
   (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
          (vars '("DRGNX_TEST_SELECTOR=\"x\"" "DRGNX_TEST_JOBS=4" "DRGNX_TEST_RERUN=1" "DRGNX_TEST_NO_TIMING=1"
-                 "DRGNX_PERF_CPU_FACTOR=2" "DRGNX_PERF_WORKLOADS=typing" "DRGNX_UITEST_SETTLE_SCALE=3" "DRGNX_UI_TEST_TIMEOUT=3000"
+                 "DRGNX_PERF_CPU_FACTOR=2" "DRGNX_PERF_WORKLOADS=typing" "DRGNX_UITEST_SETTLE_SCALE=3" "DRGNX_UITEST_TICK=0.03" "DRGNX_UI_TEST_TIMEOUT=3000"
                  ;; UI-SCALE-1: the sessions' size and scale (without them a container run was silently 1600x900 at 1)
                  "DRGNX_UI_SIZE=2880x1800" "DRGNX_UI_SCALE=1.5" "DRGNX_UI_SCALES=1 2")))
     (unwind-protect
