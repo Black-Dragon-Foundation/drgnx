@@ -352,4 +352,16 @@
       (drgnx-settings-apply-global)
       (should-not (equal inode (file-attribute-inode-number (file-attributes file)))))))
 
+(ert-deftest drgnx-settings-apply/a-start-reads-the-applied-values-once ()
+  (drgnx-settings-apply-test--with (drgnx-sat--a)
+    (drgnx-settings-apply-test--def 'drgnx-sat--a)
+    (drgnx-settings-apply-test--settings "(drgnx-sat--a 50)")
+    (drgnx-settings-apply-global)
+    (setq drgnx-settings-apply--entries nil)                  ; a restart
+    (let ((reads 0) (orig (symbol-function 'drgnx-settings-apply--load-applied)))
+      (cl-letf (((symbol-function 'drgnx-settings-apply--load-applied)
+                 (lambda () (cl-incf reads) (funcall orig))))
+        (drgnx-settings-apply-global)
+        (should (= reads 1))))))
+
 ;;; settings-apply-test.el ends here

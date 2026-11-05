@@ -20,6 +20,7 @@
 (require 'drgnx-config)
 (require 'drgnx-setting)
 (require 'drgnx-view)
+(require 'drgnx-timer)
 (require 'drgnx-settings-file)
 (require 'drgnx-settings-prov)
 (require 'drgnx-settings-workspace)
@@ -620,6 +621,26 @@ Ends with a blank line."
       (insert new)
       (delete-region (+ (point-min) (length new)) (+ old-end (length new))))))
 
+(defvar drgnx-settings-page--warm nil
+  "The variables whose search text is still to be built (`drgnx-settings-page--warm-step').")
+
+(defconst drgnx-settings-page--warm-slice 250 "How many variables one step of the warming builds the search text of.")
+
+(defun drgnx-settings-page--warm-step ()
+  "Build the search text (name, title, documentation, value) of the next slice of variables, so that the first
+character typed into the search does not: non-nil while some are left.  An idle step (`drgnx-timer-idle-steps')."
+  (dotimes (_ drgnx-settings-page--warm-slice)
+    (when-let* ((v (pop drgnx-settings-page--warm)))
+      (drgnx-settings-page--static-hay v)
+      (drgnx-settings-page--value-hay v)))
+  (and drgnx-settings-page--warm t))
+
+(defun drgnx-settings-page--warm-start ()
+  "Warm the search text of every variable in idle time, from now (this page's buffer owns the timer)."
+  (setq drgnx-settings-page--warm (copy-sequence (drgnx-settings-page--all-vars)))
+  (drgnx-timer-idle-steps 'settings-page-warm 0.2 #'drgnx-settings-page--warm-step
+                          :interruptible t :owner (current-buffer)))
+
 (defun drgnx-settings-page-refresh (&optional keep)
   "Read the files and the variables again and redraw: the header and the rows (the visible ones first).
 With KEEP (a search typing on), the list of variables and their search text are kept, and so are the rows: a search
@@ -643,6 +664,7 @@ takes its kept data (each is a provenance lookup).  Without KEEP every row is wo
             (error (message "Settings: %s" (error-message-string err)) nil)))
     (drgnx-settings-page--draw-header)
     (when (drgnx-view-p drgnx-view) (drgnx-view-touch drgnx-view))
+    (unless keep (drgnx-settings-page--warm-start))
     (current-buffer)))
 
 (defun drgnx-settings-page--buffer ()

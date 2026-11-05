@@ -515,5 +515,57 @@
         (drgnx-settings-trust--state-data)
         (should (= reads 2))))))
 
+(ert-deftest drgnx-settings-trust/a-root-and-its-state-are-worked-out-once-per-folder ()
+  ;; every file open asks both: the second ask of an already judged folder resolves no path and reads no marker
+  (drgnx-stt--with `((,drgnx-stt--ws))
+    (let ((norms 0) (orig (symbol-function 'drgnx-settings-trust--norm)))
+      (cl-letf (((symbol-function 'drgnx-settings-trust--norm) (lambda (d) (cl-incf norms) (funcall orig d))))
+        (should (equal (drgnx-settings-trust-root drgnx-stt--proj) drgnx-stt--proj))
+        (should (eq (drgnx-settings-trust-state drgnx-stt--proj) 'location))
+        (should (> norms 0))
+        (setq norms 0)
+        (dotimes (_ 5)
+          (should (equal (drgnx-settings-trust-root drgnx-stt--proj) drgnx-stt--proj))
+          (should (eq (drgnx-settings-trust-state drgnx-stt--proj) 'location)))
+        (should (= norms 0))))))
+
+(ert-deftest drgnx-settings-trust/a-judged-root-is-judged-again-when-what-it-rests-on-changes ()
+  (drgnx-stt--with `((,drgnx-stt--ws))
+    (let* ((sub (expand-file-name "pkg/" drgnx-stt--proj)))
+      (make-directory sub t)
+      (should (equal (drgnx-settings-trust-root sub) drgnx-stt--proj))        ; no marker of its own: the project's
+      (should (eq (drgnx-settings-trust-state drgnx-stt--proj) 'location))
+      (should (eq (drgnx-settings-trust-state drgnx-stt--ws) 'location))
+      (make-directory (expand-file-name ".git" sub) t)                        ; now it has one
+      (should (equal (drgnx-settings-trust-root sub) (drgnx-stt--norm sub)))
+      (let ((inhibit-message t)) (drgnx-trust-folder drgnx-stt--proj))        ; trusted-folders.eld changes
+      (should (eq (drgnx-settings-trust-state drgnx-stt--proj) 'trusted))
+      (let ((drgnx-trust-parents nil))                                        ; the setting changes
+        (should (eq (drgnx-settings-trust-state drgnx-stt--ws) 'untrusted))))))
+
+(ert-deftest drgnx-settings-trust/a-repeat-open-in-a-judged-root-classes-nothing ()
+  ;; the shared file's entries are classed once per read of the file and per state of trust
+  (drgnx-stt--with nil
+    (drgnx-stt--put ".drgnx/settings.el"
+                    "(drgnx-workspace-settings\n :version 1\n (fill-column 77)\n (drgnx-stt-data \"w1\"))\n")
+    (let ((classes 0) (orig (symbol-function 'drgnx-settings-trust-class)))
+      (cl-letf (((symbol-function 'drgnx-settings-trust-class) (lambda (&rest args) (cl-incf classes) (apply orig args))))
+        (drgnx-stt--in "a.txt" (should (= fill-column 77)))
+        (should (> classes 0))
+        (setq classes 0)
+        (drgnx-stt--in "b.txt" (should (= fill-column 77)))
+        (drgnx-stt--in "c.txt" (should (= fill-column 77)))
+        (should (= classes 0))
+        ;; the file changes: classed again
+        (drgnx-stt--put ".drgnx/settings.el"
+                        "(drgnx-workspace-settings\n :version 1\n (fill-column 78)\n (drgnx-stt-data \"w1\"))\n")
+        (drgnx-stt--in "d.txt" (should (= fill-column 78)))
+        (should (> classes 0))
+        ;; trust changes: judged again, and the data now applies
+        (setq classes 0)
+        (let ((inhibit-message t)) (drgnx-trust-folder drgnx-stt--proj))
+        (drgnx-stt--in "e.txt" (should (equal drgnx-stt-data "w1")))
+        (should (> classes 0))))))
+
 (provide 'settings-trust-test)
 ;;; settings-trust-test.el ends here
