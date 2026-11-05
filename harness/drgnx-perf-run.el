@@ -585,6 +585,9 @@ error if it does not hold).  With :actions, :measure runs after the input and it
                                    " (let ((editor (selected-window)) (b (drgnx-agents-ui-transcript-buffer drgnx-perf--stream)))"
                                    "   (unless (get-buffer-window b) (set-window-buffer (split-window editor nil 'right) b))"
                                    "   (select-window editor))"
+                                   ;; the hub sends entries to the editors that showed the session: the editor does it from
+                                   ;; `window-buffer-change-functions', which a run of workloads in one session may have removed
+                                   " (drgnx-agents-mirror-show (drgnx-agent-session-remote drgnx-perf--stream))"
                                    " (drgnx-perf--send drgnx-perf--stream \"stream 1500\")"
                                    " (drgnx-perf--wait 30 (lambda () (let ((e (car (last (drgnx-agent-session-entries drgnx-perf--stream)))))"
                                    "   (and (eq (plist-get e :type) 'agent) (>= (drgnx-agents-entry-length e) 409600)))))"
