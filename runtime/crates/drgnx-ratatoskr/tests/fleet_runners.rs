@@ -596,6 +596,7 @@ mod link {
             image: Some(img),
             env: vec![],
             net_hosts: vec![],
+            pins: vec![],
             parser: "exit".into(),
         });
         a.frame("started", |f| {

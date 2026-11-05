@@ -322,6 +322,7 @@ fn drgnx_key_exec_sets_env_in_the_process_only() {
         pids: 100,
         proxy: None,
         net_hosts: vec![],
+        pins: vec![],
     };
     let ra = RunnerArgs {
         cgroup_parent: None,
