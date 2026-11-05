@@ -1,6 +1,7 @@
 ;;; search-setup-test.el --- batch tests: Set Up Semantic Search, the wizard of the built-in model and servers -*- lexical-binding: t -*-
-;; test-class: cond
+;; test-class: det
 ;; The hub is the seam: its answers are the stub's, the questions the wizard asks are `y-or-n-p's the test answers.
+;; Everything is synchronous (no timer, process or wait), so the tests are pure.
 ;; (The model the wizard downloads is the table's default, 95 MB, which no test fetches.)
 (require 'ert)
 (require 'cl-lib)
