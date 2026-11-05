@@ -352,3 +352,28 @@ call, no bus flush: the `windows-changed' `now' subscriber."
       (setq runs (sort runs #'<))
       (message "chrome now subscribers, 7 windows: %.1f µs per call (median of 21 × %d)" (nth 10 runs) n)
       (should (<= (nth 10 runs) (* 50 (drgnx-run-ert-time-factor)))))))
+
+;;;; Docked panes as cards (ui/look under Glitnir)
+;; Race-proof pattern D (pure): window and frame parameters of one frame, no timing.
+
+(load (expand-file-name "modules/ui/drgnx-look" drgnx-dir) nil t)
+
+(ert-deftest drgnx-chrome/wb-card-params-set-and-undone ()
+  "A docked pane gets the card parameters and the frame the gap in its dividers; an editor window gets none.
+Taking the cards off gives back the parameters and the divider widths the frame had."
+  (drgnx-chrome-test--with _dir
+    (let* ((f (selected-frame)) (editor (selected-window))
+           (dock (split-window editor nil 'left))
+           (gap (alist-get 'gap drgnx-look-card))
+           (before (list (frame-parameter f 'right-divider-width) (frame-parameter f 'bottom-divider-width))))
+      (set-window-parameter dock 'drgnx-role 'dock)
+      (drgnx-look--card-frame f)
+      (dolist (p '(corner-radius shadow ring))
+        (should (equal (window-parameter dock p) (alist-get p drgnx-look-card)))
+        (should-not (window-parameter editor p)))
+      (should (eql (frame-parameter f 'right-divider-width) gap))
+      (should (eql (frame-parameter f 'bottom-divider-width) gap))
+      (drgnx-look--card-frame f)               ; again: the saved widths are still the first ones
+      (drgnx-look--card-restore f)
+      (dolist (p '(corner-radius shadow ring)) (should-not (window-parameter dock p)))
+      (should (equal before (list (frame-parameter f 'right-divider-width) (frame-parameter f 'bottom-divider-width)))))))
