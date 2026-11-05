@@ -359,21 +359,26 @@ call, no bus flush: the `windows-changed' `now' subscriber."
 (load (expand-file-name "modules/ui/drgnx-look" drgnx-dir) nil t)
 
 (ert-deftest drgnx-chrome/wb-card-params-set-and-undone ()
-  "A docked pane gets the card parameters and the frame the gap in its dividers; an editor window gets none.
-Taking the cards off gives back the parameters and the divider widths the frame had."
+  "A docked pane and an editor window get the card parameters and the frame the gap in its dividers; a popup lane
+window gets none.  Taking the cards off gives back the parameters and the divider widths the frame had."
   (drgnx-chrome-test--with _dir
     (let* ((f (selected-frame)) (editor (selected-window))
            (dock (split-window editor nil 'left))
+           (lane (split-window editor nil 'below))
            (gap (alist-get 'gap drgnx-look-card))
            (before (list (frame-parameter f 'right-divider-width) (frame-parameter f 'bottom-divider-width))))
       (set-window-parameter dock 'drgnx-role 'dock)
+      (set-window-parameter lane 'drgnx-popup (list :popup nil))
       (drgnx-look--card-frame f)
       (dolist (p '(corner-radius shadow ring))
         (should (equal (window-parameter dock p) (alist-get p drgnx-look-card)))
-        (should-not (window-parameter editor p)))
+        (should (equal (window-parameter editor p) (alist-get p drgnx-look-card)))
+        (should-not (window-parameter lane p)))
       (should (eql (frame-parameter f 'right-divider-width) gap))
       (should (eql (frame-parameter f 'bottom-divider-width) gap))
       (drgnx-look--card-frame f)               ; again: the saved widths are still the first ones
       (drgnx-look--card-restore f)
-      (dolist (p '(corner-radius shadow ring)) (should-not (window-parameter dock p)))
+      (dolist (p '(corner-radius shadow ring))
+        (should-not (window-parameter dock p))
+        (should-not (window-parameter editor p)))
       (should (equal before (list (frame-parameter f 'right-divider-width) (frame-parameter f 'bottom-divider-width)))))))

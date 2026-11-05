@@ -38,7 +38,7 @@ restores the old value, and the refresh recorded before it runs after that).  Wi
 (defcustom drgnx-look-card
   '((corner-radius . 10) (shadow . (:blur 3 :offset (0 . 1) :spread 0 :opacity 0.45))
     (ring . (vertical-border . 0.6)) (gap . 6))
-  "The card look of the docked panes (Explorer, panel, right dock) under Glitnir, in logical pixels.
+  "The card look of the docked panes (Explorer, panel, right dock) and the editor groups under Glitnir, in logical pixels.
 `corner-radius', `shadow' and `ring' become the window parameters Glitnir reads; `gap' is the frame's
 `right-divider-width' and `bottom-divider-width', the room the ring and shadow are drawn in.  The ring is a face
 \(its foreground) and an opacity: no colour is named here."
@@ -49,8 +49,13 @@ restores the old value, and the refresh recorded before it runs after that).  Wi
   (and (featurep 'glitnir) (fboundp 'glitnir-active-p) (glitnir-active-p) t))
 
 (defun drgnx-look--card-window-p (window)
-  "Non-nil when WINDOW is a docked pane: the Explorer, the panel or the right dock."
-  (memq (window-parameter window 'drgnx-role) '(dock panel right)))
+  "Non-nil when WINDOW is a card: a docked pane (the Explorer, the panel, the right dock) or an editor group.
+An editor group is an ordinary window: not the minibuffer, a package's side window or a popup lane."
+  (let ((role (window-parameter window 'drgnx-role)))
+    (if role
+        (and (memq role '(dock panel right)) t)
+      (not (or (window-minibuffer-p window) (window-parameter window 'window-side)
+               (window-parameter window 'drgnx-popup))))))
 
 (defconst drgnx-look--card-parameters '(corner-radius shadow ring)
   "The window parameters of `drgnx-look-card' that make a card.")

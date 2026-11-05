@@ -52,6 +52,10 @@
   (let ((s (drgnx-uitest-device-scale (window-frame window))))
     (mapcar (lambda (e) (round (* s e))) (window-pixel-edges window))))
 
+(defun drgnx-card-panels-ui-test--editor ()
+  "The frame's editor window: neither a dock nor a lane."
+  (seq-find (lambda (w) (not (window-parameter w 'drgnx-role))) (window-list nil 'nomini)))
+
 (defun drgnx-card-panels-ui-test--scene ()
   "Write the scene's picture into the session's temp dir; return its path."
   (let ((shot (plist-get (drgnx-uitest-capture (make-temp-file "card-panels" t)) :root))
@@ -75,18 +79,65 @@
         (drgnx-card-panels-ui-test--scene)))))
 
 (ert-deftest drgnx-ui-card-panels/text-never-covered ()
-  "The editor window's picture is the same with the card chrome as with only the card gap: chrome takes no text."
+  "The editor window's picture between its corner rows is the same with the card chrome as with only the card gap:
+chrome takes no text."
   (drgnx-card-panels-ui-test--with-explorer
-    (let* ((dock (car (drgnx-wb--dock-windows)))
-           (editor (seq-find (lambda (w) (not (window-parameter w 'drgnx-role))) (window-list nil 'nomini)))
+    (let* ((dock (car (drgnx-wb--dock-windows))) (editor (drgnx-card-panels-ui-test--editor))
            (_ (with-current-buffer (window-buffer editor)
                 (let ((inhibit-read-only t)) (erase-buffer) (dotimes (i 20) (insert (format "editor line %d\n" i))))))
            (_ (drgnx-test-wait-presented))
            (with-chrome (drgnx-uitest-snapshot))
-           (rect (drgnx-card-panels-ui-test--rect editor)))
-      (dolist (p '(corner-radius shadow ring)) (set-window-parameter dock p nil))
+           (rect (drgnx-card-panels-ui-test--rect editor))
+           (middle (list (nth 0 rect) (+ (nth 1 rect) 40) (nth 2 rect) (- (nth 3 rect) 40))))
+      (dolist (w (list dock editor)) (dolist (p '(corner-radius shadow ring)) (set-window-parameter w p nil)))
       (drgnx-test-wait-presented)
-      (should (drgnx-uitest-region-equal-p with-chrome (drgnx-uitest-snapshot) rect)))))
+      (should (drgnx-uitest-region-equal-p with-chrome (drgnx-uitest-snapshot) middle)))))
+
+(ert-deftest drgnx-ui-card-panels/editor-card-keeps-corners-when-scrolled ()
+  "An editor card has its corners cut at rest, and the four outermost corner pixels are the same after the
+text scrolls (a full-window scroll puts the window on its own layer; the card's corners go with it)."
+  (drgnx-card-panels-ui-test--with-explorer
+    (let* ((editor (drgnx-card-panels-ui-test--editor)))
+      (should (equal (window-parameter editor 'corner-radius) (alist-get 'corner-radius drgnx-look-card)))
+      (with-current-buffer (window-buffer editor)
+        (let ((inhibit-read-only t))
+          (erase-buffer) (dotimes (i 400) (insert (format "editor line %d with some text to scroll\n" i)))
+          (goto-char (point-min))))
+      (set-window-start editor (point-min))
+      (drgnx-test-wait-presented)
+      (let* ((r (drgnx-card-panels-ui-test--rect editor))
+             (spots (list (cons (nth 0 r) (nth 1 r)) (cons (1- (nth 2 r)) (nth 1 r))
+                          (cons (nth 0 r) (1- (nth 3 r))) (cons (1- (nth 2 r)) (1- (nth 3 r)))))
+             (rest (drgnx-uitest-snapshot))
+             (inside (drgnx-uitest-pixel rest (+ (nth 0 r) 60) (+ (nth 1 r) 60))))
+        (dolist (s spots)               ; cut away: not the window's own background
+          (should-not (equal (drgnx-uitest-pixel rest (car s) (cdr s)) inside)))
+        (dotimes (_ 3)                  ; whole-window scrolls, then settle
+          (with-selected-window editor (scroll-up (- (window-body-height) 2)))
+          (drgnx-test-wait-presented))
+        (let ((after (drgnx-uitest-snapshot)))
+          (dolist (s spots)
+            (should (equal (drgnx-uitest-pixel rest (car s) (cdr s)) (drgnx-uitest-pixel after (car s) (cdr s))))))))))
+
+(ert-deftest drgnx-ui-card-panels/whole-window-scene ()
+  "Explorer, editor and panel are all cards; the scene's screenshot is written for the sign-off (palette and status
+bar are other modules')."
+  (drgnx-card-panels-ui-test--with-explorer
+    (require 'drgnx-area)
+    (let ((res (with-current-buffer (get-buffer-create "*card-panels-results*")
+                 (erase-buffer) (dotimes (i 10) (insert (format "result %d\n" i))) (current-buffer))))
+      (unwind-protect
+          (progn
+            (drgnx-wb-area-show 'panel 'results res)
+            (drgnx-look-cards-apply)
+            (drgnx-test-wait-presented)
+            (dolist (w (list (car (drgnx-wb--dock-windows)) (drgnx-card-panels-ui-test--editor)
+                             (drgnx-wb-area-window 'panel)))
+              (should w)
+              (should (equal (window-parameter w 'corner-radius) (alist-get 'corner-radius drgnx-look-card))))
+            (should (file-exists-p (drgnx-card-panels-ui-test--scene))))
+        (drgnx-wb-area-hide 'panel)
+        (kill-buffer res)))))
 
 (provide 'card-panels-test)
 ;;; card-panels-test.el ends here
