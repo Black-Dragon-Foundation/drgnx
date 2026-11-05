@@ -8,8 +8,8 @@
 ;; Nothing in the code under test changes: `timer-list'/`timer-idle-list' are bound to nil, so every timer BODY starts,
 ;; whoever starts it, lands in lists of its own and runs only when the test (or a wait that moves virtual time) says
 ;; so.  In a batch Emacs with NIDHOGG_TEST_CLOCK=1 the clock is Nidhogg's own; on a system without /proc (macOS), where
-;; that clock cannot run, `float-time', `current-time' and `timer--activate' are advised while BODY runs, and
-;; anywhere else the fixture refuses to start.  `current-idle-time',
+;; that clock cannot run, `float-time', `current-time', `timer-relative-time' and `timer--activate' are advised while
+;; BODY runs, and anywhere else the fixture refuses to start.  `current-idle-time',
 ;; `input-pending-p', `sleep-for', `sit-for' and `accept-process-output' are advised on both (`drgnx-test--advice' says
 ;; why).  Docs: docs/develop/core.md "Testing: time, waits and processes", docs/develop/harness.md "Virtual time".
 (require 'ert)
@@ -103,13 +103,22 @@ binary).  Any other float is rounded to the microsecond, so repeated sums do not
   (drgnx-test--sync)
   (float-time drgnx-test--now))
 
+(defun drgnx-test--relative-time (orig time secs &rest more)
+  "`timer-relative-time' from now (TIME nil) counts from the virtual clock plus H, never from a real read.
+That is how `run-at-time' and `run-with-timer' stamp a delay, so the timer is due at virtual v + d however much real
+time passes before it is activated; SECS is snapped as the test's own times are (`drgnx-test--secs')."
+  (if time
+      (apply orig time secs more)
+    (apply orig (time-add drgnx-test--now drgnx-test-clock-horizon) (drgnx-test--secs secs) more)))
+
 (defun drgnx-test-clock--shift (timer &optional _triggered _cell idle)
-  "A wall timer stamped from the real clock (by `run-at-time', whoever calls it) moves onto the virtual clock plus H.
-Stamp minus real now is the delay, so a timer made at virtual v with delay d is due at v + d.  Emacs stamped it a
-few microseconds before this advice runs, so a delay of 2 ms or more is rounded to the millisecond (1 s stays
-exactly 1 s).  A timer already in the virtual era (its time is H away from the real one: a re-armed repeat) and
-every idle timer stay as they are.  A time computed from the virtual clock (`float-time' plus a delay) reads as a
-real stamp: give timers delays, not absolute times."
+  "A wall timer stamped from the real clock moves onto the virtual clock plus H.
+A delay is stamped on the virtual clock already (`drgnx-test--relative-time'); this is for the rest, an absolute time
+or a stamp such as `(time-add nil D)'.  Stamp minus real now is the delay, so a timer made at virtual v with delay d is
+due at v + d.  Real time passed between that stamp and this advice, so a delay of 2 ms or more is rounded to the
+millisecond (1 s stays exactly 1 s), right while that time is under 0.5 ms.  A timer already in the virtual era (its
+time is H away from the real one: a delay, a re-armed repeat) and every idle timer stay as they are.  A time computed
+from the virtual clock (`float-time' plus a delay) reads as a real stamp: give timers delays, not absolute times."
   (unless (or idle (not (timerp timer)))
     (let ((due (timer--time timer)) (real (time-convert nil t)))
       (when (and (consp due) (time-less-p due (time-add real (/ drgnx-test-clock-horizon 2))))
@@ -181,6 +190,7 @@ stay on `manual' too: a wait on a manual clock is a real wait, which moves no ti
   (append (unless core
             '((float-time :around drgnx-test--float-time)
               (current-time :override drgnx-test--current-time)
+              (timer-relative-time :around drgnx-test--relative-time)
               (timer--activate :before drgnx-test-clock--shift)))
           '((current-idle-time :override drgnx-test--current-idle-time)
             (input-pending-p :override drgnx-test--input-pending-p))

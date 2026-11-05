@@ -23,6 +23,13 @@
   (push (list (float-time (current-idle-time)) (input-pending-p)) drgnx-clock-test--runs)
   (run-with-idle-timer (time-add (current-idle-time) 0.2) nil #'drgnx-clock-test--rearm))
 
+(defun drgnx-clock-test--late (timer &rest _)
+  "As if the real clock moved 1 ms between Emacs's stamp of TIMER and its activation: a real stamp moves 1 ms back.
+A stamp already on the virtual clock (H ahead of the real one) stays."
+  (let ((due (timer--time timer)))
+    (when (time-less-p due (time-add (time-convert nil t) (/ drgnx-test-clock-horizon 2)))
+      (setf (timer--time timer) (time-subtract due (cons 1 1000))))))
+
 (defmacro drgnx-clock-test--with (&rest body)
   "BODY on the clock with `drgnx-clock-test--runs' empty, a timer left over cancelled so the end check passes."
   `(let ((drgnx-clock-test--runs nil)) (drgnx-test-with-clock () ,@body (mapc #'cancel-timer (append timer-list timer-idle-list)))))
@@ -208,6 +215,22 @@
      (should (drgnx-clock-test--close (float-time (current-time)) (+ t0 0.9)))   ; the pause ended at the key
      (should (drgnx-clock-test--close (- (car drgnx-clock-test--runs) t0) 0.3)))))
 
+(ert-deftest drgnx-test-clock/a-delay-holds-however-late-the-timer-is-activated ()
+  ;; Pure: the real time between `run-at-time' reading the clock and activating the timer is the test's, 1 ms, not
+  ;; the machine's.  On the advice a delay is the virtual clock's from the start, so a slow runner cannot shorten it.
+  ;; The advice clock is forced, so Linux runs it as macOS does.
+  (cl-letf (((symbol-function 'drgnx-test--core-p) #'ignore)
+            ((symbol-function 'drgnx-test--advice-clock-p) #'always))
+    (drgnx-clock-test--with
+     (let ((t0 (float-time)))
+       (advice-add 'timer--activate :before #'drgnx-clock-test--late)   ; outermost: before the fixture's own
+       (unwind-protect
+           (progn (run-at-time 0.3 nil #'drgnx-clock-test--note)
+                  (run-at-time 2 nil #'drgnx-clock-test--note))
+         (advice-remove 'timer--activate #'drgnx-clock-test--late))
+       (drgnx-test-advance 2)
+       (should (equal (drgnx-clock-test--since t0) '(0.3 2.0)))))))
+
 (ert-deftest drgnx-test-clock/advance-by-the-delay-always-fires ()
   ;; run-at-time D then advance D fires, for every D (0.3 is not a whole number of binary floats)
   (let (misses)
@@ -321,7 +344,7 @@
     (should (eq timer-list before))
     (should-not drgnx-test--pause)
     (dolist (a '(float-time current-time current-idle-time input-pending-p sleep-for sit-for accept-process-output
-                            timer--activate))
+                            timer-relative-time timer--activate))
       (should-not (advice--p (advice--symbol-function a))))
     (should (< (abs (- (float-time) (drgnx-test-real-time))) 1))
     (should-not (input-pending-p))
@@ -402,7 +425,7 @@ them and native code that calls `current-time' (ERT itself) jumps into unmapped 
   (drgnx-test-with-clock ()
     (should (nidhogg-test-clock-active-p))
     (should (eq drgnx-test--core 'manual))
-    (dolist (f '(float-time current-time timer--activate))
+    (dolist (f '(float-time current-time timer-relative-time timer--activate))
       (should-not (advice--p (advice--symbol-function f)))))
   (should-not (nidhogg-test-clock-active-p)))
 
@@ -450,7 +473,7 @@ them and native code that calls `current-time' (ERT itself) jumps into unmapped 
       ;; `error' formats its message, so the apostrophe follows `text-quoting-style' (curved in CI)
       (should (equal (cadr err) (format-message "drgnx-test-with-clock: here it runs on Nidhogg's test clock, in a batch Emacs with NIDHOGG_TEST_CLOCK=1")))))
   (should-not drgnx-test--active)
-  (dolist (f '(float-time current-time timer--activate))
+  (dolist (f '(float-time current-time timer-relative-time timer--activate))
     (should-not (advice--p (advice--symbol-function f)))))
 
 (ert-deftest drgnx-test-clock-core/without-proc-the-advice-runs-and-ignores-auto ()

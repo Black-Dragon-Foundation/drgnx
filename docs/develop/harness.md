@@ -1408,7 +1408,7 @@ for a timer. Load it with `(load (expand-file-name "test/fixtures/clock-fixture"
   `bin/drgnx test`'s unit tier sets the variable. On a system without `/proc` (macOS), where that clock cannot run, the
   clock reads and the timers' stamps are advice, as described below (`drgnx-test--advice-clock-p`). Anywhere else (a
   Linux Emacs with `NIDHOGG_TEST_CLOCK=0`, an interactive one) `drgnx-test-with-clock` refuses to start: there is no
-  advice of `float-time`, `current-time` or `timer--activate` beside the core clock.
+  advice of `float-time`, `current-time`, `timer-relative-time` or `timer--activate` beside the core clock.
   What differs on Nidhogg's clock:
   - every read of the time is virtual: `time-since`, `(time-subtract nil ...)` and `format-time-string` too, and
     `(float-time nil)`. `drgnx-test-real-time` reads `/proc/uptime` then, because nothing else in Emacs stays real
@@ -1434,11 +1434,13 @@ for a timer. Load it with `(load (expand-file-name "test/fixtures/clock-fixture"
   starts it, lands in lists of its own and the real ones are untouched. `float-time` and `current-time` without an
   argument return virtual time (with an argument they are Emacs's own); `current-idle-time` is nil outside a pause and
   the pause's length inside one; `input-pending-p` is nil, or t from `:input-at` on. Virtual time starts at the real
-  time (`drgnx-test-clock-now` is the virtual seconds since entry). On the advice, timers made by `run-at-time` are
-  stamped by Emacs from the real clock; a `:before` advice on `timer--activate` moves them to the virtual due time plus
-  10^6 s (`drgnx-test-clock-horizon`), so a real wait never finds a virtual timer ripe, and a timer made at virtual *v*
-  with delay *d* is due at *v* + *d*, also after an advance (a delay of 2 ms or more is rounded to the millisecond: Emacs
-  stamps the timer a few microseconds before the advice runs).
+  time (`drgnx-test-clock-now` is the virtual seconds since entry). On the advice, a timer made at virtual *v* with
+  delay *d* is due at *v* + *d* plus 10^6 s (`drgnx-test-clock-horizon`), so a real wait never finds a virtual timer
+  ripe, also after an advance. `run-at-time` and `run-with-timer` stamp a delay with `timer-relative-time` from now,
+  which the advice counts from the virtual clock, never a real read: however long a slow machine takes between that
+  stamp and the timer's activation, the delay holds exactly. A timer stamped from the real clock some other way (an
+  absolute time, `(time-add nil D)`) is moved by a `:before` advice on `timer--activate`, which takes stamp minus real
+  now as the delay and rounds one of 2 ms or more to the millisecond (right while under 0.5 ms passed since the stamp).
   Before the lists are swapped, the macro advises and unadvises each primitive the advice layer advises once, on scratch lists: Emacs 31
   compiles a native advice trampoline on the first `advice-add` of a primitive, and logging that compile arms
   `undo-auto--boundary-timer`. That timer, and any like it armed during the body, is cancelled by the macro (it is
