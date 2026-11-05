@@ -22,7 +22,6 @@
   "drgnx-ai/the-editor-holds-no-key-after-the-handover"
   "drgnx-ai/the-environment-is-left-as-it-was"
   "drgnx-bootstrap/a-fifo-in-the-handback-is-refused-without-blocking"
-  "drgnx-cockpit-feed/an-answer-reaches-the-store-through-ratatoskr"
   "drgnx-explorer/find-with-a-root-inside-a-project-terminates"
   "drgnx-file/a-fifo-is-refused-without-blocking"
   "drgnx-git/a-folder-with-only-new-files-is-not-untracked"

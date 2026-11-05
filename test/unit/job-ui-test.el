@@ -1,4 +1,4 @@
-;;; job-ui-test.el --- batch tests: jobs as an attention source and the Plan Job commands (a job's parts in the cockpit: mod-cockpit-cards-test.el) -*- lexical-binding: t -*-
+;;; job-ui-test.el --- batch tests: jobs as an attention source and the Plan Job commands -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx)
 (require 'drgnx-timer)
@@ -31,7 +31,7 @@
   "BODY on a fresh notice model with the `jobs' source defined, as the module's setup does."
   (declare (indent 0) (debug t))
   `(drgnx-notice-test-with-model
-     (drgnx-notice-define-source 'jobs :title "Jobs" :command 'cockpit-needs-you)
+     (drgnx-notice-define-source 'jobs :title "Jobs" :command 'work-needs-you-next)
      (cl-letf (((symbol-function 'force-mode-line-update) #'ignore))
        ,@body)))
 
@@ -184,7 +184,7 @@
     (drgnx-notice-test-with-model
       (drgnx-test-with-modules '(tools/jobs) :strict t
                                (should (gethash 'jobs drgnx-notice--sources))
-                               (should (eq (plist-get (gethash 'jobs drgnx-notice--sources) :command) 'cockpit-needs-you))
+                               (should (eq (plist-get (gethash 'jobs drgnx-notice--sources) :command) 'work-needs-you-next))
                                (should drgnx-job-ui-attention-mode)
                                (should (memq #'drgnx-job-ui--event drgnx-hub-event-functions))
                                (drgnx-job-ui-note-jobs (list drgnx-job-ui-test--summary))
@@ -211,7 +211,7 @@
       (drgnx-test-with-modules '(tools/jobs) :strict t
                                (let ((spec (gethash 'jobs drgnx-statusbar--segments)))
                                  (should spec)
-                                 (should (eq (plist-get spec :click) 'drgnx-cockpit-show-jobs)))
+                                 (should (eq (plist-get spec :click) 'drgnx-work-space-open)))
                                (should-not (drgnx-job-ui-test--segment))
                                ;; the running jobs are counted from the answer the notice model is fed with
                                (drgnx-job-ui-note-jobs (list '(:id "a" :status "running") '(:id "b" :status "running")
@@ -238,7 +238,7 @@
 
 (ert-deftest drgnx-job-ui/note-jobs-is-quiet-while-the-module-is-off ()
   :tags '(:frozen)
-  ;; the cockpit's every-job pane calls it whether or not tools/jobs is on
+  ;; the recount calls it whether or not tools/jobs is on
   (drgnx-notice-test-with-model
     (should-not (gethash 'jobs drgnx-notice--sources))
     (drgnx-job-ui-note-jobs (list drgnx-job-ui-test--summary))
@@ -252,7 +252,7 @@
                              (dolist (profile '("vscode" "emacs" "vim"))
                                (should (with-temp-buffer (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir))
                                                          (search-forward (format "(%s " id) nil t)))))
-                           ;; M12f: a job shows in the Work cockpit; the window of its own is gone (closing a frame forgets nothing here)
+                           ;; a job shows in the Work space; the window of its own is gone (closing a frame forgets nothing here)
                            (should (equal (drgnx-cmd-title (drgnx-commands-get 'job-show)) "Show Job in Work…"))
                            (should-not (memq 'drgnx-job-ui--frame-deleted delete-frame-functions))
                            (should-not (fboundp 'drgnx-job-ui--frame))
@@ -271,8 +271,8 @@
                              (should-not (drgnx-timer-active-p 'job-ui-recount))
                              (should-not (drgnx-timer-active-p 'job-ui-recount-idle)))))
 
-;; M9b4-1: once the hub has marked a dismissed message acted, the job does not wait on you (Dismiss itself:
-;; mod-cockpit-cards-test.el); the count is the notice model's (`drgnx-needs-you-count', tested above).
+;; M9b4-1: once the hub has marked a dismissed message acted, the job does not wait on you; the count is the notice
+;; model's (`drgnx-needs-you-count', tested above).
 (ert-deftest drgnx-job-ui/what-waits-on-you-is-open-cards-and-unacted-messages ()
   :tags '(:frozen)
   (let ((done (list :id "j2" :status "done" :cards '((:id 9 :kind "review")) :messages :null))

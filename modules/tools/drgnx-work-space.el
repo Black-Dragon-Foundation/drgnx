@@ -33,6 +33,33 @@
 (declare-function drgnx-work-diff-reject-hunk "drgnx-work-code")
 (declare-function drgnx-work-code-teardown "drgnx-work-code")
 (defvar drgnx-work-diff-mode-map)
+(unless (featurep 'drgnx-work-board)
+  (load (expand-file-name "drgnx-work-board" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-work-trail)
+  (load (expand-file-name "drgnx-work-trail" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-work-review)
+  (load (expand-file-name "drgnx-work-review" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(declare-function drgnx-work-review-buffers "drgnx-work-review")
+(declare-function drgnx-work-review-show "drgnx-work-review")
+(declare-function drgnx-work-review-second "drgnx-work-review")
+(declare-function drgnx-work-review-accept "drgnx-work-review")
+(declare-function drgnx-work-review-reject "drgnx-work-review")
+(declare-function drgnx-work-trail-buffers "drgnx-work-trail")
+(declare-function drgnx-work-timeline-buffers "drgnx-work-trail")
+(declare-function drgnx-work-trail-event "drgnx-work-trail")
+(declare-function drgnx-work-trail-show "drgnx-work-trail")
+(declare-function drgnx-work-trail-steer "drgnx-work-trail")
+(declare-function drgnx-work-trail-pause "drgnx-work-trail")
+(declare-function drgnx-work-trail-resume "drgnx-work-trail")
+(declare-function drgnx-work-trail-stop "drgnx-work-trail")
+(declare-function drgnx-work-trail-show-steps "drgnx-work-trail")
+(declare-function drgnx-work-trail-show-conclusions "drgnx-work-trail")
+(declare-function drgnx-work-keys-sheet "drgnx-work-trail")
+(declare-function drgnx-work-lens-show-timeline "drgnx-work-board")
+(declare-function drgnx-work-board-buffers "drgnx-work-board")
+(declare-function drgnx-work-board--changed "drgnx-work-board")
+(declare-function drgnx-work-lens-show-map "drgnx-work-board")
+(declare-function drgnx-work-lens-show-board "drgnx-work-board")
 (declare-function drgnx-work-detail-buffer "drgnx-work-detail")
 (declare-function drgnx-work-detail-update "drgnx-work-detail")
 (declare-function drgnx-work-detail-buffers "drgnx-work-detail")
@@ -97,7 +124,10 @@ it (a notes repository with the code repositories inside it)."
   '(work-view work-outline work-left work-right work-why work-touches work-next-agent work-previous-agent work-open
               work-open-beside work-needs-you-next work-needs-you-here-next work-needs-you-here-previous
               work-needs-you-1 work-needs-you-2 work-needs-you-3 work-needs-you-4 work-needs-you-5 work-needs-you-6
-              work-needs-you-7 work-needs-you-8 work-needs-you-9 work-view-map work-focus work-overlaps
+              work-needs-you-7 work-needs-you-8 work-needs-you-9 work-view-map work-view-board work-view-timeline work-trail
+              work-steer work-pause work-resume work-stop work-keys-sheet work-conclusion-steps work-step-conclusions
+              work-review work-second-reviewer work-review-accept work-review-reject
+              work-focus work-overlaps
               work-collapse-layer-1 work-collapse-layer-2 work-collapse-layer-3 work-collapse-layer-4
               work-collapse-layer-5 work-collapse-layer-6 work-expand-layers work-show-finished work-search
               work-escape work-take-wheel work-files work-who-is-here
@@ -346,6 +376,8 @@ follows the windows; the commands."
   (drgnx-module-hook 'drgnx-hub-connected-functions connected () (drgnx-work-client-connected))
   (drgnx-module-hook 'drgnx-hub-disconnect-functions disconnected () (drgnx-work-client-disconnected))
   (drgnx-module-hook 'drgnx-work-client-change-functions changed (view marks) (drgnx-work-map--changed view marks))
+  (drgnx-module-hook 'drgnx-work-client-change-functions board-changed (view marks) (drgnx-work-board--changed view marks))
+  (drgnx-module-hook 'drgnx-hub-event-functions trail-event (event data) (drgnx-work-trail-event event data))
   (drgnx-module-hook 'drgnx-work-client-status-functions status (view status) (drgnx-work-space--show-status view status))
   (drgnx-module-hook 'drgnx-work-map-select-functions selected (buffer) (drgnx-work-detail-update buffer))
   (drgnx-module-hook 'drgnx-work-map-edges-functions edges (view selection) (drgnx-work-map--edges-update view selection))
@@ -389,13 +421,42 @@ follows the windows; the commands."
                    (work-open "Open" drgnx-work-map-open-selection
                               "An agent's transcript, a branch's repository, a file or a document")
                    (work-open-beside "Open Beside" drgnx-work-map-open-beside "Open it without moving focus")))
-    (drgnx-command-define id :category "Work" :title title :command fn :map 'drgnx-work-map-mode-map :doc doc))
+    ;; the lens map: the Board and the Timeline share these keys and move in their own way
+    (drgnx-command-define id :category "Work" :title title :command fn :map 'drgnx-work-lens-map :doc doc))
+  (drgnx-command-define 'work-view-map :category "Work" :title "Show the Map" :command #'drgnx-work-lens-show-map
+                        :map 'drgnx-work-lens-map :doc "The map, keeping the selection")
+  (drgnx-command-define 'work-view-board :category "Work" :title "Show the Board" :command #'drgnx-work-lens-show-board
+                        :map 'drgnx-work-lens-map :doc "The tracker's tasks by column, keeping the selection")
+  (pcase-dolist (`(,id ,title ,fn ,doc)
+                 '((work-view-timeline "Show the Timeline" drgnx-work-lens-show-timeline "A lane for each agent over time, keeping the selection")
+                   (work-trail "Open the Research Trail" drgnx-work-trail-show "The selected agent's steps in order, with its conclusions")
+                   (work-steer "Steer the Agent" drgnx-work-trail-steer "Message the selected agent; queued or steering, never a cancel")
+                   (work-pause "Pause the Agent" drgnx-work-trail-pause "Cancel after the current tool call; u resumes")
+                   (work-resume "Resume the Agent" drgnx-work-trail-resume "A plain continue prompt, labelled in the trail")
+                   (work-stop "Stop the Agent" drgnx-work-trail-stop "Stop it, after a confirmation line")
+                   (work-keys-sheet "Show This View's Keys" drgnx-work-keys-sheet "The keyboard shortcuts sheet")
+                   (work-review "Open the Review" drgnx-work-review-show
+                                "The selected agent's decisions with what they computed to, then its work as hunks")
+                   (work-second-reviewer "Start a Second Reviewer" drgnx-work-review-second
+                                         "A reviewer that sees the code and not the author's conclusions, through job/propose")))
+    (drgnx-command-define id :category "Work" :title title :command fn :map 'drgnx-work-lens-map :doc doc))
+  (drgnx-command-define 'work-review-accept :category "Work" :title "Accept the Change Here"
+                        :command #'drgnx-work-review-accept :map 'drgnx-work-review-mode-map
+                        :doc "A review mark with the diff's hash, for the merge gate; nothing is merged")
+  (drgnx-command-define 'work-review-reject :category "Work" :title "Reject the Hunk Here"
+                        :command #'drgnx-work-review-reject :map 'drgnx-work-review-mode-map
+                        :doc "The file goes back to pending and the agent is told, queued; the agent is not cancelled")
+  (drgnx-command-define 'work-conclusion-steps :category "Work" :title "Light the Steps of a Conclusion"
+                        :command #'drgnx-work-trail-show-steps :map 'drgnx-work-trail-mode-map
+                        :doc "On a conclusion: light the steps it rests on and go through them")
+  (drgnx-command-define 'work-step-conclusions :category "Work" :title "Go to the Conclusions of a Step"
+                        :command #'drgnx-work-trail-show-conclusions :map 'drgnx-work-trail-mode-map
+                        :doc "On a step: go to the first conclusion that rests on it")
   (pcase-dolist (`(,id ,title ,fn ,doc)
                  '((work-needs-you-here-next "Select the Next Thing That Needs You" drgnx-work-map-needs-you-here-next
                                              "Cycle the strip's chips; it selects, it never approves")
                    (work-needs-you-here-previous "Select the Previous Thing That Needs You"
                                                  drgnx-work-map-needs-you-here-previous "Cycle the strip's chips backwards")
-                   (work-view-map "Show the Map" drgnx-work-space-open "The map, keeping the selection")
                    (work-focus "Focus on the Chain" drgnx-work-map-focus "Hide what is not on the selection's chain; again for all")
                    (work-overlaps "Show Overlaps Only" drgnx-work-map-overlaps "Only the agents and branches that overlap")
                    (work-expand-layers "Expand All Layers" drgnx-work-map-expand-layers "Every layer open again")
@@ -434,6 +495,9 @@ follows the windows; the commands."
   (dolist (b (buffer-list))
     (when (buffer-local-value 'drgnx-work-live-file-mode b)
       (with-current-buffer b (drgnx-work-live-file-mode -1))))
+  (dolist (b (append (drgnx-work-board-buffers) (drgnx-work-timeline-buffers) (drgnx-work-trail-buffers)
+                     (drgnx-work-review-buffers)))
+    (kill-buffer b))
   (dolist (b (drgnx-work-detail-buffers)) (kill-buffer b))
   (drgnx-work-code-teardown)
   (dolist (b (buffer-list))

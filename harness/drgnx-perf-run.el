@@ -609,46 +609,6 @@ error if it does not hold).  With :actions, :measure runs after the input and it
                          :actions ,(make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) "))
                          :check "(> (drgnx-perf-replay-count \"replay\") drgnx-perf--replay-mark)"   ; typed while it streamed
                          :teardown ,(concat "(progn (drgnx-perf-replay-stop \"replay\") " kill-fixture ")"))
-      ;; the Work cockpit filtered to a job (Show Job in Work: the graph, what needs you), following three agents that
-      ;; stream (as it follows the hub's events)
-      (cockpit-cards
-       :setup ,(format "(progn %s (drgnx-perf--hub-start (make-list 6 (drgnx-perf--slow)))
-                              (setq drgnx-perf--agents (mapcar (lambda (n) (drgnx-agents-mirror-start \"mock\" temporary-file-directory (format \"perf#%%d\" n) \"perf\")) '(1 2 3)))
-                              (drgnx-perf--wait 10 (lambda () (seq-every-p (lambda (s) (eq (drgnx-agent-session-status s) 'idle)) drgnx-perf--agents)))
-                              (setq drgnx-perf--spent 0.0)
-                              (defun drgnx-perf--job-summary ()   ; what the hub would answer: spend and agents change
-                         (list :id \"perf\" :title \"Perf\" :status \"running\" :repo temporary-file-directory :budget 5.0 :spent drgnx-perf--spent
-                               :tasks (mapcar (lambda (n) (list :n n :title (format \"task %%d\" n) :role \"implement\" :profile \"mock\" :status \"running\" :agent :null :deps :null)) '(1 2 3))
-                               :agents (mapcar (lambda (s) (list :id (drgnx-agent-session-id s) :profile \"mock\" :task (drgnx-agent-session-task s) :status (symbol-name (drgnx-agent-session-status s)) :review :false)) drgnx-perf--agents)
-                               :cards (mapcar (lambda (n) (list :id n :kind \"stalled\" :task (format \"perf#%%d\" n) :title \"waiting\" :actions '((\"retry\" \"Retry\") (\"drop\" \"Drop the task\")) :data :null)) '(1 2 3 4))
-                               :messages :null
-                               :decisions (mapcar (lambda (n) (list :n n :kind \"build\" :subject (format \"part %%d\" n) :author \"user\" :status \"current\")) (number-sequence 20 1 -1))))
-                       (require 'drgnx-hub-client)         ; loaded first: the stub below stays
-                       (setq drgnx-perf--hub-call (symbol-function 'drgnx-hub-call))
-                       (fset 'drgnx-hub-call (lambda (method &rest args)   ; the hub answers all but the job's summary
-                                               (if (not (equal method \"job/status\"))
-                                                   (apply drgnx-perf--hub-call method args)
-                                                 (setq drgnx-perf--spent (+ drgnx-perf--spent 0.01))
-                                                 (when (cadr args) (funcall (cadr args) (drgnx-perf--job-summary) nil)))))
-                       (setq drgnx-perf--dock (cons (and (drgnx-wb--dock-windows) t) (drgnx-wb-sidebar-view)))
-                       (let ((editor (selected-window)))
-                         (drgnx-cockpit-show-job \"perf\")
-                         (drgnx-cockpit-cards--draw \"perf\" (drgnx-perf--job-summary))
-                         (select-window editor))
-                       t)"
-                       (drgnx-perf-run--hub-form))
-       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form)
-                      " (drgnx-perf--wait 15 (lambda () (not (seq-some #'drgnx-perf--running-p drgnx-perf--agents))))"
-                      " (dolist (s drgnx-perf--agents) (drgnx-perf--send s \"slow\")) t)")
-       :actions ,(make-list 2 (funcall type "(setq y 2) "))
-       :check "(seq-some #'drgnx-perf--running-p drgnx-perf--agents)"   ; typed while they streamed
-       :teardown ,(concat "(progn (fset 'drgnx-hub-call drgnx-perf--hub-call)"
-                          " (dolist (s drgnx-perf--agents) (ignore-errors (drgnx-agents-kill s)))"
-                          " (drgnx-perf--hub-stop)"
-                          " (ignore-errors (drgnx-pane-hide 'needs-you))"
-                          " (if (car drgnx-perf--dock) (drgnx-wb-show-view (or (cdr drgnx-perf--dock) 'explorer)) (drgnx-wb-hide-sidebar))"
-                          " (dolist (n '(\"*Needs You*\" \"*Decisions*\")) (when (get-buffer n) (kill-buffer n)))"
-                          " (setq drgnx-cockpit-graph-current-filter nil) " kill-fixture ")"))
       ;; a long code file with sticky scroll, indent guides (when installed) and smooth scrolling on
       (code-scrolling
        :setup ,(format "(progn (dolist (m '(\"editor/drgnx-sticky\" \"ui/drgnx-smooth\" \"extra/drgnx-guides\")) (load (expand-file-name (concat \"modules/\" m) %S) nil t)) (drgnx-smooth--setup) t)"
@@ -1101,7 +1061,6 @@ version and the commit, as JSON in FILE."
 
 (defconst drgnx-perf-run-unseeded
   '((agent-stream . "errored in the Emacs 31.1 container: the mock agent was not busy at the end (2026-10-20)")
-    (cockpit-cards . "errored in the container: no agent busy at the end")
     (live-view . "the container image has no websocket package")
     (typing-with-index . "the container's /src is not a git project; the workload indexes the repo")
     (terminal-typing . "the container image has no eat package")

@@ -62,7 +62,7 @@ tail of fewer samples is the maximum or next to it, and says nothing about the c
 (defvar drgnx-perf--gc-last 0.0 "`gc-elapsed' after the last collection seen.")
 
 (defvar drgnx-perf-row-counters
-  '(drgnx-explorer--renders drgnx-buffers--renders drgnx-cockpit--draws drgnx-cockpit-edits--draws)
+  '(drgnx-explorer--renders drgnx-buffers--renders)
   "Counters of rows drawn; the run's `:rows' is the growth of their sum.  A counter whose library is not
 loaded counts 0.  The render pipeline's `drgnx-view-stats' joins them when it exists (DEFERRED).")
 

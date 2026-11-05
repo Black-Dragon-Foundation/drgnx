@@ -205,36 +205,44 @@ FINISHED: the id of the item that went and was replaced by SEL, said first."
   (let* ((id (cdr sel)) (item (drgnx-work-client-item state id)) (f (lambda (k) (drgnx-work-map--field item k))))
     (if (null item)
         (list (cons :head "Nothing is selected."))
-      (list
-       (cons :head
-             (concat (if finished (format "%s finished.\n" (drgnx-work-detail--label state finished)) "")
-                     (format "%s · %s" (plist-get item :label) (plist-get item :kind))
-                     (let ((bits (delq nil (list (and (funcall f :state) (drgnx-work-map--state-word (funcall f :state)))
-                                                 (and (funcall f :minutes) (format "%d min" (funcall f :minutes)))
-                                                 (funcall f :spend) (funcall f :model)
-                                                 (and (funcall f :context) (format "context %d %%" (funcall f :context)))))))
-                       (if bits (concat "\n" (string-join bits " · ")) ""))))
-       (cons :why
-             (let* ((why (drgnx-work-detail--why state id))
-                    (parents (delq nil (mapcar (lambda (e) (and (equal (plist-get e :kind) "came-from") (equal (plist-get e :to) id)
-                                                                (drgnx-work-detail--label state (plist-get e :from))))
-                                               (drgnx-work-client-edges state)))))
-               (concat "why ↑\n"
-                       (if why (mapconcat (lambda (l) (concat "  › " l)) why "\n") "  no ask, spec or plan recorded")
-                       (if parents (format "\n  came from: %s" (string-join parents ", ")) ""))))
-       (cons :touches
-             (let ((lines (drgnx-work-detail--edge-lines state id)))
-               (concat "touches ↓\n"
-                       (if lines (mapconcat (lambda (l) (concat "  " l)) lines "\n") "  nothing yet")
-                       (if (funcall f :reads) (format "\n  reads %d files" (funcall f :reads)) "")
-                       (if (funcall f :edits)
-                           (format "\n  edits %d files (+%d −%d)" (nth 0 (funcall f :edits)) (nth 1 (funcall f :edits))
-                                   (nth 2 (funcall f :edits)))
-                         ""))))
-       (cons :conclusions
-             (concat "conclusions\n"
-                     (if-let* ((c (funcall f :conclusion))) (concat "  → " c) "  none recorded")))
-       (cons :actions "actions\n  open (RET)")))))
+      (seq-filter
+       #'cdr                            ; a section with nothing to say (the queue of a branch not in it) is left out
+       (list
+        (cons :head
+              (concat (if finished (format "%s finished.\n" (drgnx-work-detail--label state finished)) "")
+                      (format "%s · %s" (plist-get item :label) (plist-get item :kind))
+                      (let ((bits (delq nil (list (and (funcall f :state) (drgnx-work-map--state-word (funcall f :state)))
+                                                  (and (funcall f :minutes) (format "%d min" (funcall f :minutes)))
+                                                  (funcall f :spend) (funcall f :model)
+                                                  (and (funcall f :context) (format "context %d %%" (funcall f :context)))))))
+                        (if bits (concat "\n" (string-join bits " · ")) ""))))
+        (cons :why
+              (let* ((why (drgnx-work-detail--why state id))
+                     (parents (delq nil (mapcar (lambda (e) (and (equal (plist-get e :kind) "came-from") (equal (plist-get e :to) id)
+                                                                 (drgnx-work-detail--label state (plist-get e :from))))
+                                                (drgnx-work-client-edges state)))))
+                (concat "why ↑\n"
+                        (if why (mapconcat (lambda (l) (concat "  › " l)) why "\n") "  no ask, spec or plan recorded")
+                        (if parents (format "\n  came from: %s" (string-join parents ", ")) ""))))
+        (cons :touches
+              (let ((lines (drgnx-work-detail--edge-lines state id)))
+                (concat "touches ↓\n"
+                        (if lines (mapconcat (lambda (l) (concat "  " l)) lines "\n") "  nothing yet")
+                        (if (funcall f :reads) (format "\n  reads %d files" (funcall f :reads)) "")
+                        (if (funcall f :edits)
+                            (format "\n  edits %d files (+%d −%d)" (nth 0 (funcall f :edits)) (nth 1 (funcall f :edits))
+                                    (nth 2 (funcall f :edits)))
+                          ""))))
+        (cons :conclusions
+              (concat "conclusions\n"
+                      (if-let* ((c (funcall f :conclusion))) (concat "  → " c) "  none recorded")))
+        ;; a branch in the merge queue: where it stands and what it conflicts with, as the hub sent it
+        (cons :queue
+              (when-let* ((q (funcall f :queue)))
+                (concat "merge queue\n"
+                        (format "  %d of %d" (car q) (cadr q))
+                        (if-let* ((c (funcall f :conflicts))) (format "\n  conflicts with %s" (string-join c ", ")) ""))))
+        (cons :actions "actions\n  open (RET)"))))))
 
 (defun drgnx-work-detail-text (state sel &optional finished)
   "All of the side panel's text for SEL in STATE, one section after another."
@@ -258,7 +266,7 @@ FINISHED: the id of the item that went and was replaced by SEL, said first."
   (concat (or (cdr (assq key (drgnx-work-detail--sections))) (if (eq key :head) "Nothing is selected." "")) "\n"))
 
 (defun drgnx-work-detail--sync (_view)
-  (drgnx-view-sync-rows drgnx-view '(:head :why :touches :conclusions :actions)
+  (drgnx-view-sync-rows drgnx-view (or (mapcar #'car (drgnx-work-detail--sections)) '(:head))
                         (lambda (key) (cdr (assq key (drgnx-work-detail--sections))))))
 
 (drgnx-view-define 'work-detail :render #'drgnx-work-detail--render :sync #'drgnx-work-detail--sync

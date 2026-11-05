@@ -192,8 +192,7 @@ let-binds the registries the module touches:
 ```
 
 The first argument is a list of module names (evaluated): their files are loaded, and so are the modules they
-`:requires`, all the way down — also a required module whose file another file already loaded (`tools/cockpit`
-loads `tools/work`'s). A module's file is loaded only when the module is not in the table yet (a string element is loaded each time): then
+`:requires`, all the way down — also a required module whose file another file already loaded. A module's file is loaded only when the module is not in the table yet (a string element is loaded each time): then
 a `defcustom` with a `:set` function sets the global value again, over a `let` binding around the helper, and a
 function the file defines replaces a `cl-letf` stub made outside it. Set a module's own setting, and stub its functions, inside BODY. An element that is a string is a file to load instead, for a fake module a test writes to a temporary
 directory. `:stages '(startup idle)` sets up every shipped module of those stages as well. The module table, report

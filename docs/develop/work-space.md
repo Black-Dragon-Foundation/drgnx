@@ -512,6 +512,65 @@ chain, the edge selection, the item that finished) and the commands are in `drgn
 - The client calls the hub on the subscribed connection (`drgnx-work-client--call`): the hub sends a view's events to
   the connection that subscribed it, and only that connection's events reach `drgnx-hub-event-functions`.
 
+### The lens, and the Board
+
+`drgnx-work-lens-map` is the keymap every Work view shares (the parent of the map's, the Board's and the Timeline's);
+the movement and opening commands (`work-left` and so on), `work-view-map` and `work-view-board` are bound in it. They
+act through `drgnx-work-lens-nav` (buffer-local): a view that is not the map sets it to a function of one direction, and
+`drgnx-work-map--move` and its siblings call it first. The selection always lives in the map buffer
+(`drgnx-work-lens--map` names it from the other views); `drgnx-work-lens-switch` carries it across.
+
+`modules/tools/drgnx-work-board.el` is the Board: a `work-board` view (rows `(:head)` and `(:cards I)`, three lines a
+card, the bar a 4 px `display` space). Its tasks come from `tasks/find` (every task, up to four pages) or `plans/get`
+(a plan's tasks with their steps, for the progress bar), asked again 0.3 s after the map's frame changes
+(`drgnx-timer-soon` keyed `(work-board . VIEW)`). `drgnx-work-board-column` is the Lisp copy of
+`norn::tracker::board_column` (a test pins every status). `drgnx-work-board-for-selection` and
+`drgnx-work-board-to-selection` are the design's table 8.2, pure functions of the cached frame and the cards; an agent
+works on a card when its `task` field names the card's id.
+
+### The Timeline and the trail
+
+`modules/tools/drgnx-work-trail.el` holds both, and the steering commands. A step is the hub's `timeline/get` row;
+`drgnx-work-trail-kind` takes its kind from its class and `detail.kind` (never its prose), `drgnx-work-trail-title` its
+title, and `drgnx-work-trail-row-text` its row (the gap before the time is a `display` space, `(- right 14)`).
+
+- **The trail** is a `work-trail` view (`:follow-tail`): row keys `(:step ID)`, `(:conc N)` (a conclusion card, after
+  the step the hub stamped it on, else at the end) and `(:note N)` ("paused by you", "resumed by you", added when the
+  command ran). It opens with `timeline/get {limit drgnx-work-trail-first-page}`, asks `work/conclusions`, and a
+  `post-command-hook` function asks `{before SEQ, limit drgnx-work-trail-page}` when point is within about 30 rows of
+  the top (`drgnx-work-trail-page-back`; `drgnx-work-trail--more` falls when a page comes back short). Older steps go in
+  with `drgnx-view-insert :after nil`, new ones with `drgnx-view-append`; no step is held twice (a hash by id). Live
+  steps come from `agent-step` events (`drgnx-work-trail-event`): the trail asks `{since LAST-SEQ}` rather than trusting
+  the event's body, and asks the conclusions again half a second later (`drgnx-timer-soon`).
+- **Conclusions** link to steps through the hub's `links` (named, since the last one); `drgnx-work-trail-conclusion-steps`
+  and `-step-conclusions` are the two directions, `drgnx-work-trail-lit-steps` lights them (`drgnx-work-trail--lit`).
+- **Opening a step** (`drgnx-work-trail-open-step`): a read opens the file at its lines (relative paths against the
+  mirrored session's `cwd`); AS-READ calls `work/file-at {session path seq}`; a search runs `project-find-regexp` again; a
+  page `browse-url`; an edit shows `work/hunks` in `diff-mode`; a thought opens the agent's transcript (the step has no
+  text of its own).
+- **The Timeline** is a `work-timeline` view (rows `(:axis)` and `(:lane AGENT-ID)`), a lane per agent in team order,
+  `timeline/get {limit 200}` each, asked again 0.3 s after an `agent-step` of its session. `drgnx-work-timeline-spans`
+  (pure) puts steps at their time on the lane's pixel width, at least 2 px; faces `drgnx-work-seg-*` use
+  `:inverse-video` over the stock colour faces, so a segment's colour is the face's foreground.
+- **Steering** (`drgnx-work-trail-steer`, `-pause`, `-resume`, `-stop`) lives on the lens map and finds its agent per
+  view (`drgnx-work-trail--agent-sid`): the trail's session, the Timeline's lane, the Board's card, the map's selection.
+  Pause is `agents/pause`; resume is `agents/send` with `drgnx-work-resume-text`; stop asks `y-or-n-p` and is not
+  bound to anything automatic.
+
+### The review view and the second reviewer
+
+`modules/tools/drgnx-work-review.el`. `drgnx-work-review-open` asks `work/conclusions`, then `decisions/effects` for each
+decision (alist `drgnx-work-review--effects`), `work/files` and `work/hunks` for each file; every answer draws the view
+again with `drgnx-work-review-install`. Row keys: `(:decisions)`, `(:decision N)` (origin order: from the brief, own,
+needs you), `(:summary)`, `(:files)`, `(:file PATH)`, `(:hunk PATH I)`; `drgnx-work-review-parse-hunks` splits a
+unified diff at its `@@` lines. `a` is a `review/mark` `accepted` with the sha1 of the file's whole diff (what the merge
+gate compares); `D` is a `review/mark` `pending` and an `agents/send` naming the hunk (the hub has no hunk revert until
+the edit history lands). `V` writes a plan (`<state>/work-space/reviews/SESSION-TIME.md`, **Role:** review, the files
+changed, no conclusions) and calls `job/propose`; it never calls `agents/start`.
+
+The merge queue is not inferred: a branch item's `queue` (`[N, M]`) and `conflicts` fields are drawn when the hub sends
+them (`drgnx-work-map--chip-line`, a `:queue` section of the side panel). The hub sends none yet, so no chip shows.
+
 ### Live agents' files
 
 `drgnx-work-live-file-mode` (in `drgnx-work-space.el`) is turned on by the module's `find-file-hook` function in a file

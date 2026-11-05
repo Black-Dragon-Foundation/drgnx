@@ -64,7 +64,8 @@ arrives with the files picker.
   and every agent that waits on you. On the right, the machines' load ("desktop 3/16"). `n` and `N` cycle the chips,
   and `C-k n` / `C-c w n` / `SPC a n` do it from anywhere. **A jump only selects.** Allowing, pushing and answering stay
   on the card's own keys; no key of the map settles anything.
-- The **lens** (the tab line) names the views: Map, Board, Timeline. Only the map exists so far.
+- The **lens** (the tab line) names the views: Map, Board, Timeline. `m`, `b` and `t` switch between them in the same
+  window, and the selection comes along: each view shows the nearest thing it can represent.
 - `f` hides everything not on the selection's chain; while it is on, the arrow keys move inside the chain and ask the
   hub for nothing. `o` shows only the agents and branches that overlap. `1` to `6` collapse a layer to one thin row
   with its name and a count, `0` opens them all, `.` brings finished items back. Each of these is a layout you asked
@@ -72,6 +73,70 @@ arrives with the files picker.
 - `/` narrows the map to the items matching your text: they keep their look, the rest dim, and Enter selects the first.
 - `Esc` clears the search; then the filters and collapsed layers; then closes the pane.
 - When an agent records a new conclusion, its card shows a **new** chip for four seconds.
+
+### The Board
+
+`b` shows the tracker's tasks in six columns (queued, running, waiting, needs you, review, done), one flat card each
+with a thin progress bar (the steps of its plan that are ticked). With a plan, spec or ask selected on the map, the
+Board shows that plan's tasks; otherwise every task. The arrow keys move between cards, `Tab` to the next card that has
+an agent, `Enter` opens that agent's transcript.
+
+What a selection becomes when you switch:
+
+| Selected | On the Board |
+|---|---|
+| an agent (or a subagent) | the card of its task |
+| a file, branch or machine | the cards of the agents that touch it, lit |
+| a plan, spec or ask | that plan's tasks |
+
+From the Board back to the map, a card selects its agent; a task with no agent selects its plan.
+
+### The Timeline and the research trail
+
+`t` shows a lane for each agent over time. Each step is a segment, coloured by what it was (reading and searching,
+editing, other tools, thinking, waiting on a job, waiting for you). Left and right move to the earlier or later step of
+a lane, up and down to the lane above or below, and `Enter` opens the step. A file selected on the map lights the lanes
+of the agents that touch it.
+
+`r` on an agent opens its **research trail**: its steps in order, newest at the bottom, following the end while it works.
+A row has the kind's icon, a title (`path:120–184` for a read, the query for a search, the host and title of a page,
+`thinking` for a thought), and its time and duration at the right. It opens with the last 60 steps and fetches 200 more
+when you scroll near its top. The agent's decisions and findings stand among the steps as cards that say how many steps
+they are based on and which named sources no step of the session matches ("named, not read in this session"); a step a
+conclusion rests on carries that conclusion's number in a small pill. `l` on a conclusion lights its steps and goes
+through them; `L` on a step goes to a conclusion that rests on it (in the Vim profile, `g l` and `g L`).
+
+`Enter` opens a step's source: a read at its lines, a search run again now, a page in your browser, an edit as its diff,
+a thought in the agent's transcript. `S-Enter` on a read opens the file **as the agent read it**, in a read-only buffer
+`FILE@step-N`, when the file has changed since.
+
+The steering keys work in every Work view, on the agent selected there:
+
+| Key | Does |
+|---|---|
+| `s` | message the agent (queued or steering as its mode says, never a cancel) |
+| `p` | pause it after its current tool call ("Pausing after the current tool call · u resume") |
+| `u` | resume it with a plain "Continue.", labelled "resumed by you" in the trail |
+| `x` | stop it, after a confirmation line |
+| `?` | this view's keys |
+
+### The review view, the merge queue and a second reviewer
+
+`v` on an agent opens its **review**. It starts with the agent's decisions: those from the brief, then its own, then
+those it needs your call on. Under each is what git computed of it ("computed": the commits that implement it, and the
+later hunks that overlap its lines), never a guess. Then come where the plan stands, what the agent did and what it
+spent, and every file it edited as hunks against the branch it was cut from. On a hunk:
+
+- `a` accepts the file's change as it is now: a review mark for the merge gate. Nothing is merged.
+- `D` rejects it: the file goes back to pending and the agent is told, in a queued message, to take the change back. The
+  agent is not cancelled.
+
+`V` starts a **second reviewer**. It is given the code (the files changed) and none of the author's conclusions, and it
+starts an agent, so it goes through `job/propose` like every dispatch from the Work space.
+
+A branch in the merge queue shows "queue 2/3" on its card, and "conflicts with rp-x" when a trial merge failed; selected,
+its side panel says the same in words. These come from the hub's own record; a branch the hub sent no queue for shows
+nothing. Merging and pushing stay on their cards.
 
 ### Files an agent is editing
 
@@ -117,8 +182,9 @@ a window ("Too many to draw at this width · O back to the map, at a wider tile"
 The colours are the theme's: the map's faces (`drgnx-work-dim`, `drgnx-work-card`, `drgnx-work-selected`,
 `drgnx-work-chain`, `drgnx-work-overlap`, `drgnx-work-needs-you`, `drgnx-work-edge`, `drgnx-work-edge-strong`,
 `drgnx-work-label`, `drgnx-work-chip`, `drgnx-work-new` and `drgnx-work-agent-1` to `-6`) inherit stock faces and carry
-no colour of their own. The Work tab that used to sit in the right dock (`work-view` as "Show Work") is gone; the Work
-graph (`work-graph`) stays until the cockpit retires.
+no colour of their own. The Work tab that used to sit in the right dock (`work-view` as "Show Work") is gone, and so is
+the Work cockpit (its graph of agents, jobs and reviews, the feed, the edits pane and the job parts): the map, the Board,
+the Timeline and the review view replace them. `work-graph` stays as the older drawing of specs, plans and branches.
 
 ## Machines
 

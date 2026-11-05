@@ -73,7 +73,18 @@
 (defvar drgnx-work-map-scale nil
   "The display scale the rows are drawn at; nil: the frame's.  A test binds it.")
 
-(defvar drgnx-work-map-mode-map (make-sparse-keymap)
+(defvar drgnx-work-lens-map
+  (let ((m (make-sparse-keymap))) (set-keymap-parent m special-mode-map) m)
+  "Keys every Work view shares: the map, the Board, the Timeline and the trail (the lens, moving, opening).  The
+key profiles bind them (`drgnx-command-define' with this map); each view's own keymap has it as its parent.")
+(defvar-local drgnx-work-lens--map nil
+  "In a Board, Timeline, trail or review buffer: the map buffer it is a view of (the selection lives there).")
+(defvar-local drgnx-work-lens-nav nil
+  "In a Work view that is not the map: a function of one direction (`left' `right' `up' `down' `next-agent'
+`previous-agent' `open' `open-beside') that moves or opens in that view; the shared keys call it.")
+
+(defvar drgnx-work-map-mode-map
+  (let ((m (make-sparse-keymap))) (set-keymap-parent m drgnx-work-lens-map) m)
   "Keys of the map buffer.  The key profiles bind them (`drgnx-command-define' with this map).")
 
 (defface drgnx-work-band '((t :height 0.1))
@@ -357,10 +368,13 @@ the side panel follows; the chain's edge tiles one frame later (the timer takes 
           (drgnx-work-nav-sel state id)))))
 
 (defun drgnx-work-map--move (dir)
-  (let ((state (drgnx-work-map--require-state)))
-    (drgnx-work-map-select (if drgnx-work-map--selection
-                               (drgnx-work-nav-move state drgnx-work-map--selection dir)
-                             (drgnx-work-map--first)))))
+  "Move the selection in DIR; in a Work view that is not the map, that view's own move."
+  (if drgnx-work-lens-nav
+      (funcall drgnx-work-lens-nav dir)
+    (let ((state (drgnx-work-map--require-state)))
+      (drgnx-work-map-select (if drgnx-work-map--selection
+                                 (drgnx-work-nav-move state drgnx-work-map--selection dir)
+                               (drgnx-work-map--first))))))
 
 (defun drgnx-work-map-left () "Select the previous item of this layer." (interactive) (drgnx-work-map--move 'left))
 (defun drgnx-work-map-right () "Select the next item of this layer." (interactive) (drgnx-work-map--move 'right))
@@ -370,14 +384,18 @@ the side panel follows; the chain's edge tiles one frame later (the timer takes 
 (defun drgnx-work-map-next-agent ()
   "Select the next agent, in team order."
   (interactive)
-  (let ((state (drgnx-work-map--require-state)))
-    (drgnx-work-map-select (drgnx-work-nav-agent state drgnx-work-map--selection t))))
+  (if drgnx-work-lens-nav
+      (funcall drgnx-work-lens-nav 'next-agent)
+    (let ((state (drgnx-work-map--require-state)))
+      (drgnx-work-map-select (drgnx-work-nav-agent state drgnx-work-map--selection t)))))
 
 (defun drgnx-work-map-previous-agent ()
   "Select the previous agent, in team order."
   (interactive)
-  (let ((state (drgnx-work-map--require-state)))
-    (drgnx-work-map-select (drgnx-work-nav-agent state drgnx-work-map--selection nil))))
+  (if drgnx-work-lens-nav
+      (funcall drgnx-work-lens-nav 'previous-agent)
+    (let ((state (drgnx-work-map--require-state)))
+      (drgnx-work-map-select (drgnx-work-nav-agent state drgnx-work-map--selection nil)))))
 
 ;;;; Opening the selection
 
@@ -424,14 +442,18 @@ the side panel follows; the chain's edge tiles one frame later (the timer takes 
   "Open the selected item: an agent's transcript, a branch's repository, a file, a document.  BESIDE (a prefix
 argument): without moving focus."
   (interactive "P")
-  (let ((state (drgnx-work-map--require-state)))
-    (unless drgnx-work-map--selection (user-error "Nothing is selected"))
-    (drgnx-work-map--open-item state drgnx-work-map--selection beside)))
+  (if drgnx-work-lens-nav
+      (funcall drgnx-work-lens-nav (if beside 'open-beside 'open))
+    (let ((state (drgnx-work-map--require-state)))
+      (unless drgnx-work-map--selection (user-error "Nothing is selected"))
+      (drgnx-work-map--open-item state drgnx-work-map--selection beside))))
 
 (defun drgnx-work-map-open-beside ()
   "Open the selected item beside the map, without moving focus."
   (interactive)
-  (drgnx-work-map-open-selection t))
+  (if drgnx-work-lens-nav
+      (funcall drgnx-work-lens-nav 'open-beside)
+    (drgnx-work-map-open-selection t)))
 
 ;;;; Card text
 
@@ -510,7 +532,12 @@ argument): without moving focus."
          (glyph (pcase kind ("ask" "❝") ("spec" "◫") ("plan" "☰") ("branch" "⑂") ("file" "▭") ("machine" "▣") (_ "·")))
          (extra (pcase kind
                   ("plan" (when-let* ((p (funcall f :progress))) (format "%d/%d" (car p) (cadr p))))
-                  ("branch" (when-let* ((e (funcall f :edits))) (format "edits %d" (car e))))
+                  ("branch" (let ((bits (delq nil (list (when-let* ((e (funcall f :edits))) (format "edits %d" (car e)))
+                                                        ;; only what the hub sent: the merge queue is its fact
+                                                        (when-let* ((q (funcall f :queue))) (format "queue %d/%d" (car q) (cadr q)))
+                                                        (when-let* ((c (funcall f :conflicts)))
+                                                          (format "conflicts with %s" (string-join c ", ")))))))
+                              (and bits (string-join bits " · "))))
                   ("file" (when-let* ((c (funcall f :change))) (format "+%d −%d" (car c) (cadr c))))
                   ("machine" (when-let* ((s (funcall f :slots))) (format "%d/%d" (car s) (cadr s)))))))
     (concat (if (plist-get item :needs_you) (propertize "⚑ " 'face 'drgnx-work-needs-you) "")
@@ -771,10 +798,17 @@ mission chips (the machines' load) at the right."
                                                'face 'drgnx-work-chip))
                        (drgnx-work-client-chips state) " "))))
 
+(defun drgnx-work-lens-string (&optional current)
+  "The lens: Map · Board · Timeline, CURRENT (`map', `board' or `timeline'; default `map') in bold, the others in the
+label face (`m' `b' `t' switch)."
+  (let ((current (or current 'map)))
+    (mapconcat (lambda (v)
+                 (propertize (format " %s " (cdr v)) 'face (if (eq (car v) current) 'bold 'drgnx-work-label)))
+               '((map . "Map") (board . "Board") (timeline . "Timeline")) "·")))
+
 (defun drgnx-work-map--lens-string ()
-  "The lens: Map · Board · Timeline, the one shown in bold (the Board and the Timeline arrive with their views)."
-  (concat (propertize " Map " 'face 'bold) " · " (propertize "Board" 'face 'drgnx-work-dim) " · "
-          (propertize "Timeline" 'face 'drgnx-work-dim)))
+  "The lens of the map: Map · Board · Timeline, the map in bold."
+  (drgnx-work-lens-string 'map))
 
 (defun drgnx-work-map--refresh-strip ()
   "Make the strip of the current buffer's frame; redisplay then only reads the variable."
