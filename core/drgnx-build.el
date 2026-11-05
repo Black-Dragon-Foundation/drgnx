@@ -206,7 +206,7 @@ the functions of `drgnx-build--advised-lists'."
 
 (defvar native-comp-eln-load-path)
 (declare-function comp-trampoline-compile "comp-run")
-(declare-function comp-trampoline-search "comp-run")
+(declare-function comp--trampoline-search "comp-run")
 
 (defun drgnx-build--native-p ()
   "Does this Emacs compile natively?"
@@ -216,11 +216,12 @@ the functions of `drgnx-build--advised-lists'."
   "Compile the trampolines of the primitives under ROOT that drgnx advises (`drgnx-build-advised-primitives'), which
 are not there yet, into `drgnx-build-trampoline-dir'.  Return the list of the primitives it compiled; nil without
 native compilation.  One that fails to compile is skipped: Emacs compiles it when it is first advised, as before."
-  (when (and (drgnx-build--native-p) (require 'comp nil t) (fboundp 'comp-trampoline-compile))
+  (when (and (drgnx-build--native-p) (require 'comp nil t) (require 'comp-run nil t)
+             (fboundp 'comp-trampoline-compile))
     (when-let* ((dir (drgnx-build-trampoline-dir)))
       (let ((native-comp-eln-load-path (cons dir (bound-and-true-p native-comp-eln-load-path))) done)
         (dolist (s (drgnx-build-advised-primitives root))
-          (unless (and (fboundp 'comp-trampoline-search) (comp-trampoline-search s))
+          (unless (and (fboundp 'comp--trampoline-search) (comp--trampoline-search s))
             (when (ignore-errors (comp-trampoline-compile s) t) (push s done))))
         (nreverse done)))))
 

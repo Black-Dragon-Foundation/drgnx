@@ -35,7 +35,7 @@
     (unwind-protect
         (cl-letf (((symbol-function 'drgnx-build--native-p) (lambda () t))
                   ((symbol-function 'comp-trampoline-compile) (lambda (s) (push s compiled)))
-                  ((symbol-function 'comp-trampoline-search) (lambda (_) nil))
+                  ((symbol-function 'comp--trampoline-search) (lambda (_) nil))
                   ((symbol-function 'drgnx-build-trampoline-dir) (lambda () dir)))
           (should (equal (drgnx-build-trampolines drgnx-dir) want))
           (should (equal (sort compiled #'string<) want))
@@ -50,7 +50,7 @@
     (unwind-protect
         (cl-letf (((symbol-function 'drgnx-build--native-p) (lambda () t))
                   ((symbol-function 'comp-trampoline-compile) (lambda (s) (push s compiled)))
-                  ((symbol-function 'comp-trampoline-search) (lambda (s) (eq s 'require)))
+                  ((symbol-function 'comp--trampoline-search) (lambda (s) (eq s 'require)))
                   ((symbol-function 'drgnx-build-trampoline-dir) (lambda () dir)))
           (drgnx-build-trampolines drgnx-dir)
           (should compiled)
