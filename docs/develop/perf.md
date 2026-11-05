@@ -636,8 +636,17 @@ workload it ran on). An `inconclusive` verdict does not refuse: with about 13 de
 metrics read two ways at n around 100, a tail metric is nearly always inconclusive against itself, so it prints a line
 (`A/A (typing): p95 inconclusive (forward)`) and the A/B goes on; the A/B's own verdicts, budgets and exit codes are unchanged.
 A probe that counts a phase twice shows up here, as a refused run, instead of as a verdict about the change. An A/A that
-is not judged for its own reasons (a loaded calibration, a workload without per-command samples) is left to the A/B,
-which reports the same. The A/A costs one workload's lab time per invocation.
+is not judged (a loaded calibration, an error, a workload without per-command samples) proves nothing about the lab and
+refuses the invocation like a failed one: `A/A failed: the A/A was not-judged (loaded calibration)`, exit 4. Every
+calibration (of an A/A or an A/B) is taken once both sessions are quiet: the wait lets a stream left running by the
+last run end first, so a session's own background work does not mark it loaded. The A/A costs one workload's lab time
+per invocation.
+
+The results file carries `run_rounds` for every workload: per round and arm, the input p95, p99 and max and the counts of
+stalls of 16 and of 100 ms or more, so a tail in the pooled samples can be traced to the rounds that carry it. The
+`lsp-typing` digest hashes each server's first 100 messages of the session (not of the round, the flood goes on across
+rounds); the `quick-open-large` digest names files by their path under the repository, not under the session's temporary
+directory.
 
 **The calibration rows** (report-only, never failing; printed as `report cal-ROW WORKLOAD: KEY value, …` by plain
 `--perf`; a key the Nidhogg build does not report prints `n/a (Task 55/57)`): `cal-costs` (`:costs` and `:decisions`
