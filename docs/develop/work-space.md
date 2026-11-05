@@ -440,6 +440,33 @@ STATE KEY`, a function of the cached frame and the display scale (`drgnx-work-ma
   (`drgnx-view-dirty`), a relayout or a changed list of rows touches the view (SYNC diffs the keys with a signature of
   each row's items and rectangles), so a field change draws one row.
 
+### The edges
+
+`modules/tools/drgnx-work-edges.el`, pure: a function of the layout's geometry, the chain and the colours. The
+fixture's bands carry real curves, so the screenshot set shows them.
+
+- **Tiles.** A band is cut into tiles 192 logical pixels wide (device pixels at the display scale: an SVG stays the size
+  it is written at on the native shell). `drgnx-work-edges-tile BAND I GEOMETRY COLOURS` is the image of tile I, or nil
+  when no curve and no port crosses it. `drgnx-work-edges-tile-svg` is its text, built as a string (no DOM): a cubic
+  from the band's top to its bottom for a straight segment, an arch rising from the bottom for a same-row arc, the
+  chain's curves last so they draw on top. The image cache is keyed on the SVG text and the alternative text, so a tile
+  whose strokes did not change is the very same object, a theme change makes new tiles by itself, and the cache holds
+  600 entries at most. The alternative text names the tile's edges ("hub rows → rp-df-hub (came from)").
+- **Strokes** (design §5.2 as amended): came from 1 px solid; edits 2 px solid, neutral off the chain; reads 1.5 px
+  dotted in the agent's colour; runs on 1 px dash-dot; based on 1 px short dashes; overlap 2 px dashed in the warning
+  colour; read versus edit 1 px dotted. No two kinds share a width and a dash. On the selection's chain an edge takes the
+  accent colour (an edit: its agent's colour) and is 1 px wider.
+- **Colours** come from the `drgnx-work-*` faces whenever a tile is made (`drgnx-work-edges-colours`); the module holds
+  none. A theme change draws every map again (`drgnx-work-map-theme-changed`).
+- **A chain change** (`drgnx-work-map--edges-update`, on `drgnx-work-map-edges-functions`, one frame after the
+  selection): the edges that joined or left the chain name the bands and lanes to draw again; the images the redraw
+  replaces are flushed (`image-flush`), the unchanged tiles are not touched.
+- **Lanes.** An edge that skips a card row is a 2 px wide image at the lane's x in each text line of that row, as high as
+  the text, with the row's ascent in percent (`drgnx-work-edges-row-metrics`: the font's ascent over ascent plus
+  descent), so the row keeps its height.
+- **Ports.** Edges bundled for want of lanes end in a chip "↑ N" on the bottom edge of the band above their target,
+  drawn into the tile that holds its column.
+
 ### Selection, the chain and the side panel
 
 `modules/tools/drgnx-work-detail.el` holds the pure part; the buffer's state (`drgnx-work-map--selection`, the cached
