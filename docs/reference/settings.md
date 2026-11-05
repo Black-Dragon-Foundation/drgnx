@@ -761,11 +761,11 @@ Files matching one of these globs are not indexed; a workspace's are added to yo
 | `:scope` | `project` |
 | `:workspace` | `data` |
 | `:merge` | `append` |
-| `:on-error` | `last-good` |
+| `:on-error` | `strict` |
 | `:apply` | - |
-| `:runtime` | - |
-| `:agents` | `grantable` |
-| `:schema` | - |
+| `:runtime` | `"Vec<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(list-of string)` |
 
 ## drgnx-search-include
 
@@ -778,11 +778,11 @@ Only files matching one of these globs are indexed (nil: all); see `drgnx-search
 | `:scope` | `project` |
 | `:workspace` | `data` |
 | `:merge` | `replace` |
-| `:on-error` | `last-good` |
+| `:on-error` | `strict` |
 | `:apply` | - |
-| `:runtime` | - |
-| `:agents` | `grantable` |
-| `:schema` | - |
+| `:runtime` | `"Vec<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(list-of string)` |
 
 ## drgnx-search-model-mirror
 
@@ -812,11 +812,11 @@ Non-nil turns a project's semantic search off; see `drgnx-search-config'.
 | `:scope` | `project` |
 | `:workspace` | `data` |
 | `:merge` | `replace` |
-| `:on-error` | `last-good` |
+| `:on-error` | `strict` |
 | `:apply` | - |
-| `:runtime` | - |
-| `:agents` | `grantable` |
-| `:schema` | - |
+| `:runtime` | `"bool"` |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
 
 ## drgnx-session-keep-running
 

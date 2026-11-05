@@ -374,6 +374,9 @@ fn decode_default(name: &str, default: &RuntimeValues, values: &mut RuntimeValue
             values.search_model_mirror = default.search_model_mirror.clone();
         }
         "drgnx-search-builtin" => values.search_builtin = default.search_builtin,
+        "drgnx-search-include" => values.search_include = default.search_include.clone(),
+        "drgnx-search-exclude" => values.search_exclude = default.search_exclude.clone(),
+        "drgnx-search-off" => values.search_off = default.search_off,
         _ => {}
     }
 }

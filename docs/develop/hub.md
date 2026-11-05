@@ -1069,6 +1069,12 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `reports/get` | user | `{id?: string, task?: string}` | `{reports?: [Report]}` | no |
 | `restart` | user | `{}` | `boolean` | no |
 | `review/mark` | user | `{agent: AgentName, event?: {data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text}, hash: string, path: string, state: "accepted" \| "pending"}` | `boolean` | yes |
+| `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, prefer?: string, servers: [ServerInfo]}` | no |
+| `search/index` | user | `{now?: boolean, rebuild?: boolean, root: AbsPath}` | `{started: boolean}` | yes |
+| `search/model-download` | user | `{consent: {bytes: natnum}, model: Id}` | `{started: boolean}` | yes |
+| `search/query` | user | `{k?: natnum, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code", text: Prompt}` | `{hits: [Hit], lag: Lag, lag_line: string, model?: string, notice?: string}` | no |
+| `search/status` | user | `{root: AbsPath}` | `StatusAnswer` | no |
+| `search/typing` | user | `{}` | `{}` | no |
 | `settings/confirm` | user | `{error?: string, ok: boolean, tx: natnum}` | `{state: "accepted" \| "reverted" \| "blocked"}` | yes |
 | `settings/explained` | user | `{req: natnum, settings: [JsonObject]}` | `boolean` | no |
 | `settings/record` | user | `{changes: [{file: string, id: string, line?: natnum, value?: Text}], req: string, reverts?: natnum, tool: string}` | `{tx: integer}` | yes |
@@ -1635,7 +1641,7 @@ reading and fallbacks; `profiles.rs`, `providers.rs`: the types).
   `RUNTIME_NAMES` and `value` JSON of the setting's runtime type (alists are objects, keys sorted; `drgnx-ai-roles` a
   list of `{role, chain: [{provider, model}]}`; at most 64 KiB). A call replaces the whole set of that project (none:
   global); an empty list clears it (the project still counts as having sent). A project's set holds only the settings
-  the Lisp declares `:scope project` (`overrides::PER_PROJECT`: `drgnx-ai-roles`); every other runtime setting is
+  the Lisp declares `:scope project` (`overrides::PER_PROJECT`: `drgnx-ai-roles`, `drgnx-search-include`, `drgnx-search-exclude`, `drgnx-search-off`); every other runtime setting is
   global and security-bearing (profiles and their commands, providers and their URLs,
   `drgnx-agents-allow-unsandboxed`), so a project never changes it. A name that is not a runtime setting, a global one
   in a project's set, or a value that does not fit is `invalid-params` at `overrides[N].name` or

@@ -24,6 +24,9 @@ pub const USAGE: &str = "usage: ratatoskr serve [--foreground] [--parent-pid PID
     \x20      ratatoskr graph export|import|backup|revert|excise|scrub|grants|sql|compact|proposed ...   (the store, from a terminal)\n\
     \x20      ratatoskr job propose PLAN [--repo DIR] [--budget USD] [--auto] [--json]   (plan runs, from a terminal)\n\
     \x20      ratatoskr job approve ID [--budget USD] | status [ID] | stop ID | resume ID [--budget USD]   [--json]\n\
+    \x20      ratatoskr search index ROOT [--rebuild] [--now]   (build or rebuild a project's code index)\n\
+    \x20      ratatoskr search query ROOT QUESTION... [-k N] [--scope code|tests|docs|all] [--json]\n\
+    \x20      ratatoskr search mcp [ROOT]   (the MCP search tool on stdio, for an agent outside drgnx)\n\
     \x20      ratatoskr mcp-bridge --socket PATH   (an agent's coordination tools: stdio to its session's mcp.sock)\n\
     \x20      ratatoskr mcp-bridge --outside --kind KIND [--cwd DIR]   (an agent outside drgnx: stdio to the hub)\n\
     \x20      ratatoskr embed-worker --model ID --dir D --device auto|cpu --device-cache FILE [--threads N] [--idle-ms N]\n\
@@ -87,6 +90,8 @@ pub enum Command {
     Graph(crate::graph_cli::GraphCommand),
     /// `job …`: plan runs, a client of the running hub (`crate::job_cli`).
     Job(crate::job_cli::JobCommand),
+    /// `search …`: Hrafn from a terminal, and the MCP `search` tool on stdio (`crate::search_cli`).
+    Search(crate::search_cli::SearchCommand),
     /// `embed-worker …`: Hrafn's embed worker, a child of the hub (`crate::search::worker`). `main` runs it before
     /// any tokio runtime.
     EmbedWorker(crate::search::worker::WorkerArgs),
@@ -366,6 +371,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
         "store" => store(&mut p).map(Command::Store),
         "graph" => crate::graph_cli::parse(p.raw_args().map_err(e)?).map(Command::Graph),
         "job" => crate::job_cli::parse(p.raw_args().map_err(e)?).map(Command::Job),
+        "search" => crate::search_cli::parse(p.raw_args().map_err(e)?).map(Command::Search),
         "embed-worker" => embed_worker(&mut p).map(Command::EmbedWorker),
         other => Err(format!("unknown command {other:?}")),
     }

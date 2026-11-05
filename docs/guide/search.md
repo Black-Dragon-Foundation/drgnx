@@ -226,5 +226,11 @@ answer names the model that made it. The built-in model keeps indexing either wa
 `drgnx-search-builtin` to nil. Ollama needs the model named in the `embed` role (`(ollama . "qwen3-embedding:0.6b")`).
 An address written as `localhost` is used as `127.0.0.1` for these local servers.
 
+From a terminal, `ratatoskr search index ROOT [--rebuild] [--now]` builds a project's index and `ratatoskr search query ROOT
+QUESTION… [-k N] [--scope code|tests|docs|all]` asks it (tests rank below code; `--json` prints the answer as data).
+`ratatoskr search mcp [ROOT]` is the same search as an MCP server on stdio, for an agent outside drgnx. Every answer ends
+with what lags, for example "vectors: 12 files behind (…); keyword and symbol results are current"; with no model it says
+why ("built-in model not downloaded") and keyword, symbol and path results come at once.
+
 Models are only ever downloaded after you agree to the model and its size, from Hugging Face, or from the mirror you name in
 `drgnx-search-model-mirror`, which is laid out as that host. Every file is checked against its pinned sum.

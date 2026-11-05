@@ -79,8 +79,8 @@ pub struct Front {
     pub settings: Arc<crate::settings::Settings>,
     /// The subscribers: the editors the agents' settings tools ask ([`crate::settings::agents`]).
     pub editors: Arc<crate::settings::agents::Editors>,
-    /// Hrafn's hub-wide state (the built-in model's worker), once the server knows its folders.
-    pub search: OnceLock<Arc<crate::search::Search>>,
+    /// Hrafn: the built-in model's worker, the open projects, the `search/*` methods ([`crate::search::methods`]).
+    pub search: crate::search::Hub,
     /// Test hooks (`--test-ignore-shutdown`): `shutdown` is answered and ignored, so `stop` reaches its signal.
     pub ignore_shutdown: AtomicBool,
     /// The store's other folders (home, config, `<state>/hub`), once the server opened it.
@@ -163,7 +163,7 @@ impl Front {
             gate,
             settings,
             editors,
-            search: OnceLock::new(),
+            search: crate::search::Hub::default(),
             ignore_shutdown: AtomicBool::new(false),
             dirs: OnceLock::new(),
             shell_env: crate::shell_env::ShellEnv::default(),
@@ -634,6 +634,15 @@ impl Front {
             | Params::RecordsStatus(_)
             | Params::RecordsProposals(_)
             | Params::RecordsDecide(_)) => crate::agent_core::serve(self, &caller, p)
+                .await
+                .unwrap_or_else(|_| unserved(method)),
+            // Hrafn's (`search/*`)
+            p @ (Params::SearchQuery(_)
+            | Params::SearchStatus(_)
+            | Params::SearchIndex(_)
+            | Params::SearchEmbedders(_)
+            | Params::SearchModelDownload(_)
+            | Params::SearchTyping(_)) => crate::search::methods::serve(self, &caller, p)
                 .await
                 .unwrap_or_else(|_| unserved(method)),
             // the graph store's (`graph/*`, `tasks/*`); a settled card too (an access card becomes a grant)

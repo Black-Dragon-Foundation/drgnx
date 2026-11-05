@@ -393,6 +393,58 @@ impl Project {
     pub async fn lag(&self, model: Option<&str>) -> Result<Lag, ProjectError> {
         Ok(hrafn::lag(&self.inner.store, model).await?)
     }
+
+    /// The file REL as it is now (read through the root's descriptor, at most [`hrafn::files::MAX_FILE_BYTES`]); none
+    /// when it cannot be read or is not text.
+    pub fn read_now(&self, rel: &str) -> Option<String> {
+        let root = eitri::open_path(&self.inner.root, eitri::Kind::Dir).ok()?;
+        let bytes = eitri::read_regular(
+            root.fd.as_fd(),
+            Path::new(rel),
+            hrafn::files::MAX_FILE_BYTES,
+        )
+        .ok()?;
+        String::from_utf8(bytes).ok()
+    }
+
+    /// What is wrong with the index's coverage of the listed files (storage design §12A.3 item 9), one line each.
+    pub async fn coverage_errors(&self) -> Result<Vec<String>, ProjectError> {
+        let inner = self.inner.clone();
+        let listed = tokio::task::spawn_blocking(move || inner.list())
+            .await
+            .map_err(io::Error::other)??;
+        let per_file: std::collections::HashMap<String, u32> = self
+            .inner
+            .store
+            .handle()
+            .read(|c| {
+                let mut st = c.prepare("select path, count(*) from chunk group by path")?;
+                let rows = st
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                    .collect::<Result<_, _>>()?;
+                Ok(rows)
+            })
+            .await
+            .map_err(StoreError::from)?;
+        Ok(hrafn::coverage(&listed, &per_file)
+            .into_iter()
+            .map(|e| match e {
+                hrafn::CoverageError::ClassWithNoChunks(c) => {
+                    format!(
+                        "files of class {} are listed and none has a chunk",
+                        c.as_str()
+                    )
+                }
+                hrafn::CoverageError::FileWithoutChunks(p) => format!("{p} has no chunk"),
+            })
+            .collect())
+    }
+
+    /// Drops the index's rows (the vectors stay) and builds them again.
+    pub async fn rebuild(&self) -> Result<Refresh, ProjectError> {
+        hrafn::reset(&self.inner.store).await?;
+        self.refresh_now().await
+    }
 }
 
 impl Inner {

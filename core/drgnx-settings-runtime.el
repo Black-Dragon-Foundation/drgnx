@@ -141,6 +141,9 @@ running.  Nil: only a running server (TEI, Ollama) makes vectors, and with none,
                    (cons :zdr (and (plist-member v :zdr) (drgnx-settings-runtime--bool (plist-get v :zdr)))))))))
     (drgnx-agents-allow-unsandboxed . drgnx-settings-runtime--bool)
     (drgnx-search-builtin . drgnx-settings-runtime--bool)
+    (drgnx-search-include . drgnx-settings-runtime--strings)
+    (drgnx-search-exclude . drgnx-settings-runtime--strings)
+    (drgnx-search-off . drgnx-settings-runtime--bool)
     (drgnx-agents-start-env-names . drgnx-settings-runtime--strings))
   "Runtime setting → the function that turns its Lisp value into the JSON of its runtime type.")
 

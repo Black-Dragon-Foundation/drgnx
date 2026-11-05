@@ -91,4 +91,7 @@
  (drgnx-agents-no-progress-tokens 20000)
  (drgnx-agents-manager-context 0.7)
  (drgnx-search-model-mirror nil)
- (drgnx-search-builtin t))
+ (drgnx-search-builtin t)
+ (drgnx-search-include nil)
+ (drgnx-search-exclude nil)
+ (drgnx-search-off nil))

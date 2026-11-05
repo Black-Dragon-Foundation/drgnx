@@ -264,6 +264,10 @@ pub const SESSION_HUB_SOCKET: &str = "hub.sock";
 /// The coordination tools' socket in a session dir (`mcp/session`): whoever connects to it is that session's agent.
 pub const SESSION_MCP_SOCKET: &str = "mcp.sock";
 
+/// The search tool's socket in a session dir (when `drgnx-agents-mcp` holds `search`): the `search` MCP tool, pinned to
+/// the session's working folder.
+pub const SESSION_SEARCH_SOCKET: &str = "search.sock";
+
 /// The gateway's socket in a session dir (`gateway/register` with `sid`): a token issued for it is good only there.
 pub const SESSION_GATEWAY_SOCKET: &str = "gateway.sock";
 
@@ -585,6 +589,7 @@ mod tests {
         for name in [
             SESSION_HUB_SOCKET,
             SESSION_MCP_SOCKET,
+            SESSION_SEARCH_SOCKET,
             SESSION_GATEWAY_SOCKET,
             SESSION_PROXY_SOCKET,
             SESSION_WEB_SOCKET,

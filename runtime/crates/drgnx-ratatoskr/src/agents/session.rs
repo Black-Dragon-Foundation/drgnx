@@ -1270,14 +1270,23 @@ async fn bridge(
     } else {
         std::env::current_exe().unwrap_or(installed)
     };
-    serde_json::from_value(json!({
-        "name": "drgnx",
-        "command": command,
-        "args": ["mcp-bridge", "--socket", socket],
-        "env": [],
-    }))
-    .map(|m| vec![m])
-    .unwrap_or_default()
+    // the search tool too, when `drgnx-agents-mcp` holds `search` (the session's `search.sock`, pinned to its folder)
+    let mut servers = vec![("drgnx", socket)];
+    if let Some(search) = front.mcp.search_socket_of(sid) {
+        servers.push(("drgnx-search", search));
+    }
+    servers
+        .into_iter()
+        .filter_map(|(name, socket)| {
+            serde_json::from_value(json!({
+                "name": name,
+                "command": command,
+                "args": ["mcp-bridge", "--socket", socket],
+                "env": [],
+            }))
+            .ok()
+        })
+        .collect()
 }
 
 /// PROFILE's agent in CWD: started in its sandbox, initialized, on a session (a new one, or EXISTING by

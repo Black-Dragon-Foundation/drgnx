@@ -17,6 +17,7 @@ pub mod matrix;
 pub mod mcp;
 pub mod plans;
 pub mod records;
+pub mod search;
 pub mod settings;
 pub mod tasks;
 pub mod timeline;
@@ -214,6 +215,12 @@ params! {
     RecordsStatus(records::ByPath),
     RecordsProposals(records::ByPath),
     RecordsDecide(records::DecideParams),
+    SearchQuery(search::QueryParams),
+    SearchStatus(search::RootParams),
+    SearchIndex(search::IndexParams),
+    SearchEmbedders(Empty),
+    SearchModelDownload(search::DownloadParams),
+    SearchTyping(Empty),
 }
 
 /// Every method, in no order.
@@ -233,6 +240,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(plans::methods());
     v.extend(timeline::methods());
     v.extend(records::methods());
+    v.extend(search::methods());
     v
 }
 

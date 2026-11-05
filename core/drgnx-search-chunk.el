@@ -99,15 +99,18 @@ whitespace are dropped, so empty TEXT has none."
 
 (drgnx-defsetting drgnx-search-include nil
   "Only files matching one of these globs are indexed (nil: all); see `drgnx-search-config'."
-  :type '(repeat string) :group 'drgnx :safe #'drgnx-search--globs-p :scope 'project)
+  :type '(repeat string) :group 'drgnx :safe #'drgnx-search--globs-p :scope 'project
+  :on-error 'strict :agents 'never :runtime "Vec<String>" :schema '(list-of string))
 
 (drgnx-defsetting drgnx-search-exclude nil
   "Files matching one of these globs are not indexed; a workspace's are added to yours (see `drgnx-search-config')."
-  :type '(repeat string) :group 'drgnx :safe #'drgnx-search--globs-p :scope 'project :merge 'append)
+  :type '(repeat string) :group 'drgnx :safe #'drgnx-search--globs-p :scope 'project :merge 'append
+  :on-error 'strict :agents 'never :runtime "Vec<String>" :schema '(list-of string))
 
 (drgnx-defsetting drgnx-search-off nil
   "Non-nil turns a project's semantic search off; see `drgnx-search-config'."
-  :type 'boolean :group 'drgnx :safe #'booleanp :scope 'project)
+  :type 'boolean :group 'drgnx :safe #'booleanp :scope 'project
+  :on-error 'strict :agents 'never :runtime "bool" :schema 'boolean)
 
 (defun drgnx-search-config (root)
   "The search configuration of the project at ROOT.

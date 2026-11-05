@@ -301,6 +301,23 @@ pub async fn collect(store: &CodeStore, model: &str) -> Result<u32, StoreError> 
         .await?)
 }
 
+/// Drops every file row and chunk (with their FTS rows and symbols), so the next [`refresh`] builds everything again.
+/// The vectors stay: their keys are content, so the new chunks find them.
+pub async fn reset(store: &CodeStore) -> Result<(), StoreError> {
+    Ok(store
+        .handle()
+        .write(|c| {
+            c.execute("delete from chunk", [])?;
+            c.execute("delete from file", [])?;
+            c.execute(
+                "delete from meta where key in (?1, ?2)",
+                [META_CHUNKER, META_BUILT_FROM],
+            )?;
+            Ok(())
+        })
+        .await?)
+}
+
 /// How far behind the index is for MODEL (none: no model fills tier 2, so nothing is behind on vectors).
 pub async fn lag(store: &CodeStore, model: Option<&str>) -> Result<Lag, StoreError> {
     let model = model.map(str::to_string);

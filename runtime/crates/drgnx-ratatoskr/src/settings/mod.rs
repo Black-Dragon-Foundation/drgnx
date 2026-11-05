@@ -114,6 +114,9 @@ pub const RUNTIME: &[RuntimeSetting] = &[
         OnError::Strict,
     ),
     setting("drgnx-search-builtin", "bool", OnError::Strict),
+    setting("drgnx-search-include", "Vec<String>", OnError::Strict),
+    setting("drgnx-search-exclude", "Vec<String>", OnError::Strict),
+    setting("drgnx-search-off", "bool", OnError::Strict),
 ];
 
 /// The names of [`RUNTIME`].
@@ -161,6 +164,11 @@ pub struct RuntimeValues {
     pub search_model_mirror: Option<String>,
     /// Whether the built-in embedding model indexes (the floor under any server).
     pub search_builtin: bool,
+    /// A project's search globs: only these files (none: all), not these, and search off. Per project
+    /// ([`overrides::PER_PROJECT`]).
+    pub search_include: Vec<String>,
+    pub search_exclude: Vec<String>,
+    pub search_off: bool,
 }
 
 /// One entry of `drgnx-agents-container-images`: a name and its image reference pinned by digest.
@@ -274,6 +282,9 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-agents-manager-context" => values.agents_manager_context = de(node)?,
         "drgnx-search-model-mirror" => values.search_model_mirror = de(node)?,
         "drgnx-search-builtin" => values.search_builtin = de(node)?,
+        "drgnx-search-include" => values.search_include = de(node)?,
+        "drgnx-search-exclude" => values.search_exclude = de(node)?,
+        "drgnx-search-off" => values.search_off = de(node)?,
         other => {
             return Err(Bad::at(
                 node,

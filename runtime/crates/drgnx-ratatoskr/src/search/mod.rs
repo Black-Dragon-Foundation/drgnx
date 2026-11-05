@@ -2,11 +2,14 @@
 //! it (`worker`); one project's index, its tiers and gates (`project`); and the battery rule (`power`).
 
 pub mod download;
+pub mod mcp;
+pub mod methods;
 pub mod power;
 pub mod project;
 pub mod worker;
 
 pub use download::{Consent, DownloadError, download};
+pub use methods::Hub;
 
 use bifrost::Uri;
 use hrafn::Lag;

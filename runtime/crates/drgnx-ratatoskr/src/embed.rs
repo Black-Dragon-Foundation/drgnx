@@ -88,6 +88,19 @@ impl ProviderEmbedder {
         }
     }
 
+    /// The provider's id in the table.
+    pub fn provider(&self) -> &str {
+        &self.provider
+    }
+
+    /// `tei` or `ollama`.
+    pub fn kind(&self) -> &'static str {
+        match self.api {
+            Api::Tei => "tei",
+            Api::Ollama(_) => "ollama",
+        }
+    }
+
     /// The vector of query Q. With an INSTRUCTION (the query wording of the query's scope) the text is
     /// `Instruct: <instruction>\nQuery:<q>`, as the Qwen3 embedding models are trained on; documents go plain.
     pub async fn embed_query(

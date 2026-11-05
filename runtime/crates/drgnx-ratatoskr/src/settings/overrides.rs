@@ -144,6 +144,9 @@ pub fn from_json(name: &str, v: &Value, values: &mut RuntimeValues) -> Result<()
         "drgnx-agents-manager-context" => values.agents_manager_context = de(v)?,
         "drgnx-search-model-mirror" => values.search_model_mirror = de(v)?,
         "drgnx-search-builtin" => values.search_builtin = de(v)?,
+        "drgnx-search-include" => values.search_include = de(v)?,
+        "drgnx-search-exclude" => values.search_exclude = de(v)?,
+        "drgnx-search-off" => values.search_off = de(v)?,
         other => return Err(refused("", format!("{other} is not a runtime setting"))),
     }
     Ok(())
@@ -226,6 +229,9 @@ pub fn to_json(name: &str, values: &RuntimeValues) -> Option<Value> {
         "drgnx-agents-manager-context" => json!(values.agents_manager_context),
         "drgnx-search-model-mirror" => json!(values.search_model_mirror),
         "drgnx-search-builtin" => json!(values.search_builtin),
+        "drgnx-search-include" => json!(values.search_include),
+        "drgnx-search-exclude" => json!(values.search_exclude),
+        "drgnx-search-off" => json!(values.search_off),
         _ => return None,
     })
 }
@@ -246,7 +252,12 @@ pub fn apply(values: &mut RuntimeValues, list: &[Override]) {
 /// The runtime settings a project's set may hold: those the Lisp declares `:scope project` (a workspace sets them as
 /// data). Every other one is `:scope global :workspace never :agents never` (profiles and their commands, providers
 /// and their URLs, `drgnx-agents-allow-unsandboxed`, …): a project never changes it.
-pub const PER_PROJECT: &[&str] = &["drgnx-ai-roles"];
+pub const PER_PROJECT: &[&str] = &[
+    "drgnx-ai-roles",
+    "drgnx-search-include",
+    "drgnx-search-exclude",
+    "drgnx-search-off",
+];
 
 /// The first override of LIST that cannot be one: its index and why (a name not in [`RUNTIME_NAMES`], one not in
 /// [`PER_PROJECT`] in a project's set (PROJECT true), a value that does not fit the type).
@@ -528,7 +539,7 @@ mod tests {
             let one = [o(name, to_json(name, d).unwrap())];
             assert_eq!(
                 validate(&one, true).is_ok(),
-                name == "drgnx-ai-roles",
+                PER_PROJECT.contains(&name),
                 "{name}"
             );
             assert!(validate(&one, false).is_ok(), "{name}");

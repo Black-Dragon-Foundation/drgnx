@@ -9,6 +9,7 @@ pub mod coverage;
 pub mod files;
 pub mod fresh;
 pub mod index;
+pub mod query;
 pub mod schema;
 pub mod store;
 pub mod watch;
@@ -17,7 +18,8 @@ pub use coverage::{CoverageError, coverage};
 #[cfg(feature = "host")]
 pub use files::GitCli;
 pub use files::{Class, Config, Git, Lang, Listed, list};
-pub use index::{Lag, Refresh, collect, lag, missing, put_vectors, refresh};
+pub use index::{Lag, Refresh, collect, lag, missing, put_vectors, refresh, reset};
+pub use query::{Answer, Hit, Query, Scope, search};
 #[cfg(feature = "host")]
 pub use watch::NotifyWatch;
 pub use watch::{Watch, WatchEvent};

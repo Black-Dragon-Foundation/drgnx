@@ -65,6 +65,8 @@ fn main() -> ExitCode {
         Command::Graph(g) => return code(drgnx_ratatoskr::graph_cli::run(&Env::process(), g)),
         // No runtime either: the job commands are one call each to the running hub.
         Command::Job(j) => return code(drgnx_ratatoskr::job_cli::run(&Env::process(), j)),
+        // Hrafn from a terminal (and `search mcp`, which builds a runtime of its own).
+        Command::Search(s) => return code(drgnx_ratatoskr::search_cli::run(&Env::process(), s)),
         // Hrafn's embed worker: threads of its own (stdin, the CPU path's pool), never a tokio runtime.
         Command::EmbedWorker(args) => return code(drgnx_ratatoskr::search::worker::run(args)),
         // Test builds only: one command under the sandbox, judged by its --result file.

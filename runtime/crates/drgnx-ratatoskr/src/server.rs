@@ -209,7 +209,12 @@ pub async fn run(args: ServeArgs) -> Exit {
         config: paths::config_dir(&env),
         hub: hub_dir.clone(),
     });
-    let _ = front.search.set(Arc::new(crate::search::Search::new(&env)));
+    front.search.bind(&front);
+    if let Some(d) = front.dirs.get() {
+        front
+            .search
+            .configure(&env, d.home.clone(), d.config.clone(), runtime.clone());
+    }
     // before anything is served: a hub that could not be hardened takes no key
     front.gate.set_hardened(hardened);
     #[cfg(feature = "test-hooks")]
@@ -224,6 +229,7 @@ pub async fn run(args: ServeArgs) -> Exit {
     front
         .mcp
         .open_store(env.clone(), socket.clone(), runtime.clone());
+    front.mcp.bind_search(&front);
     front.mcp.restore().await;
     front.core.agents.open_store(runtime.clone());
     crate::clock::spawn("sessions:watch", sessions::watch(front.clone()));
@@ -789,7 +795,7 @@ fn embed_idle(front: &Arc<Front>, timer: &Arc<std::sync::Mutex<crate::embed::Tim
         .map(|e| Arc::new(e) as Arc<dyn urdr::graph::search::Embedder>)
         .collect();
     if current.loaded.values.search_builtin
-        && let Some(b) = front.search.get().and_then(|s| s.builtin())
+        && let Some(b) = front.search.builtin()
     {
         embedders.push(b);
     }

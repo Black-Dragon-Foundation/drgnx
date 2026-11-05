@@ -369,7 +369,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 108, "{names:?}");
+        assert_eq!(names.len(), 114, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -388,6 +388,8 @@ mod tests {
         ];
         want.extend(FRONT_WRITES);
         want.extend(CORE_WRITES);
+        // Hrafn's: the index and the consented download change what the hub holds
+        want.extend(["search/index", "search/model-download"]);
         want.extend(
             registry()
                 .iter()
@@ -637,7 +639,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 73);
+        assert_eq!(with, 77);
     }
 
     #[test]

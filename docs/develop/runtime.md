@@ -1066,6 +1066,26 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   on battery, until AC or `index_now`. Its state (`Stopped`, `Idle`, `Running`, `Typing`, `Battery`, `Failed`) and the
   vectors written are published for `search/status`. Its embedders are `DocEmbedder`s: the built-in model's worker and
   each server that answers, every one filling its own model's `vec` rows.
+- **The query (`hrafn::query`).** Lists from the routes, fused by RRF (k = 60): an exact one-identifier query pins its
+  definitions first (non-test before test, then by kind); prefix and trigram name matches from the identifier-like
+  tokens of a question add a list that is never pinned; a token that names a file adds a path list; `bm25(chunk_fts, 5,
+  5, 2, 1)` ranks identifier phrases on `symbols` and words over `doc` and `body`; vectors are scanned by Hamming
+  distance over the sign bits and the nearest 200 re-ranked by their int8 values. A test or generated file keeps half
+  its score. Hits in files changed since indexing are looked for again by their first line, else their symbol (20 files,
+  50 ms). The scope (`code`, which holds tests below it, `tests`, `docs`, `all`) filters by file class. Every answer has
+  the lag line.
+- **The methods (`search/methods.rs`).** `Hub` (`Front::search`) opens a project on first use of its root and runs its
+  driver (`Project::tick` every 500 ms on the hub clock, dropped with the project); `search/query` refreshes tier 1 when
+  the files changed (the watcher's events, else a blob diff), picks the model (`search::prefer`), embeds the question
+  with it and answers; `search/status`, `search/index`, `search/embedders`, `search/model-download` (consent checked
+  against the model's size; the projects open again once it lands) and `search/typing` are the others. All are the
+  user's: an agent has no search method. A project's globs are `.drgnx/search.eld` (a file that does not read turns
+  its search off) and the editor's per-project `drgnx-search-{include,exclude,off}` (`overrides::PER_PROJECT`).
+- **The MCP tool (`search/mcp.rs`).** A session whose `mcp/session` came while `drgnx-agents-mcp` holds `search` gets
+  `search.sock` beside `mcp.sock` (recorded in the session's row, so it is bound again at a restart and closed with the
+  session): the `search` tool (`query`, `scope`, `k`), pinned to the session's `cwd`. The agent's `mcpServers` list it
+  as `drgnx-search`. `ratatoskr search mcp [ROOT]` serves the same tool on stdio for an agent outside drgnx, its
+  questions going to the hub; `ratatoskr search index|query` are terminal clients of `search/index` and `search/query`.
 - **Servers as embedders (`embed.rs`, `Gate::embedders`).** The providers of kind `tei` and `ollama` with the `embed`
   capability embed through the hub's own gateway listener (`/p/ID/embed`, `/p/ID/api/embed`), so each request is in
   `spend`. An Ollama provider needs the model the `embed` role names for it, and its model name is

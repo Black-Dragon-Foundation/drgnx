@@ -72,6 +72,8 @@ pub struct Row {
     pub profile: Option<String>,
     /// The profile's tracker tools on or off (`None`: the profile says nothing).
     pub tracker: Option<bool>,
+    /// The session also has a `search.sock` (the MCP `search` tool, pinned to its `cwd`).
+    pub search: bool,
 }
 
 impl Row {
@@ -103,15 +105,28 @@ impl Row {
     }
 }
 
-/// `msession.tools` of TRACKER.
-fn tools_text(tracker: Option<bool>) -> Option<String> {
-    tracker.map(|t| serde_json::json!({ "tracker": t }).to_string())
+/// `msession.tools` of TRACKER (the profile's setting) and SEARCH (the session has a `search.sock`).
+fn tools_text(tracker: Option<bool>, search: bool) -> Option<String> {
+    let mut v = serde_json::Map::new();
+    if let Some(t) = tracker {
+        v.insert("tracker".into(), serde_json::json!(t));
+    }
+    if search {
+        v.insert("search".into(), serde_json::json!(true));
+    }
+    (!v.is_empty()).then(|| serde_json::Value::Object(v).to_string())
 }
 
-/// TEXT of `msession.tools` as the profile's tracker setting (anything else: none).
-fn tools_of(text: Option<String>) -> Option<bool> {
-    let v: serde_json::Value = serde_json::from_str(text.as_deref()?).ok()?;
-    v.get("tracker")?.as_bool()
+/// TEXT of `msession.tools` as the profile's tracker setting (anything else: none) and whether the session has a
+/// `search.sock`.
+fn tools_of(text: Option<String>) -> (Option<bool>, bool) {
+    let Some(v) = text.and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) else {
+        return (None, false);
+    };
+    (
+        v.get("tracker").and_then(serde_json::Value::as_bool),
+        v.get("search").and_then(serde_json::Value::as_bool) == Some(true),
+    )
 }
 
 /// Where sessions live: the hub's environment and main socket (for `session_dir`) and `runtime.db`.
@@ -130,6 +145,8 @@ struct Live {
     cancel: CancellationToken,
     /// Its `gateway.sock`, once a registration asked for it.
     gateway: Option<PathBuf>,
+    /// Its `search.sock`, when the row has one.
+    search: Option<PathBuf>,
 }
 
 /// The front's MCP hosting.
@@ -151,6 +168,10 @@ pub struct Sessions {
     outside_end: CancellationToken,
     /// One open or close at a time: a row and its socket change together.
     serial: tokio::sync::Mutex<()>,
+    /// The front (for the `drgnx-agents-mcp` setting and the questions a `search.sock` answers), once bound.
+    front: OnceLock<std::sync::Weak<Front>>,
+    /// The tools of a `search.sock`.
+    search_tools: OnceLock<Arc<[Box<dyn Tool<crate::search::mcp::SearchCtx>>]>>,
 }
 
 /// An `mcp/session` (or the front's work before it) slower than this, in real time, logs how long each stage took.
@@ -304,7 +325,7 @@ async fn insert(db: &urdr::Handle, row: &Row) -> urdr::Result<()> {
                 i64::try_from(r.owner_start).unwrap_or(i64::MAX),
                 r.at,
                 r.profile,
-                tools_text(r.tracker),
+                tools_text(r.tracker, r.search),
             ),
         )?;
         Ok(())
@@ -329,6 +350,7 @@ async fn rows(db: &urdr::Handle) -> urdr::Result<Vec<Row>> {
         )?;
         let rows = st
             .query_map([], |r| {
+                let (tracker, search) = tools_of(r.get(9)?);
                 Ok(Row {
                     sid: r.get(0)?,
                     agent: r.get(1)?,
@@ -339,7 +361,8 @@ async fn rows(db: &urdr::Handle) -> urdr::Result<Vec<Row>> {
                     owner_start: u64::try_from(r.get::<_, i64>(6)?).unwrap_or(0),
                     at: r.get(7)?,
                     profile: r.get(8)?,
-                    tracker: tools_of(r.get(9)?),
+                    tracker,
+                    search,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -348,17 +371,15 @@ async fn rows(db: &urdr::Handle) -> urdr::Result<Vec<Row>> {
     .await
 }
 
-/// Accept on a session's socket until CANCEL: each connection serves the tools as WHO.
-async fn accept(
+/// Accept on a session's socket until CANCEL: each connection serves the tools LIST with CTX.
+async fn accept<C: Send + Sync + 'static>(
     listener: UnixListener,
     sid: String,
-    who: Identity,
+    ctx: Arc<C>,
     cancel: CancellationToken,
     uid: u32,
-    tools: Arc<Coord>,
-    list: ToolList,
+    list: Arc<[Box<dyn Tool<C>>]>,
 ) {
-    let ctx: Arc<Ctx> = Arc::new((tools, who));
     let open = Arc::new(AtomicUsize::new(0));
     loop {
         let stream = tokio::select! {
@@ -426,7 +447,41 @@ impl Sessions {
             serial: tokio::sync::Mutex::new(()),
             managers: Mutex::new(BTreeSet::new()),
             manager_list: OnceLock::new(),
+            front: OnceLock::new(),
+            search_tools: OnceLock::new(),
         }
+    }
+
+    /// The front, once it is in its `Arc`: a session gets a `search.sock` when `drgnx-agents-mcp` holds `search`, and
+    /// the socket's questions go to the front's search.
+    pub fn bind_search(&self, front: &Arc<Front>) {
+        let _ = self.front.set(Arc::downgrade(front));
+    }
+
+    /// Whether a session started now with working folder CWD gets a `search.sock`: the setting holds `search` and the
+    /// folder is one (a root `/` is no project).
+    fn wants_search(&self, cwd: Option<&str>) -> bool {
+        let Some(front) = self.front.get().and_then(std::sync::Weak::upgrade) else {
+            return false;
+        };
+        cwd.is_some_and(|c| c != "/")
+            && front
+                .settings
+                .current()
+                .loaded
+                .values
+                .agents_mcp
+                .iter()
+                .any(|s| s == "search")
+    }
+
+    /// Session SID's `search.sock`, while it is bound.
+    pub fn search_socket_of(&self, sid: &str) -> Option<PathBuf> {
+        self.live
+            .lock()
+            .expect("sessions")
+            .get(sid)
+            .and_then(|l| l.search.clone())
     }
 
     /// Session SID is a manager: its next socket serves the manager tools too (an open socket is closed and opened
@@ -505,6 +560,7 @@ impl Sessions {
         let dir = paths::make_session_dir(&store.env, &store.socket, &sid)
             .map_err(|e| internal(format!("session {sid}'s directory: {e}")))?;
         stages.mark("directory");
+        let search = self.wants_search(p.cwd.as_ref().map(|c| c.as_str()));
         let row = Row {
             sid: sid.clone(),
             agent,
@@ -516,6 +572,7 @@ impl Sessions {
             at: now(),
             profile: p.profile.map(|n| n.as_str().to_owned()),
             tracker: p.tools.map(|t| t.tracker),
+            search,
         };
         // recorded before bound: a hub that dies in between leaves a row whose socket the next start binds
         insert(&store.db, &row)
@@ -576,15 +633,16 @@ impl Sessions {
         list: ToolList,
     ) {
         let cancel = CancellationToken::new();
+        let ctx: Arc<Ctx> = Arc::new((self.tools.clone(), row.identity()));
         tokio::spawn(accept(
             listener,
             row.sid.clone(),
-            row.identity(),
+            ctx,
             cancel.clone(),
             self.uid,
-            self.tools.clone(),
             list,
         ));
+        let search = self.listen_search(&row, &dir, &cancel);
         tracing::info!(
             sid = row.sid,
             agent = row.agent,
@@ -600,8 +658,46 @@ impl Sessions {
                 path,
                 cancel,
                 gateway: None,
+                search,
             },
         );
+    }
+
+    /// ROW's `search.sock` in DIR, when the row has one: the `search` tool pinned to the row's working folder.
+    fn listen_search(&self, row: &Row, dir: &Path, cancel: &CancellationToken) -> Option<PathBuf> {
+        let (true, Some(cwd)) = (row.search, row.cwd.as_deref()) else {
+            return None;
+        };
+        let front = self.front.get()?.clone();
+        let path = dir.join(paths::SESSION_SEARCH_SOCKET);
+        let listener = match bind_socket(&path) {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!(sid = row.sid, "cannot bind {}: {e}", path.display());
+                return None;
+            }
+        };
+        let ctx = Arc::new(crate::search::mcp::SearchCtx {
+            root: PathBuf::from(cwd),
+            backend: Arc::new(crate::search::mcp::HubBackend(front)),
+        });
+        let list = self
+            .search_tools
+            .get_or_init(crate::search::mcp::tools)
+            .clone();
+        crate::clock::spawn(
+            "sessions:search",
+            accept(
+                listener,
+                row.sid.clone(),
+                ctx,
+                cancel.child_token(),
+                self.uid,
+                list,
+            ),
+        );
+        tracing::info!(sid = row.sid, "the search tool on {}", path.display());
+        Some(path)
     }
 
     /// Session SID's `mcp.sock`, while it is bound.
@@ -661,6 +757,9 @@ impl Sessions {
         remove_socket(&live.path);
         if let Some(g) = &live.gateway {
             remove_socket(g);
+        }
+        if let Some(s) = &live.search {
+            remove_socket(s);
         }
         remove_dir(&live.dir);
         delete(&store.db, sid).await;
@@ -762,6 +861,9 @@ impl Sessions {
             remove_socket(&live.path);
             if let Some(g) = &live.gateway {
                 remove_socket(g);
+            }
+            if let Some(s) = &live.search {
+                remove_socket(s);
             }
         }
     }
@@ -1023,6 +1125,7 @@ mod tests {
             at: 0.0,
             profile: None,
             tracker: None,
+            search: false,
         };
         let start = draugr::start_time(me() as i32).unwrap();
         assert!(owner_alive(&row(me(), start)));
@@ -1129,6 +1232,7 @@ mod tests {
             at: 1.0,
             profile: None,
             tracker: None,
+            search: false,
         };
         insert(&h.db, &gone).await.unwrap();
         let gone_dir = paths::make_session_dir(&h.env, &h.socket, &gone.sid).unwrap();

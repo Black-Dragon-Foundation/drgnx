@@ -818,6 +818,7 @@ dependencies = [
  "libc",
  "mimir",
  "norn",
+ "rmcp",
  "runstav",
  "rustix",
  "saga",

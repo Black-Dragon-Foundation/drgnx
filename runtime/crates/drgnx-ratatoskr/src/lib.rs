@@ -91,6 +91,7 @@ pub mod runtime_db;
 pub mod sandbox;
 pub mod sandbox_settings;
 pub mod search;
+pub mod search_cli;
 #[cfg(feature = "test-hooks")]
 pub mod sequencer;
 pub mod server;

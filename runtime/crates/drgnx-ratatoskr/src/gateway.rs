@@ -339,6 +339,11 @@ impl Gate {
         Ok(out)
     }
 
+    /// Provider ID's URL, as the table has it.
+    pub fn base_of(&self, id: &str) -> Option<String> {
+        read(&self.providers).get(id).map(|p| p.base.to_string())
+    }
+
     /// The editor token the hub's own embedders use (made when first asked for).
     fn hub_embed_token(&self) -> Result<String, Error> {
         let token = match self.embed_token.get() {
