@@ -41,6 +41,7 @@
 (defvar drgnx-work-lens-map)
 (defvar drgnx-work-map--lens)
 (defvar drgnx-work-map--selection)
+(defvar drgnx-work-timeline--sel)
 
 ;;;; The columns
 
@@ -384,10 +385,13 @@ Returns the buffer; it asks the hub for the tasks and does not show itself."
   "Show LENS (`map', `board' or `timeline') in this window, with the selection of the view that was shown.  A card
 selected on the board becomes the map's selection (its agent, else its plan)."
   (let ((map (drgnx-work-lens-map-buffer)))
-    (when (derived-mode-p 'drgnx-work-board-mode)
-      (when-let* ((state (drgnx-work-board--state)) (id drgnx-work-board--card)
-                  (sel (drgnx-work-board-to-selection state drgnx-work-board--cards id)))
-        (with-current-buffer map (drgnx-work-map-select sel))))
+    (when-let* ((sel (cond
+                      ((derived-mode-p 'drgnx-work-board-mode)
+                       (when-let* ((state (drgnx-work-board--state)) (id drgnx-work-board--card))
+                         (drgnx-work-board-to-selection state drgnx-work-board--cards id)))
+                      ((derived-mode-p 'drgnx-work-timeline-mode)
+                       (when-let* ((lane (car drgnx-work-timeline--sel))) (cons 'agent lane))))))
+      (with-current-buffer map (drgnx-work-map-select sel)))
     (pop-to-buffer-same-window
      (pcase lens
        ('map map)

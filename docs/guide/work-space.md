@@ -91,6 +91,35 @@ What a selection becomes when you switch:
 
 From the Board back to the map, a card selects its agent; a task with no agent selects its plan.
 
+### The Timeline and the research trail
+
+`t` shows a lane for each agent over time. Each step is a segment, coloured by what it was (reading and searching,
+editing, other tools, thinking, waiting on a job, waiting for you). Left and right move to the earlier or later step of
+a lane, up and down to the lane above or below, and `Enter` opens the step. A file selected on the map lights the lanes
+of the agents that touch it.
+
+`r` on an agent opens its **research trail**: its steps in order, newest at the bottom, following the end while it works.
+A row has the kind's icon, a title (`path:120–184` for a read, the query for a search, the host and title of a page,
+`thinking` for a thought), and its time and duration at the right. It opens with the last 60 steps and fetches 200 more
+when you scroll near its top. The agent's decisions and findings stand among the steps as cards that say how many steps
+they are based on and which named sources no step of the session matches ("named, not read in this session"); a step a
+conclusion rests on carries that conclusion's number in a small pill. `l` on a conclusion lights its steps and goes
+through them; `L` on a step goes to a conclusion that rests on it (in the Vim profile, `g l` and `g L`).
+
+`Enter` opens a step's source: a read at its lines, a search run again now, a page in your browser, an edit as its diff,
+a thought in the agent's transcript. `S-Enter` on a read opens the file **as the agent read it**, in a read-only buffer
+`FILE@step-N`, when the file has changed since.
+
+The steering keys work in every Work view, on the agent selected there:
+
+| Key | Does |
+|---|---|
+| `s` | message the agent (queued or steering as its mode says, never a cancel) |
+| `p` | pause it after its current tool call ("Pausing after the current tool call · u resume") |
+| `u` | resume it with a plain "Continue.", labelled "resumed by you" in the trail |
+| `x` | stop it, after a confirmation line |
+| `?` | this view's keys |
+
 ### Files an agent is editing
 
 A file in the worktree of an agent that is still alive (running, waiting, waiting for you, or paused) opens **read-only**,
