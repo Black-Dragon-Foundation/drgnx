@@ -8,8 +8,8 @@ the machine and carry out what it returns:
 - `sleipnir`, the runner, for its local admission;
 - jobq, the org folder's scheduler, which pins a tag (`forseti-v0.N`) on `main`.
 
-It depends on `serde` only (`cargo tree -p forseti -e normal`), so it builds for every target, Android's included,
-and brings no runtime into jobq. Its tests are pure ([D]) or run every order of a pure core with `skuld` ([A]).
+It depends on `serde` and `sha2` only (`cargo tree -p forseti -e normal`; `sha2` is the result cache's key), so it
+builds for every target, Android's included, and brings no runtime into jobq. Its tests are pure ([D]) or run every order of a pure core with `skuld` ([A]).
 
 ## The words
 
@@ -245,3 +245,49 @@ next (on a tie, the one whose next job comes first), and each job charges it `qu
 project that used less goes first, shares follow the weights, and one project's 400-chunk gate can't starve another
 project's priority-4 work. `nothing_starves_under_fairness` bounds when each project's first job comes by the use
 gaps and weights alone, however many jobs the others queue.
+
+## Sets and crash isolation (`split`)
+
+A suite's listed rows are cut by `chunks(rows, set_minutes, overhead_s, quiet_parallel, red_last, probes)`:
+
+- the **probe chunk** (priority 2; parts of at most 40 names): the rows in `red_last` or `probes`, and the first
+  `max(5, 10 %)` rows, in listing order;
+- **the rest** in `chunk_count` near-equal contiguous chunks: `clamp(set_minutes / max(8 min, 4 × overhead), 1, rows)`,
+  raised to the free parallel capacity when the machine is quiet, and to what 40 names a chunk needs.
+
+`Chunk::selector` is `^\(a\|b\)$` with each name `regexp-quote`d (Emacs alternation is `\|`, never `|`). Every row is in
+exactly one chunk (`split_covers_every_row_exactly_once`).
+
+Only a `crash` verdict splits (`splits`): an eviction, an OOM and an oomd kill are the machine's. `split_on_crash(chunk,
+done_rows, listed)` names the suspect, the first listed row of the chunk without a result, and the rest after it
+(`IsolateJob` at priority 2, `RestJob` at the chunk's). A set may spawn `max(3, rows / 10)` extra jobs
+(`SplitBudget::split`, charging 1 for a lone isolated row and 2 with a rest); past that the rows are `not run (split
+budget)`. `after_isolate` says whether the isolated row crashed alone (`crash`) or passed (`OrderDependent`).
+`remaining_rows(listed, done)` is a lost attempt's requeue plan: the rows with no result, in order, so none runs twice
+and none is dropped.
+
+## Order-dependent crashes (`bisect`)
+
+`bisect_plan(done_rows, suspect, budget = 4)` plans at most `budget` independent runs (they may run side by side) that
+name the done row which crashes the suspect: the done rows are cut into `min(rows, 2^budget − 1)` contiguous groups
+numbered from 1, and run `k` holds the groups whose number has bit `k` set, then the suspect. `find` reads which runs
+crashed back into the group: a `Culprit::Row` for up to 15 done rows, a `Culprit::Group` (at most 7 rows for 100) when
+more rows than four runs can tell apart. With no per-row lines there are no done rows, so `halves` cuts the chunk in two,
+again until every part is one row.
+
+## The replay (`sim`)
+
+`replay(arrivals, machines, policy)` runs past arrivals (time, job, expected figures) through a policy and reports the
+makespan, the mean wait and `cache_saved_s`. `Policy::FixedSlots(n)` is a pool of n slots, first come first served;
+`Policy::Capacity` starts a job where it finishes first among machines with room for its cores and memory, still first
+come first served. Neither models eviction, drains or the ladder; `cache_saved_s` is the run time of repeats within a
+day, never of a gate, a fresh job or a timing run, an estimate (those jobs still run in the replay).
+
+## The result cache's key (`cachekey`)
+
+`cache_key(KeyParts)` is the SHA-256 (64 hex digits) of the schema version (`SCHEMA`, first), then every part of the
+job's key, each length-prefixed, so changing any one part changes the key (`any_key_part_changes_the_key`).
+`lookup(store, key, now, Want)` answers the newest stored **pass** at most 24 h old, and nothing for a gate, `--fresh` or
+a timing run, nor for a red (`Stored::red`); the verdict is judged again from the stored counts under the job's current
+`expect` (`verdict_of`, the rules a parser's judge applies), so a stricter threshold never reuses an old verdict.
+`is_flaky` marks a key with both a pass and a red. The store itself is the shell's.
