@@ -95,16 +95,17 @@
 (ert-deftest drgnx-gc-census/origin-from-binding ()
   (drgnx-gc-census-test--fresh
     (cl-letf (((symbol-function 'garbage-collect) (lambda () (drgnx-gc-census--note) nil)))
-      (let ((gc-cons-threshold 1000) (drgnx-gc--base 0))
-        (drgnx-gc--idle)                                ; drgnx's idle collection
+      (let ((gc-cons-threshold 1000) (drgnx-gc--base 0) (drgnx-gc--idle-pause nil))
         (cl-letf (((symbol-function 'current-idle-time) (lambda () '(0 1 0 0)))
-                  ((symbol-function 'input-pending-p) #'ignore))
+                  ((symbol-function 'input-pending-p) #'ignore)
+                  ((symbol-function 'drgnx-gc--someone-waits-p) (lambda () t)))
+          (drgnx-gc--idle)                              ; drgnx's idle collection, a second into a pause
           (let ((drgnx-gc-gap-quiet 0.02)) (should (drgnx-gc-gap)))))   ; a producer's quiet gap
       (let ((nidhogg-watchdog-gc-origin 'audit)) (garbage-collect))     ; the heap audit binds it
       (garbage-collect))                                                ; anything else
     (let ((e (drgnx-gc-census--entries)))
       (should (equal (mapcar (lambda (x) (plist-get x :origin)) e) '(idle gap audit auto)))
-      (should (equal (mapcar (lambda (x) (plist-get x :felt)) e) '(t nil t t))))))   ; the gap ran at idle
+      (should (equal (mapcar (lambda (x) (plist-get x :felt)) e) '(nil nil t t))))))   ; the idle one and the gap ran at idle
 
 (ert-deftest drgnx-gc-census/writer-lines-match-the-schema ()
   (drgnx-gc-census-test--in-dirs

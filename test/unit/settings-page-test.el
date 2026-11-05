@@ -183,6 +183,64 @@
     (should (nth 2 r))
     (should-not (nth 3 r))))
 
+(ert-deftest drgnx-settings-page/a-search-keystroke-draws-no-row-that-stays ()
+  "Pattern D.  A search changes which rows are listed, not what a row shows: the rows that stay are not drawn again
+and a row that comes back takes its kept data (each row's data is a provenance lookup).  A refresh draws them all."
+  (let ((r (drgnx-settings-page-test--run
+            nil
+            '((progn (defgroup sat-ks nil "Many." :group 'tools)
+                     (dotimes (i 300)
+                       (eval `(defcustom ,(intern (format "sat-ks-%03d" i)) 1 "Doc." :type 'integer :group 'sat-ks) t))
+                     t)
+              (with-current-buffer (drgnx-settings-page)
+                (drgnx-settings-page-search "sat-ks")
+                (drgnx-view-draw-now drgnx-view)
+                (let ((drawn (lambda () (plist-get (drgnx-view-stats drgnx-view) :rows-drawn)))
+                      (explained 0) narrowed back)
+                  (advice-add 'drgnx-settings-explain :before (lambda (&rest _) (setq explained (1+ explained)))
+                              '((name . sat-ks-count)))
+                  (let ((before (funcall drawn)))
+                    (drgnx-settings-page-search "sat-ks-1")          ; 300 rows to 100
+                    (drgnx-view-draw-now drgnx-view)
+                    (setq narrowed (list (length drgnx-settings-page--keys) (- (funcall drawn) before) explained)))
+                  (let ((before (funcall drawn)))
+                    (drgnx-settings-page-search "sat-ks")            ; the 200 come back
+                    (drgnx-view-draw-now drgnx-view)
+                    (setq back (list (length drgnx-settings-page--keys) (- (funcall drawn) before) explained)))
+                  (let ((before (funcall drawn)))
+                    (drgnx-settings-page-refresh)
+                    (drgnx-view-draw-now drgnx-view)
+                    (advice-remove 'drgnx-settings-explain 'sat-ks-count)
+                    (list narrowed back (- (funcall drawn) before)))))))))
+    (should (equal (nth 0 r) '(100 0 0)))
+    (should (equal (nth 1 r) '(300 200 0)))
+    (should (= (nth 2 r) 300))))
+
+(ert-deftest drgnx-settings-page/typing-a-search-keeps-the-variable-list ()
+  ;; a keystroke narrows the list it already has; a refresh reads the variables again; a term may match a value only
+  (let ((r (drgnx-settings-page-test--run
+            nil
+            '((progn
+                (eval '(defcustom sat-ks-a 4242 "Width." :type 'integer :group 'tools) t)
+                (with-current-buffer (drgnx-settings-page)
+                  (drgnx-settings-page-search "sat-ks")
+                  (let ((all drgnx-settings-page--all))
+                    (drgnx-settings-page-search "sat-ks-a")
+                    (let ((kept (eq all drgnx-settings-page--all)) (keys drgnx-settings-page--keys)
+                          (prior drgnx-settings-page--prior))
+                      (drgnx-settings-page-search "4242")
+                      (let ((by-value (and (memq 'sat-ks-a drgnx-settings-page--keys) t)))
+                        (set-default 'sat-ks-a 9999)           ; a new value is found, the old one is not
+                        (drgnx-settings-page-search "9999")
+                        (let ((new (and (memq 'sat-ks-a drgnx-settings-page--keys) t)))
+                          (drgnx-settings-page-search "4242")
+                          (let ((old (and (memq 'sat-ks-a drgnx-settings-page--keys) t)))
+                            (drgnx-settings-page-refresh)
+                            (list kept keys prior by-value new old (eq all drgnx-settings-page--all)
+                                  drgnx-settings-page--prior))))))))))))
+    ;; a longer query starts from the last one's matches; a refresh searches again from all of them
+    (should (equal r '(t (sat-ks-a) ("sat-ks-a" sat-ks-a) t t nil nil ("4242"))))))
+
 (ert-deftest drgnx-settings-page/works-in-safe-mode ()
   (let ((r (drgnx-settings-page-test--run
             drgnx-settings-page-test--files

@@ -71,7 +71,9 @@ area(self):`. The header line is always there (the breadcrumb), so nothing moves
 fewer than 30 frame lines (31 terminal rows with the menu bar on), where the breadcrumb row is off and the scopes,
 which share its row, are hidden too. Scopes come from
 tree-sitter when the buffer has a parser (functions, methods, classes, structs, …), else from indentation; each
-position is worked out once, and again only when the text above the window's top changes. **Toggle Sticky Scroll** for this buffer. Module `editor/sticky` (drgnx's own; a buffer
+position is worked out once, and again only when the text above the window's top changes. Scrolling inside the same
+scopes reuses their text (the scope lines are read and coloured once), and a comment block or a long string above the
+top is passed in one step, however many lines it has. **Toggle Sticky Scroll** for this buffer. Module `editor/sticky` (drgnx's own; a buffer
 can add to the header the same way: `drgnx-chrome-header-tail`).
 
 ## Markdown

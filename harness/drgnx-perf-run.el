@@ -15,16 +15,38 @@
 (require 'seq)
 (require 'drgnx-ui)
 (require 'drgnx-perf)
+(require 'drgnx-perf-settings)
 
 (defvar drgnx-perf-run--fixture nil "The typing fixture of this run (one file, reused, deleted at the end).")
 
+(defconst drgnx-perf-run--fixture-mark ";; drgnx-perf: the keys go on the next line"
+  "The comment in `drgnx-perf-run--fixture-spot' above the line the keys go to.")
+
+(defconst drgnx-perf-run--fixture-spot
+  (concat "\n(defun drgnx-perf-fixture-spot (items)
+  \"Where the perf lab types: six lists deep, so a list the keys leave open ends in here.\"
+  (dolist (item items)
+    (when (consp item)
+      (with-temp-buffer
+        (save-excursion
+          (progn
+            " drgnx-perf-run--fixture-mark "
+            (insert (format \"%s\" item))))))))\n")
+  "The form the keys go into, the same in every tree.  Where the middle of core/ falls changes with every core file:
+on a line with too few lists around it, each `(let ((x' typed left a list open past its form, and Emacs Lisp's
+font-lock (`lisp--el-funcall-position-p', through `forward-sexp') scanned the rest of the file at every key.")
+
 (defun drgnx-perf-run--make-fixture ()
-  "A large Emacs Lisp file — drgnx's own core three times (~12k lines) — written once per run."
-  (let ((f (make-temp-file "drgnx-perf-" nil ".el")))
+  "A large Emacs Lisp file — drgnx's own core three times (~140k lines) — written once per run, with
+`drgnx-perf-run--fixture-spot' between two files near its middle."
+  (let* ((f (make-temp-file "drgnx-perf-" nil ".el"))
+         (files (directory-files (expand-file-name "core" drgnx-ui-repo-dir) t "\\.el\\'"))
+         (middle (nth (/ (length files) 2) files)))
     (with-temp-file f
-      (dotimes (_ 3)
-        (dolist (x (directory-files (expand-file-name "core" drgnx-ui-repo-dir) t "\\.el\\'"))
-          (insert-file-contents x) (goto-char (point-max)))))
+      (dotimes (i 3)
+        (dolist (x files)
+          (insert-file-contents x) (goto-char (point-max))
+          (when (and (= i 1) (eq x middle)) (insert drgnx-perf-run--fixture-spot)))))
     f))
 
 (defun drgnx-perf-run--session-size ()
@@ -32,9 +54,10 @@
   (let ((e (getenv "DRGNX_UI_SIZE"))) (if (member e '(nil "")) "1400x800" e)))
 
 (defun drgnx-perf-run--visit-fixture-form ()
+  "The form that visits the fixture and puts point where the keys go: the line under `drgnx-perf-run--fixture-mark'."
   (format "(let ((f %S)) (when-let* ((b (find-buffer-visiting f))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))
-                         (find-file f) (goto-char (/ (point-max) 2)) (forward-line 0) t)"
-          drgnx-perf-run--fixture))
+                         (find-file f) (goto-char (point-min)) (search-forward %S) (forward-line 1) t)"
+          drgnx-perf-run--fixture drgnx-perf-run--fixture-mark))
 
 (defun drgnx-perf-run--replace-setup-form ()
   "The replace-typing workload's setup: 100 files of 100 matching lines, and the session functions it uses."
@@ -692,6 +715,7 @@ error if it does not hold).  With :actions, :measure runs after the input and it
        :each "(progn (dolist (b (buffer-list)) (when (string-prefix-p \"*agent settings: \" (buffer-name b)) (kill-buffer b))) t)"
        :measure ,drgnx-perf-run--agent-settings-measure-form
        :teardown ,drgnx-perf-run--agent-settings-teardown-form)
+      ,@(drgnx-perf-settings-workloads)
       ;; typing in a local file while a remote root is listed in the Explorer and its connection is dead
       (remote-typing
        :setup ,(drgnx-perf-run--remote-setup-form)
@@ -1119,6 +1143,12 @@ its own cost to the other numbers)."
   (unless (drgnx-perf-run--childframe-elpa) (princ (concat drgnx-perf-run-childframe-skipped "\n")))
   (drgnx-perf-run--judged audit))
 
+(defconst drgnx-perf-ab--settle-form
+  "(progn (let ((d (+ (float-time) 180))) (while (and (fboundp 'comp--async-runnings) (boundp 'comp-files-queue)
+         (or comp-files-queue (> (comp--async-runnings) 0)) (< (float-time) d)) (accept-process-output nil 0.2))) t)"
+  "Wait until the session's background native compilation has drained (PERF-ELN-1: a fresh tree compiles its files
+to the eln cache while it runs, and the wall clock pays for it).  A plain run waits too, before its first workload.")
+
 (defun drgnx-perf-run--judged (audit)
   "The run of `drgnx-perf-run'."
   (let* ((loads (list (drgnx-perf-load)))
@@ -1128,6 +1158,7 @@ its own cost to the other numbers)."
     (unwind-protect
         (progn
           (drgnx-perf-run--check-gc sess)
+          (drgnx-perf-run--call sess drgnx-perf-ab--settle-form 200)   ; the first workload must not pay for it
           (dolist (w selected)
             (if-let* ((why (and (drgnx-env-container) (cdr (assq (car w) drgnx-perf-run-container-skipped)))))
                 (princ (format "perf: %s skipped in the container — %s\n" (car w) why))
@@ -1552,12 +1583,6 @@ ENV (\"K=V\" strings, `drgnx-ui-session-extra-env-names' only) is added to its e
   (if (string-match "\\`\\([A-Z_][A-Z0-9_]*\\)=\\([^,=]+\\),\\([^,=]+\\)\\'" spec)
       (list (match-string 1 spec) (match-string 2 spec) (match-string 3 spec))
     (error "usage: drgnx test --perf --ab-env VAR=JUDGED,REF (two values, comma-separated)")))
-
-(defconst drgnx-perf-ab--settle-form
-  "(progn (let ((d (+ (float-time) 180))) (while (and (fboundp 'comp--async-runnings) (boundp 'comp-files-queue)
-         (or comp-files-queue (> (comp--async-runnings) 0)) (< (float-time) d)) (accept-process-output nil 0.2))) t)"
-  "Wait until the session's background native compilation has drained (PERF-ELN-1: a fresh tree compiles its files
-to the eln cache while it runs, and the wall clock pays for it).")
 
 (defun drgnx-perf-ab--one (sess spec)
   "One repeat of the input workload SPEC in SESS: (:samples (ms per command…) :run RESULT)."

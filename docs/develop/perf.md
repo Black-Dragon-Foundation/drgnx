@@ -23,7 +23,7 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 
 | Workload | What it does | Measured |
 |---|---|---|
-| typing | 186 characters into the middle of a ~12k-line Emacs Lisp file | input latency (p50/p95/max), GC count, time and each pause |
+| typing | 186 characters into the middle of a ~140k-line Emacs Lisp file | input latency (p50/p95/max), GC count, time and each pause |
 | scrolling | 30 pages down and up in the same file | input latency |
 | tabs | 20 next-tab switches among 20 open files | input latency |
 | explorer | focus the Explorer, 10 rows down (each one moves), back | input latency |
@@ -37,6 +37,11 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | replace-retype | the same 10k matches listed and drawn, then the string `pi` typed 5 times into the Replace field: after the pause each match row is patched with its new preview, in slices, the visible rows first (checked: no full draw, the rows equal a fresh render of the view's keys) | input latency, and `:slice_ms`: the wall time of each view draw (`drgnx-view--draw-buffer`, timed by a harness-side advice; budget: max 6 ms) |
 | live-view | the typing workload's 186 characters while the Live view, beside the file, shows a mock browser's JPEG frames as wide as the view asked for (as Chrome sends them), 30 a second, each sent once the last was acknowledged (the mock runs in the same Emacs, so its message and websocket frame are made once; without ImageMagick the frames are a few bytes no decoder takes, so drawing costs less) (checked: frames were drawn) | input latency |
 | agent-settings-open | the Claude Code settings page opened and drawn (`redisplay`) against a fixture home: a 5 MB `.claude.json` (300 projects with history), 50 MCP servers and 200 skills; three runs | milliseconds until drawn (budget 150) and the processes started (budget 0: opening the page starts nothing) |
+| settings-start | `settings.el` with 200 entries (100 of defined options, 100 of packages not loaded; no `:set` functions) read and applied as at a second start; three runs | milliseconds (`:read_ms`, budget 2) |
+| settings-page | the Settings page opened and drawn with 5,000 customizable variables added to the session's own, then the name of one typed into the search a character at a time | `:open_ms` (budget 100), `:key_p50_ms` and `:key_max_ms` (a keystroke with its redisplay; the worst, budget 16), `:key_search_max_ms` (the search without the redisplay) |
+| settings-prov | a 500-line `config.el` (a header, ten `load`s of small libraries, 97 blocks of a function, a managed variable's `setq` and an `add-hook`) loaded plain and with provenance, interleaved, nine rounds | `:prov_pct` (budget 5), `:load_ms`, `:prov_load_ms`, and `:cold_extra_ms` (what the first, uncached load adds) |
+| settings-sync | the settings index written for 200 fixture packages of three files each | `:index_ms` (budget 2000) |
+| settings-open | 30 files in a project with a shared and a private workspace file and a language override, opened with the workspace and language layers in and out, interleaved (the layers are checked to have applied) | `:open_on_ms`, `:open_off_ms` (medians per open) and `:delta_ms`, what the layers add (budget 1) |
 | remote-typing | the typing workload's 186 characters in a local file while the Explorer lists a mock-method root (test/fixtures/tramp-mock.el: a real TRAMP connection to a local `sh`) and its connection is dead, the segment showing it lost (checked: nothing was sent to the remote, the connection stayed dead) | input latency |
 | typing-with-index | the typing workload's 186 characters with the search module on and the drgnx repo's semantic index loaded: the repo indexed into the session's own state dir by a stub embedder (384 numbers per chunk; no provider, no network), read into memory by one query before the keys (checked: the query cache still holds it); the index file is deleted after | input latency |
 | typing-evil | the typing workload with Vim keys: `i`, the same six strings, `<escape>` (checked: typed, back in normal state) | input latency |
@@ -82,6 +87,13 @@ when its `gc-cons-threshold` is not `drgnx-gc-cons-threshold`.
 Every workload runs three times (each with its own setup, its typing fixture reused, everything it opened closed
 after it) and the median of each number is kept, so one noisy run never decides.
 
+The typing fixture is `core/` three times with one form of the lab's own between two files near its middle
+(`drgnx-perf-run--fixture-spot`); the keys go into that form, six lists deep, the same text in every tree. They used to
+go to the fixture's middle line, which moves whenever a core file is added: on a line with too few lists around it,
+each `(let ((x` typed left a list open past its form, and Emacs Lisp's font-lock (`lisp--el-funcall-position-p`,
+through `forward-sexp`) scanned the rest of the 4 MB file at every key, about one key in five costing 190 to 370 ms,
+in every workload that types into the fixture.
+
 ## Vim keys (evil)
 
 The three `-evil` workloads switch the session to the Vim key stack (`editor/evil` on, the engine started, `(vim app
@@ -123,7 +135,7 @@ not move. A broken one fails the run (`drgnx-perf-verdict`; `--perf` exits 1):
 | Path | Limit | Seeded as |
 |---|---|---|
 | `(:alloc :p50)` | objects allocated per command | measured x 1.25, rounded up |
-| `(:cpu_ms :p50)` (typing, typing-with-ghost, remote-typing) | a normal key: about 30 ms (the p90 sits on the 1-in-10 spike, PERF-KEYSPIKE-1) | the measured p50 with the same headroom |
+| `(:cpu_ms :p50)` (typing, typing-with-ghost, remote-typing) | a normal key: 8-12 ms. These rows and the p90 ones were 30 and 350-420 ms while one key in ten cost 100-200 ms (the fixture's open list and a Nidhogg redisplay, both fixed); seeded again 2026-11-05, so a key spike fails the run | the measured p50 with the same headroom |
 | `(:cpu_ms :p90)` | CPU ms per command, times `DRGNX_PERF_CPU_FACTOR` (default 1; 2 on hosted runners) | the container's p90 x 2 |
 | `(:rows)` | rows drawn during the run, exact | measured |
 | `(:processes)`, `(:rss_kb)` | as before | the design |
@@ -241,7 +253,10 @@ over its rounds.
 **Fresh builds and the eln cache (PERF-ELN-1).** A tree that was just built has no native-compiled files yet: its
 session compiles them in the background while it runs, and the first runs cost several times more. Both sessions
 therefore wait until their native compilation has drained, and both run a discarded warm-up before the samples; the
-report prints each side's warm-up p50 next to the measured one.
+report prints each side's warm-up p50 next to the measured one. A plain `--perf` run waits too, before its first
+workload: on a built tree `typing`, which runs first, measured the compilation (its calibration loop ran at 59 ms
+against 13 ms in every later workload of the same session, and the watchdog's stacks show the compilation's loads). A checkout
+that is not built (CI's perf job) compiles nothing, and the wait ends at once.
 
 ## Glitnir (the compositor): popups, the `compose` probe, A/B by environment
 
@@ -442,11 +457,14 @@ terminal-typing's p95 is 7 ms: the worst of 16 runs with the module active (1.9 
 - **GC.** One owner, `core/drgnx-gc.el`. Emacs' default threshold (800 kB) collected 28 times in 186 keystrokes.
   drgnx raises it to 512 MB while starting (early-init; set back after startup even if drgnx fails to start), then
   uses 64 MB (`drgnx-gc-cons-threshold`). A threshold your own init set (no longer early-init's) is kept.
-  - **The idle collection** is the timer layer's key `gc-idle` (`drgnx-gc-idle-seconds`, 8 s; started again by a
-    second setup, never doubled), owner `:core`, so it is covered by the timer lint like every other timer. It
-    collects only when more than a quarter of the threshold was allocated since the last collection
-    (`drgnx-gc--consed` minus `drgnx-gc--base`, which `drgnx-gc--note` on `post-gc-hook` sets): an idle Emacs that
-    allocated nothing stays still. `drgnx-gc-mode` (on after `drgnx-gc-setup`) owns that hook function, so it is
+  - **The idle collection** is the timer layer's key `gc-idle` (`drgnx-gc-idle-seconds`, 1 s; started again by a
+    second setup, never doubled), owner `:core`, so it is covered by the timer lint like every other timer. A
+    collection at the threshold takes about 45 ms and lands on whatever key allocates past it, so the idle one takes
+    it in a pause in typing instead: one second without input, when at least half the threshold
+    (`drgnx-gc-idle-share`) was allocated since the last collection (`drgnx-gc--consed` minus `drgnx-gc--base`, which
+    `drgnx-gc--note` on `post-gc-hook` sets): an idle Emacs that allocated nothing stays still. It collects at most
+    once per pause (`drgnx-gc--idle-pause`), never with input pending, and never in a batch Emacs or a daemon no
+    client is connected to (`drgnx-gc--someone-waits-p`). It was 8 s and a quarter, which a typist rarely gave it. `drgnx-gc-mode` (on after `drgnx-gc-setup`) owns that hook function, so it is
     one function, removed when the mode turns off.
   - **A gap collection for producers:** `(drgnx-gc-gap)` collects, and returns t, when `drgnx-gc-gap-quiet` (0.02 s,
     nil: never) has passed without input, no input is pending and at least `drgnx-gc-gap-share` (85%) of the
@@ -580,8 +598,34 @@ A quiet-machine `bin/drgnx test --perf` run pins the number: set the p95 to 16 i
 
 ## Settings (design §16)
 
-The settings gates (start, provenance, watchers, page open, `drgnx sync`'s index) are not perf rows yet: the perf
-deferral stands, so there is no `test/perf/settings-*.el`.
+The settings gates are the five `settings-*` workloads of the table above (`harness/drgnx-perf-settings.el`, which
+builds each fixture in the session under a temp config, state and cache directory and puts the environment back).
+They are wall clock, so they are reported against their budgets and judged in a pinned run:
+`DRGNX_PERF_WORKLOADS='settings-start settings-page settings-prov settings-sync settings-open' bin/drgnx test --container --perf`.
+The two gates that are not timings are tests: no provenance watcher sits on a variable that typing writes more than
+1,000 times (`test/unit/settings-watch-test.el`), and applying settings adds only the custom loads of the variables it
+names to `features` (`drgnx-settings-apply/applying-adds-only-the-named-custom-loads`).
+
+Installing a variable watcher costs about 160 µs: `add-variable-watcher` walks the whole obarray. Provenance installs
+one for each managed variable and each variable the static index finds your Lisp setting, once per start, so a
+`settings.el` with 100 entries costs 16 ms of the start, and `settings-prov` shows it.
+
+First measurements (2026-11-05, pinned island on the desktop, Emacs 31.1 in the GUI container; wall clock, so a
+second run moves by up to 1.5×): `settings-start` 18.8 ms, then 5.7 after the applied-values file stopped being
+rewritten at every start, the index file stopped being stat'ed for every setting and the last good copy stopped being
+parsed again (budget 2: the rest is the bounded reader's token scan, about 1.8 ms for 200 entries, the per-entry
+value check, about 1.7 ms, and the pushes, about 1.7 ms); `settings-page` open 90.6 then 49 ms (budget 100, met), a
+search keystroke 209 then 70 ms at most (budget 16: the search itself is at most 32 ms for the first key, which looks
+at every setting, then a few ms for the keys that narrow the last result; a forced redisplay of the page was the other
+40 ms: the workload's `(redisplay t)' runs the ripe timers first, and the page's view drew every listed row again,
+each worked out through provenance, because each search moved the rows' signature; a search now keeps the rows, and
+on the island the keystroke went from p50 23.9 / 19.8, max 66.1 / 68.5 ms to p50 12.3 / 12.3, max 26.7 / 29.4 ms, the
+worst key now the first key's own search, and the open from 31 to 19 ms); `settings-prov` 114 ms against a plain load of 0.8 ms before, 54 to 78 ms against 2 to 4 ms after provenance
+stopped re-judging the file at every write and counting lines from the top for every form (budget 5 %: 97 watchers
+installed at 160 µs and more each are most of it, so the gate cannot be met while every managed variable is watched
+before the load); `settings-sync` 510 to 860 ms for 200 packages (budget 2 s, met); `settings-open` 3.1 then 2.4 ms per
+open added by the workspace and language layers (budget 1: the trust resolution of the shared file's root, about
+0.9 ms, and the private file's, about 0.5 ms, run at every open).
 
 Ratatoskr's reader is timed by `runtime/crates/huginn/tests/timing.rs`: 64 KiB of settings-shaped data, median of 200
 reads at most 1 ms. It is `#[ignore]`, run once and alone on a pinned host, optimized:

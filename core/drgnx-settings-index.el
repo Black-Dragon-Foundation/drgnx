@@ -20,6 +20,9 @@
 (defvar read-circle)
 (defvar drgnx-settings-index--cache nil "(FILE STAMP . TABLES) of the index last read; see `drgnx-settings-index--tables'.")
 
+(defvar drgnx-settings-index--tick nil "The `drgnx-setting-tick' at which the index file's stamp was last checked.")
+(declare-function drgnx-setting-tick "drgnx-setting" ())
+
 (defconst drgnx-settings-index-head'drgnx-settings-index "The head of the index file's one data form.")
 
 (defconst drgnx-settings-index-other-tools
@@ -135,6 +138,15 @@ recorded (default FILE's base name).  A file that cannot be read gives what was 
 
 (defun drgnx-settings-index--tables ()
   "The index as (VARS . GROUPS): hash tables var -> entry and group -> entry; read again when the file changed."
+  (let ((tick (and (fboundp 'drgnx-setting-tick) (drgnx-setting-tick))))
+    ;; the file is looked at once per command (`drgnx-setting-tick'), not for every variable asked about
+    (if (and drgnx-settings-index--cache tick (eql tick drgnx-settings-index--tick))
+        (cddr drgnx-settings-index--cache)
+      (setq drgnx-settings-index--tick tick)
+      (drgnx-settings-index--tables-1))))
+
+(defun drgnx-settings-index--tables-1 ()
+  "`drgnx-settings-index--tables', the file's stamp checked now."
   (let* ((file (drgnx-settings-index-file))
          (stamp (ignore-errors (file-attributes file))))
     (if (and drgnx-settings-index--cache (equal (car drgnx-settings-index--cache) file)

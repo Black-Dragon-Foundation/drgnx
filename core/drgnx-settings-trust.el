@@ -85,7 +85,8 @@ for :code t.  Remote, broad (`drgnx-trust--broad-p') and malformed entries are l
   "trusted-folders.eld's plist, read again when its stamp changed; nil when there is none or it cannot be used (a
 mistake or a newer drgnx's: then nothing in it is trusted or allowed)."
   (let* ((file (drgnx-trust-folders-file)) (stamp (drgnx-file-stamp file)))
-    (if (and stamp drgnx-settings-trust--data (equal (car drgnx-settings-trust--data) stamp))
+    ;; a missing file has no stamp: that is a stamp too (it is read once, not at every open)
+    (if (and drgnx-settings-trust--data (equal (car drgnx-settings-trust--data) stamp))
         (cdr drgnx-settings-trust--data)
       (let* ((r (drgnx-file-read file)) (data (plist-get r :data))
              (ok (and (eq (plist-get r :status) 'ok) (listp (drgnx-trust--folders-of data)) data)))

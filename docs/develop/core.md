@@ -1497,6 +1497,18 @@ the mode) moves `flymake` like a report does. Tests: `drgnx-statusbar/` (`a-memo
 `a-buffer-dependent-entry-shows-each-buffers-own-value`, `a-let-of-global-mode-string-is-seen`,
 `a-slow-entry-falls-back-alone`) and `drgnx-doctor/statusbar-*`.
 
+**A keystroke's bar.** Point and the change tick are keys, so every keystroke builds the bar again; what that build
+reads is kept so that it costs the segments, not the buffer. The line number (`drgnx-statusbar--line-cache`) and the
+indentation scan of the first 300 lines (`drgnx-statusbar--indent-cache`) each keep LOW, the lowest position an edit
+touched since they were made: a buffer-local `after-change-functions` entry (`drgnx-statusbar--note-edit`, added with
+the first cache, taken out of every buffer when the mode turns off) lowers it, allocating nothing. An edit at or below
+the line (below the 300 lines) keeps the answer; one above it, or a change no hook saw (LOW stays nil), counts again
+from the top. The branch segment keeps its buffer's repository root (`drgnx-statusbar--git-root`) until the buffer's
+file name is another string or the git cache finds a folder's root (`drgnx-git-roots-known`): the lookup builds file
+names, and on every bar it allocated more than the other segments together. Tests:
+`a-keystroke-counts-no-lines-from-the-top`, `an-edit-below-the-first-lines-scans-nothing`,
+`the-branch-segment-finds-its-root-once-per-buffer`.
+
 Each module activates its memo in its `:setup` (`drgnx-memo-activate`), so turning the module off empties it. The Live
 view bumps by hand rather than by `:watch`: its tests and its use do not wait for the module's setup, and the sites are
 all in one file. The segment and the header are read per redisplay; a hit allocates 0 (tests: `mod-sticky-test.el`,
@@ -1632,6 +1644,14 @@ A draw (`drgnx-view--draw`) runs SYNC when touched, the self-check, then two ste
    `new` rendered and inserted, a dirty row deleted and inserted again at its integer start, a growing row gets an
    `insert` before SUFFIX. Dirty marks are moved onto the entries first (`patch` wins over `grow`). When every entry
    is done, the empty entries are dropped and the index follows the rows that moved.
+   A slice costs the rows it passes, not the view's length. The sweep over every entry starts at `lo`, the first entry
+   that may have work (a mark lowers it, the sweep moves it to where it stopped), so the rows done by earlier slices
+   are not walked again. A slice that stops after a changed row does not rewrite every start after it: it leaves that
+   shift to the next one (`shift-at`, `shift`; `drgnx-view--at` adds it to a start), which takes it on as it goes.
+   When a sweep would leave two shifts (the window's rows above or below the one left), the shorter run of starts is
+   written. Code that rewrites the vectors (the fold, the compaction) applies the shift first. Before this, a slice
+   of 8 rows on 64,000 rows cost 3.9 ms of CPU against 0.13 ms on 2,000, and drawing a large Search view was
+   quadratic in its rows (`drgnx-view/a-slice-costs-its-rows-not-the-rows-before-or-after`).
 
 It returns the number of rows drawn, grown or removed, clears the modified flag and calls PATCHED. It binds
 `inhibit-read-only` and `inhibit-interaction`. A RENDER or GROW that signals draws the row `⚠ KEY: MESSAGE` in the
@@ -1991,8 +2011,13 @@ editor with `drgnx-state-use-editor`.
 `drgnx-signal-mode` listens to the raw buffer hooks, and on the store's `now` lane to `windows-changed`,
 `editor-changed` and `selected-changed` (`drgnx-signal--store-events`); it emits deduplicated edges after an idle
 delay (`drgnx-signal-delay`). There is one idle flush, `drgnx-signal--flush`, for the bus and the store: the store's
-idle lane arms it too, and its timer (`signal-flush`) is cancelled only when both modes are off. It observes the selected frame (`drgnx-state-sync`), makes the store's waiting idle calls
-(`drgnx-state--deliver-idle`), then compares the buffer state:
+idle lane arms it too, and its timer (`signal-flush`) is cancelled only when both modes are off. It observes the
+selected frame as `drgnx-state-sync` does, but without comparing the frame parameters the record copies (their
+writers sync themselves; `frame-parameter` copies them all) and without copying the record, makes the store's waiting
+idle calls (`drgnx-state--deliver-idle`), then compares the buffer state, which it keeps when nothing changed. The
+bus's `post-command-hook` arms the flush after every command, so it runs at every pause in typing: a flush that finds
+nothing changed allocates nothing (`drgnx-signal/a-quiet-flush-allocates-nothing`; it was 157 objects on a batch
+frame, more on a graphical frame, whose parameter list is longer).
 
 - `editor-changed` gets the *buffer* of the selected frame's MRU editor, only when it is not the one it sent last
   (`drgnx-signal--editor`): `C-x o` between two windows on one buffer is the store's `editor-changed`, not the bus's,
