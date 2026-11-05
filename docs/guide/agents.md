@@ -143,7 +143,7 @@ raw, is not served, and the file on disk is read instead, under the same limit.
 ## Durable jobs
 
 Background work that must survive a closed frame, a restart of Emacs or an interrupted chat runs as a **job of the
-hub**: tree-sitter grammars, Mermaid diagrams, the Playwright server of Test Report, the browser for agents, local AI
+hub**: tree-sitter grammars, Mermaid diagrams, the Playwright server of Test Report, local AI
 servers, and the installs of onboarding all start with `drgnx-exec-start`
 (`docs/guide/jobs.md`, "The editor's jobs"). The hub runs each in a unit of its own and keeps its log and exit code, so
 any Emacs lists it in the Agents tab (running, done, failed, stopped, gone), shows its log (Show Job Log) and stops it
@@ -151,7 +151,7 @@ any Emacs lists it in the Agents tab (running, done, failed, stopped, gone), sho
 `memory_max` or `nice` it does not accept) is a message. A job can be memory-capped (`:memory-max "1G"`: the unit's
 `MemoryMax` on Linux; macOS has no cap for jobs, so drgnx asks for none there) and made nicer (`:nice 10`). A job's
 time box is an hour unless the caller asks for more: the servers drgnx keeps (the local AI runner, the Playwright
-server, the browser for agents) run with no time box, so a daemon left up for days keeps them, and the runner is started
+server) run with no time box, so a daemon left up for days keeps them, and the runner is started
 again when it is down. Commits a job makes while it works on a task are recorded for that task ([Work tracker](work.md)).
 
 ## The job sandbox
@@ -332,15 +332,28 @@ Onboarding's Agents step asks for both and writes them without touching the rest
 edit them by hand too. The search tool lets an agent read the indexed code of any of your projects, so it is off until
 you say yes.
 
+### What a session gets with the browser
+
+When the matrix's `browser` cell allows it (Balanced: managers and workers; a chat asks), a session also gets a
+headless browser inside its own sandbox ([agent-browser.md](agent-browser.md)). Its agent finds it at
+`PLAYWRIGHT_MCP_CDP_ENDPOINT` (and `DRGNX_BROWSER_CDP`): a `ws://127.0.0.1:9222/devtools/browser/…` address with a
+secret of its own, set by the hub. Playwright MCP and other CDP clients connect there with no setup. The browser
+reaches the agent's own servers inside the sandbox on the ports of `drgnx-agents-browser-local-ports`, and everything
+else only through the session's web proxy, as the `browser.web` and `browser.private` cells say. With a user systemd the session and its browser share
+one memory cap (`drgnx-agents-session-memory`); near it, the browser is stopped and starts again at the next use.
+
+A host that cannot give the browser (no bubblewrap full tier, a kernel below Landlock ABI 9, no browser found:
+`drgnx browser install`) starts the session without it. Its `agents/get` says why, and you see one notice with the fix.
+
 ### What modules add to a session
 
-A module can add variables to the environment of an agent you start from the editor (the Live browser adds
-`PLAYWRIGHT_MCP_CDP_ENDPOINT` while the browser for agents runs, [live.md](live.md)). The editor sends them with
+A module can add variables to the environment of an agent you start from the editor (no module of drgnx does now;
+the Live view no longer starts a browser for agents, [live.md](live.md)). The editor sends them with
 `agents/start`, and the hub starts the agent with them after the profile's own variables. Only the names in
-`drgnx-agents-start-env-names` go through, by default just the Playwright one:
+`drgnx-agents-start-env-names` go through, and by default there are none:
 
 ```elisp
-(drgnx-agents-start-env-names ("PLAYWRIGHT_MCP_CDP_ENDPOINT"))   ; only you can change it, never a repository or an agent
+(drgnx-agents-start-env-names ())   ; only you can change it, never a repository or an agent
 ```
 
 A name that is not on the list is dropped, with one notice naming it. A name that looks like a credential (it contains
@@ -515,6 +528,11 @@ with the line) and `:agents never` (the `settings_change` tool refuses them). Th
 `-away-after`, `-wait-refusals` (3), `-close-idle-after` (1800 s), `-checkpoint-cap` (2 GiB), `-job-memory` ("4G"),
 `-job-cpus` (2), `-container-images` (name → digest-pinned image), and the supervisor's `-silent-after`
 (task 600 s, brainstorm 1800 s), `-repeat-limit` (3), `-no-progress-tokens` (20000) and `-manager-context` (0.7).
+The agent browser has eight more, each with its unit in the docstring (see the
+[settings reference](../reference/settings.md)): `-browser-program` (nil: find one), `-browser-local-ports` (3000
+3001 4173 4200 5000 5173 8000 8080 8888), `-browser-deny-hosts` (nil), `-browser-max-message` (64 MiB),
+`-browser-idle` (600 s), `-browser-once-window` (600 s), `-session-memory` ("4G", the browser included) and
+`-browser-memory-high` (75 %).
 The hub reads them from `settings.el`.
 
 ## Changing settings

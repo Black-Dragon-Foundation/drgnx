@@ -4,7 +4,7 @@
 // Linux only: the inner helper is Linux only (Android: no backend; apps get no user namespaces; fails closed).
 #![cfg(target_os = "linux")]
 
-use gleipnir::inner::{self, InnerSpec, LayersReport, RelayPlan};
+use gleipnir::inner::{self, BrowserPlan, InnerSpec, LayersReport, RelayPlan};
 use gleipnir::landlock::{self, LandlockPlan, Tier};
 use gleipnir::validate::{Refusal, Rule};
 use std::io::{self, Read};
@@ -66,6 +66,8 @@ struct Opts {
     deny: Option<libc::c_long>,
     /// Run the command directly, without the helper (a control).
     bare: bool,
+    /// The browser's socketpair end, passed at fd 5 as the full tier passes it.
+    hub: Option<OwnedFd>,
 }
 
 struct Outcome {
@@ -117,6 +119,8 @@ fn run_fd(spec_fd: OwnedFd, cmd: &[&str], o: Opts) -> Outcome {
         c.process_group(0);
     }
     let (s, w, setsid, canary) = (hs.as_raw_fd(), hw.as_raw_fd(), o.setsid, o.canary_fd7);
+    let hh = o.hub.as_ref().map(high);
+    let hub = hh.as_ref().map(AsRawFd::as_raw_fd);
     let filter = o.deny.map(deny_filter);
     // SAFETY: only async-signal-safe calls (setsid, dup2, prctl) on values made before the fork.
     unsafe {
@@ -126,6 +130,11 @@ fn run_fd(spec_fd: OwnedFd, cmd: &[&str], o: Opts) -> Outcome {
                 return fail();
             }
             if libc::dup2(s, 3) < 0 || libc::dup2(w, 4) < 0 {
+                return fail();
+            }
+            if let Some(h) = hub
+                && libc::dup2(h, 5) < 0
+            {
                 return fail();
             }
             if canary && libc::dup2(2, 7) < 0 {
@@ -150,7 +159,7 @@ fn run_fd(spec_fd: OwnedFd, cmd: &[&str], o: Opts) -> Outcome {
         });
     }
     let mut child = c.spawn().unwrap();
-    drop((hs, hw));
+    drop((hs, hw, hh, o.hub));
     let mut out = child.stdout.take().unwrap();
     let out = std::thread::spawn(move || {
         let mut s = String::new();
@@ -218,6 +227,7 @@ fn status_reports_layers() {
             new_session: false,
             relay: false,
             seatbelt: false,
+            browser: false,
         }
     );
     assert_eq!(o.code, Some(0), "{}", o.stderr);
@@ -702,6 +712,7 @@ fn a_reduced_run_end_to_end() {
         layers: Layers::for_target(Target::LinuxReduced),
         extra_tcp_ports: vec![],
         trace: Default::default(),
+        browser: None,
     };
     let valid = gleipnir::validate::validate(s, &ctx, Target::LinuxReduced).unwrap();
     let inner = reduced::inner_spec(&valid, Path::new(HELPER), &["relay".into()]).unwrap();
@@ -753,4 +764,221 @@ fn a_reduced_run_end_to_end() {
     );
     assert_eq!(std::fs::read_to_string(root.join("w/f")).unwrap(), "in\n");
     assert!(!out.join("f").exists());
+}
+
+fn abi9_here(test: &str) -> bool {
+    let abi = landlock::kernel_abi();
+    if abi < 9 {
+        eprintln!("SKIP {test}: the kernel's Landlock ABI is {abi}, the browser needs 9");
+    }
+    abi >= 9
+}
+
+/// A socketpair: (the hub's end, the browser host's end).
+fn hub_pair() -> (std::os::unix::net::UnixStream, OwnedFd) {
+    let (ours, theirs) = std::os::unix::net::UnixStream::pair().unwrap();
+    (ours, theirs.into())
+}
+
+/// The browser host's plan for a run without bwrap: `argv`, its own dir `dir/own`, the browser layer with `extra`
+/// as more read roots.
+fn browser(
+    dir: &Path,
+    argv: &[&str],
+    timeout_ms: u32,
+    extra: Vec<std::path::PathBuf>,
+) -> BrowserPlan {
+    let own = dir.join("own");
+    BrowserPlan {
+        hub_fd: 5,
+        argv: argv.iter().map(|a| a.to_string()).collect(),
+        env: vec![
+            ("HOME".into(), own.to_str().unwrap().into()),
+            ("PATH".into(), "/usr/bin:/bin".into()),
+        ],
+        own_dir: own.clone(),
+        landlock: landlock::browser_plan(&gleipnir::BrowserInputs {
+            tier: Tier::Full,
+            program_dir: "/usr/bin".into(),
+            own_dir: own,
+            helper: HELPER.into(),
+            extra_read: extra,
+            web_port: 3130,
+            local_ports: vec![],
+        }),
+        ready_timeout_ms: timeout_ms,
+    }
+}
+
+/// The browser host is forked under its layer and ready before the program runs: it holds the hub's end at fd 3
+/// (a socket: what it writes reaches the hub's end), writes in its own dir (made by the helper), and says `ready` on
+/// fd 4; the status reports it. A host that exits first, says something else or is late fails the run (125), and the
+/// program never runs.
+#[test]
+fn a_browser_host_is_ready_before_exec() {
+    if !abi9_here("a_browser_host_is_ready_before_exec") {
+        return;
+    }
+    let dir = fixture();
+    let d = dir.path().to_str().unwrap();
+    let host = "test -S /proc/self/fd/3 && printf hello >&3 && : > $HOME/host-was-here && echo ready >&4; \
+                exec sleep 30";
+    let mut s = spec(dir.path());
+    s.browser = Some(browser(dir.path(), &["/bin/sh", "-c", host], 5000, vec![]));
+    let check = format!("test -e {d}/own/host-was-here && echo after");
+    let (mut ours, theirs) = hub_pair();
+    let o = run(
+        &s,
+        &["/bin/sh", "-c", &check],
+        Opts {
+            pgroup: true,
+            hub: Some(theirs),
+            ..Opts::default()
+        },
+    );
+    let l = o
+        .status
+        .as_ref()
+        .unwrap_or_else(|r| panic!("{r}: {}", o.stderr));
+    assert!(l.browser, "{l:?}");
+    assert_eq!(o.stdout, "after\n", "{}", o.stderr);
+    let mut hello = [0u8; 5];
+    ours.read_exact(&mut hello).unwrap();
+    assert_eq!(&hello, b"hello");
+    // The status of a run that asked for the browser is read with it required; a v1 spec with one is refused.
+    let marker = dir.path().join("marker");
+    let touch = ["/usr/bin/touch", marker.to_str().unwrap()];
+    for (script, timeout, why) in [
+        (
+            "exit 0",
+            5000,
+            "the browser host exited before it was ready",
+        ),
+        ("echo nope >&4; exec sleep 30", 5000, "not ready"),
+        ("exec sleep 30", 300, "not ready within 300 ms"),
+    ] {
+        s.browser = Some(browser(
+            dir.path(),
+            &["/bin/sh", "-c", script],
+            timeout,
+            vec![],
+        ));
+        let o = run(
+            &s,
+            &touch,
+            Opts {
+                pgroup: true,
+                hub: Some(hub_pair().1),
+                ..Opts::default()
+            },
+        );
+        let r = refusal(&o);
+        assert!(r.message.contains(why), "{script}: {}", r.message);
+        assert_eq!(o.code, Some(inner::EXIT_SETUP), "{script}");
+        assert!(!marker.exists(), "{script}");
+    }
+    let mut v1 = s.clone();
+    v1.version = inner::VERSION_V1;
+    let o = run(
+        &v1,
+        &touch,
+        Opts {
+            hub: Some(hub_pair().1),
+            ..Opts::default()
+        },
+    );
+    assert!(
+        refusal(&o).message.contains("version 2"),
+        "{}",
+        refusal(&o).message
+    );
+    // No hub end at fd 5: refused, nothing run.
+    s.browser = Some(browser(dir.path(), &["/bin/sh", "-c", host], 5000, vec![]));
+    let o = run(&s, &touch, Opts::default());
+    assert!(
+        refusal(&o).message.contains("fd 5"),
+        "{}",
+        refusal(&o).message
+    );
+    assert!(!marker.exists());
+}
+
+/// The browser host runs under its own Landlock layer from its first instruction: the escape probe, run as the
+/// host, cannot connect to the session's `hub.sock` (the agent can) or create a file in the agent's write root, and
+/// can create one in its own dir; then it says `ready` and the agent's command runs.
+#[test]
+#[ignore = "needs the gleipnir-probe binary next to ratatoskr, and Landlock ABI 9 (the VM)"]
+fn a_browser_child_is_layered_before_it_runs() {
+    if !abi9_here("a_browser_child_is_layered_before_it_runs") {
+        return;
+    }
+    let probe = Path::new(HELPER).with_file_name("gleipnir-probe");
+    assert!(
+        probe.exists(),
+        "build gleipnir-probe first: {}",
+        probe.display()
+    );
+    let dir = fixture();
+    let run_dir = dir.path().join("run");
+    std::fs::create_dir(&run_dir).unwrap();
+    let sock = run_dir.join("hub.sock");
+    let _listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+    let mut s = spec(dir.path());
+    s.landlock.unix_connect_roots = vec![run_dir.clone()];
+    let script = format!(
+        "{p} connect-unix {sock} --and create {w}/agent-file --and create {w}/own/x >&2; echo ready >&4",
+        p = probe.display(),
+        sock = sock.display(),
+        w = dir.path().display(),
+    );
+    s.browser = Some(browser(
+        dir.path(),
+        &["/bin/sh", "-c", &script],
+        5000,
+        vec![probe.parent().unwrap().to_owned()],
+    ));
+    let agent = format!(
+        "{p} connect-unix {sock}",
+        p = probe.display(),
+        sock = sock.display()
+    );
+    let o = run(
+        &s,
+        &["/bin/sh", "-c", &agent],
+        Opts {
+            pgroup: true,
+            hub: Some(hub_pair().1),
+            ..Opts::default()
+        },
+    );
+    let l = o
+        .status
+        .as_ref()
+        .unwrap_or_else(|r| panic!("{r}: {}", o.stderr));
+    assert!(l.browser && l.landlock_abi >= 9, "{l:?}");
+    let results = |text: &str| -> Vec<(String, String)> {
+        text.lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .map(|v| {
+                (
+                    v["probe"].as_str().unwrap_or("").to_owned(),
+                    v["result"].as_str().unwrap_or("").to_owned(),
+                )
+            })
+            .collect()
+    };
+    let browser_lines = results(&o.stderr);
+    let want = [
+        ("connect-unix", "blocked"),
+        ("create", "blocked"),
+        ("create", "reached"),
+    ]
+    .map(|(a, b)| (a.to_owned(), b.to_owned()));
+    assert_eq!(browser_lines, want, "{}", o.stderr);
+    assert_eq!(
+        results(&o.stdout),
+        [("connect-unix".to_owned(), "reached".to_owned())],
+        "control: the agent reaches hub.sock"
+    );
+    assert!(!dir.path().join("agent-file").exists());
 }

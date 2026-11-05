@@ -17,8 +17,8 @@ tokio = { version = "1.54", features = ["rt-multi-thread", "net", "io-util", "pr
 tokio-util = { version = "0.7", features = ["codec"] }
 serde = { version = "1", features = ["derive"] }
 # float_roundtrip: a stored f64 (a grant's expiry, any time in an entity's data) reads back exactly; the default parser
-# may land one ulp off (URDR-SCOPE-GRANT-FLAKE-1)
-serde_json = { version = "1", features = ["float_roundtrip"] }
+# may land one ulp off (URDR-SCOPE-GRANT-FLAKE-1). raw_value: the CDP broker (heimdall) keeps params as the bytes it got
+serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
 schemars = "1.2"
 serde_path_to_error = "0.1"
 serde_ignored = "0.1"
@@ -40,6 +40,10 @@ libc = "0.2"
 hyper = { version = "1.12", features = ["server", "client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "http1", "client-legacy", "client-proxy"] }
 http-body-util = "0.1"
+# the CDP broker's websocket server on cdp.sock, on the hyper above; `unstable-split` reads and writes it from two tasks
+fastwebsockets = { version = "0.10", features = ["upgrade", "unstable-split"] }
+# `drgnx browser install` unpacks the pinned Chrome for Testing archive; read only, deflate only
+zip = { version = "9.3", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 # `rustls-platform-verifier` is turned on by bifrost's default feature `platform-verifier`, so an Android build can drop it
 hyper-rustls = { version = "0.27", default-features = false, features = ["ring", "http1", "tls12", "logging"] }
 rustls = { version = ">=0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }

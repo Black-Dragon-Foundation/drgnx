@@ -830,29 +830,35 @@ clears the count after carding.
 ## The permissions matrix
 
 `norn::matrix` (`runtime/crates/norn/src/matrix/`) is the policy on the wire's vocabulary
-(`runstav::methods::matrix`). Rows are the 22 `Action`s (ids such as `agents.start`, `push.main`); columns are
+(`runstav::methods::matrix`). Rows are the 25 `Action`s (ids such as `agents.start`, `push.main`); columns are
 roles (manager, worker, chat), named agents and providers; a cell is `Allow`, `Ask` or `Never` with an optional
 limit (`amount` in a `Unit`).
 
 - **Presets:** `preset(Cautious | Balanced | Autonomous)` builds a layer with every action in the three role columns.
   Balanced is the design mockup's table. `JobContainer` is Allow for managers and workers under Balanced and
   Autonomous, Ask under Cautious, Never for chat. A cell has one limit, so Balanced `spend` carries the dollar cap
-  (manager $40, worker $10, chat $2); the weekly-limit share is the gateway's budget check, not the cell.
+  (manager $40, worker $10, chat $2); the weekly-limit share is the gateway's budget check, not the cell. The
+  browser rows (after `network`): `browser` is Ask in Cautious, Allow for managers and workers in Balanced (Ask for
+  chat) and Allow everywhere in Autonomous; `browser.web` is Allow only in Autonomous, Ask otherwise;
+  `browser.private` is Ask in every column of every preset.
 - **Combination:** `effective(layers, who)` applies the layers in order (preset, user overrides, project, plan; a
   later layer replaces a cell), then takes the most restrictive of the columns that match the session: `Never >
   Ask > Allow`. A provider or agent column can tighten a role, never widen it. At the same verdict a limit beats
   none and the smaller limit wins; limits in different units do not compare, so the cell becomes Ask with no limit.
-  `unsandboxed` and `user.private` are Never whatever a layer says; an action without a cell is Never.
+  `unsandboxed` and `user.private` are Never whatever a layer says (`always_never`); an action without a cell is
+  Never. `browser.private` is capped at Ask (`always_ask`): after the merge an Allow there becomes Ask with its limit
+  kept, whichever layer or column said Allow; a Never stays Never.
 - **Deciding:** `decide(effective, action, amount)` is the cell's verdict; over the cell's limit it is Ask if
-  `spend.over` is not Never, else Never.
+  `spend.over` is not Never, else Never. It applies both caps itself, so a row capped at Ask answers Ask for an
+  Allow cell whatever `Effective` it is handed.
 - **Narrowing:** `narrow(parent, asked)` returns `asked` only if no cell is wider than the parent's: a verdict at
   least as restrictive and, where the parent has a limit, a limit in the same unit that is no greater (a child with
   no limit, or in another unit, is wider). Otherwise `Widening { action }` names the first offender.
 - **Time presets:** `active(base, time_presets, away, minute)` picks the first `Away` preset while the user is away,
   else the first `Between(from, to)` holding at that minute of day (wrapping past midnight), else the base.
 
-Tests: `cargo test -p norn matrix` (the Balanced table cell by cell, combination, overrides, narrowing as a
-property test, units, time presets).
+Tests: `cargo test -p norn matrix` (the Balanced table cell by cell, the browser rows in every preset, the Ask cap
+in every layer, combination, overrides, narrowing as a property test and for the browser rows, units, time presets).
 
 ### The matrix in the hub (`drgnx-ratatoskr/src/matrix_gate.rs`)
 
@@ -868,6 +874,36 @@ its entity's data and counts only when the user's tx wrote that field: urdr keep
 `field_tx` as `data.<key>`, and the gate reads `data.matrix` (an agent's write of the field, or of another data key,
 never decides it). `ActionCtx::of_session` fills a session's project and plan from the runner's scope table (a plan
 run's, or the one `open_as` derives from the task a session starts on).
+
+**Grant records (the browser rows).** A matrix card is otherwise one answer to one question, so a retry after a yes
+would make a new card. For `browser`, `browser.web` and `browser.private` the user's yes is a `grant` entity of
+access `matrix` (`norn::grants::create_matrix`; [store.md](store.md), "Grants"), with a scope: once (the session,
+`expires` now + `agents-browser-once-window`), the session (no expiry) or the plan (`who: {plan: ID}`, every session
+of that plan). When the verdict is Ask, `check` and `recheck` read the active grants for the session or its plan
+(`matrix_grants_for`) and answer Allow, with no card, when one covers the hub's facts: for `browser` any grant; for
+`browser.web` one with no host or with `facts.host`; for `browser.private` one whose target is exactly
+`facts.target` (the web proxy matches CIDR and all-private grants itself). `Facts.host` and `Facts.target` are the
+web proxy's, never an agent's. A Never verdict ignores every grant, and `browser.private` stays capped at Ask, so its
+grants are the only way it is ever allowed. `recheck` reads the card's own facts back from its data.
+
+**Browser cards.** The card of a browser row lists its answers in its data (`choices: [{id, label}]`, also in the
+`card` event with `body`), with `once_window` (the setting's seconds when the card was made). Its title is the hub's
+(`matrix_gate::card_title`): the session id and, for `browser.web`, the first host; for `browser.private` the target,
+`Facts.addr` (the pinned address) and the class of `Facts.class` (the web policy's `Class` in snake case).
+- The ids: `once`, `session`, `plan` (only when the card's ctx has a plan) and `refuse`. A `browser.private` card whose
+  target is a LAN or ULA literal (`cidr_of`) adds `session/cidr`, `plan/cidr`, `session/all-private` and
+  `plan/all-private`. A name, `host.drgnx.internal`, CGNAT and link-local get the one target only.
+- `cards/settle` on such a card (`graph::settle_browser`): `allow` is read as `once` and `deny` as `refuse`; any id
+  the card does not list is `invalid-params` at `choice`, and the card stays open. An allow writes the grant in the
+  same user tx (`who` from the scope; `expires` now + `once_window` for once; for `browser.web` a once names the
+  card's `facts.host`, the others no host; for `browser.private` the target is `facts.target`, `Cidr {the /24 or
+  /64, the target's port}` or `"all_private"`, in `gleipnir::net::policy::PrivateTarget`'s wire form). `refuse`
+  writes no grant and sets `refused: true` in the card's data, which the web proxy reads so the session gets no more
+  cards. The session gets a message either way.
+- `recheck` of a settled browser card allows while the grant it wrote (`grant.card`) is live, so a once ends with its
+  window.
+- `Facts.target` is that wire form for one target, `{"host_port": "H:P"}` with the name or literal as asked, so a
+  grant for exactly that target matches it by equal JSON.
 
 `effective_for(conn, who, ctx, now)` is what a session may do now; the permission seam, the brief and the launch
 plan all call it. A worker a manager started gets `meet` (the cellwise tighter) of its own cells from every layer, its

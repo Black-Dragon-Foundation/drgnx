@@ -2,7 +2,9 @@
 //! Balanced allows work that reaches beyond the worktree; Autonomous allows most of what Balanced asks of the manager
 //! (a done task, the CI configuration, a larger spend and fleet), but still asks for pushes to main, settings and the
 //! user's Emacs, asks the worker for the CI configuration, and keeps `spend.over` Ask for the manager and chat.
-//! `unsandboxed` and `user.private` are Never in every column of every preset.
+//! `unsandboxed` and `user.private` are Never in every column of every preset.  The browser rows: `browser` asks in
+//! Cautious, is allowed in Balanced for managers and workers (asked of chat) and everywhere in Autonomous;
+//! `browser.web` is allowed only in Autonomous; `browser.private` asks in every preset (and no layer can allow it).
 
 use super::{Action, Cell, Column, Limit, Matrix, Preset, Role, Unit, Verdict};
 
@@ -67,6 +69,11 @@ fn row(a: Action, p: Preset) -> [Cell; 3] {
         (JobContainer, _) => [ALLOW, ALLOW, NEVER],
         (Network, Cautious) => [ASK, ASK, ALLOW],
         (Network, _) => [ALLOW, ALLOW, ALLOW],
+        (Browser, Cautious) => [ASK, ASK, ASK],
+        (Browser, Balanced) => [ALLOW, ALLOW, ASK],
+        (Browser, Autonomous) => [ALLOW, ALLOW, ALLOW],
+        (BrowserWeb, Autonomous) => [ALLOW, ALLOW, ALLOW],
+        (BrowserWeb, _) | (BrowserPrivate, _) => [ASK, ASK, ASK],
         (Unsandboxed, _) | (UserPrivate, _) => [NEVER, NEVER, NEVER],
         (SettingsChange, _) => [ASK, ASK, ASK],
         (UserEmacs, Cautious) => [NEVER, NEVER, NEVER],

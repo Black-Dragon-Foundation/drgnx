@@ -18,6 +18,7 @@ serde_json = { version = "1", features = ["raw_value"] }
 runstav = { path = "../crates/runstav" }
 drgnx-ratatoskr = { path = "../crates/drgnx-ratatoskr", features = ["fuzzing"] }
 saga = { path = "../crates/saga" }
+heimdall = { path = "../crates/heimdall" }
 gleipnir = { path = "../crates/gleipnir", features = ["fuzzing"] }
 huginn = { path = "../crates/huginn" }
 mimir = { path = "../crates/mimir", features = ["fuzzing"] }
@@ -54,6 +55,13 @@ bench = false
 [[bin]]
 name = "connect_head"
 path = "fuzz_targets/connect_head.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "absolute_head"
+path = "fuzz_targets/absolute_head.rs"
 test = false
 doc = false
 bench = false
@@ -215,6 +223,13 @@ bench = false
 [[bin]]
 name = "saga_org"
 path = "fuzz_targets/saga_org.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cdp_envelope"
+path = "fuzz_targets/cdp_envelope.rs"
 test = false
 doc = false
 bench = false

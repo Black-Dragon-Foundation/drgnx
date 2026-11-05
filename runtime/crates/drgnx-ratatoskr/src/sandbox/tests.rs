@@ -146,6 +146,7 @@ fn context_closes_data_state_config_and_sockets() {
         layers: Layers::for_target(Target::LinuxBwrap),
         extra_tcp_ports: vec![],
         trace: Default::default(),
+        browser: None,
     };
     validate(spec(fx.p("home/proj")), &ctx, Target::LinuxBwrap).expect("a task folder passes");
     for closed in [fx.p("real-data/drgnx/x"), fx.p("src"), fx.p("run/drgnx/s")] {
@@ -193,6 +194,7 @@ fn an_agent_session_dir_reaches_nothing_else_beside_the_socket() {
         layers: Layers::for_target(Target::LinuxBwrap),
         extra_tcp_ports: vec![],
         trace: Default::default(),
+        browser: None,
     };
     let run = |source: &Path| {
         Some(Bind {
@@ -257,6 +259,7 @@ fn helper_dir_is_closed() {
         layers: Layers::for_target(Target::LinuxBwrap),
         extra_tcp_ports: vec![],
         trace: Default::default(),
+        browser: None,
     };
     let r = validate(spec, &ctx, Target::LinuxBwrap).unwrap_err();
     assert_eq!(r.rule, Rule::ExposesUser, "{}", r.message);
@@ -304,4 +307,183 @@ fn to_draugr_maps_every_field() {
     assert!(s.stdin_null && s.new_session);
     let targets: Vec<i32> = s.pass_fds.iter().map(|p| p.target).collect();
     assert_eq!(targets, [4, 3]);
+}
+
+/// A browser shape for the fixture's stand-in program (outside `/usr` and `/opt`), local ports 3000 and 5173.
+fn browser(fx: &Fx) -> BrowserShape {
+    let program = fx.p("chrome/headless_shell");
+    fs::create_dir_all(program.parent().unwrap()).unwrap();
+    fs::write(&program, "#!/bin/sh\n").unwrap();
+    let found = crate::browser::resolve::Found {
+        path: program,
+        kind: crate::browser::resolve::Kind::HeadlessShell,
+        version: None,
+        source: crate::browser::resolve::Source::Setting,
+    };
+    browser_for(
+        norn::matrix::Verdict::Allow,
+        Some(gleipnir::BackendKind::Bwrap),
+        9,
+        Ok(found),
+        vec![3000, 5173],
+        1 << 20,
+        crate::browser::Secret([0x5a; 32]),
+    )
+    .unwrap()
+    .unwrap()
+}
+
+fn browser_plan(env: Vec<(String, String)>) -> crate::agents::lock::LaunchPlan {
+    crate::agents::lock::LaunchPlan {
+        argv: vec!["/bin/sh".into()],
+        env,
+        session_meta: None,
+        protected_ro: vec![],
+        login_dir: None,
+        enforced: crate::agents::lock::Enforced::Yes,
+        gateway: false,
+        trace: None,
+    }
+}
+
+#[test]
+fn browser_spec_shape() {
+    let fx = Fx::new();
+    fs::create_dir_all(fx.p("wt")).unwrap();
+    let env = fx.env();
+    let ctx = context_for(&env, None);
+    let b = browser(&fx);
+    let secret = b.secret.hex();
+    // the shape never shows its secret
+    assert!(!format!("{b:?}").contains(&secret));
+    let shape = SessionShape {
+        sid: "S1".into(),
+        cwd: fx.p("wt"),
+        write: vec![fx.p("wt")],
+        read: vec![],
+        net: crate::agents::launch::NetCell::ProviderOnly,
+        browser: Some(b),
+    };
+    // an editor's endpoint and a display are dropped
+    let plan = browser_plan(vec![
+        ("DRGNX_BROWSER_CDP".into(), "ws://elsewhere".into()),
+        ("WAYLAND_DISPLAY".into(), "wayland-0".into()),
+        ("DISPLAY".into(), ":0".into()),
+        ("SOCK".into(), "/run/user/1000/x".into()),
+        ("KEPT".into(), "1".into()),
+    ]);
+    let scratch = crate::agents::launch::scratch_dir(&env, "S1").unwrap();
+    let built = session_spec(
+        &env,
+        &ctx,
+        &plan,
+        &shape,
+        &scratch,
+        Tier::Full,
+        Target::LinuxBwrap,
+    )
+    .unwrap();
+    let spec = validate(built.spec, &ctx, Target::LinuxBwrap)
+        .unwrap_or_else(|r| panic!("refused: {r}"))
+        .spec()
+        .clone();
+    let run = paths::session_dir(&env, &paths::socket_path(&env), "S1").unwrap();
+    let Net::Isolated { relay, .. } = &spec.net else {
+        panic!("{:?}", spec.net)
+    };
+    let relays: Vec<(u16, PathBuf)> = relay.iter().map(|r| (r.port, r.socket.clone())).collect();
+    assert_eq!(
+        relays,
+        [
+            (3128, run.join("proxy.sock")),
+            (9222, run.join("cdp.sock")),
+            (3130, run.join("web.sock"))
+        ]
+    );
+    assert_eq!(spec.extra_tcp_ports, [3000, 5173]);
+    assert!(spec.read.contains(&fx.p("chrome")), "{:?}", spec.read);
+    let url = format!("ws://127.0.0.1:9222/devtools/browser/{secret}");
+    let get = |k: &str| {
+        spec.env
+            .iter()
+            .filter(|(n, _)| n == k)
+            .map(|(_, v)| v.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        get("PLAYWRIGHT_MCP_CDP_ENDPOINT"),
+        std::slice::from_ref(&url)
+    );
+    assert_eq!(get("DRGNX_BROWSER_CDP"), [url]);
+    assert_eq!(get("KEPT"), ["1"]);
+    for gone in ["WAYLAND_DISPLAY", "DISPLAY", "XDG_RUNTIME_DIR", "SOCK"] {
+        assert!(get(gone).is_empty(), "{gone} is in {:?}", spec.env);
+    }
+    assert!(spec.env.iter().all(|(_, v)| !v.contains("/run/user")));
+    let sb = spec.browser.as_ref().expect("Spec.browser");
+    assert_eq!(sb.program, fx.p("chrome/headless_shell"));
+    assert_eq!(sb.own_dir, PathBuf::from(gleipnir::BROWSER_DIR_FULL));
+    assert_eq!(sb.web_port, 3130);
+    assert_eq!(sb.local_ports, [3000, 5173]);
+    assert!(sb.extra_read.contains(&fx.p("chrome")));
+    assert_eq!(
+        sb.host_args,
+        ["--headless-shell", "--max-message", "1048576"]
+    );
+    // the secret is in the environment only
+    assert!(sb.host_args.iter().all(|a| !a.contains(&secret)));
+    assert!(!format!("{:?}", spec.read).contains(&secret));
+    // and the data dir's browsers are open for a download's program
+    assert!(
+        ctx.open_inside_closed
+            .contains(&true_name(&paths::data_dir(&env).join("browsers")).unwrap()),
+        "{:?}",
+        ctx.open_inside_closed
+    );
+}
+
+#[test]
+fn no_browser_without_abi9_or_bwrap_or_program() {
+    use crate::browser::resolve::{Found, Kind, NotFound, Source};
+    use norn::matrix::Verdict;
+    let found = || {
+        Ok(Found {
+            path: "/usr/bin/chromium".into(),
+            kind: Kind::Full,
+            version: None,
+            source: Source::System,
+        })
+    };
+    let secret = || crate::browser::Secret([1; 32]);
+    let ask =
+        |cell, backend, abi, found| browser_for(cell, backend, abi, found, vec![], 64, secret());
+    // Never: no browser and no reason to say
+    assert_eq!(
+        ask(Verdict::Never, None, 0, found()).map(|s| s.is_none()),
+        Ok(true)
+    );
+    // Allow and Ask: one, on the full tier with ABI 9 and a program
+    for cell in [Verdict::Allow, Verdict::Ask] {
+        let s = ask(cell, Some(gleipnir::BackendKind::Bwrap), 9, found())
+            .unwrap()
+            .unwrap();
+        assert_eq!((s.web_port, s.cdp_port, s.kind), (3130, 9222, Kind::Full));
+    }
+    let why = |backend, abi, found| ask(Verdict::Allow, backend, abi, found).unwrap_err();
+    let tier = why(Some(gleipnir::BackendKind::Reduced), 10, found());
+    assert_eq!(tier.kind, "tier");
+    assert!(tier.fix.contains("bubblewrap"), "{tier:?}");
+    assert_eq!(why(None, 10, found()).kind, "tier");
+    let old = why(Some(gleipnir::BackendKind::Bwrap), 8, found());
+    assert_eq!(old.kind, "landlock");
+    assert!(old.why.contains('8') && old.why.contains('9'), "{old:?}");
+    let none = why(
+        Some(gleipnir::BackendKind::Bwrap),
+        9,
+        Err(NotFound {
+            fix: "run drgnx browser install".into(),
+        }),
+    );
+    assert_eq!(none.kind, "program");
+    assert_eq!(none.fix, "run drgnx browser install");
 }

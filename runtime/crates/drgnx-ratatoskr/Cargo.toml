@@ -56,6 +56,11 @@ vegvisir = { path = "../vegvisir", version = "0.1.0" }  # the Work map's model a
 forseti = { path = "../forseti", version = "0.1.0" }  # the scheduler core: the queue's order, placement and admission
 hrafn-embed = { path = "../hrafn-embed", version = "0.1.0" }  # the model table, the cache's checks, the embed worker's engine
 hrafn = { path = "../hrafn", version = "0.1.0" }  # each project's code store, tier 1 and the store side of tier 2
+heimdall = { path = "../heimdall", version = "0.1.0" }  # the CDP broker's routing and codecs (browser::{host,broker})
+fastwebsockets.workspace = true  # the CDP broker's websocket (browser::broker)
+hyper.workspace = true           # the CDP broker's HTTP/1.1 upgrade (already in the tree through bifrost)
+hyper-util.workspace = true
+subtle.workspace = true          # the CDP secret, compared in constant time
 huginn = { path = "../huginn", version = "0.1.0", features = ["serde"] }  # settings.el and runtime-defaults.el, as data
 serde_path_to_error.workspace = true  # where in a setting's value a mistake is
 tokio = { workspace = true, features = ["io-std"] }  # mcp-bridge's stdio (a feature, no new crate)
@@ -70,6 +75,9 @@ tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 lexopt.workspace = true
 sha2.workspace = true  # the merge gate's diff hashes
+zip.workspace = true  # `browser install` unpacks the pinned archive
+http-body-util.workspace = true  # the download's body
+http = "1"                # the download's request (already in the tree through hyper)
 zeroize.workspace = true  # the line that carries provider keys to the backend is wiped once written
 
 # runners: the user's OpenSSH through the crate's native mux (no Android: the transport is Unix desktops only)

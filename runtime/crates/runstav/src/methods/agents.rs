@@ -141,6 +141,10 @@ pub struct Snapshot {
     /// Why the provider's lock is not enforced (shown "not enforced").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enforced_why: Option<String>,
+    /// Why a session whose `browser` cell allows the agent browser started without it, and the fix (a host that
+    /// cannot give one: no full sandbox tier, Landlock below ABI 9, no browser found).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_why: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<Role>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

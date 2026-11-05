@@ -75,7 +75,9 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   `<4>` / `<3>` when `JOURNAL_STREAM` is set (the journal under systemd). `DRGNX_RATATOSKR_LOG` takes a `Targets`
   string (`info`, the default; `warn,drgnx_ratatoskr::conn=debug`). The cap, keys and params are never logged. The
   cargo feature `test-hooks` (off in the binary install.sh builds) holds the test-only surfaces: the `__test_flood`
-  method, `--idle-tick-ms N` (the restart-when-idle tick), `--test-clock`, `__test_advance`, `--test-sequencer` and
+  method, `__test_matrix_ask {action, who, session?, plan?, facts?}` (the matrix gate asked as the hub's own callers
+  ask it, answered `{gate, card?, why?}`: the browser card rows raise their cards with it), `--idle-tick-ms N` (the
+  restart-when-idle tick), `--test-clock`, `__test_advance`, `--test-sequencer` and
   `__test_barrier` ([Test hooks](#test-hooks)), `--test-hold-store` (at the hub's end runtime.db's thread is held by a
   job until the hub gets SIGUSR1, with one write queued behind it, so a test sees the end close its connections first
   and then write that queue, or a second SIGTERM abandon it; only SIGUSR1 releases the job, never the runtime's end),
@@ -864,7 +866,9 @@ directory, `spawn_chat` for a chat in a project: the project read-only, its scra
 test builds spawn the mock unsandboxed), the sandbox status pipe read (`gleipnir::read_status`), the ACP
 handshake, `lock::verify` (a lock that does not hold kills the session). Every permission request then goes through
 `MatrixGate::check` with the session's id (so a manager's delegation applies): allowed answers at once, never
-refuses at once, an ask waits for the user; a session's `exec/start` is checked as `code.edit` the same way.
+refuses at once, an ask waits for the user; a session's `exec/start` is checked as `code.edit` the same way. For the
+browser rows an ask that the user's matrix grant for the session or its plan already covers is allowed with no card
+([coordination.md](coordination.md), "Grant records").
 
 ## Sessions across a restart
 
@@ -1036,6 +1040,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `agents/tool-input` | user | `{session: Id, tool_call: string}` | `{raw_input: any, truncated: boolean}` | no |
 | `brief/build` | user | `{task: string}` | `{cut: boolean, edited: boolean, parts?: [BriefPartText], task: string, text: string}` | no |
 | `brief/set` | user | `{task: string, text: string}` | `{note: string}` | yes |
+| `browser/check` | user | `{}` | `BrowserCheckResult` | no |
 | `budget/get` | user | `{scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | no |
 | `budget/set` | user | `{limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | yes |
 | `cards/settle` | user | `{card: natnum, choice: Text}` | `{settled: boolean}` | yes |
@@ -1102,7 +1107,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `job/unblock` | user | `{task: TaskRef}` | `JobSummary` | yes |
 | `machines/list` | user | `{}` | `{machines?: [Machine]}` | no |
 | `machines/report` | user | `{machine: string, slots?: [{holder?: string, id: string, kind: string}], ttl: number}` | `{local: boolean, machine: string, slots?: [Slot]}` | no |
-| `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "network" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no |
+| `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "network" \| "browser" \| "browser.web" \| "browser.private" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no |
 | `matrix/get` | user | `{plan?: string, project?: string, who?: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `MatrixView` | no |
 | `mcp/attach` | service | `{kind: AgentKind}` | `{identity: string}` | no |
 | `mcp/session` | user | `{agent: AgentName, cwd?: AbsPath, job?: Id, owner: natnum, profile?: Id, sid?: SessionId, task?: TaskRef, tools?: {tracker: boolean}}` | `{sid: string, socket: string}` | no |
@@ -1174,7 +1179,7 @@ method from every class).
 | Classes | Methods |
 |---|---|
 | user, agent, service | `hello`, `ping`, `status`, `coord/notify` (users too: SB-T12-4), `agents/list`, `spend` |
-| user | `restart`, `shutdown`, `subscribe`, `events/since`, `env/set`, `config/settings`, `config/changed`, `gateway/register`, `gateway/unregister`, `gateway/keys`, `gateway/set-budget`, `gateway/editor-token`, `gateway/keys-held`, `agents/{start,get,send,stop,kill,permission,do}`, `job/{propose,start-task,reassign,block,unblock,order,approve,stop,resume,card,reply,dismiss,status}`, the editor's writes `cards/settle`, `messages/{send,mark}`, `events/add`, `review/mark`, the seam's `coord/{job-create,job-set,task-status,leases,decide,agent,card-create,card-set,held,prune}`, and `mcp/{session,session-close}` |
+| user | `browser/check`, `restart`, `shutdown`, `subscribe`, `events/since`, `env/set`, `config/settings`, `config/changed`, `gateway/register`, `gateway/unregister`, `gateway/keys`, `gateway/set-budget`, `gateway/editor-token`, `gateway/keys-held`, `agents/{start,get,send,stop,kill,permission,do}`, `job/{propose,start-task,reassign,block,unblock,order,approve,stop,resume,card,reply,dismiss,status}`, the editor's writes `cards/settle`, `messages/{send,mark}`, `events/add`, `review/mark`, the seam's `coord/{job-create,job-set,task-status,leases,decide,agent,card-create,card-set,held,prune}`, and `mcp/{session,session-close}` |
 | service | `mcp/attach` (an outside agent's bridge: [Sessions and their sockets](#sessions-and-their-sockets)) |
 
 Everything that answers, approves, starts, stops, configures or reads a transcript is `user` only. What the other
@@ -1272,7 +1277,7 @@ and name. The session is recorded in `runtime.db` (`asession`, migration 5) and 
 (`run_by` its agent, `works_on` its task; a brainstorm's topic note and design document are in its `data`).
 
 - **Module env.** `agents/start` takes `env` (at most 8 `{name, value}`): what the editor's modules add through
-  `drgnx-agents-env-functions` (the Live browser's `PLAYWRIGHT_MCP_CDP_ENDPOINT`). Each name must be on the runtime
+  `drgnx-agents-env-functions` (no module adds one by default). Each name must be on the runtime
   setting `drgnx-agents-start-env-names` and must not be `refused_env_name` (a name with KEY, TOKEN, SECRET, PASSWORD,
   PASSPHRASE or CREDENTIAL in it) nor a provider's `key_env` (as `env/set`), else `invalid-params` at `env[i].name`; the values are added to the launch plan's
   environment last, so they win over the profile's and the lock's. The hub keeps them in the session's notes
@@ -1598,6 +1603,94 @@ makes: the hub never grants `Open`) has no network but its sandbox's relay port,
 
 Rows: `test/conformance/sandbox-net/`. The real launch: `tests/launch_sandboxed.rs`
 (`a_session_reaches_its_provider_through_the_proxy`, the sandbox lane).
+
+### The web proxy (`web.sock`)
+
+A session with the agent browser reaches the web only through its web relay port, 3130, whose other end is `web.sock`
+in its session directory (`runstav::paths::SESSION_WEB_SOCKET`). The hub serves it with **a web proxy of its own per
+session** (`runtime/crates/drgnx-ratatoskr/src/browser/web.rs`): a `gleipnir::net::proxy` under the web policy
+(`Policy::Web`, [gleipnir.md](gleipnir.md), "The web policy"), separate from the session's provider proxy, with its own
+connection cap (64), so one session's flood never takes another's places. `browser::web::start_web(sid, dir, ctx, who,
+front)` binds it (a stale file replaced, 0600), reads the state below, and only then listens; the
+`agents::net::SessionNet` it is given (`set_web`) drops it with the session, removing the socket when it is still its
+own.
+
+- **The state, read at the start and again at each change:**
+  - `browser.web` is on when the session's cell for it is Allow, or a grant with no host covers the session (a
+    `session` or `plan` answer); a grant that names a `host:port` (an `once` answer, until it expires) opens that one
+    target alone (`WebState::set_web_hosts`);
+  - the `browser.private` grants of the session and its plan (`norn::grants::matrix_grants_for`), each target in its
+    wire form, go to the proxy, which matches them against what was asked and where it leads;
+  - a Never cell ignores every grant;
+  - the deny list is the `agents-browser-deny-hosts` setting.
+- **What the proxy refuses becomes a card, at most:**
+  - **`WebOff`**, a public target while the web is off: `MatrixGate::decide(browser.web)` with the facts
+    `{host: "H:P"}`, the first host refused, so a page of thirty hosts makes one card. A session has at most one open
+    `browser.web` card; the targets refused while it is open make none. An Allow (the cell, or a grant that covers the
+    session) turns the web on without a card. Once the user refused one (a settled matrix card of the session with the
+    choice `refuse` or `deny`, or one marked `refused`), the session gets no more `browser.web` cards, after a hub
+    restart too.
+  - **`Private`**, a private target no grant opens: `decide(browser.private)` with the facts `{target, addr, class}`:
+    `target` the target as a grant names it, `{"host_port": "H:P"}` (the name, the literal or the
+    `host.drgnx.internal` port that was asked), `addr` the address and port it led to, `class` its class (`lan`,
+    `ula`, `link_local`, `cgnat`, `loopback`, `host_own`). One card per target; none for a refused target.
+    `browser.private` is capped at Ask, so every new target asks.
+  - **`Refused`** (a hard never, a port, a rebinding, a malformed request) is logged only; **`Reached`** is a store
+    event, once per host per session: kind `status`, the session as `agent`, data
+    `{"browser-host": true, "session": SID, "host": HOST}`.
+- **Changes reach it at once.** `coord::Signals::answers_changed` is called for every write of the user's (a settled
+  card, `graph/grants`, a plan's or a project's matrix override), every `config/settings`, every settings refresh that
+  changed what is in effect, and `presence/set`. Every web proxy then reads its cells, grants and cards again, so a
+  narrowed `browser.web` cell refuses the very next request. The proxy also reads again when the earliest grant in
+  force expires and, while the matrix setting has time presets, at each minute's turn.
+  - When what the session's browser may reach changed (the start included, when it is not nothing), a store event
+    says so: kind `status`, the session as `agent`, data `{"browser-net": true, "session": SID, "web": BOOL,
+    "hosts": ["H:P", …], "private": [TARGET, …]}` (the once-opened hosts, the private grants' targets in their wire
+    form). Rows wait on it after a settle.
+  - When the state changed or a card it asked settled, the proxy may ask its questions anew
+    (`ProxyHandle::forget_questions`), so the target refused while another card was open asks on its retry.
+- **What no grant opens** (`browser/nevers.rs`, shared by every session's proxy, started with the hub):
+  - `HostAddrsWatch`: every interface address of the host (`getifaddrs`, every 5 s), which the policy treats as
+    loopback;
+  - `NeverSetWatch`: the hub's own TCP ports on the host's loopback: the gateway's (registered once it listens), every
+    listener the hub registers (`hold`, `release`), and an Emacs TCP server's port, read every 30 s from the first line
+    (`HOST:PORT PID`) of each server file in `~/.emacs.d/server/` and `$XDG_CONFIG_HOME/emacs/server/` (the hub's
+    HOME; the line with the key is never read).
+- **Test hooks.** A test launch is unsandboxed and has no browser host. With `DRGNX_TEST_BROWSER` set, a session
+  whose `browser` cell is not Never still gets the hub's side of its browser at its start (the web proxy, and the
+  broker with the far end of its socketpair held); `DRGNX_TEST_WEB_REDIRECT=ADDR:PORT` sends every upstream but the
+  host's loopback there (the mock LLM stands for the site), and `DRGNX_TEST_PROXY_PINS` pins names for it as for the
+  provider proxy.
+
+Rows: `test/conformance/browser/web-*.jsonl`, `browser/private-*.jsonl`.
+
+### A session with the browser
+
+At `prepare`, the session's `browser` cell decides (`agents/session.rs`, `sandbox::browser_for`):
+
+- **Never:** today's spec, no browser.
+- **Allow or Ask:** the browser, when the sandbox is bubblewrap's full tier, the kernel's Landlock ABI is at least 9
+  and `browser::resolve` finds a program. Ask comes at first use: the broker asks the cell at each websocket upgrade.
+  Otherwise (OD1 (b)) the session starts without it: `agents/get` says why in `browser_why`, with the fix, and the hub
+  raises one `notice` per reason per hub run (`id` `browser-tier`, `browser-landlock` or `browser-program`).
+- **The spec** ([gleipnir.md](gleipnir.md), "Ratatoskr's side"): the relays 3128 → `proxy.sock`, 9222 → `cdp.sock`,
+  3130 → `web.sock`; the local ports (`agents-browser-local-ports`) in `extra_tcp_ports`; the program's folder and
+  `/var/cache/fontconfig` read-only; `PLAYWRIGHT_MCP_CDP_ENDPOINT` and `DRGNX_BROWSER_CDP` set to
+  `ws://127.0.0.1:9222/devtools/browser/SECRET` (a fresh 32-byte secret per session, in hex, in the environment
+  only: never in an argv or a log); no display, no runtime dir; `Spec.browser` with `--headless-shell` or `--full`
+  and `--max-message N`. An editor's value for either endpoint name is dropped for every session (`module_env`).
+- **The launch** makes the browser host's socketpair (`agents::launch::launch_on`): the host's end goes into the
+  sandbox, the hub's end to the broker. The status line must say the browser host is layered and ready
+  (`gleipnir::inner::read_status_for`). Where a user systemd answers, the sandbox runs in a scope of its own,
+  `drgnx-session-SID`, with `MemoryMax` = `agents-session-memory` and `TasksMax=4096` (`exec::unit::session_scope`).
+- **Before the spawn** `agents::net::start_browser` starts the web proxy (above) and the CDP broker on `cdp.sock`
+  (0600): its gate is the `browser` cell, its limits `agents-browser-max-message` and `agents-browser-idle`.
+- **The memory watch** (a scope only): it reads the scope's cgroup once (`systemctl --user show -P ControlGroup`),
+  then `memory.current` every second, and stops the browser (`stop("memory")`) each time it rises above
+  `agents-browser-memory-high` percent of `agents-session-memory`.
+- **At the end** of the agent's process the broker, the web proxy, the provider proxy and the socketpair close (the
+  browser host stops Chromium and exits), their sockets go, and the scope ends with its process. A resumed session
+  is launched again, with a fresh browser.
 
 ## The MCP bridge
 
@@ -2142,3 +2235,217 @@ one `notice` (a running task's refs are never removed). Restore and fork are par
 
 `timeline/get {scope, id, since?, rollup?}` answers the steps of a session, task, plan or project (500 a page, `next`
 continues) and their rollup: seconds by class (closed steps), cost by unit (never summed across units) and tokens.
+
+## The CDP broker
+
+A session with the browser drives a Chromium inside its own sandbox over CDP. The hub is the broker between the
+agent's websocket and the browser's pipe. Its routing is the crate `heimdall`: pure, with no I/O and no async runtime,
+std and serde only, built for every target (Android included). The hub's websocket server and the browser host wrap
+it.
+
+**Envelopes** (`heimdall::envelope`). `parse(msg, max)` reads `id`, `method` and `sessionId`, and for `Target.*` the
+`targetId` and `sessionId` params. `params`, `result` and `error` stay `serde_json` `RawValue`s borrowed from the
+message, so a 20 MiB screenshot passes byte for byte and is never re-encoded. The parse is strict, so the broker and
+Chromium never read one message two ways:
+- one JSON object (serde would read an array as a struct);
+- a key the broker reads appears once;
+- the strings it routes by are plain (an escape is an error, not decoded);
+- `id` is a whole number;
+- a message has a method or a reply, not both;
+- over `max` (`agents-browser-max-message`) is `TooLarge`.
+
+The router itself takes no limit: the pipe's codec and the websocket enforce it before a message reaches the router.
+What the router sends is rebuilt from what it parsed, so only `id`, `method`, `sessionId` and `params` reach the
+browser, and a key CDP does not have is dropped.
+
+**Routing** (`heimdall::route::Router`). One router per browser start. `Router::new()` returns the hub's first command,
+`Target.attachToBrowserTarget` on the root session. The agent gets that browser session, so it sees what looks like a
+root connection:
+- every agent message without a `sessionId` gets the browser session, and replies and events on it lose it again;
+- the hub's own commands use ids from `HUB_ID_BASE` (2^30) to `i32::MAX`, because Chromium reads an id as a 32-bit
+  integer; an agent id at or above it is refused (`-32600`), and a reply with a hub id is the hub's whatever its session;
+- a child session belongs to the owner of the session its `Target.attachedToTarget` arrived on, and an attach event
+  never changes the owner of a session that exists;
+- an agent command on a session it does not own (the hub's, a closed one, an unknown one), or naming one or the browser
+  target in `Target.*` params, gets `-32000` "not yours";
+- `REFUSED_ALWAYS` gets `-32601` "refused by drgnx": `Target.exposeDevToolsProtocol`, `Target.setRemoteLocations`,
+  `Target.sendMessageToTarget` (a whole message for a non-flat session that would pass unread), `Tethering.*`,
+  `Extensions.*`, `Browser.close`, `Browser.crash` and `Browser.crashGpuProcess`;
+- messages to or from the hub's sessions never reach the agent.
+
+Until the attach is answered the router is not `ready()`: the broker holds the agent's messages until it is, and a
+message passed anyway gets `-32000` "the browser is starting". If the attach fails, the agent gets the root session as it
+is, the router reports `BrokerEvent::NoBrowserSession`, and the hub cannot watch that browser.
+
+**Downloads.** Playwright sets `Browser.setDownloadBehavior` with a path in its own artifacts dir, which the browser
+layer cannot write. The router answers the agent `{}` and sends its own on the root: `allowAndName` into
+`/tmp/drgnx-browser/downloads` (`DOWNLOAD_DIR`), with events and the agent's `browserContextId`. The download events
+then arrive on the root session. They go to the agent, and a `downloadProgress` with `state: "completed"` and a plain
+guid is also `BrokerEvent::Download { guid, path }` (`Step::ToAgentAndEvent`). Playwright's `download.path()` does not
+find the file; the agent reads it from that dir.
+
+**The agent goes** (`agent_closed`). The router:
+1. resumes every agent session still paused by auto-attach (`waitingForDebugger`, not yet resumed by the agent) that no
+   hub session holds, with `Runtime.runIfWaitingForDebugger`;
+2. detaches every agent session on its parent, children first;
+3. marks them closing (what they still send is dropped until Chromium reports them detached);
+4. attaches to the browser target again for the next agent, and is not ready until that is answered.
+
+In the fallback it instead turns the root's auto-attach and target discovery off.
+
+**Codecs** (`heimdall::codec`):
+- `Nul` splits Chromium's NUL-delimited pipe messages under a limit. An overlong message is one `Overlong` error, and
+  the next message after its NUL reads as usual. `Nul::encode` refuses a message with a NUL inside.
+- `Frame::encode(kind, payload)` and `FrameDecoder` carry the socketpair between the hub and the browser host,
+  `[kind u8][len u32 BE][payload]`: kind 1 (`KIND_CDP`) is one CDP message, kind 2 (`KIND_CONTROL`) control JSON. A header
+  over the decoder's limit fails it for good, since the stream cannot resync.
+
+Tests: unit tests in each module. `route`'s tests play transcripts written by hand from the protocol JSON
+(`crates/heimdall/tests/data/*.jsonl`: an input line, then what it must give), and the fuzz target `cdp_envelope`
+([runtime.md](runtime.md#fuzzing)) seeds from them. `real-full.jsonl` and `real-headless-shell.jsonl` are recorded
+from real runs (the browser side only, long strings as their length; [runtime.md](runtime.md)'s `browser_real`):
+a test checks that the router's first command is the one sent there and that everything the browser said goes
+through a router as well-formed output.
+
+**The fallback's late replies.** In the fallback the agent owns the root session, so a reply there could outlive its
+agent and reach the next one. The router remembers the root commands an agent left unanswered when it went, and drops
+the first reply with each such id: Chromium answers one session's commands in order, so that reply is the old agent's,
+even when the next agent reused the id. At most 4096 ids are kept (the oldest go first).
+
+### The websocket server (`browser::broker`)
+
+The hub serves each browser session's `cdp.sock` with `broker::start(cfg, listener, host) -> BrokerHandle`, where `host`
+is the hub's end of the socketpair to the browser host ([The browser host](#the-browser-host)). `BrokerCfg` holds:
+- `sid` (logs say `cdp://SID`, never the path);
+- `secret` (32 bytes);
+- `max_message` (`agents-browser-max-message`);
+- `idle` (`agents-browser-idle`);
+- `gate`, an async closure that returns the session's `browser` cell as a `Gate`;
+- `events`, a channel of `BrokerEvent`s: downloads, `NoBrowserSession` and `Stopped { why }`. A full channel loses the
+  event, which is logged.
+
+The handle's `stop(why)`, `close()` and `connected()` do what their names say, and dropping the handle closes it.
+
+**The upgrade.** A connection from another uid is closed at once (`conn::peer_allowed`). HTTP/1.1 (hyper, a 10 s head
+timeout) then serves one path, `GET /devtools/browser/<the secret's 64 hex>` with a websocket upgrade (fastwebsockets).
+The secret is compared in constant time (`subtle`). Anything else (a wrong secret, no upgrade, a query) is 404 with no
+body. With the right secret:
+1. a broker whose host has ended answers 503;
+2. while an agent websocket is open, a second gets 409 "the agent's browser is already connected";
+3. `gate()` is asked: `Allow` goes on, `Ask(n)` is 403 "waiting for the user's yes: card N", and `Never(why)` is 403 with
+   WHY. So a cell narrowed to Never refuses the next connection, though not the open one;
+4. then 101.
+
+**The browser's life.** The first upgrade while the browser is stopped sends `{"op":"start"}` to the host. The agent's
+messages are held, in order, until `started` has come and the router is ready (its attach answered). More than twice
+the message limit held closes the agent with 1008. A message over the limit closes it with 1009.
+- **The agent goes:** the router's `agent_closed` commands go to the browser (resume, detach, attach afresh). A new
+  agent's messages wait for that attach.
+- **Idle:** with no agent websocket for `idle`, the broker sends `stop` with `idle` and reports `Stopped { why: "idle" }`.
+- **`stop(why)`:** an open websocket is closed with 1001. For `memory` the reason is "the browser was stopped: the
+  session is near its memory cap", and otherwise "the browser was stopped (WHY)". The broker then sends `{"op":"stop",
+  "why":WHY}` and reports `Stopped { why }`.
+- **`exited` while the browser ran** (a crash, or Chromium's own end): an open websocket is closed with 1011 "the browser
+  exited (signal N)" (or "(code N)", or the host's error text).
+- **After any stop or exit:** the next upgrade starts a fresh Chromium through the same host. An agent that connected
+  while a stop was under way gets the fresh one when `exited` comes.
+- **The host's end** (EOF on the socketpair): an open websocket is closed with 1011, and every later upgrade with the
+  right secret is 503 "the browser's host ended; restart the session to get it back".
+- **The hub restarted:** a resumed session has no host, since the socketpair died with the old hub.
+  `broker::start_after_restart(cfg, listener)` serves its endpoint with 503 "the browser ended with the hub's restart;
+  restart the session to get it back".
+- **`close()`:** the broker sends `stop` with `hub`, closes the agent with 1001, and closes the socketpair, so the
+  host exits.
+
+One task, the actor, owns the router and the state. The accept loop, each connection's reader and writer (the
+websocket split in two, fastwebsockets' `unstable-split`), and the host's reader and writer are tasks that talk to it
+over channels.
+
+Tests: `browser::broker` tests run a broker over the real browser host (`host::serve` on a thread with the stand-in
+Chromium), with a websocket client of their own: the 404s, 403s, 409, 503, the relay both ways, idle, the memory stop, a
+crash (Review Focus 3), a reconnect while the router detaches, and a log with no secret in it. The row
+`browser/the-endpoint-refuses-a-wrong-secret` (test-hooks) checks the endpoint through a hub: `__test_browser_endpoint
+{socket}` starts a broker with no browser behind it and answers its secret.
+
+## The browser check
+
+`browser/check` (user class, `writes: false`) is the doctor's smoke run (`browser::check`). `ratatoskr doctor --json`
+has two seconds, so the doctor only reads `<state>/hub/browser-check.json`, which this method writes. The method runs a
+throwaway session of the real shape: sid `check-<8 hex>`, command `sleep 60`, the browser on, made by
+`sandbox::browser_for` (so the reasons are a session's: `tier`, `landlock`, `program`), launched by `launch::spawn_plain`
+and, where a user systemd answers, in a scope. Its broker is `start_browser_with` with two hooks (`CheckHooks`): a gate
+that allows, so no card is raised, and a channel for the host's `stderr` events (`BrokerCfg::stderr`; only the check
+sets it). The hub then connects to its own `cdp.sock` with the secret as a websocket client, sends
+`Target.createTarget data:text/html,<p>drgnx`, `Target.attachToTarget` (flat) and `Page.captureScreenshot`, and tears
+the session down. The whole run has a 45 s deadline; the sandbox's process group is killed after it, and the session
+dir and scratch dir are removed.
+
+The answer is `{ok, browser, start_ms, peak_bytes, sys_missed, screenshot_bytes, why, at}`: `start_ms` runs from the
+connect to the page's target, `peak_bytes` is the scope's `MemoryPeak`, and `sys_missed` is true when a stderr line
+names `/sys/`. A check that could not run is `ok: false` with `why`. Under `test-hooks`,
+`DRGNX_TEST_BROWSER_CHECK_ABI=N` replaces the kernel's Landlock ABI, so the `landlock` reason can be tested on any host.
+
+The doctor's `browser` section (`doctor::browser_section`) is
+`{found, fix, tier, landlock_abi, verdict, modes, cap, proxy_refusals, last_check, age_warning}`. `proxy_refusals` are
+four `gleipnir::net::policy` judgements made in the doctor, no I/O: each must not be `Connect`.
+
+Tests: `browser::check` (the file round trip, the PNG size, the `/sys/` test), `doctor::tests::browser_section_shape`
+and `proxy_refusals_all_hold`, and the `#[ignore]` `browser_sandboxed::the_check_takes_a_screenshot` (a hub, the stand-in
+`tests/data/fake-chromium-png.sh` as the browser program, the real sandbox).
+
+## The browser host
+
+`ratatoskr browser-host` (`browser::host`, Linux only) runs Chromium inside a session's sandbox for the hub. The inner
+helper forks it under the browser layer, its own Landlock domain and seccomp filter ([gleipnir.md](gleipnir.md), "The
+inner helper", step 6b), with the hub's end of a socketpair at fd 3 and a ready pipe at fd 4:
+
+```
+browser-host --hub-fd 3 --ready-fd 4 --program P --dir D --web-port N [--max-message B] [--headless-shell|--full]
+```
+
+**The layer check.** Before it touches a descriptor or makes a dir, the host checks that it runs under the browser
+layer: `NoNewPrivs: 1` in `/proc/self/status`, and a TCP bind on loopback refused (`EACCES`). The browser layer binds no
+port at all, while the agent's own layer and an unsandboxed process may, so the bind tells the layers apart without a
+path. Otherwise it exits 1. Only a `test-hooks` build has `--unconfined`, which skips the check for the container tests
+that run it with a real Chromium and no sandbox ([the real browser tests](runtime.md#the-real-browser-tests)); the
+sandboxed path with a real Chromium is the `real-start/the-agent-drives-its-browser` row
+([the real-start rows](runtime.md#the-real-start-rows)).
+
+**Start.** The host makes `D/profile` and `D/downloads` (0700), writes `ready\n` on fd 4, closes it, and reads frames
+from fd 3 (`heimdall::codec`, `[kind u8][len u32 BE][payload]`; the largest is the message limit plus 64 bytes). A
+`{"op":"start"}` forks Chromium:
+- in its own process group, with `PR_SET_PDEATHSIG(SIGKILL)`;
+- stdin and stdout on `/dev/null`, stderr on a pipe, the CDP pipe at fds 3 (in) and 4 (out), every other fd closed at
+  the exec;
+- exactly the flags of the design (`--remote-debugging-pipe --user-data-dir=D/profile --no-sandbox --disable-gpu
+  --proxy-server=http://127.0.0.1:N …  about:blank`), and `--headless` unless `--headless-shell`;
+- an environment of `HOME`, `XDG_CACHE_HOME` and `TMPDIR`, all `D`, and nothing else.
+
+It answers `{"ev":"started","pid":N}`. A program that cannot be exec'd gets `{"ev":"exited","code":127|126,
+"signal":null,"error":"cannot start P: …"}` instead. A start while one runs answers `started` for the running one.
+
+**The relay.** A CDP frame from the hub goes to the pipe with its NUL. Each NUL-ended message from the pipe goes back as
+one CDP frame; one over the limit is dropped up to its NUL. A CDP frame while no browser runs is dropped.
+
+**Stop and exit.** `{"op":"stop","why":W}` closes the pipe, sends SIGTERM to Chromium's process group, and SIGKILL after
+2 s. However Chromium ends (stopped, crashed, or on its own), the host waits for the main process without reaping it,
+kills what is left of its group (the group's id is still held by the unreaped leader), reaps it, lets the pipe's last
+messages through for up to 1 s, and sends `{"ev":"exited","code":N|null,"signal":N|null}`. The next `start` is a fresh
+Chromium through the same host.
+
+**The hub goes.** EOF on fd 3 (the hub ended, or restarted: an inherited fd cannot be handed over again), or a reset
+(the hub closed its end with the host's last lines unread), stops Chromium as
+`stop` does, and the host exits 0, so no Chromium is left behind.
+
+**Stderr.** Chromium's stderr lines go out as `{"ev":"stderr","line":S}`, at most one a second (the others are only in the
+tail), and the last 16 KiB are kept in `D/stderr.tail` across starts.
+
+There is no async runtime: the main thread reads the hub, and each start has a writer, a reader, a stderr reader and a
+waiter thread. The main thread is the one that forks, so Chromium's death signal fires when the host ends.
+
+Tests: `browser::host` unit tests run the host on a thread against `tests/data/fake-chromium.sh`, a stand-in that
+speaks the pipe and echoes every command as its reply. It records its argv, its environment and every call in its
+dir, and answers `Target.attachToBrowserTarget` and `Target.detachFromTarget` as Chromium would. On `Fake.attach` it
+sends a paused child target, on `Fake.crash` it dies by SIGKILL, and on `Fake.stubborn` it ignores SIGTERM and the
+pipe's end. `tests/browser_sandboxed.rs` (`#[ignore]`, the
+VM) starts the host under a real bwrap launch with the stand-in.

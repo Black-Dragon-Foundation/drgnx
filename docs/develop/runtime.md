@@ -49,6 +49,7 @@ runtime/
 | `sleipnir` | the runner: the Linux machine probe and runner contract, the reservation files two schedulers share, the executor; its `linux` and `sync` features are blocking, never tokio, so jobq takes them ([sleipnir.md](sleipnir.md)) |
 | `vegvisir` | the Work space's map core: its model (items in six layers, edges, chains, overlaps, needs-you) and its layout, stepped by typed events with effects out; pure, `serde` only ([work-space.md](work-space.md)) |
 | `skuld` | test support, never shipped: every order of a pure core, and the one real-time wait Rust tests may use ([below](#every-order-skuld)); crates name it under `[dev-dependencies]` only |
+| `heimdall` | the CDP broker's pure part: envelope parsing over `serde_json`'s `RawValue` (params never re-encoded), routing one browser connection between the agent and the hub by session owner, the refusal list, downloads, cleanup when the agent goes, and the pipe's NUL and frame codecs; no I/O, std and serde only, built for Android too ([hub.md](hub.md#the-cdp-broker)) |
 | `domr` (formerly `drgnx-conformance`; lives in `runtime/conformance/`) | the conformance harness (this page) |
 
 The protocol is still called "the hub protocol", and the socket, cap and lock files keep their `hub-HASH.*` names.
@@ -76,7 +77,7 @@ Android stance. Rust's Android target is `target_os = "android"`, not `"linux"`,
 bwrap) `target_os = "linux"` alone with the Android stance (a stub, or "unsupported") in a comment. Every `cfg` chain
 ends in a fallback that returns `None` or `Unsupported`, never a missing item. Platform code sits in one module or
 function per crate. The type-check (`rustup target add aarch64-linux-android` first) is
-`cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p drgnx-ratatoskr`.
+`cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p heimdall -p drgnx-ratatoskr`.
 `drgnx-ratatoskr` depends on `urdr`, whose bundled SQLite is C, and compiling C for Android needs the NDK. A type-check
 does not link, so without the NDK stub the C compiler and archiver: `CC_aarch64_linux_android=/usr/bin/true
 AR_aarch64_linux_android=/usr/bin/true` (the Rust is still checked in full; only the C object files are fake).
@@ -600,8 +601,13 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 **Tags** (`requires`): `v1` (hello v1: every row), `sudo` (euid 0, or `sudo -n true` succeeds), `test-hooks` (the
 binary's `version --json` says `"test_hooks": true`), `linux`, `macos`, `perf`, `agent-locks`, `podman` (`podman` is on
 the PATH; an excused skip otherwise), `real-sandbox` (the binary has **no** test hooks and its `sandbox check --json`
-says `ok`; an excused skip otherwise, with the reason: [the real-start rows](#the-real-start-rows)). A tag that is not in
-this list is a parse error naming it. A row whose requirement is missing is skipped.
+says `ok`; an excused skip otherwise, with the reason: [the real-start rows](#the-real-start-rows)), `chromium` (the hub
+gives sessions a browser here: its `sandbox check` reports Landlock ABI 9 or later, and `browser list --json` resolves a
+Chromium), `playwright-mcp` (`node` on the PATH and Playwright MCP in `/opt/pw-mcp`, as the browser test image has them),
+`internet` (the row reaches the outside network; it runs only with `DRGNX_TEST_INTERNET=1`). `chromium` and
+`playwright-mcp` are excused skips where they are missing, except with `DRGNX_TEST_REAL_BROWSER=1` in domr's
+environment: real browsers were asked for, so a missing one fails `--require-all`. A tag that is not in this list is a
+parse error naming it. A row whose requirement is missing is skipped.
 
 **Known reds** (`"pending": "REASON"` in the header, REASON naming the task that turns it green): the row runs, and a
 failure is listed as `PENDING` and counted apart (`N pending` in the summary), never as a failure; a row that passes
@@ -657,6 +663,14 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
   `_claude/rateLimit`), codex (same set; logs `-c` overrides of argv; forks at a turn; `usage_update` and
   `_codex/rateLimits`), gemini (`loadSession` only; the rest answers -32601). `--refuse-mode MODE` refuses `session/set_mode` to MODE (a lock that does not hold; the `agent-locks` rows); other modes are accepted. `--log` is JSONL; `--llm URL` POSTs
   to a `ratatoskr-mock llm` once per turn, so its log counts requests.
+- `http-serve PORT TEXT` prints `MOCK-HTTP-PORT N` and serves on 127.0.0.1:PORT (0: any free port) a page whose title
+  and text are TEXT, and `/download`, TEXT as an attachment: an agent's dev server inside its sandbox, or a site on the
+  host's loopback.
+- `cdp-drive URL…` is an outside agent's browser tool: it runs Playwright MCP (`node
+  /opt/pw-mcp/node_modules/@playwright/mcp/cli.js`, the browser test image's) over stdio with its own environment, so
+  Playwright reaches the browser that `PLAYWRIGHT_MCP_CDP_ENDPOINT` names (never in an argv), and for each URL calls
+  `browser_navigate` and `browser_snapshot` and prints `TITLE <the page's title>` or `ERROR <url>: <why>`; it exits 1
+  when any failed.
 - `llm --script FILE [--log FILE] [--tls CA_FILE] [--parent PID]` prints `MOCK-LLM-PORT N` and serves a scripted
   provider on 127.0.0.1 (a port of `test/fixtures/mock-llm.el`). With `--tls` it makes a certificate authority and a
   leaf for `localhost` and 127.0.0.1 at start (`rcgen`), writes the CA's certificate (no key) to CA_FILE, prints
@@ -806,6 +820,31 @@ excused skips that name the reason.
 | Row | Proves |
 |---|---|
 | `an-agent-starts-sandboxed` | the editor's shape (a project cwd, no task) through `launch::spawn_chat`, Gleipnir's validation and the sandbox: the mock agent is a link in `~/.local/bin` to a versioned install under `~/.local/share/claude/versions` (Claude's own layout), so the [toolchain roots](gleipnir.md#toolchain-roots) must be bound for it to exec; it answers a prompt, cannot write the home, `agents/get` says `enforced: true`, and `agents/stop` leaves no process and no session dir |
+| `the-agent-drives-its-browser` | (also `chromium`, `playwright-mcp`: Landlock ABI 9, the browser test image) the agent browser as a user gets it: under Autonomous the agent runs `ratatoskr-mock cdp-drive` with the endpoint from its environment and reaches its own `http-serve` on local port 5173 inside the sandbox; a server on the host's loopback, as `host.drgnx.internal:PORT`, is refused with one `browser.private` card offering `session`; settled `session`, the retry reaches it and a second retry makes no card; `agents/stop` leaves no Chromium, no session dir and no `drgnx-session-SID` scope |
+| `no-browser-below-abi9` | [OD1](hub.md#the-cdp-broker): a session whose host cannot give it a browser starts without one: a notice with the fix, `browser_why` in `agents/get`, no endpoint variable in the agent's environment. Below ABI 9 the kernel is the reason; on ABI 9 the row's setting names a missing program, so it holds on every kernel |
+| `local-network-access-smoke` | (also `internet`: the gate only, once) Playwright opens `http://example.com/` through the web proxy under Autonomous; whether Chromium's Local Network Access blocked the proxied fetch is in the agent's `drive.out` (a block is a deferred item, not a red) |
+
+A chat's project cwd is read-only to the session, so the rows' agent writes what they read back (`endpoint.out`,
+`drive*.out`) in its scratch dir, `$TMPDIR/drgnx-scratch-UID/SID` of the hub's `TMPDIR`, and Playwright MCP's
+snapshots go to a temp dir `cdp-drive` removes. CI's sandbox lane (`escape-host` in `runtime.yml`) runs these on its runner: the first and the third run there (bwrap,
+user namespaces, a kernel below ABI 9), the browser rows are excused skips. The Fedora VM runs all four at the gate.
+
+### The real browser tests
+
+`drgnx-ratatoskr/tests/browser_real.rs` (`test-hooks`) runs the CDP broker against real browsers, one test per kind:
+Fedora's `chromium-headless` (the headless shell) and the full `chromium`. Each starts `ratatoskr browser-host
+--unconfined` with the real program, a broker over it, and `ratatoskr-mock cdp-drive` as the agent, which navigates a
+`data:` page and an `http-serve` page; a raw CDP client of the test then checks that `Target.exposeDevToolsProtocol` is
+refused, that a download lands in the browser's own `downloads/` with its `Browser.downloadProgress` event and the
+broker's `Download`, and that a page the agent left paused (`waitForDebuggerOnStart`) loads once the agent's websocket
+closes. It prints whether the hub's `Target.attachToBrowserTarget` worked on that Chromium, or the fallback ran.
+
+It runs only with `DRGNX_TEST_REAL_BROWSER=1`, in the browser test image (`test/container/browser/Containerfile`: the
+image the Rust tests run in, plus Chromium, Node and Playwright MCP pinned in `/opt/pw-mcp`), with `ratatoskr-mock`
+built beside `ratatoskr`; with the variable set, a missing browser, Node or Playwright MCP fails the test.
+`DRGNX_TEST_RECORD_DIR=DIR` writes the browser side of each run to `DIR/real-KIND.jsonl`, which `heimdall`'s tests read
+from its `tests/data`. No page comes from the network: `http-serve` serves them on loopback, which Chromium reaches
+without its proxy.
 
 ### The perf rows
 
@@ -1182,6 +1221,7 @@ runs each binary as `cargo fuzz run` does (`-artifact_prefix=runtime/fuzz/artifa
 | `request_prelude` | a line through `dispatch::prelude` (steps 1 to 5, no handler) for every class and several protocol states |
 | `hello` | hello params decoded from arbitrary JSON, then `hello()` against a fixed cap: as given, with the correct proof, on a main and on an agent socket, and a second hello |
 | `connect_head` | bytes as a proxy request head: the blank-line search, the exactly-`CONNECT target HTTP/1.x` line, then `parse_target` on the target (gleipnir's `fuzzing` feature exposes the entry point) |
+| `absolute_head` | bytes as a web proxy's plain-HTTP head: the blank-line search, the absolute-form line and headers, `parse_target`, then the rewritten head, which must have one blank line (at its end), no bare CR or LF, and end in `Connection: close` |
 | `host_target` | text through `parse_target`; a success must `Display` back to a string that parses to the same target |
 | `sbpl_quote` | text through `sbpl::quote`; a success must read back through `sbpl::sexp` as one string equal to the input |
 | `bwrap_version` | text as `bwrap --version` output through `parse_version` and `version_at_floor` |
@@ -1204,11 +1244,14 @@ runs each binary as `cargo fuzz run` does (`-artifact_prefix=runtime/fuzz/artifa
 | `saga_plan` | text through `saga::plan::parse` and `render`: the output equals the input |
 | `saga_deferred` | the same through `saga::deferred` |
 | `saga_org` | the same through `saga::org` (`board.org`) |
+| `cdp_envelope` | bytes as one browser connection through heimdall: NUL-split under a limit the first byte picks, each message's first byte choosing the agent, the browser or the agent's close; every envelope parses or is refused without a panic, whatever goes to the browser is a command with an id and no NUL, and no refused method from the agent reaches it; the same bytes through the frame decoder whole and in two pieces give the same frames |
 
 The seed corpus in `fuzz/corpus/<target>/` is the request lines of the conformance rows (phase 1; for `mcp_message` and
 `jsonrpc_parse` the JSON-RPC lines the `mcp/*` and `bridge/*` rows send), the unit tables (gleipnir's targets) and, for
 the gateway's targets, the SSE fixtures (`test/fixtures/sse`) and a few hand-made heads and bodies; for `huginn_read`
-it is huginn's hand corpus (`test/fixtures/huginn/corpus/`, copied as `accept-NAME` and `refuse-NAME`). The
+it is huginn's hand corpus (`test/fixtures/huginn/corpus/`, copied as `accept-NAME` and `refuse-NAME`); for
+`cdp_envelope` it is heimdall's transcripts (`crates/heimdall/tests/data/*.jsonl`, one seed each: `0` agent, `1`
+browser, `2` close before each message, NUL after). The
 bridge's `classify`, `id_in_prefix` and `read_bounded` are private to `mimir::bridge`; mimir's `fuzzing` feature
 exposes them through `bridge::fuzzing` for `bridge_line` (seeds: the `mcp_message` corpus behind a limit byte). A run adds files to the
 corpus directory, so run on a scratch copy and keep the repository's seeds as they are.

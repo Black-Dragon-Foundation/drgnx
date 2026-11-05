@@ -112,6 +112,7 @@ params! {
     Hello(hub::HelloParams),
     Ping(Empty),
     Status(Empty),
+    BrowserCheck(Empty),
     Restart(Empty),
     Shutdown(Empty),
     Subscribe(Empty),

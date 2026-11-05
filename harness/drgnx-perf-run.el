@@ -182,7 +182,7 @@ for agents, the Live view open, and the session functions it uses."
       (defvar drgnx-perf--live-sent 0 "How many messages the mock had received when it sent the last frame.")
       (setq drgnx-perf--live-sent 0)
       (defvar drgnx-perf--live-drawn 0 "Frames drawn when the typing began.")
-      (defvar drgnx-perf--jobs-get nil "The real `drgnx-exec-get'.")
+      (defvar drgnx-perf--live-endpoint nil "The mock browser's endpoint (:port :ws).")
       (defun drgnx-perf--live-make-jpeg (width)
         "A real JPEG WIDTH pixels wide, as Chrome sends at the view's maxWidth (ImageMagick's built-in logo, a
 1280×800 page scaled); without ImageMagick nil: the frames are then a few bytes no decoder accepts, cheaper to draw."
@@ -192,10 +192,8 @@ for agents, the Live view open, and the session functions it uses."
             (and (eq 0 (call-process magick nil t nil "logo:" "-resize" (format "%dx%d!" width (round (* width 0.625))) "jpeg:-"))
                  (base64-encode-string (buffer-string) t)))))
       (setq drgnx-perf--live-jpeg nil)
-      (setq drgnx-perf--jobs-get (symbol-function 'drgnx-exec-get))
-      (fset 'drgnx-exec-get (lambda (id) (if (equal id "job-perf-live") (list :id id :status 'running) (funcall drgnx-perf--jobs-get id))))
       (let ((port (drgnx-mock-cdp-start)))
-        (setq drgnx-live--browser (list :port port :ws (format "ws://127.0.0.1:%d/devtools/browser/mock" port) :job "job-perf-live")))
+        (setq drgnx-perf--live-endpoint (list :port port :ws (format "ws://127.0.0.1:%d/devtools/browser/mock" port))))
       (defun drgnx-perf--live-view () (get-buffer drgnx-live-buffer-name))
       (defun drgnx-perf--live-frame ()
         "A frame, once the last one was acknowledged (as Chrome sends them)."
@@ -227,6 +225,7 @@ for agents, the Live view open, and the session functions it uses."
         (let* ((editor (selected-window)) (file (window-buffer editor)))
           (unless (drgnx-perf--live-view)
             (drgnx-live-view)
+            (drgnx-live--open (drgnx-perf--live-view) drgnx-perf--live-endpoint)   ; the product's view is dormant: the frozen client, on the mock
             (drgnx-mock-cdp-wait (lambda () (drgnx-mock-cdp-received "Page.startScreencast")) 10))
           (set-window-buffer editor file)               ; the view may have taken the file's window
           (unless (get-buffer-window (drgnx-perf--live-view))
@@ -244,8 +243,7 @@ for agents, the Live view open, and the session functions it uses."
           (when-let* ((w (get-buffer-window v))) (ignore-errors (delete-window w)))
           (kill-buffer v))
         (drgnx-mock-cdp-stop)
-        (setq drgnx-live--browser nil)
-        (fset 'drgnx-exec-get drgnx-perf--jobs-get))
+        (setq drgnx-perf--live-endpoint nil))
       t)))
 
 (defun drgnx-perf-run--agent-settings-setup-form ()

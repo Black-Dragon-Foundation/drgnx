@@ -216,6 +216,7 @@ mod tests {
             layers: Layers::for_target(Target::Macos),
             extra_tcp_ports: vec![],
             trace: Default::default(),
+            browser: None,
         };
         (top, spec)
     }

@@ -33,12 +33,12 @@ pub use backend::TestHooks;
 pub use backend::{BackendKind, Invocation, Prepared, Sandbox};
 pub use bwrap::InnerCommand;
 pub use inner::{LayersReport, read_status};
-pub use landlock::Tier;
+pub use landlock::{BrowserInputs, Tier, browser_plan};
 pub use validate::{Context, Refusal, Rule, validate};
 
 pub use spec::{
-    BASE_ENV_DENY, Bind, HELPER_INSIDE, LANDLOCK_ABI_MAX, LANDLOCK_FLOOR_FULL,
-    LANDLOCK_FLOOR_REDUCED, LANDLOCK_FLOOR_SHARED_NET, Layers, Mode, Net, RESERVED_DESTS,
-    RelayPort, SECRET_DIRS, SECRET_DIRS_MACOS, SYSTEM_CLOSED, Spec, TRACE_INSIDE, Target, Trace,
-    ValidSpec,
+    BASE_ENV_DENY, BROWSER_DIR_FULL, Bind, HELPER_INSIDE, LANDLOCK_ABI_MAX, LANDLOCK_FLOOR_BROWSER,
+    LANDLOCK_FLOOR_FULL, LANDLOCK_FLOOR_REDUCED, LANDLOCK_FLOOR_SHARED_NET, Layers, Mode, Net,
+    RESERVED_DESTS, RelayPort, SECRET_DIRS, SECRET_DIRS_MACOS, SYSTEM_CLOSED, Spec, SpecBrowser,
+    TRACE_INSIDE, Target, Trace, ValidSpec,
 };

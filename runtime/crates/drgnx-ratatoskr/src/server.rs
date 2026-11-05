@@ -204,6 +204,17 @@ pub async fn run(args: ServeArgs) -> Exit {
         Some(graph),
     ));
     front.tool_hub.bind(&front);
+    // what the browser sessions' web proxies never reach: the host's addresses and the hub's loopback ports, kept
+    // live from now on (the gateway's port is added once it listens)
+    front
+        .browser_nevers
+        .start(crate::browser::nevers::emacs_server_dirs(
+            &home,
+            env.vars
+                .get("XDG_CONFIG_HOME")
+                .map(Path::new)
+                .filter(|p| p.is_absolute()),
+        ));
     let _ = front.dirs.set(crate::graph::StoreDirs {
         home,
         config: paths::config_dir(&env),
@@ -279,6 +290,9 @@ pub async fn run(args: ServeArgs) -> Exit {
     front.gate.open_store(runtime.clone());
     match front.gate.listen(gateway_port).await {
         Ok(events) => {
+            if let Some(port) = front.gate.port() {
+                front.browser_nevers.never.hold(port);
+            }
             front.gate.restore(&front.mcp).await;
             crate::clock::spawn("gateway:events", gateway::run_events(events, front.clone()));
             crate::clock::spawn("gateway:watch", gateway::watch(front.clone()));

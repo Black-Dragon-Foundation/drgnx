@@ -713,6 +713,8 @@ pub struct Session {
     provider: Option<String>,
     enforced: bool,
     enforced_why: Option<String>,
+    /// Why its `browser` cell allows the browser but it has none (OD1 (b)).
+    browser_why: Option<String>,
     capabilities: Option<Value>,
     conn: Conn,
     acp: SessionId,
@@ -802,8 +804,9 @@ struct Launched {
     enforced_why: Option<String>,
     /// The token of the gateway registration this launch made (a gateway profile).
     gateway: Option<String>,
-    /// Its provider proxy, bound before the spawn.
+    /// Its provider proxy, bound before the spawn (and its browser's web proxy and CDP broker).
     net: Option<super::net::SessionNet>,
+    browser_why: Option<String>,
 }
 
 /// Where a path may be read or written: inside the session's directory; a brainstorm writes its document only, and a
@@ -901,6 +904,15 @@ pub(super) struct Prepared {
     gateway: Option<String>,
     /// How its shell steps' opens are seen (`work::trace`).
     trace: crate::work::trace::TraceMode,
+    browser: BrowserLaunch,
+}
+
+/// What a session's browser came to at its launch: the hub's side of it (the session has one), or why it has none
+/// though its `browser` cell allows it (OD1 (b)).
+#[derive(Default)]
+pub(super) struct BrowserLaunch {
+    hub: Option<super::net::BrowserHub>,
+    why: Option<String>,
 }
 
 /// How PROFILE's sessions are traced: by its CLI's kind and `agents-trace-opens`; never on macOS (a test hub takes
@@ -969,26 +981,33 @@ fn project_read_allowed(kind: launch::Kind, eff: &norn::matrix::Effective) -> Re
     Ok(())
 }
 
+/// What a launch is ready to spawn: the process, the helper's status pipe, why it is unsandboxed (a test launch),
+/// and its browser.
+type Spawn = (
+    draugr::Spec,
+    Option<std::os::fd::OwnedFd>,
+    Option<&'static str>,
+    BrowserLaunch,
+);
+
 /// The launch of a test session: the plan's command, unsandboxed, with a short allowlisted environment.  Only tests
 /// and `test-hooks` builds have it (the mock agent lives outside any sandbox's reach); a shipped build always goes
-/// through `launch::spawn` and Gleipnir.
+/// through `launch::spawn` and Gleipnir.  It has no browser host: with `DRGNX_TEST_BROWSER` set and a `browser` cell
+/// that is not Never, the hub's side of the browser starts anyway (the web proxy, the broker with the far end of its
+/// socketpair held), so the rows reach it.
 #[cfg(any(test, feature = "test-hooks"))]
+#[allow(clippy::too_many_arguments)]
 async fn spawn_spec(
-    shell: &crate::shell_env::ShellEnv,
+    front: &Front,
     p: &AgentProfile,
     plan: &plock::LaunchPlan,
     _: &Path,
     cwd: &Path,
     sid: &str,
     _: Role,
-) -> Result<
-    (
-        draugr::Spec,
-        Option<std::os::fd::OwnedFd>,
-        Option<&'static str>,
-    ),
-    Error,
-> {
+    cell: norn::matrix::Verdict,
+) -> Result<Spawn, Error> {
+    let shell = &front.shell_env;
     let (prog, args) = plan
         .argv
         .split_first()
@@ -1030,33 +1049,45 @@ async fn spawn_spec(
         pass_fds: Vec::new(),
         new_session: false,
     };
-    Ok((spec, None, Some("a test launch: unsandboxed")))
+    let mut browser = BrowserLaunch::default();
+    if cell != norn::matrix::Verdict::Never && std::env::var_os("DRGNX_TEST_BROWSER").is_some() {
+        let (hub, far) = std::os::unix::net::UnixStream::pair()
+            .map_err(|e| internal(format!("the browser's socketpair: {e}")))?;
+        let secret = crate::browser::Secret::new()
+            .map_err(|e| internal(format!("the browser's secret: {e}")))?;
+        browser.hub = Some(super::net::BrowserHub {
+            hub,
+            secret,
+            unit: None,
+            held: Some(far),
+        });
+    }
+    Ok((spec, None, Some("a test launch: unsandboxed"), browser))
 }
 
 /// The sandboxed launch (`launch::kind`): a worktree session writes its worktree only; a chat in its own scratch
 /// directory (`launch::scratch_dir`) is the plain one; a chat in a project reads the project and writes its scratch
-/// directory only.  The network is the provider's alone: `Open` is never granted here.
+/// directory only.  The network is the provider's alone: `Open` is never granted here.  With the browser
+/// ([`browser_shape`]) the launch holds the hub's end of its socketpair, and where a user systemd answers, the
+/// sandbox runs in a scope of its own with the session's memory cap (`exec::unit::session_scope`).
 #[cfg(not(any(test, feature = "test-hooks")))]
+#[allow(clippy::too_many_arguments)]
 async fn spawn_spec(
-    shell: &crate::shell_env::ShellEnv,
+    front: &Front,
     _: &AgentProfile,
     plan: &plock::LaunchPlan,
     scratch: &Path,
     cwd: &Path,
     sid: &str,
     role: Role,
-) -> Result<
-    (
-        draugr::Spec,
-        Option<std::os::fd::OwnedFd>,
-        Option<&'static str>,
-    ),
-    Error,
-> {
-    let env = shell.paths_env();
+    cell: norn::matrix::Verdict,
+) -> Result<Spawn, Error> {
+    let env = front.shell_env.paths_env();
+    let (shape, why) = browser_shape(front, cell).await;
+    let secret = shape.as_ref().map(|s| s.secret.clone());
     let launched = match launch::kind(role, cwd, scratch) {
-        launch::Kind::Plain => launch::spawn_plain(&env, plan, sid).await,
-        launch::Kind::Chat => launch::spawn_chat(&env, plan, sid, cwd).await,
+        launch::Kind::Plain => launch::spawn_plain(&env, plan, sid, shape).await,
+        launch::Kind::Chat => launch::spawn_chat(&env, plan, sid, cwd, shape).await,
         launch::Kind::Worktree => {
             launch::spawn(
                 &env,
@@ -1068,17 +1099,93 @@ async fn spawn_spec(
                     net: SESSION_NET,
                     role,
                 },
+                shape,
             )
             .await
         }
     }
     .map_err(|r| refuse(&format!("the sandbox refused the launch: {}", r.message)))?;
-    Ok((launched.spec, launched.status, None))
+    let mut spec = launched.spec;
+    let mut browser = BrowserLaunch { hub: None, why };
+    if let (Some(hub), Some(secret)) = (launched.browser, secret) {
+        let unit =
+            crate::exec::unit::systemd_user().then(|| crate::exec::unit::session_unit_name(sid));
+        if unit.is_some() {
+            let memory = front
+                .settings
+                .current()
+                .loaded
+                .values
+                .agents_session_memory
+                .clone();
+            spec = crate::exec::unit::session_scope(spec, sid, &memory);
+        }
+        browser.hub = Some(super::net::BrowserHub {
+            hub,
+            secret,
+            unit,
+            held: None,
+        });
+    }
+    Ok((spec, launched.status, None, browser))
+}
+
+/// The browser a sandboxed session gets under its `browser` cell CELL (`sandbox::browser_for`): the sandbox the
+/// launch takes, the kernel's Landlock ABI, the program `browser::resolve` finds (read on a blocking thread: the
+/// setting's program is asked its version), the local ports, the message cap and a fresh secret.  Otherwise none, and
+/// for a cell that allows it, why (with the hub's notice, once per reason per hub run).
+#[cfg(not(any(test, feature = "test-hooks")))]
+async fn browser_shape(
+    front: &Front,
+    cell: norn::matrix::Verdict,
+) -> (Option<crate::sandbox::BrowserShape>, Option<String>) {
+    if cell == norn::matrix::Verdict::Never {
+        return (None, None);
+    }
+    let backend = launch::detect().await.ok().map(|s| s.kind());
+    let cur = front.settings.current();
+    let data = runstav::paths::data_dir(&runstav::paths::Env::process());
+    let looked = cur.clone();
+    let found = tokio::task::spawn_blocking(move || {
+        crate::browser::resolve::resolve(&looked.loaded.values, &data)
+    })
+    .await
+    .unwrap_or_else(|e| {
+        Err(crate::browser::resolve::NotFound {
+            fix: format!("the browser lookup failed: {e}"),
+        })
+    });
+    let secret = match crate::browser::Secret::new() {
+        Ok(s) => s,
+        Err(e) => {
+            return (
+                None,
+                Some(format!("no random bytes for the CDP secret: {e}")),
+            );
+        }
+    };
+    let v = &cur.loaded.values;
+    match crate::sandbox::browser_for(
+        cell,
+        backend,
+        gleipnir::landlock::kernel_abi(),
+        found,
+        v.agents_browser_local_ports.clone(),
+        v.agents_browser_max_message,
+        secret,
+    ) {
+        Ok(shape) => (shape, None),
+        Err(n) => {
+            super::net::no_browser_notice(front, &n);
+            (None, Some(format!("{}; fix: {}", n.why, n.fix)))
+        }
+    }
 }
 
 /// The variables an editor module asked to add to a new session's environment (`agents/start`'s `env`).  A name must be
 /// on `drgnx-agents-start-env-names` and must not look like a credential or be a provider's key variable, whatever
-/// that setting lists.
+/// that setting lists.  The browser's endpoint names (`browser::ENDPOINT_ENV`) are the hub's alone: an editor's value
+/// is dropped for every session (the log names the name, never the value).
 fn module_env(front: &Front, env: Option<&[EnvVar]>) -> Result<Vec<(String, String)>, Error> {
     let Some(env) = env.filter(|e| !e.is_empty()) else {
         return Ok(Vec::new());
@@ -1089,6 +1196,13 @@ fn module_env(front: &Front, env: Option<&[EnvVar]>) -> Result<Vec<(String, Stri
     let mut out = Vec::with_capacity(env.len());
     for (i, var) in env.iter().enumerate() {
         let name = var.name.as_str();
+        if crate::browser::ENDPOINT_ENV.contains(&name) {
+            tracing::info!(
+                name,
+                "an editor's value for {name} is dropped: the hub sets it"
+            );
+            continue;
+        }
         if refused_env_name(name) || key_envs.iter().any(|k| k == name) {
             return Err(invalid(
                 &format!("env[{i}].name"),
@@ -1213,8 +1327,10 @@ pub(super) async fn prepare(
     }
     let scratch = launch::scratch_dir(&runstav::paths::Env::process(), sid).unwrap_or_default();
     project_read_allowed(launch::kind(role, cwd, &scratch), &eff)?;
-    let (spec, status, unsandboxed) =
-        spawn_spec(&front.shell_env, profile, &plan, &scratch, cwd, sid, role).await?;
+    // the `browser` cell decides whether the session gets the browser (Allow or Ask: at first use, the broker asks)
+    let cell = eff.cell(Action::Browser).verdict;
+    let (spec, status, unsandboxed, browser) =
+        spawn_spec(front, profile, &plan, &scratch, cwd, sid, role, cell).await?;
     Ok(Prepared {
         spec,
         status,
@@ -1223,6 +1339,7 @@ pub(super) async fn prepare(
         plan,
         gateway,
         trace,
+        browser,
     })
 }
 
@@ -1539,9 +1656,18 @@ async fn launch(
         }
     };
     // the provider proxy the spec's relay reaches, bound before the spawn; a start that fails below drops it, and its
-    // socket with it
-    let net = super::net::start_session(front, profile, sid, SESSION_NET)
+    // socket with it.  So are the browser's web proxy and CDP broker, for a session with the browser
+    let mut net = super::net::start_session(front, profile, sid, SESSION_NET)
         .map_err(|e| internal(format!("the session's provider proxy: {e}")))?;
+    let with_browser = prep.browser.hub.is_some();
+    if let Some(hub) = prep.browser.hub {
+        let n = net
+            .as_mut()
+            .ok_or_else(|| internal("a session with the browser needs its network"))?;
+        super::net::start_browser(front, n, sid, who_of(role, profile), hub)
+            .await
+            .map_err(|e| internal(format!("the session's browser: {e}")))?;
+    }
     // the trace supervisor's socket, served before the spawn too (a traced session); an untraced one labels its steps
     let env = runstav::paths::Env::process();
     let run = runstav::paths::make_session_dir(&env, &runstav::paths::socket_path(&env), sid)
@@ -1556,11 +1682,17 @@ async fn launch(
         .map_err(|e| internal(e.to_string()))?;
     let kill = || draugr::kill_group(conn.pid(), Duration::ZERO, &draugr::RealSignaller);
     // The sandbox helper reports on a pipe; a launch whose status is not read hangs (Task 10).  A start that fails
-    // before the helper speaks says why on stderr (bwrap's own message).
+    // before the helper speaks says why on stderr (bwrap's own message).  With the browser, the line must say its
+    // host is layered and ready.
     if let Some(fd) = prep.status {
         let stderr = conn.stderr();
         let read = crate::clock::blocking(move || {
-            gleipnir::read_status(fd, &|| stderr.get(), Duration::from_secs(20))
+            gleipnir::inner::read_status_for(
+                fd,
+                &|| stderr.get(),
+                Duration::from_secs(20),
+                with_browser,
+            )
         })
         .await;
         match read {
@@ -1637,6 +1769,7 @@ async fn launch(
             enforced_why: prep.enforced_why,
             gateway: prep.gateway,
             net,
+            browser_why: prep.browser.why,
         },
         rx,
     ))
@@ -1718,6 +1851,7 @@ fn assemble(
         provider: profile.ai.clone(),
         enforced: l.enforced,
         enforced_why: l.enforced_why,
+        browser_why: l.browser_why,
         capabilities: l.caps,
         conn: l.conn,
         acp: l.acp,
@@ -2736,6 +2870,7 @@ impl Session {
             turns: Some(st.turns),
             enforced: Some(self.enforced),
             enforced_why: self.enforced_why.clone(),
+            browser_why: self.browser_why.clone(),
             role: Some(self.role),
             provider: self.provider.clone(),
             parent: self.parent.clone(),
@@ -4157,6 +4292,51 @@ mod tests {
         )
         .await;
         assert_eq!(*log.lock().unwrap(), ["rekey", "prompt"]);
+    }
+
+    #[tokio::test]
+    async fn editor_endpoint_is_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = Front::new(
+            runstav::proof::Cap::generate().unwrap(),
+            dir.path().join("hub-x.sock"),
+            crate::store::WorkDb::spawn(dir.path().join("work.db")).unwrap(),
+            norn::store::CoordDb::spawn(dir.path().join("work.db")),
+        );
+        let fr = &f;
+        let names = move |list: Value| async move {
+            fr.settings
+                .set_overrides(
+                    None,
+                    vec![crate::settings::overrides::Override {
+                        name: "drgnx-agents-start-env-names".into(),
+                        value: list,
+                        source: "test".into(),
+                    }],
+                )
+                .await
+                .unwrap();
+        };
+        let vars = |v: Value| -> Vec<EnvVar> { serde_json::from_value(v).unwrap() };
+        // listed or not, the endpoint's two names are the hub's: an editor's values are dropped, the rest goes on
+        names(json!([
+            "PLAYWRIGHT_MCP_CDP_ENDPOINT",
+            "DRGNX_BROWSER_CDP",
+            "FOO"
+        ]))
+        .await;
+        let env = vars(json!([
+            {"name": "PLAYWRIGHT_MCP_CDP_ENDPOINT", "value": "ws://127.0.0.1:1/devtools/browser/x"},
+            {"name": "DRGNX_BROWSER_CDP", "value": "ws://elsewhere"},
+            {"name": "FOO", "value": "1"}
+        ]));
+        assert_eq!(
+            module_env(&f, Some(env.as_slice())).unwrap(),
+            [("FOO".to_string(), "1".to_string())]
+        );
+        names(json!([])).await;
+        let env = vars(json!([{"name": "DRGNX_BROWSER_CDP", "value": "ws://elsewhere"}]));
+        assert!(module_env(&f, Some(env.as_slice())).unwrap().is_empty());
     }
 
     #[test]

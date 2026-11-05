@@ -8,9 +8,9 @@ license.workspace = true
 publish = false
 
 # Normal dependencies, not dev ones: the whole crate is test tooling. It never turns on gleipnir's `test-hooks`
-# (docs/develop/gleipnir.md, "Proving it").
+# (docs/develop/gleipnir.md, "Proving it"); `escape-fixture` only exposes the proxy's upstream connector.
 [dependencies]
-gleipnir = { path = "../gleipnir", version = "0.1.0" }
+gleipnir = { path = "../gleipnir", version = "0.1.0", features = ["escape-fixture"] }
 draugr = { path = "../draugr", version = "0.1.0" }
 serde.workspace = true
 serde_json.workspace = true

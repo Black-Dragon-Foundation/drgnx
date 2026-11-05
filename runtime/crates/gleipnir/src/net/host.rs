@@ -211,9 +211,96 @@ fn public_v6(a: Ipv6Addr) -> bool {
     !not_public
 }
 
+/// An address as the web policy judges it: plain, or an IPv6 address that carries an IPv4 one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Embedded {
+    /// IPv4, or IPv6 that carries no IPv4 address (`::` and `::1` among them).
+    Plain(IpAddr),
+    /// `outer` carries `v4`: IPv4-mapped `::ffff:0:0/96`, IPv4-compatible `::/96`, NAT64 `64:ff9b::/96` and
+    /// `64:ff9b:1::/48` (the last 32 bits), 6to4 `2002::/16` (the 32 bits after the prefix) or Teredo `2001::/32`
+    /// (the client's address, the last 32 bits inverted).
+    Wrapped { outer: Ipv6Addr, v4: Ipv4Addr },
+}
+
+/// `ip` with the IPv4 address it carries, if it carries one.
+pub fn unwrap_embedded(ip: IpAddr) -> Embedded {
+    let IpAddr::V6(a) = ip else {
+        return Embedded::Plain(ip);
+    };
+    let w = a.segments();
+    let v4 = |hi: u16, lo: u16| Ipv4Addr::from((u32::from(hi) << 16) | u32::from(lo));
+    let inner = if a.is_unspecified() || a.is_loopback() {
+        None
+    } else if w[..5] == [0; 5] && (w[5] == 0xffff || w[5] == 0) {
+        // mapped, compatible
+        Some(v4(w[6], w[7]))
+    } else if w[0] == 0x64 && w[1] == 0xff9b && (w[2..6] == [0; 4] || w[2] == 1) {
+        // NAT64, the well-known and the local-use prefix
+        Some(v4(w[6], w[7]))
+    } else if w[0] == 0x2002 {
+        Some(v4(w[1], w[2]))
+    } else if w[0] == 0x2001 && w[1] == 0 {
+        Some(v4(!w[6], !w[7]))
+    } else {
+        None
+    };
+    match inner {
+        Some(v4) => Embedded::Wrapped { outer: a, v4 },
+        None => Embedded::Plain(ip),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unwrap_embedded_table() {
+        let wrapped = [
+            ("::ffff:192.168.1.20", "192.168.1.20"),
+            ("::ffff:7f00:1", "127.0.0.1"),
+            ("::10.1.2.3", "10.1.2.3"),
+            ("::0.0.0.2", "0.0.0.2"),
+            ("64:ff9b::a9fe:a9fe", "169.254.169.254"),
+            ("64:ff9b:1::c0a8:114", "192.168.1.20"),
+            ("64:ff9b:1:ffff::7f00:1", "127.0.0.1"),
+            ("2002:a83f:8110::", "168.63.129.16"),
+            ("2002:c0a8:101:1::1", "192.168.1.1"),
+            // Teredo: server 65.54.227.120, client 192.0.2.45 stored inverted (RFC 4380's example)
+            ("2001:0:4136:e378:8000:63bf:3fff:fdd2", "192.0.2.45"),
+        ];
+        for (outer, inner) in wrapped {
+            assert_eq!(
+                unwrap_embedded(v6(outer)),
+                Embedded::Wrapped {
+                    outer: outer.parse().unwrap(),
+                    v4: inner.parse().unwrap()
+                },
+                "{outer}"
+            );
+        }
+        for plain in [
+            "::",
+            "::1",
+            "fe80::1",
+            "fd00:ec2::254",
+            "2606:4700::1111",
+            "64:ff9b:2::1",
+            "2001:db8::1",
+            "2001:1::1",
+            "2003::1",
+        ] {
+            assert_eq!(
+                unwrap_embedded(v6(plain)),
+                Embedded::Plain(v6(plain)),
+                "{plain}"
+            );
+        }
+        assert_eq!(
+            unwrap_embedded(v4("10.0.0.1")),
+            Embedded::Plain(v4("10.0.0.1"))
+        );
+    }
 
     fn name(n: &str, port: u16) -> Target {
         Target {

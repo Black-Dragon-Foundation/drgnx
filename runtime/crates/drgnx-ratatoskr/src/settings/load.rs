@@ -390,6 +390,28 @@ fn decode_default(name: &str, default: &RuntimeValues, values: &mut RuntimeValue
         "drgnx-search-include" => values.search_include = default.search_include.clone(),
         "drgnx-search-exclude" => values.search_exclude = default.search_exclude.clone(),
         "drgnx-search-off" => values.search_off = default.search_off,
+        "drgnx-agents-browser-program" => {
+            values.agents_browser_program = default.agents_browser_program.clone();
+        }
+        "drgnx-agents-browser-local-ports" => {
+            values.agents_browser_local_ports = default.agents_browser_local_ports.clone();
+        }
+        "drgnx-agents-browser-deny-hosts" => {
+            values.agents_browser_deny_hosts = default.agents_browser_deny_hosts.clone();
+        }
+        "drgnx-agents-browser-max-message" => {
+            values.agents_browser_max_message = default.agents_browser_max_message;
+        }
+        "drgnx-agents-browser-idle" => values.agents_browser_idle = default.agents_browser_idle,
+        "drgnx-agents-browser-once-window" => {
+            values.agents_browser_once_window = default.agents_browser_once_window;
+        }
+        "drgnx-agents-session-memory" => {
+            values.agents_session_memory = default.agents_session_memory.clone();
+        }
+        "drgnx-agents-browser-memory-high" => {
+            values.agents_browser_memory_high = default.agents_browser_memory_high;
+        }
         _ => {}
     }
 }

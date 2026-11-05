@@ -1,0 +1,25 @@
+{"note":"Playwright sets each context's download behaviour with a path in its own artifacts dir, which the browser layer cannot write"}
+{"to_browser":{"id":1073741824,"method":"Target.attachToBrowserTarget"}}
+{"browser":{"method":"Target.attachedToTarget","params":{"sessionId":"S-browser","targetInfo":{"targetId":"T-browser","type":"browser","title":"","url":"","attached":true,"canAccessOpener":false},"waitingForDebugger":false}}}
+{"drop":true}
+{"browser":{"id":1073741824,"result":{"sessionId":"S-browser"}}}
+{"drop":true}
+{"note":"the router answers it and sets its own, on the root session"}
+{"agent":{"id":5,"method":"Browser.setDownloadBehavior","params":{"behavior":"allowAndName","browserContextId":"C-1","downloadPath":"/tmp/playwright-artifacts-x","eventsEnabled":true}}}
+{"to_browser":{"id":1073741825,"method":"Browser.setDownloadBehavior","params":{"behavior":"allowAndName","browserContextId":"C-1","downloadPath":"/tmp/drgnx-browser/downloads","eventsEnabled":true}}}
+{"to_agent":{"id":5,"result":{}}}
+{"browser":{"id":1073741825,"result":{}}}
+{"drop":true}
+{"note":"the download events come on the root session, and go to the agent"}
+{"browser":{"method":"Browser.downloadWillBegin","params":{"frameId":"F-1","guid":"0c9f-41aa","url":"http://127.0.0.1:8000/r.csv","suggestedFilename":"r.csv"}}}
+{"to_agent":"same"}
+{"browser":{"method":"Browser.downloadProgress","params":{"guid":"0c9f-41aa","totalBytes":10,"receivedBytes":5,"state":"inProgress"}}}
+{"to_agent":"same"}
+{"browser":{"method":"Browser.downloadProgress","params":{"guid":"0c9f-41aa","totalBytes":10,"receivedBytes":10,"state":"completed"}}}
+{"to_agent":"same"}
+{"event":{"download":{"guid":"0c9f-41aa","path":"/tmp/drgnx-browser/downloads/0c9f-41aa"}}}
+{"note":"a guid that is not a plain name is passed on, never reported as a path"}
+{"browser":{"method":"Browser.downloadProgress","params":{"guid":"../x","totalBytes":1,"receivedBytes":1,"state":"completed"}}}
+{"to_agent":"same"}
+{"browser":{"method":"Browser.downloadProgress","params":{"guid":"0c9f-41ab","totalBytes":1,"receivedBytes":0,"state":"canceled"}}}
+{"to_agent":"same"}

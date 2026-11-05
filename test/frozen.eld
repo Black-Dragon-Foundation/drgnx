@@ -271,15 +271,6 @@
           drgnx-onboard/run-in-a-terminal-shows-its-row
           drgnx-onboard/a-limited-terminal-gets-the-recommendation)
   :keep ())
- ("test/unit/mod-live-test.el"
-  :by "2026-11-04-agent-browser-p1:100,1133-1145" :since "2026-11-04"
-  :tests (drgnx-live/agents-get-the-endpoint
-          drgnx-live/the-module-turns-off-and-stops-the-browser
-          drgnx-live/failures-say-why
-          drgnx-live/quit-while-starting-leaks-nothing
-          drgnx-live/watch-needs-websocket-before-chrome
-          drgnx-live/the-browser-runs-without-a-time-box)
-  :keep ())
  ("test/unit/hub-client-test.el"
   :by "2026-10-24-agent-system-p1:258" :since "2026-10-24"
   :tests (drgnx-hub-client/editor-traffic-over-ratatoskr)

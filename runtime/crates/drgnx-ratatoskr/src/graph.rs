@@ -1406,6 +1406,140 @@ async fn allow(w: &Writer, tools: Option<&Coord>, caller: &Caller, a: Allowed, n
     }
 }
 
+/// Whether D is the data of a browser row's matrix card that lists its choices.
+fn is_browser_card(d: &Value) -> bool {
+    d["action"]
+        .as_str()
+        .and_then(norn::matrix::Action::from_id)
+        .is_some_and(crate::matrix_gate::is_browser)
+        && d["choices"].is_array()
+}
+
+/// A browser card's (data D) CHOICE as one of the ids it lists: `allow` reads as `once` and `deny` as `refuse` (the
+/// cockpit's generic buttons, the narrowest); any other id is invalid at `choice`.
+fn check_browser_choice(choice: &str, d: &Value) -> Result<String, Error> {
+    let mapped = match choice {
+        "allow" => "once",
+        "deny" => "refuse",
+        c => c,
+    };
+    let ids: Vec<&str> = d["choices"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|c| c["id"].as_str())
+        .collect();
+    if ids.contains(&mapped) {
+        Ok(mapped.to_owned())
+    } else {
+        Err(invalid(
+            "choice",
+            format!("this card's choices are {}, not {choice:?}", ids.join(", ")),
+        ))
+    }
+}
+
+/// Browser card CARD (its data D) settled with CHOICE (checked): an allow writes, in this tx (the user's), the matrix
+/// grant its scope and width name.
+/// - The scope: `once` is the card's session for the card's `once_window` seconds, `session` the session with no end,
+///   `plan` every session of the session's plan.
+/// - What it opens: for `browser.web` a once covers only the card's first host, the others every public site; for
+///   `browser.private` the card's target, its /24 or /64 on the target's port (`…/cidr`), or every LAN and ULA
+///   address (`…/all-private`).
+///
+/// `refuse` marks the card's data `refused` (the web proxy then makes no more cards for the session). The session
+/// hears either. False when the card was not open.
+fn settle_browser(
+    tx: &mut WTx<'_>,
+    card: i64,
+    choice: &str,
+    now: f64,
+    d: &Value,
+) -> Result<bool, CoordError> {
+    use crate::matrix_gate::{DEFAULT_ONCE_WINDOW, cidr_of};
+    use gleipnir::net::policy::PrivateTarget;
+    use runstav::methods::matrix::Facts;
+    let action = d["action"].as_str().unwrap_or_default().to_owned();
+    let text = |k: &str| d[k].as_str().filter(|s| !s.is_empty()).map(str::to_owned);
+    let session = text("session");
+    let grant = if choice == "refuse" {
+        None
+    } else {
+        let (scope, width) = choice.split_once('/').unwrap_or((choice, ""));
+        let who = if scope == "plan" {
+            Who::Plan(text("plan").ok_or_else(|| {
+                refused("the session works for no plan: allow it for the session")
+            })?)
+        } else {
+            Who::Session(
+                session
+                    .clone()
+                    .ok_or_else(|| refused("the card names no session: refuse it"))?,
+            )
+        };
+        let facts: Facts = serde_json::from_value(d["facts"].clone()).unwrap_or_default();
+        let (target, host) = match (action.as_str(), width) {
+            ("browser.web", _) if scope == "once" => {
+                (None, facts.host.as_ref().map(|h| h.as_str().to_owned()))
+            }
+            ("browser.private", "") => {
+                let t = facts
+                    .target
+                    .clone()
+                    .filter(|t| serde_json::from_value::<PrivateTarget>(t.clone()).is_ok())
+                    .ok_or_else(|| refused("the card's target does not read: refuse it"))?;
+                (Some(t), None)
+            }
+            ("browser.private", "cidr") => {
+                let c = cidr_of(&facts)
+                    .ok_or_else(|| refused("the card's target is not a LAN or ULA literal"))?;
+                (Some(json!(c)), None)
+            }
+            ("browser.private", "all-private") => (Some(json!(PrivateTarget::AllPrivate)), None),
+            _ => (None, None),
+        };
+        let window = d["once_window"]
+            .as_f64()
+            .unwrap_or(DEFAULT_ONCE_WINDOW as f64);
+        let expires = (scope == "once").then_some(now + window);
+        Some((who, target, host, expires))
+    };
+    if !cards::card_settle(tx, card, choice, now)? {
+        return Ok(false);
+    }
+    let said = match grant {
+        Some((who, target, host, expires)) => {
+            let g = grants::create_matrix(tx, who, &action, target, host, expires, card)?;
+            format!("allowed ({choice}; grant {}): try again", g.id)
+        }
+        None => {
+            let mut marked = d.clone();
+            marked["refused"] = json!(true);
+            tx.sql().execute(
+                "update card set data = ?1 where id = ?2",
+                (marked.to_string(), card),
+            )?;
+            "refused".to_owned()
+        }
+    };
+    if let Some(s) = &session {
+        messages::send(
+            tx,
+            messages::Send {
+                job: None,
+                sender: None,
+                recipient: requester(s),
+                text: format!("your {action} request (card {card}): {said}"),
+                seen: None,
+                answers: None,
+                question: false,
+            },
+            now,
+        )?;
+    }
+    Ok(true)
+}
+
 /// `cards/settle` without the tools (`crate::coord`'s, the tests'): [`settle_with`] with none.
 pub async fn settle(
     w: &Writer,
@@ -1417,8 +1551,8 @@ pub async fn settle(
     settle_with(w, None, caller, card, choice, now).await
 }
 
-/// `cards/settle`: an access or a close card as above (the choice checked first), any other card settled as it is. A
-/// settings card's allowed change is proposed through TOOLS after the settle committed ([`allow`]).
+/// `cards/settle`: an access, a close or a browser card as above (the choice checked first), any other card settled as
+/// it is. A settings card's allowed change is proposed through TOOLS after the settle committed ([`allow`]).
 pub async fn settle_with(
     w: &Writer,
     tools: Option<&Coord>,
@@ -1446,16 +1580,21 @@ pub async fn settle_with(
             .unwrap_or((None, None));
             let d = card_data(data);
             let setting = kind.as_deref() == Some("access") && d.get("setting").is_some();
+            let browser = kind.as_deref() == Some("matrix") && is_browser_card(&d);
             let checked = match kind.as_deref() {
-                Some("access") if setting => check_setting_access(&choice),
-                Some("access") => check_access(&choice),
-                Some("close") => check_close(&choice),
-                _ => Ok(()),
+                Some("access") if setting => check_setting_access(&choice).map(|()| None),
+                Some("access") => check_access(&choice).map(|()| None),
+                Some("close") => check_close(&choice).map(|()| None),
+                Some("matrix") if browser => check_browser_choice(&choice, &d).map(Some),
+                _ => Ok(None),
             };
-            if let Err(e) = checked {
-                *lock(&theirs) = Some(e);
-                return Err(refused(UNDONE));
-            }
+            let mapped = match checked {
+                Ok(m) => m,
+                Err(e) => {
+                    *lock(&theirs) = Some(e);
+                    return Err(refused(UNDONE));
+                }
+            };
             match kind.as_deref() {
                 Some("access") if setting => {
                     let (settled, a) = settle_setting(tx, card, &choice, now, &d)?;
@@ -1464,6 +1603,9 @@ pub async fn settle_with(
                 }
                 Some("access") => settle_access(tx, card, &choice, now),
                 Some("close") => settle_close(tx, card, &choice, now),
+                Some("matrix") if browser => {
+                    settle_browser(tx, card, mapped.as_deref().unwrap_or("refuse"), now, &d)
+                }
                 _ => cards::card_settle(tx, card, &choice, now),
             }
         })
@@ -3154,5 +3296,185 @@ mod tests {
                 "{task:?} {profile:?}"
             );
         }
+    }
+
+    /// A browser row's card for session s1 (in PLAN), as the matrix gate makes it (Balanced asks a chat for all three
+    /// rows).
+    async fn browser_card(w: &Writer, a: &str, plan: Option<&str>, facts: Value) -> i64 {
+        use crate::matrix_gate::{ActionCtx, Gate, MatrixGate};
+        let ctx = ActionCtx {
+            session: Some("s1".into()),
+            plan: plan.map(Into::into),
+            facts: serde_json::from_value(facts).unwrap(),
+            ..ActionCtx::default()
+        };
+        let a = norn::matrix::Action::from_id(a).unwrap();
+        let g = MatrixGate::default();
+        g.apply_setting(&json!({"preset": "balanced"})).unwrap();
+        let who = norn::matrix::Who {
+            role: Some(norn::matrix::Role::Chat),
+            ..norn::matrix::Who::default()
+        };
+        let gate =
+            w.db.write(system(), move |tx| g.check(tx, &who, a, &ctx, now()))
+                .await
+                .unwrap();
+        let Gate::Ask(card) = gate else {
+            panic!("asked: {gate:?}")
+        };
+        card
+    }
+
+    async fn user_plan(w: &Writer, id: &'static str) {
+        w.db.write(TxMeta::new("user", TxClass::User, "test"), move |tx| {
+            entity::create(
+                tx,
+                entity::EntityNew {
+                    id: id.into(),
+                    kind: "plan".into(),
+                    project: None,
+                    title: Some("p".into()),
+                    status: None,
+                    body: None,
+                    priority: None,
+                    assignee: None,
+                    data: json!({}),
+                    origin: entity::Origin::Recorded,
+                    source: None,
+                },
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    fn private(target: &str, addr: &str, class: &str) -> Value {
+        json!({"target": {"host_port": target}, "addr": addr, "class": class})
+    }
+
+    /// Each choice of a browser card writes its grant in the user's settle: once (the card's window, the web card's
+    /// first host only), session, plan, a LAN literal's /24 and all private; `allow` is once.
+    #[tokio::test]
+    async fn a_browser_card_settles_into_its_grant() {
+        let (_dir, w, _, _) = fixture().await;
+        user_plan(&w, "plan:p1").await;
+        let at = now();
+        let lan = private("192.168.1.20:8080", "192.168.1.20:8080", "lan");
+        // in an order where no grant already covers the next card's question (the gate would allow it, no card)
+        let cases: [(&str, Value, &str, Option<&str>); 6] = [
+            (
+                "browser.web",
+                json!({"host": "example.com:443"}),
+                "plan",
+                Some("plan:p1"),
+            ),
+            (
+                "browser.web",
+                json!({"host": "example.com:443"}),
+                "allow",
+                None,
+            ),
+            ("browser.private", lan.clone(), "session/cidr", None),
+            (
+                "browser.private",
+                lan.clone(),
+                "plan/all-private",
+                Some("plan:p1"),
+            ),
+            ("browser.private", lan.clone(), "session", None),
+            ("browser", json!({}), "once", None),
+        ];
+        for (a, facts, choice, plan) in cases {
+            let card = browser_card(&w, a, plan, facts).await;
+            let r = settle(&w, &user(), card, choice.into(), at).await;
+            assert_eq!(r.unwrap(), json!({"settled": true}), "{a} {choice}");
+        }
+        let gs = grants_now(&w).await;
+        assert_eq!(gs.len(), 6, "{gs:?}");
+        let near = |e: Option<f64>, want: f64| e.is_some_and(|e| (e - want).abs() < 0.01);
+        let web: Vec<_> = gs
+            .iter()
+            .filter(|g| matches!(&g.what, What::Matrix { action, .. } if action == "browser.web"))
+            .collect();
+        // allow → once: the first host, for the window
+        let once = web.iter().find(|g| g.expires.is_some()).unwrap();
+        assert_eq!(once.who, Who::Session("s1".into()));
+        assert!(near(once.expires, at + 600.0), "{:?}", once.expires);
+        assert!(
+            matches!(&once.what, What::Matrix { host: Some(h), .. } if h == "example.com:443"),
+            "{:?}",
+            once.what
+        );
+        let plan = web.iter().find(|g| g.expires.is_none()).unwrap();
+        assert_eq!(plan.who, Who::Plan("plan:p1".into()));
+        assert!(matches!(&plan.what, What::Matrix { host: None, .. }));
+        let targets: Vec<(Who, Option<Value>)> = gs
+            .iter()
+            .filter_map(|g| match &g.what {
+                What::Matrix { action, target, .. } if action == "browser.private" => {
+                    Some((g.who.clone(), target.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        let s1 = || Who::Session("s1".into());
+        for want in [
+            (s1(), Some(json!({"host_port": "192.168.1.20:8080"}))),
+            (
+                s1(),
+                Some(json!({"cidr": "192.168.1.0/24", "ports": "8080"})),
+            ),
+            (Who::Plan("plan:p1".into()), Some(json!("all_private"))),
+        ] {
+            assert!(targets.contains(&want), "{want:?} in {targets:?}");
+        }
+        // the session hears each yes
+        let heard = count(
+            &w,
+            "select count(*) from message where recipient = 'agent:s1' and text like '%: allowed (%'",
+        )
+        .await;
+        assert_eq!(heard, 6);
+    }
+
+    /// A choice the card does not list is invalid at `choice` and the card stays open; `deny` is refuse, which marks
+    /// the card refused and writes no grant; a plan choice for a session with no plan is not listed.
+    #[tokio::test]
+    async fn a_browser_card_takes_only_its_choices_and_records_a_refusal() {
+        let (_dir, w, _, _) = fixture().await;
+        let name = private("printer.local:631", "192.168.1.20:631", "lan");
+        let card = browser_card(&w, "browser.private", None, name).await;
+        for choice in [
+            "plan",
+            "session/cidr",
+            "session/all-private",
+            "project",
+            "maybe",
+        ] {
+            let e = settle(&w, &user(), card, choice.into(), now())
+                .await
+                .unwrap_err();
+            assert_eq!(
+                (e.code, e.path.as_deref()),
+                (ErrorCode::InvalidParams, Some("choice")),
+                "{choice}"
+            );
+        }
+        assert_eq!(card_state(&w, card).await, "open");
+        let r = settle(&w, &user(), card, "deny".into(), now()).await;
+        assert_eq!(r.unwrap(), json!({"settled": true}));
+        assert!(grants_now(&w).await.is_empty());
+        let (choice, refused): (String, bool) =
+            w.db.read(move |c| {
+                Ok(c.query_row(
+                    "select choice, json_extract(data, '$.refused') from card where id = ?1",
+                    [card],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!((choice.as_str(), refused), ("refuse", true));
     }
 }

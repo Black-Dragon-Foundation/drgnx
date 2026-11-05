@@ -120,6 +120,13 @@
                   "null"
                 ]
               },
+              "browser_why": {
+                "description": "Why a session whose `browser` cell allows the agent browser started without it, and the fix (a host that\ncannot give one: no full sandbox tier, Landlock below ABI 9, no browser found).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "capabilities": true,
               "commands": {
                 "default": [],
@@ -940,9 +947,45 @@
     },
     {
       "data": {
+        "$defs": {
+          "CardChoice": {
+            "additionalProperties": false,
+            "description": "One answer a card lists.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "label"
+            ],
+            "type": "object"
+          }
+        },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
+          "body": {
+            "description": "What the user should know before answering, in one line (the hub's text).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "choices": {
+            "description": "A card that lists its answers (a browser row's matrix card): the ids `cards/settle` takes, with their labels.",
+            "items": {
+              "$ref": "#/$defs/CardChoice"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "id": {
             "format": "uint64",
             "minimum": 0,
@@ -2428,6 +2471,13 @@
                   "null"
                 ]
               },
+              "browser_why": {
+                "description": "Why a session whose `browser` cell allows the agent browser started without it, and the fix (a host that\ncannot give one: no full sandbox tier, Landlock below ABI 9, no browser found).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "capabilities": true,
               "commands": {
                 "default": [],
@@ -2836,6 +2886,13 @@
             "properties": {
               "about": {
                 "description": "A brainstorm's topic note.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "browser_why": {
+                "description": "Why a session whose `browser` cell allows the agent browser started without it, and the fix (a host that\ncannot give one: no full sandbox tier, Landlock below ABI 9, no browser found).",
                 "type": [
                   "string",
                   "null"
@@ -4602,6 +4659,70 @@
         "type": "object"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "runs a throwaway browser session (a screenshot of a data: page) and caches the result for the doctor",
+      "name": "browser/check",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`browser/check`: what a throwaway browser session did (the doctor's smoke run).  `browser` is the program found\n(`{path, kind, version, source}`); `start_ms` the time from the start to the first answer; `peak_bytes` the\nscope's peak memory where a user systemd answers; `sys_missed` that the browser's stderr named a `/sys/` path (a\nread the layer does not allow); `why` what stopped it, and `at` when it ran (RFC 3339, UTC).",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "browser": true,
+          "ok": {
+            "type": "boolean"
+          },
+          "peak_bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "screenshot_bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sys_missed": {
+            "type": "boolean"
+          },
+          "why": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "start_ms",
+          "sys_missed",
+          "screenshot_bytes",
+          "at"
+        ],
+        "title": "BrowserCheckResult",
+        "type": "object"
+      },
+      "writes": false
     },
     {
       "classes": [
@@ -12774,7 +12895,7 @@
       "params": {
         "$defs": {
           "Action": {
-            "description": "A row of the matrix: one thing an agent may do.  `unsandboxed` and `user.private` are Never in every column of\nevery preset and no override changes them.",
+            "description": "A row of the matrix: one thing an agent may do.  `unsandboxed` and `user.private` are Never in every column of\nevery preset and no override changes them; `browser.private` is at most Ask, whatever a layer says.\n\nThe browser rows: `browser` is the in-sandbox browser itself (its relay ports, its host and the CDP endpoint; its\nnetwork only the session's own local servers), `browser.web` lets that browser reach any public site on ports 80\nand 443, and `browser.private` lets it reach the private targets a grant names.",
             "enum": [
               "agents.start",
               "agents.model",
@@ -12793,6 +12914,9 @@
               "machines",
               "job.container",
               "network",
+              "browser",
+              "browser.web",
+              "browser.private",
               "unsandboxed",
               "settings.change",
               "user.private",
@@ -12999,7 +13123,7 @@
       "result": {
         "$defs": {
           "Action": {
-            "description": "A row of the matrix: one thing an agent may do.  `unsandboxed` and `user.private` are Never in every column of\nevery preset and no override changes them.",
+            "description": "A row of the matrix: one thing an agent may do.  `unsandboxed` and `user.private` are Never in every column of\nevery preset and no override changes them; `browser.private` is at most Ask, whatever a layer says.\n\nThe browser rows: `browser` is the in-sandbox browser itself (its relay ports, its host and the CDP endpoint; its\nnetwork only the session's own local servers), `browser.web` lets that browser reach any public site on ports 80\nand 443, and `browser.private` lets it reach the private targets a grant names.",
             "enum": [
               "agents.start",
               "agents.model",
@@ -13018,6 +13142,9 @@
               "machines",
               "job.container",
               "network",
+              "browser",
+              "browser.web",
+              "browser.private",
               "unsandboxed",
               "settings.change",
               "user.private",

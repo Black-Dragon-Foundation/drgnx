@@ -468,6 +468,7 @@ snapshots then).  The test answers the fetch itself (`drgnx-hub-call' stubbed), 
   ;; the functions' NAME=value strings go to agents/start as `env' when the name is on `drgnx-agents-start-env-names' and
   ;; is no credential; the others are dropped, with one notice naming them; the session they saw is the mirror
   (let* ((drgnx-agents--sessions nil) (inhibit-message t) (calls nil) (notices nil) (seen nil)
+         (drgnx-agents-start-env-names '("PLAYWRIGHT_MCP_CDP_ENDPOINT")) ; none by default: the test names the one it sends
          (drgnx-agents-env-functions
           (list (lambda (s) (push s seen)
                   (list "PLAYWRIGHT_MCP_CDP_ENDPOINT=http://127.0.0.1:9222" "OPENAI_API_KEY=sk-x" "OTHER=1"))

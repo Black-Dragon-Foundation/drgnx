@@ -438,6 +438,16 @@ jobs:
       - name: agent core, sandbox lane (--ignored)
         if: ${{ !cancelled() && steps.core-build.outcome == 'success' }}
         run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks -- --ignored --test-threads 1
+      # The real-start rows (docs/develop/runtime.md, "The real-start rows"): a release hub, no test hooks, so each
+      # agents/start goes through the real launch, Gleipnir's validation and bwrap. --require-all: a row that cannot
+      # start sandboxed fails here; the browser row is an excused skip on this runner (no Chromium, and a Landlock ABI
+      # below 9), as is the internet row.
+      - name: real-start rows (release hub)
+        if: ${{ !cancelled() && steps.core-build.outcome == 'success' }}
+        run: |
+          cargo build --locked --release --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr
+          runtime/target/release/domr --hub-bin runtime/target/release/ratatoskr \
+            --scenarios test/conformance --only 'real-start/*' --require-all
       # last, whatever the tests said
       - id: prune
         if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && (steps.build.outcome == 'success' || steps.core-build.outcome == 'success') }}
@@ -628,12 +638,12 @@ jobs:
       # + the runner's protocol and sync alone: the shape jobq and the Android door take (docs/develop/sleipnir.md)
       - id: build
         run: |
-          cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p huginn -p drgnx-ratatoskr -p forseti
+          cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p huginn -p heimdall -p drgnx-ratatoskr -p forseti
           cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p sleipnir --no-default-features --features proto,sync
       # the pure-Rust crates' tests too: only clippy's test build shows code that is dead on Android (gate review M21)
       - if: ${{ !cancelled() }}
         run: |
-          cargo clippy --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android --all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -p bifrost -p huginn -p forseti -- -D warnings
+          cargo clippy --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android --all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -p bifrost -p huginn -p heimdall -p forseti -- -D warnings
           cargo clippy --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android --all-targets -p sleipnir --no-default-features --features proto,sync -- -D warnings
       - id: prune
         if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
@@ -949,7 +959,7 @@ jobs:
       # (gate review M21). After the escape rows, whatever they say, so neither hides the other.
       - name: clippy on darwin (the pure-Rust crates)
         if: ${{ !cancelled() }}
-        run: cargo clippy --locked --manifest-path runtime/Cargo.toml --all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -p bifrost -p huginn -- -D warnings
+        run: cargo clippy --locked --manifest-path runtime/Cargo.toml --all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -p bifrost -p huginn -p heimdall -- -D warnings
       - id: prune
         if: ${{ !cancelled() && (env.CACHE_SAVE == 'true' || env.CACHE_SAVE_PR == 'true') && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
         run: |

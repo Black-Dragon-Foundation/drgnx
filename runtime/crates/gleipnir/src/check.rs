@@ -497,6 +497,7 @@ where
         layers: Layers::for_target(target),
         extra_tcp_ports: vec![],
         trace: Default::default(),
+        browser: None,
     };
     // The probe's own paths only: a home that exists nowhere, so nothing real is named or protected here.
     let ctx = Context {
@@ -514,9 +515,9 @@ where
         canary.to_string_lossy().into_owned(),
     ];
     #[cfg(feature = "test-hooks")]
-    let prepared = sandbox.prepare(valid, command, crate::backend::TestHooks::default())?;
+    let prepared = sandbox.prepare(valid, command, None, crate::backend::TestHooks::default())?;
     #[cfg(not(feature = "test-hooks"))]
-    let prepared = sandbox.prepare(valid, command)?;
+    let prepared = sandbox.prepare(valid, command, None)?;
     Ok(run(prepared, timeout).await)
 }
 

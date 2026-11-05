@@ -125,7 +125,7 @@ OpenRouter agents do not start until it is fixed."
   :type 'boolean :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
   :runtime "bool" :schema 'boolean)
 
-(drgnx-defsetting drgnx-agents-start-env-names '("PLAYWRIGHT_MCP_CDP_ENDPOINT")
+(drgnx-defsetting drgnx-agents-start-env-names nil
   "The environment variables an editor module may add to an agent the hub starts (`drgnx-agents-env-functions'), by
 name.  The hub drops any other name, and any name that looks like a credential (it contains KEY, TOKEN, SECRET,
 PASSWORD, PASSPHRASE or CREDENTIAL), whatever this lists.  Only you can set it, never a repository or an agent."

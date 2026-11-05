@@ -287,6 +287,7 @@ mod tests {
                 layers: Layers::for_target(Target::LinuxBwrap),
                 extra_tcp_ports: vec![],
                 trace: Default::default(),
+                browser: None,
             }
         }
 
@@ -295,6 +296,7 @@ mod tests {
                 source: self.p("bin/ratatoskr"),
                 inner_args: vec!["sandbox-inner".into()],
                 relay_args: vec![],
+                browser_host_args: vec![],
             }
         }
 

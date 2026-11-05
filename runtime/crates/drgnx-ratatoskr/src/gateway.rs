@@ -249,6 +249,11 @@ impl Gate {
             .ok_or_else(|| internal("the gateway is not listening"))
     }
 
+    /// The gateway's port on 127.0.0.1, once it listens.
+    pub fn port(&self) -> Option<u16> {
+        self.engine.get().map(|e| e.1)
+    }
+
     /// Listen on 127.0.0.1: PORT when given (`--gateway-port`, test hooks), else `kv.gateway_port`, else a free one;
     /// the port is stored.  A kept port that is taken is remembered, so [`Gate::restore`] drops the tokens issued for
     /// it.  The engine's events come out of the receiver ([`run_events`]).

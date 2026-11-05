@@ -286,7 +286,10 @@ information: "OPENROUTER_API_KEY is set in this Emacs's environment; children in
 holds". drgnx leaves them there ([security.md](security.md#where-your-keys-live)).
 The `job-sandbox` check shows the job sandbox's state as Ratatoskr reports it (`sandbox` in `ratatoskr doctor --json`):
 the back end and its version, or a warning with the reason and the fix; with no answer from Ratatoskr it is only a
-notice. The `lisp-runtime` check (Agents group) says the old Lisp agent runtime is gone. It fails when a Lisp hub of
+notice. The `agent-browser` check (Agents group) says what an agent's browser would get on this machine: the tier and
+Landlock ABI, the browser found, whether the memory cap can be set, the web proxy's refusals, and the last smoke check
+(palette: Agents: Check the Agent Browser); see [agent-browser.md](agent-browser.md#the-doctors-lines). The
+`lisp-runtime` check (Agents group) says the old Lisp agent runtime is gone. It fails when a Lisp hub of
 yours still runs (`ratatoskr stop`, then `kill` the pid; drgnx starts Ratatoskr again). It warns when an outside
 agent's MCP config (Claude Code, Codex, Gemini, Kimi Code) still starts the Lisp coordination server (Agent settings →
 Register drgnx again), and when command jobs from before the move still run (they finish on their own, then drgnx
@@ -371,6 +374,13 @@ drgnx runtime install [--prefix DIR] # <data>/bin/ratatoskr (by rename), links D
 
 `runtime install` refuses a binary built with test hooks. The build's commit (`ratatoskr version --json`) is what the
 doctor compares with the checkout.
+
+## A browser for agents
+
+Agent sessions on Linux can drive a headless Chromium. install.sh and `drgnx update` never download one. If your
+distro has a package (Fedora: `dnf install chromium-headless`), use that; otherwise run `drgnx browser install`, which
+fetches a checksum-pinned headless shell into drgnx's data folder when you ask. See the
+[agent browser guide](agent-browser.md).
 
 ## Staying up to date
 

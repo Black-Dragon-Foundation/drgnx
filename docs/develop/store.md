@@ -491,6 +491,12 @@ arguments.
   "edit-user-tasks", expires?}`. A row that does not parse opens nothing.
   - `create(tx, who, what, access, expires)`: a `read` grant opens a project or `*`; an `edit-user-tasks` grant a
     task, a project or `*`. The named projects and task must exist; `expires` must be later than the tx.
+  - `create_matrix(tx, who, action, target, host, expires, card)`: the user's yes to a browser row's card (the
+    permissions matrix's grant record; [coordination.md](coordination.md), "The matrix in the hub"). `who` is
+    `{session: SID}` or `{plan: ID}` (only a matrix grant names a plan), `what` `{matrix: ACTION, host?: "H:P",
+    target?}` (a host only for `browser.web`, a target, required, only for `browser.private`), `access` `matrix`,
+    `card` the card it answered. It opens no store access. `matrix_grants_for(conn, action, session, plan, now)`
+    lists the active ones for a session or its plan.
   - `revoke(tx, id)` sets `revoked`; false when there was no active grant.
   - `list(conn, &caller, &Filter { who, active }, now)`: the user sees every grant; an agent or ext caller only the
     grants whose `who` is its own (others would name other projects).

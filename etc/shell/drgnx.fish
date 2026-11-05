@@ -54,6 +54,7 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n __fish_use_subcommand -a coord -d 'Serve the coordination tools to an agent outside drgnx'
     complete -c drgnx -n __fish_use_subcommand -a graph -d 'The store'"'"'s commands (export, backup, revert, …)'
     complete -c drgnx -n __fish_use_subcommand -a childframe-elpa -d '(Tests) the pinned child-frame packages into a new folder'
+    complete -c drgnx -n __fish_use_subcommand -a browser -d 'The browser sandboxed agents get (install, list)'
     complete -c drgnx -n __fish_use_subcommand -s t -d 'Open in this terminal'
     complete -c drgnx -n __fish_use_subcommand -l gui -d 'Open in a window'
 
@@ -131,6 +132,11 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from runtime; and not __fish_seen_subcommand_from build install' -a install -d "The built binary into drgnx's data folder"
     complete -c drgnx -n '__fish_seen_subcommand_from runtime; and __fish_seen_subcommand_from build' -l install -d 'Install it after the build'
     complete -c drgnx -n '__fish_seen_subcommand_from runtime; and __fish_seen_subcommand_from build install' -l prefix -x -a '(__fish_complete_directories)' -d 'Also link bin/ratatoskr and bin/rtsk here'
+    complete -c drgnx -n '__fish_seen_subcommand_from browser' -f
+    complete -c drgnx -n '__fish_seen_subcommand_from browser; and not __fish_seen_subcommand_from install list' -a install -d 'Download the pinned headless shell'
+    complete -c drgnx -n '__fish_seen_subcommand_from browser; and not __fish_seen_subcommand_from install list' -a list -d 'The browsers sessions can get'
+    complete -c drgnx -n '__fish_seen_subcommand_from browser; and __fish_seen_subcommand_from install' -l version -x -d 'A pinned version'
+    complete -c drgnx -n '__fish_seen_subcommand_from browser; and __fish_seen_subcommand_from install list' -l json -d 'Machine-readable'
     complete -c drgnx -n '__fish_seen_subcommand_from job; and not __fish_seen_subcommand_from propose approve resume stop status' -f -a propose -d 'A job from a plan'
     complete -c drgnx -n '__fish_seen_subcommand_from job; and not __fish_seen_subcommand_from propose approve resume stop status' -f -a approve -d 'Run a proposed job'
     complete -c drgnx -n '__fish_seen_subcommand_from job; and not __fish_seen_subcommand_from propose approve resume stop status' -f -a resume -d 'Resume a paused job'

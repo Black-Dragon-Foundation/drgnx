@@ -1,0 +1,18 @@
+# The agent browser against real browsers (docs/develop/runtime.md, "The real browser tests"): Fedora's Chromium, both
+# kinds (the full browser and `chromium-headless`'s headless shell), Node, and Playwright MCP pinned in /opt/pw-mcp,
+# which `ratatoskr-mock cdp-drive` runs as an outside agent's browser tool. Node and Playwright MCP live only in this
+# test image; drgnx itself never runs Node.
+#
+# BASE is the image the Rust tests already run in (a Fedora 45 with the C toolchain cargo needs; the Rust toolchain
+# itself may be mounted). Build it once and reuse it: its tag is a hash of this file, so it changes only with this
+# file. The pages the tests open are served on loopback by `ratatoskr-mock http-serve`: no test reaches the network.
+ARG BASE=registry.fedoraproject.org/fedora:45
+FROM ${BASE}
+RUN dnf -y install --setopt=install_weak_deps=False chromium chromium-headless nodejs npm procps-ng \
+    && dnf clean all
+# Playwright MCP, pinned (0.0.84 brings playwright-core 1.65); Playwright's own browsers are never downloaded (it
+# drives the Chromium above over CDP)
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+RUN npm install --prefix /opt/pw-mcp --no-fund --no-audit @playwright/mcp@0.0.84 \
+    && test -f /opt/pw-mcp/node_modules/@playwright/mcp/cli.js \
+    && npm cache clean --force

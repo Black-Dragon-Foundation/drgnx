@@ -36,6 +36,132 @@ Seconds without input after which the editor tells the hub you are away (the tim
 | `:agents` | `never` |
 | `:schema` | `natnum` |
 
+## drgnx-agents-browser-deny-hosts
+
+Host names (like "example.com") a session's browser never reaches, whatever you grant: a list of strings.
+Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat string)` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Vec<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(list-of string)` |
+
+## drgnx-agents-browser-idle
+
+Seconds without a command after which a session's browser is stopped; the next command starts it again.
+Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `600` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"u64"` |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
+
+## drgnx-agents-browser-local-ports
+
+The TCP ports on the sandbox's own loopback that a session with the browser lets its agent and browser
+connect to, for the servers the agent starts there (a list of port numbers, 1 to 65535).  Servers on this machine are
+reached only as host.drgnx.internal:PORT, through a grant.  Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `(3000 3001 4173 4200 5000 5173 8000 8080 8888)` |
+| Type | `(repeat integer)` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Vec<u16>"` |
+| `:agents` | `never` |
+| `:schema` | `(list-of (integer :min 1 :max 65535))` |
+
+## drgnx-agents-browser-max-message
+
+The largest message, in bytes, that passes between an agent and its session's browser (64 MiB).
+Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `67108864` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"u64"` |
+| `:agents` | `never` |
+| `:schema` | `(integer :min 1)` |
+
+## drgnx-agents-browser-memory-high
+
+The share of the session's memory cap (1 to 99, a percent) at which its browser is stopped.
+Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `75` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"u32"` |
+| `:agents` | `never` |
+| `:schema` | `(integer :min 1 :max 99)` |
+
+## drgnx-agents-browser-once-window
+
+Seconds a one-time browser grant lasts after you give it.  Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `600` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"u64"` |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
+
+## drgnx-agents-browser-program
+
+The browser an agent session gets: the absolute path of a Chromium, Chrome or headless shell, or nil to find one
+(a distro package first, then the one `drgnx browser install' downloaded).  Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(choice (const :tag "find one" nil) file)` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Option<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(or null (string :match "\\`/"))` |
+
 ## drgnx-agents-checkpoint-cap
 
 Bytes of checkpoints kept per project (the shadow repos of all its sessions together); the oldest of finished
@@ -175,7 +301,7 @@ column that matches wins.  Set it in Settings → User; no workspace and no agen
 | `:apply` | - |
 | `:runtime` | `"AgentsMatrix"` |
 | `:agents` | `never` |
-| `:schema` | `(plist (:preset (enum cautious balanced autonomous) "The base preset; absent: balanced") (:time (list-of (plist (:when (or (enum away) (pred drgnx-agents-matrix--between-p "(between FROM TO), minutes of the day")) "While you are away, or between two minutes of the day (local time)" :required t) (:preset (enum cautious balanced autonomous) "The preset that applies then" :required t))) "Presets that replace the base one at some times") (:cells (list-of (plist (:action (enum agents.start agents.model agents.control graph.change task.done spend spend.over code.read code.edit commit merge.integration push.ci push.main code.ci-config machines job.container network unsandboxed settings.change user.private user.emacs chat.project-read) "What the agent does" :required t) (:column (pred drgnx-agents-matrix--column-p "(:role manager\|worker\|chat), (:agent NAME) or (:provider NAME)") "Whose cell" :required t) (:verdict (enum allow ask never) "What happens" :required t) (:limit (plist (:amount number "How much" :required t) (:unit (enum count usd usd-est tokens limit-share) "Of what" :required t)) "An amount over which the cell is decided by spend.over"))) "Cell overrides"))` |
+| `:schema` | `(plist (:preset (enum cautious balanced autonomous) "The base preset; absent: balanced") (:time (list-of (plist (:when (or (enum away) (pred drgnx-agents-matrix--between-p "(between FROM TO), minutes of the day")) "While you are away, or between two minutes of the day (local time)" :required t) (:preset (enum cautious balanced autonomous) "The preset that applies then" :required t))) "Presets that replace the base one at some times") (:cells (list-of (plist (:action (enum agents.start agents.model agents.control graph.change task.done spend spend.over code.read code.edit commit merge.integration push.ci push.main code.ci-config machines job.container network browser browser.web browser.private unsandboxed settings.change user.private user.emacs chat.project-read) "What the agent does" :required t) (:column (pred drgnx-agents-matrix--column-p "(:role manager\|worker\|chat), (:agent NAME) or (:provider NAME)") "Whose cell" :required t) (:verdict (enum allow ask never) "What happens" :required t) (:limit (plist (:amount number "How much" :required t) (:unit (enum count usd usd-est tokens limit-share) "Of what" :required t)) "An amount over which the cell is decided by spend.over"))) "Cell overrides"))` |
 
 ## drgnx-agents-mcp
 
@@ -346,6 +472,24 @@ another one on, remove it from this list (or set it in the profile's `:env').
 | `:agents` | `never` |
 | `:schema` | - |
 
+## drgnx-agents-session-memory
+
+The memory cap of one agent session with its browser, like "4G" or "512M".
+Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `"4G"` |
+| Type | `string` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"String"` |
+| `:agents` | `never` |
+| `:schema` | `(string :match "\\`[1-9][0-9]*[KMGT]?\\'")` |
+
 ## drgnx-agents-silent-after
 
 Seconds without an update after which the supervisor pauses a session, per kind of work.
@@ -371,7 +515,7 @@ PASSWORD, PASSPHRASE or CREDENTIAL), whatever this lists.  Only you can set it, 
 
 | Key | Value |
 | --- | --- |
-| Default | `("PLAYWRIGHT_MCP_CDP_ENDPOINT")` |
+| Default | `nil` |
 | Type | `(repeat string)` |
 | `:scope` | `global` |
 | `:workspace` | `never` |
