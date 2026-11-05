@@ -404,7 +404,8 @@ In a terminal window the lane works the same, and the line you are on stays visi
 While `ui/look` runs under Glitnir, the Explorer, the panel, the right dock and every editor group are **cards**: corner radius 10, a
 1 px ring just outside in the divider colour (60 % opaque) and a soft shadow, on a 6 px gap. `drgnx-look-card` holds
 the numbers (logical pixels; the ring is a face and an opacity, never a colour). The gap is the frame's
-`right-divider-width` and `bottom-divider-width`, so the ring and shadow have room and never cover text. Turning the
+`right-divider-width` and `bottom-divider-width` (set in device pixels, so the gap is 6 logical pixels at any display
+scale, and set again when the scale changes), so the ring and shadow have room and never cover text. Turning the
 module off takes the cards away and gives the frame its divider widths back. An editor card keeps its corners while it scrolls. Without
 Glitnir nothing changes.
 

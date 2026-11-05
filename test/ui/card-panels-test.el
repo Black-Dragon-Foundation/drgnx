@@ -71,7 +71,7 @@
       (should dock)
       (dolist (p '(corner-radius shadow ring))
         (should (equal (window-parameter dock p) (alist-get p drgnx-look-card))))
-      (should (eql (frame-parameter nil 'right-divider-width) gap))
+      (should (eql (frame-parameter nil 'right-divider-width) (round (* gap (frame-scale-factor)))))
       (let* ((on (drgnx-uitest-snapshot)) (r (drgnx-card-panels-ui-test--rect dock))
              (corner (drgnx-uitest-pixel on (nth 0 r) (nth 1 r)))
              (inside (drgnx-uitest-pixel on (+ (nth 0 r) 40) (+ (nth 1 r) 40))))
@@ -146,6 +146,17 @@ bar are other modules')."
             (should (file-exists-p (drgnx-card-panels-ui-test--scene))))
         (drgnx-wb-area-hide 'panel)
         (kill-buffer res)))))
+
+(ert-deftest drgnx-ui-card-panels/gap-is-logical ()
+  "The gap between the cards is `gap' logical pixels: the dock's right divider and the frame's divider widths are
+\(* gap scale) device pixels.  Pattern D (read after `drgnx-test-wait-presented').  Meaningful at a scale above 1
+\(`DRGNX_UI_SCALE=2')."
+  (drgnx-card-panels-ui-test--with-explorer
+    (let* ((dock (car (drgnx-wb--dock-windows)))
+           (want (round (* (alist-get 'gap drgnx-look-card) (frame-scale-factor)))))
+      (should (eql (window-right-divider-width dock) want))
+      (should (eql (frame-parameter nil 'right-divider-width) want))
+      (should (eql (frame-parameter nil 'bottom-divider-width) want)))))
 
 (provide 'card-panels-test)
 ;;; card-panels-test.el ends here

@@ -40,7 +40,8 @@ restores the old value, and the refresh recorded before it runs after that).  Wi
     (ring . (vertical-border . 0.6)) (gap . 6))
   "The card look of the docked panes (Explorer, panel, right dock) and the editor groups under Glitnir, in logical pixels.
 `corner-radius', `shadow' and `ring' become the window parameters Glitnir reads; `gap' is the frame's
-`right-divider-width' and `bottom-divider-width', the room the ring and shadow are drawn in.  The ring is a face
+`right-divider-width' and `bottom-divider-width', the room the ring and shadow are drawn in (set in device
+pixels: the gap times the frame's scale, and again when the scale changes).  The ring is a face
 \(its foreground) and an opacity: no colour is named here."
   :type 'sexp :group 'drgnx-face)
 
@@ -76,9 +77,19 @@ An editor group is an ordinary window: not the minibuffer, a package's side wind
   (when (window-parameter window 'drgnx-look-card)
     (dolist (p (cons 'drgnx-look-card drgnx-look--card-parameters)) (set-window-parameter window p nil))))
 
+(defun drgnx-look--card-gap-px (frame)
+  "The gap in FRAME's own pixels: `gap' logical pixels times the frame's scale (a frame pixel is a device pixel
+on the native shell)."
+  (round (* (alist-get 'gap drgnx-look-card) (frame-scale-factor frame))))
+
+(defun drgnx-look--card-follow-scale (frame)
+  "Give FRAME's dividers the gap again when its scale changed under it (a frame that is a card frame only)."
+  (when (and (frame-live-p frame) (frame-parameter frame 'drgnx-look-card-saved))
+    (drgnx-look--card-frame frame)))
+
 (defun drgnx-look--card-frame (frame)
   "Make the docked panes of FRAME cards and widen the dividers to the gap; the frame's own widths are kept."
-  (let ((gap (alist-get 'gap drgnx-look-card)))
+  (let ((gap (drgnx-look--card-gap-px frame)))
     (unless (frame-parameter frame 'drgnx-look-card-saved)
       (set-frame-parameter frame 'drgnx-look-card-saved
                            (list (frame-parameter frame 'right-divider-width)
@@ -215,6 +226,8 @@ refuses (`drgnx-settings-refused') before the theme changes."
                        (drgnx-modules-push-undo "docked panes as cards" #'drgnx-look-cards-clear)
                        (drgnx-module-hook window-configuration-change-hook cards-follow-windows ()
                          (drgnx-look-cards-apply))
+                       (drgnx-module-hook window-size-change-functions cards-follow-scale (frame)
+                         (drgnx-look--card-follow-scale frame))
                        (drgnx-look-cards-apply)
                        (drgnx-command-define 'preferences-theme :category "Preferences" :title "Color Theme"
                                              :command #'drgnx-look-choose-theme :menu '("Options") :doc "Pick the colour theme (remembered)")
