@@ -333,9 +333,9 @@
                         ;; the registry: an older index and set of .crate files only lack crates cargo then fetches
                         (string-prefix-p "cargo-registry-" rk)))))))))
 
-;; A cache is written only by a trusted run (a push or a manual run of main or ci/*, the daily run, or a pull request
-;; from a branch of this repository, whose cache GitHub scopes to its merge ref), never by a fork's pull request, and
-;; the cargo caches are pruned first (.github/ci/cargo-prune.sh).
+;; A cache is written only by a trusted run (a push or a manual run of main, the daily run, or a pull request from a
+;; branch of this repository, whose cache GitHub scopes to its merge ref, for the families that pay off), never by a
+;; ci/* branch or a fork's pull request, and the cargo caches are pruned first (.github/ci/cargo-prune.sh).
 (defconst drgnx-ci-test--own-pr "github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository")
 
 (ert-deftest drgnx-ci/no-fork-pull-request-writes-a-cache ()
@@ -359,12 +359,19 @@
         (should (string-search drgnx-ci-test--own-pr c))))
     (dolist (c (drgnx-ci-test--matches "id: prune\n *if: \\(.*\\)\n" yml))
       (should (or (string-search "env.CACHE_SAVE == 'true'" c)
-                  (string-search "github.event_name != 'pull_request' && (" c)))))
+                  (string-search "github.event_name != 'pull_request' && github.ref == 'refs/heads/main'" c)))
+      ;; ci/* branches restore only
+      (should-not (string-search "refs/heads/ci/" c))))
   (let ((rt (drgnx-ci-test--yml "runtime.yml")))
     (skip-unless rt)
-    (drgnx-ci-test--has rt (concat "CACHE_SAVE: ${{ (github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/ci/'))) || ("
-                                   drgnx-ci-test--own-pr ") }}")
-                        "CARGO_INCREMENTAL: \"0\"")))
+    (drgnx-ci-test--has rt "CACHE_SAVE: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}"
+                        (concat "CACHE_SAVE_PR: ${{ " drgnx-ci-test--own-pr " }}")
+                        "CARGO_INCREMENTAL: \"0\"")
+    ;; a pull request saves the two families that pay off, linux and macos; the others restore main's
+    (dolist (job '("linux" "macos"))
+      (should (string-search "env.CACHE_SAVE_PR == 'true'" (drgnx-ci-test--job rt job))))
+    (dolist (job '("msrv" "escape-host" "agent-containers" "android" "fuzz"))
+      (should-not (string-search "env.CACHE_SAVE_PR" (drgnx-ci-test--job rt job))))))
 
 (ert-deftest drgnx-ci/a-restored-target-sees-unchanged-files-as-old ()
   ;; every job that restores runtime/target gives the files their last commit's time before cargo runs (and has the
@@ -421,7 +428,7 @@
     (should (string-match "id: prune\n *if: \\(.*\\)\n" bins))
     (let ((cond (match-string 1 bins)))
       (dolist (s (list "github.event_name != 'pull_request'" "github.ref == 'refs/heads/main'"
-                       "startsWith(github.ref, 'refs/heads/ci/')" drgnx-ci-test--own-pr
+                       drgnx-ci-test--own-pr
                        "steps.own.outputs.commit == (github.event.pull_request.head.sha || github.sha)"
                        "github.repository == 'Black-Dragon-Foundation/drgnx'"))
         (should (string-search s cond)))
