@@ -244,6 +244,10 @@ unterminated string)."
 The handlers are measured from it: advice on jsonrpc's filter would show when the main thread got the bytes, but it
 keeps Nidhogg's framing off (jsonrpc with advice stays on its own filter), and framed, the bytes never reach a filter.")
 (defvar drgnx-perf-w--lsp-notes nil "The server's own messages received, newest first: (METHOD . URI-OR-TOKEN).")
+(defvar drgnx-perf-w--lsp-heads nil
+  "Per server, its first `drgnx-perf-w--lsp-head' messages of the session, oldest last: (NAME . MESSAGES).  Rounds
+clear `drgnx-perf-w--lsp-notes' but the flood goes on, so a round's first messages start at a different place each time.")
+(defconst drgnx-perf-w--lsp-head 100)
 (defvar drgnx-perf-w--lsp-rounds 3)
 
 (defun drgnx-perf-w--lsp-count (result)
@@ -253,10 +257,14 @@ keeps Nidhogg's framing off (jsonrpc with advice stays on its own filter), and f
 (defun drgnx-perf-w--lsp-note (conn method params)
   (if (equal (format "%s" method) "$/replaySent")
       (puthash (cons (jsonrpc-name conn) (plist-get params :id)) (plist-get params :t) drgnx-perf-w--lsp-sent)
-    (push (list (jsonrpc-name conn) method
-                (or (ignore-errors (plist-get (plist-get params :textDocument) :uri))
-                    (ignore-errors (format "%s" (plist-get params :token)))))
-          drgnx-perf-w--lsp-notes)))
+    (let* ((name (jsonrpc-name conn))
+           (note (list name method
+                       (or (ignore-errors (plist-get (plist-get params :textDocument) :uri))
+                           (ignore-errors (format "%s" (plist-get params :token))))))
+           (head (assoc name drgnx-perf-w--lsp-heads)))
+      (push note drgnx-perf-w--lsp-notes)
+      (unless head (push (setq head (list name)) drgnx-perf-w--lsp-heads))
+      (when (< (length (cdr head)) drgnx-perf-w--lsp-head) (setcdr head (cons note (cdr head)))))))
 
 (defun drgnx-perf-w--lsp-start (corpus env)
   "A jsonrpc connection to a replay server for the recorded CORPUS (rust, c or ts) with ENV (VAR=VALUE strings), initialized.
@@ -279,7 +287,8 @@ The server's own messages wait for `initialized' (the fire function sends it)."
 
 (defun drgnx-perf-w-lsp-setup (env)
   "The three replay servers (rust-analyzer's, clangd's and tsserver's recorded traffic), each started with ENV."
-  (setq drgnx-perf-w--lsps (mapcar (lambda (c) (drgnx-perf-w--lsp-start c env)) '("rust" "c" "ts")))
+  (setq drgnx-perf-w--lsp-heads nil
+        drgnx-perf-w--lsps (mapcar (lambda (c) (drgnx-perf-w--lsp-start c env)) '("rust" "c" "ts")))
   t)
 
 (defun drgnx-perf-w--lsp-request (conn method params)
@@ -362,11 +371,11 @@ The server's own messages wait for `initialized' (the fire function sends it)."
 (defun drgnx-perf-w-lsp-typing-measure () (list :lsp (list :framed (drgnx-perf-w--lsp-framed))))
 
 (defun drgnx-perf-w-lsp-typing-digest ()
-  "Each server's first 100 messages, in order (the flood goes on, so later ones are not compared)."
+  "Each server's first 100 messages of the session, in order (the flood goes on across rounds, so later ones are not
+compared, and a round's own list starts wherever the flood is)."
   (let (out)
-    (dolist (name (sort (seq-uniq (mapcar #'car drgnx-perf-w--lsp-notes)) #'string<))
-      (push (cons name (secure-hash 'md5 (format "%S" (seq-take (seq-filter (lambda (n) (equal (car n) name)) (reverse drgnx-perf-w--lsp-notes)) 100))))
-            out))
+    (dolist (head (sort (copy-sequence drgnx-perf-w--lsp-heads) (lambda (a b) (string< (car a) (car b)))))
+      (push (cons (car head) (secure-hash 'md5 (format "%S" (reverse (cdr head))))) out))
     (format "%S" (nreverse out))))
 
 (defun drgnx-perf-w-lsp-teardown ()
@@ -611,7 +620,12 @@ The server's own messages wait for `initialized' (the fire function sends it)."
 
 (defun drgnx-perf-w-quick-open-done () (and drgnx-perf-w--qo-files t))
 (defun drgnx-perf-w-quick-open-digest ()
-  (format "%d %s" (length drgnx-perf-w--qo-files) (secure-hash 'md5 (mapconcat #'identity (sort (copy-sequence drgnx-perf-w--qo-files) #'string<) "\n"))))
+  "The count and a hash of the files' paths under the repository (each session's temporary directory is its own)."
+  (let ((root (file-name-as-directory (expand-file-name "big" drgnx-perf-w--tmp))))
+    (format "%d %s" (length drgnx-perf-w--qo-files)
+            (secure-hash 'md5 (mapconcat #'identity
+                                         (sort (mapcar (lambda (f) (string-remove-prefix root f)) drgnx-perf-w--qo-files) #'string<)
+                                         "\n")))))
 (defun drgnx-perf-w-quick-open-measure () (list :list_ms (plist-get drgnx-perf-w--stats :list_ms)))
 
 (defun drgnx-perf-w-quick-open-teardown ()

@@ -394,4 +394,39 @@ period, so work finishing later in the pause after the keys was never seen."
                            [[["ts" "inline" "estimate"] 3]]))))
       (delete-file file))))
 
+(defvar drgnx-perf-w--lsp-heads)
+(defvar drgnx-perf-w--lsp-notes)
+(declare-function drgnx-perf-w--lsp-note "perf-session")
+(declare-function drgnx-perf-w-lsp-typing-digest "perf-session")
+
+(defun perf-workers-test--flood (clear-at)
+  "The lsp-typing digest after 150 flood messages of one server, the round's list cleared after CLEAR-AT of them (nil: never)."
+  (setq drgnx-perf-w--lsp-heads nil drgnx-perf-w--lsp-notes nil)
+  (cl-letf (((symbol-function 'jsonrpc-name) (lambda (_c) "perf-lsp-c")))
+    (dotimes (i 150)
+      (when (eql i clear-at) (setq drgnx-perf-w--lsp-notes nil))
+      (drgnx-perf-w--lsp-note 'conn (intern (format "m%d" i)) nil)))
+  (drgnx-perf-w-lsp-typing-digest))
+
+(ert-deftest drgnx-perf-workers/lsp-typing-digest-ignores-where-a-round-starts ()
+  "lsp-typing's flood runs on across rounds while each round clears the list of messages, so the first 100 of a round
+began at a different place each time (8 digests in 8 rounds).  The digest is of the first messages of the session.
+Pattern D: the digest of the same flood, whether or not a round started in the middle of it."
+  (perf-workers-test--session)
+  (should (equal (perf-workers-test--flood nil) (perf-workers-test--flood 40))))
+
+(defvar drgnx-perf-w--tmp)
+(defvar drgnx-perf-w--qo-files)
+(declare-function drgnx-perf-w-quick-open-digest "perf-session")
+
+(ert-deftest drgnx-perf-workers/quick-open-digest-is-relative-to-the-root ()
+  "Each session lists a repository in its own temporary directory: the digest names the files by their path under it, so
+the two arms agree.  Pattern D: the same listing under two roots."
+  (perf-workers-test--session)
+  (let ((digest (lambda (tmp)
+                  (setq drgnx-perf-w--tmp tmp
+                        drgnx-perf-w--qo-files (mapcar (lambda (f) (concat tmp "/big/" f)) '("d1/a" "d0/b" "d0/a")))
+                  (drgnx-perf-w-quick-open-digest))))
+    (should (equal (funcall digest "/tmp/drgnx-perf-wAAA") (funcall digest "/tmp/drgnx-perf-wBBB")))))
+
 ;;; perf-workers-test.el ends here
