@@ -128,7 +128,7 @@ async fn attempt(
     let cur = front.settings.current();
     let v = cur.loaded.values.clone();
     let data = paths::data_dir(&Env::process());
-    let found = tokio::task::spawn_blocking(move || {
+    let found = crate::clock::blocking(move || {
         crate::browser::resolve::resolve(&cur.loaded.values, &data)
     })
     .await
@@ -241,7 +241,7 @@ async fn session(
     *pid = Some(child.id());
     if let Some(fd) = launched.status {
         let stderr = child.stderr();
-        let read = tokio::task::spawn_blocking(move || {
+        let read = crate::clock::blocking(move || {
             gleipnir::inner::read_status_for(fd, &|| stderr.get(), Duration::from_secs(20), true)
         })
         .await

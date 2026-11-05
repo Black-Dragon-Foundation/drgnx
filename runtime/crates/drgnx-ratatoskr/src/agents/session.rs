@@ -1146,7 +1146,7 @@ async fn browser_shape(
     let cur = front.settings.current();
     let data = runstav::paths::data_dir(&runstav::paths::Env::process());
     let looked = cur.clone();
-    let found = tokio::task::spawn_blocking(move || {
+    let found = crate::clock::blocking(move || {
         crate::browser::resolve::resolve(&looked.loaded.values, &data)
     })
     .await
