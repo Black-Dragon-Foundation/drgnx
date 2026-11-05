@@ -602,11 +602,34 @@ no longer what the page shows (what was confirmed must be what runs)."
             drgnx-agent-settings--root (drgnx-agent-settings--usable-root root)
             ;; never the caller's (a remote buffer's would be reached for every relative name)
             default-directory (or drgnx-agent-settings--root (expand-file-name "~/")))
-      (drgnx-agent-settings--read)
-      (drgnx-agent-settings--render)
-      (goto-char (point-min)))
+      (drgnx-agent-settings--read-then buffer
+                                       (lambda ()
+                                         (drgnx-agent-settings--render)
+                                         (goto-char (point-min)))))
     (pop-to-buffer buffer)
     buffer))
+
+(defun drgnx-agent-settings--read-then (buffer then &optional keep)
+  "Read the agent's settings for BUFFER's page, then call THEN in BUFFER.  Claude Code's user file (`.claude.json', big,
+rewritten every few seconds) is read off the main thread when Nidhogg's workers are on: THEN runs when it lands, and
+the page says it is reading until then (KEEP: the page stays as it is); otherwise THEN runs before this returns.  Only
+the page's open and Refresh come here: what an edit changes is re-read at once (`drgnx-agent-config-read-text-async')."
+  (let ((done nil))
+    (cl-flet ((finish (text)
+                (when (buffer-live-p buffer)
+                  (with-current-buffer buffer
+                    (let ((drgnx-agent-config--preread
+                           (and text (list (cons (drgnx-agent-config-claude-json-file) text)))))
+                      (drgnx-agent-settings--read))
+                    (funcall then)))
+                (setq done t)))
+      (if (and (eq (buffer-local-value 'drgnx-agent-settings--kind buffer) 'claude)
+               (drgnx-agent-config-read-text-async (drgnx-agent-config-claude-json-file) #'finish))
+          (unless (or done keep)                      ; asynchronous: the page waits for the text
+            (with-current-buffer buffer              ; a new page is empty; one shown before keeps its text meanwhile
+              (when (= (point-min) (point-max))
+                (let ((inhibit-read-only t)) (insert "Reading the settings…\n")))))
+        (unless done (finish nil))))))
 
 (defun drgnx-agent-settings--page ()
   (unless (derived-mode-p 'drgnx-agent-settings-mode) (user-error "Not an agent settings page"))
@@ -688,7 +711,8 @@ Interactively: the agent of the session at point (in the Agents list or a transc
 (defun drgnx-agent-settings-refresh ()
   "Read the agent's files again and redraw the page (nothing is started)."
   (interactive)
-  (drgnx-agent-settings--refresh-buffer (drgnx-agent-settings--page)))
+  (let ((page (drgnx-agent-settings--page)))
+    (drgnx-agent-settings--read-then page (lambda () (drgnx-agent-settings--redraw)) t)))
 
 (defun drgnx-agent-settings-other ()
   "Show another agent's settings, for the same project."

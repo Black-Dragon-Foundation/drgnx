@@ -115,7 +115,10 @@ stays highlighted wherever the new ones sort; it moves when you type or move it.
 **Live**: files created, deleted or renamed outside Emacs appear within ~150 ms (only the changed folder is read
 again; the view and selection stay; nothing changes while a mouse button is held — a press whose release never
 reaches the Explorer, because Emacs lost focus or the release came with a modifier or in another window, ends
-there).
+there). With Nidhogg's workers on (`nidhogg-workers-framing`), a local folder you open, or one that changed, is read off the
+main thread: it keeps showing the rows it had (a folder never listed shows one row, "…") and its rows change when the
+last part of the listing is in. A folder you close before that shows nothing, and a listing that a newer change or a
+Refresh overtook is not shown. A remote folder is listed as before.
 
 **Git**: `M` modified, `A` added, `U` untracked, `R` renamed, `D` deleted, `C` conflict, in the colours of your
 theme's version-control faces; a folder with changes inside shows `●` (also one whose only change is a new file;

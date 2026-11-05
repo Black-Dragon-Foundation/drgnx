@@ -83,6 +83,114 @@ listed.  Otherwise a remote folder shows its cached listing, or one row saying i
   (dolist (dir (drgnx-cache-keys 'explorer-listing))
     (unless (file-remote-p dir) (drgnx-cache-remove 'explorer-listing dir))))
 
+;;;; Reading a folder off the main thread
+;; With Nidhogg's workers on (`drgnx-file-stream-available-p'), a local folder shown by a command of the user (expanding
+;; it) or by a file event is read by `nidhogg-directory-files-async' (unsorted, in batches).  Until the last batch the
+;; folder shows its cached rows, or one row "…"; then the rows are put in place (`drgnx-explorer--patch-dir').  What
+;; may happen when is decided by a pure core, `drgnx-explorer--read-step' (a state and an event give a state and the
+;; effects to run), tested in every order: a collapse before the last batch shows nothing, a read that a file event or a
+;; Refresh overtook is not shown, a batch of an older read is dropped.  The shell below only runs the effects.
+
+(cl-defstruct (drgnx-explorer--read (:constructor drgnx-explorer--read-make) (:copier drgnx-explorer--read-copy))
+  "One folder's read: EXPANDED (its rows are shown), GEN (the current read's number), READING (a read of GEN runs),
+ACC (the entries delivered by it, in order) and DIRTY (the folder changed while it ran)."
+  (expanded t) (gen 0) reading acc dirty)
+
+(defun drgnx-explorer--read-step (state event)
+  "STATE after EVENT, as (STATE . EFFECTS); STATE is not changed.  The events: (expand) rows of the folder are wanted
+and its cache is no good; (collapse); (changed) the folder changed on disk; (refresh) a full render follows, so every
+read so far is dropped; (batch GEN ENTRIES) and (done GEN) from the read GEN.  The effects: (start GEN), (store GEN) the
+read GEN ended and its entries are the folder's listing, (patch GEN) and show them now."
+  (let ((s (drgnx-explorer--read-copy state)) effects)
+    (cl-flet ((start () (setf (drgnx-explorer--read-gen s) (1+ (drgnx-explorer--read-gen s))
+                              (drgnx-explorer--read-reading s) t (drgnx-explorer--read-acc s) nil
+                              (drgnx-explorer--read-dirty s) nil)
+                (push (list 'start (drgnx-explorer--read-gen s)) effects)))
+      (pcase event
+        (`(expand) (setf (drgnx-explorer--read-expanded s) t)
+         (unless (drgnx-explorer--read-reading s) (start)))
+        (`(collapse) (setf (drgnx-explorer--read-expanded s) nil))
+        (`(changed) (if (drgnx-explorer--read-reading s)
+                        (setf (drgnx-explorer--read-dirty s) t)
+                      (when (drgnx-explorer--read-expanded s) (start))))
+        (`(refresh) (setf (drgnx-explorer--read-gen s) (1+ (drgnx-explorer--read-gen s))
+                          (drgnx-explorer--read-reading s) nil (drgnx-explorer--read-acc s) nil
+                          (drgnx-explorer--read-dirty s) nil))
+        (`(batch ,gen ,entries)
+         (when (and (drgnx-explorer--read-reading s) (eql gen (drgnx-explorer--read-gen s)))
+           (setf (drgnx-explorer--read-acc s) (append (drgnx-explorer--read-acc s) entries nil))))
+        (`(done ,gen)
+         (when (and (drgnx-explorer--read-reading s) (eql gen (drgnx-explorer--read-gen s)))
+           (setf (drgnx-explorer--read-reading s) nil)
+           (push (list 'store gen (drgnx-explorer--read-acc s)) effects)
+           (cond ((drgnx-explorer--read-dirty s) (when (drgnx-explorer--read-expanded s) (start)))
+                 ((drgnx-explorer--read-expanded s) (push (list 'patch gen) effects)))))))
+    (cons s (nreverse effects))))
+
+(defvar drgnx-explorer--async-reads nil
+  "Non-nil while a command of the user or a file event shows a folder: a local folder that must be read is read off the
+main thread (see `drgnx-explorer--read-step').  Everything else, a full render included, reads at once.")
+(defvar drgnx-explorer--reads (make-hash-table :test #'equal)
+  "Folder → its `drgnx-explorer--read'.  Small, so kept; past 256 the idle ones go, and `drgnx-explorer--read-epoch'
+keeps the number of a read that still runs from being given again.")
+(defvar drgnx-explorer--read-epoch 0 "The highest read number given to any folder.")
+(defvar drgnx-explorer--read-mtimes (make-hash-table :test #'equal) "Folder → its modification time when its read started.")
+(defconst drgnx-explorer--reading-row "…" "The one row of a folder with no cached rows while it is read.")
+
+(defun drgnx-explorer--batch-entries (dir batch)
+  "BATCH, a list of (NAME . ATTRIBUTES) from `nidhogg-directory-files-async' for DIR, as (NAME . DIRP) without the
+excluded names, as `drgnx-explorer-children' reads a folder."
+  (let (entries)
+    (dolist (e batch)
+      (let ((name (car e)) (type (file-attribute-type (cdr e))))
+        (unless (or (member name '("." "..")) (string-match-p drgnx-explorer-exclude name))
+          (push (cons name (or (eq type t) (and (stringp type) (file-directory-p (expand-file-name name dir))))) entries))))
+    (nreverse entries)))
+
+(defun drgnx-explorer--read-feed (dir event)
+  "Give EVENT to DIR's read and run the effects; the state."
+  (setq dir (file-name-as-directory dir))
+  (when (> (hash-table-count drgnx-explorer--reads) 256)
+    (maphash (lambda (d s) (unless (drgnx-explorer--read-reading s) (remhash d drgnx-explorer--reads))) drgnx-explorer--reads))
+  (let* ((state (or (gethash dir drgnx-explorer--reads)
+                    (puthash dir (drgnx-explorer--read-make :gen drgnx-explorer--read-epoch) drgnx-explorer--reads)))
+         (result (drgnx-explorer--read-step state event))
+         (new (car result)))
+    (puthash dir new drgnx-explorer--reads)
+    (setq drgnx-explorer--read-epoch (max drgnx-explorer--read-epoch (drgnx-explorer--read-gen new)))
+    (dolist (effect (cdr result))
+      (pcase effect
+        (`(start ,gen) (drgnx-explorer--read-start dir gen))
+        (`(store ,_ ,entries) (drgnx-cache-put 'explorer-listing dir
+                                               (cons (gethash dir drgnx-explorer--read-mtimes)
+                                                     (sort (copy-sequence entries) #'drgnx-explorer--before))))
+        (`(patch ,_) (drgnx-explorer--patch-dir dir))))
+    (gethash dir drgnx-explorer--reads)))
+
+(defun drgnx-explorer--read-start (dir gen)
+  "Start read GEN of DIR; a read that cannot start ends at once with nothing, and the next look reads synchronously."
+  (puthash dir (file-attribute-modification-time (file-attributes dir)) drgnx-explorer--read-mtimes)
+  (let ((handle (condition-case nil
+                    (nidhogg-directory-files-async
+                     dir (drgnx-guard-wrap
+                          (lambda (batch done err)
+                            (drgnx-explorer--read-feed dir (list 'batch gen (drgnx-explorer--batch-entries dir batch)))
+                            (when (or done err) (drgnx-explorer--read-feed dir (list 'done gen))))
+                          "explorer folder read")
+                     :nosort t)
+                  (error nil))))
+    (unless handle (drgnx-explorer--read-feed dir '(refresh)))))
+
+(defun drgnx-explorer--async-rows (dir hit)
+  "DIR's cached rows (HIT is its cache entry), or the one reading row, while DIR is read off the main thread, started
+now when none runs; nil when it cannot be (the caller reads at once)."
+  (when (and drgnx-explorer--async-reads (drgnx-file-stream-available-p dir) (not (file-remote-p dir)))
+    (let ((state (drgnx-explorer--read-feed dir '(expand))))
+      (when (drgnx-explorer--read-reading state)
+        (if hit (cdr hit) (list (cons drgnx-explorer--reading-row nil)))))))
+
+(declare-function nidhogg-directory-files-async "nidhogg-blk.c" (dir callback &rest args))
+
 (defun drgnx-explorer-children (dir)
   "DIR's entries as sorted (NAME . DIRP), without excluded names; cached while DIR is unchanged.
 A remote DIR is read only while `drgnx-explorer--remote-reads' is non-nil (a command of the user): the
@@ -100,16 +208,17 @@ cached listing is used without asking the host, and a folder never listed has on
                       (file-attribute-modification-time (file-attributes dir)))))
         (if (or (and hit (equal (car hit) mtime)) (and remote (null mtime)))
             (if hit (cdr hit) (list (cons drgnx-explorer--not-listed nil)))
-          (let (entries)
-            (dolist (e (ignore-errors (directory-files-and-attributes dir nil nil t)))
-              (let ((name (car e)) (type (file-attribute-type (cdr e))))
-                (unless (or (member name '("." "..")) (string-match-p drgnx-explorer-exclude name))
-                  (push (cons name (or (eq type t)
-                                       (and (stringp type) (file-directory-p (expand-file-name name dir)))))
-                        entries))))
-            (setq entries (sort entries #'drgnx-explorer--before))
-            (drgnx-cache-put 'explorer-listing dir (cons mtime entries))
-            entries)))))))
+          (or (and (not remote) (drgnx-explorer--async-rows dir hit))
+              (let (entries)
+                (dolist (e (ignore-errors (directory-files-and-attributes dir nil nil t)))
+                  (let ((name (car e)) (type (file-attribute-type (cdr e))))
+                    (unless (or (member name '("." "..")) (string-match-p drgnx-explorer-exclude name))
+                      (push (cons name (or (eq type t)
+                                           (and (stringp type) (file-directory-p (expand-file-name name dir)))))
+                            entries))))
+                (setq entries (sort entries #'drgnx-explorer--before))
+                (drgnx-cache-put 'explorer-listing dir (cons mtime entries))
+                entries))))))))
 
 (defun drgnx-explorer--expanded-p (path) (gethash path drgnx-explorer--expanded))
 
@@ -283,6 +392,8 @@ faces come later, from jit-lock, for the rows on screen."
   "Render every root from scratch, keeping the row at point by its path."
   (with-current-buffer (get-buffer-create drgnx-explorer-buffer-name)
     (cl-incf drgnx-explorer--renders)
+    ;; this render reads every folder now: a read that runs is no use any more, and its batches are dropped
+    (dolist (dir (hash-table-keys drgnx-explorer--reads)) (drgnx-explorer--read-feed dir '(refresh)))
     (let ((inhibit-read-only t) data)
       (drgnx-view-with-kept-windows (:key-at #'drgnx-explorer-node-at :pos-of #'drgnx-explorer--row-pos)
         (erase-buffer)
@@ -448,10 +559,20 @@ split, a plain one may join.  The folder's own row and everything else stay."
     (when hl-line-mode (hl-line-highlight))
     (drgnx-explorer--sync-watches)))
 
-(defun drgnx-explorer--refresh-dir (dir)
+(defun drgnx-explorer--patch-dir (dir)
+  "DIR's read ended and its listing is in the cache: put its rows in place (nothing when DIR is not shown any more or
+Find shows its own tree).  Called from the read's callback."
+  (when-let* ((buf (get-buffer drgnx-explorer-buffer-name)) ((not drgnx-explorer--find)))
+    (with-current-buffer buf
+      (let ((drgnx-explorer--async-reads nil))
+        (drgnx-explorer--refresh-dir dir t))
+      (drgnx-explorer--git-refresh))))
+
+(defun drgnx-explorer--refresh-dir (dir &optional keep-cache)
   "Re-list DIR (shown and expanded) and replace its rows in place, keeping views and selection.
 A folder in the middle of a joined row, or one that now joins its only folder (or no longer does),
-shows its whole entry again."
+shows its whole entry again.  KEEP-CACHE: the listing in the cache is the new one (`drgnx-explorer--patch-dir').
+With Nidhogg's workers on, a local DIR is read off the main thread instead: its rows change when the read ends."
   (when-let* ((dir (directory-file-name dir))
               (i (drgnx-explorer--entry-index dir))
               (v (aref drgnx-explorer--rows i)))
@@ -460,9 +581,13 @@ shows its whole entry again."
       (cl-incf drgnx-explorer--relists)
       (drgnx-cache-remove 'explorer-listing (file-name-as-directory dir))
       (drgnx-explorer--reinsert-entry i))
+     ((and (not keep-cache) (or (= (aref v 1) 0) (drgnx-explorer--expanded-p dir))
+           (drgnx-file-stream-available-p dir) (fboundp 'nidhogg-directory-files-async))
+      (cl-incf drgnx-explorer--relists)
+      (let ((drgnx-explorer--async-reads t)) (drgnx-explorer--read-feed dir '(changed))))
      ((or (= (aref v 1) 0) (drgnx-explorer--expanded-p dir))
       (cl-incf drgnx-explorer--relists)
-      (drgnx-cache-remove 'explorer-listing (file-name-as-directory dir))
+      (unless keep-cache (drgnx-cache-remove 'explorer-listing (file-name-as-directory dir)))
       (if (and (> (aref v 1) 0) (drgnx-explorer--compact-p)
                (drgnx-explorer--only-folder (drgnx-explorer-children dir)))
           (drgnx-explorer--reinsert-entry i)                         ; it joins its folder now
@@ -507,15 +632,18 @@ shows its whole entry again."
           (if (drgnx-explorer--expanded-p path)
               (let ((j (drgnx-explorer--subtree-last i)))
                 (remhash path drgnx-explorer--expanded)
+                (when (gethash (file-name-as-directory path) drgnx-explorer--reads) ; a read still running shows nothing
+                  (drgnx-explorer--read-feed (file-name-as-directory path) '(collapse)))
                 (delete-region next (save-excursion (goto-char next) (forward-line (- j i 1)) (point)))
                 (setq drgnx-explorer--rows (vconcat (seq-subseq rows 0 (1+ i)) (seq-subseq rows j)))
                 (drgnx-explorer--set-chevron bol depth nil))
             (puthash path t drgnx-explorer--expanded)
-            (if (and (drgnx-explorer--compact-p) (drgnx-explorer--only-folder (drgnx-explorer-children path)))
-                (drgnx-explorer--reinsert-entry i)           ; its only folder joins this row
-              (let ((new (save-excursion (goto-char next) (drgnx-explorer--insert-subtree path (1+ depth)))))
-                (setq drgnx-explorer--rows (vconcat (seq-subseq rows 0 (1+ i)) new (seq-subseq rows (1+ i)))))
-              (drgnx-explorer--set-chevron bol depth t)))
+            (let ((drgnx-explorer--async-reads t))             ; the user's command: a folder to read is read off the main thread
+              (if (and (drgnx-explorer--compact-p) (drgnx-explorer--only-folder (drgnx-explorer-children path)))
+                  (drgnx-explorer--reinsert-entry i)           ; its only folder joins this row
+                (let ((new (save-excursion (goto-char next) (drgnx-explorer--insert-subtree path (1+ depth)))))
+                  (setq drgnx-explorer--rows (vconcat (seq-subseq rows 0 (1+ i)) new (seq-subseq rows (1+ i)))))
+                (drgnx-explorer--set-chevron bol depth t))))
           (drgnx-explorer--sync-watches))
         t))))
 
