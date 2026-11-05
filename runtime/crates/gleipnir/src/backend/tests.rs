@@ -7,7 +7,6 @@ use crate::inner::InnerSpec;
 use crate::spec::{Bind, HELPER_INSIDE, Layers, Mode, Net, RelayPort, Spec};
 use std::fs;
 use std::io::Read;
-use std::path::Path;
 
 /// `w` (written), `r` (read), `t` (the reduced tier's tmp), `rt/s/S1` (the session dir, with `proxy.sock`),
 /// `bin/ratatoskr` (the helper) and `w/.env` (a file to hide).
@@ -87,7 +86,7 @@ impl Fx {
 
     fn sandbox(&self, kind: BackendKind) -> Sandbox {
         let program = (kind == BackendKind::Bwrap)
-            .then(|| eitri::trusted_program(&[Path::new("/usr/bin/env")]).unwrap());
+            .then(|| eitri::trusted_program(&[&system_program()]).unwrap());
         Sandbox {
             kind,
             tier: if kind == BackendKind::Reduced {
@@ -100,6 +99,12 @@ impl Fx {
             mac: MacContext::default(),
         }
     }
+}
+
+/// A program only root can change, standing in for bwrap (never run here): `/usr/bin/env`'s true name, since it is a
+/// link where coreutils comes from uutils (Ubuntu 26.04) and `trusted_program` refuses links.
+fn system_program() -> PathBuf {
+    fs::canonicalize("/usr/bin/env").unwrap()
 }
 
 fn prep(sb: &Sandbox, spec: ValidSpec, cmd: &[&str]) -> Result<Prepared, Refusal> {
@@ -165,7 +170,7 @@ fn bwrap_invocation_has_spec_status_and_binds_at_3_4_5() {
     )
     .unwrap();
     let inv = &p.invocation;
-    assert_eq!(inv.program, PathBuf::from("/usr/bin/env"), "bwrap's path");
+    assert_eq!(inv.program, system_program(), "bwrap's path");
     assert!(inv.env.is_empty() && inv.cwd.is_none() && !inv.new_session);
     // 3 = the spec, 4 = the status pipe, then the binds from 5 in argv order: read, write, run, the helper.
     assert_eq!(targets(inv), [3, 4, 5, 6, 7, 8]);

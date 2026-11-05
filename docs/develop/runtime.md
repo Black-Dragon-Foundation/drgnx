@@ -203,7 +203,10 @@ cap }`, `Escapes`, `Untrusted { path, why }`, `Unsupported` or `Io`.
   path, dev, ino }`: an absolute path with no `.` or `..`, opened with `open_path`, a regular file with an execute
   bit, owned by uid 0 and not group- or world-writable, in directories up to `/` that are owned by uid 0 and not
   group- or world-writable (so never under `/tmp`). Otherwise the last candidate's `Untrusted { path, why }`.
-  Callers pass fixed candidates (bwrap, `sandbox-exec`, git); `PATH` is never searched.
+  Callers pass fixed candidates (bwrap, `sandbox-exec`, git); `PATH` is never searched. A link in any component,
+  the last one included, is refused even when root owns it: the candidates are the distributions' own regular files.
+  Not every system program is one (Ubuntu 26.04's `coreutils-from-uutils` makes `/usr/bin/env` a link into
+  `/usr/lib/cargo/bin/coreutils/`), so the tests that need a trusted program take `/usr/bin/env`'s resolved path.
 
 `cargo test -p eitri` runs the unit tests (links in every component, `..` refused with no syscall made, a FIFO
 refused within 100 ms, the cap, a write over a link, no temporary file left, `ENOSYS`/`EINVAL` from `openat2`

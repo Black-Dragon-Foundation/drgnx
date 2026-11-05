@@ -152,25 +152,36 @@ mod tests {
         (top, prog)
     }
 
+    /// `/usr/bin/env`'s true name: the file itself on most systems, a link into `/usr/lib/cargo/bin/coreutils/`
+    /// where coreutils comes from uutils (Ubuntu 26.04).
+    fn system_program() -> PathBuf {
+        fs::canonicalize("/usr/bin/env").unwrap()
+    }
+
     #[test]
-    fn usr_bin_env_is_trusted() {
-        let t = trusted_program(&[Path::new("/usr/bin/env")]).unwrap();
-        let m = fs::symlink_metadata("/usr/bin/env").unwrap();
+    fn a_system_program_is_trusted_and_a_link_to_it_is_not() {
+        let env = system_program();
+        let t = trusted_program(&[&env]).unwrap();
+        let m = fs::symlink_metadata(&env).unwrap();
         assert_eq!(
             t,
             TrustedProgram {
-                path: "/usr/bin/env".into(),
+                path: env.clone(),
                 dev: m.dev(),
                 ino: m.ino()
             }
         );
+        // Root's own link in root's own directory is still a link: refused, never followed.
+        if env != Path::new("/usr/bin/env") {
+            assert_eq!(why(trusted_program(&[Path::new("/usr/bin/env")])), WHY_LINK);
+        }
     }
 
     #[test]
     fn the_first_passing_candidate_wins_and_the_last_failure_is_returned() {
-        let t = trusted_program(&[Path::new("/nonexistent-glp/env"), Path::new("/usr/bin/env")])
-            .unwrap();
-        assert_eq!(t.path, Path::new("/usr/bin/env"));
+        let env = system_program();
+        let t = trusted_program(&[Path::new("/nonexistent-glp/env"), &env]).unwrap();
+        assert_eq!(t.path, env);
         assert_eq!(why(trusted_program(&[])), WHY_NO_CANDIDATE);
         assert_eq!(
             why(trusted_program(&[Path::new("/nonexistent-glp/env")])),
