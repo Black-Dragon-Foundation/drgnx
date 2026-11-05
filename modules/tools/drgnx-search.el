@@ -168,7 +168,7 @@ route once, here."
   (let ((root (drgnx-search-setup--current-root)))
     (when root (drgnx-search--confirm-route root))
     (message "Setting up semantic search…")
-    (pcase-let ((`(,status ,text) (drgnx-search-setup root :interactive t)))
+    (pcase-let ((`(,status ,text) (drgnx-search-setup root :interactive (called-interactively-p 'any))))
       (message "%s%s" (if (memq status '(warn fail)) "Semantic search: " "") text))))
 
 (defun drgnx-search--device-text (worker)

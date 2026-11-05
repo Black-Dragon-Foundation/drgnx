@@ -1,317 +1,226 @@
-;;; search-setup-test.el --- batch tests: Set Up Semantic Search, the doctor's search facts, onboarding step 5 -*- lexical-binding: t -*-
+;;; search-setup-test.el --- batch tests: Set Up Semantic Search, the wizard of the built-in model and servers -*- lexical-binding: t -*-
 ;; test-class: cond
+;; The hub is the seam: its answers are the stub's, the questions the wizard asks are `y-or-n-p's the test answers.
+;; (The model the wizard downloads is the table's default, 95 MB, which no test fetches.)
 (require 'ert)
 (require 'cl-lib)
-(require 'drgnx-onboard)
+(require 'drgnx)
+(require 'drgnx-hub-client)
+(require 'drgnx-ai)
+(require 'drgnx-settings-defaults)
+(require 'drgnx-settings-runtime)
 (require 'drgnx-search-setup)
-(require 'drgnx-search-index)
-(require 'drgnx-search-query)
-(require 'drgnx-ai-probe)
+(load (expand-file-name "modules/tools/drgnx-search" drgnx-dir) nil t)
 
-(defconst drgnx-search-setup-test--dims 4)
+(defconst drgnx-search-setup-test--model "granite-embedding-small-english-r2")
+(defconst drgnx-search-setup-test--bytes 100663296 "96 MB.")
 
-(defun drgnx-search-setup-test--vector (text)
-  "A unit vector for TEXT, the same for the same text."
-  (let ((v (make-vector drgnx-search-setup-test--dims 0.0)) (i 0))
-    (dolist (c (string-to-list (downcase text)))
-      (aset v (% (cl-incf i) drgnx-search-setup-test--dims) (+ (aref v (% i drgnx-search-setup-test--dims)) (float c))))
-    (let ((norm (sqrt (cl-loop for x across v sum (* x x)))))
-      (vconcat (mapcar (lambda (x) (/ x (max norm 1.0))) v)))))
+(defun drgnx-search-setup-test--embedders (&rest kv)
+  "What `search/embedders' answers with the built-in model missing, changed by KV (keys of the answer)."
+  (append kv (list :builtin (list :model drgnx-search-setup-test--model :state "missing"
+                                  :bytes drgnx-search-setup-test--bytes :downloaded 0)
+                   :servers nil)))
 
-(defun drgnx-search-setup-test--embed (inputs)
-  (setq drgnx-ai-embed-last-info '(:provider tei :model nil))
-  (vconcat (mapcar #'drgnx-search-setup-test--vector inputs)))
+(defun drgnx-search-setup-test--ready ()
+  (drgnx-search-setup-test--embedders
+   :builtin (list :model drgnx-search-setup-test--model :state "ready" :bytes drgnx-search-setup-test--bytes
+                  :downloaded drgnx-search-setup-test--bytes :device '(:kind "gpu" :name "AMD Radeon RX 7900"))))
 
-(defmacro drgnx-search-setup-test--with (&rest body)
-  "Run BODY in a git project ROOT (a.txt) with a temp state dir, a TEI that is up (probe stubbed, requests
-answered at once with DIMS-wide vectors), and the index job start recorded in STARTED.  No network, no HOME."
-  (declare (indent 0))
-  `(progn
-     (skip-unless (and (sqlite-available-p) (executable-find "git")))
-     (let* ((root (directory-file-name (make-temp-file "drgnx-setup-proj" t)))
-            (state (make-temp-file "drgnx-setup-state" t))
-            (process-environment (append (list (concat "XDG_STATE_HOME=" state) (concat "DRGNX_CONFIG_DIR=" state "/config")
-                                               "OPENROUTER_API_KEY")
-                                         process-environment))
-            (default-directory (file-name-as-directory root))
-            (drgnx-ai-detected nil) (drgnx-ai-embed-last-info nil) (drgnx-search-last-notice nil)
-            (started nil) (up t) (request-dims drgnx-search-setup-test--dims))
-       (unwind-protect
-           (progn
-             (call-process "git" nil nil nil "init" "-q")
-             (write-region "(defun start-here () 1)\n" nil (expand-file-name "a.txt" root) nil 'silent)
-             (cl-letf (((symbol-function 'drgnx-ai-probe)
-                        (lambda (callback &optional _ids)
-                          (setq drgnx-ai-detected (and up '((tei :up t :models ("bge")))))
-                          (funcall callback)))
-                       ((symbol-function 'drgnx-ai-role) (lambda (_role) '((tei))))
-                       ((symbol-function 'drgnx-ai-request)
-                        (lambda (_role _kind payload callback &rest _)
-                          (funcall callback
-                                   (vconcat (mapcar (lambda (text) (make-vector request-dims 0.5)) (plist-get payload :inputs)))
-                                   '(:provider tei :model nil))
-                          nil))
-                       ((symbol-function 'drgnx-search-index-start)
-                        (lambda (r &optional rebuild) (push (cons r rebuild) started) "job-1")))
-               ,@body))
-         (delete-directory root t)
-         (delete-directory state t)))))
+(defconst drgnx-search-setup-test--tei-plan
+  '(:available t :gpu nil :memory_cap "4g" :model "BAAI/bge-small-en-v1.5"
+               :commands ("systemctl --user start drgnx-tei.service")))
 
-(ert-deftest drgnx-search-setup/wizard-indexes-and-tests ()
-  (drgnx-search-setup-test--with
-    ;; no index yet: the job starts in the background, the answer says how to follow it
-    (let ((r (drgnx-search-setup root)))
-      (should (eq (car r) 'ok))
-      (should (equal (mapcar #'car started) (list root)))
-      (should (string-match-p "background" (cadr r)))
-      (should (string-match-p "Index Status" (cadr r)))
-      (should (string-match-p "tei" (cadr r)))
-      (should (string-match-p "4 dims" (cadr r))))
-    ;; an index that is current: a test query runs and the top hit is shown
-    (let ((res (drgnx-search-index root :embed #'drgnx-search-setup-test--embed)))
-      (should-not (plist-get res :error)))
-    (setq started nil)
-    (cl-letf (((symbol-function 'drgnx-ai-request)
-               (lambda (_role _kind payload callback &rest _)
-                 (funcall callback (vconcat (mapcar #'drgnx-search-setup-test--vector (plist-get payload :inputs)))
-                          '(:provider tei :model nil))
-                 nil)))
-      (let ((r (drgnx-search-setup root)))
-        (should (eq (car r) 'ok))
-        (should-not started)
-        (should (string-match-p "a\\.txt:1" (cadr r)))))))
+(defvar drgnx-search-setup-test--calls nil "Hub calls, newest first: (METHOD . PARAMS).")
+(defvar drgnx-search-setup-test--asked nil "The prompts of `y-or-n-p', newest first.")
+(defvar drgnx-search-setup-test--saved nil "(SETTING . VALUE) of `drgnx-settings-defaults-save', newest first.")
+(defvar drgnx-search-setup-test--told nil "How often the hub was told `config/changed'.")
 
-(ert-deftest drgnx-search-setup/a-current-index-costs-the-wizard-one-embedding ()
-  "The provider test and the test query are the same request."
-  (drgnx-search-setup-test--with
-    (drgnx-search-index root :embed #'drgnx-search-setup-test--embed)
-    (let ((requests 0))
-      (cl-letf (((symbol-function 'drgnx-ai-request)
-                 (lambda (_role _kind payload callback &rest _)
-                   (cl-incf requests)
-                   (funcall callback (vconcat (mapcar #'drgnx-search-setup-test--vector (plist-get payload :inputs)))
-                            '(:provider tei :model nil))
-                   nil)))
-        (let ((r (drgnx-search-setup root)))
-          (should (eq (car r) 'ok))
-          (should (string-match-p "a\\.txt:1" (cadr r)))
-          (should (= requests 1)))))))
+(defmacro drgnx-search-setup-test--with (replies answers &rest body)
+  "BODY in a frame-ful interactive Emacs whose hub answers REPLIES ((METHOD . RESULT)…) and whose `y-or-n-p' answers
+ANSWERS (a list, one per question, nil past its end)."
+  (declare (indent 2))
+  `(let ((drgnx-search-setup-test--calls nil) (drgnx-search-setup-test--asked nil)
+         (drgnx-search-setup-test--saved nil) (drgnx-search-setup-test--told 0)
+         (answers ,answers) (noninteractive nil))
+     (cl-letf (((symbol-function 'drgnx-hub-ensure)
+                (lambda () (push '("ensure") drgnx-search-setup-test--calls) t))
+               ((symbol-function 'drgnx-hub-running-p) (lambda () t))
+               ((symbol-function 'drgnx-hub-call-sync)
+                (lambda (method params &optional _timeout)
+                  (push (cons method params) drgnx-search-setup-test--calls)
+                  (cdr (assoc method ,replies))))
+               ((symbol-function 'y-or-n-p)
+                (lambda (prompt) (push prompt drgnx-search-setup-test--asked) (pop answers)))
+               ((symbol-function 'drgnx-settings-defaults-save)
+                (lambda (setting value) (push (cons setting value) drgnx-search-setup-test--saved)))
+               ((symbol-function 'drgnx-settings-runtime-changed) (lambda () (cl-incf drgnx-search-setup-test--told)))
+               ((symbol-function 'frame-list) (lambda () (list (selected-frame))))
+               ((symbol-function 'display-graphic-p) (lambda (&rest _) t)))
+       ,@body)))
 
-(ert-deftest drgnx-search-setup/stale-is-known-when-every-file-is-excluded ()
-  (drgnx-search-setup-test--with
-    (drgnx-search-index root :embed #'drgnx-search-setup-test--embed)
-    (make-directory (expand-file-name ".drgnx" root))
-    (write-region "(:exclude (\"*.txt\"))" nil (expand-file-name ".drgnx/search.eld" root) nil 'silent)
-    (should (eql (plist-get (drgnx-search-setup-index-info root (+ (float-time) 5)) :stale) 1))))   ; a.txt is gone from the list
+(defun drgnx-search-setup-test--methods ()
+  "The methods the hub was called with, oldest first."
+  (mapcar #'car (reverse drgnx-search-setup-test--calls)))
 
-(ert-deftest drgnx-search-setup/a-start-that-backs-off-is-not-reported-as-indexing ()
-  (drgnx-search-setup-test--with
-    (cl-letf (((symbol-function 'drgnx-search-index-start) (lambda (&rest _) nil)))
-      (let ((r (drgnx-search-setup root)))
-        (should (string-match-p "try again shortly" (cadr r)))
-        (should-not (string-match-p "is being indexed" (cadr r)))))))
+(ert-deftest drgnx-search-setup/daemon-never-asks ()
+  ;; batch, a daemon with no frame, and a call that is not a command: no question, no hub call, how to run it
+  (drgnx-search-setup-test--with `(("search/embedders" . ,(drgnx-search-setup-test--embedders))) '(t t t)
+    (let ((noninteractive t))
+      (should (equal (drgnx-search-setup "/p" :interactive t) (list 'info drgnx-search-setup-guard-text))))
+    (cl-letf (((symbol-function 'daemonp) (lambda () t))
+              ((symbol-function 'frame-list) (lambda () nil)))
+      (should (equal (drgnx-search-setup "/p" :interactive t) (list 'info drgnx-search-setup-guard-text))))
+    (should (equal (drgnx-search-setup "/p") (list 'info drgnx-search-setup-guard-text)))   ; not a command
+    (should-not drgnx-search-setup-test--asked)
+    (should-not drgnx-search-setup-test--calls)
+    (should (string-match-p "in a frame to download a model or start a server" drgnx-search-setup-guard-text))))
 
-(ert-deftest drgnx-search-setup/wizard-without-a-provider-says-how-to-start-one ()
-  (drgnx-search-setup-test--with
-    (setq up nil)
-    (let ((r (drgnx-search-setup root)))
+(ert-deftest drgnx-search-setup/detect-changes-nothing ()
+  (drgnx-search-setup-test--with `(("search/embedders" . ,(drgnx-search-setup-test--embedders))) '(t t t)
+    (let ((r (drgnx-search-setup-detect)))
       (should (eq (car r) 'info))
-      (should (string-match-p "Text Embeddings Inference" (cadr r)))
-      (should (string-match-p "Ollama" (cadr r)))
-      (should-not started))))
+      (should (string-match-p "built-in model granite-embedding-small-english-r2 not downloaded (96 MB)" (cadr r)))
+      (should (string-match-p "no server" (cadr r))))
+    (should (equal (drgnx-search-setup-test--methods) '("search/embedders")))   ; it neither started the hub nor asked
+    (should-not drgnx-search-setup-test--asked)
+    (should-not drgnx-search-setup-test--saved))
+  (drgnx-search-setup-test--with `(("search/embedders" . ,(drgnx-search-setup-test--ready))) nil
+    (should (eq (car (drgnx-search-setup-detect)) 'ok))
+    (cl-letf (((symbol-function 'drgnx-hub-running-p) (lambda () nil)))
+      (should (eq (car (drgnx-search-setup-detect)) 'info))
+      (should (equal (drgnx-search-setup-test--methods) '("search/embedders"))))))      ; no second call: no hub
 
-(ert-deftest drgnx-search-setup/wizard-an-embedding-that-fails-stops ()
-  (drgnx-search-setup-test--with
-    (cl-letf (((symbol-function 'drgnx-ai-request)
-               (lambda (_role _kind _payload callback &rest _)
-                 (funcall callback nil '(:error "tei: HTTP 500")) nil)))
-      (let ((r (drgnx-search-setup root)))
-        (should (eq (car r) 'warn))
-        (should (string-match-p "HTTP 500" (cadr r)))
-        (should-not started)))))
+(ert-deftest drgnx-search-setup/decline-downloads-nothing ()
+  (drgnx-search-setup-test--with `(("search/embedders" . ,(drgnx-search-setup-test--embedders))
+                                   ("search/server-plan" . (:available nil :why "no podman"))
+                                   ("search/index" . (:started t)))
+      nil
+    (let ((r (drgnx-search-setup "/p" :interactive t)))
+      (should (eq (car r) 'info))
+      (should (string-match-p "keyword and symbol search only" (cadr r))))
+    (should-not (member "search/model-download" (drgnx-search-setup-test--methods)))
+    (should (= (length drgnx-search-setup-test--asked) 1))))
 
-(ert-deftest drgnx-search-setup/wizard-does-not-rebuild-an-index-of-another-size ()
-  (drgnx-search-setup-test--with
-    (drgnx-search-index root :embed #'drgnx-search-setup-test--embed)
-    (setq request-dims 8)
-    (let ((r (drgnx-search-setup root)))
-      (should (eq (car r) 'warn))
-      (should (string-match-p "built with tei (4), the provider gives 8" (cadr r)))
-      (should (string-match-p "rebuild" (cadr r)))
-      (should-not started))))
+(ert-deftest drgnx-search-setup/consent-states-size ()
+  (drgnx-search-setup-test--with `(("search/embedders" . ,(drgnx-search-setup-test--embedders))
+                                   ("search/server-plan" . (:available nil))
+                                   ("search/model-download" . (:started t))
+                                   ("search/index" . (:started t)))
+      '(t)
+    (drgnx-search-setup "/p" :interactive t)
+    (let ((prompt (car (last drgnx-search-setup-test--asked))))
+      (should (string-match-p (regexp-quote "Download granite-embedding-small-english-r2 (96 MB) for semantic search?") prompt))
+      (should (string-match-p "on this machine, on the GPU when one is fast enough" prompt)))
+    (let ((call (assoc "search/model-download" drgnx-search-setup-test--calls)))
+      (should (equal (plist-get (cdr call) :model) drgnx-search-setup-test--model))
+      (should (equal (plist-get (cdr call) :consent) (list :bytes drgnx-search-setup-test--bytes))))))
 
-(ert-deftest drgnx-search-setup/wizard-names-a-model-that-differs ()
-  (drgnx-search-setup-test--with
-    (drgnx-search-index root :embed #'drgnx-search-setup-test--embed)
-    (cl-letf (((symbol-function 'drgnx-ai-request)
-               (lambda (_role _kind payload callback &rest _)
-                 (funcall callback (vconcat (mapcar #'drgnx-search-setup-test--vector (plist-get payload :inputs)))
-                          '(:provider tei :model "other"))
-                 nil)))
-      (let ((r (drgnx-search-setup root)))
-        (should (eq (car r) 'warn))
-        (should (string-match-p "built with tei, the provider is tei/other" (cadr r)))
-        (should-not started)))))
+(ert-deftest drgnx-search-setup/server-offered-only-when-available ()
+  (drgnx-search-setup-test--with `(("search/embedders" . ,(drgnx-search-setup-test--ready))
+                                   ("search/server-plan" . (:available nil :why "podman is not installed"))
+                                   ("search/index" . (:started t)))
+      '(t t)
+    (drgnx-search-setup "/p" :interactive t)
+    (should-not drgnx-search-setup-test--asked)                      ; ready model, no server possible: nothing to ask
+    (should-not (member "search/server-start" (drgnx-search-setup-test--methods))))
+  (drgnx-search-setup-test--with `(("search/embedders" . ,(drgnx-search-setup-test--ready))
+                                   ("search/server-plan" . ,drgnx-search-setup-test--tei-plan)
+                                   ("search/index" . (:started t)))
+      '(nil)
+    (drgnx-search-setup "/p" :interactive t)
+    (should (= (length drgnx-search-setup-test--asked) 1))
+    (let ((prompt (car drgnx-search-setup-test--asked)))
+      (should (string-match-p "systemctl --user start drgnx-tei.service" prompt))
+      (should (string-match-p "Memory cap 4g" prompt))))
+  ;; a server that already answers is not offered another
+  (drgnx-search-setup-test--with `(("search/embedders" . ,(drgnx-search-setup-test--ready))
+                                   ("search/index" . (:started t)))
+      '(t)
+    (let ((e (drgnx-search-setup-test--ready)))
+      (setq e (plist-put e :servers '((:kind "tei" :url "http://127.0.0.1:8087" :model "tei:local" :answering t))))
+      (cl-letf (((symbol-function 'drgnx-hub-call-sync)
+                 (lambda (method &rest _) (push (list method) drgnx-search-setup-test--calls)
+                   (and (equal method "search/embedders") e))))
+        (drgnx-search-setup "/p" :interactive t)))
+    (should-not (member "search/server-plan" (drgnx-search-setup-test--methods)))))
 
-(ert-deftest drgnx-search-setup/the-role-changes-only-after-the-test-embedding-works ()
-  (drgnx-search-setup-test--with
-    (let ((set nil) (calls 0))
-      ;; the role has a provider that is down; TEI is up and is found by the probe
-      (cl-letf (((symbol-function 'drgnx-ai-role) (lambda (_role) '((dead . "m"))))
-                ((symbol-function 'drgnx-ai-user-role) (lambda (_role) '((dead . "m"))))
-                ((symbol-function 'drgnx-ai-set-role) (lambda (role chain) (push (cons role chain) set))))
-        ;; a failing embedding: the role stays
-        (cl-letf (((symbol-function 'drgnx-ai-request)
-                   (lambda (_role _kind _payload callback &rest _) (cl-incf calls) (funcall callback nil '(:error "HTTP 500")) nil)))
-          (should (eq (car (drgnx-search-setup root :interactive t)) 'warn))
-          (should-not set))
-        ;; a working one: TEI goes first
-        (let ((r (drgnx-search-setup root :interactive t)))
-          (should (eq (car r) 'ok))
-          (should (equal set '((embed (tei) (dead . "m")))))
-          (should (string-match-p "put first in the embed role" (cadr r))))
-        ;; not interactive: never written
-        (setq set nil)
-        (drgnx-search-setup root)
-        (should-not set)))))
+(ert-deftest drgnx-search-setup/decline-server-starts-nothing ()
+  (drgnx-search-setup-test--with `(("search/embedders" . ,(drgnx-search-setup-test--ready))
+                                   ("search/server-plan" . ,drgnx-search-setup-test--tei-plan)
+                                   ("search/index" . (:started t)))
+      '(nil)
+    (let ((r (drgnx-search-setup "/p" :interactive t)))
+      (should (string-match-p "no server started" (cadr r))))
+    (should-not (member "search/server-start" (drgnx-search-setup-test--methods)))
+    (should-not drgnx-search-setup-test--saved)
+    (should (= drgnx-search-setup-test--told 0))))
 
-(ert-deftest drgnx-search-setup/a-projects-route-never-reaches-the-global-ai-eld ()
-  ;; A-1: the step that worked goes first in the user's own embed chain, not in the effective one (which holds the
-  ;; project's steps): one project's route must not become everybody's.
-  (drgnx-search-setup-test--with
-    (let ((set nil))
-      (cl-letf (((symbol-function 'drgnx-ai-role) (lambda (_role) '((proj . "p"))))             ; the project's chain
-                ((symbol-function 'drgnx-ai-user-role) (lambda (_role) '((dead . "m"))))        ; the user's own
-                ((symbol-function 'drgnx-ai-set-role) (lambda (role chain) (push (cons role chain) set))))
-        (should (eq (car (drgnx-search-setup root :interactive t)) 'ok))
-        (should (equal set '((embed (tei) (dead . "m")))))))))
+(ert-deftest drgnx-search-setup/started-server-lands-in-settings ()
+  (drgnx-search-setup-test--with `(("search/embedders" . ,(drgnx-search-setup-test--ready))
+                                   ("search/server-plan" . ,drgnx-search-setup-test--tei-plan)
+                                   ("search/server-start" . (:started t :unit "drgnx-tei.service"
+                                                                      :provider (:id "tei-local" :kind "tei" :base "http://127.0.0.1:8087"
+                                                                                     :auth "none" :caps ("embed"))))
+                                   ("search/index" . (:started t)))
+      '(t)
+    (let ((r (drgnx-search-setup "/p" :interactive t)))
+      (should (string-match-p "started tei" (cadr r))))
+    (let ((call (assoc "search/server-start" drgnx-search-setup-test--calls)))
+      (should (equal (cdr call) '(:kind "tei" :confirm t))))             ; confirmed, after the plan was shown
+    (let* ((saved (assq 'drgnx-ai-providers drgnx-search-setup-test--saved))
+           (entry (assq 'tei-local (cdr saved))))
+      (should entry)
+      (should (eq (plist-get (cdr entry) :kind) 'tei))
+      (should (equal (plist-get (cdr entry) :url) "http://127.0.0.1:8087"))
+      (should (equal (plist-get (cdr entry) :caps) '(embed))))
+    (should (= drgnx-search-setup-test--told 1))))                      ; `config/changed'
 
-(ert-deftest drgnx-search-setup/a-role-that-cannot-be-written-is-said-not-half-done ()
-  (drgnx-search-setup-test--with
-    (cl-letf (((symbol-function 'drgnx-ai-role) (lambda (_role) '((dead . "m"))))
-              ((symbol-function 'drgnx-ai-user-role) (lambda (_role) '((dead . "m"))))
-              ((symbol-function 'drgnx-ai-set-role) (lambda (&rest _) (user-error "ai.eld does not read"))))
-      (let ((r (drgnx-search-setup root :interactive t)))
-        (should (eq (car r) 'warn))
-        (should (string-match-p "could not be put first" (cadr r)))
-        (should (string-match-p "ai.eld does not read" (cadr r)))
-        (should-not started)))))                                  ; stopped: nothing indexed on a half-set-up role
+(ert-deftest drgnx-search-setup/route-confirmed-once-per-root ()
+  ;; The wizard never asks about a project's remote route itself: the command does, for the one project it runs in,
+  ;; once, and never for several projects in one go.
+  (let (asked (current nil))
+    (cl-letf (((symbol-function 'drgnx-ai-confirm-project-route)
+               (lambda () (push (file-truename default-directory) asked) t))
+              ((symbol-function 'drgnx-search-setup) (lambda (&rest _) (list 'ok "fine")))
+              ((symbol-function 'drgnx-search-setup--current-root) (lambda () current))
+              ((symbol-function 'message) #'ignore))
+      (dolist (dir (list (make-temp-file "drgnx-setup-a" t) (make-temp-file "drgnx-setup-b" t)))
+        (setq current (directory-file-name dir) asked nil)
+        (drgnx-search-set-up)
+        (should (equal asked (list (file-truename (file-name-as-directory dir)))))
+        (delete-directory dir t))))
+  (let (asked)
+    (cl-letf (((symbol-function 'drgnx-ai-confirm-project-route) (lambda () (push t asked))))
+      (drgnx-search-setup-test--with `(("search/embedders" . ,(drgnx-search-setup-test--ready))
+                                       ("search/server-plan" . (:available nil))
+                                       ("search/index" . (:started t)))
+          nil
+        (drgnx-search-setup "/p" :interactive t)
+        (should-not asked)))))                                  ; the wizard itself never asks it
 
-(ert-deftest drgnx-search-setup/the-doctors-embedding-test-honours-its-second ()
-  (drgnx-search-setup-test--with
-    (drgnx-search-index root :embed #'drgnx-search-setup-test--embed)
-    (let (seen)
-      (cl-letf (((symbol-function 'drgnx-ai-detected-cached) (lambda () '((tei :up t :models ("bge")))))
-                ((symbol-function 'drgnx-ai-embed-sync)
-                 (lambda (inputs &rest args) (setq seen args) (vector (make-vector 4 0.5)))))
-        (let ((facts (drgnx-search-doctor-facts (list root))))
-          (should (= (plist-get seen :timeout) 1))
-          (should (equal (plist-get seen :chain) '((tei))))
-          (should (= (plist-get facts :embed-dims) 4)))))))
-
-(defmacro drgnx-search-setup-test--slow-git (&rest body)
-  "BODY with a `git' first on PATH that only sleeps."
-  (declare (indent 0))
-  `(let* ((bin (make-temp-file "drgnx-slow-git" t))
-          (exec-path (cons bin exec-path))
-          (process-environment (cons (concat "PATH=" bin ":" (getenv "PATH")) process-environment)))
-     (unwind-protect
-         (progn
-           (with-temp-file (expand-file-name "git" bin) (insert "#!/bin/sh\nexec sleep 5\n"))
-           (set-file-modes (expand-file-name "git" bin) #o755)
-           ,@body)
-       (delete-directory bin t))))
-
-(ert-deftest drgnx-search-setup/doctor-facts-return-within-the-budget-with-a-slow-git ()
-  :tags '(:timing)
-  (skip-unless (executable-find "sleep"))
-  (drgnx-search-setup-test--with
-    (drgnx-search-index root :embed #'drgnx-search-setup-test--embed)
-    (let ((drgnx-search-setup-stale-budget 1) (facts nil) (t0 nil))
-      (cl-letf (((symbol-function 'drgnx-ai-detected-cached) (lambda () nil)))
-        (drgnx-search-setup-test--slow-git
-          (setq t0 (float-time))
-          (setq facts (drgnx-search-doctor-facts (list root root root)))))   ; three projects, every git call sleeps
-      (should (< (- (float-time) t0) 2))                                    ; budget + 1 s
-      (should (= (length (plist-get facts :indexes)) 3))
-      (should (cl-every (lambda (e) (null (plist-get (cdr e) :stale))) (plist-get facts :indexes))))))   ; unknown
-
-(ert-deftest drgnx-search-setup/doctor-facts-name-a-broken-config ()
-  (drgnx-search-setup-test--with
-    (make-directory (expand-file-name ".drgnx" root))
-    (write-region "(:off yes)" nil (expand-file-name ".drgnx/search.eld" root) nil 'silent)
-    (let ((facts (drgnx-search-doctor-facts (list root))))
-      (should (equal (plist-get facts :config-errors)
-                     (list (cons root ".drgnx/search.eld cannot be read: :off: expected t or nil, got symbol")))))
-    ;; the wizard says so too, and starts nothing
-    (should (string-match-p "\\.drgnx/search\\.eld cannot be read" (cadr (drgnx-search-setup root :interactive t))))
-    (should-not started)))
-
-(ert-deftest drgnx-search-setup/doctor-facts-count-stale-and-unindexed ()
-  (drgnx-search-setup-test--with
-    (let ((other (directory-file-name (make-temp-file "drgnx-setup-other" t))))
-      (unwind-protect
-          (progn
-            (drgnx-search-index root :embed #'drgnx-search-setup-test--embed)
-            (write-region "changed\n" nil (expand-file-name "a.txt" root) nil 'silent)
-            (write-region "new\n" nil (expand-file-name "b.txt" root) nil 'silent)
-            (let* ((facts (drgnx-search-doctor-facts (list root other)))
-                   (entry (cdr (assoc root (plist-get facts :indexes)))))
-              (should (plist-get facts :sqlite))
-              (should (plist-get facts :fts5))
-              (should (= (length (plist-get facts :indexes)) 1))
-              (should (= (plist-get facts :unindexed) 1))        ; `other': listed as not indexed, not stale
-              (should (= (plist-get entry :dims) 4))
-              (should (= (plist-get entry :stale) 2))            ; one changed, one new
-              (should (> (plist-get entry :chunks) 0))))
-        (delete-directory other t)))))
-
-(ert-deftest drgnx-search-setup/doctor-facts-never-prompt-or-block-without-a-provider ()
-  (drgnx-search-setup-test--with
-    (drgnx-search-index root :embed #'drgnx-search-setup-test--embed)
-    (let ((asked nil))
-      (cl-letf (((symbol-function 'drgnx-ai-request) (lambda (&rest _) (setq asked t) nil))
-                ((symbol-function 'drgnx-ai-detected-cached) (lambda () nil)))
-        (let ((facts (drgnx-search-doctor-facts (list root))))
-          (should-not asked)                                    ; nothing cached as up: no request at all
-          (should-not (plist-get facts :embed-up))
-          (should-not (plist-get facts :embed-dims)))))))
-
-(ert-deftest drgnx-onboard/search-step-non-interactive-detects ()
-  :tags '(:frozen)
-  (drgnx-search-setup-test--with
-    (let ((roots (list root)))
-      (cl-letf (((symbol-function 'drgnx-search-setup--roots) (lambda () roots)))
-        ;; a provider is up, the project has no index: info, names the way to index
-        (let ((r (drgnx-onboard--search-step '(:interactive nil))))
-          (should (eq (car r) 'info))
-          (should (string-match-p "tei" (cadr r)))
-          (should (string-match-p "no index" (cadr r)))
-          (should-not started))                                 ; detecting never starts a job
-        ;; indexed: ok
-        (drgnx-search-index root :embed #'drgnx-search-setup-test--embed)
-        (should (eq (car (drgnx-onboard--search-step '(:interactive nil))) 'ok))
-        ;; no provider: info with how to start one
-        (setq up nil)
-        (let ((r (drgnx-onboard--search-step '(:interactive nil))))
-          (should (eq (car r) 'info))
-          (should (string-match-p "Text Embeddings Inference" (cadr r))))))))
-
-(ert-deftest drgnx-onboard/search-step-interactive-runs-the-wizard ()
-  :tags '(:frozen)
-  (drgnx-search-setup-test--with
-    (cl-letf (((symbol-function 'drgnx-search-setup--current-root) (lambda () root)))
-      (let ((r (drgnx-onboard--search-step '(:interactive t))))
-        (should (eq (car r) 'ok))
-        (should (equal (mapcar #'car started) (list root)))))))
-
-(ert-deftest drgnx-search-setup/the-command-has-a-key-entry-in-every-profile ()
-  (load (expand-file-name "modules/tools/drgnx-search" drgnx-dir) nil t)
-  (should (commandp 'drgnx-search-set-up))
-  (dolist (profile '("vscode" "emacs" "vim"))
-    (with-temp-buffer
-      (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir))
-      (should (search-forward "(search-set-up :none \"in the palette\")" nil t)))))
+(ert-deftest drgnx-search-setup/indexes-after-consent ()
+  (drgnx-search-setup-test--with `(("search/embedders" . ,(drgnx-search-setup-test--embedders))
+                                   ("search/server-plan" . (:available nil))
+                                   ("search/model-download" . (:started t))
+                                   ("search/status" . (:files 3 :chunks 0 :models nil :lag (:chunks_behind 0)))
+                                   ("search/index" . (:started t)))
+      '(t)
+    (let ((r (drgnx-search-setup "/p" :interactive t)))
+      (should (string-match-p "is being indexed in the background" (cadr r))))
+    (should (equal (drgnx-search-setup-test--methods)
+                   '("ensure" "search/embedders" "search/model-download" "search/server-plan" "search/server-plan"
+                     "search/status" "search/index")))
+    (should (equal (plist-get (cdr (assoc "search/index" drgnx-search-setup-test--calls)) :root) "/p")))
+  ;; a current index gets the test query instead
+  (drgnx-search-setup-test--with `(("search/embedders" . ,(drgnx-search-setup-test--ready))
+                                   ("search/server-plan" . (:available nil))
+                                   ("search/status" . (:files 3 :chunks 40 :models ((:model "m" :vectors 40))
+                                                              :lag (:chunks_behind 0)))
+                                   ("search/query" . (:hits ((:path "core/a.el" :line_start 7)))))
+      nil
+    (let ((r (drgnx-search-setup "/p" :interactive t)))
+      (should (string-match-p "test query \"where does the program start\": core/a.el:7" (cadr r))))
+    (should-not (member "search/index" (drgnx-search-setup-test--methods)))))
 
 (provide 'search-setup-test)
 ;;; search-setup-test.el ends here
