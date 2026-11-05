@@ -558,8 +558,11 @@
                         "podman push \"$image:$tag\"")
     ;; the runtime's Fedora 45 job runs in the Rust image (by digest) when there is one, else installs what it holds
     (drgnx-ci-test--has (drgnx-ci-test--job rt "images")
-                        "ghcr.sh ref drgnx-test-rust \"$(bash test/container/image-tag.sh test/container/Containerfile.rust)\""
-                        "ghcr.sh ref drgnx-bwrap \"$bwrap-x64\"" "ghcr.sh ref drgnx-bwrap \"$bwrap-arm64\"")
+                        "ghcr.sh ref drgnx-test-rust \"$(bash test/container/image-tag.sh test/container/Containerfile.rust)\"")
+    ;; the escape legs look their architecture's bubblewrap up themselves (no job to wait for)
+    (drgnx-ci-test--has (drgnx-ci-test--job rt "escape-host")
+                        "ghcr.sh ref drgnx-bwrap \"$(bash test/container/image-tag.sh .github/ci/bwrap/Containerfile)-$ARCH\"")
+    (should-not (string-search "needs: images" (drgnx-ci-test--job rt "escape-host")))
     (drgnx-ci-test--has (drgnx-ci-test--job rt "linux")
                         "image: ${{ needs.images.outputs.rust || 'registry.fedoraproject.org/fedora:45' }}"
                         "run: sh test/container/rust-packages.sh" "if: ${{ env.PREBUILT == '' }}")))

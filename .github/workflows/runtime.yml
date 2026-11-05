@@ -63,13 +63,13 @@ env:
   CACHE_SAVE_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
 
 jobs:
-  # The prebuilt images of the jobs below (`Test images`, images.yml), by digest: the Fedora 45 job's container
-  # (test/container/Containerfile.rust) and the escape suite's bubblewrap per architecture (.github/ci/bwrap). Each is
-  # looked up by the tag of this checkout's inputs (test/container/image-tag.sh); an output is empty when GHCR has no
-  # image for them (a change not yet on main), and that job then installs or builds what the image holds itself.
+  # The Fedora 45 job's prebuilt container (`Test images`, images.yml: test/container/Containerfile.rust), by digest: a
+  # job's container is named before its steps run, so this job looks it up, by the tag of this checkout's inputs
+  # (test/container/image-tag.sh). The output is empty when GHCR has no image for them (a change not yet on main), and
+  # the job then installs what the image holds itself. (The escape legs look their bubblewrap up in their own step.)
   images:
-    name: Prebuilt images
-    if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-linux ') || contains(format(' {0} ', inputs.only), ' rt-escape ')) }}
+    name: Prebuilt image (Fedora 45 job)
+    if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-linux ')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -77,8 +77,6 @@ jobs:
       packages: read
     outputs:
       rust: ${{ steps.ref.outputs.rust }}
-      bwrap_x64: ${{ steps.ref.outputs.bwrap_x64 }}
-      bwrap_arm64: ${{ steps.ref.outputs.bwrap_arm64 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -93,12 +91,7 @@ jobs:
           ACTOR: ${{ github.actor }}
         run: |
           rust="$(bash .github/ci/ghcr.sh ref drgnx-test-rust "$(bash test/container/image-tag.sh test/container/Containerfile.rust)")"
-          bwrap="$(bash test/container/image-tag.sh .github/ci/bwrap/Containerfile)"
-          {
-            echo "rust=$rust"
-            echo "bwrap_x64=$(bash .github/ci/ghcr.sh ref drgnx-bwrap "$bwrap-x64")"
-            echo "bwrap_arm64=$(bash .github/ci/ghcr.sh ref drgnx-bwrap "$bwrap-arm64")"
-          } | tee -a "$GITHUB_OUTPUT"
+          echo "rust=$rust" | tee -a "$GITHUB_OUTPUT"
 
   linux:
     name: fmt, clippy, tests, conformance, perf (Fedora 45)
@@ -332,12 +325,11 @@ jobs:
   # runner (free for public repositories), a real arm64 Linux run of the seccomp tests (GL-T4-2: the aarch64 syscall
   # numbers). Ubuntu 24.04 turns unprivileged user namespaces off through AppArmor, so the job lifts the restriction
   # with sudo (the runner user has passwordless sudo) and installs bubblewrap 0.12.0 (gleipnir's floor; apt has 0.9.0),
-# prebuilt per architecture (the `images` job) or built here.
+  # prebuilt per architecture (`Test images`) or built here.
   # It gates (green on both runners since 74be75cf; a failure here fails the CI gate: docs/develop/ci.md).
   escape-host:
     name: escape suite on the runner (${{ matrix.os }})
-    needs: images
-    if: ${{ !cancelled() && github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-escape ')) }}
+    if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-escape ')) }}
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -357,15 +349,17 @@ jobs:
           fetch-depth: 0          # the whole history, for commit-times.sh
           filter: blob:none       # without old file contents
           persist-credentials: false
-      # the prebuilt one of this architecture (its one layer, by digest), else built here (.github/ci/bwrap/build.sh,
-      # the image's own recipe: checksum verified, from source). /usr/bin: Gleipnir trusts a bwrap only where root alone
-      # can change it, and the runner image makes /usr/local group-writable (Gleipnir rightly refuses /usr/local/bin/bwrap)
+      # the prebuilt one of this architecture, looked up by the tag of this checkout's .github/ci/bwrap (its one layer,
+      # by digest), else built here (build.sh, the image's own recipe: checksum verified, from source). /usr/bin:
+      # Gleipnir trusts a bwrap only where root alone can change it, and the runner image makes /usr/local
+      # group-writable (Gleipnir rightly refuses /usr/local/bin/bwrap)
       - name: bubblewrap 0.12.0 (prebuilt, or built from source)
         env:
-          REF: ${{ runner.arch == 'ARM64' && needs.images.outputs.bwrap_arm64 || needs.images.outputs.bwrap_x64 }}
+          ARCH: ${{ runner.arch == 'ARM64' && 'arm64' || 'x64' }}
           TOKEN: ${{ github.token }}
           ACTOR: ${{ github.actor }}
         run: |
+          REF="$(bash .github/ci/ghcr.sh ref drgnx-bwrap "$(bash test/container/image-tag.sh .github/ci/bwrap/Containerfile)-$ARCH")"
           if [ -n "$REF" ]; then
             bash .github/ci/ghcr.sh file "$REF" bwrap "$RUNNER_TEMP/bwrap"
           else
