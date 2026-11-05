@@ -282,7 +282,10 @@ pub fn gate(s: &Scenario, h: &Host) -> Gate {
         return skip(why, !h.browsers_required);
     }
     if has("internet") && !h.internet {
-        return skip("needs DRGNX_TEST_INTERNET=1 (it reaches the outside network)", true);
+        return skip(
+            "needs DRGNX_TEST_INTERNET=1 (it reaches the outside network)",
+            true,
+        );
     }
     if h.ptrace_stays
         && s.steps
@@ -582,7 +585,10 @@ mod tests {
             browsers_required: true,
             ..bare.clone()
         };
-        assert!(matches!(gate(&s, &asked), Gate::Skip { excused: false, .. }));
+        assert!(matches!(
+            gate(&s, &asked),
+            Gate::Skip { excused: false, .. }
+        ));
         let no_mcp = Host {
             no_browser: None,
             ..asked.clone()

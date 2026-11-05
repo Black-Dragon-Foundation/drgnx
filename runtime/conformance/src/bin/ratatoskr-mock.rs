@@ -795,7 +795,9 @@ fn page(mut c: TcpStream, text: &str) {
         (
             "text/html; charset=utf-8",
             String::new(),
-            format!("<!doctype html><html><head><title>{t}</title></head><body><p>{t}</p></body></html>"),
+            format!(
+                "<!doctype html><html><head><title>{t}</title></head><body><p>{t}</p></body></html>"
+            ),
         )
     };
     let _ = c.write_all(
@@ -822,7 +824,10 @@ struct Mcp {
 
 impl Mcp {
     fn send(&mut self, v: &Value) {
-        if writeln!(self.to, "{v}").and_then(|()| self.to.flush()).is_err() {
+        if writeln!(self.to, "{v}")
+            .and_then(|()| self.to.flush())
+            .is_err()
+        {
             die("cdp-drive: Playwright MCP closed its stdin");
         }
     }
@@ -835,12 +840,10 @@ impl Mcp {
         let end = std::time::Instant::now() + CALL_WITHIN;
         loop {
             let left = end.saturating_duration_since(std::time::Instant::now());
-            let v = self.from.recv_timeout(left).map_err(|_| {
-                format!(
-                    "no answer to {method} within {} s",
-                    CALL_WITHIN.as_secs()
-                )
-            })?;
+            let v = self
+                .from
+                .recv_timeout(left)
+                .map_err(|_| format!("no answer to {method} within {} s", CALL_WITHIN.as_secs()))?;
             if v["id"] == id {
                 return match v.get("error") {
                     Some(e) => Err(e.to_string()),
@@ -852,10 +855,7 @@ impl Mcp {
 
     /// A tool's text, or its error text as `Err`.
     fn tool(&mut self, name: &str, arguments: Value) -> Result<String, String> {
-        let r = self.call(
-            "tools/call",
-            json!({"name": name, "arguments": arguments}),
-        )?;
+        let r = self.call("tools/call", json!({"name": name, "arguments": arguments}))?;
         let text = r["content"]
             .as_array()
             .into_iter()

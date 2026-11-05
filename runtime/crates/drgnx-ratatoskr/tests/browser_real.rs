@@ -24,10 +24,10 @@ use std::time::Duration;
 use drgnx_ratatoskr::browser::Secret;
 use drgnx_ratatoskr::browser::broker::{self, BrokerCfg, GateFn};
 use drgnx_ratatoskr::matrix_gate::Gate;
-use mimir::BoxFuture;
 use fastwebsockets::{FragmentCollector, Frame, OpCode, Payload, Role, WebSocket};
 use heimdall::BrokerEvent;
 use heimdall::codec::{FrameDecoder, KIND_CDP};
+use mimir::BoxFuture;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, UnixListener, UnixStream};
@@ -129,19 +129,42 @@ fn relay(
 }
 
 /// The browser host for `kind`, through the recording relay: the host process, the broker's end of the stream.
-fn start_host(kind: &Kind, rec: &Recording) -> (std::process::Child, std::os::unix::net::UnixStream) {
+fn start_host(
+    kind: &Kind,
+    rec: &Recording,
+) -> (std::process::Child, std::os::unix::net::UnixStream) {
     let (broker_end, relay_a) = std::os::unix::net::UnixStream::pair().unwrap();
     let (relay_b, host_end) = std::os::unix::net::UnixStream::pair().unwrap();
-    relay(relay_a.try_clone().unwrap(), relay_b.try_clone().unwrap(), "to_browser", rec.clone());
+    relay(
+        relay_a.try_clone().unwrap(),
+        relay_b.try_clone().unwrap(),
+        "to_browser",
+        rec.clone(),
+    );
     relay(relay_b, relay_a, "browser", rec.clone());
     let (mut ready_r, ready_w) = std::io::pipe().unwrap();
     let (hub_fd, ready_fd) = (high(&host_end), high(&ready_w));
     drop((host_end, ready_w));
     let (h, r) = (hub_fd.as_raw_fd(), ready_fd.as_raw_fd());
     let mut cmd = Command::new(RATATOSKR);
-    cmd.args(["browser-host", "--hub-fd", "3", "--ready-fd", "4", "--program", kind.program])
-        .args(["--dir", OWN_DIR, "--web-port", "3130", kind.flag, "--unconfined"])
-        .stdin(Stdio::null());
+    cmd.args([
+        "browser-host",
+        "--hub-fd",
+        "3",
+        "--ready-fd",
+        "4",
+        "--program",
+        kind.program,
+    ])
+    .args([
+        "--dir",
+        OWN_DIR,
+        "--web-port",
+        "3130",
+        kind.flag,
+        "--unconfined",
+    ])
+    .stdin(Stdio::null());
     // SAFETY: only dup2, which is async-signal-safe, between fork and exec.
     unsafe {
         cmd.pre_exec(move || {
@@ -327,10 +350,9 @@ fn write_recording(kind: &Kind, product: &str, rec: &Recording) {
     let Some(dir) = std::env::var_os("DRGNX_TEST_RECORD_DIR") else {
         return;
     };
-    let pw: Value = serde_json::from_str(
-        &std::fs::read_to_string(format!("{PW_MCP}/package.json")).unwrap(),
-    )
-    .unwrap();
+    let pw: Value =
+        serde_json::from_str(&std::fs::read_to_string(format!("{PW_MCP}/package.json")).unwrap())
+            .unwrap();
     let mut out = json!({"note": format!(
         "Recorded by drgnx-ratatoskr's tests/browser_real.rs: {product} ({}) with Playwright MCP {} as the agent; \
          the browser side only (what the broker sent, what the browser answered), strings over 300 bytes elided",
@@ -425,7 +447,11 @@ fn run(kind: &Kind) {
             .unwrap_or_else(|| panic!("{version}"))
             .to_owned();
         let refused = c
-            .call(None, "Target.exposeDevToolsProtocol", json!({"targetId": "x"}))
+            .call(
+                None,
+                "Target.exposeDevToolsProtocol",
+                json!({"targetId": "x"}),
+            )
             .await;
         assert_eq!(
             refused["error"],
@@ -526,7 +552,11 @@ fn run(kind: &Kind) {
         eprintln!(
             "browser_real {}: {product}: Target.attachToBrowserTarget {}",
             kind.name,
-            if fallback { "failed: the root-session fallback ran" } else { "worked" }
+            if fallback {
+                "failed: the root-session fallback ran"
+            } else {
+                "worked"
+            }
         );
         handle.close();
         product
