@@ -1577,12 +1577,15 @@ fn assemble(
     ));
     // a folder the hub made no tree for is measured from its head now (a docs agent in the org folder)
     if let Some(d) = front.dirs.get() {
-        tokio::spawn(crate::work::bases::session_started(
-            front.writer.clone(),
-            d.hub.clone(),
-            i.id.clone(),
-            i.cwd.clone(),
-        ));
+        crate::clock::spawn(
+            "session:bases",
+            crate::work::bases::session_started(
+                front.writer.clone(),
+                d.hub.clone(),
+                i.id.clone(),
+                i.cwd.clone(),
+            ),
+        );
     }
     let scope = scope_of(i.role, &i.id);
     front.core.budgets.enroll(&scope);
@@ -2668,9 +2671,9 @@ impl Session {
                                 });
                             if !s.is_empty() {
                                 let w = self.writer.clone();
-                                tokio::spawn(
-                                    async move { crate::work::conclusions::put(&w, s).await },
-                                );
+                                crate::clock::spawn("session:conclusions", async move {
+                                    crate::work::conclusions::put(&w, s).await
+                                });
                             }
                         }
                         self.drain_steps();
