@@ -156,6 +156,31 @@ pub fn put_base(tx: &WTx<'_>, b: WorktreeBase) -> Result<(), CoordError> {
     Ok(())
 }
 
+/// Stamp CONCLUSION (`decision:N`, a finding's note id) with the timeline step its MCP call was made in; none: the
+/// step is unknown (no step key).  The hub's own record: whatever the agent said of the step is not kept.  A conclusion
+/// that is gone is skipped.
+pub fn stamp_step(tx: &mut WTx<'_>, conclusion: &str, step: Option<i64>) -> Result<(), CoordError> {
+    hub_only(tx)?;
+    let Some(e) = entity::by_id(tx.sql(), conclusion)? else {
+        return Ok(());
+    };
+    if !matches!(e.kind.as_str(), "decision" | "note") {
+        return Err(CoordError::Refused(format!(
+            "{conclusion} is no conclusion"
+        )));
+    }
+    entity::update(
+        tx,
+        e.n,
+        None,
+        entity::Changes {
+            data_patch: Some(json!({ "step": step })),
+            ..entity::Changes::default()
+        },
+    )?;
+    Ok(())
+}
+
 /// Create an `ask` entity; answers its id.
 pub fn new_ask(tx: &mut WTx<'_>, a: AskNew) -> Result<String, CoordError> {
     hub_only(tx)?;

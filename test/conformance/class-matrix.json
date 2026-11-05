@@ -112,5 +112,6 @@
   "tasks/find": ["user"],
   "tasks/ready": ["user"],
   "tasks/write": ["user"],
-  "timeline/get": ["user"]
+  "timeline/get": ["user"],
+  "work/conclusions": ["user"]
 }

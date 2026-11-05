@@ -221,6 +221,7 @@ params! {
     RecordsDecide(records::DecideParams),
     MachinesReport(work::MachineReport),
     MachinesList(Empty),
+    WorkConclusions(work::ConclusionsParams),
 }
 
 /// Every method, in no order.

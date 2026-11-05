@@ -2,6 +2,7 @@
 //! part 2; docs/develop/work-space.md).  The pure parts take no clock and do no I/O.
 //!
 //! - [`asks`]: the work a session does links to the user's message behind it (its current ask), in any turn.
+//! - [`conclusions`]: the step each conclusion was recorded in, stamped by the hub, and the steps it rests on.
 //! - [`bases`]: where each worktree branched from (the interim diff base), and which branch is based on which.
 //! - [`detail`]: a step's detail by tool name.
 //! - [`machines`]: the machines the hub lists (`local`, and those jobq reports with `machines/report`).
@@ -11,6 +12,7 @@
 
 pub mod asks;
 pub mod bases;
+pub mod conclusions;
 pub mod detail;
 pub mod machines;
 pub mod shell_read;

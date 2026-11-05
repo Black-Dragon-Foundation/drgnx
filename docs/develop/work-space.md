@@ -226,6 +226,32 @@ channel, session, message_id?}`) and `asked` links from it to specs, plans, task
 - Tests: `work::asks::tests` (`every_order_links_every_write`, pattern A over a manager, its worker, a chat and the
   ends; the rest pattern D) and conformance `work/a-managers-later-turns-link-to-the-ask` (pattern B).
 
+### Conclusions
+
+`work::conclusions` stamps each conclusion (a `record_decision` decision, a `note_add` finding) with the timeline step
+it was recorded in, and computes the steps it rests on. `work/conclusions {session}` answers them.
+
+- **The stamp.** The step is the session's tool step of that MCP call; the agent's own `step` argument is ignored (not
+  kept). The MCP call and the ACP `tool_call` arrive in either order, so `StampCore` (pure; events `McpCall`,
+  `ToolStep`, `StepClosed`, `TurnEnd`) pairs them per session and tool, first with first, and stamps once the step is
+  written. A call with no tool step by its turn's end is "step unknown" (`step` absent): an adapter that reports no
+  MCP calls, or the fenced `drgnx-conclusion` block (origin `from-text`), which has no call at all.
+- **Where the events come from.** A session's reader sends `ToolStep` when a tool step of `record_decision` or
+  `note_add` begins (Claude `mcp__drgnx__…`, Codex `drgnx.…`, Gemini `… (drgnx MCP Server)`, by tool name, else title);
+  its step writer sends `StepClosed` with the step's id once the row is written, and `TurnEnd` after the turn's last
+  step. The asks shell (above) reads the decisions and findings a session's transaction made from the log at the end
+  of every tool call and sends `McpCall`: before the call answers, so before the agent can report the step complete.
+  The hub writes the stamp as `("hub", System)` (`norn::write::work::stamp_step`, `data.step`).
+- **The links** (`links(c, prev, steps)`, computed, never inferred): each `{path, lines}` source matches the
+  session's latest read step of that path, up to the conclusion, whose lines overlap (a read with no end covers the
+  rest of the file; paths match when one is the other's tail at a `/`); each `{url}` its latest fetch (`named`). The
+  reads, searches, pages and thoughts after the previous conclusion are `since_last`. A source no step matches is
+  kept in `unmatched` ("named, not read in this session"). A conclusion whose step is unknown is placed by its time.
+- `work/conclusions {session} -> {conclusions: [{n, id, kind, text, sources, step?, at, origin, links: {named,
+  since_last, unmatched}}]}` (user connections), in the order they were recorded, numbered from 1.
+- Tests: `work::conclusions::tests` (`both_arrival_orders_stamp_the_same_step`, pattern A over two sessions; the
+  rest pattern D) and norn's `the_agents_step_argument_is_ignored` (D).
+
 ### Machines
 
 `work::machines` keeps the list `machines/list` and the event `machines-changed` carry (types in

@@ -2,6 +2,8 @@
 //!
 //! Machines: `machines/report` (a user connection tells the hub which slots a machine has and who holds them, for a
 //! time) and `machines/list`; the event `machines-changed` carries the list again when it changed.
+//!
+//! Conclusions: `work/conclusions` (a session's decisions and findings, with their steps and links).
 
 use super::{Empty, invalid, method};
 use crate::registry::Method;
@@ -63,6 +65,79 @@ pub struct MachinesList {
     pub machines: Vec<Machine>,
 }
 
+/// `work/conclusions`'s params: a session id.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConclusionsParams {
+    pub session: String,
+}
+
+/// What a conclusion rests on: a file with optional lines, or a page.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConclusionSource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// First and last line, 1-based.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines: Option<[u32; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+/// The steps a conclusion links back to (timeline step ids).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConclusionLinks {
+    /// The steps its named sources match ("named").
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub named: Vec<i64>,
+    /// The reads, searches, pages and thoughts since the previous conclusion.
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub since_last: Vec<i64>,
+    /// Named sources no step of the session matches ("named, not read in this session").
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub unmatched: Vec<ConclusionSource>,
+}
+
+/// A decision or a finding, as the Work space shows it.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Conclusion {
+    /// Its number in the session, from 1.
+    pub n: u32,
+    /// `decision:N`, or the finding's note id.
+    pub id: String,
+    /// `decision` or `finding`.
+    pub kind: String,
+    pub text: String,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub sources: Vec<ConclusionSource>,
+    /// The timeline step the hub stamped; absent: step unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<i64>,
+    /// When it was recorded (seconds since the epoch).
+    pub at: f64,
+    /// `own`, `from-brief`, `needs-user`, or `from-text` (a fenced block in a message).
+    pub origin: String,
+    pub links: ConclusionLinks,
+}
+
+/// `work/conclusions`'s answer.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Conclusions {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub conclusions: Vec<Conclusion>,
+}
+
+fn check_conclusions(p: &ConclusionsParams) -> Result<(), Error> {
+    if p.session.is_empty() || p.session.len() > NAME_MAX {
+        return Err(invalid("session", "a session id"));
+    }
+    Ok(())
+}
+
 /// The longest machine name, in bytes.
 pub const NAME_MAX: usize = 64;
 /// Most slots one report may hold.
@@ -111,6 +186,12 @@ pub(crate) fn methods() -> Vec<Method> {
             "machines/list", MachinesList(Empty) -> MachinesList,
             classes: [User], writes: false,
             doc: "the machines the hub knows: local, and those reported and not yet expired",
+        ),
+        method!(
+            "work/conclusions", WorkConclusions(ConclusionsParams) -> Conclusions,
+            classes: [User], writes: false,
+            doc: "a session's decisions and findings, numbered, each with the step the hub stamped and the steps it rests on",
+            check: check_conclusions,
         ),
     ]
 }

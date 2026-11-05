@@ -15880,6 +15880,173 @@
         "type": "object"
       },
       "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a session's decisions and findings, numbered, each with the step the hub stamped and the steps it rests on",
+      "name": "work/conclusions",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/conclusions`'s params: a session id.",
+        "properties": {
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session"
+        ],
+        "title": "ConclusionsParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Conclusion": {
+            "additionalProperties": false,
+            "description": "A decision or a finding, as the Work space shows it.",
+            "properties": {
+              "at": {
+                "description": "When it was recorded (seconds since the epoch).",
+                "format": "double",
+                "type": "number"
+              },
+              "id": {
+                "description": "`decision:N`, or the finding's note id.",
+                "type": "string"
+              },
+              "kind": {
+                "description": "`decision` or `finding`.",
+                "type": "string"
+              },
+              "links": {
+                "$ref": "#/$defs/ConclusionLinks"
+              },
+              "n": {
+                "description": "Its number in the session, from 1.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "origin": {
+                "description": "`own`, `from-brief`, `needs-user`, or `from-text` (a fenced block in a message).",
+                "type": "string"
+              },
+              "sources": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/ConclusionSource"
+                },
+                "type": "array"
+              },
+              "step": {
+                "description": "The timeline step the hub stamped; absent: step unknown.",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "n",
+              "id",
+              "kind",
+              "text",
+              "at",
+              "origin",
+              "links"
+            ],
+            "type": "object"
+          },
+          "ConclusionLinks": {
+            "additionalProperties": false,
+            "description": "The steps a conclusion links back to (timeline step ids).",
+            "properties": {
+              "named": {
+                "default": [],
+                "description": "The steps its named sources match (\"named\").",
+                "items": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "since_last": {
+                "default": [],
+                "description": "The reads, searches, pages and thoughts since the previous conclusion.",
+                "items": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "unmatched": {
+                "default": [],
+                "description": "Named sources no step of the session matches (\"named, not read in this session\").",
+                "items": {
+                  "$ref": "#/$defs/ConclusionSource"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "ConclusionSource": {
+            "additionalProperties": false,
+            "description": "What a conclusion rests on: a file with optional lines, or a page.",
+            "properties": {
+              "lines": {
+                "description": "First and last line, 1-based.",
+                "items": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/conclusions`'s answer.",
+        "properties": {
+          "conclusions": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Conclusion"
+            },
+            "type": "array"
+          }
+        },
+        "title": "Conclusions",
+        "type": "object"
+      },
+      "writes": false
     }
   ],
   "proto": 1,

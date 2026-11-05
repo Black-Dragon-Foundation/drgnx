@@ -314,7 +314,7 @@ impl Asks {
 }
 
 /// The hub's own author: `("hub", System)`.
-fn hub() -> Caller {
+pub(crate) fn hub() -> Caller {
     Caller {
         class: Class::Service,
         sid: None,
@@ -323,12 +323,35 @@ fn hub() -> Caller {
     }
 }
 
+/// A conclusion a session's tool call recorded: the stamp core's `McpCall`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Recorded {
+    pub session: String,
+    /// The transaction's tool: `mcp:record_decision`, `mcp:note_add`.
+    pub tool: String,
+    pub conclusion: String,
+    pub at: f64,
+}
+
+/// What the log held since the last look: the newest `tx` row, the entity versions written, the conclusions recorded.
+#[derive(Debug, Default)]
+struct Seen {
+    last: i64,
+    written: Vec<Written>,
+    recorded: Vec<Recorded>,
+}
+
 /// The newest `tx` row, and when SINCE is given, the spec, plan and task versions written after it (by anyone; the
-/// pure [`write_of`] keeps the sessions'). The entity scan runs only when a session wrote since.
-fn read_written(c: &Tx, since: Option<i64>) -> Result<(i64, Vec<Written>), CoordError> {
+/// pure [`write_of`] keeps the sessions') and the decisions and findings sessions recorded. The entity scans run only
+/// when a session wrote since.
+fn read_written(c: &Tx, since: Option<i64>) -> Result<Seen, CoordError> {
     let last: i64 = c.query_row("select coalesce(max(id), 0) from tx", [], |r| r.get(0))?;
+    let nothing = Seen {
+        last,
+        ..Seen::default()
+    };
     let Some(since) = since.filter(|s| *s < last) else {
-        return Ok((last, Vec::new()));
+        return Ok(nothing);
     };
     let by_sessions: i64 = c.query_row(
         "select count(*) from tx where id > ?1 and id <= ?2 and session is not null and imported = 0",
@@ -336,8 +359,25 @@ fn read_written(c: &Tx, since: Option<i64>) -> Result<(i64, Vec<Written>), Coord
         |r| r.get(0),
     )?;
     if by_sessions == 0 {
-        return Ok((last, Vec::new()));
+        return Ok(nothing);
     }
+    let mut q = c.prepare(
+        "select t.session, coalesce(t.tool, ''), e.id, t.at from entity e join tx t on t.id = e.created_tx \
+         where e.created_tx > ?1 and e.created_tx <= ?2 and t.session is not null and t.imported = 0 \
+         and t.state = 'committed' \
+         and (e.kind = 'decision' or (e.kind = 'note' and json_extract(e.data, '$.kind') = 'finding')) \
+         order by e.created_tx, e.n",
+    )?;
+    let recorded = q
+        .query_map((since, last), |r| {
+            Ok(Recorded {
+                session: r.get(0)?,
+                tool: r.get(1)?,
+                conclusion: r.get(2)?,
+                at: r.get(3)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
     let mut q = c.prepare(
         "select x.tx, e.id, e.kind, t.session, t.imported from \
          (select n, updated_tx as tx from entity where updated_tx > ?1 and updated_tx <= ?2 \
@@ -356,7 +396,24 @@ fn read_written(c: &Tx, since: Option<i64>) -> Result<(i64, Vec<Written>), Coord
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
-    Ok((last, rows))
+    Ok(Seen {
+        last,
+        written: rows,
+        recorded,
+    })
+}
+
+/// The stamp event R is: the MCP call of its drgnx tool.
+pub fn call_of(r: &Recorded) -> Option<crate::work::conclusions::StampEv> {
+    let tool = r.tool.strip_prefix("mcp:")?;
+    crate::work::conclusions::TOOLS.contains(&tool).then(|| {
+        crate::work::conclusions::StampEv::McpCall {
+            session: r.session.clone(),
+            tool: tool.to_string(),
+            call: r.conclusion.clone(),
+            at: r.at,
+        }
+    })
 }
 
 /// The session whose transaction made plan run JOB.
@@ -380,13 +437,21 @@ struct Shell {
 }
 
 impl Shell {
-    /// The sessions' writes since the last look, as events; the first look only sets the mark.
-    async fn tail(&mut self, w: &Writer) -> Vec<AskEv> {
+    /// The sessions' writes since the last look, as events; the first look only sets the mark. The conclusions they
+    /// recorded go to the stamp core at once (their calls answer only after this).
+    async fn tail(&mut self, front: &Front) -> Vec<AskEv> {
         let since = self.seen;
-        match w.db.read(move |c| read_written(c, since)).await {
-            Ok((last, rows)) => {
-                self.seen = Some(last);
-                rows.iter().filter_map(write_of).collect()
+        match front.writer.db.read(move |c| read_written(c, since)).await {
+            Ok(seen) => {
+                self.seen = Some(seen.last);
+                let due: Vec<_> = seen
+                    .recorded
+                    .iter()
+                    .filter_map(call_of)
+                    .flat_map(|ev| front.core.stamps.step(ev))
+                    .collect();
+                crate::work::conclusions::put(&front.writer, due).await;
+                seen.written.iter().filter_map(write_of).collect()
             }
             Err(e) => {
                 tracing::debug!("the sessions' writes are not read yet: {e}");
@@ -397,7 +462,7 @@ impl Shell {
 
     async fn input(&mut self, front: &Front, i: Input) {
         let w = &front.writer;
-        let mut evs = self.tail(w).await;
+        let mut evs = self.tail(front).await;
         let mut reply = None;
         match i {
             Input::Ev(e) => evs.push(e),
@@ -494,7 +559,7 @@ pub async fn run(front: Arc<Front>) {
         seen: None,
     };
     // the mark first: what was written before this start is not linked again
-    sh.tail(&front.writer).await;
+    sh.tail(&front).await;
     asks.tx.running.store(true, Ordering::SeqCst);
     while let Some(i) = rx.recv().await {
         sh.input(&front, i).await;

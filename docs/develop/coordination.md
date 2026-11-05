@@ -782,8 +782,9 @@ reuses a live one, and `agents/stop` and `agents/kill` close it. Test builds run
   refused. An agent without drgnx's tools ends its last message with a fenced `drgnx-report` block of the same
   schema; the hub validates it when the turn ends and files it as that session (once: not for a task already in
   review or done). `reports/get` reads them back.
-- **Decisions and commits.** `record_decision` takes `step` and `origin` (`from-brief`, `own`, `needs-user`) and
-  keeps them, with the session, in the decision. After each shell step of a plan-run session the hub lists the new
+- **Decisions and commits.** `record_decision` takes `origin` (`from-brief`, `own`, `needs-user`) and keeps it, with
+  the session, in the decision. Its `step` argument is ignored: the hub stamps the timeline step of the call itself
+  (`work::conclusions`, `docs/develop/work-space.md`, "Conclusions"). After each shell step of a plan-run session the hub lists the new
   non-merge commits of its tree beyond `job/<job>` (git in a blocking task) and links each new commit
   (`commit:<sha>`) `implements` to every decision that session recorded and no commit implements yet.
   `decisions/effects` returns a decision's commits and the later commits whose changed lines (`git diff-tree -U0`,

@@ -889,6 +889,22 @@ mod tools {
         assert_eq!(w.count("select count(*) from decision"), 1);
     }
 
+    /// Pattern D: a decision's step is the hub's stamp, never the agent's claim; its origin and session stay.
+    #[tokio::test]
+    async fn the_agents_step_argument_is_ignored() {
+        let w = World::new().await;
+        let h = w.place("pa");
+        let a = w.agent("a1", &h);
+        let o = w
+            .call(&a, "record_decision", json!({"kind": "build", "subject": "use x", "reason": "because", "seen_version": 0, "step": 7, "origin": "own"}))
+            .await;
+        assert!(!o.err, "{}", o.text);
+        assert_eq!(
+            w.count("select count(*) from entity where kind = 'decision' and json_extract(data, '$.step') is null and json_extract(data, '$.origin') = 'own'"),
+            1
+        );
+    }
+
     #[tokio::test]
     async fn note_add_sources_only_on_a_finding() {
         let w = World::new().await;

@@ -170,6 +170,10 @@ struct State {
     tokens: u64,
     /// Turns started by this hub process (the snapshot's `turns`).
     turns: u64,
+    /// The steps begun so far (each step's key).
+    steps_begun: i64,
+    /// Tool steps of a conclusion's drgnx tool begun since the reader last looked: (key, tool name).
+    mcp_begun: Vec<(i64, String)>,
 }
 
 /// What a turn core step decided, with the permission requests it took out of the snapshot.
@@ -191,6 +195,10 @@ struct OpenStep {
     tool_kind: Option<String>,
     tool_id: Option<String>,
     message_id: Option<String>,
+    /// Its place among the steps the session began (a step a wait cut in two keeps it).
+    key: i64,
+    /// A call of a drgnx tool that records a conclusion ([`crate::work::conclusions`]).
+    mcp: bool,
 }
 
 /// A step that ended, waiting to be written to the `step` table and announced.
@@ -242,6 +250,8 @@ impl State {
             max_repeat: 0,
             tokens: 0,
             turns: 0,
+            steps_begun: 0,
+            mcp_begun: Vec::new(),
             closed: Vec::new(),
             seq: 0,
             entries: Vec::new(),
@@ -297,6 +307,7 @@ impl State {
     fn step_begin(&mut self, class: StepClass, tool: Option<(&str, Option<&str>, Option<&str>)>) {
         let at = now();
         self.step_close(at, None);
+        self.steps_begun += 1;
         self.cur = Some(OpenStep {
             class,
             start: at,
@@ -304,6 +315,8 @@ impl State {
             tool_kind: tool.and_then(|t| t.1).map(str::to_string),
             tool_id: tool.and_then(|t| t.2).map(str::to_string),
             message_id: self.last_mid.clone(),
+            key: self.steps_begun,
+            mcp: false,
         });
     }
 
@@ -558,6 +571,21 @@ impl State {
                             Some(id),
                         )),
                     );
+                    // a call of a tool that records a conclusion: its step is that conclusion's
+                    let name = self
+                        .tool_meta
+                        .get(id)
+                        .and_then(|m| m.name.clone())
+                        .filter(|n| crate::work::conclusions::mcp_tool_of(n).is_some())
+                        .or_else(|| {
+                            title
+                                .clone()
+                                .filter(|t| crate::work::conclusions::mcp_tool_of(t).is_some())
+                        });
+                    if let (Some(n), Some(c)) = (name, self.cur.as_mut()) {
+                        c.mcp = true;
+                        self.mcp_begun.push((c.key, n));
+                    }
                     let command = self.entries[idx].rest.get("rawInput").map(Value::to_string);
                     let key = format!(
                         "{}\n{}",
@@ -669,6 +697,8 @@ pub struct Session {
     done: tokio::sync::mpsc::UnboundedSender<TurnEnd>,
     /// The user's messages as they reach the agent: its current ask ([`crate::work::asks`]).
     asks: crate::work::asks::AskTx,
+    /// Where its conclusions' tool steps go ([`crate::work::conclusions`]).
+    stamps: Arc<crate::work::conclusions::Stamps>,
 }
 
 /// What `Conn::prompt` answered.
@@ -688,6 +718,8 @@ pub(crate) struct StepSink {
     pub tools: Option<Arc<norn::tools::Coord>>,
     /// Where a spec it wrote is linked to the session's current ask (none: a test).
     pub asks: Option<crate::work::asks::AskTx>,
+    /// The conclusions' stamps: a conclusion's tool step written, a turn ended (none: a test).
+    pub stamps: Option<Arc<crate::work::conclusions::Stamps>>,
 }
 
 /// What `open` and `resume` know of a session before its agent is running.
@@ -1484,6 +1516,7 @@ fn assemble(
             scopes: Some(front.core.runs.scopes()),
             tools: Some(front.tools.clone()),
             asks: Some(front.core.asks.handle()),
+            stamps: Some(front.core.stamps.clone()),
         },
         ctx,
     ));
@@ -1547,6 +1580,7 @@ fn assemble(
         steps,
         done,
         asks: front.core.asks.handle(),
+        stamps: front.core.stamps.clone(),
     });
     (s, done_rx)
 }
@@ -1993,6 +2027,24 @@ async fn write_steps(
             cost_unit: None,
             detail: c.detail.as_ref().map(crate::work::detail::wire),
         };
+        // a conclusion's tool step is written, or the turn ended: the stamps that are due
+        if let Some(stamps) = &sink.stamps {
+            use crate::work::conclusions::StampEv;
+            let mut due = Vec::new();
+            if c.open.mcp && id != 0 {
+                due.extend(stamps.step(StampEv::StepClosed {
+                    session: ctx.session.clone(),
+                    step: c.open.key,
+                    id,
+                }));
+            }
+            if step.turn_id.is_some() {
+                due.extend(stamps.step(StampEv::TurnEnd {
+                    session: ctx.session.clone(),
+                }));
+            }
+            crate::work::conclusions::put(&sink.writer, due).await;
+        }
         // a spec an agent just wrote is stored at once, not at the next scan
         if let (Some(tools), Some(d)) = (&sink.tools, &c.detail)
             && d.kind.as_deref() == Some("edit")
@@ -2477,12 +2529,33 @@ impl Session {
                             );
                             self.budgets.notify(hits);
                         }
-                        let stepped = {
+                        let (stepped, begun) = {
                             let mut st = lock(&self.state);
                             st.apply(&v);
-                            std::mem::take(&mut st.tool_ended)
-                                .then(|| st.turn_step(TurnEvent::ToolCompleted))
+                            let begun = std::mem::take(&mut st.mcp_begun);
+                            (
+                                std::mem::take(&mut st.tool_ended)
+                                    .then(|| st.turn_step(TurnEvent::ToolCompleted)),
+                                begun,
+                            )
                         };
+                        // a conclusion's tool step began: the stamp core pairs it with its MCP call
+                        for (key, tool_name) in begun {
+                            let s = self
+                                .stamps
+                                .step(crate::work::conclusions::StampEv::ToolStep {
+                                    session: self.id.clone(),
+                                    step: key,
+                                    tool_name,
+                                    at: now(),
+                                });
+                            if !s.is_empty() {
+                                let w = self.writer.clone();
+                                tokio::spawn(
+                                    async move { crate::work::conclusions::put(&w, s).await },
+                                );
+                            }
+                        }
                         self.drain_steps();
                         if let Some(s) = stepped {
                             // the pause after a tool call: the turn ends here, the queue waits
@@ -3900,6 +3973,7 @@ mod tests {
             scopes: None,
             tools: None,
             asks: None,
+            stamps: None,
         };
         tokio::spawn(write_steps(rx, sink, ctx));
         let open = |class, tool: Option<&str>| OpenStep {
@@ -3909,6 +3983,8 @@ mod tests {
             tool_kind: None,
             tool_id: None,
             message_id: None,
+            key: 0,
+            mcp: false,
         };
         for (class, tool, turn) in [
             (StepClass::Think, None, None),
@@ -3984,6 +4060,7 @@ mod tests {
             scopes: None,
             tools: None,
             asks: None,
+            stamps: None,
         };
         let ctx = StepCtx {
             session: "a1".into(),
@@ -4001,6 +4078,8 @@ mod tests {
             tool_kind: kind.map(str::to_string),
             tool_id: None,
             message_id: Some("m1".into()),
+            key: 0,
+            mcp: false,
         };
         for (o, end, turn) in [
             (open(StepClass::Think, None, 1.0), 2.0, None),
