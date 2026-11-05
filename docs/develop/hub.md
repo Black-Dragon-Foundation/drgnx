@@ -1305,9 +1305,10 @@ What the core keeps:
 - A turn's prompt reaches the agent only through its `Sending` step. Until then the queue on disk holds it at its
   front (`kept()`: the waiting prompts behind the prompt not yet sent), so a hub that dies in between, with no end
   step, runs it at the next start; the shell writes the turn's entries to the transcript file first and then the
-  queue without it (a hub that dies between the two runs the prompt again rather than losing it). When the hub ends
-  or a Stop comes between a turn's start and that step, the turn is put back: its prompt goes back to the front of
-  the queue (held, after a Stop), and the shell drops the turn's entries (the transcript file holds a turn's entries
+  queue without it (a hub that dies between the two runs the prompt again rather than losing it). When the hub ends,
+  a Stop comes or the agent's process exits between a turn's start and that step, the turn is put back: its prompt
+  goes back to the front of the queue, on disk too (held, after a Stop; for the next start or resume, after an exit),
+  and the shell drops the turn's entries (the transcript file holds a turn's entries
   only once its prompt was sent). When the
   user's kill comes there instead, the prompt is dropped with the queue, and `Discard` names both, so a peer's
   message among them goes back to `queued` in the store.
@@ -1342,6 +1343,8 @@ again after it.
   (every prompt reached the agent or waits in the queue on disk);
 - the same, but the hub dies with no end step and nothing of it runs after (every prompt reached the agent or is in
   the queue on disk);
+- a sender, the turn's task that sends in a step of its own, the freshness gate's notice (a queue write), and the
+  agent's exit, then a resume from the queue on disk (every prompt reaches an agent once);
 - a user who sends, stops and delivers, the turn's task that sends each prompt in a step of its own, an agent, and
   the stop's deadline (no prompt goes after its turn was told to cancel);
 - a sender, the hub's delivery (`sending`, the prompt, the mark), an agent, and the user's kill, then the exit (a

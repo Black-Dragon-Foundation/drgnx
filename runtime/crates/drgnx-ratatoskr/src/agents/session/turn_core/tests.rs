@@ -956,6 +956,119 @@ fn every_order_the_queue_on_disk_keeps_a_prompt_until_it_reaches_the_agent() {
     assert_eq!(r.orders, 630);
 }
 
+// ---- an exit before the send keeps the prompt for the next start ----
+
+/// The user sends a prompt; the turn's task sends it in a step of its own; the agent's process exits, and the session
+/// is resumed afterwards from the queue on disk; the freshness gate puts a notice in the queue (a queue write, also on
+/// the exited session).  The resumed session runs what the queue on disk holds.
+#[derive(Clone, Debug)]
+enum ExitEv {
+    Send(&'static str),
+    Prompt,
+    Edit,
+    Exit,
+    Resume,
+}
+skuld::events!(ExitEv {
+    Send,
+    Prompt,
+    Edit,
+    Exit,
+    Resume
+});
+
+struct ExitShell {
+    s: Shell,
+    /// What reached the resumed session's agent.
+    resumed: Vec<String>,
+}
+
+const NOTICE: &str = "notice";
+
+impl Core for ExitShell {
+    type Event = ExitEv;
+
+    fn step(&mut self, ev: ExitEv) -> Vec<ExitEv> {
+        let s = &mut self.s;
+        match ev {
+            ExitEv::Send(t) => s.send(t),
+            ExitEv::Prompt => s.send_prompt(),
+            ExitEv::Edit => {
+                s.feed(TurnEvent::QueueEdited(QueueEdit::SteerIn(NOTICE.into())));
+            }
+            ExitEv::Exit => {
+                s.close();
+                s.exit();
+            }
+            // the next start (`resume_row_with`): the queue and pause on disk; the queue runs, one turn after another
+            ExitEv::Resume => {
+                let mut q = crate::agents::queue::Queue::default();
+                for t in &s.disk.0 {
+                    q.push(t.clone(), Origin::User, false);
+                }
+                let mut c = TurnCore::new();
+                c.resume(q, s.disk.1, None);
+                c.ready(false);
+                // each turn's end starts the next
+                let mut fx = c.next();
+                while let Some(TurnEffect::StartTurn { turn, item }) = fx
+                    .into_iter()
+                    .find(|e| matches!(e, TurnEffect::StartTurn { .. }))
+                {
+                    c.step(TurnEvent::Sending { turn });
+                    self.resumed.push(item.text);
+                    fx = c.step(TurnEvent::PromptDone {
+                        cancelled: false,
+                        jobs: false,
+                    });
+                }
+            }
+        }
+        Vec::new()
+    }
+}
+
+fn check_exit(e: &ExitShell, _: &[ExitEv]) -> Result<(), String> {
+    let s = &e.s;
+    s.settled()?;
+    // every prompt sent reached an agent once: before the exit, or the resumed session's
+    let mut seen: Vec<String> = s.reached.iter().chain(&e.resumed).cloned().collect();
+    seen.retain(|t| t != NOTICE);
+    seen.sort();
+    let mut sent = s.sent.clone();
+    sent.sort();
+    if seen != sent {
+        return Err(format!(
+            "sent {sent:?}; reached the agent {:?}, the resumed one {:?}",
+            s.reached, e.resumed
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn every_order_an_exit_before_the_send_keeps_the_prompt_for_the_next_start() {
+    let mut p = Partial::new();
+    let user = p.source("user", vec![ExitEv::Send("u1")]);
+    let turn = p.source("turn", vec![ExitEv::Prompt]);
+    p.source("gate", vec![ExitEv::Edit]);
+    let process = p.source("process", vec![ExitEv::Exit, ExitEv::Resume]);
+    // the turn's task sends only a turn that started; the process exits once the session works on something
+    p.before((user, 0), (turn, 0));
+    p.before((user, 0), (process, 0));
+    let r = every_order(
+        &p,
+        Bound::default(),
+        || ExitShell {
+            s: Shell::with_gap(),
+            resumed: Vec::new(),
+        },
+        check_exit,
+    );
+    assert_eq!(r.mode, Mode::Exhaustive);
+    assert_eq!(r.orders, 15);
+}
+
 // ---- a Stop before the send wins ----
 
 /// The user sends two prompts, stops and delivers the held queue; the turn's task sends each turn's prompt in a step

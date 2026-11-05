@@ -7,9 +7,9 @@
 //! The edges the shell keeps: a turn's `PromptDone` or `PromptFailed` comes after its `StartTurn`, and after every
 //! update the agent sent in that turn (the reader drains them first); a `PermissionAsked` names the turn that was
 //! running when the reader received the request; a `Kill` for a stop's deadline names the turn that Stop stopped; a
-//! turn's prompt goes to the agent only when its `Sending` step answers `Prompt` (the hub's end, a Stop or the user's
-//! kill may come between the turn's start and its send: the hub's end and the Stop then put the prompt back at the
-//! front of the queue, the user's kill names it with what it discards).
+//! turn's prompt goes to the agent only when its `Sending` step answers `Prompt` (the hub's end, a Stop, the agent's
+//! exit or the user's kill may come between the turn's start and its send: the hub's end, the Stop and the exit then
+//! put the prompt back at the front of the queue, the user's kill names it with what it discards).
 
 use super::super::queue::{Origin, Queue, Queued};
 use runstav::methods::agents::SessionStatus;
@@ -100,8 +100,8 @@ pub(crate) enum TurnEffect {
     StartTurn { turn: u64, item: Queued },
     /// Turn TURN's prompt goes to the agent now (with a `Persist`: it leaves the queue on disk).
     Prompt { turn: u64 },
-    /// Turn TURN's prompt never reached the agent and is back at the front of the queue (the hub's end, or a Stop):
-    /// what the turn began (its entry, its step) is undone.
+    /// Turn TURN's prompt never reached the agent and is back at the front of the queue (the hub's end, a Stop, or
+    /// the agent's exit): what the turn began (its entry, its step) is undone.
     PutBack { turn: u64 },
     /// The user's kill drops these prompts, which never reached the agent (the queue, and a turn not yet sent).
     Discard(Vec<Queued>),
@@ -384,8 +384,14 @@ impl TurnCore {
             }
             TurnEvent::Exited => {
                 self.status = SessionStatus::Exited;
-                self.unsent = None;
-                self.cancel_held()
+                let mut fx = self.cancel_held();
+                // a turn whose prompt never reached the agent never ran: the prompt waits at the front of the queue,
+                // on disk too, for the next start or resume
+                if let Some(item) = self.unsent.take() {
+                    self.queue.push_front(item);
+                    fx.extend([E::PutBack { turn: self.turn }, E::Persist]);
+                }
+                fx
             }
         }
     }
