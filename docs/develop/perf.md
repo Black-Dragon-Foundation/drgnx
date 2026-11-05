@@ -459,11 +459,14 @@ terminal-typing's p95 is 7 ms: the worst of 16 runs with the module active (1.9 
 - **GC.** One owner, `core/drgnx-gc.el`. Emacs' default threshold (800 kB) collected 28 times in 186 keystrokes.
   drgnx raises it to 512 MB while starting (early-init; set back after startup even if drgnx fails to start), then
   uses 64 MB (`drgnx-gc-cons-threshold`). A threshold your own init set (no longer early-init's) is kept.
-  - **The idle collection** is the timer layer's key `gc-idle` (`drgnx-gc-idle-seconds`, 8 s; started again by a
-    second setup, never doubled), owner `:core`, so it is covered by the timer lint like every other timer. It
-    collects only when more than a quarter of the threshold was allocated since the last collection
-    (`drgnx-gc--consed` minus `drgnx-gc--base`, which `drgnx-gc--note` on `post-gc-hook` sets): an idle Emacs that
-    allocated nothing stays still. `drgnx-gc-mode` (on after `drgnx-gc-setup`) owns that hook function, so it is
+  - **The idle collection** is the timer layer's key `gc-idle` (`drgnx-gc-idle-seconds`, 1 s; started again by a
+    second setup, never doubled), owner `:core`, so it is covered by the timer lint like every other timer. A
+    collection at the threshold takes about 45 ms and lands on whatever key allocates past it, so the idle one takes
+    it in a pause in typing instead: one second without input, when at least half the threshold
+    (`drgnx-gc-idle-share`) was allocated since the last collection (`drgnx-gc--consed` minus `drgnx-gc--base`, which
+    `drgnx-gc--note` on `post-gc-hook` sets): an idle Emacs that allocated nothing stays still. It collects at most
+    once per pause (`drgnx-gc--idle-pause`), never with input pending, and never in a batch Emacs or a daemon no
+    client is connected to (`drgnx-gc--someone-waits-p`). It was 8 s and a quarter, which a typist rarely gave it. `drgnx-gc-mode` (on after `drgnx-gc-setup`) owns that hook function, so it is
     one function, removed when the mode turns off.
   - **A gap collection for producers:** `(drgnx-gc-gap)` collects, and returns t, when `drgnx-gc-gap-quiet` (0.02 s,
     nil: never) has passed without input, no input is pending and at least `drgnx-gc-gap-share` (85%) of the
