@@ -57,6 +57,8 @@
   "drgnx-onboard/chat-needs-its-module"
   "drgnx-onboard/openrouter-key-goes-to-the-keychain"
   "drgnx-portable/the-pre-commit-hook-knows-the-new-formats"
+  "drgnx-quick-open/under-vertico-batches-arrive-the-highlight-stays-typing-filters"
+  "drgnx-quick-open/under-vertico-with-orderless"
   "drgnx-search-config/a-fifo-is-refused"
   "drgnx-search-files/a-submodule-is-not-listed-nor-its-files"
   "drgnx-search-files/config-fails-closed-fifo"

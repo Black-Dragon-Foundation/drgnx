@@ -106,12 +106,19 @@ but never watched for changes (a remote watch starts a process that blocks); ref
 
 **Typing** in the Explorer jumps to the next row starting with what you typed (letters a profile does not use).
 **Find** filters the tree live to the files whose names contain the text — also inside collapsed folders — and the
-title shows it; an empty text (or `C-g`) brings back the tree, its open folders, the view and the selection.
+title shows it; an empty text (or `C-g`) brings back the tree, its open folders, the view and the selection. In a big
+project the files are listed in the background and the tree fills in while they arrive (with Nidhogg's framing on,
+`nidhogg-workers-framing`; a remote folder, or no framing, lists them first as before). **Quick Open** (`C-p` in the VS
+Code profile) does the same: the list grows while the project is still being listed, and the file you have highlighted
+stays highlighted wherever the new ones sort; it moves when you type or move it.
 
 **Live**: files created, deleted or renamed outside Emacs appear within ~150 ms (only the changed folder is read
 again; the view and selection stay; nothing changes while a mouse button is held — a press whose release never
 reaches the Explorer, because Emacs lost focus or the release came with a modifier or in another window, ends
-there).
+there). With Nidhogg's workers on (`nidhogg-workers-framing`), a local folder you open, or one that changed, is read off the
+main thread: it keeps showing the rows it had (a folder never listed shows one row, "…") and its rows change when the
+last part of the listing is in. A folder you close before that shows nothing, and a listing that a newer change or a
+Refresh overtook is not shown. A remote folder is listed as before.
 
 **Git**: `M` modified, `A` added, `U` untracked, `R` renamed, `D` deleted, `C` conflict, in the colours of your
 theme's version-control faces; a folder with changes inside shows `●` (also one whose only change is a new file;
@@ -119,7 +126,10 @@ a new folder itself shows `U`), and so does a root; ignored files are dimmed. On
 repository on screen (never holding your git lock), repositories nested inside the tree included; a repository made
 after the tree was shown (`git init`) is picked up at the next refresh (a save, or Emacs getting the focus back).
 The status of at most 16 repositories is kept, so the Explorer reads at most the top 16 it shows; a repository
-scrolled into view, or one that was pushed out, is read when its rows are drawn. `drgnx-explorer-git` turns it off. What git complains
+scrolled into view, or one that was pushed out, is read when its rows are drawn. A repository whose index holds more
+than 50,000 entries gets one notice per session offering `core.untrackedCache` and, where your git has its built-in
+file system monitor (`git fsmonitor--daemon status` answers), `core.fsmonitor`; the button sets them in that
+repository, and drgnx never remembers that you declined. `drgnx-explorer-git` turns it off. What git complains
 about is kept in the hidden buffer ` *drgnx git errors*` (its last `drgnx-git-errors-max` characters).
 
 ### Buffers panel

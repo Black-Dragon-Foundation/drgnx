@@ -49,7 +49,9 @@ Undo button) puts every file of the last replacement back in one step; a file ed
 
 When a listed file changes — you edit its buffer (saved or not), or something writes it on disk (an agent, a
 checkout) — its rows are searched again half a second later, from the buffer when it is open, so unsaved edits count.
-A match that was unticked stays unticked when the text around it is the same. Changes on disk are noticed for the
+A file that no buffer visits is read off the main thread when Nidhogg's workers are on (`nidhogg-workers-framing`); a read
+that lands after the file changed again, after a new search started or after a replace is dropped. Replace itself always
+reads the files at once, and checks them, before it writes. A match that was unticked stays unticked when the text around it is the same. Changes on disk are noticed for the
 first 200 listed files (`drgnx-replace-watch-limit`); with more, the view searches again when it is shown. A symbol
 list is never re-asked of the server by itself: when the code changes, the status line says so; run Rename Symbol
 again.

@@ -1510,9 +1510,30 @@ cap or is weak**; the docstring or `:doc` says which event or cap bounds it.
 The workbench has two string caches, both activated by `core/workbench`: `git-status` (repository root → its status
 plist, 16 roots; `wb/drgnx-git.el`) and `explorer-listing` (folder → `(MTIME . CHILDREN)`, 64 folders;
 `wb/drgnx-explorer.el`). A root pushed out of `git-status` while its `git status` runs is not killed: the finished
-run puts the root back (`drgnx-git--done` sees no entry and no earlier read of that process). A folder the Explorer shows
+run puts the root back (`drgnx-git--done` sees no entry and no earlier read of that process).
+
+With Nidhogg's framing on (`nidhogg-workers-framing`), the status process is framed as `records` split at NUL
+(`drgnx-git--frame`) and its batches are read as they arrive (`drgnx-git--batch`) into an accumulator on the process
+(`drgnx-git--acc`); the sentinel takes the result from it instead of from the process buffer, and every other rule of
+`drgnx-git--done` (the rerun, a stale run, eviction) is the same. All batches come before the sentinel, so the buffer
+`drgnx-git--done` kills holds no batch still to be delivered. A rename (`2 …`) is followed by its origin path as a
+record of its own, possibly in the next batch: the accumulator carries that. Without the feature or with the switch
+off (or if the reader refuses), the output goes to the buffer and is parsed at the sentinel, as before; both paths
+use the same record reader, so they give the same status (`test/unit/git-records-test.el`). A folder the Explorer shows
 is got on every render and stays recent; a tree with more than 64 expanded folders re-lists the oldest on each
 render (an `mtime` check, then a directory read).
+
+`core/drgnx-file-stream.el` lists a local folder's files in batches (`git ls-files -z` through the same `records`
+framing in a repository, `nidhogg-directory-files-async` elsewhere), only with the feature and the switch on; Quick Open
+(`core/drgnx-quick-open.el`) and Find in Explorer (`drgnx-explorer--find-load`, one generation per listing, a
+late batch is dropped) use it, and keep their synchronous path otherwise and for a remote folder. Quick Open's list and
+highlight are a pure core (`drgnx-quick-open--step`; events `batch`, `input`, `move`, `done`; the highlight is kept by the
+file's name and moves only on `input` and `move`), tested in every order (`test/unit/quick-open-stream-test.el`). The shell
+touches vertico's `vertico--input`, `vertico--candidates`, `vertico--index` and `vertico--exhibit` to show a batch with the
+highlight where the core says; a vertico update can break them, so `test/unit/quick-open-vertico-test.el` drives the command under real vertico (needs
+vertico and compat in `DRGNX_USER_ELPA`, else it skips). Quick Open reads with its own completion style, which keeps the
+core's candidates as they are (a user's prefix or orderless style would filter them a second time). Not checked under
+`vertico-buffer`.
 
 ### Declarations, activation and ownership
 

@@ -28,6 +28,13 @@
 		   :summary "Store EIEIO objects using EmacSQL"
 		   :commit "48955ae02cfc7dad93b6bdc9ffd8d4b760dfb62b"
 		   :url "https://github.com/emacscollective/closql")
+	   (compat :version "31.1.0.0" :archive "gnu" :kind tar :file
+		   "compat-31.1.0.0.tar" :sha256
+		   "d0b21a401990575b0fed84f5e692440c3e16aaa8e679172e38ee131b88ecff9c"
+		   :size 409600 :requires nil :summary
+		   "Emacs Lisp Compatibility Library" :commit
+		   "90880f81419577e1d3f68424d2a3adf31e6d663e" :url
+		   "https://github.com/emacs-compat/compat")
 	   (cond-let :version "1.1.5" :archive "nongnu" :kind tar
 		     :file "cond-let-1.1.5.tar" :sha256
 		     "cb12ebffaab37fc12d60a3d749d304f67012a6580750f260b013b124bfb592e6"
