@@ -18,6 +18,29 @@ it is drawn again when you show it.
 
 Outside a project (a scratch buffer, a folder that is not in git) the map is empty and says so.
 
+### What the cards show
+
+- An **agent** is a card of five lines: its state dot, a badge (the model's initial in the agent's colour), the model
+  and its name; the task it works on; how it is going (what it is doing or its state, how long, what it has cost with
+  its unit, its progress, its context use once it is over 80 %); its latest conclusion; and either "⚠ shares files
+  with …" or how much it has read and changed. When a plan has more agents than fit, the cards become **compact**: two
+  lines, the second still carrying the ⚠ mark. An agent that needs you, and the agents on the selection's chain, stay
+  rich.
+- A **subagent** (Claude Code's own) is a compact card under its parent.
+- Asks, specs, plans, branches, files and machines are one-line chips: a plan shows its progress, a branch its
+  edits, a file its changed lines, a machine how many of its slots are taken.
+- The layers' names stand in the left margin. A collapsed layer is one thin row with its name and a count.
+
+Text that does not fit a card is cut with an ellipsis, by its width on screen; a long ask, or one with emoji in it,
+never makes its row taller than the others.
+
+### The outline
+
+**Show the Map as an Outline** (`work-outline`, `O`) draws one block per agent instead: the agent's line, why it
+exists (you › spec › plan › task), what it touches (its branch, machine, edits and reads) and its latest conclusion.
+It is what a terminal frame shows, what a screen reader reads best, and what the map falls back to when it cannot fit
+a window ("Too many to draw at this width · O back to the map, at a wider tile"). `O` again goes back.
+
 The colours are the theme's: the map's faces (`drgnx-work-dim`, `drgnx-work-card`, `drgnx-work-selected`,
 `drgnx-work-chain`, `drgnx-work-overlap`, `drgnx-work-needs-you`, `drgnx-work-edge`, `drgnx-work-edge-strong`,
 `drgnx-work-label`, `drgnx-work-chip`, `drgnx-work-new` and `drgnx-work-agent-1` to `-6`) inherit stock faces and carry

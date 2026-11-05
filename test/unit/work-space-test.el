@@ -18,6 +18,7 @@
 (declare-function drgnx-work-space-open "drgnx-work-space")
 (declare-function drgnx-work-space-sync-shown "drgnx-work-space")
 (defvar drgnx-work-space-command-ids)
+(defvar drgnx-work-map--outline)
 
 (defmacro drgnx-work-space-test--with (&rest body)
   "BODY with the module `tools/work-space' set up, a gated hub serving the test's dirs (profile \"mock\"), and
@@ -46,11 +47,12 @@ directories."
        (lambda () (let ((s (drgnx-work-space-test--state buf)))
                     (and (drgnx-work-client-live-p s) (drgnx-work-client-item s (concat "agent:" id)))))
        "the map's frame holds the agent")
-      (with-current-buffer buf (drgnx-view-draw-now drgnx-view))
+      ;; a batch Emacs has no graphic frame, so the map shows its outline; the rows are asked for
+      (with-current-buffer buf (setq drgnx-work-map--outline 'off) (drgnx-view-touch drgnx-view) (drgnx-view-draw-now drgnx-view))
       (let ((text (with-current-buffer buf (buffer-string))))
         (should (string-search "Agents" text))
         (should (string-search "mock" text))
-        (should (string-search "Files and machines" text)))
+        (should (string-search "Files" text)))
       (should (eq 'drgnx-work-map-mode (buffer-local-value 'major-mode buf))))))
 
 (ert-deftest drgnx-work-space/hidden-map-draws-and-receives-nothing ()

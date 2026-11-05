@@ -27,6 +27,7 @@
 (declare-function drgnx-work-map-buffers "drgnx-work-map")
 (declare-function drgnx-work-map-buffer "drgnx-work-map")
 (declare-function drgnx-work-map-mode "drgnx-work-map")
+(declare-function drgnx-work-map-toggle-outline "drgnx-work-map")
 (declare-function drgnx-work-map--changed "drgnx-work-map")
 (defvar drgnx-work-space--view)
 (defvar drgnx-work-space--message)
@@ -66,7 +67,7 @@ it (a notes repository with the code repositories inside it)."
 (defface drgnx-work-agent-5 '((t :inherit ansi-color-yellow)) "The fifth agent colour." :group 'drgnx-work-space)
 (defface drgnx-work-agent-6 '((t :inherit ansi-color-red)) "The sixth agent colour." :group 'drgnx-work-space)
 
-(defconst drgnx-work-space-command-ids '(work-view)
+(defconst drgnx-work-space-command-ids '(work-view work-outline)
   "The commands of this module, each with a row in every key profile (keys/*.eld).")
 
 ;;;; The workspace of a frame
@@ -222,7 +223,10 @@ follows the windows; the commands."
   (drgnx-state-subscribe 'windows-changed #'drgnx-work-space--windows-changed)
   (when (fboundp 'drgnx-wb-place) (drgnx-wb-place 'drgnx-work-map-mode 'editor))
   (drgnx-command-define 'work-view :category "Work" :title "Open the Work Space" :command #'drgnx-work-space-open
-                        :doc "The map of every live piece of agent work: asks, specs, plans, agents, branches, files and machines"))
+                        :doc "The map of every live piece of agent work: asks, specs, plans, agents, branches, files and machines")
+  (drgnx-command-define 'work-outline :category "Work" :title "Show the Map as an Outline"
+                        :command #'drgnx-work-map-toggle-outline :map 'drgnx-work-map-mode-map
+                        :doc "One block per agent, with why it exists and what it touches; again for the map"))
 
 (defun drgnx-work-space--teardown ()
   "tools/work-space's `:teardown': the views close (the hub forgets them) and the map buffers go."

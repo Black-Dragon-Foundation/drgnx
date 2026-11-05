@@ -1,0 +1,16 @@
+;; The rows of test/fixtures/work-space/frame.json at scale 1 in a batch Emacs (8 px per column), as
+;; `drgnx-work-rows-test--flat' shows them: <N> is a display space aligned to pixel column N.
+(((:row 1 0 0) . "You asked<388>❝ fix deferred testin…<580>\n")
+ ((:band 2 0 0) . " \n")
+ ((:row 2 0 0) . "Specs<420>◫ race-proof tests<596>\n")
+ ((:band 3 0 0) . " \n")
+ ((:row 3 0 0) . "Plans<232>☰ deferred testing…<408>\n")
+ ((:band 4 0 0) . " \n")
+ ((:row 4 0 0)
+  . "Agents<84>● O  Opus · hub rows<316><328>● S  Sonnet · fx-sess<560>\n<84>SESSION-END-LOSES-STARTED-1<316><328>review item 3<560>\n<84>testing · 32 min · $1.20 ·…<316><328>needs you · 5 min<560>\n<84>→ turn_core drops the star…<316><328>→ fixed in seq<560>\n<84>⚠ shares files with Sonnet…<316><328>⚠ shares files with Opus ·…<560>\n")
+ ((:band 5 0 0) . " \n")
+ ((:row 5 0 0) . "Branches<120>⑂ rp-df-hub · edi…<280><364>⑂ rp-fx-sess · ed…<524>\n")
+ ((:band 4 0 1) . " \n")
+ ((:row 4 0 1) . "<116>● O explore<284>\n<116>running 2m<284>\n")
+ ((:band 6 0 0) . " \n")
+ ((:row 6 0 0) . "Files<248>▭ session.rs · …<392><404>▣ desktop · 3…<532>\n"))

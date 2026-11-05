@@ -5,31 +5,49 @@
 ;;; Commentary:
 ;; The map is one read-only buffer, `*drgnx work: NAME*', in `drgnx-work-map-mode': a `drgnx-view' whose rows are
 ;; the layout's sub-rows `(:row LAYER BLOCK-LINE SUB)' and the bands between them `(:band LAYER BLOCK-LINE SUB)', in
-;; the order of their y.  A row's text is a function of the cached frame (core/drgnx-work-client.el).  The buffer's
-;; view id is `drgnx-work-space--view'.  Keys come from the key profiles (keys/*.eld), never from this file.
-;; Loaded by tools/work-space (drgnx-work-space.el); defines no module.  See docs/develop/work-space.md.
+;; the order of their y.  A row's text is a function of the cached frame (core/drgnx-work-client.el) and the scale:
+;; cards are buffer text, their lines placed by pixel `:align-to' from the layout's units, their boxes the decoration
+;; faces' (modules/ui/drgnx-decor.el); the bands are blank lines of their height, which the edge tiles draw into.
+;; The same frame is also drawn as an outline (one block per agent), in terminals, when the layout does not fit, and
+;; on `O'.  The buffer's view id is `drgnx-work-space--view'.  Keys come from the key profiles (keys/*.eld), never
+;; from this file.  Loaded by tools/work-space (drgnx-work-space.el); defines no module.
+;; See docs/develop/work-space.md.
 
 ;;; Code:
 (require 'cl-lib)
+(require 'seq)
 (require 'subr-x)
 (require 'drgnx-view)
 (require 'drgnx-work-client)
+(unless (featurep 'drgnx-decor)
+  (load (expand-file-name "../ui/drgnx-decor" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 
 (defvar-local drgnx-work-space--view nil
   "The id of the map view this buffer shows (`drgnx-work-client-open'), or nil for an empty map.")
 (defvar-local drgnx-work-space--message nil
   "The text an empty map (no workspace) shows.")
+(defvar-local drgnx-work-map--outline nil
+  "nil: the outline form when the frame is a terminal's or does not fit; t: always; `off': never.")
+
+(defvar drgnx-work-map-scale nil
+  "The display scale the rows are drawn at; nil: the frame's.  A test binds it.")
 
 (defvar drgnx-work-map-mode-map (make-sparse-keymap)
   "Keys of the map buffer.  The key profiles bind them (`drgnx-command-define' with this map).")
+
+(defface drgnx-work-band '((t :height 0.1))
+  "The blank lines of the bands between rows: small, so a band is as high as its tile and no higher."
+  :group 'drgnx-work-space)
 
 (define-derived-mode drgnx-work-map-mode special-mode "Work map"
   "The Work space's map: layers of asks, specs, plans, agents, branches and files, and the edges between them."
   (setq-local truncate-lines t cursor-type nil))
 
 (defconst drgnx-work-map--layer-names
-  ["You asked" "Specs" "Plans" "Agents" "Branches" "Files and machines"]
-  "The six layers' labels, sentence case (the look).")
+  ["You asked" "Specs" "Plans" "Agents" "Branches" "Files"]
+  "The six layers' labels, sentence case (the look); the last, \"Files and machines\", is short for the margin.")
+
+(defconst drgnx-work-map--margin 84 "The width, in logical pixels, of the layer labels' margin.")
 
 (defun drgnx-work-map-buffers ()
   "The live map buffers."
@@ -44,11 +62,49 @@
   (when-let* ((id (buffer-local-value 'drgnx-work-space--view (or buffer (current-buffer)))))
     (drgnx-work-client-view-state id)))
 
-;;;; Keys of the rows
+;;;; Geometry
+
+(defun drgnx-work-map--scale ()
+  (or drgnx-work-map-scale (and (fboundp 'frame-scale-factor) (ignore-errors (frame-scale-factor))) 1))
+
+(defun drgnx-work-map--px (units)
+  "UNITS (4 logical pixels each) in device pixels."
+  (round (* units 4 (drgnx-work-map--scale))))
+
+(defun drgnx-work-map--margin-px () (round (* drgnx-work-map--margin (drgnx-work-map--scale))))
+
+(defun drgnx-work-map--width (s)
+  "The width of S in pixels (in a terminal, 8 per column)."
+  (if (display-graphic-p) (string-pixel-width s) (* 8 (string-width s))))
+
+(defvar drgnx-work-map--fit-memo (make-hash-table :test #'equal)
+  "(TEXT . PIXELS) → TEXT cut to PIXELS, so `string-pixel-width' runs once per label.  Emptied when it holds 4000
+entries (a theme, font or scale change makes the rows draw again anyway).")
+
+(defun drgnx-work-map--fit (text px)
+  "TEXT cut at the end, with an ellipsis, to be at most PX pixels wide.  Memoised by text and width."
+  (let ((key (cons text px)))
+    (or (gethash key drgnx-work-map--fit-memo)
+        (progn
+          (when (> (hash-table-count drgnx-work-map--fit-memo) 4000) (clrhash drgnx-work-map--fit-memo))
+          (puthash key
+                   (if (<= (drgnx-work-map--width text) px)
+                       text
+                     (let ((lo 0) (hi (length text)))
+                       (while (< lo hi)
+                         (let ((mid (/ (+ lo hi 1) 2)))
+                           (if (<= (drgnx-work-map--width (concat (substring text 0 mid) "…")) px)
+                               (setq lo mid)
+                             (setq hi (1- mid)))))
+                       (concat (substring text 0 lo) "…")))
+                   drgnx-work-map--fit-memo)))))
+
+;;;; The rows of a layout
 
 (defvar drgnx-work-map--index (make-hash-table :test #'eq :weakness 'key)
-  "Layout (the plist of a state's frame) → hash row key → the ids in that row, left to right.  Weak on the layout: a
-new frame has a new layout, and the old index goes with it.")
+  "Layout (the plist of a state's frame) → (ITEMS . ROWS): ITEMS a hash row key → the ids in that row, left to
+right; ROWS a hash row key → the layout's row plist.  Weak on the layout: a new frame has a new layout, and the old
+index goes with it.")
 
 (defun drgnx-work-map--row-key (r)
   (list :row (plist-get r :layer) (plist-get r :block_line) (plist-get r :sub)))
@@ -57,7 +113,8 @@ new frame has a new layout, and the old index goes with it.")
   "STATE's row index (see `drgnx-work-map--index')."
   (let ((layout (drgnx-work-client-layout state)))
     (or (gethash layout drgnx-work-map--index)
-        (let ((h (make-hash-table :test #'equal)))
+        (let ((h (make-hash-table :test #'equal)) (rows (make-hash-table :test #'equal)))
+          (dolist (r (plist-get layout :rows)) (puthash (drgnx-work-map--row-key r) r rows))
           (dolist (id (drgnx-work-client-ids state))
             (dolist (key (drgnx-work-client-rows-of state id)) (push id (gethash key h))))
           (maphash (lambda (key ids)
@@ -65,13 +122,14 @@ new frame has a new layout, and the old index goes with it.")
                                                              (plist-get (drgnx-work-client-rect state b) :x))))
                               h))
                    h)
-          (puthash layout h drgnx-work-map--index)))))
+          (puthash layout (cons h rows) drgnx-work-map--index)))))
 
-(defun drgnx-work-map--keys (state)
+(defun drgnx-work-map--layout-keys (state)
   "The row keys of STATE's layout in y order: each band above its row."
   (let* ((layout (drgnx-work-client-layout state))
-         (rows (sort (copy-sequence (plist-get layout :rows)) (lambda (a b) (< (plist-get a :y) (plist-get b :y)))))
-         (original (plist-get layout :rows)) out)
+         (original (plist-get layout :rows))
+         (rows (sort (copy-sequence original) (lambda (a b) (< (plist-get a :y) (plist-get b :y)))))
+         out)
     (dolist (r rows)
       (let ((i (cl-position r original :test #'eq)))
         (when (seq-find (lambda (b) (eql (plist-get b :row) i)) (plist-get layout :bands))
@@ -79,16 +137,251 @@ new frame has a new layout, and the old index goes with it.")
       (push (drgnx-work-map--row-key r) out))
     (nreverse out)))
 
-;;;; Rows
+(defun drgnx-work-map--outline-p (state)
+  "Whether STATE is drawn as an outline: asked for, a terminal's, or a layout that does not fit."
+  (and state
+       (or (eq drgnx-work-map--outline t)
+           (and (not (eq drgnx-work-map--outline 'off))
+                (or (not (display-graphic-p)) (not (plist-get (drgnx-work-client-layout state) :fits)))))))
 
-(defun drgnx-work-map--label (state id)
-  (let ((it (drgnx-work-client-item state id)))
-    (or (plist-get it :label) id)))
+(defun drgnx-work-map--outline-ids (state)
+  "The agents of STATE the outline shows, in block order (plan rank, then start order), a subagent after its parent."
+  (let* ((agents (seq-filter (lambda (id) (equal (plist-get (drgnx-work-client-item state id) :kind) "agent"))
+                             (drgnx-work-client-ids state)))
+         (plan-rank (lambda (id) (let ((b (plist-get (drgnx-work-client-item state id) :block)))
+                                   (if b (or (plist-get (drgnx-work-client-item state b) :order) 0) most-positive-fixnum))))
+         (order (lambda (id) (or (plist-get (drgnx-work-client-item state id) :order) 0))))
+    (sort agents (lambda (a b) (let ((ra (funcall plan-rank a)) (rb (funcall plan-rank b)))
+                                 (if (= ra rb)
+                                     (or (< (funcall order a) (funcall order b))
+                                         (and (= (funcall order a) (funcall order b)) (string< a b)))
+                                   (< ra rb)))))))
 
-(defun drgnx-work-map--first-row-p (state key)
-  "Whether KEY is the first row of its layer."
-  (let ((layer (nth 1 key)))
-    (equal key (seq-find (lambda (k) (and (eq (car k) :row) (eq (nth 1 k) layer))) (drgnx-work-map--keys state)))))
+(defun drgnx-work-map--keys (state)
+  "The keys of the rows STATE is drawn as: the layout's, or the outline's (a notice when it did not fit)."
+  (if (drgnx-work-map--outline-p state)
+      (append (and (not (plist-get (drgnx-work-client-layout state) :fits)) '((:notice)))
+              (or (mapcar (lambda (id) (list :outline id)) (drgnx-work-map--outline-ids state)) '((:outline-none))))
+    (drgnx-work-map--layout-keys state)))
+
+;;;; Card text
+
+(defun drgnx-work-map--field (item key) (plist-get (plist-get item :fields) key))
+
+(defun drgnx-work-map--state-word (s)
+  (pcase s ("needs-you" "needs you") ((pred stringp) s) (_ "")))
+
+(defun drgnx-work-map--dot (item)
+  "The state dot of ITEM, in the face of its state."
+  (propertize "●" 'face (pcase (drgnx-work-map--field item :state)
+                          ("running" 'drgnx-work-chain)
+                          ("needs-you" 'drgnx-work-needs-you)
+                          ((or "review" "stalled") 'drgnx-work-overlap)
+                          (_ 'drgnx-work-dim))))
+
+(defun drgnx-work-map--badge (item)
+  "The agent badge: the model's initial in the agent's colour."
+  (let ((model (or (drgnx-work-map--field item :model) "")))
+    (propertize (if (string-empty-p model) "?" (upcase (substring model 0 1)))
+                'face (intern (format "drgnx-work-agent-%d" (1+ (mod (1- (or (plist-get item :order) 1)) 6)))))))
+
+(defun drgnx-work-map--partner (state id)
+  "The item an overlap edge joins ID to, as \"model · name\", or nil."
+  (when-let* ((e (seq-find (lambda (e) (and (equal (plist-get e :kind) "overlap")
+                                            (or (equal (plist-get e :from) id) (equal (plist-get e :to) id))))
+                           (drgnx-work-client-edges state)))
+              (other (if (equal (plist-get e :from) id) (plist-get e :to) (plist-get e :from)))
+              (it (drgnx-work-client-item state other)))
+    (if-let* ((m (drgnx-work-map--field it :model))) (format "%s · %s" m (plist-get it :label)) (plist-get it :label))))
+
+(defun drgnx-work-map--rich-lines (state id)
+  "The five lines of the rich agent card ID: who, its task, how it is going, its latest conclusion, the flag."
+  (let* ((it (drgnx-work-client-item state id)) (f (lambda (k) (drgnx-work-map--field it k)))
+         (model (funcall f :model)) (edits (funcall f :edits)) (progress (funcall f :progress))
+         (ctx (funcall f :context)) (partner (drgnx-work-map--partner state id)))
+    (list (concat (drgnx-work-map--dot it) " " (drgnx-work-map--badge it) "  "
+                  (if model (concat model " · ") "") (plist-get it :label))
+          (or (funcall f :task) "")
+          (mapconcat #'identity
+                     (delq nil (list (or (funcall f :activity) (drgnx-work-map--state-word (funcall f :state)))
+                                     (and (funcall f :minutes) (format "%d min" (funcall f :minutes)))
+                                     (funcall f :spend)
+                                     (and progress (format "%d/%d" (car progress) (cadr progress)))
+                                     (and ctx (> ctx 80) (format "ctx %d %%" ctx))))
+                     " · ")
+          (if-let* ((c (funcall f :conclusion))) (concat "→ " c) "")
+          (cond ((plist-get it :warn)
+                 (propertize (if partner (format "⚠ shares files with %s" partner) "⚠ overlap")
+                             'face 'drgnx-work-overlap))
+                (t (mapconcat #'identity
+                              (delq nil (list (and (funcall f :reads) (format "reads %d" (funcall f :reads)))
+                                              (and edits (format "edits %d (+%d −%d)" (nth 0 edits) (nth 1 edits)
+                                                                 (nth 2 edits)))))
+                              " · "))))))
+
+(defun drgnx-work-map--compact-lines (item)
+  "The two lines of a compact agent card: who, and how it is going (with the overlap mark)."
+  (let* ((f (lambda (k) (drgnx-work-map--field item k))) (model (funcall f :model)))
+    (list (concat (drgnx-work-map--dot item) " " (drgnx-work-map--badge item) " "
+                  (if (and model (equal (plist-get item :kind) "agent")) (concat model " · ") "") (plist-get item :label))
+          (concat (mapconcat #'identity
+                             (delq nil (list (or (funcall f :activity) (drgnx-work-map--state-word (funcall f :state)))
+                                             (and (funcall f :minutes) (format "%dm" (funcall f :minutes)))))
+                             " ")
+                  (if (plist-get item :warn) (propertize " ⚠" 'face 'drgnx-work-overlap) "")))))
+
+(defun drgnx-work-map--chip-line (item)
+  "The one line of a chip item: ask, spec, plan, branch, file or machine."
+  (let* ((kind (plist-get item :kind)) (label (plist-get item :label)) (f (lambda (k) (drgnx-work-map--field item k)))
+         (glyph (pcase kind ("ask" "❝") ("spec" "◫") ("plan" "☰") ("branch" "⑂") ("file" "▭") ("machine" "▣") (_ "·")))
+         (extra (pcase kind
+                  ("plan" (when-let* ((p (funcall f :progress))) (format "%d/%d" (car p) (cadr p))))
+                  ("branch" (when-let* ((e (funcall f :edits))) (format "edits %d" (car e))))
+                  ("file" (when-let* ((c (funcall f :change))) (format "+%d −%d" (car c) (cadr c))))
+                  ("machine" (when-let* ((s (funcall f :slots))) (format "%d/%d" (car s) (cadr s)))))))
+    (concat (if (plist-get item :needs_you) (propertize "⚑ " 'face 'drgnx-work-needs-you) "")
+            glyph " " label (if extra (concat " · " extra) "")
+            (if (plist-get item :warn) (propertize " ⚠" 'face 'drgnx-work-overlap) ""))))
+
+(defun drgnx-work-map--card-lines (state id)
+  "The text lines of item ID's card, by its form: five (rich agent), two (compact agent or subagent) or one (chip)."
+  (let* ((item (drgnx-work-client-item state id)) (kind (plist-get item :kind)))
+    (cond ((member kind '("agent" "subagent"))
+           (if (and (equal kind "agent") (equal (drgnx-work-client-form state id) "rich"))
+               (drgnx-work-map--rich-lines state id)
+             (drgnx-work-map--compact-lines item)))
+          (t (list (drgnx-work-map--chip-line item))))))
+
+(defun drgnx-work-map--card-face (n i)
+  "The decoration face of line I of a card of N lines."
+  (cond ((= n 1) (if (facep 'drgnx-card-single) 'drgnx-card-single 'drgnx-work-chip))
+        ((= i 0) 'drgnx-card-top) ((= i (1- n)) 'drgnx-card-bottom) (t 'drgnx-card-mid)))
+
+;;;; Row text
+
+(defun drgnx-work-map--row-lines (row)
+  "How many text lines the layout row ROW holds: five for a rich agent row, two for a compact one, else one."
+  (cond ((not (eql 4 (plist-get row :layer))) 1)
+        ((>= (plist-get row :height_units) 20) 5)
+        (t 2)))
+
+(defun drgnx-work-map--layer-label (state key row)
+  "The label for KEY's first line: the layer's name on its first row, a collapsed layer's with its count."
+  (let* ((layer (nth 1 key)) (name (aref drgnx-work-map--layer-names (1- layer)))
+         (first (equal key (seq-find (lambda (k) (and (eq (car k) :row) (eql (nth 1 k) layer)))
+                                     (drgnx-work-map--layout-keys state)))))
+    (cond ((plist-get row :collapsed)
+           (format "%s · %d" name (cl-count-if (lambda (id) (eq (drgnx-work-client-kind-layer
+                                                                 (plist-get (drgnx-work-client-item state id) :kind))
+                                                                layer))
+                                               (drgnx-work-client-ids state))))
+          (first name)
+          (t ""))))
+
+(defun drgnx-work-map--segment (state id i)
+  "Line I of item ID's card, placed at its x, or the empty string when its card has fewer lines."
+  (let* ((rect (drgnx-work-client-rect state id)) (lines (drgnx-work-map--card-lines state id)) (n (length lines)))
+    (if (or (null rect) (>= i n))
+        ""
+      (let* ((left (+ (drgnx-work-map--margin-px) (drgnx-work-map--px (plist-get rect :x))))
+             (right (+ (drgnx-work-map--margin-px) (drgnx-work-map--px (+ (plist-get rect :x) (plist-get rect :w)))))
+             (face (drgnx-work-map--card-face n i)))
+        (concat (propertize " " 'display `(space :align-to (,left)))
+                (propertize (drgnx-work-map--fit (nth i lines) (- right left 10)) 'face face 'drgnx-work-id id)
+                (propertize " " 'display `(space :align-to (,right)) 'face face 'drgnx-work-id id))))))
+
+(defun drgnx-work-map-row-text (state key)
+  "The text of row KEY of STATE's layout: a band (blank, as high as its tile), or the lines of a row's cards."
+  (let* ((index (drgnx-work-map--index-of state)) (row-key (cons :row (cdr key)))
+         (row (gethash row-key (cdr index))))
+    (if (eq (car key) :band)
+        (let* ((layout (drgnx-work-client-layout state))
+               (i (cl-position row (plist-get layout :rows) :test #'eq))
+               (band (seq-find (lambda (b) (eql (plist-get b :row) i)) (plist-get layout :bands)))
+               (px (drgnx-work-map--px (or (plist-get band :height_units) 1))))
+          (concat (propertize " " 'face 'drgnx-work-band)
+                  (propertize "\n" 'face 'drgnx-work-band 'line-height (list (max 0 (1- px))))))
+      (let* ((ids (gethash row-key (car index))) (n (drgnx-work-map--row-lines row))
+             (px (/ (drgnx-work-map--px (plist-get row :height_units)) n))
+             (label (drgnx-work-map--layer-label state key row)) lines)
+        (dotimes (i n)
+          (push (concat (if (and (= i 0) (not (string-empty-p label)))
+                            (propertize (drgnx-work-map--fit label (- (drgnx-work-map--margin-px) 8)) 'face 'drgnx-work-label)
+                          "")
+                        (mapconcat (lambda (id) (drgnx-work-map--segment state id i)) ids "")
+                        (propertize "\n" 'line-height (list (max 0 (1- px)))))
+                lines))
+        (apply #'concat (nreverse lines))))))
+
+;;;; The outline form
+
+(defun drgnx-work-map--parent (state id)
+  "The item ID came from (the first came-from edge into it, by id), or nil."
+  (let ((from (delq nil (mapcar (lambda (e) (and (equal (plist-get e :kind) "came-from") (equal (plist-get e :to) id)
+                                                 (plist-get e :from)))
+                                (drgnx-work-client-edges state)))))
+    (car (sort from #'string<))))
+
+(defun drgnx-work-map--why (state id)
+  "ID's why-chain as text: you: \"ask\" › spec › plan › task."
+  (let ((chain nil) (cur (drgnx-work-map--parent state id)) (guard 0))
+    (while (and cur (< (cl-incf guard) 8))
+      (let ((it (drgnx-work-client-item state cur)))
+        (push (if (equal (plist-get it :kind) "ask") (format "you: \"%s\"" (plist-get it :label)) (plist-get it :label))
+              chain))
+      (setq cur (drgnx-work-map--parent state cur)))
+    (let ((task (drgnx-work-map--field (drgnx-work-client-item state id) :task)))
+      (mapconcat #'identity (append chain (and task (list task))) " › "))))
+
+(defun drgnx-work-map--touches (state id)
+  "ID's touches as text: its branch, machine, edits and reads."
+  (let* ((item (drgnx-work-client-item state id)) (out nil))
+    (dolist (e (drgnx-work-client-edges state))
+      (when (equal (plist-get e :from) id)
+        (let ((to (drgnx-work-client-item state (plist-get e :to))))
+          (pcase (plist-get e :kind)
+            ("came-from" (when (equal (plist-get to :kind) "branch") (push (plist-get to :label) out)))
+            ("runs-on" (push (format "%s slot" (plist-get to :label)) out))))))
+    (when-let* ((edits (drgnx-work-map--field item :edits)))
+      (push (format "edits %d (+%d −%d)" (nth 0 edits) (nth 1 edits) (nth 2 edits)) out))
+    (when-let* ((r (drgnx-work-map--field item :reads))) (push (format "reads %d" r) out))
+    (mapconcat #'identity (nreverse out) " · ")))
+
+(defun drgnx-work-map--outline-block (state id columns)
+  "The outline block of agent ID: its line, why, touches and conclusion, each at most COLUMNS wide, ending in a newline."
+  (let* ((item (drgnx-work-client-item state id)) (f (lambda (k) (drgnx-work-map--field item k)))
+         (model (funcall f :model)) (progress (funcall f :progress))
+         (head (concat (drgnx-work-map--dot item) " " (if model (concat model " · ") "") (plist-get item :label) "  "
+                       (mapconcat #'identity
+                                  (delq nil (list (or (funcall f :activity) (drgnx-work-map--state-word (funcall f :state)))
+                                                  (and (funcall f :minutes) (format "%dm" (funcall f :minutes)))
+                                                  (funcall f :spend)
+                                                  (and progress (format "%d/%d" (car progress) (cadr progress)))))
+                                  " ")))
+         (partner (and (plist-get item :warn) (drgnx-work-map--partner state id)))
+         (flag (and (plist-get item :warn) (propertize (if partner (format "⚠ shares files with %s" partner) "⚠ overlap")
+                                                       'face 'drgnx-work-overlap)))
+         (first (if (and flag (<= (+ (string-width head) 2 (string-width flag)) columns))
+                    (concat head (make-string (- columns (string-width head) (string-width flag)) ?\s) flag)
+                  (truncate-string-to-width head columns nil nil "…")))
+         (lines (list first
+                      (format "   why:      %s" (drgnx-work-map--why state id))
+                      (format "   touches:  %s" (drgnx-work-map--touches state id)))))
+    (when-let* ((c (funcall f :conclusion))) (setq lines (append lines (list (concat "   → " c)))))
+    (concat (mapconcat (lambda (l) (truncate-string-to-width l columns nil nil "…")) lines "\n") "\n")))
+
+(defun drgnx-work-map-outline (state &optional columns)
+  "STATE as an outline, at most COLUMNS (default 80) wide: one block per agent, in plan order, each with why, touches
+and its latest conclusion.  The form of terminals, of a map that does not fit and of `O'."
+  (let ((columns (or columns 80)) (ids (drgnx-work-map--outline-ids state)))
+    (if (null ids)
+        "No agents are working.\n"
+      (mapconcat (lambda (id) (drgnx-work-map--outline-block state id columns)) ids "\n"))))
+
+;;;; The view type
+
+(defun drgnx-work-map--columns ()
+  (if-let* ((w (get-buffer-window (current-buffer) t))) (max 40 (window-body-width w)) 80))
 
 (defun drgnx-work-map--render (key)
   "The text of row KEY in the current buffer's map."
@@ -96,30 +389,35 @@ new frame has a new layout, and the old index goes with it.")
     (cond
      ((equal key '(:empty)) (concat (or drgnx-work-space--message "") "\n"))
      ((null state) "\n")
-     ((eq (car key) :band) "\n")
-     (t (let* ((ids (gethash key (drgnx-work-map--index-of state)))
-               (label (if (drgnx-work-map--first-row-p state key)
-                          (aref drgnx-work-map--layer-names (1- (nth 1 key)))
-                        "")))
-          (concat (format "%-20s" label)
-                  (mapconcat (lambda (id) (drgnx-work-map--label state id)) ids " · ")
-                  "\n"))))))
+     ((equal key '(:notice)) (concat "Too many to draw at this width · O back to the map, at a wider tile\n"))
+     ((equal key '(:outline-none)) (drgnx-work-map-outline state))
+     ((eq (car key) :outline) (drgnx-work-map--outline-block state (cadr key) (drgnx-work-map--columns)))
+     (t (drgnx-work-map-row-text state key)))))
 
 (defun drgnx-work-map--sig (key)
   "KEY's signature for `drgnx-view-sync-rows': the rows' items and rectangles themselves (`eq' tells a change)."
   (let ((state (drgnx-work-map--state)))
-    (if (or (null state) (not (eq (car key) :row)))
-        key
-      (vconcat (list (plist-get (drgnx-work-client-layout state) :rows))
-               (mapcar (lambda (id) (drgnx-work-client-item state id)) (gethash key (drgnx-work-map--index-of state)))))))
+    (cond ((null state) key)
+          ((eq (car key) :row)
+           (vconcat (list (plist-get (drgnx-work-client-layout state) :rows))
+                    (mapcar (lambda (id) (drgnx-work-client-item state id))
+                            (gethash key (car (drgnx-work-map--index-of state))))))
+          ((eq (car key) :outline) (vector (drgnx-work-client-items state) (drgnx-work-client-edges state)))
+          (t key))))
 
-(defun drgnx-work-map--sync (view)
-  "The view type's SYNC: the rows are the layout's."
+(defun drgnx-work-map--sync (_view)
+  "The view type's SYNC: the rows are the frame's."
   (let ((state (drgnx-work-map--state)))
-    (drgnx-view-sync-rows view (if state (drgnx-work-map--keys state) '((:empty))) #'drgnx-work-map--sig)))
+    (drgnx-view-sync-rows drgnx-view (if state (drgnx-work-map--keys state) '((:empty))) #'drgnx-work-map--sig)))
 
 (drgnx-view-define 'work-map :render #'drgnx-work-map--render :sync #'drgnx-work-map--sync
                    :slice drgnx-view-slice)
+
+(defun drgnx-work-map-toggle-outline ()
+  "Show the outline form instead of the map, or the map again (a terminal's frame always shows the outline)."
+  (interactive)
+  (setq drgnx-work-map--outline (if (eq drgnx-work-map--outline t) 'off t))
+  (drgnx-view-touch drgnx-view))
 
 ;;;; Marks from the client
 
@@ -128,7 +426,8 @@ new frame has a new layout, and the old index goes with it.")
   (when-let* ((buffer (drgnx-work-map-buffer view-id)))
     (with-current-buffer buffer
       (when (drgnx-view-p drgnx-view)
-        (if (or (eq (plist-get marks :rows) t) (plist-get marks :keys) (plist-get marks :layout))
+        (if (or (eq (plist-get marks :rows) t) (plist-get marks :keys) (plist-get marks :layout)
+                (drgnx-work-map--outline-p (drgnx-work-map--state)))
             (drgnx-view-touch drgnx-view)
           (when (plist-get marks :rows) (drgnx-view-dirty drgnx-view (plist-get marks :rows))))))))
 

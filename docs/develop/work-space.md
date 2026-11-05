@@ -379,6 +379,29 @@ Module `tools/work-space` (`modules/tools/drgnx-work-space.el`; the buffer's mod
   `cond`, gated: a real hub, real mock agents), `test/unit/work-rows-test.el` (`det`). The frame in
   `test/fixtures/work-space/frame.json` is what the wire decodes to.
 
+### The rows
+
+`modules/tools/drgnx-work-map.el`. A view row is a sub-row of the layout, keyed `(:row LAYER BLOCK-LINE SUB)`, or the
+band above it, `(:band LAYER BLOCK-LINE SUB)`, in the order of their y. A row's text is `drgnx-work-map-row-text
+STATE KEY`, a function of the cached frame and the display scale (`drgnx-work-map-scale`, the frame's by default).
+
+- **Geometry.** The layout's units are 4 logical pixels; a row's pixel height is its units × 4 × scale, split evenly
+  over its lines (five for a rich agent row, two for a compact one, else one). Each line ends in a newline carrying
+  `line-height` `(N)` (the spike showed `(N)` gives N+1 pixels, never `(N . t)`), so a row's height is the layout's whatever
+  its text holds. A band is a blank line in a small face (`drgnx-work-band`) of its height; the edge tiles draw into it.
+- **Cards.** A card's line is placed by pixel `:align-to` from the layout's x, in the decoration faces
+  (`drgnx-card-top`, `-mid`, `-bottom`, `-single`: PD's open boxes under Glitnir), its text cut to the card's width by
+  `string-pixel-width` (memoised in `drgnx-work-map--fit-memo`, bounded). Every card character carries the text
+  property `drgnx-work-id`. The layer label stands in the 84 px margin on a layer's first row.
+- **Index.** `drgnx-work-map--index` (weak on the layout) maps a row key to its items left to right and to its layout
+  row, built once per frame.
+- **Outline.** `drgnx-work-map-outline STATE COLUMNS` and the rows `(:outline AGENT-ID)`; used in a terminal frame,
+  when the layout's `fits` is false (with a `(:notice)` row first) and when `O` asks. Blocks are ordered by plan, then
+  start order; each line is cut to the window's width.
+- **Redraws.** The client's marks reach the view in `drgnx-work-map--changed`: a changed item dirties its rows
+  (`drgnx-view-dirty`), a relayout or a changed list of rows touches the view (SYNC diffs the keys with a signature of
+  each row's items and rectangles), so a field change draws one row.
+
 ### The view core
 
 `drgnx-view-draw-now VIEW &optional KEYS` draws only the rows named by KEYS (the keypress's own redisplay for a
