@@ -1143,7 +1143,7 @@ struct NoteAddArgs {
     kind: Option<String>,
     /// A request key (1-64 of A-Za-z0-9._-): retrying with the same key returns the first answer
     req: Option<String>,
-    /// A finding's sources: up to 12 of `{path, lines?: [first, last]}` or `{url}`
+    /// A finding's sources (at most 12)
     sources: Option<Vec<crate::write::work::Source>>,
 }
 

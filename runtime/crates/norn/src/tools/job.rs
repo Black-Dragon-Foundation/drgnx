@@ -262,7 +262,7 @@ struct RecordDecisionArgs {
     step: Option<i64>,
     /// Where it came from: from-brief, own or needs-user
     origin: Option<String>,
-    /// What it rests on: up to 12 of `{path, lines?: [first, last]}` or `{url}`
+    /// What it rests on (at most 12)
     sources: Option<Vec<crate::write::work::Source>>,
 }
 

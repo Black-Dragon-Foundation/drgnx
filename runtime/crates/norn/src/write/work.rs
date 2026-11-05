@@ -36,14 +36,14 @@ fn hub_only(tx: &WTx<'_>) -> Result<(), CoordError> {
 #[serde(untagged)]
 pub enum Source {
     Path {
-        /// A file the conclusion rests on
+        /// A file
         path: String,
         /// First and last line, 1-based
         #[serde(default, skip_serializing_if = "Option::is_none")]
         lines: Option<[u32; 2]>,
     },
     Url {
-        /// A page the conclusion rests on
+        /// A page
         url: String,
     },
 }
