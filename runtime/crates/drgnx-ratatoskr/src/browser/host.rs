@@ -296,6 +296,9 @@ pub fn serve(cfg: &HostCfg, hub: OwnedFd, ready: OwnedFd) -> i32 {
             Ok(0) => break EXIT_OK,
             Ok(n) => n,
             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            // the hub closed its end before it read what the host last sent (an exit event, say): the hub went,
+            // as with EOF
+            Err(e) if e.kind() == io::ErrorKind::ConnectionReset => break EXIT_OK,
             Err(e) => break fail(format!("reading the hub: {e}")),
         };
         let frames = match decoder.push(&buf[..n]) {
@@ -981,6 +984,29 @@ mod tests {
         // the hub is gone
         fx.hub.shutdown(std::net::Shutdown::Both).unwrap();
         assert_eq!(fx.host_exit(Duration::from_secs(4)), EXIT_OK);
+        assert!(group_gone(pid), "no browser process is left");
+    }
+
+    #[test]
+    fn the_hub_closing_with_lines_unread_ends_everything_too() {
+        use std::os::fd::AsRawFd;
+        let mut fx = Fx::new();
+        let pid = fx.start();
+        fx.cdp(r#"{"id":1,"method":"Fake.stubborn"}"#);
+        fx.reply(1);
+        // the next reply is in the hub's queue, unread, when the hub closes: the host's read is a reset, not an EOF
+        fx.cdp(r#"{"id":2,"method":"Browser.getVersion"}"#);
+        let fd = fx.hub.as_raw_fd();
+        skuld::wait_until("the reply, queued", 5, || {
+            let mut n: libc::c_int = 0;
+            // SAFETY: FIONREAD writes one c_int to the pointer, which lives across the call
+            let r = unsafe { libc::ioctl(fd, libc::FIONREAD, &mut n) };
+            (r == 0 && n > 0).then_some(())
+        });
+        drop(fx.hub);
+        let h = fx.host.take().unwrap();
+        skuld::wait_until("the host's exit", 4, || h.is_finished().then_some(()));
+        assert_eq!(h.join().unwrap(), EXIT_OK);
         assert!(group_gone(pid), "no browser process is left");
     }
 

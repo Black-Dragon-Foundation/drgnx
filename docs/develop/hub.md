@@ -2362,7 +2362,8 @@ kills what is left of its group (the group's id is still held by the unreaped le
 messages through for up to 1 s, and sends `{"ev":"exited","code":N|null,"signal":N|null}`. The next `start` is a fresh
 Chromium through the same host.
 
-**The hub goes.** EOF on fd 3 (the hub ended, or restarted: an inherited fd cannot be handed over again) stops Chromium as
+**The hub goes.** EOF on fd 3 (the hub ended, or restarted: an inherited fd cannot be handed over again), or a reset
+(the hub closed its end with the host's last lines unread), stops Chromium as
 `stop` does, and the host exits 0, so no Chromium is left behind.
 
 **Stderr.** Chromium's stderr lines go out as `{"ev":"stderr","line":S}`, at most one a second (the others are only in the
