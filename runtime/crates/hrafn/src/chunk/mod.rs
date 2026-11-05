@@ -20,7 +20,7 @@ pub use elisp::top_level_forms;
 pub const BUDGET: usize = 1800;
 
 /// Bump it when chunking changes: the content key of every vector changes with it.
-pub const CHUNKER_VERSION: u32 = 1;
+pub const CHUNKER_VERSION: u32 = 2;
 
 /// The text of a chunk's FTS columns. `symbols` is raw: the store encodes it (`encode_symbol`) on write.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

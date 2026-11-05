@@ -189,6 +189,47 @@ async fn changed_file_only_rewritten() {
     assert!(ids_of(&s, "b.el").await.is_empty());
 }
 
+/// The first lines of a file's chunks, as stored.
+async fn line_starts(s: &CodeStore, path: &str) -> Vec<i64> {
+    let path = path.to_string();
+    s.handle()
+        .read(move |c| {
+            let mut st = c.prepare("select line_start from chunk where path = ?1 order by id")?;
+            let rows = st
+                .query_map([&path], |r| r.get(0))?
+                .collect::<Result<Vec<i64>, _>>()?;
+            Ok(rows)
+        })
+        .await
+        .unwrap()
+}
+
+/// Pattern D. An index made by the chunker that numbered a chunk's first line one too early (version 1) is chunked
+/// again, though no file changed: its lines are the corrected ones.
+#[tokio::test]
+async fn an_index_of_the_old_chunker_is_chunked_again() {
+    let (_d, s) = store().await;
+    let text = ";;; a.el\n\n(defun a-one () \"One.\" 1)\n\n(defun a-two () \"Two.\" 2)\n";
+    let tree = Tree::new(&[("a.el", text)]);
+    let listed = [el("a.el", "a1")];
+    run(&s, &tree, &listed).await;
+    let right = line_starts(&s, "a.el").await;
+    assert!(!right.is_empty());
+    // the old chunker's rows: the same chunks, each first line one too early, under its version number
+    s.handle()
+        .write(|c| {
+            c.execute("update chunk set line_start = line_start - 1", [])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    s.meta_set("chunker_version", "1").await.unwrap();
+    assert_ne!(line_starts(&s, "a.el").await, right);
+
+    run(&s, &tree, &listed).await;
+    assert_eq!(line_starts(&s, "a.el").await, right);
+}
+
 /// Pattern D. Unreferenced keys are kept up to 2× the live set, least recently referenced first out.
 #[tokio::test]
 async fn collect_keeps_two_x() {

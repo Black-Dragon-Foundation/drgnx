@@ -947,7 +947,9 @@ from a `#!` line when it has none. A file is marked `generated` (listed, not dro
 together give back the file, byte for byte (offsets are bytes). The budget is 1,800 non-whitespace characters
 (`BUDGET`); `CHUNKER_VERSION` is part of every vector's content key. A chunk's `line_start` is the line of its first
 non-blank character (chunks are cut on the previous chunk's last newline, so the byte offset alone would name the line
-before), which is where a hit opens and what `reanchor` compares against.
+before), which is where a hit opens and what `reanchor` compares against. Version 2 is that rule: an index made by
+version 1 is chunked again at the next refresh, whether or not a file changed (and, the version being in every
+vector's key, embedded again).
 
 For Emacs Lisp (`tree-sitter` 0.25, ABI 15, with `tree-sitter-elisp` 1.7; 0.26 and later need Rust 1.90, above the
 workspace's 1.88) the units are the top-level forms, each with the comments right above it, and the stretches between
