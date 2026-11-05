@@ -39,7 +39,7 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | live-view | the typing workload's 186 characters while the Live view, beside the file, shows a mock browser's JPEG frames as wide as the view asked for (as Chrome sends them), 30 a second, each sent once the last was acknowledged (the mock runs in the same Emacs, so its message and websocket frame are made once; without ImageMagick the frames are a few bytes no decoder takes, so drawing costs less) (checked: frames were drawn) | input latency |
 | agent-settings-open | the Claude Code settings page opened and drawn (`redisplay`) against a fixture home: a 5 MB `.claude.json` (300 projects with history), 50 MCP servers and 200 skills; three runs | milliseconds until drawn (budget 150) and the processes started (budget 0: opening the page starts nothing) |
 | settings-start | `settings.el` with 200 entries (100 of defined options, 100 of packages not loaded; no `:set` functions) read and applied as at a second start; three runs | milliseconds (`:read_ms`, budget 2) |
-| settings-page | the Settings page opened and drawn with 5,000 customizable variables added to the session's own, then the name of one typed into the search a character at a time | `:open_ms` (budget 100), `:key_p50_ms` and `:key_max_ms` (the worst keystroke, budget 16) |
+| settings-page | the Settings page opened and drawn with 5,000 customizable variables added to the session's own, then the name of one typed into the search a character at a time | `:open_ms` (budget 100), `:key_p50_ms` and `:key_max_ms` (a keystroke with its redisplay; the worst, budget 16), `:key_search_max_ms` (the search without the redisplay) |
 | settings-prov | a 500-line `config.el` (a header, ten `load`s of small libraries, 97 blocks of a function, a managed variable's `setq` and an `add-hook`) loaded plain and with provenance, interleaved, nine rounds | `:prov_pct` (budget 5), `:load_ms`, `:prov_load_ms`, and `:cold_extra_ms` (what the first, uncached load adds) |
 | settings-sync | the settings index written for 200 fixture packages of three files each | `:index_ms` (budget 2000) |
 | settings-open | 30 files in a project with a shared and a private workspace file and a language override, opened with the workspace and language layers in and out, interleaved (the layers are checked to have applied) | `:open_on_ms`, `:open_off_ms` (medians per open) and `:delta_ms`, what the layers add (budget 1) |
@@ -598,6 +598,20 @@ names to `features` (`drgnx-settings-apply/applying-adds-only-the-named-custom-l
 Installing a variable watcher costs about 160 µs: `add-variable-watcher` walks the whole obarray. Provenance installs
 one for each managed variable and each variable the static index finds your Lisp setting, once per start, so a
 `settings.el` with 100 entries costs 16 ms of the start, and `settings-prov` shows it.
+
+First measurements (2026-11-05, pinned island on the desktop, Emacs 31.1 in the GUI container; wall clock, so a
+second run moves by up to 1.5×): `settings-start` 18.8 ms, then 5.7 after the applied-values file stopped being
+rewritten at every start, the index file stopped being stat'ed for every setting and the last good copy stopped being
+parsed again (budget 2: the rest is the bounded reader's token scan, about 1.8 ms for 200 entries, the per-entry
+value check, about 1.7 ms, and the pushes, about 1.7 ms); `settings-page` open 90.6 then 49 ms (budget 100, met), a
+search keystroke 209 then 70 ms at most (budget 16: the search itself is at most 32 ms for the first key, which looks
+at every setting, then a few ms for the keys that narrow the last result; a forced redisplay of the page is the other
+40 ms); `settings-prov` 114 ms against a plain load of 0.8 ms before, 54 to 78 ms against 2 to 4 ms after provenance
+stopped re-judging the file at every write and counting lines from the top for every form (budget 5 %: 97 watchers
+installed at 160 µs and more each are most of it, so the gate cannot be met while every managed variable is watched
+before the load); `settings-sync` 510 to 860 ms for 200 packages (budget 2 s, met); `settings-open` 3.1 then 2.4 ms per
+open added by the workspace and language layers (budget 1: the trust resolution of the shared file's root, about
+0.9 ms, and the private file's, about 0.5 ms, run at every open).
 
 Ratatoskr's reader is timed by `runtime/crates/huginn/tests/timing.rs`: 64 KiB of settings-shaped data, median of 200
 reads at most 1 ms. It is `#[ignore]`, run once and alone on a pinned host, optimized:

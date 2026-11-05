@@ -135,15 +135,18 @@
      (defun drgnx-perf-settings-page-measure ()
        (let* ((open (drgnx-perf-settings--ms (lambda () (pop-to-buffer (drgnx-settings-page)) (redisplay t))))
               (rows (with-current-buffer "*drgnx settings*" (length drgnx-settings-page--keys)))
-              (query "") keys)
+              (query "") keys searches)
          (unless (>= rows (drgnx-perf-settings--size 'page)) (error "the page lists %d settings" rows))
          ;; typing one setting's name: the first key matches every setting, the last one
          (dolist (c (string-to-list (format "perf-%d" (/ (drgnx-perf-settings--size 'page) 2))))
            (setq query (concat query (string c)))
-           (push (drgnx-perf-settings--ms
-                  (lambda () (with-current-buffer "*drgnx settings*" (drgnx-settings-page-search query)) (redisplay t)))
-                 keys))
+           (let ((search (drgnx-perf-settings--ms
+                          (lambda () (with-current-buffer "*drgnx settings*" (drgnx-settings-page-search query)))))
+                 (draw (drgnx-perf-settings--ms (lambda () (redisplay t)))))
+             (push search searches)
+             (push (+ search draw) keys)))
          (list :open_ms (drgnx-perf-settings--r open)
+               :key_search_max_ms (drgnx-perf-settings--r (apply #'max searches))
                :key_p50_ms (drgnx-perf-settings--r (drgnx-perf-settings--median keys))
                :key_max_ms (drgnx-perf-settings--r (apply #'max keys)))))
 
