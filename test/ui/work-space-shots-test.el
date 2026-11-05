@@ -59,8 +59,8 @@
 (ert-deftest drgnx-work-shots/dark-and-light ()
   (require 'drgnx-modules)
   (drgnx-test-with-modules '(tools/work-space)
-    (drgnx-work-shots--shoot 'modus-vivendi (format "dark-s%s" (or (getenv "DRGNX_UI_SCALE") "1")))
-    (drgnx-work-shots--shoot 'modus-operandi (format "light-s%s" (or (getenv "DRGNX_UI_SCALE") "1")))))
+    (drgnx-work-shots--shoot 'modus-vivendi (format "dark-s%s" (round (frame-scale-factor))))
+    (drgnx-work-shots--shoot 'modus-operandi (format "light-s%s" (round (frame-scale-factor))))))
 
 (provide 'work-space-shots-test)
 ;;; work-space-shots-test.el ends here

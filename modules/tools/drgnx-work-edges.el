@@ -249,7 +249,7 @@ The characters are in `drgnx-work-band', so the line is no higher than its tiles
     (dolist (image (drgnx-work-edges-band-tiles band geometry colours))
       (cl-incf i)
       (when image
-        (push (propertize " " 'display (list 'space :align-to (* i w)) 'face 'drgnx-work-band) parts)
+        (push (propertize " " 'display (list 'space :align-to (list (* i w))) 'face 'drgnx-work-band) parts)
         (push (propertize " " 'display image 'face 'drgnx-work-band) parts)))
     (and parts (apply #'concat (nreverse parts)))))
 
@@ -295,7 +295,7 @@ places the lane's image at its column.  One set for each text line of the row."
                (width (round (* (max 2 (nth 1 (drgnx-work-edges--look lane geometry colours))) (plist-get geometry :scale))))
                (column (- (drgnx-work-edges--px (plist-get lane :x) geometry) (/ width 2))))
           (push (cons column
-                      (concat (propertize " " 'display (list 'space :align-to column))
+                      (concat (propertize " " 'display (list 'space :align-to (list column)))
                               (propertize " " 'display image)))
                 parts))))
     (nreverse parts)))
