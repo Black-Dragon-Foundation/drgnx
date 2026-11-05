@@ -270,24 +270,43 @@ fn spec_of(id: Option<&str>) -> Result<&'static ModelSpec, String> {
 
 /// Up to LIMIT definitions with a name of their own (`(name, path)`), spread evenly through the code files.
 async fn sample_names(store: &CodeStore, limit: usize) -> Result<Vec<(String, String)>, String> {
-    let all: Vec<(String, String)> = store
+    let all: Vec<(String, String, String)> = store
         .handle()
         .read(|c| {
+            // one pass over the table; the uniqueness is counted here (a `name in (select … group by name having …)`
+            // ran for minutes on a 16,000-chunk project)
             let mut q = c.prepare(
-                "select s.name, s.path from symbol s join file f on f.path = s.path
-                 where f.class = 'code' and length(s.name) >= 4
-                   and s.name in (select name from symbol group by name having count(*) = 1)
-                 order by s.name",
+                "select s.name, s.path, f.class from symbol s join file f on f.path = s.path",
             )?;
             let rows = q
-                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-                .collect::<Result<Vec<_>, _>>()?;
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .collect::<Result<Vec<(String, String, String)>, _>>()?;
             Ok(rows)
         })
         .await
         .map_err(|e| e.to_string())?;
-    let step = (all.len() / limit.max(1)).max(1);
-    Ok(all.into_iter().step_by(step).take(limit).collect())
+    Ok(spread(unique_code_names(all), limit))
+}
+
+/// The definitions of code files whose name is at least 4 characters and defined once in the whole project, by name.
+fn unique_code_names(all: Vec<(String, String, String)>) -> Vec<(String, String)> {
+    let mut count: HashMap<&str, u32> = HashMap::new();
+    for (name, _, _) in &all {
+        *count.entry(name.as_str()).or_default() += 1;
+    }
+    let mut out: Vec<(String, String)> = all
+        .iter()
+        .filter(|(n, _, class)| class == "code" && n.chars().count() >= 4 && count[n.as_str()] == 1)
+        .map(|(n, p, _)| (n.clone(), p.clone()))
+        .collect();
+    out.sort();
+    out
+}
+
+/// Up to LIMIT of ITEMS, evenly spread.
+fn spread<T>(items: Vec<T>, limit: usize) -> Vec<T> {
+    let step = (items.len() / limit.max(1)).max(1);
+    items.into_iter().step_by(step).take(limit).collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -557,6 +576,29 @@ mod tests {
         assert_eq!((s.n, s.max), (6, 4.0));
         assert_eq!(s.p50, 0.2);
         assert_eq!(s.p95, 4.0);
+    }
+
+    /// Pattern D. The exact-symbol sample is names defined once, in code files, of 4 characters or more, spread evenly.
+    #[test]
+    fn the_symbol_sample_is_unique_code_names() {
+        let row = |n: &str, p: &str, c: &str| (n.to_string(), p.to_string(), c.to_string());
+        let names = unique_code_names(vec![
+            row("alpha-one", "a.el", "code"),
+            row("dup-name", "a.el", "code"),
+            row("dup-name", "b.el", "code"),
+            row("abc", "a.el", "code"),
+            row("in-tests", "t.el", "test"),
+            row("beta-two", "b.el", "code"),
+        ]);
+        assert_eq!(
+            names,
+            [
+                ("alpha-one".into(), "a.el".into()),
+                ("beta-two".into(), "b.el".into())
+            ]
+        );
+        assert_eq!(spread((0..10).collect::<Vec<_>>(), 5), [0, 2, 4, 6, 8]);
+        assert_eq!(spread((0..3).collect::<Vec<_>>(), 5), [0, 1, 2]);
     }
 
     #[test]
