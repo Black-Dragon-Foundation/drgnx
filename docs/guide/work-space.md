@@ -34,6 +34,29 @@ Outside a project (a scratch buffer, a folder that is not in git) the map is emp
 Text that does not fit a card is cut with an ellipsis, by its width on screen; a long ask, or one with emoji in it,
 never makes its row taller than the others.
 
+### Moving around
+
+Everything here is computed in your Emacs from what the hub already sent, so a key never waits.
+
+| Key | Does |
+|---|---|
+| `←` `→` (Vim `h` `l`) | along the layer: the previous or next item |
+| `↑` (Vim `k`) | follow *why* up: what the selection came from |
+| `↓` (Vim `j`) | follow *touches* down: the branch an agent works on, the machine it runs on, the files a branch edits |
+| `Tab` / `Shift-Tab` | the next or previous agent, plans in their order, a subagent right after its parent |
+| `Enter` | open: an agent's transcript (today's Agents view), a branch's repository (Magit when it is there), a file, a spec or plan document |
+| `Shift-Enter` | the same, beside the map, without moving focus |
+
+The **selected** card is raised; its **chain** (everything it came from, up, and everything it touches, down) keeps
+its normal look; everything else is dimmed. From any item, `↑` reaches the ask it came from in a handful of keys. If
+the selected item goes (its agent finishes, its branch merges), the selection moves to the nearest thing it came from
+that is left, and the side panel says what finished; nothing pops up.
+
+The **side panel** (a window of the right dock) follows the selection and says in words everything a line on the map
+says: *why* (you › spec › plan › task), what it *touches* (what it edits, reads, runs on, overlaps with), its latest
+conclusion, and what you can do with it. Reads show as a count here; the list of each file with how it was seen
+arrives with the files picker.
+
 ### The outline
 
 **Show the Map as an Outline** (`work-outline`, `O`) draws one block per agent instead: the agent's line, why it

@@ -21,6 +21,13 @@
 (require 'drgnx-work-client)
 (unless (featurep 'drgnx-work-map)
   (load (expand-file-name "drgnx-work-map" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-work-detail)
+  (load (expand-file-name "drgnx-work-detail" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(declare-function drgnx-work-detail-buffer "drgnx-work-detail")
+(declare-function drgnx-work-detail-update "drgnx-work-detail")
+(declare-function drgnx-work-detail-buffers "drgnx-work-detail")
+(declare-function drgnx-pane-define-kind "drgnx-panes")
+(declare-function drgnx-pane-show "drgnx-panes")
 
 (declare-function drgnx-hub-ensure "drgnx-hub-client")
 (declare-function drgnx-wb-place "drgnx-rules")
@@ -67,7 +74,9 @@ it (a notes repository with the code repositories inside it)."
 (defface drgnx-work-agent-5 '((t :inherit ansi-color-yellow)) "The fifth agent colour." :group 'drgnx-work-space)
 (defface drgnx-work-agent-6 '((t :inherit ansi-color-red)) "The sixth agent colour." :group 'drgnx-work-space)
 
-(defconst drgnx-work-space-command-ids '(work-view work-outline)
+(defconst drgnx-work-space-command-ids
+  '(work-view work-outline work-left work-right work-why work-touches work-next-agent work-previous-agent work-open
+              work-open-beside)
   "The commands of this module, each with a row in every key profile (keys/*.eld).")
 
 ;;;; The workspace of a frame
@@ -174,8 +183,24 @@ an editor window unless NO-DISPLAY.  Returns the map buffer.  Outside a project 
 and subscribes to nothing."
   (interactive)
   (let ((buffer (drgnx-work-space--buffer (or workspace (drgnx-work-space-workspace)))))
-    (unless no-display (pop-to-buffer buffer))
+    (unless no-display
+      (pop-to-buffer buffer)
+      (when (and (display-graphic-p) (buffer-local-value 'drgnx-work-space--view buffer))
+        (drgnx-work-space--show-detail buffer)))
     buffer))
+
+(defun drgnx-work-space--show-detail (map-buffer)
+  "The side panel of MAP-BUFFER in a window of the right dock (pane kind `work-detail'), the map keeping focus."
+  (condition-case err
+      (let ((win (selected-window)))
+        (drgnx-work-detail-buffer map-buffer)
+        (drgnx-pane-show 'work-detail)
+        (when (window-live-p win) (select-window win)))
+    (error (message "Work: the side panel did not open: %s" (error-message-string err)))))
+
+(defun drgnx-work-space--detail-buffer ()
+  "The buffer pane kind `work-detail' shows: the side panel of the newest map."
+  (if-let* ((map (car (drgnx-work-map-buffers)))) (drgnx-work-detail-buffer map) (get-buffer-create "*drgnx work detail*")))
 
 (defun drgnx-work-space-sync-shown ()
   "Tell the hub which maps a window shows now: a hidden one gets no deltas, a shown one a full frame.  Runs on the
@@ -220,8 +245,23 @@ follows the windows; the commands."
   (drgnx-module-hook 'drgnx-hub-disconnect-functions disconnected () (drgnx-work-client-disconnected))
   (drgnx-module-hook 'drgnx-work-client-change-functions changed (view marks) (drgnx-work-map--changed view marks))
   (drgnx-module-hook 'drgnx-work-client-status-functions status (view status) (drgnx-work-space--show-status view status))
+  (drgnx-module-hook 'drgnx-work-map-select-functions selected (buffer) (drgnx-work-detail-update buffer))
   (drgnx-state-subscribe 'windows-changed #'drgnx-work-space--windows-changed)
   (when (fboundp 'drgnx-wb-place) (drgnx-wb-place 'drgnx-work-map-mode 'editor))
+  (when (fboundp 'drgnx-pane-define-kind)
+    (drgnx-pane-define-kind 'work-detail :title " WORK DETAIL" :home 'right :buffer #'drgnx-work-space--detail-buffer))
+  (pcase-dolist (`(,id ,title ,fn ,doc)
+                 '((work-left "Select the Previous Item" drgnx-work-map-left "Along the layer, to the left")
+                   (work-right "Select the Next Item" drgnx-work-map-right "Along the layer, to the right")
+                   (work-why "Select What It Came From" drgnx-work-map-why "Follow why up, to the nearest by position")
+                   (work-touches "Select What It Touches" drgnx-work-map-touches "Follow touches down")
+                   (work-next-agent "Select the Next Agent" drgnx-work-map-next-agent "The next agent, in team order")
+                   (work-previous-agent "Select the Previous Agent" drgnx-work-map-previous-agent
+                                        "The previous agent, in team order")
+                   (work-open "Open" drgnx-work-map-open-selection
+                              "An agent's transcript, a branch's repository, a file or a document")
+                   (work-open-beside "Open Beside" drgnx-work-map-open-beside "Open it without moving focus")))
+    (drgnx-command-define id :category "Work" :title title :command fn :map 'drgnx-work-map-mode-map :doc doc))
   (drgnx-command-define 'work-view :category "Work" :title "Open the Work Space" :command #'drgnx-work-space-open
                         :doc "The map of every live piece of agent work: asks, specs, plans, agents, branches, files and machines")
   (drgnx-command-define 'work-outline :category "Work" :title "Show the Map as an Outline"
@@ -234,6 +274,7 @@ follows the windows; the commands."
   (dolist (b (drgnx-work-map-buffers))
     (with-current-buffer b (remove-hook 'kill-buffer-hook #'drgnx-work-space--killed t))
     (kill-buffer b))
+  (dolist (b (drgnx-work-detail-buffers)) (kill-buffer b))
   (when-let* ((b (get-buffer "*drgnx work: none*"))) (kill-buffer b)))
 
 (drgnx-module-define 'tools/work-space

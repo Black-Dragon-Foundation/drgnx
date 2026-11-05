@@ -402,6 +402,32 @@ STATE KEY`, a function of the cached frame and the display scale (`drgnx-work-ma
   (`drgnx-view-dirty`), a relayout or a changed list of rows touches the view (SYNC diffs the keys with a signature of
   each row's items and rectangles), so a field change draws one row.
 
+### Selection, the chain and the side panel
+
+`modules/tools/drgnx-work-detail.el` holds the pure part; the buffer's state (`drgnx-work-map--selection`, the cached
+chain, the edge selection, the item that finished) and the commands are in `drgnx-work-map.el`.
+
+- A selection is `(KIND . ID)`. `drgnx-work-nav-chain STATE SEL` is `(UP DOWN EDGES)`: UP is every item reachable
+  backwards over the edges the chain follows (came from, edits, reads, runs on), DOWN forwards, EDGES the ones between
+  them. Overlap and based-on edges are not on the chain. The edge lists' adjacency is cached per frame (weak on the
+  list).
+- `drgnx-work-nav-move STATE SEL DIR`: `left` and `right` walk the layer in reading order and stop at its ends; `up`
+  and `down` take the nearest direct neighbour over the chain's edges (least vertical, then horizontal, distance), and
+  `up` falls back to the nearest ancestor on the lowest layer above when a level is missing. `drgnx-work-nav-agent`
+  walks the team order, wrapping. `drgnx-work-nav-resolve OLD NEW SEL` gives `(SELECTION . FINISHED-ID)` when the frame
+  changed.
+- **Dimming is text properties.** `drgnx-work-map--class` reads the cached selection (and the search text) when a card
+  line is drawn and prepends `drgnx-work-selected` or `drgnx-work-dim` to its faces, so a row that is deleted and
+  inserted again has them; there are no overlays.
+- **A selection move** (`drgnx-work-map-select`) works out which items changed class, draws the visible rows among
+  them in the command's own redisplay (`drgnx-view-draw-now VIEW KEYS`), puts point on the card, runs
+  `drgnx-work-map-select-functions` (the side panel) and arms `drgnx-timer-soon` keyed `(work-edges . VIEW)`: one frame
+  later it runs `drgnx-work-map-edges-functions` with the final selection, so a held arrow key never pays for tiles it
+  has left.
+- **The side panel** is the buffer `*drgnx work detail: NAME*` in `drgnx-work-detail-mode`, a `drgnx-view` of type
+  `work-detail` with one row per section (`:head :why :touches :conclusions :actions`); its text is
+  `drgnx-work-detail-sections`. The pane kind `work-detail` (home right) shows it.
+
 ### The view core
 
 `drgnx-view-draw-now VIEW &optional KEYS` draws only the rows named by KEYS (the keypress's own redisplay for a

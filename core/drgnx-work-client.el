@@ -331,8 +331,10 @@ kept for the next subscription.  Never signals: a hub that is not there is the r
        ((eq (plist-get data :stale) t) (drgnx-work-client--status view 'hidden))
        ((drgnx-work-client--view-state view)
         (drgnx-work-client--bump view :deltas)
-        (pcase-let ((`(,new . ,marks) (drgnx-work-client-step (drgnx-work-client--view-state view) data)))
+        (pcase-let* ((old (drgnx-work-client--view-state view))
+                     (`(,new . ,marks) (drgnx-work-client-step old data)))
           (setf (drgnx-work-client--view-state view) new)
+          (when (plist-get marks :removed) (setq marks (plist-put (copy-sequence marks) :old old)))   ; to resolve the selection
           (when (plist-get data :full) (drgnx-work-client--bump view :frames))
           (when (and (plist-get data :full) (drgnx-work-client--view-shown view))
             (drgnx-work-client--status view 'live))
