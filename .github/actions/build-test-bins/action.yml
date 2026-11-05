@@ -27,13 +27,19 @@ runs:
     - id: rv
       shell: bash
       run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
-    - id: bins-cache
+    # the registry once per lock and OS, shared with runtime.yml's jobs; the target per job
+    - id: registry
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
           ~/.cargo/registry/index
           ~/.cargo/registry/cache
-          ${{ inputs.dir }}/runtime/target
+        key: cargo-registry-${{ runner.os }}-${{ hashFiles(format('{0}/runtime/Cargo.lock', inputs.dir)) }}
+        restore-keys: cargo-registry-${{ runner.os }}-
+    - id: bins-cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ inputs.dir }}/runtime/target
         key: cargo-${{ runner.os }}-drgnx-test-bins-mt1-${{ steps.rv.outputs.v }}-${{ hashFiles(format('{0}/runtime/Cargo.lock', inputs.dir), format('{0}/runtime/Cargo.toml', inputs.dir), format('{0}/runtime/*/Cargo.toml', inputs.dir), format('{0}/runtime/crates/*/Cargo.toml', inputs.dir)) }}
         restore-keys: cargo-${{ runner.os }}-drgnx-test-bins-mt1-${{ steps.rv.outputs.v }}-
     # what the cached build was built from stays as old as its last commit, so cargo rebuilds only what changed
@@ -63,12 +69,17 @@ runs:
         DIR: ${{ inputs.dir }}
       run: |
         bash "$DIR/.github/ci/cargo-prune.sh" "$DIR/runtime/Cargo.toml" "$DIR/runtime/target" --keep-bins
-        git -C "$DIR" rev-parse HEAD > "$DIR/runtime/target/.drgnx-built-from"
+        # the commit it was built from, only when the build passed (this step runs only then; said again here)
+        if [ "${{ steps.build.outcome }}" = success ]; then git -C "$DIR" rev-parse HEAD > "$DIR/runtime/target/.drgnx-built-from"; fi
     - if: ${{ steps.prune.outcome == 'success' }}
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ inputs.dir }}/runtime/target
+        key: ${{ steps.bins-cache.outputs.cache-primary-key }}
+    - if: ${{ steps.prune.outcome == 'success' && steps.registry.outputs.cache-hit != 'true' }}
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
           ~/.cargo/registry/index
           ~/.cargo/registry/cache
-          ${{ inputs.dir }}/runtime/target
-        key: ${{ steps.bins-cache.outputs.cache-primary-key }}
+        key: ${{ steps.registry.outputs.cache-primary-key }}

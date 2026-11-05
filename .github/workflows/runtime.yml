@@ -89,13 +89,18 @@ jobs:
           persist-credentials: false
       - id: rv
         run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
-      - id: cache
+      - id: registry
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
-            runtime/target
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('runtime/Cargo.lock') }}
+          restore-keys: cargo-registry-${{ runner.os }}-
+      - id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: runtime/target
           key: cargo-${{ runner.os }}-fedora45-mt1-${{ steps.rv.outputs.v }}-${{ hashFiles('runtime/Cargo.lock', 'runtime/Cargo.toml', 'runtime/*/Cargo.toml', 'runtime/crates/*/Cargo.toml') }}
           restore-keys: cargo-${{ runner.os }}-fedora45-mt1-${{ steps.rv.outputs.v }}-
       - name: Each tracked file at its last commit's time (cargo rebuilds only what changed since the cache)
@@ -198,15 +203,23 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           bash .github/ci/cargo-prune.sh runtime/Cargo.toml runtime/target
-          git -c safe.directory="$PWD" rev-parse HEAD > runtime/target/.drgnx-built-from
+          # the commit it was built from, only when every step before passed: after a step that failed some outputs
+          # may be older than the sources, so the commit restored stays (or none: the next run rebuilds everything)
+          if [ "${{ job.status }}" = success ]; then git -c safe.directory="$PWD" rev-parse HEAD > runtime/target/.drgnx-built-from; fi
       - if: ${{ !cancelled() && steps.prune.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: runtime/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      # the registry once per lock and OS, for every job: one already there (main's, for a pull request whose lock is
+      # main's) is not saved again
+      - if: ${{ !cancelled() && steps.prune.outcome == 'success' && steps.registry.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
-            runtime/target
-          key: ${{ steps.cache.outputs.cache-primary-key }}
+          key: ${{ steps.registry.outputs.cache-primary-key }}
 
   msrv:
     name: MSRV 1.88 builds
@@ -220,13 +233,18 @@ jobs:
           fetch-depth: 0          # the whole history, for commit-times.sh
           filter: blob:none       # without old file contents
           persist-credentials: false
-      - id: cache
+      - id: registry
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
-            runtime/target
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('runtime/Cargo.lock') }}
+          restore-keys: cargo-registry-${{ runner.os }}-
+      - id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: runtime/target
           key: cargo-${{ runner.os }}-msrv188-mt1-1.88.0-${{ hashFiles('runtime/Cargo.lock', 'runtime/Cargo.toml', 'runtime/*/Cargo.toml', 'runtime/crates/*/Cargo.toml') }}
           restore-keys: cargo-${{ runner.os }}-msrv188-mt1-1.88.0-
       - name: Each tracked file at its last commit's time (cargo rebuilds only what changed since the cache)
@@ -240,15 +258,23 @@ jobs:
           RUSTUP_TOOLCHAIN: 1.88.0
         run: |
           bash .github/ci/cargo-prune.sh runtime/Cargo.toml runtime/target
-          git -c safe.directory="$PWD" rev-parse HEAD > runtime/target/.drgnx-built-from
+          # the commit it was built from, only when every step before passed: after a step that failed some outputs
+          # may be older than the sources, so the commit restored stays (or none: the next run rebuilds everything)
+          if [ "${{ job.status }}" = success ]; then git -c safe.directory="$PWD" rev-parse HEAD > runtime/target/.drgnx-built-from; fi
       - if: ${{ !cancelled() && steps.prune.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: runtime/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      # the registry once per lock and OS, for every job: one already there (main's, for a pull request whose lock is
+      # main's) is not saved again
+      - if: ${{ !cancelled() && steps.prune.outcome == 'success' && steps.registry.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
-            runtime/target
-          key: ${{ steps.cache.outputs.cache-primary-key }}
+          key: ${{ steps.registry.outputs.cache-primary-key }}
 
   # The escape suite on the runner itself, no container: the full tier (bubblewrap with user namespaces) and, on the arm64
   # runner (free for public repositories), a real arm64 Linux run of the seccomp tests (GL-T4-2: the aarch64 syscall
@@ -308,13 +334,18 @@ jobs:
       # one cache for the job's builds (the escape suite's and the agent core's tests), saved at its end
       - id: rv
         run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
-      - id: cache
+      - id: registry
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
-            runtime/target
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('runtime/Cargo.lock') }}
+          restore-keys: cargo-registry-${{ runner.os }}-
+      - id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: runtime/target
           key: cargo-${{ runner.os }}-${{ runner.arch }}-escape-${{ matrix.os }}-mt1-${{ steps.rv.outputs.v }}-${{ hashFiles('runtime/Cargo.lock', 'runtime/Cargo.toml', 'runtime/*/Cargo.toml', 'runtime/crates/*/Cargo.toml') }}
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-escape-${{ matrix.os }}-mt1-${{ steps.rv.outputs.v }}-
       - name: Each tracked file at its last commit's time (cargo rebuilds only what changed since the cache)
@@ -359,15 +390,23 @@ jobs:
         if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && (steps.build.outcome == 'success' || steps.core-build.outcome == 'success') }}
         run: |
           bash .github/ci/cargo-prune.sh runtime/Cargo.toml runtime/target
-          git -c safe.directory="$PWD" rev-parse HEAD > runtime/target/.drgnx-built-from
+          # the commit it was built from, only when every step before passed: after a step that failed some outputs
+          # may be older than the sources, so the commit restored stays (or none: the next run rebuilds everything)
+          if [ "${{ job.status }}" = success ]; then git -c safe.directory="$PWD" rev-parse HEAD > runtime/target/.drgnx-built-from; fi
       - if: ${{ !cancelled() && steps.prune.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: runtime/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      # the registry once per lock and OS, for every job: one already there (main's, for a pull request whose lock is
+      # main's) is not saved again
+      - if: ${{ !cancelled() && steps.prune.outcome == 'success' && steps.registry.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
-            runtime/target
-          key: ${{ steps.cache.outputs.cache-primary-key }}
+          key: ${{ steps.registry.outputs.cache-primary-key }}
 
   # The agent core's container rows (agent system part 1, Tasks 11b/11c): a container job runs only an allowed image,
   # with only its worktree mounted, inside its caps, and every escape row is refused. GitHub's Ubuntu runners ship
@@ -388,14 +427,19 @@ jobs:
       - run: rustup toolchain install stable --profile minimal
       - id: rv
         run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
-      - name: cargo cache (containers)
-        id: cache
+      - id: registry
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
-            runtime/target
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('runtime/Cargo.lock') }}
+          restore-keys: cargo-registry-${{ runner.os }}-
+      - name: cargo cache (containers)
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: runtime/target
           key: cargo-${{ runner.os }}-${{ runner.arch }}-agent-containers-mt1-${{ steps.rv.outputs.v }}-${{ hashFiles('runtime/Cargo.lock', 'runtime/Cargo.toml', 'runtime/*/Cargo.toml', 'runtime/crates/*/Cargo.toml') }}
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-agent-containers-mt1-${{ steps.rv.outputs.v }}-
       - name: Each tracked file at its last commit's time (cargo rebuilds only what changed since the cache)
@@ -431,15 +475,23 @@ jobs:
         if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
         run: |
           bash .github/ci/cargo-prune.sh runtime/Cargo.toml runtime/target
-          git -c safe.directory="$PWD" rev-parse HEAD > runtime/target/.drgnx-built-from
+          # the commit it was built from, only when every step before passed: after a step that failed some outputs
+          # may be older than the sources, so the commit restored stays (or none: the next run rebuilds everything)
+          if [ "${{ job.status }}" = success ]; then git -c safe.directory="$PWD" rev-parse HEAD > runtime/target/.drgnx-built-from; fi
       - if: ${{ !cancelled() && steps.prune.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: runtime/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      # the registry once per lock and OS, for every job: one already there (main's, for a pull request whose lock is
+      # main's) is not saved again
+      - if: ${{ !cancelled() && steps.prune.outcome == 'success' && steps.registry.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
-            runtime/target
-          key: ${{ steps.cache.outputs.cache-primary-key }}
+          key: ${{ steps.registry.outputs.cache-primary-key }}
 
   # The Android type-check (Android is not a target; the door stays open: docs/develop/runtime.md). The fake C compiler
   # is for urdr's bundled SQLite: a type-check does not link.
@@ -461,13 +513,18 @@ jobs:
       - run: rustup target add aarch64-linux-android
       - id: rv
         run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
-      - id: cache
+      - id: registry
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
-            runtime/target
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('runtime/Cargo.lock') }}
+          restore-keys: cargo-registry-${{ runner.os }}-
+      - id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: runtime/target
           key: cargo-${{ runner.os }}-android-mt1-${{ steps.rv.outputs.v }}-${{ hashFiles('runtime/Cargo.lock', 'runtime/Cargo.toml', 'runtime/*/Cargo.toml', 'runtime/crates/*/Cargo.toml') }}
           restore-keys: cargo-${{ runner.os }}-android-mt1-${{ steps.rv.outputs.v }}-
       - name: Each tracked file at its last commit's time (cargo rebuilds only what changed since the cache)
@@ -481,15 +538,23 @@ jobs:
         if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
         run: |
           bash .github/ci/cargo-prune.sh runtime/Cargo.toml runtime/target
-          git -c safe.directory="$PWD" rev-parse HEAD > runtime/target/.drgnx-built-from
+          # the commit it was built from, only when every step before passed: after a step that failed some outputs
+          # may be older than the sources, so the commit restored stays (or none: the next run rebuilds everything)
+          if [ "${{ job.status }}" = success ]; then git -c safe.directory="$PWD" rev-parse HEAD > runtime/target/.drgnx-built-from; fi
       - if: ${{ !cancelled() && steps.prune.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: runtime/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      # the registry once per lock and OS, for every job: one already there (main's, for a pull request whose lock is
+      # main's) is not saved again
+      - if: ${{ !cancelled() && steps.prune.outcome == 'success' && steps.registry.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
-            runtime/target
-          key: ${{ steps.cache.outputs.cache-primary-key }}
+          key: ${{ steps.registry.outputs.cache-primary-key }}
 
   deny:
     name: cargo deny (advisories, licenses, bans, sources)
@@ -626,13 +691,18 @@ jobs:
       - run: brew install rust
       - id: rv
         run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
-      - id: cache
+      - id: registry
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
-            runtime/target
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('runtime/Cargo.lock') }}
+          restore-keys: cargo-registry-${{ runner.os }}-
+      - id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: runtime/target
           key: cargo-${{ runner.os }}-brew-mt1-${{ steps.rv.outputs.v }}-${{ hashFiles('runtime/Cargo.lock', 'runtime/Cargo.toml', 'runtime/*/Cargo.toml', 'runtime/crates/*/Cargo.toml') }}
           restore-keys: cargo-${{ runner.os }}-brew-mt1-${{ steps.rv.outputs.v }}-
       - name: Each tracked file at its last commit's time (cargo rebuilds only what changed since the cache)
@@ -708,12 +778,20 @@ jobs:
         if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
         run: |
           bash .github/ci/cargo-prune.sh runtime/Cargo.toml runtime/target
-          git -c safe.directory="$PWD" rev-parse HEAD > runtime/target/.drgnx-built-from
+          # the commit it was built from, only when every step before passed: after a step that failed some outputs
+          # may be older than the sources, so the commit restored stays (or none: the next run rebuilds everything)
+          if [ "${{ job.status }}" = success ]; then git -c safe.directory="$PWD" rev-parse HEAD > runtime/target/.drgnx-built-from; fi
       - if: ${{ !cancelled() && steps.prune.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: runtime/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      # the registry once per lock and OS, for every job: one already there (main's, for a pull request whose lock is
+      # main's) is not saved again
+      - if: ${{ !cancelled() && steps.prune.outcome == 'success' && steps.registry.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
-            runtime/target
-          key: ${{ steps.cache.outputs.cache-primary-key }}
+          key: ${{ steps.registry.outputs.cache-primary-key }}

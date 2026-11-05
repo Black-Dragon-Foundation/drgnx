@@ -363,7 +363,7 @@ isolation test and kitty's kkp tests run instead of skipping. So the caches are 
 | What | Key | Saves | Bust it |
 |---|---|---|---|
 | the three test images (`Test images`, GHCR; the GUI one also holds the pinned child-frame packages, checked out at pinned upstream commits at build, so the tier fetches none) | tag = first 16 hex of `sha256sum test/container/Containerfile{,.gui,.tty}` (and `f45`); a pin bump edits `Containerfile.gui` too | an install of Emacs and the GUI/terminal stack into Fedora per job: about 1.5–2 min (the tty tier now pulls instead of building every night) | edit the Containerfile, or run `Test images` by hand (the weekly run refreshes the tag with Fedora's updates) |
-| cargo: the registry's index and `.crate` files and `target/` of every Rust job (`runtime.yml`'s `linux`, `msrv`, `escape-host` per architecture, `agent-containers`, `android`, `fuzz`, `macos`; `build-test-bins` per OS) | `cargo-OS-JOB-TOOLCHAIN-HASH` (TOOLCHAIN: `rustc -V`, the pinned nightly or 1.88.0; HASH: `Cargo.lock` and every `Cargo.toml`), restored from the newest `cargo-OS-JOB-TOOLCHAIN-` entry when the hash moved | the dependencies' compile (the unpruned `linux` cache was 3.5 GB, and every `Cargo.lock` change, a workspace version bump included, missed it whole) | a toolchain or dependency change makes a new key; delete the entries in the repository's Actions caches |
+| cargo: `target/` of every Rust job (`runtime.yml`'s `linux`, `msrv`, `escape-host` per architecture, `agent-containers`, `android`, `fuzz`, `macos`; `build-test-bins` per OS), and the registry's index and `.crate` files once per OS and lock for all of them (`fuzz` keeps its own, with its own lock) | target: `cargo-OS-JOB-mt1-TOOLCHAIN-HASH` (TOOLCHAIN: `rustc -V`, the pinned nightly or 1.88.0; HASH: `Cargo.lock` and every `Cargo.toml`), restored from the newest `cargo-OS-JOB-mt1-TOOLCHAIN-` entry when the hash moved; registry: `cargo-registry-OS-HASH(Cargo.lock)`, else the newest `cargo-registry-OS-` | the dependencies' compile (the unpruned `linux` cache was 3.5 GB, and every `Cargo.lock` change, a workspace version bump included, missed it whole) | a toolchain or dependency change makes a new key; delete the entries in the repository's Actions caches |
 | the fuzz corpora the fuzzers grew (`runtime/fuzz/corpus`, per shard) | `fuzz-corpus-SHARD-HASH-RUN`, restored from the newest of its shard | a run starts where the last stopped | delete the entries |
 
 An image is addressed by the hash of the file it is built from, and a job whose hash has no image builds it itself, so
@@ -373,7 +373,9 @@ A cargo entry is safe to restore when older than the checkout: cargo checks ever
 rebuilds what is stale, and the key names the toolchain, whose change would rebuild everything (a new key, so the
 stale entry is never saved again under the same name). Cargo rebuilds a local crate when one of its sources is newer
 than its last build, and a fresh checkout gives every file the checkout's time. So each entry carries the commit it
-was built from (`runtime/target/.drgnx-built-from`, written before the save), and after the restore
+was built from (`runtime/target/.drgnx-built-from`, written before the save, and only when every step of the job
+before it passed: after a failed step some outputs may be older than their sources, so the commit the job restored
+stays, or none, and the next run rebuilds all that changed since), and after the restore
 `.github/ci/commit-times.sh` gives each tracked file its last commit's time. A file that differs from that commit keeps
 the checkout's time: its last commit can be older than the cached build (a branch committed before `main`'s run), and
 it must still rebuild. Untracked files keep theirs too. The checkouts fetch the whole history for it (`fetch-depth: 0`,
@@ -393,7 +395,9 @@ GitHub scopes a `ci/*` branch's entries to itself and a pull request's to its me
 a `ci/*` branch whose lock matches `main`'s restores `main`'s entry under the exact key and saves nothing. CI builds
 with line tables only (`CARGO_PROFILE_DEV_DEBUG=line-tables-only`: backtraces keep file and line), which halves the
 kept build: the `linux` job's test build is 2.6 GB on disk and 0.6 GB compressed, against 5.3 GB and 1.1 GB with full
-debug info. So `main`'s entries stay well inside the 10 GB with room for one branch's. More inputs
+debug info. The registry is one entry per OS and lock, not a copy in each job's entry, and a pull request or branch
+whose lock is `main`'s finds `main`'s and saves none. So `main`'s entries stay well inside the 10 GB with room for one
+branch's. More inputs
 in a corpus only reach further: no corpus turns a crash into a pass. The repository's limit is 10 GB; GitHub evicts the
 least recently used entries first, so a finished `ci/*` branch's go before `main`'s, which every run reads.
 

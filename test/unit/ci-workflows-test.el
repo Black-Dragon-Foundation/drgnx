@@ -329,7 +329,9 @@
             (should (or (string-search "hashFiles(" rk)
                         (and (string-prefix-p "cargo-" rk)
                              (string-match-p "steps\\.rv\\.outputs\\.v\\|1\\.88\\.0\\|env\\.NIGHTLY" rk))
-                        (string-prefix-p "fuzz-corpus-" rk)))))))))
+                        (string-prefix-p "fuzz-corpus-" rk)
+                        ;; the registry: an older index and set of .crate files only lack crates cargo then fetches
+                        (string-prefix-p "cargo-registry-" rk)))))))))
 
 ;; A cache is written only by a trusted run (a push or a manual run of main or ci/*, the daily run, or a pull request
 ;; from a branch of this repository, whose cache GitHub scopes to its merge ref), never by a fork's pull request, and
@@ -366,13 +368,18 @@
 
 (ert-deftest drgnx-ci/a-restored-target-sees-unchanged-files-as-old ()
   ;; every job that restores runtime/target gives the files their last commit's time before cargo runs (and has the
-  ;; history for it), and records the commit its saved target was built from
+  ;; history for it), and records the commit its saved target was built from, only when every step before passed (a
+  ;; half-done build stamped with its commit would pass its stale outputs off as fresh); the registry is its own entry
   (dolist (yml (list (drgnx-ci-test--yml "runtime.yml") (drgnx-ci-test--action "build-test-bins")))
     (skip-unless yml)
-    (let ((restores (length (drgnx-ci-test--matches "uses: actions/cache/restore@[^\n]*\n *with:\n *path: |\n\\(?:.*\n\\)\\{2\\} *\\(\\(?:\\${{ inputs\\.dir }}/\\)?runtime/target\\)\n" yml))))
+    (let ((restores (length (drgnx-ci-test--matches "uses: actions/cache/restore@[^\n]*\n *with:\n *path: \\(\\(?:\\${{ inputs\\.dir }}/\\)?runtime/target\\)\n" yml)))
+          (stamps (drgnx-ci-test--matches "^\\(.*rev-parse HEAD > [^\n]*runtime/target/\\.drgnx-built-from.*\\)$" yml)))
       (should (> restores 0))
       (should (= restores (length (drgnx-ci-test--matches "\\(commit-times\\.sh runtime/target/\\.drgnx-built-from\\)" yml))))
-      (should (= restores (length (drgnx-ci-test--matches "\\(rev-parse HEAD > [^\n]*runtime/target/\\.drgnx-built-from\\)" yml))))))
+      (should (= restores (length stamps)))
+      (dolist (s stamps)
+        (should (string-match-p "if \\[ \"\\${{ \\(?:job\\.status\\|steps\\.build\\.outcome\\) }}\" = success \\]; then" s)))
+      (should-not (string-match-p "path: |\n *~/\\.cargo/registry/index\n *~/\\.cargo/registry/cache\n *\\(?:\\${{ inputs\\.dir }}/\\)?runtime/target" yml))))
   (should (string-search "fetch-depth: 0" (drgnx-ci-test--yml "runtime.yml")))
   (should (= 2 (length (drgnx-ci-test--matches "\\(fetch-depth: 0\\)" (drgnx-ci-test--yml "drgnx-tiers.yml"))))))
 
@@ -409,7 +416,8 @@
   (let ((bins (drgnx-ci-test--action "build-test-bins")))
     (skip-unless bins)
     (should-not (string-search "uses: actions/cache@" bins))
-    (should (= 1 (length (drgnx-ci-test--matches "uses: \\(actions/cache/restore@\\)" bins))))
+    ;; the registry's and the target's
+    (should (= 2 (length (drgnx-ci-test--matches "uses: \\(actions/cache/restore@\\)" bins))))
     (should (string-match "id: prune\n *if: \\(.*\\)\n" bins))
     (let ((cond (match-string 1 bins)))
       (dolist (s (list "github.event_name != 'pull_request'" "github.ref == 'refs/heads/main'"
