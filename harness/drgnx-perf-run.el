@@ -596,8 +596,10 @@ every tenth of a second) for thirty seconds: the typing of six strings takes lon
        t))
    ")"))
 
+(defvar drgnx-perf-ab-min-rounds)   ; below, with the A/B
+
 (defun drgnx-perf-run--workloads ()
-  "The workloads: (NAME :setup FORM :each FORM :actions ACTIONS :check FORM :measure FORM :teardown FORM :repeat N).
+  "The workloads:(NAME :setup FORM :each FORM :actions ACTIONS :check FORM :measure FORM :teardown FORM :repeat N).
 Every workload runs three times (medians are kept); :each runs before each repeat, :check after it (an
 error if it does not hold).  With :actions, :measure runs after the input and its plist joins the run's."
   (let ((type (lambda (s) (list :type s))) (keys (lambda (k n) (make-list n (list :keys k))))
@@ -632,8 +634,11 @@ error if it does not hold).  With :actions, :measure runs after the input and it
       ;; 100-character chunks, 50 a second: a chunk costs the chunk (model) and only the new text is drawn (view)
       ;; (the mock's turn is that: a first chunk of 400 kB, then five chunks every tenth of a second, 300 times; the
       ;; run waits for the 400 kB to be in the transcript before it types)
+      ;; the mock runs a prompt past its script's last line as its own words (a turn that ends at once): one line for
+      ;; every run of a setup, both sides' warm-ups and rounds of an A/A included
       (agent-stream :setup ,(concat "(progn " (drgnx-perf-run--hub-form)
-                                    " (drgnx-perf--hub-start (make-list 5 (drgnx-perf--stream)))"
+                                    (format " (drgnx-perf--hub-start (make-list %d (drgnx-perf--stream)))"
+                                            (* 2 (1+ drgnx-perf-ab-min-rounds)))
                                     " (setq drgnx-perf--stream (drgnx-agents-mirror-start \"mock\" temporary-file-directory))"
                                     " (drgnx-perf--wait 10 (lambda () (eq (drgnx-agent-session-status drgnx-perf--stream) 'idle)))"
                                     " t)")
