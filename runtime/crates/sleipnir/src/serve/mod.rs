@@ -668,7 +668,14 @@ impl<W: Write> Serve<W> {
             return Next::Go;
         }
         let (dir, meta) = (l.dir.clone(), l.meta.clone());
-        match self.launch(&dir, &meta, image, &env, (net_hosts.as_slice(), pins), parser) {
+        match self.launch(
+            &dir,
+            &meta,
+            image,
+            &env,
+            (net_hosts.as_slice(), pins),
+            parser,
+        ) {
             Ok((unit, pid)) => {
                 let at = now_s();
                 let mut meta = meta;
@@ -1118,41 +1125,6 @@ fn job_caps(grant: &forseti::Grant, image: String, pins: Pins) -> Caps {
 }
 
 #[cfg(test)]
-mod caps_tests {
-    use super::*;
-    use crate::proto::Nonce;
-
-    /// Pattern D.  The pins the hub sends with a start reach the job's caps, which its proxy pins by; a start from an
-    /// older hub, which has no `pins`, still reads, with none.
-    #[test]
-    fn a_starts_pins_reach_the_jobs_caps() {
-        let pins: Pins = vec![("registry.corp".into(), "10.0.0.5".parse().unwrap())];
-        let grant = forseti::Grant {
-            cores: 1,
-            mem_cap_mib: 256,
-            reserve_mib: 128,
-        };
-        assert_eq!(job_caps(&grant, "img".into(), pins.clone()).pins, pins);
-        let start = Frame::Start {
-            r: JobRef {
-                job: "a3f".into(),
-                attempt: 1,
-                nonce: Nonce([1; 16]),
-            },
-            image: None,
-            env: vec![],
-            net_hosts: vec![],
-            pins,
-            parser: String::new(),
-        };
-        let mut v = serde_json::to_value(&start).unwrap();
-        v.as_object_mut().unwrap().remove("pins");
-        let old: Frame = serde_json::from_value(v).unwrap();
-        assert!(matches!(old, Frame::Start { pins, .. } if pins.is_empty()));
-    }
-}
-
-#[cfg(test)]
 pub(crate) fn tests_spec() -> forseti::JobSpec {
     use forseti::{Expect, JobTrust, Kind, Lane, Range, Weight};
     forseti::JobSpec {
@@ -1189,5 +1161,40 @@ pub(crate) fn tests_spec() -> forseti::JobSpec {
         keys: vec![],
         local_only: false,
         writes: vec![],
+    }
+}
+
+#[cfg(test)]
+mod caps_tests {
+    use super::*;
+    use crate::proto::Nonce;
+
+    /// Pattern D.  The pins the hub sends with a start reach the job's caps, which its proxy pins by; a start from an
+    /// older hub, which has no `pins`, still reads, with none.
+    #[test]
+    fn a_starts_pins_reach_the_jobs_caps() {
+        let pins: Pins = vec![("registry.corp".into(), "10.0.0.5".parse().unwrap())];
+        let grant = forseti::Grant {
+            cores: 1,
+            mem_cap_mib: 256,
+            reserve_mib: 128,
+        };
+        assert_eq!(job_caps(&grant, "img".into(), pins.clone()).pins, pins);
+        let start = Frame::Start {
+            r: JobRef {
+                job: "a3f".into(),
+                attempt: 1,
+                nonce: Nonce([1; 16]),
+            },
+            image: None,
+            env: vec![],
+            net_hosts: vec![],
+            pins,
+            parser: String::new(),
+        };
+        let mut v = serde_json::to_value(&start).unwrap();
+        v.as_object_mut().unwrap().remove("pins");
+        let old: Frame = serde_json::from_value(v).unwrap();
+        assert!(matches!(old, Frame::Start { pins, .. } if pins.is_empty()));
     }
 }
