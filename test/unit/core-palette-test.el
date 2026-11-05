@@ -90,3 +90,69 @@
         (should (string-match-p "No command: \\?" (cadr err)))))
     ;; the legend's own empty case: nothing typed, nothing happens, no error
     (should-not (nth 2 (drgnx-test--palette-with-search "" styles)))))
+
+;; The floating palette (core/drgnx-palette-frame.el): Glitnir decides, nothing else does.
+(require 'drgnx-palette-frame)
+(defvar vertico-count)
+
+(defun drgnx-test--palette-placed (parent-width)
+  "The (WIDTH HEIGHT) `drgnx-palette-frame--place' gives a parent PARENT-WIDTH frame pixels wide."
+  (let ((vertico-count 10) (drgnx-palette-frame-width 640) sized)
+    (cl-letf (((symbol-function 'frame-char-height) (lambda (&rest _) 20))
+              ((symbol-function 'frame-pixel-width) (lambda (f) (if (eq f 'parent) parent-width (car sized))))
+              ((symbol-function 'frame-pixel-height) (lambda (_) 2000))
+              ((symbol-function 'frame-scale-factor) (lambda (_) 2.0))
+              ((symbol-function 'set-frame-size) (lambda (_f w h _pixelwise) (setq sized (list w h))))
+              ((symbol-function 'set-frame-position) #'ignore))
+      (drgnx-palette-frame--place 'child 'parent))
+    sized))
+
+(ert-deftest core-palette-float-sizes-are-logical-pixels ()
+  ;; a frame of Nidhogg's Wayland shell counts device pixels: 640 logical at scale 2 are 1280 of them
+  ;; `dlet': `features' is not special, so a `let' of it would be lexical here and change nothing
+  (dlet ((features (cons 'nidhogg-wayland features)))
+    (should (equal (drgnx-test--palette-placed 3000) '(1280 240)))
+    (should (equal (drgnx-test--palette-placed 1000) '(936 240)))
+    (cl-letf (((symbol-function 'frame-scale-factor) (lambda (_) 2.0)))
+      (should (= 16 (alist-get 'internal-border-width (drgnx-palette-frame--params 'parent))))))
+  ;; elsewhere a frame counts logical pixels already
+  (dlet ((features (remq 'nidhogg-wayland features)))
+    (should (equal (drgnx-test--palette-placed 3000) '(640 240)))
+    (should (= 8 (alist-get 'internal-border-width (drgnx-palette-frame--params 'parent))))))
+
+(ert-deftest core-palette-float-stays-for-a-minibuffer-on-top ()
+  ;; a question on top of the open palette ends: the palette's own minibuffer still reads, so its box stays
+  (let ((root (frame-root-window)) (drgnx-palette-frame--frame (selected-frame)) hidden)
+    (unwind-protect
+        (save-window-excursion
+          (with-temp-buffer
+            (set-window-buffer root (current-buffer))
+            (cl-letf (((symbol-function 'frame-visible-p) (lambda (_) t))
+                      ((symbol-function 'make-frame-invisible) (lambda (_) (setq hidden t)))
+                      ((symbol-function 'active-minibuffer-window) (lambda () (minibuffer-window))))
+              (drgnx-palette-frame-hide)
+              (should-not hidden)
+              (should (eq (window-buffer root) (current-buffer)))
+              ;; the palette's own minibuffer ends
+              (cl-letf (((symbol-function 'active-minibuffer-window) (lambda () root)))
+                (drgnx-palette-frame-hide))
+              (should hidden)
+              (should (equal (buffer-name (window-buffer root)) drgnx-palette-frame--buffer)))))
+      (when-let* ((b (get-buffer drgnx-palette-frame--buffer))) (kill-buffer b)))))
+
+
+(ert-deftest core-palette-float-off-without-glitnir ()
+  (let (modes)
+    (cl-letf (((symbol-function 'vertico-buffer-mode) (lambda (arg) (push arg modes))))
+      ;; no Glitnir (or no graphical frame): the palette stays in the minibuffer, as before
+      (should-not (drgnx-palette-frame-wanted-p))
+      (drgnx-palette-frame-buffer 1)
+      (should-not modes)
+      ;; Glitnir on a graphical frame: `vertico-buffer-mode' on; off is always passed on
+      (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t))
+                ((symbol-function 'glitnir-active-p) (lambda () t)))
+        (should (drgnx-palette-frame-wanted-p))
+        (drgnx-palette-frame-buffer 1))
+      (should (equal modes '(1)))
+      (drgnx-palette-frame-buffer -1)
+      (should (equal modes '(-1 1))))))
