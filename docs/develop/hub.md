@@ -732,6 +732,16 @@ hello (the cap is read there; the core gets the proof the hub must give back, ne
 before giving up on a challenge, run the event, skew, disconnect and connected hooks, the hand-over, presence, the
 jobs' cache, and dial.
 
+**Who splits the lines.** The shell does, in one of two ways, and the core gets the same events from both. By default
+the connection's filter (`drgnx-hub--client-filter`, through `drgnx-hub--lines`) cuts the chunks into lines and parses
+them. With Nidhogg's `nidhogg-workers-framing` on, `drgnx-hub--open` hands the connection to Nidhogg's reader
+(`drgnx-hub--frame`: `lines` framing, parsed there, no line limit, as the client has none today), and the main thread
+gets batches (`drgnx-hub--client-batch`) of parsed messages; a line that is not JSON, or is `null`, is dropped on both
+paths. The connection is `(binary . utf-8-unix)`: bytes in, which framing needs, UTF-8 out. One difference: a last line
+with no newline before the end of the stream is a message when framed, and dropped by the filter. Without the feature
+or the switch, or when the framing is refused, the filter reads. The probe (`drgnx-hub--ping-socket`) is never framed.
+`test/unit/hub-client-frame-test.el` checks that both paths give the same events, over Nidhogg's own framer.
+
 **The shell's edges**, which the every-order tests assume and `test/unit/hub-client-shell-test.el` checks with
 scripted peers: a connection's lines reach the core in the order they were written (so the challenge, Ratatoskr's
 first line, comes first), whatever the chunks; its `closed` comes once, after everything read before the end, and
