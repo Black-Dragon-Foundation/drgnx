@@ -45,7 +45,7 @@ curl -fsSL https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/
 ```
 
 It prints a plan first, asks before every root step, and builds Nidhogg, drgnx's own Emacs (GNU Emacs 31.1 with drgnx's
-patches, native compilation), on Fedora 44/45, Ubuntu 26.04 and macOS; elsewhere it stops (no Nidhogg recipe yet), and
+patches, native compilation), on Fedora 45, Ubuntu 26.04 and macOS; elsewhere it stops (no Nidhogg recipe yet), and
 the doctor fails on a stock GNU Emacs. On macOS, run it in Terminal: it installs Homebrew
 (after asking) and builds Nidhogg with it, adds a **drgnx** app to `~/Applications` and opens it, and the Welcome sets up keys,
 AI and Claude Code; afterwards open drgnx with Spotlight (⌘Space, type "drgnx") or Launchpad, or run `drgnx .` in a

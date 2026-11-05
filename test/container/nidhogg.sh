@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install Nidhogg's release tarball for drgnx's CI: the test images (Containerfile*) and the macOS job use it, so the
-# suite runs on the Emacs drgnx ships on.  Usage: nidhogg.sh DISTRO [TARBALL]   (fedora-44 | fedora-45 | ubuntu-26.04 | macos)
+# suite runs on the Emacs drgnx ships on.  Usage: nidhogg.sh DISTRO [TARBALL]   (fedora-45 | ubuntu-26.04 | macos)
 #
 # TARBALL: install that Nidhogg tarball instead of the pinned release (Nidhogg's CI runs drgnx's tiers on the tarball it
 # just built, .github/workflows/drgnx-tiers.yml): no download and no pinned checksum (the run built it), the version is
@@ -21,11 +21,10 @@ NIDHOGG_URL=https://github.com/Black-Dragon-Foundation/nidhogg/releases/download
 
 distro=${1:-}
 case "$distro" in
-  fedora-44)    asset=fedora-44-x86_64;    sha=1504743144c7d020cd0b9e675368045086e1c6597f8c26189b4be5796d7ed534 ;;
   fedora-45)    asset=fedora-45-x86_64;    sha=1fb8d9beaedf0ebff4e4594c768af7260431eafb09b61cf77a225c6a281ae433 ;;
   ubuntu-26.04) asset=ubuntu-26.04-x86_64; sha=4da0f75594bf6d310bce3dc11b646b62196a9f5beb0b932fd7ed8e5a279aadbe ;;
   macos)        asset=macos-arm64;         sha=c64e97010bf1314ae64a72e46645f35e396258e66ce0ddc753b39a15800142d7 ;;
-  *) echo "usage: nidhogg.sh fedora-44|fedora-45|ubuntu-26.04|macos" >&2; exit 2 ;;
+  *) echo "usage: nidhogg.sh fedora-45|ubuntu-26.04|macos" >&2; exit 2 ;;
 esac
 
 local_tarball=${2:-}

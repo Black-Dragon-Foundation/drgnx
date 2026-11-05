@@ -39,8 +39,9 @@
 
 (ert-deftest drgnx-ci/nidhogg-tarballs-are-pinned ()
   (let ((s (drgnx-ci-test--slurp (drgnx-ci-test--path "test/container/nidhogg.sh"))))
-    (dolist (d '("fedora-44" "fedora-45" "ubuntu-26.04" "macos"))
-      (should (string-match-p (concat d "[^\n]*[0-9a-f]\\{64\\}") s)))))
+    (dolist (d '("fedora-45" "ubuntu-26.04" "macos"))
+      (should (string-match-p (concat d "[^\n]*[0-9a-f]\\{64\\}") s)))
+    (should-not (string-search "fedora-44" s))))
 
 (ert-deftest drgnx-ci/macos-unit-job-uses-nidhogg ()
   ;; macos.yml calls the tiers workflow's macos job, which installs the tarball; the weekly install stays in macos.yml

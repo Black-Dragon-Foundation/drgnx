@@ -1,7 +1,7 @@
 //! gleipnir-probe: tries one channel per probe and prints one JSON line each (Task 14; docs/develop/gleipnir.md,
 //! "Proving it"). Probes are separated by `--and`. A probe never prints file contents.
 //!
-//! Static or old-glibc friendly on purpose: it uses `std` and `libc` only, so a build for Fedora 44 or for a musl
+//! Static or old-glibc friendly on purpose: it uses `std` and `libc` only, so a build for an older Fedora or for a musl
 //! target runs inside a VM that has no toolchain.
 
 use gleipnir_escape::{ProbeLine, errno_name};

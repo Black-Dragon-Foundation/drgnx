@@ -293,7 +293,7 @@ from the connection (its own timeouts bound that); this deadline ends any other 
           (if (not podman)
               (message "m11c-2: no podman, Open Remote is not shown")
             (let ((run (drgnx-m11c2-ui-test--podman "run" "-d" "--rm" "--memory" "256m" "--name" name
-                                                    "registry.fedoraproject.org/fedora:44" "sleep" "600")))
+                                                    "registry.fedoraproject.org/fedora:45" "sleep" "600")))
               (should (eql (car run) 0))
               (setq container name)
               ;; nobody answers a question in a session, and nothing may wait forever: either one fails the test

@@ -17,7 +17,7 @@ _drgnx_steps='environment look-and-keys projects ai search agents daemon portabi
 _drgnx_bootstrap_steps='preflight config keys sync onboard desktop shell doctor'
 _drgnx_presets='minimal ide full-ai'
 _drgnx_uis='start frame stop ls reap state shot click keys type measure mcp test-ui test-ui-session'
-_drgnx_installs='fedora-44 debian-trixie ubuntu-26.04 fedora-45 archlinux'
+_drgnx_installs='debian-trixie ubuntu-26.04 fedora-45 archlinux'
 
 _drgnx() {
   local n=${COMP_CWORD-0} cur=${COMP_WORDS[${COMP_CWORD-0}]-} prev= cmd= sub= words= w f i

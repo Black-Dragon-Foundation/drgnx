@@ -17,8 +17,8 @@ how every drgnx UI change is developed and verified.
 | `bin/drgnx test --tty` / `--container --tty [--fedora 45]` | the terminal tier in `test/tty/`: drgnx in Emacs sessions inside private tmux servers — see [Terminal tier](#terminal-tier) | the host (needs tmux); a container |
 | `bin/drgnx test --bench` | the workbench timed against treemacs and ibuffer in a GUI session on a 25k-file project — see [workbench.md](../guide/workbench.md#performance) | the host (needs mutter); treemacs from `$DRGNX_BENCH_ELPA` |
 | `bin/drgnx test --perf` / `--soak [MIN]` | input latency, frames, GC, startup and memory against budgets; the memory soak — see [perf.md](perf.md) | the host (needs mutter) |
-| `bin/drgnx test --install [NAME…]` | `install.sh` end to end in fresh distribution containers: source builds on Fedora 44, Debian 13, Ubuntu 26.04, packages on Fedora 45 and Arch; then the doctor, a second run (no-op), on Fedora packages emacs-nw installed beside emacs-pgtk (`emacs` must stay the pgtk build) and `--dry-run` (no changes) — see [install.md](../guide/install.md) | podman, docker or nerdctl; slow, network |
-| `bin/drgnx test --bootstrap [--fedora 44\|45]` | the exit test of a second machine ([second-machine.md](../guide/second-machine.md)): one command on a fresh Fedora container — see below | podman, docker or nerdctl; slow, network, 6 GB |
+| `bin/drgnx test --install [NAME…]` | `install.sh` end to end in fresh distribution containers: source builds on Debian 13, Ubuntu 26.04, packages on Fedora 45 and Arch; then the doctor, a second run (no-op), on Fedora packages emacs-nw installed beside emacs-pgtk (`emacs` must stay the pgtk build) and `--dry-run` (no changes) — see [install.md](../guide/install.md) | podman, docker or nerdctl; slow, network |
+| `bin/drgnx test --bootstrap [--fedora 45]` | the exit test of a second machine ([second-machine.md](../guide/second-machine.md)): one command on a fresh Fedora container — see below | podman, docker or nerdctl; slow, network, 6 GB |
 
 `bin/drgnx check` runs the build and all of these host tiers in one go, in parallel where that is safe — see
 [check.md](check.md).
@@ -756,7 +756,7 @@ image; there the two tests skip.
 
 ## The second-machine exit test
 
-`bin/drgnx test --bootstrap [--fedora 44|45]` (default 45) proves what [second-machine.md](../guide/second-machine.md)
+`bin/drgnx test --bootstrap [--fedora 45]` (45 is the only Fedora drgnx supports) proves what [second-machine.md](../guide/second-machine.md)
 promises: on a machine with nothing of drgnx's, **one command** brings back the configuration, the locked packages and
 the provider keys, and ends in a green doctor. It makes a snapshot of the working tree, as `--install` does, and a
 fixture configuration (`test/fixtures/bootstrap/config/` with this tree's `etc/drgnx.lock.eld`) as a git repository,

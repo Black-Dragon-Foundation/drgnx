@@ -391,7 +391,7 @@ env_eval() { # FORM — evaluate with harness/drgnx-env.el loaded, print the res
 
 test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --day [MIN] | --tty [--fedora 45]] — the batch (GUI, scenario, perf, terminal) tier inside a fedora:45 / Nidhogg 31.1 container
   # DRGNX_TEST_IMAGE / DRGNX_TEST_GUI_IMAGE / DRGNX_TEST_TTY_IMAGE: use that image (CI pulls a prebuilt one) instead of building it
-  # --tty --fedora 45 (the default): Fedora 44's Emacs is 30.2, which drgnx no longer supports
+  # --tty --fedora 45 (the default and the only release drgnx supports)
   local rt mount image file elpa prebuilt="${DRGNX_TEST_IMAGE:-}" args=() cmd=(bin/drgnx test) build=() tier="" fedora="" compositor="" abenv="" abn="" soakmin=""
   while (($#)); do
     case "$1" in
@@ -666,7 +666,6 @@ test_preflight() { # --out REPORT [--seeds N] [--nidhogg-tarball F] — the orde
 }
 
 INSTALL_IMAGES=( # name=image; source builds first (slow), then distribution packages
-  fedora-44=registry.fedoraproject.org/fedora:44
   debian-trixie=docker.io/library/debian:trixie
   ubuntu-26.04=docker.io/library/ubuntu:26.04
   fedora-45=registry.fedoraproject.org/fedora:45
@@ -758,7 +757,7 @@ ui_compositor_ok() { # C — is C a compositor a GUI session can run under (harn
   esac
 }
 
-test_bootstrap() { # [--fedora 44|45] — the exit test of a second machine: one command on a fresh Fedora reaches a green doctor
+test_bootstrap() { # [--fedora 45] — the exit test of a second machine: one command on a fresh Fedora reaches a green doctor
   # Container 1 makes the encrypted key bundle (age) and commits it into a bare copy of the fixture configuration;
   # container 2, a fresh Fedora with only what a desktop has, runs install.sh --yes --config … --identity … and checks
   # the outcome (test/bootstrap/in-container.sh; docs/develop/harness.md).  Nidhogg is the pinned release, put in before install.sh runs (which keeps it); building it is `--install`'s job.
@@ -766,10 +765,10 @@ test_bootstrap() { # [--fedora 44|45] — the exit test of a second machine: one
   while (($#)); do
     case "$1" in
       --fedora) fedora="${2:-}"; shift; shift || true ;;
-      *) echo "usage: drgnx test --bootstrap [--fedora 44|45]" >&2; return 2 ;;
+      *) echo "usage: drgnx test --bootstrap [--fedora 45]" >&2; return 2 ;;
     esac
   done
-  [[ "$fedora" == 44 || "$fedora" == 45 ]] || { echo "drgnx: --fedora is 44 or 45, not '$fedora'" >&2; return 2; }
+  [[ "$fedora" == 45 ]] || { echo "drgnx: --fedora is 45, not '$fedora' (Fedora 44 and older are no longer supported)" >&2; return 2; }
   rt="${DRGNX_CONTAINER:-$(env_eval '(drgnx-env-container-runtime)')}"   # set: no host Emacs needed (CI)
   [ -n "$rt" ] || { echo "drgnx: no container runtime found (podman, docker, nerdctl); set DRGNX_CONTAINER" >&2; return 1; }
   # a test never touches the user's home: the snapshot, the configuration, the keys' scratch and the logs live in a fresh
@@ -1934,8 +1933,8 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                the terminal tier in a container (45: Nidhogg 31.1, the default; 44's 30.2 is no longer supported)
        drgnx test --install [NAME…]
                                install.sh end to end in fresh distribution containers (slow;
-                               names: fedora-44 debian-trixie ubuntu-26.04 fedora-45 archlinux)
-       drgnx test --bootstrap [--fedora 44|45]
+                               names: debian-trixie ubuntu-26.04 fedora-45 archlinux)
+       drgnx test --bootstrap [--fedora 45]
                                the exit test of a second machine: install.sh --yes --config … --identity …
                                in a fresh Fedora container (default 45) must end in a green doctor,
                                with the keys in the keyring and a second run changing nothing (slow, network)

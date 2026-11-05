@@ -51,7 +51,7 @@ index check); WezTerm and foot have Flatpaks on Flathub, but a Flatpak terminal 
 sandbox, where drgnx and emacsclient are not, so they are not suggested; kitty and Ghostty have none.
 
 Package names were checked against the distributions' indexes on 2026-10-18: Arch (extra) has kitty, foot, ghostty,
-wezterm, xterm and alacritty; Fedora 44 has kitty, foot, xterm and alacritty; Debian 13 and Ubuntu 26.04 have kitty,
+wezterm, xterm and alacritty; Fedora has kitty, foot, xterm and alacritty; Debian 13 and Ubuntu 26.04 have kitty,
 foot, xterm and alacritty; Homebrew has the casks kitty, ghostty, wezterm and alacritty.
 The RHEL clones (Rocky, Alma) have kitty only in EPEL, which is not on by default,
 and Amazon Linux has none: both get the download pages.")

@@ -1555,18 +1555,18 @@ while :; do wait; done" job job job job job)))
 ;;;; drgnx test --bootstrap: the exit test of a second machine (test/bootstrap/, docs/develop/harness.md)
 
 (ert-deftest drgnx-bin/test-bootstrap-is-listed ()
-  ;; usage names the tier and its flag; the three scripts parse; a Fedora other than 44 or 45 is refused before any
+  ;; usage names the tier and its flag; the three scripts parse; a Fedora other than 45 is refused before any
   ;; container is looked for
   (with-temp-buffer
     (call-process drgnx-bin-test--bin nil t nil "help")
-    (should (string-search "drgnx test --bootstrap [--fedora 44|45]" (buffer-string))))
+    (should (string-search "drgnx test --bootstrap [--fedora 45]" (buffer-string))))
   (dolist (script '("in-container.sh" "make-secrets.sh" "pty-run.sh"))
     (should (= 0 (call-process "bash" nil nil nil "-n" (expand-file-name (concat "test/bootstrap/" script)
                                                                          drgnx-bin-test--root)))))
-  (dolist (args '(("--fedora" "40") ("--fedora") ("--nope")))
+  (dolist (args '(("--fedora" "40") ("--fedora" "44") ("--fedora") ("--nope")))
     (with-temp-buffer
       (should (= 2 (apply #'call-process drgnx-bin-test--bin nil t nil "test" "--bootstrap" args)))
-      (should (string-match-p "usage: drgnx test --bootstrap\\|--fedora is 44 or 45" (buffer-string))))))
+      (should (string-match-p "usage: drgnx test --bootstrap\\|--fedora is 45"(buffer-string))))))
 
 (ert-deftest drgnx-bin/test-bootstrap-installs-the-way-a-user-does-now ()
   ;; NH-BOOTSTRAP-1: install.sh dropped --method source|package (exit 2) when drgnx required Nidhogg; the second machine
@@ -1601,7 +1601,7 @@ while :; do wait; done" job job job job job)))
                    drgnx-bin-test--bin
                    (list (concat "HOME=" home) (concat "TMPDIR=" tmp) (concat "XDG_STATE_HOME=" home "/state")
                          (concat "DRGNX_CONFIG_DIR=" dir "/config") (concat "DRGNX_CONTAINER=" rt))
-                   "test" "--bootstrap" "--fedora" "44"))
+                   "test" "--bootstrap" "--fedora" "45"))
                (all (split-string (drgnx-bin-test--slurp log) "\n" t))
                (calls (seq-filter (lambda (c) (string-prefix-p "run " c)) all))
                (snap (expand-file-name "seen1" dir))
@@ -1614,8 +1614,8 @@ while :; do wait; done" job job job job job)))
           (dolist (c calls)
             (string-match "--name \\([^ ]+\\)" c)
             (should (member (format "rm -f %s" (match-string 1 c)) (cdr (member c all)))))   ; podman's has -t 0
-          (should (string-match-p "--memory 3g --memory-swap 3g .*fedora:44 bash /src/test/bootstrap/make-secrets\\.sh\\'" (nth 0 calls)))
-          (should (string-match-p "--memory 6g --memory-swap 6g .*:ro.* .*fedora:44 bash /src/test/bootstrap/in-container\\.sh\\'" (nth 1 calls)))
+          (should (string-match-p "--memory 3g --memory-swap 3g .*fedora:45 bash /src/test/bootstrap/make-secrets\\.sh\\'" (nth 0 calls)))
+          (should (string-match-p "--memory 6g --memory-swap 6g .*:ro.* .*fedora:45 bash /src/test/bootstrap/in-container\\.sh\\'" (nth 1 calls)))
           (should-not (string-match-p ":ro" (nth 0 calls)))   ; container 1 writes secrets.age into the repository
           (dolist (c calls) (should (string-match-p (concat "-v " (regexp-quote tmp) "/drgnx-bootstrap\\.[A-Za-z0-9]+/src:/src") c)))
           (should-not (string-search home (car calls)))       ; nothing of the run is in the user's home
