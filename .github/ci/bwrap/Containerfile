@@ -1,0 +1,9 @@
+# bubblewrap 0.12.0 for the escape suite's runner jobs (runtime.yml's `escape-host`), built once per architecture by
+# `Test images` (build.sh on Ubuntu 24.04: its glibc and libcap run on the 24.04 and 26.04 runners alike).  The image
+# holds the one file /bwrap, so a job reads its one layer with curl (.github/ci/ghcr.sh file) and needs no podman.
+FROM docker.io/library/ubuntu:24.04 AS build
+COPY build.sh /tmp/build.sh
+RUN sh /tmp/build.sh /out
+
+FROM scratch
+COPY --from=build /out/bwrap /bwrap

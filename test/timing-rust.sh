@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # The Rust half of drgnx's timing lane (report-only): the `#[ignore = "timing: …"]` tests under runtime/, which every
 # other Rust job leaves out (a shared runner's clock judges nothing there).
-#   test/timing-rust.sh [--report F]            run them from a Fedora 45 container (DRGNX_CONTAINER, else podman)
+#   test/timing-rust.sh [--report F]            run them from a Fedora 45 container (DRGNX_CONTAINER, else podman): the
+#                                               prebuilt DRGNX_TEST_RUST_IMAGE (test/container/Containerfile.rust, which
+#                                               CI's test-image step sets), else plain Fedora 45 and its Rust from dnf
 #   test/timing-rust.sh --inside [--report F]   the same in this environment (the container runs this)
 # Each row of timing-rust.txt is one test run alone (--test-threads 1); F gets one line per row, `ROW pass|red`.
 # Exit 0 always (report-only: a red verdict never reddens the run), 2 on a usage error.  The checkout is mounted
@@ -22,12 +24,12 @@ emit() { if [ -n "$report" ]; then tee "$report"; else cat; fi; }
 
 if [ "$inside" = 0 ]; then
   "${DRGNX_CONTAINER:-podman}" run --rm --init --memory 6g --memory-swap 6g --tmpfs /tmp/target:size=4g \
-    -v "$root:/src:ro,z" -w /src registry.fedoraproject.org/fedora:45 \
+    -v "$root:/src:ro,z" -w /src "${DRGNX_TEST_RUST_IMAGE:-registry.fedoraproject.org/fedora:45}" \
     bash test/timing-rust.sh --inside </dev/null | emit
   exit 0
 fi
 
-dnf -y -q install cargo rust gcc >/dev/null 2>&1 || { echo "timing-rust: no toolchain"; exit 0; }
+command -v cargo >/dev/null 2>&1 || dnf -y -q install cargo rust gcc >/dev/null 2>&1 || { echo "timing-rust: no toolchain"; exit 0; }
 export CARGO_TARGET_DIR=/tmp/target CARGO_TERM_COLOR=never
 out=$(mktemp)
 sed 's/#.*//' "$rows" | awk 'NF' | while read -r crate target test mode; do

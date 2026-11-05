@@ -481,7 +481,14 @@ jobs:
           name: drgnx-timing-report
           path: ${{ runner.temp }}/timing-report.txt
           if-no-files-found: ignore
-      # The Rust timing tests (#[ignore = "timing: …"], test/timing-rust.txt), alone, in a Fedora 45 container; report only
+      # The Rust timing tests (#[ignore = "timing: …"], test/timing-rust.txt), alone, in a Fedora 45 container (the
+      # prebuilt Rust image, else plain Fedora and dnf's Rust); report only
+      - if: ${{ !cancelled() }}
+        uses: ./drgnx/.github/actions/test-image
+        with:
+          containerfile: Containerfile.rust
+          image: drgnx-test-rust
+          variable: DRGNX_TEST_RUST_IMAGE
       - name: Rust timing tests
         if: ${{ !cancelled() }}
         working-directory: drgnx
