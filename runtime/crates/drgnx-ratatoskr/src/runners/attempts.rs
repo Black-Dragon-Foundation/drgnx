@@ -116,8 +116,10 @@ pub enum Event {
         r: JobRef,
         result: Value,
     },
-    /// Any other job frame from RUNNER (`log`, `row`, `key-use`, `admit`, `refuse`).
+    /// Any other job frame from RUNNER (`log`, `row`, `key-use`, `admit`).
     FrameFrom { runner: String, r: JobRef },
+    /// RUNNER's `refuse` of an offer: the attempt ends before it started, and its job goes back to the queue.
+    Refused { runner: String, r: JobRef },
     /// RUNNER's control link is down: no frame for 45 s, its master failed its check, or an EOF without `bye`.
     LinkLost { runner: String },
     /// RUNNER's `hello-ok` with the attempts it holds.
@@ -190,6 +192,8 @@ pub struct Core {
 pub const RUNNER_LOST: &str = "infra: runner lost";
 /// The reason a requeue for a preemption carries.
 pub const PREEMPTED: &str = "infra: preempted";
+/// The reason a requeue for a refused offer carries.
+pub const REFUSED: &str = "refused";
 
 /// The result an attempt ends with when it is cancelled and its runner can't say so itself.
 fn cancelled() -> Value {
@@ -244,6 +248,23 @@ impl Core {
                     out.push(ignore(&runner, &r, "a frame"));
                 }
             }
+            Event::Refused { runner, r } => match self.frame_ok(&runner, &r) {
+                None => out.push(ignore(&runner, &r, "refuse")),
+                // never ran, so never lost: back to the queue whatever the job is
+                Some(late) => {
+                    if let Some(a) = self.get_mut(&r)
+                        && a.state == AttemptState::Offered
+                    {
+                        a.state = AttemptState::Requeued;
+                        if !late {
+                            out.push(Effect::Requeue {
+                                job: r.job,
+                                reason: REFUSED.into(),
+                            });
+                        }
+                    }
+                }
+            },
             Event::Finished { runner, r, result } => {
                 let Some(late) = self.frame_ok(&runner, &r) else {
                     out.push(ignore(&runner, &r, "finished"));

@@ -196,6 +196,7 @@ params! {
     ExecList(exec::ListParams),
     ExecStop(exec::ById),
     ExecLog(exec::LogParams),
+    ExecBump(exec::ById),
     MatrixGet(matrix::GetParams),
     MatrixCheck(matrix::CheckParams),
     PresenceSet(matrix::PresenceParams),

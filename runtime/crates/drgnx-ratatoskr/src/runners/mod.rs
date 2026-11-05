@@ -11,6 +11,8 @@ use std::time::Duration;
 
 pub mod attempts;
 pub mod link;
+pub mod local;
+pub mod queue;
 pub mod ssh_config;
 pub mod transport;
 

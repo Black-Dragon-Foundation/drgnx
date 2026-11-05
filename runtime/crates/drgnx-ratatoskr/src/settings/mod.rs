@@ -108,6 +108,15 @@ pub const RUNTIME: &[RuntimeSetting] = &[
     setting("drgnx-agents-repeat-limit", "u32", OnError::Strict),
     setting("drgnx-agents-no-progress-tokens", "u64", OnError::Strict),
     setting("drgnx-agents-manager-context", "f64", OnError::Strict),
+    setting("drgnx-runners-send", "String", OnError::Strict),
+    setting("drgnx-runners-heavy", "Vec<String>", OnError::Strict),
+    setting("drgnx-runners-image", "Option<String>", OnError::Strict),
+    setting("drgnx-runners-weight", "f64", OnError::Strict),
+    setting(
+        "drgnx-runners-project-visibility",
+        "String",
+        OnError::Strict,
+    ),
 ];
 
 /// The names of [`RUNTIME`].
@@ -151,6 +160,16 @@ pub struct RuntimeValues {
     pub agents_repeat_limit: u32,
     pub agents_no_progress_tokens: u64,
     pub agents_manager_context: f64,
+    /// Which of a project's jobs may leave this machine: `all`, `heavy` or `none` (per project).
+    pub runners_send: String,
+    /// The suite or command patterns whose jobs are heavy (per project).
+    pub runners_heavy: Vec<String>,
+    /// The image a runner runs a project's command jobs in, by digest; none: the job's own (per project).
+    pub runners_image: Option<String>,
+    /// A project's weight in the queue's fairness (per project).
+    pub runners_weight: f64,
+    /// `public` or `private` (per project): with the commit on the public origin, what makes a job `public`.
+    pub runners_project_visibility: String,
 }
 
 /// One entry of `drgnx-agents-container-images`: a name and its image reference pinned by digest (the shared podman
@@ -259,6 +278,23 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-agents-repeat-limit" => values.agents_repeat_limit = de(node)?,
         "drgnx-agents-no-progress-tokens" => values.agents_no_progress_tokens = de(node)?,
         "drgnx-agents-manager-context" => values.agents_manager_context = de(node)?,
+        "drgnx-runners-send" => {
+            let v: String = de(node)?;
+            if !["all", "heavy", "none"].contains(&v.as_str()) {
+                return Err(Bad::at(node, None, "\"all\", \"heavy\" or \"none\""));
+            }
+            values.runners_send = v;
+        }
+        "drgnx-runners-heavy" => values.runners_heavy = de(node)?,
+        "drgnx-runners-image" => values.runners_image = de(node)?,
+        "drgnx-runners-weight" => values.runners_weight = de(node)?,
+        "drgnx-runners-project-visibility" => {
+            let v: String = de(node)?;
+            if !["public", "private"].contains(&v.as_str()) {
+                return Err(Bad::at(node, None, "\"public\" or \"private\""));
+            }
+            values.runners_project_visibility = v;
+        }
         other => {
             return Err(Bad::at(
                 node,
