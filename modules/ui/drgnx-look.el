@@ -112,7 +112,7 @@ on the native shell)."
 (defun drgnx-look--card-frame (frame)
   "Make the docked panes of FRAME cards and widen the dividers to the gap; the frame's own widths are kept.  The
 frame's edge gets the same gap (`internal-border-width'), in the dividers' colour."
-  (let ((gap (drgnx-look--card-gap-px frame)))
+  (let ((gap (drgnx-look--card-gap-px frame)) (recolour nil))
     (unless (frame-parameter frame 'drgnx-look-card-saved)
       (set-frame-parameter frame 'drgnx-look-card-saved
                            (list (frame-parameter frame 'right-divider-width)
@@ -122,9 +122,13 @@ frame's edge gets the same gap (`internal-border-width'), in the dividers' colou
       (unless (eql (frame-parameter frame p) gap) (set-frame-parameter frame p gap)))
     (let ((colour (face-foreground 'window-divider frame t)))
       (when (and colour (not (equal colour (face-background 'internal-border frame))))
-        (set-face-background 'internal-border colour frame)))
+        (set-face-background 'internal-border colour frame)
+        (setq recolour t)))
     (dolist (w (window-list frame 'nomini))
-      (if (drgnx-look--card-window-p w) (drgnx-look--card-set w) (drgnx-look--card-unset w)))))
+      (if (drgnx-look--card-window-p w) (drgnx-look--card-set w) (drgnx-look--card-unset w)))
+    ;; Glitnir reads a card's colours (what its corners show: the dividers' colour) when it resolves the card: a
+    ;; colour set on the frame outside a theme shows after a refresh
+    (when (and recolour (fboundp 'glitnir-refresh)) (glitnir-refresh))))
 
 (defun drgnx-look--card-restore (frame)
   "Take the cards off FRAME and give its divider widths and edge gap back."

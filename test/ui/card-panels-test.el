@@ -182,5 +182,32 @@ two cards has their shadows in it, the margin none).  Pattern D."
       (should (equal (drgnx-uitest-pixel snap (1- want) (1- want)) between))
       (should (equal (drgnx-uitest-pixel snap (/ (+ (nth 0 r) (nth 2 r)) 2) (/ want 2)) between)))))
 
+(ert-deftest drgnx-ui-card-panels/a-divider-colour-set-on-the-frame-reaches-the-corners ()
+  "A divider colour set on the frame outside a theme reaches the card's corners when the cards are applied again:
+the corner pixel and the frame's margin are the new colour, not the one the card was first resolved with (Glitnir
+reads a card's colours when it resolves the card).  Pattern D (read after `drgnx-test-wait-presented')."
+  (drgnx-card-panels-ui-test--with-explorer
+    (let* ((dock (car (drgnx-wb--dock-windows))) (frame (selected-frame))
+           (old (face-foreground 'window-divider frame t))
+           (new (face-foreground 'error frame t))
+           (want (cons 255 (mapcar (lambda (v) (ash v -8)) (color-values new))))
+           ;; the corners as the card's only chrome, so applying the cards again changes no window parameter: the
+           ;; card's key stays, and only the colour can make Glitnir resolve it again
+           (drgnx-look-card (seq-remove (lambda (c) (memq (car c) '(shadow ring))) drgnx-look-card)))
+      (should-not (equal (color-values old) (color-values new)))
+      (unwind-protect
+          (progn
+            ;; resolved with the old colour first
+            (dolist (p '(shadow ring)) (set-window-parameter dock p nil))
+            (drgnx-test-wait-presented)
+            (set-face-foreground 'window-divider new frame)
+            (drgnx-look-cards-apply)
+            (drgnx-test-wait-presented)
+            (let ((snap (drgnx-uitest-snapshot)) (r (drgnx-card-panels-ui-test--rect dock)))
+              (should (equal (drgnx-uitest-pixel snap 0 0) want))
+              (should (equal (drgnx-uitest-pixel snap (nth 0 r) (nth 1 r)) want))))
+        (set-face-foreground 'window-divider old frame)
+        (drgnx-look-cards-apply)))))
+
 (provide 'card-panels-test)
 ;;; card-panels-test.el ends here
