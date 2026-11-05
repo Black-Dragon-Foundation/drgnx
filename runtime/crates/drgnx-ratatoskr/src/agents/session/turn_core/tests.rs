@@ -73,6 +73,9 @@ struct Shell {
     turn_of: BTreeMap<u64, u64>,
     asked: Vec<u64>,
     replies: BTreeMap<u64, Vec<&'static str>>,
+    /// The matrix card each request was asked through, and the cards withdrawn, in order.
+    card_of: BTreeMap<u64, i64>,
+    withdrawn: Vec<i64>,
     /// The shell sends a turn's prompt in a step of its own after the turn started (`Session::turn`), not at once.
     gap: bool,
     /// A turn started whose prompt the shell has not sent yet, with its text.
@@ -110,6 +113,8 @@ impl Shell {
             turn_of: BTreeMap::new(),
             asked: Vec::new(),
             replies: BTreeMap::new(),
+            card_of: BTreeMap::new(),
+            withdrawn: Vec::new(),
             gap: false,
             unsent: None,
             reached: Vec::new(),
@@ -166,7 +171,7 @@ impl Shell {
                     } else {
                         // the shell's turn sends at once
                         let sent = self.core.step(TurnEvent::Sending { turn: *turn });
-                        if sent != [TurnEffect::Prompt { turn: *turn }] {
+                        if sent != [TurnEffect::Prompt { turn: *turn }, TurnEffect::Persist] {
                             self.note(format!("turn {turn} started, but its send got {sent:?}"));
                         }
                         self.running = Some(*turn);
@@ -211,6 +216,24 @@ impl Shell {
                 }
                 TurnEffect::Answer { request } => self.reply(*request, "answered"),
                 TurnEffect::Cancel { request } => self.reply(*request, "cancelled"),
+                TurnEffect::Withdraw { card } => {
+                    // withdrawn once, and only when no request waits on it
+                    let waiting: Vec<u64> = self
+                        .core
+                        .held()
+                        .into_iter()
+                        .filter(|r| self.card_of.get(r) == Some(card))
+                        .collect();
+                    if !waiting.is_empty() {
+                        self.note(format!(
+                            "card {card} withdrawn while {waiting:?} wait on it"
+                        ));
+                    }
+                    if self.withdrawn.contains(card) {
+                        self.note(format!("card {card} withdrawn twice"));
+                    }
+                    self.withdrawn.push(*card);
+                }
                 _ => {}
             }
         }
@@ -219,7 +242,7 @@ impl Shell {
             .iter()
             .any(|e| matches!(e, TurnEffect::Persist | TurnEffect::StartTurn { .. }))
         {
-            self.disk = (self.core.queue().texts(), self.core.paused());
+            self.disk = (self.core.kept().texts(), self.core.paused());
         }
         self.after_step();
         if fx.contains(&TurnEffect::NotRunning) {
@@ -249,8 +272,9 @@ impl Shell {
                 ));
             }
         }
-        // a restart finds what the core holds (the hub's end keeps the queue as it was; its pause may move)
-        let now = (self.core.queue().texts(), self.core.paused());
+        // a restart finds what the core holds, a prompt not yet sent included (the hub's end keeps the queue as it
+        // was; its pause may move)
+        let now = (self.core.kept().texts(), self.core.paused());
         if self.disk.0 != now.0 || (!self.core.ending() && self.disk.1 != now.1) {
             self.note(format!(
                 "on disk {:?}, but the core holds {now:?}",
@@ -331,6 +355,10 @@ impl Shell {
             .contains(&TurnEffect::Prompt { turn: t })
         {
             return;
+        }
+        // Stop wins over a prompt that has not gone: none goes after its turn was told to cancel
+        if self.cancels.contains_key(&t) {
+            self.note(format!("turn {t}'s prompt ({text}) went after its cancel"));
         }
         if self.doomed {
             self.lost.push(text);
@@ -848,6 +876,281 @@ fn every_order_the_hubs_end_keeps_a_prompt_that_has_not_reached_the_agent() {
     assert_eq!(r.orders, 2_520);
 }
 
+// ---- the queue on disk keeps a prompt until it reaches the agent ----
+
+/// The user sends two prompts; the turn's task sends each turn's prompt in a step of its own; the agent answers what
+/// it works on; the hub dies with no end step (a SIGKILL, a crash), and nothing of it runs after.  The next start
+/// runs what the queue on disk holds.
+#[derive(Clone, Debug)]
+enum DieEv {
+    Send(&'static str),
+    Prompt,
+    Done,
+    Dies,
+}
+skuld::events!(DieEv {
+    Send,
+    Prompt,
+    Done,
+    Dies
+});
+
+struct DieShell {
+    s: Shell,
+    dead: bool,
+}
+
+impl Core for DieShell {
+    type Event = DieEv;
+
+    fn step(&mut self, ev: DieEv) -> Vec<DieEv> {
+        if self.dead {
+            return Vec::new();
+        }
+        let s = &mut self.s;
+        match ev {
+            DieEv::Send(t) => s.send(t),
+            DieEv::Prompt => s.send_prompt(),
+            DieEv::Done => s.done(),
+            DieEv::Dies => self.dead = true,
+        }
+        Vec::new()
+    }
+}
+
+fn check_die(d: &DieShell, _: &[DieEv]) -> Result<(), String> {
+    let s = &d.s;
+    s.settled()?;
+    // every prompt sent reached the agent, or the next start finds it on disk
+    let mut seen = s.reached.clone();
+    seen.extend(s.disk.0.iter().cloned());
+    seen.sort();
+    let mut sent = s.sent.clone();
+    sent.sort();
+    if seen != sent {
+        return Err(format!(
+            "sent {sent:?}; reached the agent {:?}, on disk {:?}: the rest is lost",
+            s.reached, s.disk.0
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn every_order_the_queue_on_disk_keeps_a_prompt_until_it_reaches_the_agent() {
+    let mut p = Partial::new();
+    p.source("user", vec![DieEv::Send("u1"), DieEv::Send("u2")]);
+    p.source("turn", vec![DieEv::Prompt, DieEv::Prompt]);
+    p.source("agent", vec![DieEv::Done, DieEv::Done]);
+    p.source("hub", vec![DieEv::Dies]);
+    let r = every_order(
+        &p,
+        Bound::default(),
+        || DieShell {
+            s: Shell::with_gap(),
+            dead: false,
+        },
+        check_die,
+    );
+    assert_eq!(r.mode, Mode::Exhaustive);
+    assert_eq!(r.orders, 630);
+}
+
+// ---- an exit before the send keeps the prompt for the next start ----
+
+/// The user sends a prompt; the turn's task sends it in a step of its own; the agent's process exits, and the session
+/// is resumed afterwards from the queue on disk; the freshness gate puts a notice in the queue (a queue write, also on
+/// the exited session).  The resumed session runs what the queue on disk holds.
+#[derive(Clone, Debug)]
+enum ExitEv {
+    Send(&'static str),
+    Prompt,
+    Edit,
+    Exit,
+    Resume,
+}
+skuld::events!(ExitEv {
+    Send,
+    Prompt,
+    Edit,
+    Exit,
+    Resume
+});
+
+struct ExitShell {
+    s: Shell,
+    /// What reached the resumed session's agent.
+    resumed: Vec<String>,
+}
+
+const NOTICE: &str = "notice";
+
+impl Core for ExitShell {
+    type Event = ExitEv;
+
+    fn step(&mut self, ev: ExitEv) -> Vec<ExitEv> {
+        let s = &mut self.s;
+        match ev {
+            ExitEv::Send(t) => s.send(t),
+            ExitEv::Prompt => s.send_prompt(),
+            ExitEv::Edit => {
+                s.feed(TurnEvent::QueueEdited(QueueEdit::SteerIn(NOTICE.into())));
+            }
+            ExitEv::Exit => {
+                s.close();
+                s.exit();
+            }
+            // the next start (`resume_row_with`): the queue and pause on disk; the queue runs, one turn after another
+            ExitEv::Resume => {
+                let mut q = crate::agents::queue::Queue::default();
+                for t in &s.disk.0 {
+                    q.push(t.clone(), Origin::User, false);
+                }
+                let mut c = TurnCore::new();
+                c.resume(q, s.disk.1, None);
+                c.ready(false);
+                // each turn's end starts the next
+                let mut fx = c.next();
+                while let Some(TurnEffect::StartTurn { turn, item }) = fx
+                    .into_iter()
+                    .find(|e| matches!(e, TurnEffect::StartTurn { .. }))
+                {
+                    c.step(TurnEvent::Sending { turn });
+                    self.resumed.push(item.text);
+                    fx = c.step(TurnEvent::PromptDone {
+                        cancelled: false,
+                        jobs: false,
+                    });
+                }
+            }
+        }
+        Vec::new()
+    }
+}
+
+fn check_exit(e: &ExitShell, _: &[ExitEv]) -> Result<(), String> {
+    let s = &e.s;
+    s.settled()?;
+    // every prompt sent reached an agent once: before the exit, or the resumed session's
+    let mut seen: Vec<String> = s.reached.iter().chain(&e.resumed).cloned().collect();
+    seen.retain(|t| t != NOTICE);
+    seen.sort();
+    let mut sent = s.sent.clone();
+    sent.sort();
+    if seen != sent {
+        return Err(format!(
+            "sent {sent:?}; reached the agent {:?}, the resumed one {:?}",
+            s.reached, e.resumed
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn every_order_an_exit_before_the_send_keeps_the_prompt_for_the_next_start() {
+    let mut p = Partial::new();
+    let user = p.source("user", vec![ExitEv::Send("u1")]);
+    let turn = p.source("turn", vec![ExitEv::Prompt]);
+    p.source("gate", vec![ExitEv::Edit]);
+    let process = p.source("process", vec![ExitEv::Exit, ExitEv::Resume]);
+    // the turn's task sends only a turn that started; the process exits once the session works on something
+    p.before((user, 0), (turn, 0));
+    p.before((user, 0), (process, 0));
+    let r = every_order(
+        &p,
+        Bound::default(),
+        || ExitShell {
+            s: Shell::with_gap(),
+            resumed: Vec::new(),
+        },
+        check_exit,
+    );
+    assert_eq!(r.mode, Mode::Exhaustive);
+    assert_eq!(r.orders, 15);
+}
+
+// ---- a Stop before the send wins ----
+
+/// The user sends two prompts, stops and delivers the held queue; the turn's task sends each turn's prompt in a step
+/// of its own (a Stop may come between a turn's start and its send); the agent answers what it works on; the stop's
+/// deadline fires.
+#[derive(Clone, Debug)]
+enum GapStopEv {
+    Send(&'static str),
+    Stop,
+    Deliver,
+    Prompt,
+    Done,
+    Due(usize),
+}
+skuld::events!(GapStopEv {
+    Send,
+    Stop,
+    Deliver,
+    Prompt,
+    Done,
+    Due
+});
+
+struct GapStopShell(Shell);
+
+impl Core for GapStopShell {
+    type Event = GapStopEv;
+
+    fn step(&mut self, ev: GapStopEv) -> Vec<GapStopEv> {
+        let s = &mut self.0;
+        match ev {
+            GapStopEv::Send(t) => s.send(t),
+            GapStopEv::Stop => {
+                s.feed(TurnEvent::Stop { after_tool: false });
+            }
+            GapStopEv::Deliver => s.deliver(),
+            GapStopEv::Prompt => s.send_prompt(),
+            GapStopEv::Done => s.done(),
+            GapStopEv::Due(i) => s.due(i),
+        }
+        Vec::new()
+    }
+}
+
+fn check_gap_stop(g: &GapStopShell, _: &[GapStopEv]) -> Result<(), String> {
+    let s = &g.0;
+    // (no prompt went after its cancel: `send_prompt` notes it)
+    s.settled()?;
+    if let Some((t, n)) = s.cancels.iter().find(|(_, n)| **n > 1) {
+        return Err(format!("turn {t} was told to cancel {n} times"));
+    }
+    s.no_stall()
+}
+
+#[test]
+fn every_order_a_stop_before_the_send_keeps_the_prompt_from_the_agent() {
+    let mut p = Partial::new();
+    let user = p.source(
+        "user",
+        vec![
+            GapStopEv::Send("a"),
+            GapStopEv::Send("b"),
+            GapStopEv::Stop,
+            GapStopEv::Deliver,
+        ],
+    );
+    let turn = p.source("turn", vec![GapStopEv::Prompt, GapStopEv::Prompt]);
+    let agent = p.source("agent", vec![GapStopEv::Done, GapStopEv::Done]);
+    let timer = p.source("timer", vec![GapStopEv::Due(0)]);
+    p.before((user, 0), (turn, 0));
+    p.before((user, 0), (agent, 0));
+    p.before((user, 2), (timer, 0));
+    let r = every_order(
+        &p,
+        Bound::default(),
+        || GapStopShell(Shell::with_gap()),
+        check_gap_stop,
+    );
+    assert_eq!(r.mode, Mode::Exhaustive);
+    assert!(r.orders > 100, "{} orders", r.orders);
+}
+
 // ---- a delivered peer message a user's kill discards goes back to the store's queue ----
 
 /// The user sends a prompt; the hub's delivery (`deliver::pass`) finds the session free and marks the peer's message
@@ -1022,7 +1325,11 @@ impl Core for PermShell {
             PermEv::Ask(request) => {
                 s.asked.push(request);
                 s.turn_of.insert(request, 1);
-                s.feed(TurnEvent::PermissionAsked { request, turn: 1 });
+                s.feed(TurnEvent::PermissionAsked {
+                    request,
+                    turn: 1,
+                    card: None,
+                });
             }
             PermEv::Answer(request) => {
                 s.feed(TurnEvent::PermissionAnswered { request });
@@ -1088,6 +1395,153 @@ fn every_order_a_held_permission_is_answered_or_cancelled_once() {
     assert!(r.orders > 100, "{} orders", r.orders);
 }
 
+// ---- a matrix card nobody will answer is withdrawn ----
+
+/// The user sends a prompt and stops; the agent sends two requests that ask the same question in the turn it works
+/// on, and answers it; the matrix decides on each in a task of its own (possibly after the turn was cancelled or
+/// ended), through the one open card for that question, or a new one; the cockpit settles the open card.
+#[derive(Clone, Debug)]
+enum CardEv {
+    Send,
+    Stop,
+    Request(u64),
+    Done,
+    Decide(u64),
+    Settle,
+}
+skuld::events!(CardEv {
+    Send,
+    Stop,
+    Request,
+    Done,
+    Decide,
+    Settle
+});
+
+/// A matrix card in the store.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Card {
+    Open,
+    Settled,
+    Withdrawn,
+}
+
+struct CardShell {
+    s: Shell,
+    cards: BTreeMap<i64, Card>,
+}
+
+impl CardShell {
+    /// The open card of the question, or a new one (`norn::write::cards::matrix_card`).
+    fn card(&mut self) -> i64 {
+        if let Some((c, _)) = self.cards.iter().find(|(_, st)| **st == Card::Open) {
+            return *c;
+        }
+        let c = 7 + self.cards.len() as i64;
+        self.cards.insert(c, Card::Open);
+        c
+    }
+}
+
+impl Core for CardShell {
+    type Event = CardEv;
+
+    fn step(&mut self, ev: CardEv) -> Vec<CardEv> {
+        match ev {
+            CardEv::Send => self.s.send("u1"),
+            CardEv::Stop => {
+                self.s.feed(TurnEvent::Stop { after_tool: false });
+            }
+            // the agent asks only while it works on a turn; the reader stamps that turn
+            CardEv::Request(request) => {
+                if let Some(t) = self.s.running {
+                    self.s.turn_of.insert(request, t);
+                }
+            }
+            CardEv::Done => self.s.done(),
+            CardEv::Decide(request) => {
+                if let Some(&turn) = self.s.turn_of.get(&request) {
+                    let card = self.card();
+                    self.s.card_of.insert(request, card);
+                    self.s.asked.push(request);
+                    self.s.feed(TurnEvent::PermissionAsked {
+                        request,
+                        turn,
+                        card: Some(card),
+                    });
+                }
+            }
+            // `cards/settle` in the cockpit, then `Hub::card_settled`: the requests waiting on it go on
+            CardEv::Settle => {
+                if let Some((&c, _)) = self.cards.iter().find(|(_, st)| **st == Card::Open) {
+                    self.cards.insert(c, Card::Settled);
+                    let on: Vec<u64> = self
+                        .s
+                        .core
+                        .held()
+                        .into_iter()
+                        .filter(|r| self.s.card_of.get(r) == Some(&c))
+                        .collect();
+                    for request in on {
+                        self.s.feed(TurnEvent::PermissionAnswered { request });
+                    }
+                }
+            }
+        }
+        // `card_withdraw`: only an open card moves
+        for c in &self.s.withdrawn {
+            if self.cards.get(c) == Some(&Card::Open) {
+                self.cards.insert(*c, Card::Withdrawn);
+            }
+        }
+        Vec::new()
+    }
+}
+
+fn check_cards(c: &CardShell, _: &[CardEv]) -> Result<(), String> {
+    c.s.settled()?;
+    replied_once_over(&c.s)?;
+    // a card still open is one a request still waits on: none is left in the needs-you lists for nobody
+    let held = c.s.core.held();
+    for (card, st) in &c.cards {
+        let waited = held.iter().any(|r| c.s.card_of.get(r) == Some(card));
+        if *st == Card::Open && !waited {
+            return Err(format!(
+                "card {card} stays open, but no request waits on it (replies {:?})",
+                c.s.replies
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn every_order_a_card_nobody_will_answer_is_withdrawn() {
+    let mut p = Partial::new();
+    let user = p.source("user", vec![CardEv::Send, CardEv::Stop]);
+    let agent = p.source(
+        "agent",
+        vec![CardEv::Request(1), CardEv::Request(2), CardEv::Done],
+    );
+    let matrix = p.source("matrix", vec![CardEv::Decide(1), CardEv::Decide(2)]);
+    p.source("cockpit", vec![CardEv::Settle]);
+    // the agent works only once something was sent; the matrix decides on what the reader received
+    p.before((user, 0), (agent, 0));
+    p.before((agent, 0), (matrix, 0));
+    p.before((agent, 1), (matrix, 1));
+    let r = every_order(
+        &p,
+        Bound::default(),
+        || CardShell {
+            s: Shell::new(),
+            cards: BTreeMap::new(),
+        },
+        check_cards,
+    );
+    assert_eq!(r.mode, Mode::Exhaustive);
+    assert!(r.orders > 100, "{} orders", r.orders);
+}
+
 // ---- a kill or an exit cancels what is held ----
 
 /// How the session's process ends.
@@ -1143,7 +1597,11 @@ impl Core for EndShell {
             EndEv::Decide(request) => {
                 if let Some(&turn) = s.turn_of.get(&request) {
                     s.asked.push(request);
-                    s.feed(TurnEvent::PermissionAsked { request, turn });
+                    s.feed(TurnEvent::PermissionAsked {
+                        request,
+                        turn,
+                        card: None,
+                    });
                 }
             }
             EndEv::End(Ending::Kill(why), 0) => {
@@ -1268,6 +1726,30 @@ fn the_event_pair_waits_for_its_timer() {
     assert!(c.step(TurnEvent::Changed).is_empty());
     assert_eq!(c.step(TurnEvent::EmitTick), [TurnEffect::Emit]);
     assert_eq!(c.step(TurnEvent::Changed), [TurnEffect::ArmEmit]);
+}
+
+/// Pure (D): a session started afresh after a restart (or a manager's rotation) keeps the prompts its queue on disk
+/// holds and is told first what happened, in a turn of its own.
+#[test]
+fn a_fresh_start_is_told_first_and_keeps_its_queue() {
+    let mut disk = crate::agents::queue::Queue::default();
+    disk.push("u1".into(), Origin::User, false);
+    disk.push("p1".into(), Origin::Peer("w".into()), false);
+    let mut c = TurnCore::new();
+    c.resume(disk.clone(), false, Some("told".into()));
+    c.ready(false);
+    assert_eq!(c.queue().texts(), ["told", "u1", "p1"]);
+    let fx = c.next();
+    assert!(
+        matches!(&fx[..], [TurnEffect::StartTurn { item, .. }] if item.text == "told" && item.origin == Origin::Hub),
+        "{fx:?}"
+    );
+    // a session that resumed its conversation is told nothing, and a held queue stays held
+    let mut c = TurnCore::new();
+    c.resume(disk, true, None);
+    c.ready(false);
+    assert_eq!(c.queue().texts(), ["u1", "p1"]);
+    assert!(c.next().is_empty() && c.paused());
 }
 
 #[test]

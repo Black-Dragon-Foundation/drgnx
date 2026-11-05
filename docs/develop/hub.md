@@ -477,6 +477,10 @@ tested over a socket pair in `conn/tests.rs`:
 - the client's EOF is the last read event;
 - the writer reports at most one of a refused and a stuck write, then ends.
 
+The client in these tests leaves with a `shutdown`, never by closing its end alone: a child another test of the same
+binary is spawning holds a copy of every descriptor from its fork to its exec, so a close ends the stream only once
+that copy is gone too. `a_drain_reads_what_the_socket_holds_before_the_reactor_saw_it` holds such a copy throughout.
+
 ### hello and versions
 
 Ratatoskr's `hello` (protocol v1, `runtime/crates/drgnx-ratatoskr/src/hello.rs`) closes SB-T12-6: a hello line is
@@ -864,7 +868,9 @@ resume, the tick goes on from the store with the same workers, and the wakes sti
   its job is still running.
 - **If the agent can neither resume nor load**: a fresh session on the same transcript, told so by a hub prompt (`RESTART_NOTICE`, followed by the
   summary handoff when there is one). A manager is restarted from the graph (`restart_manager_from_graph`): a new
-  session told its digest and open decisions, its conversation not restored.
+  session told its digest and open decisions, its conversation not restored. What it is told goes at the front of the
+  queue kept on disk (`TurnCore::resume`), which stays as it was, so the agent reads it first and then the prompts
+  that waited (a rotated manager's brief included). Its cost, `usd-est`, counts from zero in the new conversation.
 - **A job's end wakes once.** `runtime.db` table `wake` (migration 7): a row `pending` when the end is announced,
   `sending` while it is delivered, `done` once the session has the prompt (the mark; pruned with the job). After the
   sessions are back (`agents::wake::recover`) a `pending` row is delivered, a `sending` one only when the session's
@@ -1259,7 +1265,9 @@ and name. The session is recorded in `runtime.db` (`asession`, migration 5) and 
   unsandboxed.
 - **Stop and kill.** `agents/stop` on a running turn cancels it (`session/cancel`), answers the pending permission
   requests cancelled and holds the queue (`paused`); an agent that has not ended the turn after 2 s loses its process
-  group. A second Stop of the same turn changes nothing. On a session with no turn running it ends the session
+  group. A second Stop of the same turn changes nothing. A Stop that comes before the turn's prompt has reached the
+  agent wins: the prompt is not sent, no `session/cancel` goes, and it waits at the front of the held queue. On a
+  session with no turn running it ends the session
   (SIGTERM, SIGKILL after 3 s). `agents/kill` ends it at once. The pause after a tool call and the turn's end answer
   the requests still waiting cancelled too.
 
@@ -1292,7 +1300,8 @@ event and performs what it answers; the entries, steps and transcript stay with 
   Stop's deadline, end the process group, hold a permission request for the user, answer it or answer it cancelled,
   keep the queue on disk, announce a change, arm and send the event pair; and the refusals (exited, not free, no
   turn running, no such queued prompt, no such request).
-- The shell asks it `status()`, `queue()`, `paused()`, `turn()`, `ending()` and `is_free()`.
+- The shell asks it `status()`, `queue()`, `kept()` (what the queue on disk holds), `paused()`, `turn()`, `ending()`
+  and `is_free()`.
 
 What the core keeps:
 
@@ -1301,9 +1310,14 @@ What the core keeps:
 - A prompt sent while the process is being ended for good (`agents/kill`, `agents/stop` with no turn running, a
   Stop's deadline) is refused as exited, and the session is not free then: the sender keeps it (a peer's message goes
   back to `queued`, a wake stays pending). A prompt sent while the hub ends waits on disk for the next start.
-- A turn's prompt reaches the agent only through its `Sending` step. When the hub ends between a turn's start and that
-  step, the turn is put back: its prompt goes back to the front of the queue, which is kept on disk, and the shell
-  drops the turn's entries (the transcript file holds a turn's entries only once its prompt was sent). When the
+- A turn's prompt reaches the agent only through its `Sending` step. Until then the queue on disk holds it at its
+  front (`kept()`: the waiting prompts behind the prompt not yet sent), so a hub that dies in between, with no end
+  step, runs it at the next start; the shell writes the turn's entries to the transcript file first and then the
+  queue without it (a hub that dies between the two runs the prompt again rather than losing it). When the hub ends,
+  a Stop comes or the agent's process exits between a turn's start and that step, the turn is put back: its prompt
+  goes back to the front of the queue, on disk too (held, after a Stop; for the next start or resume, after an exit),
+  and the shell drops the turn's entries (the transcript file holds a turn's entries
+  only once its prompt was sent). When the
   user's kill comes there instead, the prompt is dropped with the queue, and `Discard` names both, so a peer's
   message among them goes back to `queued` in the store.
 - A turn ends once, at its agent's answer. A second Stop of a stopped turn changes nothing; a Stop's deadline ends
@@ -1311,7 +1325,9 @@ What the core keeps:
 - Each permission request is answered or answered cancelled once. A Stop, the pause after a tool call, the turn's end,
   a kill and the agent's exit cancel what is held; a kill's cancels change the snapshot at once, so the editors drop
   the card before the exit. A request the matrix decides on after its turn was cancelled or ended is answered
-  cancelled at once: the agent no longer waits on it.
+  cancelled at once: the agent no longer waits on it. A matrix card that no request waits on any more after such a
+  cancel is withdrawn (`Withdraw`: `norn::write::cards::card_withdraw`, state `withdrawn` with a `card` event), so it
+  leaves the open cards and the needs-you lists; a card the user settled first stays settled.
 - One event pair is armed at a time; the timer's tick sends it.
 
 The shell acts on a turn's end as the step decided it: whether the hub is ending is read under the step's lock, never
@@ -1328,8 +1344,17 @@ again after it.
   call, and the cockpit settling a card;
 - two senders, an agent that asks in each turn, the matrix deciding late, and the user's kill, the hub's end or a
   crash;
+- a user who sends and stops, an agent that asks the same question twice and answers, the matrix deciding late
+  through the question's open card or a new one, and the cockpit settling the open card (no card stays open that no
+  request waits on, and none is withdrawn while one does);
 - two senders, the turn's task that sends each prompt in a step of its own, an agent, and the hub's end, then the exit
   (every prompt reached the agent or waits in the queue on disk);
+- the same, but the hub dies with no end step and nothing of it runs after (every prompt reached the agent or is in
+  the queue on disk);
+- a sender, the turn's task that sends in a step of its own, the freshness gate's notice (a queue write), and the
+  agent's exit, then a resume from the queue on disk (every prompt reaches an agent once);
+- a user who sends, stops and delivers, the turn's task that sends each prompt in a step of its own, an agent, and
+  the stop's deadline (no prompt goes after its turn was told to cancel);
 - a sender, the hub's delivery (`sending`, the prompt, the mark), an agent, and the user's kill, then the exit (a
   message marked delivered ran; one the kill discarded is `queued` again).
 

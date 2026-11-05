@@ -436,6 +436,7 @@ impl State {
                 }
                 TurnEffect::StartTurn { item, .. } => {
                     self.unsent_at = Some(self.entries.len());
+                    self.turns += 1;
                     self.begin_turn(item);
                     continue;
                 }
@@ -444,6 +445,7 @@ impl State {
                     continue;
                 }
                 TurnEffect::PutBack { .. } => {
+                    self.turns = self.turns.saturating_sub(1);
                     self.undo_turn();
                     continue;
                 }
@@ -1982,29 +1984,28 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
         }
     };
     let (s, done) = assemble(ident, &profile, l, front, hub.step_bus());
-    if fresh {
-        // a manager's restart or rotation is told FIRST; any other fresh start the notice and the summary handoff
-        let told = match (first, handoff) {
-            (Some(f), _) => f,
-            (None, Some(h)) => format!("{RESTART_NOTICE}\n\n{h}"),
-            (None, None) => RESTART_NOTICE.to_string(),
-        };
-        lock(&s.state)
-            .core
-            .queue_mut()
-            .push(told, Origin::Hub, false);
-        if let Some(db) = hub.db() {
-            insert_row(db, &s).await;
+    // a manager's restart or rotation is told FIRST; any other fresh start the notice and the summary handoff
+    let told = fresh.then(|| match (first, handoff) {
+        (Some(f), _) => f,
+        (None, Some(h)) => format!("{RESTART_NOTICE}\n\n{h}"),
+        (None, None) => RESTART_NOTICE.to_string(),
+    });
+    if fresh && let Some(db) = hub.db() {
+        insert_row(db, &s).await;
+    }
+    // the queue on disk as it was, with what the agent is told at its front
+    let (queue, paused) = match &s.store {
+        Some(store) => {
+            let entries = store.load(&sid);
+            let mut st = lock(&s.state);
+            st.flushed = entries.len();
+            st.entries = entries;
+            drop(st);
+            store.load_queue(&sid)
         }
-    }
-    if let Some(store) = &s.store {
-        let entries = store.load(&sid);
-        let (queue, paused) = store.load_queue(&sid);
-        let mut st = lock(&s.state);
-        st.flushed = entries.len();
-        st.entries = entries;
-        st.core.restore(queue, paused);
-    }
+        None => Default::default(),
+    };
+    lock(&s.state).core.resume(queue, paused, told);
     // a job it started still runs (re-attached before the sessions): it waits for it as before the restart
     let waiting = s.has_jobs();
     {
@@ -2517,12 +2518,13 @@ impl Session {
         }
     }
 
-    /// The held queue and the pause, kept for a restart.  Written under the state's lock: two writes from different
-    /// tasks (a turn's end, the hub's end) land in the order of the states they read, so the file ends as the last.
+    /// The held queue and the pause, kept for a restart, with a turn's prompt that has not reached the agent at its
+    /// front ([`TurnCore::kept`]).  Written under the state's lock: two writes from different tasks (a turn's end, the
+    /// hub's end) land in the order of the states they read, so the file ends as the last.
     fn persist_queue(&self) {
         let Some(store) = &self.store else { return };
         let st = lock(&self.state);
-        if let Err(e) = store.save_queue(&self.id, st.core.queue(), st.core.paused()) {
+        if let Err(e) = store.save_queue(&self.id, &st.core.kept(), st.core.paused()) {
             tracing::warn!(sid = self.id, "queue not kept: {e}");
         }
     }
@@ -2559,9 +2561,58 @@ impl Session {
                 TurnEffect::EndTurn { waiting: true, .. } => self.close_when_idle(),
                 TurnEffect::Persist => self.persist_queue(),
                 TurnEffect::Announce => self.changed(),
+                TurnEffect::Withdraw { card } => self.withdraw_later(vec![card]),
                 _ => {}
             }
         }
+    }
+
+    /// The matrix cards a step withdraws.
+    fn withdrawn(fx: &[TurnEffect]) -> Vec<i64> {
+        fx.iter()
+            .filter_map(|e| match e {
+                TurnEffect::Withdraw { card } => Some(*card),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// CARDS leave the open cards (and so the needs-you lists): every request that waited on them was answered
+    /// cancelled.  A card the user settled first stays settled.
+    async fn withdraw_cards(&self, cards: Vec<i64>) {
+        if cards.is_empty() {
+            return;
+        }
+        let hub = Caller {
+            class: Class::Service,
+            sid: None,
+            job: None,
+            conn_id: 0,
+        };
+        let at = now();
+        let r = self
+            .writer
+            .write(&hub, "cards/withdraw", move |tx| {
+                for card in &cards {
+                    norn::write::cards::card_withdraw(tx, *card, at)?;
+                }
+                Ok(())
+            })
+            .await;
+        if let Err(e) = r {
+            tracing::warn!(session = %self.id, "matrix cards not withdrawn: {e:?}");
+        }
+    }
+
+    /// [`Session::withdraw_cards`] in a task of its own, for a step taken where nothing waits.
+    fn withdraw_later(self: &Arc<Self>, cards: Vec<i64>) {
+        if cards.is_empty() {
+            return;
+        }
+        let me = self.clone();
+        crate::clock::spawn("session:card-withdraw", async move {
+            me.withdraw_cards(cards).await;
+        });
     }
 
     fn emit(&self) {
@@ -2716,9 +2767,10 @@ impl Session {
                             .and_then(Value::as_f64)
                             .filter(|_| v.get("sessionUpdate") == Some(&json!("usage_update")))
                         {
-                            let hits = self.budgets.spend_total(
+                            let hits = self.budgets.spend_total_in(
                                 &self.scope(),
                                 "usd-est",
+                                &self.acp.0,
                                 Unit::UsdEst,
                                 total,
                             );
@@ -2949,10 +3001,16 @@ impl Session {
         };
         {
             let mut st = lock(&self.state);
-            let fx = st.core.step(TurnEvent::PermissionAsked { request, turn });
+            let fx = st.core.step(TurnEvent::PermissionAsked {
+                request,
+                turn,
+                card,
+            });
             if !fx.contains(&TurnEffect::Hold { request }) {
                 drop(st);
                 reply(pending.resp, None);
+                // nobody answers its card either
+                self.withdraw_later(Self::withdrawn(&fx));
                 return;
             }
             st.permissions.push(pending);
@@ -3108,7 +3166,8 @@ impl Session {
 
     /// The running turn, if any, is the only thing Stop cancels: the permission requests it waits on are answered
     /// cancelled, the queue is held, and an agent that has not ended the turn after STOP_ANSWER loses its process.  A
-    /// second Stop of the same turn changes nothing.
+    /// second Stop of the same turn changes nothing.  A turn whose prompt has not reached the agent yet is put back
+    /// instead: the prompt waits at the front of the held queue, and nothing is sent.
     pub(crate) fn stop_turn(self: &Arc<Self>) -> bool {
         !self
             .turn_event(TurnEvent::Stop { after_tool: false })
@@ -3336,7 +3395,9 @@ impl Session {
             })
             .flatten()
             .collect();
+        let cards = Self::withdrawn(&stepped.fx);
         self.reply_cancelled(stepped);
+        self.withdraw_cards(cards).await;
         // a message the store gave this session and that never ran waits in the store again, for its next session
         super::deliver::put_back(&self.writer, &dropped).await;
         let _ = self.conn.cancel(&self.acp);
@@ -3406,7 +3467,6 @@ impl Session {
     /// Turn TURN of ITEM began (its entry and step are in the state): its prompt goes to the agent.
     fn start_turn(self: &Arc<Self>, turn: u64, item: Queued) {
         self.wait_refusals.store(0, Ordering::Relaxed);
-        lock(&self.state).turns += 1;
         self.persist_queue();
         self.flush_transcript();
         self.changed();
@@ -3424,8 +3484,10 @@ impl Session {
         if !send {
             return;
         }
-        // its entry is the agent's now: in the transcript file too
+        // its entry is the agent's now: in the transcript file first, then off the queue on disk (a hub that dies
+        // between the two runs the prompt again at the next start; it never loses it)
         self.flush_transcript();
+        self.persist_queue();
         // the user's words reach the agent: its current ask from here on (told before the agent can write)
         if item.origin == Origin::User {
             let (session, text, at) = (self.id.clone(), item.text.clone(), now());
@@ -3567,7 +3629,10 @@ impl Session {
             why: KillWhy::HubEnding,
         });
         let put_back = stepped.fx.contains(&TurnEffect::Persist);
+        let cards = Self::withdrawn(&stepped.fx);
         self.reply_cancelled(stepped);
+        // before the store ends: the agent that asked is going, and its requests with it
+        self.withdraw_cards(cards).await;
         if put_back {
             self.persist_queue();
         }
