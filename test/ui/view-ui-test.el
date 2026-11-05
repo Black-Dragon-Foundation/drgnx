@@ -24,8 +24,9 @@ It runs the view's slice chain back to back (CI-GUI-1: a poll per slice starved 
   (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the view GUI test's predicate"))
 
 (ert-deftest drgnx-view-ui/replace-retype-has-no-jank ()
-  ;; Known red until the render pipeline's Replace port (R2, REPLACE-REDRAW-1): the busy waits pass now, but the first
-  ;; slice after the typing need not hold the rows the window showed (seen: f099's line 41 shown, lines 1-8 drawn first).
+  ;; The rows the window shows are patched before any other row.  Not that the first slice holds them all: a slice
+  ;; stops at its 4 ms deadline (`drgnx-view-slice'), which a loaded machine reaches inside the visible rows, and the
+  ;; next slice goes on with them.
   :tags '(:timing)
   (let* ((root (drgnx-uitest-root-frame))
          (drgnx-wb--sections nil)
@@ -71,8 +72,16 @@ It runs the view's slice chain back to back (CI-GUI-1: a poll per slice starved 
                 (should (drgnx-view-ui-test--wait (lambda () (with-current-buffer view (not (drgnx-replace--busy-p))))))
                 (should visible)
                 (should (> (length slices) 1))
-                (let ((first (car (last slices))))
-                  (dolist (key visible) (should (memq key first))))
+                ;; in drawing order, every shown row is first drawn before the first match row the window did not show
+                ;; (a redraw that starts again, after a late key, draws them again later)
+                (let* ((order (apply #'append (reverse slices)))
+                       (last-shown (cl-loop for key in visible   ; a shown row never drawn: never before the others
+                                            maximize (or (cl-position key order :test #'eq) most-positive-fixnum)))
+                       (first-other (cl-loop for key in order for i from 0   ; a match's key is its plist
+                                             when (and (not (eq (car key) 'drgnx-replace-file)) (not (memq key visible)))
+                                             return i)))
+                  (dolist (key visible) (should (memq key order)))
+                  (should (or (null first-other) (< last-shown first-other))))
                 (should (= 0 (plist-get (drgnx-view-stats v) :full-draws)))
                 (with-current-buffer view
                   (should (string-search "needlepin" (buffer-substring-no-properties (window-start w) (point-max)))))))))
