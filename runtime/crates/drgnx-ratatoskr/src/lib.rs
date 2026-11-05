@@ -27,6 +27,8 @@
 //!   excise, scrub, grants, sql, compact, proposed), a client of the running hub.
 //! - [`job_cli`]: `ratatoskr job …`, plan runs from a terminal (propose, approve, status, stop, resume), a client of
 //!   the running hub.
+//! - [`machines_cli`]: `ratatoskr machines report …`, a machine's slots from jobq, a client of the running hub.
+//! - [`work`]: the Work space's hub side (machines, shell reads).
 //! - [`sessions`]: the coordination tools on a socket per session (the socket is the identity) and for outside
 //!   agents' bridges (`mcp/session`, `mcp/session-close`, `mcp/attach`), kept in `runtime.db`.
 //! - [`peer`]: the process behind a connection: its parent and start time, for an outside agent's identity; the
@@ -82,6 +84,7 @@ pub mod job_cli;
 pub mod legacy;
 pub mod lock;
 pub mod log;
+pub mod machines_cli;
 pub mod manager;
 pub mod matrix_gate;
 pub mod peer;

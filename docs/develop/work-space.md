@@ -3,6 +3,26 @@
 The hub's code for the Work space lives in `runtime/crates/drgnx-ratatoskr/src/work/`. The pure parts take no clock and
 no I/O, so tests run them in every order or directly.
 
+## Machines
+
+`work::machines` keeps the list `machines/list` and the event `machines-changed` carry (types in
+`runstav/src/methods/work.rs`).
+
+- `Registry` is pure: `report(r, now)`, `expire(now) -> names`, `set_local(slots)`, `list()`; `local` is always first
+  and never expires. `Machines` holds one behind a lock in `Core`.
+- `machines/report` takes user connections only (`classes: [User]`, in `test/conformance/class-matrix.json`); a report
+  for `local`, a ttl outside 0..86400, more than 256 slots or a slot without id and kind is `invalid-params`.
+- The local pool is read from the job runner (`exec::Runner::slot_counts`): one `local-N` slot per agent-job slot, the
+  busy ones held by `job` (the pool does not say which job). The hub refreshes it, and drops expired reports, on every
+  `machines/report` and `machines/list`, and every 2 s (`work::machines::run`, which waits on the clock only, a task named
+  `machines:run` on the hub's clock, so `__test_advance` moves it). `machines-changed` carries the whole list, and only
+  when it changed.
+- The CLI is `ratatoskr machines report --machine M --ttl S [--json FILE|-]` (`machines_cli`): exit 0, 1 on a hub
+  error, 2 on bad arguments. jobq calls it; its side is jobq's plan.
+- Tests: `registry::*` (pattern D), `machines_cli::parses_and_reports` (D), conformance
+  `work/machines-report-from-a-user`, `work/machines-report-from-an-agent-is-refused`,
+  `work/machines-expire-after-ttl` (virtual clock) and `cli/machines-report` (the CLI as a child, exit read).
+
 ## Shell reads
 
 Layer 1 of "reads through shell commands" (the files a command names; labelled "from the command") is

@@ -20,6 +20,7 @@ pub mod records;
 pub mod settings;
 pub mod tasks;
 pub mod timeline;
+pub mod work;
 
 use crate::registry::Method;
 use crate::wire::{Error, ErrorCode};
@@ -214,6 +215,8 @@ params! {
     RecordsStatus(records::ByPath),
     RecordsProposals(records::ByPath),
     RecordsDecide(records::DecideParams),
+    MachinesReport(work::MachineReport),
+    MachinesList(Empty),
 }
 
 /// Every method, in no order.
@@ -233,6 +236,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(plans::methods());
     v.extend(timeline::methods());
     v.extend(records::methods());
+    v.extend(work::methods());
     v
 }
 

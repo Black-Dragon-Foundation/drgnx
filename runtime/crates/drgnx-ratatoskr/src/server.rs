@@ -233,6 +233,8 @@ pub async fn run(args: ServeArgs) -> Exit {
     );
     // a queued message reaches its session once that is free
     crate::clock::spawn("deliver:run", crate::agents::deliver::run(front.clone()));
+    // reported machines expire; the local slots follow the job pool
+    crate::clock::spawn("machines:run", crate::work::machines::run(front.clone()));
     // settings.el and the shipped defaults, as data, before anything is served (its last good values in runtime.db)
     front
         .settings

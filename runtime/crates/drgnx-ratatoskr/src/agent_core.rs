@@ -21,6 +21,7 @@
 //! | `budget/*`, `pace/get` | [`crate::budget`] | 20 |
 //! | `records/{import,status}` | [`crate::records`] | 14 |
 //! | `records/{proposals,decide}` | [`crate::records`] | 14b |
+//! | `machines/{report,list}` | [`crate::work::machines`] | P2 5 |
 
 use crate::dispatch::Caller;
 use crate::front::Front;
@@ -43,6 +44,7 @@ pub struct Core {
     pub briefs: crate::brief::Briefs,
     pub manager: crate::manager::Managers,
     pub records: crate::records::Views,
+    pub machines: crate::work::machines::Machines,
 }
 
 fn answer<T: Serialize>(r: Result<T, Error>) -> Result<Value, Error> {
@@ -55,7 +57,9 @@ pub async fn serve(
     caller: &Caller,
     p: Params,
 ) -> Result<Result<Value, Error>, Box<Params>> {
-    use crate::{agents, brief, budget, exec, manager, matrix_gate, records, runner, timeline};
+    use crate::{
+        agents, brief, budget, exec, manager, matrix_gate, records, runner, timeline, work,
+    };
     let (f, c) = (front, caller);
     Ok(match p {
         Params::AgentsList(p) => answer(agents::session::list(f, c, p).await),
@@ -106,6 +110,8 @@ pub async fn serve(
         Params::RecordsStatus(p) => answer(records::status(f, c, p).await),
         Params::RecordsProposals(p) => answer(records::proposals(f, c, p).await),
         Params::RecordsDecide(p) => answer(records::decide(f, c, p).await),
+        Params::MachinesReport(p) => answer(work::machines::report(f, c, p).await),
+        Params::MachinesList(p) => answer(work::machines::list(f, c, p).await),
         other => return Err(Box::new(other)),
     })
 }

@@ -630,7 +630,9 @@ impl Front {
             | Params::RecordsImport(_)
             | Params::RecordsStatus(_)
             | Params::RecordsProposals(_)
-            | Params::RecordsDecide(_)) => crate::agent_core::serve(self, &caller, p)
+            | Params::RecordsDecide(_)
+            | Params::MachinesReport(_)
+            | Params::MachinesList(_)) => crate::agent_core::serve(self, &caller, p)
                 .await
                 .unwrap_or_else(|_| unserved(method)),
             // the graph store's (`graph/*`, `tasks/*`); a settled card too (an access card becomes a grant)
