@@ -43,6 +43,28 @@ server sends after the answer, and the A/B judges the slowest one."
                                                                                   :b (funcall run (+ 40.0 (* 0.1 (% i 3)))))))))
     (should (eq (plist-get (cdr (assoc '(:lsp :handler_ms :max) vs)) :verdict) 'regressed))))
 
+(ert-deftest drgnx-perf-workers/lsp-burst-records-a-timed-out-request-as-handled ()
+  "A server that answers after the request's timeout (here: never) leaves no workload hanging: jsonrpc drops a late
+answer silently, so each request carries the workload's own deadline and a timeout is a handled failure that the
+row reports (`:timeouts', `:timeout_ids'), so `lsp-burst-done' holds."
+  (skip-unless (eq system-type 'gnu/linux))
+  (perf-workers-process-test--session)
+  (let* ((drgnx-perf-w--lsp-timeout 0.2)
+         (conn (make-instance 'jsonrpc-process-connection :name "perf-lsp-mute" :events-buffer-config '(:size 0)
+                              :notification-dispatcher #'ignore :request-dispatcher #'ignore
+                              :process (lambda () (make-process :name "perf-lsp-mute" :noquery t :connection-type 'pipe
+                                                                :command '("sleep" "3600"))))))
+    (unwind-protect
+        (progn
+          (setq drgnx-perf-w--lsps (list conn) drgnx-perf-w--lsp-handled nil)
+          (clrhash drgnx-perf-w--lsp-sent)
+          (drgnx-perf-w--lsp-request conn :textDocument/documentSymbol nil)
+          (drgnx-test-wait (lambda () drgnx-perf-w--lsp-handled) :secs 5 :what "the request's timeout")
+          (let ((lsp (plist-get (drgnx-perf-w-lsp-burst-measure) :lsp)))
+            (should (= (plist-get lsp :timeouts) 1))
+            (should (= (length (plist-get lsp :timeout_ids)) 1))))
+      (drgnx-perf-w-lsp-teardown))))
+
 (defun perf-workers-process-test--frames (bytes)
   "The payload sizes of the framed messages in the unibyte string BYTES: a reply counts its result text only."
   (let ((pos 0) sizes)
