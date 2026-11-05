@@ -1105,6 +1105,9 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `tasks/write` | user | `{acceptance?: Text, add?: [string], body?: Text, cwd?: AbsPath, dst?: string, id?: string, kind?: string, labels?: [string], lease?: integer, mode?: "children" \| "replace", note?: Text, op: "create" \| "update" \| "claim" \| "heartbeat" \| "release" \| "handoff" \| "reassign" \| "split" \| "complete" \| "link" \| "unlink" \| "label" \| "tools", parent?: string, parts?: [Text], priority?: integer, project?: string, remove?: [string], src?: string, status?: Status, title?: Text, to?: string, tracker?: boolean, ver?: integer}` | `any` | yes |
 | `timeline/get` | user | `{before?: natnum, id: string, limit?: natnum, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
 | `work/conclusions` | user | `{session: string}` | `{conclusions?: [Conclusion]}` | no |
+| `work/map/close` | user | `{view: string}` | `boolean` | no |
+| `work/map/set` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
+| `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `MapFrame` | no |
 <!-- hub-methods:end -->
 
 ### Classes
@@ -1193,6 +1196,7 @@ result is (`event(NAME).check`):
 | `exec-done` | jobs (the front) | `{id, session?, status, exit?, summary: {exit?, failing, lines, log}}` |
 | `machines-changed` | machines (the front) | `{machines: [{machine, slots: [{id, holder?, kind}], local}]}`: the whole list, sent when a report, an expiry or the local slots changed it |
 | `agent-presence` | the presence model (to the connections that asked) | `{file, entries: [{session, file, mode, line?, source, step, at}]}`: who is in the file now, at most once per file per 100 ms ("The presence model") |
+| `work-map` | the Work map (to the view's connection only) | `{view, version, base, full?, changed: [Item], removed: [Id], entered: [Id], places?, edges?, layout?, needs_you?, chips?, stale?}`: what changed in one map view since version `base` ("The Work map") |
 | `supervisor` | the supervisor | `{rule, session?, exec?, task?, card?, text}` |
 | `view-written` | records | `{path, kind, hash}`: a view file written (never committed) |
 | `view-proposal` | records | `{id, path, by?}`: a hand edit to a view became a proposal |
@@ -1388,6 +1392,43 @@ and badges build on it). This is its contract.
 - **Durability:** none of its own. At start, before the recorded sessions resume, it is rebuilt from their steps'
   details (reads, searches, edits); a shell step's command is not stored, so its files come back with its next step.
 - New sources (Gleipnir's opens, part 3's own refinements) add a `source` value without changing this contract.
+
+### The Work map
+
+The Work space's map (`work::map`): the hub feeds the pure map core `vegvisir` from its sources and sends each map
+view only what changed, to the connection that shows it.
+
+- **Methods** (user connections). `work/map/subscribe {view, workspace: {id, roots}, width_units, density?, filters?,
+  collapsed?, selected?}` opens one view of the connection (again, if it is open) and answers its full frame `{version,
+  items, edges, layout, needs_you, chips}`. `view` is the editor's id for it: one editor can show two workspaces, or one
+  at two widths, so the hub keeps state per (connection, view). `work/map/set {view, filters? | collapsed? |
+  width_units? | density? | shown? | selected?}` answers `{version}`; an unknown view is `invalid-params`.
+  `work/map/close {view}` ends one; a connection's views end with it. A workspace no view shows is dropped.
+- **The event** `work-map` goes by `Front::send_to` to the view's connection only. `version` counts the view's events
+  from the frame's 1, and `base` names the version it applies to: an editor drops an older one and subscribes again on
+  a gap. A full frame (`full`) carries every item shown in `changed` and the new `layout`; a delta carries the items
+  new or changed (whole), `removed` ids, and `edges` (all, among the items shown) when the edge set changed.
+- **Coalescing** (design §11.3 step 5; `work::map::Coalescer`, pure, tested in every order). Field changes go out at
+  most once per 100 ms per view: the first change arms a flush 100 ms later on the hub's clock. A live arrival takes a
+  free place at the end of its layer's last row (or a row of its own at the bottom) and fades in (`entered`, with its
+  rectangle and form in `places`); a departure fades out and leaves its place empty; nothing else moves
+  (`vegvisir::layout::place_live`). What arrived and went reflows after a quiet second (no change and no
+  `work/map/set` with `selected` for 1 s) as one full frame, unless that would move an item of the selection's chain:
+  then it waits for the user. The user's own change (filters, collapsed layers, width, density, shown again)
+  relayouts at once. The clock's minute is one delta (time fields are minutes).
+- **Hidden:** `shown: false` gets no deltas: one `work-map` with `stale: true` at the next change, then nothing;
+  `shown: true` sends one full frame.
+- **Sources.** Each session's snapshot and subagents at its `agent` emit (state, spend, context; its branch and tree
+  read from its folder's `.git` at first sight: `branch:REPO/NAME`, REPO being the main tree's folder name, so a linked
+  worktree is a branch of its repository); each closed step (the card's activity); the presence model's changed files
+  (edits in flight and reads, keyed `file:REPO/PATH` through the session's tree or a workspace root); the machine
+  registry; and, re-read after each write while a map is open (task `map:run`), the store's asks, specs, plans,
+  tasks, `asked` and `derives` links, open cards and the worktree bases' "based on" pairs. A session belongs to a
+  workspace when its folder, its tree or its repository is under one of the roots. Overlaps are the core's: two live
+  agents on two branches changing one file, from their edits in flight until the edit history's changed sets reach
+  it.
+- **Restart:** nothing is kept. The editor's re-subscription after a restart gets a full frame from the new hub's
+  sessions and store.
 
 ### After a restart
 

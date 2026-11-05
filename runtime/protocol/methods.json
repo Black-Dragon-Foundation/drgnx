@@ -1796,6 +1796,96 @@
       },
       "doc": "the hub wrote a record view file (never committed)",
       "name": "view-written"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The data of `work-map`: what changed in one view since version `base`.",
+        "properties": {
+          "base": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "changed": {
+            "default": [],
+            "description": "Items new or changed, whole.",
+            "items": true,
+            "type": "array"
+          },
+          "chips": {
+            "items": true,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "edges": {
+            "description": "Every edge between the items shown, when the edge set changed.",
+            "items": true,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "entered": {
+            "default": [],
+            "description": "Ids that arrived live: they fade in at their place in `places`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "full": {
+            "description": "A full frame (a relayout): `changed` is every item shown, `layout` the new one.",
+            "type": "boolean"
+          },
+          "layout": true,
+          "needs_you": {
+            "items": true,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "places": {
+            "description": "The free places the arrivals took (id → rect), and their forms."
+          },
+          "removed": {
+            "default": [],
+            "description": "Ids no longer shown: they fade out and leave their place empty.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "stale": {
+            "description": "The view is hidden and its frame is out of date: shown again, it gets a full frame.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "version",
+          "base"
+        ],
+        "title": "WorkMap",
+        "type": "object"
+      },
+      "doc": "what changed in one Work map view since its version base, to that view's connection only (work/map/subscribe): at most one delta per 100 ms, a full frame on a relayout, a stale mark for a hidden view",
+      "name": "work-map"
     }
   ],
   "methods": [
@@ -16528,6 +16618,324 @@
           }
         },
         "title": "Conclusions",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "end one map view of this connection (a connection's views end with it)",
+      "name": "work/map/close",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/map/close`'s params.",
+        "properties": {
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "MapClose",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "change one map view (filters, collapsed layers, width, density, shown, the selection): a change the user made relayouts at once",
+      "name": "work/map/set",
+      "params": {
+        "$defs": {
+          "MapDensity": {
+            "description": "A map view's density (the look's).",
+            "enum": [
+              "compact",
+              "comfortable",
+              "roomy"
+            ],
+            "type": "string"
+          },
+          "MapFilters": {
+            "additionalProperties": false,
+            "description": "A map view's filters: `f` (only an item's chain), `o` (only overlaps and clashes), `.` (finished items too).",
+            "properties": {
+              "finished": {
+                "default": false,
+                "type": "boolean"
+              },
+              "focus": {
+                "description": "An item id: only its chain.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "overlaps": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/map/set`'s params: what changes in one view (each absent field stays).",
+        "properties": {
+          "collapsed": {
+            "items": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "density": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MapDensity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "filters": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MapFilters"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "selected": {
+            "description": "The selection moved (a map key).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "shown": {
+            "description": "False: hidden (no deltas, one stale mark); true again: a full frame.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "view": {
+            "type": "string"
+          },
+          "width_units": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "MapSet",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/map/set`'s answer: the view's version after it.",
+        "properties": {
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "MapVersion",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "open (or open again) one map view of this connection: the answer is its full frame, and work-map events follow, to this connection only",
+      "name": "work/map/subscribe",
+      "params": {
+        "$defs": {
+          "MapDensity": {
+            "description": "A map view's density (the look's).",
+            "enum": [
+              "compact",
+              "comfortable",
+              "roomy"
+            ],
+            "type": "string"
+          },
+          "MapFilters": {
+            "additionalProperties": false,
+            "description": "A map view's filters: `f` (only an item's chain), `o` (only overlaps and clashes), `.` (finished items too).",
+            "properties": {
+              "finished": {
+                "default": false,
+                "type": "boolean"
+              },
+              "focus": {
+                "description": "An item id: only its chain.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "overlaps": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "Workspace": {
+            "additionalProperties": false,
+            "description": "The workspace a Work view shows: one id, the roots (repositories or folders) it spans. The editor sends it with\nevery subscription; the hub never decides what a workspace is.",
+            "properties": {
+              "id": {
+                "description": "`workspace:` and 12 hex digits.",
+                "type": "string"
+              },
+              "roots": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/map/subscribe`'s params: one map view of this connection (VIEW is the editor's id for it), the workspace it\nshows, and how.",
+        "properties": {
+          "collapsed": {
+            "default": [],
+            "description": "Collapsed layers, 1 to 6.",
+            "items": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "density": {
+            "$ref": "#/$defs/MapDensity",
+            "default": "comfortable"
+          },
+          "filters": {
+            "$ref": "#/$defs/MapFilters",
+            "default": {
+              "finished": false,
+              "overlaps": false
+            }
+          },
+          "selected": {
+            "description": "The selected item: a quiet reflow that would move its chain waits for the user.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "view": {
+            "type": "string"
+          },
+          "width_units": {
+            "description": "The drawing width, in units of 4 px.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "workspace": {
+            "$ref": "#/$defs/Workspace"
+          }
+        },
+        "required": [
+          "view",
+          "workspace",
+          "width_units"
+        ],
+        "title": "MapSubscribe",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A map view's full frame: `work/map/subscribe`'s answer.",
+        "properties": {
+          "chips": {
+            "default": [],
+            "description": "The mission chips (the machines' load).",
+            "items": true,
+            "type": "array"
+          },
+          "edges": {
+            "default": [],
+            "description": "The edges between them.",
+            "items": true,
+            "type": "array"
+          },
+          "items": {
+            "default": [],
+            "description": "The items the view shows, each with its kind, label, flags and card fields.",
+            "items": true,
+            "type": "array"
+          },
+          "layout": {
+            "description": "Rows, positions and forms, lanes, ports and bands, in units of 4 px."
+          },
+          "needs_you": {
+            "default": [],
+            "description": "The needs-you strip.",
+            "items": true,
+            "type": "array"
+          },
+          "version": {
+            "description": "The frame's version; every `work-map` after it names the version it applies to (`base`).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "layout"
+        ],
+        "title": "MapFrame",
         "type": "object"
       },
       "writes": false

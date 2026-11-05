@@ -565,6 +565,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "urdr",
+ "vegvisir",
  "zeroize",
 ]
 

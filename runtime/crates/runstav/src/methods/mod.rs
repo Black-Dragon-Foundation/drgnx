@@ -224,6 +224,9 @@ params! {
     WorkConclusions(work::ConclusionsParams),
     AgentsPresenceSubscribe(work::PresenceSubscribe),
     AgentsPresenceGet(work::PresenceGet),
+    WorkMapSubscribe(work::MapSubscribe),
+    WorkMapSet(work::MapSet),
+    WorkMapClose(work::MapClose),
 }
 
 /// Every method, in no order.

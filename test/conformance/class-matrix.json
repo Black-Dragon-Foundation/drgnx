@@ -115,5 +115,8 @@
   "tasks/ready": ["user"],
   "tasks/write": ["user"],
   "timeline/get": ["user"],
-  "work/conclusions": ["user"]
+  "work/conclusions": ["user"],
+  "work/map/close": ["user"],
+  "work/map/set": ["user"],
+  "work/map/subscribe": ["user"]
 }

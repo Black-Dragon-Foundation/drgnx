@@ -24,6 +24,7 @@
 //! | `machines/{report,list}` | [`crate::work::machines`] | P2 5 |
 //! | `work/conclusions` | [`crate::work::conclusions`] | P2 14 |
 //! | `agents/presence/{subscribe,get}` | [`crate::work::presence`] | P2 15 |
+//! | `work/map/{subscribe,set,close}` | [`crate::work::map`] | P2 18 |
 
 use crate::dispatch::Caller;
 use crate::front::Front;
@@ -53,6 +54,8 @@ pub struct Core {
     pub stamps: std::sync::Arc<crate::work::conclusions::Stamps>,
     /// Who is in which file now ([`crate::work::presence`]).
     pub presence: std::sync::Arc<crate::work::presence::Live>,
+    /// The Work map's views and the model behind them ([`crate::work::map`]).
+    pub map: std::sync::Arc<crate::work::map::Map>,
 }
 
 fn answer<T: Serialize>(r: Result<T, Error>) -> Result<Value, Error> {
@@ -129,6 +132,9 @@ pub async fn serve(
         Params::WorkConclusions(p) => answer(work::conclusions::get(f, c, p).await),
         Params::AgentsPresenceSubscribe(p) => answer(work::presence::subscribe(f, c, p).await),
         Params::AgentsPresenceGet(p) => answer(work::presence::get(f, c, p).await),
+        Params::WorkMapSubscribe(p) => answer(work::map::subscribe(f, c, p).await),
+        Params::WorkMapSet(p) => answer(work::map::set(f, c, p)),
+        Params::WorkMapClose(p) => answer(work::map::close(f, c, p)),
         other => return Err(Box::new(other)),
     })
 }

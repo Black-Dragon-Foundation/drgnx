@@ -45,6 +45,8 @@ pub struct Signals {
     writes: AtomicU64,
     /// A write the record views may follow ([`crate::records::follow`]).
     pub records: Notify,
+    /// A write the Work map may follow: asks, specs, plans, tasks, worktree bases, cards ([`crate::work::map::run`]).
+    pub map: Notify,
     /// What the proposal tools ask of the records (set once the hub's front is built).
     pub records_tool: std::sync::OnceLock<RecordsTool>,
 }
@@ -62,6 +64,7 @@ impl Signals {
     pub fn wrote(&self) {
         self.writes.fetch_add(1, Ordering::Relaxed);
         self.records.notify_one();
+        self.map.notify_one();
         self.deliver.notify_one();
         self.events_soon();
     }
@@ -623,6 +626,7 @@ impl Hub for ToolHub {
     fn notify(&self) {
         // every tool write says so: the record views follow it too
         self.signals.records.notify_one();
+        self.signals.map.notify_one();
         self.signals.events_soon();
         self.signals.notify_soon();
     }

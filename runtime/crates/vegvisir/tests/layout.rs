@@ -723,3 +723,46 @@ fn fits_is_width_and_lanes_not_height() {
     );
     assert!(!layout(&model_of(fixture::thirty()), &view(119), None).fits);
 }
+
+/// [D] A live arrival takes a free place and a departure leaves its place empty: nothing else moves, the new cards
+/// overlap nothing, and a layer with no row yet gets one at the bottom.
+#[test]
+fn live_arrivals_and_departures_move_nothing() {
+    let m = model_of(fixture::thirty());
+    let v = view(226);
+    let prev = layout(&m, &v, None);
+    let gone = prev
+        .at
+        .keys()
+        .find(|id| id.kind() == Some(Kind::Agent))
+        .expect("an agent")
+        .clone();
+    let new: Vec<ItemId> = vec![
+        ItemId("agent:late-1".into()),
+        ItemId("agent:late-2".into()),
+        ItemId("branch:drgnx/late".into()),
+        ItemId("ask:late".into()),
+    ];
+    let l = vegvisir::layout::place_live(&v, &prev, &new, std::slice::from_ref(&gone));
+    assert!(!l.at.contains_key(&gone), "{gone} left its place");
+    for (id, r) in &prev.at {
+        if *id != gone {
+            assert_eq!(l.at.get(id), Some(r), "{id} moved");
+        }
+    }
+    for id in &new {
+        let r = l.at.get(id).unwrap_or_else(|| panic!("{id} got no place"));
+        assert!(r.x + r.w <= v.width_units, "{id} {r:?} is inside the width");
+        let layer = id.kind().expect("an item id").layer();
+        assert!(
+            l.rows.iter().any(|row| row.y == r.y && row.layer == layer),
+            "{id} sits in a row of its layer"
+        );
+    }
+    check_overlap(&l).unwrap();
+    assert_eq!(
+        l.rows[..prev.rows.len()],
+        prev.rows[..],
+        "the rows above stay"
+    );
+}

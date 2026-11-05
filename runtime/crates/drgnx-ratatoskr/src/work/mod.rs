@@ -6,6 +6,7 @@
 //! - [`bases`]: where each worktree branched from (the interim diff base), and which branch is based on which.
 //! - [`detail`]: a step's detail by tool name.
 //! - [`machines`]: the machines the hub lists (`local`, and those jobq reports with `machines/report`).
+//! - [`map`]: the Work map: `vegvisir` fed from the sources above, and each map view's deltas, coalesced.
 //! - [`presence`]: who is in which file, at which line, now (the presence model part 3 builds on).
 //! - [`shell_read`]: the files a shell command names, parsed from its text and kept inside the workspace (layer 1 of
 //!   "reads through shell commands").
@@ -17,6 +18,7 @@ pub mod bases;
 pub mod conclusions;
 pub mod detail;
 pub mod machines;
+pub mod map;
 pub mod presence;
 pub mod shell_read;
 pub mod specs;

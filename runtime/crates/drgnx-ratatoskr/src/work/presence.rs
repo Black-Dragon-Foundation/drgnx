@@ -308,13 +308,38 @@ fn wire(e: &Entry) -> PresenceEntry {
 }
 
 impl Live {
-    /// EV into the model; the files it changed go out within [`COALESCE`], once each.
-    pub fn apply(self: &Arc<Self>, ev: PresenceEv) {
-        let outs = lock(&self.model).apply(ev);
-        if outs.is_empty() || lock(&self.subs).is_empty() {
-            return;
+    /// EV into the model; the files it changed go out within [`COALESCE`], once each. The answer is those files (the
+    /// Work map reads them at once).
+    pub fn apply(self: &Arc<Self>, ev: PresenceEv) -> Vec<RepoPath> {
+        let files: Vec<RepoPath> = lock(&self.model)
+            .apply(ev)
+            .into_iter()
+            .map(|PresenceOut::Changed { file }| file)
+            .collect();
+        if !files.is_empty() && !lock(&self.subs).is_empty() {
+            self.pending_flush(&files);
         }
-        lock(&self.pending).extend(outs.into_iter().map(|PresenceOut::Changed { file }| file));
+        files
+    }
+
+    /// Who is in each of FILES now (at the hub's time), file by file.
+    pub fn now_in(&self, files: &[RepoPath]) -> Vec<(RepoPath, Vec<Entry>)> {
+        let at = crate::clock::wall_secs();
+        let model = lock(&self.model);
+        files
+            .iter()
+            .map(|f| (f.clone(), model.now(f, at).into_iter().cloned().collect()))
+            .collect()
+    }
+
+    /// Every file someone is in now, with its entries.
+    pub fn all_now(&self) -> Vec<(RepoPath, Vec<Entry>)> {
+        let files = lock(&self.model).files_under("/", crate::clock::wall_secs());
+        self.now_in(&files)
+    }
+
+    fn pending_flush(self: &Arc<Self>, files: &[RepoPath]) {
+        lock(&self.pending).extend(files.iter().cloned());
         if !self.armed.swap(true, Ordering::SeqCst) {
             let me = self.clone();
             crate::clock::spawn("presence:flush", async move {

@@ -7,6 +7,9 @@
 //!
 //! The presence model: `agents/presence/subscribe`, `agents/presence/get` and the event `agent-presence` (who is in
 //! which file, at which line, now). The `agents/` names keep clear of `presence/set`, the user's own away state.
+//!
+//! The Work map: `work/map/subscribe`, `work/map/set`, `work/map/close` and the event `work-map`, per (connection,
+//! view), sent to that connection only.
 
 use super::{Empty, invalid, method};
 use crate::registry::Method;
@@ -217,6 +220,187 @@ pub struct PresenceFiles {
     pub files: Vec<FilePresence>,
 }
 
+/// A map view's density (the look's).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MapDensity {
+    Compact,
+    #[default]
+    Comfortable,
+    Roomy,
+}
+
+/// A map view's filters: `f` (only an item's chain), `o` (only overlaps and clashes), `.` (finished items too).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MapFilters {
+    /// An item id: only its chain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus: Option<String>,
+    #[serde(default)]
+    pub overlaps: bool,
+    #[serde(default)]
+    pub finished: bool,
+}
+
+/// `work/map/subscribe`'s params: one map view of this connection (VIEW is the editor's id for it), the workspace it
+/// shows, and how.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MapSubscribe {
+    pub view: String,
+    pub workspace: Workspace,
+    /// The drawing width, in units of 4 px.
+    pub width_units: u32,
+    #[serde(default)]
+    pub density: MapDensity,
+    #[serde(default)]
+    pub filters: MapFilters,
+    /// Collapsed layers, 1 to 6.
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub collapsed: Vec<u8>,
+    /// The selected item: a quiet reflow that would move its chain waits for the user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected: Option<String>,
+}
+
+/// A map view's full frame: `work/map/subscribe`'s answer.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MapFrame {
+    /// The frame's version; every `work-map` after it names the version it applies to (`base`).
+    pub version: u64,
+    /// The items the view shows, each with its kind, label, flags and card fields.
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub items: Vec<serde_json::Value>,
+    /// The edges between them.
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub edges: Vec<serde_json::Value>,
+    /// Rows, positions and forms, lanes, ports and bands, in units of 4 px.
+    pub layout: serde_json::Value,
+    /// The needs-you strip.
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub needs_you: Vec<serde_json::Value>,
+    /// The mission chips (the machines' load).
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub chips: Vec<serde_json::Value>,
+}
+
+/// `work/map/set`'s params: what changes in one view (each absent field stays).
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MapSet {
+    pub view: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filters: Option<MapFilters>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collapsed: Option<Vec<u8>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width_units: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub density: Option<MapDensity>,
+    /// False: hidden (no deltas, one stale mark); true again: a full frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shown: Option<bool>,
+    /// The selection moved (a map key).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected: Option<String>,
+}
+
+/// `work/map/set`'s answer: the view's version after it.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MapVersion {
+    pub version: u64,
+}
+
+/// `work/map/close`'s params.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MapClose {
+    pub view: String,
+}
+
+/// The data of `work-map`: what changed in one view since version `base`.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkMap {
+    pub view: String,
+    pub version: u64,
+    pub base: u64,
+    /// A full frame (a relayout): `changed` is every item shown, `layout` the new one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub full: bool,
+    /// Items new or changed, whole.
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub changed: Vec<serde_json::Value>,
+    /// Ids no longer shown: they fade out and leave their place empty.
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub removed: Vec<String>,
+    /// Ids that arrived live: they fade in at their place in `places`.
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub entered: Vec<String>,
+    /// The free places the arrivals took (id → rect), and their forms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub places: Option<serde_json::Value>,
+    /// Every edge between the items shown, when the edge set changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edges: Option<Vec<serde_json::Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub needs_you: Option<Vec<serde_json::Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chips: Option<Vec<serde_json::Value>>,
+    /// The view is hidden and its frame is out of date: shown again, it gets a full frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale: Option<bool>,
+}
+
+/// The longest view id, in bytes.
+pub const VIEW_MAX: usize = 64;
+/// The widest map, in units.
+pub const WIDTH_MAX: u32 = 10_000;
+
+fn check_view(view: &str) -> Result<(), Error> {
+    if view.is_empty() || view.len() > VIEW_MAX {
+        return Err(invalid("view", "a view id of 1 to 64 bytes"));
+    }
+    Ok(())
+}
+
+fn check_layers(collapsed: &[u8]) -> Result<(), Error> {
+    if collapsed.iter().any(|l| !(1..=6).contains(l)) {
+        return Err(invalid("collapsed", "layers 1 to 6"));
+    }
+    Ok(())
+}
+
+fn check_width(w: u32) -> Result<(), Error> {
+    if w > WIDTH_MAX {
+        return Err(invalid("width_units", "at most 10000 units"));
+    }
+    Ok(())
+}
+
+fn check_map_subscribe(p: &MapSubscribe) -> Result<(), Error> {
+    check_view(&p.view)?;
+    check_width(p.width_units)?;
+    check_layers(&p.collapsed)
+}
+
+fn check_map_set(p: &MapSet) -> Result<(), Error> {
+    check_view(&p.view)?;
+    if let Some(w) = p.width_units {
+        check_width(w)?;
+    }
+    check_layers(p.collapsed.as_deref().unwrap_or_default())
+}
+
+fn check_map_close(p: &MapClose) -> Result<(), Error> {
+    check_view(&p.view)
+}
+
 fn check_presence_subscribe(p: &PresenceSubscribe) -> Result<(), Error> {
     match (&p.workspace, &p.file) {
         (Some(_), None) => Ok(()),
@@ -307,6 +491,24 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "a session's decisions and findings, numbered, each with the step the hub stamped and the steps it rests on",
             check: check_conclusions,
+        ),
+        method!(
+            "work/map/subscribe", WorkMapSubscribe(MapSubscribe) -> MapFrame,
+            classes: [User], writes: false,
+            doc: "open (or open again) one map view of this connection: the answer is its full frame, and work-map events follow, to this connection only",
+            check: check_map_subscribe,
+        ),
+        method!(
+            "work/map/set", WorkMapSet(MapSet) -> MapVersion,
+            classes: [User], writes: false,
+            doc: "change one map view (filters, collapsed layers, width, density, shown, the selection): a change the user made relayouts at once",
+            check: check_map_set,
+        ),
+        method!(
+            "work/map/close", WorkMapClose(MapClose) -> bool,
+            classes: [User], writes: false,
+            doc: "end one map view of this connection (a connection's views end with it)",
+            check: check_map_close,
         ),
     ]
 }

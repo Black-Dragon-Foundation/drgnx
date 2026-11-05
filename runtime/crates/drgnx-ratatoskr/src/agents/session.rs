@@ -715,6 +715,8 @@ pub struct Session {
     conn: Conn,
     acp: SessionId,
     editors: Arc<crate::settings::agents::Editors>,
+    /// The Work map: each snapshot reaches it too ([`crate::work::map`]).
+    map: Arc<crate::work::map::Map>,
     /// What the matrix decides at the permission seam: the gate, the settings it reads, the store its cards go to.
     gate: MatrixGate,
     settings: Arc<crate::settings::Settings>,
@@ -769,6 +771,8 @@ pub(crate) struct StepSink {
     pub stamps: Option<Arc<crate::work::conclusions::Stamps>>,
     /// The presence model: the files each step was in (none: a test).
     pub presence: Option<Arc<crate::work::presence::Live>>,
+    /// The Work map: each closed step, and the presence it changed (none: a test).
+    pub map: Option<Arc<crate::work::map::Map>>,
 }
 
 /// What `open` and `resume` know of a session before its agent is running.
@@ -1567,6 +1571,7 @@ fn assemble(
             asks: Some(front.core.asks.handle()),
             stamps: Some(front.core.stamps.clone()),
             presence: Some(front.core.presence.clone()),
+            map: Some(front.core.map.clone()),
         },
         ctx,
     ));
@@ -1613,6 +1618,7 @@ fn assemble(
         conn: l.conn,
         acp: l.acp,
         editors: front.editors.clone(),
+        map: front.core.map.clone(),
         gate: front.core.matrix.clone(),
         settings: front.settings.clone(),
         writer: front.writer.clone(),
@@ -2110,13 +2116,22 @@ async fn write_steps(
             .await
             .unwrap_or_default();
             if !files.is_empty() {
-                live.apply(crate::work::presence::PresenceEv::Step {
+                let changed = live.apply(crate::work::presence::PresenceEv::Step {
                     session: ctx.session.clone(),
                     step: id,
                     at: step.start,
                     files,
                 });
+                if let Some(map) = &sink.map {
+                    map.presence(&live.now_in(&changed));
+                }
             }
+        }
+        // the step's class is the agent card's activity
+        if let Some(map) = &sink.map
+            && id != 0
+        {
+            map.step(&ctx.session, id, &step.class, step.start);
         }
         // a conclusion's tool step is written, or the turn ended: the stamps that are due
         if let Some(stamps) = &sink.stamps {
@@ -2474,9 +2489,13 @@ impl Session {
                 .collect();
             (st.seq, entries)
         };
+        let snapshot = self.snapshot();
+        if self.map.open() {
+            self.map.session(&snapshot, &self.subagents());
+        }
         self.editors.broadcast_agent(
             &self.id,
-            json!({"id": self.id, "seq": seq, "session": self.snapshot()}),
+            json!({"id": self.id, "seq": seq, "session": snapshot}),
         );
         if entries.is_empty() {
             return;
@@ -3701,11 +3720,13 @@ fn asks_gone(f: &Front, sid: &str) {
         .send(crate::work::asks::AskEv::SessionGone {
             session: sid.to_string(),
         });
-    f.core
+    let changed = f
+        .core
         .presence
         .apply(crate::work::presence::PresenceEv::SessionEnd {
             session: sid.to_string(),
         });
+    f.core.map.presence(&f.core.presence.now_in(&changed));
 }
 
 /// The sessions the hub recorded, with their folders (the presence model's rebuild at start).
@@ -4080,6 +4101,7 @@ mod tests {
             asks: None,
             stamps: None,
             presence: None,
+            map: None,
         };
         tokio::spawn(write_steps(rx, sink, ctx));
         let open = |class, tool: Option<&str>| OpenStep {
@@ -4170,6 +4192,7 @@ mod tests {
             asks: None,
             stamps: None,
             presence: None,
+            map: None,
         };
         let ctx = StepCtx {
             session: "a1".into(),

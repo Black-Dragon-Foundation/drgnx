@@ -217,6 +217,73 @@ struct Block {
     width: u32,
 }
 
+/// A live arrival or departure without a relayout (design §11.3 step 5): `prev` with each of `gone` taken out (its
+/// place stays empty) and each of `new` at a free place at the end of the last row of its layer, an agent compact, any
+/// other item as its chip. When that row has no room inside the width, or the layer has no row, the item gets a row of
+/// its own at the bottom. Nothing else moves; the next layout puts the arrivals where they belong. Items of a
+/// collapsed layer, and items `prev` already places, are left as they are.
+pub fn place_live(v: &ViewState, prev: &Layout, new: &[ItemId], gone: &[ItemId]) -> Layout {
+    let mx = Metrics::of(v.density);
+    let mut out = prev.clone();
+    for id in gone {
+        out.at.remove(id);
+        out.form.remove(id);
+        out.want.remove(id);
+    }
+    for id in new {
+        let Some(kind) = id.kind() else { continue };
+        let layer = kind.layer();
+        if out.at.contains_key(id) || v.collapsed.contains(&layer) {
+            continue;
+        }
+        let agent = matches!(kind, Kind::Agent | Kind::Subagent);
+        let (w, h) = if agent {
+            mx.compact
+        } else {
+            (mx.chip_w(kind), mx.chip_h)
+        };
+        let last = out
+            .rows
+            .iter()
+            .filter(|r| r.layer == layer && !r.collapsed)
+            .max_by_key(|r| r.y)
+            .map(|r| (r.y, r.height_units));
+        let end = |y: u32| {
+            out.at
+                .values()
+                .filter(|r| r.y == y)
+                .map(|r| r.x + r.w + mx.gap)
+                .max()
+                .unwrap_or(0)
+        };
+        let room = last.and_then(|(y, rh)| {
+            let x = end(y);
+            (x + w <= v.width_units && h <= rh).then_some((y, x))
+        });
+        let (x, y) = match room {
+            Some((y, x)) => (x, y),
+            None => {
+                let y = out.height_units + mx.band;
+                out.rows.push(Row {
+                    layer,
+                    block_line: 0,
+                    sub: 0,
+                    y,
+                    height_units: h,
+                    collapsed: false,
+                });
+                out.height_units = y + h;
+                (0, y)
+            }
+        };
+        out.at.insert(id.clone(), Rect { x, y, w, h });
+        if agent {
+            out.form.insert(id.clone(), Form::Compact);
+        }
+    }
+    out
+}
+
 /// Lays a view out. `prev` (the view's previous layout) seeds the order inside blocks and the targets.
 pub fn layout(m: &Model, v: &ViewState, prev: Option<&Layout>) -> Layout {
     let mx = Metrics::of(v.density);

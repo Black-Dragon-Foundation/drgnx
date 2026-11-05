@@ -282,6 +282,7 @@ impl Front {
         lock_conns(&self.conns).remove(&conn);
         self.editors.gone(conn);
         self.core.presence.gone(conn);
+        self.core.map.gone(conn);
     }
 
     /// EVENT with DATA to every subscribed connection: queued for each before any is written (a queue never waits),
@@ -645,7 +646,10 @@ impl Front {
             | Params::MachinesList(_)
             | Params::WorkConclusions(_)
             | Params::AgentsPresenceSubscribe(_)
-            | Params::AgentsPresenceGet(_)) => crate::agent_core::serve(self, &caller, p)
+            | Params::AgentsPresenceGet(_)
+            | Params::WorkMapSubscribe(_)
+            | Params::WorkMapSet(_)
+            | Params::WorkMapClose(_)) => crate::agent_core::serve(self, &caller, p)
                 .await
                 .unwrap_or_else(|_| unserved(method)),
             // the graph store's (`graph/*`, `tasks/*`); a settled card too (an access card becomes a grant)

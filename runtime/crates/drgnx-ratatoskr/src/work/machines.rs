@@ -122,6 +122,7 @@ fn refresh(f: &Front) -> Vec<Machine> {
         (after, changed)
     };
     if changed {
+        f.core.map.machines(&list);
         f.broadcast(
             "machines-changed",
             json!(MachinesList {
@@ -130,6 +131,11 @@ fn refresh(f: &Front) -> Vec<Machine> {
         );
     }
     list
+}
+
+/// The machines now (the registry brought up to date first): the Work map's seed.
+pub(crate) fn list_now(f: &Front) -> Vec<Machine> {
+    refresh(f)
 }
 
 /// `machines/report`. The caller is a user connection (the registry's class table).
@@ -145,6 +151,7 @@ pub async fn report(f: &Front, _: &Caller, p: MachineReport) -> Result<Machine, 
         (after, changed)
     };
     if changed {
+        f.core.map.machines(&list);
         f.broadcast(
             "machines-changed",
             json!(MachinesList {
