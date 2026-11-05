@@ -7,6 +7,7 @@
 (require 'drgnx-modules-fingerprint)
 (require 'drgnx-signal)
 (load (expand-file-name "test/fixtures/view-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/measure-fixture" drgnx-dir) nil t)
 
 ;;;; Helpers
 
@@ -273,6 +274,91 @@ tail, and the next draw finishes both."
     (should (equal (append (number-sequence 51 100) '(200 201)) (drgnx-view-test--keys v)))
     (should (= 50 (drgnx-view-test--stat v :removed)))
     (drgnx-view-test--ok v)))
+
+(defmacro drgnx-view-test--late (&rest body)
+  "BODY with every clock check of a slice late: a sliced draw does its first 8 rows and stops.  The pass's key
+`drgnx-view-pass', which a spent slice starts, is cancelled after."
+  (declare (indent 0))
+  `(let ((now 0.0) (drgnx-view--deadline nil))
+     (unwind-protect
+         (cl-letf (((symbol-function 'drgnx-timer-now) (lambda () (setq now (+ now 1.0))))) ,@body)
+       (drgnx-timer-cancel 'drgnx-view-pass))))
+
+(ert-deftest drgnx-view/sliced-draws-keep-the-starts-after-every-slice ()
+  "Pattern D (pure, seeded).  300 random marks, each batch drawn by slices that stop after 8 rows, with a window on the
+view: after every slice the starts are the rows (`drgnx-view--check'); at the end the text is a fresh render in the
+order a plain list gets from the same marks."
+  (drgnx-view-test--with (v :render #'drgnx-view-test--render-body :grow #'drgnx-view-test--grow :key-test 'eq
+                            :slice 0.004)
+    (let ((seed 20261105) (ref nil) (marks 0) (visible 0) (shifted 0))
+      (cl-labels ((rand (n) (setq seed (mod (+ (* seed 1103515245) 12345) 2147483648)) (mod (/ seed 65536) n))
+                  (some-keys () (let (l) (dotimes (_ (1+ (rand 6))) (push (rand 90) l)) l))
+                  (fresh (ks) (let (out) (dolist (k ks) (unless (or (memql k ref) (memql k out)) (push k out)))
+                                   (nreverse out))))
+        (drgnx-view-append v (number-sequence 0 59))
+        (setq ref (number-sequence 0 59))
+        (drgnx-view-draw-now v)
+        (save-window-excursion
+          (switch-to-buffer (current-buffer))         ; a window on the view: its rows are drawn first
+          (drgnx-view-test--late
+            (while (< marks 300)
+              (dotimes (_ (1+ (rand 4)))
+                (let ((ks (some-keys)))
+                  (pcase (rand 10)
+                    ((or 0 1) (setq ref (append ref (fresh ks))) (drgnx-view-append v ks))
+                    (2 (let* ((after (and (> (rand 4) 0) (rand 90))) (tail (and after (memql after ref))) (new (fresh ks)))
+                         (cond ((null after) (setq ref (append new ref)))
+                               (tail (setcdr tail (append new (cdr tail))))
+                               (t (setq ref (append ref new))))
+                         (drgnx-view-insert v ks :after after)))
+                    (3 (setq ref (cl-remove-if (lambda (k) (memql k ks)) ref)) (drgnx-view-remove v ks))
+                    ((or 4 5) (dolist (k ks) (puthash k (make-string (rand 9) ?x) drgnx-view-test--model))
+                     (drgnx-view-dirty v ks))
+                    (6 (dotimes (k 90) (puthash k (make-string (rand 9) ?y) drgnx-view-test--model))
+                       (drgnx-view-dirty v t))
+                    ((or 7 8) (let ((k (car ks)))
+                                (when (memql k ref)
+                                  (puthash k (concat (gethash k drgnx-view-test--model "") "+") drgnx-view-test--model)
+                                  (drgnx-view-grow v k))))
+                    (_ (set-window-start (selected-window) (min (point-max) (+ (point-min) (* 5 (rand 60)))))))) ; it moves
+                (setq marks (1+ marks)))
+              (dotimes (_ (1+ (rand 3)))
+                (when (drgnx-view--visible-ranges v) (setq visible (1+ visible)))
+                (drgnx-view--draw v 0.004)
+                (when (drgnx-view--shift-at v) (setq shifted (1+ shifted)))
+                (drgnx-view--pass-end)
+                (should-not (drgnx-view--check v))))))
+        (drgnx-view-draw-now v)
+        (should-not (drgnx-view--check v))
+        (should (equal ref (drgnx-view-test--keys v)))
+        (should (equal (drgnx-view-test--expected v) (drgnx-view-test--text v)))
+        (should (> visible 0))                         ; the window's rows were drawn first
+        (should (> shifted 0))))))                     ; and slices left starts to the next one
+
+(defun drgnx-view-test--slice-ms (rows how)
+  "The median CPU ms of 10 slices of 8 rows each on a view of ROWS drawn rows.  HOW: `retype' (every row dirty, each
+patched longer) or `stream' (2,000 rows appended after them, drawn at the end)."
+  (drgnx-view-test--with (v :render #'drgnx-view-test--render :slice 0.004 :key-test 'eq)
+    (drgnx-view-test--compile-library)
+    (drgnx-view-append v (number-sequence 1 rows))
+    (drgnx-view-draw-now v)
+    (if (eq how 'retype)
+        (progn (dotimes (k rows) (puthash (1+ k) "a longer row" drgnx-view-test--model))
+               (drgnx-view-dirty v t))
+      (drgnx-view-append v (number-sequence (1+ rows) (+ rows 2000))))
+    (drgnx-view-test--late
+      (drgnx-view--draw v 0.004)                          ; the first slice takes the marks
+      (prog1 (drgnx-test-cpu-ms (:n 15) (dotimes (_ 10) (drgnx-view--pass-end) (drgnx-view--draw v 0.004)))
+        (should (drgnx-view--cut v))
+        (should-not (drgnx-view--check v))))))
+
+(ert-deftest drgnx-view/a-slice-costs-its-rows-not-the-rows-before-or-after ()
+  "Pattern D (CPU, 3x headroom).  A slice that patches or appends 8 rows costs the same on 64,000 rows as on 2,000: it
+resumes where the last one stopped (no walk over the rows before it) and leaves the starts after it to the next
+one (no shift of every row after a changed one)."
+  (dolist (how '(retype stream))
+    (let ((small (drgnx-view-test--slice-ms 2000 how)) (big (drgnx-view-test--slice-ms 64000 how)))
+      (should (< big (+ (* 3 small) 1.0))))))
 
 (defvar drgnx-view-test--clock 0.0
   "The clock `drgnx-timer-now' reads in the pass tests: each rendered row costs 2^-14 s (exact: sums never round).")

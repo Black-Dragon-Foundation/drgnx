@@ -1627,6 +1627,14 @@ A draw (`drgnx-view--draw`) runs SYNC when touched, the self-check, then two ste
    `new` rendered and inserted, a dirty row deleted and inserted again at its integer start, a growing row gets an
    `insert` before SUFFIX. Dirty marks are moved onto the entries first (`patch` wins over `grow`). When every entry
    is done, the empty entries are dropped and the index follows the rows that moved.
+   A slice costs the rows it passes, not the view's length. The sweep over every entry starts at `lo`, the first entry
+   that may have work (a mark lowers it, the sweep moves it to where it stopped), so the rows done by earlier slices
+   are not walked again. A slice that stops after a changed row does not rewrite every start after it: it leaves that
+   shift to the next one (`shift-at`, `shift`; `drgnx-view--at` adds it to a start), which takes it on as it goes.
+   When a sweep would leave two shifts (the window's rows above or below the one left), the shorter run of starts is
+   written. Code that rewrites the vectors (the fold, the compaction) applies the shift first. Before this, a slice
+   of 8 rows on 64,000 rows cost 3.9 ms of CPU against 0.13 ms on 2,000, and drawing a large Search view was
+   quadratic in its rows (`drgnx-view/a-slice-costs-its-rows-not-the-rows-before-or-after`).
 
 It returns the number of rows drawn, grown or removed, clears the modified flag and calls PATCHED. It binds
 `inhibit-read-only` and `inhibit-interaction`. A RENDER or GROW that signals draws the row `⚠ KEY: MESSAGE` in the
