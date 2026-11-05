@@ -83,6 +83,10 @@ struct Shell {
     /// The prompts that reached the agent, and those sent to a process the hub's end was ending.
     reached: Vec<String>,
     lost: Vec<String>,
+    /// The event pair's timer runs (the shell's `schedule` started it), and the pairs sent: the status the snapshot
+    /// had when it was sent, and whether the hub was ending then.
+    emit_timer: bool,
+    pairs: Vec<(SessionStatus, bool)>,
     /// The first broken invariant.
     broken: Option<String>,
 }
@@ -119,6 +123,8 @@ impl Shell {
             unsent: None,
             reached: Vec::new(),
             lost: Vec::new(),
+            emit_timer: false,
+            pairs: Vec::new(),
             broken: None,
         }
     }
@@ -234,6 +240,7 @@ impl Shell {
                     }
                     self.withdrawn.push(*card);
                 }
+                TurnEffect::Announce => self.changed(),
                 _ => {}
             }
         }
@@ -426,6 +433,34 @@ impl Shell {
         self.doomed = true;
         self.dying = false;
         self.feed(TurnEvent::Exited);
+        // the reader's exit schedules an event pair (`Session::schedule`)
+        self.changed();
+    }
+
+    /// The shell's `changed` / `schedule`: the event pair's timer starts when the core says so.
+    fn changed(&mut self) {
+        if self
+            .core
+            .step(TurnEvent::Changed)
+            .contains(&TurnEffect::ArmEmit)
+        {
+            self.emit_timer = true;
+        }
+    }
+
+    /// The event pair's timer fires, if it runs: the pair goes out when the core says so, with the snapshot as it is
+    /// at the send (`Session::emit` reads it then).
+    fn tick(&mut self) {
+        if !std::mem::take(&mut self.emit_timer) {
+            return;
+        }
+        if self
+            .core
+            .step(TurnEvent::EmitTick)
+            .contains(&TurnEffect::Emit)
+        {
+            self.pairs.push((self.core.status(), self.core.ending()));
+        }
     }
 
     /// The I-th stop's deadline fires, if that many were armed.
@@ -780,6 +815,81 @@ fn every_order_a_send_after_the_users_kill_is_refused() {
 #[test]
 fn every_order_a_send_while_the_hub_ends_is_kept() {
     kill_orders(KillWhy::HubEnding);
+}
+
+// ---- no event pair goes out while the hub ends ----
+
+/// The user sends; the agent answers; the event pair's timer fires twice; the hub ends (its process group goes), then
+/// the process exits.  The shell reads the snapshot when it sends a pair, so a pair sent during the hub's end can show
+/// the session's own exit, and an editor that reads it before the hub's end of file keeps that reason instead of the
+/// hub's.
+#[derive(Clone, Debug)]
+enum PairEv {
+    Send(&'static str),
+    Done,
+    Tick,
+    HubEnds,
+    Exit,
+}
+skuld::events!(PairEv {
+    Send,
+    Done,
+    Tick,
+    HubEnds,
+    Exit
+});
+
+struct PairShell(Shell);
+
+impl Core for PairShell {
+    type Event = PairEv;
+
+    fn step(&mut self, ev: PairEv) -> Vec<PairEv> {
+        let s = &mut self.0;
+        match ev {
+            PairEv::Send(t) => s.send(t),
+            PairEv::Done => s.done(),
+            PairEv::Tick => s.tick(),
+            PairEv::HubEnds => {
+                s.kill(KillWhy::HubEnding);
+            }
+            PairEv::Exit => {
+                s.close();
+                s.exit();
+            }
+        }
+        Vec::new()
+    }
+}
+
+fn check_pairs(e: &PairShell, _: &[PairEv]) -> Result<(), String> {
+    let s = &e.0;
+    s.settled()?;
+    if let Some((status, _)) = s.pairs.iter().find(|(_, ending)| *ending) {
+        return Err(format!(
+            "an event pair (status {status:?}) went out while the hub ends: {:?}",
+            s.pairs
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn every_order_no_event_pair_goes_out_while_the_hub_ends() {
+    let mut p = Partial::new();
+    let user = p.source("user", vec![PairEv::Send("u1")]);
+    let agent = p.source("agent", vec![PairEv::Done]);
+    p.source("timer", vec![PairEv::Tick, PairEv::Tick]);
+    p.source("hub", vec![PairEv::HubEnds, PairEv::Exit]);
+    p.before((user, 0), (agent, 0));
+    let r = every_order(
+        &p,
+        Bound::default(),
+        || PairShell(Shell::new()),
+        check_pairs,
+    );
+    assert_eq!(r.mode, Mode::Exhaustive);
+    assert_eq!(r.orders, 90);
 }
 
 // ---- the hub's end keeps a prompt that has not reached the agent ----

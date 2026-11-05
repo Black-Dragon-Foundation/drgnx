@@ -1337,7 +1337,9 @@ What the core keeps:
   cancelled at once: the agent no longer waits on it. A matrix card that no request waits on any more after such a
   cancel is withdrawn (`Withdraw`: `norn::write::cards::card_withdraw`, state `withdrawn` with a `card` event), so it
   leaves the open cards and the needs-you lists; a card the user settled first stays settled.
-- One event pair is armed at a time; the timer's tick sends it.
+- One event pair is armed at a time; the timer's tick sends it. While the hub ends none is armed or sent: the shell
+  reads the snapshot when it sends a pair, so one sent then could show the session's own exit, and an editor that read
+  it before its connection's end of file would keep that reason instead of the hub's.
 
 The shell acts on a turn's end as the step decided it: whether the hub is ending is read under the step's lock, never
 again after it.
@@ -1349,6 +1351,7 @@ again after it.
 - four senders, an editor that removes and delivers, an agent, and a pause after the tool call;
 - two senders, the hub's delivery (`sending`, then the prompt), an editor that delivers, an agent, and the user's kill
   or the hub's end, then the exit;
+- a sender, an agent, the event pair's timer, and the hub's end, then the exit (no pair goes out while the hub ends);
 - a user who answers and stops, an agent that asks twice, completes a tool call and answers, a pause after the tool
   call, and the cockpit settling a card;
 - two senders, an agent that asks in each turn, the matrix deciding late, and the user's kill, the hub's end or a
