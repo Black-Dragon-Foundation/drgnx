@@ -136,6 +136,9 @@ struct State {
     entries: Vec<Entry>,
     /// Tool call id → index in `entries`.
     tools: HashMap<String, usize>,
+    /// Tool call id → the provider's tool name and its parent tool call (`_meta.claudeCode`), kept beside the
+    /// entries, whose wire shape stays as it was.
+    tool_meta: HashMap<String, ToolMeta>,
     /// The entry the next text chunk of that kind extends.
     open: Option<(EntryType, usize)>,
     /// Entries changed since the last event.
@@ -200,6 +203,15 @@ struct ClosedStep {
     cache_read: i64,
     cache_write: i64,
     cost: Option<f64>,
+    /// What a tool step read, searched or fetched, taken as the step closed (its `rawInput` is final then).
+    detail: Option<norn::write::work::StepDetail>,
+}
+
+/// What a provider says of a tool call beyond ACP's fields: Claude's `_meta.claudeCode`.
+#[derive(Clone, Debug, Default)]
+struct ToolMeta {
+    name: Option<String>,
+    parent: Option<String>,
 }
 
 /// What a turn used (the last step carries it).
@@ -231,6 +243,7 @@ impl State {
             seq: 0,
             entries: Vec::new(),
             tools: HashMap::new(),
+            tool_meta: HashMap::new(),
             open: None,
             dirty: BTreeSet::new(),
             permissions: Vec::new(),
@@ -245,7 +258,9 @@ impl State {
     fn step_close(&mut self, end: f64, turn_use: Option<TurnUse>) {
         if let Some(open) = self.cur.take() {
             let u = turn_use.unwrap_or_default();
+            let detail = open.tool_id.as_deref().and_then(|id| self.tool_detail(id));
             self.closed.push(ClosedStep {
+                detail,
                 open,
                 end,
                 turn_id: u.turn_id,
@@ -256,6 +271,23 @@ impl State {
                 cost: u.cost,
             });
         }
+    }
+
+    /// The detail of tool call ID from what the entry holds now.
+    fn tool_detail(&self, id: &str) -> Option<norn::write::work::StepDetail> {
+        let rest = &self.entries.get(*self.tools.get(id)?)?.rest;
+        let s = |k: &str| rest.get(k).and_then(Value::as_str);
+        let locations = rest
+            .get("locations")
+            .and_then(Value::as_array)
+            .map_or(&[][..], Vec::as_slice);
+        crate::work::detail::of(
+            self.tool_meta.get(id).and_then(|m| m.name.as_deref()),
+            s("kind"),
+            s("title"),
+            locations,
+            rest.get("rawInput"),
+        )
     }
 
     /// The running step ends and a step of CLASS begins.
@@ -478,6 +510,20 @@ impl State {
                         i
                     }
                 };
+                if let Some(cc) = u.pointer("/_meta/claudeCode") {
+                    let m = self
+                        .tool_meta
+                        .entry(
+                            u.get("toolCallId")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string(),
+                        )
+                        .or_default();
+                    let s = |k: &str| cc.get(k).and_then(Value::as_str).map(str::to_string);
+                    m.name = s("toolName").or(m.name.take());
+                    m.parent = s("parentToolUseId").or(m.parent.take());
+                }
                 let e = &mut self.entries[idx];
                 for k in [
                     "title",
@@ -1852,6 +1898,7 @@ async fn write_steps(
             snapshot: None,
             log_version: None,
         };
+        let detail = c.detail.clone();
         let (id, seq, log_version) = match sink
             .writer
             .write(&caller, "agents/step", move |tx| {
@@ -1859,6 +1906,10 @@ async fn write_steps(
                 end.log_version = Some(norn::write::meta::version(tx.sql())? as i64);
                 let log_version = end.log_version;
                 table::close(tx, id, end)?;
+                if let Some(mut d) = detail {
+                    d.step = id;
+                    norn::write::work::put_step_detail(tx, d)?;
+                }
                 let seq: i64 =
                     tx.sql()
                         .query_row("select seq from step where id = ?1", [id], |r| r.get(0))?;
@@ -1908,6 +1959,7 @@ async fn write_steps(
             cache_write: Some(c.cache_write as u64),
             cost: c.cost,
             cost_unit: None,
+            detail: c.detail.as_ref().map(crate::work::detail::wire),
         };
         // a shell step may have committed: link the new commits to the decisions this session recorded
         if let Some(task) = &ctx.task
@@ -3706,6 +3758,7 @@ mod tests {
                 cache_read: 0,
                 cache_write: 0,
                 cost: None,
+                detail: None,
             })
             .unwrap();
         }
@@ -3796,6 +3849,7 @@ mod tests {
                 cache_read: 0,
                 cache_write: 0,
                 cost: None,
+                detail: None,
             })
             .unwrap();
         }

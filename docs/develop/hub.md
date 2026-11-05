@@ -1323,6 +1323,17 @@ writer task per session; the last step of a turn carries its tokens and `turn_id
 announced as an `agent-step` event (`{session, step}`) and on `Hub::subscribe_steps()`. A store that is not ready
 loses the row (logged), not the event.
 
+**Step detail** (`work::detail::of`, schema 9's `step_detail`): a tool step also records what it read, searched or
+fetched, in the same transaction as the step, taken when the call completes because `rawInput` is refined while it
+streams. The hub keeps `_meta.claudeCode.toolName` and `.parentToolUseId` of each tool call beside the entries (the
+entries' wire shape is unchanged) and classifies by tool name, never by ACP kind alone: Claude's `WebSearch` is kind
+`fetch`, like `WebFetch`. A provider that sends no name (Codex's parsed calls, Gemini) is classified by kind; Gemini's
+query or URL, which is only in the title, is labelled `acp-title`. A `Read` has `line_end` only from `rawInput.limit`.
+Content is never kept and no text field is longer than 4 KiB. A shell call has no detail yet (the shell-read layers
+write `command` and `opened` details). The detail is the step's `detail` on `agent-step` and `timeline/get`
+(`runstav::methods::timeline::StepDetail`). The mock agent's `provider:read|grep|web-search|web-fetch|write` words
+send each personality's real shapes.
+
 ### After a restart
 
 `Hub::shutdown` (server end) ends every session's process group and leaves the rows, transcripts and queues.

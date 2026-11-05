@@ -479,6 +479,17 @@
                   }
                 ]
               },
+              "detail": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/StepDetail"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "What the step read, searched or fetched (tool steps)."
+              },
               "end": {
                 "format": "double",
                 "type": [
@@ -630,6 +641,75 @@
                 "type": "string"
               }
             ]
+          },
+          "StepDetail": {
+            "additionalProperties": false,
+            "description": "What a step read, searched or fetched (the `step_detail` table); never the content.",
+            "properties": {
+              "kind": {
+                "description": "`read`, `search`, `fetch`, `edit` or `execute`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "line_end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "line_start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "origin": {
+                "description": "How the hub learned it: `acp`, `acp-title` (parsed from the title), `browser`, `command` or `opened`.",
+                "type": "string"
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "query": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "title": {
+                "description": "A page's title (the agent browser's).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tool": {
+                "description": "The tool's name as the provider sent it, when it sent one.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "origin"
+            ],
+            "type": "object"
           },
           "Unit": {
             "description": "What a limit counts.  Limits compare only in the same unit.",
@@ -2828,6 +2908,17 @@
                   }
                 ]
               },
+              "detail": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/StepDetail"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "What the step read, searched or fetched (tool steps)."
+              },
               "end": {
                 "format": "double",
                 "type": [
@@ -2979,6 +3070,75 @@
                 "type": "string"
               }
             ]
+          },
+          "StepDetail": {
+            "additionalProperties": false,
+            "description": "What a step read, searched or fetched (the `step_detail` table); never the content.",
+            "properties": {
+              "kind": {
+                "description": "`read`, `search`, `fetch`, `edit` or `execute`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "line_end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "line_start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "origin": {
+                "description": "How the hub learned it: `acp`, `acp-title` (parsed from the title), `browser`, `command` or `opened`.",
+                "type": "string"
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "query": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "title": {
+                "description": "A page's title (the agent browser's).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tool": {
+                "description": "The tool's name as the provider sent it, when it sent one.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "origin"
+            ],
+            "type": "object"
           },
           "Unit": {
             "description": "What a limit counts.  Limits compare only in the same unit.",
@@ -14901,6 +15061,17 @@
                   }
                 ]
               },
+              "detail": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/StepDetail"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "What the step read, searched or fetched (tool steps)."
+              },
               "end": {
                 "format": "double",
                 "type": [
@@ -15052,6 +15223,75 @@
                 "type": "string"
               }
             ]
+          },
+          "StepDetail": {
+            "additionalProperties": false,
+            "description": "What a step read, searched or fetched (the `step_detail` table); never the content.",
+            "properties": {
+              "kind": {
+                "description": "`read`, `search`, `fetch`, `edit` or `execute`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "line_end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "line_start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "origin": {
+                "description": "How the hub learned it: `acp`, `acp-title` (parsed from the title), `browser`, `command` or `opened`.",
+                "type": "string"
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "query": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "title": {
+                "description": "A page's title (the agent browser's).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tool": {
+                "description": "The tool's name as the provider sent it, when it sent one.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "origin"
+            ],
+            "type": "object"
           },
           "Tokens": {
             "additionalProperties": false,

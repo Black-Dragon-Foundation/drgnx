@@ -169,6 +169,7 @@ pub(crate) fn step_of(s: table::Step) -> Step {
         cache_write: Some(s.cache_write as u64),
         cost: s.cost,
         cost_unit: s.cost_unit.as_deref().and_then(unit_of),
+        detail: None,
     }
 }
 
@@ -216,7 +217,7 @@ pub async fn get(front: &Front, _: &Caller, p: TimelineParams) -> Result<Timelin
     };
     let since = p.since.unwrap_or(0) as i64;
     let rollup_only = p.rollup == Some(true);
-    let (steps, roll) = front
+    let (steps, details, roll) = front
         .writer
         .db
         .read(move |c| {
@@ -225,11 +226,22 @@ pub async fn get(front: &Front, _: &Caller, p: TimelineParams) -> Result<Timelin
             } else {
                 table::for_scope(c, scope, &id, since, PAGE + 1)?
             };
-            Ok((steps, table::rollup(c, scope, &id)?))
+            let mut details = Vec::with_capacity(steps.len());
+            for s in &steps {
+                details.push(norn::read::work::step_detail(c, s.id)?);
+            }
+            Ok((steps, details, table::rollup(c, scope, &id)?))
         })
         .await
         .map_err(internal)?;
-    let mut steps: Vec<Step> = steps.into_iter().map(step_of).collect();
+    let mut steps: Vec<Step> = steps
+        .into_iter()
+        .zip(details)
+        .map(|(s, d)| Step {
+            detail: d.as_ref().map(crate::work::detail::wire),
+            ..step_of(s)
+        })
+        .collect();
     let next = if steps.len() as i64 > PAGE {
         steps.truncate(PAGE as usize);
         steps.last().map(|s| match p.scope {

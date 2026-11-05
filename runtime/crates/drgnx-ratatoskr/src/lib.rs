@@ -103,6 +103,7 @@ pub mod supervise;
 pub mod supervisor;
 pub mod timeline;
 pub mod version;
+pub mod work;
 
 /// How the process ends (design 3.2): supervisors restart on 75 and never on 1, 2 or 3.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

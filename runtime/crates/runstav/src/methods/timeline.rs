@@ -31,6 +31,33 @@ pub enum StepClass {
     Stalled,
 }
 
+/// What a step read, searched or fetched (the `step_detail` table); never the content.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StepDetail {
+    /// The tool's name as the provider sent it, when it sent one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    /// `read`, `search`, `fetch`, `edit` or `execute`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_start: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_end: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// A page's title (the agent browser's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// How the hub learned it: `acp`, `acp-title` (parsed from the title), `browser`, `command` or `opened`.
+    pub origin: String,
+}
+
 /// One row of the `step` table.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -81,6 +108,9 @@ pub struct Step {
     pub cost: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_unit: Option<Unit>,
+    /// What the step read, searched or fetched (tool steps).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<StepDetail>,
 }
 
 /// What a timeline covers.
