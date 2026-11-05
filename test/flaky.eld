@@ -7,6 +7,4 @@
 ;; THIS LIST IS READ-ONLY: it takes no new rows, and it only empties.  drgnx-lint/flaky-list-takes-no-new-rows holds
 ;; its entries to a constant in test/unit/lint-test.el.  A gating test that fails on its rerun moves to a pattern that
 ;; cannot race (orders, gated, handshake; docs/develop/harness.md, "Test patterns"); it is not listed.
-((drgnx-remote/a-second-file-of-the-project-joins-the-running-server
-  :reason "TRAMP returns a pipe process before its remote shell has read the exec line; eglot's initialize follows at once, and a shell that reads late reads those bytes with the line (bash reads a -icanon terminal in chunks) and drops them at the exec, so the server never answers (30 s).  The fix is in Nidhogg's TRAMP: wait until the shell has read the line"
-  :stress "DRGNX_TEST_SELECTOR='\"^drgnx-remote/a-second-file-of-the-project-joins-the-running-server$\"' bin/drgnx test --stress 30 --load 16 (Linux container): 30 passed; with a slow shell emulated (tramp-pipe-stty-settings \"-icanon min 255 time 5\") all 6 tests of the file that start a server fail this way"))
+()

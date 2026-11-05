@@ -252,9 +252,10 @@ of it.  A wrapper's wait for a process to start (`(process-live-p P)') is no rac
                            unless (and (stringp v) (not (string-empty-p (string-trim v))))
                            collect (format "%s: no %s" name key))))
 
-(defconst drgnx-lint--flaky-allowed '(drgnx-remote/a-second-file-of-the-project-joins-the-running-server)
-  "The tests `test/flaky.eld' may list: the one row of 2026-11-04.  The list is read-only, so this only shrinks: a flaky
-test is made deterministic (orders, gated, handshake), not listed.")
+(defconst drgnx-lint--flaky-allowed nil
+  "The tests `test/flaky.eld' may list: none (its one row, the TRAMP exec-line race, left when Nidhogg's TRAMP fix
+landed).  The list is read-only, so this only shrinks: a flaky test is made deterministic (orders, gated, handshake),
+not listed.")
 
 (defun drgnx-lint--flaky-new-rows (entries)
   "The names of ENTRIES (`(NAME …)') that `drgnx-lint--flaky-allowed' does not hold, as strings."
@@ -268,7 +269,7 @@ test is made deterministic (orders, gated, handshake), not listed.")
                    (read (current-buffer)))))
     (should (equal (drgnx-lint--flaky-new-rows entries) nil)))
   (should (equal (drgnx-lint--flaky-new-rows
-                  '((drgnx-remote/a-second-file-of-the-project-joins-the-running-server :reason "x") (a/b :reason "y")))
+                  '((a/b :reason "y")))
                  '("a/b")))
   (should (equal (drgnx-lint--flaky-new-rows nil) nil)))
 

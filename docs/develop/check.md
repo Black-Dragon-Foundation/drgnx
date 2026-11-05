@@ -146,7 +146,7 @@ does a whole-file flake (`file NAME`: its Emacs hung or died) of a file that hol
 a test's own `:det` tag: that test may be what hung. `DRGNX_TEST_FLAKY=FILE` names another list (the runner's own tests).
 
 **The list is read-only.** It takes no new rows and only empties: `drgnx-lint/flaky-list-takes-no-new-rows` holds its
-entries to a constant in `test/unit/lint-test.el` (today's one row). A gating test that fails on its rerun is not
+entries to a constant in `test/unit/lint-test.el` (today empty). A gating test that fails on its rerun is not
 listed; it moves to a pattern in which it cannot observe an order it did not choose (`orders`, `gated` or `handshake`,
 `docs/develop/harness.md`, "Test patterns").
 
