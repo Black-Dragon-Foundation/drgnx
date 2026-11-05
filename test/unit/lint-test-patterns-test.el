@@ -228,7 +228,7 @@ levels that enclose it (a `let' binding, a call's argument); inside a branching 
     "test/ui/childframe-chrome-test.el" "test/ui/childframe-extra-test.el" "test/ui/code-editing-test.el"
     "test/ui/editor-m11c2-test.el" "test/ui/git-review-test.el" "test/ui/glitnir-parity-test.el"
     "test/ui/guard-test.el" "test/ui/input-test.el" "test/ui/live-state-ui-test.el" "test/ui/notices-ui-test.el"
-    "test/ui/palette-float-test.el" "test/ui/quickhelp-test.el" "test/ui/report-test.el" "test/ui/rf2-process-test.el" "test/ui/session-home-test.el"
+    "test/ui/quickhelp-test.el" "test/ui/report-test.el" "test/ui/rf2-process-test.el" "test/ui/session-home-test.el"
     "test/ui/settings-page-ui-test.el" "test/ui/smoke-test.el" "test/ui/state-intent-ui-test.el"
     "test/ui/state-ui-test.el" "test/ui/statusbar-state-ui-test.el" "test/ui/statusbar-test.el"
     "test/ui/view-ui-test.el" "test/ui/workbench-pass-a-test.el" "test/unit/agent-check-test.el"

@@ -47,8 +47,6 @@
  "test/ui/input-test.el"
  "test/ui/live-state-ui-test.el"
  "test/ui/notices-ui-test.el"
- ("test/ui/palette-float-test.el"
-  :why "older than this register (made on a branch before it): its keys arrive from a polling timer inside the palette's read, which no pattern allows yet")
  "test/ui/quickhelp-test.el"
  "test/ui/report-test.el"
  "test/ui/rf2-process-test.el"

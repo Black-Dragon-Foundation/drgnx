@@ -1,5 +1,6 @@
 ;;; palette-float-test.el --- GUI tests: the command palette floats in its own child frame -*- lexical-binding: t -*-
 ;; test-class: cond
+;; test-pattern: handshake
 
 ;; `drgnx-palette' under vertico's `vertico-buffer' with `drgnx-palette-frame--display': the prompt, the typed text
 ;; and the candidates show in a child frame of the editor frame, while the minibuffer window and keyboard focus
@@ -58,38 +59,29 @@
 (defun drgnx-palette-float-test--reading (typed probe &optional ending)
   "Call `drgnx-palette' while TYPED arrives as keys; PROBE runs once the minibuffer holds them.
 ENDING is the key list that ends the read after the probe (default C-g).  Return PROBE's value; an error it
-signalled (a failed `should') is signalled again.  Conditions, not delays."
-  (let* ((result nil) (stage 'open) (timer nil) (watchdog nil)
+signalled (a failed `should') is signalled again.  Handshake: the keys go in when the palette's minibuffer is set up,
+and the probe runs from that minibuffer's `post-command-hook' once the last of them is in; no timer, no delay."
+  (let* ((result nil) (stage 'open) (after nil)
          (drgnx-jank-guard--timer-fn nil) (drgnx-guard--timer-fn nil)
-         (drgnx-uitest--queue (list 'typed-from-the-timers-below))
-         (finish (lambda () (cancel-timer timer) (cancel-timer watchdog))))
-    (setq timer (run-with-timer
-                 0.02 0.02
-                 (lambda ()
-                   (pcase stage
-                     ('open (when (active-minibuffer-window)
-                              (setq stage 'typed)
-                              (setq unread-command-events
-                                    (append (listify-key-sequence typed) unread-command-events))))
-                     ('typed (when (and (null unread-command-events)
-                                        (equal (with-current-buffer (window-buffer (active-minibuffer-window))
-                                                 (minibuffer-contents-no-properties))
-                                               typed))
-                               (setq stage 'probed)
-                               (funcall finish)
-                               (setq result (condition-case err (list :ok (funcall probe)) (error (list :error err))))
-                               (setq unread-command-events (or ending (list ?\C-g))))))))
-          watchdog (run-at-time 60 nil (lambda ()
-                                         (unless (eq stage 'probed)
-                                           (funcall finish)
-                                           (setq result (list :error (list 'error (format "the read never reached its probe (stage %s)" stage))))
-                                           (setq unread-command-events (list 'return))))))
-    (unwind-protect (condition-case nil (drgnx-palette) (quit nil))
-      (funcall finish))
+         (drgnx-uitest--queue (list 'typed-from-the-minibuffer-hooks-below))
+         (setup (lambda ()
+                  (setq stage 'typed)
+                  ;; late, so vertico has drawn the candidates of the last key before the probe looks
+                  (add-hook 'post-command-hook after 90 t)
+                  (setq unread-command-events (append (listify-key-sequence typed) unread-command-events)))))
+    (setq after (lambda ()
+                  (when (and (eq stage 'typed) (null unread-command-events)
+                             (equal (minibuffer-contents-no-properties) typed))
+                    (setq stage 'probed)
+                    (remove-hook 'post-command-hook after t)
+                    (setq result (condition-case err (list :ok (funcall probe)) (error (list :error err))))
+                    (setq unread-command-events (or ending (list ?\C-g))))))
+    (minibuffer-with-setup-hook setup
+      (condition-case nil (drgnx-palette) (quit nil)))
     (pcase result
       (`(:ok ,v) v)
       (`(:error ,err) (signal (car err) (cdr err)))
-      (_ (error "The probe never ran")))))
+      (_ (error "The probe never ran (stage %s)" stage)))))
 
 (defun drgnx-palette-float-test--palette-frame ()
   (seq-find (lambda (f) (frame-parameter f 'drgnx-palette)) (frame-list)))
