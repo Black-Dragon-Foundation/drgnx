@@ -95,6 +95,12 @@ and the probe runs from that minibuffer's `post-command-hook' once the last of t
               (seq-some (lambda (o) (let ((s (overlay-get o 'before-string))) (and (stringp s) (string-search "Do " s))))
                         (overlays-in (point-min) (point-max)))))))
 
+(defun drgnx-palette-float-test--edges (frame)
+  "FRAME's edges (LEFT TOP RIGHT BOTTOM) in its parent, in the frames' own pixels: its position and its size.  Not
+`frame-edges': Nidhogg's Wayland shell answers a child frame's outer and native edges from (0, 0)."
+  (let ((p (frame-position frame)))
+    (list (car p) (cdr p) (+ (car p) (frame-pixel-width frame)) (+ (cdr p) (frame-pixel-height frame)))))
+
 (defun drgnx-palette-float-test--wait-shown (frame)
   "Wait until FRAME shows the candidates; a timeout says what the minibuffer buffer and its overlays held."
   (condition-case err
@@ -127,7 +133,7 @@ and the probe runs from that minibuffer's `post-command-hook' once the last of t
            (dolist (k '(corner-radius shadow backdrop-blur transition))
              (should (equal (frame-parameter f k) (alist-get k drgnx-look-palette))))
            ;; top-centre, inside the editor frame, at most 640 logical px wide
-           (let ((e (frame-edges f 'outer-edges)) (w (frame-pixel-width root)))
+           (let ((e (drgnx-palette-float-test--edges f)) (w (frame-pixel-width root)))
              (should (<= (frame-pixel-width f) (drgnx-palette-frame--px root 640)))
              (should (>= (nth 0 e) 0)) (should (<= (nth 2 e) w))
              (should (< (abs (- (/ (+ (nth 0 e) (nth 2 e)) 2.0) (/ w 2.0))) 2))
@@ -216,13 +222,13 @@ holds child frames, pixel checks: the palette's rectangle differs from the pictu
            (let* ((shot (drgnx-uitest-capture (expand-file-name (format "scale-%s" scale) dir)))
                   (snap (drgnx-uitest-snapshot root))
                   ;; the snapshot is in device pixels, which is what a frame of Nidhogg's Wayland shell counts
-                  (e (mapcar (lambda (v) (round (* (if (featurep 'nidhogg-wayland) 1 scale) v))) (frame-edges f 'outer-edges)))
-                  (mid-x (/ (+ (nth 0 e) (nth 2 e)) 2)) (mid-y (/ (+ (nth 1 e) (nth 3 e)) 2)))
+                  (e (mapcar (lambda (v) (round (* (if (featurep 'nidhogg-wayland) 1 scale) v)))
+                             (drgnx-palette-float-test--edges f))))
              (should (file-exists-p (plist-get shot :root)))
-             (when (equal (drgnx-uitest-pixel snap mid-x mid-y) (drgnx-uitest-pixel none mid-x mid-y))
+             ;; the palette's rectangle as a whole, not one pixel: its middle may be its background, the root's colour
+             (when (drgnx-uitest-region-equal-p snap none e)
                (ert-skip "the snapshot of a root does not hold child frames yet (nsnap): no pixel checks"))
              ;; the palette is drawn where the frame is, and its upper-left corner pixel is cut (rounded)
-             (should-not (equal (drgnx-uitest-pixel snap mid-x mid-y) (drgnx-uitest-pixel none mid-x mid-y)))
              (let ((corner (cdr (drgnx-uitest-pixel snap (nth 0 e) (nth 1 e))))
                    (bare (cdr (drgnx-uitest-pixel none (nth 0 e) (nth 1 e))))
                    (inside (cdr (drgnx-uitest-pixel snap (+ (nth 0 e) (ceiling (* scale 14))) (+ (nth 1 e) (ceiling (* scale 14)))))))
