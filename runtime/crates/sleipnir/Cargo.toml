@@ -12,7 +12,7 @@ default = ["runner"]
 # the wire protocol: pure (serde, and `secrecy` for a key's value)
 proto = ["dep:forseti", "dep:serde_json", "dep:secrecy", "dep:zeroize"]
 # input capture, the hardened git and slots: blocking, no tokio
-sync = ["dep:forseti", "dep:sha2", "dep:rustix"]
+sync = ["dep:forseti", "dep:sha2", "dep:rustix", "dep:secrecy"]
 # the probe, the reservation files and the executor: blocking, std, rustix and serde only, no tokio; the probe's
 # facts are the protocol's
 linux = ["proto", "dep:forseti", "dep:serde_json", "dep:rustix", "dep:libc"]
@@ -46,6 +46,16 @@ required-features = ["linux"]
 [[test]]
 name = "fleet_serve"
 required-features = ["runner"]
+
+# sync's rows run inside a fake runner too (the real binary's git-receive and credential-helper modes)
+[[test]]
+name = "runner_host_sync"
+required-features = ["linux", "sync", "test-hooks"]
+
+# sync's rows over real SSH, from the fleet's harness to a fake runner (the binary's test-hooks bundle mode)
+[[test]]
+name = "fleet_sync"
+required-features = ["sync"]
 
 [dev-dependencies]
 skuld = { path = "../skuld", version = "0.1.0" }

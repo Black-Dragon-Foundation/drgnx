@@ -1,7 +1,7 @@
 # sleipnir: the runner
 
 `runtime/crates/sleipnir` is what runs jobs on a machine: the hub's own (local) machine, the user's other machines
-over SSH, and jobq's. It is a library, shared by the hub, the runners and jobq, and the `sleipnir` binary (its `job-exec` mode so far).
+over SSH, and jobq's. It is a library, shared by the hub, the runners and jobq, and the `sleipnir` binary (its modes: `serve`, `job-exec`, `bench`, `git-receive`, `credential-helper`).
 The scheduling decisions are [`forseti`](forseti.md)'s; sleipnir reads the machine for them and carries them out.
 
 ## Features
@@ -9,13 +9,13 @@ The scheduling decisions are [`forseti`](forseti.md)'s; sleipnir reads the machi
 | Feature | What | Dependencies |
 |---|---|---|
 | `linux` | the machine probe, the reservation files, the executor | std, rustix, libc, serde, `forseti`; blocking, never tokio |
-| `sync` | a job's inputs, the hardened git, checkout slots | std, rustix, `sha2`, `forseti`; blocking, never tokio |
+| `sync` | a job's inputs, the hardened git, checkout slots, mirrors, bundles, blobs, caches, the disk guard | std, rustix, `sha2`, `secrecy`, `forseti`; blocking, never tokio |
 | `proto` | the hub–runner protocol: the frames and their wire | pure: serde, serde_json, `forseti`'s types, `secrecy` and `zeroize` for a key's value |
 | `runner` (default) | the binary's modes | all of the above |
+| `test-hooks` | test-only entry points | compiled away otherwise |
 
 `linux` turns on `proto`: the probe's `Facts` and `Missing` are the protocol's types, since `hello-ok` and
 `probe-result` carry them.
-| `test-hooks` | test-only entry points | compiled away otherwise |
 
 jobq depends with `default-features = false, features = ["linux", "sync"]`, so no async runtime reaches it. The
 Android check builds `--no-default-features --features proto,sync`.
@@ -292,6 +292,106 @@ planted program would write is absent and the planted `.git` is gone:
 
 All are `[D]`: temp repositories and real git, no clock, no waits.
 
+### Mirrors (`sync::mirror`)
+
+`Mirror::ensure(root, repo_id)` is the runner's bare mirror of one repository, `<root>/git/<id>/`. It is made with no
+template (so it has no sample hooks) and its config gets `core.hooksPath=/dev/null` every time, besides the hardened
+git's own `-c`. A repository id is letters, digits, `.`, `_` and `-`, at most 64, and never starts with `.` or `-`.
+Jobs never see a mirror; slots borrow its objects through `objects/info/alternates`. Refs land under `refs/origin/`
+(the origin's branches and tags) and `refs/hub/` (what the hub sent).
+
+A mirror gets its objects three ways (design 6.2):
+
+- **`fetch_origin(url, cred)`**, at the runner's own bandwidth. The URL is `https://` with no user or password in it,
+  `ssh://`, or `user@host:path`; never a local path, `file://`, a remote helper (`ext::`) or anything starting with
+  `-`. Git is told the same (`protocol.allow=never`, then `https` and `ssh` only; plain `http` only under
+  `test-hooks`), and any configured credential helper is reset. The fetch writes no `FETCH_HEAD`.
+- **A bundle** (below).
+- **The hub's `git push`.** Its `--receive-pack` is `sleipnir git-receive --root ROOT REPO`, which execs `git
+  receive-pack` on the mirror REPO names (its id, or its path under `ROOT/git/`, never anything else), through the
+  hardened git. No hook runs, whatever the mirror's config says, and every object received is checked.
+
+`has_commit(commit)` answers whether the mirror holds a commit, for the hub's choice between these.
+
+**The origin's credential** (`sync::cred`) is a token or deploy key the user named for the project. It is held only in
+`serve`'s memory and never written to a file:
+
+- `OriginCred::Https(token)`: for one fetch, a socket in `<root>/run/` (mode 0700, the socket 0600) hands the token
+  to `sleipnir credential-helper SOCKET get`, which git runs as its only helper and which prints it to git's pipe.
+  The socket and its thread end with the fetch.
+- `OriginCred::SshKey(key)`: a per-fetch `ssh-agent` (with a 600 s key lifetime besides) gets the key on stdin from
+  `ssh-add -`; git's ssh is pointed at it with `IdentityAgent`, and the agent is killed after the fetch.
+
+### Bundles and blobs (`sync::bundle`, `sync::blobs`)
+
+When the mirror lacks more than 8 MiB, the hub sends one git bundle in 1 MiB chunks. `bundle::Receiver::open(root,
+repo, BundleRef { sha256, size })` appends them to `<root>/bundles/<repo>.<sha256>.part`, under an exclusive lock, so a
+leftover process from a dropped link and the reconnect's receiver never write at once. The file survives a drop, and
+`offset()` (its size) is where the hub resumes. A partial of another bundle of the same repository is stale and goes.
+`append` refuses bytes past the declared size. `finish()` checks the size and the sha256, then fetches the bundle's
+refs into `refs/hub/` with every object checked. A bundle that fails either check never reaches the mirror, and its
+file is removed.
+
+`blobs::Store` is the overlay's content-addressed store, `<root>/blobs/<sha256 hex>`. `missing(hashes)` names the
+blobs the hub must send (each once); `put(sha, bytes)` keeps a blob only when its bytes hash to its name, written
+aside and renamed. It is the `Blobs` a slot update reads.
+
+**The frames** (`sync-have`, `sync-need`, `blob`, `bundle {offset}`, `origin-fetch`) map onto these calls:
+`Store::missing` and `Mirror::has_commit` answer a `sync-have`, `Receiver::offset` and `append` take a `bundle`, and
+`fetch_origin` serves an `origin-fetch`. Until `serve` handles them, `sleipnir sync-bundle` (`test-hooks` only) takes
+one bundle on stdin and announces `at OFFSET` after every chunk, for the fleet row.
+
+## Disk and caches
+
+### Caches by trust (`sync::cache`)
+
+Every writable cache a job's suite declares is a folder `<root>/cache/<project>/<trust>/<name>/`, the trust being the
+job's (`public`, `private`, `private+keys`). So a job never reads a cache that a job of another trust wrote. Each word
+of the path is one component: letters, digits, `_`, `-` and `.` (not first) stay, and every other byte is `%XX`. So
+no two words share a folder, and none leaves its parent.
+
+`mounts_for(job, suite_caches)` gives the job's mounts, all read-write. The target dir comes first, at `/target`
+inside:
+
+- `public` and `private` jobs build into the slot's target dir;
+- a `private+keys` job gets a fresh one in its own job folder (`jobs/<id>/target`). A keyed release job never runs
+  what an unkeyed job's `build.rs` left.
+
+Then comes one mount per declared cache. A `CacheKind::Shared` cache (cargo home, ccache, the Lisp cache) is shared by
+the project's jobs of that trust. A `CacheKind::PerJob` cache (dnf and other package caches) is
+`<name>@<job id>`, one per running job, since two runs on one dnf cache fail. Each cache's budget is 10 GiB
+(`cache::BUDGET`, a setting).
+
+### The disk guard (`sync::guard`)
+
+The floor is 20 GB and 10 % of the runner folder's filesystem, whichever is more. Free space comes from `statvfs`
+(`guard::df`), never from adding up sizes. The guard has four parts:
+
+- **`scan(root, now, budget)`** lists what may go:
+  - job folders, collected (the `collected` marker) or older than 24 h;
+  - artifacts, by job;
+  - slots, with how long each has been unused;
+  - caches, each with its size (a walk that never follows a link, used only against its budget) and its last use.
+
+  A link where one of these folders belongs is never followed and never listed.
+- **`images(root)`** lists the podman store's images, each with the references we pulled it by. `<root>/images`
+  records those, one `<id> <reference>` line per `pull`.
+- **`plan(df, items, needs)`** is pure. Below the floor, it prunes in the design's order:
+  1. collected job folders;
+  2. artifacts no queued job needs;
+  3. slots unused for 7 days, target dir first;
+  4. caches over their budget, then the others, lowest trust first and least recently used first;
+  5. images we pulled that no queued job names. An image we didn't pull is never pruned.
+
+  Above the floor, only caches over their budget are pruned (between jobs).
+- **`apply(root, plan, df)`** re-reads `df` before every prune for the floor and skips those once the floor is
+  reached. Every path is opened component by component under the root with `O_NOFOLLOW`, so a link on the way fails
+  that prune. Below it nothing is followed, and a link is removed as a link. A slot goes under its update lock, so a
+  slot in use is kept. An image goes with `podman image rm`, never forced.
+
+`pull(root, reference, allow)` pulls only `<repository>@sha256:<digest>` with the repository on the project's
+allow-list (`check_pull`), and records it as ours. Jobs run `--pull=never`.
+
 ## The protocol (`proto`)
 
 The hub and a runner talk over the hub's SSH sessions to the runner: the control channel (`sleipnir serve`'s stdin
@@ -454,3 +554,21 @@ running one of the file's `child_*` entries. The rows: the fake runner's own che
 against one budget, a dead pid's reservation, the slice tree taking a container (cgroup path, cpusets both ways, the
 cap, OOM scores), the cap's step ending in a kernel OOM below oomd's limit, a job in its own slice, an OOM as `oom`, a
 keyed job without `memory.swap.max` 0, and a job outliving its starter.
+
+`tests/runner_host_sync.rs` holds sync's runner-host rows, built with `--features test-hooks` and run the same way:
+
+- `origin_fetch_with_a_token_leaves_no_file`: a fetch from a smart-HTTP origin (git's `http-backend` behind a small
+  server in the test) that answers only with the token; afterwards no file under the runner folder, `/tmp` or the
+  runner's home holds the token or its Authorization header;
+- `push_into_the_mirror_runs_no_hook`: a push through `sleipnir git-receive` into a mirror with every receive hook
+  planted, and a planted `core.hooksPath`, runs none of them; a path outside the mirrors is refused;
+- `guard::a_symlink_planted_in_a_cache_is_never_followed`: links in a cache to a sentinel outside the root, and links
+  where a cache or project folder belongs; after a scan, plan and apply below the floor the cache is gone, the
+  sentinel is untouched, and a prune through a planted link is refused;
+- `guard::never_removes_an_image_we_did_not_pull`: the fake runner's base image (not ours) and an imported image
+  recorded as ours; only ours goes, and not while a queued job names it.
+
+`tests/fleet_sync.rs` holds sync's fleet rows (`#[ignore = "fleet"]`), run from the fleet's harness over real SSH
+(`fleet.sh test 'sync::'`, with the `sleipnir` binary in `/fleet/share`). `sync::a_dropped_bundle_resumes_not_restarts`
+sends a 10 MiB bundle, cuts the link at 40 % once the runner has announced that offset, reconnects, and checks that the
+runner resumes there: at most 60 % plus 1 MiB is sent again, and the commit arrives in the mirror.

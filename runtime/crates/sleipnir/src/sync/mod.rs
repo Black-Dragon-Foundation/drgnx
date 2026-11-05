@@ -6,14 +6,24 @@
 //!   read, received objects are checked, and no inherited `GIT_*` variable reaches git.
 //! - `slot`: one checkout per slot key, updated in place through a git dir outside the slot; private copies for
 //!   jobs that write the tree; the locks; the prune of slots unused for 7 days.
+//! - `mirror`: the runner's bare mirror per repository, fed by an origin fetch, a bundle or the hub's push
+//!   (`git_receive`); `cred`: the origin's token or deploy key, served to git from memory only.
+//! - `bundle`: a resumable bundle's receiver; `blobs`: the overlay's content-addressed store.
+//! - `cache`: caches partitioned by trust; `guard`: the disk guard's prune plan and its link-proof removal.
 
 use std::error::Error;
 use std::fmt;
 use std::io;
 use std::path::PathBuf;
 
+pub mod blobs;
+pub mod bundle;
+pub mod cache;
 pub mod capture;
+pub mod cred;
 pub mod git;
+pub mod guard;
+pub mod mirror;
 pub mod slot;
 
 #[cfg(test)]
@@ -102,6 +112,26 @@ pub(crate) fn refused(path: &[u8], why: &'static str) -> SyncError {
         path: path.to_vec(),
         why,
     }
+}
+
+/// The sha256 of `bytes`.
+pub(crate) fn sha256(bytes: &[u8]) -> [u8; 32] {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes).into()
+}
+
+/// 64 hex digits as a sha256, or `None`.
+pub fn unhex32(s: &str) -> Option<[u8; 32]> {
+    let b = s.as_bytes();
+    if b.len() != 64 {
+        return None;
+    }
+    let digit = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+    let mut out = [0; 32];
+    for (i, pair) in b.chunks(2).enumerate() {
+        out[i] = digit(pair[0])? << 4 | digit(pair[1])?;
+    }
+    Some(out)
 }
 
 pub(crate) fn hex(bytes: &[u8]) -> String {
