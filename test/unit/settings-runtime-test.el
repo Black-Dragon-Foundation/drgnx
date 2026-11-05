@@ -108,7 +108,17 @@
                    "{\"tools\":\"r@sha256:00\"}"))
     (should (equal (funcall enc 'drgnx-agents-away-after 600) "600"))
     (should (equal (funcall enc 'drgnx-agents-job-memory "4G") "\"4G\""))
-    (should (equal (funcall enc 'drgnx-agents-manager-context 0.7) "0.7"))))
+    (should (equal (funcall enc 'drgnx-agents-manager-context 0.7) "0.7"))
+    ;; the runners' per-project settings and Hrafn's model mirror, as their runtime types
+    (should (equal (funcall enc 'drgnx-runners-send "heavy") "\"heavy\""))
+    (should (equal (funcall enc 'drgnx-runners-heavy '("cargo test" "fleet")) "[\"cargo test\",\"fleet\"]"))
+    (should (equal (funcall enc 'drgnx-runners-heavy nil) "[]"))
+    (should (equal (funcall enc 'drgnx-runners-image nil) "null"))
+    (should (equal (funcall enc 'drgnx-runners-image "r/n@sha256:00") "\"r/n@sha256:00\""))
+    (should (equal (funcall enc 'drgnx-runners-weight 2) "2"))
+    (should (equal (funcall enc 'drgnx-runners-project-visibility "public") "\"public\""))
+    (should (equal (funcall enc 'drgnx-search-model-mirror nil) "null"))
+    (should (equal (funcall enc 'drgnx-search-model-mirror "https://m.test") "\"https://m.test\""))))
 
 (ert-deftest drgnx-settings-runtime/the-old-sender-is-gone ()
   (dolist (f '(drgnx-hub--send-providers drgnx-hub--providers-table drgnx-hub--provider-json drgnx-hub-resend-providers

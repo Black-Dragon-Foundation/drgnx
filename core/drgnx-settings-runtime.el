@@ -187,6 +187,13 @@ running.  Nil: only a running server (TEI, Ollama) makes vectors, and with none,
     (drgnx-agents-repeat-limit . identity)
     (drgnx-agents-no-progress-tokens . identity)
     (drgnx-agents-manager-context . identity)
+    ;; the runners' per-project settings (`drgnx-agents-matrix.el') and Hrafn's model mirror
+    (drgnx-runners-send . drgnx-settings-runtime--str)
+    (drgnx-runners-heavy . drgnx-settings-runtime--strings)
+    (drgnx-runners-image . ,(lambda (v) (or (drgnx-settings-runtime--str v) :null)))
+    (drgnx-runners-weight . identity)
+    (drgnx-runners-project-visibility . drgnx-settings-runtime--str)
+    (drgnx-search-model-mirror . ,(lambda (v) (or (drgnx-settings-runtime--str v) :null)))
     (drgnx-sandbox-proxy-pinned-addresses . ,(lambda (v) (drgnx-settings-runtime--alist v #'identity))))
   "Runtime setting → the function that turns its Lisp value into the JSON of its runtime type.  `drgnx-agents-matrix'
 has none: the hub reads its plist from settings.el alone.")
