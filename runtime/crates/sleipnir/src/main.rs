@@ -4,6 +4,7 @@
 //! sleipnir serve --root DIR --prefix P --hub-id H --profile dedicated|workstation
 //!                                             the hub's control channel, on stdin and stdout
 //! sleipnir job-exec <attempt folder>          runs the folder's job.json, writes its result.json
+//! sleipnir job-helper --dir D [--hub-allow F] the attempt's keys, proxy and disk watch, until stdin ends
 //! sleipnir bench --root DIR --image DIGEST    this runner's speed, as JSON on stdout
 //! sleipnir git-receive --root ROOT REPO       the hub's `git push --receive-pack`: receive-pack on a mirror, hardened
 //! sleipnir credential-helper SOCKET OP        git's credential helper for an origin fetch: the token from SOCKET
@@ -13,6 +14,7 @@ use std::process::ExitCode;
 
 const USAGE: &str = "usage: sleipnir serve --root DIR --prefix P --hub-id H --profile dedicated|workstation\n       \
                      sleipnir job-exec <attempt folder>\n       \
+                     sleipnir job-helper --dir D [--hub-allow FILE]\n       \
                      sleipnir bench --root DIR --image DIGEST\n       \
                      sleipnir git-receive --root ROOT REPO\n       \
                      sleipnir credential-helper SOCKET OP";
@@ -21,6 +23,7 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         ["job-exec", dir] => job_exec(std::path::Path::new(dir)),
+        ["job-helper", ref rest @ ..] => job_helper(rest),
         ["serve", ref rest @ ..] => serve(rest),
         ["bench", "--root", root, "--image", image] => bench(root, image),
         #[cfg(feature = "sync")]
@@ -39,6 +42,10 @@ fn main() -> ExitCode {
             "--size",
             size,
         ] => sync::bundle(root, repo, sha, size),
+        #[cfg(all(feature = "sync", feature = "test-hooks"))]
+        ["sync-fetch", "--root", root, "--repo", repo, "--url", url] => {
+            sync::fetch(root, repo, url)
+        }
         _ => {
             eprintln!("{USAGE}");
             ExitCode::from(2)
@@ -125,6 +132,23 @@ fn job_exec(_dir: &std::path::Path) -> ExitCode {
     ExitCode::from(2)
 }
 
+#[cfg(target_os = "linux")]
+fn job_helper(args: &[&str]) -> ExitCode {
+    match sleipnir::helper::Args::parse(args) {
+        Ok(a) => ExitCode::from(sleipnir::helper::run(&a).clamp(0, 255) as u8),
+        Err(e) => {
+            eprintln!("sleipnir job-helper: {e}\n{USAGE}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn job_helper(_args: &[&str]) -> ExitCode {
+    eprintln!("sleipnir job-helper: jobs run only on Linux with a systemd user manager");
+    ExitCode::from(2)
+}
+
 #[cfg(feature = "sync")]
 mod sync {
     use std::path::Path;
@@ -194,6 +218,30 @@ mod sync {
             Err(e) => {
                 eprintln!("sleipnir sync-bundle: {e}");
                 ExitCode::from(2)
+            }
+        }
+    }
+
+    /// Test-only: fetches the origin URL into the mirror REPO under ROOT with the deploy key read from stdin, as the
+    /// `origin-fetch` frame's key would come; exit 0 when the fetch went through.
+    #[cfg(feature = "test-hooks")]
+    pub fn fetch(root: &str, repo: &str, url: &str) -> ExitCode {
+        use secrecy::SecretString;
+        use sleipnir::sync::cred::OriginCred;
+        use std::io::Read;
+        let mut key = String::new();
+        if let Err(e) = std::io::stdin().read_to_string(&mut key) {
+            eprintln!("sleipnir sync-fetch: stdin: {e}");
+            return ExitCode::from(2);
+        }
+        let key = OriginCred::SshKey(SecretString::from(key));
+        let r = mirror::Mirror::ensure(Path::new(root), repo)
+            .and_then(|m| m.fetch_origin(url, Some(key)));
+        match r {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("sleipnir sync-fetch: {e}");
+                ExitCode::from(1)
             }
         }
     }
