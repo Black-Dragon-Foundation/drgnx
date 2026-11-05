@@ -1861,6 +1861,34 @@ Tests: `runners::queue::`, `runners::local::`, `runtime_db::`, `exec::tests::a_q
 `test/conformance/runners/*.jsonl` [B]; `tests/fleet_runners.rs` `queue::` [C] (a heavy job goes to the runner under
 `send heavy` while the light one waits here).
 
+## Runners: health
+
+`runners/health.rs` (design §6.9). `is_strike(verdict, StrikeCtx {link_lost_today, link_stayed_up})` is the strike
+table: `infra: setup`, `sync`, `image`, `disk`, `killed` and `health check` always; `runner lost` the second time in a day
+(`Strikes::lost_link`); `key not delivered` only on a link that stayed up; nothing else (reds, crashes, `oom`, `oomd/killed`,
+timeouts, `preempted`, evictions, cancels). `Strikes` keeps a runner's strikes since its last passing check: `record(now,
+verdict, ctx)` (a job that ran ends a run of strikes, a non-strike infra end doesn't), `strike(now, reason)`; two in a row
+or two within 3600 s (`BENCH_WINDOW_S`) bench it; `clear` (a pass, the user's `unbench`), `text` for the runner list
+(`benched: REASON (HH:MM, HH:MM)`, UTC).
+
+The queue counts a strike at each runner verdict (`Queue::strike_of`) and at a link lost with attempts open, and holds a
+benched runner as `RunnerState::Benched`, which `forseti`'s filter keeps every job off; its `hello` doesn't put it back.
+**The check** runs every 300 s per runner (`CHECK_EVERY_S`; `Queue::check_now` makes it due), on a ready or benched one:
+a `probe` frame (its `probe-result`: the contract's missing items, `check_limits`, the free disk), a canary attempt
+offered straight to the runner (job `health<runner><at>`, letters and digits as a runner takes a job id, `true` in
+`RemoteRunner.image`, priority 1, no grace;
+offered again 2 s after a refusal; its verdict never reaches the job layer), and the runner's clock from its last `ping`
+(`LinkEvent::Clock`, the runner's `at` against the hub's time). `judge(Facts)` passes only when all hold: the probe
+answered with nothing missing and no `check_limits` failure, 20 GB free (and 10 % where the size is known), the canary
+`Pass`, the clock within 2 s (`CLOCK_SKEW_S`); else it names every part that failed. It judges once every answer is in,
+or after 120 s (`CHECK_WAIT_S`) with what it has. A pass clears the strikes and returns a benched runner to rotation; a
+failure is a strike (`health check: …`). `Queue::runner(name)` gives the row (`state`, `strikes`, `last`) and
+`Queue::unbench(name)` is the user's override (the `runners/unbench` method is the registry's).
+
+Tests: `runners::health::` [D] (the strike table, two in an hour, the check's parts); `tests/fleet_runners.rs` `health::`
+[C]: two jobs a runner can't start bench it and the next job runs here; a passing check returns a benched runner with no
+strikes; a hub clock 5 s off the runner's fails the check, saying so.
+
 ## The timeline
 
 Every step of an agent's work is a row of the `step` table (`norn::write::steps`), written when it closes by the

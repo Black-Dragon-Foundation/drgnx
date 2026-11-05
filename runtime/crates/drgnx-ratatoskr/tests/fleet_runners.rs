@@ -241,6 +241,18 @@ async fn drive<T>(
     events: &mut UnboundedReceiver<LinkEvent>,
     outcomes: &mut Vec<Outcome>,
     what: &str,
+    check: impl FnMut(&Queue, &[Outcome]) -> Option<T>,
+) -> T {
+    drive_at(q, events, outcomes, what, 0, check).await
+}
+
+/// [`drive`] with the hub's clock OFFSET seconds off the runner's.
+async fn drive_at<T>(
+    q: &Queue,
+    events: &mut UnboundedReceiver<LinkEvent>,
+    outcomes: &mut Vec<Outcome>,
+    what: &str,
+    offset: u64,
     mut check: impl FnMut(&Queue, &[Outcome]) -> Option<T>,
 ) -> T {
     skuld::wait_until_async(what, WAIT, || {
@@ -248,12 +260,182 @@ async fn drive<T>(
             if let LinkEvent::Lost { why, .. } = &ev {
                 panic!("the link was lost waiting for {what}: {why}");
             }
-            outcomes.extend(q.on_link(ev, now()));
+            outcomes.extend(q.on_link(ev, now() + offset));
         }
-        q.tick(now());
+        outcomes.extend(q.tick(now() + offset).outcomes);
         std::future::ready(check(q, outcomes))
     })
     .await
+}
+
+/// A queue on a temporary folder whose one local slot JOB holds, and runner r1 (serve in ROOT) added with IMAGE for its
+/// health check's canary.
+fn queue_with_r1(
+    dir: &std::path::Path,
+    root: &str,
+    prefix: &str,
+    hub: &str,
+    img: &str,
+) -> (
+    Arc<Queue>,
+    UnboundedReceiver<LinkEvent>,
+    tokio::process::Child,
+) {
+    let (q, events) = Queue::new(QueueCfg {
+        hub_id: hub.into(),
+        exec_root: dir.to_path_buf(),
+        local: LocalRunner::new(Admission::Fixed(1), dir),
+        db: None,
+    });
+    q.adopt("xbusy", Priority::P1, now());
+    let (channels, child) = serve("r1", root, prefix, hub);
+    let session = Session::start("r1", channels, q.route(), q.link_events());
+    q.add_runner(
+        RemoteRunner {
+            name: "r1".into(),
+            trust: forseti::RunnerTrust::Mine,
+            accept: forseti::Accept::All,
+            grace_s: 600,
+            image: Some(img.into()),
+        },
+        session,
+    );
+    (q, events, child)
+}
+
+/// A heavy job ID for any runner, run in IMAGE (none: the runner can't start it).
+fn heavy_job(id: &str, image: Option<&str>) -> Submit {
+    let mut s = spec(&format!("echo {id}"));
+    s.weight = Weight::Heavy;
+    Submit {
+        id: id.into(),
+        session: Some("s1".into()),
+        own: Priority::P3,
+        spec: s,
+        place: Placement {
+            heavy: true,
+            send: SendMode::Heavy,
+            image: image.map(String::from),
+            ..Placement::default()
+        },
+        pending: serde_json::Value::Null,
+    }
+}
+
+/// Benches r1: two jobs it can't start (`infra: setup`, its strikes); waits for both verdicts.
+async fn bench_r1(
+    q: &Queue,
+    events: &mut UnboundedReceiver<LinkEvent>,
+    outcomes: &mut Vec<Outcome>,
+) {
+    for id in ["xbad1", "xbad2"] {
+        q.submit(heavy_job(id, None), now());
+    }
+    drive(q, events, outcomes, "both jobs' verdicts", |_, o| {
+        let done = o
+            .iter()
+            .filter(|o| matches!(o, Outcome::Done { id, .. } if id.starts_with("xbad")))
+            .count();
+        (done == 2).then_some(())
+    })
+    .await;
+    for o in outcomes.iter() {
+        if let Outcome::Done { id, result, .. } = o {
+            assert_eq!(
+                result["verdict"],
+                json!({"Infra": "setup"}),
+                "{id}: {result}"
+            );
+        }
+    }
+}
+
+mod health {
+    use super::*;
+
+    /// [C] Two jobs r1 can't start (no image to run them in: `infra: setup`, a strike each) bench it; with this machine
+    /// free again the next heavy job runs here, never on the benched runner.
+    #[tokio::test]
+    #[ignore = "fleet"]
+    async fn a_broken_image_twice_benches_and_jobs_run_elsewhere() {
+        let (prefix, hub) = ("flbench", "hubbench");
+        let root = root("r1", "fl-bench");
+        let img = image("r1");
+        let dir = tempfile::tempdir().unwrap();
+        let (q, mut events, _child) = queue_with_r1(dir.path(), &root, prefix, hub, &img);
+        let mut outcomes = vec![];
+        bench_r1(&q, &mut events, &mut outcomes).await;
+        let r1 = q.runner("r1").expect("r1");
+        assert!(r1.state.starts_with("benched: infra: setup ("), "{r1:?}");
+        assert_eq!(r1.strikes, 2);
+        q.release("xbusy");
+        q.submit(heavy_job("xgood", Some(&img)), now());
+        let row = drive(
+            &q,
+            &mut events,
+            &mut outcomes,
+            "the next job placed",
+            |q, _| q.row("xgood").filter(|r| r.machine.is_some()),
+        )
+        .await;
+        assert_eq!(row.machine.as_deref(), Some("local"), "{row:?}");
+    }
+
+    /// [C] A benched runner whose health check passes (the probe and the contract, the canary `true` in its image under
+    /// the caps, disk above the guard, its clock within 2 s) is back in rotation with no strikes.
+    #[tokio::test]
+    #[ignore = "fleet"]
+    async fn a_passing_check_returns_with_zero_strikes() {
+        let (prefix, hub) = ("flcheck", "hubcheck");
+        let root = root("r1", "fl-check");
+        let img = image("r1");
+        let dir = tempfile::tempdir().unwrap();
+        let (q, mut events, _child) = queue_with_r1(dir.path(), &root, prefix, hub, &img);
+        let mut outcomes = vec![];
+        bench_r1(&q, &mut events, &mut outcomes).await;
+        assert!(q.runner("r1").unwrap().state.starts_with("benched"));
+        q.check_now("r1");
+        // judged: back in rotation, or a third strike naming what failed
+        let r1 = drive(
+            &q,
+            &mut events,
+            &mut outcomes,
+            "r1's check judged",
+            |q, _| {
+                q.runner("r1")
+                    .filter(|r| r.state == "ready" || r.strikes > 2)
+            },
+        )
+        .await;
+        assert_eq!(r1.state, "ready", "{r1:?}");
+        assert_eq!((r1.strikes, r1.last.as_deref()), (0, None), "{r1:?}");
+    }
+
+    /// [C] A runner whose clock is more than 2 s off the hub's fails its health check: a strike, saying so.
+    #[tokio::test]
+    #[ignore = "fleet"]
+    async fn clock_skew_over_2s_fails_the_check() {
+        let (prefix, hub) = ("flskew", "hubskew");
+        let root = root("r1", "fl-skew");
+        let img = image("r1");
+        let dir = tempfile::tempdir().unwrap();
+        let (q, mut events, _child) = queue_with_r1(dir.path(), &root, prefix, hub, &img);
+        let mut outcomes = vec![];
+        q.check_now("r1");
+        // the hub's clock 5 s ahead of the runner's
+        let r1 = drive_at(
+            &q,
+            &mut events,
+            &mut outcomes,
+            "r1's check judged",
+            5,
+            |q, _| q.runner("r1").filter(|r| r.strikes > 0),
+        )
+        .await;
+        assert_eq!(r1.strikes, 1, "{r1:?}");
+        let last = r1.last.unwrap_or_default();
+        assert!(last.contains("clock is -5 s off the hub's"), "{last}");
+    }
 }
 
 /// The wall clock as the queue takes it: a value, never waited on.
@@ -292,6 +474,7 @@ mod queue {
                 trust: forseti::RunnerTrust::Mine,
                 accept: forseti::Accept::All,
                 grace_s: 600,
+                image: Some(img.clone()),
             },
             session,
         );

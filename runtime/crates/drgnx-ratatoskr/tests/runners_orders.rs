@@ -9,6 +9,7 @@
 use drgnx_ratatoskr::runners::attempts::{
     AttemptState, Core as Attempts, Effect, Event, Listed, ListedState, PREEMPTED,
 };
+use drgnx_ratatoskr::runners::health::{StrikeCtx, is_strike};
 use serde_json::{Value, json};
 use skuld::{Bound, Core, Partial, every_order, random_orders};
 use sleipnir::proto::{JobRef, Nonce};
@@ -190,9 +191,15 @@ impl Shell {
                     if matches!(kind, "HubRestarted" | "HelloListed") {
                         self.note(format!("{kind} requeued the job"));
                     }
-                    // preemption_is_neither_strike_nor_eviction
+                    // preemption_is_neither_strike_nor_eviction: its reason is the preemption's, which is no strike
                     if kind == "Preempting" && reason != PREEMPTED {
                         self.note(format!("a preemption requeued for {reason:?}"));
+                    }
+                    let why = reason.strip_prefix("infra: ").unwrap_or(reason);
+                    if kind == "Preempting"
+                        && is_strike(&forseti::Verdict::Infra(why.into()), &StrikeCtx::default())
+                    {
+                        self.note("a preemption counted as a strike".into());
                     }
                     let (n, _) = before.current("j1").expect("a current attempt");
                     self.ended.push(n);
