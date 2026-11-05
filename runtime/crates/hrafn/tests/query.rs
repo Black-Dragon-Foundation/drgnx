@@ -334,6 +334,58 @@ async fn the_vector_scan_plan_is_one_pass_over_the_vectors() {
     );
 }
 
+/// Pattern D. In a file that has not changed, no hit moves, whatever the chunk starts with (a blank line, an attribute):
+/// the hit's lines are the chunk's own, and it is not marked as found again.
+#[tokio::test]
+async fn an_unchanged_file_moves_no_hit() {
+    let text = "use std::fmt;\n\npub const FIRST_LIMIT: usize = 64;\n\n/// How long the second waits.\npub const SECOND_WAIT: u64 = 5;\n\n#[derive(Debug)]\nstruct ThirdArgs {\n    a: u32,\n}\n\nfn fourth_helper() -> u32 {\n    7\n}\n";
+    let dir = tempfile::tempdir().unwrap();
+    let store = CodeStore::open(&dir.path().join("code.db")).unwrap();
+    let listed = vec![Listed {
+        path: "src/lib.rs".into(),
+        blob: "b".into(),
+        class: Class::Code,
+        lang: Lang::Rust,
+        generated: false,
+        size: text.len() as u64,
+    }];
+    refresh(
+        &store,
+        &listed,
+        &|_: &str| Ok(text.as_bytes().to_vec()),
+        &[],
+    )
+    .await
+    .unwrap();
+    let starts: Vec<(i64, String)> = store
+        .handle()
+        .read(|c| {
+            let mut st = c.prepare(
+                "select s.name, c.line_start from symbol s join chunk c on c.id = s.chunk",
+            )?;
+            let rows = st
+                .query_map([], |r| Ok((r.get::<_, i64>(1)?, r.get::<_, String>(0)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .await
+        .unwrap();
+    assert!(starts.len() >= 4, "{starts:?}");
+    for (line, name) in starts {
+        let a = search(&store, &q(&name, Scope::All), None, &|_: &str| {
+            Some(text.to_string())
+        })
+        .await
+        .unwrap();
+        let h = &a.hits[0];
+        assert_eq!(
+            (h.line_start as i64, h.reanchored),
+            (line, false),
+            "{name}: {h:?}"
+        );
+    }
+}
+
 /// Pattern D. The file grew three lines at its top since it was indexed: the hit's lines are found again and move.
 #[tokio::test]
 async fn reanchors_moved_hit() {

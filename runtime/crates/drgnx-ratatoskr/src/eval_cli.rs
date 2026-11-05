@@ -268,19 +268,19 @@ fn spec_of(id: Option<&str>) -> Result<&'static ModelSpec, String> {
     }
 }
 
-/// Up to LIMIT definitions with a name of their own (`(name, path, first line of the chunk)`), spread evenly through
+/// Up to LIMIT definitions with a name of their own (`(name, path, first symbol of the chunk)`), spread evenly through
 /// the code files.
 async fn sample_names(
     store: &CodeStore,
     limit: usize,
-) -> Result<Vec<(String, String, u32)>, String> {
-    let all: Vec<(String, String, String, u32)> = store
+) -> Result<Vec<(String, String, String)>, String> {
+    let all: Vec<(String, String, String, String)> = store
         .handle()
         .read(|c| {
             // one pass over the table; the uniqueness is counted here (a `name in (select … group by name having …)`
             // ran for minutes on a 16,000-chunk project)
             let mut q = c.prepare(
-                "select s.name, s.path, f.class, c.line_start from symbol s
+                "select s.name, s.path, f.class, coalesce(c.symbol, '') from symbol s
                  join file f on f.path = s.path join chunk c on c.id = s.chunk",
             )?;
             let rows = q
@@ -294,17 +294,17 @@ async fn sample_names(
 }
 
 /// The definitions of code files whose name is at least 4 characters and defined once in the whole project, by name.
-fn unique_code_names(all: Vec<(String, String, String, u32)>) -> Vec<(String, String, u32)> {
+fn unique_code_names(all: Vec<(String, String, String, String)>) -> Vec<(String, String, String)> {
     let mut count: HashMap<&str, u32> = HashMap::new();
     for (name, _, _, _) in &all {
         *count.entry(name.as_str()).or_default() += 1;
     }
-    let mut out: Vec<(String, String, u32)> = all
+    let mut out: Vec<(String, String, String)> = all
         .iter()
-        .filter(|(n, _, class, _)| {
-            class == "code" && n.chars().count() >= 4 && count[n.as_str()] == 1
+        .filter(|(n, _, class, sym)| {
+            class == "code" && n.chars().count() >= 4 && count[n.as_str()] == 1 && !sym.is_empty()
         })
-        .map(|(n, p, _, l)| (n.clone(), p.clone(), *l))
+        .map(|(n, p, _, s)| (n.clone(), p.clone(), s.clone()))
         .collect();
     out.sort();
     out
@@ -592,22 +592,24 @@ mod tests {
     /// Pattern D. The exact-symbol sample is names defined once, in code files, of 4 characters or more, spread evenly.
     #[test]
     fn the_symbol_sample_is_unique_code_names() {
-        let row =
-            |n: &str, p: &str, c: &str, l: u32| (n.to_string(), p.to_string(), c.to_string(), l);
+        let row = |n: &str, p: &str, c: &str, s: &str| {
+            (n.to_string(), p.to_string(), c.to_string(), s.to_string())
+        };
         let names = unique_code_names(vec![
-            row("alpha-one", "a.el", "code", 3),
-            row("dup-name", "a.el", "code", 9),
-            row("dup-name", "b.el", "code", 1),
-            row("abc", "a.el", "code", 20),
-            row("in-tests", "t.el", "test", 1),
-            row("beta-two", "b.el", "code", 7),
+            row("alpha-one", "a.el", "code", "alpha-one"),
+            row("dup-name", "a.el", "code", "dup-name"),
+            row("dup-name", "b.el", "code", "dup-name"),
+            row("abc", "a.el", "code", "abc"),
+            row("in-tests", "t.el", "test", "in-tests"),
+            row("beta-two", "b.el", "code", "alpha-one"),
+            row("no-chunk-symbol", "b.el", "code", ""),
         ]);
-        // each with the first line of the chunk that defines it
+        // each with the first symbol of the chunk that defines it (the chunk's name in a hit)
         assert_eq!(
             names,
             [
-                ("alpha-one".into(), "a.el".into(), 3),
-                ("beta-two".into(), "b.el".into(), 7)
+                ("alpha-one".into(), "a.el".into(), "alpha-one".into()),
+                ("beta-two".into(), "b.el".into(), "alpha-one".into())
             ]
         );
         assert_eq!(spread((0..10).collect::<Vec<_>>(), 5), [0, 2, 4, 6, 8]);

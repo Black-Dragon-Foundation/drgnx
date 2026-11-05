@@ -75,10 +75,11 @@ pub fn run(rows: &[EvalRow], answer: &dyn Fn(&Query) -> Answer) -> Report {
     }
 }
 
-/// The share of NAMES (`(name, path, first line of its chunk)` of definitions) whose first hit is the chunk that
-/// defines it: the gate wants 1.0. The first misses come back too, each as a line saying what answered instead.
+/// The share of NAMES (`(name, path, first symbol of its chunk)` of definitions) whose first hit is the chunk that
+/// defines it (a hit's `symbol` is its chunk's first one): the gate wants 1.0. The first misses come back too, each as
+/// a line saying what answered instead.
 pub fn exact_symbol_floor(
-    names: &[(String, String, u32)],
+    names: &[(String, String, String)],
     answer: &dyn Fn(&Query) -> Answer,
 ) -> (f64, Vec<String>) {
     if names.is_empty() {
@@ -86,7 +87,7 @@ pub fn exact_symbol_floor(
     }
     let mut misses = Vec::new();
     let mut ok = 0usize;
-    for (name, path, line) in names {
+    for (name, path, chunk) in names {
         let q = Query {
             text: name.clone(),
             scope: Scope::All,
@@ -95,12 +96,12 @@ pub fn exact_symbol_floor(
         let first: Option<Hit> = answer(&q).hits.into_iter().next();
         if first
             .as_ref()
-            .is_some_and(|h| &h.path == path && h.line_start == *line)
+            .is_some_and(|h| &h.path == path && h.symbol.as_deref() == Some(chunk.as_str()))
         {
             ok += 1;
         } else if misses.len() < 10 {
             misses.push(format!(
-                "{name} ({path}:{line}) answered by {}",
+                "{name} ({path}, chunk {chunk}) answered by {}",
                 first.map_or("nothing".to_string(), |h| format!(
                     "{}:{} {:?} via {:?}",
                     h.path, h.line_start, h.symbol, h.routes
