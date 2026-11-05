@@ -806,7 +806,7 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
            (log (drgnx-install-test--file (expand-file-name "log" tmp)))
            (prefix (concat home "/.local/opt/nidhogg/31.1-nidhogg.5")))
       (should (= (car r) 0))
-      (should (string-search (concat "build.sh --container fedora-45--memory 6g --jobs 4 --prefix " prefix) log))
+      (should (string-search (concat "build.sh --container fedora-45 --memory 6g --jobs 4 --prefix " prefix) log))
       (should (string-search "--build-dir " log))
       (should (string-search "sudo dnf install -y libfoo libbar" log))
       (should-not (string-search "libbuildfoo" log))
@@ -952,7 +952,7 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
                               drgnx-install-test--roomy)))
            (log (drgnx-install-test--file (expand-file-name "log" tmp))))
       (should (= (car r) 0))
-      (should (string-search "build.sh --container fedora-45--memory 5g --jobs 2 --prefix " log)))))
+      (should (string-search "build.sh --container fedora-45 --memory 5g --jobs 2 --prefix " log)))))
 
 (ert-deftest drgnx-install/the-pin-is-the-published-series-head ()
   (drgnx-install-test--expect (drgnx-install-test--plan "fedora-45" "--method" "nidhogg")
