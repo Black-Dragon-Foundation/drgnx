@@ -1147,7 +1147,7 @@ layer alone cap Landlock (`landlock_abi_cap: 3` takes its TCP rules away) or omi
 | `landlock-layer-2` | a write the mount namespace allows is still refused by Landlock when Landlock is not told about it |
 | `landlock-below-required-refused` | a spec's `landlock_min_abi` above the effective ABI refuses the run before the program |
 | `fds-closed`, `fds-closed-reduced` | an fd the caller leaked does not reach the program |
-| `tfo-blocked`, `udp-blocked` | TCP Fast Open and UDP leave the network namespace for neither the host's loopback nor its non-loopback address |
+| `tfo-blocked`, `udp-blocked` | TCP Fast Open and UDP leave the network namespace for neither the host's loopback nor its non-loopback address. With Landlock capped below TCP, the namespace answers a Fast Open send with ENETUNREACH or ECONNREFUSED. Where AppArmor confines bwrap (Ubuntu 26.04's `bwrap-userns-restrict`, label `bwrap//&unpriv_bwrap`), its `bwrap` profile denies the send's implicit connect first, with EACCES (`apparmor="DENIED" operation="connect"`), while a plain `connect` still meets the namespace. On such a host this row sees AppArmor's block, not the namespace's |
 | `relay-reaches-the-proxy` | the relay reaches the session's proxy: a listed target connects, another is a `Denied` |
 | `connect-wildcard-refused`, `connect-private-literal-refused` | `*` and private literals (the metadata address, loopback, `::1`, `0.0.0.0`) are `Refused`, never `Denied`, and reach nothing |
 | `own-tmp-unix-socket` | a server the program makes itself in its `/tmp` is reachable (Landlock's same-domain rule, ABI 9), as design §5.11 needs |
@@ -1172,7 +1172,7 @@ reduced tier's network); every one turned its row red, and no other row changed:
 | the reduced floor 9 → 6 (harness built with it too) | `reduced-below-abi-9-refused`; at cap 8 the bus is reached |
 | binds by path instead of by fd | `bind-fd-link-swap` (the canary dir was mounted) |
 | no bwrap floor | `bwrap-below-floor-run`, `bwrap-below-floor-check` (the fake ran) |
-| `--share-net` always, Landlock's TCP rule still on | `k6-isolated-refused`, `tfo-blocked`, `udp-blocked`; `k6-isolated-landlock-tcp` stays green: Landlock holds TCP, never UDP |
+| `--share-net` always, Landlock's TCP rule still on | `k6-isolated-refused`, `tfo-blocked`, `udp-blocked`; `k6-isolated-landlock-tcp` stays green: Landlock holds TCP, never UDP (where AppArmor confines bwrap, `tfo-blocked` stays green too: the profile still denies the send) |
 | `io_uring_*` dropped from seccomp | `seccomp-denies`, and `seccomp::tests::installed_filter_denies` on the VM |
 | rule 11 dropped and the helper bound before the binds | `helper-cannot-be-shadowed` (the planted program ran as the helper) |
 | the reduced tier's TCP connect rule dropped | `reduced-tcp-only-to-the-relay` |
