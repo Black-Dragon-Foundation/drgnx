@@ -106,8 +106,10 @@ impl Gather {
     pub(crate) fn new(weights: &Weights, hidden: usize) -> Result<Gather, LoadError> {
         let bytes = weights.f16_bytes("embeddings.tok_embeddings.weight")?;
         let table = bytes
-            .chunks_exact(2)
-            .map(|b| f16::from_le_bytes([b[0], b[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| f16::from_le_bytes(*b))
             .collect();
         Ok(Gather { table, hidden })
     }

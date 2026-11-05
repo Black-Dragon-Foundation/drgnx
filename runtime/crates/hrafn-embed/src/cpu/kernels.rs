@@ -47,7 +47,7 @@ fn attn_row(s: Shape, q: &[f32], qkv: &[f32], span: [u32; 2], out: &mut [f32], s
         for (j, score) in scores.iter_mut().enumerate() {
             let k = &qkv[(from + j) * row + s.hidden + head..][..s.head];
             let mut sum = [0f32; 8];
-            for (a, b) in q.chunks_exact(8).zip(k.chunks_exact(8)) {
+            for (a, b) in q.as_chunks::<8>().0.iter().zip(k.as_chunks::<8>().0) {
                 for l in 0..8 {
                     sum[l] += a[l] * b[l];
                 }
@@ -74,8 +74,8 @@ fn attn_row(s: Shape, q: &[f32], qkv: &[f32], span: [u32; 2], out: &mut [f32], s
 #[inline(always)]
 fn norm_row(s: Shape, x: &[f32], gain: &[f32], y: &mut [f32]) {
     let (mut sum, mut squares) = ([0f32; 16], [0f32; 16]);
-    let lanes = x.chunks_exact(16);
-    for (l, v) in lanes.remainder().iter().enumerate() {
+    let (lanes, rest) = x.as_chunks::<16>();
+    for (l, v) in rest.iter().enumerate() {
         sum[l] += v;
         squares[l] += v * v;
     }

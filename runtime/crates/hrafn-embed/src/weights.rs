@@ -132,7 +132,7 @@ impl Weights {
 }
 
 fn pairs(raw: &[u8]) -> impl Iterator<Item = [u8; 2]> + '_ {
-    raw.chunks_exact(2).map(|b| [b[0], b[1]])
+    raw.as_chunks::<2>().0.iter().copied()
 }
 
 fn transpose<T: Copy>(m: &[T], rows: usize, cols: usize) -> Vec<T> {
