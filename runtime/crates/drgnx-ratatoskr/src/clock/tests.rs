@@ -188,3 +188,114 @@ fn a_real_wait_is_waited_for_and_one_that_lasts_is_named() {
         assert_eq!(seen(&l), ["after"]);
     });
 }
+
+/// What a barrier's settle names `waiting`.
+async fn waiting(within: Duration, ok: &[String]) -> Vec<String> {
+    settle_real(within, ok).await
+}
+
+#[test]
+fn a_task_woken_by_another_tasks_real_wait_is_waited_for() {
+    // Pattern B: a job's watcher leaves its real wait and tells a subscriber over a channel (a job's end waking its
+    // session); the settle returns only once the subscriber has run too, every one of 100 runs
+    on_virtual(async {
+        let mut missed = 0;
+        for _ in 0..100 {
+            let l = log();
+            let (go, rx) = tokio::sync::oneshot::channel::<()>();
+            let (tell, heard) = tokio::sync::oneshot::channel::<()>();
+            spawn("job:watch", async move {
+                let _ = real(rx).await;
+                let _ = tell.send(());
+            });
+            let mine = l.clone();
+            spawn("wake:run", async move {
+                let _ = heard.await;
+                for _ in 0..20 {
+                    tokio::task::yield_now().await;
+                }
+                mine.lock().unwrap().push("woke");
+            });
+            advance(Duration::ZERO).await;
+            go.send(()).unwrap();
+            assert!(waiting(Duration::from_secs(30), &[]).await.is_empty());
+            if seen(&l) != ["woke"] {
+                missed += 1;
+            }
+        }
+        assert_eq!(
+            missed, 0,
+            "{missed} of 100 settles returned before the woken task ran"
+        );
+    });
+}
+
+#[test]
+fn a_store_threads_answer_is_a_real_wait() {
+    // Pattern C: a task waits on the store thread, which the test holds: the task is inside a real wait (named after
+    // the settle's limit); once the thread answers, the settle returns after what the task did with it
+    on_virtual(async {
+        let dir = tempfile::tempdir().unwrap();
+        let (_store, db) = urdr::Store::spawn(urdr::StoreSpec {
+            path: dir.path().join("a.db"),
+            mode: urdr::Mode::ReadWrite {
+                file_mode: 0o600,
+                synchronous_full: false,
+            },
+            migrations: &[(1, "create table t(x);")],
+        })
+        .unwrap();
+        let (hold, held) = std::sync::mpsc::channel::<()>();
+        let l = log();
+        let mine = l.clone();
+        spawn("records:follow", async move {
+            let _ = db
+                .read(move |_| {
+                    let _ = held.recv();
+                    Ok(())
+                })
+                .await;
+            mine.lock().unwrap().push("read");
+        });
+        advance(Duration::ZERO).await;
+        assert_eq!(waiting(ms(100), &[]).await, ["records:follow"]);
+        hold.send(()).unwrap();
+        assert!(waiting(Duration::from_secs(30), &[]).await.is_empty());
+        assert_eq!(seen(&l), ["read"]);
+    });
+}
+
+#[test]
+fn an_advance_waits_for_a_real_wait_inside_a_clock_timeout() {
+    // Pattern B: a task an advance woke goes into a real wait under the clock's timeout (a download under its stall
+    // limit); its end comes from outside a little later, and the advance answers only after it, every one of 100 runs
+    on_virtual(async {
+        let mut missed = 0;
+        for _ in 0..100 {
+            let l = log();
+            let mine = l.clone();
+            let (go, rx) = tokio::sync::oneshot::channel::<()>();
+            spawn("search:download", async move {
+                sleep(ms(10)).await;
+                let _ = timeout(ms(5000), real(rx)).await;
+                mine.lock().unwrap().push("after");
+            });
+            advance(Duration::ZERO).await;
+            tokio::spawn(async move {
+                for _ in 0..20 {
+                    tokio::task::yield_now().await;
+                }
+                let _ = go.send(());
+            });
+            let a = advance(ms(10)).await;
+            assert!(a.busy.is_empty(), "{a:?}");
+            if seen(&l) != ["after"] {
+                missed += 1;
+            }
+        }
+        assert_eq!(
+            missed, 0,
+            "{missed} of 100 advances answered inside the real wait"
+        );
+    });
+}
