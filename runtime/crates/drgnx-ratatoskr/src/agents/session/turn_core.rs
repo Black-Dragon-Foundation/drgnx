@@ -34,8 +34,13 @@ pub(crate) enum TurnEvent {
     Stop { after_tool: bool },
     /// The agent's process is to end.
     Kill { why: KillWhy },
-    /// The matrix asks the user about permission request REQUEST, which the agent sent during TURN.
-    PermissionAsked { request: u64, turn: u64 },
+    /// The matrix asks the user about permission request REQUEST, which the agent sent during TURN, through matrix
+    /// card CARD when the store made one.
+    PermissionAsked {
+        request: u64,
+        turn: u64,
+        card: Option<i64>,
+    },
     /// The user answered REQUEST (or settled its matrix card).
     PermissionAnswered { request: u64 },
     /// A tool call completed or failed.
@@ -118,6 +123,8 @@ pub(crate) enum TurnEffect {
     Answer { request: u64 },
     /// The request is answered cancelled.
     Cancel { request: u64 },
+    /// Matrix card CARD is withdrawn: every request that waited on it was answered cancelled, so nobody answers it.
+    Withdraw { card: i64 },
     /// The queue and the pause are kept on disk ([`TurnCore::kept`]).
     Persist,
     /// The snapshot changed: its change number goes up and an event pair is due.
@@ -152,8 +159,8 @@ pub(crate) struct TurnCore {
     killed: bool,
     /// The hub is ending: a turn's end holds nothing and starts nothing.
     ending: bool,
-    /// The requests the user is asked, oldest first.
-    held: Vec<u64>,
+    /// The requests the user is asked, oldest first, with the matrix card each waits on.
+    held: Vec<(u64, Option<i64>)>,
     /// The event pair's timer runs.
     emit_armed: bool,
 }
@@ -294,17 +301,28 @@ impl TurnCore {
                     Vec::new()
                 }
             }
-            TurnEvent::PermissionAsked { request, turn } => {
+            TurnEvent::PermissionAsked {
+                request,
+                turn,
+                card,
+            } => {
                 let asked = self.status == SessionStatus::Busy
                     && turn == self.turn
                     && !self.cancelling
                     && !self.killed;
                 if asked {
-                    self.held.push(request);
+                    self.held.push((request, card));
                     vec![E::Hold { request }]
                 } else {
-                    // its turn is cancelled or over: nobody will answer it
-                    vec![E::Cancel { request }]
+                    // its turn is cancelled or over: nobody will answer it, nor its card unless another request waits
+                    // on that
+                    let mut fx = vec![E::Cancel { request }];
+                    if let Some(card) =
+                        card.filter(|c| !self.held.iter().any(|(_, h)| *h == Some(*c)))
+                    {
+                        fx.push(E::Withdraw { card });
+                    }
+                    fx
                 }
             }
             TurnEvent::PermissionAnswered { request } => {
@@ -461,15 +479,20 @@ impl TurnCore {
         fx
     }
 
+    /// Every held request answered cancelled, then each card they waited on withdrawn (none waits on it now).
     fn cancel_held(&mut self) -> Vec<TurnEffect> {
-        std::mem::take(&mut self.held)
-            .into_iter()
-            .map(|request| TurnEffect::Cancel { request })
+        let held = std::mem::take(&mut self.held);
+        let mut cards: Vec<i64> = held.iter().filter_map(|(_, c)| *c).collect();
+        cards.sort_unstable();
+        cards.dedup();
+        held.into_iter()
+            .map(|(request, _)| TurnEffect::Cancel { request })
+            .chain(cards.into_iter().map(|card| TurnEffect::Withdraw { card }))
             .collect()
     }
 
     fn take_held(&mut self, request: u64) -> bool {
-        let at = self.held.iter().position(|r| *r == request);
+        let at = self.held.iter().position(|(r, _)| *r == request);
         at.map(|i| self.held.remove(i)).is_some()
     }
 
@@ -514,8 +537,8 @@ impl TurnCore {
     }
 
     #[cfg(test)]
-    pub(crate) fn held(&self) -> &[u64] {
-        &self.held
+    pub(crate) fn held(&self) -> Vec<u64> {
+        self.held.iter().map(|(r, _)| *r).collect()
     }
 }
 

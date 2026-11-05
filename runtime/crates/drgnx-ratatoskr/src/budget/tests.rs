@@ -181,5 +181,9 @@ fn a_new_conversation_under_one_session_counts_its_cost_from_zero() {
         .iter()
         .find(|l| l.unit == Unit::UsdEst)
         .map(|l| l.amount);
-    assert_eq!(spent, Some(10.0), "7 in the first conversation, 3 in the second");
+    assert_eq!(
+        spent,
+        Some(10.0),
+        "7 in the first conversation, 3 in the second"
+    );
 }

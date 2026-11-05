@@ -1316,7 +1316,9 @@ What the core keeps:
 - Each permission request is answered or answered cancelled once. A Stop, the pause after a tool call, the turn's end,
   a kill and the agent's exit cancel what is held; a kill's cancels change the snapshot at once, so the editors drop
   the card before the exit. A request the matrix decides on after its turn was cancelled or ended is answered
-  cancelled at once: the agent no longer waits on it.
+  cancelled at once: the agent no longer waits on it. A matrix card that no request waits on any more after such a
+  cancel is withdrawn (`Withdraw`: `norn::write::cards::card_withdraw`, state `withdrawn` with a `card` event), so it
+  leaves the open cards and the needs-you lists; a card the user settled first stays settled.
 - One event pair is armed at a time; the timer's tick sends it.
 
 The shell acts on a turn's end as the step decided it: whether the hub is ending is read under the step's lock, never
@@ -1333,6 +1335,9 @@ again after it.
   call, and the cockpit settling a card;
 - two senders, an agent that asks in each turn, the matrix deciding late, and the user's kill, the hub's end or a
   crash;
+- a user who sends and stops, an agent that asks the same question twice and answers, the matrix deciding late
+  through the question's open card or a new one, and the cockpit settling the open card (no card stays open that no
+  request waits on, and none is withdrawn while one does);
 - two senders, the turn's task that sends each prompt in a step of its own, an agent, and the hub's end, then the exit
   (every prompt reached the agent or waits in the queue on disk);
 - the same, but the hub dies with no end step and nothing of it runs after (every prompt reached the agent or is in

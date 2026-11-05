@@ -73,6 +73,9 @@ struct Shell {
     turn_of: BTreeMap<u64, u64>,
     asked: Vec<u64>,
     replies: BTreeMap<u64, Vec<&'static str>>,
+    /// The matrix card each request was asked through, and the cards withdrawn, in order.
+    card_of: BTreeMap<u64, i64>,
+    withdrawn: Vec<i64>,
     /// The shell sends a turn's prompt in a step of its own after the turn started (`Session::turn`), not at once.
     gap: bool,
     /// A turn started whose prompt the shell has not sent yet, with its text.
@@ -110,6 +113,8 @@ impl Shell {
             turn_of: BTreeMap::new(),
             asked: Vec::new(),
             replies: BTreeMap::new(),
+            card_of: BTreeMap::new(),
+            withdrawn: Vec::new(),
             gap: false,
             unsent: None,
             reached: Vec::new(),
@@ -211,6 +216,24 @@ impl Shell {
                 }
                 TurnEffect::Answer { request } => self.reply(*request, "answered"),
                 TurnEffect::Cancel { request } => self.reply(*request, "cancelled"),
+                TurnEffect::Withdraw { card } => {
+                    // withdrawn once, and only when no request waits on it
+                    let waiting: Vec<u64> = self
+                        .core
+                        .held()
+                        .into_iter()
+                        .filter(|r| self.card_of.get(r) == Some(card))
+                        .collect();
+                    if !waiting.is_empty() {
+                        self.note(format!(
+                            "card {card} withdrawn while {waiting:?} wait on it"
+                        ));
+                    }
+                    if self.withdrawn.contains(card) {
+                        self.note(format!("card {card} withdrawn twice"));
+                    }
+                    self.withdrawn.push(*card);
+                }
                 _ => {}
             }
         }
@@ -1189,7 +1212,11 @@ impl Core for PermShell {
             PermEv::Ask(request) => {
                 s.asked.push(request);
                 s.turn_of.insert(request, 1);
-                s.feed(TurnEvent::PermissionAsked { request, turn: 1 });
+                s.feed(TurnEvent::PermissionAsked {
+                    request,
+                    turn: 1,
+                    card: None,
+                });
             }
             PermEv::Answer(request) => {
                 s.feed(TurnEvent::PermissionAnswered { request });
@@ -1255,6 +1282,153 @@ fn every_order_a_held_permission_is_answered_or_cancelled_once() {
     assert!(r.orders > 100, "{} orders", r.orders);
 }
 
+// ---- a matrix card nobody will answer is withdrawn ----
+
+/// The user sends a prompt and stops; the agent sends two requests that ask the same question in the turn it works
+/// on, and answers it; the matrix decides on each in a task of its own (possibly after the turn was cancelled or
+/// ended), through the one open card for that question, or a new one; the cockpit settles the open card.
+#[derive(Clone, Debug)]
+enum CardEv {
+    Send,
+    Stop,
+    Request(u64),
+    Done,
+    Decide(u64),
+    Settle,
+}
+skuld::events!(CardEv {
+    Send,
+    Stop,
+    Request,
+    Done,
+    Decide,
+    Settle
+});
+
+/// A matrix card in the store.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Card {
+    Open,
+    Settled,
+    Withdrawn,
+}
+
+struct CardShell {
+    s: Shell,
+    cards: BTreeMap<i64, Card>,
+}
+
+impl CardShell {
+    /// The open card of the question, or a new one (`norn::write::cards::matrix_card`).
+    fn card(&mut self) -> i64 {
+        if let Some((c, _)) = self.cards.iter().find(|(_, st)| **st == Card::Open) {
+            return *c;
+        }
+        let c = 7 + self.cards.len() as i64;
+        self.cards.insert(c, Card::Open);
+        c
+    }
+}
+
+impl Core for CardShell {
+    type Event = CardEv;
+
+    fn step(&mut self, ev: CardEv) -> Vec<CardEv> {
+        match ev {
+            CardEv::Send => self.s.send("u1"),
+            CardEv::Stop => {
+                self.s.feed(TurnEvent::Stop { after_tool: false });
+            }
+            // the agent asks only while it works on a turn; the reader stamps that turn
+            CardEv::Request(request) => {
+                if let Some(t) = self.s.running {
+                    self.s.turn_of.insert(request, t);
+                }
+            }
+            CardEv::Done => self.s.done(),
+            CardEv::Decide(request) => {
+                if let Some(&turn) = self.s.turn_of.get(&request) {
+                    let card = self.card();
+                    self.s.card_of.insert(request, card);
+                    self.s.asked.push(request);
+                    self.s.feed(TurnEvent::PermissionAsked {
+                        request,
+                        turn,
+                        card: Some(card),
+                    });
+                }
+            }
+            // `cards/settle` in the cockpit, then `Hub::card_settled`: the requests waiting on it go on
+            CardEv::Settle => {
+                if let Some((&c, _)) = self.cards.iter().find(|(_, st)| **st == Card::Open) {
+                    self.cards.insert(c, Card::Settled);
+                    let on: Vec<u64> = self
+                        .s
+                        .core
+                        .held()
+                        .into_iter()
+                        .filter(|r| self.s.card_of.get(r) == Some(&c))
+                        .collect();
+                    for request in on {
+                        self.s.feed(TurnEvent::PermissionAnswered { request });
+                    }
+                }
+            }
+        }
+        // `card_withdraw`: only an open card moves
+        for c in &self.s.withdrawn {
+            if self.cards.get(c) == Some(&Card::Open) {
+                self.cards.insert(*c, Card::Withdrawn);
+            }
+        }
+        Vec::new()
+    }
+}
+
+fn check_cards(c: &CardShell, _: &[CardEv]) -> Result<(), String> {
+    c.s.settled()?;
+    replied_once_over(&c.s)?;
+    // a card still open is one a request still waits on: none is left in the needs-you lists for nobody
+    let held = c.s.core.held();
+    for (card, st) in &c.cards {
+        let waited = held.iter().any(|r| c.s.card_of.get(r) == Some(card));
+        if *st == Card::Open && !waited {
+            return Err(format!(
+                "card {card} stays open, but no request waits on it (replies {:?})",
+                c.s.replies
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn every_order_a_card_nobody_will_answer_is_withdrawn() {
+    let mut p = Partial::new();
+    let user = p.source("user", vec![CardEv::Send, CardEv::Stop]);
+    let agent = p.source(
+        "agent",
+        vec![CardEv::Request(1), CardEv::Request(2), CardEv::Done],
+    );
+    let matrix = p.source("matrix", vec![CardEv::Decide(1), CardEv::Decide(2)]);
+    p.source("cockpit", vec![CardEv::Settle]);
+    // the agent works only once something was sent; the matrix decides on what the reader received
+    p.before((user, 0), (agent, 0));
+    p.before((agent, 0), (matrix, 0));
+    p.before((agent, 1), (matrix, 1));
+    let r = every_order(
+        &p,
+        Bound::default(),
+        || CardShell {
+            s: Shell::new(),
+            cards: BTreeMap::new(),
+        },
+        check_cards,
+    );
+    assert_eq!(r.mode, Mode::Exhaustive);
+    assert!(r.orders > 100, "{} orders", r.orders);
+}
+
 // ---- a kill or an exit cancels what is held ----
 
 /// How the session's process ends.
@@ -1310,7 +1484,11 @@ impl Core for EndShell {
             EndEv::Decide(request) => {
                 if let Some(&turn) = s.turn_of.get(&request) {
                     s.asked.push(request);
-                    s.feed(TurnEvent::PermissionAsked { request, turn });
+                    s.feed(TurnEvent::PermissionAsked {
+                        request,
+                        turn,
+                        card: None,
+                    });
                 }
             }
             EndEv::End(Ending::Kill(why), 0) => {

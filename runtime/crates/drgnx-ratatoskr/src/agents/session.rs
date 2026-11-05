@@ -2486,9 +2486,58 @@ impl Session {
                 TurnEffect::EndTurn { waiting: true, .. } => self.close_when_idle(),
                 TurnEffect::Persist => self.persist_queue(),
                 TurnEffect::Announce => self.changed(),
+                TurnEffect::Withdraw { card } => self.withdraw_later(vec![card]),
                 _ => {}
             }
         }
+    }
+
+    /// The matrix cards a step withdraws.
+    fn withdrawn(fx: &[TurnEffect]) -> Vec<i64> {
+        fx.iter()
+            .filter_map(|e| match e {
+                TurnEffect::Withdraw { card } => Some(*card),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// CARDS leave the open cards (and so the needs-you lists): every request that waited on them was answered
+    /// cancelled.  A card the user settled first stays settled.
+    async fn withdraw_cards(&self, cards: Vec<i64>) {
+        if cards.is_empty() {
+            return;
+        }
+        let hub = Caller {
+            class: Class::Service,
+            sid: None,
+            job: None,
+            conn_id: 0,
+        };
+        let at = now();
+        let r = self
+            .writer
+            .write(&hub, "cards/withdraw", move |tx| {
+                for card in &cards {
+                    norn::write::cards::card_withdraw(tx, *card, at)?;
+                }
+                Ok(())
+            })
+            .await;
+        if let Err(e) = r {
+            tracing::warn!(session = %self.id, "matrix cards not withdrawn: {e:?}");
+        }
+    }
+
+    /// [`Session::withdraw_cards`] in a task of its own, for a step taken where nothing waits.
+    fn withdraw_later(self: &Arc<Self>, cards: Vec<i64>) {
+        if cards.is_empty() {
+            return;
+        }
+        let me = self.clone();
+        crate::clock::spawn("session:card-withdraw", async move {
+            me.withdraw_cards(cards).await;
+        });
     }
 
     fn emit(&self) {
@@ -2877,10 +2926,16 @@ impl Session {
         };
         {
             let mut st = lock(&self.state);
-            let fx = st.core.step(TurnEvent::PermissionAsked { request, turn });
+            let fx = st.core.step(TurnEvent::PermissionAsked {
+                request,
+                turn,
+                card,
+            });
             if !fx.contains(&TurnEffect::Hold { request }) {
                 drop(st);
                 reply(pending.resp, None);
+                // nobody answers its card either
+                self.withdraw_later(Self::withdrawn(&fx));
                 return;
             }
             st.permissions.push(pending);
@@ -3265,7 +3320,9 @@ impl Session {
             })
             .flatten()
             .collect();
+        let cards = Self::withdrawn(&stepped.fx);
         self.reply_cancelled(stepped);
+        self.withdraw_cards(cards).await;
         // a message the store gave this session and that never ran waits in the store again, for its next session
         super::deliver::put_back(&self.writer, &dropped).await;
         let _ = self.conn.cancel(&self.acp);
@@ -3497,7 +3554,10 @@ impl Session {
             why: KillWhy::HubEnding,
         });
         let put_back = stepped.fx.contains(&TurnEffect::Persist);
+        let cards = Self::withdrawn(&stepped.fx);
         self.reply_cancelled(stepped);
+        // before the store ends: the agent that asked is going, and its requests with it
+        self.withdraw_cards(cards).await;
         if put_back {
             self.persist_queue();
         }

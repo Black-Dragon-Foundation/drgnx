@@ -85,8 +85,8 @@ shows again it catches up at once. Scrolled to the end, it follows what comes in
 place while the agent streams. `g` redraws it at once.
 
 Agents: Send to Agent (RET in a transcript) sends; Stop Agent (`C-c C-c` in a transcript, or [Stop]) cancels the
-running turn — it ends within a second, pending permission requests are answered "cancelled", pending edits
-rejected, and queued messages wait (Deliver Queued Messages, `C-c C-d`, sends them; Edit Queued Message changes or
+running turn — it ends within a second, pending permission requests are answered "cancelled" (and their permission
+cards leave What needs you), pending edits rejected, and queued messages wait (Deliver Queued Messages, `C-c C-d`, sends them; Edit Queued Message changes or
 removes one before it is sent). If the agent answers the cancel late, its last words are dropped and nothing new
 is sent until that answer came — never two turns at once. Answer Agent picks an option for a pending permission. The **context** column shows how full the agent's
 context is (from the agent's `usage_update`, or usage in its answer). The **Last** column shows how long ago the
