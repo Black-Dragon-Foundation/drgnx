@@ -747,7 +747,8 @@ jobs:
           fetch-depth: 0          # the whole history, for commit-times.sh
           filter: blob:none       # without old file contents
           persist-credentials: false
-      - run: brew install rust
+      # the image's rustup (as the Linux runner jobs), not Homebrew's rust: no formula download and install per run
+      - run: rustup toolchain install stable --profile minimal --component clippy
       - id: rv
         run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
       - id: registry
@@ -762,8 +763,8 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: runtime/target
-          key: cargo-${{ runner.os }}-brew-mt1-${{ steps.rv.outputs.v }}-${{ hashFiles('runtime/Cargo.lock', 'runtime/Cargo.toml', 'runtime/*/Cargo.toml', 'runtime/crates/*/Cargo.toml') }}
-          restore-keys: cargo-${{ runner.os }}-brew-mt1-${{ steps.rv.outputs.v }}-
+          key: cargo-${{ runner.os }}-rustup-mt1-${{ steps.rv.outputs.v }}-${{ hashFiles('runtime/Cargo.lock', 'runtime/Cargo.toml', 'runtime/*/Cargo.toml', 'runtime/crates/*/Cargo.toml') }}
+          restore-keys: cargo-${{ runner.os }}-rustup-mt1-${{ steps.rv.outputs.v }}-
       - name: Each tracked file at its last commit's time (cargo rebuilds only what changed since the cache)
         run: bash .github/ci/commit-times.sh runtime/target/.drgnx-built-from
       # draugr runs only the git of the developer dir xcode-select's link names, and refuses Xcode under the

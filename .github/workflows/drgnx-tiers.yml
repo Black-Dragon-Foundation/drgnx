@@ -536,8 +536,11 @@ jobs:
             { echo "::error::drgnx_ref $ASKED ($sha) is on none of drgnx's branches (a fork's or a pull request's commit)"; exit 1; }
       - id: commit
         run: echo "commit=$(git -C drgnx rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - name: ripgrep and Rust (Homebrew)
-        run: brew install ripgrep rust
+      # Rust from the image's rustup (no Homebrew formula per run), ripgrep from Homebrew
+      - name: ripgrep (Homebrew) and Rust (rustup)
+        run: |
+          brew install ripgrep
+          rustup toolchain install stable --profile minimal
       - uses: ./drgnx/.github/actions/build-test-bins
       - name: install.sh parses under macOS's bash 3.2
         if: ${{ !cancelled() }}

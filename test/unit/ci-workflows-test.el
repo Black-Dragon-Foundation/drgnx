@@ -68,7 +68,11 @@
     (drgnx-ci-test--has (drgnx-ci-test--job tiers "bins-linux")
                         "uses: ./drgnx/.github/actions/build-test-bins" "name: drgnx-test-bins-linux" "retention-days: 1")
     (drgnx-ci-test--has (drgnx-ci-test--job tiers "macos") "uses: ./drgnx/.github/actions/build-test-bins"
-                        "brew install ripgrep rust" "test/container/nidhogg.sh macos")
+                        "brew install ripgrep\n" "rustup toolchain install stable --profile minimal"
+                        "test/container/nidhogg.sh macos")
+    ;; neither macOS job installs Homebrew's rust (the image's rustup is quicker)
+    (should-not (string-search "brew install ripgrep rust" tiers))
+    (should-not (string-search "brew install rust" (drgnx-ci-test--yml "runtime.yml")))
     ;; `nidhogg: artifact' puts the run's own build under the tests: the overlay on Linux, the tarball on macOS
     (drgnx-ci-test--has tiers "nidhogg-artifact: ${{ inputs.nidhogg == 'artifact' && 'tarball-fedora-45' || '' }}"
                         "name: tarball-macos")))
