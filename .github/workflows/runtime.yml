@@ -304,6 +304,26 @@ jobs:
             --probe runtime/target/debug/gleipnir-probe \
             --rows runtime/crates/gleipnir-escape/rows/linux --rows runtime/crates/gleipnir-escape/rows/any \
             --report "$RUNNER_TEMP/escape/escape-${{ runner.arch }}.json"
+      # diagnostic only (this branch): where a TFO SYN's EACCES comes from
+      - name: tfo diagnostic
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          set +e
+          p=$PWD/runtime/target/debug/gleipnir-probe
+          ip=$(ip -4 route get 1.1.1.1 | sed -n 's/.* src \([0-9.]*\).*/\1/p')
+          echo "ip=$ip"; ls -l /usr/bin/bwrap
+          sudo aa-status 2>&1 | grep -i -A2 bwrap | head
+          b="/usr/bin/bwrap --unshare-net --ro-bind / / --dev /dev --proc /proc"
+          echo "== label inside bwrap"; $b cat /proc/self/attr/current; echo
+          echo "== routes inside bwrap"; $b ip route; $b ip -4 addr
+          echo "== bwrap --unshare-net"; $b "$p" tfo "$ip:9" --and connect-tcp "$ip:9" --and udp "$ip:9" --and tfo 127.0.0.1:9 --and connect-tcp 127.0.0.1:9
+          echo "== bwrap --unshare-all"; /usr/bin/bwrap --unshare-all --ro-bind / / --dev /dev --proc /proc "$p" tfo "$ip:9" --and connect-tcp "$ip:9"
+          echo "== sudo unshare -n (root, no userns)"; sudo unshare -n sh -c "ip link set lo up; $p tfo $ip:9 --and connect-tcp $ip:9 --and tfo 127.0.0.1:9"
+          echo "== unshare -rn"; unshare -rn sh -c "$p tfo $ip:9 --and connect-tcp $ip:9"
+          echo "== a copy of bwrap outside /usr/bin (no profile attaches)"; sudo cp /usr/bin/bwrap /usr/local/sbin/bwrap-copy
+          /usr/local/sbin/bwrap-copy --unshare-net --ro-bind / / --dev /dev --proc /proc "$p" tfo "$ip:9" --and connect-tcp "$ip:9"
+          echo "== kernel log"; sudo dmesg | grep -i -E 'apparmor|landlock' | tail -30
+          exit 0
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
