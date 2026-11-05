@@ -250,7 +250,10 @@ over its rounds.
 **Fresh builds and the eln cache (PERF-ELN-1).** A tree that was just built has no native-compiled files yet: its
 session compiles them in the background while it runs, and the first runs cost several times more. Both sessions
 therefore wait until their native compilation has drained, and both run a discarded warm-up before the samples; the
-report prints each side's warm-up p50 next to the measured one.
+report prints each side's warm-up p50 next to the measured one. A plain `--perf` run waits too, before its first
+workload: on a built tree `typing`, which runs first, measured the compilation (its calibration loop ran at 59 ms
+against 13 ms in every later workload of the same session, and the watchdog's stacks show the compilation's loads). A checkout
+that is not built (CI's perf job) compiles nothing, and the wait ends at once.
 
 ## Glitnir (the compositor): popups, the `compose` probe, A/B by environment
 

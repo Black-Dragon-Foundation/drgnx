@@ -1182,6 +1182,12 @@ its own cost to the other numbers)."
   (unless (drgnx-perf-run--childframe-elpa) (princ (concat drgnx-perf-run-childframe-skipped "\n")))
   (drgnx-perf-run--judged audit))
 
+(defconst drgnx-perf-ab--settle-form
+  "(progn (let ((d (+ (float-time) 180))) (while (and (fboundp 'comp--async-runnings) (boundp 'comp-files-queue)
+         (or comp-files-queue (> (comp--async-runnings) 0)) (< (float-time) d)) (accept-process-output nil 0.2))) t)"
+  "Wait until the session's background native compilation has drained (PERF-ELN-1: a fresh tree compiles its files
+to the eln cache while it runs, and the wall clock pays for it).  A plain run waits too, before its first workload.")
+
 (defun drgnx-perf-run--judged (audit)
   "The run of `drgnx-perf-run'."
   (let* ((loads (list (drgnx-perf-load)))
@@ -1191,6 +1197,7 @@ its own cost to the other numbers)."
     (unwind-protect
         (progn
           (drgnx-perf-run--check-gc sess)
+          (drgnx-perf-run--call sess drgnx-perf-ab--settle-form 200)   ; the first workload must not pay for it
           (dolist (w selected)
             (if-let* ((why (and (drgnx-env-container) (cdr (assq (car w) drgnx-perf-run-container-skipped)))))
                 (princ (format "perf: %s skipped in the container — %s\n" (car w) why))
@@ -1615,12 +1622,6 @@ ENV (\"K=V\" strings, `drgnx-ui-session-extra-env-names' only) is added to its e
   (if (string-match "\\`\\([A-Z_][A-Z0-9_]*\\)=\\([^,=]+\\),\\([^,=]+\\)\\'" spec)
       (list (match-string 1 spec) (match-string 2 spec) (match-string 3 spec))
     (error "usage: drgnx test --perf --ab-env VAR=JUDGED,REF (two values, comma-separated)")))
-
-(defconst drgnx-perf-ab--settle-form
-  "(progn (let ((d (+ (float-time) 180))) (while (and (fboundp 'comp--async-runnings) (boundp 'comp-files-queue)
-         (or comp-files-queue (> (comp--async-runnings) 0)) (< (float-time) d)) (accept-process-output nil 0.2))) t)"
-  "Wait until the session's background native compilation has drained (PERF-ELN-1: a fresh tree compiles its files
-to the eln cache while it runs, and the wall clock pays for it).")
 
 (defun drgnx-perf-ab--one (sess spec)
   "One repeat of the input workload SPEC in SESS: (:samples (ms per command…) :run RESULT)."

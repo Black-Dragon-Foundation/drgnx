@@ -90,6 +90,21 @@ after another (the last repeats).  Binds `history' (the history file) and `start
       (should (file-exists-p history))
       (should (string-match-p "frame p50 1 p90 nil ms (loaded)" out)))))
 
+(ert-deftest drgnx-perf-run/a-run-waits-for-native-compilation-before-its-first-workload ()
+  "Pattern D.  A built tree's session compiles the files it loads natively, in the background, when it starts; the
+first workload (typing) paid for it (its calibration loop ran 4x slower than the later workloads').  The run waits for
+that to drain (`drgnx-perf-ab--settle-form', as an A/B does) before it calibrates or measures anything."
+  (drgnx-perf-run-test--with-fake-run '(1.0)
+    (let* ((forms nil) (fake (symbol-function 'drgnx-perf-run--call)))
+      (cl-letf (((symbol-function 'drgnx-perf-run--call) (lambda (s form &rest r) (push form forms) (apply fake s form r))))
+        (with-output-to-string (drgnx-perf-run)))
+      (setq forms (nreverse forms))
+      (let ((settle (seq-position forms drgnx-perf-ab--settle-form))
+            (calibrate (seq-position forms "(drgnx-perf-calibrate)")))
+        (should settle)
+        (should calibrate)
+        (should (< settle calibrate))))))
+
 (ert-deftest drgnx-perf/results-are-written-as-json ()
   (drgnx-perf-run-test--with-fake-run '(1.0)
     (let* ((file (expand-file-name "out/results.json" dir))
