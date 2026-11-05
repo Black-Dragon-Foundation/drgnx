@@ -63,9 +63,10 @@ by with no `busy` status: the workloads count the `stop` entries of the transcri
 check "typed while it streamed" is a turn that has not ended), never the status. `cockpit-cards` stubs only the job's
 summary (`job/status`); the agents, their events and the panes' reaction to them are the hub's.
 
-**Input latency** is a command's start until the screen shows it: a 0 s timer set after the command redisplays
-before it reads the clock (timers can run before the command loop's own redisplay, which would leave fontification
-and mode-line work out). Keys arrive one at a time (the harness), so typed-ahead input — where Emacs skips
+**Input latency** is a command's start until the screen shows it: `post-command-hook` redisplays
+before it reads the clock (which leaves fontification and mode-line work in). The latency ends in the hook, not in a
+0 s timer: under the harness a timer ran at the next paced input event, so input p95 sat at the tick (40.3 ms at the
+0.04 s tick, 30.3 at 0.03; `DRGNX_UITEST_TICK` sets the tick for a probe). Keys arrive one at a time (the harness), so typed-ahead input — where Emacs skips
 redisplay — is not covered; the harness's own recorder runs inside the measured span (small).
 
 **Per command** (`drgnx-perf-begin` / `drgnx-perf-end`), from `pre-command-hook` to the redisplay after the command,

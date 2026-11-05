@@ -4,8 +4,8 @@
 
 ;;; Commentary:
 ;; Probes run inside a harness session: input latency (a command's start until the screen shows it:
-;; a 0 s timer set in post-command-hook, which redisplays before reading the clock — timers can run
-;; before the command loop's own redisplay, so without it the redisplay would be left out), forced
+;; post-command-hook redisplays and then reads the clock, so the redisplay is part of it; a timer would end
+;; the latency at the harness's next paced input event instead), forced
 ;; redisplay time, frame creation, GC (count and time), memory (RSS), a CPU profile of a thunk, and a
 ;; hook audit (every function on the busy hooks timed, the hooks restored after).  The controller
 ;; (drgnx-perf-run.el) runs workloads in a session, judges them against budgets
@@ -135,7 +135,7 @@ that ran after, up to the next command.")
       (when (numberp a) (push a drgnx-perf--ahead)))))
 
 (defun drgnx-perf--finish (t0)
-  "The 0 s timer: the screen shows the command; record its wall, CPU and allocation, then (Glitnir) its present."
+  "From `post-command-hook': the screen shows the command; record its wall, CPU and allocation, then (Glitnir) its present."
   (redisplay)                           ; the screen showing the command is part of its latency
   (let ((alloc (drgnx-perf--alloc-sum)) (ms (* 1000 (- (float-time) (car t0)))))
     (push (- alloc (nth 2 t0) 7) drgnx-perf--allocs)           ; less the first reading's own 7 conses
@@ -149,7 +149,7 @@ that ran after, up to the next command.")
   (when drgnx-perf--t0
     (let ((t0 drgnx-perf--t0))
       (setq drgnx-perf--t0 nil)
-      (run-at-time 0 nil #'drgnx-perf--finish t0))))
+      (drgnx-perf--finish t0))))
 
 (defun drgnx-perf--gc ()
   "After each collection: its own time (`gc-elapsed' grows by it)."
