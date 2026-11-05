@@ -17,8 +17,7 @@ review,event,prune}` implements.
 
 What the editor reads of it lives in `core/drgnx-coord-read.el`, on `drgnx-work-db-read` (the read-only handle):
 `drgnx-coord-version`, `-events`, `-open-questions`, `-agent`, `-agents`, `-review-marks`, `-job`, `-message`,
-`-message-answers` and `-message-prompt` (with `drgnx-coord--event-cols`/`-event-plist` for the cockpit's own
-queries). The cockpit requires `drgnx-coord-read`.
+`-message-answers` and `-message-prompt` (with `drgnx-coord--event-cols`/`-event-plist` for event queries).
 
 Schema 6 (Ratatoskr): every `data` column (`node`, `job`, `jtask`, `card`, `event`) is JSON text, checked by the
 database (`check (data is null or json_valid(data))`), written and read through the record schemas of
@@ -264,20 +263,18 @@ thread is the file's one writer. No Lisp opens it read-write:
 
 ### The editor writes through the hub
 
-The cockpit (`modules/tools/drgnx-cockpit*.el`) writes nothing to `work.db`; its five writes are hub calls
-(`drgnx-hub-call`, asynchronous: a path the user did not wait on never waits):
+The Work space (`modules/tools/drgnx-work-*.el`) writes nothing to `work.db`; its writes are hub calls
+(`drgnx-hub-call`, asynchronous: a path the user did not wait on never waits). The Work cockpit that made these calls
+before it is gone; the review view makes the last two:
 
 | Where | Call |
 |---|---|
-| answering an ask card (`drgnx-cockpit-answer`) | `cards/settle`; `{settled: false}` says "That card was settled already" |
-| an answer to a message, a message to an agent (feed, cards, edits) | `messages/send`; a held one says why |
-| an answer closes its question | `events/add` (the `answer` event), then `messages/mark` `acted`, in that order |
-| a comment or a revert request in the edits pane | `messages/send`, then `events/add` once it was sent |
-| accepting a file | one `review/mark` with its `accept` event |
+| a message to an agent (steer, resume) | `agents/send` |
+| accepting a file in the review view (`a`) | one `review/mark` with its `accept` event |
+| rejecting a hunk in the review view (`D`) | `review/mark` `pending`, and an `agents/send` naming the hunk |
 
 An error is said once as "drgnx hub: TEXT". The editor sends no `coord/notify` after a send: the front notifies
-itself after a write. Reads stay on the read-only path. `drgnx-cockpit/no-writer-call-in-the-modules` walks the cockpit
-modules and `core/drgnx-cockpit-model.el` for a `drgnx-coord-` writer or a `sqlite-execute`.
+itself after a write. Reads stay on the read-only path.
 
 ## The tracker (`runtime/crates/norn/src/tracker`)
 

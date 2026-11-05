@@ -182,7 +182,7 @@ list of (FILE . HASH-OF-SYMBOLS) for the kept forms."
         (mapcar (lambda (n) (format "core/drgnx-%s.el" n))
                 '("agent-check" "agent-config-claude" "agent-config-codex" "agent-config-gemini" "agent-config-kimi"
                   "agent-config" "agents-matrix" "agents-mirror" "agents" "ai-client" "ai-probe" "ai" "bootstrap" "build"
-                  "check" "cockpit-model" "compat-gryphn" "config" "coord-read" "deny" "doctor" "exec" "face-state" "file"
+                  "check" "compat-gryphn" "config" "coord-read" "deny" "doctor" "exec" "face-state" "file"
                   "fmt" "frame-kind" "freezes" "gc-census" "gc" "guard" "heap" "hooks" "hub-client" "hub-core"
                   "keys-edit" "keys-modal"
                   "keys" "large-file" "lisp-index" "macos" "mcp" "memo" "modal-choose" "modal" "modules-fingerprint"
@@ -196,7 +196,7 @@ list of (FILE . HASH-OF-SYMBOLS) for the kept forms."
                   "settings-resolve" "settings-review" "settings-runtime" "settings-tidy" "settings-trust"
                   "settings-workspace" "shell-env" "shell" "startup-trace" "store-privacy" "surfaces" "timer" "toml"
                   "trust" "tty-fallback" "tty-recommend" "tty" "ui-kit" "user-lisp" "watchdog-doctor" "watchdog" "work-db"
-                  "work-scan" "work")))
+                  "work-client" "work-scan" "work")))
   "Every file under core/ after the Lisp agent runtime was deleted: a new core file is added here on purpose, so no
 runtime file comes back unnoticed.")
 

@@ -55,7 +55,7 @@ finds it spent in the same pass draws its first rows only; the next pass starts 
 right after it would inherit `read-only' and is refused (see `drgnx-view--protect').")
 
 (defconst drgnx-view--stat-names
-  [:rows-drawn :rows-grown :appended :removed :slices :max-slice-rows :full-draws :stale-skips]
+  [:rows-drawn :rows-grown :appended :removed :slices :max-slice-rows :full-draws :stale-skips :draw-ms]
   "The names of the counters in a view's `stats' vector, in order.")
 
 ;;;; The frame budget: one deadline for every view in a timer pass
@@ -771,14 +771,33 @@ draw every row again, before the pending changes.  In VIEW's buffer, widened."
   (let ((type (alist-get (drgnx-view-type-name (drgnx-view--type view)) drgnx-view--types)))
     (when type (setf (drgnx-view--type view) type))))
 
-(defun drgnx-view--draw (view slice)
+(defun drgnx-view--work-left-p (view)
+  "Non-nil if some entry of VIEW still has a work mark."
+  (let ((work (drgnx-view--work view)) (i (drgnx-view--n view)) (found nil))
+    (while (and (> i 0) (not found))
+      (setq i (1- i) found (aref work i)))
+    (and found t)))
+
+(defun drgnx-view--entry-ranges (view keys)
+  "The sorted disjoint (FROM . TO) entry ranges of VIEW's rows KEYS (keys with no row are skipped)."
+  (let ((index (drgnx-view--index view)) entries ranges)
+    (dolist (key keys)
+      (when-let* ((i (gethash key index))) (push i entries)))
+    (dolist (i (sort entries #'<))
+      (if (and ranges (= i (cdr (car ranges))))
+          (setcdr (car ranges) (1+ i))
+        (unless (and ranges (< i (cdr (car ranges)))) (push (cons i (1+ i)) ranges))))
+    (nreverse ranges)))
+
+(defun drgnx-view--draw (view slice &optional keys)
   "Draw VIEW: SYNC when touched, the self-check, the fold, then the row work, the visible rows first when SLICE (a
-number of seconds: stop at the shared deadline or on input).  Window start and point stay on their row.  Returns the
-rows drawn, grown or removed; the view's `cut' says whether work is left."
+number of seconds: stop at the shared deadline or on input).  KEYS (a list; with no SLICE): only those rows' work;
+the marks of the others stay.  Window start and point stay on their row.  Returns the rows drawn, grown or removed;
+the view's `cut' says whether work is left."
   (with-current-buffer (drgnx-view--buffer view)
     (save-restriction
       (widen)
-      (let ((inhibit-read-only t) (inhibit-interaction t)
+      (let ((inhibit-read-only t) (inhibit-interaction t) (t0 (drgnx-timer-now))
             (drgnx-view--slicing (and slice t)) (drgnx-view--rows 0) (drgnx-view--stopped nil)
             (drgnx-view--changed nil) (type (drgnx-view--type view)))
         (when slice
@@ -797,11 +816,15 @@ rows drawn, grown or removed; the view's `cut' says whether work is left."
         (drgnx-view--fold view)
         (drgnx-view--take-dirty view)
         (let ((places (drgnx-view--save-row-places view)))
-          (when slice
-            (let ((ranges (drgnx-view--visible-ranges view))) (when ranges (drgnx-view--sweep view ranges))))
-          (drgnx-view--sweep view t)
+          (if keys
+              (let ((ranges (drgnx-view--entry-ranges view keys))) (when ranges (drgnx-view--sweep view ranges)))
+            (when slice
+              (let ((ranges (drgnx-view--visible-ranges view))) (when ranges (drgnx-view--sweep view ranges))))
+            (drgnx-view--sweep view t))
           (when (> drgnx-view--rows 0) (drgnx-view--restore-row-places view places)))
-        (setf (drgnx-view--cut view) drgnx-view--stopped)
+        (when (> drgnx-view--rows 0)
+          (cl-incf (aref (drgnx-view--stats view) 8) (* 1000.0 (- (drgnx-timer-now) t0))))
+        (setf (drgnx-view--cut view) (or drgnx-view--stopped (and keys (drgnx-view--work-left-p view))))
         (when (and (not drgnx-view--stopped) (> (drgnx-view--empty view) 0)) (drgnx-view--compact view))
         (when (> drgnx-view--rows 0) (set-buffer-modified-p nil))
         (let ((patched (drgnx-view-type-patched type)))
@@ -810,14 +833,16 @@ rows drawn, grown or removed; the view's `cut' says whether work is left."
               (error (drgnx-view--record view (format "PATCHED: %s" (error-message-string err)))))))
         drgnx-view--rows))))
 
-(defun drgnx-view-draw-now (view)
-  "Draw VIEW now, whole, even when hidden: run SYNC when touched, then apply every mark.  Window start and point stay
-on their row.  Returns the number of rows drawn, grown or removed; 0 for a view no longer attached or whose type
-was removed.  A RENDER, GROW, SYNC or PATCHED that signals is recorded (`drgnx-view--record'), never raised."
+(defun drgnx-view-draw-now (view &optional keys)
+  "Draw VIEW now, whole, even when hidden: run SYNC when touched, then apply every mark.  KEYS (a list of row keys):
+only the work on those rows, in the caller's own redisplay; the marks of the other rows stay for the view's own
+draw.  Window start and point stay on their row.  Returns the number of rows drawn, grown or removed; 0 for a view
+no longer attached or whose type was removed.  A RENDER, GROW, SYNC or PATCHED that signals is recorded
+\(`drgnx-view--record'), never raised."
   (let ((buffer (drgnx-view--buffer view)))
     (if (and (buffer-live-p buffer) (eq view (buffer-local-value 'drgnx-view buffer))
              (drgnx-view--current-type view))
-        (prog1 (drgnx-view--draw view nil) (setf (drgnx-view--stale view) nil))
+        (prog1 (drgnx-view--draw view nil keys) (unless keys (setf (drgnx-view--stale view) nil)))
       0)))
 
 (defun drgnx-view--draw-buffer (buffer)

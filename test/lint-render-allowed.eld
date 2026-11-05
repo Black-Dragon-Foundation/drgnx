@@ -6,7 +6,6 @@
 ;; Counts can only fall: the task that rewrites a site deletes its entry.  A branch merged later adds its sites.
 (
  (:file "modules/tools/drgnx-agents-ui.el" :in drgnx-agents-ui--update-lines :what delete-region :kind migrate :why "drops the trailing lines of ids no longer listed; a line diff, not an erase" :until "RP8-a")
- (:file "modules/tools/drgnx-cockpit-feed.el" :in drgnx-cockpit-feed--earlier :what erase-buffer :kind document :why "a row's older chips, listed when the user pushes its `‹ N' (no live view: it never updates)")
  (:file "modules/tools/drgnx-live.el" :in drgnx-live--render-notes :what delete-region :kind migrate :why "the notes below the live page are cut and redrawn on a state change (no render task owns this file: the manager assigns one)" :until "unassigned (live browser notes)")
  (:file "wb/drgnx-explorer.el" :in drgnx-explorer--render :what erase-buffer :kind listing :why "Explorer is styled by jit-lock and rebuilt on a root change (spec non-goal)")
  (:file "wb/drgnx-explorer.el" :in drgnx-explorer--find-apply :what erase-buffer :kind listing :why "the find-in-tree result is the same listing, built whole (spec non-goal)")
@@ -27,6 +26,8 @@
  (:file "modules/tools/drgnx-prs.el" :in drgnx-prs--draw :what tabulated-list-print :kind document :why "the pull-request list is printed on the user's refresh")
  (:file "modules/tools/drgnx-review.el" :in drgnx-review--draw :what erase-buffer :kind document :why "a review is drawn when the user opens it")
  (:file "modules/tools/drgnx-shortcuts.el" :in drgnx-shortcuts--draw :what erase-buffer :kind document :why "the shortcuts page is drawn on the user's action")
+ (:file "modules/tools/drgnx-work-code.el" :in drgnx-work-code-files :what erase-buffer :kind document :why "the picker's waiting line is drawn when the user opens the list")
+ (:file "modules/tools/drgnx-work-code.el" :in drgnx-work-files--fill :what erase-buffer :kind document :why "the picker lists one agent's files once, when the hub has answered")
  (:file "modules/tools/drgnx-work-ui.el" :in drgnx-work-ui--show-commit :what erase-buffer :kind document :why "a commit is shown on the user's action")
  (:file "modules/tools/drgnx-work-ui.el" :in drgnx-work-ui-refresh :what erase-buffer :kind document :why "only this scan's output buffer is cleared, on the user's scan")
  (:file "modules/tools/drgnx-work-ui.el" :in drgnx-work-ui-graph :what erase-buffer :kind document :why "the graph is drawn on the user's action")

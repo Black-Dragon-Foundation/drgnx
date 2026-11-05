@@ -607,6 +607,7 @@ mod tests {
             tmp: Some(TMP.into()),
             layers: Layers::for_target(Target::Macos),
             extra_tcp_ports: vec![],
+            trace: Default::default(),
         }
     }
 

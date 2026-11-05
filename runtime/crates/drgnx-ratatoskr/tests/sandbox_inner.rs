@@ -504,6 +504,167 @@ fn landlock_restrict_failure_exits_125() {
     );
 }
 
+/// What the test's supervisor saw at a whole-tree spec's trace socket.
+#[derive(Debug)]
+enum AtSocket {
+    /// No offer: only the test's own wake-up connected.
+    Nothing,
+    /// The listener came over the socket; every open it was notified of until the traced tree was gone.
+    Traced {
+        hello: gleipnir::trace::Hello,
+        opens: Vec<gleipnir::trace::Open>,
+    },
+    /// The hello, answered `trace` with the read side already shut, so the fd could not arrive (the stream is held
+    /// until the join).
+    Shut {
+        hello: String,
+        _stream: std::os::unix::net::UnixStream,
+    },
+}
+
+/// A supervisor for one offer at `sock`. `shut`: read the hello, shut the read side, then answer `trace`; otherwise
+/// take the listener and answer every open until the traced tree is gone. Its result is taken with [`supervised`].
+fn supervise(sock: &Path, shut: bool) -> std::thread::JoinHandle<AtSocket> {
+    use gleipnir::trace as gt;
+    use std::io::Write;
+    let l = std::os::unix::net::UnixListener::bind(sock).unwrap();
+    std::thread::spawn(move || {
+        let Ok((s, _)) = l.accept() else {
+            return AtSocket::Nothing;
+        };
+        if shut {
+            let mut hello = Vec::new();
+            let mut b = [0u8; 1];
+            loop {
+                match (&s).read(&mut b) {
+                    Ok(1) if b[0] == b'\n' => break,
+                    Ok(1) => hello.push(b[0]),
+                    _ => return AtSocket::Nothing,
+                }
+            }
+            s.shutdown(std::net::Shutdown::Read).unwrap();
+            (&s).write_all(b"trace\n").unwrap();
+            return AtSocket::Shut {
+                hello: String::from_utf8_lossy(&hello).into_owned(),
+                _stream: s,
+            };
+        }
+        let Ok(offer) = gt::accept(s) else {
+            return AtSocket::Nothing;
+        };
+        let hello = offer.hello.clone();
+        match offer.trace() {
+            Ok(gt::Handed::Listener(fd)) => {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let listener = gt::listen(fd, gt::ListenOptions::default(), tx).unwrap();
+                listener.join();
+                AtSocket::Traced {
+                    hello,
+                    opens: rx.try_iter().collect(),
+                }
+            }
+            other => panic!("the listener did not come over the socket: {other:?}"),
+        }
+    })
+}
+
+/// The supervisor's result once the helper is gone: a connection of our own wakes an `accept` the helper never
+/// reached (it has exited, so it never will), and is then nothing.
+fn supervised(sock: &Path, h: std::thread::JoinHandle<AtSocket>) -> AtSocket {
+    let _ = std::os::unix::net::UnixStream::connect(sock);
+    h.join().unwrap()
+}
+
+/// A whole-tree spec (pattern C, handshake: the helper offers and parks on the reply; nothing waits on time). The
+/// listener is installed after Gleipnir's own layers, on the program's whole tree, and its fd reaches the supervisor:
+/// one more filter than Gleipnir's, a child's open notified, none of the helper's own Landlock opens (`O_PATH`, before
+/// the listener). A listener whose fd cannot reach the supervisor stops the setup: 125, and the program never runs.
+#[test]
+fn a_whole_tree_spec_hands_its_listener_over() {
+    if !landlock_here("a_whole_tree_spec_hands_its_listener_over") {
+        return;
+    }
+    let dir = fixture();
+    let root = dir.path().canonicalize().unwrap();
+    let marker = root.join("marker");
+    std::fs::write(&marker, "seen\n").unwrap();
+    let sock = root.join("trace.sock");
+    let mut s = spec(&root);
+    s.landlock.unix_connect_roots = vec![sock.clone()];
+    s.trace_tree = Some(sock.clone());
+    let status = ["/usr/bin/cat", "/proc/self/status"];
+    let control = run(
+        &s,
+        &status,
+        Opts {
+            bare: true,
+            ..Opts::default()
+        },
+    );
+    let script = format!(
+        "/usr/bin/cat {}; /usr/bin/cat /proc/self/status",
+        marker.display()
+    );
+    let cmd = ["/bin/sh", "-c", script.as_str()];
+    let h = supervise(&sock, false);
+    let o = run(&s, &cmd, Opts::default());
+    let seen = supervised(&sock, h);
+    assert!(o.status.is_ok(), "{:?}: {}", o.status, o.stderr);
+    assert_eq!(o.code, Some(0), "{}", o.stderr);
+    let AtSocket::Traced { hello, opens } = seen else {
+        panic!(
+            "the listener never reached the supervisor: {seen:?}; stderr {}",
+            o.stderr
+        );
+    };
+    assert_eq!(hello.scope, gleipnir::trace::Scope::Tree);
+    assert_eq!(hello.command, cmd.join(" "));
+    assert!(
+        opens
+            .iter()
+            .any(|p| p.full().as_deref() == Some(marker.as_path())),
+        "the child's open of the marker was notified: {opens:?}"
+    );
+    let landlock_opens: Vec<_> = opens
+        .iter()
+        .filter(|p| {
+            p.flags & libc::O_PATH as u64 != 0
+                && [Path::new("/"), root.as_path()].contains(&p.path.as_path())
+        })
+        .collect();
+    assert_eq!(landlock_opens.len(), 0, "{landlock_opens:?}");
+    let filters = |out: &str| status_field(out, "Seccomp_filters:").unwrap();
+    assert_eq!(
+        filters(&o.stdout),
+        filters(&control.stdout) + 2,
+        "Gleipnir's filter and the listener's"
+    );
+    assert_eq!(status_field(&o.stdout, "NoNewPrivs:"), Some(1));
+    // The fd cannot arrive (the supervisor's read side is shut before it answers): setup fails, nothing runs.
+    std::fs::remove_file(&sock).unwrap();
+    let touched = root.join("touched");
+    let h = supervise(&sock, true);
+    let o = run(
+        &s,
+        &["/usr/bin/touch", touched.to_str().unwrap()],
+        Opts::default(),
+    );
+    let seen = supervised(&sock, h);
+    let AtSocket::Shut { hello, .. } = &seen else {
+        panic!("the helper never offered: {seen:?}; stderr {}", o.stderr);
+    };
+    assert!(hello.contains(r#""scope":"tree""#), "{hello}");
+    let r = refusal(&o);
+    assert_eq!(r.rule, Rule::Setup);
+    assert!(
+        r.message.contains("trace:") && r.message.contains("did not reach the supervisor"),
+        "{}",
+        r.message
+    );
+    assert_eq!(o.code, Some(inner::EXIT_SETUP));
+    assert!(!touched.exists(), "nothing was exec'd");
+}
+
 /// The reduced run path end to end (ABI 9): a validated reduced spec, `reduced::inner_spec` and `prepare`, the
 /// helper spawned as a session leader. The program writes its write root and nothing else, and reaches no TCP port.
 #[test]
@@ -540,6 +701,7 @@ fn a_reduced_run_end_to_end() {
         tmp: Some(root.join("t")),
         layers: Layers::for_target(Target::LinuxReduced),
         extra_tcp_ports: vec![],
+        trace: Default::default(),
     };
     let valid = gleipnir::validate::validate(s, &ctx, Target::LinuxReduced).unwrap();
     let inner = reduced::inner_spec(&valid, Path::new(HELPER), &["relay".into()]).unwrap();

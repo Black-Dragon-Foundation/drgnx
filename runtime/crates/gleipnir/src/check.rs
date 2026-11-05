@@ -496,6 +496,7 @@ where
         tmp: (target != Target::LinuxBwrap).then(|| base.join("t")),
         layers: Layers::for_target(target),
         extra_tcp_ports: vec![],
+        trace: Default::default(),
     };
     // The probe's own paths only: a home that exists nowhere, so nothing real is named or protected here.
     let ctx = Context {

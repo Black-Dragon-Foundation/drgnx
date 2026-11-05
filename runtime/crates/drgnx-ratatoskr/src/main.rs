@@ -1,6 +1,7 @@
 //! `ratatoskr`: drgnx's agent runtime (docs/develop/hub.md).  The tokio runtime is built by hand, after the command
 //! line is read (the commands that only talk to a hub never build one): multi-thread, two workers.  The same binary
-//! answers to any name (`rtsk`): argv[0] is never consulted.
+//! answers to any name (`rtsk`), with one exception: started as `gleipnir-trace` (the link Gleipnir puts beside the
+//! inner helper for per-step tracing, `gleipnir::TRACE_INSIDE`) it is that wrapper and nothing else.
 
 use drgnx_ratatoskr::cli::{self, Command, Supervisor};
 use drgnx_ratatoskr::{Exit, doctor, idle, server, supervise, version};
@@ -14,6 +15,13 @@ fn code(c: i32) -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    // the per-step wrapper of a traced shell step: before anything else, with no runtime and no thread
+    let argv0 = std::env::args_os().next().unwrap_or_default();
+    if std::path::Path::new(&argv0).file_name()
+        == Some(std::ffi::OsStr::new(gleipnir::trace::WRAPPER_NAME))
+    {
+        return code(gleipnir::trace::wrapper_main(std::env::args_os().collect()));
+    }
     let command = match cli::parse(std::env::args_os().skip(1)) {
         Ok(c) => c,
         Err(e) => {

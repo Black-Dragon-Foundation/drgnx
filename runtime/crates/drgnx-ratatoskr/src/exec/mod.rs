@@ -1055,6 +1055,7 @@ impl Inner {
                     login_dir: None,
                     enforced: Enforced::Yes,
                     gateway: false,
+                    trace: None,
                 };
                 let shape = SessionShape {
                     sid: sid.clone(),

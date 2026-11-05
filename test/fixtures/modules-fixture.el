@@ -66,7 +66,7 @@ Returns the names of the modules ENTRIES stand for."
               (unless (or (null file) (member file loaded))
                 (push file loaded)
                 (load (file-name-sans-extension file) nil t)))
-            ;; also when another file's `require' defined it already (tools/cockpit loads tools/work's file)
+            ;; also when another file's `require' defined it already
             (dolist (r (plist-get (alist-get entry drgnx-modules--table) :requires)) (push r todo))))))
     (nreverse names)))
 
@@ -208,6 +208,13 @@ snapshot, so no leak is hidden.  A library that cannot be found or does not load
       (dolist (f (append (plist-get spec :packages) (and file (drgnx-test-modules--requires file))))
         (unless (or (featurep f) (not (locate-library (symbol-name f))))
           (ignore-errors (require f)))))))
+
+(defun drgnx-test-modules-preload (modules)
+  "Load the files of MODULES and the libraries their setups load, as a test file does at its top.
+The leak census reads the state around each test: a library first loaded by a test's `drgnx-test-with-modules'
+shows its top-level registrations (rules, places, view types, config definitions) as that test's leaks.  A file
+whose tests set MODULES up calls this once at load, so the first test finds them loaded like the rest."
+  (drgnx-test-modules--preload (drgnx-test-modules--closure (drgnx-test-modules--load modules))))
 
 (defun drgnx-test-modules--without-emacs-timers (fp)
   "FP without the timers the recorder leaves alone too: those whose function drgnx does not define

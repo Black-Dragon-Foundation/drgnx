@@ -289,7 +289,7 @@ stable across updates), which connects to the hub as a service and is ext:KIND:P
             "  ")
     (drgnx-agent-settings--button (if on "[Remove drgnx]" "[Add drgnx]") #'drgnx-agent-settings-report
                                   (if on "Take the coordination server out of this agent's settings"
-                                    "Add the coordination server: the agent then shows in the Work cockpit"))
+                                    "Add the coordination server: the agent then shows in the Work space"))
     (insert "\n")))
 
 (defun drgnx-agent-settings--insert-problems ()
@@ -965,7 +965,7 @@ The answer may hold a secret (a token in a command line or URL): it is kept out 
 
 (defun drgnx-agent-settings-report ()
   "Add the `drgnx' MCP server to this agent's user settings, or take it out when it is there: an agent with it shows
-in the Work cockpit.  Asks first, names the file, and writes no token or key (the server needs none)."
+in the Work space.  Asks first, names the file, and writes no token or key (the server needs none)."
   (interactive)
   (drgnx-agent-settings--page)
   (let ((kind drgnx-agent-settings--kind)
@@ -1050,7 +1050,7 @@ for every OpenRouter route, saved in settings.el; it applies through drgnx's gat
                    (agent-settings-openrouter "OpenRouter Restrictions…" drgnx-agent-settings-openrouter
                                               "Which providers OpenRouter may use for the agents, and whether they may keep data")
                    (agent-settings-report "Report to drgnx" drgnx-agent-settings-report
-                                          "Add the drgnx coordination server to this agent (or take it out): it then shows in the Work cockpit")
+                                          "Add the drgnx coordination server to this agent (or take it out): it then shows in the Work space")
                    (agent-settings-new-skill "New Skill…" drgnx-agent-settings-new-skill "A SKILL.md with its name and description")
                    (agent-settings-open-file "Open Its File" drgnx-agent-settings-open-file "The file this line comes from")
                    (agent-settings-other "Other Agent…" drgnx-agent-settings-other "Another agent's settings, same project")))

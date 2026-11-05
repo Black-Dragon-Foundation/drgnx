@@ -347,3 +347,295 @@ Layer 1 of "reads through shell commands" (the files a command names; labelled "
 - Tests: `work::shell_read::tests` (class `det`, pattern D, with a property test over the corpus and random words),
   the corpus in `src/work/shell_read/corpus.txt`, and the timing row `shell_parse_within_200_us`
   (`tests/work_timing.rs`, listed in `test/timing-rust.txt`, 200 µs at p95).
+
+Layer 2 (the files a command's processes opened; labelled "seen open") is Gleipnir's tracer
+([sandbox.md](sandbox.md#seeing-the-files-a-shell-step-opens)) and the hub's supervisor, `work::trace`:
+
+- **Who is traced** (`TraceMode::of`, at the session's start): `drgnx-agents-trace-opens` lists providers, `("claude")`
+  by default. Claude Code is traced per step: its spec gets `trace: per_step` and `CLAUDE_CODE_SHELL_PREFIX` (the
+  wrapper); Codex and Gemini, when listed, over their whole tree (`trace: tree`). Not listed, or on macOS, the session
+  is `Off` with a label. The socket is `trace.sock` in the session dir (`runstav::paths::SESSION_TRACE_SOCKET`),
+  served from before the spawn (`Traces::open`) until the session ends (`Traces::end`). A test hub's unsandboxed
+  launch links the hub binary as `gleipnir-trace` in the session dir and sets the same variables.
+- **Offers** (`shell.rs`, off the async threads): a per-step offer is skipped when another shell step is open (a hook
+  or a status line through the prefix); when no step is open yet (the hub may not have read the tool call) it is
+  traced as given. A command whose head is on the skip list (`SKIP_HEADS`: the design's list plus `emacs`, `nidhogg`,
+  every `bin/drgnx` subcommand; `go` only to build or test) or on the worktree's learned list is skipped and its step
+  labelled "opens not traced for this build". A whole-tree offer is traced with the CLI's own thread group ignored
+  (its peer pid).
+- **Opens** come from Gleipnir's channel: a system or toolchain path is dropped at once, a read of a missing file is a
+  failed probe (dropped, and remembered for the step); the rest goes into the pure `Core` as `Opened`. The budget is
+  checked on each: the answering thread's time plus 6 µs per notification against max(5 %, 50 ms) of the step so far,
+  at most 250 ms (`over_budget`). Over it, reading stops for the rest of the step (`Listener::set_reading(false)`),
+  what it saw is dropped, the step is labelled, and its heads join the worktree's learned list (in memory).
+- **`Core`** (pure) ties traces to steps: a step's close takes the oldest trace whose command matches its own (as
+  given, or inside what the CLI wrapped around it, `command_matches`), and the step goes out once both its close and
+  its listener's end have come, in either order. In whole-tree mode an open goes to the shell step open when it
+  arrives (one per session as the hub sees it), and an open while N run is labelled "one of N parallel commands".
+- **What goes out** (`touches`): each path by its true name, under the session's folder (as layer 1's), never under
+  the system's or the home's toolchain and cache dirs, not git-ignored (`git check-ignore`, cached per path); a write
+  is looked at now, at its step's close. The files go to the presence model as `opened` on the step, and the files
+  that changed there go on to the Work map as `Presence` facts, like any other read (when they land after the step's
+  close, they reach the map then); a label goes to the step's detail (origin `opened`, the label as `title`) when the
+  step has no detail of its own, and so does an `Off` session's label on each of its shell steps.
+- **Not kept:** a step's opens are not stored (like layer 1's, they come back only with the session's next steps after
+  a restart); the learned skip list is lost with the hub; whole-tree mode has no budget of its own (it is opt-in).
+- Tests: `work::trace::tests` (pattern A: a step's close before or after its listener's last notifications; pattern
+  D: the rules through a fake probe, the budget, the skip list, the labels), and the rows
+  `trace/claude-bash-reads-are-seen-open` (the mock's `provider:bash` through the wrapper),
+  `trace/a-file-seen-open-shows-on-the-map` (a read only the tracer sees, counted on the agent's card) and
+  `trace/macos-says-not-traced` (`DRGNX_TEST_TRACE_PLATFORM=macos`, test hubs only), in the sandbox container.
+
+## The editor's side
+
+Module `tools/work-space` (`modules/tools/drgnx-work-space.el`; the buffer's mode, view type and rows are in
+`drgnx-work-map.el`, a library of the module; the map client is `core/drgnx-work-client.el`).
+
+### The map client
+
+`core/drgnx-work-client.el` has a pure core and a shell.
+
+- **The core.** `drgnx-work-client-init FRAME` makes a state from `work/map/subscribe`'s answer (items by id, edges,
+  the layout with `:at` and `:form` as hash tables by item id, the needs-you strip, the chips).
+  `drgnx-work-client-step STATE EVENT` takes one `work-map` event and returns `(NEW-STATE . MARKS)`:
+  - an event whose version is not newer than the frame's is dropped, and so is every event while the state is not live
+    (before a frame, after `drgnx-work-client-lost`);
+  - a full event replaces the frame (every row, the layout, the edges and the strip are marked);
+  - an event whose `base` is the frame's version is applied: changed items put, removed ones taken out, the places the
+    arrivals took put (a place no row holds gets a row of its own, block line 1000 and up), edges, layout, strip and
+    chips replaced when the event carries them; then any held event it unblocks;
+  - any other event is held, and the marks say `:resync t`: the shell subscribes again, and the full frame it gets
+    replaces the state and drops what was held.
+  The marks are a plist: `:rows` (row keys `(:row LAYER BLOCK-LINE SUB)` to draw again, or `t`), `:items`, `:removed`,
+  `:keys` (the list of rows changed), `:edges`, `:layout`, `:strip`, `:resync`; each only when it applies. The core
+  calls no process, timer or clock, so its tests run it in every order its events can arrive in.
+- **The shell.** One view per map buffer, keyed by the workspace id. `drgnx-work-client-open` subscribes;
+  `-set` sends `work/map/set` (hidden or shown, filters, collapsed layers, width, density, the selection); `-close`
+  sends `work/map/close`. Events come from `drgnx-hub-event-functions`; a view re-subscribes from
+  `drgnx-hub-connected-functions` (the hub client core's own reconnection), and `drgnx-hub-disconnect-functions` makes
+  every view keep its frame and say "reconnecting". Each view counts its events, deltas and frames
+  (`drgnx-work-client-counter`), which the hidden-map test reads: a hidden map receives one stale mark and nothing else.
+  The change and status hooks (`drgnx-work-client-change-functions`, `-status-functions`) are how the buffer hears.
+- **Tests.** `test/unit/work-client-test.el` (class `det`, every order), `test/unit/work-space-test.el` (class
+  `cond`, gated: a real hub, real mock agents), `test/unit/work-rows-test.el` (`det`). The frame in
+  `test/fixtures/work-space/frame.json` is what the wire decodes to.
+
+### The rows
+
+`modules/tools/drgnx-work-map.el`. A view row is a sub-row of the layout, keyed `(:row LAYER BLOCK-LINE SUB)`, or the
+band above it, `(:band LAYER BLOCK-LINE SUB)`, in the order of their y. A row's text is `drgnx-work-map-row-text
+STATE KEY`, a function of the cached frame and the display scale (`drgnx-work-map-scale`, the frame's by default).
+
+- **Geometry.** The layout's units are 4 logical pixels; a row's pixel height is its units × 4 × scale, split evenly
+  over its lines (five for a rich agent row, two for a compact one, else one). Each line ends in a newline carrying
+  `line-height` `(N)` (the spike showed `(N)` gives N+1 pixels, never `(N . t)`), so a row's height is the layout's whatever
+  its text holds. A band is a blank line in a small face (`drgnx-work-band`) of its height; the edge tiles draw into it.
+- **Cards.** A card's line is placed by pixel `:align-to` from the layout's x, in the decoration faces
+  (`drgnx-card-top`, `-mid`, `-bottom`, `-single`: PD's open boxes under Glitnir), its text cut to the card's width by
+  `string-pixel-width` (memoised in `drgnx-work-map--fit-memo`, bounded). Every card character carries the text
+  property `drgnx-work-id`. The layer label stands in the 84 px margin on a layer's first row.
+- **Index.** `drgnx-work-map--index` (weak on the layout) maps a row key to its items left to right and to its layout
+  row, built once per frame.
+- **Outline.** `drgnx-work-map-outline STATE COLUMNS` and the rows `(:outline AGENT-ID)`; used in a terminal frame,
+  when the layout's `fits` is false (with a `(:notice)` row first) and when `O` asks. Blocks are ordered by plan, then
+  start order; each line is cut to the window's width.
+- **Redraws.** The client's marks reach the view in `drgnx-work-map--changed`: a changed item dirties its rows
+  (`drgnx-view-dirty`), a relayout or a changed list of rows touches the view (SYNC diffs the keys with a signature of
+  each row's items and rectangles), so a field change draws one row.
+
+### The edges
+
+`modules/tools/drgnx-work-edges.el`, pure: a function of the layout's geometry, the chain and the colours. The
+fixture's bands carry real curves, so the screenshot set shows them.
+
+- **Tiles.** A band is cut into tiles 192 logical pixels wide (device pixels at the display scale: an SVG stays the size
+  it is written at on the native shell). `drgnx-work-edges-tile BAND I GEOMETRY COLOURS` is the image of tile I, or nil
+  when no curve and no port crosses it. `drgnx-work-edges-tile-svg` is its text, built as a string (no DOM): a cubic
+  from the band's top to its bottom for a straight segment, an arch rising from the bottom for a same-row arc, the
+  chain's curves last so they draw on top. The image cache is keyed on the SVG text and the alternative text, so a tile
+  whose strokes did not change is the very same object, a theme change makes new tiles by itself, and the cache holds
+  600 entries at most. The alternative text names the tile's edges ("hub rows → rp-df-hub (came from)").
+- **Strokes** (design §5.2 as amended): came from 1 px solid; edits 2 px solid, neutral off the chain; reads 1.5 px
+  dotted in the agent's colour; runs on 1 px dash-dot; based on 1 px short dashes; overlap 2 px dashed in the warning
+  colour; read versus edit 1 px dotted. No two kinds share a width and a dash. On the selection's chain an edge takes the
+  accent colour (an edit: its agent's colour) and is 1 px wider.
+- **Colours** come from the `drgnx-work-*` faces whenever a tile is made (`drgnx-work-edges-colours`); the module holds
+  none. A theme change draws every map again (`drgnx-work-map-theme-changed`).
+- **A chain change** (`drgnx-work-map--edges-update`, on `drgnx-work-map-edges-functions`, one frame after the
+  selection): the edges that joined or left the chain name the bands and lanes to draw again; the images the redraw
+  replaces are flushed (`image-flush`), the unchanged tiles are not touched.
+- **Lanes.** An edge that skips a card row is a 2 px wide image at the lane's x in each text line of that row, as high as
+  the text, with the row's ascent in percent (`drgnx-work-edges-row-metrics`: the font's ascent over ascent plus
+  descent), so the row keeps its height.
+- **Ports.** Edges bundled for want of lanes end in a chip "↑ N" on the bottom edge of the band above their target,
+  drawn into the tile that holds its column.
+
+### Selection, the chain and the side panel
+
+`modules/tools/drgnx-work-detail.el` holds the pure part; the buffer's state (`drgnx-work-map--selection`, the cached
+chain, the edge selection, the item that finished) and the commands are in `drgnx-work-map.el`.
+
+- A selection is `(KIND . ID)`. `drgnx-work-nav-chain STATE SEL` is `(UP DOWN EDGES)`: UP is every item reachable
+  backwards over the edges the chain follows (came from, edits, reads, runs on), DOWN forwards, EDGES the ones between
+  them. Overlap and based-on edges are not on the chain. The edge lists' adjacency is cached per frame (weak on the
+  list).
+- `drgnx-work-nav-move STATE SEL DIR`: `left` and `right` walk the layer in reading order and stop at its ends; `up`
+  and `down` take the nearest direct neighbour over the chain's edges (least vertical, then horizontal, distance), and
+  `up` falls back to the nearest ancestor on the lowest layer above when a level is missing. `drgnx-work-nav-agent`
+  walks the team order, wrapping. `drgnx-work-nav-resolve OLD NEW SEL` gives `(SELECTION . FINISHED-ID)` when the frame
+  changed.
+- **Dimming is text properties.** `drgnx-work-map--class` reads the cached selection (and the search text) when a card
+  line is drawn and prepends `drgnx-work-selected` or `drgnx-work-dim` to its faces, so a row that is deleted and
+  inserted again has them; there are no overlays.
+- **A selection move** (`drgnx-work-map-select`) works out which items changed class, draws the visible rows among
+  them in the command's own redisplay (`drgnx-view-draw-now VIEW KEYS`), puts point on the card, runs
+  `drgnx-work-map-select-functions` (the side panel) and arms `drgnx-timer-soon` keyed `(work-edges . VIEW)`: one frame
+  later it runs `drgnx-work-map-edges-functions` with the final selection, so a held arrow key never pays for tiles it
+  has left.
+- **The side panel** is the buffer `*drgnx work detail: NAME*` in `drgnx-work-detail-mode`, a `drgnx-view` of type
+  `work-detail` with one row per section (`:head :why :touches :conclusions :actions`); its text is
+  `drgnx-work-detail-sections`. The pane kind `work-detail` (home right) shows it.
+
+### The strip, the lens, the filters, search and Esc
+
+- `header-line-format` is `("" drgnx-work-map--strip)` and `tab-line-format` `("" drgnx-work-map--lens)`: variables
+  holding strings, made by `drgnx-work-map--refresh-strip` when the client marks the strip (a frame or a delta with
+  `needs_you` or `chips`). There is no `:eval` and so no work in redisplay. The entries are the hub's needs-you cards
+  and the agents in the needs-you state that no card is about.
+- `g 1` to `g 9`, `n`, `N` and the global `work-needs-you-next` select the item a chip is about
+  (`drgnx-work-map-needs-you`); the module calls no method that settles a card (a test records the client's calls).
+  The mode-local `n`/`N` are the commands `work-needs-you-here-next` and `-previous`, because a command has one keymap
+  and `work-needs-you-next` is the global one.
+- Filters are buffer-local (`drgnx-work-map--filters`, `--collapsed`) and sent with `work/map/set` (`f`, `o`, `.`, `1`
+  to `6`, `0`); the hub answers with a full frame. The selection and the arrow keys never send those fields.
+- Search is a local class: `drgnx-work-map--class` dims what the text does not match, with the same text properties
+  the selection uses.
+- A conclusion that differs from the frame before (`:old` in the marks) puts its id in `drgnx-work-map--new`; one
+  `drgnx-timer-start` keyed `(work-new . VIEW)` clears it after 4 s and draws those cards again.
+- The client calls the hub on the subscribed connection (`drgnx-work-client--call`): the hub sends a view's events to
+  the connection that subscribed it, and only that connection's events reach `drgnx-hub-event-functions`.
+
+### The lens, and the Board
+
+`drgnx-work-lens-map` is the keymap every Work view shares (the parent of the map's, the Board's and the Timeline's);
+the movement and opening commands (`work-left` and so on), `work-view-map` and `work-view-board` are bound in it. They
+act through `drgnx-work-lens-nav` (buffer-local): a view that is not the map sets it to a function of one direction, and
+`drgnx-work-map--move` and its siblings call it first. The selection always lives in the map buffer
+(`drgnx-work-lens--map` names it from the other views); `drgnx-work-lens-switch` carries it across.
+
+`modules/tools/drgnx-work-board.el` is the Board: a `work-board` view (rows `(:head)` and `(:cards I)`, three lines a
+card, the bar a 4 px `display` space). Its tasks come from `tasks/find` (every task, up to four pages) or `plans/get`
+(a plan's tasks with their steps, for the progress bar), asked again 0.3 s after the map's frame changes
+(`drgnx-timer-soon` keyed `(work-board . VIEW)`). `drgnx-work-board-column` is the Lisp copy of
+`norn::tracker::board_column` (a test pins every status). `drgnx-work-board-for-selection` and
+`drgnx-work-board-to-selection` are the design's table 8.2, pure functions of the cached frame and the cards; an agent
+works on a card when its `task` field names the card's id.
+
+### The Timeline and the trail
+
+`modules/tools/drgnx-work-trail.el` holds both, and the steering commands. A step is the hub's `timeline/get` row;
+`drgnx-work-trail-kind` takes its kind from its class and `detail.kind` (never its prose), `drgnx-work-trail-title` its
+title, and `drgnx-work-trail-row-text` its row (the gap before the time is a `display` space, `(- right 14)`).
+
+- **The trail** is a `work-trail` view (`:follow-tail`): row keys `(:step ID)`, `(:conc N)` (a conclusion card, after
+  the step the hub stamped it on, else at the end) and `(:note N)` ("paused by you", "resumed by you", added when the
+  command ran). It opens with `timeline/get {limit drgnx-work-trail-first-page}`, asks `work/conclusions`, and a
+  `post-command-hook` function asks `{before SEQ, limit drgnx-work-trail-page}` when point is within about 30 rows of
+  the top (`drgnx-work-trail-page-back`; `drgnx-work-trail--more` falls when a page comes back short). Older steps go in
+  with `drgnx-view-insert :after nil`, new ones with `drgnx-view-append`; no step is held twice (a hash by id). Live
+  steps come from `agent-step` events (`drgnx-work-trail-event`): the trail asks `{since LAST-SEQ}` rather than trusting
+  the event's body, and asks the conclusions again half a second later (`drgnx-timer-soon`).
+- **Conclusions** link to steps through the hub's `links` (named, since the last one); `drgnx-work-trail-conclusion-steps`
+  and `-step-conclusions` are the two directions, `drgnx-work-trail-lit-steps` lights them (`drgnx-work-trail--lit`).
+- **Opening a step** (`drgnx-work-trail-open-step`): a read opens the file at its lines (relative paths against the
+  mirrored session's `cwd`; only a plain local file inside that folder, by its true name: `drgnx-work-code-local-file`);
+  AS-READ calls `work/file-at {session path seq}` (the mode is chosen from the path with no file name handler); a search
+  runs `project-find-regexp` again in the agent's folder (not when that folder is remote); a page `browse-url`; an edit
+  shows `work/hunks` in `drgnx-work-hunk-mode`; a thought opens the agent's transcript (the step has no text of its own).
+- **The Timeline** is a `work-timeline` view (rows `(:axis)` and `(:lane AGENT-ID)`), a lane per agent in team order,
+  `timeline/get {limit 200}` each, asked again 0.3 s after an `agent-step` of its session. `drgnx-work-timeline-spans`
+  (pure) puts steps at their time on the lane's pixel width, at least 2 px; faces `drgnx-work-seg-*` use
+  `:inverse-video` over the stock colour faces, so a segment's colour is the face's foreground.
+- **Steering** (`drgnx-work-trail-steer`, `-pause`, `-resume`, `-stop`) lives on the lens map and finds its agent per
+  view (`drgnx-work-trail--agent-sid`): the trail's session, the Timeline's lane, the Board's card, the map's selection.
+  Pause is `agents/pause`; resume is `agents/send` with `drgnx-work-resume-text`; stop asks `y-or-n-p` and is not
+  bound to anything automatic.
+
+### The review view and the second reviewer
+
+`modules/tools/drgnx-work-review.el`. `drgnx-work-review-open` asks `work/conclusions`, then `decisions/effects` for each
+decision (alist `drgnx-work-review--effects`), `work/files` and `work/hunks` for each file; every answer draws the view
+again with `drgnx-work-review-install`. Row keys: `(:decisions)`, `(:decision N)` (origin order: from the brief, own,
+needs you), `(:summary)`, `(:files)`, `(:file PATH)`, `(:hunk PATH I)`; `drgnx-work-review-parse-hunks` splits a
+unified diff at its `@@` lines. `a` is a `review/mark` `accepted` with the sha1 of the file's whole diff (what the merge
+gate compares); `D` is a `review/mark` `pending` and an `agents/send` naming the hunk (the hub has no hunk revert until
+the edit history lands; nothing here writes into the agent's folder). `V` writes a plan
+(`<state>/work-space/reviews/SESSION-TIME.md`, **Role:** review, the files changed, no conclusions) and calls
+`job/propose`; it never calls `agents/start`. The path and the hunk's header in `D`'s message, and the session, folder
+and file names in `V`'s plan, are the agent's words: `drgnx-work-code-one-line` keeps each on one line, so a file named
+with a forged "[message from the user …]" header or a `### Task` line adds neither.
+
+The merge queue is not inferred: a branch item's `queue` (`[N, M]`) and `conflicts` fields are drawn when the hub sends
+them (`drgnx-work-map--chip-line`, a `:queue` section of the side panel). The hub sends none yet, so no chip shows.
+
+### Live agents' files
+
+`drgnx-work-live-file-mode` (in `drgnx-work-space.el`) is turned on by the module's `find-file-hook` function in a file
+under the `cwd` of a mirrored hub session that is not `exited` and whose `cwd` is a linked worktree (its `.git` is a
+file, not a directory: the user's own checkout has a directory). It sets `view-mode`, keeps the buffer's old read-only
+state, and shows " live · NAME" (`drgnx-work-live-file--lighter`). `drgnx-work-take-wheel` (`W`, and the remaps of
+`read-only-mode` and `View-exit`) calls `agents/pause`, makes the buffer editable and adds a local `after-save-hook`
+that sends `agents/send` naming the file. The module's `:teardown` turns the mode off in every buffer, restoring the
+read-only state each had.
+
+### Into the code (`drgnx-work-code.el`)
+
+The hub keys presence by the path in the agent's own folder, and a map file item is `file:REPO/REL`, so every question is
+asked for REL in each candidate folder: the worktree (`cwd` of the mirrored session whose hub id is the agent's) of each
+agent on the selection's chain (`drgnx-work-code--chain-sids`, from `drgnx-work-nav-chain`), then the root of the
+workspace named REPO. `drgnx-work-code--presence` asks `agents/presence/get` for each path and gathers the entries;
+`drgnx-work-code--pick` chooses: the newest entry of the chain's agents that has a line, else the newest with a line of
+any agent, else the newest without one (the buffer opens at the top and `drgnx-work-code--file-only` is set). An
+answer arrives after the keypress; the file opens when it does, and a hub that is not there opens the first path that
+exists at the top. `drgnx-work-code-open-file` is the entry point (the `file` row of `work-open`).
+
+Every name here is the hub's, so an agent's (docs/develop/core.md, "Names an agent gave"): a session's `cwd` counts only
+when it is local (`drgnx-work-code-local-dir`), the candidate paths are made with no file name handler, an entry's file
+counts only when it is one of the paths asked about, and a file opens only by the true name
+`drgnx-work-code-local-file` gives: a plain regular file inside the agents' worktrees or the workspace's roots, never a
+remote or quoted name, a link out or into a loop, a device, a FIFO, a folder or a name a handler would read. An entry
+naming anything else is passed over. `test/unit/work-names-test.el` holds these cases.
+
+`work-files` (`e`) calls `work/files {session}` for the agent the selection stands for (an agent, a subagent's parent,
+or the first agent a branch came from) and fills a `drgnx-work-files-mode` buffer, placed in the popup lane. Its hint keys
+come from `drgnx-work-code-hint-keys`. The list is the edited files only: `work/files` has no read list yet (its
+`read_at` is filled when the edit history lands). `work-who-is-here` asks for the visited file in the user's checkout and
+in every mirrored worktree of the same repository (found from the `.git` file), keeps each agent's newest entry, selects
+`file:REPO/REL` when the cached frame holds it and echoes the agents. A file the frame shows only as a count chip is not
+given a node: the hub has no way to add one for a selection yet.
+
+`work-diffs` (`d`, `drgnx-work-code-diffs`) asks `work/files {session}`, then `work/hunks {session, path}` for each file: the
+hub's diff against the worktree's recorded base (the interim source, the base snapshot; part 4's edit history replaces
+it behind the same methods). Each answer becomes a `drgnx-work-diff-mode` buffer, killed and made again each time. It
+derives from `drgnx-work-hunk-mode` (also a trail step's hunk): a read-only `special-mode` coloured from its text with
+`diff-mode`'s faces, standing in `/`. It is no `diff-mode` buffer on purpose: `diff-mode` reads the file names in the
+diff with file name handlers on (syntax colouring, which-func), and its keys, VC and ediff open, apply or revert the files
+they name, in a live agent's worktree or in the folder the buffer stands in. `drgnx-work-code--diff-layout` saves `current-window-configuration` in
+`drgnx-work-code--saved-windows` unless one is already saved, then splits the window into at most three side by side;
+files from the third on are the third window's tabs: the window parameter `drgnx-work-diff-tabs` holds them and each
+buffer's `tab-line-tabs-function` reads it. `work-diff-quit` (`q`) restores the saved configuration and kills the
+diff buffers; the module's teardown does the same without restoring. `a` and `D` are registered so the keys are
+reserved for hunks, and say the review view decides them (no review view exists in this phase).
+
+### The view core
+
+`drgnx-view-draw-now VIEW &optional KEYS` draws only the rows named by KEYS (the keypress's own redisplay for a
+selection move); the marks of other rows stay for the view's own draw. `(drgnx-view-stats)` gains `:draw-ms`, the
+milliseconds spent drawing (`work-live-draw` reads it).
+
+### The workspace
+
+`drgnx-work-space-workspace` is the frame's selected window's project (`project-current`; none for a remote folder, a
+folder outside git or a scratch buffer, which opens an empty map). Its roots are `drgnx-work-space-roots` or the
+default (the project's repository, and an enclosing repository with the repositories directly in it); its id is `workspace:` and 12 hex digits of the 64-bit FNV-1a hash over the sorted
+roots' first root commits (the path where git does not answer).

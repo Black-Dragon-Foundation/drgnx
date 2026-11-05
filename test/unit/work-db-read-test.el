@@ -126,22 +126,10 @@
       (should (sqlitep (drgnx-work-db)))
       (should (file-exists-p (concat dir "work.db"))))))
 
-(drgnx-work-db-writer-deftest drgnx-work-db/a-writer-commit-changes-the-read-handles-stamp ()
-  (drgnx-work-db-read-test--with
-    (require 'drgnx)
-    (load (expand-file-name "modules/tools/drgnx-cockpit" drgnx-dir) nil t)
-    (drgnx-work-fixture-put-node "plan:p" :kind 'plan :title "P")
-    (dolist (fn '(drgnx-cockpit-edits--store-key drgnx-cockpit--db-key))
-      (let ((before (funcall fn)))
-        (should (equal (funcall fn) before))
-        (drgnx-work-fixture-put-node "plan:q" :kind 'plan :title "Q")
-        (should-not (equal (funcall fn) before))))))
-
 ;;; The static walk: no read goes through the writer handle
 
 (defconst drgnx-work-db-read-test--files
-  '("core/drgnx-work-db.el" "core/drgnx-coord-read.el" "core/drgnx-cockpit-model.el" "core/drgnx-work.el"
-    "modules/tools/drgnx-cockpit.el" "modules/tools/drgnx-cockpit-edits.el" "modules/tools/drgnx-cockpit-feed.el"))
+  '("core/drgnx-work-db.el" "core/drgnx-coord-read.el" "core/drgnx-work.el"))
 
 (defun drgnx-work-db-read-test--writer-call-p (x)
   (equal x '(drgnx-work-db)))

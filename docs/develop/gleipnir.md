@@ -186,6 +186,7 @@ seen inside.
 | `tmp` | path or absent | the temporary directory; required by the reduced tier, which has no private `/tmp` |
 | `layers` | `{landlock_min_abi}` | the lowest Landlock ABI the run accepts; seccomp is not a field (always on) |
 | `extra_tcp_ports` | ports | TCP ports besides the relay's (Landlock's port rule, never counted as isolation); the full tier only, the reduced tier grants none |
+| `trace` | `"off"` (the default, left out of the JSON), `{"per_step": {"socket"}}` or `{"tree": {"socket"}}` | seeing the files the program's shell steps open ([sandbox.md](sandbox.md#seeing-the-files-a-shell-step-opens)); the socket must be one of `sockets`; `per_step` needs the full tier, and macOS refuses both (`Malformed`) |
 
 `gleipnir::validate::validate(spec, &ctx, target)` checks a spec for one `Target` (`LinuxBwrap`, `LinuxReduced`,
 `Macos`) against a `Context` and returns a `ValidSpec` or a `Refusal { rule, path, message }`. Only a `ValidSpec`

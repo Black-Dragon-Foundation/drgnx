@@ -1077,6 +1077,30 @@ pub fn session_spec(
             .filter(|(k, _)| !(plan.gateway && k == "ANTHROPIC_BASE_URL"))
             .cloned(),
     );
+    // its shell steps' opens (`work::trace`): Claude Code runs each Bash call through Gleipnir's wrapper (the full
+    // tier's), another CLI's whole tree gets the listener from the inner helper; never on macOS
+    let trace_sock = run.join(paths::SESSION_TRACE_SOCKET);
+    let trace = match (plan.trace, target) {
+        (Some(gleipnir::trace::Scope::Step), gleipnir::Target::LinuxBwrap) => {
+            vars.push((
+                "CLAUDE_CODE_SHELL_PREFIX".into(),
+                gleipnir::TRACE_INSIDE.into(),
+            ));
+            gleipnir::Trace::PerStep {
+                socket: trace_sock.clone(),
+            }
+        }
+        (
+            Some(gleipnir::trace::Scope::Tree),
+            gleipnir::Target::LinuxBwrap | gleipnir::Target::LinuxReduced,
+        ) => gleipnir::Trace::Tree {
+            socket: trace_sock.clone(),
+        },
+        _ => gleipnir::Trace::Off,
+    };
+    if !trace.is_off() {
+        sockets.push(trace_sock);
+    }
     let spec = Spec {
         read,
         write,
@@ -1095,6 +1119,7 @@ pub fn session_spec(
         tmp: Some(tmp),
         layers: Layers::for_target(target),
         extra_tcp_ports: vec![],
+        trace,
     };
     Ok(SessionSpec {
         spec,

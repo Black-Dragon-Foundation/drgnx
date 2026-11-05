@@ -8,6 +8,7 @@
 //! |---|---|
 //! | `tool:read PATH` / `tool:edit PATH` / `tool:exec CMD` | a tool call (pending, then completed) that does it in the session's cwd (edit appends a line) |
 //! | `provider:read FILE [OFFSET LIMIT]` / `provider:grep PAT` / `provider:web-search Q` / `provider:web-fetch URL` / `provider:write FILE` | a tool call in the personality's own shape (Claude: `_meta.claudeCode.toolName`, `locations`, `rawInput`; Codex: kind and `action`; Gemini: kind and title only); nothing runs |
+//! | `provider:bash CMD` (Claude) | a `Bash` call: pending, then CMD run as Claude Code runs it (through `$CLAUDE_CODE_SHELL_PREFIX` with CMD as its one argument, else `sh -c`), then completed with its output |
 //! | `tool:write N` | a tool call (pending, then completed) whose raw input is a Write of N bytes (nothing is written) |
 //! | `ask:permission KIND` | `session/request_permission` for a tool call of KIND (read, edit, execute, ...); says `permission: OPTION` |
 //! | `call:TOOL JSON` | calls the hub's MCP tool TOOL through the first stdio server of `mcpServers`; says `call: TEXT` |
@@ -543,6 +544,34 @@ impl Agent {
                 for u in claude::task_updates(&task, &child, rest) {
                     self.update(sid, u);
                 }
+            }
+            // a Bash call as Claude Code runs it: pending first, then the command through $CLAUDE_CODE_SHELL_PREFIX
+            // when one is set (the wrapper gets the command as one argument), then completed with its output
+            "provider:bash" if self.kind == Kind::Claude => {
+                let Some(Value::Object(mut fields)) = claude::tool_shape("bash", rest) else {
+                    return false;
+                };
+                let tid = format!("tc-{turn}-{}", self.next_out_id);
+                self.next_out_id += 1;
+                fields.insert("sessionUpdate".into(), json!("tool_call"));
+                fields.insert("toolCallId".into(), json!(tid));
+                fields.insert("status".into(), json!("pending"));
+                self.update(sid, Value::Object(fields));
+                let out = match std::env::var_os("CLAUDE_CODE_SHELL_PREFIX") {
+                    Some(prefix) => Command::new(prefix)
+                        .arg(rest)
+                        .current_dir(&cwd)
+                        .stdin(Stdio::null())
+                        .output()
+                        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                        .unwrap_or_else(|e| format!("cannot run: {e}")),
+                    None => sh(&cwd, rest),
+                };
+                self.update(
+                    sid,
+                    json!({"sessionUpdate": "tool_call_update", "toolCallId": tid, "status": "completed",
+                    "content": [{"type": "content", "content": {"type": "text", "text": out}}]}),
+                );
             }
             _ if head.starts_with("provider:") => {
                 self.provider_tool(sid, turn, &head[9..], rest);

@@ -132,6 +132,14 @@ PASSWORD, PASSPHRASE or CREDENTIAL), whatever this lists.  Only you can set it, 
   :type '(repeat string) :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
   :runtime "Vec<String>" :schema '(list-of string))
 
+(drgnx-defsetting drgnx-agents-trace-opens '("claude")
+  "The agents whose shell commands' opens the hub sees on Linux (\"seen open\" in the Work space), by provider:
+\"claude\", \"codex\", \"gemini\".  Claude Code is traced per shell step; Codex and Gemini over their whole process
+tree, which costs every command they run (a test suite run as one command: about a third longer), so they are off
+unless listed.  An agent not listed shows only the files its commands name.  Read when a session starts."
+  :type '(repeat (choice (const "claude") (const "codex") (const "gemini"))) :group 'drgnx :scope 'global
+  :workspace 'never :on-error 'strict :agents 'never :runtime "Vec<String>" :schema '(list-of string))
+
 (cl-defstruct (drgnx-agent-session (:constructor drgnx-agents--make) (:copier nil))
   name profile cwd conn acp-id (status 'starting) entries queue (mode 'queue) capabilities usage commands
   permissions reviews stderr exit stopping paused turn draining task via gateway id job remote

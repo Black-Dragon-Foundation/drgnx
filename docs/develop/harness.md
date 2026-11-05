@@ -192,14 +192,20 @@ let-binds the registries the module touches:
 ```
 
 The first argument is a list of module names (evaluated): their files are loaded, and so are the modules they
-`:requires`, all the way down — also a required module whose file another file already loaded (`tools/cockpit`
-loads `tools/work`'s). A module's file is loaded only when the module is not in the table yet (a string element is loaded each time): then
+`:requires`, all the way down — also a required module whose file another file already loaded. A module's file is loaded only when the module is not in the table yet (a string element is loaded each time): then
 a `defcustom` with a `:set` function sets the global value again, over a `let` binding around the helper, and a
 function the file defines replaces a `cl-letf` stub made outside it. Set a module's own setting, and stub its functions, inside BODY. An element that is a string is a file to load instead, for a fake module a test writes to a temporary
 directory. `:stages '(startup idle)` sets up every shipped module of those stages as well. The module table, report
 and state are fresh, and `DRGNX_CONFIG_DIR` is a temporary directory, so the user's `modules.eld` is never read.
 Inside BODY, `drgnx-modules--table` holds only the selected modules and the modules they require, not every module file that was loaded.
 
+- **Under `--leaks`, load the libraries first.** The census reads the state around each test, so a library that the
+  first test's helper loads shows its top-level registrations (rules, places, view types, config definitions) as that
+  test's leaks. A file calls `(drgnx-test-modules-preload '(tools/browser))` once at its top, after loading the
+  fixture. Two more causes of a leak on a test's behalf: a `with-temp-buffer` buffer runs no kill hooks
+  (`inhibit-buffer-hooks`), so the timers a buffer owns outlive it (make the buffer with `generate-new-buffer` and
+  kill it); and a gated hub run (`drgnx-test-gated`) enters the test clock after the helper's setups, so a timer
+  they armed stays in the real list: wrap the helper in `(drgnx-test-with-clock (:allow-pending t) …)`.
 - **Teardown is part of the test.** After BODY (also when BODY signals) the modules are turned off last first through
   `drgnx-module-teardown`, then `drgnx-modules-after-teardown-functions` run: every use of the helper tests the
   module's teardown too. The product's after-teardown function re-applies the keys and menus from the registry; the

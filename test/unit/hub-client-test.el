@@ -207,19 +207,18 @@ connects inside `drgnx-test-gated'.  `hub' is the hub's process; the fixture dis
   (cl-count method drgnx-hub-client-test--traffic :key #'car :test #'equal))
 
 (ert-deftest drgnx-hub-client/editor-traffic-over-ratatoskr ()
-  ;; binary + the Lisp backend (review I6): the calls the cockpit, the job UI, the agents mirror and `drgnx job' make,
-  ;; with the params their own code builds, over a store with a proposed job, a card and a mock-acp session: none is
+  ;; binary + the Lisp backend (review I6): the calls the job UI, the agents mirror and `drgnx job' make,
+  ;; with the params their own code builds, over a store with a proposed job and a mock-acp session: none is
   ;; refused for its params, and none fails inside.  :frozen until agent system part 1's Task 16a: the hub serves
-  ;; job/* itself and answers "not yet" until 16a ports plan runs from the frozen Lisp (the job UI and cockpit are
-  ;; frozen Lisp too)
+  ;; job/* itself and answers "not yet" until 16a ports plan runs from the frozen Lisp (the job UI is frozen Lisp too)
   :tags '(:frozen)
   (let ((load-path (append (list (expand-file-name "modules/tools" drgnx-dir) (expand-file-name "modules/ui" drgnx-dir))
                            load-path)))
-    (dolist (f '(drgnx-job drgnx-job-ui drgnx-cockpit-cards drgnx-cockpit-feed drgnx-agents-ui)) (require f)))
+    (dolist (f '(drgnx-job drgnx-job-ui drgnx-agents-ui)) (require f)))
   (drgnx-hub-client-test--with-ratatoskr
     (drgnx-hub-client-test--mock-profile root)
     (let ((plan (concat root "plan.md")) (drgnx-hub-client-test--traffic nil)
-          (drgnx-agents--sessions nil) (drgnx-agents-profiles nil) job card)
+          (drgnx-agents--sessions nil) (drgnx-agents-profiles nil) job)
       (with-temp-file plan
         (insert "# Two tasks\n\n**Repo:** " root "repo\n\n### Task 1: Do the thing\n\n**Role:** implement\n\nNothing.\n\n"
                 "### Task 2: Check the thing\n\n**Role:** review\n\nNeeds Task 1.\n"))
@@ -231,8 +230,7 @@ connects inside `drgnx-test-gated'.  `hub' is the hub's process; the fixture dis
       (let ((r (drgnx-hub-client-test--cli "job" "status" "--json"))) (should (equal r (cons 0 (cdr r)))))
       (let ((r (drgnx-hub-client-test--cli "job" "status" job))) (should (equal r (cons 0 (cdr r)))))
       (advice-add 'drgnx-hub-call :around #'drgnx-hub-client-test--record)
-      ;; the filter the cockpit's graph would hold (not loaded here)
-      (cl-letf* ((filter nil) ((symbol-function 'drgnx-cockpit-cards-job) (lambda () filter)))
+      (progn
         (unwind-protect
             (progn
               ;; the job UI: propose (with this Emacs's gate), list, reject
@@ -241,31 +239,15 @@ connects inside `drgnx-test-gated'.  `hub' is the hub's process; the fixture dis
                   (drgnx-job-ui-start plan))
                 (drgnx-job-ui-status)
                 (drgnx-job-ui-stop second))
-              ;; a card of the CLI's job, and the cockpit's parts: every job, then the job with its decisions
-              (drgnx-work-fixture-as-hub
-                (let ((db (sqlite-open (concat root "data/work.db"))))
-                  (sqlite-execute db "insert into card (job, task, kind, title, data, state, at) values (?, null, 'note', 'a note', '{}', 'open', 1.5)"
-                                  (list job))
-                  (sqlite-close db)))
-              (drgnx-cockpit-cards-refresh)
-              (setq filter job)
-              (drgnx-cockpit-cards-refresh)
-              (drgnx-hub-client-test--wait (lambda () (>= (drgnx-hub-client-test--answered "job/status") 3)) "the cockpit's answers")
-              (setq card (seq-find (lambda (c) (equal (plist-get c :kind) "note"))
-                                   (plist-get (drgnx-hub-call-sync "job/status" (list :id job) 10) :cards)))
-              (should card)
-              (drgnx-cockpit-cards--act job card "dismiss")
-              (drgnx-hub-client-test--wait (lambda () (>= (drgnx-hub-client-test--answered "job/card") 1)) "the card's answer")
-              ;; a durable session and its mirror: the agents UI starts it, the mirror and the feed drive it
+              (drgnx-hub-client-test--wait (lambda () (>= (drgnx-hub-client-test--answered "job/status") 2)) "the job UI's answers")
+              ;; a durable session and its mirror: the agents UI starts it, the mirror drives it
               (cl-letf (((symbol-function 'drgnx-agents-ui--cwd) (lambda () root))) (drgnx-agents-ui-new-durable "mock"))
               (let ((m (drgnx-hub-client-test--wait (lambda () (seq-find #'drgnx-agent-session-remote drgnx-agents--sessions))
                                                     "the mirror")))
                 (drgnx-hub-client-test--wait (lambda () (eq (drgnx-agent-session-status m) 'idle)) "the mirror is idle")
                 (drgnx-agents-send m "hello mirror")
-                (drgnx-cockpit-feed--queue (drgnx-agent-session-remote m) "and again" #'ignore)
-                (drgnx-agents-deliver-queue m)
-                (drgnx-hub-client-test--wait (lambda () (and (>= (drgnx-hub-client-test--answered "agents/send") 2)
-                                                             (>= (drgnx-hub-client-test--answered "agents/do") 1)))
+                (drgnx-agents-send m "and again")
+                (drgnx-hub-client-test--wait (lambda () (>= (drgnx-hub-client-test--answered "agents/send") 2))
                                              "the mirror's answers")
                 (drgnx-agents-kill m)
                 (drgnx-hub-client-test--wait (lambda () (>= (drgnx-hub-client-test--answered "agents/kill") 1)) "the kill's answer")))

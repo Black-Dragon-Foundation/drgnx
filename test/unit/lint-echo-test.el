@@ -40,10 +40,6 @@
     ("modules/tools/drgnx-prs.el" . 1)           ; "fetching pull request #N…" (Show Changes, a progress line)
     ("modules/tools/drgnx-commit-message.el" . 4) ; Generate Commit Message's own answer: progress, no answer, kill ring
     ("modules/tools/drgnx-browser.el" . 7)       ; Test Report / Show Browser: a command's refusals (NT-T21-1: the sentinel ones)
-    ("modules/tools/drgnx-cockpit-cards.el" . 7) ; card commands' errors (NT-T21-1: the callbacks among them)
-    ("modules/tools/drgnx-cockpit-graph.el" . 1)
-    ("modules/tools/drgnx-cockpit-edits.el" . 1)
-    ("modules/tools/drgnx-cockpit.el" . 1)
     ("modules/ui/drgnx-statusbar.el" . 1)        ; Show Test Output: no output to show
     ;; modules/: automatic paths still messages, waiting for their module's own source (NT-T21-1)
     ("modules/editor/drgnx-clipboard.el" . 1)

@@ -1,5 +1,8 @@
 # Work tracker
 
+> The right dock's Work tab described below is gone: the Work space's map ([work-space.md](work-space.md)) replaced it.
+> `drgnx work`, the Work graph and the commit recording stay.
+
 Where did this plan come from, how far is it, and which commits did it? The work tracker answers that across
 every project drgnx knows: **spec › plan › task › step / TODO › commit**, with the branch and worktree each plan
 is built on. It reads what is already there (spec and plan files, execution ledgers, the board) and records the
@@ -102,9 +105,8 @@ looking at draws nothing; it catches up when you show it.
 - **Start Agent on Task…** starts an agent on the task (or TODO, or plan) at point, in the plan's worktree (else
   its repository, else the plan's folder); its commits are recorded for that task.
 - **Open Plan's Worktree** adds the plan's worktree to the Explorer.
-- **Show Work as Graph** opens the Work cockpit's graph — specs, plans, tasks, agents, jobs and reviews, who is on
-  what and what waits on you ([cockpit.md](cockpit.md)) — when the `tools/cockpit` module runs. Without it, it draws
-  the older graph described here: the specs, the plans shown (the tab's filter and hide-merged apply; each with its tasks
+- **Show Work as Graph** draws the graph described here (the Work space's map, [work-space.md](work-space.md), shows
+  the agents and jobs): the specs, the plans shown (the tab's filter and hide-merged apply; each with its tasks
   done and commits; merged ones dashed) and their branches, in three columns, with Emacs's own `svg.el` — no other
   program. Every box is a hot spot: click a spec or plan to open its file, a branch to add its worktree to the
   Explorer (a double click opens it once; the file opens from the graph's window, even when another was selected);
