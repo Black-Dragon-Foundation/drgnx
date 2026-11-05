@@ -18,13 +18,34 @@
 
 (defvar drgnx-perf-run--fixture nil "The typing fixture of this run (one file, reused, deleted at the end).")
 
+(defconst drgnx-perf-run--fixture-mark ";; drgnx-perf: the keys go on the next line"
+  "The comment in `drgnx-perf-run--fixture-spot' above the line the keys go to.")
+
+(defconst drgnx-perf-run--fixture-spot
+  (concat "\n(defun drgnx-perf-fixture-spot (items)
+  \"Where the perf lab types: six lists deep, so a list the keys leave open ends in here.\"
+  (dolist (item items)
+    (when (consp item)
+      (with-temp-buffer
+        (save-excursion
+          (progn
+            " drgnx-perf-run--fixture-mark "
+            (insert (format \"%s\" item))))))))\n")
+  "The form the keys go into, the same in every tree.  Where the middle of core/ falls changes with every core file:
+on a line with too few lists around it, each `(let ((x' typed left a list open past its form, and Emacs Lisp's
+font-lock (`lisp--el-funcall-position-p', through `forward-sexp') scanned the rest of the file at every key.")
+
 (defun drgnx-perf-run--make-fixture ()
-  "A large Emacs Lisp file — drgnx's own core three times (~12k lines) — written once per run."
-  (let ((f (make-temp-file "drgnx-perf-" nil ".el")))
+  "A large Emacs Lisp file — drgnx's own core three times (~140k lines) — written once per run, with
+`drgnx-perf-run--fixture-spot' between two files near its middle."
+  (let* ((f (make-temp-file "drgnx-perf-" nil ".el"))
+         (files (directory-files (expand-file-name "core" drgnx-ui-repo-dir) t "\\.el\\'"))
+         (middle (nth (/ (length files) 2) files)))
     (with-temp-file f
-      (dotimes (_ 3)
-        (dolist (x (directory-files (expand-file-name "core" drgnx-ui-repo-dir) t "\\.el\\'"))
-          (insert-file-contents x) (goto-char (point-max)))))
+      (dotimes (i 3)
+        (dolist (x files)
+          (insert-file-contents x) (goto-char (point-max))
+          (when (and (= i 1) (eq x middle)) (insert drgnx-perf-run--fixture-spot)))))
     f))
 
 (defun drgnx-perf-run--session-size ()
@@ -32,16 +53,10 @@
   (let ((e (getenv "DRGNX_UI_SIZE"))) (if (member e '(nil "")) "1400x800" e)))
 
 (defun drgnx-perf-run--visit-fixture-form ()
-  "The form that visits the fixture and puts point where the keys go: the first line at or after the middle that
-starts inside a form two deep, outside strings and comments.  The fixture is core/ three times, so its middle moves
-whenever a core file is added; at column 0 of a top-level form, the typed `(let ((x 1' left a list open at top level
-and Emacs Lisp's font-lock (`lisp--el-funcall-position-p') scanned the rest of the file at every key."
+  "The form that visits the fixture and puts point where the keys go: the line under `drgnx-perf-run--fixture-mark'."
   (format "(let ((f %S)) (when-let* ((b (find-buffer-visiting f))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))
-                         (find-file f) (goto-char (/ (point-max) 2)) (forward-line 0)
-                         (while (and (not (eobp)) (let ((s (syntax-ppss))) (or (< (car s) 2) (nth 3 s) (nth 4 s))))
-                           (forward-line 1))
-                         t)"
-          drgnx-perf-run--fixture))
+                         (find-file f) (goto-char (point-min)) (search-forward %S) (forward-line 1) t)"
+          drgnx-perf-run--fixture drgnx-perf-run--fixture-mark))
 
 (defun drgnx-perf-run--replace-setup-form ()
   "The replace-typing workload's setup: 100 files of 100 matching lines, and the session functions it uses."
