@@ -532,33 +532,21 @@ Returns the buffer."
 
 ;;;; The module
 
+;; The Work tab (the right dock's tree, its commands `work-view' and `work-open' and the fold, scan and filter keys)
+;; retired when the Work space's map arrived (module tools/work-space owns those ids).  What stays is what the Work
+;; cockpit's graph (tools/cockpit, which requires this module until it retires) still uses: the graph command, the
+;; agent-turn commit recording and the file's helper functions.
 (drgnx-module-define 'tools/work
-                     :doc "Work: specs › plans › tasks › TODOs › commits in the right dock's Work tab; the graph."
+                     :doc "Work: the Work graph command and the commit recording for an agent started on a task (the Work tab retired: see tools/work-space)."
                      :stage 'startup :requires '(core/workbench)
                      :setup
                      (lambda ()
                        (add-hook 'drgnx-agents-task-functions #'drgnx-work-ui--agent-turn 90)
-                       (when (fboundp 'drgnx-wb-define-tab)
-                         (drgnx-wb-define-tab 'right 'work :title "Work")
-                         ;; …and in the bottom panel, for the Agent layout (the same buffer)
-                         (drgnx-wb-define-tab 'panel 'work :title "Work" :placeholder #'drgnx-work-ui-buffer))
                        (when (fboundp 'drgnx-wb-place)
-                         (drgnx-wb-place 'drgnx-work-mode 'right :tab 'work)
                          (drgnx-wb-place "\\`\\*\\(commit: \\|work graph\\*\\)" 'editor))
-                       (pcase-dolist (`(,id ,title ,fn ,doc)
-                                      '((work-view "Show Work" drgnx-work-ui-view "Specs, plans, tasks, TODOs and commits, in the right dock")
-                                        (work-graph "Show Work as Graph" drgnx-work-ui-show-graph
-                                                    "The Work graph: specs, plans, tasks, agents, jobs and reviews; click a node to open it")
-                                        (work-start-agent "Start Agent on Task…" drgnx-work-ui-start-agent "An agent on this task; its commits are recorded for it")
-                                        (work-open-worktree "Open Plan's Worktree" drgnx-work-ui-open-worktree "The worktree of this plan, in the Explorer")))
-                         (drgnx-command-define id :category "Work" :title title :command fn :doc doc))
-                       (pcase-dolist (`(,id ,title ,fn ,doc)
-                                      '((work-open "Open" drgnx-work-ui-open "The file at this line, or the commit's diff")
-                                        (work-toggle "Fold" drgnx-work-ui-toggle "Fold or unfold this spec, plan or task")
-                                        (work-refresh "Scan Again" drgnx-work-ui-refresh "Read the projects again (in the background)")
-                                        (work-filter "Filter Plans…" drgnx-work-ui-filter "Only the plans whose title or path contain a text")
-                                        (work-hide-merged "Hide Merged Plans" drgnx-work-ui-toggle-merged "Hide or show the plans already merged")))
-                         (drgnx-command-define id :category "Work" :title title :command fn :doc doc :map 'drgnx-work-mode-map))))
+                       (drgnx-command-define 'work-graph :category "Work" :title "Show Work as Graph"
+                                             :command #'drgnx-work-ui-show-graph
+                                             :doc "The Work graph: specs, plans, tasks, agents, jobs and reviews; click a node to open it")))
 
 (provide 'drgnx-work-ui)
 ;;; drgnx-work-ui.el ends here

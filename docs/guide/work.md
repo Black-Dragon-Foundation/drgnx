@@ -1,5 +1,8 @@
 # Work tracker
 
+> The right dock's Work tab described below is gone: the Work space's map ([work-space.md](work-space.md)) replaced it.
+> `drgnx work`, the Work graph and the commit recording stay.
+
 Where did this plan come from, how far is it, and which commits did it? The work tracker answers that across
 every project drgnx knows: **spec › plan › task › step / TODO › commit**, with the branch and worktree each plan
 is built on. It reads what is already there (spec and plan files, execution ledgers, the board) and records the

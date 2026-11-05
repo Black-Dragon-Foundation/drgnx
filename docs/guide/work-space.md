@@ -1,7 +1,28 @@
 # The Work space
 
-The Work space shows what your agents are doing in one place. This page grows with the feature; today it covers the
-machines the hub knows about.
+The Work space shows what your agents are doing in one place. This page grows with the feature; today it covers
+opening the map, and the machines and files the hub knows about.
+
+## Opening the map
+
+**Open the Work Space** (`work-view`; VS Code `C-k t`, Emacs `C-c w w`, Vim `SPC a w`) opens the map of the project
+of the frame you are in. A *workspace* is the project's repository and, when it lies inside another repository (a
+notes repository with the code repositories inside it), that repository and the repositories directly inside it. To name
+the repositories yourself, set `drgnx-work-space-roots`.
+
+The map is a read-only buffer, `*drgnx work: NAME*`, in six layers: you asked, specs, plans, agents, branches, and
+files and machines. The hub keeps what the map shows and sends changes as they happen; the map never asks again until
+the hub restarts. If the hub goes away the map keeps what it showed and says "reconnecting" in its mode line, and it
+subscribes again by itself when the hub is back. A map no window shows costs nothing: the hub sends it no changes, and
+it is drawn again when you show it.
+
+Outside a project (a scratch buffer, a folder that is not in git) the map is empty and says so.
+
+The colours are the theme's: the map's faces (`drgnx-work-dim`, `drgnx-work-card`, `drgnx-work-selected`,
+`drgnx-work-chain`, `drgnx-work-overlap`, `drgnx-work-needs-you`, `drgnx-work-edge`, `drgnx-work-edge-strong`,
+`drgnx-work-label`, `drgnx-work-chip`, `drgnx-work-new` and `drgnx-work-agent-1` to `-6`) inherit stock faces and carry
+no colour of their own. The Work tab that used to sit in the right dock (`work-view` as "Show Work") is gone; the Work
+graph (`work-graph`) stays until the cockpit retires.
 
 ## Machines
 

@@ -1635,8 +1635,10 @@ It returns the number of rows drawn, grown or removed, clears the modified flag 
 raised. Between two slices the vectors always describe the buffer: `key-at`, `row-start` and the self-check stay
 right while work is left.
 
-`(drgnx-view-draw-now VIEW)` draws everything at once, even when the view is hidden (`g` and tests); it returns 0
-for a view object no longer attached to its buffer, or whose type was removed.
+`(drgnx-view-draw-now VIEW &optional KEYS)` draws everything at once, even when the view is hidden (`g` and tests); it
+returns 0 for a view object no longer attached to its buffer, or whose type was removed. With KEYS (a list of row
+keys) it does only the work on those rows, in the caller's own redisplay (the Work map's selection move); the marks of
+the other rows stay, the view reports itself pending, and its own draw takes them.
 
 **Self-check:** before a draw, when the region (START to the end of the buffer) is not as long as the entries, a
 foreign edit moved them: the view deletes the region, draws every row again before the pending changes, and counts
@@ -1723,10 +1725,10 @@ edits pane.
 nothing), `(drgnx-view-row-start VIEW KEY)`, `(drgnx-view-row-count VIEW)` (rows in the buffer; between slices, rows
 still to delete count), `(drgnx-view-pending-p VIEW)` (marks not drawn, or work left by a slice),
 `(drgnx-view-body-length VIEW KEY)`, `(drgnx-view-shown-p VIEW)`, and `(drgnx-view-stats &optional VIEW)` →
-`(:rows-drawn :rows-grown :appended :removed :slices :max-slice-rows :full-draws :stale-skips)`. `:rows-drawn`
+`(:rows-drawn :rows-grown :appended :removed :slices :max-slice-rows :full-draws :stale-skips :draw-ms)`. `:rows-drawn`
 counts every row rendered (patched, inserted or appended, an error row too); `:rows-grown` the rows that took GROW's
-text; `:appended` the rows added; `:removed` the rows deleted. Without VIEW it sums every live view
-(`:max-slice-rows`: the largest).
+text; `:appended` the rows added; `:removed` the rows deleted; `:draw-ms` the milliseconds spent in draws that did
+work. Without VIEW it sums every live view (`:max-slice-rows`: the largest).
 
 ### Consumers
 

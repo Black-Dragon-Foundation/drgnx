@@ -344,3 +344,50 @@ Layer 1 of "reads through shell commands" (the files a command names; labelled "
 - Tests: `work::shell_read::tests` (class `det`, pattern D, with a property test over the corpus and random words),
   the corpus in `src/work/shell_read/corpus.txt`, and the timing row `shell_parse_within_200_us`
   (`tests/work_timing.rs`, listed in `test/timing-rust.txt`, 200 µs at p95).
+
+## The editor's side
+
+Module `tools/work-space` (`modules/tools/drgnx-work-space.el`; the buffer's mode, view type and rows are in
+`drgnx-work-map.el`, a library of the module; the map client is `core/drgnx-work-client.el`).
+
+### The map client
+
+`core/drgnx-work-client.el` has a pure core and a shell.
+
+- **The core.** `drgnx-work-client-init FRAME` makes a state from `work/map/subscribe`'s answer (items by id, edges,
+  the layout with `:at` and `:form` as hash tables by item id, the needs-you strip, the chips).
+  `drgnx-work-client-step STATE EVENT` takes one `work-map` event and returns `(NEW-STATE . MARKS)`:
+  - an event whose version is not newer than the frame's is dropped, and so is every event while the state is not live
+    (before a frame, after `drgnx-work-client-lost`);
+  - a full event replaces the frame (every row, the layout, the edges and the strip are marked);
+  - an event whose `base` is the frame's version is applied: changed items put, removed ones taken out, the places the
+    arrivals took put (a place no row holds gets a row of its own, block line 1000 and up), edges, layout, strip and
+    chips replaced when the event carries them; then any held event it unblocks;
+  - any other event is held, and the marks say `:resync t`: the shell subscribes again, and the full frame it gets
+    replaces the state and drops what was held.
+  The marks are a plist: `:rows` (row keys `(:row LAYER BLOCK-LINE SUB)` to draw again, or `t`), `:items`, `:removed`,
+  `:keys` (the list of rows changed), `:edges`, `:layout`, `:strip`, `:resync`; each only when it applies. The core
+  calls no process, timer or clock, so its tests run it in every order its events can arrive in.
+- **The shell.** One view per map buffer, keyed by the workspace id. `drgnx-work-client-open` subscribes;
+  `-set` sends `work/map/set` (hidden or shown, filters, collapsed layers, width, density, the selection); `-close`
+  sends `work/map/close`. Events come from `drgnx-hub-event-functions`; a view re-subscribes from
+  `drgnx-hub-connected-functions` (the hub client core's own reconnection), and `drgnx-hub-disconnect-functions` makes
+  every view keep its frame and say "reconnecting". Each view counts its events, deltas and frames
+  (`drgnx-work-client-counter`), which the hidden-map test reads: a hidden map receives one stale mark and nothing else.
+  The change and status hooks (`drgnx-work-client-change-functions`, `-status-functions`) are how the buffer hears.
+- **Tests.** `test/unit/work-client-test.el` (class `det`, every order), `test/unit/work-space-test.el` (class
+  `cond`, gated: a real hub, real mock agents), `test/unit/work-rows-test.el` (`det`). The frame in
+  `test/fixtures/work-space/frame.json` is what the wire decodes to.
+
+### The view core
+
+`drgnx-view-draw-now VIEW &optional KEYS` draws only the rows named by KEYS (the keypress's own redisplay for a
+selection move); the marks of other rows stay for the view's own draw. `(drgnx-view-stats)` gains `:draw-ms`, the
+milliseconds spent drawing (`work-live-draw` reads it).
+
+### The workspace
+
+`drgnx-work-space-workspace` is the frame's selected window's project (`project-current`; none for a remote folder, a
+folder outside git or a scratch buffer, which opens an empty map). Its roots are `drgnx-work-space-roots` or the
+default (the project's repository, and an enclosing repository with the repositories directly in it); its id is `workspace:` and 12 hex digits of the 64-bit FNV-1a hash over the sorted
+roots' first root commits (the path where git does not answer).
