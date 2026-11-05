@@ -1530,7 +1530,10 @@ late batch is dropped) use it, and keep their synchronous path otherwise and for
 highlight are a pure core (`drgnx-quick-open--step`; events `batch`, `input`, `move`, `done`; the highlight is kept by the
 file's name and moves only on `input` and `move`), tested in every order (`test/unit/quick-open-stream-test.el`). The shell
 touches vertico's `vertico--input`, `vertico--candidates`, `vertico--index` and `vertico--exhibit` to show a batch with the
-highlight where the core says; a vertico update can break them, and it was not checked under `vertico-buffer`.
+highlight where the core says; a vertico update can break them, so `test/unit/quick-open-vertico-test.el` drives the command under real vertico (needs
+vertico and compat in `DRGNX_USER_ELPA`, else it skips). Quick Open reads with its own completion style, which keeps the
+core's candidates as they are (a user's prefix or orderless style would filter them a second time). Not checked under
+`vertico-buffer`.
 
 ### Declarations, activation and ownership
 

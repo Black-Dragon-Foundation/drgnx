@@ -90,9 +90,26 @@ them all (0) before a path that does (1), then the shorter."
 
 (defun drgnx-quick-open--table (string pred action)
   "The completion table: the core's candidates, in the core's order (the core filters; the style does not re-sort)."
-  (if (eq action 'metadata)
-      '(metadata (category . project-file) (display-sort-function . identity) (cycle-sort-function . identity))
-    (complete-with-action action (drgnx-quick-open--candidates drgnx-quick-open--state) string pred)))
+  (let ((names (drgnx-quick-open--candidates drgnx-quick-open--state)))
+    (cond ((eq action 'metadata)
+           '(metadata (category . project-file) (display-sort-function . identity) (cycle-sort-function . identity)))
+          ((eq action t) (copy-sequence names))        ; all of them: `complete-with-action' would keep only a prefix match
+          ((null action) (try-completion string names pred))
+          ((eq action 'lambda) (test-completion string names pred)))))
+
+(defun drgnx-quick-open--style-all (string table pred _point)
+  "A completion style that keeps what the table gives: the core has matched and ranked the candidates already, and the
+user's styles (prefix, orderless) would filter them again by another rule."
+  (when-let* ((all (all-completions string table pred))) (nconc all 0)))               ; base size 0: they are whole names
+
+(defun drgnx-quick-open--style-try (string table pred _point)
+  "The `try-completion' side of `drgnx-quick-open--style-all'."
+  (let ((c (try-completion string table pred)))
+    (cond ((eq c t) t) ((stringp c) (cons c (length c))))))
+
+(defconst drgnx-quick-open--style
+  '(drgnx-quick-open drgnx-quick-open--style-try drgnx-quick-open--style-all "The candidates the Quick Open core chose.")
+  "The entry for `completion-styles-alist', bound only while Quick Open reads.")
 
 (defun drgnx-quick-open--refresh ()
   "Show the core's candidates in the minibuffer, the highlight on its candidate.
@@ -152,8 +169,11 @@ Without Nidhogg's framing (or on a remote folder) this is `project-find-file'."
     (if (not drgnx-quick-open--stream)
         (call-interactively #'project-find-file)
       (unwind-protect
-          (let ((choice (minibuffer-with-setup-hook #'drgnx-quick-open--setup
-                          (completing-read "Quick Open: " #'drgnx-quick-open--table nil t))))
+          (let ((choice (let ((completion-styles-alist (cons drgnx-quick-open--style completion-styles-alist))
+                              (completion-styles '(drgnx-quick-open))
+                              (completion-category-overrides nil) (completion-category-defaults nil))
+                          (minibuffer-with-setup-hook #'drgnx-quick-open--setup
+                            (completing-read "Quick Open: " #'drgnx-quick-open--table nil t)))))
             (find-file (expand-file-name choice root)))
         (drgnx-file-stream-stop drgnx-quick-open--stream)))))
 
