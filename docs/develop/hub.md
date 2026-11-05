@@ -1255,8 +1255,10 @@ and name. The session is recorded in `runtime.db` (`asession`, migration 5) and 
   it ends. A turn begins when the status becomes `busy` and ends when it stops being busy or when its `stop` entry
   arrives, whichever the mirror sees first: the hub sends a session's state at most every 50 ms, so a short turn can
   go by with no `busy` snapshot. Each turn runs its hooks once (the mirror counts turns per session), a snapshot or
-  entries sent again run nothing, and the turns already in a transcript fetched at attach run none. The work tracker
-  records a task's commits from `turn-end`.
+  entries sent again run nothing, and a fetched transcript's turns that had ended when the editor last heard of the
+  session (within the `entries_count` of the last snapshot it applied) run none. A turn that ended after that runs
+  its hooks once, even when it ended before the fetch's answer and its own events were dropped as older than it. The
+  work tracker records a task's commits from `turn-end`.
 
 - **Shapes.** Snapshots and entries are records 2 (`runstav::methods::agents::{Snapshot, Entry}`), unchanged for the
   mirror and the cockpit. Message chunks of one message join into one entry (`text`, `length`); a tool call and its

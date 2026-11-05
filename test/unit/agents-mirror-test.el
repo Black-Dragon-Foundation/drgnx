@@ -417,6 +417,53 @@ hub hands that permission request to the editor."
       (drgnx-agents-mirror--apply-snapshot (drgnx-agents-mirror-test--snap "busy" "T#1"))
       (should (equal (mapcar #'car (reverse events)) '(start turn-start))))))
 
+(defun drgnx-agents-mirror-test--attach (order shown)
+  "The task hooks' events, oldest first, for session \"h-t\" first seen idle with one past turn in its transcript (2
+entries), whose transcript fetch is answered while a new turn runs.  ORDER is where that turn's end falls: `in-fetch'
+(before the answer: its entries event comes while the fetch is out, numbered before the answer) or `after-fetch' (the
+answer shows it busy, its stop entry comes after).  SHOWN: a window shows the transcript (no turn counts from the
+snapshots then).  The test answers the fetch itself (`drgnx-hub-call' stubbed), so each order is made, not waited for."
+  (let (events answer)
+    (drgnx-agents-mirror-test--hooks events
+      (let ((drgnx-agents-mirror--shown (make-hash-table :test #'equal))
+            (drgnx-agents-mirror--fetching (make-hash-table :test #'equal))
+            (drgnx-agents-mirror--hub-turns (make-hash-table :test #'equal))
+            (snap (lambda (status count turns)
+                    (list :id "h-t" :name "t" :profile "mock" :cwd "/w" :task "T#1" :status status
+                          :entries_count count :turns turns)))
+            (past '((0 (:type "user" :text "old")) (1 (:type "stop" :stop "EndTurn"))))
+            (turn '((2 (:type "user" :text "new")) (3 (:type "stop" :stop "EndTurn")))))
+        (when shown (puthash "h-t" t drgnx-agents-mirror--shown))
+        (unwind-protect
+            (cl-letf (((symbol-function 'drgnx-hub-call)
+                       (lambda (method _params &optional cb) (when (equal method "agents/get") (setq answer cb)))))
+              ;; first seen: the fetch goes out
+              (drgnx-agents-mirror--event "agent" (list :id "h-t" :seq 2 :session (funcall snap "idle" 2 1)))
+              (pcase-exhaustive order
+                ('in-fetch
+                 (drgnx-agents-mirror--event "agent" (list :id "h-t" :seq 3 :session (funcall snap "busy" 3 2)))
+                 (drgnx-agents-mirror--event "agent-entries" (list :id "h-t" :seq 4 :entries turn))
+                 (funcall answer (list :seq 5 :session (funcall snap "idle" 4 2)
+                                       :entries (mapcar #'cadr (append past turn)))
+                          nil))
+                ('after-fetch
+                 (funcall answer (list :seq 3 :session (funcall snap "busy" 3 2)
+                                       :entries (mapcar #'cadr (append past (list (car turn)))))
+                          nil)
+                 (drgnx-agents-mirror--event "agent-entries" (list :id "h-t" :seq 4 :entries (cdr turn)))
+                 (drgnx-agents-mirror--event "agent" (list :id "h-t" :seq 5 :session (funcall snap "idle" 4 2))))))
+          (drgnx-agents-mirror-stop))))
+    (mapcar #'car (reverse events))))
+
+(ert-deftest drgnx-agents-mirror/a-turn-that-ends-while-the-transcript-is-fetched-runs-its-hooks ()
+  ;; test-pattern: every order (the turn's end before or after the fetch's answer, shown or not), made by the test
+  ;; the past turn (in the transcript before the session was first seen) runs nothing; the new one runs each hook once,
+  ;; so the work tracker records its commits
+  (dolist (order '(in-fetch after-fetch))
+    (dolist (shown '(t nil))
+      (should (equal (list order shown (drgnx-agents-mirror-test--attach order shown))
+                     (list order shown '(start turn-start turn-end)))))))
+
 (ert-deftest drgnx-agents-mirror/env-functions-reach-start ()
   ;; the functions' NAME=value strings go to agents/start as `env' when the name is on `drgnx-agents-start-env-names' and
   ;; is no credential; the others are dropped, with one notice naming them; the session they saw is the mirror
