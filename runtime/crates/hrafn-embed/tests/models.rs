@@ -174,8 +174,10 @@ fn f16_and_bf16_weights_read_as_f32() {
     let back: Vec<f32> = granite
         .f16_bytes("final_norm.weight")
         .unwrap()
-        .chunks_exact(2)
-        .map(|b| half::f16::from_le_bytes([b[0], b[1]]).to_f32())
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|b| half::f16::from_le_bytes(*b).to_f32())
         .collect();
     assert!(
         norm.iter()
