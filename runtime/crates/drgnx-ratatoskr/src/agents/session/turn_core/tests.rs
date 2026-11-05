@@ -166,7 +166,7 @@ impl Shell {
                     } else {
                         // the shell's turn sends at once
                         let sent = self.core.step(TurnEvent::Sending { turn: *turn });
-                        if sent != [TurnEffect::Prompt { turn: *turn }] {
+                        if sent != [TurnEffect::Prompt { turn: *turn }, TurnEffect::Persist] {
                             self.note(format!("turn {turn} started, but its send got {sent:?}"));
                         }
                         self.running = Some(*turn);
@@ -332,6 +332,10 @@ impl Shell {
             .contains(&TurnEffect::Prompt { turn: t })
         {
             return;
+        }
+        // Stop wins over a prompt that has not gone: none goes after its turn was told to cancel
+        if self.cancels.contains_key(&t) {
+            self.note(format!("turn {t}'s prompt ({text}) went after its cancel"));
         }
         if self.doomed {
             self.lost.push(text);
@@ -927,6 +931,88 @@ fn every_order_the_queue_on_disk_keeps_a_prompt_until_it_reaches_the_agent() {
     );
     assert_eq!(r.mode, Mode::Exhaustive);
     assert_eq!(r.orders, 630);
+}
+
+// ---- a Stop before the send wins ----
+
+/// The user sends two prompts, stops and delivers the held queue; the turn's task sends each turn's prompt in a step
+/// of its own (a Stop may come between a turn's start and its send); the agent answers what it works on; the stop's
+/// deadline fires.
+#[derive(Clone, Debug)]
+enum GapStopEv {
+    Send(&'static str),
+    Stop,
+    Deliver,
+    Prompt,
+    Done,
+    Due(usize),
+}
+skuld::events!(GapStopEv {
+    Send,
+    Stop,
+    Deliver,
+    Prompt,
+    Done,
+    Due
+});
+
+struct GapStopShell(Shell);
+
+impl Core for GapStopShell {
+    type Event = GapStopEv;
+
+    fn step(&mut self, ev: GapStopEv) -> Vec<GapStopEv> {
+        let s = &mut self.0;
+        match ev {
+            GapStopEv::Send(t) => s.send(t),
+            GapStopEv::Stop => {
+                s.feed(TurnEvent::Stop { after_tool: false });
+            }
+            GapStopEv::Deliver => s.deliver(),
+            GapStopEv::Prompt => s.send_prompt(),
+            GapStopEv::Done => s.done(),
+            GapStopEv::Due(i) => s.due(i),
+        }
+        Vec::new()
+    }
+}
+
+fn check_gap_stop(g: &GapStopShell, _: &[GapStopEv]) -> Result<(), String> {
+    let s = &g.0;
+    // (no prompt went after its cancel: `send_prompt` notes it)
+    s.settled()?;
+    if let Some((t, n)) = s.cancels.iter().find(|(_, n)| **n > 1) {
+        return Err(format!("turn {t} was told to cancel {n} times"));
+    }
+    s.no_stall()
+}
+
+#[test]
+fn every_order_a_stop_before_the_send_keeps_the_prompt_from_the_agent() {
+    let mut p = Partial::new();
+    let user = p.source(
+        "user",
+        vec![
+            GapStopEv::Send("a"),
+            GapStopEv::Send("b"),
+            GapStopEv::Stop,
+            GapStopEv::Deliver,
+        ],
+    );
+    let turn = p.source("turn", vec![GapStopEv::Prompt, GapStopEv::Prompt]);
+    let agent = p.source("agent", vec![GapStopEv::Done, GapStopEv::Done]);
+    let timer = p.source("timer", vec![GapStopEv::Due(0)]);
+    p.before((user, 0), (turn, 0));
+    p.before((user, 0), (agent, 0));
+    p.before((user, 2), (timer, 0));
+    let r = every_order(
+        &p,
+        Bound::default(),
+        || GapStopShell(Shell::with_gap()),
+        check_gap_stop,
+    );
+    assert_eq!(r.mode, Mode::Exhaustive);
+    assert!(r.orders > 100, "{} orders", r.orders);
 }
 
 // ---- a delivered peer message a user's kill discards goes back to the store's queue ----

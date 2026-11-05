@@ -436,6 +436,7 @@ impl State {
                 }
                 TurnEffect::StartTurn { item, .. } => {
                     self.unsent_at = Some(self.entries.len());
+                    self.turns += 1;
                     self.begin_turn(item);
                     continue;
                 }
@@ -444,6 +445,7 @@ impl State {
                     continue;
                 }
                 TurnEffect::PutBack { .. } => {
+                    self.turns = self.turns.saturating_sub(1);
                     self.undo_turn();
                     continue;
                 }
@@ -3034,7 +3036,8 @@ impl Session {
 
     /// The running turn, if any, is the only thing Stop cancels: the permission requests it waits on are answered
     /// cancelled, the queue is held, and an agent that has not ended the turn after STOP_ANSWER loses its process.  A
-    /// second Stop of the same turn changes nothing.
+    /// second Stop of the same turn changes nothing.  A turn whose prompt has not reached the agent yet is put back
+    /// instead: the prompt waits at the front of the held queue, and nothing is sent.
     pub(crate) fn stop_turn(self: &Arc<Self>) -> bool {
         !self
             .turn_event(TurnEvent::Stop { after_tool: false })
@@ -3332,7 +3335,6 @@ impl Session {
     /// Turn TURN of ITEM began (its entry and step are in the state): its prompt goes to the agent.
     fn start_turn(self: &Arc<Self>, turn: u64, item: Queued) {
         self.wait_refusals.store(0, Ordering::Relaxed);
-        lock(&self.state).turns += 1;
         self.persist_queue();
         self.flush_transcript();
         self.changed();

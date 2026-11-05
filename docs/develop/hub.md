@@ -1255,7 +1255,9 @@ and name. The session is recorded in `runtime.db` (`asession`, migration 5) and 
   unsandboxed.
 - **Stop and kill.** `agents/stop` on a running turn cancels it (`session/cancel`), answers the pending permission
   requests cancelled and holds the queue (`paused`); an agent that has not ended the turn after 2 s loses its process
-  group. A second Stop of the same turn changes nothing. On a session with no turn running it ends the session
+  group. A second Stop of the same turn changes nothing. A Stop that comes before the turn's prompt has reached the
+  agent wins: the prompt is not sent, no `session/cancel` goes, and it waits at the front of the held queue. On a
+  session with no turn running it ends the session
   (SIGTERM, SIGKILL after 3 s). `agents/kill` ends it at once. The pause after a tool call and the turn's end answer
   the requests still waiting cancelled too.
 
@@ -1302,8 +1304,9 @@ What the core keeps:
   front (`kept()`: the waiting prompts behind the prompt not yet sent), so a hub that dies in between, with no end
   step, runs it at the next start; the shell writes the turn's entries to the transcript file first and then the
   queue without it (a hub that dies between the two runs the prompt again rather than losing it). When the hub ends
-  between a turn's start and that step, the turn is put back: its prompt goes back to the front of the queue, and the
-  shell drops the turn's entries (the transcript file holds a turn's entries only once its prompt was sent). When the
+  or a Stop comes between a turn's start and that step, the turn is put back: its prompt goes back to the front of
+  the queue (held, after a Stop), and the shell drops the turn's entries (the transcript file holds a turn's entries
+  only once its prompt was sent). When the
   user's kill comes there instead, the prompt is dropped with the queue, and `Discard` names both, so a peer's
   message among them goes back to `queued` in the store.
 - A turn ends once, at its agent's answer. A second Stop of a stopped turn changes nothing; a Stop's deadline ends
@@ -1332,6 +1335,8 @@ again after it.
   (every prompt reached the agent or waits in the queue on disk);
 - the same, but the hub dies with no end step and nothing of it runs after (every prompt reached the agent or is in
   the queue on disk);
+- a user who sends, stops and delivers, the turn's task that sends each prompt in a step of its own, an agent, and
+  the stop's deadline (no prompt goes after its turn was told to cancel);
 - a sender, the hub's delivery (`sending`, the prompt, the mark), an agent, and the user's kill, then the exit (a
   message marked delivered ran; one the kill discarded is `queued` again).
 
