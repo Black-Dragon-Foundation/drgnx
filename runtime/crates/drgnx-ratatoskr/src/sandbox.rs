@@ -1095,6 +1095,7 @@ pub fn session_spec(
         tmp: Some(tmp),
         layers: Layers::for_target(target),
         extra_tcp_ports: vec![],
+        trace: Default::default(),
     };
     Ok(SessionSpec {
         spec,

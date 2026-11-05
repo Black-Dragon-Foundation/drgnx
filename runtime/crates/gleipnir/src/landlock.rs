@@ -695,6 +695,7 @@ mod tests {
             tmp: Some("/state/tmp-1".into()),
             layers: Layers::for_target(Target::LinuxBwrap),
             extra_tcp_ports: vec![8080, 3128],
+            trace: Default::default(),
         }
     }
 
@@ -1244,6 +1245,7 @@ mod tests {
             tmp: Some(p("t")),
             layers: Layers::for_target(Target::LinuxReduced),
             extra_tcp_ports: vec![],
+            trace: Default::default(),
         };
         plan(spec, Target::LinuxReduced, Tier::Reduced)
     }

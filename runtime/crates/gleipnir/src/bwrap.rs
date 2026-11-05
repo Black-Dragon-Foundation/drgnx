@@ -6,7 +6,10 @@
 //! are bound by path. No environment value is ever in the argv: bwrap gets `--clearenv` and no `--setenv`, and the
 //! program's environment travels in the inner spec (fd 3).
 
-use crate::spec::{Bind, HELPER_INSIDE, Mode, Net, RESERVED_DESTS, SYSTEM_CLOSED, Spec, ValidSpec};
+use crate::spec::{
+    Bind, HELPER_INSIDE, Mode, Net, RESERVED_DESTS, SYSTEM_CLOSED, Spec, TRACE_INSIDE, Trace,
+    ValidSpec,
+};
 use crate::validate::{Refusal, Rule};
 use eitri::Kind;
 use std::ffi::OsString;
@@ -291,6 +294,10 @@ pub fn argv(
     // 8. The helper last, read-only, so that no later mount covers it (review S1).
     push(&[&"--ro-bind-fd", &next.to_string(), &HELPER_INSIDE]);
     fds.push((opened.helper.fd, next));
+    // 8a. Per-step tracing: the wrapper is the helper started by another name (`crate::trace::wrapper_main`).
+    if matches!(s.trace, Trace::PerStep { .. }) {
+        push(&[&"--symlink", &"helper", &TRACE_INSIDE]);
+    }
     // 9. The program: the helper, which applies Landlock and seccomp, then the command.
     push(&[&"--chdir", &s.chdir, &"--", &HELPER_INSIDE]);
     for x in &opened.inner_args {
@@ -367,6 +374,7 @@ mod tests {
             tmp: None,
             layers: Layers::for_target(Target::LinuxBwrap),
             extra_tcp_ports: vec![],
+            trace: Default::default(),
         }
     }
 
@@ -567,6 +575,29 @@ mod tests {
             assert_eq!(rest, tail, "{argv:?}");
             assert_eq!(&opts[opts.len() - 2..], ["--chdir", "/work/task"]);
         }
+    }
+
+    /// Per-step tracing puts the wrapper beside the helper, as a link to it, after the helper's bind; nothing is
+    /// linked without it.
+    #[test]
+    fn per_step_tracing_links_the_wrapper_to_the_helper() {
+        let (plain, _) = run(spec(Net::Shared), merged(), &["/usr/bin/agent"]);
+        assert!(!plain.iter().any(|a| a == TRACE_INSIDE), "{plain:?}");
+        let traced = Spec {
+            trace: Trace::PerStep {
+                socket: "/rt/s/S1/proxy.sock".into(),
+            },
+            ..spec(Net::Shared)
+        };
+        let (argv, _) = run(traced, merged(), &["/usr/bin/agent"]);
+        let opts = options(&argv);
+        let helper = opts.iter().rposition(|a| a == HELPER_INSIDE).unwrap();
+        let link = opts.iter().position(|a| a == TRACE_INSIDE).unwrap();
+        assert_eq!(
+            &opts[link - 2..=link],
+            ["--symlink", "helper", TRACE_INSIDE]
+        );
+        assert!(link > helper, "{opts:?}");
     }
 
     /// Each bind keeps its mode, and nothing is widened: a home asked `ro` is bound read-only, and `run` is read-only

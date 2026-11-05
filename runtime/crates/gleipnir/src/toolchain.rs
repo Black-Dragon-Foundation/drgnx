@@ -186,6 +186,7 @@ pub fn readable(roots: Roots, ctx: &Context, target: Target) -> Roots {
             tmp: None,
             layers: Layers::for_target(target),
             extra_tcp_ports: vec![],
+            trace: Default::default(),
         };
         validate(spec, ctx, target).is_ok_and(|v| v.spec().read.len() == 1)
     };
