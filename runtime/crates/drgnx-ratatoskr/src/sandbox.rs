@@ -935,46 +935,65 @@ fn system_hidden(target: gleipnir::Target) -> &'static [&'static str] {
     }
 }
 
-/// What a session's CLI may write in its login dir DIR, which is read-only otherwise, and a bind for it: the entries
-/// [`crate::agents::lock::login_writes`] names that exist (a missing folder is made first), and Claude's folder for the
-/// session's cwd ([`crate::agents::lock::claude_project`]).  That folder is the session's own when its cwd is (a
-/// worktree, a chat's scratch).  A chat in your project shares its cwd with your own Claude Code, whose transcripts and
-/// auto memory live there, so it never gets that folder: on the full tier an empty one of its own (`claude-project`
-/// in its scratch) is bound over it, and the other targets, which cannot bind, give it none (Claude Code then keeps no
-/// transcript of that chat).
+/// What a session's CLI gets of its login dir ([`login_grants`]).
+#[derive(Default)]
+struct LoginGrants {
+    read: Vec<PathBuf>,
+    write: Vec<PathBuf>,
+    binds: Vec<gleipnir::Bind>,
+}
+
+/// What a session's CLI gets of its login dir DIR, which is never shown itself: the entries
+/// [`crate::agents::lock::login_entries`] names that exist, each as the CLI uses it (a missing folder of its own state
+/// is made first; a token file or a folder that is a link is left out), and Claude's folder for the session's cwd
+/// ([`crate::agents::lock::claude_project`]).  That folder is the session's own when its cwd is (a worktree, a chat's
+/// scratch).  A chat in your project shares its cwd with your own Claude Code, whose transcripts and auto memory live
+/// there, so it never gets that folder: on the full tier an empty one of its own (`claude-project` in its scratch) is
+/// bound over it, and the other targets, which cannot bind, give it none (Claude Code then keeps no transcript of that
+/// chat).
 fn login_grants(
     dir: &Path,
     shape: &SessionShape,
     scratch: &Path,
     target: gleipnir::Target,
-) -> Result<(Vec<PathBuf>, Option<gleipnir::Bind>), Refusal> {
-    let mut write = Vec::new();
-    for &(name, folder) in crate::agents::lock::login_writes(dir) {
+) -> Result<LoginGrants, Refusal> {
+    use crate::agents::lock::LoginUse;
+    let real = |p: &Path| p.symlink_metadata().is_ok_and(|m| !m.file_type().is_symlink());
+    let mut g = LoginGrants::default();
+    for &(name, used) in crate::agents::lock::login_entries(dir) {
         let p = dir.join(name);
-        if folder {
-            make_login_dir(&p)?;
-        }
-        if p.symlink_metadata().is_ok() {
-            write.push(p);
+        match used {
+            LoginUse::Read => read_login_entry(&p, target, &mut g),
+            LoginUse::File => {
+                if real(&p) {
+                    g.write.push(p);
+                }
+            }
+            LoginUse::Dir => {
+                make_login_dir(&p)?;
+                if real(&p) {
+                    g.write.push(p);
+                }
+            }
         }
     }
     let Some(project) = crate::agents::lock::claude_project(dir, &shape.cwd) else {
-        return Ok((write, None));
+        return Ok(g);
     };
     let own_cwd = shape.write.iter().any(|w| shape.cwd.starts_with(w));
     if !own_cwd && target != gleipnir::Target::LinuxBwrap {
-        return Ok((write, None));
+        return Ok(g);
     }
     if let Some(projects) = project.parent() {
         make_login_dir(projects)?;
     }
     make_login_dir(&project)?;
-    if own_cwd {
-        write.push(project);
-        return Ok((write, None));
-    }
     if !project.symlink_metadata().is_ok_and(|m| m.is_dir()) {
-        return Ok((write, None));
+        return Ok(g);
+    }
+    if own_cwd {
+        g.write.push(project);
+        return Ok(g);
     }
     let own = scratch.join("claude-project");
     paths::private_dir(&own).map_err(|e| Refusal {
@@ -982,12 +1001,36 @@ fn login_grants(
         path: Some(own.clone()),
         message: format!("{}: {e}", own.display()),
     })?;
-    let bind = gleipnir::Bind {
+    g.binds.push(gleipnir::Bind {
         mode: gleipnir::Mode::Rw,
         source: own,
         dest: project,
+    });
+    Ok(g)
+}
+
+/// The login dir's entry P that the CLI loads, when it exists, made readable.  One that is a link (into your dotfiles)
+/// is read at its true name, and on the full tier that file is bound read-only at P, where the CLI looks for it
+/// (without a mount namespace P leads there itself); a link that leads nowhere gives nothing.
+fn read_login_entry(p: &Path, target: gleipnir::Target, g: &mut LoginGrants) {
+    let Ok(meta) = p.symlink_metadata() else {
+        return;
     };
-    Ok((write, Some(bind)))
+    if !meta.file_type().is_symlink() {
+        g.read.push(p.to_path_buf());
+        return;
+    }
+    let Ok(real) = std::fs::canonicalize(p) else {
+        return;
+    };
+    g.read.push(real.clone());
+    if target == gleipnir::Target::LinuxBwrap {
+        g.binds.push(gleipnir::Bind {
+            mode: gleipnir::Mode::Ro,
+            source: real,
+            dest: p.to_path_buf(),
+        });
+    }
 }
 
 /// Make the folder P in a login dir (0700) when it is missing and its parent is a folder, not a link; a link anywhere
@@ -1016,8 +1059,8 @@ pub struct SessionSpec {
     pub program: PathBuf,
 }
 
-/// The Gleipnir spec of one agent session: only `shape.write` (and in the CLI's read-only login dir its token file and
-/// its session's state, [`login_grants`]) writable, `shape.read`, the
+/// The Gleipnir spec of one agent session: only `shape.write` (and in the CLI's login dir its token file and its
+/// session's state, [`login_grants`]) writable, `shape.read`, what the CLI loads from its login dir, the
 /// [`toolchain`] roots and the system readable (the toolchains' credential files hidden), the lock's `protected_ro`
 /// pinned read-only, its session dir (`hub.sock`, and `proxy.sock` unless the network is open) read-only, the network
 /// the cell's: the proxy through the relay, or the host's.  A plan on the gateway's socket (`LaunchPlan::gateway`) gets
@@ -1053,14 +1096,13 @@ pub fn session_spec(
     paths::private_dir(&tmp).map_err(|e| malformed(format!("{}: {e}", tmp.display())))?;
     let mut write = shape.write.clone();
     let mut read = shape.read.clone();
-    // The CLI's own login dir, for it alone and read-only, but for its token file and its session's state
-    // (`login_grants`); never the home.
-    let mut login_bind = None;
+    // What the CLI uses of its own login dir, for it alone (`login_grants`); never the dir itself, never the home.
+    let mut login_binds = Vec::new();
     if let Some(dir) = plan.login_dir.as_ref().filter(|d| d.exists()) {
-        read.push(dir.clone());
-        let (grants, bind) = login_grants(dir, shape, scratch, target)?;
-        write.extend(grants);
-        login_bind = bind;
+        let g = login_grants(dir, shape, scratch, target)?;
+        read.extend(g.read);
+        write.extend(g.write);
+        login_binds = g.binds;
     }
     let path = env
         .vars
@@ -1093,7 +1135,7 @@ pub fn session_spec(
             dest: p.clone(),
         })
         .collect();
-    binds.extend(login_bind);
+    binds.extend(login_binds);
     let hub = run.join("hub.sock");
     // served by the session's provider proxy (`agents::net`), bound before the spawn
     let proxy = run.join(paths::SESSION_PROXY_SOCKET);

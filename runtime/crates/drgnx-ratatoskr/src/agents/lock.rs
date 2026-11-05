@@ -52,7 +52,7 @@ pub struct LaunchPlan {
     pub session_meta: Option<Value>,
     pub protected_ro: Vec<PathBuf>,
     /// The one place under the home where the CLI keeps its login token (`~/.claude`, `~/.codex`, `~/.gemini`): the
-    /// sandbox shows it to this CLI alone, read-only but for what [`login_writes`] names (Task 10).
+    /// sandbox shows this CLI alone what [`login_entries`] names of it (Task 10).
     pub login_dir: Option<PathBuf>,
     pub enforced: Enforced,
     /// The session's gateway token is good on its `gateway.sock`: the sandbox relays a port to that socket and points
@@ -195,16 +195,57 @@ pub fn plan(p: &AgentProfile, role: Role, _e: &Effective) -> LaunchPlan {
     }
 }
 
-/// What a CLI writes in its login dir LOGIN_DIR during a session, relative to it, each with whether it is a folder: the
-/// token file it refreshes in place, and its sessions' state.  Never what your own CLI runs or reads as instructions
-/// later (settings and their hooks, commands, agents, skills, plugins, `CLAUDE.md`/`AGENTS.md`/`GEMINI.md`, Codex's
-/// `config.toml` and rules, Claude's shell snapshots and session environments, which its Bash tool sources): the rest
-/// of the login dir is read-only.  Claude's project folder is [`claude_project`]'s.
-pub fn login_writes(login_dir: &Path) -> &'static [(&'static str, bool)] {
+/// How a session's CLI uses one entry of its login dir.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoginUse {
+    /// It loads it (its settings, your instructions and commands): readable, never writable.
+    Read,
+    /// A file it rewrites in place: its token.
+    File,
+    /// A folder of its own state it writes (made when missing).
+    Dir,
+}
+
+/// What a CLI uses in its login dir LOGIN_DIR during a session, relative to it: what it loads, the token file it
+/// refreshes in place, and its sessions' state.  Nothing else of the login dir is shown: not the dir itself, so not
+/// the keys of your own CLI's daemon and live sessions, its prompt history, shell snapshots, IDE locks or another
+/// project's transcripts.  Nothing your own CLI runs or reads as instructions later (settings and their hooks,
+/// commands, agents, skills, plugins, `CLAUDE.md`/`AGENTS.md`/`GEMINI.md`, Codex's `config.toml` and rules) is
+/// writable.  Claude's project folder is [`claude_project`]'s.
+pub fn login_entries(login_dir: &Path) -> &'static [(&'static str, LoginUse)] {
+    use LoginUse::{Dir, File, Read};
     match login_dir.file_name().and_then(|n| n.to_str()) {
-        Some(".claude") => &[(".credentials.json", false), ("todos", true)],
-        Some(".codex") => &[("auth.json", false), ("sessions", true), ("log", true)],
-        Some(".gemini") => &[("oauth_creds.json", false), ("tmp", true)],
+        Some(".claude") => &[
+            (".credentials.json", File),
+            ("settings.json", Read),
+            ("CLAUDE.md", Read),
+            ("agents", Read),
+            ("commands", Read),
+            ("skills", Read),
+            ("plugins", Read),
+            ("output-styles", Read),
+            ("keybindings.json", Read),
+            ("todos", Dir),
+        ],
+        Some(".codex") => &[
+            ("auth.json", File),
+            ("config.toml", Read),
+            ("AGENTS.md", Read),
+            ("prompts", Read),
+            ("skills", Read),
+            ("rules", Read),
+            ("sessions", Dir),
+            ("log", Dir),
+        ],
+        Some(".gemini") => &[
+            ("oauth_creds.json", File),
+            ("google_accounts.json", Read),
+            ("settings.json", Read),
+            ("GEMINI.md", Read),
+            ("commands", Read),
+            ("extensions", Read),
+            ("tmp", Dir),
+        ],
         _ => &[],
     }
 }

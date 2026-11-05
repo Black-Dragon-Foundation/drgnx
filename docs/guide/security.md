@@ -348,18 +348,22 @@ that is allowed to write in a folder still cannot change what your Emacs loads a
 ## Agents and your CLI's login folder
 
 An agent's CLI needs its login folder (`~/.claude`, `~/.codex` or `~/.gemini`), and your own CLI, outside any sandbox,
-reads the same folder: its settings and their hooks, commands, skills, plugins, `CLAUDE.md`. So the sandbox shows a
-session its own CLI's login folder **read-only** (and never another CLI's), and lets it write only these:
+uses the same folder: its settings and their hooks, commands, skills, plugins, `CLAUDE.md`, and also the keys of your
+Claude Code's daemon and live sessions, your prompt history and every project's transcripts. So a session sees only
+the parts of its own CLI's login folder that the CLI uses (never another CLI's, never the folder itself), and writes
+only some of them:
 
-| CLI | Writable in its login folder |
-|---|---|
-| Claude Code | `.credentials.json` (the token, refreshed in place), `todos/`, and `projects/<the session's folder>/` (its transcript) |
-| Codex | `auth.json`, `sessions/`, `log/` |
-| Gemini CLI | `oauth_creds.json`, `tmp/` |
+| CLI | Readable only | Writable |
+|---|---|---|
+| Claude Code | `settings.json`, `CLAUDE.md`, `agents/`, `commands/`, `skills/`, `plugins/`, `output-styles/`, `keybindings.json` | `.credentials.json` (the token, refreshed in place), `todos/`, and `projects/<the session's folder>/` (its transcript) |
+| Codex | `config.toml`, `AGENTS.md`, `prompts/`, `skills/`, `rules/` | `auth.json`, `sessions/`, `log/` |
+| Gemini CLI | `google_accounts.json`, `settings.json`, `GEMINI.md`, `commands/`, `extensions/` | `oauth_creds.json`, `tmp/` |
 
-A missing folder of these is made first; a file that does not exist is not made (a login that keeps its token
-elsewhere, such as the macOS keychain, has none). Everything else, `settings.json`, `hooks/`, `commands/`,
-`shell-snapshots/` (which Claude Code's Bash tool sources) included, cannot be written, renamed or added to.
+A missing writable folder is made first; a file that does not exist is not made (a login that keeps its token
+elsewhere, such as the macOS keychain, has none). One of the readable files that is a link, into your dotfiles say,
+is read where it really is. Everything else (`hooks/`, `shell-snapshots/`, which Claude Code's Bash tool sources,
+Claude Code's `daemon/` and `sessions/` with their keys, `history.jsonl`, the other projects' folders) cannot be
+read, written or added to.
 
 A chat in your project runs in the folder your own Claude Code uses there, so its `projects/` folder would be yours:
 your transcripts and the project's auto memory. On the full tier the chat gets an empty folder of its own (in its

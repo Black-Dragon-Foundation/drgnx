@@ -656,6 +656,55 @@ fn a_project_chat_reads_the_project_and_writes_only_its_scratch() {
     );
 }
 
+/// Pattern D (one run, its exit code), on the full tier and on the reduced one where the kernel has ABI 9.  The
+/// session reads only what its CLI loads from the login dir: not the keys of your own Claude Code's daemon and live
+/// sessions, not another project's transcript or auto memory, not your prompt history or shell snapshots.  A settings
+/// file that is a link into your dotfiles still reads.
+#[test]
+#[ignore = "needs the real sandbox (bwrap with user namespaces): the sandbox lane"]
+fn the_login_dir_shows_only_what_the_cli_loads() {
+    let fx = Fx::new();
+    let c = fx.p("home/.claude");
+    for d in [
+        "daemon",
+        "sessions",
+        "projects/-other/memory",
+        "shell-snapshots",
+        "commands",
+    ] {
+        std::fs::create_dir_all(c.join(d)).unwrap();
+    }
+    for f in [
+        "daemon/control.key",
+        "sessions/9.key",
+        "projects/-other/t.jsonl",
+        "projects/-other/memory/MEMORY.md",
+        "history.jsonl",
+        "shell-snapshots/snapshot-zsh-1.sh",
+        "commands/c.md",
+    ] {
+        std::fs::write(c.join(f), "x").unwrap();
+    }
+    std::fs::create_dir_all(fx.p("home/dotfiles")).unwrap();
+    std::fs::write(fx.p("home/dotfiles/settings.json"), "dotfile").unwrap();
+    std::os::unix::fs::symlink(fx.p("home/dotfiles/settings.json"), c.join("settings.json")).unwrap();
+    let script = format!(
+        "for f in daemon/control.key sessions/9.key projects/-other/t.jsonl projects/-other/memory/MEMORY.md \
+           history.jsonl shell-snapshots/snapshot-zsh-1.sh; do cat {c}/$f >/dev/null 2>&1 && exit 13; done; \
+         ls {c}/projects >/dev/null 2>&1 && exit 14; \
+         grep -q dotfile {c}/settings.json || exit 11; cat {c}/commands/c.md >/dev/null || exit 12; exit 0",
+        c = c.display()
+    );
+    let mut tiers = vec![Tier::Full];
+    if reduced() == Tier::Reduced {
+        tiers.push(Tier::Reduced);
+    }
+    for tier in tiers {
+        let code = fx.run(tier, &fx.plan(&script), &fx.shape(NetCell::ProviderOnly));
+        assert_eq!(code, 0, "{tier:?}");
+    }
+}
+
 /// B3 + B4 on the shipped layout: the worktree sits under `<state>/hub/runs` (inside Gleipnir's closed folders) and
 /// the lock's real, relative `PROTECTED_RO` list is pinned inside it, `.envrc` and `mise.toml` included, though none
 /// exists yet.  Pinning needs bwrap's read-only bind, so the full tier.

@@ -88,13 +88,18 @@ this returns.
   starts a session unsandboxed. The spec:
   - writable: the worktree (a chat: its scratch dir `<tmp>/drgnx-scratch-UID/SID`, not in the session dir, which is
     read-only and takes nothing else); no home, no other login dir; `HOME` is told but unreadable beyond it;
-  - the CLI's own login dir (`LaunchPlan.login_dir`, for that CLI alone) is read-only (`read`), since your own CLI
-    runs and loads what is in it (settings and hooks, commands, skills, plugins, shell snapshots): only what
-    `lock::login_writes` names is in `write`, each that exists (a missing folder made 0700 first, never through a
-    link): Claude's `.credentials.json` and `todos`, Codex's `auth.json`, `sessions` and `log`, Gemini's
-    `oauth_creds.json` and `tmp` (a file bind or Landlock file rule; a token file is rewritten in place, not renamed
-    over). Claude's folder for the cwd, `projects/<the cwd, each non-alphanumeric UTF-16 unit as ->`
-    (`lock::claude_project`; none past 200 characters, where Claude Code adds a hash), is writable when the cwd is the
+  - the CLI's own login dir (`LaunchPlan.login_dir`, for that CLI alone) is never shown itself: your own CLI runs and
+    loads what is in it (settings and hooks, commands, skills, plugins, shell snapshots), and it holds the keys of
+    your CLI's daemon and live sessions and every project's transcripts. Only the entries `lock::login_entries` names
+    are, each that exists, as the CLI uses it: what it loads in `read` (Claude's `settings.json`, `CLAUDE.md`,
+    `agents`, `commands`, `skills`, `plugins`, `output-styles`, `keybindings.json`; Codex's `config.toml`,
+    `AGENTS.md`, `prompts`, `skills`, `rules`; Gemini's `google_accounts.json`, `settings.json`, `GEMINI.md`,
+    `commands`, `extensions`), an entry that is a link read at its true name and, on the full tier, bound read-only
+    at the link's path (`sandbox::read_login_entry`); the token file and the CLI's state in `write` (a missing folder
+    made 0700 first, never through a link, and a link there left out): Claude's `.credentials.json` and `todos`,
+    Codex's `auth.json`, `sessions` and `log`, Gemini's `oauth_creds.json` and `tmp` (a file bind or Landlock file
+    rule; a token file is rewritten in place, not renamed over). Claude's folder for the cwd,
+    `projects/<the cwd, each non-alphanumeric UTF-16 unit as ->` (`lock::claude_project`; none past 200 characters, where Claude Code adds a hash), is writable when the cwd is the
     session's own (a worktree, a plain chat's scratch). A project chat's cwd is your project, whose folder holds your
     transcripts and auto memory: on the full tier (`sandbox::login_grants`) an rw bind of `<scratch>/claude-project`
     covers it, elsewhere nothing is granted;

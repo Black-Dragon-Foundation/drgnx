@@ -108,14 +108,28 @@ fn claude_folder(project: &Path) -> String {
         .collect()
 }
 
-/// Pattern D. The login dir is read-only: the CLI writes only its token file and its own session's state there
-/// (Claude's `.credentials.json`, `todos` and the project folder of its cwd), never `settings.json`, hooks, commands or
-/// anything else your own, unsandboxed CLI runs or reads later.
+/// Pattern D. The CLI writes only its token file and its own session's state in its login dir (Claude's
+/// `.credentials.json`, `todos` and the project folder of its cwd), never `settings.json`, hooks, commands or anything
+/// else your own, unsandboxed CLI runs or reads later; and it reads only what it loads (its settings, `CLAUDE.md`, your
+/// commands, …): never the folder itself, so not the keys of your Claude Code's daemon and sessions, nor another
+/// project's transcripts and auto memory.
 #[test]
-fn a_worker_reads_its_login_dir_and_writes_only_its_token_and_state() {
+fn a_worker_reads_and_writes_only_what_its_cli_needs_in_its_login_dir() {
     let fx = Fx::new();
     let login = fx.p("home/.claude");
-    fs::write(login.join(".credentials.json"), "{}").unwrap();
+    for d in ["commands", "daemon", "sessions", "projects/-other/memory"] {
+        fs::create_dir_all(login.join(d)).unwrap();
+    }
+    for f in [
+        ".credentials.json",
+        "settings.json",
+        "daemon/control.key",
+        "sessions/9.key",
+        "projects/-other/t.jsonl",
+        "history.jsonl",
+    ] {
+        fs::write(login.join(f), "{}").unwrap();
+    }
     let spec = fx.spec(&fx.plan(".claude"), &fx.shape(NetCell::ProviderOnly));
     assert_eq!(
         spec.write,
@@ -126,26 +140,69 @@ fn a_worker_reads_its_login_dir_and_writes_only_its_token_and_state() {
             login.join("projects").join(claude_folder(&fx.p("wt"))),
         ]
     );
-    assert!(spec.read.contains(&login), "{:?}", spec.read);
-    assert!(spec.home.is_none());
-    let all: Vec<&PathBuf> = spec.read.iter().chain(&spec.write).collect();
-    for never in ["home", "home/.ssh", "home/.codex"] {
-        assert!(!all.contains(&&fx.p(never)), "{never} is bound");
+    for r in ["settings.json", "commands"] {
+        assert!(spec.read.contains(&login.join(r)), "{r}: {:?}", spec.read);
     }
+    let all: Vec<&PathBuf> = spec.read.iter().chain(&spec.write).collect();
+    let others = login.join("projects").join("-other");
+    for never in [
+        fx.p("home"),
+        fx.p("home/.ssh"),
+        fx.p("home/.codex"),
+        login.clone(),
+        login.join("daemon"),
+        login.join("sessions"),
+        login.join("projects"),
+        others,
+        login.join("history.jsonl"),
+    ] {
+        assert!(
+            !all.iter().any(|p| never.starts_with(p)),
+            "{} is bound: {all:?}",
+            never.display()
+        );
+    }
+    assert!(spec.home.is_none());
     assert_eq!(spec.chdir, fx.p("wt"));
 }
 
-/// Pattern D. Codex and Gemini get the same shape: their login dir read-only, their token file and their sessions'
-/// folders writable, and nothing of another CLI's.
+/// Pattern D. A file the CLI loads that is a link into your dotfiles is read at its true name, and on the full tier
+/// bound read-only where the CLI looks for it; the folder it lies in is not shown.
 #[test]
-fn each_cli_writes_its_token_and_its_sessions_alone() {
+fn a_linked_settings_file_is_read_where_it_really_is() {
+    let fx = Fx::new();
+    fs::create_dir_all(fx.p("home/dotfiles")).unwrap();
+    fs::write(fx.p("home/dotfiles/settings.json"), "{}").unwrap();
+    let link = fx.p("home/.claude/settings.json");
+    std::os::unix::fs::symlink(fx.p("home/dotfiles/settings.json"), &link).unwrap();
+    let shape = fx.shape(NetCell::ProviderOnly);
+    let reduced = fx.spec(&fx.plan(".claude"), &shape);
+    let real = fx.p("home/dotfiles/settings.json");
+    assert!(reduced.read.contains(&real), "{:?}", reduced.read);
+    assert!(!reduced.read.contains(&link) && !reduced.read.contains(&fx.p("home/dotfiles")));
+    let full = fx.spec_on(&fx.plan(".claude"), &shape, Tier::Full, Target::LinuxBwrap);
+    assert!(
+        full.binds
+            .iter()
+            .any(|b| b.mode == Mode::Ro && b.source == real && b.dest == link),
+        "{:?}",
+        full.binds
+    );
+}
+
+/// Pattern D. Codex and Gemini get the same shape: what they load readable, their token file and their sessions'
+/// folders writable, never the login dir itself, and nothing of another CLI's.
+#[test]
+fn each_cli_reads_what_it_loads_and_writes_its_token_and_sessions() {
     let fx = Fx::new();
     fs::write(fx.p("home/.codex/auth.json"), "{}").unwrap();
+    fs::write(fx.p("home/.codex/config.toml"), "").unwrap();
     fs::create_dir_all(fx.p("home/.gemini")).unwrap();
     fs::write(fx.p("home/.gemini/oauth_creds.json"), "{}").unwrap();
+    fs::write(fx.p("home/.gemini/settings.json"), "{}").unwrap();
     let shape = fx.shape(NetCell::ProviderOnly);
+    let (c, g) = (fx.p("home/.codex"), fx.p("home/.gemini"));
     let codex = fx.spec(&fx.plan(".codex"), &shape);
-    let c = fx.p("home/.codex");
     assert_eq!(
         codex.write,
         vec![
@@ -155,15 +212,15 @@ fn each_cli_writes_its_token_and_its_sessions_alone() {
             c.join("log")
         ]
     );
+    assert!(codex.read.contains(&c.join("config.toml")));
     let gemini = fx.spec(&fx.plan(".gemini"), &shape);
-    let g = fx.p("home/.gemini");
     assert_eq!(
         gemini.write,
         vec![fx.p("wt"), g.join("oauth_creds.json"), g.join("tmp")]
     );
+    assert!(gemini.read.contains(&g.join("settings.json")));
     for (spec, dir) in [(&codex, &c), (&gemini, &g)] {
-        assert!(spec.read.contains(dir), "{:?}", spec.read);
-        assert!(!spec.write.contains(dir));
+        assert!(!spec.read.iter().chain(&spec.write).any(|p| dir.starts_with(p)));
     }
 }
 
@@ -187,10 +244,12 @@ fn the_login_dir_is_the_plans_own_alone() {
             .chain(&spec.write)
             .any(|p| p.starts_with(fx.p(d)))
     };
-    assert!(claude.read.contains(&fx.p("home/.claude")));
+    assert!(under(&claude, "home/.claude"));
+    assert!(!claude.read.contains(&fx.p("home/.claude")));
     assert!(!claude.write.contains(&fx.p("home/.claude")));
     assert!(!under(&claude, "home/.codex"));
-    assert!(codex.read.contains(&fx.p("home/.codex")));
+    assert!(under(&codex, "home/.codex"));
+    assert!(!codex.read.contains(&fx.p("home/.codex")));
     assert!(!codex.write.contains(&fx.p("home/.codex")));
     assert!(!under(&codex, "home/.claude"));
 }
@@ -426,10 +485,8 @@ fn a_chat_in_a_project_reads_it_and_writes_only_its_scratch() {
     let (plan, shape) = chat_launch(&env, &fx.plan(".claude"), "C2", &linked).unwrap();
     let spec = fx.spec(&plan, &shape);
     assert_eq!(spec.chdir, linked);
-    assert_eq!(
-        spec.read,
-        vec![linked.clone(), common.clone(), login.clone()]
-    );
+    // the login dir holds nothing the CLI loads here: none of it is read
+    assert_eq!(spec.read, vec![linked.clone(), common.clone()]);
     assert_eq!(
         spec.write,
         vec![scratch_path(&env, "C2"), login.join("todos")]
