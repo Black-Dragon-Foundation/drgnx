@@ -6,7 +6,7 @@
 //!   the parts that talk to systemd and the cgroup files build on `target_os = "linux"` only.
 //! - `sync`: a job's inputs frozen at submit, the hardened git (the only way sleipnir runs git), and the checkout
 //!   slots, whose git dirs live outside anything a job can write; the runner's mirrors, the origin's credential,
-//!   resumable bundles and the blob store. Blocking, never tokio.
+//!   resumable bundles and the blob store; caches by trust and the disk guard. Blocking, never tokio.
 //! - `proto`: the wire protocol.
 //! - `runner` (default): the binary's modes.
 //! - `test-hooks`: test-only entry points, compiled away otherwise.

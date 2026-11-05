@@ -96,7 +96,7 @@ impl SlotKey {
 }
 
 /// The job trust's word: `public`, `private` or `private+keys`.
-fn trust_word(t: JobTrust) -> &'static str {
+pub(crate) fn trust_word(t: JobTrust) -> &'static str {
     match t {
         JobTrust::Public => "public",
         JobTrust::Private => "private",

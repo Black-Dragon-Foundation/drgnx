@@ -9,6 +9,7 @@
 //! - `mirror`: the runner's bare mirror per repository, fed by an origin fetch, a bundle or the hub's push
 //!   (`git_receive`); `cred`: the origin's token or deploy key, served to git from memory only.
 //! - `bundle`: a resumable bundle's receiver; `blobs`: the overlay's content-addressed store.
+//! - `cache`: caches partitioned by trust; `guard`: the disk guard's prune plan and its link-proof removal.
 
 use std::error::Error;
 use std::fmt;
@@ -17,9 +18,11 @@ use std::path::PathBuf;
 
 pub mod blobs;
 pub mod bundle;
+pub mod cache;
 pub mod capture;
 pub mod cred;
 pub mod git;
+pub mod guard;
 pub mod mirror;
 pub mod slot;
 
