@@ -68,3 +68,70 @@ adds it). `WaitReason` is why a job waits; the runners added `Trust`, `Pinned`, 
 The properties in `tests/props.rs`: `inheritance_is_monotone` (no job falls below its own priority or below a
 waiter's, and raising one job never lowers another) and `no_starvation` (a job a minute arrives and one starts, so
 higher work never stops; every job still starts within three promotions, its expected time and the backlog).
+
+## Admission (`admit`)
+
+The model is a partitionable slot (jobq §5.4): each machine is one pool of cores, memory and disk, and each job
+carves its share at start.
+
+- **`budget(m, limits)`**:
+  - `mem = MemAvailable − floor − reserve_user − Σ ours − others`. One of our running jobs counts its whole
+    reservation for its first 300 s (a container grows after its setup), then `(reserve − current)⁺`, since what it
+    uses is already gone from `MemAvailable`. `others` is `count_others` over `m.others` on `m.boot_id`; the probe has
+    already dropped the reservations whose process is gone. Another scheduler's job counts `max(reserve, current)`
+    whole, its use included: careful, since its `current` is that scheduler's last write.
+  - `cpu = cores_usable − Σ expected CPU`: a job's mean from history, or its grant's cores when it has none
+    (`Expected::known()` is false).
+- **`admit(job, eff, exp, m, budget, limits)`** checks, in this order, and answers the first `WaitReason` that holds
+  it back:
+  1. with `fixed_slots(n)`: the count alone (`Threads` at `n` running), and nothing else;
+  2. power: `OnBattery` when the limits say no jobs on battery;
+  3. 10 s since the last start (`Gap`);
+  4. memory: `budget ≥ mem_min` (`NoRoom`);
+  5. CPU: `budget ≥` the job's expected CPU (its `cores.min` with no history), plus `(overcommit − 1) × cores_usable`
+     while the running jobs use less than half their grants on average (`Threads`);
+  6. the PSI limits, each reading strictly below its limit (`Pressure` naming `memory`, `app memory`, `cpu` or `io`);
+  7. the disk: free space after the job's `disk_gib` stays at the guard, `max(disk_guard_gb, disk_guard_pct % of the
+     filesystem)` (`DiskLow`).
+
+  `eff` is the job's effective priority; none of F1's checks reads it.
+- **`size(job, exp, budget, waiting_fit)`**, the grant:
+  - `cores = clamp(cpu_budget / waiting_fit, cores_min, cores_max)`: a quiet machine gives a large run its maximum,
+    a long queue shrinks shares toward the minimum;
+  - `mem_cap = clamp(max(p95 × 1.3, mem_min), mem_min, min(mem_max, mem_budget))`;
+  - `reserve = max(p95 × 1.1, mem_min)`, never above the cap (a job can't use more than its cap, and so admitted
+    reservations never pass the budget);
+  - with no history the cap is `min(mem_max, mem_budget)` and the reserve `mem_min`.
+- **`oom_rerun(mem)`**: the one re-run after an `oom` verdict asks `mem_min × 1.5`.
+- **`head_protection(order, waiting_since, now, fits)`**: when the first job of the order has waited 600 s without
+  fitting anywhere, it names its best machine, and the shell admits nothing smaller there
+  (`WaitReason::HeadProtection`) until it starts. Backfill replaces this in F2.
+
+## Eviction and drains (`evict`, `drain`)
+
+- **`may_evict(victim, claimant, now)`**: a P1 or P2 claimant may evict a job at least two priorities below it, and
+  only one that is restartable, has run less than half its expected time, and was never evicted before. A job is
+  evicted at most once.
+- **`preempt_victims(claimant, m, need_mib, now, misses_2min_goal)`**: newest first, until what they free (their use
+  plus what the budget held for them) covers the need; nothing when the claimant wouldn't miss its 2-minute start
+  goal, or when evicting every candidate still wouldn't free enough.
+- **Drains** for whole-machine runs: one starts only with no P1–P2 work pending (`drain_may_start`), pauses while P1
+  work is there (`drain_paused`), is given up after 1800 s (`drain_abandon`), and may evict running P5 jobs after
+  900 s (`drain_may_evict_p5`). A timing run that has started is never stopped.
+
+## Two schedulers on one machine (`reserve`)
+
+A hub and jobq share the laptop; a runner and jobq the desktop; two hubs may share a runner. Each writes a
+`Reservation { scheduler, pid, boot_id, start_time, job, reserve_mib, current_mib, expires }` per running job
+(`sleipnir::linux::reserve` keeps them as files under `$XDG_RUNTIME_DIR/forseti/` and takes `admit.lock` around
+each admission).
+
+- **`count_others(rs, boot_id, alive, own_scheduler, now)`**: Σ `max(reserve, current)` over the reservations of
+  other schedulers that are on this boot, whose process is alive (pid and start time, so a reused pid isn't taken
+  for it) and that haven't expired. A job written twice counts once.
+- **`ladder_actor(own, own_slice_mib, others)`**: at ladder level 2 or higher only the scheduler whose slice holds
+  the most memory acts; a tie goes to the name first in order.
+
+`admitted_reservations_never_exceed_the_budget` (a property) and `admissions_in_every_order_stay_in_the_budget` ([A],
+every interleaving of two schedulers' admissions under the lock) check that what both reserve stays within one
+machine's budget; `a_job_is_evicted_at_most_once` checks the eviction limit over repeated rounds.

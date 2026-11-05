@@ -1,4 +1,7 @@
-//! Two schedulers on one machine: the reservation format.
+//! Two schedulers on one machine (a hub and jobq, or two hubs): the reservation format, the counting rule, and who
+//! acts on the ladder.
+
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -15,4 +18,114 @@ pub struct Reservation {
     pub reserve_mib: u64,
     pub current_mib: u64,
     pub expires: u64,
+}
+
+/// The memory other schedulers hold: Σ `max(reserve, current)` over the reservations that are another scheduler's
+/// (not `own_scheduler`), on `boot_id`, alive (`alive(pid, start_time)`) and unexpired at `now`. A job written twice
+/// counts once, at its larger figure.
+pub fn count_others(
+    rs: &[Reservation],
+    boot_id: &str,
+    alive: &dyn Fn(u32, u64) -> bool,
+    own_scheduler: &str,
+    now: u64,
+) -> u64 {
+    let mut once: BTreeMap<(&str, &str), u64> = BTreeMap::new();
+    for r in rs {
+        if r.scheduler == own_scheduler
+            || r.boot_id != boot_id
+            || r.expires <= now
+            || !alive(r.pid, r.start_time)
+        {
+            continue;
+        }
+        let held = r.reserve_mib.max(r.current_mib);
+        let e = once.entry((&r.scheduler, &r.job)).or_default();
+        *e = (*e).max(held);
+    }
+    once.values().sum()
+}
+
+/// At ladder level 2 or higher only one scheduler acts: the one whose slice holds the most memory, ties going to the
+/// name first in order. `own` is this scheduler's name, `others` every other scheduler's `(name, slice MiB)`.
+pub fn ladder_actor(own: &str, own_slice_mib: u64, others: &[(String, u64)]) -> bool {
+    others
+        .iter()
+        .filter(|(name, _)| name != own)
+        .all(|(name, mib)| own_slice_mib > *mib || (own_slice_mib == *mib && own < name.as_str()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn r(scheduler: &str, job: &str, reserve: u64, current: u64) -> Reservation {
+        Reservation {
+            scheduler: scheduler.into(),
+            pid: 4242,
+            boot_id: "boot-a".into(),
+            start_time: 77,
+            job: job.into(),
+            reserve_mib: reserve,
+            current_mib: current,
+            expires: 2000,
+        }
+    }
+
+    const LIVE: &dyn Fn(u32, u64) -> bool = &|_, _| true;
+
+    #[test]
+    fn others_count_max_of_reserve_and_current_once() {
+        // [D] pure
+        let rs = [
+            r("jobq", "a", 1000, 400),
+            r("jobq", "b", 500, 900),
+            r("jobq", "a", 1000, 600), // written twice: once
+            r("hub", "mine", 8000, 8000),
+            r("other-hub", "a", 300, 0), // the same job name of another scheduler is another job
+        ];
+        assert_eq!(
+            count_others(&rs, "boot-a", LIVE, "hub", 1000),
+            1000 + 900 + 300
+        );
+        let mut late = r("jobq", "c", 700, 0);
+        late.expires = 1000;
+        assert_eq!(
+            count_others(&[late], "boot-a", LIVE, "hub", 1000),
+            0,
+            "expired"
+        );
+    }
+
+    #[test]
+    fn a_dead_or_other_boot_reservation_is_ignored() {
+        // [D] pure
+        let mut other_boot = r("jobq", "a", 1000, 0);
+        other_boot.boot_id = "boot-b".into();
+        assert_eq!(count_others(&[other_boot], "boot-a", LIVE, "hub", 1000), 0);
+        let mut reused = r("jobq", "a", 1000, 0);
+        reused.start_time = 99;
+        let alive = |pid: u32, start: u64| pid == 4242 && start == 77;
+        assert_eq!(count_others(&[reused], "boot-a", &alive, "hub", 1000), 0);
+        assert_eq!(
+            count_others(&[r("jobq", "a", 1000, 0)], "boot-a", &alive, "hub", 1000),
+            1000
+        );
+    }
+
+    #[test]
+    fn only_the_largest_scheduler_acts_at_level_2() {
+        // [D] pure
+        let o = |n: &str, mib: u64| vec![(n.to_string(), mib)];
+        assert!(ladder_actor("hub", 5000, &o("jobq", 3000)));
+        assert!(!ladder_actor("hub", 3000, &o("jobq", 5000)));
+        assert!(
+            ladder_actor("hub", 4000, &o("jobq", 4000)),
+            "a tie goes to the first name"
+        );
+        assert!(!ladder_actor("jobq", 4000, &o("hub", 4000)));
+        assert!(ladder_actor("hub", 0, &[]), "alone, it acts");
+        let both = [("hub".to_string(), 4000), ("jobq".to_string(), 1000)];
+        assert!(!ladder_actor("hub-2", 3999, &both));
+    }
 }
