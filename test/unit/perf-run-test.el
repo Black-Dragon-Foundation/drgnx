@@ -256,27 +256,40 @@ without them would pass unjudged), unless `drgnx-perf-run-unseeded' says why it 
         (should-not (string-match-p "\\.bashrc\\|\\.zshrc\\|SHELL" setup))))
     (should (string-match-p "seq 1 2000" (plist-get (cdr (assq 'terminal-output ws)) :setup)))))
 
-(ert-deftest drgnx-perf-run/the-keys-go-inside-a-form-wherever-the-middle-of-the-fixture-falls ()
-  "Pattern D (pure: a buffer and the visit form, no session).  The fixture is core/ three times, so a new core file
-moves its middle; when the middle fell at column 0 of a top-level form, the typed `(let ((x 1' left a list open at
-top level, and Emacs Lisp's font-lock (`lisp--el-funcall-position-p') scanned the rest of the file at every key.  The
-keys go to the first line at or after the middle that starts inside a form two deep, outside strings and comments."
-  (let* ((form "(defun a ()\n  \"Doc.\"\n  (let ((x 1))\n    (message \"%s\"\n             x)))\n")
-         ;; (/ (point-max) 2) is the first character of the second defun: column 0, outside every form
-         (file (make-temp-file "drgnx-perf-fixture" nil ".el" (concat form form "\n")))
-         (drgnx-perf-run--fixture file))
+(defvar drgnx-perf-run-test--reach 0 "The furthest point a `forward-sexp' reached (`point-max' for a failed one).")
+
+(defun drgnx-perf-run-test--forward-sexp (f &rest args)
+  "Around `forward-sexp': note how far F got in `drgnx-perf-run-test--reach'."
+  (condition-case err
+      (prog1 (apply f args) (setq drgnx-perf-run-test--reach (max drgnx-perf-run-test--reach (point))))
+    (scan-error (setq drgnx-perf-run-test--reach (point-max)) (signal (car err) (cdr err)))))
+
+(ert-deftest drgnx-perf-run/typing-at-the-fixtures-spot-never-scans-past-its-form ()
+  "Pattern D (pure: the real fixture in a buffer, the typing workload's characters inserted one by one and the line
+fontified after each, as redisplay does; no session, no clock).  The fixture is core/ three times, so where its middle
+falls changes with every core file; when the keys went to a line with too few lists around it, each `(let ((x' typed
+left a list open past its form, and Emacs Lisp's font-lock (`lisp--el-funcall-position-p', through `forward-sexp')
+scanned the rest of the 4 MB file at every key.  The keys go to a spot of the fixture's own, the same in every tree:
+no `forward-sexp' of the font-lock goes past the form that holds it."
+  (let* ((drgnx-perf-run--fixture (drgnx-perf-run--make-fixture))
+         (text (mapconcat (lambda (a) (plist-get a :type)) (plist-get (cdr (assq 'typing (drgnx-perf-run--workloads))) :actions) ""))
+         (drgnx-perf-run-test--reach 0))
     (unwind-protect
         (progn
           (should (eq t (eval (read (drgnx-perf-run--visit-fixture-form)) t)))
-          (with-current-buffer (find-buffer-visiting file)
-            (let ((s (syntax-ppss)))
-              (should (>= (car s) 2))
-              (should-not (nth 3 s))
-              (should-not (nth 4 s)))
-            (should (bolp))
-            (should (> (point) (/ (point-max) 2)))))
-      (when-let* ((b (find-buffer-visiting file))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))
-      (delete-file file))))
+          (with-current-buffer (find-buffer-visiting drgnx-perf-run--fixture)
+            (let* ((top (car (nth 9 (syntax-ppss)))) (end (and top (scan-lists top 1 0))))
+              (should top)                      ; inside a form
+              (font-lock-set-defaults)
+              (font-lock-fontify-region (line-beginning-position) (line-end-position))
+              (advice-add 'forward-sexp :around #'drgnx-perf-run-test--forward-sexp)
+              (dotimes (i (length text))
+                (insert (aref text i))
+                (font-lock-fontify-region (line-beginning-position) (line-end-position)))
+              (should (<= drgnx-perf-run-test--reach (+ end (length text)))))))
+      (advice-remove 'forward-sexp #'drgnx-perf-run-test--forward-sexp)
+      (when-let* ((b (find-buffer-visiting drgnx-perf-run--fixture))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))
+      (delete-file drgnx-perf-run--fixture))))
 
 
 ;;; perf-run-test.el ends here

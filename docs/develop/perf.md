@@ -23,7 +23,7 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 
 | Workload | What it does | Measured |
 |---|---|---|
-| typing | 186 characters into the middle of a ~12k-line Emacs Lisp file | input latency (p50/p95/max), GC count, time and each pause |
+| typing | 186 characters into the middle of a ~140k-line Emacs Lisp file | input latency (p50/p95/max), GC count, time and each pause |
 | scrolling | 30 pages down and up in the same file | input latency |
 | tabs | 20 next-tab switches among 20 open files | input latency |
 | explorer | focus the Explorer, 10 rows down (each one moves), back | input latency |
@@ -87,12 +87,12 @@ when its `gc-cons-threshold` is not `drgnx-gc-cons-threshold`.
 Every workload runs three times (each with its own setup, its typing fixture reused, everything it opened closed
 after it) and the median of each number is kept, so one noisy run never decides.
 
-The typing fixture is `core/` three times, so its middle moves whenever a core file is added. The keys go to the
-first line at or after the middle that starts inside a form two deep, outside strings and comments
-(`drgnx-perf-run--visit-fixture-form`): when the middle fell at column 0 of a top-level form, the typed `(let ((x 1`
-left a list open at top level and Emacs Lisp's font-lock (`lisp--el-funcall-position-p`, through `forward-sexp`)
-scanned the rest of the 4 MB file at every key, about one key in five costing 190 to 370 ms, in every workload that
-types into the fixture.
+The typing fixture is `core/` three times with one form of the lab's own between two files near its middle
+(`drgnx-perf-run--fixture-spot`); the keys go into that form, six lists deep, the same text in every tree. They used to
+go to the fixture's middle line, which moves whenever a core file is added: on a line with too few lists around it,
+each `(let ((x` typed left a list open past its form, and Emacs Lisp's font-lock (`lisp--el-funcall-position-p`,
+through `forward-sexp`) scanned the rest of the 4 MB file at every key, about one key in five costing 190 to 370 ms,
+in every workload that types into the fixture.
 
 ## Vim keys (evil)
 
