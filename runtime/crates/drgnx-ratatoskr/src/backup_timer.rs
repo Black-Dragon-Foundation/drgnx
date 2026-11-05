@@ -133,6 +133,18 @@ pub fn finish() {
     RUNNING.store(false, Ordering::SeqCst);
 }
 
+/// Run the copy FUT that [`begin`] allowed, then [`finish`] on every way out: a panic or a dropped task included.
+pub async fn guarded<F: std::future::Future<Output = ()>>(fut: F) {
+    struct Finish;
+    impl Drop for Finish {
+        fn drop(&mut self) {
+            finish();
+        }
+    }
+    let _finish = Finish;
+    fut.await;
+}
+
 /// Whether the tick at NOW (unix seconds) should start the nightly copy.
 pub fn due_at(now: u64) -> bool {
     let l = last();
@@ -169,6 +181,21 @@ mod tests {
         // a failed try is not repeated every tick
         assert!(!due(at(12, 9, 13), ok, Some(60)));
         assert!(due(at(12, 10, 13), ok, Some(RETRY_AFTER)));
+    }
+
+    /// Pattern D (pure): no clock, no order; one task whose copy panics.
+    #[test]
+    fn a_panicking_copy_does_not_stop_the_next_nightly() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            assert!(begin(), "the first nightly starts");
+            let panicked = tokio::spawn(guarded(async { panic!("the copy panicked") })).await;
+            assert!(panicked.is_err(), "the copy task panicked");
+            assert!(begin(), "the next nightly can start after a panic");
+            finish();
+        });
     }
 
     #[test]
