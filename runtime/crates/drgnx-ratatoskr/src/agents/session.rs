@@ -2309,12 +2309,37 @@ impl Session {
             "agent",
             json!({"id": self.id, "seq": seq, "session": self.snapshot()}),
         );
-        if !entries.is_empty() {
-            self.editors.broadcast(
-                "agent-entries",
-                json!({"id": self.id, "seq": seq, "entries": entries}),
-            );
+        if entries.is_empty() {
+            return;
         }
+        let subscribers = self.editors.entry_subscribers(&self.id);
+        if subscribers.is_empty() {
+            return;
+        }
+        let entries: Vec<(u64, Entry)> = entries
+            .iter()
+            .map(|(i, e)| (*i, super::wire::public_entry(e)))
+            .collect();
+        let data = json!({"id": self.id, "seq": seq, "entries": entries});
+        for conn in subscribers {
+            self.editors.send_to(conn, "agent-entries", data.clone());
+        }
+    }
+
+    /// Connection CONN gets this session's entries from now on; the change number they continue from.
+    pub(crate) fn subscribe_entries(&self, conn: u64) -> u64 {
+        // the number is read under the same lock the dirty set is drained under, so no entry falls between
+        let st = lock(&self.state);
+        self.editors.subscribe_entries(&self.id, conn);
+        st.seq
+    }
+
+    /// The raw input of tool call TOOL_CALL, capped.
+    pub(crate) fn tool_input(&self, tool_call: &str) -> Option<(Value, bool)> {
+        let st = lock(&self.state);
+        let idx = *st.tools.get(tool_call)?;
+        let raw = st.entries.get(idx)?.rest.get("rawInput")?;
+        Some(super::wire::capped_tool_input(raw))
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -2595,7 +2620,13 @@ impl Session {
         card: Option<i64>,
         turn: u64,
     ) {
-        let tool = req.get("toolCall").cloned();
+        // an editor never gets a tool call's raw input (a Write carries the file)
+        let tool = req.get("toolCall").cloned().map(|mut t| {
+            if let Some(o) = t.as_object_mut() {
+                o.remove("rawInput");
+            }
+            t
+        });
         let request = self.next_request.fetch_add(1, Ordering::Relaxed);
         let public = Permission {
             id: Some(match card {
@@ -3398,6 +3429,50 @@ pub async fn stop(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
         let _ = f.mcp.close(p.id.as_str()).await;
     }
     r
+}
+
+/// `agents/entries/subscribe`: the caller's connection gets the session's entries from now on.
+pub fn entries_subscribe(
+    f: &Front,
+    c: &Caller,
+    p: runstav::methods::agents::SessionRef,
+) -> Result<runstav::methods::agents::EntriesSubscribed, Error> {
+    let s = f.core.agents.find(p.session.as_str())?;
+    Ok(runstav::methods::agents::EntriesSubscribed {
+        seq: s.subscribe_entries(c.conn_id),
+    })
+}
+
+/// `agents/entries/unsubscribe`.
+pub fn entries_unsubscribe(
+    f: &Front,
+    c: &Caller,
+    p: runstav::methods::agents::SessionRef,
+) -> Result<bool, Error> {
+    f.editors.unsubscribe_entries(p.session.as_str(), c.conn_id);
+    Ok(true)
+}
+
+/// `agents/tool-input`: a tool call's raw input, capped.
+pub fn tool_input(
+    f: &Front,
+    _: &Caller,
+    p: runstav::methods::agents::ToolInputParams,
+) -> Result<runstav::methods::agents::ToolInput, Error> {
+    let s = f.core.agents.find(p.session.as_str())?;
+    let (raw_input, truncated) = s
+        .tool_input(&p.tool_call)
+        .ok_or_else(|| invalid("tool_call", "a tool call of this session with a raw input"))?;
+    Ok(runstav::methods::agents::ToolInput {
+        raw_input,
+        truncated,
+    })
+}
+
+/// `agents/pause`: the turn is cancelled once the tool call running now completes.
+pub fn pause(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
+    f.core.agents.cancel_after_tool(p.id.as_str())?;
+    Ok(true)
 }
 
 pub async fn kill(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {

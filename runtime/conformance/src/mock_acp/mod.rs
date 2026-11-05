@@ -8,6 +8,7 @@
 //! |---|---|
 //! | `tool:read PATH` / `tool:edit PATH` / `tool:exec CMD` | a tool call (pending, then completed) that does it in the session's cwd (edit appends a line) |
 //! | `provider:read FILE [OFFSET LIMIT]` / `provider:grep PAT` / `provider:web-search Q` / `provider:web-fetch URL` / `provider:write FILE` | a tool call in the personality's own shape (Claude: `_meta.claudeCode.toolName`, `locations`, `rawInput`; Codex: kind and `action`; Gemini: kind and title only); nothing runs |
+//! | `tool:write N` | a tool call (pending, then completed) whose raw input is a Write of N bytes (nothing is written) |
 //! | `ask:permission KIND` | `session/request_permission` for a tool call of KIND (read, edit, execute, ...); says `permission: OPTION` |
 //! | `call:TOOL JSON` | calls the hub's MCP tool TOOL through the first stdio server of `mcpServers`; says `call: TEXT` |
 //! | `decide TEXT` | `call:record_decision {"text": TEXT}` |
@@ -536,6 +537,18 @@ impl Agent {
             }
             _ if head.starts_with("provider:") => {
                 self.provider_tool(sid, turn, &head[9..], rest);
+            }
+            "tool:write" => {
+                // a Write whose input is N bytes of file (no file is written)
+                let n: usize = rest.parse().unwrap_or(0);
+                self.tool(
+                    sid,
+                    turn,
+                    "edit",
+                    "Write big.txt",
+                    json!({"file_path": "big.txt", "content": "x".repeat(n)}),
+                    "written",
+                );
             }
             "tool:exec" => {
                 let out = sh(&cwd, rest);

@@ -177,7 +177,7 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
         event!(
             "agent-entries",
             AgentEntries,
-            "a session's entries new or changed since the last time"
+            "a session's entries new or changed since the last time, without `rawInput`, only to the connections that subscribed to the session (`agents/entries/subscribe`)"
         ),
         event!(
             "events",

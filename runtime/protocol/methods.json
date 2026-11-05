@@ -427,7 +427,7 @@
         "title": "AgentEntries",
         "type": "object"
       },
-      "doc": "a session's entries new or changed since the last time",
+      "doc": "a session's entries new or changed since the last time, without `rawInput`, only to the connections that subscribed to the session (`agents/entries/subscribe`)",
       "name": "agent-entries"
     },
     {
@@ -1760,6 +1760,88 @@
       "classes": [
         "user"
       ],
+      "doc": "this connection gets the session's `agent-entries` events from now on (they go to no one else); the change number to continue from",
+      "name": "agents/entries/subscribe",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A session, for the entry subscription.",
+        "properties": {
+          "session": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "session"
+        ],
+        "title": "SessionRef",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The change number a subscription to a session's entries continues from.",
+        "properties": {
+          "seq": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq"
+        ],
+        "title": "EntriesSubscribed",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "this connection no longer gets the session's `agent-entries` events",
+      "name": "agents/entries/unsubscribe",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A session, for the entry subscription.",
+        "properties": {
+          "session": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "session"
+        ],
+        "title": "SessionRef",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a session's snapshot, whole transcript and change number",
       "name": "agents/get",
       "params": {
@@ -2609,6 +2691,40 @@
         ],
         "title": "Started",
         "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the session's turn is cancelled once the tool call running now completes, and its queue is held",
+      "name": "agents/pause",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ById",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
       },
       "writes": true
     },
@@ -3492,6 +3608,58 @@
         "type": "boolean"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a tool call's raw input, which no event carries (at most 256 KiB, else its JSON text cut and `truncated`)",
+      "name": "agents/tool-input",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "session": {
+            "$ref": "#/$defs/Id"
+          },
+          "tool_call": {
+            "description": "The tool call's id (the `id` of its `tool` entry).",
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "tool_call"
+        ],
+        "title": "ToolInputParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A tool call's raw input: the input, or (when `truncated`) its JSON text cut at 256 KiB.",
+        "properties": {
+          "raw_input": true,
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "raw_input",
+          "truncated"
+        ],
+        "title": "ToolInput",
+        "type": "object"
+      },
+      "writes": false
     },
     {
       "classes": [

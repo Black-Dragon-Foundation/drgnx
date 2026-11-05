@@ -300,6 +300,34 @@ pub struct SliceParams {
     pub n: Option<u64>,
 }
 
+/// A session, for the entry subscription.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct SessionRef {
+    pub session: Id,
+}
+
+/// The change number a subscription to a session's entries continues from.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EntriesSubscribed {
+    pub seq: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ToolInputParams {
+    pub session: Id,
+    /// The tool call's id (the `id` of its `tool` entry).
+    pub tool_call: Bounded<String, 256>,
+}
+
+/// A tool call's raw input: the input, or (when `truncated`) its JSON text cut at 256 KiB.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ToolInput {
+    pub raw_input: Value,
+    pub truncated: bool,
+}
+
 /// A slice of a session's transcript by steps (never a whole transcript): the steps and their entries.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -419,6 +447,26 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "steps of a session's transcript with their entries (at most 50; never a whole transcript)",
             check: check_slice,
+        ),
+        method!(
+            "agents/entries/subscribe", AgentsEntriesSubscribe(SessionRef) -> EntriesSubscribed,
+            classes: [User], writes: false,
+            doc: "this connection gets the session's `agent-entries` events from now on (they go to no one else); the change number to continue from",
+        ),
+        method!(
+            "agents/entries/unsubscribe", AgentsEntriesUnsubscribe(SessionRef) -> bool,
+            classes: [User], writes: false,
+            doc: "this connection no longer gets the session's `agent-entries` events",
+        ),
+        method!(
+            "agents/tool-input", AgentsToolInput(ToolInputParams) -> ToolInput,
+            classes: [User], writes: false,
+            doc: "a tool call's raw input, which no event carries (at most 256 KiB, else its JSON text cut and `truncated`)",
+        ),
+        method!(
+            "agents/pause", AgentsPause(ById) -> bool,
+            classes: [User], writes: true,
+            doc: "the session's turn is cancelled once the tool call running now completes, and its queue is held",
         ),
         method!(
             "agents/probe", AgentsProbe(ProbeParams) -> ProbeResult,

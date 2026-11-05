@@ -241,6 +241,64 @@ transcript before."
                         (dolist (ev (reverse waiting)) (drgnx-agents-mirror--event (car ev) (cdr ev)))
                         (drgnx-agents--changed m))))))
 
+(defvar drgnx-agents-mirror--shown (make-hash-table :test #'equal)
+  "Hub id → t while a transcript of the session is shown: the ids whose entries the hub sends this editor.")
+
+(defvar drgnx-hub--events)
+(declare-function drgnx-hub--call-on "drgnx-hub-client")
+
+(defun drgnx-agents-mirror--entries-call (method id &optional callback)
+  "Ask the hub METHOD (`agents/entries/subscribe' or `…/unsubscribe') for session ID on this Emacs's subscribed
+connection: the entries are sent to that connection, which is where events arrive.  Nothing while it is down: the
+subscriptions are made again when it is up (`drgnx-agents-mirror--resubscribe')."
+  (when (process-live-p drgnx-hub--events)
+    (drgnx-hub--call-on drgnx-hub--events method (list :session id) (or callback #'ignore))))
+
+(defun drgnx-agents-mirror-show (id)
+  "A transcript of hub session ID is shown: ask the hub for its entries, and fetch what the mirror missed.
+The hub sends a session's entries only to the editors that asked, so a mirror nobody shows has its snapshots (status,
+queue, permissions) and no transcript beyond the one fetched when it first appeared.  Asynchronous."
+  (unless (or (gethash id drgnx-agents-mirror--shown) drgnx-agents-mirror--paused)
+    (puthash id t drgnx-agents-mirror--shown)
+    (drgnx-agents-mirror--subscribe id)))
+
+(defun drgnx-agents-mirror--subscribe (id)
+  "Subscribe to session ID's entries; once the hub took the subscription, fetch the transcript (the two travel on
+different connections, so the fetch waits): the entries between the two wait (`--fetching') and are applied on top."
+  (drgnx-agents-mirror--entries-call
+   "agents/entries/subscribe" id
+   (lambda (_result err)
+     (when-let* (((not err)) ((gethash id drgnx-agents-mirror--shown)) (m (drgnx-agents-mirror--find id)))
+       (drgnx-agents-mirror--fetch m)))))
+
+(defun drgnx-agents-mirror-hide (id)
+  "No transcript of hub session ID is shown now: the hub stops sending its entries."
+  (when (gethash id drgnx-agents-mirror--shown)
+    (remhash id drgnx-agents-mirror--shown)
+    (drgnx-agents-mirror--entries-call "agents/entries/unsubscribe" id)))
+
+(defun drgnx-agents-mirror--shown-ids ()
+  "The hub ids of the sessions whose transcripts a window shows now."
+  (let (ids)
+    (walk-windows
+     (lambda (w)
+       (let ((s (and (boundp 'drgnx-agents-ui--session) (buffer-local-value 'drgnx-agents-ui--session (window-buffer w)))))
+         (when (and (drgnx-agent-session-p s) (drgnx-agent-session-remote s))
+           (cl-pushnew (drgnx-agent-session-remote s) ids :test #'equal))))
+     'never t)
+    ids))
+
+(defun drgnx-agents-mirror--windows-changed (&optional _frame)
+  "`window-buffer-change-functions': show the sessions whose transcripts a window now shows, hide those none does."
+  (let ((now (drgnx-agents-mirror--shown-ids)) gone)
+    (maphash (lambda (id _) (unless (member id now) (push id gone))) drgnx-agents-mirror--shown)
+    (mapc #'drgnx-agents-mirror-hide gone)
+    (mapc #'drgnx-agents-mirror-show now)))
+
+(defun drgnx-agents-mirror--resubscribe ()
+  "A new connection to the hub (after a restart): ask again for the entries of the sessions shown."
+  (maphash (lambda (id _) (drgnx-agents-mirror--subscribe id)) drgnx-agents-mirror--shown))
+
 (defun drgnx-agents-mirror--event (event data)
   "An event from the hub (`drgnx-hub-event-functions')."
   (when (and (member event '("agent" "agent-entries")) (not drgnx-agents-mirror--paused))
@@ -276,6 +334,8 @@ transcript before."
   (add-hook 'drgnx-hub-event-functions #'drgnx-agents-mirror--event)
   (add-hook 'drgnx-hub-disconnect-functions #'drgnx-agents-mirror--hub-gone)
   (add-hook 'drgnx-hub-skew-functions #'drgnx-agents-mirror--skew)
+  (add-hook 'drgnx-hub-connected-functions #'drgnx-agents-mirror--resubscribe)
+  (add-hook 'window-buffer-change-functions #'drgnx-agents-mirror--windows-changed)
   (drgnx-hub-connect)
   (drgnx-hub-call "agents/list" nil
                   (lambda (r _err)
@@ -290,7 +350,10 @@ transcript before."
   (remove-hook 'drgnx-hub-event-functions #'drgnx-agents-mirror--event)
   (remove-hook 'drgnx-hub-disconnect-functions #'drgnx-agents-mirror--hub-gone)
   (remove-hook 'drgnx-hub-skew-functions #'drgnx-agents-mirror--skew)
+  (remove-hook 'drgnx-hub-connected-functions #'drgnx-agents-mirror--resubscribe)
+  (remove-hook 'window-buffer-change-functions #'drgnx-agents-mirror--windows-changed)
   (setq drgnx-agents-mirror--paused nil)
+  (clrhash drgnx-agents-mirror--shown)
   (clrhash drgnx-agents-mirror--fetching)
   (clrhash drgnx-agents-mirror--lock)
   (clrhash drgnx-agents-mirror--turns)

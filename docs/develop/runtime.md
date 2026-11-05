@@ -625,6 +625,7 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
 | `poll` | `conn`, `json` (a request with an `id`), `expect` (pattern), `within_ms` (5000), `every_ms` (200) | send the request and take its reply (by id) again until one matches: for state the hub reaches in the background (sessions resumed after a restart), read back instead of an event that may have gone before the row subscribed |
 | `expect_closed` | `conn`, `within_ms`, `silent` | the hub closed the connection; with `"silent": true`, without sending a line first (a refusal answers nothing) |
 | `expect_silent` | `conn`, `for_ms` (300) | no line arrives |
+| `count_events` | `conn`, `for_ms` (1000), `at_most` (event name → N), `none` (event names), `lacks` | read the connection for `for_ms` (lines already buffered included) and count its events by name: no name over its `at_most`, none of `none` at all, no line holding the text `lacks`. For traffic budgets |
 | `kill` | `hub` or `pid`, `signal` (`TERM KILL STOP CONT INT HUP QUIT USR1 USR2`) | signal the hub (or a captured pid) |
 | `expect_exit` | `hub`, `pid` or `conn`, `code`, `signal`, `within_ms` (10000) | the process ended with this status (a `pid` must be one the scenario spawned; a `conn` one a `spawn_conn` started) |
 | `file` | `path`, `exists`, `mode`, `owner` (`"user"` or a uid), `json`, `contains`, `count` (1), `at_most`, `lacks`, `within_ms` (5000) | inspect a file the contract names. A `*` or `?` in the last component picks the first matching name (`hub-*.jsonl`). `contains` waits up to `within_ms` until the file's text holds the string `count` times (a log is written a moment later), and then no more than `at_most` times when given (a line logged once); `lacks` is a string the text must not hold |
@@ -644,7 +645,7 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
 
 - `acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] [--refuse-mode MODE]` is a scripted ACP agent on stdio
   (`conformance/src/mock_acp/`, the stand-in for the outside agents' CLIs; wire of `agent-client-protocol-schema
-  =1.12.0`). A prompt's lines are its program: `tool:read|edit PATH`, `tool:exec CMD`, `ask:permission KIND`,
+  =1.12.0`). A prompt's lines are its program: `tool:read|edit PATH`, `tool:exec CMD`, `tool:write N` (a Write of N bytes of input), `ask:permission KIND`,
   `call:MCPTOOL JSON` (through the first stdio server of `mcpServers`), `decide TEXT` (`record_decision`),
   `commit MSG`, `sleep-loop` (asks to run `sleep 30; pgrep …`), `silent N` (a `session/cancel` ends it),
   `crash` (exit 3); anything else is echoed. `--script` gives the n-th prompt its n-th line. Every answer carries

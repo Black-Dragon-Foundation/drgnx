@@ -378,6 +378,17 @@ agent, from, to, why); from sessions `agent` (id, seq, session — the snapshot)
 in place: chunks appended, tool calls updated), at most one of each per session per 50 ms; `lease-released` (task,
 agent, job); `events` (below).
 
+**Who gets what.** `agent` goes to every subscribed connection, and carries no tool call's `rawInput` (a permission
+request's tool call included). `agent-entries` goes only to the connections that called `agents/entries/subscribe`
+for that session (the answer is the change number to continue from; the connection's subscriptions end with it, and
+`agents/entries/unsubscribe` ends one), and its tool entries have no `rawInput` either (a string `url` of the input
+stays as `url`). An editor that needs a tool call's input asks `agents/tool-input` (at most 256 KiB of its JSON text;
+a larger one comes back cut, as a string, with `truncated`). The hub keeps the whole input. `agents/pause` cancels a
+busy session's turn once the tool call running now completes, and holds its queue. A mirror (below) subscribes while a
+transcript of its session is shown (`drgnx-agents-mirror-show` and `-hide`, run from `window-buffer-change-functions`
+for transcript buffers only) and fetches the transcript then; a session nobody shows has its turns told by the
+snapshots' `status` alone. `agents/get` still returns whole entries.
+
 **Mirrors** (`core/drgnx-agents-mirror.el`): the editing Emacs keeps a `drgnx-agent-session` per hub session (`remote`
 = its id) filled from these events; an action on a mirror goes to the hub (`drgnx-agents--remote`, never waiting).
 A new Emacs fetches each transcript once (`agents/get`, which answers the session's change number `seq`) and keeps
@@ -973,10 +984,13 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | Method | Class | Params | Result | Writes |
 |---|---|---|---|---|
 | `agents/do` | user | `{id: Id, item?: RequestId, n?: natnum, op: "deliver-queue" \| "unqueue" \| "requeue" \| "review", reject?: boolean, text?: Prompt}` | `boolean` | yes |
+| `agents/entries/subscribe` | user | `{session: Id}` | `{seq: natnum}` | no |
+| `agents/entries/unsubscribe` | user | `{session: Id}` | `boolean` | no |
 | `agents/get` | user | `{id: Id}` | `{entries?: [Entry], seq: natnum, session: Snapshot}` | no |
 | `agents/kill` | user | `{id: Id}` | `boolean` | yes |
 | `agents/list` | user, agent, service | `{}` | `{sessions?: [Snapshot]}` | no |
 | `agents/move` | user | `{id: Id, profile: string}` | `{id: string, name: string}` | yes |
+| `agents/pause` | user | `{id: Id}` | `boolean` | yes |
 | `agents/permission` | user | `{id: Id, option?: string, request: RequestId}` | `boolean` | yes |
 | `agents/probe` | user | `{profile: string, wait_s?: natnum}` | `{agent?: AgentInfo, ok: boolean, stderr_tail?: string, why?: string}` | no |
 | `agents/role` | user | `{id: Id, role: "manager" \| "worker" \| "chat"}` | `boolean` | yes |
@@ -984,6 +998,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `agents/slice` | user | `{from_step: natnum, id: Id, n?: natnum}` | `{entries?: [[natnum, Entry]], id: string, next?: natnum, steps?: [Step]}` | no |
 | `agents/start` | user | `{about?: string, cwd?: AbsPath, document?: AbsPath, env?: [{name: EnvName, value: string}], job?: Id, profile: string, role?: "manager" \| "worker" \| "chat", task?: TaskRef}` | `{id: string, name: string}` | yes |
 | `agents/stop` | user | `{id: Id}` | `boolean` | yes |
+| `agents/tool-input` | user | `{session: Id, tool_call: string}` | `{raw_input: any, truncated: boolean}` | no |
 | `brief/build` | user | `{task: string}` | `{cut: boolean, edited: boolean, parts?: [BriefPartText], task: string, text: string}` | no |
 | `brief/set` | user | `{task: string, text: string}` | `{note: string}` | yes |
 | `budget/get` | user | `{scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | no |

@@ -75,6 +75,12 @@ pub async fn serve(
         Params::MessagesRetract(p) => answer(agents::deliver::retract(f, c, p).await),
         Params::AgentsRole(p) => answer(manager::role(f, c, p).await),
         Params::AgentsSlice(p) => answer(manager::slice(f, c, p).await),
+        Params::AgentsEntriesSubscribe(p) => answer(agents::session::entries_subscribe(f, c, p)),
+        Params::AgentsEntriesUnsubscribe(p) => {
+            answer(agents::session::entries_unsubscribe(f, c, p))
+        }
+        Params::AgentsToolInput(p) => answer(agents::session::tool_input(f, c, p)),
+        Params::AgentsPause(p) => answer(agents::session::pause(f, c, p)),
         Params::ExecStart(p) => answer(exec::start(f, c, p).await),
         Params::ExecGet(p) => answer(exec::get(f, c, p).await),
         Params::ExecList(p) => answer(exec::list(f, c, p).await),

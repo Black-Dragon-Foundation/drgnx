@@ -19,6 +19,8 @@ use crate::conn::Outbox;
 #[derive(Default)]
 pub struct Editors {
     subscribers: Mutex<BTreeMap<u64, Arc<Outbox>>>,
+    /// Session id → the connections that asked for its `agent-entries`.
+    entry_subs: Mutex<HashMap<String, std::collections::BTreeSet<u64>>>,
     confirms: Mutex<HashMap<i64, oneshot::Sender<EditorAnswer>>>,
     explains: Mutex<HashMap<u64, oneshot::Sender<Vec<Value>>>>,
     next: AtomicU64,
@@ -37,6 +39,10 @@ impl Editors {
     /// Connection CONN is gone.
     pub fn gone(&self, conn: u64) {
         lock(&self.subscribers).remove(&conn);
+        lock(&self.entry_subs).retain(|_, set| {
+            set.remove(&conn);
+            !set.is_empty()
+        });
     }
 
     /// EVENT with DATA to every subscriber: queued for each before any is written (a queue never waits), so a newer
@@ -46,6 +52,49 @@ impl Editors {
             return;
         };
         lock(&self.subscribers).retain(|_, out| out.push(line.clone()));
+    }
+
+    /// EVENT with DATA to connection CONN only; false when it is not subscribed or its connection is closed.
+    pub fn send_to(&self, conn: u64, event: &str, data: Value) -> bool {
+        let Some(line) = crate::front::event_line(event, data) else {
+            return false;
+        };
+        let mut subs = lock(&self.subscribers);
+        let Some(out) = subs.get(&conn) else {
+            return false;
+        };
+        if out.push(line) {
+            return true;
+        }
+        subs.remove(&conn);
+        false
+    }
+
+    /// Connection CONN gets session SID's `agent-entries` from now on.
+    pub fn subscribe_entries(&self, sid: &str, conn: u64) {
+        lock(&self.entry_subs)
+            .entry(sid.to_string())
+            .or_default()
+            .insert(conn);
+    }
+
+    /// Connection CONN no longer gets session SID's `agent-entries`.
+    pub fn unsubscribe_entries(&self, sid: &str, conn: u64) {
+        let mut subs = lock(&self.entry_subs);
+        if let Some(set) = subs.get_mut(sid) {
+            set.remove(&conn);
+            if set.is_empty() {
+                subs.remove(sid);
+            }
+        }
+    }
+
+    /// The connections that get session SID's `agent-entries`.
+    pub fn entry_subscribers(&self, sid: &str) -> Vec<u64> {
+        lock(&self.entry_subs)
+            .get(sid)
+            .map(|s| s.iter().copied().collect())
+            .unwrap_or_default()
     }
 
     /// EVENT with DATA to one subscriber, the first (the oldest connection): a change is written by one editor, not
@@ -163,6 +212,27 @@ mod tests {
             .iter()
             .map(|l| serde_json::from_str(l).unwrap())
             .collect()
+    }
+
+    mod wire {
+        use super::*;
+
+        /// [D] A targeted send reaches the one connection, not the others; an unknown or gone one takes nothing.
+        #[test]
+        fn send_to_reaches_one_connection() {
+            let e = Editors::default();
+            let (a, b) = (Arc::new(Outbox::new(1)), Arc::new(Outbox::new(2)));
+            e.subscribe(1, a.clone());
+            e.subscribe(2, b.clone());
+            assert!(e.send_to(2, "agent-entries", json!({"id": "s1"})));
+            assert!(lines(&a).is_empty());
+            let got = lines(&b);
+            assert_eq!(got.len(), 1);
+            assert_eq!(got[0]["event"], "agent-entries");
+            assert!(!e.send_to(9, "agent-entries", json!({})));
+            e.gone(2);
+            assert!(!e.send_to(2, "agent-entries", json!({})));
+        }
     }
 
     #[tokio::test]

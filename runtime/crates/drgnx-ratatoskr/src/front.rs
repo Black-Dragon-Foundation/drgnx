@@ -289,6 +289,11 @@ impl Front {
         self.editors.broadcast(event, data);
     }
 
+    /// EVENT with DATA to connection CONN only (it must be subscribed); false when it took nothing.
+    pub fn send_to(&self, conn: u64, event: &str, data: Value) -> bool {
+        self.editors.send_to(conn, event, data)
+    }
+
     /// `gateway/keys-changed` to the subscribers when the held keys' ids are no longer BEFORE (ids only).  A
     /// restarted hub holds none: a reconnecting editor asks `gateway/keys-held`, and hears this when its handover
     /// fills the set again.
@@ -594,6 +599,10 @@ impl Front {
             | Params::AgentsMove(_)
             | Params::AgentsRole(_)
             | Params::AgentsSlice(_)
+            | Params::AgentsEntriesSubscribe(_)
+            | Params::AgentsEntriesUnsubscribe(_)
+            | Params::AgentsToolInput(_)
+            | Params::AgentsPause(_)
             | Params::AgentsProbe(_)
             | Params::MessagesRetract(_)
             | Params::ExecStart(_)
