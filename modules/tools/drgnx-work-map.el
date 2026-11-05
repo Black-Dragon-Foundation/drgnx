@@ -42,6 +42,8 @@
 
 (defvar-local drgnx-work-map--strip ""
   "The needs-you strip, the buffer's header line: drawn when the frame's strip changes, so redisplay only reads it.")
+(defvar-local drgnx-work-map--strip-source nil
+  "The (NEEDS-YOU . CHIPS) lists of the frame the strip was made from: a draw makes the strip again when they differ.")
 (defvar-local drgnx-work-map--lens ""
   "The lens (Map · Board · Timeline), the buffer's tab line.")
 (defvar-local drgnx-work-map--filters nil
@@ -627,6 +629,11 @@ and its latest conclusion.  The form of terminals, of a map that does not fit an
 (defun drgnx-work-map--sync (_view)
   "The view type's SYNC: the rows are the frame's."
   (let ((state (drgnx-work-map--state)))
+    ;; a map attached to a frame it already holds has had no event to make its strip from
+    (when (and state (not (and drgnx-work-map--strip-source
+                               (eq (car drgnx-work-map--strip-source) (drgnx-work-client-needs-you state))
+                               (eq (cdr drgnx-work-map--strip-source) (drgnx-work-client-chips state)))))
+      (drgnx-work-map--refresh-strip))
     (drgnx-view-sync-rows drgnx-view (if state (drgnx-work-map--keys state) '((:empty))) #'drgnx-work-map--sig)))
 
 (drgnx-view-define 'work-map :render #'drgnx-work-map--render :sync #'drgnx-work-map--sync
@@ -673,8 +680,10 @@ mission chips (the machines' load) at the right."
 
 (defun drgnx-work-map--refresh-strip ()
   "Make the strip of the current buffer's frame; redisplay then only reads the variable."
-  (setq drgnx-work-map--strip (if-let* ((state (drgnx-work-map--state))) (drgnx-work-map--strip-string state) "")
-        drgnx-work-map--lens (drgnx-work-map--lens-string))
+  (let ((state (drgnx-work-map--state)))
+    (setq drgnx-work-map--strip (if state (drgnx-work-map--strip-string state) "")
+          drgnx-work-map--strip-source (and state (cons (drgnx-work-client-needs-you state) (drgnx-work-client-chips state)))
+          drgnx-work-map--lens (drgnx-work-map--lens-string)))
   (force-mode-line-update))
 
 (defun drgnx-work-map-needs-you (n)

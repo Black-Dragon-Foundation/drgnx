@@ -79,6 +79,29 @@
           (should (= 1 (- (plist-get (drgnx-view-stats drgnx-view) :rows-drawn) drawn)))
           (should (string-search "33 min" (buffer-string))))))))
 
+(ert-deftest drgnx-work-rows/a-drawn-map-shows-the-strip-and-the-chip-of-its-frame ()
+  ;; pattern D: a map attached to a frame already held (no event arrives) shows the needs-you strip and the machine chip
+  ;; in its header line at the first draw
+  (drgnx-test-with-modules '(tools/work-space)
+    (let* ((drgnx-work-map-scale 1) (id "work-rows-strip")
+           (drgnx-work-client--views (make-hash-table :test #'equal))
+           (drgnx-work-client-change-functions '(drgnx-work-map--changed)))
+      (puthash id (drgnx-work-client--make-view :id id :state (drgnx-work-client-init (drgnx-work-fixture-frame))
+                                                :status 'live)
+               drgnx-work-client--views)
+      (drgnx-work-fixture-with-buffer
+        (drgnx-work-map-mode)
+        (setq drgnx-work-space--view id drgnx-work-map--outline 'off)
+        (drgnx-view-attach 'work-map)
+        (drgnx-view-touch drgnx-view)
+        (drgnx-view-draw-now drgnx-view)
+        (should (memq 'drgnx-work-map--strip header-line-format))     ; the header line shows the variable the draw filled
+        (let ((header (substring-no-properties drgnx-work-map--strip)))
+          (should (string-search "⚑ Codex asks: cargo clippy" header))
+          (should (string-search "g1" header))
+          (should (string-search "desktop 3/16" header)))
+        (should (string-search "Map" (substring-no-properties drgnx-work-map--lens)))))))
+
 (ert-deftest drgnx-work-rows/compact-keeps-the-overlap-mark ()
   (let* ((drgnx-work-map-scale 1) (state (drgnx-work-rows-test--state)))
     (puthash "agent:a2" "compact" (plist-get (drgnx-work-client-layout state) :form))
