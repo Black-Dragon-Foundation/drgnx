@@ -27,6 +27,8 @@
  (:file "modules/tools/drgnx-prs.el" :in drgnx-prs--draw :what tabulated-list-print :kind document :why "the pull-request list is printed on the user's refresh")
  (:file "modules/tools/drgnx-review.el" :in drgnx-review--draw :what erase-buffer :kind document :why "a review is drawn when the user opens it")
  (:file "modules/tools/drgnx-shortcuts.el" :in drgnx-shortcuts--draw :what erase-buffer :kind document :why "the shortcuts page is drawn on the user's action")
+ (:file "modules/tools/drgnx-work-code.el" :in drgnx-work-code-files :what erase-buffer :kind document :why "the picker's waiting line is drawn when the user opens the list")
+ (:file "modules/tools/drgnx-work-code.el" :in drgnx-work-files--fill :what erase-buffer :kind document :why "the picker lists one agent's files once, when the hub has answered")
  (:file "modules/tools/drgnx-work-ui.el" :in drgnx-work-ui--show-commit :what erase-buffer :kind document :why "a commit is shown on the user's action")
  (:file "modules/tools/drgnx-work-ui.el" :in drgnx-work-ui-refresh :what erase-buffer :kind document :why "only this scan's output buffer is cleared, on the user's scan")
  (:file "modules/tools/drgnx-work-ui.el" :in drgnx-work-ui-graph :what erase-buffer :kind document :why "the graph is drawn on the user's action")

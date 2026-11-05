@@ -122,6 +122,8 @@
         (work-search "/")
         (work-escape "<escape>")
         (work-take-wheel "W")
+        (work-files "e")
+        (work-who-is-here "SPC a h")
         (ai-tab "TAB" :map drgnx-ai-ghost-mode-map)
         (ai-accept :none "Tab while a suggestion shows; the palette")
         (ai-accept-word "C-<right>" :map drgnx-ai-ghost-showing-map)

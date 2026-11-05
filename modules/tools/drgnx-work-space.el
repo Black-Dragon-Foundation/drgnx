@@ -23,6 +23,10 @@
   (load (expand-file-name "drgnx-work-map" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-work-detail)
   (load (expand-file-name "drgnx-work-detail" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-work-code)
+  (load (expand-file-name "drgnx-work-code" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(declare-function drgnx-work-code-files-command "drgnx-work-code")
+(declare-function drgnx-work-who-is-here "drgnx-work-code")
 (declare-function drgnx-work-detail-buffer "drgnx-work-detail")
 (declare-function drgnx-work-detail-update "drgnx-work-detail")
 (declare-function drgnx-work-detail-buffers "drgnx-work-detail")
@@ -88,7 +92,7 @@ it (a notes repository with the code repositories inside it)."
               work-needs-you-7 work-needs-you-8 work-needs-you-9 work-view-map work-focus work-overlaps
               work-collapse-layer-1 work-collapse-layer-2 work-collapse-layer-3 work-collapse-layer-4
               work-collapse-layer-5 work-collapse-layer-6 work-expand-layers work-show-finished work-search
-              work-escape work-take-wheel)
+              work-escape work-take-wheel work-files work-who-is-here)
   "The commands of this module, each with a row in every key profile (keys/*.eld).")
 
 ;;;; The workspace of a frame
@@ -341,6 +345,13 @@ follows the windows; the commands."
                         :doc "Pause the agent that is editing here and make this file editable; saving tells the agent")
   (drgnx-state-subscribe 'windows-changed #'drgnx-work-space--windows-changed)
   (when (fboundp 'drgnx-wb-place) (drgnx-wb-place 'drgnx-work-map-mode 'editor))
+  (when (fboundp 'drgnx-wb-place) (drgnx-wb-place 'drgnx-work-files-mode 'popup))
+  (drgnx-command-define 'work-files :category "Work" :title "List the Agent's Files"
+                        :command #'drgnx-work-code-files-command :map 'drgnx-work-map-mode-map
+                        :doc "The files the selected agent edited, one key each; the key opens the file at the agent's line")
+  (drgnx-command-define 'work-who-is-here :category "Work" :title "Who Is in This File"
+                        :command #'drgnx-work-who-is-here
+                        :doc "Name the agents in the file you are visiting, with their lines, and select it on the map")
   (when (fboundp 'drgnx-pane-define-kind)
     (drgnx-pane-define-kind 'work-detail :title " WORK DETAIL" :home 'right :buffer #'drgnx-work-space--detail-buffer))
   (pcase-dolist (`(,id ,title ,fn ,doc)
@@ -400,6 +411,8 @@ follows the windows; the commands."
     (when (buffer-local-value 'drgnx-work-live-file-mode b)
       (with-current-buffer b (drgnx-work-live-file-mode -1))))
   (dolist (b (drgnx-work-detail-buffers)) (kill-buffer b))
+  (dolist (b (buffer-list))
+    (when (eq (buffer-local-value 'major-mode b) 'drgnx-work-files-mode) (kill-buffer b)))
   (when-let* ((b (get-buffer "*drgnx work: none*"))) (kill-buffer b)))
 
 (drgnx-module-define 'tools/work-space

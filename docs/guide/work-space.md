@@ -84,6 +84,22 @@ in, the buffer becomes editable, and when you save, a message tells the agent wh
 again before touching it. Resume the agent when you are done. Turning the Work space module off gives every such
 buffer back its old read-only state.
 
+### Into the code
+
+**Enter on a file** opens it where an agent is. The hub knows which agents have read, searched or edited the file and at
+which line; Enter takes the line of the agent on the selected chain (else the most recent agent's) and opens the file in
+that agent's worktree at that line. When no line is known (Codex's reads and Claude's file searches give a path and no
+line) it opens at the top and says "file only". **Shift-Enter** opens it beside the map without moving focus.
+
+**`e`** on an agent (or its branch) lists the files it edited, each with `+N −M` and "new file" when the agent made it.
+Every row has a hint key: `1` to `9`, then `a`, `b`, … without the picker's own keys (`q`, `n`, `p`, `j`, `k`, `g`).
+One key opens that file at the agent's line; Enter opens the one at point and `q` closes the list.
+
+**Who Is in This File** (`work-who-is-here`: `C-k h` in the VS Code profile, `C-c w h` in Emacs, `SPC a h` in Vim) works
+from any buffer that visits a file. It names the agents in the file, the way they are in it and their lines, selects the
+file on the map when the map shows it, and focuses the map. With nobody in it, the echo area says "No agent in this
+file" and nothing moves.
+
 ### The outline
 
 **Show the Map as an Outline** (`work-outline`, `O`) draws one block per agent instead: the agent's line, why it
