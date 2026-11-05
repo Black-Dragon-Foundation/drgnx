@@ -392,6 +392,10 @@ pub enum Frame {
         env: Vec<(String, String)>,
         #[serde(default)]
         net_hosts: Vec<String>,
+        /// Names the job's proxy resolves to a fixed address instead of asking DNS (the hub's
+        /// `drgnx-sandbox-proxy-pinned-addresses`); an older hub sends none.
+        #[serde(default)]
+        pins: Vec<(String, std::net::IpAddr)>,
         /// The row parser (`ert`, `cargo-test`, `plist`, `exit`).
         #[serde(default)]
         parser: String,

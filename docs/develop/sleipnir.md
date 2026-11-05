@@ -426,7 +426,7 @@ does not parse.
 | `ready` | runner → hub | free memory and CPU, PSI, running attempts, slots and images present |
 | `offer` / `admit` / `refuse` | hub → runner / back | the job spec, its priority, the frozen input key, the grant hint and expected time; the grant; why not (text, and `forseti`'s `WaitReason`) |
 | `sync-have` / `sync-need` / `blob` / `bundle` / `origin-fetch` | both | the commit, tree and overlay manifest (paths as raw bytes); the missing blobs and commit; a blob; a bundle chunk at its offset (the last with the bundle's hash); a fetch from the project's origin |
-| `start` / `started` | hub → runner / back | the image, plain variables, the allowed hosts, the row parser; the unit |
+| `start` / `started` | hub → runner / back | the image, plain variables, the allowed hosts, the pinned names (`pins`, `[[name, address]]`, none from an older hub), the row parser; the unit |
 | `log` | runner → hub | the offset, then the bytes, read from the attempt's log file, never from a pipe |
 | `row` | runner → hub | a test row's name and verdict |
 | `key` | hub → runner | a key's name and value (below) |
@@ -483,7 +483,9 @@ slice `drgnx-runner-work-<id>.slice`) and starts the unit `<prefix>-<id>-<attemp
 `RuntimeMaxSec` = the timeout + 60 s (job-exec's own timeout writes the verdict first). The reservation passes to the
 unit's main pid, so it outlives `serve`. Then `started`. What can't start (no image, a parser it doesn't know, and
 for now network, keys and container variables, which wait for the job helper) ends `infra: setup`, with the reason
-in the attempt's log; it is never run another way.
+in the attempt's log; it is never run another way. The pins go into the job's caps (`Caps.pins`, as a local
+container job's come from `drgnx-sandbox-proxy-pinned-addresses`), for the proxy the job helper will give a job with
+network.
 
 **Logs** are read from the attempt's log file by offset, never from a pipe: a new attempt streams from 0, and after a
 reconnect the hub sends `attach {r, log_offset}` with where its own copy ends. When the attempt has its
