@@ -79,24 +79,52 @@ is found.  A count, no allocation: redisplay memos compare it to see that `drgnx
           ((eq x ?R) 'renamed)
           (t 'modified))))
 
+;; The status parser is one record at a time (`drgnx-git--acc-feed'), so the same code reads the whole output
+;; (`drgnx-git-parse') and the batches of Nidhogg's records framing as they arrive (`drgnx-git--batch').  A rename
+;; (`2 …') is followed by its origin path as a record of its own, which may land in the next batch: ACC carries a
+;; flag, SKIP, saying the next record is that origin.  No process, timer or clock here: the order of the records is
+;; the only input.
+(cl-defstruct (drgnx-git--acc (:constructor drgnx-git--acc-make) (:copier nil))
+  "A status being read: FILES (path → status), IGNORED (the `! ' records, newest first), N (how many), SKIP (the
+next record is a rename's origin path) and BRANCH (the `# ' records, newest first)."
+  (files (make-hash-table :test #'equal)) ignored (n 0) skip branch)
+
+(defun drgnx-git--acc-feed (acc e)
+  "Read the record E (one NUL-separated entry, no separator) into ACC."
+  (cond
+   ((string-empty-p e))
+   ((drgnx-git--acc-skip acc) (setf (drgnx-git--acc-skip acc) nil)) ; the original path of the rename
+   (t
+    (let ((h (drgnx-git--acc-files acc)))
+      (pcase (aref e 0)
+        (?1 (when (string-match "\\`1 \\(..\\) \\(?:[^ ]+ \\)\\{6\\}\\(.*\\)\\'" e)
+              (puthash (match-string 2 e) (drgnx-git--xy (match-string 1 e)) h)))
+        (?2 (when (string-match "\\`2 \\(..\\) \\(?:[^ ]+ \\)\\{7\\}\\(.*\\)\\'" e)
+              (puthash (match-string 2 e) (drgnx-git--xy (match-string 1 e)) h))
+            (setf (drgnx-git--acc-skip acc) t))
+        (?u (when (string-match "\\`u .. \\(?:[^ ]+ \\)\\{8\\}\\(.*\\)\\'" e)
+              (puthash (match-string 1 e) 'conflict h)))
+        (?? (puthash (string-remove-suffix "/" (substring e 2)) 'untracked h))
+        (?! (when (<= (cl-incf (drgnx-git--acc-n acc)) drgnx-git-ignored-limit) (push e (drgnx-git--acc-ignored acc))))
+        (?# (push e (drgnx-git--acc-branch acc))))))))
+
+(defun drgnx-git--acc-files-done (acc)
+  "ACC's path → status hash, with the ignored entries put in unless there are too many.  Call it once, at the end."
+  (let ((h (drgnx-git--acc-files acc)))
+    (when (<= (drgnx-git--acc-n acc) drgnx-git-ignored-limit)
+      (dolist (e (reverse (drgnx-git--acc-ignored acc)))
+        (puthash (string-remove-suffix "/" (substring e 2)) 'ignored h)))
+    h))
+
+(defun drgnx-git--acc-branch-of (acc)
+  "ACC's branch as `drgnx-git-parse-branch' reads it, or nil."
+  (drgnx-git-parse-branch (mapconcat (lambda (e) (concat e "\0")) (reverse (drgnx-git--acc-branch acc)) "")))
+
 (defun drgnx-git-parse (output)
   "Parse `git status --porcelain=v2 -z' OUTPUT into a hash: path (relative, no trailing /) → status."
-  (let ((h (make-hash-table :test #'equal)) (entries (split-string output "\0" t)) ignored (n 0))
-    (while entries
-      (let ((e (pop entries)))
-        (pcase (aref e 0)
-          (?1 (when (string-match "\\`1 \\(..\\) \\(?:[^ ]+ \\)\\{6\\}\\(.*\\)\\'" e)
-                (puthash (match-string 2 e) (drgnx-git--xy (match-string 1 e)) h)))
-          (?2 (when (string-match "\\`2 \\(..\\) \\(?:[^ ]+ \\)\\{7\\}\\(.*\\)\\'" e)
-                (puthash (match-string 2 e) (drgnx-git--xy (match-string 1 e)) h))
-              (pop entries))                    ; the original path of the rename
-          (?u (when (string-match "\\`u .. \\(?:[^ ]+ \\)\\{8\\}\\(.*\\)\\'" e)
-                (puthash (match-string 1 e) 'conflict h)))
-          (?? (puthash (string-remove-suffix "/" (substring e 2)) 'untracked h))
-          (?! (when (<= (setq n (1+ n)) drgnx-git-ignored-limit) (push e ignored))))))
-    (when (<= n drgnx-git-ignored-limit)
-      (dolist (e ignored) (puthash (string-remove-suffix "/" (substring e 2)) 'ignored h)))
-    h))
+  (let ((acc (drgnx-git--acc-make)))
+    (dolist (e (split-string output "\0" t)) (drgnx-git--acc-feed acc e))
+    (drgnx-git--acc-files-done acc)))
 
 (defun drgnx-git-parse-branch (output)
   "The branch of `git status --branch --porcelain=v2 -z' OUTPUT: (:head NAME :ahead A :behind B), or nil without
@@ -170,6 +198,29 @@ A peek: it keeps nothing from eviction."
     (when (> (buffer-size) drgnx-git-errors-max)
       (delete-region (point-min) (- (point-max) drgnx-git-errors-max)))))
 
+(defvar nidhogg-workers-framing)
+(declare-function nidhogg-set-process-framing "nidhogg-io.c" (process framing &rest args))
+
+(defun drgnx-git--batch (proc batch)
+  "Read BATCH, a list of (RECORD RAW ERROR) from Nidhogg's records framing of PROC, into PROC's status.
+The batches of a run all come before its sentinel, so before `drgnx-git--done' kills the process buffer (a batch
+for a dead buffer would be dropped); the run's result is read from here, not from the buffer."
+  (when-let* ((acc (process-get proc 'drgnx-git-acc)))
+    (pcase-dolist (`(,record ,_raw ,err) batch)
+      (when (and (stringp record) (not err)) (drgnx-git--acc-feed acc record)))))
+
+(defun drgnx-git--frame (proc)
+  "Have PROC's output delivered in records (see `drgnx-git--batch'); the accumulator they go into, or nil.
+Only with Nidhogg's framing and its switch (`nidhogg-workers-framing') on; any refusal leaves PROC as it is (its
+output goes to its buffer, read at the sentinel).  The caller puts the accumulator on PROC: no batch is delivered
+before it does, because batches run only when Lisp waits for output."
+  (when (and (fboundp 'nidhogg-set-process-framing) (bound-and-true-p nidhogg-workers-framing))
+    (condition-case nil
+        (progn (nidhogg-set-process-framing proc 'records :separator 0 :coding 'utf-8-unix
+                                            :batch-function #'drgnx-git--batch)
+               (drgnx-git--acc-make))
+      (error nil))))
+
 (defun drgnx-git--run-of (root)
   "ROOT's status run that is still going, or nil: found among the processes, for a ROOT the cache pushed out while
 its run went on (the entry, and with it :proc, is gone)."
@@ -203,6 +254,7 @@ A refresh asked for while one runs is done once afterwards, also when the cache 
                                  "--ignored=matching" "--untracked-files=normal")
                       :sentinel (lambda (p _event) (drgnx-git--done p root)))))
           (process-put proc 'drgnx-git-root root)
+          (process-put proc 'drgnx-git-acc (drgnx-git--frame proc))
           (drgnx-cache-put 'git-status root (plist-put (copy-sequence repo) :proc proc))))
       (when wait
         ;; Until no run is left unread: the one running, and the one queued behind it.  A run is read
@@ -229,10 +281,15 @@ The look is a peek: a late sentinel is no use of ROOT, and a stamp would evict a
           (when (buffer-live-p buf) (kill-buffer buf))
         (process-put proc 'drgnx-git-read t)
         (setq repo (plist-put repo :result (list (process-status proc) (process-exit-status proc)))) ; how the last run ended
-        (when (and (eq (process-status proc) 'exit) (= (process-exit-status proc) 0) (buffer-live-p buf))
-          (let* ((output (with-current-buffer buf (buffer-string))) (files (drgnx-git-parse output)))
-            (setq repo (plist-put (plist-put (plist-put repo :files files) :folders (drgnx-git--folders files))
-                                  :branch (drgnx-git-parse-branch output)))))
+        (when (and (eq (process-status proc) 'exit) (= (process-exit-status proc) 0))
+          (let ((acc (process-get proc 'drgnx-git-acc)) files branch)
+            (cond (acc (setq files (drgnx-git--acc-files-done acc) branch (drgnx-git--acc-branch-of acc)))
+                  ((buffer-live-p buf)
+                   (let ((output (with-current-buffer buf (buffer-string))))
+                     (setq files (drgnx-git-parse output) branch (drgnx-git-parse-branch output)))))
+            (when files
+              (setq repo (plist-put (plist-put (plist-put repo :files files) :folders (drgnx-git--folders files))
+                                    :branch branch)))))
         (when (buffer-live-p buf) (kill-buffer buf))
         (let ((again (plist-get repo :again)))
           (drgnx-cache-put 'git-status root (plist-put (plist-put repo :proc nil) :again nil))
