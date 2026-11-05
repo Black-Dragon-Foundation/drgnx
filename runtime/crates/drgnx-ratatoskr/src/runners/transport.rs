@@ -183,7 +183,17 @@ pub struct Channel {
     _hold: Option<Box<dyn std::any::Any + Send>>,
 }
 
+/// What keeps a session open (its process on the master and its place in the runner's session budget): drop it and
+/// the session ends.
+pub type Hold = Option<Box<dyn std::any::Any + Send>>;
+
 impl Channel {
+    /// The channel in pieces: its writer, reader, standard error and what keeps the session open, which the caller
+    /// must keep for as long as it uses the others.
+    pub fn split(self) -> (Writer, Reader, Option<Reader>, Hold) {
+        (self.tx, self.rx, self.err, self._hold)
+    }
+
     /// A channel over any reader and writer: a link test's in-memory pipe, or another transport's.
     pub fn new(tx: Writer, rx: Reader) -> Channel {
         Channel {

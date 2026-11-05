@@ -12,7 +12,7 @@ case ${BASH_SOURCE[0]-} in
   */*) _drgnx_dir=$PWD/${BASH_SOURCE[0]%/*} ;;
   *) _drgnx_dir=$PWD ;;
 esac
-_drgnx_commands='open doctor build test ui macos-app sync upgrade rollback generations lock bisect service-unit onboard check lease fmt work hub runtime job search keys safe help shell secrets bootstrap update coord graph childframe-elpa'
+_drgnx_commands='open doctor build test ui macos-app sync upgrade rollback generations lock bisect service-unit onboard check lease fmt work hub runtime job runner search keys safe help shell secrets bootstrap update coord graph childframe-elpa'
 _drgnx_steps='environment look-and-keys projects ai search agents daemon portability finish'
 _drgnx_bootstrap_steps='preflight config keys sync onboard desktop shell doctor'
 _drgnx_presets='minimal ide full-ai'
@@ -78,6 +78,9 @@ _drgnx() {
           'job propose') words='--repo --budget --auto' ;;
           'job approve' | 'job resume') words='--budget' ;;
           'job status') words='--json' ;;
+          'runner list') words='--json' ;;
+          'runner add') words='--trust --name --profile --accept --root --prefix' ;;
+          'runner remove') words='--yes' ;;
           'search index') words='--rebuild' ;;
           'search query') words='-k' ;;
           'keys diff') words='--against' ;;
@@ -98,6 +101,7 @@ _drgnx() {
           hub) words='start stop status' ;;
           runtime) words='build install' ;;
           job) words='propose approve resume stop status' ;;
+          runner) words='list add check bench trust unbench remove audit' ;;
           search) words='index query mcp' ;;
           keys) words='diff' ;;
           ui) words=$_drgnx_uis ;;

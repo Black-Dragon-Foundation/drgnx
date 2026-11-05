@@ -35,6 +35,37 @@ terminal". That covers:
 **A changed host key is never accepted.** The runner stops until you have found out why the key changed and fixed your
 `known_hosts` yourself.
 
+## Adding and removing a machine
+
+```
+drgnx runner add desktop --trust mine            # a host as your ssh knows it
+drgnx runner list                                # every runner, in 60 columns; one out of rotation says why
+drgnx runner check desktop | bench desktop | unbench desktop
+drgnx runner trust desktop shared                # mine, my-cloud or shared
+drgnx runner remove desktop --yes                # stops our units and containers there, deletes its folder
+```
+
+`add` options: `--name` (default: the host's first label), `--profile dedicated|workstation` (default dedicated: nobody
+sits at the machine), `--accept all|heavy`, `--root DIR` (the one folder drgnx keeps there, default `~/.drgnx-runner`)
+and `--prefix` (what its units and containers are named after, default `drgnx`).
+
+What `add` does, in order, and stops at the first thing that is wrong:
+
+1. Asks the host for its architecture and home folder through your ssh.
+2. Copies the runner (one small static program) for that architecture into the runner folder. When none is built it
+   says so and names the command: `drgnx build runner-bundle --arch aarch64`.
+3. Asks the runner about the host. It **refuses the machine drgnx itself runs on** (it already runs jobs as `local`),
+   and a host that lacks something a runner needs: a systemd user manager, cgroup v2 with the memory, pids and cpu
+   controllers delegated to you and podman on the systemd cgroup manager, rootless podman 5 or newer, git. The refusal
+   lists **everything** that is missing, each with what to run there to fix it.
+4. Pulls the image in `drgnx-runners-image` (pinned by digest) and times a reference workload in it under the runner's
+   caps.
+5. Records the runner and connects it.
+
+The runner list is yours alone: an agent can't add, bench, change or remove a machine. A runner that can't be reached
+when drgnx starts stays in the list as `not connected`; `drgnx runner check NAME` connects it again. Removing a runner
+refuses while a job is on it.
+
 ## Keys
 
 Some jobs need a secret: a registry token to publish, a deploy key to fetch a private dependency. A job names the

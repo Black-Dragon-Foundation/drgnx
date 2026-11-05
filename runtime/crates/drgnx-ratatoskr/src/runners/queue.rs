@@ -614,6 +614,65 @@ impl Queue {
         }
     }
 
+    /// Runner NAME's session now (to end it before a new link is made).
+    pub fn session(&self, name: &str) -> Option<Session> {
+        self.lock().runners.get(name).map(|r| r.session.clone())
+    }
+
+    /// Runner NAME on a new SESSION (a reconnect, or a changed profile): it says `hello` now and is ready at its
+    /// `hello-ok`; its strikes stay. False when no runner of that name is known.
+    pub fn set_session(&self, name: &str, session: Session) -> bool {
+        let mut st = self.lock();
+        let Some(r) = st.runners.get_mut(name) else {
+            return false;
+        };
+        session.send(Frame::Hello {
+            version: PROTO_VERSION,
+            hub_id: self.hub_id.clone(),
+        });
+        r.session = session;
+        r.state = RunnerState::Unreachable { since: 0 };
+        true
+    }
+
+    /// Runner NAME's trust and accept as its registry record now says.
+    pub fn set_runner(&self, name: &str, trust: RunnerTrust, accept: Accept) -> bool {
+        match self.lock().runners.get_mut(name) {
+            Some(r) => {
+                r.r.trust = trust;
+                r.r.accept = accept;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// How many jobs are offered to, or running on, runner NAME.
+    pub fn runner_jobs(&self, name: &str) -> u32 {
+        let st = self.lock();
+        st.jobs
+            .values()
+            .filter(|j| matches!(&j.state, QState::Remote(r) if r == name))
+            .count() as u32
+    }
+
+    /// Runner NAME forgotten (its session ends). Refused, with the reason, while a job is on it.
+    pub fn remove_runner(&self, name: &str) -> Result<(), String> {
+        let mut st = self.lock();
+        let busy = st
+            .jobs
+            .values()
+            .filter(|j| matches!(&j.state, QState::Remote(r) if r == name))
+            .count();
+        if busy > 0 {
+            return Err(format!(
+                "{busy} job(s) are on {name}: stop them or wait for them to end"
+            ));
+        }
+        st.runners.remove(name);
+        Ok(())
+    }
+
     fn put_job(&self, j: &QJob, eff: Priority) {
         let id = j.s.id.clone();
         let spec = json!({

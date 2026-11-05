@@ -45,15 +45,24 @@ pub enum LinkEvent {
 }
 
 /// One runner's link. Dropping it ends the session (the channels close; the runner's attempts run on).
-pub struct Session {
+#[derive(Clone)]
+pub struct Session(Arc<Shared>);
+
+struct Shared {
     runner: String,
     out: mpsc::UnboundedSender<Frame>,
-    tasks: [tokio::task::JoinHandle<()>; 2],
+    tasks: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
-impl Drop for Session {
+impl Shared {
+    fn tasks(&self) -> std::sync::MutexGuard<'_, Vec<tokio::task::JoinHandle<()>>> {
+        self.tasks.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+impl Drop for Shared {
     fn drop(&mut self) {
-        for t in &self.tasks {
+        for t in self.tasks().iter() {
             t.abort();
         }
     }
@@ -74,28 +83,52 @@ impl Session {
             bulk_out,
         } = channels;
         let (out, queued) = mpsc::unbounded_channel();
+        let (tx, rx, err, hold) = control.split();
+        // the control session's hold lives with the writer: dropping it would end the session under the link
         let writer = crate::clock::spawn(
             "runners:link-write",
-            write_loop(control.tx, queued, (bulk_in, bulk_out)),
+            write_loop(tx, queued, (bulk_in, bulk_out, hold)),
         );
         let reader = crate::clock::spawn(
             "runners:link-read",
-            read_loop(runner.to_string(), control.rx, route, events, out.clone()),
+            read_loop(runner.to_string(), rx, route, events, out.clone()),
         );
-        Session {
+        let mut tasks = vec![writer, reader];
+        // the runner's standard error is read for as long as the link lives: a pipe nobody reads is closed when it is
+        // dropped, and a runner that then writes to it (its log lines) ends
+        if let Some(mut err) = err {
+            tasks.push(crate::clock::spawn("runners:link-err", async move {
+                let _ = tokio::io::copy(&mut err, &mut tokio::io::sink()).await;
+            }));
+        }
+        Session(Arc::new(Shared {
             runner: runner.into(),
             out,
-            tasks: [writer, reader],
-        }
+            tasks: std::sync::Mutex::new(tasks),
+        }))
     }
 
     pub fn runner(&self) -> &str {
-        &self.runner
+        &self.0.runner
     }
 
     /// Queues F for the runner; false once the link has ended.
     pub fn send(&self, f: Frame) -> bool {
-        !self.tasks[0].is_finished() && self.out.send(f).is_ok()
+        let ended = self.0.tasks().first().is_none_or(|t| t.is_finished());
+        !ended && self.0.out.send(f).is_ok()
+    }
+
+    /// Ends the session now and returns once its tasks are gone, so the channels they held (and a transport's
+    /// sessions with them) are free for a new link. Every copy of the session is ended; one that is ended is left as
+    /// it is.
+    pub async fn close(&self) {
+        let tasks = std::mem::take(&mut *self.0.tasks());
+        for t in &tasks {
+            t.abort();
+        }
+        for t in tasks {
+            let _ = t.await;
+        }
     }
 }
 
@@ -103,7 +136,11 @@ impl Session {
 async fn write_loop(
     mut tx: Writer,
     mut queued: mpsc::UnboundedReceiver<Frame>,
-    _bulk: (super::transport::Channel, super::transport::Channel),
+    _held: (
+        super::transport::Channel,
+        super::transport::Channel,
+        super::transport::Hold,
+    ),
 ) {
     let mut ping = crate::clock::interval(PING_EVERY);
     loop {
@@ -197,7 +234,7 @@ async fn read_loop(
 }
 
 /// One frame from RX, through the protocol's codec: its line, then the chunk its `len` announces.
-async fn read_frame(rx: &mut BufReader<Reader>) -> std::io::Result<Option<Frame>> {
+pub(crate) async fn read_frame(rx: &mut BufReader<Reader>) -> std::io::Result<Option<Frame>> {
     use std::io::{Error, ErrorKind};
     loop {
         let mut line = Vec::new();

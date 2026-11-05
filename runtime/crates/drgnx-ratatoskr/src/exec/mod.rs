@@ -436,6 +436,11 @@ impl Runner {
         self.inner.get().map(|i| i.queue.local_slots())
     }
 
+    /// Every machine's queue (the runners register in it); none before the runner is open.
+    pub fn queue(&self) -> Option<Arc<Queue>> {
+        self.inner.get().map(|i| i.queue.clone())
+    }
+
     fn inner(&self) -> Result<&Arc<Inner>, Refusal> {
         self.inner
             .get()
@@ -1578,6 +1583,13 @@ pub fn ensure_open(f: &Front) {
     if let Err(e) = runner(f) {
         tracing::warn!("jobs not re-attached: {}", e.message);
     }
+}
+
+/// The queue of every machine, opening the runner first when it is not open yet.
+pub fn queue(f: &Front) -> Result<Arc<Queue>, Error> {
+    runner(f)?
+        .queue()
+        .ok_or_else(|| error(ErrorCode::Internal, "exec: the queue is not open yet"))
 }
 
 fn runner(f: &Front) -> Result<&Runner, Error> {

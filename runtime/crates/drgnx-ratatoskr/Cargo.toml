@@ -35,6 +35,11 @@ required-features = ["fleet"]
 name = "fleet_runners"
 required-features = ["fleet"]
 
+# the registry's rows: a host becomes a runner, its refusals, its removal
+[[test]]
+name = "fleet_registry"
+required-features = ["fleet"]
+
 [dependencies]
 runstav = { path = "../runstav", version = "0.1.0" }
 draugr = { path = "../draugr", version = "0.1.0" }

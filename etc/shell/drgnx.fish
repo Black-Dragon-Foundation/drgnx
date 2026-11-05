@@ -42,6 +42,7 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n __fish_use_subcommand -a hub -d 'The hub behind agents and jobs'
     complete -c drgnx -n __fish_use_subcommand -a runtime -d 'Build and install Ratatoskr, the agent runtime'
     complete -c drgnx -n __fish_use_subcommand -a job -d 'Jobs from plans'
+    complete -c drgnx -n __fish_use_subcommand -a runner -d 'The machines that run jobs'
     complete -c drgnx -n __fish_use_subcommand -a search -d 'Semantic search'
     complete -c drgnx -n __fish_use_subcommand -a keys -d 'Compare key profiles'
     complete -c drgnx -n __fish_use_subcommand -a safe -d "Emacs with drgnx's core only"
@@ -139,6 +140,18 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from job; and __fish_seen_subcommand_from propose approve resume' -l budget -x -d 'Budget in USD'
     complete -c drgnx -n '__fish_seen_subcommand_from job; and __fish_seen_subcommand_from propose' -l auto -d 'Approve at once'
     complete -c drgnx -n '__fish_seen_subcommand_from job; and __fish_seen_subcommand_from status' -l json -d 'Machine-readable'
+    set -l _drgnx_runner_subs list add check bench trust unbench remove audit
+    for sub in $_drgnx_runner_subs
+        complete -c drgnx -n "__fish_seen_subcommand_from runner; and not __fish_seen_subcommand_from $_drgnx_runner_subs" -f -a $sub
+    end
+    complete -c drgnx -n '__fish_seen_subcommand_from runner; and __fish_seen_subcommand_from list' -l json -d 'Machine-readable'
+    complete -c drgnx -n '__fish_seen_subcommand_from runner; and __fish_seen_subcommand_from add' -l trust -x -a 'mine my-cloud shared' -d 'What it may see'
+    complete -c drgnx -n '__fish_seen_subcommand_from runner; and __fish_seen_subcommand_from add' -l name -x -d "The runner's name"
+    complete -c drgnx -n '__fish_seen_subcommand_from runner; and __fish_seen_subcommand_from add' -l profile -x -a 'dedicated workstation' -d 'Whether somebody sits at it'
+    complete -c drgnx -n '__fish_seen_subcommand_from runner; and __fish_seen_subcommand_from add' -l accept -x -a 'all heavy' -d 'Which jobs it takes'
+    complete -c drgnx -n '__fish_seen_subcommand_from runner; and __fish_seen_subcommand_from add' -l root -x -d 'Its folder there'
+    complete -c drgnx -n '__fish_seen_subcommand_from runner; and __fish_seen_subcommand_from add' -l prefix -x -d 'What its units are named after'
+    complete -c drgnx -n '__fish_seen_subcommand_from runner; and __fish_seen_subcommand_from remove' -l yes -d 'Delete its folder'
     complete -c drgnx -n '__fish_seen_subcommand_from search; and not __fish_seen_subcommand_from index query mcp' -f -a index -d 'Build or refresh a project index'
     complete -c drgnx -n '__fish_seen_subcommand_from search; and not __fish_seen_subcommand_from index query mcp' -f -a query -d 'Ask a question'
     complete -c drgnx -n '__fish_seen_subcommand_from search; and not __fish_seen_subcommand_from index query mcp' -f -a mcp -d 'Serve the search tool to an agent'

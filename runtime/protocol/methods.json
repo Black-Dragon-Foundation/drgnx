@@ -1554,6 +1554,189 @@
     {
       "data": {
         "$defs": {
+          "Accept": {
+            "description": "Which jobs a runner takes.",
+            "enum": [
+              "all",
+              "heavy"
+            ],
+            "type": "string"
+          },
+          "Profile": {
+            "description": "Whether somebody sits at the machine.",
+            "enum": [
+              "dedicated",
+              "workstation"
+            ],
+            "type": "string"
+          },
+          "Runner": {
+            "additionalProperties": false,
+            "description": "A runner as the registry lists it.",
+            "properties": {
+              "accept": {
+                "$ref": "#/$defs/Accept"
+              },
+              "arch": {
+                "type": "string"
+              },
+              "checked": {
+                "description": "When it was last checked (seconds since the epoch).",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "cores": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "disk_free_gb": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "features": {
+                "default": [],
+                "description": "What the host has that a job may ask for (a GPU, ...).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "host": {
+                "type": "string"
+              },
+              "jobs": {
+                "description": "Jobs running there now.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "landlock_abi": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "last_strike": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "linger": {
+                "type": "boolean"
+              },
+              "mem_mib": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "os": {
+                "type": "string"
+              },
+              "podman": {
+                "type": "string"
+              },
+              "prefix": {
+                "type": "string"
+              },
+              "profile": {
+                "$ref": "#/$defs/Profile"
+              },
+              "root": {
+                "type": "string"
+              },
+              "speed": {
+                "description": "Its bench: how many times the reference workload's speed (absent: not benched).",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "state": {
+                "description": "`ready`, `benched: why (times)`, `needs a login: cmd`, `unreachable`, ...: the reason a runner is out of\nrotation is the state itself.",
+                "type": "string"
+              },
+              "strikes": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "trust": {
+                "$ref": "#/$defs/Trust"
+              }
+            },
+            "required": [
+              "name",
+              "host",
+              "trust",
+              "profile",
+              "accept",
+              "root",
+              "prefix",
+              "arch",
+              "os",
+              "cores",
+              "mem_mib",
+              "disk_free_gb",
+              "podman",
+              "linger",
+              "landlock_abi",
+              "state",
+              "strikes",
+              "jobs"
+            ],
+            "type": "object"
+          },
+          "Trust": {
+            "description": "What a runner may see of the user's work.",
+            "oneOf": [
+              {
+                "const": "mine",
+                "description": "The user's own machine: every job, every key.",
+                "type": "string"
+              },
+              {
+                "const": "my-cloud",
+                "description": "A machine drgnx starts in the user's cloud account: private code and only its listed keys.",
+                "type": "string"
+              },
+              {
+                "const": "shared",
+                "description": "Somebody else's: public code only.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/list`'s answer, and the data of `runners-changed`.",
+        "properties": {
+          "runners": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Runner"
+            },
+            "type": "array"
+          }
+        },
+        "title": "Runners",
+        "type": "object"
+      },
+      "doc": "the runners changed (one added, removed, benched or back in rotation, its trust or state, its load): the whole list",
+      "name": "runners-changed"
+    },
+    {
+      "data": {
+        "$defs": {
           "SettingScope": {
             "description": "Which file an agent's setting is in: `settings.el` (global), the private workspace file or the shared\n`.drgnx/settings.el` of the session's project.",
             "enum": [
@@ -15042,6 +15225,1549 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "boolean",
         "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a host made a runner: probe and the contract, the bundle for its architecture copied, images pulled, benched, recorded; the hub's own machine is refused",
+      "name": "runners/add",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "Accept": {
+            "description": "Which jobs a runner takes.",
+            "enum": [
+              "all",
+              "heavy"
+            ],
+            "type": "string"
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "Profile": {
+            "description": "Whether somebody sits at the machine.",
+            "enum": [
+              "dedicated",
+              "workstation"
+            ],
+            "type": "string"
+          },
+          "Trust": {
+            "description": "What a runner may see of the user's work.",
+            "oneOf": [
+              {
+                "const": "mine",
+                "description": "The user's own machine: every job, every key.",
+                "type": "string"
+              },
+              {
+                "const": "my-cloud",
+                "description": "A machine drgnx starts in the user's cloud account: private code and only its listed keys.",
+                "type": "string"
+              },
+              {
+                "const": "shared",
+                "description": "Somebody else's: public code only.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/add`'s params.",
+        "properties": {
+          "accept": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Accept"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Default `all`."
+          },
+          "host": {
+            "description": "The host as the user's ssh knows it (`ssh <host>`).",
+            "maxLength": 255,
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Id"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The runner's name (default: the host's first label)."
+          },
+          "prefix": {
+            "description": "What the runner's units and containers are named after (default `drgnx-`).",
+            "maxLength": 32,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Profile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Default `dedicated`."
+          },
+          "root": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The one folder drgnx keeps on the runner (default `~/.drgnx-runner`)."
+          },
+          "trust": {
+            "$ref": "#/$defs/Trust"
+          }
+        },
+        "required": [
+          "host",
+          "trust"
+        ],
+        "title": "AddParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Accept": {
+            "description": "Which jobs a runner takes.",
+            "enum": [
+              "all",
+              "heavy"
+            ],
+            "type": "string"
+          },
+          "Profile": {
+            "description": "Whether somebody sits at the machine.",
+            "enum": [
+              "dedicated",
+              "workstation"
+            ],
+            "type": "string"
+          },
+          "Trust": {
+            "description": "What a runner may see of the user's work.",
+            "oneOf": [
+              {
+                "const": "mine",
+                "description": "The user's own machine: every job, every key.",
+                "type": "string"
+              },
+              {
+                "const": "my-cloud",
+                "description": "A machine drgnx starts in the user's cloud account: private code and only its listed keys.",
+                "type": "string"
+              },
+              {
+                "const": "shared",
+                "description": "Somebody else's: public code only.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A runner as the registry lists it.",
+        "properties": {
+          "accept": {
+            "$ref": "#/$defs/Accept"
+          },
+          "arch": {
+            "type": "string"
+          },
+          "checked": {
+            "description": "When it was last checked (seconds since the epoch).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cores": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "disk_free_gb": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "features": {
+            "default": [],
+            "description": "What the host has that a job may ask for (a GPU, ...).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "host": {
+            "type": "string"
+          },
+          "jobs": {
+            "description": "Jobs running there now.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "landlock_abi": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_strike": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "linger": {
+            "type": "boolean"
+          },
+          "mem_mib": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "os": {
+            "type": "string"
+          },
+          "podman": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/$defs/Profile"
+          },
+          "root": {
+            "type": "string"
+          },
+          "speed": {
+            "description": "Its bench: how many times the reference workload's speed (absent: not benched).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "`ready`, `benched: why (times)`, `needs a login: cmd`, `unreachable`, ...: the reason a runner is out of\nrotation is the state itself.",
+            "type": "string"
+          },
+          "strikes": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "trust": {
+            "$ref": "#/$defs/Trust"
+          }
+        },
+        "required": [
+          "name",
+          "host",
+          "trust",
+          "profile",
+          "accept",
+          "root",
+          "prefix",
+          "arch",
+          "os",
+          "cores",
+          "mem_mib",
+          "disk_free_gb",
+          "podman",
+          "linger",
+          "landlock_abi",
+          "state",
+          "strikes",
+          "jobs"
+        ],
+        "title": "Runner",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a runner benched again: the reference workload under the runner's caps",
+      "name": "runners/bench",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A runner by name (`runners/check`, `bench`, `unbench`).",
+        "properties": {
+          "name": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ByName",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Accept": {
+            "description": "Which jobs a runner takes.",
+            "enum": [
+              "all",
+              "heavy"
+            ],
+            "type": "string"
+          },
+          "Profile": {
+            "description": "Whether somebody sits at the machine.",
+            "enum": [
+              "dedicated",
+              "workstation"
+            ],
+            "type": "string"
+          },
+          "Trust": {
+            "description": "What a runner may see of the user's work.",
+            "oneOf": [
+              {
+                "const": "mine",
+                "description": "The user's own machine: every job, every key.",
+                "type": "string"
+              },
+              {
+                "const": "my-cloud",
+                "description": "A machine drgnx starts in the user's cloud account: private code and only its listed keys.",
+                "type": "string"
+              },
+              {
+                "const": "shared",
+                "description": "Somebody else's: public code only.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A runner as the registry lists it.",
+        "properties": {
+          "accept": {
+            "$ref": "#/$defs/Accept"
+          },
+          "arch": {
+            "type": "string"
+          },
+          "checked": {
+            "description": "When it was last checked (seconds since the epoch).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cores": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "disk_free_gb": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "features": {
+            "default": [],
+            "description": "What the host has that a job may ask for (a GPU, ...).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "host": {
+            "type": "string"
+          },
+          "jobs": {
+            "description": "Jobs running there now.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "landlock_abi": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_strike": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "linger": {
+            "type": "boolean"
+          },
+          "mem_mib": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "os": {
+            "type": "string"
+          },
+          "podman": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/$defs/Profile"
+          },
+          "root": {
+            "type": "string"
+          },
+          "speed": {
+            "description": "Its bench: how many times the reference workload's speed (absent: not benched).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "`ready`, `benched: why (times)`, `needs a login: cmd`, `unreachable`, ...: the reason a runner is out of\nrotation is the state itself.",
+            "type": "string"
+          },
+          "strikes": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "trust": {
+            "$ref": "#/$defs/Trust"
+          }
+        },
+        "required": [
+          "name",
+          "host",
+          "trust",
+          "profile",
+          "accept",
+          "root",
+          "prefix",
+          "arch",
+          "os",
+          "cores",
+          "mem_mib",
+          "disk_free_gb",
+          "podman",
+          "linger",
+          "landlock_abi",
+          "state",
+          "strikes",
+          "jobs"
+        ],
+        "title": "Runner",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a runner's health check now: its probe and contract, a canary job, the clock",
+      "name": "runners/check",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A runner by name (`runners/check`, `bench`, `unbench`).",
+        "properties": {
+          "name": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ByName",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Accept": {
+            "description": "Which jobs a runner takes.",
+            "enum": [
+              "all",
+              "heavy"
+            ],
+            "type": "string"
+          },
+          "Profile": {
+            "description": "Whether somebody sits at the machine.",
+            "enum": [
+              "dedicated",
+              "workstation"
+            ],
+            "type": "string"
+          },
+          "Trust": {
+            "description": "What a runner may see of the user's work.",
+            "oneOf": [
+              {
+                "const": "mine",
+                "description": "The user's own machine: every job, every key.",
+                "type": "string"
+              },
+              {
+                "const": "my-cloud",
+                "description": "A machine drgnx starts in the user's cloud account: private code and only its listed keys.",
+                "type": "string"
+              },
+              {
+                "const": "shared",
+                "description": "Somebody else's: public code only.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A runner as the registry lists it.",
+        "properties": {
+          "accept": {
+            "$ref": "#/$defs/Accept"
+          },
+          "arch": {
+            "type": "string"
+          },
+          "checked": {
+            "description": "When it was last checked (seconds since the epoch).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cores": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "disk_free_gb": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "features": {
+            "default": [],
+            "description": "What the host has that a job may ask for (a GPU, ...).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "host": {
+            "type": "string"
+          },
+          "jobs": {
+            "description": "Jobs running there now.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "landlock_abi": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_strike": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "linger": {
+            "type": "boolean"
+          },
+          "mem_mib": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "os": {
+            "type": "string"
+          },
+          "podman": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/$defs/Profile"
+          },
+          "root": {
+            "type": "string"
+          },
+          "speed": {
+            "description": "Its bench: how many times the reference workload's speed (absent: not benched).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "`ready`, `benched: why (times)`, `needs a login: cmd`, `unreachable`, ...: the reason a runner is out of\nrotation is the state itself.",
+            "type": "string"
+          },
+          "strikes": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "trust": {
+            "$ref": "#/$defs/Trust"
+          }
+        },
+        "required": [
+          "name",
+          "host",
+          "trust",
+          "profile",
+          "accept",
+          "root",
+          "prefix",
+          "arch",
+          "os",
+          "cores",
+          "mem_mib",
+          "disk_free_gb",
+          "podman",
+          "linger",
+          "landlock_abi",
+          "state",
+          "strikes",
+          "jobs"
+        ],
+        "title": "Runner",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the runners: each with its trust, profile, load, jobs and, when it is out of rotation, why",
+      "name": "runners/list",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Accept": {
+            "description": "Which jobs a runner takes.",
+            "enum": [
+              "all",
+              "heavy"
+            ],
+            "type": "string"
+          },
+          "Profile": {
+            "description": "Whether somebody sits at the machine.",
+            "enum": [
+              "dedicated",
+              "workstation"
+            ],
+            "type": "string"
+          },
+          "Runner": {
+            "additionalProperties": false,
+            "description": "A runner as the registry lists it.",
+            "properties": {
+              "accept": {
+                "$ref": "#/$defs/Accept"
+              },
+              "arch": {
+                "type": "string"
+              },
+              "checked": {
+                "description": "When it was last checked (seconds since the epoch).",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "cores": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "disk_free_gb": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "features": {
+                "default": [],
+                "description": "What the host has that a job may ask for (a GPU, ...).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "host": {
+                "type": "string"
+              },
+              "jobs": {
+                "description": "Jobs running there now.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "landlock_abi": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "last_strike": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "linger": {
+                "type": "boolean"
+              },
+              "mem_mib": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "os": {
+                "type": "string"
+              },
+              "podman": {
+                "type": "string"
+              },
+              "prefix": {
+                "type": "string"
+              },
+              "profile": {
+                "$ref": "#/$defs/Profile"
+              },
+              "root": {
+                "type": "string"
+              },
+              "speed": {
+                "description": "Its bench: how many times the reference workload's speed (absent: not benched).",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "state": {
+                "description": "`ready`, `benched: why (times)`, `needs a login: cmd`, `unreachable`, ...: the reason a runner is out of\nrotation is the state itself.",
+                "type": "string"
+              },
+              "strikes": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "trust": {
+                "$ref": "#/$defs/Trust"
+              }
+            },
+            "required": [
+              "name",
+              "host",
+              "trust",
+              "profile",
+              "accept",
+              "root",
+              "prefix",
+              "arch",
+              "os",
+              "cores",
+              "mem_mib",
+              "disk_free_gb",
+              "podman",
+              "linger",
+              "landlock_abi",
+              "state",
+              "strikes",
+              "jobs"
+            ],
+            "type": "object"
+          },
+          "Trust": {
+            "description": "What a runner may see of the user's work.",
+            "oneOf": [
+              {
+                "const": "mine",
+                "description": "The user's own machine: every job, every key.",
+                "type": "string"
+              },
+              {
+                "const": "my-cloud",
+                "description": "A machine drgnx starts in the user's cloud account: private code and only its listed keys.",
+                "type": "string"
+              },
+              {
+                "const": "shared",
+                "description": "Somebody else's: public code only.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/list`'s answer, and the data of `runners-changed`.",
+        "properties": {
+          "runners": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Runner"
+            },
+            "type": "array"
+          }
+        },
+        "title": "Runners",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "what applies to a host's connection (ssh -G under the generated config) and what the host is, or everything the runner contract finds missing, each with its fix; the host is not recorded",
+      "name": "runners/probe-host",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/probe-host`'s params.",
+        "properties": {
+          "host": {
+            "maxLength": 255,
+            "type": "string"
+          }
+        },
+        "required": [
+          "host"
+        ],
+        "title": "ProbeParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Effective": {
+            "additionalProperties": false,
+            "description": "What reaches a host over ssh under the generated config (`ssh -G`): shown before the user adds it.",
+            "properties": {
+              "forward_agent": {
+                "type": "boolean"
+              },
+              "forwards": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "proxy": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "forward_agent"
+            ],
+            "type": "object"
+          },
+          "HostFacts": {
+            "additionalProperties": false,
+            "description": "What a host is, once it meets the runner contract.",
+            "properties": {
+              "arch": {
+                "type": "string"
+              },
+              "battery": {
+                "type": "boolean"
+              },
+              "cores": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "disk_free_gb": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "landlock_abi": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "linger": {
+                "type": "boolean"
+              },
+              "mem_mib": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "os": {
+                "type": "string"
+              },
+              "podman": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "arch",
+              "os",
+              "cores",
+              "mem_mib",
+              "disk_free_gb",
+              "podman",
+              "linger",
+              "landlock_abi",
+              "battery"
+            ],
+            "type": "object"
+          },
+          "Missing": {
+            "additionalProperties": false,
+            "description": "One thing a host lacks, and what the user runs there to fix it.",
+            "properties": {
+              "fix": {
+                "type": "string"
+              },
+              "what": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "what",
+              "fix"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/probe-host`'s answer: what applies to the connection, and the host's facts or what it lacks.",
+        "properties": {
+          "effective": {
+            "$ref": "#/$defs/Effective"
+          },
+          "facts": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/HostFacts"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "missing": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Missing"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "effective"
+        ],
+        "title": "Probed",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a runner removed: our units and containers there stopped, its folder deleted (confirm: true)",
+      "name": "runners/remove",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/remove`'s params: `confirm` must be true.",
+        "properties": {
+          "confirm": {
+            "type": "boolean"
+          },
+          "name": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "name",
+          "confirm"
+        ],
+        "title": "RemoveParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/remove`'s answer.",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "Removed",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a runner's trust, profile or accept changed",
+      "name": "runners/set",
+      "params": {
+        "$defs": {
+          "Accept": {
+            "description": "Which jobs a runner takes.",
+            "enum": [
+              "all",
+              "heavy"
+            ],
+            "type": "string"
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "Profile": {
+            "description": "Whether somebody sits at the machine.",
+            "enum": [
+              "dedicated",
+              "workstation"
+            ],
+            "type": "string"
+          },
+          "Trust": {
+            "description": "What a runner may see of the user's work.",
+            "oneOf": [
+              {
+                "const": "mine",
+                "description": "The user's own machine: every job, every key.",
+                "type": "string"
+              },
+              {
+                "const": "my-cloud",
+                "description": "A machine drgnx starts in the user's cloud account: private code and only its listed keys.",
+                "type": "string"
+              },
+              {
+                "const": "shared",
+                "description": "Somebody else's: public code only.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/set`'s params: what changes.",
+        "properties": {
+          "accept": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Accept"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "$ref": "#/$defs/Id"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Profile"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "trust": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Trust"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "SetParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Accept": {
+            "description": "Which jobs a runner takes.",
+            "enum": [
+              "all",
+              "heavy"
+            ],
+            "type": "string"
+          },
+          "Profile": {
+            "description": "Whether somebody sits at the machine.",
+            "enum": [
+              "dedicated",
+              "workstation"
+            ],
+            "type": "string"
+          },
+          "Trust": {
+            "description": "What a runner may see of the user's work.",
+            "oneOf": [
+              {
+                "const": "mine",
+                "description": "The user's own machine: every job, every key.",
+                "type": "string"
+              },
+              {
+                "const": "my-cloud",
+                "description": "A machine drgnx starts in the user's cloud account: private code and only its listed keys.",
+                "type": "string"
+              },
+              {
+                "const": "shared",
+                "description": "Somebody else's: public code only.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A runner as the registry lists it.",
+        "properties": {
+          "accept": {
+            "$ref": "#/$defs/Accept"
+          },
+          "arch": {
+            "type": "string"
+          },
+          "checked": {
+            "description": "When it was last checked (seconds since the epoch).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cores": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "disk_free_gb": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "features": {
+            "default": [],
+            "description": "What the host has that a job may ask for (a GPU, ...).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "host": {
+            "type": "string"
+          },
+          "jobs": {
+            "description": "Jobs running there now.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "landlock_abi": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_strike": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "linger": {
+            "type": "boolean"
+          },
+          "mem_mib": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "os": {
+            "type": "string"
+          },
+          "podman": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/$defs/Profile"
+          },
+          "root": {
+            "type": "string"
+          },
+          "speed": {
+            "description": "Its bench: how many times the reference workload's speed (absent: not benched).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "`ready`, `benched: why (times)`, `needs a login: cmd`, `unreachable`, ...: the reason a runner is out of\nrotation is the state itself.",
+            "type": "string"
+          },
+          "strikes": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "trust": {
+            "$ref": "#/$defs/Trust"
+          }
+        },
+        "required": [
+          "name",
+          "host",
+          "trust",
+          "profile",
+          "accept",
+          "root",
+          "prefix",
+          "arch",
+          "os",
+          "cores",
+          "mem_mib",
+          "disk_free_gb",
+          "podman",
+          "linger",
+          "landlock_abi",
+          "state",
+          "strikes",
+          "jobs"
+        ],
+        "title": "Runner",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a runner back in rotation, with no strikes",
+      "name": "runners/unbench",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A runner by name (`runners/check`, `bench`, `unbench`).",
+        "properties": {
+          "name": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ByName",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Accept": {
+            "description": "Which jobs a runner takes.",
+            "enum": [
+              "all",
+              "heavy"
+            ],
+            "type": "string"
+          },
+          "Profile": {
+            "description": "Whether somebody sits at the machine.",
+            "enum": [
+              "dedicated",
+              "workstation"
+            ],
+            "type": "string"
+          },
+          "Trust": {
+            "description": "What a runner may see of the user's work.",
+            "oneOf": [
+              {
+                "const": "mine",
+                "description": "The user's own machine: every job, every key.",
+                "type": "string"
+              },
+              {
+                "const": "my-cloud",
+                "description": "A machine drgnx starts in the user's cloud account: private code and only its listed keys.",
+                "type": "string"
+              },
+              {
+                "const": "shared",
+                "description": "Somebody else's: public code only.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A runner as the registry lists it.",
+        "properties": {
+          "accept": {
+            "$ref": "#/$defs/Accept"
+          },
+          "arch": {
+            "type": "string"
+          },
+          "checked": {
+            "description": "When it was last checked (seconds since the epoch).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cores": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "disk_free_gb": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "features": {
+            "default": [],
+            "description": "What the host has that a job may ask for (a GPU, ...).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "host": {
+            "type": "string"
+          },
+          "jobs": {
+            "description": "Jobs running there now.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "landlock_abi": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_strike": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "linger": {
+            "type": "boolean"
+          },
+          "mem_mib": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "os": {
+            "type": "string"
+          },
+          "podman": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/$defs/Profile"
+          },
+          "root": {
+            "type": "string"
+          },
+          "speed": {
+            "description": "Its bench: how many times the reference workload's speed (absent: not benched).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "`ready`, `benched: why (times)`, `needs a login: cmd`, `unreachable`, ...: the reason a runner is out of\nrotation is the state itself.",
+            "type": "string"
+          },
+          "strikes": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "trust": {
+            "$ref": "#/$defs/Trust"
+          }
+        },
+        "required": [
+          "name",
+          "host",
+          "trust",
+          "profile",
+          "accept",
+          "root",
+          "prefix",
+          "arch",
+          "os",
+          "cores",
+          "mem_mib",
+          "disk_free_gb",
+          "podman",
+          "linger",
+          "landlock_abi",
+          "state",
+          "strikes",
+          "jobs"
+        ],
+        "title": "Runner",
+        "type": "object"
       },
       "writes": true
     },

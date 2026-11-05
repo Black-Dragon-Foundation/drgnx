@@ -1122,6 +1122,14 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `reports/get` | user | `{id?: string, task?: string}` | `{reports?: [Report]}` | no |
 | `restart` | user | `{}` | `boolean` | no |
 | `review/mark` | user | `{agent: AgentName, event?: {data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text}, hash: string, path: string, state: "accepted" \| "pending"}` | `boolean` | yes |
+| `runners/add` | user | `{accept?: "all" \| "heavy", host: string, name?: Id, prefix?: string, profile?: "dedicated" \| "workstation", root?: AbsPath, trust: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |
+| `runners/bench` | user | `{name: Id}` | `Runner` | yes |
+| `runners/check` | user | `{name: Id}` | `Runner` | yes |
+| `runners/list` | user | `{}` | `{runners?: [Runner]}` | no |
+| `runners/probe-host` | user | `{host: string}` | `{effective: Effective, facts?: HostFacts, missing?: [Missing]}` | no |
+| `runners/remove` | user | `{confirm: boolean, name: Id}` | `{name: string}` | yes |
+| `runners/set` | user | `{accept?: "all" \| "heavy", name: Id, profile?: "dedicated" \| "workstation", trust?: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |
+| `runners/unbench` | user | `{name: Id}` | `Runner` | yes |
 | `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, prefer?: string, servers: [ServerInfo]}` | no |
 | `search/index` | user | `{now?: boolean, rebuild?: boolean, root: AbsPath}` | `{started: boolean}` | yes |
 | `search/model-download` | user | `{consent: {bytes: natnum}, model: Id}` | `{started: boolean}` | yes |
@@ -2070,6 +2078,44 @@ failure is a strike (`health check: …`). `Queue::runner(name)` gives the row (
 Tests: `runners::health::` [D] (the strike table, two in an hour, the check's parts); `tests/fleet_runners.rs` `health::`
 [C]: two jobs a runner can't start bench it and the next job runs here; a passing check returns a benched runner with no
 strikes; a hub clock 5 s off the runner's fails the check, saying so.
+
+## Runners: the registry
+
+`runners/registry.rs`, `runners/methods.rs`, `runner_cli.rs` (design §6.10, §7.2). A runner is a `Record` (name, host,
+trust, profile, accept, root, prefix, the bundle's folder, the probe's facts, speed, image) and a link in the queue.
+Records are entities of kind `runner` in the graph (`norn::write::runners`, id `runner:<name>`); only
+`("hub", Class::System)` writes them (also kinds `cloud_spend`, `key_sent`, `key_use`, which later tasks fill), and the
+graph's own door is shut to every other class (`write::runners::an_agent_write_of_runner_is_refused`). `Store` is the
+seam: `UrdrStore` in the hub, `MemStore` in tests.
+
+`Registry::add(host, trust, …)`, in order, each step a `sh -c` on the runner over the user's own ssh (the generated
+config, no terminal): `uname -m`, `uname -s` and `$HOME` (not Linux: refused); the bundle for that architecture from
+`DRGNX_RUNNER_BUNDLES` (default `runtime/target/bundle` beside the hub's build folder, where `drgnx build runner-bundle`
+puts `<arch>/sleipnir`, `drgnx-key`, `drgnx-fwd`) copied to `<root>/bin/<hash>/` (written as `.part`, hash checked, moved
+into place; refused with the build command when there is none); `sleipnir serve` asked for `hello-ok` and `probe` over
+one set of sessions that end after. A `boot_id` equal to the hub's is refused (`this is the hub's own machine; it
+already runs jobs as `local``), then anything the contract finds missing (`Probe`'s missing items and `check_limits`)
+is refused with all of it, each with its fix. Then `podman pull --policy=missing` of each image in
+`drgnx-runners-image` (it must be pinned by digest), `sleipnir bench` in the first, the record, and the link:
+`Session::start` over the queue's route and events, `Queue::add_runner`. A root must be absolute, plain, and never the
+home or a top-level folder. `remove` refuses while a job is on the runner (`Queue::remove_runner`), stops our containers
+(label `drgnx.runner=<hub>` and our prefix), units (`<prefix>*`) and slices (`drgnx-runner*`), then deletes the root.
+
+`check` links a runner whose link is gone again (`Registry::connect`: the old session ended with `Session::close`, so the
+transport's three sessions are free) and makes its health check due; `set` changes trust and accept at once, a new
+profile starts `serve` again; `unbench` is `Queue::unbench`; `bench` ends the link, runs the bench, links again. At the
+hub's start every record is linked in the background (`runners::methods::start`); one that can't be reached stays
+recorded and shows `not connected`. **Nothing redials a lost link by itself yet**: `runners/check` does it.
+
+`runners/list` and the others are the user's alone (`runstav::methods::runners`); each change sends `runners-changed`
+with the whole list and gives the runner names to the machine registry (`work::machines::set_runners`), which lists them
+after `local`. The CLI (`ratatoskr runner …`, `drgnx runner …`) prints the list in plain text of at most 60 columns:
+per runner, its state dot, name, trust, profile and accept; its cores, memory, jobs, free disk and last check; and, out
+of rotation, its reason on a line of its own. `runner remove` without `--yes` only says what it would do.
+
+Tests: `norn::write::runners::` [D]; `runners::registry::` and `runner_cli::` [D]; `work::machines::` [D]; conformance
+`runners/methods-are-user-only` [B]; `tests/fleet_registry.rs` [C]: add (probe, copy, pull, bench, link), the contract's
+refusal with its list, the hub's own machine, a removal that leaves nothing of ours.
 
 ## The timeline
 

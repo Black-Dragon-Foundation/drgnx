@@ -17,9 +17,32 @@ pub struct LinkKind {
 /// command the hub runs), `report` (what an agent ends a task with) and `proposal` (a generated view's edit, as a
 /// proposal the user decides: agent system part 1, Tasks 4 and 14b).
 pub const ENTITY_KINDS: &[&str] = &[
-    "task", "decision", "note", "grant", "agent", "session", "commit", "branch", "file", "symbol",
-    "spec", "plan", "step", "ruling", "todo", "worktree", "project", "option", "exec", "report",
-    "proposal", "ask",
+    "task",
+    "decision",
+    "note",
+    "grant",
+    "agent",
+    "session",
+    "commit",
+    "branch",
+    "file",
+    "symbol",
+    "spec",
+    "plan",
+    "step",
+    "ruling",
+    "todo",
+    "worktree",
+    "project",
+    "option",
+    "exec",
+    "report",
+    "proposal",
+    "ask",
+    "runner",
+    "cloud_spend",
+    "key_sent",
+    "key_use",
 ];
 
 const ANY: &[&str] = &["*"];
@@ -131,9 +154,32 @@ mod tests {
         assert_eq!(
             ENTITY_KINDS,
             [
-                "task", "decision", "note", "grant", "agent", "session", "commit", "branch",
-                "file", "symbol", "spec", "plan", "step", "ruling", "todo", "worktree", "project",
-                "option", "exec", "report", "proposal", "ask"
+                "task",
+                "decision",
+                "note",
+                "grant",
+                "agent",
+                "session",
+                "commit",
+                "branch",
+                "file",
+                "symbol",
+                "spec",
+                "plan",
+                "step",
+                "ruling",
+                "todo",
+                "worktree",
+                "project",
+                "option",
+                "exec",
+                "report",
+                "proposal",
+                "ask",
+                "runner",
+                "cloud_spend",
+                "key_sent",
+                "key_use"
             ]
         );
         let rows: Vec<(&str, Vec<&str>, Vec<&str>, bool)> = LINKS
