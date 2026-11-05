@@ -43,6 +43,8 @@ pub enum SearchCommand {
     Mcp {
         root: Option<PathBuf>,
     },
+    /// `eval gen|run|compare` (`crate::eval_cli`): needs no hub.
+    Eval(crate::eval_cli::EvalCommand),
 }
 
 /// The arguments after `search`.
@@ -54,8 +56,11 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
     let name = match p.next().map_err(e)? {
         Some(Word(v)) => v.string().map_err(e)?,
         Some(other) => return Err(other.unexpected().to_string()),
-        None => return Err("search needs a subcommand: index, query or mcp".into()),
+        None => return Err("search needs a subcommand: index, query, mcp or eval".into()),
     };
+    if name == "eval" {
+        return crate::eval_cli::parse(p.raw_args().map_err(e)?.collect()).map(SearchCommand::Eval);
+    }
     if !["index", "query", "mcp"].contains(&name.as_str()) {
         return Err(format!("unknown search subcommand {name:?}"));
     }
@@ -196,6 +201,9 @@ pub fn run(env: &Env, cmd: SearchCommand) -> i32 {
             return 1;
         }
     };
+    if let SearchCommand::Eval(e) = cmd {
+        return crate::eval_cli::run(env, e);
+    }
     let hub = crate::supervise::ensure_quiet(env, ENSURE_TIMEOUT);
     if hub != 0 {
         return hub;
@@ -205,6 +213,7 @@ pub fn run(env: &Env, cmd: SearchCommand) -> i32 {
             let root = root.as_ref().map_or(cwd.clone(), |r| cwd.join(r));
             return serve_mcp(env, root);
         }
+        SearchCommand::Eval(_) => unreachable!("handled above"),
         SearchCommand::Index { root, rebuild, now } => {
             let mut p = json!({"root": absolute(&cwd, root)});
             if *rebuild {

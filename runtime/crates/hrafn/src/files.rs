@@ -90,6 +90,80 @@ pub trait Git {
     fn nested(&self, root: &Path) -> io::Result<Vec<String>>;
     /// The subset of `paths` marked `linguist-generated` or `linguist-vendored` by `.gitattributes`.
     fn generated(&self, root: &Path, paths: &[String]) -> io::Result<Vec<String>>;
+    /// The last `limit` commits reachable from HEAD that are not merges, newest first, with the lines each changed
+    /// (the eval's source of questions).
+    fn history(&self, root: &Path, limit: usize) -> io::Result<Vec<Commit>>;
+    /// A file's bytes as of `rev`.
+    fn show(&self, root: &Path, rev: &str, path: &str) -> io::Result<Vec<u8>>;
+}
+
+/// One commit of the history.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Commit {
+    pub id: String,
+    /// Committer time, seconds since the epoch.
+    pub time: i64,
+    pub subject: String,
+    pub changes: Vec<Change>,
+}
+
+/// The lines one commit changed in one file (in the file as the commit left it).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Change {
+    pub path: String,
+    /// The commit created the file.
+    pub added: bool,
+    /// First and last line (1-based, inclusive) of each hunk that adds or changes lines; a pure deletion has none.
+    pub hunks: Vec<(u32, u32)>,
+}
+
+/// The `-U0` log of `git log -p`, parsed. Commits start at a `\x01id\0time\0subject` line.
+#[cfg(feature = "host")]
+fn parse_history(text: &str) -> Vec<Commit> {
+    let mut out: Vec<Commit> = Vec::new();
+    let mut added = false;
+    for line in text.lines() {
+        if let Some(head) = line.strip_prefix('\u{1}') {
+            let mut f = head.splitn(3, '\0');
+            out.push(Commit {
+                id: f.next().unwrap_or("").to_string(),
+                time: f.next().and_then(|t| t.parse().ok()).unwrap_or(0),
+                subject: f.next().unwrap_or("").to_string(),
+                changes: Vec::new(),
+            });
+        } else if let Some(c) = out.last_mut() {
+            if line.starts_with("--- ") {
+                added = line == "--- /dev/null";
+            } else if let Some(path) = line.strip_prefix("+++ b/") {
+                c.changes.push(Change {
+                    path: path.to_string(),
+                    added,
+                    hunks: Vec::new(),
+                });
+            } else if line.starts_with("+++ ") {
+                // /dev/null: a deleted file
+                c.changes.push(Change {
+                    path: String::new(),
+                    added: false,
+                    hunks: Vec::new(),
+                });
+            } else if let Some(rest) = line.strip_prefix("@@ ")
+                && let Some(new) = rest.split(' ').nth(1).and_then(|s| s.strip_prefix('+'))
+                && let Some(ch) = c.changes.last_mut()
+            {
+                let (start, count) = new.split_once(',').unwrap_or((new, "1"));
+                if let (Ok(s), Ok(n)) = (start.parse::<u32>(), count.parse::<u32>())
+                    && n > 0
+                {
+                    ch.hunks.push((s, s + n - 1));
+                }
+            }
+        }
+    }
+    for c in &mut out {
+        c.changes.retain(|ch| !ch.path.is_empty());
+    }
+    out
 }
 
 #[cfg(feature = "host")]
@@ -141,6 +215,30 @@ mod cli {
     }
 
     impl Git for GitCli {
+        fn history(&self, root: &Path, limit: usize) -> io::Result<Vec<super::Commit>> {
+            let n = format!("-n{limit}");
+            let out = run(
+                root,
+                &[
+                    "log",
+                    "--no-merges",
+                    "--no-color",
+                    "--no-ext-diff",
+                    "-M",
+                    "-U0",
+                    "-p",
+                    &n,
+                    "--format=%x01%H%x00%ct%x00%s",
+                ],
+                vec![],
+            )?;
+            Ok(super::parse_history(&String::from_utf8_lossy(&out)))
+        }
+
+        fn show(&self, root: &Path, rev: &str, path: &str) -> io::Result<Vec<u8>> {
+            run(root, &["show", &format!("{rev}:{path}")], vec![])
+        }
+
         fn ls_files(&self, root: &Path) -> io::Result<Vec<String>> {
             let tracked = run(root, &["ls-files", "-z"], vec![])?;
             let others = run(
@@ -406,6 +504,12 @@ fn shebang_lang(head: &[u8]) -> Lang {
     } else {
         Lang::Text
     }
+}
+
+/// A path's language and class as the file list gives them; HEAD is the first bytes of the file (for a `#!` line).
+pub fn classify(path: &str, head: &[u8]) -> (Lang, Class) {
+    let lang = lang_of(path, head);
+    (lang, class_of(path, lang))
 }
 
 fn class_of(path: &str, lang: Lang) -> Class {

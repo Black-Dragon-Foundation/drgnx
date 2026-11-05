@@ -1354,6 +1354,7 @@ dependencies = [
  "eitri",
  "notify",
  "rusqlite",
+ "serde",
  "serde_json",
  "sha2",
  "skuld",

@@ -6,6 +6,7 @@
 
 pub mod chunk;
 pub mod coverage;
+pub mod eval;
 pub mod files;
 pub mod fresh;
 pub mod index;
@@ -17,7 +18,7 @@ pub mod watch;
 pub use coverage::{CoverageError, coverage};
 #[cfg(feature = "host")]
 pub use files::GitCli;
-pub use files::{Class, Config, Git, Lang, Listed, list};
+pub use files::{Change, Class, Commit, Config, Git, Lang, Listed, classify, list};
 pub use index::{Lag, Refresh, collect, lag, missing, put_vectors, refresh, reset};
 pub use query::{Answer, Hit, Query, Scope, search};
 #[cfg(feature = "host")]

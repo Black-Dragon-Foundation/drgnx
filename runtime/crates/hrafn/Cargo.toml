@@ -16,6 +16,8 @@ host = ["dep:notify"]
 eitri = { path = "../eitri", version = "0.1.0" }
 notify = { workspace = true, optional = true }
 urdr = { path = "../urdr", version = "0.1.0" }
+serde.workspace = true
+serde_json.workspace = true
 rusqlite.workspace = true
 sha2.workspace = true
 tree-sitter.workspace = true
@@ -26,6 +28,5 @@ tree-sitter-bash.workspace = true
 
 [dev-dependencies]
 skuld = { path = "../skuld", version = "0.1.0" }  # every order of the settle core
-serde_json.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "macros"] }
