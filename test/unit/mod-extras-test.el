@@ -41,7 +41,15 @@
        (dolist (c cmds) (should-not (drgnx-commands-get c)))))))
 
 (ert-deftest drgnx-extras/with-packages-they-run ()
-  (skip-unless (file-directory-p drgnx-extras-test--elpa))
+  ;; every module's packages in the user's ELPA (CI's DRGNX_USER_ELPA holds only the pinned evil and kkp)
+  (skip-unless (seq-every-p (lambda (m)
+                              (seq-every-p (lambda (pkg)
+                                             (and (file-directory-p drgnx-extras-test--elpa)
+                                                  (directory-files drgnx-extras-test--elpa nil
+                                                                   (format "\\`%s\\(-[0-9]\\|\\'\\)"
+                                                                           (regexp-quote (symbol-name pkg))))))
+                                           (nth 2 m)))
+                            drgnx-extras-test--modules))
   (let ((load-path (append load-path (seq-filter #'file-directory-p (directory-files drgnx-extras-test--elpa t "\\`[^.]"))))
         ;; extra/llm points gptel at the `chat' role's OpenRouter step (a key: a fake one, never sent)
         (process-environment (cons "OPENROUTER_API_KEY=sk-or-fake" process-environment)))

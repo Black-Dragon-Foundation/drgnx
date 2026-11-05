@@ -389,7 +389,8 @@ buffer is not affected."
 ;;;; diff-hl
 
 (ert-deftest drgnx-remote/diff-hl-off-for-remote ()
-  (skip-unless (file-directory-p drgnx-remote-auto--elpa))
+  ;; diff-hl in the user's ELPA (CI's DRGNX_USER_ELPA holds only the pinned evil and kkp)
+  (skip-unless (file-expand-wildcards (expand-file-name "diff-hl-*" drgnx-remote-auto--elpa)))
   (let ((load-path (append load-path (seq-filter #'file-directory-p (directory-files drgnx-remote-auto--elpa t "\\`[^.]"))))
         (cfg (make-temp-file "drgnx-cfg" t)))
     (unwind-protect

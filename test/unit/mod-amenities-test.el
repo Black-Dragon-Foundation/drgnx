@@ -47,8 +47,9 @@
        (dolist (c cmds) (should-not (drgnx-commands-get c)))))))
 
 (ert-deftest drgnx-amenities/with-their-package-they-run ()
-  ;; each module whose package the user's ELPA has
-  (skip-unless (file-directory-p drgnx-amenities-test--elpa))
+  ;; each module whose package the user's ELPA has (CI's DRGNX_USER_ELPA holds only the pinned evil and kkp: none)
+  (skip-unless (seq-some (lambda (m) (seq-every-p #'drgnx-amenities-test--installed-p (nth 2 m)))
+                         drgnx-amenities-test--modules))
   (let ((load-path (append load-path (drgnx-amenities-test--elpa-path))) (ran 0))
     (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) nil)))   ; no booster binary, no formatters
       (drgnx-test-with-modules (mapcar #'cadr drgnx-amenities-test--modules) :strict t
