@@ -131,11 +131,40 @@ plain data: an `eval' form may hold a backquote)."
   "Does DIR hold one of `drgnx-settings-trust-root-markers'?"
   (seq-some (lambda (m) (file-exists-p (expand-file-name m dir))) drgnx-settings-trust-root-markers))
 
+(defvar drgnx-settings-trust--memo (make-hash-table :test 'equal)
+  "(KIND . KEY) -> (TOKEN EXTRA RESULT): roots and states already worked out.  A result stands while the token
+\(`drgnx-settings-trust--token') and EXTRA are the same.  Emptied past 256 entries.")
+
+(defun drgnx-settings-trust--token ()
+  "What a root or a state depends on besides its folder: the stamp of trusted-folders.eld and the value of
+`drgnx-trust-parents' (an object, so a changed value is a different one)."
+  (drgnx-settings-trust--state-data)
+  (cons (car drgnx-settings-trust--data) (default-value 'drgnx-trust-parents)))
+
+(defun drgnx-settings-trust--memoized (kind key extra compute)
+  "COMPUTE's result for KIND and KEY, kept while the token and EXTRA stay the same."
+  (let ((token (drgnx-settings-trust--token)) (hit (gethash (cons kind key) drgnx-settings-trust--memo)))
+    (if (and hit (equal (car (nth 0 hit)) (car token)) (eq (cdr (nth 0 hit)) (cdr token)) (equal (nth 1 hit) extra))
+        (nth 2 hit)
+      (when (> (hash-table-count drgnx-settings-trust--memo) 256) (clrhash drgnx-settings-trust--memo))
+      (let ((result (funcall compute)))
+        (puthash (cons kind key) (list token extra result) drgnx-settings-trust--memo)
+        result))))
+
 (defun drgnx-settings-trust-root (dir)
   "The workspace DIR belongs to, normalized: the longest folder of Trust This Folder holding DIR, else the nearest
 folder at or above DIR holding one of `drgnx-settings-trust-root-markers' (unless that is broad: home, `/', a temp
-folder), else DIR.  Nil for a remote DIR.  Allowed pairs are kept per root."
+folder), else DIR.  Nil for a remote DIR.  Allowed pairs are kept per root.  Worked out once per folder: a file open
+asks for it, and what it depends on (the folders file, `drgnx-trust-parents', whether DIR itself holds a marker) is
+checked, not the folders above."
   (unless (or (null dir) (file-remote-p dir))
+    (let ((dir (expand-file-name dir)))
+      (drgnx-settings-trust--memoized 'root dir (drgnx-settings-trust--marked-p dir)
+                                      (lambda () (drgnx-settings-trust--root-1 dir))))))
+
+(defun drgnx-settings-trust--root-1 (dir)
+  "`drgnx-settings-trust-root' of the local DIR, worked out now."
+  (progn
     (let* ((dir (drgnx-settings-trust--norm dir))
            (folder (car (sort (seq-filter (lambda (f) (string-prefix-p f dir)) (drgnx-settings-trust--folders))
                               (lambda (a b) (> (length a) (length b)))))))
@@ -152,8 +181,15 @@ folder), else DIR.  Nil for a remote DIR.  Allowed pairs are kept per root."
 (defun drgnx-settings-trust-state (root)
   "The trust state of the workspace ROOT: `untrusted' (the default, a remote root, and a root you untrusted),
 `everything' (below a `drgnx-trust-parents' entry with :code t), `trusted' (below a folder of Trust This Folder) or
-`location' (below another `drgnx-trust-parents' entry), checked in that order."
+`location' (below another `drgnx-trust-parents' entry), checked in that order.  Worked out once per root, until
+trusted-folders.eld or `drgnx-trust-parents' changes."
   (if (or (null root) (file-remote-p root)) 'untrusted
+    (let ((root (expand-file-name root)))
+      (drgnx-settings-trust--memoized 'state root nil (lambda () (drgnx-settings-trust--state-1 root))))))
+
+(defun drgnx-settings-trust--state-1 (root)
+  "`drgnx-settings-trust-state' of the local ROOT, worked out now."
+  (progn
     (let* ((root (drgnx-settings-trust--norm root))
            (data (drgnx-settings-trust--state-data))
            (parents (drgnx-settings-trust--parents))

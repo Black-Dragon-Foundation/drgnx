@@ -515,5 +515,33 @@
         (drgnx-settings-trust--state-data)
         (should (= reads 2))))))
 
+(ert-deftest drgnx-settings-trust/a-root-and-its-state-are-worked-out-once-per-folder ()
+  ;; every file open asks both: the second ask of an already judged folder resolves no path and reads no marker
+  (drgnx-stt--with `((,drgnx-stt--ws))
+    (let ((norms 0) (orig (symbol-function 'drgnx-settings-trust--norm)))
+      (cl-letf (((symbol-function 'drgnx-settings-trust--norm) (lambda (d) (cl-incf norms) (funcall orig d))))
+        (should (equal (drgnx-settings-trust-root drgnx-stt--proj) drgnx-stt--proj))
+        (should (eq (drgnx-settings-trust-state drgnx-stt--proj) 'location))
+        (should (> norms 0))
+        (setq norms 0)
+        (dotimes (_ 5)
+          (should (equal (drgnx-settings-trust-root drgnx-stt--proj) drgnx-stt--proj))
+          (should (eq (drgnx-settings-trust-state drgnx-stt--proj) 'location)))
+        (should (= norms 0))))))
+
+(ert-deftest drgnx-settings-trust/a-judged-root-is-judged-again-when-what-it-rests-on-changes ()
+  (drgnx-stt--with `((,drgnx-stt--ws))
+    (let* ((sub (expand-file-name "pkg/" drgnx-stt--proj)))
+      (make-directory sub t)
+      (should (equal (drgnx-settings-trust-root sub) drgnx-stt--proj))        ; no marker of its own: the project's
+      (should (eq (drgnx-settings-trust-state drgnx-stt--proj) 'location))
+      (should (eq (drgnx-settings-trust-state drgnx-stt--ws) 'location))
+      (make-directory (expand-file-name ".git" sub) t)                        ; now it has one
+      (should (equal (drgnx-settings-trust-root sub) (drgnx-stt--norm sub)))
+      (let ((inhibit-message t)) (drgnx-trust-folder drgnx-stt--proj))        ; trusted-folders.eld changes
+      (should (eq (drgnx-settings-trust-state drgnx-stt--proj) 'trusted))
+      (let ((drgnx-trust-parents nil))                                        ; the setting changes
+        (should (eq (drgnx-settings-trust-state drgnx-stt--ws) 'untrusted))))))
+
 (provide 'settings-trust-test)
 ;;; settings-trust-test.el ends here
