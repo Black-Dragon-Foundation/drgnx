@@ -20,6 +20,11 @@
 (require 'drgnx-work-client)
 (unless (featurep 'drgnx-work-board)
   (load (expand-file-name "drgnx-work-board" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-work-code)
+  (load (expand-file-name "drgnx-work-code" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(declare-function drgnx-work-code-local-dir "drgnx-work-code")
+(declare-function drgnx-work-code-local-file "drgnx-work-code")
+(declare-function drgnx-work-hunk-mode "drgnx-work-code")
 
 (declare-function drgnx-hub-call "drgnx-hub-client")
 (declare-function drgnx-work--open-agent "drgnx-work-map")
@@ -386,14 +391,11 @@ chain's face.  Returns the ids."
 ;;;; Opening a step's source
 
 (defun drgnx-work-trail--cwd (sid)
-  "The folder of session SID, as this Emacs's mirror of it knows it, or nil."
+  "The folder of session SID, as this Emacs's mirror of it knows it, or nil; nil too when it is not a local folder
+\(`drgnx-work-code-local-dir': the folder is the hub's word, and no file name handler runs on it)."
   (when-let* ((s (and (boundp 'drgnx-agents--sessions)
                       (seq-find (lambda (x) (equal (drgnx-agent-session-remote x) sid)) drgnx-agents--sessions))))
-    (drgnx-agent-session-cwd s)))
-
-(defun drgnx-work-trail--file (sid path)
-  "PATH (the step's, relative to its worktree) as a file name of this machine."
-  (if (file-name-absolute-p path) path (expand-file-name path (or (drgnx-work-trail--cwd sid) default-directory))))
+    (drgnx-work-code-local-dir (drgnx-agent-session-cwd s))))
 
 (defun drgnx-work-trail--show (buffer beside)
   (if beside (display-buffer buffer) (pop-to-buffer buffer))
@@ -406,7 +408,9 @@ there is killed first."
   (with-current-buffer (get-buffer-create name)
     (insert text)
     (goto-char (point-min))
-    (if mode (funcall mode) (when file-name (let ((buffer-file-name file-name)) (set-auto-mode))))
+    ;; FILE-NAME is the agent's: the mode is chosen from it with no file name handler running
+    (if mode (funcall mode)
+      (when file-name (let ((buffer-file-name file-name) (file-name-handler-alist nil)) (set-auto-mode))))
     (setq buffer-file-name nil buffer-read-only t)
     (current-buffer)))
 
@@ -431,17 +435,20 @@ its diff.  BESIDE: without moving focus.  Returns the buffer when it is there at
                                             (decode-coding-string (base64-decode-string (plist-get r :bytes)) 'utf-8)
                                             nil path)
                                            beside))))))
-        (t (let ((buf (find-file-noselect (drgnx-work-trail--file sid path))))
-             (with-current-buffer buf
-               (when-let* ((line (plist-get d :line_start)))
-                 (goto-char (point-min)) (forward-line (1- line))))
-             (setq result (drgnx-work-trail--show buf beside))))))
+        ;; the step's path is the agent's: only a plain local file inside its folder opens, by its true name
+        (t (if-let* ((file (drgnx-work-code-local-file path (list (drgnx-work-trail--cwd sid)))))
+               (let ((buf (find-file-noselect file)))
+                 (with-current-buffer buf
+                   (when-let* ((line (plist-get d :line_start)))
+                     (goto-char (point-min)) (forward-line (1- line))))
+                 (setq result (drgnx-work-trail--show buf beside)))
+             (message "Work: %s is no plain local file in the agent's folder" path)))))
       ('search
-       (if-let* ((q (plist-get d :query)))
-           (progn (message "Work: run again now: %s" q)
-                  (let ((default-directory (or (drgnx-work-trail--cwd sid) default-directory)))
-                    (project-find-regexp (regexp-quote q))))
-         (message "Work: this search recorded no query")))
+       (let ((q (plist-get d :query)) (cwd (drgnx-work-trail--cwd sid)))
+         (cond ((null q) (message "Work: this search recorded no query"))
+               ((null cwd) (message "Work: the agent's folder is not a local one here"))
+               (t (message "Work: run again now: %s" q)
+                  (let ((default-directory cwd)) (project-find-regexp (regexp-quote q)))))))
       ('web (if-let* ((url (plist-get d :url))) (browse-url url) (message "Work: this step recorded no page")))
       ('thought (drgnx-work--open-agent sid))
       ('edit
@@ -453,7 +460,7 @@ its diff.  BESIDE: without moving focus.  Returns the buffer when it is there at
                                (message "Work: %s" err)
                              (setq result (drgnx-work-trail--show
                                            (drgnx-work-trail--text-buffer (format "*Work hunk: %s*" path)
-                                                                          (or (plist-get r :diff) "") #'diff-mode)
+                                                                          (or (plist-get r :diff) "") #'drgnx-work-hunk-mode)
                                            beside)))))))
       (_ (message "Work: nothing to open for this step")))
     result))

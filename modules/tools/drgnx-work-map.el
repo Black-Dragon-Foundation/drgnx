@@ -404,6 +404,8 @@ the side panel follows; the chain's edge tiles one frame later (the timer takes 
 (declare-function drgnx-agent-session-remote "drgnx-agents")
 
 (declare-function drgnx-work-code-open-file "drgnx-work-code")
+(declare-function drgnx-work-code-local-file "drgnx-work-code")
+(declare-function drgnx-work-code--roots "drgnx-work-code")
 
 (defun drgnx-work--open-agent (sid)
   "Open the transcript of the hub session SID in today's Agents view (the agent panel replaces this later)."
@@ -430,11 +432,11 @@ the side panel follows; the chain's edge tiles one frame later (the timer takes 
                        (t (funcall show (dired-noselect root))))))
       ('file (drgnx-work-code-open-file state sel :beside beside))
       ('machine (message "Work: %s — its queue is in the side panel" (plist-get (drgnx-work-client-item state id) :label)))
-      (_ (let ((path (seq-some (lambda (root)
-                                 (let ((p (expand-file-name key root))) (and (file-regular-p p) p)))
-                               (plist-get (plist-get (drgnx-work-client--view-params (drgnx-work-client--get drgnx-work-space--view))
-                                                     :workspace)
-                                          :roots))))
+      ;; a document's key is the hub's: only a plain local file inside a root of the workspace opens, by its true name
+      (_ (let ((path (seq-some (lambda (root) (drgnx-work-code-local-file key (list root)))
+                               (if-let* ((v (drgnx-work-client--get drgnx-work-space--view)))
+                                   (plist-get (plist-get (drgnx-work-client--view-params v) :workspace) :roots)
+                                 (drgnx-work-code--roots)))))
            (if path (funcall show (find-file-noselect path))
              (message "Work: no document is recorded for %s" (plist-get (drgnx-work-client-item state id) :label))))))))
 

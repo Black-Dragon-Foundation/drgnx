@@ -156,6 +156,11 @@ which line; Enter takes the line of the agent on the selected chain (else the mo
 that agent's worktree at that line. When no line is known (Codex's reads and Claude's file searches give a path and no
 line) it opens at the top and says "file only". **Shift-Enter** opens it beside the map without moving focus.
 
+The Work space opens only plain files on this machine, inside the agent's worktree or your workspace. A name an agent
+gave that leads elsewhere (a remote name, a link out of its folder, a device, a compressed or encrypted file) is not
+opened, and says so; an agent whose folder is on another machine has no file to open here. The diffs are text: nothing
+in them opens, applies or reverts a file.
+
 **`e`** on an agent (or its branch) lists the files it edited, each with `+N −M` and "new file" when the agent made it.
 Every row has a hint key: `1` to `9`, then `a`, `b`, … without the picker's own keys (`q`, `n`, `p`, `j`, `k`, `g`).
 One key opens that file at the agent's line; Enter opens the one at point and `q` closes the list.

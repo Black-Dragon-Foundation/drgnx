@@ -224,19 +224,28 @@ check passes. `find-file` on `TREE/x` then resolves it again, with handlers on, 
 - `(drgnx-file-inside-p FILE DIR)` says whether FILE is DIR or inside it by those true names. A name for which
   `drgnx-file-truename` gives nil is not inside.
 - Code that does more with such a path binds `file-name-handler-alist` to nil around it:
-  - the Work cockpit's file checks (`drgnx-cockpit--file-ok`, `drgnx-cockpit--true-dir`,
-    `drgnx-cockpit-edits--inside-p`);
-  - the cockpit's file watches and edit-event paths (`drgnx-cockpit-edits--update-watches`,
-    `drgnx-cockpit-edits--event-paths`), a file's diff (`drgnx-cockpit-file-diff` reads its size by the true
-    name) and the git it runs in an agent's folder (`drgnx-cockpit--git`).
+  - the Work space's checks of the hub's names (`modules/tools/drgnx-work-code.el`): `drgnx-work-code-local-dir`
+    (a session's folder: nil when it is, or leads to, a remote or quoted name) and `drgnx-work-code-local-file` (a
+    file: its true name when that is a plain regular file inside the agent's folder or the workspace; nil for a
+    device, FIFO, folder, a link out or into a loop, and a name a file name handler would read: compressed,
+    encrypted, inside an archive);
+  - the names it builds from them (`drgnx-work-code--paths`, the files picker's rows), a linked worktree's `.git`
+    file (`drgnx-work-code--repo-of`, its first 4 KB) and the lock check of a live agent's file
+    (`drgnx-work-live-file--session`).
 - These commands open the true name, checked with no handler:
   - Review's RET on a finding (`drgnx-review-visit`);
-  - RET in an agent's edits (`drgnx-cockpit-edits-visit`);
-  - a node of the cockpit's Work graph: a spec, a plan, a task (`drgnx-cockpit-graph-open-node`,
-    `drgnx-cockpit--show-file`);
+  - the Work space's Enter on a file, its files picker and who is here (`drgnx-work-code-open-file`), a document of
+    the map (`drgnx-work-map--open-item`) and a trail step's read (`drgnx-work-trail-open-step`);
   - the diff's Open File at Line (`drgnx-diff-visit`);
   - Work's open of a row and of a graph box (`drgnx-work-ui-open`, `drgnx-work-ui--graph-open`).
   The buffer visits the file under that name: a link's target, not the link.
+- **Work, agents and AI links never open a remote name.** A session whose folder is remote has no file the Work
+  space opens, searches or locks; its diffs show as text only. An agent's diff is shown in `drgnx-work-hunk-mode`
+  (the side-by-side diffs and a step's hunk), which is no `diff-mode` buffer: `diff-mode` reads the names in it with
+  handlers on (its syntax colouring, which-func), and its keys, VC and ediff open, apply or revert the files they
+  name. Nothing in the Work space writes into an agent's folder: a rejected hunk is marked pending and the agent is
+  told, queued. What the user sends an agent keeps the agent's own words (a path, a hunk's header) on one line
+  (`drgnx-work-code-one-line`), so none reads as a forged header or a plan's task.
 - **Agents never write a file Emacs keeps encrypted or compressed.** `(drgnx-file-sealed-p FILE &optional DIR)`
   says whether FILE matches one of these, as written or through its links:
   - EasyPG's `epa-file-name-regexp` (`.gpg`);
@@ -258,7 +267,9 @@ check passes. `find-file` on `TREE/x` then resolves it again, with handlers on, 
     Homebrew, Debian/Ubuntu and Fedora; a visit can autoload `image.el`): it keeps the real handlers, unrecorded;
   - `drgnx-test-visit` opens a name the way each command above does;
   - a test checks end to end in a fresh `emacs -Q`:
-    `drgnx-cockpit-edits/visiting-a-link-out-through-a-remote-name-never-loads-tramp` (the visits).
+    `drgnx-work-names/visiting-a-link-out-through-a-remote-name-never-loads-tramp` (the visits);
+  - `test/unit/work-names-test.el` holds the Work space's cases: the cockpit's security and data-loss tests, ported
+    when the cockpit went.
 
 ## Schema (`drgnx-schema.el`)
 

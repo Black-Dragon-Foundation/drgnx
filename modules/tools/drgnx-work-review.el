@@ -33,6 +33,7 @@
 (declare-function drgnx-work-lens-string "drgnx-work-map")
 (declare-function drgnx-work-trail--agent-sid "drgnx-work-trail")
 (declare-function drgnx-work-trail--cwd "drgnx-work-trail")
+(declare-function drgnx-work-code-one-line "drgnx-work-code")
 (defvar drgnx-work-lens--map)
 (defvar drgnx-work-lens-nav)
 (defvar drgnx-work-lens-map)
@@ -239,7 +240,8 @@ computed of each, the edited files and their hunks.  Returns the buffer; it does
                                               (or err path))))))
 
 (defun drgnx-work-review--reject (path i)
-  "Reject hunk I of PATH: the file is marked pending again and the agent is told, in a queued message, to take it back."
+  "Reject hunk I of PATH: the file is marked pending again and the agent is told, in a queued message, to take it back.
+PATH and the hunk's header are the agent's words: they stay on the message's one line (`drgnx-work-code-one-line')."
   (let* ((diff (or (cdr (assoc path drgnx-work-review--diffs)) ""))
          (hunk (and i (nth i (drgnx-work-review-parse-hunks diff)))))
     (drgnx-hub-call "review/mark" (list :agent drgnx-work-review--session :path path :state "pending"
@@ -248,7 +250,8 @@ computed of each, the edited files and their hunks.  Returns the buffer; it does
     (drgnx-hub-call "agents/send"
                     (list :id drgnx-work-review--session
                           :text (format "I reject your change to %s%s. Please take it back and tell me what you changed instead."
-                                        path (if hunk (format " (the hunk %s)" (plist-get hunk :header)) "")))
+                                        (drgnx-work-code-one-line path)
+                                        (if hunk (format " (the hunk %s)" (drgnx-work-code-one-line (plist-get hunk :header))) "")))
                     #'ignore)
     (message "Work: %s is marked pending and the agent has been told" path)))
 
@@ -279,14 +282,16 @@ computed of each, the edited files and their hunks.  Returns the buffer; it does
 
 (defun drgnx-work-review--plan (sid repo files)
   "The text of the plan for a second reviewer of SID's work in REPO: the files to read, and no word of the author's
-conclusions."
-  (concat (format "# Second review of %s's work\n\n" sid)
-          (format "**Repo:** %s\n\n" repo)
+conclusions.  The files' names are the author's: each stays on its own line (`drgnx-work-code-one-line'), so none adds
+a task or a role."
+  (concat (format "# Second review of %s's work\n\n" (drgnx-work-code-one-line sid))
+          (format "**Repo:** %s\n\n" (drgnx-work-code-one-line repo))
           "### Task 1: Review the change\n\n**Role:** review\n\n"
           "Review the uncommitted and committed changes on the branch the agent worked on, against the branch it was cut from. "
           "Read the code yourself, run what you need to and say what is wrong or risky, with file and line. "
           "Do not edit anything.\n\n"
-          (if files (concat "Files changed:\n\n" (mapconcat (lambda (f) (format "- %s" f)) files "\n") "\n") "")))
+          (if files (concat "Files changed:\n\n" (mapconcat (lambda (f) (format "- %s" (drgnx-work-code-one-line f))) files "\n") "\n")
+            "")))
 
 (defun drgnx-work-review-second ()
   "Start a second reviewer on the selected agent's work, from another provider than the author's where the profile

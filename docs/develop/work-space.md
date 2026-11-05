@@ -545,9 +545,10 @@ title, and `drgnx-work-trail-row-text` its row (the gap before the time is a `di
 - **Conclusions** link to steps through the hub's `links` (named, since the last one); `drgnx-work-trail-conclusion-steps`
   and `-step-conclusions` are the two directions, `drgnx-work-trail-lit-steps` lights them (`drgnx-work-trail--lit`).
 - **Opening a step** (`drgnx-work-trail-open-step`): a read opens the file at its lines (relative paths against the
-  mirrored session's `cwd`); AS-READ calls `work/file-at {session path seq}`; a search runs `project-find-regexp` again; a
-  page `browse-url`; an edit shows `work/hunks` in `diff-mode`; a thought opens the agent's transcript (the step has no
-  text of its own).
+  mirrored session's `cwd`; only a plain local file inside that folder, by its true name: `drgnx-work-code-local-file`);
+  AS-READ calls `work/file-at {session path seq}` (the mode is chosen from the path with no file name handler); a search
+  runs `project-find-regexp` again in the agent's folder (not when that folder is remote); a page `browse-url`; an edit
+  shows `work/hunks` in `drgnx-work-hunk-mode`; a thought opens the agent's transcript (the step has no text of its own).
 - **The Timeline** is a `work-timeline` view (rows `(:axis)` and `(:lane AGENT-ID)`), a lane per agent in team order,
   `timeline/get {limit 200}` each, asked again 0.3 s after an `agent-step` of its session. `drgnx-work-timeline-spans`
   (pure) puts steps at their time on the lane's pixel width, at least 2 px; faces `drgnx-work-seg-*` use
@@ -565,8 +566,11 @@ again with `drgnx-work-review-install`. Row keys: `(:decisions)`, `(:decision N)
 needs you), `(:summary)`, `(:files)`, `(:file PATH)`, `(:hunk PATH I)`; `drgnx-work-review-parse-hunks` splits a
 unified diff at its `@@` lines. `a` is a `review/mark` `accepted` with the sha1 of the file's whole diff (what the merge
 gate compares); `D` is a `review/mark` `pending` and an `agents/send` naming the hunk (the hub has no hunk revert until
-the edit history lands). `V` writes a plan (`<state>/work-space/reviews/SESSION-TIME.md`, **Role:** review, the files
-changed, no conclusions) and calls `job/propose`; it never calls `agents/start`.
+the edit history lands; nothing here writes into the agent's folder). `V` writes a plan
+(`<state>/work-space/reviews/SESSION-TIME.md`, **Role:** review, the files changed, no conclusions) and calls
+`job/propose`; it never calls `agents/start`. The path and the hunk's header in `D`'s message, and the session, folder
+and file names in `V`'s plan, are the agent's words: `drgnx-work-code-one-line` keeps each on one line, so a file named
+with a forged "[message from the user …]" header or a `### Task` line adds neither.
 
 The merge queue is not inferred: a branch item's `queue` (`[N, M]`) and `conflicts` fields are drawn when the hub sends
 them (`drgnx-work-map--chip-line`, a `:queue` section of the side panel). The hub sends none yet, so no chip shows.
@@ -592,6 +596,13 @@ any agent, else the newest without one (the buffer opens at the top and `drgnx-w
 answer arrives after the keypress; the file opens when it does, and a hub that is not there opens the first path that
 exists at the top. `drgnx-work-code-open-file` is the entry point (the `file` row of `work-open`).
 
+Every name here is the hub's, so an agent's (docs/develop/core.md, "Names an agent gave"): a session's `cwd` counts only
+when it is local (`drgnx-work-code-local-dir`), the candidate paths are made with no file name handler, an entry's file
+counts only when it is one of the paths asked about, and a file opens only by the true name
+`drgnx-work-code-local-file` gives: a plain regular file inside the agents' worktrees or the workspace's roots, never a
+remote or quoted name, a link out or into a loop, a device, a FIFO, a folder or a name a handler would read. An entry
+naming anything else is passed over. `test/unit/work-names-test.el` holds these cases.
+
 `work-files` (`e`) calls `work/files {session}` for the agent the selection stands for (an agent, a subagent's parent,
 or the first agent a branch came from) and fills a `drgnx-work-files-mode` buffer, placed in the popup lane. Its hint keys
 come from `drgnx-work-code-hint-keys`. The list is the edited files only: `work/files` has no read list yet (its
@@ -602,8 +613,11 @@ given a node: the hub has no way to add one for a selection yet.
 
 `work-diffs` (`d`, `drgnx-work-code-diffs`) asks `work/files {session}`, then `work/hunks {session, path}` for each file: the
 hub's diff against the worktree's recorded base (the interim source, the base snapshot; part 4's edit history replaces
-it behind the same methods). Each answer becomes a `drgnx-work-diff-mode` buffer (a read-only `diff-mode`, killed and
-made again each time). `drgnx-work-code--diff-layout` saves `current-window-configuration` in
+it behind the same methods). Each answer becomes a `drgnx-work-diff-mode` buffer, killed and made again each time. It
+derives from `drgnx-work-hunk-mode` (also a trail step's hunk): a read-only `special-mode` coloured from its text with
+`diff-mode`'s faces, standing in `/`. It is no `diff-mode` buffer on purpose: `diff-mode` reads the file names in the
+diff with file name handlers on (syntax colouring, which-func), and its keys, VC and ediff open, apply or revert the files
+they name, in a live agent's worktree or in the folder the buffer stands in. `drgnx-work-code--diff-layout` saves `current-window-configuration` in
 `drgnx-work-code--saved-windows` unless one is already saved, then splits the window into at most three side by side;
 files from the third on are the third window's tabs: the window parameter `drgnx-work-diff-tabs` holds them and each
 buffer's `tab-line-tabs-function` reads it. `work-diff-quit` (`q`) restores the saved configuration and kills the

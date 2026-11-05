@@ -8,13 +8,17 @@
 ;; that agent's worktree at that line.  Without a line it opens at the top and says "file only".  `e' lists the files an
 ;; agent edited (`work/files') in a popup with one hint key each; `work-who-is-here' names the agents in the file you
 ;; are visiting and selects it on the map.  The hub's paths are the agents' own worktrees, so every question is asked
-;; for the file in each candidate worktree and in the user's checkout.
+;; for the file in each candidate worktree and in the user's checkout.  Every name the hub gives (a session's folder,
+;; an entry's file, an edited file) is an agent's: it is resolved with no file name handler and only a plain local file
+;; inside the agent's folder or the workspace opens, by its true name (docs/develop/core.md, "Names an agent gave").
 ;; Loaded by tools/work-space (drgnx-work-space.el); defines no module.  See docs/develop/work-space.md.
 
 ;;; Code:
 (require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
+(require 'drgnx-file)
+(require 'drgnx-coord-read)
 (require 'drgnx-work-client)
 (require 'diff-mode)
 
@@ -37,6 +41,35 @@
 (defvar-local drgnx-work-code--file-only nil
   "Non-nil in a buffer the Work space opened without a line to go to: it is at the top, \"file only\".")
 
+;;;; Names the hub gave
+
+(defun drgnx-work-code-local-dir (dir)
+  "DIR, a folder the hub named (an agent's), as a directory name when it is local; else nil: a remote or quoted name,
+one a link of it leads to, or a link loop (`drgnx-file-truename': no file name handler runs on it).  DIR's own name,
+not its true one: the hub keys presence by the names in the agent's folder."
+  (and (stringp dir) (drgnx-file-truename dir)
+       (let ((file-name-handler-alist nil)) (file-name-as-directory (expand-file-name dir)))))
+
+(defun drgnx-work-code-local-file (name dirs)
+  "NAME, a file the hub or an agent named (absolute, or relative to the first of DIRS), by its true name when that is a
+plain regular file inside one of DIRS; else nil.  A remote or quoted name, a link out of DIRS or into a loop, a device,
+a FIFO or a folder, and a name a file name handler would read (compressed, encrypted, inside an archive) are nil.
+Decided with no handler running (docs/develop/core.md, \"Names an agent gave\").  Open the name this gives, never
+NAME: `find-file' of NAME follows its links again, with handlers on."
+  (when-let* ((dirs (delq nil (mapcar #'drgnx-work-code-local-dir dirs)))
+              ((stringp name))
+              (true (drgnx-file-truename name (car dirs))))
+    (and (let ((file-name-handler-alist nil)) (file-regular-p true))
+         (not (find-file-name-handler true 'insert-file-contents))
+         (seq-some (lambda (d) (drgnx-file-inside-p true d)) dirs)
+         true)))
+
+(defun drgnx-work-code-one-line (s)
+  "S, words of an agent's or the hub's (a path, a hunk's header), on one line: its control and bidi characters are
+spaces, so in what the user sends an agent nothing of it reads as a line of its own (a forged \"[message from the user
+…]\" header, a plan's \"### Task\")."
+  (string-trim (replace-regexp-in-string (concat "[" drgnx-coord-control-chars "]+") " " (format "%s" s))))
+
 ;;;; Where things are
 
 (defun drgnx-work-code--roots ()
@@ -53,12 +86,13 @@
 
 (defun drgnx-work-code--repo-of (top)
   "The repository the checkout or linked worktree TOP belongs to (a directory name), or nil.  A linked worktree has a
-`.git' file naming its gitdir inside the repository."
-  (let ((git (expand-file-name ".git" top)))
+`.git' file naming its gitdir inside the repository.  TOP may be an agent's folder: no file name handler runs, and
+only the head of a `.git' file is read."
+  (let* ((file-name-handler-alist nil) (git (expand-file-name ".git" top)))
     (cond ((file-directory-p git) (file-name-as-directory top))
           ((file-regular-p git)
            (with-temp-buffer
-             (insert-file-contents git)
+             (insert-file-contents git nil 0 4096)
              (when (re-search-forward "^gitdir: \\(.*\\)$" nil t)
                (let ((gitdir (match-string 1)))
                  (when (string-match "\\`\\(.*?\\)/\\.git/worktrees/" gitdir)
@@ -76,9 +110,10 @@
        (seq-find (lambda (s) (equal (drgnx-agent-session-remote s) sid)) drgnx-agents--sessions)))
 
 (defun drgnx-work-code--worktree (sid)
-  "The folder session SID works in, with its trailing slash, or nil when this editor does not mirror it."
-  (when-let* ((s (drgnx-work-code--session sid)) (cwd (drgnx-agent-session-cwd s)))
-    (file-name-as-directory cwd)))
+  "The folder session SID works in, with its trailing slash, or nil when this editor does not mirror it or the folder is
+not a local one (`drgnx-work-code-local-dir')."
+  (when-let* ((s (drgnx-work-code--session sid)))
+    (drgnx-work-code-local-dir (drgnx-agent-session-cwd s))))
 
 (defun drgnx-work-code--agent-name (sid)
   (if-let* ((s (drgnx-work-code--session sid))) (drgnx-agent-session-name s) (format "agent %s" sid)))
@@ -102,12 +137,17 @@
 
 (defun drgnx-work-code--paths (repo rel sids)
   "The paths of REL of REPO that can hold an agent's work: in each of SIDS' worktrees that has it, then the user's
-checkout."
-  (delq nil (delete-dups
-             (append (mapcar (lambda (sid) (when-let* ((wt (drgnx-work-code--worktree sid)))
-                                             (expand-file-name rel wt)))
-                             sids)
-                     (list (when-let* ((root (drgnx-work-code--root-named repo))) (expand-file-name rel root)))))))
+checkout.  Names only (REL is the hub's), made with no file name handler."
+  (let ((file-name-handler-alist nil))
+    (delq nil (delete-dups
+               (append (mapcar (lambda (sid) (when-let* ((wt (drgnx-work-code--worktree sid)))
+                                               (expand-file-name rel wt)))
+                               sids)
+                       (list (when-let* ((root (drgnx-work-code--root-named repo))) (expand-file-name rel root))))))))
+
+(defun drgnx-work-code--dirs (sids)
+  "The folders a file of the agents SIDS may open from: their local worktrees, then the workspace's roots."
+  (delq nil (append (mapcar #'drgnx-work-code--worktree sids) (drgnx-work-code--roots))))
 
 ;;;; The presence model's answer
 
@@ -144,7 +184,8 @@ with a line, else the newest of the chain's, else the newest of all (those open 
 ;;;; Opening
 
 (defun drgnx-work-code--visit (path line beside)
-  "Visit PATH at LINE (nil: the top, \"file only\"), in the selected window or, with BESIDE, in another one."
+  "Visit PATH (a true name `drgnx-work-code-local-file' gave) at LINE (nil: the top, \"file only\"), in the selected
+window or, with BESIDE, in another one."
   (let ((buffer (find-file-noselect path)))
     (with-current-buffer buffer
       (setq drgnx-work-code--file-only (not line))
@@ -156,17 +197,21 @@ with a line, else the newest of the chain's, else the newest of all (those open 
     buffer))
 
 (cl-defun drgnx-work-code--open-paths (paths sids beside)
-  "Open the first of PATHS the agents SIDS have an entry in at its line; with no entry, the first that exists, at the
-top.  The buffer, when the hub answered at once."
-  (let (result)
+  "Open the first of PATHS the agents SIDS have an entry in at its line; with no entry, the first that is there, at the
+top.  Only a plain local file inside the agents' folders or the workspace opens, by its true name; an entry naming
+anything else (it is the hub's word) is passed over.  The buffer, when the hub answered at once."
+  (let ((dirs (drgnx-work-code--dirs sids)) (result nil))
     (drgnx-work-code--presence
      paths
      (lambda (entries)
-       (let* ((e (drgnx-work-code--pick entries sids)) (path (plist-get e :file)))
+       (let* ((ok (lambda (p) (and (member p paths) (drgnx-work-code-local-file p dirs))))
+              (e (drgnx-work-code--pick (seq-filter (lambda (e) (funcall ok (plist-get e :file))) entries) sids))
+              (true (and e (funcall ok (plist-get e :file))))
+              (any (and (not true) (seq-some (lambda (p) (drgnx-work-code-local-file p dirs)) paths))))
          (setq result
-               (cond ((and path (file-exists-p path)) (drgnx-work-code--visit path (plist-get e :line) beside))
-                     ((seq-find #'file-exists-p paths) (drgnx-work-code--visit (seq-find #'file-exists-p paths) nil beside))
-                     (t (message "Work: %s is not on disk" (car paths)) nil))))))
+               (cond (true (drgnx-work-code--visit true (plist-get e :line) beside))
+                     (any (drgnx-work-code--visit any nil beside))
+                     (t (message "Work: %s is no plain local file in the agent's folder" (car paths)) nil))))))
     result))
 
 (cl-defun drgnx-work-code-open-file (state sel &key beside agents)
@@ -236,7 +281,8 @@ answered at once."
       (when (null files) (insert "  no edited files\n"))
       (cl-loop for f in files for i from 0
                do (let ((rel (plist-get f :path)) (at (plist-get f :read_at)))
-                    (push (list :path (if wt (expand-file-name rel wt) rel) :sid sid) drgnx-work-files--rows)
+                    (push (list :path (if wt (let ((file-name-handler-alist nil)) (expand-file-name rel wt)) rel) :sid sid)
+                          drgnx-work-files--rows)
                     (insert (format " %-2s %s  +%d −%d%s%s\n" (or (nth i keys) "") rel
                                     (or (plist-get f :plus) 0) (or (plist-get f :minus) 0)
                                     (if (eq (plist-get f :untracked) t) "  new file" "")
@@ -288,10 +334,10 @@ the popup lane unless NO-DISPLAY.  Returns the picker buffer, filled when the hu
                                (when key
                                  (append (when-let* ((root (drgnx-work-code--root-named repo))) (list (expand-file-name rel root)))
                                          (mapcar (lambda (s)
-                                                   (when-let* ((cwd (drgnx-agent-session-cwd s))
+                                                   (when-let* ((cwd (drgnx-work-code-local-dir (drgnx-agent-session-cwd s)))
                                                                (top (drgnx-work-code--repo-of cwd))
                                                                ((equal repo (file-name-nondirectory (directory-file-name top)))))
-                                                     (expand-file-name rel cwd)))
+                                                     (let ((file-name-handler-alist nil)) (expand-file-name rel cwd))))
                                                  (and (boundp 'drgnx-agents--sessions) drgnx-agents--sessions))))))))
          (result nil))
     (drgnx-work-code--presence
@@ -330,10 +376,24 @@ the popup lane unless NO-DISPLAY.  Returns the picker buffer, filled when the hu
   "The window configuration from before the diffs opened; nil while no diffs are open.  The first one is kept: opening
 the diffs again never replaces it.")
 
-(define-derived-mode drgnx-work-diff-mode diff-mode "Work diff"
+(defconst drgnx-work-code--hunk-keywords
+  '(("^\\(?:---\\|\\+\\+\\+\\) .*" . 'diff-file-header) ("^@@ .*" . 'diff-hunk-header)
+    ("^\\+.*" . 'diff-added) ("^-.*" . 'diff-removed))
+  "How a hunk buffer is coloured: from its text alone, with `diff-mode''s faces.")
+
+(define-derived-mode drgnx-work-hunk-mode special-mode "Work hunk"
+  "An agent's change as diff text: read-only and coloured as a diff, and no `diff-mode' buffer.  The file names in it
+are the agent's: `diff-mode' would read them with file name handlers on (its syntax colouring, which-func), and its
+keys, VC and ediff would open, apply or revert the files they name — in a live agent's worktree, or in the folder the
+buffer stands in.  Its folder is the root, no agent's or user's: VC finds nothing here."
+  (setq-local font-lock-defaults '(drgnx-work-code--hunk-keywords t)
+              default-directory "/"
+              truncate-lines t)
+  (buffer-disable-undo))
+
+(define-derived-mode drgnx-work-diff-mode drgnx-work-hunk-mode "Work diff"
   "One file of an agent's work as a diff against the base its worktree was cut from.  The keys come from the key
-profiles: q puts the windows back, a and D belong to the review view."
-  (setq-local buffer-read-only t))
+profiles: q puts the windows back, a and D belong to the review view.")
 
 (defun drgnx-work-code--diff-buffer (path diff)
   "A fresh read-only diff buffer for PATH holding DIFF."

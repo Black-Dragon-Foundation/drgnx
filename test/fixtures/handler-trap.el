@@ -7,8 +7,9 @@
 ;; (drgnx-test-hostile-paths TREE)         links planted in the worktree TREE, and the paths an agent would send
 ;;                                         through them: (:outside PATHS :inside PATHS :back PATH :real FILE)
 ;; (drgnx-test-visit HOW NAME ROOT)        open NAME (relative to ROOT, as an agent or a model names it) the way a
-;;                                         command does: Review's RET, the diff's visit, Work's row and graph box;
-;;                                         the buffer visiting it
+;;                                         command does: Review's RET, the diff's visit, Work's row and graph box,
+;;                                         the Work space's file (Enter on the map) and a trail step's read; the
+;;                                         buffer visiting it
 ;;
 ;; An agent's path is resolved with no file name handler, and the file is opened by that resolved name
 ;; (docs/develop/core.md, "Names an agent gave"): a test asserts `drgnx-test-handler-calls' stays nil.  Everything is
@@ -24,6 +25,10 @@
 (declare-function drgnx-diff-visit "drgnx-diff")
 (declare-function drgnx-work-ui-open "drgnx-work-ui")
 (declare-function drgnx-work-ui--graph-open "drgnx-work-ui")
+(defvar drgnx-agents--sessions)
+(declare-function drgnx-agents--make "drgnx-agents")
+(declare-function drgnx-work-code-open-file "drgnx-work-code")
+(declare-function drgnx-work-trail-open-step "drgnx-work-trail")
 
 (defun drgnx-test--library-name-p (name)
   "Non-nil if NAME is an absolute file name in a `load-path' directory (a test's temp tree never is)."
@@ -80,7 +85,9 @@ names in TREE that only look special: `n.gz', `n.gpg', `a.zip/y' (nothing is mad
 
 (defun drgnx-test-visit (how name root)
   "Open NAME (relative to the folder ROOT) the way HOW does: `review' (RET on a finding), `diff' (Open File at Line),
-`work' (Work: open a row), `work-graph' (a box of the Work graph).  The buffer visiting the file; the caller kills it."
+`work' (Work: open a row), `work-graph' (a box of the Work graph), `work-space' (Enter on a file of the Work map: an
+agent working in ROOT, the hub's presence entry naming NAME there at line 1), `work-trail' (a read step of that agent
+naming NAME).  The buffer visiting the file; the caller kills it."
   (save-window-excursion
     (pcase how
       ('review
@@ -107,7 +114,23 @@ names in TREE that only look special: `n.gz', `n.gpg', `a.zip/y' (nothing is mad
          (drgnx-work-ui-open)))
       ('work-graph
        (require 'drgnx-work-ui)
-       (drgnx-work-ui--graph-open (list :kind 'plan :node (list :path (concat root name))))))))
+       (drgnx-work-ui--graph-open (list :kind 'plan :node (list :path (concat root name)))))
+      ((or 'work-space 'work-trail)
+       (require 'drgnx-agents)
+       (require 'drgnx-work-code)
+       (require 'drgnx-work-trail)
+       ;; the hub is the one answering here: its entry names the file in the agent's folder
+       (let ((drgnx-agents--sessions (list (drgnx-agents--make :name "agent" :cwd root :remote "s" :status 'running))))
+         (cl-letf (((symbol-function 'drgnx-hub-call)
+                    (lambda (_method params callback &rest _)
+                      (funcall callback (list :file (plist-get params :file)
+                                              :entries (list (list :session "s" :file (plist-get params :file) :line 1 :at 1.0)))
+                               nil)
+                      1))
+                   ((symbol-function 'drgnx-work-code--roots) #'ignore))
+           (if (eq how 'work-space)
+               (drgnx-work-code-open-file nil (cons 'file (concat "file:x/" name)) :agents '("s"))
+             (drgnx-work-trail-open-step (list :session "s" :seq 1 :detail (list :kind "read" :path name :line_start 1))))))))))
 
 (provide 'handler-trap)
 ;;; handler-trap.el ends here

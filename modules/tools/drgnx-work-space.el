@@ -32,6 +32,8 @@
 (declare-function drgnx-work-diff-accept-hunk "drgnx-work-code")
 (declare-function drgnx-work-diff-reject-hunk "drgnx-work-code")
 (declare-function drgnx-work-code-teardown "drgnx-work-code")
+(declare-function drgnx-work-code-local-dir "drgnx-work-code")
+(declare-function drgnx-work-code-one-line "drgnx-work-code")
 (defvar drgnx-work-diff-mode-map)
 (unless (featurep 'drgnx-work-board)
   (load (expand-file-name "drgnx-work-board" (file-name-directory (or load-file-name buffer-file-name))) nil t))
@@ -321,10 +323,14 @@ workbench state store's window events (and by hand in tests); only calls the hub
 
 (defun drgnx-work-live-file--session (file)
   "The mirrored session that holds FILE: alive (not exited), and FILE is in its linked worktree.  A linked
-worktree has a `.git' file; the user's own checkout has a `.git' directory, and an agent in it locks nothing."
+worktree has a `.git' file; the user's own checkout has a `.git' directory, and an agent in it locks nothing.  A
+session's folder is the hub's word: a remote one (or one a link leads out to a remote name) holds no file here, and
+no file name handler runs on it (`drgnx-work-code-local-dir')."
   (seq-find (lambda (s)
-              (let ((cwd (drgnx-agent-session-cwd s)))
-                (and cwd (drgnx-agent-session-remote s) (not (eq (drgnx-agent-session-status s) 'exited))
+              (let ((cwd (and (drgnx-agent-session-remote s) (not (eq (drgnx-agent-session-status s) 'exited))
+                              (drgnx-work-code-local-dir (drgnx-agent-session-cwd s))))
+                    (file-name-handler-alist nil))
+                (and cwd
                      (file-in-directory-p file cwd)
                      (file-regular-p (expand-file-name ".git" cwd)))))
             drgnx-agents--sessions))
@@ -352,8 +358,9 @@ worktree has a `.git' file; the user's own checkout has a `.git' directory, and 
 replaces this later)."
   (when-let* ((s drgnx-work-live-file--agent) (id (drgnx-agent-session-remote s)) (file buffer-file-name))
     (drgnx-hub-call "agents/send"
+                    ;; the file's name is the agent's: it stays on the message's one line
                     (list :id id :text (format "I edited %s while you were paused. Read it again before you change it."
-                                               (file-name-nondirectory file)))
+                                               (drgnx-work-code-one-line (file-name-nondirectory file))))
                     #'ignore)))
 
 (defun drgnx-work-take-wheel ()

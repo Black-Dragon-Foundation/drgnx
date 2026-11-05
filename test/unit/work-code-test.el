@@ -305,7 +305,9 @@ diff buffers killed."
         (let ((buffers (drgnx-work-code-diffs state '(agent . "agent:a1"))))
           ;; the hub's diff against the recorded base is the whole content; nothing else is asked
           (with-current-buffer (car buffers)
-            (should (derived-mode-p 'diff-mode))
+            ;; a hunk buffer, no `diff-mode' one: nothing in it opens, applies or reverts the files it names
+            (should (derived-mode-p 'drgnx-work-hunk-mode))
+            (should-not (derived-mode-p 'diff-mode))
             (should buffer-read-only)
             (should (string-search "@@ -1 +1 @@\n-old\n+new\n" (buffer-string))))
           (should (equal '("work/files" "work/hunks") (sort (delete-dups (mapcar #'car calls)) #'string<)))
