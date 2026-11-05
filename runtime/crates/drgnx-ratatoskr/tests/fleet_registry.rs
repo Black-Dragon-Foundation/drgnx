@@ -224,9 +224,9 @@ mod registry {
         sh(
             "r1",
             &format!(
-                "podman run -d --pull=never --name drgnx-leftover --label drgnx.runner=hub {img} sleep 600 >/dev/null; \
-                 podman run -d --pull=never --name keep-other {img} sleep 600 >/dev/null; \
-                 systemd-run --user --quiet --unit drgnx-leftover-unit sleep 600"
+                "podman run -d --pull=never --name drgnx-leftover --label drgnx.runner=hub {img} sleep 600 >/dev/null 2>&1 </dev/null; \
+                 podman run -d --pull=never --name keep-other {img} sleep 600 >/dev/null 2>&1 </dev/null; \
+                 systemd-run --user --quiet --unit drgnx-leftover-unit sleep 600 >/dev/null 2>&1 </dev/null"
             ),
         );
         assert!(ok(

@@ -350,7 +350,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 23);
+        assert_eq!(events().len(), 24);
         assert!(event("settings/proposed").is_some());
         // ids only: a key-shaped value is no id, and nothing but `providers` is taken
         let changed = event("gateway/keys-changed").unwrap();

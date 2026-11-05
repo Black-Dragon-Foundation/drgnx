@@ -83,18 +83,28 @@ impl Session {
             bulk_out,
         } = channels;
         let (out, queued) = mpsc::unbounded_channel();
+        let (tx, rx, err, hold) = control.split();
+        // the control session's hold lives with the writer: dropping it would end the session under the link
         let writer = crate::clock::spawn(
             "runners:link-write",
-            write_loop(control.tx, queued, (bulk_in, bulk_out)),
+            write_loop(tx, queued, (bulk_in, bulk_out, hold)),
         );
         let reader = crate::clock::spawn(
             "runners:link-read",
-            read_loop(runner.to_string(), control.rx, route, events, out.clone()),
+            read_loop(runner.to_string(), rx, route, events, out.clone()),
         );
+        let mut tasks = vec![writer, reader];
+        // the runner's standard error is read for as long as the link lives: a pipe nobody reads is closed when it is
+        // dropped, and a runner that then writes to it (its log lines) ends
+        if let Some(mut err) = err {
+            tasks.push(crate::clock::spawn("runners:link-err", async move {
+                let _ = tokio::io::copy(&mut err, &mut tokio::io::sink()).await;
+            }));
+        }
         Session(Arc::new(Shared {
             runner: runner.into(),
             out,
-            tasks: std::sync::Mutex::new(vec![writer, reader]),
+            tasks: std::sync::Mutex::new(tasks),
         }))
     }
 
@@ -126,7 +136,11 @@ impl Session {
 async fn write_loop(
     mut tx: Writer,
     mut queued: mpsc::UnboundedReceiver<Frame>,
-    _bulk: (super::transport::Channel, super::transport::Channel),
+    _held: (
+        super::transport::Channel,
+        super::transport::Channel,
+        super::transport::Hold,
+    ),
 ) {
     let mut ping = crate::clock::interval(PING_EVERY);
     loop {

@@ -16,7 +16,7 @@ use super::queue::{Queue, RemoteRunner};
 use super::ssh_config;
 use super::transport::{Channels, LinkError, Transport};
 use super::{NAME_MAX, Remote, RunnerCfg};
-use forseti::{Accept as FAccept, Profile as FProfile, RunnerTrust};
+use forseti::{Accept as FAccept, RunnerTrust};
 use mimir::BoxFuture;
 use runstav::methods::runners::{
     self as wire, Accept, AddParams, Effective, HostFacts, Missing, Probed, Profile, Trust,
@@ -632,11 +632,13 @@ impl Registry {
             };
             let sha = hex(&Sha256::digest(&bytes));
             let script = format!(
-                "set -e; d={d}; mkdir -p \"$d\"; cat > \"$d/{file}.part\"; \
+                "set -e; d={d}; mkdir -p \"$d\"; head -c {len} > \"$d/{file}.part\"; \
                  echo '{sha}  '\"$d/{file}.part\" | sha256sum -c - >/dev/null; chmod 755 \"$d/{file}.part\"; \
                  mv \"$d/{file}.part\" \"$d/{file}\"",
-                d = quote(&format!("{root}/bin/{bundle}"))
+                d = quote(&format!("{root}/bin/{bundle}")),
+                len = bytes.len()
             );
+            // exactly LEN bytes are read, so the copy never waits for the end of the input
             self.sh_ok(&cfg, &script, &bytes, LONG).await?;
         }
         let mut rec = Record {
@@ -1050,7 +1052,14 @@ mod tests {
         assert!(check_root("/users/u/.drgnx-runner", "/users/u").is_ok());
         assert!(check_root("/srv/runner", "/users/u").is_ok());
         for bad in [
-            "/", "/users/u", "/users/u/", "/tmp", "rel/x", "/a/../b", "/a/b'c", "/a/\nb",
+            "/",
+            "/users/u",
+            "/users/u/",
+            "/tmp",
+            "rel/x",
+            "/a/../b",
+            "/a/b'c",
+            "/a/\nb",
         ] {
             assert!(check_root(bad, "/users/u").is_err(), "{bad:?}");
         }
