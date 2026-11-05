@@ -5,7 +5,7 @@ systemd as PID 1, the user `runner` (lingering, with the `memory pids cpu` contr
 and rootless podman inside. A fleet is N of them plus one harness container on one podman network.
 
 ```
-fleet.sh up --runners N [--max-sessions K] [--no-linger] [--sshd-opt OPT]...
+fleet.sh up --runners N [--max-sessions K] [--no-linger | --no-linger-on I] [--sshd-opt OPT]...
 fleet.sh exec I -- CMD...      # in runner I (1-based), as `runner`, with its user manager's environment
 fleet.sh check I               # runner I's controllers are delegated as the caps need (`up` checks every runner)
 fleet.sh put FILE...           # copy files to /fleet/share in every runner (read-only there)
@@ -76,3 +76,20 @@ fleet.sh host runtime/target/debug/deps/runner_host-HASH [FILTER]...
 
 `host` copies the binary (and the `sleipnir` binary beside its `deps/`, which the job-exec rows start) into
 `/fleet/share` and runs it in every runner with `--ignored --test-threads=1`.
+
+## Fleet rows
+
+Rows that play the hub (`#[ignore = "fleet"]`, `sleipnir`'s `tests/fleet_serve.rs`) run in the harness and reach
+the runners over real SSH:
+
+```
+cargo test -p sleipnir --test fleet_serve --no-run                     # in the dev container
+fleet.sh up --runners 2 --no-linger-on 2
+DRGNX_FLEET_TEST_BIN=runtime/target/debug/deps/fleet_serve-HASH fleet.sh test --test-threads=1 serve::
+```
+
+`test` copies the `sleipnir` binary beside the test's `deps/` into the share and tells the rows where the share is
+(`DRGNX_FLEET_SHARE`); each row installs it into its own runner root as a bundle (`<root>/bin/<name>/sleipnir`).
+Runner 1 lingers and runner 2 (`--no-linger-on 2`) doesn't. The rows can't be root in a runner, so a row that turns
+linger on writes `enable-linger` into the share: the image's `fleet-linger.path` sees it and runs
+`loginctl enable-linger runner`.

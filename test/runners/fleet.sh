@@ -2,7 +2,7 @@
 # The fake fleet: N containers acting as SSH runners (fake-runner/Containerfile) and one harness container (the "hub")
 # on one podman network. Run it through the heavy slot (see README.md); it starts only containers named
 # $DRGNX_FLEET_PREFIX-<run>-*.
-#   fleet.sh up --runners N [--max-sessions K] [--no-linger] [--sshd-opt OPT]...
+#   fleet.sh up --runners N [--max-sessions K] [--no-linger | --no-linger-on I] [--sshd-opt OPT]...
 #   fleet.sh exec I -- CMD...        as `runner` in runner I (1-based)
 #   fleet.sh check I                 runner I's podman has the controllers the caps need (`up` checks every runner)
 #   fleet.sh test FILTER             the test binary $DRGNX_FLEET_TEST_BIN in the harness, with --ignored FILTER
@@ -26,12 +26,13 @@ die() { echo "fleet.sh: $*" >&2; exit 2; }
 mine() { podman ps -a --filter "name=^$PREFIX-$RUN-" --format '{{.Names}}'; }
 
 up() {
-  local n=1 max_sessions="" linger=1 opts=()
+  local n=1 max_sessions="" linger=1 no_linger_on="" opts=()
   while [ $# -gt 0 ]; do
     case "$1" in
       --runners) n=$2; shift 2 ;;
       --max-sessions) max_sessions=$2; shift 2 ;;
       --no-linger) linger=0; shift ;;
+      --no-linger-on) no_linger_on=$2; shift 2 ;;
       --sshd-opt) opts+=("$2"); shift 2 ;;
       *) die "up: unknown option $1" ;;
     esac
@@ -70,7 +71,9 @@ up() {
     exec_runner "$i" systemctl --user is-system-running --wait >/dev/null 2>&1 || true
     # then what the tests need of it: rootless podman with the controllers delegated
     check "$i" || die "runner $i: the cgroup controllers are not delegated; the tests would fail on caps (see above)"
-    [ "$linger" = 1 ] || podman exec "$(name r$i)" rm -f /var/lib/systemd/linger/runner
+    if [ "$linger" = 0 ] || [ "$i" = "$no_linger_on" ]; then
+      podman exec "$(name r$i)" rm -f /var/lib/systemd/linger/runner
+    fi
   done
   # the harness: the org folder mounted as ctr.sh does, a temporary HOME with the ssh config and known_hosts
   podman run -d --name "$(name hub)" --hostname hub --network "$NET" --memory 2g --memory-swap 2g --init \
@@ -145,7 +148,9 @@ case "${1:-}" in
   exec) shift; i=$1; shift; exec_runner "$i" "$@" ;;
   check) shift; check "$1" ;;
   test) shift; bin=${DRGNX_FLEET_TEST_BIN:?set DRGNX_FLEET_TEST_BIN to the container-built test binary}
-        podman exec -e HOME="$STATE/home" "$(name hub)" "$bin" --ignored "$@" ;;
+        # the runner bundle the tests install into their runner roots: the sleipnir binary beside the test's deps/
+        [ ! -x "$(dirname "$bin")/../sleipnir" ] || cp "$(dirname "$bin")/../sleipnir" "$STATE/share/sleipnir"
+        podman exec -e HOME="$STATE/home" -e DRGNX_FLEET_SHARE="$STATE/share" "$(name hub)" "$bin" --ignored "$@" ;;
   put) shift; for f in "$@"; do cp "$f" "$STATE/share/"; done ;;   # files appear in every runner at /fleet/share
   check-linger)   # log in over ssh, start a unit, log out, log in again: the unit is still active
         h=$(name hub)

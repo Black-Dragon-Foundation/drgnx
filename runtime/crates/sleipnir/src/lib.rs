@@ -14,5 +14,7 @@
 pub mod linux;
 #[cfg(feature = "proto")]
 pub mod proto;
+#[cfg(all(feature = "runner", target_os = "linux"))]
+pub mod serve;
 #[cfg(feature = "sync")]
 pub mod sync;

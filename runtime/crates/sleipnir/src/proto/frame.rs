@@ -448,7 +448,9 @@ pub enum Frame {
         log_offset: u64,
     },
     /// hub → runner: the hub has recorded the attempt's result, so its folder may go at the next cleanup.
-    Done { r: JobRef },
+    Done {
+        r: JobRef,
+    },
 
     // ---- runner state
     Preempting {

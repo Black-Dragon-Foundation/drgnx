@@ -1,0 +1,6 @@
+[Unit]
+Description=Turn linger on for runner (the fleet's linger rows)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/loginctl enable-linger runner

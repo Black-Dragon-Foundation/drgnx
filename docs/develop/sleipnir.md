@@ -338,6 +338,72 @@ while the codec writes a frame (a thread-local flag the writer sets); anywhere e
 reach a log or a file by way of `serde_json`. The writer's and the reader's line buffers are zeroed after a key frame,
 and the value is zeroed when the frame drops.
 
+## serve
+
+```
+sleipnir serve --root DIR --prefix P --hub-id H --profile dedicated|workstation
+```
+
+The runner's end of the hub's control channel. It lives on stdin and stdout and exits at their end, at `bye`, or
+after 45 s without a frame (the hub pings every 10 s, and so does `serve`). Nothing is installed or enabled: between
+connections the runner has its folder and, with linger, the attempts still running in their own units. It is blocking
+and threaded (one thread reads frames, the main loop handles them and ticks every 100 ms); no async runtime.
+
+**The runner folder** (`--root`): `bin/<name>/` holds bundles (the `sleipnir` that serves names its own folder in
+`hello-ok`, and runs every job-exec it starts); `jobs/<id>.<attempt>/` is an attempt's folder, its whole record:
+
+| File | What |
+|---|---|
+| `attempt.json` | the hub id, the `JobRef` with its nonce, the spec, priority, grant and expected figures, the bundle its job-exec runs from, its unit |
+| `job.json`, `log`, `result.json`, `kill_reason` | job-exec's (above) |
+| `src/`, `target/` | the job's source (mounted `ro,z`) and target dir, until slots come from sync |
+| `cancelled`, `collected` | the hub cancelled it; the hub has its result (`done`), so the folder may go |
+
+**`hello`** must come first; a hub id other than `--hub-id` gets `bye`. Each `hello` re-probes the runner contract
+(`missing`) and linger (logind's live answer), and lists this hub's attempts from the folder: `finished` when
+`result.json` is there, `running` while the unit is active, `lost` otherwise, each with its log's length. A `ready`
+follows, then one every 2 s and at every job end: free memory and CPU from `forseti::budget` over the live machine
+(this hub's running attempts counted, the others' through their reservations), PSI and the running attempts.
+
+**`offer`** is admitted by `forseti::admit` under the machine's admission lock (`linux::reserve::with_admit_lock`):
+it reads the machine with the others' live reservations, decides, sizes the grant (`forseti::size`) and writes the
+reservation (`drgnx-<hub id>`, job `<id>-<attempt>`) before it lets go, so two schedulers never fit into the same
+memory. The answer is `admit {grant}` or `refuse {why, reason}`. An offer whose folder exists is answered again from
+it when it is the same placement (hub and nonce), and refused otherwise. While the memory ladder is above normal, no
+offer is admitted. `forseti`'s 10 s gap between starts counts from this hub's latest start in the folder, so it
+holds across `serve` processes.
+
+**`start`** writes `job.json` (the shared podman argv, `RunnerArgs::runner(prefix, hub id, slice)`, in the job's
+slice `drgnx-runner-work-<id>.slice`) and starts the unit `<prefix>-<id>-<attempt>` running `sleipnir job-exec` with
+`RuntimeMaxSec` = the timeout + 60 s (job-exec's own timeout writes the verdict first). The reservation passes to the
+unit's main pid, so it outlives `serve`. Then `started`. What can't start (no image, a parser it doesn't know, and
+for now network, keys and container variables, which wait for the job helper) ends `infra: setup`, with the reason
+in the attempt's log; it is never run another way.
+
+**Logs** are read from the attempt's log file by offset, never from a pipe: a new attempt streams from 0, and after a
+reconnect the hub sends `attach {r, log_offset}` with where its own copy ends. When the attempt has its
+`result.json` and its log is all sent, `serve` sends its rows (`row`) and `finished` with `result.json`, drops the
+reservation, cleans up and sends `ready`. A unit that ended without job-exec's result was killed from outside: its
+result is written as `infra: killed`. `cancel` writes `cancelled` and the kill reason, then kills the container, so
+job-exec writes the verdict, which `serve` reports as `Cancelled`.
+
+**The ladder** runs at every `ready` on the runner's slice tree: `tight` stops admissions; at `pressure` and
+`danger` the scheduler holding the most memory (`forseti::ladder_actor`, over the reservations) evicts (dedicated) or
+kills our newest (workstation), writing `evicted` or `infra: killed` before it kills the container. Pausing a long
+build waits for live resizing.
+
+**The cleanup**, at start, at every job end and at every `done`, removes only what is this hub's
+(`serve::cleanup::plan`, pure):
+
+- containers named `<prefix>-<id>` labelled `drgnx.runner=<hub id>` whose attempt doesn't run;
+- this hub's ended units (named in its own attempt records) still loaded;
+- this hub's job folders, collected or older than 24 h, whose attempt doesn't run;
+- bundles put there before its own that no process runs from and no running attempt (of any hub) started from (a
+  newer one is a hub's update, about to serve).
+
+So two hubs on one runner, with one root and one prefix, never remove each other's containers, units or folders,
+and an update keeps the old bundle while its attempts run.
+
 ## Tests
 
 `cargo test -p sleipnir --no-default-features --features linux` runs the pure rows: the contract's refusals from
@@ -347,7 +413,15 @@ kill reason's precedence. `--features proto,sync` (the Android shape) runs sync'
 git, the slots and their escape rows, each with temp repositories and real git. `--features proto` alone runs the
 protocol's rows `[D]`: every frame round-trips, unknown fields and frames are ignored, a key frame is never loggable
 or printed, chunks over 1 MiB are refused, a job frame without its nonce doesn't parse, and a property that the reader
-never panics on any bytes.
+never panics on any bytes. The default features add `serve`'s rows: admission waits for the admission lock and
+writes the reservation another scheduler then counts (`[B]`, the lock as the gate), and the cleanup's plan matches
+prefix and label only (`[D]`).
+
+`tests/fleet_serve.rs` plays the hub over real SSH to a real `serve` in the fake fleet (`#[ignore = "fleet"]`,
+`test/runners/README.md`, "Fleet rows"), every row `[C]`: a new `serve` lists the running attempt after a cut
+channel and reattaches it; `serve` ends at `bye` and at an EOF and leaves nothing enabled, loaded or written outside
+its root; two hubs on one root and prefix never clean each other's; an update keeps the old bundle while its job runs;
+the log after a reconnect comes from the file by offset, byte for byte; linger is reported at every `hello`.
 
 `tests/runner_host.rs` holds the rows that need a real user manager, cgroups and podman. They are
 `#[ignore = "runner-host"]` and run only inside a fake runner (`test/runners/README.md`), never on a developer's

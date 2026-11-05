@@ -42,6 +42,11 @@ required-features = ["linux"]
 name = "runner_host"
 required-features = ["linux"]
 
+# the hub's side of `serve`, run in the fake fleet's harness (tests/fleet_serve.rs)
+[[test]]
+name = "fleet_serve"
+required-features = ["runner"]
+
 [dev-dependencies]
 skuld = { path = "../skuld", version = "0.1.0" }
 tempfile.workspace = true

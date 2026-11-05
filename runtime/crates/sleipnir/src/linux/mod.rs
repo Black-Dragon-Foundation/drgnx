@@ -20,7 +20,7 @@ pub mod probe;
 #[cfg(target_os = "linux")]
 pub mod reserve;
 #[cfg(target_os = "linux")]
-mod run;
+pub(crate) mod run;
 #[cfg(target_os = "linux")]
 pub mod slices;
 #[cfg(target_os = "linux")]
