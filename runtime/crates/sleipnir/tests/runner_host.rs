@@ -892,3 +892,41 @@ fn linger_keeps_a_unit_after_the_session_ends() {
         "yes"
     );
 }
+
+// ---- the bench (the runner's modes: the default features) ----
+
+/// [C] The bench's workload runs in its capped container and reports its own readings: inside it `memory.max` is
+/// 512 MiB and `cpu.max` one core; the run ends within the bench's 2-minute bound (past it the bench fails, so a
+/// result is the proof), with a speed, the machine's cores and memory, and leaves no container behind.
+#[cfg(feature = "runner")]
+#[test]
+#[ignore = "runner-host"]
+fn bench_runs_capped_and_under_2_minutes() {
+    let d = tempfile::tempdir_in(std::env::var("HOME").unwrap()).unwrap();
+    let (result, t) = sleipnir::bench::run(d.path(), &base_ref()).unwrap();
+    assert_eq!(
+        (t.memory_max.as_str(), t.cpu_max.as_str()),
+        ("536870912", "100000 100000"),
+        "{t:?}"
+    );
+    assert!(t.cpu_s > 0.0 && t.io_s > 0.0, "{t:?}");
+    assert!(
+        result.speed > 0.0 && result.cores >= 1 && result.mem_mib > 0,
+        "{result:?}"
+    );
+    assert_eq!(
+        run(
+            "podman",
+            &[
+                "ps",
+                "-a",
+                "--filter",
+                "name=^drgnx-bench-",
+                "--format",
+                "{{.Names}}"
+            ]
+        ),
+        "",
+        "the bench's container is left"
+    );
+}

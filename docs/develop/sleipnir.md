@@ -404,6 +404,27 @@ build waits for live resizing.
 So two hubs on one runner, with one root and one prefix, never remove each other's containers, units or folders,
 and an update keeps the old bundle while its attempts run.
 
+## bench
+
+```
+sleipnir bench --root DIR --image DIGEST
+```
+
+How fast the runner is, for placement's finish-time estimates; the hub records the result in the runner's registry
+record. A fixed workload runs in one capped container (1 core, 512 MiB, no network, the shared argv, in its own job
+slice `drgnx-runner-work-bench.slice`, named `drgnx-bench-bench`): sha256 over 256 MiB, then 128 MiB written and
+synced into `<root>/bench/target`. The container times both parts itself (podman's start-up isn't counted) and prints
+them with its own `memory.max` and `cpu.max`. The result, as JSON on stdout:
+
+| Field | What |
+|---|---|
+| `speed` | `REFERENCE_S` (2.0 s, a current desktop core with an NVMe disk) over the measured seconds: higher is faster |
+| `cores`, `mem_mib` | the cores jobs may use and the machine's memory, from the probe |
+| `link_hint` | the default route's interface speed in Mbit/s when the kernel knows it; the hub measures the link itself |
+
+The run is bounded at 120 s, start-up included: past it the bench fails and removes its container. The caps it ran
+under go to stderr.
+
 ## Tests
 
 `cargo test -p sleipnir --no-default-features --features linux` runs the pure rows: the contract's refusals from
@@ -414,8 +435,10 @@ git, the slots and their escape rows, each with temp repositories and real git. 
 protocol's rows `[D]`: every frame round-trips, unknown fields and frames are ignored, a key frame is never loggable
 or printed, chunks over 1 MiB are refused, a job frame without its nonce doesn't parse, and a property that the reader
 never panics on any bytes. The default features add `serve`'s rows: admission waits for the admission lock and
-writes the reservation another scheduler then counts (`[B]`, the lock as the gate), and the cleanup's plan matches
-prefix and label only (`[D]`).
+writes the reservation another scheduler then counts (`[B]`, the lock as the gate), the cleanup's plan matches
+prefix and label only (`[D]`), and the bench's readings, speed, result shape and capped argv (`[D]`). The bench's
+runner-host row (`bench_runs_capped_and_under_2_minutes`, `[C]`) needs the default features: build `runner_host`
+without `--no-default-features` for it.
 
 `tests/fleet_serve.rs` plays the hub over real SSH to a real `serve` in the fake fleet (`#[ignore = "fleet"]`,
 `test/runners/README.md`, "Fleet rows"), every row `[C]`: a new `serve` lists the running attempt after a cut

@@ -10,6 +10,8 @@
 //! - `runner` (default): the binary's modes.
 //! - `test-hooks`: test-only entry points, compiled away otherwise.
 
+#[cfg(all(feature = "runner", target_os = "linux"))]
+pub mod bench;
 #[cfg(feature = "linux")]
 pub mod linux;
 #[cfg(feature = "proto")]
