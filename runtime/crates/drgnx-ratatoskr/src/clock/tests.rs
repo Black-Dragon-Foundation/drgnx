@@ -87,15 +87,35 @@ fn advance_returns_after_woken_tasks_park() {
 #[test]
 fn a_task_that_never_parks_is_named_busy() {
     on_virtual(async {
-        let (_keep, rx) = tokio::sync::oneshot::channel::<()>();
         spawn("t", async move {
             sleep(ms(10)).await;
-            // a channel, not the clock: it never parks
-            let _ = rx.await;
+            // woken again and again, never by the clock: it never parks
+            loop {
+                tokio::task::yield_now().await;
+            }
         });
         let a = advance(ms(10)).await;
         assert_eq!((a.now_ms, a.woken), (10, 1));
         assert_eq!(a.busy, ["t"]);
+    });
+}
+
+#[test]
+fn a_task_idle_on_a_channel_after_its_wake_is_parked() {
+    // Pattern B: a loop that sleeps, then waits for its next signal on a channel nothing fills (a hub loop between
+    // signals) runs nothing and has no wake pending, so the advance goes on at once
+    on_virtual(async {
+        let l = log();
+        let mine = l.clone();
+        let (_keep, rx) = tokio::sync::oneshot::channel::<()>();
+        spawn("t", async move {
+            sleep(ms(10)).await;
+            mine.lock().unwrap().push("woke");
+            let _ = rx.await;
+        });
+        let a = advance(ms(10)).await;
+        assert_eq!((a.now_ms, a.woken, a.busy.len()), (10, 1, 0), "{a:?}");
+        assert_eq!(seen(&l), ["woke"]);
     });
 }
 

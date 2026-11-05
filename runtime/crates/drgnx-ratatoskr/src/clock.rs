@@ -207,9 +207,9 @@ pub fn is_virtual() -> bool {
 
 /// Move the virtual clock by D.  Time moves to each due deadline in order; sleepers due at one instant wake in the order
 /// they began to wait, one at a time.  After each wake the advance waits until the woken task, and every task it
-/// spawned, waits on the clock again or has ended; a task spawned before the advance, until it was first run.  A task
-/// still running after [`BUSY_AFTER`] of real time is named in `busy`, and the advance goes on.  Advances run one at a
-/// time.  Panics on the real clock.
+/// spawned, is parked (between polls, no wake pending, whatever it waits on) or has ended; a task spawned before the
+/// advance, until it was first run.  A task still running after [`BUSY_AFTER`] of real time is named in `busy`, and
+/// the advance goes on.  Advances run one at a time.  Panics on the real clock.
 #[cfg(feature = "test-hooks")]
 pub async fn advance(d: Duration) -> Advanced {
     let v = virt::current().expect("the hub runs on the real clock");
@@ -291,7 +291,7 @@ mod virt {
     use std::pin::Pin;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
-    use std::task::{Context, Poll, Waker};
+    use std::task::{Context, Poll, Wake, Waker};
     use std::time::{Duration, SystemTime};
     use tokio::sync::Notify;
     use tokio::task::futures::TaskLocalFuture;
@@ -347,8 +347,8 @@ mod virt {
         polling: bool,
         polls: u64,
         ended: bool,
-        /// Its sleepers registered and not fired.
-        waits: u32,
+        /// Woken (by the clock or by anything else: a channel, a socket, a thread) since its last poll began.
+        woken: bool,
         /// Wakes the clock gave it, and the count its last finished poll began after.
         fired: u64,
         seen: u64,
@@ -361,11 +361,11 @@ mod virt {
             lock(&self.flags)
         }
 
-        /// Waits on the clock and runs nothing: ended, or between polls with a sleeper registered and every wake it
-        /// was given seen by a poll.
+        /// Runs nothing and will not until something wakes it: ended, or between polls with no wake pending (every
+        /// wake it was given seen by a poll).  What it waits on (the clock, a channel nothing fills) does not matter.
         fn parked(&self) -> bool {
             let f = self.flags();
-            f.ended || (!f.polling && f.seen == f.fired && f.waits > 0)
+            f.ended || (!f.polling && !f.woken && f.seen == f.fired)
         }
 
         /// Run once (its first sleeper, if any, registered at the time it was spawned).
@@ -492,9 +492,7 @@ mod virt {
                 st.elapsed = st.elapsed.max(at);
                 st.fired.insert(seq);
                 if let Some(t) = &e.task {
-                    let mut f = t.flags();
-                    f.waits -= 1;
-                    f.fired += 1;
+                    t.flags().fired += 1;
                 }
                 e
             };
@@ -590,9 +588,6 @@ mod virt {
                     let seq = st.next_seq;
                     st.next_seq += 1;
                     let task = TASK.try_with(Arc::clone).ok();
-                    if let Some(t) = &task {
-                        t.flags().waits += 1;
-                    }
                     st.queue.insert(
                         (this.deadline, seq),
                         Entry {
@@ -613,9 +608,8 @@ mod virt {
             let mut st = self.clock.state();
             st.fired.remove(&seq);
             if let Some(e) = st.queue.remove(&(self.deadline, seq))
-                && let Some(t) = e.task
+                && e.task.is_some()
             {
-                t.flags().waits -= 1;
                 drop(st);
                 self.clock.changed.notify_waiters();
             }
@@ -727,18 +721,49 @@ mod virt {
                 st.fresh.push(task.clone());
             }
         }
+        let wake = Arc::new(TaskWaker {
+            task: task.clone(),
+            clock: clock.clone(),
+            runtime: Mutex::new(Waker::noop().clone()),
+        });
         tokio::spawn(Tracked {
             fut: Box::pin(scoped),
             task,
             clock,
+            waker: Waker::from(wake.clone()),
+            wake,
         })
     }
 
-    /// A spawned task on the virtual clock: each poll is recorded in its flags.
+    /// The waker a tracked task's future is polled with: any wake (the clock's, a channel's, a socket's) marks the
+    /// task woken until its next poll begins, then wakes it on the runtime.
+    struct TaskWaker {
+        task: Arc<Task>,
+        clock: Arc<Virtual>,
+        /// The runtime's waker of the task, from its last poll.
+        runtime: Mutex<Waker>,
+    }
+
+    impl Wake for TaskWaker {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.task.flags().woken = true;
+            lock(&self.runtime).wake_by_ref();
+            self.clock.changed.notify_waiters();
+        }
+    }
+
+    /// A spawned task on the virtual clock: each poll and each wake is recorded in its flags.
     struct Tracked<F: Future> {
         fut: Pin<Box<TaskLocalFuture<Arc<Task>, F>>>,
         task: Arc<Task>,
         clock: Arc<Virtual>,
+        wake: Arc<TaskWaker>,
+        /// `wake` as a waker, made once: the future's resources see one waker across polls.
+        waker: Waker,
     }
 
     impl<F: Future> Future for Tracked<F> {
@@ -746,12 +771,22 @@ mod virt {
 
         fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
             let this = &mut *self;
+            {
+                let mut w = lock(&this.wake.runtime);
+                if !w.will_wake(cx.waker()) {
+                    w.clone_from(cx.waker());
+                }
+            }
             let seen = {
                 let mut f = this.task.flags();
                 f.polling = true;
+                f.woken = false;
                 f.fired
             };
-            let r = this.fut.as_mut().poll(cx);
+            let r = this
+                .fut
+                .as_mut()
+                .poll(&mut Context::from_waker(&this.waker));
             {
                 let mut f = this.task.flags();
                 f.polling = false;

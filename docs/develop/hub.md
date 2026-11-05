@@ -256,13 +256,15 @@ the real clock refuses it (`not-allowed`, "the hub runs on the real clock"). tok
 runtime stays multi-thread, and a paused tokio clock jumps ahead whenever the runtime is idle.
 
 An advance moves the clock to each due deadline in order. Sleepers due at one instant wake in the order they began to
-wait, one at a time. After each wake it waits until the woken task, and every task that one spawned, waits on the
-clock again or has ended. Before moving the clock it waits until every task spawned since has run once, so a timer it
-started is in the queue. It then answers:
+wait, one at a time. After each wake it waits until the woken task, and every task that one spawned, is parked or has
+ended. A task is parked between polls with no wake pending: every wake it was given, by the clock or by anything else
+(a channel, a socket), seen by a poll that began after it. What it then waits on does not matter, so a loop that sleeps
+and then waits for its next signal on a channel is parked once its poll ends. Before moving the clock it waits until
+every task spawned since has run once, so a timer it started is in the queue. It then answers:
 
 - `woken`: the sleepers it woke.
-- `busy`: the origins of tasks still running after 5 s of real time. The advance names them and goes on, never hangs.
-  A task woken from the clock that then waits on something else (a channel, a child's I/O) is busy.
+- `busy`: the origins of tasks still running after 5 s of real time: still polled, or woken again and again. The
+  advance names them and goes on, never hangs.
 - `unnamed`: woken sleepers in a task not started by `clock::spawn`. The advance cannot wait for those, so a test
   that sees `unnamed > 0` is not deterministic there.
 
