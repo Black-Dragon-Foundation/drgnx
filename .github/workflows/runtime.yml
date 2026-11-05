@@ -537,7 +537,7 @@ jobs:
           podman pull -q docker.io/library/alpine:3.22
           img="docker.io/library/alpine@$(podman image inspect docker.io/library/alpine:3.22 --format '{{.Digest}}')"
           DRGNX_TEST_BUNDLE="$PWD/runtime/target/bundle/x86_64" DRGNX_TEST_FOREIGN_IMAGE="$img" \
-            cargo test --locked --manifest-path runtime/Cargo.toml -p sleipnir --test bundle_host -- --ignored
+            cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p sleipnir --test bundle_host -- --ignored
       # last, whatever the rows said
       - id: prune
         if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
