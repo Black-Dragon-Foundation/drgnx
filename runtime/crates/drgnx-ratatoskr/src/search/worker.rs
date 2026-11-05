@@ -6,7 +6,7 @@
 //! the CPU path after a lost device writes `{"fallback": {"from", "reason"}}`. A `doc` request is tokenised first and
 //! split into batches by the pacer's budget; a thread reads stdin, so a query that arrives during a request is
 //! answered before that request's next batch. It runs at nice 10, caps its address space at 2 GiB once its model is
-//! loaded on the CPU path, and on the GPU path (no cap can stand there) reads its peak resident memory (`VmHWM`) before
+//! loaded on the CPU path, and on the GPU path (no cap can stand there) reads its peak resident memory (`getrusage`, on Linux and macOS) before
 //! each batch: over 1.5 GiB it answers the request with the reason and `"exit": true` and exits, and the hub starts
 //! a fresh worker for the next request. It exits after `--idle-ms` (300 s) without a request and at the end of its stdin, so a dead hub leaves no worker.
 //!
@@ -145,18 +145,21 @@ fn cap_address_space() {
     }
 }
 
-/// This process's peak resident memory in bytes (`VmHWM`); none where `/proc` has none.
+/// This process's peak resident memory in bytes: `getrusage`'s `ru_maxrss`, which is the kernel's high-water mark
+/// (Linux's `VmHWM`) in KiB on Linux and in bytes on macOS.
 fn peak_rss() -> Option<u64> {
-    let status = std::fs::read_to_string("/proc/self/status").ok()?;
-    let kib = status
-        .lines()
-        .find_map(|l| l.strip_prefix("VmHWM:"))?
-        .trim()
-        .strip_suffix("kB")?
-        .trim()
-        .parse::<u64>()
-        .ok()?;
-    Some(kib << 10)
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    // SAFETY: getrusage fills the struct it is given and reads nothing else.
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    // SAFETY: the call succeeded, so the struct is filled.
+    let max = u64::try_from(unsafe { usage.assume_init() }.ru_maxrss).ok()?;
+    Some(if cfg!(target_os = "macos") {
+        max
+    } else {
+        max << 10
+    })
 }
 
 fn lower_priority() {
