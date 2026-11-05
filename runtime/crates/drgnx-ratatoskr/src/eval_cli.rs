@@ -111,6 +111,72 @@ pub fn parse(args: Vec<OsString>) -> Result<EvalCommand, String> {
     })
 }
 
+/// Progress of one phase of a run: a line to stderr every EVERY items, with the slowest item since the last line, and
+/// the latencies kept for the report.
+struct Tally {
+    what: &'static str,
+    total: usize,
+    every: usize,
+    times: Vec<f64>,
+    since: Vec<f64>,
+}
+
+/// Latency percentiles of one phase, in seconds.
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+struct Latency {
+    n: usize,
+    p50: f64,
+    p95: f64,
+    max: f64,
+}
+
+impl Tally {
+    fn new(what: &'static str, total: usize, every: usize) -> Tally {
+        Tally {
+            what,
+            total,
+            every,
+            times: Vec::new(),
+            since: Vec::new(),
+        }
+    }
+
+    /// One item took SECS: the progress line when one is due.
+    fn note(&mut self, secs: f64) -> Option<String> {
+        self.times.push(secs);
+        self.since.push(secs);
+        if !self.times.len().is_multiple_of(self.every) && self.times.len() != self.total {
+            return None;
+        }
+        let line = format!(
+            "{} {}/{}: {:.1}s since the last line, slowest {:.2}s",
+            self.what,
+            self.times.len(),
+            self.total,
+            self.since.iter().sum::<f64>(),
+            self.since.iter().copied().fold(0.0, f64::max)
+        );
+        self.since.clear();
+        Some(line)
+    }
+
+    fn stats(&self) -> Latency {
+        let mut v = self.times.clone();
+        v.sort_by(f64::total_cmp);
+        let at = |q: f64| {
+            v.get(((v.len() as f64 - 1.0) * q).round() as usize)
+                .copied()
+                .unwrap_or(0.0)
+        };
+        Latency {
+            n: v.len(),
+            p50: at(0.5),
+            p95: at(0.95),
+            max: v.last().copied().unwrap_or(0.0),
+        }
+    }
+}
+
 /// What `eval run` writes.
 #[derive(Serialize, Deserialize)]
 struct RunFile {
@@ -119,6 +185,8 @@ struct RunFile {
     device: String,
     chunks_embedded: u64,
     embed_seconds: f64,
+    /// What one question cost (embedding it and searching), in seconds.
+    query_latency: Latency,
     report: Report,
 }
 
@@ -258,7 +326,14 @@ fn run_set(
     std::fs::create_dir_all(&state_dir).map_err(|e| e.to_string())?;
     let store = CodeStore::open(&state_dir.join("code.db")).map_err(|e| e.to_string())?;
     let rt = runtime()?;
+    eprintln!("indexing {} into {}", root.display(), state_dir.display());
+    let began = clock::real_now();
     let listed = rt.block_on(index(&store, root, &[(spec.id, spec.dims)]))?;
+    eprintln!(
+        "indexed {} files in {:.0}s",
+        listed.len(),
+        began.elapsed().as_secs_f64()
+    );
 
     // tier 2, in this process: every chunk the model lacks
     let begun = clock::real_now();
@@ -287,9 +362,12 @@ fn run_set(
     }
     let embed_seconds = begun.elapsed().as_secs_f64();
 
+    eprintln!("embedded {embedded} chunks in {embed_seconds:.0}s; sampling names");
+    let names = rt.block_on(sample_names(&store, 300))?;
     let embedder = RefCell::new(embedder);
     let base = root.to_path_buf();
-    let answer = |q: &Query| -> Answer {
+    let phase = RefCell::new(Tally::new("scoring", questions.len(), 25));
+    let ask = |q: &Query| -> Answer {
         let none = || Answer {
             hits: Vec::new(),
             lag: Lag::default(),
@@ -308,9 +386,20 @@ fn run_set(
         ))
         .unwrap_or_else(|_| none())
     };
+    let answer = |q: &Query| -> Answer {
+        let started = clock::real_now();
+        let a = ask(q);
+        if let Some(line) = phase.borrow_mut().note(started.elapsed().as_secs_f64()) {
+            eprintln!("{line}");
+        }
+        a
+    };
     let mut report = eval::run(&questions, &answer);
-    let names = rt.block_on(sample_names(&store, 300))?;
+    let query_latency = phase
+        .replace(Tally::new("exact-symbol", names.len(), 50))
+        .stats();
     report.exact_symbol_r1 = Some(eval::exact_symbol_floor(&names, &answer));
+    eprintln!("coverage check");
     let per_file: HashMap<String, u32> = rt
         .block_on(store.handle().read(|c| {
             let mut q = c.prepare("select path, count(*) from chunk group by path")?;
@@ -325,13 +414,18 @@ fn run_set(
         .map(|e| format!("{e:?}"))
         .collect();
 
-    let text = summary(spec.id, set, &report, embedded, embed_seconds);
+    let mut text = summary(spec.id, set, &report, embedded, embed_seconds);
+    text.push_str(&format!(
+        "one question (embed + search), {} asked: p50 {:.3}s, p95 {:.3}s, max {:.3}s\n",
+        query_latency.n, query_latency.p50, query_latency.p95, query_latency.max
+    ));
     let file = RunFile {
         model: spec.id.to_string(),
         set: set.to_string(),
         device: device.to_string(),
         chunks_embedded: embedded,
         embed_seconds,
+        query_latency,
         report,
     };
     if let Some(out) = out {
@@ -438,6 +532,31 @@ mod tests {
 
     fn p(args: &[&str]) -> Result<EvalCommand, String> {
         parse(args.iter().map(OsString::from).collect())
+    }
+
+    /// Pattern D. A phase says how far it is every EVERY items, with the slowest item since the last line, so a slow
+    /// phase can be told from a stuck one; the figures at the end are percentiles of every item.
+    #[test]
+    fn a_phase_logs_progress_and_keeps_its_latencies() {
+        let mut t = Tally::new("scoring", 6, 3);
+        let lines: Vec<Option<String>> = [0.1, 0.5, 0.2, 0.1, 0.1, 4.0]
+            .iter()
+            .map(|s| t.note(*s))
+            .collect();
+        assert_eq!(lines[0], None);
+        assert_eq!(lines[1], None);
+        assert_eq!(
+            lines[2].as_deref(),
+            Some("scoring 3/6: 0.8s since the last line, slowest 0.50s")
+        );
+        assert_eq!(
+            lines[5].as_deref(),
+            Some("scoring 6/6: 4.2s since the last line, slowest 4.00s")
+        );
+        let s = t.stats();
+        assert_eq!((s.n, s.max), (6, 4.0));
+        assert_eq!(s.p50, 0.2);
+        assert_eq!(s.p95, 4.0);
     }
 
     #[test]
