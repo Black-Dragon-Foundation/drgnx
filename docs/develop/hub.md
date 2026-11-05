@@ -1925,7 +1925,8 @@ zeroed once written. Dropping the session ends it; the runner's attempts run on.
 Tests: `runners::attempts::` and `runners::link::` [D]; `tests/runners_orders.rs` [A] (every order of a lost link, a
 reattaching and a non-listing `hello`, a restart, the grace, a preemption and a wrong nonce around a `finished`,
 exhaustively, then 2000 drawn orders with a cancel); `tests/fleet_runners.rs` [C] (`#[ignore = "fleet"]`, its header
-has the commands): a job's log cut mid-stream and reattached equals the runner's file byte for byte.
+has the commands; like `fleet_link` it builds only with `--features fleet`, out of the escape lane's `--ignored`): a
+job's log cut mid-stream and reattached equals the runner's file byte for byte.
 
 ## Runners: the queue
 

@@ -2,7 +2,7 @@
 //! test/runners/): the link session, the queue's placement, the health check. They run in a fleet's harness only:
 //!
 //! ```text
-//! cargo test -p drgnx-ratatoskr --test fleet_runners --no-run
+//! cargo test -p drgnx-ratatoskr --features fleet --test fleet_runners --no-run
 //! cargo build -p sleipnir --features test-hooks        # the bundle each row installs (fleet.sh test shares it)
 //! fleet.sh up --runners 1
 //! DRGNX_FLEET_TEST_BIN=<the test binary> fleet.sh test --test-threads=1

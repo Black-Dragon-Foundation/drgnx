@@ -21,13 +21,18 @@ path = "src/main.rs"
 test-hooks = ["gleipnir/test-hooks", "norn/test-hooks"]
 # The fuzz crate's entry into the session reducer (`agents::session::fuzz_apply`); off everywhere else.
 fuzzing = []
-# Builds the transport's fleet rows (tests/fleet_link.rs), which run only inside a fake-runner fleet's harness
-# container (test/runners/); a plain `cargo test --ignored` leaves them out.
+# Builds the fleet rows (tests/fleet_link.rs, tests/fleet_runners.rs), which run only inside a fake-runner fleet's
+# harness container (test/runners/); a plain `cargo test --ignored` leaves them out.
 fleet = []
 
 # the transport's rows run in the fake fleet's harness against real sshd
 [[test]]
 name = "fleet_link"
+required-features = ["fleet"]
+
+# the link session's, the queue's and the health check's rows, against a real `sleipnir serve` in a fake runner
+[[test]]
+name = "fleet_runners"
 required-features = ["fleet"]
 
 [dependencies]
