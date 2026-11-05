@@ -925,8 +925,10 @@ The commands of modules that need no installed package are in it, the later stag
 
 (ert-deftest drgnx-keys/the-later-stages-leave-no-global-hooks-or-pane-fillers ()
   ;; Setting the modules up for the snapshot must not stay: a registered browser pane made the next layouts test
-  ;; open a third editor group, the persist hooks changed every later restore.
+  ;; open a third editor group, the persist hooks changed every later restore.  The registries' libraries load
+  ;; first: run alone, the snapshot would otherwise be taken before layouts' defvars give the built-ins.
   (require 'drgnx-persist)
+  (require 'drgnx-layouts (expand-file-name "modules/tools/drgnx-layouts" drgnx-dir))
   (let ((fillers (copy-tree (bound-and-true-p drgnx-layouts-pane-fillers)))
         (shapes (copy-tree (bound-and-true-p drgnx-layouts-shapes)))
         (state-fns (copy-sequence drgnx-persist-state-functions))
