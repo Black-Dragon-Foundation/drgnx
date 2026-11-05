@@ -24,10 +24,12 @@ ENV is more \"K=V\" strings.  Return (EXIT OUTPUT CALLS): the calls are the fake
           (dolist (s state) (write-region "" nil (expand-file-name s dir) nil 'silent))
           (write-region (format (concat "#!/bin/sh\necho \"$*\" >> %s\n"
                                         "case \"$1\" in\n"
-                                        "  image) [ -e %s/local ] ;;\n"
-                                        "  pull) [ -e %s/pull-ok ] ;;\n"
+                                        ;; `image inspect NAME': `local' = every image is there, `local-base' = only the bases
+                                        "  image) [ -e %s/local ] || { [ -e %s/local-base ] && case \"$3\" in drgnx-base-*) true ;; *) false ;; esac; } ;;\n"
+                                        ;; `pull -q REF': `pull-ok' = every image, `pull-base-ok' = only the bases
+                                        "  pull) case \"$3\" in *drgnx-base-*) [ -e %s/pull-base-ok ] || [ -e %s/pull-ok ] ;; *) [ -e %s/pull-ok ] ;; esac ;;\n"
                                         "  *) exit 0 ;;\nesac\n")
-                                log dir dir)
+                                log dir dir dir dir dir)
                         nil rt nil 'silent)
           (set-file-modes rt #o755)
           (let* ((process-environment
@@ -80,6 +82,59 @@ ENV is more \"K=V\" strings.  Return (EXIT OUTPUT CALLS): the calls are the fake
     (should-not (container-image-test--calls calls "pull"))
     (should (container-image-test--calls calls "build"))
     (should (string-match "(built)" (nth 1 r)))))
+
+(defun container-image-test--builds (calls)
+  "The build calls as (TAG . BASE-ARG-or-nil), in order."
+  (mapcar (lambda (c)
+            (cons (and (string-match " -t \\([^ ]+\\) " c) (match-string 1 c))
+                  (and (string-match "--build-arg BASE=\\([^ ]+\\)" c) (match-string 1 c))))
+          (container-image-test--calls calls "build")))
+
+(ert-deftest drgnx-image/a-test-image-is-built-on-its-base-and-the-base-first ()
+  (let* ((r (container-image-test--run nil)) (builds (container-image-test--builds (nth 2 r))))
+    (should (eql 0 (car r)))
+    (should (= 2 (length builds)))
+    (should (string-match-p "\\`drgnx-base-test:[0-9a-f]\\{16\\}\\'" (car (nth 0 builds))))
+    (should-not (cdr (nth 0 builds)))
+    (should (string-match-p "\\`drgnx-test:[0-9a-f]\\{16\\}\\'" (car (nth 1 builds))))
+    (should (equal (car (nth 0 builds)) (cdr (nth 1 builds))))
+    (should (string-match-p "image: drgnx-base-test:[0-9a-f]\\{16\\} (built)" (nth 1 r)))))
+
+(ert-deftest drgnx-image/a-local-base-is-reused-and-only-the-top-is-built ()
+  (let* ((r (container-image-test--run '("local-base"))) (builds (container-image-test--builds (nth 2 r))))
+    (should (eql 0 (car r)))
+    (should (= 1 (length builds)))
+    (should (string-match-p "\\`drgnx-test:" (car (car builds))))
+    (should (string-match-p "\\`drgnx-base-test:[0-9a-f]\\{16\\}\\'" (cdr (car builds))))
+    (should (string-match-p "image: drgnx-base-test:[0-9a-f]\\{16\\} (local)" (nth 1 r)))))
+
+(ert-deftest drgnx-image/a-pulled-base-is-reused-and-only-the-top-is-built ()
+  (let* ((r (container-image-test--run '("pull-base-ok"))) (builds (container-image-test--builds (nth 2 r))))
+    (should (eql 0 (car r)))
+    (should (= 1 (length builds)))
+    (should (string-match-p "image: drgnx-base-test:[0-9a-f]\\{16\\} (pulled)" (nth 1 r)))
+    (should (string-match-p "image: drgnx-test:[0-9a-f]\\{16\\} (built)" (nth 1 r)))))
+
+(ert-deftest drgnx-image/the-top-tag-includes-the-bases-tag ()
+  ;; a base change re-tags the images on it; the base's own tag does not depend on them
+  (let* ((tmp (make-temp-file "container-image-tag" t)) (script (expand-file-name "test/container/image-tag.sh" container-image-test--root))
+         (tag (lambda (f) (with-temp-buffer (list (call-process "bash" nil t nil script (expand-file-name f tmp))
+                                                  (string-trim (buffer-string))))))
+         (put (lambda (rel text) (with-temp-file (expand-file-name rel tmp) (insert text)))))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "base" tmp))
+          (funcall put "base/Containerfile" "FROM x\nRUN a\n")
+          (funcall put "Containerfile" "# base: drgnx-base-x base/Containerfile\nARG BASE\nFROM ${BASE}\n")
+          (let ((top (funcall tag "Containerfile")) (base (funcall tag "base/Containerfile")))
+            (should (eql 0 (car top)))
+            (funcall put "base/Containerfile" "FROM x\nRUN b\n")
+            (should-not (equal top (funcall tag "Containerfile")))
+            (should-not (equal base (funcall tag "base/Containerfile"))))
+          ;; a base that is not there is an error, never a tag
+          (delete-file (expand-file-name "base/Containerfile" tmp))
+          (should (eql 1 (car (funcall tag "Containerfile")))))
+      (delete-directory tmp t))))
 
 (ert-deftest drgnx-image/a-prebuilt-override-is-used-as-it-is ()
   (let* ((r (container-image-test--run nil "DRGNX_TEST_IMAGE=an-image")) (calls (nth 2 r)))

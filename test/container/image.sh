@@ -34,6 +34,13 @@ if [ "${DRGNX_TEST_IMAGE_PULL:-1}" != 0 ]; then
   fi
 fi
 
+# an image on a base (a line `# base: NAME FILE`, as image-tag.sh reads it) is built FROM the base, which is resolved
+# the same way: local, pulled, built
+base=$(awk '$1 == "#" && $2 == "base:" { print $3, $4; exit }' "$file")
+if [ -n "$base" ]; then
+  set -- --build-arg "BASE=$(bash "$0" "$rt" "${base% *}" "$(dirname "$file")/${base#* }" "$@")" "$@"
+fi
+
 bargs=()
 [ "$rt" != podman ] || bargs=(--memory "${DRGNX_TEST_BUILD_MEMORY:-3g}" --memory-swap "${DRGNX_TEST_BUILD_MEMORY:-3g}")
 "$rt" build ${bargs[@]+"${bargs[@]}"} -q -t "$image" "$@" -f "$file" "$(dirname "$file")" >/dev/null

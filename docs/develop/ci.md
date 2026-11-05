@@ -352,7 +352,12 @@ the image itself and pushes nothing, so a job never runs on an image of other in
 repository's manual runs publish. The prebuilt images:
 
 - `drgnx-test`, `drgnx-test-gui`, `drgnx-test-tty`: the tiers (the `test-image` action; `bin/drgnx test --container`
-  builds one itself when the action set none).
+  builds one itself when the action set none). Each is built on a base: `drgnx-base-test`, `drgnx-base-gui`,
+  `drgnx-base-tty` (`test/container/base/Containerfile*`: only the Fedora packages), published first by the `bases` job
+  of `Test images`. The tier's Containerfile is `ARG BASE` / `FROM ${BASE}` plus `nidhogg.sh` and its few copied
+  files, and its `# base: NAME FILE` line names the base; `image-tag.sh` puts the base's tag into the image's, so a
+  base change re-tags every image on it and a Nidhogg bump re-tags none of the bases. `image.sh` resolves a base as it
+  does an image (local, GHCR, build), so a local run after a Nidhogg bump builds only the thin top.
 - `drgnx-test-rust` (`Containerfile.rust`: Fedora 45 with `test/container/rust-packages.sh` and Nidhogg): the container
   of `runtime.yml`'s `linux` job, by digest, from the `images` job before it; without one the job runs plain
   `fedora:45`, and its steps run `rust-packages.sh` and `nidhogg.sh` themselves. The timing lane's Rust step

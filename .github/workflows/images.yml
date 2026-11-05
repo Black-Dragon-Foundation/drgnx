@@ -1,5 +1,6 @@
 # The prebuilt CI images, so jobs pull them instead of installing packages every run: the three test images
-# (test/container/Containerfile{,.gui,.tty}), the Rust job's (Containerfile.rust) and bubblewrap for the escape suite's
+# (test/container/Containerfile{,.gui,.tty}), each built on a base of only the Fedora packages published first
+# (drgnx-base-{test,gui,tty}, test/container/base/), the Rust job's (Containerfile.rust) and bubblewrap for the escape suite's
 # runner jobs (.github/ci/bwrap, one per architecture). Each is tagged with test/container/image-tag.sh: a hash of the
 # Containerfile and every file it copies. CI looks the tag of its checkout up (.github/ci/ghcr.sh ref) and pulls that
 # digest, else builds the image itself. Published only by `main` (a push that changes their inputs, the weekly
@@ -28,7 +29,47 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The bases of the three test images (test/container/base/): only the Fedora packages, so a change to nidhogg.sh or
+  # the child-frame pins rebuilds none of them. The images below build FROM the one of their checkout's base tag.
+  bases:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: drgnx-base-test
+            file: test/container/base/Containerfile
+          - name: drgnx-base-gui
+            file: test/container/base/Containerfile.gui
+          - name: drgnx-base-tty
+            file: test/container/base/Containerfile.tty
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and push ghcr.io/black-dragon-foundation/${{ matrix.name }}
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          NAME: ${{ matrix.name }}
+          FILE: ${{ matrix.file }}
+          EVENT: ${{ github.event_name }}
+          SOURCE: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          image="ghcr.io/black-dragon-foundation/$NAME"
+          tag="$(bash test/container/image-tag.sh "$FILE")"
+          if [ "$EVENT" != schedule ] && [ -n "$(bash .github/ci/ghcr.sh ref "$NAME" "$tag")" ]; then
+            echo "$image:$tag is on GHCR already"; exit 0
+          fi
+          printf '%s' "$TOKEN" | podman login ghcr.io -u "$ACTOR" --password-stdin
+          podman build --pull=always --label "org.opencontainers.image.source=$SOURCE" \
+            -t "$image:$tag" -f "$FILE" "$(dirname "$FILE")"
+          podman push "$image:$tag"
+
   build:
+    needs: bases
     name: ${{ matrix.name }}${{ matrix.arch && format(' ({0})', matrix.arch) || '' }}
     runs-on: ${{ matrix.runs-on || 'ubuntu-24.04' }}
     timeout-minutes: 30
@@ -38,10 +79,16 @@ jobs:
         include:
           - name: drgnx-test
             file: test/container/Containerfile
+            base-name: drgnx-base-test
+            base-file: test/container/base/Containerfile
           - name: drgnx-test-gui
             file: test/container/Containerfile.gui
+            base-name: drgnx-base-gui
+            base-file: test/container/base/Containerfile.gui
           - name: drgnx-test-tty
             file: test/container/Containerfile.tty
+            base-name: drgnx-base-tty
+            base-file: test/container/base/Containerfile.tty
           - name: drgnx-test-rust
             file: test/container/Containerfile.rust
           - name: drgnx-bwrap
@@ -61,6 +108,8 @@ jobs:
           ACTOR: ${{ github.actor }}
           NAME: ${{ matrix.name }}
           FILE: ${{ matrix.file }}
+          BASE_NAME: ${{ matrix.base-name }}
+          BASE_FILE: ${{ matrix.base-file }}
           ARCH: ${{ matrix.arch }}
           EVENT: ${{ github.event_name }}
           SOURCE: ${{ github.server_url }}/${{ github.repository }}
@@ -72,7 +121,14 @@ jobs:
             echo "$image:$tag is on GHCR already"; exit 0
           fi
           printf '%s' "$TOKEN" | podman login ghcr.io -u "$ACTOR" --password-stdin
-          podman build --pull=always --label "org.opencontainers.image.source=$SOURCE" \
+          # an image on a base builds FROM the base GHCR holds for this checkout's base tag (the `bases` job pushed it)
+          base_args=()
+          if [ -n "$BASE_NAME" ]; then
+            base="ghcr.io/black-dragon-foundation/$BASE_NAME:$(bash test/container/image-tag.sh "$BASE_FILE")"
+            podman pull -q "$base" >/dev/null
+            base_args=(--build-arg "BASE=$base")
+          fi
+          podman build --pull=always --label "org.opencontainers.image.source=$SOURCE" ${base_args[@]+"${base_args[@]}"} \
             -t "$image:$tag" -f "$FILE" "$(dirname "$FILE")"
           podman push "$image:$tag"
           # the moving name of the test images, for a local `DRGNX_TEST_IMAGE=…:f45` (main only)

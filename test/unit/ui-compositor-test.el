@@ -670,7 +670,12 @@ paths no WM serves."
            dir (list (concat "PATH=" path ":/usr/bin:/bin") "DRGNX_CONTAINER=podman" "DRGNX_TEST_BUILD_MEMORY=4g"
                      "DRGNX_UI_COMPOSITOR" "DRGNX_TEST_GUI_IMAGE")
            "test" "--container" "--ui")
-          (let ((build (cdr (member "build" (split-string (with-temp-buffer (insert-file-contents log) (buffer-string)) "\n" t)))))
+          ;; the GUI image is built on its base: the base's build comes first
+          (let* ((args (split-string (with-temp-buffer (insert-file-contents log) (buffer-string)) "\n" t))
+                 (base (cdr (member "build" args)))
+                 (build (cdr (member "build" base))))
+            (should (string-match-p "\\`drgnx-base-gui:[0-9a-f]\\{16\\}\\'" (cadr (member "-t" base))))
+            (should (equal (cadr (member "--build-arg" build)) (concat "BASE=" (cadr (member "-t" base)))))
             (should (string-match-p "\\`drgnx-test-gui:[0-9a-f]\\{16\\}\\'" (cadr (member "-t" build))))
             (should (equal (cadr (member "--memory" build)) "4g")))
           ;; an image override is an image reference, never an option for podman
