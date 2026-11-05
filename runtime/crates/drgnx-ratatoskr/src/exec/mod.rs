@@ -1451,9 +1451,7 @@ impl Inner {
         // a podman client that died with the last hub leaves its container: remove those no running job owns
         if let Some(podman) = self.hooks.podman.clone() {
             let shell = self.hooks.shell_env.clone();
-            crate::clock::blocking(move || {
-                container::remove_leftovers(&shell, &podman, &running)
-            });
+            crate::clock::blocking(move || container::remove_leftovers(&shell, &podman, &running));
         }
     }
 }

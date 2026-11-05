@@ -199,6 +199,20 @@ pub fn install_virtual() {
     virt::install();
 }
 
+/// The runtime's `on_thread_park` hook (test-hooks): a worker parks only with no task to run and no wake it holds
+/// back (a `yield_now`'s, a spent budget's), so an advance or a barrier that saw every task parked trusts it once the
+/// workers are parked too.
+#[cfg(feature = "test-hooks")]
+pub fn worker_parks() {
+    virt::worker(true);
+}
+
+/// The runtime's `on_thread_unpark` hook (test-hooks): see [`worker_parks`].
+#[cfg(feature = "test-hooks")]
+pub fn worker_unparks() {
+    virt::worker(false);
+}
+
 /// Does the hub run on the virtual clock?
 #[cfg(feature = "test-hooks")]
 pub fn is_virtual() -> bool {
@@ -351,6 +365,8 @@ pub(crate) fn on_virtual<F: Future>(f: F) -> F::Output {
         .worker_threads(2)
         .enable_all()
         .on_thread_start(move || virt::LOCAL.with(|l| *l.borrow_mut() = Some(theirs.clone())))
+        .on_thread_park(worker_parks)
+        .on_thread_unpark(worker_unparks)
         .build()
         .unwrap();
     virt::LOCAL.with(|l| *l.borrow_mut() = Some(clock));
@@ -369,12 +385,14 @@ pub(crate) fn sleepers() -> usize {
 #[cfg(feature = "test-hooks")]
 mod virt {
     use super::{Advanced, BUSY_AFTER, Elapsed, Origin};
-    use std::collections::{BTreeMap, BTreeSet, HashSet};
+    use std::cell::Cell;
+    use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
     use std::future::Future;
     use std::pin::Pin;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
     use std::task::{Context, Poll, Wake, Waker};
+    use std::thread::ThreadId;
     use std::time::{Duration, SystemTime};
     use tokio::sync::Notify;
     use tokio::task::futures::TaskLocalFuture;
@@ -451,11 +469,17 @@ mod virt {
     }
 
     impl Flags {
-        /// Runs nothing and will not until something wakes it: ended, or between polls with no wake pending (every
-        /// wake it was given seen by a poll) and outside a [`super::real`] wait.  What else it waits on (the clock, a
-        /// channel nothing fills) does not matter.
+        /// Runs nothing now: ended, or between polls with no wake pending (every wake it was given seen by a poll).
+        /// A wake the runtime holds back (a `yield_now`'s, a spent budget's) is not seen here: the workers' look
+        /// ([`Virtual::workers_quiet`]) covers it.
+        fn idle(&self) -> bool {
+            self.ended || (!self.polling && !self.woken && self.seen == self.fired)
+        }
+
+        /// Runs nothing and will not until something wakes it: idle and outside a [`super::real`] wait.  What else it
+        /// waits on (the clock, a channel nothing fills) does not matter.
         fn parked(&self) -> bool {
-            self.ended || (!self.polling && !self.woken && self.seen == self.fired && self.real == 0)
+            self.idle() && (self.ended || self.real == 0)
         }
     }
 
@@ -503,9 +527,68 @@ mod virt {
         live: Vec<Arc<Task>>,
         /// What a barrier waits for outside the tasks ([`super::outside`]): a name and how much is in flight.
         outside: Vec<(&'static str, Pending)>,
+        /// The runtime's workers, from their first park on ([`worker`]).
+        workers: HashMap<ThreadId, Worker>,
     }
 
     type Pending = Box<dyn Fn() -> usize + Send + Sync>;
+
+    /// A runtime worker: parked now, and how many times it unparked.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct Worker {
+        parked: bool,
+        unparks: u64,
+    }
+
+    thread_local! {
+        /// This thread polled a tracked task since it last parked: a wake that task's poll handed to the runtime
+        /// (deferred until the worker runs out of work) may still be held.
+        static DIRTY: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// The tasks of LIVE running now, or polled since POLLS (each task's poll count at the last look) was taken; POLLS
+    /// now holds this look's.  A task that yields again and again is seen here even between its polls.
+    fn moving(live: &[Arc<Task>], polls: &mut HashMap<usize, u64>) -> Vec<Arc<Task>> {
+        let mut now = HashMap::with_capacity(live.len());
+        let mut out = Vec::new();
+        for t in live {
+            let f = t.flags();
+            let key = Arc::as_ptr(t) as usize;
+            let polled = polls.get(&key).is_some_and(|p| *p != f.polls);
+            now.insert(key, f.polls);
+            if !f.idle() || polled {
+                out.push(t.clone());
+            }
+        }
+        *polls = now;
+        out
+    }
+
+    /// The runtime's park hooks (PARKS: about to park; else just unparked), on the worker's own thread.  A worker
+    /// parks only once it holds no deferred wake and no task to run.
+    pub(super) fn worker(parks: bool) {
+        if parks {
+            DIRTY.with(|d| d.set(false));
+        }
+        let Some(v) = current() else { return };
+        {
+            let mut st = v.state();
+            let w = st
+                .workers
+                .entry(std::thread::current().id())
+                .or_insert(Worker {
+                    parked: false,
+                    unparks: 0,
+                });
+            w.parked = parks;
+            if !parks {
+                w.unparks += 1;
+            }
+        }
+        if parks {
+            v.changed.notify_waiters();
+        }
+    }
 
     pub(crate) struct Virtual {
         base: tokio::time::Instant,
@@ -531,6 +614,7 @@ mod virt {
                     advancing: false,
                     live: Vec::new(),
                     outside: Vec::new(),
+                    workers: HashMap::new(),
                 }),
                 changed: Notify::new(),
                 one_at_a_time: tokio::sync::Mutex::new(()),
@@ -612,45 +696,75 @@ mod virt {
             Some(entry.task)
         }
 
-        /// Wait until WOKEN and the tasks it spawned are parked, and every task spawned before has run once; at most
-        /// [`BUSY_AFTER`] of real time, after which those still running are named in BUSY and not waited for again.
+        /// Wait until WOKEN and the tasks it spawned are parked, every task spawned before has run once, and no task
+        /// runs or holds a deferred wake; at most [`BUSY_AFTER`] of real time, after which those still running are
+        /// named in BUSY and not waited for again.
         async fn settle(&self, woken: Option<Arc<Task>>, busy: &mut BTreeSet<String>) {
             let give_up = tokio::time::Instant::now() + BUSY_AFTER;
-            let mut woken = woken;
+            // the tasks last seen running: named if the limit passes while a deferred wake hides them
+            let mut last: Vec<Arc<Task>> = woken.iter().cloned().collect();
+            let mut polls = HashMap::new();
             loop {
                 let note = self.changed.notified();
                 let mut note = std::pin::pin!(note);
                 note.as_mut().enable();
+                let before = self.workers_quiet();
                 let mut running: Vec<Arc<Task>> = Vec::new();
-                {
+                let (idle, moving) = {
                     let mut st = self.state();
                     st.fresh.retain(|t| !t.started());
                     st.born.retain(|t| !t.parked());
                     running.extend(st.fresh.iter().cloned());
                     running.extend(st.born.iter().cloned());
+                    st.live.retain(|t| !t.flags().ended);
+                    let idle = st.live.iter().all(|t| t.flags().idle());
+                    (idle, moving(&st.live, &mut polls))
+                };
+                if let Some(w) = &woken
+                    && !w.parked()
+                {
+                    running.push(w.clone());
                 }
-                if let Some(w) = &woken {
-                    if w.parked() {
-                        woken = None;
-                    } else {
-                        running.push(w.clone());
-                    }
-                }
-                if running.is_empty() {
+                if running.is_empty() && idle && before.is_some() && self.workers_quiet() == before
+                {
                     return;
                 }
-                if tokio::time::timeout_at(give_up, note).await.is_err() {
-                    for t in &running {
+                if !running.is_empty() || !moving.is_empty() {
+                    last = running.iter().chain(&moving).cloned().collect();
+                }
+                // a deferred wake tells nobody: looked at again each millisecond until a worker parks
+                let next = if running.is_empty() {
+                    give_up.min(tokio::time::Instant::now() + Duration::from_millis(1))
+                } else {
+                    give_up
+                };
+                if tokio::time::timeout_at(next, note).await.is_err()
+                    && tokio::time::Instant::now() >= give_up
+                {
+                    for t in &last {
                         busy.insert(t.origin.as_str().to_string());
                     }
                     let mut st = self.state();
-                    st.fresh
-                        .retain(|t| !running.iter().any(|r| Arc::ptr_eq(r, t)));
-                    st.born
-                        .retain(|t| !running.iter().any(|r| Arc::ptr_eq(r, t)));
+                    st.fresh.retain(|t| !last.iter().any(|r| Arc::ptr_eq(r, t)));
+                    st.born.retain(|t| !last.iter().any(|r| Arc::ptr_eq(r, t)));
                     return;
                 }
             }
+        }
+
+        /// The workers' state, when every worker but this thread is parked and this thread has polled no tracked
+        /// task since it last parked: no wake is held back in a worker's deferred list.  A look after the tasks'
+        /// flags that gives the same state shows nothing ran in between.
+        fn workers_quiet(&self) -> Option<HashMap<ThreadId, Worker>> {
+            if DIRTY.with(Cell::get) {
+                return None;
+            }
+            let me = std::thread::current().id();
+            let st = self.state();
+            if st.workers.iter().any(|(id, w)| *id != me && !w.parked) {
+                return None;
+            }
+            Some(st.workers.clone())
         }
     }
 
@@ -798,26 +912,37 @@ mod virt {
 
         pub(super) async fn settle_real(&self, within: Duration, ok: &[String]) -> super::Settled {
             let give_up = tokio::time::Instant::now() + within;
+            // the origins last seen running: named if the limit passes while a deferred wake hides them
+            let mut last: Vec<String> = Vec::new();
+            let mut polls = HashMap::new();
             loop {
                 let note = self.changed.notified();
                 let mut note = std::pin::pin!(note);
                 note.as_mut().enable();
+                let before = self.workers_quiet();
                 let (outside, waited) = {
                     let mut st = self.state();
                     // what is in flight outside first: what it sends wakes a task, which the look below then sees
                     let outside = st.outside.iter().any(|(_, pending)| pending() > 0);
                     st.live.retain(|t| !t.flags().ended);
-                    let waited = st
-                        .live
+                    let mine = |t: &&Arc<Task>| !ok.iter().any(|o| o == t.origin.as_str());
+                    let waited = st.live.iter().filter(mine).any(|t| !t.settled());
+                    let running: Vec<String> = moving(&st.live, &mut polls)
                         .iter()
-                        .any(|t| !ok.iter().any(|o| o == t.origin.as_str()) && !t.settled());
+                        .filter(mine)
+                        .map(|t| t.origin.as_str().to_string())
+                        .collect();
+                    if !running.is_empty() {
+                        last = running;
+                    }
                     (outside, waited)
                 };
-                if !outside && !waited {
-                    return self.left(ok, false);
+                if !outside && !waited && before.is_some() && self.workers_quiet() == before {
+                    return self.left(ok, None);
                 }
-                // nothing outside tells the clock it is done: looked at again each millisecond while it is in flight
-                let next = if outside {
+                // nothing outside, and no deferred wake, tells the clock it is done: looked at again each
+                // millisecond while one may be what is left
+                let next = if outside || !waited {
                     give_up.min(tokio::time::Instant::now() + Duration::from_millis(1))
                 } else {
                     give_up
@@ -825,14 +950,14 @@ mod virt {
                 if tokio::time::timeout_at(next, note).await.is_err()
                     && tokio::time::Instant::now() >= give_up
                 {
-                    return self.left(ok, true);
+                    return self.left(ok, Some(&last));
                 }
             }
         }
 
-        /// What a settle leaves: the tasks inside a real wait and what is in flight outside; after its limit (LATE),
-        /// the other tasks OK does not list that still run.
-        fn left(&self, ok: &[String], late: bool) -> super::Settled {
+        /// What a settle leaves: the tasks inside a real wait and what is in flight outside; after its limit (LATE:
+        /// the origins last seen running), the other tasks OK does not list that still run.
+        fn left(&self, ok: &[String], late: Option<&[String]>) -> super::Settled {
             let st = self.state();
             let mut out = super::Settled::default();
             for (name, pending) in &st.outside {
@@ -848,7 +973,7 @@ mod virt {
                 let origin = t.origin.as_str().to_string();
                 if f.real > 0 || f.long > 0 {
                     out.waiting.push(origin);
-                } else if late && !f.parked() && !ok.contains(&origin) {
+                } else if late.is_some_and(|l| l.contains(&origin)) && !ok.contains(&origin) {
                     out.busy.push(origin);
                 }
             }
@@ -942,6 +1067,7 @@ mod virt {
                     w.clone_from(cx.waker());
                 }
             }
+            DIRTY.with(|d| d.set(true));
             let seen = {
                 let mut f = this.task.flags();
                 f.polling = true;

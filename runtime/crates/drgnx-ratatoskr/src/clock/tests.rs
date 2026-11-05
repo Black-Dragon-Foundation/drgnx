@@ -253,7 +253,6 @@ fn a_task_still_running_after_the_settle_is_named_busy() {
                 tokio::task::yield_now().await;
             }
         });
-        advance(Duration::ZERO).await;
         assert_eq!(
             settle_real(ms(100), &[]).await,
             Settled {

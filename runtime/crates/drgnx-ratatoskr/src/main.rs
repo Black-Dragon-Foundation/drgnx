@@ -85,11 +85,14 @@ fn main() -> ExitCode {
         Command::SandboxRun(args) => return code(drgnx_ratatoskr::sandbox::run(args)),
         Command::Serve(args) => {
             let supervisor = args.supervisor;
-            let runtime = match tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(2)
-                .enable_all()
-                .build()
-            {
+            let mut builder = tokio::runtime::Builder::new_multi_thread();
+            builder.worker_threads(2).enable_all();
+            // the virtual clock's look at the workers: a parked worker holds no deferred wake
+            #[cfg(feature = "test-hooks")]
+            builder
+                .on_thread_park(drgnx_ratatoskr::clock::worker_parks)
+                .on_thread_unpark(drgnx_ratatoskr::clock::worker_unparks);
+            let runtime = match builder.build() {
                 Ok(r) => r,
                 Err(e) => {
                     eprintln!("ratatoskr: cannot start: no async runtime: {e}");

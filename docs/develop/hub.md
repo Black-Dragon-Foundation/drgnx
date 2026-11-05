@@ -260,7 +260,10 @@ An advance moves the clock to each due deadline in order. Sleepers due at one in
 wait, one at a time. After each wake it waits until the woken task, and every task that one spawned, is parked or has
 ended. A task is parked between polls with no wake pending: every wake it was given, by the clock or by anything else
 (a channel, a socket), seen by a poll that began after it. What it then waits on does not matter, so a loop that sleeps
-and then waits for its next signal on a channel is parked once its poll ends. Before moving the clock it waits until
+and then waits for its next signal on a channel is parked once its poll ends. A wake tokio holds back (a `yield_now`'s,
+a spent budget's: deferred until the worker runs out of work) is not seen on the task, so the advance also waits until
+no clock task runs and every runtime worker is parked (`clock::worker_parks`, the runtime's park hook): a worker parks
+only once it holds no deferred wake. Before moving the clock it waits until
 every task spawned since has run once, so a timer it started is in the queue. It then answers:
 
 - `woken`: the sleepers it woke.
@@ -315,7 +318,8 @@ lowest pending line:
 
 1. Every connection's socket is read to `WouldBlock` or EOF, and every line read is served.
 2. The hub settles, up to 5 s of real time: every task started by `clock::spawn` is parked (no wake pending, not in a
-   poll) and outside any **real wait**, and nothing outside the tasks is in flight. Tasks whose origin `waiting_ok`
+   poll, the workers parked as for an advance) and outside any **real wait**, and nothing outside the tasks is in
+   flight. Tasks whose origin `waiting_ok`
    lists are not waited for. So a task another task wakes through a channel (a job's end waking its session, an event
    bifrost put on `gateway:events`) has run before the barrier goes on. A real wait is a wait on something outside the
    clock that ends by itself:

@@ -1203,7 +1203,7 @@ async fn a_request_is_in_flight_until_its_event_is_sent() {
         {"path": "/a/", "chunks": [[0, MESSAGE_START], [0, MESSAGE_STOP]]}
     ]));
     let registry = Arc::new(Mem(
-        [(token_hash(AGENT.as_bytes()), agent(&["a"], None))].into(),
+        [(token_hash(AGENT.as_bytes()), agent(&["a"], None))].into()
     ));
     let providers = Arc::new(RwLock::new(
         [(

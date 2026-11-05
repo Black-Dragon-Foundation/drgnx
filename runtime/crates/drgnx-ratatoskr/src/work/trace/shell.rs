@@ -238,10 +238,8 @@ impl Traces {
             }
             return;
         }
-        let _ = crate::clock::blocking(move || {
-            st.apply(TraceEv::StepClosed { step, command, at })
-        })
-        .await;
+        let _ = crate::clock::blocking(move || st.apply(TraceEv::StepClosed { step, command, at }))
+            .await;
     }
 }
 
