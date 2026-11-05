@@ -59,6 +59,49 @@ pub(crate) fn job(name: &str, own: Priority, submitted: u64) -> Job {
     }
 }
 
+/// A quiet machine at `now = 1_000_000`: 32 GiB with 24,000 MiB available, no pressure, on AC, 500 of 1,000 GB free.
+pub(crate) fn machine(profile: Profile) -> MachineState {
+    MachineState {
+        name: "m".into(),
+        profile,
+        now: 1_000_000,
+        boot_id: "boot-a".into(),
+        mem_total_mib: 32768,
+        mem_available_mib: 24_000,
+        psi: Psi::default(),
+        disk_free_gb: 500,
+        disk_total_gb: 1000,
+        on_ac: true,
+        last_start: None,
+        running: vec![],
+        features: vec![],
+        reachable: true,
+        others: vec![],
+    }
+}
+
+/// A running job granted 4 cores that uses 1 on average and is expected to take 10 minutes.
+pub(crate) fn running(
+    name: &str,
+    priority: Priority,
+    started: u64,
+    reserve_mib: u64,
+    current_mib: u64,
+) -> RunningJob {
+    RunningJob {
+        id: JobId(name.into()),
+        priority,
+        started,
+        reserve_mib,
+        current_mib,
+        cores: 4,
+        expected: expected_min(10.0),
+        restartable: true,
+        evicted_once: false,
+        long_build: false,
+    }
+}
+
 pub(crate) fn expected_min(minutes: f64) -> Expected {
     Expected {
         minutes,

@@ -61,6 +61,51 @@ fn job(name: &str, own: Priority, submitted: u64) -> Job {
     }
 }
 
+fn machine(profile: Profile, avail: u64, now: u64) -> MachineState {
+    MachineState {
+        name: "m".into(),
+        profile,
+        now,
+        boot_id: "boot-a".into(),
+        mem_total_mib: avail + 8192,
+        mem_available_mib: avail,
+        psi: Psi::default(),
+        disk_free_gb: 500,
+        disk_total_gb: 1000,
+        on_ac: true,
+        last_start: None,
+        running: vec![],
+        features: vec![],
+        reachable: true,
+        others: vec![],
+    }
+}
+
+fn running(
+    name: &str,
+    priority: Priority,
+    started: u64,
+    grant: &Grant,
+    minutes: f64,
+) -> RunningJob {
+    RunningJob {
+        id: JobId(name.into()),
+        priority,
+        started,
+        reserve_mib: grant.reserve_mib,
+        current_mib: 0,
+        cores: grant.cores,
+        expected: Expected {
+            minutes,
+            cpu: 0.0,
+            mem_p95_mib: Some(0),
+        },
+        restartable: true,
+        evicted_once: false,
+        long_build: false,
+    }
+}
+
 fn id(i: usize) -> JobId {
     JobId(format!("j{i}"))
 }
@@ -203,6 +248,204 @@ proptest! {
             match started.get(j) {
                 Some(s) => prop_assert!(s - a <= bound, "{j} waited {} s, over {bound}", s - a),
                 None => prop_assert!(end - a <= bound, "{j} still waits after {} s, over {bound}", end - a),
+            }
+        }
+    }
+}
+
+/// Two schedulers on one machine, each admitting under the shared admission lock: each sees the other's jobs only as
+/// reservations (`MachineState.others`), counted by `count_others`. `worst` is the most both have reserved at once.
+#[derive(Clone, Debug)]
+struct Two {
+    profile: Profile,
+    avail: u64,
+    now: u64,
+    ours: [Vec<RunningJob>; 2],
+    worst: i64,
+}
+
+const NAMES: [&str; 2] = ["hub", "jobq"];
+
+impl Two {
+    fn new(profile: Profile, avail: u64) -> Self {
+        Two {
+            profile,
+            avail,
+            now: 100_000,
+            ours: [vec![], vec![]],
+            worst: 0,
+        }
+    }
+
+    fn limits(&self) -> Limits {
+        Limits::for_profile(self.profile, self.avail + 8192, 64)
+    }
+
+    /// What may be reserved in all: `MemAvailable − floor − reserve_user` (nothing is in use yet).
+    fn limit(&self) -> i64 {
+        let l = self.limits();
+        self.avail as i64 - l.floor_mib as i64 - l.reserve_user_mib as i64
+    }
+
+    fn view(&self, s: usize) -> MachineState {
+        let mut m = machine(self.profile, self.avail, self.now);
+        m.running = self.ours[s].clone();
+        m.others = self.ours[1 - s]
+            .iter()
+            .map(|r| Reservation {
+                scheduler: NAMES[1 - s].into(),
+                pid: 100 + s as u32,
+                boot_id: "boot-a".into(),
+                start_time: 1,
+                job: r.id.0.clone(),
+                reserve_mib: r.reserve_mib,
+                current_mib: r.current_mib,
+                expires: self.now + 3600,
+            })
+            .collect();
+        m
+    }
+
+    fn try_admit(&mut self, s: usize, name: &str, mem: Range<u64>, p95: Option<u64>) -> bool {
+        let lim = self.limits();
+        let m = self.view(s);
+        let b = budget(&m, &lim);
+        let mut j = job(name, Priority::P3, self.now);
+        j.spec.mem_mib = mem;
+        j.spec.cores = Range { min: 1, max: 1 };
+        let exp = Expected {
+            minutes: 10.0,
+            cpu: 0.1,
+            mem_p95_mib: p95,
+        };
+        if admit(&j, Priority::P3, &exp, &m, &b, &lim).is_err() {
+            return false;
+        }
+        let g = size(&j, &exp, &b, 1);
+        self.ours[s].push(running(name, Priority::P3, self.now, &g, 10.0));
+        let total: i64 = self
+            .ours
+            .iter()
+            .flatten()
+            .map(|r| r.reserve_mib as i64)
+            .sum();
+        self.worst = self.worst.max(total);
+        true
+    }
+}
+
+proptest! {
+    #[test]
+    fn admitted_reservations_never_exceed_the_budget(
+        dedicated in any::<bool>(),
+        avail in 4000u64..64_000,
+        jobs in prop::collection::vec((0usize..2, 256u64..8192, 0u64..8192, prop::option::of(0u64..12_000)), 1..24),
+    ) {
+        let profile = if dedicated { Profile::Dedicated } else { Profile::Workstation };
+        let mut two = Two::new(profile, avail);
+        for (i, (s, min, extra, p95)) in jobs.into_iter().enumerate() {
+            two.try_admit(s, &format!("j{i}"), Range { min, max: min + extra }, p95);
+        }
+        prop_assert!(two.worst <= two.limit().max(0), "reserved {} of {}", two.worst, two.limit());
+    }
+}
+
+#[derive(Clone, Debug)]
+enum Ev {
+    Admit(usize, &'static str),
+    Finish(usize, &'static str),
+}
+skuld::events!(Ev { Admit, Finish });
+
+impl skuld::Core for Two {
+    type Event = Ev;
+    fn step(&mut self, ev: Ev) -> Vec<Ev> {
+        let mem = |name: &str| match name {
+            "a" | "b" => (
+                Range {
+                    min: 4000,
+                    max: 6000,
+                },
+                Some(3000),
+            ),
+            _ => (
+                Range {
+                    min: 3000,
+                    max: 3000,
+                },
+                None,
+            ),
+        };
+        match ev {
+            Ev::Admit(s, name) => {
+                let (range, p95) = mem(name);
+                self.try_admit(s, name, range, p95);
+            }
+            Ev::Finish(s, name) => self.ours[s].retain(|r| r.id.0 != name),
+        }
+        vec![]
+    }
+}
+
+/// [A] every order: the hub admits a and b and finishes a while jobq admits x and y, each admission under the lock,
+/// in every interleaving. However they fall, what both reserve stays within one machine's budget.
+#[test]
+fn admissions_in_every_order_stay_in_the_budget() {
+    let mut p = skuld::Partial::new();
+    p.source(
+        "hub",
+        vec![Ev::Admit(0, "a"), Ev::Admit(0, "b"), Ev::Finish(0, "a")],
+    );
+    p.source("jobq", vec![Ev::Admit(1, "x"), Ev::Admit(1, "y")]);
+    let report = skuld::every_order(
+        &p,
+        skuld::Bound::default(),
+        || Two::new(Profile::Dedicated, 12_000),
+        |two, order| {
+            if two.worst > two.limit() {
+                return Err(format!(
+                    "{order:?}: reserved {} of {}",
+                    two.worst,
+                    two.limit()
+                ));
+            }
+            Ok(())
+        },
+    );
+    assert_eq!(report.mode, skuld::Mode::Exhaustive);
+}
+
+proptest! {
+    #[test]
+    fn a_job_is_evicted_at_most_once(
+        jobs in prop::collection::vec((1u8..=5, 0u64..1200, 1u32..30, any::<bool>(), prop::bool::weighted(0.2), 256u64..4096), 1..12),
+        rounds in prop::collection::vec((0u64..600, 100u64..20_000), 1..6),
+    ) {
+        let mut m = machine(Profile::Dedicated, 32_000, 100_000);
+        let mut evicted = std::collections::HashSet::new();
+        m.running = jobs
+            .iter()
+            .enumerate()
+            .map(|(i, &(p, age, minutes, restartable, once, mib))| {
+                let g = Grant { cores: 1, mem_cap_mib: mib, reserve_mib: mib };
+                let mut r = running(&id(i).0, Priority::from_number(p), m.now - age, &g, f64::from(minutes));
+                r.current_mib = mib / 2;
+                r.restartable = restartable;
+                r.evicted_once = once;
+                if once {
+                    evicted.insert(r.id.clone());
+                }
+                r
+            })
+            .collect();
+        for (dt, need) in rounds {
+            m.now += dt;
+            for v in preempt_victims(Priority::P1, &m, need, m.now, true) {
+                prop_assert!(evicted.insert(v.clone()), "{v} evicted twice");
+                let r = m.running.iter_mut().find(|r| r.id == v).unwrap();
+                // Requeued and started again: it remembers the eviction.
+                r.evicted_once = true;
+                r.started = m.now;
             }
         }
     }
