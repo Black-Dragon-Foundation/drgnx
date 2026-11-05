@@ -116,6 +116,9 @@
   "tasks/write": ["user"],
   "timeline/get": ["user"],
   "work/conclusions": ["user"],
+  "work/file-at": ["user"],
+  "work/files": ["user"],
+  "work/hunks": ["user"],
   "work/map/close": ["user"],
   "work/map/set": ["user"],
   "work/map/subscribe": ["user"]

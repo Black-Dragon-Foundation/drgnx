@@ -17,6 +17,7 @@ pub mod asks;
 pub mod bases;
 pub mod conclusions;
 pub mod detail;
+pub mod edits;
 pub mod machines;
 pub mod map;
 pub mod presence;

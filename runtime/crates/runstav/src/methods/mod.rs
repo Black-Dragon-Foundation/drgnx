@@ -227,6 +227,9 @@ params! {
     WorkMapSubscribe(work::MapSubscribe),
     WorkMapSet(work::MapSet),
     WorkMapClose(work::MapClose),
+    WorkFiles(work::EditedFiles),
+    WorkHunks(work::HunksParams),
+    WorkFileAt(work::FileAtParams),
 }
 
 /// Every method, in no order.

@@ -24,6 +24,7 @@
 //! | `machines/{report,list}` | [`crate::work::machines`] | P2 5 |
 //! | `work/conclusions` | [`crate::work::conclusions`] | P2 14 |
 //! | `agents/presence/{subscribe,get}` | [`crate::work::presence`] | P2 15 |
+//! | `work/{files,hunks,file-at}` | [`crate::work::edits`] | Work space |
 //! | `work/map/{subscribe,set,close}` | [`crate::work::map`] | P2 18 |
 
 use crate::dispatch::Caller;
@@ -135,6 +136,9 @@ pub async fn serve(
         Params::WorkMapSubscribe(p) => answer(work::map::subscribe(f, c, p).await),
         Params::WorkMapSet(p) => answer(work::map::set(f, c, p)),
         Params::WorkMapClose(p) => answer(work::map::close(f, c, p)),
+        Params::WorkFiles(p) => answer(work::edits::files(f, c, p).await),
+        Params::WorkHunks(p) => answer(work::edits::hunks(f, c, p).await),
+        Params::WorkFileAt(p) => answer(work::edits::file_at(f, c, p).await),
         other => return Err(Box::new(other)),
     })
 }

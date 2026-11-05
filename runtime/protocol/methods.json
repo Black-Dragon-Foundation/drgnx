@@ -16626,6 +16626,215 @@
       "classes": [
         "user"
       ],
+      "doc": "a file's bytes (base64) as the newest step snapshot at or before seq had them",
+      "name": "work/file-at",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/file-at`: a file as a step's snapshot had it.",
+        "properties": {
+          "path": {
+            "description": "Relative to the worktree.",
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "seq": {
+            "description": "The step; the newest snapshot at or before it answers.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "session": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "session",
+          "path",
+          "seq"
+        ],
+        "title": "FileAtParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/file-at`'s answer.",
+        "properties": {
+          "bytes": {
+            "description": "The file's bytes, base64.",
+            "type": "string"
+          },
+          "seq": {
+            "description": "The step whose snapshot this is.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "bytes",
+          "seq"
+        ],
+        "title": "FileAt",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the files a session edited, with added and removed lines against its worktree's base (new files included)",
+      "name": "work/files",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/files`: the files session `session` edited.",
+        "properties": {
+          "session": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "session"
+        ],
+        "title": "EditedFiles",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "EditedFile": {
+            "additionalProperties": false,
+            "description": "One edited file: its added and removed lines against the worktree's base.",
+            "properties": {
+              "minus": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "description": "Relative to the worktree.",
+                "type": "string"
+              },
+              "plus": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "read_at": {
+                "description": "When the agent last read it (seconds); absent until the edit history supplies it.",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "untracked": {
+                "description": "The file is not in the base at all (the agent made it).",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "path",
+              "plus",
+              "minus",
+              "untracked"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/files`' answer.",
+        "properties": {
+          "files": {
+            "items": {
+              "$ref": "#/$defs/EditedFile"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "files"
+        ],
+        "title": "EditedFilesList",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "one edited file's unified diff against its worktree's base",
+      "name": "work/hunks",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/hunks`: one file's changes.",
+        "properties": {
+          "path": {
+            "description": "Relative to the worktree.",
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "session": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "session",
+          "path"
+        ],
+        "title": "HunksParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/hunks`' answer: the unified diff against the base.",
+        "properties": {
+          "diff": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "diff"
+        ],
+        "title": "Hunks",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "end one map view of this connection (a connection's views end with it)",
       "name": "work/map/close",
       "params": {
