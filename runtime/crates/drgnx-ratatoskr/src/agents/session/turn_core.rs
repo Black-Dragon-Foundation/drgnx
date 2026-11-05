@@ -157,7 +157,7 @@ pub(crate) struct TurnCore {
     /// The process is being ended (a kill, a Stop's deadline): no turn starts, and unless the hub is ending, no prompt
     /// is taken.
     killed: bool,
-    /// The hub is ending: a turn's end holds nothing and starts nothing.
+    /// The hub is ending: a turn's end holds nothing and starts nothing, and no event pair is armed or sent.
     ending: bool,
     /// The requests the user is asked, oldest first, with the matrix card each waits on.
     held: Vec<(u64, Option<i64>)>,
@@ -345,10 +345,15 @@ impl TurnCore {
             }
             TurnEvent::EmitTick => {
                 self.emit_armed = false;
+                // while the hub ends no pair goes out: the snapshot is read at the send and may show the session's own
+                // exit, and the editors learn of the end from their connection's end of file
+                if self.ending {
+                    return Vec::new();
+                }
                 vec![E::Emit]
             }
             TurnEvent::Changed => {
-                if self.emit_armed {
+                if self.emit_armed || self.ending {
                     return Vec::new();
                 }
                 self.emit_armed = true;

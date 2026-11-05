@@ -346,7 +346,8 @@ A module can add variables to the environment of an agent you start from the edi
 A name that is not on the list is dropped, with one notice naming it. A name that looks like a credential (it contains
 `KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PASSPHRASE` or `CREDENTIAL`) never goes through, whatever the list says: keys
 reach agents through the gateway, not the environment. Agents the hub starts on its own (a plan's workers, a manager's
-workers) get no module variables.
+workers) get no module variables. The hub keeps a session's module variables with it: when the hub restarts, or resumes
+a session that waited on a job, the agent gets them again (less any name you took off the list since).
 
 ## Jobs and your Claude settings
 

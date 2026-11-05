@@ -1267,15 +1267,18 @@ and name. The session is recorded in `runtime.db` (`asession`, migration 5) and 
   `drgnx-agents-env-functions` (the Live browser's `PLAYWRIGHT_MCP_CDP_ENDPOINT`). Each name must be on the runtime
   setting `drgnx-agents-start-env-names` and must not be `refused_env_name` (a name with KEY, TOKEN, SECRET, PASSWORD,
   PASSPHRASE or CREDENTIAL in it) nor a provider's `key_env` (as `env/set`), else `invalid-params` at `env[i].name`; the values are added to the launch plan's
-  environment last, so they win over the profile's and the lock's. They belong to that start only: a session the hub
-  restarts or resumes does not get them again. The mirror (`drgnx-agents-mirror-start`) fills `env` from the hook and
+  environment last, so they win over the profile's and the lock's. The hub keeps them in the session's notes
+  (`meta.json`, 0600 in its own folder): a session it restarts or resumes gets them again, checked against the settings
+  as they are then (a name taken off the list since, or now a provider's `key_env`, is left out and logged). The mirror (`drgnx-agents-mirror-start`) fills `env` from the hook and
   drops, with one notice, the names the hub would refuse. The mirror also runs `drgnx-agents-task-functions` for hub
   sessions that have a task: `start` when a session is first seen, `turn-start` when a turn begins and `turn-end` when
   it ends. A turn begins when the status becomes `busy` and ends when it stops being busy or when its `stop` entry
   arrives, whichever the mirror sees first: the hub sends a session's state at most every 50 ms, so a short turn can
   go by with no `busy` snapshot. Each turn runs its hooks once (the mirror counts turns per session), a snapshot or
-  entries sent again run nothing, and the turns already in a transcript fetched at attach run none. The work tracker
-  records a task's commits from `turn-end`.
+  entries sent again run nothing, and a fetched transcript's turns that had ended when the editor last heard of the
+  session (within the `entries_count` of the last snapshot it applied) run none. A turn that ended after that runs
+  its hooks once, even when it ended before the fetch's answer and its own events were dropped as older than it. The
+  work tracker records a task's commits from `turn-end`.
 
 - **Shapes.** Snapshots and entries are records 2 (`runstav::methods::agents::{Snapshot, Entry}`), unchanged for the
   mirror and the cockpit. Message chunks of one message join into one entry (`text`, `length`); a tool call and its
@@ -1356,7 +1359,9 @@ What the core keeps:
   cancelled at once: the agent no longer waits on it. A matrix card that no request waits on any more after such a
   cancel is withdrawn (`Withdraw`: `norn::write::cards::card_withdraw`, state `withdrawn` with a `card` event), so it
   leaves the open cards and the needs-you lists; a card the user settled first stays settled.
-- One event pair is armed at a time; the timer's tick sends it.
+- One event pair is armed at a time; the timer's tick sends it. While the hub ends none is armed or sent: the shell
+  reads the snapshot when it sends a pair, so one sent then could show the session's own exit, and an editor that read
+  it before its connection's end of file would keep that reason instead of the hub's.
 
 The shell acts on a turn's end as the step decided it: whether the hub is ending is read under the step's lock, never
 again after it.
@@ -1368,6 +1373,7 @@ again after it.
 - four senders, an editor that removes and delivers, an agent, and a pause after the tool call;
 - two senders, the hub's delivery (`sending`, then the prompt), an editor that delivers, an agent, and the user's kill
   or the hub's end, then the exit;
+- a sender, an agent, the event pair's timer, and the hub's end, then the exit (no pair goes out while the hub ends);
 - a user who answers and stops, an agent that asks twice, completes a tool call and answers, a pause after the tool
   call, and the cockpit settling a card;
 - two senders, an agent that asks in each turn, the matrix deciding late, and the user's kill, the hub's end or a

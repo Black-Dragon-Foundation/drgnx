@@ -115,6 +115,9 @@ with no busy status in between."
 (defvar drgnx-agents-mirror--shown)
 (defvar drgnx-agents-mirror--hub-turns (make-hash-table :test #'equal)
   "Hub id → the turn count (the snapshot's `turns') of the last snapshot applied.")
+(defvar drgnx-agents-mirror--hub-entries (make-hash-table :test #'equal)
+  "Hub id → how many entries the transcript had at the last snapshot applied (its `entries_count'): where a fetched
+transcript's new turns begin.")
 
 (defun drgnx-agents-mirror--transitions (m new prev &optional turned)
   "Run the task hooks for what a snapshot changed in mirror M, which was in status PREV before it (M was just made,
@@ -151,6 +154,7 @@ turn begins and ends, and the one open now begins."
         (drgnx-notify 'agents 'warn (format "%s: %s" (plist-get snap :name) (format "not enforced: %s" (plist-get snap :enforced_why)))
                       :id (intern (concat "lock-" id)) :life 'event)))
     ;; a session whose transcript is shown has its turns told by its entries too; one nobody shows, by the count alone
+    (when-let* ((count (plist-get snap :entries_count))) (puthash id count drgnx-agents-mirror--hub-entries))
     (let* ((turns (plist-get snap :turns)) (last (gethash id drgnx-agents-mirror--hub-turns)))
       (when turns (puthash id turns drgnx-agents-mirror--hub-turns))
       (drgnx-agents-mirror--transitions
@@ -236,7 +240,10 @@ transcript before."
     stops))
 
 (defun drgnx-agents-mirror--fetch (m)
-  "Fetch mirror M's whole transcript; then apply the events that came meanwhile and are newer."
+  "Fetch mirror M's whole transcript; then apply the events that came meanwhile and are newer.
+The turns that had ended when this editor last heard of the session (the entries the last snapshot applied counted)
+ran their hooks, or belong to the past: none runs again.  A turn that ended after that, even before the fetch's
+answer, runs its hooks once."
   (let ((id (drgnx-agent-session-remote m)))
     (puthash id nil drgnx-agents-mirror--fetching)
     (drgnx-hub-call "agents/get" (list :id id)
@@ -244,16 +251,23 @@ transcript before."
                       (let ((waiting (gethash id drgnx-agents-mirror--fetching)) (seq (or (plist-get r :seq) 0)))
                         (remhash id drgnx-agents-mirror--fetching)
                         (when r
-                          (when-let* ((snap (drgnx-agents-mirror--decode 'drgnx-records-session (plist-get r :session))))
-                            (drgnx-agents-mirror--apply-snapshot (car snap)))
-                          (setf (drgnx-agent-session-entries m) nil)
-                          ;; the turns already in the transcript ran their hooks (or belong to the past): none runs again
-                          (let ((stops (drgnx-agents-mirror--apply-entries
-                                        m (let ((i -1)) (mapcar (lambda (e) (list (cl-incf i) e)) (plist-get r :entries)))))
-                                (c (drgnx-agents-mirror--counts id)))
-                            (aset c 2 stops)
-                            (aset c 1 stops)
-                            (aset c 0 (if (eq (drgnx-agent-session-status m) 'busy) (1+ stops) stops)))
+                          (let* ((known (gethash id drgnx-agents-mirror--hub-entries))   ; before the answer's snapshot
+                                 (c (drgnx-agents-mirror--counts id))
+                                 (open (> (aref c 0) (aref c 1)))
+                                 (stops (progn (setf (drgnx-agent-session-entries m) nil)
+                                               (drgnx-agents-mirror--apply-entries
+                                                m (let ((i -1)) (mapcar (lambda (e) (list (cl-incf i) e)) (plist-get r :entries))))))
+                                 (old (if known
+                                          (cl-count-if #'drgnx-agents-mirror--ends-turn-p
+                                                       (seq-take (drgnx-agent-session-entries m) known))
+                                        stops)))
+                            (aset c 2 old)
+                            (aset c 1 old)
+                            (aset c 0 (if open (1+ old) old))
+                            (when-let* ((snap (drgnx-agents-mirror--decode 'drgnx-records-session (plist-get r :session))))
+                              (drgnx-agents-mirror--apply-snapshot (car snap)))
+                            ;; the turns that ended since: once each (the answer's status may have ended one already)
+                            (drgnx-agents-mirror--stops m (- stops old)))
                           (puthash id seq drgnx-agents-mirror--seq))
                         (dolist (ev (reverse waiting)) (drgnx-agents-mirror--event (car ev) (cdr ev)))
                         (drgnx-agents--changed m))))))
@@ -372,6 +386,7 @@ different connections, so the fetch waits): the entries between the two wait (`-
   (setq drgnx-agents-mirror--paused nil)
   (clrhash drgnx-agents-mirror--shown)
   (clrhash drgnx-agents-mirror--hub-turns)
+  (clrhash drgnx-agents-mirror--hub-entries)
   (clrhash drgnx-agents-mirror--fetching)
   (clrhash drgnx-agents-mirror--lock)
   (clrhash drgnx-agents-mirror--turns)
