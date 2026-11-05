@@ -916,8 +916,11 @@ for real.
 `runtime/fuzz/` is a cargo-fuzz crate with its own `[workspace]` (the product workspace excludes it). It builds on
 nightly only: the pin is `nightly-2026-10-15`, set by the CI job and by local runs, never by a `rust-toolchain.toml`
 (a toolchain file would make a plain `cargo` there install a nightly). cargo-fuzz needs a C++ compiler for libFuzzer
-(`g++`: CI's `fuzz` job runs on the Ubuntu runner, which has it; 60 s a target on a push to `main` or `ci/*`, 10 minutes a target
-daily, `fuzz_minutes` on demand: [ci.md](ci.md)).
+(`g++`: CI's `fuzz-build` job runs on the Ubuntu runner, which has it; 60 s a target on a push to `main` or `ci/*`, 10 minutes a target
+daily, `fuzz_minutes` on demand: [ci.md](ci.md)). CI builds every target once (`cargo fuzz build`, the build `cargo fuzz
+run` makes) and passes each of the four shards its targets' binaries as an artifact (`fuzz-bins-N`, one day); a shard
+runs each binary as `cargo fuzz run` does (`-artifact_prefix=runtime/fuzz/artifacts/<target>/`, the corpus directory,
+`ASAN_OPTIONS=detect_odr_violation=0`).
 
 | Target | What it feeds |
 |---|---|

@@ -383,6 +383,19 @@
     (dolist (job '("msrv" "escape-host" "agent-containers" "android" "fuzz"))
       (should-not (string-search "env.CACHE_SAVE_PR" (drgnx-ci-test--job rt job))))))
 
+(ert-deftest drgnx-ci/the-fuzz-targets-are-built-once-for-the-four-shards ()
+  ;; one build job (the only one with the fuzz cargo cache) uploads each shard's binaries; a shard downloads its own
+  ;; and builds nothing
+  (let* ((rt (drgnx-ci-test--yml "runtime.yml"))
+         (build (and rt (drgnx-ci-test--job rt "fuzz-build"))) (shard (and rt (drgnx-ci-test--job rt "fuzz"))))
+    (skip-unless (and build shard))
+    (drgnx-ci-test--has build "cargo \"+$NIGHTLY\" fuzz build --fuzz-dir runtime/fuzz" "cargo-fuzz --version 0.13.2"
+                        "key: cargo-${{ runner.os }}-fuzz-")
+    (dotimes (n 4) (drgnx-ci-test--has build (format "name: fuzz-bins-%d\n" n)))
+    (drgnx-ci-test--has shard "needs: fuzz-build" "name: fuzz-bins-${{ matrix.shard }}" "detect_odr_violation=0"
+                        "\"-artifact_prefix=runtime/fuzz/artifacts/$target/\"" "\"runtime/fuzz/corpus/$target\"")
+    (should-not (string-match-p "^ *\\(?:- \\)?\\(?:run: \\)?\\(?:cargo\\|rustup\\) \\|key: cargo-" shard))))
+
 (ert-deftest drgnx-ci/the-macos-jobs-keep-the-nidhogg-release-tarball ()
   ;; both macOS jobs restore the pinned release by the hash of nidhogg.sh into NIDHOGG_DOWNLOADS, which nidhogg.sh
   ;; checks against the pin on every use; only main saves it, and Nidhogg's run (its own tarball) never touches it
