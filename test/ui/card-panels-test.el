@@ -65,7 +65,9 @@
     out))
 
 (ert-deftest drgnx-ui-card-panels/explorer-has-card ()
-  "The dock's window has the card parameters and the gap; its top-left corner pixel shows the gap, not the dock."
+  "The dock's window has the card parameters and the gap; its top-left corner pixel shows the gap, not the dock.
+With the corners as the card's only chrome (a shadow would darken the gap), that pixel is exactly the colour beneath
+the card: the frame's margin, painted in the dividers' colour."
   (drgnx-card-panels-ui-test--with-explorer
     (let* ((dock (car (drgnx-wb--dock-windows))) (gap (alist-get 'gap drgnx-look-card)))
       (should dock)
@@ -76,7 +78,11 @@
              (corner (drgnx-uitest-pixel on (nth 0 r) (nth 1 r)))
              (inside (drgnx-uitest-pixel on (+ (nth 0 r) 40) (+ (nth 1 r) 40))))
         (should-not (equal corner inside))        ; the corner is cut away: the gap shows, not the dock's background
-        (drgnx-card-panels-ui-test--scene)))))
+        (drgnx-card-panels-ui-test--scene))
+      (dolist (p '(shadow ring)) (set-window-parameter dock p nil))
+      (drgnx-test-wait-presented)
+      (let ((snap (drgnx-uitest-snapshot)) (r (drgnx-card-panels-ui-test--rect dock)))
+        (should (equal (drgnx-uitest-pixel snap (nth 0 r) (nth 1 r)) (drgnx-uitest-pixel snap 0 0)))))))
 
 (ert-deftest drgnx-ui-card-panels/text-never-covered ()
   "The editor window's picture between its corner rows is the same with the card chrome as with only the card gap:
@@ -160,13 +166,15 @@ bar are other modules')."
 
 (ert-deftest drgnx-ui-card-panels/frame-edge ()
   "The frame has an outer gap like the one between cards: the first card starts one gap in from the frame's edge,
-and the margin is painted in the divider's colour, the one between the cards.  Pattern D."
+and the margin is painted in the divider's colour, the one between the cards (read from the face: the gap between
+two cards has their shadows in it, the margin none).  Pattern D."
   (drgnx-card-panels-ui-test--with-explorer
     (let* ((dock (car (drgnx-wb--dock-windows)))
            (want (round (* (alist-get 'gap drgnx-look-card) (frame-scale-factor))))
            (snap (drgnx-uitest-snapshot))
            (r (drgnx-card-panels-ui-test--rect dock))
-           (between (drgnx-uitest-pixel snap (- (nth 2 r) (/ want 2)) (/ (+ (nth 1 r) (nth 3 r)) 2))))
+           (between (cons 255 (mapcar (lambda (v) (ash v -8))
+                                      (color-values (face-foreground 'window-divider nil t))))))
       (should (eql (frame-parameter nil 'internal-border-width) want))
       (should (>= (nth 0 r) want))
       (should (>= (nth 1 r) want))
