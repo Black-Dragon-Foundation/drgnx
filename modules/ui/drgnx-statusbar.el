@@ -49,6 +49,7 @@
 (declare-function jsonrpc-running-p "jsonrpc")
 (declare-function drgnx-git-branch "drgnx-git")
 (declare-function drgnx-git-cached-root "drgnx-git")
+(declare-function drgnx-git-roots-known "drgnx-git")
 (declare-function drgnx-git-refresh "drgnx-git")
 (declare-function eglot--server-info "ext:eglot")
 (declare-function eglot--current-server-connection-running-p "ext:eglot")
