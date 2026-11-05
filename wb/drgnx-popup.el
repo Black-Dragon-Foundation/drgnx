@@ -16,9 +16,41 @@
 (require 'seq)
 (require 'drgnx-area)
 
+(require 'drgnx-setting)
+
+(drgnx-defsetting drgnx-popup-style 'auto
+  "How the popup lane shows: `window' (the panel's window, or one under the editors), `float' (one child frame
+over the editor, bottom-centre) or `auto': `float' under Glitnir, `window' without it."
+  :type '(choice (const auto) (const window) (const float)) :group 'drgnx
+  :scope 'global :workspace 'never :agents 'never
+  :schema '(or (const auto) (const window) (const float)))
+
+(declare-function glitnir-active-p "glitnir")
+
+(defun drgnx-popup--float-p ()
+  "Non-nil when the lane floats in a child frame now."
+  (pcase drgnx-popup-style
+    ('float t)
+    ('auto (and (featurep 'glitnir) (fboundp 'glitnir-active-p) (glitnir-active-p) t))))
+
+(defun drgnx-popup--root (&optional frame)
+  "FRAME's (default: the selected one's) root frame."
+  (let ((f (or frame (selected-frame))))
+    (while (frame-parent f) (setq f (frame-parent f)))
+    f))
+
+(defun drgnx-popup--float-frame (root)
+  "ROOT's popup child frame while it is live, else nil."
+  (let ((f (frame-parameter root 'drgnx-popup-frame)))
+    (and (frame-live-p f) f)))
+
 (defun drgnx-popup--window (&optional frame)
   "The window the popup lane uses now on FRAME, or nil."
-  (seq-find (lambda (w) (window-parameter w 'drgnx-popup)) (window-list frame 'nomini)))
+  (or (seq-find (lambda (w) (window-parameter w 'drgnx-popup)) (window-list frame 'nomini))
+      (when-let* ((child (drgnx-popup--float-frame (drgnx-popup--root frame)))
+                  (w (frame-root-window child))
+                  ((window-parameter w 'drgnx-popup)))
+        w)))
 
 (defun drgnx-popup-active-p (&optional frame)
   "Non-nil while a popup shows on FRAME."
@@ -40,11 +72,60 @@ Built when the popup shows, set as a window parameter."
   (drgnx-wb-header-with-close (concat " " (string-trim (buffer-name buffer) "[ *]+" "[ *]+"))
                               #'drgnx-popup--close-click "Close (Esc, q)"))
 
+(defun drgnx-popup--float-fit (window)
+  "Fit the floating lane's frame to its buffer (at most 0.9 of the root's width and 0.33 of its height) and put it
+bottom-centre, above the echo area."
+  ;; The size is computed from the text and set, then the position from that size: a frame's size is answered by the
+  ;; compositor later, so `frame-outer-width' right after a resize still says the old one.
+  (let* ((child (window-frame window)) (root (frame-parent child))
+         (max-w (floor (* 0.9 (frame-pixel-width root)))) (max-h (floor (* 0.33 (frame-pixel-height root))))
+         (extra-w (- (window-pixel-width window) (window-body-width window t)))
+         (extra-h (- (window-pixel-height window) (window-body-height window t)))
+         (text (window-text-pixel-size window nil nil (- max-w extra-w) (- max-h extra-h)))
+         (w (min max-w (+ (car text) extra-w))) (h (min max-h (+ (cdr text) extra-h)))
+         (border-w (- (frame-outer-width child) (frame-text-width child)))
+         (border-h (- (frame-outer-height child) (frame-text-height child))))
+    (set-frame-size child w h t)
+    (set-frame-position child
+                        (max 0 (/ (- (frame-pixel-width root) w border-w) 2))
+                        (max 0 (- (frame-pixel-height root) (window-pixel-height (minibuffer-window root))
+                                  h border-h)))))
+
+(defun drgnx-popup--float-window (buffer)
+  "The root window of the selected root frame's popup child frame, showing BUFFER; the frame is made once and
+reused (`display-buffer-in-child-frame' makes it the first time)."
+  (let* ((root (drgnx-popup--root)) (child (drgnx-popup--float-frame root)))
+    (if child
+        (let ((w (frame-root-window child)))
+          (set-window-dedicated-p w nil)
+          (set-window-buffer w buffer))
+      (let ((drgnx-rules--placing t))
+        (setq child (window-frame
+                     (display-buffer-in-child-frame
+                      buffer `((child-frame-parameters . ((undecorated . t) (no-accept-focus . t) (no-other-frame . t)
+                                                          (minibuffer . nil) (drgnx-popup . t) (skip-taskbar . t)
+                                                          (no-focus-on-map . t) (internal-border-width . 0)))
+                               (inhibit-switch-frame . t)))))
+        (set-frame-parameter root 'drgnx-popup-frame child)))
+    (frame-root-window child)))
+
+(defun drgnx-popup--show-float (buffer)
+  "The lane in the popup child frame: shown with BUFFER, fitted and placed; return its window."
+  (let ((lane (drgnx-popup--float-window buffer)))
+    (set-window-parameter lane 'header-line-format (drgnx-popup--header buffer))
+    (set-window-parameter lane 'drgnx-popup (list :float t :popup buffer))
+    (set-window-dedicated-p lane 'drgnx)
+    (drgnx-popup--float-fit lane)
+    (make-frame-visible (window-frame lane))
+    lane))
+
 (defun drgnx-popup--show (buffer alist props)
   "The `popup' place: borrow the panel's window — unless you are typing in it — else a temporary
-one; mark it as the lane."
+one; mark it as the lane.  Under `drgnx-popup-style' `float', one child frame instead."
   (let ((lane (drgnx-popup--window)) (panel (drgnx-wb-area-window 'panel)))
     (cond
+     ((and (drgnx-popup--float-p) (or (not lane) (plist-get (window-parameter lane 'drgnx-popup) :float)))
+      (setq lane (drgnx-popup--show-float buffer)))
      (lane (drgnx-wb-set-area-buffer lane buffer)                   ; a popup replaces a popup
            (set-window-parameter lane 'header-line-format (drgnx-popup--header buffer))
            (set-window-parameter lane 'drgnx-popup
@@ -76,7 +157,8 @@ one; mark it as the lane."
     ;; `quit-window' / `bury-buffer' delete the window (no earlier buffers to go back to).
     (set-window-prev-buffers lane nil)
     (set-window-parameter lane 'delete-window #'drgnx-popup--end)
-    (set-window-parameter lane 'quit-restore (list 'window 'window (selected-window) buffer))
+    (unless (plist-get (window-parameter lane 'drgnx-popup) :float)
+      (set-window-parameter lane 'quit-restore (list 'window 'window (selected-window) buffer)))
     (with-current-buffer buffer (add-hook 'kill-buffer-hook #'drgnx-popup--killed nil t))
     (drgnx-wb-run-body-function lane alist)
     lane))
@@ -88,8 +170,13 @@ one; mark it as the lane."
     (when (buffer-live-p (plist-get saved :buffer))
       (with-current-buffer (plist-get saved :buffer)
         (remove-hook 'window-buffer-change-functions #'drgnx-popup--check-window t)))
-    (if (not (plist-get saved :borrowed))
-        (delete-window lane)
+    (cond
+     ((plist-get saved :float)             ; hidden, never deleted while the root lives: the next popup reuses it
+      (set-window-dedicated-p lane nil)
+      (make-frame-invisible (window-frame lane) t))
+     ((not (plist-get saved :borrowed))
+      (delete-window lane))
+     (t
       (let ((b (plist-get saved :buffer)))
         (drgnx-wb-set-area-buffer
          lane (if (buffer-live-p b) b
@@ -102,7 +189,7 @@ one; mark it as the lane."
       (set-window-parameter lane 'delete-window (plist-get saved :delete))
       (let ((delta (- (plist-get saved :height) (window-pixel-height lane))))  ; the popup resized it
         (unless (zerop delta)
-          (let ((window-resize-pixelwise t)) (ignore-errors (window-resize lane delta nil nil t))))))
+          (let ((window-resize-pixelwise t)) (ignore-errors (window-resize lane delta nil nil t)))))))
     nil))
 
 (defun drgnx-popup--check-window (window)
@@ -129,11 +216,20 @@ their window; the editor above must not move).  A temporary lane is fitted as as
   (unless (plist-get (window-parameter (window-normalize-window window) 'drgnx-popup) :borrowed)
     (apply orig window args)))
 
+(defun drgnx-popup--delete (orig window &rest args)
+  "Around `window--delete': the floating lane's window is its frame's only one, so `quit-window' and `bury-buffer'
+\(which delete a dedicated window) would delete the frame.  Ending the popup hides the frame instead."
+  (if (plist-get (window-parameter (window-normalize-window window) 'drgnx-popup) :float)
+      (progn (drgnx-popup--end window) t)
+    (apply orig window args)))
+
 (defun drgnx-popup--mode ()
-  "Follow `drgnx-rules-mode': the fit guard is on while the rules are."
+  "Follow `drgnx-rules-mode': the fit and delete guards are on while the rules are."
   (if drgnx-rules-mode
-      (advice-add 'fit-window-to-buffer :around #'drgnx-popup--fit)
-    (advice-remove 'fit-window-to-buffer #'drgnx-popup--fit)))
+      (progn (advice-add 'fit-window-to-buffer :around #'drgnx-popup--fit)
+             (advice-add 'window--delete :around #'drgnx-popup--delete))
+    (advice-remove 'fit-window-to-buffer #'drgnx-popup--fit)
+    (advice-remove 'window--delete #'drgnx-popup--delete)))
 
 (add-hook 'drgnx-rules-mode-hook #'drgnx-popup--mode)
 (when drgnx-rules-mode (drgnx-popup--mode))

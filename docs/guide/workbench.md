@@ -387,6 +387,14 @@ The lane always has a one-line header: the popup's name (`Calendar`, `which-key`
 click it, or press `Esc` or `q` while the lane has focus (**Close Pane**), to end the popup. Because the header is
 there whether the popup borrows the panel or has a window of its own, borrowing never changes the header's height.
 
+**Floating lane.** `drgnx-popup-style` is `auto` (the default), `window` or `float`. Under Glitnir (Nidhogg's
+compositor) `auto` is `float`: the popup shows in one child frame of the window, bottom-centre above the echo area,
+as wide as its text (at most 0.9 of the frame) and at most a third of the frame high. The frame is made once per
+window and reused; ending the popup (`delete-window`, `quit-window`, `bury-buffer`, killing the buffer) hides it, and
+it is never deleted while the window lives. It never takes focus: transient and which-key keep their keys in the
+editor, and a click on a candidate in `*Completions*` chooses it. Without Glitnir, or with `window`, the lane is the
+window described above.
+
 In a terminal window the lane works the same, and the line you are on stays visible. Completion as you type
 (corfu) shows as a child frame there. See
 [terminal.md](terminal.md#popups).
