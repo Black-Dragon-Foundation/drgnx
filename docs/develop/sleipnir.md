@@ -38,7 +38,8 @@ keeps the key and a change of content or mode doesn't.
 
 Git runs here as everywhere in sleipnir: hardened, with no global config. The user's `core.excludesFile` is still
 honoured: it is read as data from their global config files (and the repository's) with `git config --file`, and
-passed to `ls-files`. Files the user ignores never enter the overlay.
+passed to `ls-files`. Files the user ignores never enter the overlay. `capture::a_globally_ignored_file_never_enters_the_overlay`
+(`tests/capture_home.rs`, alone in its binary since it sets `HOME`) checks this through the real `~/.gitconfig` lookup.
 
 ### The hardened git (`sync::git`)
 
