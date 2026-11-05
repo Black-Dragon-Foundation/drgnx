@@ -761,9 +761,11 @@ mod virt {
             }
             let me = std::thread::current().id();
             // a worker that never parked yet is not in the map: it runs
-            let workers = tokio::runtime::Handle::try_current().map_or(0, |h| h.metrics().num_workers());
+            let workers =
+                tokio::runtime::Handle::try_current().map_or(0, |h| h.metrics().num_workers());
             let st = self.state();
-            if st.workers.len() < workers || st.workers.iter().any(|(id, w)| *id != me && !w.parked) {
+            if st.workers.len() < workers || st.workers.iter().any(|(id, w)| *id != me && !w.parked)
+            {
                 return None;
             }
             Some(st.workers.clone())
