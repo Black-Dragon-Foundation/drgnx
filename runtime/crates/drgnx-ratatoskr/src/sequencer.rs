@@ -1,7 +1,8 @@
 //! The sequencer (test-hooks, `serve --test-sequencer`; docs/develop/hub.md, "Test hooks").  Requests from every
 //! connection are served one at a time, in the order of the top-level `"__seq": N` the client stamped on each line.
-//! Before it serves, the sequencer reads every connection's socket to `WouldBlock`: a Unix-socket write is in the
-//! peer's queue when it returns, so a lower N the client wrote earlier has been read.  The sockets are read one after
+//! Before it serves, the sequencer reads every connection's socket to `WouldBlock`, with read(2) itself (tokio's
+//! `try_read` answers `WouldBlock` without reading until its reactor has seen the socket readable): a Unix-socket write
+//! is in the peer's queue when it returns, so a lower N the client wrote earlier has been read.  The sockets are read one after
 //! another, so a line above a gap waits for one more full drain, begun after it was read.  Lines without `__seq`
 //! (another process's) are served after the sequenced ones, in read order.
 //!

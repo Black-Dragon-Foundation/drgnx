@@ -3,6 +3,39 @@
 use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+/// The sequencer's premise: a line the client finished writing is in the next drain.  Written with no await between
+/// the write and the drain, so the reactor has not yet seen the socket readable (tokio's own `try_read` answers
+/// `WouldBlock` then, without reading).
+#[cfg(feature = "test-hooks")]
+#[tokio::test(flavor = "current_thread")]
+async fn a_drain_reads_what_the_socket_holds_before_the_reactor_saw_it() {
+    use std::io::Write;
+    let (ours, mut theirs) = std::os::unix::net::UnixStream::pair().unwrap();
+    ours.set_nonblocking(true).unwrap();
+    let (r, _w) = UnixStream::from_std(ours).unwrap().into_split();
+    let out = Outbox::new(1);
+    let mut reader = Reader::new();
+    theirs
+        .write_all(b"{\"id\":1,\"__seq\":7}\n{\"id\":2,\"__seq\":8}\n")
+        .unwrap();
+    let d = drain(&r, &mut reader.codec, &mut reader.buf, &out, false);
+    let seqs: Vec<Option<u64>> = d.lines.iter().map(|l| l.seq).collect();
+    assert_eq!(
+        (seqs, d.partial, d.end),
+        (vec![Some(7), Some(8)], false, None)
+    );
+    // and once the reactor has seen it, nothing is read twice
+    tokio::task::yield_now().await;
+    let d = drain(&r, &mut reader.codec, &mut reader.buf, &out, false);
+    assert!(d.lines.is_empty() && d.end.is_none());
+    // EOF after the last line
+    theirs.write_all(b"{\"id\":3,\"__seq\":9}\n").unwrap();
+    drop(theirs);
+    let d = drain(&r, &mut reader.codec, &mut reader.buf, &out, false);
+    assert_eq!(d.lines.len(), 1);
+    assert_eq!(d.end, Some(crate::sequencer::End::Eof));
+}
+
 #[tokio::test]
 async fn a_write_is_reported_after_its_push() {
     let (ours, theirs) = UnixStream::pair().unwrap();

@@ -540,21 +540,39 @@ fn drain(
     attaching: bool,
 ) -> crate::sequencer::Drained {
     use crate::sequencer::{Drained, End, Line};
+    use rustix::io::Errno;
     let mut end = None;
+    // read(2) itself first: tokio's `try_read` answers WouldBlock without reading while the reactor has not yet seen
+    // the socket readable, and a line the client finished writing must be in this drain (the sequencer's premise)
+    let mut chunk = [0u8; 8192];
     loop {
-        // room first: a read into no room returns 0, which is EOF
-        buf.reserve(8192);
-        match r.try_read_buf(buf) {
+        match rustix::io::read(r.as_ref(), &mut chunk[..]) {
             Ok(0) => {
                 end = Some(End::Eof);
                 break;
             }
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            Err(e) if e == Errno::AGAIN || e == Errno::WOULDBLOCK => break,
+            Err(e) if e == Errno::INTR => {}
+            Err(e) => {
+                out.close(&format!("closed a connection: {e}"));
+                end = Some(End::Closed);
+                break;
+            }
+        }
+    }
+    // then tokio's own read to WouldBlock, which clears its readiness (so `readable()` waits for new bytes rather than
+    // firing at once), with whatever came meanwhile
+    while end.is_none() {
+        // room first: a read into no room returns 0, which is EOF
+        buf.reserve(8192);
+        match r.try_read_buf(buf) {
+            Ok(0) => end = Some(End::Eof),
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
             Err(e) => {
                 out.close(&format!("closed a connection: {e}"));
                 end = Some(End::Closed);
-                break;
             }
         }
     }

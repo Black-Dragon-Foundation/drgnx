@@ -278,7 +278,9 @@ the order of the top-level **`"__seq": N`** the client stamped on each line (the
 sends, counting across its connections in the order it wrote them). The stamp is taken off before the line is served.
 
 - Before it serves, the sequencer reads every connection's socket to `WouldBlock`. A Unix-socket write is in the
-  peer's queue when it returns, so a lower N the client wrote earlier has been read by then. A connection is known to
+  peer's queue when it returns, so a lower N the client wrote earlier has been read by then. The read is read(2)
+  itself: tokio's `try_read` answers `WouldBlock` without reading until its reactor has seen the socket readable, which
+  let a line above a gap go out before the lower N already waiting in another socket (macOS CI). A connection is known to
   the sequencer before its challenge is written, so no line can come from one it does not know.
 - The lowest N is served when it follows the last N served. Above a gap it waits while some connection holds part of
   a line, where the missing N may be, and until one more full drain, begun after it was read, has ended: the sockets
