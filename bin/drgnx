@@ -167,6 +167,48 @@ rt_build() { # [--install] [--prefix DIR] — cargo build --release --locked of 
   fi
 }
 
+rt_bundle() { # [--arch x86_64|aarch64] — the runner bundle (sleipnir, drgnx-key, drgnx-fwd), static musl, into runtime/target/bundle/<arch>/
+  local arch triple jobs b out dir l
+  arch="$(uname -m)"
+  while (($#)); do
+    case "$1" in
+      --arch) [[ -n "${2:-}" ]] || { rt_err "--arch needs x86_64 or aarch64"; return 2; }; arch="$2"; shift ;;
+      *) rt_err "unknown option: $1"; return 2 ;;
+    esac
+    shift
+  done
+  case "$arch" in x86_64 | aarch64) ;; arm64) arch=aarch64 ;; *) rt_err "no runner bundle for $arch (x86_64 or aarch64)"; return 2 ;; esac
+  triple="$arch-unknown-linux-musl"
+  rt_toolchain || return 1
+  jobs="$(rt_jobs)"
+  local envs=("PATH=${RT_CARGO%/*}:$PATH" "CARGO_TARGET_DIR=$here/runtime/target/bundle-build")
+  case " ${RT_ENV[*]-} " in *" CARGO_HOME="*) ;; *) envs+=("CARGO_HOME=$(drgnx_dir cache)/cargo") ;; esac
+  for l in ${RT_ENV[@]+"${RT_ENV[@]}"}; do envs+=("$l"); done
+  # another architecture links with the toolchain's own lld (Rust's self-contained musl: no C cross toolchain)
+  if [[ "$arch" != "$(uname -m)" ]]; then
+    if [[ "$arch" == aarch64 ]]; then l=AARCH64; else l=X86_64; fi
+    envs+=("CARGO_TARGET_${l}_UNKNOWN_LINUX_MUSL_LINKER=rust-lld")
+  fi
+  env "${envs[@]}" rustup target add "$triple" >/dev/null 2>&1 || true
+  rt_cap "$jobs"
+  printf 'drgnx runtime: building the runner bundle for %s (-j%s)\n' "$arch" "$jobs"
+  (cd "$here" && "${RT_CAP[@]+"${RT_CAP[@]}"}" env "${envs[@]}" "$RT_CARGO" build --release --locked -j "$jobs" \
+        --target "$triple" --manifest-path runtime/Cargo.toml -p sleipnir -p drgnx-fwd --bins) ||
+    { rt_err "the runner bundle failed to build (it needs the Rust target $triple: rustup target add $triple)"; return 1; }
+  dir="$here/runtime/target/bundle/$arch"
+  mkdir -p "$dir"
+  for b in sleipnir drgnx-key drgnx-fwd; do
+    out="$here/runtime/target/bundle-build/$triple/release/$b"
+    cp "$out" "$dir/$b.new" && chmod 755 "$dir/$b.new" && mv -f "$dir/$b.new" "$dir/$b" ||
+      { rt_err "could not put $b into $dir"; return 1; }
+    case "$(file -b -L "$dir/$b" 2>&1)" in
+      *"statically linked"* | *"static-pie linked"*) ;;
+      *) rt_err "$dir/$b is not a static binary: $(file -b -L "$dir/$b" 2>&1)"; return 1 ;;
+    esac
+  done
+  printf 'drgnx runtime: the runner bundle for %s is in %s\n' "$arch" "$dir"
+}
+
 rt_install() { # [--prefix DIR] — the built binary to <data>/bin/ratatoskr by rename; with a prefix, $PREFIX/bin/{ratatoskr,rtsk} link to it
   local prefix="" built dir fwd answer re_true='"test_hooks": *true' re_false='"test_hooks": *false' n
   while (($#)); do
@@ -1886,6 +1928,9 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx open --check      start drgnx's daemon if needed, print its Emacs version, stop it if this started it
        drgnx macos-app         macOS: install drgnx.app into ~/Applications (Finder, Spotlight, Dock, Open With)
        drgnx build             byte-compile drgnx (core, wb, modules, harness); native compilation follows on load
+       drgnx build runner-bundle [--arch x86_64|aarch64]
+                               the static runner bundle (sleipnir, drgnx-key, drgnx-fwd) in runtime/target/bundle/ARCH
+                               (docs/guide/runners.md)
        drgnx runtime build [--install] [--prefix DIR] | install [--prefix DIR]
                                build Ratatoskr (Rust) from source / install the built binary (docs/guide/install.md)
        drgnx update [--quiet]  update this install to GitHub main: fast-forward, then sync and build; the previous
@@ -2006,7 +2051,8 @@ USAGE
 
 case "${1:-help}" in
   doctor) shift; cmd_doctor "$@" ;;
-  build) cmd_build ;;
+  build) shift
+        if [[ "${1:-}" == runner-bundle ]]; then shift; rt_bundle "$@"; else cmd_build; fi ;;
   runtime) shift; cmd_runtime "$@" ;;
   test) shift; lease_self "$(lease_test_class "$@")" test "$@"; cmd_test "$@" ;;
   lease) shift; cmd_lease "$@" ;;

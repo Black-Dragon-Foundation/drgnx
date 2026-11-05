@@ -472,6 +472,18 @@ jobs:
         run: |
           runtime/target/debug/domr --hub-bin runtime/target/debug/ratatoskr \
             --scenarios test/conformance --only 'container*/*' --require-all
+      # the runner bundles of both architectures, static (`bin/drgnx build runner-bundle`, docs/develop/sleipnir.md),
+      # and the x86_64 one run in an image of another libc (Alpine's musl, pinned by the digest pulled now)
+      - name: runner bundles, and the bundle in a musl image
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+          bin/drgnx build runner-bundle --arch x86_64
+          bin/drgnx build runner-bundle --arch aarch64
+          podman pull -q docker.io/library/alpine:3.22
+          img="docker.io/library/alpine@$(podman image inspect docker.io/library/alpine:3.22 --format '{{.Digest}}')"
+          DRGNX_TEST_BUNDLE="$PWD/runtime/target/bundle/x86_64" DRGNX_TEST_FOREIGN_IMAGE="$img" \
+            cargo test --locked --manifest-path runtime/Cargo.toml -p sleipnir --test bundle_host -- --ignored
       # last, whatever the rows said
       - id: prune
         if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
