@@ -1,5 +1,6 @@
 ;;; work-space-gui-test.el --- GUI rows: the Work space's row geometry and edge-tile rasters (spike S1) -*- lexical-binding: t -*-
 ;; test-class: cond
+;; test-pattern: handshake
 ;; The map is a buffer of display lines: card rows (PD `:open' boxes), band lines of SVG image tiles carrying
 ;; `line-height t', and lanes (thin images inside card rows).  These rows measure what the view can rely on:
 ;; (1) `window-line-height' per row against the heights the layout would hand out, an emoji row detected as
