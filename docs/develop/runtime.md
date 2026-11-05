@@ -1053,7 +1053,10 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   out (`{"id", "vectors"}` or `{"id", "error"}`), first `{"ready": {"device", "name", "why"}}`, and `{"fallback": {"from",
   "reason"}}` when a lost GPU sends the batch again on the CPU path. A query that arrives during a request is answered
   before its next batch. It runs at nice 10, caps its address space at 2 GiB on the CPU path (llvmpipe could not start a
-  thread under the cap, so the GPU path runs without it), and exits after 300 s idle and at the end of its stdin. The hub
+  thread under the cap, so the GPU path runs without it). On the GPU path it reads its peak resident memory (`VmHWM`)
+  before each batch instead: over 1.5 GiB it answers the request with the reason and `"exit": true` and exits, and the hub
+  starts a fresh worker for the next request (no crash is counted, nothing is retried). It also exits after 300 s idle and
+  at the end of its stdin. The hub
   starts it with `--device auto` on AC and `--device cpu` on battery; a query uses whatever worker runs. A worker that dies
   inside a request is started again and the request sent again, once.
 - **A project (`search/project.rs`).** The store is `<state>/code/<id>.db`, `id` the first 16 hex characters of the

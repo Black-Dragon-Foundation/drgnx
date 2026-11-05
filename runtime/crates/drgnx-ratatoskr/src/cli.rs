@@ -373,7 +373,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
 
 /// `embed-worker --model ID --dir D --threads N --device auto|cpu --device-cache FILE [--idle-ms N]`, and with
 /// test-hooks `--device gpu:NAME`, `--test-park`, `--test-crash-once FILE`, `--test-crash-always`,
-/// `--test-power-root DIR`. A repeated option: the last counts.
+/// `--test-rss-cap-mb N`, `--test-power-root DIR`. A repeated option: the last counts.
 fn embed_worker(p: &mut lexopt::Parser) -> Result<crate::search::worker::WorkerArgs, String> {
     use crate::search::worker::{DeviceArg, WorkerArgs, WorkerTest};
     use lexopt::prelude::*;
@@ -421,6 +421,10 @@ fn embed_worker(p: &mut lexopt::Parser) -> Result<crate::search::worker::WorkerA
             Long("test-crash-once") => test.crash_once = Some(PathBuf::from(p.value().map_err(e)?)),
             #[cfg(feature = "test-hooks")]
             Long("test-crash-always") => test.crash_always = true,
+            #[cfg(feature = "test-hooks")]
+            Long("test-rss-cap-mb") => {
+                test.rss_cap_mb = Some(p.value().map_err(e)?.parse().map_err(e)?)
+            }
             #[cfg(feature = "test-hooks")]
             Long("test-power-root") => test.power_root = Some(PathBuf::from(p.value().map_err(e)?)),
             other => return Err(other.unexpected().to_string()),

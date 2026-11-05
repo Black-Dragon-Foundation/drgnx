@@ -5,8 +5,10 @@
 //! `{"id", "vectors"}` or `{"id", "error"}`. Its first line is `{"ready": {"device", "name", "why"}}`; a fallback to
 //! the CPU path after a lost device writes `{"fallback": {"from", "reason"}}`. A `doc` request is tokenised first and
 //! split into batches by the pacer's budget; a thread reads stdin, so a query that arrives during a request is
-//! answered before that request's next batch. It runs at nice 10, caps its address space at 2 GiB once its model is loaded on the CPU path,
-//! and exits after `--idle-ms` (300 s) without a request and at the end of its stdin, so a dead hub leaves no worker.
+//! answered before that request's next batch. It runs at nice 10, caps its address space at 2 GiB once its model is
+//! loaded on the CPU path, and on the GPU path (no cap can stand there) reads its peak resident memory (`VmHWM`) before
+//! each batch: over 1.5 GiB it answers the request with the reason and `"exit": true` and exits, and the hub starts
+//! a fresh worker for the next request. It exits after `--idle-ms` (300 s) without a request and at the end of its stdin, so a dead hub leaves no worker.
 //!
 //! Its device: `--device cpu`, or `auto` (`hrafn_embed::device`: a cached choice, the CPU path on battery, otherwise
 //! measured, and the choice written to `--device-cache` unless on battery). With the `test-hooks` feature `gpu:NAME`
@@ -35,6 +37,9 @@ pub const IDLE: Duration = Duration::from_secs(300);
 
 /// The address space the worker allows itself once its model is loaded on the CPU path.
 const ADDRESS_CAP: u64 = 2 << 30;
+
+/// The peak resident memory the worker allows itself on the GPU path, where no address-space cap can stand.
+const RSS_CAP: u64 = 3 << 29;
 
 /// The worker's priority.
 const NICE: i32 = 10;
@@ -67,6 +72,8 @@ pub struct WorkerTest {
     pub crash_once: Option<PathBuf>,
     pub crash_always: bool,
     pub power_root: Option<PathBuf>,
+    /// The resident-memory cap in MiB, in place of 1.5 GiB.
+    pub rss_cap_mb: Option<u64>,
 }
 
 /// Half the cores, at least one: the CPU path's threads.
@@ -136,6 +143,20 @@ fn cap_address_space() {
             std::io::Error::last_os_error()
         );
     }
+}
+
+/// This process's peak resident memory in bytes (`VmHWM`); none where `/proc` has none.
+fn peak_rss() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let kib = status
+        .lines()
+        .find_map(|l| l.strip_prefix("VmHWM:"))?
+        .trim()
+        .strip_suffix("kB")?
+        .trim()
+        .parse::<u64>()
+        .ok()?;
+    Some(kib << 10)
 }
 
 fn lower_priority() {
@@ -279,6 +300,7 @@ pub fn run(args: WorkerArgs) -> i32 {
         on_gpu: matches!(choice.device, Device::Gpu { .. }),
         lose_after_first,
         lost: false,
+        over_cap: false,
         embedder: embedder.take(),
         refusal: choice.why.clone(),
         pacer: Pacer::new(),
@@ -316,6 +338,8 @@ struct Work<'a> {
     on_gpu: bool,
     lose_after_first: bool,
     lost: bool,
+    /// The GPU path's memory passed its cap: the request in hand is answered with the reason and the worker exits.
+    over_cap: bool,
     embedder: Option<LocalEmbedder>,
     /// Why there is no embedder, when there is none.
     refusal: String,
@@ -353,9 +377,11 @@ impl Work<'_> {
         let answer = match self.vectors(&r) {
             Ok(Some(v)) => json!({"id": r.id, "vectors": v}),
             Ok(None) => return false,
+            // "exit": the hub starts the next worker at once, not after this one's pipe closes
+            Err(e) if self.over_cap => json!({"id": r.id, "error": e, "exit": true}),
             Err(e) => json!({"id": r.id, "error": e}),
         };
-        self.out.line(&answer)
+        self.out.line(&answer) && !self.over_cap
     }
 
     fn crash_hooks(&self) {
@@ -389,8 +415,14 @@ impl Work<'_> {
         let mut out = Vec::with_capacity(lists.len());
         let (mut at, mut batch_no) = (0, 0u64);
         while at < lists.len() {
-            if batch_no > 0 && !r.query && !self.between_batches(batch_no) {
-                return Ok(None);
+            if !r.query {
+                if batch_no > 0 && !self.between_batches(batch_no) {
+                    return Ok(None);
+                }
+                if let Some(msg) = self.rss_over_cap() {
+                    self.over_cap = true;
+                    return Err(msg);
+                }
             }
             let lens: Vec<usize> = lists[at..].iter().map(Vec::len).collect();
             let n = if r.query {
@@ -452,6 +484,17 @@ impl Work<'_> {
             }
         }
         true
+    }
+
+    /// On the GPU path, the reason to stop when the peak resident memory is over the cap.
+    fn rss_over_cap(&self) -> Option<String> {
+        let cap = self.test.rss_cap_mb.map_or(RSS_CAP, |mb| mb << 20);
+        let peak = peak_rss().filter(|p| self.on_gpu && *p > cap)?;
+        Some(format!(
+            "the embed worker's memory ({} MiB) is over its {} MiB cap on the GPU path; it exits and the next request starts a fresh one",
+            peak >> 20,
+            cap >> 20
+        ))
     }
 
     /// The GPU is gone: the CPU path from now on, said first.
@@ -753,6 +796,11 @@ fn answer(pending: &Mutex<Pending>, facts: &Mutex<WorkerFacts>, v: Value) {
     let Some(id) = v.get("id").and_then(Value::as_u64) else {
         return;
     };
+    if v.get("exit").and_then(Value::as_bool) == Some(true)
+        && let Ok(mut p) = pending.lock()
+    {
+        p.dead = true; // the worker is leaving: the next request starts another
+    }
     let reply = match (v.get("vectors"), v.get("error")) {
         (Some(vs), _) => serde_json::from_value::<Vec<Vec<f32>>>(vs.clone()).map_or_else(
             |e| Reply::Error(format!("bad vectors: {e}")),

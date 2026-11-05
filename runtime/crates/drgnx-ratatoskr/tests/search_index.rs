@@ -233,6 +233,49 @@ fn query_runs_before_the_next_batch() {
     assert_eq!(vectors(&docs).len(), 3);
 }
 
+/// Pattern C. The GPU path has no address-space cap (a Vulkan driver maps far more than it uses), so the worker reads
+/// its peak resident memory between batches. `--test-rss-cap-mb 1` stands for the 1.5 GiB cap, which any worker is
+/// over: before a batch it answers the request with the reason (and `exit`) and exits, by itself and cleanly.
+#[test]
+fn gpu_worker_exits_over_its_rss_cap() {
+    let mut w = Worker::start(&format!("gpu:{}", adapter()), &["--test-rss-cap-mb", "1"]);
+    let first = w.line().unwrap();
+    assert_eq!(first["ready"]["device"], "gpu", "{first}");
+    let long = "word ".repeat(900);
+    w.send(doc(1, &[&long, &long, &long]));
+    let answer = w.line().unwrap();
+    assert_eq!(answer["id"], 1, "{answer}");
+    let why = answer["error"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{answer}"));
+    assert!(why.contains("memory") && why.contains("cap"), "{why}");
+    assert!(w.exit().success());
+    assert_eq!(w.line(), None);
+}
+
+/// Pattern C. The hub sees that exit as the worker's answer, not a crash: no retry, no crash counted, and the next
+/// request starts a fresh worker.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rss_exit_is_not_a_crash_loop() {
+    let (cache, ac) = (tempfile::tempdir().unwrap(), power(true));
+    let dev = format!("gpu:{}", adapter());
+    let e = WorkerEmbedder::new(spec(
+        cache.path(),
+        ac.path(),
+        &["--device", &dev, "--test-rss-cap-mb", "1"],
+    ));
+    let long = "word ".repeat(900);
+    let texts = vec![long.clone(), long.clone(), long];
+    let err = e.embed_docs(&texts, false).await.unwrap_err();
+    assert!(err.0.contains("memory"), "{err:?}");
+    let facts = e.facts();
+    assert_eq!((facts.crashes, facts.spawns), (0, 1), "{facts:?}");
+    let err = e.embed_docs(&texts, false).await.unwrap_err();
+    assert!(err.0.contains("memory"), "{err:?}");
+    let facts = e.facts();
+    assert_eq!((facts.crashes, facts.spawns), (0, 2), "{facts:?}");
+}
+
 fn spec(cache: &Path, power: &Path, test_args: &[&str]) -> WorkerSpec {
     WorkerSpec {
         exe: exe(),
