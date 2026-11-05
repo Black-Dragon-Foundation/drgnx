@@ -777,7 +777,10 @@ to start one. `drgnx-hub-ask-at-daemon-start` (core, on `emacs-startup-hook`) sc
 start is a `hub` warning notice. It does not connect and hands over no keys or settings: a key-less hub starts no
 provider; keys arrive with the first AI use (`drgnx-hub-hand-over-keys`) or when the hub asks (`gateway/need-keys`).
 `drgnx doctor` (the `store` check) says the hub is down, and the nightly cannot run, when the last backup is old and no
-hub runs.
+hub runs. The copy runs on its own task through `backup_timer::guarded`, which clears the running flag on every way
+out, a panic included, so one failed night never stops the next. `test/live/hub-daemon-start-test.el` starts a real daemon
+session with a real hub (`DRGNX_RATATOSKR_BIN`), sees the hub come up and the nightly copy appear, and reads the idle
+hub's CPU and resident memory from `/proc` (about 0.1 % CPU and 63 MB for a debug build).
 
 The hub's `notice` event (sent when the binary on disk changed) is posted by `drgnx-hub--note-notice` (an editor's
 subscription) as a notice of source `hub`, a condition with command `hub-restart-now`. A hello that finds the hub
