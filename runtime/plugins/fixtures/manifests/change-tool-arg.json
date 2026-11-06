@@ -1,0 +1,7 @@
+{
+  "name": "change-tool-arg",
+  "version": "0.1.0",
+  "hooks": [{"point": "before-tool", "verdicts": ["change"],
+             "filter": {"tool_kinds": ["drgnx"], "tools": ["mcp__drgnx-plugins__echo-ability_echo"]},
+             "deadline_ms": 1000}]
+}

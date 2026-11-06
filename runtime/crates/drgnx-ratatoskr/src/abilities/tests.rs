@@ -483,3 +483,88 @@ fn annotation_keywords_are_accepted() {
     let e = brokkr::parse(&manifest(json!({"type": "object", "minProperties": 1}))).unwrap_err();
     assert!(e.message.contains("minProperties"), "{e}");
 }
+
+/// The hub's own hook rows (`hub:hooks` writer), oldest first.
+async fn hook_rows(r: &Rig) -> Vec<serde_json::Value> {
+    let rows =
+        r.f.writer
+            .db
+            .read(|c| {
+                let mut st = c.prepare(
+                    "select e.data from event e join tx t on t.id = e.tx \
+                 where t.actor = 'hub:hooks' order by e.id",
+                )?;
+                let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+                Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            })
+            .await
+            .unwrap();
+    rows.iter()
+        .map(|t| serde_json::from_str(t).unwrap())
+        .collect()
+}
+
+/// A rule that notes every hub tool call (kind `drgnx`).
+fn note_rule() -> serde_json::Value {
+    json!([{"id": "seen", "point": "before-tool", "tool-kinds": ["drgnx"],
+            "verdict": "annotate", "reason": "seen"}])
+}
+
+// [D] pure: hooks/an-ability-call-is-hooked-once. The seam and the panel's adapter site both skip
+// `mcp__drgnx-plugins__*`, so the ability server's own `before_tool` is the only place the call is hooked: one row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_ability_call_is_hooked_once() {
+    let r = rig(&["echo-ability"]).await;
+    r.set("drgnx-agents-hook-rules", note_rule()).await;
+    let who = worker("claude", None);
+    let list = offered(&r.f, "s1", &who).await;
+    let got = run(&list, &r.ctx("s1", &who), json!({"x": 1})).await;
+    assert_eq!(got, Ok(json!({"x": 1})));
+    let rows = hook_rows(&r).await;
+    assert_eq!(rows.len(), 1, "one row for one call: {rows:?}");
+    assert_eq!(rows[0]["at"], "hub-server");
+    assert_eq!(rows[0]["tool"], "mcp__drgnx-plugins__echo-ability_echo");
+    assert_eq!(rows[0]["records"][0]["source"], "rule:seen");
+}
+
+// [D] pure: hooks/change-rewrites-an-ability-argument. A plugin's `change` at before-tool, named for this ability,
+// is what the ability runs with (the schema is checked again on the changed arguments).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn change_rewrites_an_ability_argument() {
+    let r = rig(&["echo-ability", "change-tool-arg"]).await;
+    let who = worker("claude", None);
+    let list = offered(&r.f, "s1", &who).await;
+    let got = run(&list, &r.ctx("s1", &who), json!({"a": 1})).await;
+    assert_eq!(
+        got,
+        Ok(json!({"changed": true})),
+        "the ability ran with the hook's arguments"
+    );
+    let rows = hook_rows(&r).await;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["outcome"], "change");
+    assert_eq!(rows[0]["records"][0]["verdict"], "change");
+}
+
+// [C] handshake: hooks/change-before-an-ability-is-shown-on-its-card. The matrix's Ask comes after the hooks, so the
+// card shows the arguments that will run, never the ones the agent sent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn change_before_an_ability_is_shown_on_its_card() {
+    let r = rig(&["echo-ability", "change-tool-arg"]).await;
+    r.cell("ask").await;
+    let who = worker("claude", None);
+    let list = offered(&r.f, "s1", &who).await;
+    let mut waiting = r.f.core.plugins.waiting();
+    let ctx = r.ctx("s1", &who);
+    let mut call = tokio::spawn(async move { run(&list, &ctx, json!({"a": 1})).await });
+    until_waiting(&mut waiting, &mut call).await;
+    let cards = r.cards().await;
+    assert_eq!(cards.len(), 1, "{cards:?}");
+    let (id, _, title) = &cards[0];
+    assert!(
+        title.contains(r#"{"changed":true}"#) && !title.contains(r#"{"a":1}"#),
+        "the card shows what will run: {title}"
+    );
+    r.allow(*id).await;
+    assert_eq!(call.await.unwrap(), Ok(json!({"changed": true})));
+}

@@ -67,7 +67,8 @@ configuration). Results come in folder-name order.
 
 `runtime/plugins/fixtures` is a crate of its own (its own workspace, excluded from the runtime workspace, so
 `cargo test --workspace` never builds it for the host). One binary per test plugin, each with its manifest in
-`manifests/NAME.json`: `echo-ability`, `deny-rm-hook`, `rewrite-commit-msg`, `annotate-edit`, `slow-hook` (spins),
+`manifests/NAME.json`: `echo-ability`, `deny-rm-hook`, `rewrite-commit-msg`, `annotate-edit`, `change-tool-arg` (a
+`before-tool` change of the `echo-ability` call's arguments to `{"changed": true}`), `slow-hook` (spins),
 `trap-hook` (traps), `big-alloc` (allocates `mib` MiB), `fs-importer` (std file access, so it imports
 `wasi:filesystem`), `http-ability` (the host's HTTP, key-value store and log), and the three that must fail to load,
 `http-importer` (`wasi:http`) and `socket-importer` (`std::net`, so `wasi:sockets`). The guests use `wit-bindgen`
