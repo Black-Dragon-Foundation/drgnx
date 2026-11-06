@@ -104,9 +104,7 @@ when you ask (the Refresh command)."
 
 ;;;; The modules as Built-in rows
 
-(defvar drgnx-modules--report)
 (defvar drgnx-hub-connected-functions)
-(defvar drgnx-modules-after-teardown-functions)
 (declare-function drgnx-hub-call "drgnx-hub-client" (method params callback &rest keys))
 
 (defun drgnx-extensions--module-state (name)

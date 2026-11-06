@@ -127,6 +127,9 @@ word that starts with @ and is none of these is listed under :unknown, never an 
 (defvar drgnx-extensions-list--error nil "The text of the last search the hub could not answer, or nil.")
 (defvar drgnx-extensions-list--restart nil "The ids that wait for a restart (a cached copy of the live layer's answer).")
 (defvar drgnx-extensions-list--updates 0 "How many updates the last unfiltered search found: the status bar's number.")
+(defvar drgnx-extensions-list--installed-ids nil
+  "Installed's ids without the rows that wait in Updates, made once per answer: emptied by the reset and by each
+answer the hub sends (which may change a row's state).")
 (defvar drgnx-extensions-list--root nil
   "The root of the project the list or a page was last opened from (a file buffer's), or nil: where `p' and a page's
 toggle turn a package off, and what @this-project reads.")
@@ -163,10 +166,6 @@ toggle turn a package off, and what @this-project reads.")
   '((installed . "Installed") (updates . "Updates") (recommended . "Recommended") (plugins . "Plugins")
     (builtin . "Built-in") (search . "Search results") (generations . "Generations"))
   "SECTION → the header's text.")
-
-(defvar drgnx-extensions-list--installed-ids nil
-  "Installed's ids without the rows that wait in Updates, made once per answer: emptied by the reset and by each
-answer the hub sends (which may change a row's state).")
 
 (defun drgnx-extensions-list--section-ids (section)
   "The ids SECTION shows: a row with an update waits in Updates, not in Installed."

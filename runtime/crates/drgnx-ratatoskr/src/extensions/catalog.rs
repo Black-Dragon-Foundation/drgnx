@@ -845,7 +845,10 @@ mod tests {
         let i = fixture_index();
         // a gnu entry with :verified t is signed; the same archive without it is a signing archive, not unsigned
         assert_eq!(row(&i, "pkg:with-editor").signed, w::Signed::Signed);
-        assert_eq!(serde_json::to_value(row(&i, "pkg:dash").signed).unwrap(), "signing-archive");
+        assert_eq!(
+            serde_json::to_value(row(&i, "pkg:dash").signed).unwrap(),
+            "signing-archive"
+        );
         // MELPA does not sign, a directory archive is local, a repository is a commit
         assert_eq!(row(&i, "pkg:magit").signed, w::Signed::UnsignedArchive);
         assert_eq!(row(&i, "pkg:in-a-directory").signed, w::Signed::Local);
