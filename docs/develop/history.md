@@ -143,7 +143,34 @@ is refused as `split-required`. `history/resync {buffer_id, text}` replaces the 
 change (looked for every 5 s), and a document unused for 5 minutes is parked (looked for every minute, so a parked
 document leaves memory between 5 and 6 minutes after its last use).
 
+## The editor
+
+`core/drgnx-history.el` (`drgnx-history-mode`, global) is the editor's side; it needs Nidhogg built with
+`--with-nidhogg-history` and stays off without it. A file buffer inside a git project is registered with `history/register`
+(on `find-file-hook`, and for every open file buffer when a hub connects; a hook never opens a connection). Nidhogg then
+records each change to the buffer's text in a ring, outside the command's own work. The timer `history-drain` (every
+0.1 s, through `drgnx-timer-*`) does nothing unless `nidhogg-history-pending-p`; otherwise it sends each tracked buffer's
+ring as `history/batch`es with the SHA-256 of the buffer's whole text. A change that inserts more than 1 MiB is split into
+pieces of at most a quarter of that many characters, and batches are filled up to the cap. The hub checks every batch
+against the hash of the buffer's whole text, which costs time in proportion to the buffer (about 4 ms per MB), so a
+buffer over 256 K characters is drained only after 0.3 s of idleness and its changes wait in the ring meanwhile. When the hub answers
+`resync` (or Nidhogg drains the symbol `resync`), the ring is dropped and the whole text goes as `history/resync`. A hub
+that goes drops every registration; the next connection registers the buffers again.
+
+The module `tools/work-space` turns the mode on in its setup and off in its teardown.
+A buffer that holds a large file (`drgnx-large-file-p`) is never registered, and one that becomes a large file is
+unregistered at the next drain.
+
+An indirect buffer shares its base's text, so only the base is registered and each change is recorded once.
+`drgnx-history-with-origin` binds `nidhogg-history-origin` for code that writes into buffers for someone else (a merge,
+a revert, git): the changes carry that origin. Emacs's own undo of them runs outside the macro, so it is the user's
+change. Auto-revert binds `external:disk`.
+
 ## Testing
+
+`test/unit/history-test.el` (pattern D: batch splitting, the origin macro, an indirect buffer, the mode's teardown, the
+no-prompt lint) and `test/unit/history-hub-test.el` (pattern B: the real hub through the delivery gate; the answers to
+batches and resyncs are the evidence). Rows that need the hook skip on a Nidhogg built without the flag.
 
 `cargo test -p verdandi`: `tests/store.rs`, `tests/docs.rs`, `tests/log.rs`, `tests/revert.rs` and the property in
 `src/revert_props.rs` (in the crate so it can use a store without a sync at each commit; its 10,000 cases make some
