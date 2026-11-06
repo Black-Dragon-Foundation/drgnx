@@ -62,7 +62,7 @@ case "$cmd" in
     "${qemu[@]}" "${accel[@]}" -m 4096 -smp "$(nproc)" -display none -daemonize -pidfile "$dir/qemu.pid" \
       -serial "file:$dir/console.log" \
       -drive "if=virtio,format=qcow2,file=$dir/disk.qcow2" -drive "if=virtio,format=raw,file=$dir/seed.img" \
-      -netdev "user,id=n0,hostfwd=tcp:127.0.0.1:$port-:22" -device virtio-net-pci,netdev=n0
+      -netdev "user,id=n0,hostfwd=tcp:127.0.0.1:$port-:22" -device virtio-net-pci,netdev=n0,romfile=
     # cloud-init has made the user once ssh lets it in; emulated, the boot takes minutes
     deadline=$(( $(date +%s) + 1200 ))
     until ssh_vm true 2>/dev/null; do
