@@ -162,6 +162,8 @@ struct State {
     cur: Option<OpenStep>,
     stash: Option<OpenStep>,
     closed: Vec<ClosedStep>,
+    /// The tree taken before the running turn's prompt went: the next step that closes (the turn's first) carries it.
+    before: Option<String>,
     /// The message id last seen in an update: the anchor of the steps that have none of their own (tool calls).
     last_mid: Option<String>,
     /// When the agent last sent an update (or its turn began): what the supervisor's `silent` rule reads.
@@ -226,6 +228,8 @@ struct ClosedStep {
     command: Option<String>,
     /// The session's context size in tokens when the step closed: kept on a turn's last step and on a job wait.
     context: Option<i64>,
+    /// On a turn's first step: the tree the worktree held before the prompt went to the agent, its checkpoint.
+    before: Option<String>,
 }
 
 /// What a provider says of a tool call beyond ACP's fields: Claude's `_meta.claudeCode`.
@@ -265,6 +269,7 @@ impl State {
             steps_begun: 0,
             mcp_begun: Vec::new(),
             closed: Vec::new(),
+            before: None,
             seq: 0,
             entries: Vec::new(),
             tools: HashMap::new(),
@@ -328,6 +333,7 @@ impl State {
                 cache_write: u.cache_write,
                 cost: u.cost,
                 context,
+                before: self.before.take(),
             });
         }
     }
@@ -784,6 +790,8 @@ pub struct Session {
     /// The projects' edit histories and the hub's state folder they live under: every write the hub serves for the
     /// agent is recorded there (none: the hub has no state folder).
     history: Option<(Arc<crate::history::wire::Hubs>, PathBuf)>,
+    /// Step snapshots: a turn's tree is taken before its prompt goes (none: the hub has no state folder).
+    snap: Option<crate::timeline::Snap>,
 }
 
 /// What `Conn::prompt` answered for a turn.
@@ -1995,6 +2003,7 @@ fn assemble(
             .dirs
             .get()
             .map(|d| (front.core.history.clone(), d.hub.clone())),
+        snap: crate::timeline::Snap::of(front),
     });
     (s, done_rx)
 }
@@ -2558,7 +2567,7 @@ async fn write_steps(
             seq,
             c.turn_id.as_deref(),
             &c.open,
-            turn_start,
+            (turn_start, c.before.as_deref()),
             c.end,
         )
         .await;
@@ -2694,8 +2703,9 @@ async fn write_steps(
 }
 
 /// The anchors a step gets once it is written: the turn id on the turn's earlier steps (it arrives with the turn's
-/// last), and a snapshot of the worktree after a completed edit and at the turn's first step, with the worktree's
-/// commit then (from its ref files).  Best effort; answers the snapshot and the commit.
+/// last), and a snapshot of the worktree after a completed edit and at the turn's first step (BEFORE: the tree taken
+/// before the turn's prompt went, else the worktree now), with the worktree's commit then (from its ref files).  Best
+/// effort; answers the snapshot and the commit.
 #[allow(clippy::too_many_arguments)]
 async fn anchor(
     sink: &StepSink,
@@ -2705,7 +2715,7 @@ async fn anchor(
     seq: i64,
     turn: Option<&str>,
     open: &OpenStep,
-    turn_start: bool,
+    (turn_start, before): (bool, Option<&str>),
     end: f64,
 ) -> (Option<String>, Option<String>, Option<i64>) {
     if id == 0 {
@@ -2713,6 +2723,7 @@ async fn anchor(
     }
     let edit = open.class == StepClass::Tool
         && matches!(open.tool_kind.as_deref(), Some("edit" | "delete" | "move"));
+    let turn_start = turn_start || before.is_some();
     let history_op = if edit || turn_start {
         newest_record(ctx, end).await
     } else {
@@ -2720,7 +2731,8 @@ async fn anchor(
     };
     let snapshot = match (&sink.snap, edit || turn_start) {
         (Some(s), true) => {
-            s.after_edit(&ctx.session, &ctx.cwd, seq as u64, &sink.editors)
+            let before = before.filter(|_| !edit);
+            s.after_edit(&ctx.session, &ctx.cwd, seq as u64, before, &sink.editors)
                 .await
         }
         _ => None,
@@ -4028,6 +4040,12 @@ impl Session {
         if !send {
             return;
         }
+        // the turn's first step holds the tree as it is before the agent hears of the turn: taken by the step writer
+        // once that step is written, it could already hold the turn's first write
+        if let Some(s) = &self.snap {
+            let tree = s.before_turn(&self.id, &self.cwd).await;
+            lock(&self.state).before = tree;
+        }
         // its entry is the agent's now: in the transcript file first, then off the queue on disk (a hub that dies
         // between the two runs the prompt again at the next start; it never loses it)
         self.flush_transcript();
@@ -4978,6 +4996,7 @@ mod tests {
                 detail: None,
                 command: None,
                 context: None,
+                before: None,
             })
             .unwrap();
         }
@@ -5074,6 +5093,7 @@ mod tests {
                 detail: None,
                 command: None,
                 context: None,
+                before: None,
             })
             .unwrap();
         }
@@ -5171,6 +5191,7 @@ mod tests {
                 detail: None,
                 command: None,
                 context: None,
+                before: None,
             })
             .unwrap();
         }
@@ -5247,6 +5268,7 @@ mod tests {
                 detail: None,
                 command: None,
                 context: None,
+                before: None,
             })
             .unwrap();
         }

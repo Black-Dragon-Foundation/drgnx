@@ -167,10 +167,53 @@ pub fn take(
     seq: u64,
     extra: &[String],
 ) -> Result<String, String> {
-    let (repo, tree) = write_tree(root, worktree, sid, extra)?;
-    let name = format!("refs/drgnx/s/{}/{seq}", safe(sid));
-    git(&repo, None, None, &["update-ref", &name, &tree])?;
+    let (_, tree) = write_tree(root, worktree, sid, extra)?;
+    put(root, worktree, sid, seq, &tree)?;
     Ok(tree)
+}
+
+/// TREE kept as SID's step SEQ (`refs/drgnx/s/<SID>/<SEQ>`) in WORKTREE's shadow repository under ROOT.
+fn put(root: &Path, worktree: &Path, sid: &str, seq: u64, tree: &str) -> Result<(), String> {
+    let name = format!("refs/drgnx/s/{}/{seq}", safe(sid));
+    git(
+        &repo_of(root, worktree),
+        None,
+        None,
+        &["update-ref", &name, tree],
+    )
+    .map(drop)
+}
+
+/// The ref that holds SID's turn tree ([`turn_tree`]) until its first step is written.
+fn turn_ref(sid: &str) -> String {
+    format!("refs/drgnx/turn/{}", safe(sid))
+}
+
+/// A tree of WORKTREE as it is before SID's turn reaches its agent, through an index of its own (the step writer's is
+/// never shared) and held by a ref until [`put_turn_tree`] keeps it as the turn's first step, so a collection in
+/// between does not remove it.
+pub fn turn_tree(root: &Path, worktree: &Path, sid: &str) -> Result<String, String> {
+    let (repo, tree) = write_tree(root, worktree, &format!("turn-{sid}"), &[])?;
+    git(&repo, None, None, &["update-ref", &turn_ref(sid), &tree])?;
+    Ok(tree)
+}
+
+/// TREE (a [`turn_tree`]) kept as SID's step SEQ, and its holding ref gone.
+pub fn put_turn_tree(
+    root: &Path,
+    worktree: &Path,
+    sid: &str,
+    seq: u64,
+    tree: &str,
+) -> Result<(), String> {
+    put(root, worktree, sid, seq, tree)?;
+    git(
+        &repo_of(root, worktree),
+        None,
+        None,
+        &["update-ref", "-d", &turn_ref(sid)],
+    )
+    .map(drop)
 }
 
 /// The tree of WORKTREE with the persistent index of KEY, written into its shadow repository; the repository and the
@@ -594,7 +637,10 @@ pub fn prune(repos: &[PathBuf], cap: u64, finished: &[String]) -> Pruned {
             for r in refs.lines().filter(|l| !l.is_empty()) {
                 any |= git(repo, None, None, &["update-ref", "-d", r]).is_ok();
             }
+            let _ = git(repo, None, None, &["update-ref", "-d", &turn_ref(sid)]);
             let _ = std::fs::remove_file(repo.join(format!("index-{}", safe(sid))));
+            let _ =
+                std::fs::remove_file(repo.join(format!("index-{}", safe(&format!("turn-{sid}")))));
         }
         if !any {
             continue;

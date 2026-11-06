@@ -362,9 +362,9 @@ the preview and apply, and the restart of the hub on the same root. The mock's `
 `call:note_add` also show as a tool call, as the agents show them, which is how the hub finds the step a decision was
 recorded in (`history/revert/preview {decision}`). Things the rows fix as they are:
 
-- A revert's *files* come from the checkpoint a step holds, taken when the hub observes the step; a read-only step
-  that the agent follows at once with a write can hold a checkpoint that already has the write (a row that needs the
-  files goes back to a step that edits).
+- A revert's *files* come from the checkpoint a step holds. A turn's first step holds the tree as it was before the
+  turn's prompt went to the agent, so a revert to it never keeps a write of that turn; an edit's checkpoint is taken
+  once its step is written, so a write the agent makes at once after it can already be in it.
 - The user's edits are those made after the agent's last step. Edits between two steps count as the agent's, and
   keep-mine puts the checkpoint's file back over them.
 - A file the agent created and the user then edited has no base to merge from: the card shows an overlap, and the

@@ -102,24 +102,49 @@ impl Snap {
         }
     }
 
-    /// A tree of WORKTREE after a completed edit (step SEQ of SID); its id.  Over the cap, the oldest finished
-    /// sessions' refs go first; with none left, snapshots stop and the editors get one notice.
+    /// A tree of WORKTREE as it is before SID's turn reaches its agent: the checkpoint of the turn's first step, which
+    /// [`Snap::after_edit`] keeps once that step is written.  Taken before the prompt goes, so nothing the agent does
+    /// in the turn is in it.
+    pub async fn before_turn(&self, sid: &str, worktree: &Path) -> Option<String> {
+        if self.state.stopped.load(Ordering::Relaxed) {
+            return None;
+        }
+        let (root, wt, sid_) = (self.root.clone(), worktree.to_path_buf(), sid.to_string());
+        crate::clock::blocking(move || snapshot::turn_tree(&root, &wt, &sid_))
+            .await
+            .ok()?
+            .map_err(|e| tracing::warn!(sid, "turn snapshot not taken: {e}"))
+            .ok()
+    }
+
+    /// A tree of WORKTREE after a completed edit (step SEQ of SID), or TURN (the [`Snap::before_turn`] tree of the
+    /// turn's first step) kept as that step's; its id.  Over the cap, the oldest finished sessions' refs go first; with
+    /// none left, snapshots stop and the editors get one notice.
     pub async fn after_edit(
         &self,
         sid: &str,
         worktree: &Path,
         seq: u64,
+        turn: Option<&str>,
         editors: &crate::settings::agents::Editors,
     ) -> Option<String> {
         if self.state.stopped.load(Ordering::Relaxed) {
             return None;
         }
-        let (root, wt, sid_) = (self.root.clone(), worktree.to_path_buf(), sid.to_string());
-        let tree = crate::clock::blocking(move || snapshot::take(&root, &wt, &sid_, seq, &[]))
-            .await
-            .ok()?
-            .map_err(|e| tracing::warn!(sid, "snapshot not taken: {e}"))
-            .ok()?;
+        let (root, wt, sid_, turn) = (
+            self.root.clone(),
+            worktree.to_path_buf(),
+            sid.to_string(),
+            turn.map(str::to_string),
+        );
+        let tree = crate::clock::blocking(move || match turn {
+            Some(t) => snapshot::put_turn_tree(&root, &wt, &sid_, seq, &t).map(|()| t),
+            None => snapshot::take(&root, &wt, &sid_, seq, &[]),
+        })
+        .await
+        .ok()?
+        .map_err(|e| tracing::warn!(sid, "snapshot not taken: {e}"))
+        .ok()?;
         let cap = self.settings.current().loaded.values.agents_checkpoint_cap;
         let (root, finished) = (
             self.root.clone(),

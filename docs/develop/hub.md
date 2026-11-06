@@ -2577,7 +2577,9 @@ adds `revertible`: it has a history record and its session's snapshots were not 
 ([store.md](store.md#schema-12-the-timelines-step-facts-agent-system-part-4)).
 
 A **step snapshot** is a tree of the session's worktree, written at the first step of each turn and after each completed edit (`edit`, `delete`, `move`
-tool kinds) into a shadow repository `<state>/hub/checkpoints/<hash>.git` and kept as `refs/drgnx/s/<sid>/<seq>`. Each
+tool kinds) into a shadow repository `<state>/hub/checkpoints/<hash>.git` and kept as `refs/drgnx/s/<sid>/<seq>`. A
+turn's tree is taken before its prompt goes to the agent (through an index of its own, held by `refs/drgnx/turn/<sid>`
+until the turn's first step is written and keeps it), so nothing the agent writes in the turn is in it. Each
 session has its own persistent index file in the shadow repository, so a snapshot only hashes what changed. The
 sandbox's secret file names (`.env`, `.npmrc`, `credentials*`, keys, …) are never in a tree. Over
 `drgnx-agents-checkpoint-cap` (summed over the shadow repositories), the refs of finished sessions go oldest first and
