@@ -76,7 +76,9 @@ manual install and uninstall: [docs/guide/install.md](docs/guide/install.md). Ch
 - **Agents:** the agent runtime in Rust is built: the hub runs sessions, plan runs, managers, budgets and the permissions
   matrix ([docs/guide/agents.md](docs/guide/agents.md)), and since Ratatoskr's phase 7 (done) it is the only agent
   runtime: the old Lisp one is deleted. Agent sessions can drive a headless browser inside their own sandbox, reaching
-  only what you allow ([docs/guide/agent-browser.md](docs/guide/agent-browser.md)); watching it comes later. Next, a panel that shows what agents do in detail (each step,
+  only what you allow ([docs/guide/agent-browser.md](docs/guide/agent-browser.md)); watching it comes later. Plugins (WebAssembly components with tools for agents and hooks that narrow what they do) are
+built: [docs/guide/plugins.md](docs/guide/plugins.md) for users, [docs/develop/plugins.md](docs/develop/plugins.md) for
+authors. Next, a panel that shows what agents do in detail (each step,
   diffs, permissions, context and cost), with collapse per step type that remembers your choice.
 - **Extensions:** WebAssembly extensions, so tools can be written in any language (agent tools first). Community
   Emacs packages keep working.

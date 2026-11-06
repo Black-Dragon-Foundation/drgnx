@@ -1,8 +1,9 @@
 # Plugins, rules and hooks
 
-Plugins give agents tools of their own (abilities) and shape what agents do (hooks). This page is being written:
-it grows as plugins reach the hub. Today it covers installing and approving a plugin, how your rules and the plugins'
-hooks decide a step, choosing the plugins of one project, and the hooks before an agent's tool call.
+Plugins give agents tools of their own (abilities) and shape what agents do (hooks). This page covers installing and
+approving a plugin, what a plugin can and cannot reach, abilities, how your rules and the plugins' hooks decide a step,
+choosing the plugins of one project, the hooks at each point, and what each agent provider gets today. To write a
+plugin, see [develop/plugins.md](../develop/plugins.md).
 
 ## Installing and approving
 
@@ -13,8 +14,9 @@ you have approved exactly those files.
    you alone) and prints the plugin's hash. A plugin of the same name is not overwritten: give `--replace` to put the
    new files in its place. `drgnx plugins list` shows what is installed, and `drgnx plugins remove NAME` deletes it
    and forgets its approval.
-2. **Look at it and approve it,** in the Extensions view's Plugins section (`C-S-x`) or in Settings → Plugins. A card
-   in the agent views waits for you too. You are shown what the plugin declares: its abilities, the hosts it may
+2. **Look at it and approve it,** on the Plugins page: the palette command `Plugins…` (Settings → Plugins). A card
+   in the agent views waits for you too, and the notice "Plugin NAME waits for your approval" opens the page. When the
+   Extensions view is built it hosts this same page as a second door; it is not in drgnx yet. You are shown what the plugin declares: its abilities, the hosts it may
    reach over HTTPS, and for each hook the point, the verdicts it may return and the tools or paths it looks at.
    Approving sends the hash you were shown; if the files changed in between, the approval is refused and you look
    again.
@@ -56,6 +58,28 @@ tier of `drgnx-agents-net-hosts`. drgnx looks the name up once and refuses it wh
 request fails in the plugin and shows in the session's events as a denied host (once per host per session), just as
 the agent's own proxy reports one. A plugin's key-value store holds at most the `kv_bytes` its manifest declares (1 MiB
 at most).
+
+## What a plugin can and cannot reach
+
+A plugin is a WebAssembly component that drgnx runs inside its hub, with these limits.
+
+| It can | It cannot |
+|---|---|
+| read its own arguments (an ability call) or the step it was asked about (a hook), and answer | read your files, run a process, open a socket, read the environment or a secret |
+| call HTTPS on the hosts its approved manifest names, from drgnx, on the `plugin` tier | reach a host it did not declare, an address on this machine or your network, or follow a redirect |
+| keep a key-value store (at most its declared `kv_bytes`, 1 MiB at most) | see another plugin's store |
+| see the diffs and file contents of the steps it is asked about, in the projects where it is enabled | run before you approved its exact files, or after they changed |
+
+Each call gets a fresh instance with 64 MiB of memory and a time limit (a hook's is its point's, an ability's is 30 s);
+a plugin that spins or traps is stopped and the step it hooked is refused, and the hub stays responsive. Plugins have
+no files because they have no folder: drgnx grants none. Put what a plugin needs to know in its arguments or its store.
+
+**Hooks never widen.** A hook may only narrow what the permissions matrix allows: its `allow` means "no objection" and
+never answers a card for you, never turns a `never` into an ask. A test pins this at every point
+([security.md](security.md#hooks-never-widen)).
+
+**Rules are guardrails, not a boundary.** See [Your rules](#your-rules). A plugin's hook is code, so it can look at
+more than a regex does, but it is still a check on top of the matrix and the sandbox, not a replacement for them.
 
 ## Abilities
 
@@ -104,6 +128,9 @@ At four points the hub asks your **rules** and the enabled plugins' **hooks** ab
 | `after-edit` | after an edit, before the hub writes a file for an agent | 5 s |
 | `before-commit` | before the hub merges a task's commit | 10 s |
 | `at-review` | before a task goes to its reviewer | 30 s |
+
+`before-tool` and `after-edit` run today. `before-commit` and `at-review` can be declared and are checked, but the hub
+does not call them yet: they arrive with the checkpoint and review work.
 
 Each answers **allow** (no objection), **deny** (with a reason), **annotate** (a note shown under the step) or, where
 the hub itself performs the action, **change** (a tool's arguments for the hub's own tools, the content the hub
@@ -215,3 +242,31 @@ requests, and it shares one 5 s budget. What it can do depends on who made the e
 **Which agents are changed.** `change` reaches only agents that write through the client. With Claude's adapter,
 Claude Code makes its edits itself (the adapter's `writeTextFile` is a pass-through its tools do not call), so for
 Claude a hook can annotate or deny but never change.
+
+## In the agent views
+
+- **Hook verdicts with provenance.** A refused step shows the rule or hook that refused it, with each source's verdict
+  and time, and the notes under the step. A step an agent made itself and a hook denied afterwards is marked refused by
+  hook.
+- **Context breakdown.** The palette command `Context Breakdown…` shows what fills an agent's context, for an agent
+  that reports it (below). Where the agent can drop or pin an item, the entries say so; where it cannot, they are plain
+  text.
+- **Plugins page.** `Plugins…`, as above. The page's keys: `a` approve, `d` disable, `p` turn on or off in this
+  project, `g` refresh. Replacing and removing a plugin are CLI commands (`drgnx plugins install --replace`,
+  `drgnx plugins remove`); the page shows the hint.
+
+## What each provider gets today
+
+Hooks run where drgnx sees a step. How much of an agent's work drgnx sees depends on the agent.
+
+| Provider | Today | Arrives with the adapter forks |
+|---|---|---|
+| Claude (the org's `claude-agent-acp` fork) | every kind your rules and hooks look at is made to ask, so it reaches the seam; the panel extension reports the context breakdown and asks drgnx before a tool runs | `drop`, `pin` and `compact-preview` are not offered: the SDK cannot edit messages |
+| Codex, Gemini, Kimi Code, DeepSeek Harness | a config lock that makes what it can ask; the session names the kinds that are hooked and those that are not ("not hooked: …"), and a session whose subscribed kinds cannot be hooked at all is refused with the reason | the forks are in progress and not promised here: each is to add the same panel extension (context breakdown and, where the agent allows, a request before a tool runs) |
+| Gateway profiles (OpenRouter and API keys) | the same as Claude: they run through the Claude adapter | nothing |
+
+Until a fork lands for a provider, expect "not hooked" marks for kinds its config cannot make ask, and no context
+breakdown. Abilities do not depend on the adapter: every profile gets them.
+
+The managed ask rules for Claude are expected to make read-only commands ask; that has not yet been checked against
+the real Claude Code, and the same goes for the lock formats of Codex, Gemini and DeepSeek against their real CLIs.
