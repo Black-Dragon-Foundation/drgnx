@@ -2596,7 +2596,9 @@ tree is taken by the step writer once the step's row is written, unless the sess
 `fs/write_text_file` first: then the session takes the tree before it serves that write (`Snap::before_write`, through an
 index of its own, held by `refs/drgnx/write/<sid>/<tree>` until the step keeps it), one tree for every edit step closed
 since the last write, and the writer keeps that one. The writer holds the step's cell while it takes its own tree, so no
-write is served meanwhile; with no edit step waiting, a write costs a lock and nothing more. Each
+write is served meanwhile; with no edit step waiting, a write costs a lock and nothing more. A step whose row cannot be
+written closes its cell (`EditCell::close`), so no later write takes a tree nobody would keep; a tree taken for it
+already stays held until the session's refs are pruned, since the steps closed before one write share it. Each
 session has its own persistent index file in the shadow repository, so a snapshot only hashes what changed. The
 sandbox's secret file names (`.env`, `.npmrc`, `credentials*`, keys, …) are never in a tree. Over
 `drgnx-agents-checkpoint-cap` (summed over the shadow repositories), the refs of finished sessions go oldest first and

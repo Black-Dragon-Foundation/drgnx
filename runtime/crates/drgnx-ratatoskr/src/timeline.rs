@@ -95,6 +95,13 @@ impl EditCell {
     pub(crate) fn is_done(&self) -> bool {
         self.0.try_lock().is_ok_and(|m| matches!(*m, Mark::Done))
     }
+
+    /// Its step's row was never written, so no step keeps a tree taken for it: none is taken from now on.  A tree
+    /// taken already stays held by its ref (the edit steps closed before one write share it) until the session's refs
+    /// are pruned.
+    pub(crate) async fn close(&self) {
+        *self.0.lock().await = Mark::Done;
+    }
 }
 
 /// What a session needs to take its snapshots: the shadow repositories' folder, the cap (read at every use, so a

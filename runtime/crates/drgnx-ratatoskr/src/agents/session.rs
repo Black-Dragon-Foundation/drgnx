@@ -2741,6 +2741,10 @@ async fn anchor(
     end: f64,
 ) -> (Option<String>, Option<String>, Option<i64>) {
     if id == 0 {
+        // the row is lost: an edit's checkpoint would be a tree no step keeps, so the agent's next write takes none
+        if let Some(c) = cell {
+            c.close().await;
+        }
         return (None, None, None);
     }
     let edit = open.is_edit();
@@ -5237,6 +5241,95 @@ mod tests {
         assert_eq!(edit.history_op, Some(made[0].op as u64));
         assert!(edit.revertible);
         assert_eq!(read.history_op, None, "a read step anchors no record");
+    }
+
+    // test-pattern: D (the step's row cannot be written: its store's folder is a file)
+    #[tokio::test]
+    async fn an_edit_step_whose_row_is_lost_closes_its_checkpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("not-a-folder"), "").unwrap();
+        let writer = crate::coord::Writer {
+            db: norn::store::CoordDb::spawn(dir.path().join("not-a-folder/work.db")),
+            signals: Arc::new(crate::coord::Signals::default()),
+        };
+        let wt = dir.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join("a.txt"), "edited").unwrap();
+        let snap = crate::timeline::Snap::for_test(
+            dir.path().join("cp"),
+            Arc::new(crate::settings::Settings::new()),
+        );
+        let (bus, mut seen) = tokio::sync::broadcast::channel(16);
+        let sink = StepSink {
+            writer,
+            editors: Arc::new(crate::settings::agents::Editors::default()),
+            bus,
+            snap: Some(snap.clone()),
+            scopes: None,
+            tools: None,
+            asks: None,
+            stamps: None,
+            presence: None,
+            map: None,
+            traces: None,
+        };
+        let ctx = StepCtx {
+            flow: Arc::default(),
+            session: "a1".into(),
+            task: None,
+            agent: "mock".into(),
+            provider: None,
+            cwd: wt.clone(),
+            acp: None,
+            history: None,
+        };
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(write_steps(rx, sink, ctx));
+        let cell = crate::timeline::EditCell::default();
+        tx.send(ClosedStep {
+            open: OpenStep {
+                class: StepClass::Tool,
+                start: 1.0,
+                tool: Some("Edit a.txt".into()),
+                tool_kind: Some("edit".into()),
+                tool_id: None,
+                message_id: None,
+                key: 0,
+                mcp: false,
+                parent_tool: None,
+            },
+            end: 2.0,
+            turn_id: None,
+            tokens_in: 1,
+            tokens_out: 1,
+            cache_read: 0,
+            cache_write: 0,
+            cost: None,
+            detail: None,
+            command: None,
+            context: None,
+            before: None,
+            cell: Some(cell.clone()),
+        })
+        .unwrap();
+        // the step is announced though its row is lost
+        seen.recv().await.unwrap();
+        assert!(cell.is_done(), "the lost step's checkpoint is closed");
+        // so the agent's next write takes no tree for it
+        snap.before_write("a1", &wt, vec![cell]).await;
+        let repo = crate::timeline::snapshot::repo_of(&dir.path().join("cp"), &wt);
+        let refs = if repo.exists() {
+            let out = std::process::Command::new("git")
+                .arg("--git-dir")
+                .arg(&repo)
+                .args(["for-each-ref", "--format=%(refname)"])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_owned()
+        } else {
+            String::new()
+        };
+        assert_eq!(refs, "", "no tree is held for a step nobody keeps");
     }
 
     /// Three steps of a turn through the writer: a think, an edit tool call, the turn's last think (with the turn id).
