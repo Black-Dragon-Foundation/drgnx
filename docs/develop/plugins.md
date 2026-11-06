@@ -240,8 +240,9 @@ edit, before a commit and at review use its row.
   `timeline/get` puts them on each step as `hooks`.
 - **The lock** (`agents/lock.rs`): `subscribed_kinds(plugins, project)` at launch (a rule or hook naming no kind:
   every kind), `LaunchPlan::with_hook_asks(kinds)` (Claude: managed ask rules of `claude_ask_tools(kind)`, beside
-  the user's, never an allow rule) and `hooked(profile, kinds)`, the snapshot's `hooked {before_tool, by_adapter,
-  unhooked, why}`. Codex's and Gemini's locks are not changed here.
+  the user's, never an allow rule) and `hooked(profile, kinds, plan)`, the snapshot's `hooked {before_tool,
+  by_adapter, unhooked, why}`. The other providers' locks are in `docs/develop/hub.md` ("Session start: lock, sandbox
+  and matrix").
 
 ## What a plugin can reach
 
