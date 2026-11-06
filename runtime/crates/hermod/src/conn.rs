@@ -310,6 +310,17 @@ impl Conn {
         Ok(r.session_id)
     }
 
+    /// An extension request METHOD (a `_`-prefixed method the agent advertised, e.g. `_drgnx/context/drop`) with
+    /// PARAMS, answered within DEADLINE: the agent's result as it sent it, for the caller to check.
+    pub async fn ext_request(
+        &self,
+        method: &str,
+        params: Value,
+        deadline: Duration,
+    ) -> Result<Value, Error> {
+        self.call(method, params, Some(deadline)).await
+    }
+
     fn remember(&self, sid: &SessionId, cwd: &Path) {
         self.shared
             .cwds
@@ -449,6 +460,11 @@ async fn handle(
                 }),
                 "fs/write_text_file" => decode_req(params).map(|r| {
                     Incoming::WriteFile(r, Responder::new(id.clone(), wtx.clone(), shared))
+                }),
+                m if m.starts_with('_') => Ok(Incoming::Ext {
+                    method: method.clone(),
+                    params,
+                    resp: Responder::new(id.clone(), wtx.clone(), shared),
                 }),
                 _ => {
                     reply_error(wtx, &id, jsonrpc::METHOD_NOT_FOUND, "method not found");

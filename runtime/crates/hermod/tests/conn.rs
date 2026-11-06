@@ -514,6 +514,71 @@ async fn unknown_notifications_are_ignored_unknown_requests_get_32601() {
     );
 }
 
+/// An extension request (`_`-prefixed, outside the schema) reaches the owner with its params as sent and a responder;
+/// another unknown request still gets -32601. Pattern C (handshake): the child echoes our answer before it exits.
+#[tokio::test]
+async fn an_extension_request_comes_with_a_responder() {
+    let rest = r#"printf '%s\n' '{"jsonrpc":"2.0","id":60,"method":"_drgnx/before_tool","params":{"sessionId":"s1","toolCall":{"toolCallId":"t1"}}}'; read r; echo "$r" >&2"#;
+    let (conn, mut rx) = start(&script(rest), opts()).await;
+    open(&conn).await;
+    let Event::Request(Incoming::Ext {
+        method,
+        params,
+        resp,
+    }) = next(&mut rx).await
+    else {
+        panic!("an extension request")
+    };
+    assert_eq!(method, "_drgnx/before_tool");
+    assert_eq!(params["toolCall"]["toolCallId"], "t1");
+    resp.respond(json!({"outcome": "allow"})).unwrap();
+    let Event::Exit { stderr, .. } = next(&mut rx).await else {
+        panic!("exit")
+    };
+    assert!(
+        stderr.contains(r#""id":60"#) && stderr.contains(r#""outcome":"allow""#),
+        "{stderr}"
+    );
+}
+
+/// `ext_request` sends an extension method and returns the agent's result as it is; a request the agent leaves
+/// unanswered ends at its deadline and the connection goes on. Pattern C (handshake): the child answers only after
+/// it read the request, and never answers the second.
+#[tokio::test]
+async fn ext_request_returns_the_answer_or_ends_at_its_deadline() {
+    let rest = r#"read r; echo "$r" >&2; printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"frees":12}}'; cat >/dev/null"#;
+    let (conn, mut rx) = start(&script(rest), opts()).await;
+    open(&conn).await;
+    let got = conn
+        .ext_request(
+            "_drgnx/compact/preview",
+            json!({"sessionId": "s1"}),
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("the agent's answer");
+    assert_eq!(got, json!({"frees": 12}));
+    let late = conn
+        .ext_request(
+            "_drgnx/context/drop",
+            json!({"sessionId": "s1", "item": "x"}),
+            Duration::from_millis(200),
+        )
+        .await;
+    assert!(
+        matches!(&late, Err(Error::Deadline(m)) if m == "_drgnx/context/drop"),
+        "{late:?}"
+    );
+    drop(conn);
+    let Event::Exit { stderr, .. } = next(&mut rx).await else {
+        panic!("exit")
+    };
+    assert!(
+        stderr.contains(r#""method":"_drgnx/compact/preview""#),
+        "{stderr}"
+    );
+}
+
 /// The stderr a child wrote before it said anything is readable while it runs (a sandbox's complaint before the
 /// status line), from any thread.
 #[tokio::test]

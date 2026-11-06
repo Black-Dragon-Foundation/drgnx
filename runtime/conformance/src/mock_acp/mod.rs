@@ -33,6 +33,9 @@
 //! forks or resumes what the first left; session ids then skip the ones the folder holds.  Without it, history lives
 //! in the process only.
 //!
+//! `--panel FEATURES`: the personality also speaks drgnx's `_drgnx/panel` extension (src/mock_acp/panel.rs: its
+//! `panel:*` words and the client's `_drgnx/*` requests).
+//!
 //! Every prompt answer carries `_meta.turnId` ("t1", "t2", ...).  Messages have ids (`messageId` of chunks); a
 //! fork's `_meta.jetbrains.air.fork.messageId` cuts the history: Claude after that message, Codex after its turn.
 //! The terminal capability is never used (commands run in the agent's own process).
@@ -40,6 +43,7 @@
 mod claude;
 mod codex;
 mod gemini;
+mod panel;
 
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -336,13 +340,18 @@ impl Agent {
         match method.as_str() {
             "initialize" => {
                 self.log("initialize", params);
-                reply(json!({"protocolVersion": 1, "authMethods": [],
+                let mut answer = json!({"protocolVersion": 1, "authMethods": [],
                     "agentInfo": {"name": format!("ratatoskr-mock-{}", self.kind_name()), "version": "0.1.0"},
                     "agentCapabilities": {"loadSession": self.kind == Kind::Gemini,
                         "promptCapabilities": {"image": false, "audio": false, "embeddedContext": true},
                         "mcpCapabilities": {"http": false, "sse": false},
-                        "sessionCapabilities": self.session_caps()}}));
+                        "sessionCapabilities": self.session_caps()}});
+                if let Some(meta) = panel::caps_meta(&self.argv) {
+                    answer["agentCapabilities"]["_meta"] = meta;
+                }
+                reply(answer);
             }
+            m if m.starts_with("_drgnx/") => panel::answer(self, &id, m, &params),
             "session/new" => {
                 let sid = self.open(&params);
                 self.save(&sid);
@@ -646,6 +655,7 @@ impl Agent {
                     "content": [{"type": "content", "content": {"type": "text", "text": out}}]}),
                 );
             }
+            _ if head.starts_with("panel:") => panel::word(self, sid, turn, &head[6..], rest),
             _ if head.starts_with("provider:") => {
                 self.provider_tool(sid, turn, &head[9..], rest);
             }

@@ -174,6 +174,8 @@ tail). There is no SDK role framework.
   call except `prompt` has the connection's `deadline`: a missed one fails that call with `Error::Deadline`, and the
   connection keeps working. A `prompt` ends by the agent's answer, `cancel`, or the child's exit (`Error::Closed`).
   `PromptOutcome` carries the stop reason, the turn's token usage and `_meta.turnId` when the agent sends one.
+  `ext_request(method, params, deadline)` sends an extension request (`_drgnx/context/drop` …) and returns the
+  agent's result as it is, for the caller to check.
 - **Fork.** `fork_into(ForkInto { source, cwd, mcp, at, meta })` sends `session/fork` with `{sessionId, cwd,
   mcpServers, _meta}`: the new session gets its tools (without `mcpServers` a forked agent has no drgnx tools) and the
   caller's `_meta` (a lock's options; without them the fork has no lock). With `at: Some(ForkPoint { message_id })`
@@ -188,7 +190,10 @@ tail). There is no SDK role framework.
   `is_cancelled()` is true. `Exit { code, signal, stderr }` comes exactly once, after every update the child wrote
   (the reader gets two seconds to drain), with the last `stderr_tail` characters of stderr; calls still waiting fail
   with `Error::Closed`.
-- Unknown notifications are ignored; unknown requests get -32601.
+- A notification or a request outside the schema whose method starts with `_` (an agent's extension) comes as
+  `Event::Ext { method, params }` or `Incoming::Ext { method, params, resp }`, its params unchecked: the owner checks
+  and answers them (the hub: `docs/develop/hub.md`, "The _drgnx/panel extension"). Other unknown notifications are
+  ignored; other unknown requests get -32601.
 - **Tests.** `runtime/crates/hermod/tests/conn.rs` runs scripted `/bin/sh` children, and for a fork the mock agent
   `ratatoskr-mock acp --state DIR` (`RATATOSKR_MOCK`, else beside the test binary, built there when missing): two
   processes on one state folder show a fork on a connection that never saw the session.
@@ -670,7 +675,12 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
   `_meta.turnId` (`t1`, …); chunks carry `messageId`; the terminal capability is never used. Personalities: claude
   (`close fork list resume`; logs `_meta.claudeCode.options`; forks after a message; `usage_update` with cost and
   `_claude/rateLimit`), codex (same set; logs `-c` overrides of argv; forks at a turn; `usage_update` and
-  `_codex/rateLimits`), gemini (`loadSession` only; the rest answers -32601). `--refuse-mode MODE` refuses `session/set_mode` to MODE (a lock that does not hold; the `agent-locks` rows); other modes are accepted. `--log` is JSONL; `--llm URL` POSTs
+  `_codex/rateLimits`), gemini (`loadSession` only; the rest answers -32601). `--panel FEATURES` (a comma list) adds
+  drgnx's `_drgnx/panel` extension to any personality, as the org's adapter forks do: `initialize` advertises the
+  features, the client's `_drgnx/context/drop|pin` and `_drgnx/compact/preview` are answered and logged
+  (`{"panel": …}`), and the words `panel:context JSON`, `panel:contexts N`, `panel:before-tool JSON`, `panel:big N`,
+  `panel:raw METHOD JSON` and `panel:preview JSON` send the extension's messages (answers logged as
+  `{"before_tool": …}`). `--refuse-mode MODE` refuses `session/set_mode` to MODE (a lock that does not hold; the `agent-locks` rows); other modes are accepted. `--log` is JSONL; `--llm URL` POSTs
   to a `ratatoskr-mock llm` once per turn, so its log counts requests. `--state DIR` keeps each session's history in
   `DIR/<sessionId>.json` (at its start and after every turn); `session/fork` and `session/resume` read a session this
   process does not hold from there, so a second process forks or resumes it (ids skip the ones the folder holds). A

@@ -1,4 +1,7 @@
 {
+  "agents/compact-preview": ["user"],
+  "agents/context-drop": ["user"],
+  "agents/context-pin": ["user"],
   "agents/do": ["user"],
   "agents/entries/subscribe": ["user"],
   "agents/entries/unsubscribe": ["user"],
