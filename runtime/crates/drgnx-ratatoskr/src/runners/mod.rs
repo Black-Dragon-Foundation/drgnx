@@ -9,6 +9,8 @@
 //!   a runner (origin, bundle or push; the overlay a runner may get).
 //! - [`keys`]: the job keys the user hands over, sent to a started attempt in `key` frames where trust allows, and
 //!   their audit (`key_sent`, `key_use`); [`redact`]: their bytes masked in what a runner returns.
+//! - [`returned`]: what a runner returns, checked before it touches the user's tree (paths, archives, patches), and
+//!   what a `shared` runner's results may not do.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -23,6 +25,7 @@ pub mod queue;
 pub mod redact;
 #[cfg(all(unix, not(target_os = "android")))]
 pub mod registry;
+pub mod returned;
 pub mod ssh_config;
 pub mod sync;
 pub mod transport;

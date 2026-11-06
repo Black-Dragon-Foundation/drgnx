@@ -528,6 +528,7 @@ mod queue {
                         id,
                         attempt,
                         result,
+                        ..
                     } if id == "xheavy" => Some((*attempt, result.clone())),
                     _ => None,
                 })

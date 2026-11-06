@@ -2235,6 +2235,38 @@ Tests: `runners::keys::` and `runners::redact::` [D]; `runners/keys-never-in-the
 the returned log redacted; a shared runner never gets a key; a key that never arrives is infra; `podman inspect` names
 only and `memory.swap.max` 0).
 
+## Runners: returned data
+
+`runners/returned.rs` (design §6.3, H2; the user's side is docs/guide/runners.md, "What comes back"): what a runner
+returns is checked before it reaches anyone. Runners return only the log and `result.json` today, so the checks below
+wait for their callers (reports, outputs, `changes.patch`, `exec/fetch`); the `shared` rules are wired.
+
+- `path_ok(rel)`: relative and normalised (`.` and empty segments dropped), refused for `..`, an absolute name, a NUL
+  or nothing left. `never_returned(path)`: a `target` component, a build tree (`CMakeFiles`, `CMakeCache.txt`,
+  `build.ninja`, `.ninja_log`, `.ninja_deps`, `config.status`) or an image (`oci-layout`; `.oci`, `.qcow2`, `.vmdk`,
+  `.vdi`, `.iso`, `.img`), by name, whatever a job declared.
+- `write(job_dir_fd, rel, bytes)`: both checks, then each folder on the way opened with `eitri::open_beneath` (a link
+  is refused) or made with `mkdirat` beneath the last one, then `eitri::write_regular` (0644; a link at the name is
+  replaced, never followed).
+- `archive_ok(tar)`: ustar (checksums checked; a ustar prefix, a GNU long name and a pax `path` taken; a global pax
+  `path` refused) holding only regular files and folders, every name through both checks; a link, device, FIFO,
+  any other type, a truncated entry or a missing end is refused.
+- `Patch::parse(from, bytes)` reads `git diff --full-index --binary` output: per file the paths before and after
+  (none: created or deleted), the modes and the blob before. A quoted path, a copy, a binary change without its data,
+  text before the first `diff --git` or an unknown header line can't be read: the patch is kept. `patch_ok(patch, spec,
+  attempt, submit, runner_trust)` lists every reason not to apply it: a path outside `spec.writes` (`*`/`?` within a
+  segment, `**` any segments, `dir/` the folder), a protected name (`PROTECTED`) or `.git` at any depth, a bad path,
+  a symlink or submodule mode, a changed mode or a new executable file, a blob before that isn't the file's `submit`
+  hash (or a created file that had one), another job, attempt number or nonce than `attempt`, a `shared` runner, more
+  than `PATCH_MAX`. A refused patch is kept with `review_card(runner, n)`.
+- **`shared`:** `Queue::apply` gives `Outcome::Done` the runner's name when its trust is `shared`; the job layer writes
+  it to the job's `shared` file, `finish` starts the summary with `shared_label` ("output from runner NAME (shared)"),
+  so `exec-done` and the starter's wake carry it, and `Runner::counts_for_gates(id)` is false for it
+  (`counts_for_gates(trust)`): what a gate or `needs` reads once the hub has one.
+
+Tests: `runners::returned::` [D] (the H2 rows: paths, archive links, a planted link, writes globs, protected files and
+`.git`, exec bits, an old attempt, `shared`, `target/`); `exec::tests::a_shared_runners_result_is_labelled_and_never_counts_for_a_gate` [D].
+
 ## Runners: health
 
 `runners/health.rs` (design §6.9). `is_strike(verdict, StrikeCtx {link_lost_today, link_stayed_up})` is the strike

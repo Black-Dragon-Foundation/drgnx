@@ -354,6 +354,8 @@ const KEEP_DAYS: f64 = 14.0;
 const KEEP_GRACE_S: f64 = 3600.0;
 /// How long a stop waits for the job's end to be recorded.
 const STOP_WAIT: Duration = Duration::from_secs(5);
+/// The job folder's file naming the `shared` runner the job ran on: its result is labelled and never counts for a gate.
+const SHARED: &str = "shared";
 
 /// The jobs the hub runs.
 pub struct Runner {
@@ -493,6 +495,14 @@ impl Runner {
             exit: end.exit,
             summary: end.summary,
         })
+    }
+
+    /// Whether job ID's result may count for a gate or a job's `needs`: the job is known and didn't run on a `shared`
+    /// runner.
+    pub fn counts_for_gates(&self, id: &str) -> bool {
+        self.inner
+            .get()
+            .is_some_and(|i| i.meta(id).is_some() && !i.dir(id).join(SHARED).exists())
     }
 
     /// Whether the job's row says running but its process is gone (the supervisor's `dead-wait`).
@@ -896,12 +906,15 @@ impl Inner {
     }
 
     /// What ended on a runner: its verdict becomes the job's end (`exit` and `why` as a job here writes them), a lost
-    /// job ends lost, a late result stays in the folder as that attempt's.
+    /// job ends lost, a late result stays in the folder as that attempt's. A `shared` runner's name goes to the job's
+    /// [`SHARED`] file: its summary is labelled, and it never counts for a gate.
     fn outcomes(self: &Arc<Self>, outs: Vec<Outcome>) {
         for o in outs {
-            let (id, verdict) = match o {
-                Outcome::Done { id, result, .. } => (id, queue::verdict_of(&result)),
-                Outcome::Lost { id } => (id, None),
+            let (id, verdict, shared) = match o {
+                Outcome::Done {
+                    id, result, shared, ..
+                } => (id, queue::verdict_of(&result), shared),
+                Outcome::Lost { id } => (id, None, None),
                 Outcome::Late { id, attempt, .. } => {
                     tracing::info!(
                         "job {id}: attempt {attempt} finished late; its result is kept, not applied"
@@ -929,6 +942,9 @@ impl Inner {
                     },
                 ),
                 None => {}
+            }
+            if let Some(runner) = shared {
+                write(SHARED, &runner);
             }
             let me = self.clone();
             crate::clock::spawn("exec:remote-end", async move { me.finish(&id).await });
@@ -1289,12 +1305,18 @@ impl Inner {
             _ => ExecStatus::Lost,
         };
         let text = tail_of(&dir.join("log"));
-        let summary = summary::summarise(
+        let mut summary = summary::summarise(
             CheckKind::from_name(&meta.kind),
             exit,
             &text,
             &dir.join("log").display().to_string(),
         );
+        // a shared runner's output reaches the summary, and so the starter's wake, labelled untrusted
+        if let Ok(runner) = std::fs::read_to_string(dir.join(SHARED)) {
+            summary
+                .lines
+                .insert(0, crate::runners::returned::shared_label(runner.trim()));
+        }
         let end = End {
             status,
             exit,

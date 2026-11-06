@@ -175,6 +175,32 @@ alpha is private; the only free runner is shared".
   never goes to a shared runner ("runs here: 2 uncommitted files, …"). With it on, each file is scanned first, and one
   that looks like a secret keeps the job off the shared runner, naming the file.
 
+## What comes back
+
+A job on a runner returns its log, its result and what it declared into its folder here (`<state>/hub/exec/<id>/`),
+so `exec/get`, `exec/log` and the summary work as for a job on this machine. For now a runner sends back its log and
+its result only; its reports, declared outputs and `changes.patch` (and `drgnx job fetch` for the larger ones) are
+still to come, and go through these checks when they do. Nothing a runner returns touches your tree until the hub has
+checked it:
+
+- **Paths.** Every returned path is relative and normalised: one with `..`, an absolute name or a NUL byte is refused.
+  Files are written beneath the job's folder without following a link (a link planted there is replaced or refused,
+  never written through), and an archive holding a link, a device or a FIFO is refused.
+- **Never returned,** whatever a job declares: a cargo `target/` (at any depth), a build tree (`CMakeFiles`,
+  `CMakeCache.txt`, `build.ninja`, `config.status`) or an image (`oci-layout`, `.oci`, `.qcow2`, `.vmdk`, `.vdi`,
+  `.iso`, `.img`).
+- **Limits:** the hub keeps 64 MiB of a job's log (cut in the middle beyond that; the whole stays on the runner), 16 MiB
+  of reports, 256 MiB of outputs and a 16 MiB `changes.patch`.
+- **A patch is applied only when all of these hold:** every file it touches matches one of the job's `writes` globs
+  (`*` and `?` stay within a folder, `**` is any number of folders, a trailing `/` is the whole folder); it touches no
+  protected file (`.envrc`, `.claude`, `.codex`, `.gemini`, `mise.toml`, at any depth) and nothing under a `.git`
+  folder; it adds no symbolic link or submodule and changes no executable bit (a new executable file counts); each
+  file it changes is still the one the job was submitted with; it comes from the job's current attempt (its number
+  and nonce); and its runner isn't `shared`. Otherwise it is kept, with the card "desktop returned changes to 3 files;
+  review them".
+- **A `shared` runner's results** never count for a gate or a job's `needs`, and are never promoted. Their summary, and
+  so the wake of the agent that started the job, begins "output from runner NAME (shared)".
+
 ## When a machine fails
 
 A lost link is never a job's result: a job on a runner whose link drops is *detached*, and comes back when the runner

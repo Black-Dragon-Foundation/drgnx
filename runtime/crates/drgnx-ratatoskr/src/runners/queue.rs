@@ -252,11 +252,13 @@ pub struct RunnerRow {
 /// What the queue tells the job layer.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Outcome {
-    /// A runner's verdict for the job's current attempt (its `result.json`).
+    /// A runner's verdict for the job's current attempt (its `result.json`). SHARED: the runner's name when it is a
+    /// `shared` one (its result is labelled and never counts for a gate).
     Done {
         id: String,
         attempt: u32,
         result: Value,
+        shared: Option<String>,
     },
     /// The job's runner is gone and the job isn't restartable.
     Lost { id: String },
@@ -2154,6 +2156,11 @@ impl Queue {
                     result,
                 } => {
                     let runner = st.attempts.attempt(&job, attempt).map(|a| a.runner.clone());
+                    let shared = runner.clone().filter(|r| {
+                        st.runners
+                            .get(r)
+                            .is_some_and(|x| x.r.trust == RunnerTrust::Shared)
+                    });
                     let verdict = verdict_of(&result)
                         .unwrap_or_else(|| forseti::Verdict::Infra("no verdict".into()));
                     if is_canary(&job) {
@@ -2170,6 +2177,7 @@ impl Queue {
                         id: job,
                         attempt,
                         result,
+                        shared,
                     });
                 }
                 Effect::Requeue { job, reason } => {
