@@ -29,10 +29,12 @@
       (drgnx-gc-setup)                                    ; the key is replaced: once only
       (should (= 1 (length timer-idle-list)))
       (should (equal (drgnx-timer-pending) '((gc-idle :core start))))
-      (let ((gcs 0) (gc-cons-threshold 1000000))          ; and it collects, once per pause (after real allocation)
+      (let ((gcs 0) (gc-cons-threshold 1000000))          ; and it collects, once per pause (after allocation)
         (cl-letf (((symbol-function 'garbage-collect) (lambda () (cl-incf gcs) nil))
                   ((symbol-function 'drgnx-gc--someone-waits-p) (lambda () t)))
-          (let ((junk (make-string 600000 ?x))) (ignore junk))
+          ;; 600000 bytes since the last collection, stated and not allocated: a real allocation can end in a real
+          ;; collection (post-gc-hook moves the base) or be dropped by the byte compiler
+          (setq drgnx-gc--base (- (drgnx-gc--consed) 600000))
           (drgnx-test-idle (+ drgnx-gc-idle-seconds 1)))
         (should (= gcs 1))))))
 

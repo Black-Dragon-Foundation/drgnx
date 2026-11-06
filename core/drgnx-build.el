@@ -190,7 +190,9 @@ the functions of `drgnx-build--advised-lists'."
                             (value (eval (caddr form) t)))
                   (dolist (e value) (push (if (consp e) (car e) e) syms)))))))))
     (sort (seq-uniq (seq-filter (lambda (s) (and (symbolp s) (fboundp s) (not (special-form-p s))
-                                                 (subr-primitive-p (symbol-function s))))
+                                                 ;; an advised primitive's definition is the advice around the subr
+                                                 (subr-primitive-p (let ((f (symbol-function s)))
+                                                                     (if (advice--p f) (advice--cd*r f) f)))))
                                 syms))
           #'string<)))
 

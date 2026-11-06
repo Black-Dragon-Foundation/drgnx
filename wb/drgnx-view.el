@@ -860,7 +860,8 @@ the view's `cut' says whether work is left."
   (with-current-buffer (drgnx-view--buffer view)
     (save-restriction
       (widen)
-      (let ((inhibit-read-only t) (inhibit-interaction t) (t0 (drgnx-timer-now))
+      (let ((inhibit-read-only t) (inhibit-interaction t)
+            (t0 (float-time))   ; the :draw-ms stat's own clock: the slice's deadline is the only reader of `drgnx-timer-now'
             (drgnx-view--slicing (and slice t)) (drgnx-view--rows 0) (drgnx-view--stopped nil)
             (drgnx-view--changed nil) (type (drgnx-view--type view)))
         (when slice
@@ -886,7 +887,7 @@ the view's `cut' says whether work is left."
             (drgnx-view--sweep view t))
           (when (> drgnx-view--rows 0) (drgnx-view--restore-row-places view places)))
         (when (> drgnx-view--rows 0)
-          (cl-incf (aref (drgnx-view--stats view) 8) (* 1000.0 (- (drgnx-timer-now) t0))))
+          (cl-incf (aref (drgnx-view--stats view) 8) (* 1000.0 (- (float-time) t0))))
         (setf (drgnx-view--cut view) (or drgnx-view--stopped (and keys (drgnx-view--work-left-p view))))
         (when (and (not drgnx-view--stopped) (> (drgnx-view--empty view) 0)) (drgnx-view--compact view))
         (when (> drgnx-view--rows 0) (set-buffer-modified-p nil))

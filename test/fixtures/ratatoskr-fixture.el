@@ -62,6 +62,11 @@ its clock and sequencer) and this Emacs does not connect: BODY connects inside `
                    (drgnx-test-wait (lambda () (and drgnx-hub--editor (listp (drgnx-hub-keys-held))))
                                     :secs 30 :what "the editor token and the held keys")))
              ,@body)
+         ;; the hub is asked to end (`shutdown'), which no handshake test's audit counts as a signal; a hub with no
+         ;; connection to ask (a gated test's, or one that did not answer) is sent TERM, then KILL
+         (when (and (process-live-p hub) (processp drgnx-hub--client) (process-live-p drgnx-hub--client))
+           (ignore-errors (drgnx-hub-call "shutdown" nil #'ignore))
+           (ignore-errors (drgnx-test-wait (lambda () (process-get hub :done)) :secs 10 :what "Ratatoskr ends on shutdown")))
          (drgnx-hub-disconnect)
          (when (process-live-p hub) (signal-process hub 'term))
          (when hub (ignore-errors (drgnx-test-wait (lambda () (process-get hub :done)) :secs 10 :what "Ratatoskr ends")))

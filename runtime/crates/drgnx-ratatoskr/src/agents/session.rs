@@ -768,6 +768,8 @@ pub struct Session {
     store: Option<transcript::Store>,
     /// Closed steps, in order, to the task that writes them to the `step` table.
     steps: tokio::sync::mpsc::UnboundedSender<ClosedStep>,
+    /// The count of those steps sent and written.
+    flow: Arc<StepFlow>,
     /// How a turn ended, to the reader task.
     done: tokio::sync::mpsc::UnboundedSender<TurnEnd>,
     /// The user's messages as they reach the agent: its current ask ([`crate::work::asks`]).
@@ -1807,7 +1809,9 @@ fn assemble(
 ) -> (Arc<Session>, tokio::sync::mpsc::UnboundedReceiver<TurnEnd>) {
     let (done, done_rx) = tokio::sync::mpsc::unbounded_channel();
     let (steps, rx) = tokio::sync::mpsc::unbounded_channel();
+    let flow = Arc::new(StepFlow::default());
     let ctx = StepCtx {
+        flow: flow.clone(),
         session: i.id.clone(),
         task: i.task.clone(),
         agent: profile.name.clone(),
@@ -1894,6 +1898,7 @@ fn assemble(
         state: Mutex::new(State::new()),
         store: front.dirs.get().map(|d| transcript::Store::new(&d.hub)),
         steps,
+        flow,
         done,
         asks: front.core.asks.handle(),
         stamps: front.core.stamps.clone(),
@@ -2249,8 +2254,27 @@ pub(crate) async fn resume_closed(
     hub.find(sid)
 }
 
+/// How many of a session's closed steps went to its writer task and how many rows that task has written.  A reader
+/// of the `step` table that must see every step the session closed so far waits on it ([`Session::steps_written`]):
+/// the row is written after the session already says it is idle.
+pub(crate) struct StepFlow {
+    sent: AtomicU64,
+    written: tokio::sync::watch::Sender<u64>,
+}
+
+impl Default for StepFlow {
+    fn default() -> Self {
+        StepFlow {
+            sent: AtomicU64::new(0),
+            written: tokio::sync::watch::channel(0).0,
+        }
+    }
+}
+
 /// What a session's step rows say of it.
 struct StepCtx {
+    /// Counts the rows written, for [`StepFlow`].
+    flow: Arc<StepFlow>,
     session: String,
     task: Option<String>,
     agent: String,
@@ -2339,6 +2363,7 @@ async fn write_steps(
                 (0, local as i64, None)
             }
         };
+        ctx.flow.written.send_modify(|w| *w += 1);
         let snapshot = anchor(
             &sink,
             &ctx,
@@ -2468,6 +2493,8 @@ async fn write_steps(
         sink.editors.broadcast("agent-step", json!(ev));
         let _ = sink.bus.send(ev);
     }
+    // no more rows will come: whoever waits for one stops waiting
+    ctx.flow.written.send_replace(u64::MAX);
 }
 
 /// The anchors a step gets once it is written: the turn id on the turn's earlier steps (it arrives with the turn's
@@ -2694,8 +2721,21 @@ impl Session {
     fn drain_steps(&self) {
         let closed = std::mem::take(&mut lock(&self.state).closed);
         for c in closed {
+            self.flow.sent.fetch_add(1, Ordering::SeqCst);
             let _ = self.steps.send(c);
         }
+    }
+
+    /// Returns once every step this session has closed so far is a row of the `step` table.
+    pub(crate) async fn steps_written(&self) {
+        self.drain_steps();
+        let target = self.flow.sent.load(Ordering::SeqCst);
+        let _ = self
+            .flow
+            .written
+            .subscribe()
+            .wait_for(|w| *w >= target)
+            .await;
     }
 
     /// The entries not yet in the transcript file, written (redacted) now; a turn not yet sent to the agent waits.
@@ -4576,6 +4616,7 @@ mod tests {
         let (bus, mut seen) = tokio::sync::broadcast::channel(16);
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let ctx = StepCtx {
+            flow: Arc::default(),
             session: "a1".into(),
             task: Some("task:7".into()),
             agent: "mock".into(),
@@ -4752,6 +4793,7 @@ mod tests {
             traces: None,
         };
         let ctx = StepCtx {
+            flow: Arc::default(),
             session: "a1".into(),
             task: Some("task:7".into()),
             agent: "mock".into(),

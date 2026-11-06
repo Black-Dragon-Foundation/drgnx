@@ -215,6 +215,15 @@ pub async fn get(front: &Front, _: &Caller, p: TimelineParams) -> Result<Timelin
         table::Scope::Session if !id.starts_with("session:") => format!("session:{id}"),
         _ => id,
     };
+    // a session says it is idle before the row of the step that ended its turn is written: the steps it closed are
+    // rows before they are read (a scope wider than a session waits for every session the hub holds)
+    let sessions = match (scope, id.strip_prefix("session:")) {
+        (table::Scope::Session, Some(sid)) => front.core.agents.find(sid).into_iter().collect(),
+        _ => front.core.agents.live_sessions(),
+    };
+    for s in sessions {
+        s.steps_written().await;
+    }
     let since = p.since.unwrap_or(0) as i64;
     let rollup_only = p.rollup == Some(true);
     // backwards paging: `limit` and/or `before` (the newest `limit` steps before it, newest last)
