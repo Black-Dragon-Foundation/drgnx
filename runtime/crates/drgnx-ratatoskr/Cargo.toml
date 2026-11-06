@@ -89,6 +89,12 @@ http-body-util.workspace = true  # the download's body
 http = "1"                # the download's request (already in the tree through hyper)
 zeroize.workspace = true  # the line that carries provider keys to the backend is wiped once written
 secrecy.workspace = true  # job keys held in memory (runners::keys; already in the tree through bifrost and sleipnir)
+# cloud runners over plain HTTPS (runners::cloud): EC2 Query requests signed. `sign-http` alone does not compile in
+# 1.6.4 (it names `http` types); `http1` is http 1, already in the tree, and nothing brings http 0.2. Its hmac 0.13 and
+# sha2 0.11 are the workspace's
+aws-sigv4 = { version = "1.6.4", default-features = false, features = ["sign-http", "http1"] }
+aws-credential-types = "1.3"  # the credentials aws-sigv4 signs with (in its tree)
+quick-xml = "0.42"            # EC2's XML answers
 
 # runners: the user's OpenSSH through the crate's native mux (no Android: the transport is Unix desktops only)
 [target.'cfg(all(unix, not(target_os = "android")))'.dependencies]

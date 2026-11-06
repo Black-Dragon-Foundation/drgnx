@@ -2065,6 +2065,39 @@ banner. Each row first shows the user's own ssh doing what the hub must not (for
 `RemoteCommand` on a terminal and their `LocalCommand`, opening their `LocalForward`). The dead-link row stops the
 runner's sshd for the master's connection (`kill -STOP` over a second connection), which a network cut would do too.
 
+## Runners: cloud machines
+
+`runners/cloud/` starts and ends the user's cloud machines (`docs/guide/runners.md`, "Cloud: what you give drgnx").
+`trait Provider` (`BoxFuture` methods, so the hub holds a `dyn Provider`): `preflight() -> Vec<Check>`, `start(&StartReq)
+-> Instance`, `describe(id) -> InstanceInfo`, `list_ours()`, `end(id)` (one already gone is fine), `console(id)` (where
+a machine prints its host keys) and `prices(sizes) -> Prices`. Every call is bounded by `CALL_TIMEOUT` (30 s) and an
+answer by `MAX_BODY` (8 MiB). `CloudError {NeedsLogin(cmd), Denied, Capacity, Transient, Other}` carries the
+provider's code and message, never a credential.
+
+**AWS** (`aws.rs`): EC2's Query API (and STS `GetCallerIdentity`, the Pricing API's `GetProducts`), signed by
+`aws-sigv4` (`sign-http` only), sent through bifrost's `Upstream` (HTTP/1.1, rustls on ring) and read by a small
+`quick-xml` tree (`El`). `run_params` always sets `ClientToken` (the start's token: a retry returns the same
+machine), the `drgnx-hub` and `Name` tags on the instance, its volumes and its network interface,
+`InstanceInitiatedShutdownBehavior=terminate`, `MetadataOptions` tokens required with hop limit 1, the security group,
+the spot options, and the user-data (public things only). `classify(status, code)`: a 401/403 with an expired or
+unrecognised token (`ExpiredToken`, `AuthFailure`, …) is `NeedsLogin` and drops the cached credentials;
+`UnauthorizedOperation` is `Denied`; `Insufficient*Capacity` is `Capacity`; throttling, 5xx and a just-started
+machine not listed yet are `Transient`. `POLICY` is the IAM fixture (`aws-policy.json`), `policy_for(hub, regions,
+sizes)` what `drgnx runner cloud setup aws` prints.
+
+**Credentials** (`creds.rs`): `Source {Command(argv), Keyring(name)}`. `run_command(argv, timeout)` runs with stdin on
+`/dev/null` in a session of its own (`setsid`: no `/dev/tty`), kills its process group at the limit, and refuses a
+prompt on its error output (even when it then exits 0), a failure and empty output (`CredError`); what it printed is
+in a `Zeroizing` buffer, parsed into `SecretString`s (`AwsCredentials`, never `Debug` or `Clone`), and no error quotes
+it. `Resolver` keeps them until 5 minutes before they expire; a keyring source reads `Keys::value`.
+
+**Endpoints**: the providers' own, `https://` only. A `test-hooks` build reads `DRGNX_TEST_CLOUD_ENDPOINT_AWS` /
+`_GCP` and accepts `http://`, for `ratatoskr-mock cloud` (`docs/develop/scenarios.md`, "The cloud mock").
+
+Tests: `runners::cloud::` [D] (the SigV4 test suite's `get-vanilla`, the `RunInstances` parameters, the error
+classes, the policy's statements, a prompting credential command), and [B] rows against the mock with its virtual
+clock (`start_describe_end_round_trip`, `a_retry_after_a_crash_returns_the_same_instance`).
+
 ## Runners: attempts
 
 Every placement of a job on a runner is an **attempt** with a nonce the hub made (`sleipnir::proto::JobRef {job,

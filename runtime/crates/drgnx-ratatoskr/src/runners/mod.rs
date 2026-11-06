@@ -11,11 +11,13 @@
 //!   their audit (`key_sent`, `key_use`); [`redact`]: their bytes masked in what a runner returns.
 //! - [`returned`]: what a runner returns, checked before it touches the user's tree (paths, archives, patches), and
 //!   what a `shared` runner's results may not do.
+//! - [`cloud`]: cloud machines: the providers over plain HTTPS (AWS first), their credentials by command.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub mod attempts;
+pub mod cloud;
 pub mod health;
 pub mod keys;
 pub mod link;

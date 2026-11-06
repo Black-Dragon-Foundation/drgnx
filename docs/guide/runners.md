@@ -253,3 +253,26 @@ time-out, a preemption or an eviction never is.
 5 minutes the hub checks each runner: its probe and the runner contract, a canary `true` in its image under the job
 caps, its free disk above the floor, and its clock within 2 s of this machine's. A pass brings a benched runner back
 with no strikes; a failure is one more strike. `drgnx runner unbench NAME` brings it back at once.
+
+## Cloud: what you give drgnx
+
+drgnx can start machines of its own in your AWS account (GCP follows), only with your permission and within your
+limits. It talks to the provider's API directly, over HTTPS, with a role you create for it, scoped to what it does:
+
+- **Credentials come from a command**, by default `aws configure export-credentials`, the same one your `aws` CLI
+  uses (SSO, a profile, a role). drgnx runs it with no terminal and a 30 s limit. If it asks for anything (an MFA code,
+  a password, a confirmation) or doesn't finish, drgnx doesn't answer it: the card says "the cloud credentials need a
+  login: run `aws configure export-credentials` in a terminal", and nothing starts until you have. An expired session
+  reads the same way. What the command prints stays in memory: never written, logged or shown.
+- **Or a key in your keyring**, handed over like a job key (see "Keys"): the same JSON the command prints
+  (`{"Version": 1, "AccessKeyId": …, "SecretAccessKey": …}`).
+- **The role's policy**: `drgnx runner cloud setup aws` prints it, with your hub's id, regions and machine sizes filled
+  in; you create the role, drgnx never creates IAM itself. It has one statement per resource type: machines, their
+  disks and network interfaces may be started only with the tag `drgnx-hub=<your hub id>`, only in your sizes, only
+  with metadata tokens required; tags only when they are made; ending a machine, and the image and security-group
+  calls, only on resources with that tag; every call only in your regions. It denies `iam:PassRole` (machines get no
+  role) and making an image or snapshot public. No cloud credential ever reaches a machine.
+
+Every machine drgnx starts is tagged with your hub's id, ends itself when it powers off, and is started with an
+idempotency token, so a retry after a crash or a lost answer finds the machine the first try made instead of paying
+for a second one.
