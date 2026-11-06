@@ -134,7 +134,7 @@ pub trait Hub: Send + Sync {
 
     /// Session SID's call of the tool TOOL ended; its answer goes out once this returns.  The hub reads what the call
     /// wrote first (the ask it links to).  The default: nothing.
-    fn after_tool(&self, _sid: &str, _tool: &'static str) -> BoxFuture<'_, ()> {
+    fn after_tool(&self, _sid: &str, _tool: &str) -> BoxFuture<'_, ()> {
         Box::pin(async {})
     }
 
@@ -307,12 +307,13 @@ mod core_tests {
 
     #[test]
     fn the_core_and_manager_tools_are_their_lists_and_new_names() {
-        let names = |v: Vec<Box<dyn Tool<Ctx>>>| v.iter().map(|t| t.name()).collect::<Vec<_>>();
+        let names =
+            |v: Vec<Box<dyn Tool<Ctx>>>| v.iter().map(|t| t.name().to_owned()).collect::<Vec<_>>();
         assert_eq!(names(core_tools()), CORE_TOOLS);
         assert_eq!(names(manager_tools()), MANAGER_TOOLS);
         let served = names(tools());
         for n in CORE_TOOLS.iter().chain(&MANAGER_TOOLS) {
-            assert!(!served.contains(n), "{n} is already a tool");
+            assert!(!served.iter().any(|s| s == n), "{n} is already a tool");
         }
         for t in core_tools().iter().chain(&manager_tools()) {
             assert!(t.input_schema().is_object(), "{}", t.name());

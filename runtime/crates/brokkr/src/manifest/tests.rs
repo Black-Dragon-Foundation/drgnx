@@ -288,6 +288,16 @@ fn names_and_sizes_are_checked() {
         assert_eq!(refused(&m).path, "abilities[0].input_schema");
     }
 
+    // a keyword the call's checker does not check is refused at load, where it is; annotations pass
+    let mut m = base();
+    m["abilities"][0]["input_schema"]["properties"]["path"]["pattern"] = json!("^/");
+    let e = refused(&m);
+    assert_eq!(e.path, "abilities[0].input_schema.properties.path");
+    assert!(e.message.contains("pattern"), "{e}");
+    let mut m = base();
+    m["abilities"][0]["input_schema"]["properties"]["path"]["description"] = json!("a path");
+    parse_v(&m).unwrap();
+
     let mut m = base();
     m["abilities"] = json!([
         base()["abilities"][0].clone(),

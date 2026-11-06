@@ -338,7 +338,7 @@ type Loaded = (Vec<Arc<brokkr::Plugin>>, Vec<(Arc<Plugin>, String)>);
 
 /// PLUGINS loaded into the host (compiled once per approved hash; a first load reads, hashes and compiles off the
 /// hub's workers when they are a pool), and the ones that would not load, with why.
-fn load(plugins: &Plugins, list: &[Arc<Plugin>]) -> Loaded {
+pub(crate) fn load(plugins: &Plugins, list: &[Arc<Plugin>]) -> Loaded {
     let multi = tokio::runtime::Handle::try_current()
         .is_ok_and(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread);
     let loaded = if multi {

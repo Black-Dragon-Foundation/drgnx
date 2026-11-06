@@ -721,7 +721,7 @@ impl Hub for ToolHub {
     }
 
     /// A session's tool call ended: its graph writes link to its current ask before it answers.
-    fn after_tool(&self, _sid: &str, _tool: &'static str) -> BoxFuture<'_, ()> {
+    fn after_tool(&self, _sid: &str, _tool: &str) -> BoxFuture<'_, ()> {
         let front = self.front.get().and_then(std::sync::Weak::upgrade);
         Box::pin(async move {
             if let Some(f) = front {

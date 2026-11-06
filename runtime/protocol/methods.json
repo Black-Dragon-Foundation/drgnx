@@ -259,6 +259,10 @@
                 },
                 "type": "array"
               },
+              "plugins_changed": {
+                "description": "The plugins that run for the session differ from the ones it started with: abilities are fixed when the agent\nstarts, so a new set reaches it only through a new session.",
+                "type": "boolean"
+              },
               "profile": {
                 "type": [
                   "string",
@@ -2724,6 +2728,10 @@
                 },
                 "type": "array"
               },
+              "plugins_changed": {
+                "description": "The plugins that run for the session differ from the ones it started with: abilities are fixed when the agent\nstarts, so a new set reaches it only through a new session.",
+                "type": "boolean"
+              },
               "profile": {
                 "type": [
                   "string",
@@ -3189,6 +3197,10 @@
                   "$ref": "#/$defs/Permission"
                 },
                 "type": "array"
+              },
+              "plugins_changed": {
+                "description": "The plugins that run for the session differ from the ones it started with: abilities are fixed when the agent\nstarts, so a new set reaches it only through a new session.",
+                "type": "boolean"
               },
               "profile": {
                 "type": [
@@ -13399,7 +13411,8 @@
               "settings.change",
               "user.private",
               "user.emacs",
-              "chat.project-read"
+              "chat.project-read",
+              "plugin.abilities"
             ],
             "type": "string"
           },
@@ -13627,7 +13640,8 @@
               "settings.change",
               "user.private",
               "user.emacs",
-              "chat.project-read"
+              "chat.project-read",
+              "plugin.abilities"
             ],
             "type": "string"
           },

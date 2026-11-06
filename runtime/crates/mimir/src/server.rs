@@ -176,7 +176,7 @@ async fn read_line<R: AsyncBufRead + Unpin>(
 struct Conn<Ctx> {
     ctx: Arc<Ctx>,
     tools: Arc<[Box<dyn Tool<Ctx>>]>,
-    by_name: HashMap<&'static str, usize>,
+    by_name: HashMap<String, usize>,
     /// `tools/list`'s `tools`, in name order (deterministic, storage §6).
     listing: Value,
     info: ServerInfo,
@@ -192,7 +192,7 @@ impl<Ctx: Send + Sync + 'static> Conn<Ctx> {
         for i in order {
             let t = &tools[i];
             debug_assert!(valid_name(t.name()), "bad tool name {:?}", t.name());
-            let twice = by_name.insert(t.name(), i);
+            let twice = by_name.insert(t.name().to_owned(), i);
             debug_assert!(twice.is_none(), "two tools named {}", t.name());
             let mut entry = json!({
                 "name": t.name(),
@@ -973,5 +973,89 @@ mod tests {
         assert_eq!(end, End::ClientClosed);
         assert_eq!(a[1]["id"], 1);
         assert_eq!(a[1]["error"]["code"], INTERNAL_ERROR);
+    }
+
+    /// A tool whose name and description are made at run time, as a plugin's ability is.
+    struct Dynamic {
+        name: String,
+        description: String,
+    }
+
+    impl Tool<Calls> for Dynamic {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn description(&self) -> &str {
+            &self.description
+        }
+        fn input_schema(&self) -> Value {
+            typed::<NoArgs>().schema()
+        }
+        fn check(&self, args: &Value) -> Result<(), ArgsError> {
+            typed::<NoArgs>().check(args)
+        }
+        fn call<'a>(&'a self, _: &'a Calls, _: Value) -> BoxFuture<'a, ToolResult> {
+            Box::pin(async move {
+                ToolResult::Ok {
+                    text: format!("ran {}", self.name),
+                    structured: None,
+                }
+            })
+        }
+    }
+
+    // [D] pure: the names of a served list need not be 'static
+    #[tokio::test]
+    async fn dynamic_names_listed() {
+        let made = |n: &str| -> Box<dyn Tool<Calls>> {
+            Box::new(Dynamic {
+                name: format!("plug-{n}_run"),
+                description: format!("what {n} does"),
+            })
+        };
+        let all: Vec<Box<dyn Tool<Calls>>> = vec![made("b"), made("a")];
+        let (client, server) = tokio::io::duplex(1 << 16);
+        let (sr, sw) = tokio::io::split(server);
+        let (mut cr, mut cw) = tokio::io::split(client);
+        let input = [
+            init("2025-11-25"),
+            req(1, "tools/list", json!({})),
+            call(2, "plug-b_run", json!({})),
+            call(3, "plug-c_run", json!({})),
+        ]
+        .join("\n")
+            + "\n";
+        let serving = serve(
+            Arc::new(Calls::default()),
+            all.into(),
+            ServerInfo::default(),
+            sr,
+            sw,
+            Limits::default(),
+        );
+        let feeding = async move {
+            let _ = cw.write_all(input.as_bytes()).await;
+            let _ = cw.shutdown().await;
+        };
+        let reading = async move {
+            let mut out = String::new();
+            cr.read_to_string(&mut out).await.expect("UTF-8");
+            out
+        };
+        let (_, (), out) = tokio::join!(serving, feeding, reading);
+        let a: Vec<Value> = out
+            .lines()
+            .map(|l| serde_json::from_str(l).expect("JSON"))
+            .collect();
+        let listed: Vec<&str> = a[1]["result"]["tools"]
+            .as_array()
+            .expect("tools")
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        assert_eq!(listed, ["plug-a_run", "plug-b_run"]);
+        assert_eq!(a[1]["result"]["tools"][0]["description"], "what a does");
+        assert_eq!(a[2]["result"]["content"][0]["text"], "ran plug-b_run");
+        assert_eq!(a[3]["error"]["code"], INVALID_PARAMS);
     }
 }

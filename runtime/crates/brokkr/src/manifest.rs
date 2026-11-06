@@ -335,6 +335,17 @@ fn validate(m: &mut Manifest) -> Result<(), ManifestError> {
                 "must be an object schema (`\"type\": \"object\"`)",
             ));
         }
+        if let Err(e) = crate::schema::check_schema(&a.input_schema) {
+            let sub = if e.path.is_empty() {
+                String::new()
+            } else {
+                format!(".{}", e.path)
+            };
+            return Err(ManifestError::at(
+                format!("abilities[{i}].input_schema{sub}"),
+                e.message,
+            ));
+        }
     }
     if m.hosts.len() > MAX_HOSTS {
         return Err(ManifestError::at(

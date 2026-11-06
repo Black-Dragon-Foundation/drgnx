@@ -416,6 +416,8 @@ Three rows are about the agent's own browser, which runs inside its sandbox ([ag
   asks; Balanced allows it for managers and workers and asks for chats; Autonomous allows it.
 - **`browser.web`**: that browser may open any public site (HTTPS and plain HTTP, ports 80 and 443). Only
   Autonomous allows it; the other presets ask.
+- **`plugin.abilities`**: an approved plugin's tools (its abilities) are offered to the session and may run. Never
+  hides them; Ask shows a card with the tool and its arguments for every call.
 - **`browser.private`**: that browser may reach a private address you name (your LAN, your tailnet, this computer).
   It asks in every preset, Autonomous included, and an Allow you write for it still asks: no setting turns this
   card off.

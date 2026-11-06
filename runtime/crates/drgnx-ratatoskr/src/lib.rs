@@ -64,6 +64,7 @@
 //!
 //! Runners (other machines that run jobs): [`runners`], the generated ssh config and the transport.
 
+pub mod abilities;
 pub mod agent_core;
 pub mod agents;
 pub mod backup_timer;

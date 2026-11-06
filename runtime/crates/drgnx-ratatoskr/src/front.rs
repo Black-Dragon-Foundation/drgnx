@@ -748,6 +748,7 @@ impl Front {
         };
         if let (Some(card), Ok(_)) = (settled, &result) {
             self.core.agents.card_settled(card).await;
+            self.core.plugins.card_settled(card);
         }
         if let Err(e) = &result
             && e.code != ErrorCode::Internal
