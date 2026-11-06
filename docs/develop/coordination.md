@@ -548,6 +548,23 @@ same guard: `norn::tools::tools_for(ToolSets { tracker })` lists 21 tools, or th
 - `ask_user`'s message and its task's `needs-input` commit in one transaction, and so do `hello`'s registration and its
   `start` event (the Lisp made two).
 
+### Plugin abilities (`drgnx-ratatoskr/src/abilities.rs`)
+
+Abilities are served apart from the hub's own tools: `Sessions` binds `plugins.sock` (`SESSION_PLUGINS_SOCKET`) in the
+session's directory when the session opens with an approved, enabled plugin that has an ability and its columns are
+known (`bridge` calls `Sessions::note_who` first), and `bridge()` adds the `drgnx-plugins` entry beside `drgnx-search`.
+A connection's tool list is made when it connects (`abilities::offered`): the abilities of `Plugins::abilities_for` the
+session's project, none when the `plugin.abilities` cell is Never; the tools of a plugin set are kept by its hashes.
+`mimir::Tool::name`/`description` return `&str`, so a name made at run time (`PLUGIN_ABILITY`) is served.
+
+A call (`AbilityTool::call`): still enabled, arguments against the manifest schema (`brokkr::schema`), the `before-tool`
+hooks (`hook_points::at_hub_server`, server `drgnx-plugins`; a changed argument is checked against the schema again),
+the matrix row `plugin.abilities` on the arguments that will run, then `Host::call_ability` with the session's
+`HubIo`. An Ask waits on its card through `Plugins::wait_card`, woken by `Front` when a card is settled, and the card
+is withdrawn when the call's future is dropped (MCP cancellation or the connection closing). The session snapshot's
+`plugins_changed` is `Sessions::plugins_flag`, refreshed by `Sessions::plugins_refresh` after every plugin approval,
+switch or listing.
+
 ## What this does not protect against
 
 The same Unix user is no security boundary. Any process running as the user can get round the coordination
@@ -791,7 +808,18 @@ reuses a live one, and `agents/stop` and `agents/kill` close it. Test builds run
   (`commit:<sha>`) `implements` to every decision that session recorded and no commit implements yet.
   `decisions/effects` returns a decision's commits and the later commits whose changed lines (`git diff-tree -U0`,
   old side) overlap the lines the decision's commits wrote; line numbers are not followed through the commits in
-  between, and the result says `computed`. It needs the tree (or the repository) to still exist.
+  between, and the result says `computed`. Each linked commit records the run's store beside its task tree
+  (`<run>.git`, `data.store`); history is read there when it exists, so the effects survive the tree's removal, and
+  otherwise in the recorded repository while no sandboxed agent has worked in it. A session with no job task (a chat)
+  links too: its commits start at the first `step.head` it recorded (a hint, skipped when git does not know it).
+  `runner::effects::dependents` follows the effects to a fixed point (decision, its commits, later commits that
+  touch their lines, those commits' decisions), also `computed`.
+- **Withdrawing.** `decisions::withdraw` sets a decision `withdrawn` and `notes::withdraw` a finding; both move the
+  decision log's version and write one event, so `held_check` holds every reader at its next write and
+  `decisions_since` reports the decision. A note with no status is live. `work::conclusions::after(session, seq)`
+  lists the session's live conclusions recorded after a step: those whose stamped step has a later `seq`; one
+  without a stamp counts when a decision's log version is above the step's `log_version`, or a finding was recorded
+  after the step started.
 
 ## Clashes (`runner/clash.rs`)
 

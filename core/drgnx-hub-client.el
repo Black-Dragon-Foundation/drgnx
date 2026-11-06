@@ -737,6 +737,7 @@ closes it when this Emacs dies."
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--need-keys)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--keys-changed)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--note-card)
+  (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--note-plugin)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-settings-agents--event)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-records-review--event))
 
@@ -1098,6 +1099,7 @@ end is said by its sentinel."
     (add-hook 'drgnx-hub-event-functions #'drgnx-hub--need-keys)
     (add-hook 'drgnx-hub-event-functions #'drgnx-hub--keys-changed)
     (add-hook 'drgnx-hub-event-functions #'drgnx-hub--note-card)
+    (add-hook 'drgnx-hub-event-functions #'drgnx-hub--note-plugin)
     (when (require 'drgnx-settings-agents nil t) (add-hook 'drgnx-hub-event-functions #'drgnx-settings-agents--event))
     (when (require 'drgnx-records-review nil t) (add-hook 'drgnx-hub-event-functions #'drgnx-records-review--event))
     (drgnx-hub-send-settings)
@@ -1257,6 +1259,32 @@ Answer Permission Card with the card's id; the cockpit's cards answer the others
       (drgnx-notify 'hub 'warn (format "An agent was paused: %s" (plist-get data :text))
                     :id (intern (format "supervisor-%s" (or (plist-get data :card) (plist-get data :session) "rule")))
                     :life 'condition)))))
+
+(defun drgnx-hub--plugin-notice-id (name)
+  "The notice id of plugin NAME."
+  (intern (format "plugin-%s" name)))
+
+(defun drgnx-hub--note-plugin (event data)
+  "In an editor: a `plugin' event from a hub that proved itself, or a `card' of kind `plugin', becomes a notice of
+source `hub' for a plugin that waits for your approval (`unapproved', `changed') or is `broken'; any other state
+takes the notice away.  The click opens the plugin's page (`drgnx-plugins-page-open', when the module
+`tools/plugins' runs).  Nothing asks and nothing is approved here."
+  (when (and (drgnx-hub--event-proven-p)
+             (or (equal event "plugin")
+                 (and (equal event "card") (equal (plist-get data :kind) "plugin"))))
+    (let* ((name (or (plist-get data :name) (plist-get data :subject)))
+           (state (or (plist-get data :state) "unapproved"))
+           (id (and (stringp name) (drgnx-hub--plugin-notice-id name))))
+      (when id
+        (if (not (member state '("unapproved" "changed" "broken")))
+            (drgnx-notice-clear 'hub id)
+          (drgnx-notify 'hub (if (equal state "broken") 'warn 'info)
+                        (pcase state
+                          ("unapproved" (format "Plugin %s waits for your approval" name))
+                          ("changed" (format "Plugin %s changed since you approved it: it does not run until you approve it again" name))
+                          (_ (format "Plugin %s does not load" name)))
+                        :id id :life 'condition
+                        :command (and (fboundp 'drgnx-plugins-page-open) (list 'drgnx-plugins-page-open name))))))))
 
 (provide 'drgnx-hub-client)
 ;;; drgnx-hub-client.el ends here

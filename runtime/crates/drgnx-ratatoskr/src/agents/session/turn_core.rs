@@ -24,11 +24,23 @@ pub(crate) enum TurnEvent {
         steer_mode: bool,
         if_free: bool,
     },
-    /// The agent answered the turn's prompt; CANCELLED: its stop reason is `cancelled`.  JOBS: a job the session
-    /// started still runs.
-    PromptDone { cancelled: bool, jobs: bool },
-    /// The turn's prompt failed; CLOSED: the agent's connection closed.
-    PromptFailed { closed: bool, jobs: bool },
+    /// The agent answered turn TURN's prompt; CANCELLED: its stop reason is `cancelled`.  JOBS: a job the session
+    /// started still runs.  The answer of a turn a [`TurnEvent::Detach`] cut off changes nothing.
+    PromptDone {
+        turn: u64,
+        cancelled: bool,
+        jobs: bool,
+    },
+    /// Turn TURN's prompt failed; CLOSED: the agent's connection closed.
+    PromptFailed { turn: u64, closed: bool, jobs: bool },
+    /// The session's conversation is being swapped (a rewind): a running turn is cancelled and cut off (its later
+    /// answer changes nothing), a prompt that has not reached the agent goes back to the queue's front, and no turn
+    /// starts until [`TurnEvent::Reattach`]; a prompt sent meanwhile queues, and a Stop holds the queue.
+    #[cfg_attr(not(test), allow(dead_code, reason = "sent by the rewind"))]
+    Detach,
+    /// The new conversation is live: TOLD (a summary, the user's message) goes ahead of the queue, as
+    /// [`TurnCore::resume`]'s does; then, unless the queue is held, the next prompt starts.
+    Reattach { told: Option<String> },
     /// The user's Stop (or the refused waits'); AFTER_TOOL: the pause, which cancels once the running tool call
     /// completes (`Hub::cancel_after_tool`).
     Stop { after_tool: bool },
@@ -163,6 +175,10 @@ pub(crate) struct TurnCore {
     held: Vec<(u64, Option<i64>)>,
     /// The event pair's timer runs.
     emit_armed: bool,
+    /// The conversation is being swapped: nothing starts.
+    detached: bool,
+    /// Turns a detach cut off: their answers change nothing.
+    abandoned: Vec<u64>,
 }
 
 impl Default for TurnCore {
@@ -180,6 +196,8 @@ impl Default for TurnCore {
             ending: false,
             held: Vec::new(),
             emit_armed: false,
+            detached: false,
+            abandoned: Vec::new(),
         }
     }
 }
@@ -218,10 +236,64 @@ impl TurnCore {
                 fx.push(E::Announce);
                 fx
             }
-            TurnEvent::PromptDone { cancelled, jobs } => {
+            TurnEvent::PromptDone {
+                turn,
+                cancelled,
+                jobs,
+            } => {
+                if self.forget_abandoned(turn) {
+                    return Vec::new();
+                }
                 self.finish(cancelled && !self.ending, jobs)
             }
-            TurnEvent::PromptFailed { closed, jobs } => self.finish(!closed && !self.ending, jobs),
+            TurnEvent::PromptFailed { turn, closed, jobs } => {
+                if self.forget_abandoned(turn) {
+                    return Vec::new();
+                }
+                self.finish(!closed && !self.ending, jobs)
+            }
+            TurnEvent::Detach => {
+                if self.status == SessionStatus::Exited {
+                    return vec![E::Exited];
+                }
+                self.detached = true;
+                let mut fx = Vec::new();
+                if let Some(item) = self.unsent.take() {
+                    // its prompt never reached the old conversation: it goes to the new one
+                    self.queue.push_front(item);
+                    self.status = SessionStatus::Idle;
+                    fx.push(E::PutBack { turn: self.turn });
+                } else if self.status == SessionStatus::Busy {
+                    if !self.cancelling {
+                        fx.extend(self.cancel());
+                    }
+                    self.abandoned.push(self.turn);
+                    self.status = SessionStatus::Idle;
+                }
+                self.hold = false;
+                fx.extend([E::Persist, E::Announce]);
+                fx
+            }
+            TurnEvent::Reattach { told } => {
+                self.detached = false;
+                if let Some(text) = told {
+                    self.queue.push_front(Queued {
+                        text,
+                        origin: Origin::Hub,
+                        steer: false,
+                        key: None,
+                    });
+                }
+                let mut fx = vec![E::Persist];
+                fx.extend(self.next());
+                fx.push(E::Announce);
+                fx
+            }
+            TurnEvent::Stop { .. } if self.detached => {
+                // no turn runs while detached: the Stop holds what waits
+                self.paused = true;
+                vec![E::Persist, E::Announce]
+            }
             TurnEvent::Stop { after_tool: true } => {
                 match self.status {
                     SessionStatus::Exited => return vec![E::Exited],
@@ -432,7 +504,7 @@ impl TurnCore {
 
     /// The next queued prompt starts when the session is idle (or waiting on a job), not held, and not ending.
     pub(crate) fn next(&mut self) -> Vec<TurnEffect> {
-        if !self.idle() || self.paused || self.killed || self.ending {
+        if !self.idle() || self.paused || self.killed || self.ending || self.detached {
             return Vec::new();
         }
         let Some(item) = self.queue.pop() else {
@@ -502,6 +574,12 @@ impl TurnCore {
             .collect()
     }
 
+    /// Whether TURN is one a detach cut off (its answer is then forgotten with it).
+    fn forget_abandoned(&mut self, turn: u64) -> bool {
+        let at = self.abandoned.iter().position(|t| *t == turn);
+        at.map(|i| self.abandoned.remove(i)).is_some()
+    }
+
     fn take_held(&mut self, request: u64) -> bool {
         let at = self.held.iter().position(|(r, _)| *r == request);
         at.map(|i| self.held.remove(i)).is_some()
@@ -514,11 +592,21 @@ impl TurnCore {
     /// Can a new turn start now without joining anything: idle (not busy, not waiting on a job), not held, nothing
     /// queued, and its process not being ended.
     pub(crate) fn is_free(&self) -> bool {
-        self.status == SessionStatus::Idle && !self.paused && self.queue.is_empty() && !self.killed
+        self.status == SessionStatus::Idle
+            && !self.paused
+            && self.queue.is_empty()
+            && !self.killed
+            && !self.detached
     }
 
     pub(crate) fn status(&self) -> SessionStatus {
         self.status
+    }
+
+    /// Whether a permission request of TURN would still be held now (the turn runs, and is not being cancelled):
+    /// what `PermissionAsked` checks.
+    pub(crate) fn asks_in(&self, turn: u64) -> bool {
+        self.status == SessionStatus::Busy && turn == self.turn && !self.cancelling && !self.killed
     }
 
     pub(crate) fn queue(&self) -> &Queue {

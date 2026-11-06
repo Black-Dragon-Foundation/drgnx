@@ -256,6 +256,13 @@ pub async fn run(args: ServeArgs) -> Exit {
     crate::clock::spawn("machines:run", crate::work::machines::run(front.clone()));
     // the sessions' writes and starts link to the asks behind them
     crate::clock::spawn("asks:run", crate::work::asks::run(front.clone()));
+    // finished tasks, including part 1's history, become forecast samples
+    {
+        let f = front.clone();
+        crate::clock::spawn("forecast:backfill", async move {
+            crate::forecast::sweep(&f).await;
+        });
+    }
     // the Work map follows the store's records and the clock's minutes while a map is open
     crate::clock::spawn("map:run", crate::work::map::run(front.clone()));
     // settings.el and the shipped defaults, as data, before anything is served (its last good values in runtime.db)
@@ -271,6 +278,13 @@ pub async fn run(args: ServeArgs) -> Exit {
     crate::work::machines::seed(&front);
     // the runners recorded before this start are linked (in the background: an unreachable one delays nothing)
     crate::runners::methods::start(&front);
+    // the plugins installed in <data>/plugins: read now, their approval cards raised (nothing runs yet)
+    front.core.plugins.open(
+        paths::data_dir(&env).join("plugins"),
+        runtime.clone(),
+        front.settings.clone(),
+    );
+    crate::plugins::start(&front).await;
     front.core.runs.set_recovering(true);
     {
         let f = front.clone();

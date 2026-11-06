@@ -231,8 +231,13 @@ folder it belongs to; it never goes into the repository:
 - **No question asked.** It is your file, so every value applies without the "unsafe local variables" prompt, and
   its `(:eval …)` code runs after its values. Nothing is ever added to `safe-local-variable-values`.
 - **Refused, with the line:** a setting that has one value for all of Emacs (a global minor mode, `drgnx-agents-default`
-  …: "set it in Settings → User"), and drgnx's security settings, which no workspace may set. The rest of the file
+  …: "set it in Settings → User"), and drgnx's security settings, which no repository may set. The rest of the file
   applies; the problem names the file and the line.
+- **Your own per-project security choices** are the one exception, and only in your private file: a project-scoped
+  security setting such as `drgnx-agents-plugins` (which plugins run in this project) or `drgnx-agents-hook-rules`
+  holds a project's value there, on the Workspace tab of Settings. A repository's shared `.drgnx/settings.el`, a
+  `.dir-locals.el` and an agent cannot set them, and a security setting that is not project-scoped is refused here
+  too.
 - **`enable-local-variables`** is respected: when it is nil no workspace layer applies; when it is `:safe` only safe
   values apply.
 - **Project settings** such as search's include and exclude globs are read with the project's folder rather than set

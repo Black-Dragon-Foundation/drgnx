@@ -206,6 +206,56 @@ pub fn decide(tx: &mut WTx<'_>, d: Decide, now: f64) -> Result<DecideResult, Coo
     })
 }
 
+/// Withdraw decision N: its status becomes `withdrawn` (what it rested on was reverted), the log version moves and one
+/// event says so, so `decisions_since` reports it and `held_check` holds every reader at its next write.  False when
+/// there is no such decision or it is withdrawn already.
+pub fn withdraw(
+    tx: &mut WTx<'_>,
+    n: i64,
+    reason: &str,
+    by: &str,
+    now: f64,
+) -> Result<bool, CoordError> {
+    let Some(e) =
+        entity::by_id(tx.sql(), &format!("decision:{n}"))?.filter(|e| e.kind == "decision")
+    else {
+        return Ok(false);
+    };
+    if e.status.as_deref() == Some("withdrawn") {
+        return Ok(false);
+    }
+    let v = meta::bump_version(tx)?;
+    entity::update(
+        tx,
+        e.n,
+        None,
+        Changes {
+            status: Some(Some("withdrawn".into())),
+            data_patch: Some(json!({
+                "ver": v as i64,
+                "withdrawn_by": by,
+                "withdrawn_reason": reason,
+                "withdrawn_at": now,
+            })),
+            ..Changes::default()
+        },
+    )?;
+    event(
+        tx,
+        Event {
+            at: now,
+            agent: Some(by.to_owned()),
+            job: None,
+            task: None,
+            kind: EventKind::Decision,
+            summary: format!("#{n} withdrawn: {reason}"),
+            data: Some(json!({"n": n, "status": "withdrawn", "version": v})),
+            turn: false,
+        },
+    )?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,6 +284,43 @@ mod tests {
         assert_eq!((h.version, h.changes.len()), (1, 1));
         assert_eq!(held_check(tx.sql(), Some(1)).unwrap(), None);
         assert_eq!(held_check(tx.sql(), None).unwrap(), None);
+    }
+
+    // pattern: D
+    #[test]
+    fn withdraw_bumps_the_version_and_holds_a_reader() {
+        let mut c = db7();
+        let mut tx = tx_of(&mut c);
+        decide(&mut tx, d("user", None), 1.0).unwrap();
+        assert!(withdraw(&mut tx, 1, "its step was reverted", "user", 2.0).unwrap());
+        // the version moved, and a reader at the old version is held with the withdrawal in its changes
+        let h = held_check(tx.sql(), Some(1)).unwrap().unwrap();
+        assert_eq!(h.version, 2);
+        assert_eq!(h.changes.len(), 1);
+        assert_eq!(h.changes[0].status.as_deref(), Some("withdrawn"));
+        let events: i64 = tx
+            .sql()
+            .query_row(
+                "select count(*) from event where summary like '%withdrawn%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(events, 1);
+    }
+
+    // pattern: D
+    #[test]
+    fn withdraw_twice_is_false() {
+        let mut c = db7();
+        let mut tx = tx_of(&mut c);
+        decide(&mut tx, d("user", None), 1.0).unwrap();
+        assert!(withdraw(&mut tx, 1, "r", "user", 2.0).unwrap());
+        let v = meta::version(tx.sql()).unwrap();
+        assert!(!withdraw(&mut tx, 1, "r", "user", 3.0).unwrap());
+        assert_eq!(meta::version(tx.sql()).unwrap(), v);
+        // a decision nothing has is not withdrawn either
+        assert!(!withdraw(&mut tx, 9, "r", "user", 4.0).unwrap());
     }
 
     #[test]

@@ -27,6 +27,9 @@
 {"do": "send", "conn": "c", "json": {"id": 7, "method": "timeline/get", "params": {"scope": "session", "id": "$sid", "rollup": true}}}
 {"do": "expect", "conn": "c", "json": {"id": 7, "result": {"rollup": {"secs": {"$contains": [{"class": "think", "secs": "$capture:thinksecs"}]}, "tokens": {"in": "$capture:tin", "out": "$capture:tout"}}}}}
 {"do": "sql_expect", "sql": "select sum(tokens_in) = $tin, sum(tokens_out) = $tout, sum(tokens_in) > 0, abs(sum(end - start) - $thinksecs) < 0.002 from step where session = 'session:$sid' and class = 'think'", "rows": [[1, 1, 1, 1]]}
+{"do": "send", "conn": "c", "json": {"id": 13, "method": "timeline/get", "params": {"scope": "session", "id": "$sid", "rollup": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 13, "result": {"rollup": {"cost": {"$contains": [{"unit": "usd-est", "amount": "$capture:estcost"}]}}}}}
+{"do": "sql_expect", "sql": "select count(*), abs(sum(cost) - $estcost) < 0.000001, abs(sum(cost) - 0.02) < 0.000001, min(cost_unit) from step where session = 'session:$sid' and cost is not null", "rows": [[2, 1, 1, "usd-est"]]}
 {"do": "send", "conn": "c", "json": {"id": 8, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-ai-providers", "source": "row", "value": {"a": {"kind": "anthropic", "url": "http://127.0.0.1:$port", "caps": ["chat"], "messages": true, "price": [1000, 2000]}}}]}}}
 {"do": "expect", "conn": "c", "json": {"id": 8, "result": {"applied": 1}}}
 {"do": "send", "conn": "c", "json": {"id": 9, "method": "gateway/register", "params": {"chain": [["a", null]], "job": "j1", "task": "j1#1", "agent": "a1", "owner": "$HARNESS_PID"}}}

@@ -625,6 +625,9 @@ impl Front {
             | Params::AgentsEntriesUnsubscribe(_)
             | Params::AgentsToolInput(_)
             | Params::AgentsPause(_)
+            | Params::AgentsContextDrop(_)
+            | Params::AgentsContextPin(_)
+            | Params::AgentsCompactPreview(_)
             | Params::AgentsProbe(_)
             | Params::MessagesRetract(_)
             | Params::ExecStart(_)
@@ -671,8 +674,15 @@ impl Front {
             | Params::RunnersCheck(_)
             | Params::RunnersBench(_)
             | Params::RunnersSet(_)
+            | Params::HistoryRegister(_)
+            | Params::HistoryBatch(_)
+            | Params::HistoryResync(_)
+            | Params::HistoryUnregister(_)
             | Params::RunnersUnbench(_)
             | Params::RunnersRemove(_)
+            | Params::PluginsList(_)
+            | Params::PluginsApprove(_)
+            | Params::PluginsDisable(_)
             | Params::WorkConclusions(_)
             | Params::AgentsPresenceSubscribe(_)
             | Params::AgentsPresenceGet(_)
@@ -751,6 +761,7 @@ impl Front {
         };
         if let (Some(card), Ok(_)) = (settled, &result) {
             self.core.agents.card_settled(card).await;
+            self.core.plugins.card_settled(card);
         }
         if let Err(e) = &result
             && e.code != ErrorCode::Internal

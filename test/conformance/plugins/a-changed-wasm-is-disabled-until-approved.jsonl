@@ -1,0 +1,19 @@
+{"scenario": "plugins/a-changed-wasm-is-disabled-until-approved", "requires": ["v1"], "doc": "[B] A plugin swapped on disk after the user approved it is `changed` at the next look, a card asks again, and approving the new hash turns it on again. (Nothing is offered to an agent from a changed plugin: Plugins::enabled_for is held by the unit tests.)"}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "write_file", "path": "$ROOT/src/plugin.json", "json": {"name": "alpha", "version": "1.0.0"}}
+{"do": "write_file", "path": "$ROOT/src/plugin.wasm", "text": "wasm-one"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "run", "args": ["plugins", "install", "$ROOT/src"], "expect_code": 0, "expect_stdout": "installed alpha 1.0.0"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "plugins/list", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"plugins": [{"name": "alpha", "state": "unapproved", "hash": "$capture:h"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "plugins/approve", "params": {"name": "alpha", "hash": "$h"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"state": "approved"}}, "within_ms": 10000}
+{"do": "write_file", "path": "$DATA/plugins/alpha/plugin.wasm", "text": "wasm-swapped"}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "plugins/list", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"plugins": [{"name": "alpha", "state": "changed", "hash": "$capture:h2"}]}}, "within_ms": 10000}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select count(*) from card where kind = 'plugin' and state = 'open' and json_extract(data, '$.why') = 'changed' and json_extract(data, '$.hash') = '$h2'", "rows": [[1]]}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "plugins/approve", "params": {"name": "alpha", "hash": "$h2"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"state": "approved"}}, "within_ms": 10000}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select count(*) from card where kind = 'plugin' and state = 'open'", "rows": [[0]]}

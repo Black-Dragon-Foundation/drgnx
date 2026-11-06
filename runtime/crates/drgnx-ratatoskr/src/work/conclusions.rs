@@ -393,6 +393,78 @@ fn read_session(
     Ok((conclusions, steps))
 }
 
+/// A live conclusion a revert withdraws: a decision's number or a finding's note id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Concluded {
+    Decision(i64),
+    Finding(String),
+}
+
+/// SESSION's live conclusions recorded after its step SEQ: those whose stamped step has a `seq` above it; one with no
+/// stamp counts when it was recorded after that step (a decision: its log version above the step's `log_version`; a
+/// finding, which moves no version: its time after the step's start).  Withdrawn ones are left out.
+pub fn after(c: &Tx, session: &str, seq: i64) -> Result<Vec<Concluded>, CoordError> {
+    let key = format!("session:{session}");
+    let target: Option<(Option<i64>, f64)> = c
+        .query_row(
+            "select log_version, start from step where session = ?1 and seq = ?2",
+            (&key, seq),
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map(Some)
+        .or_else(|e| match e {
+            urdr::SqliteError::QueryReturnedNoRows => Ok(None),
+            e => Err(e),
+        })?;
+    let Some((log_version, start)) = target else {
+        return Ok(Vec::new());
+    };
+    let mut q = c.prepare(
+        "select e.id, e.kind, json_extract(e.data, '$.step'), json_extract(e.data, '$.ver'), t.at, \
+         (select s.seq from step s where s.id = json_extract(e.data, '$.step')) \
+         from entity e join tx t on t.id = e.created_tx \
+         where e.retired_tx is null and coalesce(e.status, '') != 'withdrawn' \
+         and (e.kind = 'decision' or (e.kind = 'note' and json_extract(e.data, '$.kind') = 'finding')) \
+         and (json_extract(e.data, '$.session') = ?1 or t.session = ?1) order by e.created_tx, e.n",
+    )?;
+    let rows = q
+        .query_map([session], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<i64>>(2)?,
+                r.get::<_, Option<i64>>(3)?,
+                r.get::<_, f64>(4)?,
+                r.get::<_, Option<i64>>(5)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut out = Vec::new();
+    for (id, kind, stamped, ver, at, step_seq) in rows {
+        let decision = kind == "decision";
+        let later = match (stamped, step_seq) {
+            (Some(_), Some(s)) => s > seq,
+            // a stamp whose step is gone is no stamp
+            _ if decision => match (ver, log_version) {
+                (Some(v), Some(l)) => v > l,
+                _ => false,
+            },
+            _ => at > start,
+        };
+        if !later {
+            continue;
+        }
+        if decision {
+            if let Some(n) = id.strip_prefix("decision:").and_then(|n| n.parse().ok()) {
+                out.push(Concluded::Decision(n));
+            }
+        } else {
+            out.push(Concluded::Finding(id));
+        }
+    }
+    Ok(out)
+}
+
 fn wire_source(s: &Source) -> wire::ConclusionSource {
     match s {
         Source::Path { path, lines } => wire::ConclusionSource {

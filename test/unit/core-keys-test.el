@@ -964,6 +964,8 @@ The commands of modules that need no installed package are in it, the later stag
                               agent-settings-add agent-settings-edit agent-settings-remove agent-settings-toggle
                               agent-settings-new-skill agent-settings-open-file agent-settings-other
                               agent-settings-openrouter agent-settings-report
+                              ;; P9's plugins page: keys in its own page map only
+                              plugins-refresh plugins-approve plugins-disable plugins-project-toggle
                               shortcuts-tty-fallback  ; M12b's terminal fallback in the Shortcuts editor
                               ;; the Extensions list: its open key and its own keys
                               extensions-open extensions-search extensions-details extensions-install extensions-update

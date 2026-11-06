@@ -20,7 +20,7 @@ pub const PROTO_MIN: u32 = 1;
 /// The records layout: 2 is JSON (design 4.5).
 pub const RECORDS: u32 = 2;
 /// The work.db schema this code knows (the hub makes it, or migrates an older file to it at start).
-pub const SCHEMA: u32 = 10;
+pub const SCHEMA: u32 = 12;
 
 /// What a connection proved (design 4.2): `user` a valid `hello` proof, `agent` the agent socket it came in on,
 /// `service` nothing.
@@ -369,7 +369,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 146, "{names:?}");
+        assert_eq!(names.len(), 156, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -399,6 +399,15 @@ mod tests {
             "runners/remove",
             "runners/set",
             "runners/unbench",
+        ]);
+        // the plugins': an approval and a switch-off change what the hub may run
+        want.extend(["plugins/approve", "plugins/disable"]);
+        // the editor's tracking: every history method changes what the hub tracks
+        want.extend([
+            "history/batch",
+            "history/register",
+            "history/resync",
+            "history/unregister",
         ]);
         want.extend(
             registry()
@@ -651,7 +660,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 104);
+        assert_eq!(with, 113);
     }
 
     #[test]

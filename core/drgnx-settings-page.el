@@ -165,10 +165,14 @@ package or a built-in group, `workspace' lists what waits for trust or review."
        t))
 
 (defun drgnx-settings-page-tabs-for (var root)
-  "The scope tabs VAR has: User always; Workspace and Shared too when VAR is not global and ROOT is a project."
+  "The scope tabs VAR has: User always; Workspace and Shared too when VAR is not global and ROOT is a project.
+A `:workspace never' setting has no Shared tab: the Workspace tab holds your own per-project choice, and the
+repository's file never does."
   (if (and root (drgnx-settings-page--project-p root)
            (not (eq (plist-get (drgnx-setting-meta var) :scope) 'global)))
-      '(user workspace shared)
+      (if (eq (plist-get (drgnx-setting-meta var) :workspace) 'never)
+          '(user workspace)
+        '(user workspace shared))
     '(user)))
 
 (defun drgnx-settings-page-default-tab (var root)

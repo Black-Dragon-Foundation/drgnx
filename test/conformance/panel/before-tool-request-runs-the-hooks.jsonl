@@ -1,0 +1,19 @@
+{"scenario": "panel/before-tool-request-runs-the-hooks", "requires": ["v1", "test-hooks"], "doc": "[C] The adapter's _drgnx/before_tool runs the session's before-tool hooks at the adapter site: a rule's deny answers {outcome: deny} with the hub's words and the rule's quoted, and one hook row of the hub's own records it (at adapter); a step no hook refuses answers {outcome: allow}. No card is made."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-panel\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--panel\" \"before-tool\" \"--log\" \"$ROOT/acp.log\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-agents-hook-rules", "source": "row", "value": [{"id": "no-rm", "point": "before-tool", "tool-kinds": ["execute"], "command": "^rm ", "verdict": "deny", "reason": "no rm"}]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-panel", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "panel:before-tool {\"kind\": \"execute\", \"title\": \"rm -rf x\", \"rawInput\": {\"command\": \"rm -rf x\"}, \"_meta\": {\"claudeCode\": {\"toolName\": \"Bash\"}}}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "{\"before_tool\":{\"outcome\":\"deny\",\"reason\":\"drgnx refused Bash; the rule no-rm said: «no rm»\"}}", "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/send", "params": {"id": "$sid", "text": "panel:before-tool {\"kind\": \"execute\", \"title\": \"ls\", \"rawInput\": {\"command\": \"ls\"}, \"_meta\": {\"claudeCode\": {\"toolName\": \"Bash\"}}}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "{\"before_tool\":{\"outcome\":\"allow\"}}", "within_ms": 30000}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select json_extract(e.data, '$.outcome'), json_extract(e.data, '$.at'), json_extract(e.data, '$.records[0].source') from event e join tx t on t.id = e.tx where t.actor = 'hub:hooks' and json_extract(e.data, '$.outcome') = 'deny'", "rows": [["deny", "adapter", "rule:no-rm"]]}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select count(*) from card where kind = 'matrix'", "rows": [[0]]}

@@ -224,6 +224,57 @@ fn protected_paths_are_listed() {
     }
 }
 
+// [D] pure: hooks/lock-turns-subscribed-kinds-into-asks. The subscribed kinds' Claude Code tools become
+// managed ask rules beside the user's own, never an allow rule; a kind no rule can name is marked unhooked; another
+// provider's lock is left as it is, its unhooked kinds named.
+#[test]
+fn subscribed_kinds_become_asks() {
+    let kinds = |k: &[&str]| -> Vec<String> { k.iter().map(|s| s.to_string()).collect() };
+    let p = profile(&["claude-agent-acp"], None, &[], None);
+    let with = plan(&p, Role::Worker, &Effective::default())
+        .with_claude_rules(Vec::new(), vec!["Edit".into()])
+        .with_hook_asks(&kinds(&["execute", "edit", "search", "think"]));
+    let perms =
+        &with.session_meta.unwrap()["claudeCode"]["options"]["managedSettings"]["permissions"];
+    assert_eq!(
+        perms["ask"],
+        json!(["Edit", "Bash", "Write", "NotebookEdit", "Grep", "Glob"])
+    );
+    assert!(perms.get("allow").is_none() && perms.get("deny").is_none());
+    assert_eq!(claude_ask_tools("read"), ["Read"]);
+    assert_eq!(claude_ask_tools("fetch"), ["WebFetch", "WebSearch"]);
+    assert!(claude_ask_tools("think").is_empty());
+    let h = hooked(&p, &kinds(&["execute", "think", "drgnx"])).unwrap();
+    assert_eq!(h.before_tool, ["drgnx", "execute"]);
+    assert_eq!(h.unhooked, ["think"]);
+    assert!(h.by_adapter.is_empty());
+    assert!(h.why.is_some());
+    assert_eq!(hooked(&p, &[]), None);
+    // nothing subscribed: the lock is today's
+    let none = plan(&p, Role::Worker, &Effective::default()).with_hook_asks(&[]);
+    assert!(
+        none.session_meta.unwrap()["claudeCode"]["options"]["managedSettings"]["permissions"]
+            .get("ask")
+            .is_none()
+    );
+    // Gemini runs reads and searches without asking
+    let g = profile(&["gemini", "--acp"], None, &[], None);
+    let gp = plan(&g, Role::Worker, &Effective::default()).with_hook_asks(&kinds(&["read"]));
+    assert!(gp.session_meta.is_none());
+    let h = hooked(&g, &kinds(&["read", "execute"])).unwrap();
+    assert_eq!(
+        (h.before_tool, h.unhooked),
+        (kinds(&["execute"]), kinds(&["read"]))
+    );
+    // an agent with no lock asks about nothing the hub can name
+    let x = profile(&["my-agent"], None, &[], None);
+    let h = hooked(&x, &kinds(&["execute", "drgnx"])).unwrap();
+    assert_eq!(
+        (h.before_tool, h.unhooked),
+        (kinds(&["drgnx"]), kinds(&["execute"]))
+    );
+}
+
 #[test]
 fn a_profile_without_a_lock_is_not_enforced() {
     let p = profile(&["my-agent", "--flag"], None, &[], None);

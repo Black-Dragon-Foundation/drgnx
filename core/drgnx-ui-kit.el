@@ -24,7 +24,8 @@
     (diamond "◆" . "<>") (search "⌕" . "/") (bullet "•" . ">") (minimize "–" . "-") (maximize "▢" . "[]")
     (fail "✕" . "X") (stopped "■" . "#") (dismiss "×" . "x") (unqueue "−" . "-")
     (info "ℹ" . "i") (warn "⚠" . "!")
-    (package "⬡" . "P") (plugin "◆" . "+") (module "▣" . "M"))
+    (package "⬡" . "P") (plugin "◆" . "+") (module "▣" . "M")
+    (refused "⛔" . "X") (note "✎" . "n") (changed "↻" . "~") (hook-busy "⏳" . "..."))
   "The standard glyph table: the default of `drgnx-face-glyphs', and where a name the option lacks is found.")
 
 (defcustom drgnx-face-glyphs drgnx-ui--default-glyphs

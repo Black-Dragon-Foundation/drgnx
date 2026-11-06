@@ -187,3 +187,18 @@ fn a_new_conversation_under_one_session_counts_its_cost_from_zero() {
         "7 in the first conversation, 3 in the second"
     );
 }
+
+/// Pure (D): a cumulative reading answers with what it booked, never negative.
+#[test]
+fn a_cumulative_reading_answers_with_the_delta_it_booked() {
+    let b = Budgets::default();
+    let s = sc(json!({"worker": "w1"}));
+    let read = |conv: &str, total: f64| {
+        b.spend_total_in(&s, "usd-est", conv, Unit::UsdEst, total)
+            .delta
+    };
+    assert_eq!(read("c1", 5.0), 5.0);
+    assert_eq!(read("c1", 7.0), 2.0);
+    assert_eq!(read("c1", 6.0), 0.0, "a total that fell books nothing");
+    assert_eq!(read("c2", 3.0), 3.0, "a new conversation counts from zero");
+}

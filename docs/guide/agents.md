@@ -125,6 +125,37 @@ program and everything it started. The answer says `ok` and the name and version
 answer in time, it could not start, or it ended first, with its exit status and the last 2 KiB of its error output (secrets
 blanked out). Nothing is recorded and no gateway token is made for it. The check is yours alone: an agent cannot ask it.
 
+## Why was this step refused?
+
+A step an agent asked for can be refused before you see it:
+
+- **by the permissions matrix**, when its cell is `never` ([security.md](security.md#the-permissions-matrix));
+- **by the freshness check**, when the agent of a job has not read the job's decision log;
+- **by a rule or a plugin's hook** before the tool call ([plugins.md](plugins.md#before-a-tool-call)). The agent is
+  told in drgnx's words, with the rule's or hook's quoted ("drgnx refused Bash; the hook deny-rm-hook said: «no rm
+  -rf»"), and the step's provenance in the timeline (`timeline/get`, each step's `hooks`) lists every rule and hook
+  that looked at it, what each said and how long it took. A hook that failed or timed out refuses too, and says so
+  ("hook NAME failed: timed out").
+
+A note a rule or hook added shows under the step. The session's `hooked` mark says which kinds of step its hooks see
+and which the agent runs without asking.
+
+**In the transcript** a hook's word is a line under the step, in theme colours: `⛔ refused by deny-rm 0.1 · "rm
+outside the worktree"`, `↻ changed by rewrite-commit-msg`, `✎ note by annotate-edit · text`, `⏳ NAME 0.1 was busy: its hook
+did not run` (a hook the plugin host had no room for, told apart from other failures), and, for a hub tool, `hooked at
+the hub's server`. Press RET on a line for its provenance: the source, version and hash, the verdict, how many
+milliseconds it took and what the hook was asked (the point, where it ran, the tool and the step). The lines come from
+what the hub already told the editor: nothing is asked while the transcript is drawn, and a step the editor was not
+watching when it ran has no line (its note still shows).
+
+**The header** above the transcript says `context N%` and, when the agent sends a breakdown (an agent from the org's
+adapter forks does; others do not and show none), the figure opens the breakdown: a bar of the parts of the window
+(system, tools, files, tool output, conversation, free), each part's items, `[drop]` and `[pin]` for an item where the
+agent offers them, and `[What /compact keeps]` where it can tell (nothing is compacted by looking). The header also says
+`not hooked: KINDS` for the kinds of step no hook reaches (with why), `hooked by the adapter: KINDS` for those the agent's
+adapter enforces itself, and `plugins changed: restart the session to use the new set` when you approved or disabled a
+plugin after the session began (a session keeps the plugin set it started with).
+
 ## Reviewing an agent's edits
 
 When an agent writes a file (ACP `fs/write_text_file`), the file is not changed: the transcript offers **Review**,
@@ -331,6 +362,19 @@ the agent works in. `settings.el` holds the choice, next to `drgnx-agents-profil
 Onboarding's Agents step asks for both and writes them without touching the rest of the file (comments stay); you can
 edit them by hand too. The search tool lets an agent read the indexed code of any of your projects, so it is off until
 you say yes.
+
+### The plugin tier of the network list
+
+`agents-net-hosts` names the hosts each network tier reaches (`provider-only`, `packages`). A plugin's HTTP requests
+are not the agent's: they have a tier of their own, `plugin`. A plugin reaches a host only when its approved manifest
+names it and, unless the session's network is open, you also list it as `"host:port"` under `plugin`:
+
+```elisp
+(drgnx-agents-net-hosts ((plugin "api.example.com:443")))
+```
+
+The agent's own tiers are never consulted for a plugin, and addresses on your machine or your network stay out of
+reach whatever the lists say ([plugins.md](plugins.md#installing-and-approving)).
 
 ### What a session gets with the browser
 

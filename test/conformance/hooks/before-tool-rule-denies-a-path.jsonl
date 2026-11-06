@@ -1,0 +1,19 @@
+{"scenario": "hooks/before-tool-rule-denies-a-path", "requires": ["v1", "test-hooks"], "doc": "[C] A user rule (no plugin) denies edits under `secret/**`, matched on the step's path relative to the session's folder: the agent's edit of secret/key is refused with its reject option, and an edit elsewhere is allowed with no hook row (nothing subscribed to it)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\")))) (drgnx-agents-matrix (:cells ((:action code.edit :column (:role worker) :verdict allow)))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-agents-hook-rules", "source": "row", "value": [{"id": "no-secrets", "point": "before-tool", "tool-kinds": ["edit"], "paths": ["secret/**"], "verdict": "deny", "reason": "secrets stay"}]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "ask:tool {\"kind\": \"edit\", \"title\": \"Edit secret/key\", \"locations\": [{\"path\": \"$ROOT/work/secret/key\"}], \"rawInput\": {\"file_path\": \"$ROOT/work/secret/key\"}, \"_meta\": {\"claudeCode\": {\"toolName\": \"Edit\"}}}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "{\"permission\":{\"kind\":\"edit\",\"answer\":\"reject_once\"}}", "within_ms": 30000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "drgnx refused Edit; the rule no-secrets said: «secrets stay»", "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/send", "params": {"id": "$sid", "text": "ask:tool {\"kind\": \"edit\", \"title\": \"Edit src/a.rs\", \"locations\": [{\"path\": \"$ROOT/work/src/a.rs\"}], \"rawInput\": {\"file_path\": \"$ROOT/work/src/a.rs\"}, \"_meta\": {\"claudeCode\": {\"toolName\": \"Edit\"}}}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "{\"permission\":{\"kind\":\"edit\",\"answer\":\"allow_once\"}}", "within_ms": 30000}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select json_extract(e.data, '$.outcome'), json_extract(e.data, '$.records[0].source') from event e join tx t on t.id = e.tx where t.actor = 'hub:hooks'", "rows": [["deny", "rule:no-secrets"]]}

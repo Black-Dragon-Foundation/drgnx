@@ -17,6 +17,10 @@ urdr = { path = "../urdr", version = "0.1.0" }
 mimir = { path = "../mimir", version = "0.1.0" }
 draugr = { path = "../draugr", version = "0.1.0" }
 huginn = { path = "../huginn", version = "0.1.0" }  # settings_change reads an agent's value as data
+# the hook engine (hooks/): plugin manifests and their hook points
+brokkr = { path = "../brokkr", version = "0.1.0" }
+regex.workspace = true
+serde_path_to_error.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
@@ -30,5 +34,9 @@ urdr = { path = "../urdr", version = "0.1.0", features = ["test-hooks"] }
 # tests/canary.rs: the hub's entity embedder (door 4) over the canary store (a dev-dependency cycle cargo allows)
 drgnx-ratatoskr = { path = "../drgnx-ratatoskr", version = "0.1.0" }
 tempfile.workspace = true
+# tests/plugin_hooks.rs: the engine through the plugin host, over the fixture plugins
+brokkr = { path = "../brokkr", version = "0.1.0", features = ["test-support"] }
+# hooks::tests: the point's budget on paused time
+tokio = { workspace = true, features = ["test-util"] }
 proptest.workspace = true
 insta.workspace = true

@@ -119,6 +119,18 @@
     (should (equal (funcall enc 'drgnx-runners-project-visibility "public") "\"public\""))
     (should (equal (funcall enc 'drgnx-search-model-mirror nil) "null"))
     (should (equal (funcall enc 'drgnx-search-model-mirror "https://m.test") "\"https://m.test\""))
+    ;; the plugin list and the hook rules (a rule's keys with `_', its symbols as strings)
+    (should (equal (funcall enc 'drgnx-agents-plugins '("deny-rm" "notes")) "[\"deny-rm\",\"notes\"]"))
+    (should (equal (funcall enc 'drgnx-agents-hook-rules-off '("no-rm")) "[\"no-rm\"]"))
+    (should (equal (funcall enc 'drgnx-agents-hook-rules nil) "[]"))
+    (should (equal (funcall enc 'drgnx-agents-hook-rules
+                            '((:id "no-rm" :point before-tool :tool-kinds (execute) :command "^rm " :verdict deny
+                                   :reason "no rm")
+                              (:point after-edit :paths ("**/*.lock") :verdict annotate :reason "a lock")))
+                   (concat "[{\"id\":\"no-rm\",\"point\":\"before-tool\",\"tool_kinds\":[\"execute\"],"
+                           "\"command\":\"^rm \",\"verdict\":\"deny\",\"reason\":\"no rm\"},"
+                           "{\"point\":\"after-edit\",\"paths\":[\"**/*.lock\"],\"verdict\":\"annotate\","
+                           "\"reason\":\"a lock\"}]")))
     ;; the agent browser's settings
     (should (equal (funcall enc 'drgnx-agents-browser-program nil) "null"))
     (should (equal (funcall enc 'drgnx-agents-browser-program "/usr/bin/chromium") "\"/usr/bin/chromium\""))

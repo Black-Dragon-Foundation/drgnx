@@ -14,7 +14,8 @@
 //! - `proxy [--log FILE]` prints `MOCK-PROXY-PORT N`; `CONNECT host:port` is logged (`{"connect": "host:port"}`) and
 //!   tunnelled, anything else gets 405 (logged as `{"refused": "METHOD TARGET"}`).
 //!
-//! - `acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL]` is a scripted ACP agent on stdio (src/mock_acp/mod.rs).
+//! - `acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] [--panel FEATURES]` is a scripted ACP agent on
+//!   stdio (src/mock_acp/mod.rs); with `--panel` it speaks drgnx's `_drgnx/panel` extension, as an adapter fork does.
 //! - `hf --dir DIR [--log FILE] [--cut FILE BYTES] [--bad FILE] [--location URL] [--no-range]` is the model host: it prints
 //!   `MOCK-HF-PORT N` and `MOCK-HF-CDN-PORT M`. `/…/resolve/REV/FILE` on N answers 302 to `FILE?sig=1` on M (or to URL, always,
 //!   with `--location`), and M serves the files of DIR and honours `Range: bytes=START-` (unless `--no-range`). The first

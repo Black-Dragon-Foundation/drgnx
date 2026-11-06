@@ -29,6 +29,8 @@
 //!   the running hub.
 //! - [`machines_cli`]: `ratatoskr machines report …`, a machine's slots from jobq, a client of the running hub.
 //! - [`runner_cli`]: `ratatoskr runner …`, the runners from a terminal, a client of the running hub.
+//! - [`plugins`]: the installed plugins, the user's approval of their files by hash, which run for a project, and the
+//!   approval cards; [`plugins_cli`]: `ratatoskr plugins …`, installing them from a terminal.
 //! - [`work`]: the Work space's hub side (machines, shell reads).
 //! - [`sessions`]: the coordination tools on a socket per session (the socket is the identity) and for outside
 //!   agents' bridges (`mcp/session`, `mcp/session-close`, `mcp/attach`), kept in `runtime.db`.
@@ -64,6 +66,7 @@
 //!
 //! The Extensions view: [`extensions`], the catalog of packages, modules and built-ins, searched in memory.
 
+pub mod abilities;
 pub mod agent_core;
 pub mod agents;
 pub mod backup_timer;
@@ -82,11 +85,14 @@ pub mod embed;
 pub mod eval_cli;
 pub mod exec;
 pub mod extensions;
+pub mod forecast;
 pub mod front;
 pub mod gateway;
 pub mod graph;
 pub mod graph_cli;
 pub mod hello;
+pub mod history;
+pub mod hook_points;
 pub mod idle;
 pub mod job_cli;
 pub mod legacy;
@@ -96,6 +102,8 @@ pub mod machines_cli;
 pub mod manager;
 pub mod matrix_gate;
 pub mod peer;
+pub mod plugins;
+pub mod plugins_cli;
 pub mod records;
 pub mod runner;
 pub mod runner_cli;

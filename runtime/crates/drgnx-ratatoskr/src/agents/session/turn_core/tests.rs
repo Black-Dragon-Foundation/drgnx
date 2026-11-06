@@ -395,6 +395,7 @@ impl Shell {
             self.answer(
                 t,
                 TurnEvent::PromptFailed {
+                    turn: t,
                     closed: true,
                     jobs: false,
                 },
@@ -414,6 +415,7 @@ impl Shell {
         self.answer(
             t,
             TurnEvent::PromptDone {
+                turn: t,
                 cancelled,
                 jobs: false,
             },
@@ -1128,6 +1130,7 @@ impl Core for ExitShell {
                     c.step(TurnEvent::Sending { turn });
                     self.resumed.push(item.text);
                     fx = c.step(TurnEvent::PromptDone {
+                        turn,
                         cancelled: false,
                         jobs: false,
                     });
@@ -1792,6 +1795,7 @@ fn only_an_idle_unheld_session_with_nothing_queued_is_free() {
     c.step(send("a"));
     assert!(!c.is_free(), "a turn runs");
     c.step(TurnEvent::PromptDone {
+        turn: 1,
         cancelled: false,
         jobs: true,
     });
@@ -1860,6 +1864,460 @@ fn a_fresh_start_is_told_first_and_keeps_its_queue() {
     c.ready(false);
     assert_eq!(c.queue().texts(), ["u1", "p1"]);
     assert!(c.next().is_empty() && c.paused());
+}
+
+// ---- the conversation swapped under the session (a rewind) ----
+
+/// The user sends and stops; the shell hands a started turn's prompt to the agent; the rewind detaches the
+/// conversation and reattaches the new one, telling it TOLD first; the old conversation's agent answers the turn it
+/// was on (the answer to the cancel), the new one answers its own.
+/// Each order's events are one of the small enums below, which name only the kinds that order runs.
+#[derive(Clone, Debug)]
+enum SwapEv {
+    Send(&'static str),
+    Stop,
+    Sending,
+    Detach,
+    Reattach(Option<&'static str>),
+    OldDone,
+    NewDone,
+}
+
+/// The core, and what the two conversations saw of it.
+struct SwapShell {
+    core: TurnCore,
+    /// The shell sends a turn's prompt in a step of its own.
+    gap: bool,
+    /// The conversation turns go to now: 0 the old one, 1 the new one.
+    conv: u32,
+    detached: bool,
+    /// A turn started whose prompt the shell has not sent yet.
+    unsent: Option<(u64, String)>,
+    /// The turns each conversation works on, with their text.
+    running: BTreeMap<u64, (u32, String)>,
+    /// The prompts that reached each conversation.
+    reached: Vec<(u32, String)>,
+    /// Turns started (with their text), ended, and the turn being answered now.
+    started: Vec<(u64, String)>,
+    ended: Vec<u64>,
+    answering: Option<u64>,
+    /// A Stop came before the reattach.
+    stopped_early: bool,
+    started_after_reattach: Vec<String>,
+    broken: Option<String>,
+}
+
+impl SwapShell {
+    fn new(gap: bool) -> SwapShell {
+        let mut core = TurnCore::new();
+        core.ready(false);
+        SwapShell {
+            core,
+            gap,
+            conv: 0,
+            detached: false,
+            unsent: None,
+            running: BTreeMap::new(),
+            reached: Vec::new(),
+            started: Vec::new(),
+            ended: Vec::new(),
+            answering: None,
+            stopped_early: false,
+            started_after_reattach: Vec::new(),
+            broken: None,
+        }
+    }
+
+    /// A shell whose turn "a" runs in the old conversation (its prompt sent there, or not yet when GAP).
+    fn running_a(gap: bool) -> SwapShell {
+        let mut s = SwapShell::new(gap);
+        s.feed(send("a"));
+        s
+    }
+
+    fn note(&mut self, what: String) {
+        self.broken.get_or_insert(what);
+    }
+
+    fn feed(&mut self, ev: TurnEvent) -> Vec<TurnEffect> {
+        let fx = self.core.step(ev);
+        for e in &fx {
+            match e {
+                TurnEffect::StartTurn { turn, item } => {
+                    if self.detached {
+                        self.note(format!("{} started while detached", item.text));
+                    }
+                    if self.conv == 1 {
+                        self.started_after_reattach.push(item.text.clone());
+                    }
+                    self.started.push((*turn, item.text.clone()));
+                    if self.gap {
+                        self.unsent = Some((*turn, item.text.clone()));
+                    } else {
+                        self.send_prompt(*turn, item.text.clone());
+                    }
+                }
+                TurnEffect::PutBack { turn } => {
+                    if self.unsent.as_ref().map(|u| u.0) != Some(*turn) {
+                        self.note(format!("turn {turn} put back, but it was sent"));
+                    }
+                    self.unsent = None;
+                    self.started.retain(|(t, _)| t != turn);
+                }
+                TurnEffect::EndTurn { turn, .. } => {
+                    if self.answering != Some(*turn) {
+                        self.note(format!(
+                            "turn {turn} ended while {:?} was answered",
+                            self.answering
+                        ));
+                    }
+                    self.ended.push(*turn);
+                }
+                _ => {}
+            }
+        }
+        fx
+    }
+
+    /// Turn T's prompt goes to the conversation attached now, when the core still says so.
+    fn send_prompt(&mut self, t: u64, text: String) {
+        let go = self.core.step(TurnEvent::Sending { turn: t });
+        if go.contains(&TurnEffect::Prompt { turn: t }) {
+            self.running.insert(t, (self.conv, text.clone()));
+            self.reached.push((self.conv, text));
+        }
+    }
+
+    /// Conversation CONV's agent answers the turn it works on, if any.
+    fn done(&mut self, conv: u32) {
+        let Some((&t, _)) = self.running.iter().find(|(_, (c, _))| *c == conv) else {
+            return;
+        };
+        self.running.remove(&t);
+        self.answering = Some(t);
+        self.feed(TurnEvent::PromptDone {
+            turn: t,
+            cancelled: conv == 0,
+            jobs: false,
+        });
+        self.answering = None;
+    }
+
+    /// No broken step, and nothing ran twice or reached both conversations.
+    fn settled(&self) -> Result<(), String> {
+        if let Some(b) = &self.broken {
+            return Err(b.clone());
+        }
+        let mut texts: Vec<&String> = self.reached.iter().map(|(_, t)| t).collect();
+        texts.sort();
+        let n = texts.len();
+        texts.dedup();
+        if texts.len() != n {
+            return Err(format!(
+                "a prompt reached the agent twice: {:?}",
+                self.reached
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl SwapShell {
+    fn apply(&mut self, ev: SwapEv) {
+        match ev {
+            SwapEv::Send(t) => {
+                self.feed(send(t));
+            }
+            SwapEv::Stop => {
+                if self.conv == 0 {
+                    self.stopped_early = true;
+                }
+                let fx = self.feed(TurnEvent::Stop { after_tool: false });
+                if fx.contains(&TurnEffect::NotRunning) {
+                    self.note("a Stop ended the session".into());
+                }
+            }
+            SwapEv::Sending => {
+                if let Some((t, text)) = self.unsent.take() {
+                    self.send_prompt(t, text);
+                }
+            }
+            SwapEv::Detach => {
+                self.detached = true;
+                self.feed(TurnEvent::Detach);
+            }
+            SwapEv::Reattach(told) => {
+                self.detached = false;
+                self.conv = 1;
+                self.feed(TurnEvent::Reattach {
+                    told: told.map(str::to_string),
+                });
+            }
+            SwapEv::OldDone => self.done(0),
+            SwapEv::NewDone => self.done(1),
+        }
+    }
+}
+
+/// An order's own events, each one of [`SwapEv`].
+trait AsSwap: skuld::Events {
+    fn swap(self) -> SwapEv;
+}
+
+/// [`SwapShell`] driven by one order's events E.
+struct Order<E>(SwapShell, std::marker::PhantomData<E>);
+
+impl<E> Order<E> {
+    fn of(s: SwapShell) -> Order<E> {
+        Order(s, std::marker::PhantomData)
+    }
+}
+
+impl<E: AsSwap> Core for Order<E> {
+    type Event = E;
+
+    fn step(&mut self, ev: E) -> Vec<E> {
+        self.0.apply(ev.swap());
+        Vec::new()
+    }
+}
+
+#[derive(Clone, Debug)]
+enum KeepEv {
+    Send,
+    Detach,
+    Reattach,
+    OldDone,
+}
+skuld::events!(KeepEv {
+    Send,
+    Detach,
+    Reattach,
+    OldDone
+});
+
+impl AsSwap for KeepEv {
+    fn swap(self) -> SwapEv {
+        match self {
+            KeepEv::Send => SwapEv::Send("q"),
+            KeepEv::Detach => SwapEv::Detach,
+            KeepEv::Reattach => SwapEv::Reattach(None),
+            KeepEv::OldDone => SwapEv::OldDone,
+        }
+    }
+}
+
+fn check_keep_queue(k: &Order<KeepEv>, _: &[KeepEv]) -> Result<(), String> {
+    let s = &k.0;
+    s.settled()?;
+    // the queued prompt runs once, in the new conversation; the cut-off turn never ends a turn of the new one
+    let q: Vec<&(u32, String)> = s.reached.iter().filter(|(_, t)| t == "q").collect();
+    if q != [&(1, "q".to_string())] {
+        return Err(format!("q reached {:?}", s.reached));
+    }
+    if !s.ended.is_empty() {
+        return Err(format!(
+            "turns {:?} ended, but only the old one was answered",
+            s.ended
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn every_order_detach_and_reattach_keep_the_queue() {
+    let mut p = Partial::new();
+    p.source("user", vec![KeepEv::Send]);
+    let swap = p.source("swap", vec![KeepEv::Detach, KeepEv::Reattach]);
+    // the old conversation answers its turn once told to cancel it
+    let old = p.source("old", vec![KeepEv::OldDone]);
+    p.before((swap, 0), (old, 0));
+    let r = every_order(
+        &p,
+        Bound::default(),
+        || Order::of(SwapShell::running_a(false)),
+        check_keep_queue,
+    );
+    assert_eq!(r.mode, Mode::Exhaustive);
+    assert!(r.orders >= 6, "{} orders", r.orders);
+}
+
+#[derive(Clone, Debug)]
+enum UnsentEv {
+    Sending,
+    Detach,
+    Reattach,
+}
+skuld::events!(UnsentEv {
+    Sending,
+    Detach,
+    Reattach
+});
+
+impl AsSwap for UnsentEv {
+    fn swap(self) -> SwapEv {
+        match self {
+            UnsentEv::Sending => SwapEv::Sending,
+            UnsentEv::Detach => SwapEv::Detach,
+            UnsentEv::Reattach => SwapEv::Reattach(None),
+        }
+    }
+}
+
+fn check_unsent(o: &Order<UnsentEv>, _: &[UnsentEv]) -> Result<(), String> {
+    let s = &o.0;
+    s.settled()?;
+    // "a" reached one conversation: the old one when its send came first (and its turn was cut off there), else
+    // the new one, at the queue's front
+    let a: Vec<u32> = s
+        .reached
+        .iter()
+        .filter(|(_, t)| t == "a")
+        .map(|(c, _)| *c)
+        .collect();
+    let waiting = s.core.queue().texts().contains(&"a".to_string()) || s.unsent.is_some();
+    if a.len() + usize::from(waiting) != 1 {
+        return Err(format!("a reached {a:?}, waiting {waiting}"));
+    }
+    if a == [1] && s.started_after_reattach.first().map(String::as_str) != Some("a") {
+        return Err(format!("a ran after {:?}", s.started_after_reattach));
+    }
+    Ok(())
+}
+
+#[test]
+fn every_order_an_unsent_item_survives_a_detach() {
+    let mut p = Partial::new();
+    p.source("shell", vec![UnsentEv::Sending, UnsentEv::Sending]);
+    p.source("swap", vec![UnsentEv::Detach, UnsentEv::Reattach]);
+    let r = every_order(
+        &p,
+        Bound::default(),
+        || Order::of(SwapShell::running_a(true)),
+        check_unsent,
+    );
+    assert_eq!(r.mode, Mode::Exhaustive);
+    assert!(r.orders >= 6, "{} orders", r.orders);
+}
+
+#[derive(Clone, Debug)]
+enum StopEv2 {
+    Stop,
+    Detach,
+    Reattach,
+}
+skuld::events!(StopEv2 {
+    Stop,
+    Detach,
+    Reattach
+});
+
+impl AsSwap for StopEv2 {
+    fn swap(self) -> SwapEv {
+        match self {
+            StopEv2::Stop => SwapEv::Stop,
+            StopEv2::Detach => SwapEv::Detach,
+            StopEv2::Reattach => SwapEv::Reattach(Some("told")),
+        }
+    }
+}
+
+fn check_stop_detached(o: &Order<StopEv2>, _: &[StopEv2]) -> Result<(), String> {
+    let s = &o.0;
+    s.settled()?;
+    // a Stop before the new conversation is live starts nothing there, not even what it is told first
+    if s.stopped_early && !s.started_after_reattach.is_empty() {
+        return Err(format!(
+            "stopped, yet {:?} started after the reattach",
+            s.started_after_reattach
+        ));
+    }
+    if s.stopped_early && s.core.queue().texts() != ["told", "q"] {
+        return Err(format!("the queue holds {:?}", s.core.queue().texts()));
+    }
+    Ok(())
+}
+
+#[test]
+fn every_order_a_stop_while_detached_starts_nothing() {
+    let mut p = Partial::new();
+    p.source("user", vec![StopEv2::Stop]);
+    p.source("swap", vec![StopEv2::Detach, StopEv2::Reattach]);
+    let r = every_order(
+        &p,
+        Bound::default(),
+        || {
+            let mut s = SwapShell::running_a(false);
+            s.feed(send("q"));
+            Order::of(s)
+        },
+        check_stop_detached,
+    );
+    assert_eq!(r.mode, Mode::Exhaustive);
+    assert_eq!(r.orders, 3);
+}
+
+#[derive(Clone, Debug)]
+enum StaleEv {
+    Detach,
+    Reattach,
+    OldDone,
+    Send,
+    NewDone,
+}
+skuld::events!(StaleEv {
+    Detach,
+    Reattach,
+    OldDone,
+    Send,
+    NewDone
+});
+
+impl AsSwap for StaleEv {
+    fn swap(self) -> SwapEv {
+        match self {
+            StaleEv::Detach => SwapEv::Detach,
+            StaleEv::Reattach => SwapEv::Reattach(None),
+            StaleEv::OldDone => SwapEv::OldDone,
+            StaleEv::Send => SwapEv::Send("x"),
+            StaleEv::NewDone => SwapEv::NewDone,
+        }
+    }
+}
+
+fn check_stale(o: &Order<StaleEv>, _: &[StaleEv]) -> Result<(), String> {
+    let s = &o.0;
+    s.settled()?;
+    // only the new conversation's answer ends a turn: x's, once it answered
+    let x_turn = s.started.iter().find(|(_, t)| t == "x").map(|(n, _)| *n);
+    let answered =
+        !s.running.values().any(|(_, t)| t == "x") && s.reached.iter().any(|(_, t)| t == "x");
+    let want: Vec<u64> = x_turn.filter(|_| answered).into_iter().collect();
+    if s.ended != want {
+        return Err(format!("ended {:?}, want {want:?}", s.ended));
+    }
+    Ok(())
+}
+
+#[test]
+fn every_order_a_stale_prompt_done_changes_nothing() {
+    let mut p = Partial::new();
+    let swap = p.source("swap", vec![StaleEv::Detach, StaleEv::Reattach]);
+    let old = p.source("old", vec![StaleEv::OldDone]);
+    let user = p.source("user", vec![StaleEv::Send]);
+    let new = p.source("new", vec![StaleEv::NewDone]);
+    p.before((swap, 0), (old, 0));
+    // x is sent to the new conversation, which answers it
+    p.before((swap, 1), (user, 0));
+    p.before((user, 0), (new, 0));
+    let r = every_order(
+        &p,
+        Bound::default(),
+        || Order::of(SwapShell::running_a(false)),
+        check_stale,
+    );
+    assert_eq!(r.mode, Mode::Exhaustive);
+    assert!(r.orders >= 3, "{} orders", r.orders);
 }
 
 #[test]

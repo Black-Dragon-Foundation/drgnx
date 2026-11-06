@@ -25,6 +25,8 @@ runtime/
 - **`cargo deny check`** runs all four sections (advisories, licenses, bans, sources) on every push and daily. `deny.toml`
   bans OpenSSL and native-tls (one TLS stack), async-std and smol (one runtime), `h2` (HTTP/1.1 only) and `aws-lc-sys`
   (the ring provider), and denies yanked, unmaintained and unsound crates; an exception is an explicit, dated `ignore`.
+  The licence exceptions are Loro's three MPL-2.0 collection crates (`im`, `sized-chunks`, `bitmaps`; the edit history),
+  each named in `deny.toml` with its reason.
 
 ### Crate names
 
@@ -36,6 +38,7 @@ runtime/
 | `draugr` (formerly `drgnx-proc`) | spawning (explicit environments, own process groups, one exit) and the orphan reaper ([hub.md](hub.md#ratatoskrs-children-draugr)); passed fds, the pinned spawner and the git runner ([below](#draugr-passed-fds-and-git)) |
 | `gleipnir` | the sandbox: the spec and its validation, bwrap, Landlock, seccomp, Seatbelt, the relay and the CONNECT proxy; self-contained ([gleipnir.md](gleipnir.md)) |
 | `eitri` | file access that never follows a link: opens pinned by fd, bounded reads, writes by rename, root-owned programs; generic, used by `gleipnir` and `draugr` ([below](#eitri-no-link-file-access)) |
+| `brokkr` | the plugin host: plugin manifests, the approval hash, the install scan, the agent-tools WIT world, and the WASM host (wasmtime 48) that runs plugins on a guest runtime of its own ([plugins.md](plugins.md)) |
 | `gleipnir-escape` | test tooling, never shipped: the probe binary and the escape harness ([gleipnir.md](gleipnir.md), "Proving it") |
 | `mimir` | a tools-only MCP server for both protocol eras (`initialize`, and the stateless 2026-07-28) and the bridge's redial; self-contained, pure Rust |
 | `norn` | `work.db`'s coordination writer, its readers and the 16 coordination tools on `mimir` ([coordination.md](coordination.md)); drgnx's policy over `urdr::graph` (closed kinds and links, the personal-notes deny-list, scopes, grants, trust marking, projects), the schema 6 → 7 migration, the tracker and its tools ([store.md](store.md)); pure Rust but for urdr's bundled SQLite, so off the Android cross-check |
@@ -48,6 +51,7 @@ runtime/
 | `forseti` | the scheduler core: the job model, priority, admission, the memory cap and ladder, kill classes, expected times, placement and fairness; pure, `serde` only, shared by the hub, the runners and jobq ([forseti.md](forseti.md)) |
 | `sleipnir` | the runner: the Linux machine probe and runner contract, the reservation files two schedulers share, the executor; its `linux` and `sync` features are blocking, never tokio, so jobq takes them ([sleipnir.md](sleipnir.md)) |
 | `vegvisir` | the Work space's map core: its model (items in six layers, edges, chains, overlaps, needs-you) and its layout, stepped by typed events with effects out; pure, `serde` only ([work-space.md](work-space.md)) |
+| `verdandi` | the edit history: `history.db` (records, documents, branches) on urdr's store, a Loro document per tracked file and branch, the operation log and its settle rule, span revert on element ids; no hub or editor type ([history.md](history.md)) |
 | `skuld` | test support, never shipped: every order of a pure core, and the one real-time wait Rust tests may use ([below](#every-order-skuld)); crates name it under `[dev-dependencies]` only |
 | `heimdall` | the CDP broker's pure part: envelope parsing over `serde_json`'s `RawValue` (params never re-encoded), routing one browser connection between the agent and the hub by session owner, the refusal list, downloads, cleanup when the agent goes, and the pipe's NUL and frame codecs; no I/O, std and serde only, built for Android too ([hub.md](hub.md#the-cdp-broker)) |
 | `domr` (formerly `drgnx-conformance`; lives in `runtime/conformance/`) | the conformance harness (this page) |
@@ -166,13 +170,19 @@ tail). There is no SDK role framework.
   (cheap to clone; dropping every clone closes the child's stdin) and the event receiver, which the owner drains
   (1024 events buffer).
 - **Calls.** `initialize` (always without the `terminal` capability; `terminal/*` requests from an agent get -32601),
-  `new_session`, `load_session`, `resume_session`, `close_session`, `set_mode`, `prompt`, `cancel`, `fork`. Every
+  `new_session`, `load_session`, `resume_session`, `close_session`, `set_mode`, `prompt`, `cancel`, `fork_into`. Every
   call except `prompt` has the connection's `deadline`: a missed one fails that call with `Error::Deadline`, and the
   connection keeps working. A `prompt` ends by the agent's answer, `cancel`, or the child's exit (`Error::Closed`).
   `PromptOutcome` carries the stop reason, the turn's token usage and `_meta.turnId` when the agent sends one.
-- **Fork.** `fork(sid, Some(ForkPoint { message_id }))` sends `session/fork` with
-  `_meta.jetbrains.air.fork {version: 1, messageId}`; without a point, a plain fork. The new session starts in the
-  directory of the session it forks (the connection remembers the `cwd` of every session it opened or loaded).
+  `ext_request(method, params, deadline)` sends an extension request (`_drgnx/context/drop` …) and returns the
+  agent's result as it is, for the caller to check.
+- **Fork.** `fork_into(ForkInto { source, cwd, mcp, at, meta })` sends `session/fork` with `{sessionId, cwd,
+  mcpServers, _meta}`: the new session gets its tools (without `mcpServers` a forked agent has no drgnx tools) and the
+  caller's `_meta` (a lock's options; without them the fork has no lock). With `at: Some(ForkPoint { message_id })`
+  the point `_meta.jetbrains.air.fork {version: 1, messageId}` is merged into that `_meta`, key by key; without one, a
+  plain fork of the session's end. The source need not be a session this connection opened: a fresh process forks what
+  the agent kept on disk, which is how the hub always forks (a new process per fork, so the lock is applied and
+  verified at launch).
 - **Events.** `Update { at, sid, update, message_id }`: `at` is the receipt time in seconds since the epoch, taken
   when the line is read and never going backwards; `message_id` is the `messageId` of a message or thought chunk.
   `Request(Incoming)`: `Permission`, `ReadFile` or `WriteFile`, each with a `Responder`. A responder dropped
@@ -180,9 +190,13 @@ tail). There is no SDK role framework.
   `is_cancelled()` is true. `Exit { code, signal, stderr }` comes exactly once, after every update the child wrote
   (the reader gets two seconds to drain), with the last `stderr_tail` characters of stderr; calls still waiting fail
   with `Error::Closed`.
-- Unknown notifications are ignored; unknown requests get -32601.
-- **Tests.** `runtime/crates/hermod/tests/conn.rs` runs scripted `/bin/sh` children; the mock agent is
-  `ratatoskr-mock acp`.
+- A notification or a request outside the schema whose method starts with `_` (an agent's extension) comes as
+  `Event::Ext { method, params }` or `Incoming::Ext { method, params, resp }`, its params unchecked: the owner checks
+  and answers them (the hub: `docs/develop/hub.md`, "The _drgnx/panel extension"). Other unknown notifications are
+  ignored; other unknown requests get -32601.
+- **Tests.** `runtime/crates/hermod/tests/conn.rs` runs scripted `/bin/sh` children, and for a fork the mock agent
+  `ratatoskr-mock acp --state DIR` (`RATATOSKR_MOCK`, else beside the test binary, built there when missing): two
+  processes on one state folder show a fork on a connection that never saw the session.
 
 ## eitri: no-link file access
 
@@ -652,7 +666,7 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
 
 **`ratatoskr-mock`** (`conformance/src/bin/`, std only; `$MOCK` is its path, beside `domr`) stands in for the network:
 
-- `acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] [--refuse-mode MODE]` is a scripted ACP agent on stdio
+- `acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] [--refuse-mode MODE] [--state DIR]` is a scripted ACP agent on stdio
   (`conformance/src/mock_acp/`, the stand-in for the outside agents' CLIs; wire of `agent-client-protocol-schema
   =1.12.0`). A prompt's lines are its program: `tool:read|edit PATH`, `tool:exec CMD`, `tool:write N` (a Write of N bytes of input), `ask:permission KIND`,
   `call:MCPTOOL JSON` (through the first stdio server of `mcpServers`), `decide TEXT` (`record_decision`),
@@ -661,8 +675,16 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
   `_meta.turnId` (`t1`, …); chunks carry `messageId`; the terminal capability is never used. Personalities: claude
   (`close fork list resume`; logs `_meta.claudeCode.options`; forks after a message; `usage_update` with cost and
   `_claude/rateLimit`), codex (same set; logs `-c` overrides of argv; forks at a turn; `usage_update` and
-  `_codex/rateLimits`), gemini (`loadSession` only; the rest answers -32601). `--refuse-mode MODE` refuses `session/set_mode` to MODE (a lock that does not hold; the `agent-locks` rows); other modes are accepted. `--log` is JSONL; `--llm URL` POSTs
-  to a `ratatoskr-mock llm` once per turn, so its log counts requests.
+  `_codex/rateLimits`), gemini (`loadSession` only; the rest answers -32601). `--panel FEATURES` (a comma list) adds
+  drgnx's `_drgnx/panel` extension to any personality, as the org's adapter forks do: `initialize` advertises the
+  features, the client's `_drgnx/context/drop|pin` and `_drgnx/compact/preview` are answered and logged
+  (`{"panel": …}`), and the words `panel:context JSON`, `panel:contexts N`, `panel:before-tool JSON`, `panel:big N`,
+  `panel:raw METHOD JSON` and `panel:preview JSON` send the extension's messages (answers logged as
+  `{"before_tool": …}`). `--refuse-mode MODE` refuses `session/set_mode` to MODE (a lock that does not hold; the `agent-locks` rows); other modes are accepted. `--log` is JSONL; `--llm URL` POSTs
+  to a `ratatoskr-mock llm` once per turn, so its log counts requests. `--state DIR` keeps each session's history in
+  `DIR/<sessionId>.json` (at its start and after every turn); `session/fork` and `session/resume` read a session this
+  process does not hold from there, so a second process forks or resumes it (ids skip the ones the folder holds). A
+  fork's log line names `from`, `level`, `messageId`, `kept`, `turns`, `cwd`, `mcpServers` and `claude_options`.
 - `http-serve PORT TEXT` prints `MOCK-HTTP-PORT N` and serves on 127.0.0.1:PORT (0: any free port) a page whose title
   and text are TEXT, and `/download`, TEXT as an attachment: an agent's dev server inside its sandbox, or a site on the
   host's loopback.

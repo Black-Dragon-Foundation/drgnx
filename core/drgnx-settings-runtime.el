@@ -135,6 +135,17 @@ running.  Nil: only a running server (TEI, Ollama) makes vectors, and with none,
          (cons :doc (plist-get p :doc))
          (cons :job_safe (and (plist-get p :job-safe) t)))))
 
+(defun drgnx-settings-runtime--rule (r)
+  "A hook rule's plist R (:id :point :tool-kinds :paths :command :verdict :reason) as the hub's `Rule' takes it."
+  (drgnx-settings-runtime--plist
+   (list (cons :id (plist-get r :id))
+         (cons :point (drgnx-settings-runtime--str (plist-get r :point)))
+         (cons :tool_kinds (and (plist-get r :tool-kinds) (drgnx-settings-runtime--strings (plist-get r :tool-kinds))))
+         (cons :paths (and (plist-get r :paths) (vconcat (plist-get r :paths))))
+         (cons :command (plist-get r :command))
+         (cons :verdict (drgnx-settings-runtime--str (plist-get r :verdict)))
+         (cons :reason (plist-get r :reason)))))
+
 (defun drgnx-settings-runtime--alist (alist fn)
   "ALIST (KEY . VALUE)… as an object: KEY → (FN VALUE), in order."
   (cl-loop for (k . v) in alist append (list (drgnx-settings-runtime--key k) (funcall fn v))))
@@ -202,6 +213,10 @@ running.  Nil: only a running server (TEI, Ollama) makes vectors, and with none,
     (drgnx-runners-image . ,(lambda (v) (or (drgnx-settings-runtime--str v) :null)))
     (drgnx-runners-weight . identity)
     (drgnx-runners-project-visibility . drgnx-settings-runtime--str)
+    ;; plugins and hook rules: a project's values come from your private workspace file only
+    (drgnx-agents-plugins . drgnx-settings-runtime--strings)
+    (drgnx-agents-hook-rules . ,(lambda (v) (vconcat (mapcar #'drgnx-settings-runtime--rule v))))
+    (drgnx-agents-hook-rules-off . drgnx-settings-runtime--strings)
     (drgnx-search-model-mirror . ,(lambda (v) (or (drgnx-settings-runtime--str v) :null)))
     (drgnx-sandbox-proxy-pinned-addresses . ,(lambda (v) (drgnx-settings-runtime--alist v #'identity))))
   "Runtime setting → the function that turns its Lisp value into the JSON of its runtime type.  `drgnx-agents-matrix'

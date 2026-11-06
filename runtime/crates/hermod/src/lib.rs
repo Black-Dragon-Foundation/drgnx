@@ -5,7 +5,7 @@
 //! `_meta.jetbrains.air.fork` shape for forking at a message.
 //!
 //! Modules: `conn` (spawn, the tasks, calls with deadlines), `types` (`ConnOpts`, `AgentInfo`, `PromptOutcome`,
-//! `ForkPoint`, `Event`, `Error`), `incoming` (the agent's requests and their responders), `stamp` (receipt stamps).
+//! `ForkPoint`, `ForkInto`, `Event`, `Error`), `incoming` (the agent's requests and their responders), `stamp` (receipt stamps).
 
 pub mod conn;
 pub mod incoming;
