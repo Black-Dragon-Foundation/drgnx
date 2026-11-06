@@ -51,9 +51,13 @@ Used only past capacity; the agent client sets it.")
   "FRAME → a hash of ordinal → identity and mark → glyph; weak on the frame, emptied by
 `drgnx-agent-identity-clear' at theme load.")
 
+(defvar drgnx-agent-identity-cleared-hook nil
+  "Run after `drgnx-agent-identity-clear': surfaces that resolved an agent's colour redraw with the new one.")
+
 (defun drgnx-agent-identity-clear ()
   "Forget every cached identity: the ring, the setting or the theme changed."
-  (clrhash drgnx-agent-identity--cache))
+  (clrhash drgnx-agent-identity--cache)
+  (run-hooks 'drgnx-agent-identity-cleared-hook))
 
 (defun drgnx-agent-identity--kind (frame)
   (if (display-graphic-p frame) 'gui 'tty256))

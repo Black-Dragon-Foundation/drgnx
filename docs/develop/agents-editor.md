@@ -43,4 +43,25 @@ returns `(state . effects)`:
 sets `drgnx-agent-identity-watched-function` to the ordinals present in watched buffers and clears it when it goes.
 `drgnx-agents-editor-probe` times N frame applies (the probe for `agents-cursor-tick`; the verdict waits for the gate).
 The hub's `agents/buffer/watch` and `agents/buffer/unwatch` come with the hub's buffer view; until then a call finds
-no method and the buffer simply has no frame.
+no method and the buffer simply has no frame. The rows that need the hub's methods (`agents-editor-hub-test.el`, the
+[B] row of the client) come with the hub's buffer view (the presence area); the [A] and [D] rows run on fed frames.
+
+## Drawing: `drgnx-agents-editor-draw.el`
+
+The draw file adds itself to `drgnx-agents-editor-apply-functions` and draws from the frame alone.
+
+- **Bars:** an `editing` agent with a line gets one decor cursor at `(line_end, col)`. It is put once (with the
+  colour string resolved from the identity face) and moved afterwards with `drgnx-decor-cursor-move-now`, which moves
+  the same overlay at once instead of waiting for decor's 50 ms flush. `drgnx-agent-identity-cleared-hook` (run by
+  `drgnx-agent-identity-clear`, so at every theme load) puts every bar again with the new colour and clears the tints.
+- **Rings:** `reading` and `pending` agents with a line range. One overlay per visible row of each range, taken from a
+  buffer-local pool and moved, rebuilt on `window-scroll-functions`, window size changes and each frame. Reading is a
+  background tint (the agent's colour mixed into the default background with `drgnx-color-mix`); pending is a dashed
+  underline in the colour. No `:box`: see the verdict above.
+- **Projected** agents (another worktree) and file-only reads (no `:line`): no bar, no ring. A projected agent has one
+  `after-string` tag overlay at the end of its mapped line.
+- **Tags:** `drgnx-agents-tags` and `drgnx-decor-cursor-keep-label`: `always` keeps every tag on, `never` turns decor's
+  tags off, `activity` leaves decor's 2 s after a move; a shared identity face or `drgnx-agents-editor-followed` keeps
+  a tag on. Without Glitnir the tag text is the bar's `help-echo`.
+- A buffer that stops being watched (`drgnx-agents-editor-unwatch-functions`) or is killed loses its bars, ring
+  overlays and tags.

@@ -569,6 +569,24 @@ PASSWORD, PASSPHRASE or CREDENTIAL), whatever this lists.  Only you can set it, 
 | `:agents` | `never` |
 | `:schema` | `(list-of string)` |
 
+## drgnx-agents-tags
+
+When an agent's name tag shows beside its cursor: `activity' (for 2 s after it moves), `always' or `never'.
+Two agents of one colour, and the agent you follow, keep their tags on whatever this says (except `never').
+
+| Key | Value |
+| --- | --- |
+| Default | `activity` |
+| Type | `(choice (const :tag "After a move" activity) (const :tag "Always" always) (const :tag "Never" never))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-agents-editor-draw--tags-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum activity always never)` |
+
 ## drgnx-agents-trace-opens
 
 The agents whose shell commands' opens the hub sees on Linux ("seen open" in the Work space), by provider:

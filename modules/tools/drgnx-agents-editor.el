@@ -22,6 +22,10 @@
 (require 'drgnx-modules)
 (require 'drgnx-hub-client)
 
+(unless (featurep 'drgnx-agents-editor-draw)
+  (load (expand-file-name "drgnx-agents-editor-draw" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(declare-function drgnx-agents-editor-draw-setup "drgnx-agents-editor-draw")
+(declare-function drgnx-agents-editor-draw-teardown "drgnx-agents-editor-draw")
 (declare-function drgnx-agent-identity-clear "drgnx-agent-identity")
 (defvar drgnx-agent-identity-watched-function)
 
@@ -85,6 +89,9 @@ the :agents and :gutter that changed (each replaces the frame's whole list)."
 (defvar drgnx-agents-editor-apply-functions nil
   "Functions called with (BUFFER FRAME) when the hub's frame for a watched BUFFER changes.  They draw from FRAME only.")
 
+(defvar drgnx-agents-editor-unwatch-functions nil
+  "Functions called with (BUFFER) when BUFFER stops being watched: they take what they drew out of it.")
+
 (defvar drgnx-agents-editor--states (make-hash-table :test 'eq :weakness 'key)
   "Watched BUFFER → its `drgnx-agents-editor--state'.  Weak on the buffer; pruned when a window change finds it dead.")
 (defvar drgnx-agents-editor--views (make-hash-table :test 'equal)
@@ -102,7 +109,7 @@ the :agents and :gutter that changed (each replaces the frame's whole list)."
   (let (out) (maphash (lambda (b _) (when (buffer-live-p b) (push b out))) drgnx-agents-editor--states) out))
 
 (defun drgnx-agents-editor--ask (method params fn)
-  "Ask the hub METHOD with PARAMS; FN gets a result.  A missing hub or an error is quiet: the next connection watches again."
+  "Ask the hub METHOD with PARAMS; FN gets a result.  A missing hub or an error is quiet: a new connection asks again."
   (condition-case nil
       (drgnx-hub-call method params (lambda (result err) (when (and (not err) result) (funcall fn result))))
     (error nil)))
@@ -157,6 +164,7 @@ the :agents and :gutter that changed (each replaces the frame's whole list)."
 (defun drgnx-agents-editor--unwatch (view buffer)
   (remhash view drgnx-agents-editor--views)
   (when buffer (remhash buffer drgnx-agents-editor--states))
+  (when buffer (run-hook-with-args 'drgnx-agents-editor-unwatch-functions buffer))
   (when (buffer-live-p buffer) (with-current-buffer buffer (setq drgnx-agents-editor--view nil)))
   (drgnx-agents-editor--ask "agents/buffer/unwatch" (list :view view) #'ignore))
 
@@ -199,6 +207,7 @@ the :agents and :gutter that changed (each replaces the frame's whole list)."
 (defun drgnx-agents-editor--setup ()
   (require 'drgnx-agent-identity)
   (setq drgnx-agent-identity-watched-function #'drgnx-agents-editor--present-ordinals)
+  (drgnx-agents-editor-draw-setup)
   (drgnx-module-hook 'drgnx-hub-event-functions event (event data) (drgnx-agents-editor--event event data))
   (drgnx-module-hook 'drgnx-hub-connected-functions rewatch () (drgnx-agents-editor--rewatch))
   (drgnx-module-hook 'window-buffer-change-functions windows (frame) (drgnx-agents-editor-sync-windows frame))
@@ -211,7 +220,8 @@ the :agents and :gutter that changed (each replaces the frame's whole list)."
     (setq drgnx-agent-identity-watched-function nil))
   (maphash (lambda (view b) (drgnx-agents-editor--unwatch view b)) (copy-hash-table drgnx-agents-editor--views))
   (clrhash drgnx-agents-editor--states)
-  (clrhash drgnx-agents-editor--views))
+  (clrhash drgnx-agents-editor--views)
+  (drgnx-agents-editor-draw-teardown))
 
 (drgnx-module-define 'tools/agents-in-editor
                      :doc "Agents drawn in the buffer: the editor watches the file buffers it shows and keeps the hub's frames."

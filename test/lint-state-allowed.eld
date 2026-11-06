@@ -18,5 +18,7 @@
 
 (:file "modules/tools/drgnx-agents-editor.el" :what "window-buffer-change-functions"
  :why "a file buffer is watched while a window shows it (as the transcript mirror does)" :until "never: the hub is told what is visible")
+(:file "modules/tools/drgnx-agents-editor-draw.el" :what "window-size-change-functions"
+ :why "ring rows are rebuilt for the rows a resized window shows" :until "never: rows are the window's")
 (:file "modules/tools/drgnx-agents-editor.el" :what "window-size-change-functions"
  :why "a resize can reveal or hide a buffer in a window" :until "never: the hub is told what is visible")
