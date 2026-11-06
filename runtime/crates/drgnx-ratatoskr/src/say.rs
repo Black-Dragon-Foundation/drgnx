@@ -5,7 +5,8 @@
 //! shapes the plan).  The chat answers with one fenced `drgnx-proposal` block; the hub parses it ([`parse`]: a key the
 //! format does not have is refused, so a block carries no grants, approval or repository), checks it ([`check`]) and
 //! writes the plan and proposes the job as the user would, with the repository `say/start` named.  The job then waits
-//! for the user's OK like any proposal: its card's title is the hub's.  A block that does not hold is answered with
+//! for the user's OK like any proposal (its card's title is the hub's), unless the Autonomous preset's cells hold all
+//! of it ([`rule`]): then it starts, and a decision says so.  A block that does not hold is answered with
 //! the reasons, twice at most; a turn with no block is a question for the user (`say-message`).
 //!
 //! The order of one planning session is a pure core ([`SayCore`]): turn ends, the user's revisions, a stop and an end
@@ -17,10 +18,12 @@ use crate::dispatch::Caller;
 use crate::front::Front;
 use crate::runner::plan::{self, PlanTask};
 use crate::settings::AgentProfile;
+use norn::matrix::Who;
 use norn::store::{CoordError, Tx};
 use runstav::methods::agents::{ById, StartParams};
+use runstav::methods::forecast::{Forecast, PaceWindow};
 use runstav::methods::jobs::{MergeGate, PlanRef};
-use runstav::methods::matrix::{Limit, Unit};
+use runstav::methods::matrix::{Action, Limit, Preset, Role, Unit, Verdict};
 use runstav::methods::plans::WriteParams;
 use runstav::methods::say::{SayById, SayRevise, SayStart, SayStarted};
 use runstav::wire::Error;
@@ -277,6 +280,128 @@ pub(crate) fn planning_of(conn: &Tx, sid: &str) -> Result<Value, CoordError> {
         m.insert("usd".into(), json!(c));
     }
     Ok(Value::Object(m))
+}
+
+// ---- the Autonomous rule ------------------------------------------------------------------------------------------
+
+/// Whether a proposal of TASKS tasks with forecast F starts without the user's OK, under G's matrix now, about CTX's
+/// project and plan; else why it waits, the first that fails of:
+/// 1. the preset is Autonomous;
+/// 2. the manager's `agents.start` cell allows TASKS agents;
+/// 3. its `spend` cell allows the plan's p90 in `usd` plus its p90 in `usd-est`, an estimate counted as dollars;
+/// 4. nothing is unpriced;
+/// 5. no week's meter would run out at the plan's p90 before it resets, and each provider in SUBSCRIPTIONS (a task's
+///    subscription) has a pace: without one the week cannot be checked.
+///
+/// Nothing the user or the planning chat wrote is an input.
+pub(crate) fn rule(
+    g: &crate::matrix_gate::MatrixGate,
+    conn: &Tx,
+    f: &Forecast,
+    tasks: usize,
+    subscriptions: &[String],
+    ctx: &crate::matrix_gate::ActionCtx,
+    now: f64,
+) -> Result<(), String> {
+    let preset = g.active_preset(now);
+    if preset != Preset::Autonomous {
+        return Err(format!(
+            "the matrix preset is {}, not autonomous",
+            format!("{preset:?}").to_lowercase()
+        ));
+    }
+    let manager = Who {
+        role: Some(Role::Manager),
+        ..Who::default()
+    };
+    let cell = |a: Action, amount: f64| {
+        let ctx = crate::matrix_gate::ActionCtx {
+            amount: Some(amount),
+            ..ctx.clone()
+        };
+        g.dry(conn, &manager, a, &ctx, now)
+    };
+    let agents = cell(
+        Action::AgentsStart,
+        f64::from(u32::try_from(tasks).unwrap_or(u32::MAX)),
+    );
+    if agents.verdict != Verdict::Allow {
+        return Err(format!(
+            "{tasks} agents: {}",
+            agents.why.unwrap_or_default()
+        ));
+    }
+    let spend: f64 = f
+        .cost
+        .iter()
+        .filter(|c| matches!(c.unit, Unit::Usd | Unit::UsdEst))
+        .map(|c| c.p90)
+        .sum();
+    let s = cell(Action::Spend, spend);
+    if s.verdict != Verdict::Allow {
+        return Err(format!(
+            "a spend of ${spend:.2} at p90: {}",
+            s.why.unwrap_or_default()
+        ));
+    }
+    if !f.unpriced.is_empty() {
+        return Err(format!("no price for {}", f.unpriced.join(", ")));
+    }
+    if let Some(p) = f
+        .pace
+        .iter()
+        .find(|p| p.window == PaceWindow::Week && p.runs_out_p90)
+    {
+        return Err(format!(
+            "the {} week: the plan's p90 would use it up before it resets",
+            p.provider
+        ));
+    }
+    if let Some(s) = subscriptions.iter().find(|s| {
+        !f.pace
+            .iter()
+            .any(|p| &p.provider == *s && p.added_share.is_some())
+    }) {
+        return Err(format!("{s}: no pace yet, so its week cannot be checked"));
+    }
+    Ok(())
+}
+
+/// The subscriptions F's tasks run on: each task's provider whose profile has no API key.
+fn subscriptions(front: &Front, f: &Forecast) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for t in &f.tasks {
+        if let Some(p) = &t.provider
+            && crate::agents::session::find_profile(front, &t.profile)
+                .is_some_and(|p| p.ai.is_none())
+            && !out.contains(p)
+        {
+            out.push(p.clone());
+        }
+    }
+    out
+}
+
+/// [`rule`] for a proposal of TASKS tasks with forecast F about CTX, under the matrix the settings hold now.
+pub(crate) async fn may_start_alone(
+    front: &Front,
+    f: &Forecast,
+    tasks: usize,
+    ctx: crate::matrix_gate::ActionCtx,
+) -> Result<(), String> {
+    front.core.matrix.refresh(front);
+    let subs = subscriptions(front, f);
+    let (g, f, now) = (
+        front.core.matrix.clone(),
+        f.clone(),
+        crate::clock::wall_secs(),
+    );
+    front
+        .writer
+        .db
+        .read(move |c| Ok(rule(&g, c, &f, tasks, &subs, &ctx, now)))
+        .await
+        .unwrap_or_else(|e| Err(format!("the store: {e:?}")))
 }
 
 // ---- the order of one planning session, pure ----------------------------------------------------------------------

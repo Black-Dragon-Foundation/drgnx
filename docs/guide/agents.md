@@ -520,6 +520,9 @@ An action is one of the matrix's rows (`commit`, `push.main`, `spend`, `network`
 verdict is `allow`, `ask` or `never`; a limit's unit is `count`, `usd`, `usd-est`, `tokens` or `limit-share`. The most
 restrictive matching column wins.
 
+Autonomous is also the only preset under which a plan you described in one prompt can start without your OK, and
+only within its cells ([Say it](#say-it)).
+
 The editor tells the hub when you are **away**: after `drgnx-agents-away-after` seconds (600) without input it sends
 `presence/set`, and again on your next input. The time presets follow from the next action. An agent never sends it.
 
@@ -627,6 +630,26 @@ What an outside agent cannot do:
 **Coming with the Work cockpit:** an agent that does not report — no drgnx server in its config, or it never says
 hello — will still show there when it works in a git worktree, with the worktree's changes and its ledger, marked
 **not reporting**.
+
+## Say it
+
+Say what you want done in one prompt, and the hub turns it into a proposed job (`say/start`; the editor's command
+comes with the Work cockpit). A planning chat drafts the plan with no access to your repository or your records: it
+sees only your words and a list of your profiles, routes and roles. Each task gets a role, a profile when it names
+one, and a body that becomes the start of its brief. The hub checks the draft (known roles and profiles, at most 32
+tasks, no task over 16 KiB, no dependency loops, a budget in dollars) and asks the chat again when it does not hold;
+a question from the chat comes back to you instead.
+
+The job then waits for your OK, like any proposal: the proposal card's title is the hub's, never the chat's, and
+nothing either of you writes ("approved", "start now") counts as one. `say/revise` changes it: the proposal standing
+is rejected and a new one replaces it. `say/end` closes the planning chat; its proposal stays.
+
+**Under the Autonomous preset** a Say proposal starts without the OK when the preset's own cells cover all of it:
+the manager may start that many agents (8), the plan's p90 cost in `usd` and `usd-est` together, counted as dollars,
+is within its spend cell ($150), every task has a price, and no subscription's week would run out at the plan's p90
+before it resets. A subscription with no meter reading yet means the week cannot be checked, so the proposal waits.
+When it starts alone, the job's decisions say "started by the Autonomous preset within its cells"; when it waits,
+the job says why.
 
 ## Plans and the board
 

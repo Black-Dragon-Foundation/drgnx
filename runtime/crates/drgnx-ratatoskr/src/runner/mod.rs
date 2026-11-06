@@ -1165,12 +1165,14 @@ async fn new_id(front: &Front) -> Result<String, Error> {
 }
 
 /// A job from a plan, proposed (approved at once with `auto`).  ONLY: a task's number, the job is that task and the
-/// tasks it needs (Start as Job).
+/// tasks it needs (Start as Job).  ALONE: Say's proposal, which starts without the OK when the Autonomous rule holds
+/// (`say::may_start_alone`).
 struct Proposal<'a> {
     plan: &'a PlanRef,
     repo: Option<&'a str>,
     budget: Option<f64>,
     auto: bool,
+    alone: bool,
     gate: Option<MergeGate>,
     only: Option<i64>,
 }
@@ -1181,6 +1183,7 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
         repo,
         budget,
         auto,
+        alone,
         gate,
         only,
     } = p;
@@ -1307,6 +1310,27 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
     warnings.extend(ignored);
     data["estimate"] = estimate_of(forecast.as_ref(), tasks.len());
     data["warnings"] = json!(warnings);
+    // Say's proposal starts alone only inside the Autonomous preset's cells; why it waits is the job's
+    let starts_alone = if alone {
+        let ctx = crate::matrix_gate::ActionCtx {
+            project: project.clone(),
+            plan: match plan {
+                PlanRef::Entity(id) => Some(id.as_str().to_owned()),
+                PlanRef::File(_) => None,
+            },
+            ..crate::matrix_gate::ActionCtx::default()
+        };
+        let verdict = match &forecast {
+            Some(f) => crate::say::may_start_alone(front, f, tasks.len(), ctx).await,
+            None => Err("no forecast".to_owned()),
+        };
+        if let Err(why) = &verdict {
+            data["waits"] = json!(why);
+        }
+        verdict.is_ok()
+    } else {
+        false
+    };
     let title = match &forecast {
         Some(f) => card_title(tasks.len(), f),
         None => format!("{} tasks, no forecast: approve to start", tasks.len()),
@@ -1356,6 +1380,27 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
     }
     if auto {
         approve_job(front, caller, &created, None).await?;
+    } else if starts_alone {
+        approve_job(front, caller, &created, None).await?;
+        // the timeline says who decided: the preset the user chose, not a word of the plan's
+        let d = Decide {
+            kind: "build".into(),
+            subject: "start the job".into(),
+            task: None,
+            paths: None,
+            reason: Some("started by the Autonomous preset within its cells".into()),
+            author: "user".into(),
+            seen: None,
+            replaces: None,
+            job: Some(created.clone()),
+        };
+        front
+            .writer
+            .write(caller, "coord/decide", move |tx| {
+                write_decisions::decide(tx, d.clone(), now())
+            })
+            .await
+            .map_err(fail)?;
     } else {
         raise_card(front, caller, &created, None, "proposal", &title, json!({})).await?;
     }
@@ -1373,13 +1418,15 @@ pub async fn propose(
         repo: p.repo.as_ref().map(|r| r.as_str()),
         budget: p.budget.map(|b| b.get()),
         auto: p.auto.unwrap_or(false),
+        alone: false,
         gate: p.gate,
         only: None,
     };
     propose_job(front, caller, proposal).await
 }
 
-/// A graph plan PLAN proposed in REPO with a dollar BUDGET and GATE (Say it's proposal): the user's OK starts it.
+/// A graph plan PLAN proposed in REPO with a dollar BUDGET and GATE (Say it's proposal): the user's OK starts it, or
+/// the Autonomous preset's cells when they hold all of it.
 pub(crate) async fn propose_graph(
     front: &Front,
     caller: &Caller,
@@ -1393,6 +1440,7 @@ pub(crate) async fn propose_graph(
         repo: Some(repo),
         budget,
         auto: false,
+        alone: true,
         gate,
         only: None,
     };
@@ -1413,6 +1461,7 @@ pub async fn start_task(
         repo: None,
         budget: None,
         auto: p.auto.unwrap_or(false),
+        alone: false,
         gate: p.gate,
         only: Some(n),
     };

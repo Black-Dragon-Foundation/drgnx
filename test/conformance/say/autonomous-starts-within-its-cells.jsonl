@@ -1,0 +1,17 @@
+{"scenario": "say/autonomous-starts-within-its-cells", "requires": ["v1", "test-hooks"], "doc": "Under the Autonomous preset a Say proposal whose tasks run on an API-key profile (priced in usd, no subscription week to check) and stay within the manager's cells (2 agents of 8, the forecast's p90 under $150) starts with no job/approve: once say-proposal names the job it is no longer proposed, no proposal card was raised, and a decision records who started it (the Autonomous preset within its cells). Pattern B: a virtual clock; each check reads after the event that follows the fact it checks."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$ROOT/s.txt", "text": "say ```drgnx-proposal\\nsay {\"title\": \"Two fixes\", \"tasks\": [{\"n\": 1, \"title\": \"Fix one\", \"role\": \"implement\", \"profile\": \"mock-gw\", \"deps\": [], \"body\": \"Fix the first.\"}, {\"n\": 2, \"title\": \"Fix two\", \"role\": \"implement\", \"profile\": \"mock-gw\", \"deps\": [], \"body\": \"Fix the second.\"}]}\\nsay ```\n"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/s.txt\" \"--log\" \"$ROOT/s.log\")) (\"mock-gw\" :ai claude-openrouter :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/w.log\")))) (drgnx-agents-routes ((implement \"mock-claude\"))) (drgnx-agents-matrix (:preset autonomous)))\n"}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "say/start", "params": {"text": "fix the two bugs", "repo": "$ROOT/repo"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "say-proposal", "data": {"id": "$sid", "job": "$capture:job"}}, "within_ms": 30000}
+{"do": "sql_expect", "sql": "select count(*) from job where id = '$job' and status <> 'proposed' and json_extract(data, '$.waits') is null", "rows": [[1]]}
+{"do": "sql_expect", "sql": "select count(*) from card where job = '$job' and kind = 'proposal'", "rows": [[0]]}
+{"do": "sql_expect", "sql": "select author, reason from decision where job = '$job'", "rows": [["user", "started by the Autonomous preset within its cells"]]}

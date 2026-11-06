@@ -1,0 +1,24 @@
+{"scenario": "say/nothing-starts-before-the-ok", "requires": ["v1", "test-hooks"], "doc": "Under the shipped Balanced preset a Say proposal waits for the user: once say-proposal names the job it is proposed with its card open, why it waits is the job's data (the preset), nothing recorded a start and no session but the planning one exists; the user's job/approve starts it (running, the card settled approve). Pattern B: a virtual clock; each check reads after the event or answer that follows the fact it checks."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$ROOT/s.txt", "text": "say Here is the plan.\\nsay ```drgnx-proposal\\nsay {\"title\": \"Docs pass\", \"tasks\": [{\"n\": 1, \"title\": \"Write the docs\", \"role\": \"docs\", \"deps\": [], \"body\": \"Write the settings docs.\"}], \"budget\": [{\"amount\": 5, \"unit\": \"usd\"}]}\\nsay ```\n"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/s.txt\" \"--log\" \"$ROOT/s.log\")))) (drgnx-agents-routes ((implement \"mock-claude\") (docs \"mock-claude\"))))\n"}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "say/start", "params": {"text": "write the settings docs", "repo": "$ROOT/repo"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "say-proposal", "data": {"id": "$sid", "job": "$capture:job"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "job/status", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$job", "status": "proposed"}}, "within_ms": 5000}
+{"do": "sql_expect", "sql": "select count(*) from card where job = '$job' and kind = 'proposal' and state = 'open'", "rows": [[1]]}
+{"do": "sql_expect", "sql": "select count(*) from job where id = '$job' and json_extract(data, '$.waits') like '%balanced%'", "rows": [[1]]}
+{"do": "sql_expect", "sql": "select count(*) from decision where job = '$job'", "rows": [[0]]}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/list"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"sessions": [{"id": "$sid", "role": "chat"}]}}, "within_ms": 5000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "job/approve", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"id": "$job", "status": "running"}}, "within_ms": 10000}
+{"do": "sql_expect", "sql": "select state, choice from card where job = '$job' and kind = 'proposal'", "rows": [["settled", "approve"]]}

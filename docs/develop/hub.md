@@ -2609,6 +2609,24 @@ and proposed with the repository `say/start` named, the smallest dollar budget o
 never the block's, and `say-proposal {id, job}` names it. The planning session's own use is the job's
 `data.planning` (`tokens`, `usd_est`, `usd`: numbers only), shown and not budgeted.
 
+A Say proposal waits for the user's OK (`job/approve`, a user-class method: an agent's connection is refused, and
+no word of the user's prompt or of the block is read for an OK) unless the Autonomous rule holds
+(`say::rule`, called from `runner::propose_job` before the job is written). All of these must hold, read with the
+manager's column (`MatrixGate::dry`, the project's and the plan's layers applied); the first that fails is why it
+waits, kept in the job's `data.waits`:
+
+1. the active preset is Autonomous (time presets and the away flag applied);
+2. `agents.start` with the number of tasks is Allow (Autonomous: up to 8);
+3. `spend` with the plan's p90 in `usd` plus its p90 in `usd-est`, the estimate counted as dollars, is Allow
+   (Autonomous: up to $150);
+4. nothing is unpriced;
+5. no week's meter (`pace` with `window: week`) would run out at the plan's p90 before it resets, and every
+   subscription a task runs on (a profile with no API key) has a pace with the plan's share known: a subscription
+   with no meter reading yet never starts alone.
+
+When it holds, the job is approved as the user's preset decided (`approve_job`, no proposal card) and a decision
+records it: kind `build`, author `user`, reason "started by the Autonomous preset within its cells".
+
 The order of one planning session is a pure core (`say::SayCore`, every order tested with skuld): at most one prompt
 is in flight; a revision (`say/revise {id, text}`) that comes while a prompt, a check or a proposal is under way
 waits for it and replaces what it would have done; a revision of a standing proposal stops it (`job/stop`, while it is
