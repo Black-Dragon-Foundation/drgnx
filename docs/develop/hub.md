@@ -2567,7 +2567,13 @@ sweep passes it to `gather`, so a sample's cold wakes use the TTL its session ha
 `for_tasks` reads the newest 5000 samples, forms each task's class, simulates on `runner::agent_slots` slots (the number
 the tick starts at once) with a seed from the job key and every want's fields, widens each task by its class's size and
 the plan's totals by the smallest class's, and scales a task's p90 by its class's calibration factor when it has one.
-`forecast_made` keeps the p90 as it stood before calibration (`for_job` returns the rows to keep). The wake line is a
+The plan's total has its own factor (a task's holds for that task alone and says nothing of a sum's p90): split
+conformal over whole plans, from `sample::plan_pairs`, the job's own `forecast_made` row (its total's tokens p90 before
+calibration) against what its tasks used, summed, managers apart, for `done` jobs whose every task that ran has its
+sample; the latest 200, at least 9. It scales the total's p90 of tokens, time and every cost unit, and the pace's
+added share, so the Autonomous rule's spend and week checks read the calibrated total; a session's forecast
+(`forecast/session`) has none. `forecast_made` keeps the p90 as it stood before calibration (`for_job` returns the rows
+to keep). The wake line is a
 second simulation with the same seed and a price of each drawn observation's cold wakes × its context at the cache
 write rate. A manager's own spend comes from the `manager` samples, per task, beside the total.
 

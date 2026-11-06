@@ -471,6 +471,29 @@ pub fn made_pairs(
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// The latest LIMIT (p90, actual) pairs of whole plans, newest first: what a job's forecast said of its total tokens
+/// (`forecast_made`'s row for the job itself, before calibration) and what its tasks used, summed (managers apart).
+/// Only a `done` job whose every task that ran has its sample counts, so a sweep that has not caught up never reads
+/// as a plan that used less.
+pub fn plan_pairs(conn: &Tx, limit: i64) -> Result<Vec<(f64, f64)>, CoordError> {
+    let mut st = conn.prepare(
+        "select m.tokens_p90, \
+           (select sum(s.tokens_in + s.tokens_out + s.cache_read + s.cache_write) from forecast_sample s \
+            where s.job = m.job and s.role <> 'manager') \
+         from forecast_made m join job j on j.id = m.job \
+         where m.task = m.job and j.status = 'done' \
+           and exists (select 1 from forecast_sample s where s.job = m.job and s.role <> 'manager') \
+           and not exists (select 1 from jtask t where t.job = m.job \
+                           and exists (select 1 from step st where st.task = t.id) \
+                           and not exists (select 1 from forecast_sample s where s.task = t.id)) \
+         order by m.made_at desc, m.rowid desc limit ?1",
+    )?;
+    let rows = st.query_map([limit], |r| {
+        Ok((r.get::<_, f64>(0)?, r.get::<_, i64>(1)? as f64))
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1196,5 +1219,52 @@ mod tests {
             made_pairs(tx.sql(), "implement", "p1", Some("opus"), 10).unwrap(),
             [(40.0, 10.0 + 1.0 + 10.0 + 2.0)]
         );
+    }
+
+    /// Pattern D. A whole plan pairs its total's p90 with what its tasks used, once the job is done and every task
+    /// that ran is sampled: a task still unsampled keeps the plan out.
+    #[test]
+    fn a_done_plan_pairs_its_total_with_its_tasks_summed() {
+        let mut c = db7();
+        let mut tx = tx_of(&mut c);
+        job(&mut tx, "J", 2);
+        session(&mut tx, "s1", "p1", "worker", "J");
+        for t in ["J#1", "J#2"] {
+            step(&tx, "s1", Some(t), StepClass::Think, (0.0, 4.0), 10, Some("t1"));
+            finish(&mut tx, t, "done");
+        }
+        let plan = Made {
+            job: "J".into(),
+            task: "J".into(),
+            made_at: 1.0,
+            role: None,
+            profile: None,
+            model: None,
+            tokens_p50: 20.0,
+            tokens_p90: 80.0,
+            secs_p50: 1.0,
+            secs_p90: 2.0,
+            cost_p50: None,
+            cost_p90: None,
+            cost_unit: None,
+            basis: "2 tasks".into(),
+            n: 0,
+        };
+        record_made(&mut tx, std::slice::from_ref(&plan)).unwrap();
+        crate::write::jobs::job_set(&mut tx, "J", Some("done"), None, 5.0).unwrap();
+        let one = gather(tx.sql(), "J#1", &facts).unwrap().unwrap();
+        put(&mut tx, &one).unwrap();
+        assert!(plan_pairs(tx.sql(), 10).unwrap().is_empty(), "J#2 not sampled yet");
+        let two = gather(tx.sql(), "J#2", &facts).unwrap().unwrap();
+        put(&mut tx, &two).unwrap();
+        let used = (one.tokens_in + one.tokens_out + one.cache_read + one.cache_write
+            + two.tokens_in
+            + two.tokens_out
+            + two.cache_read
+            + two.cache_write) as f64;
+        assert_eq!(plan_pairs(tx.sql(), 10).unwrap(), [(80.0, used)]);
+        // a job that is not done is no plan pair
+        crate::write::jobs::job_set(&mut tx, "J", Some("stopped"), None, 6.0).unwrap();
+        assert!(plan_pairs(tx.sql(), 10).unwrap().is_empty());
     }
 }

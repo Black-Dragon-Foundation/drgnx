@@ -685,7 +685,9 @@ tokens, active and wall time, and cost, each as a range ("about 12–41 USD (est
   claude", "9 review tasks on another model, repriced" or "no history: prior". Until a class has five finished tasks
   the forecast is a labelled prior with a wide range. Every finished task adds to the history, so the next proposal of
   the same kind is forecast from it. Once enough of them were forecast and finished, the high end is scaled by how
-  often it was missed (the task says it is calibrated). `forecast/accuracy` shows, per role and profile, how many tasks
+  often it was missed (the task says it is calibrated). The plan's total is scaled the same way by how often whole
+  plans went past their high end, once nine finished plans were forecast; that total is what the Autonomous preset
+  checks against its spend cell and the week. `forecast/accuracy` shows, per role and profile, how many tasks
   finished, the share that stayed within their p90, and the median of actual over p50.
 - **Wakes and the manager.** The wake line ("of which wakes: 1–3 cold, about 3 USD") is part of the total, not added to
   it. A manager's own spend, where history has one, shows beside the total.

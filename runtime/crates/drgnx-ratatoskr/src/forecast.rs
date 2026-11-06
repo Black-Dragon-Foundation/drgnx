@@ -311,10 +311,12 @@ fn obs_of(r: &SampleRow) -> Obs {
 /// A class of forecasts: role, profile and model.
 type ClassKey = (String, String, Option<String>);
 
-/// What the history says, read once: the samples (newest first) and each class's (p90, actual) pairs.
+/// What the history says, read once: the samples (newest first), each class's (p90, actual) pairs and the whole
+/// plans' pairs.
 struct History {
     samples: Vec<SampleRow>,
     pairs: HashMap<ClassKey, Vec<(f64, f64)>>,
+    plans: Vec<(f64, f64)>,
 }
 
 async fn history(front: &Front, wants: &[Want]) -> Result<History, Error> {
@@ -334,7 +336,12 @@ async fn history(front: &Front, wants: &[Want]) -> Result<History, Error> {
                 let got = sample::made_pairs(c, &k.0, &k.1, k.2.as_deref(), PAIRS)?;
                 pairs.insert(k, got);
             }
-            Ok(History { samples, pairs })
+            let plans = sample::plan_pairs(c, PAIRS)?;
+            Ok(History {
+                samples,
+                pairs,
+                plans,
+            })
         })
         .await
         .map_err(crate::coord::fail)
@@ -490,7 +497,17 @@ async fn build(
     let tokens = wire_range(sim::widen(totals.tokens, min_n));
     let active = wire_range(sim::widen(totals.active, min_n));
     let wall = wire_range(sim::widen(totals.wall, min_n));
-    let (cost, cost_kept) = cost_ranges(&totals.cost, min_n, None);
+    // the plan's total is calibrated by whole plans' misses, as a task is by its class's: a task's factor holds for
+    // the task alone and says nothing of a sum's p90, so the total has pairs of its own (the plan's p90 as it stood,
+    // against what its tasks used).  Its tokens' factor scales the p90 of every unit, as a task's does; the Autonomous
+    // rule's spend and week checks read these.  A session's forecast is one run, not a plan: none
+    let plan_factor = if plain {
+        None
+    } else {
+        sim::conformal(&hist.plans)
+    };
+    let plan_shown = move |r: wire::Range| plan_factor.map_or(r, |f| calibrate(r, f));
+    let (cost, cost_kept) = cost_ranges(&totals.cost, min_n, plan_factor);
     made.push(Made {
         job: job_key.to_owned(),
         task: job_key.to_owned(),
@@ -551,9 +568,11 @@ async fn build(
                     }
                 };
                 let t = sim::simulate(&wants, &classes, &all, &own, slots, seed, sim::DRAWS);
-                t.cost.get("usd-est").map(|r| wire::Range {
-                    p50: r.p50 * ratio,
-                    p90: r.p90 * ratio,
+                t.cost.get("usd-est").map(|r| {
+                    plan_shown(wire::Range {
+                        p50: r.p50 * ratio,
+                        p90: r.p90 * ratio,
+                    })
                 })
             }
             None => None,
@@ -565,9 +584,9 @@ async fn build(
     let cur = front.settings.current();
     let forecast = wire::Forecast {
         tasks: out_tasks,
-        tokens,
-        active_secs: active,
-        wall_secs: wall,
+        tokens: plan_shown(tokens),
+        active_secs: plan_shown(active),
+        wall_secs: plan_shown(wall),
         cost,
         unpriced,
         wake,
@@ -1256,6 +1275,124 @@ mod tests {
         );
         assert_eq!(window_of(Some(now + 7_200.0), now), wire::PaceWindow::Short);
         assert_eq!(window_of(None, now), wire::PaceWindow::Short);
+    }
+
+    /// A finished plan PLAN of one task: what its forecast said of the whole plan (a tokens p90 of P90, before
+    /// calibration) and what its task used (ACTUAL tokens).
+    fn finished_plan(
+        tx: &mut norn::store::WTx<'_>,
+        plan: &str,
+        p90: f64,
+        actual: i64,
+    ) -> Result<(), norn::store::CoordError> {
+        use norn::write::jobs::{NewJob, NewTask, job_create, job_set};
+        job_create(
+            tx,
+            NewJob {
+                id: plan.into(),
+                title: "p".into(),
+                plan: None,
+                repo: None,
+                tasks: vec![NewTask {
+                    n: 1,
+                    title: "t".into(),
+                    role: Some("docs".into()),
+                    deps: Vec::new(),
+                }],
+                data: None,
+            },
+            1.0,
+        )?;
+        job_set(tx, plan, Some("done"), None, 2.0)?;
+        sample::record_made(
+            tx,
+            &[Made {
+                job: plan.into(),
+                task: plan.into(),
+                made_at: 1.0,
+                role: None,
+                profile: None,
+                model: None,
+                tokens_p50: p90 / 2.0,
+                tokens_p90: p90,
+                secs_p50: 1.0,
+                secs_p90: 2.0,
+                cost_p50: None,
+                cost_p90: None,
+                cost_unit: None,
+                basis: "1 tasks".into(),
+                n: 0,
+            }],
+        )?;
+        sample::put(
+            tx,
+            &SampleRow {
+                task: format!("{plan}#1"),
+                job: plan.into(),
+                project: None,
+                role: "docs".into(),
+                profile: Some("claude".into()),
+                provider: None,
+                model: None,
+                brief_bytes: 0,
+                tasks: 1,
+                tokens_in: actual,
+                tokens_out: 0,
+                cache_read: 0,
+                cache_write: 0,
+                turns: 1,
+                active_secs: 60.0,
+                wall_secs: 60.0,
+                job_wait_secs: 0.0,
+                wakes: 0,
+                cold_wakes: 0,
+                context: None,
+                cost: None,
+                cost_unit: None,
+                outcome: "done".into(),
+                last_step: 1,
+                at: 2.0,
+            },
+        )
+    }
+
+    /// Pure (D): a store in a temp folder, a fixed seed.  Nine finished plans each used 3× the tokens their total's
+    /// p90 said.  The next plan's total p90, of tokens and of cost (what the Autonomous rule reads), is scaled by that
+    /// factor and p50 is not; the row kept for later calibration holds the p90 before it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_plan_total_is_calibrated_by_past_plans() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        f.writer
+            .write(&crate::runner::service(), "test/history", |tx| {
+                for k in 1..=9 {
+                    finished_plan(tx, &format!("P{k}"), 100.0, 300)?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let want = |n: i64| Want {
+            n,
+            role: "implement".into(),
+            profile: "claude".into(),
+            model: None,
+            project: None,
+            brief_bytes: 1000,
+            deps: Vec::new(),
+        };
+        let (fc, made) = for_job(&f, "J", vec![want(1), want(2)]).await.unwrap();
+        let plan = made.iter().find(|m| m.task == "J").unwrap();
+        assert!(
+            (fc.tokens.p90 - 3.0 * plan.tokens_p90).abs() < 1e-6,
+            "{} against {}",
+            fc.tokens.p90,
+            plan.tokens_p90
+        );
+        assert_eq!(fc.tokens.p50, plan.tokens_p50);
+        let (cost, kept) = (&fc.cost[0], plan.cost_p90.unwrap());
+        assert!((cost.p90 - 3.0 * kept).abs() < 1e-6, "{} against {kept}", cost.p90);
+        assert_eq!(cost.p50, plan.cost_p50.unwrap());
     }
 
     /// Pure (D): the runner's tick and the forecast count slots with one function.
