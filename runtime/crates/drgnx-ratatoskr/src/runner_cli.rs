@@ -11,6 +11,7 @@
 //! runner audit [--key K] [--since T]
 //! runner cloud setup aws --regions R[,R…] --sizes S[,S…] [--hub ID]     (prints the role's policy; no hub call)
 //! runner cloud setup gcp --project P [--member user:EMAIL] [--hub ID]   (prints the role and its binding; no hub call)
+//! runner cloud cost | rotate-ca | off [--yes]
 //! ```
 //!
 //! The output is plain text in 60 columns ([`format_list`]); a runner that is out of rotation shows its reason.
@@ -62,6 +63,10 @@ pub enum RunnerCommand {
         hub: String,
         regions: Vec<String>,
         sizes: Vec<String>,
+    },
+    /// `cloud off`, which ends machines and deletes images: without `--yes` it says what it would do.
+    CloudOff {
+        yes: bool,
     },
     /// `cloud setup gcp`: the custom role and the `gcloud` commands that create and bind it, printed (no hub call).
     CloudSetupGcp {
@@ -122,7 +127,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
         "add" => &["trust", "name", "profile", "accept", "root", "prefix"],
         "remove" => &["yes"],
         "audit" => &["key", "since"],
-        "cloud" => &["hub", "regions", "sizes", "project", "member"],
+        "cloud" => &["hub", "regions", "sizes", "project", "member", "yes"],
         "check" | "bench" | "trust" | "unbench" => &[],
         other => return Err(format!("unknown runner subcommand {other:?}")),
     };
@@ -222,6 +227,28 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
                          runner cloud setup gcp --project P [--member user:EMAIL] [--hub ID]";
             // the id the hub's runner code tags with today (runners::methods)
             let hub = opt("hub").unwrap_or_else(|| "hub".into());
+            let plain = opt("hub").is_none()
+                && opt("regions").is_none()
+                && opt("sizes").is_none()
+                && opt("project").is_none()
+                && opt("member").is_none();
+            if words == ["off"] && plain {
+                return Ok(RunnerCommand::CloudOff { yes });
+            }
+            if yes {
+                return Err("usage: runner cloud off [--yes]".into());
+            }
+            for (word, method) in [
+                ("cost", "runners/cloud/cost"),
+                ("rotate-ca", "runners/cloud/rotate-ca"),
+            ] {
+                if words == [word] && plain {
+                    return Ok(RunnerCommand::Call {
+                        method,
+                        params: json!({}),
+                    });
+                }
+            }
             if words == ["setup", "gcp"] {
                 let project = opt("project").ok_or(usage)?;
                 if opt("regions").is_some() || opt("sizes").is_some() {
@@ -339,6 +366,13 @@ fn remove_note(name: &str) -> String {
     )
 }
 
+/// What `cloud off` without `--yes` says.
+fn cloud_off_note() -> String {
+    "runner cloud off: ends every cloud machine of ours and deletes our images, snapshots and security group.\n\
+     nothing changed: run again with --yes\n"
+        .into()
+}
+
 /// `runner …`: the exit code.
 pub fn run(env: &Env, cmd: RunnerCommand) -> i32 {
     let (method, params, within, json_out) = match cmd {
@@ -360,6 +394,13 @@ pub fn run(env: &Env, cmd: RunnerCommand) -> i32 {
                 ADD,
                 true,
             )
+        }
+        RunnerCommand::CloudOff { yes } => {
+            if !yes {
+                print!("{}", cloud_off_note());
+                return 0;
+            }
+            ("runners/cloud/off", json!({}), ADD, true)
         }
         RunnerCommand::Audit { .. } => {
             eprintln!(
@@ -516,6 +557,30 @@ mod tests {
                 sizes: vec!["m7g.large".into()],
             })
         );
+        assert_eq!(
+            p(&["cloud", "cost"]),
+            Ok(RunnerCommand::Call {
+                method: "runners/cloud/cost",
+                params: json!({})
+            })
+        );
+        assert_eq!(
+            p(&["cloud", "rotate-ca"]),
+            Ok(RunnerCommand::Call {
+                method: "runners/cloud/rotate-ca",
+                params: json!({})
+            })
+        );
+        assert_eq!(
+            p(&["cloud", "off"]),
+            Ok(RunnerCommand::CloudOff { yes: false })
+        );
+        assert_eq!(
+            p(&["cloud", "off", "--yes"]),
+            Ok(RunnerCommand::CloudOff { yes: true })
+        );
+        assert!(p(&["cloud", "cost", "--yes"]).is_err());
+        assert!(cloud_off_note().contains("run again with --yes"));
         assert!(p(&["cloud", "setup", "aws", "--sizes", "m7g.large"]).is_err());
         assert!(p(&["cloud", "setup", "gcp", "--regions", "r", "--sizes", "s"]).is_err());
         assert_eq!(

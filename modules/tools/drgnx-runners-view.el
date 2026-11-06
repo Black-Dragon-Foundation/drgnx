@@ -79,6 +79,18 @@ running, out of rotation, needing you, unreachable, or going away."
   "Whether RUNNER takes jobs: its state is `ready'."
   (equal (plist-get runner :state) "ready"))
 
+(defun drgnx-runners-view-cost (runner)
+  "RUNNER's cost line as the hub gave it (`:cost_h' per hour, `:cost_month' this month): `  cost $0.42/h · $3.10 mo', or
+`  cost —' for a cloud machine with no price yet.  Nil for a machine that is not in your cloud."
+  (when (or (equal (plist-get runner :trust) "my-cloud") (plist-get runner :cost_h))
+    (let ((h (plist-get runner :cost_h)) (mo (plist-get runner :cost_month)))
+      (concat "  " (propertize "cost" 'face 'drgnx-runners-dim) " "
+              (if (numberp h)
+                  (concat (drgnx-runners-view--num (format "$%.2f/h" h))
+                          (propertize " · " 'face 'drgnx-runners-dim)
+                          (drgnx-runners-view--num (format "$%.2f mo" (or mo 0))))
+                (propertize "—" 'face 'drgnx-runners-dim))))))
+
 (defun drgnx-runners-view-row (runner)
   "The text of RUNNER's row (a runner as `runners/list' gives it): two lines, and lines of the reason when it is out of
 rotation.  The last line ends in a newline."
@@ -101,6 +113,7 @@ rotation.  The last line ends in a newline."
                        (if clock (concat sep (drgnx-runners-view--num clock)) ""))))
     (concat (truncate-string-to-width head drgnx-runners-view-width) "\n"
             (truncate-string-to-width size drgnx-runners-view-width) "\n"
+            (if-let* ((cost (drgnx-runners-view-cost runner))) (concat cost "\n") "")
             (if ready ""
               (mapconcat (lambda (l) (concat (propertize l 'face 'drgnx-runners-reason) "\n"))
                          (drgnx-runners-view--wrap (or (plist-get runner :state) "") 2) "")))))

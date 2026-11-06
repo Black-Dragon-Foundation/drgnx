@@ -290,6 +290,25 @@ keys it holds as it connects.
 
 ## Cloud: what you give drgnx
 
+### Setting cloud up from the editor and the terminal
+
+**Runners: Set Up Cloud…** asks four things: the monthly cap in dollars (you type it; an empty, zero or non-number answer
+is refused and nothing is sent), the regions and machine sizes (comma separated, with defaults shown), and where the
+credentials come from (`aws sso`, `aws profile`, `environment` or `gcloud`). It starts no machine. The hub checks the
+account first, then raises the card **Start the first cloud machine** in Notices: it carries the projection (machine,
+price, idle time, the worst case with drgnx down, this month against your cap) and every pre-flight line, a failed one
+with its fix. **Runners: Start the First Cloud Machine** (the card's command) asks once more and only then confirms. The
+other cards: "The cloud credentials need a login: run `…`, then Runners: Retry Cloud" (**Runners: Retry Cloud**), and
+"cloud: on, not yet proven on this account" until the first machine has passed its checks, whose command is
+**Runners: Turn Cloud Off** (asks first; ends every cloud machine of ours and deletes what drgnx made). **Runners: Cloud
+Cost** says `cloud $3.10/$50`. **Runners: Rotate Cloud CA** replaces the SSH certificate authority, after a yes.
+
+In the runner list a machine of trust `my-cloud` has a line of its own: `cost $0.42/h · $3.10 mo`, or `cost —` while the
+hub has no price for it. The strip shows `cloud $3.10/$50` while cloud is on.
+
+From a terminal: `drgnx runner cloud cost`, `drgnx runner cloud off [--yes]` (without `--yes` it says what it would do)
+and `drgnx runner cloud rotate-ca`. The setup commands that print the role's policy are below.
+
 drgnx can start machines of its own in your AWS account or GCP project, only with your permission and within your
 limits. It talks to the provider's API directly, over HTTPS, with a role you create for it, scoped to what it does:
 

@@ -24,7 +24,13 @@
 (unless (featurep 'drgnx-runners-view)
   (load (expand-file-name "drgnx-runners-view" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 
+(unless (featurep 'drgnx-runners-cloud)
+  (load (expand-file-name "drgnx-runners-cloud" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+
 (declare-function drgnx-hub-ensure "drgnx-hub-client")
+(declare-function drgnx-runners-cloud-cards "drgnx-runners-cloud")
+(declare-function drgnx-runners-cloud-define-commands "drgnx-runners-cloud")
+(defvar drgnx-runners-cloud--status)
 (declare-function drgnx-runners-view-forget "drgnx-runners-view")
 (declare-function drgnx-runners-view-define "drgnx-runners-view")
 (declare-function drgnx-runners-view-runner-at "drgnx-runners-view")
@@ -92,7 +98,8 @@ hello a hub proves (`drgnx-runners--resend') and are forgotten when the module i
 (defun drgnx-runners--publish (runners-p)
   "The cards follow the state now; with RUNNERS-P the list's rows do too."
   (when (gethash 'runners drgnx-notice--sources)
-    (drgnx-notice-set 'runners (drgnx-runners-cards drgnx-runners--state)))
+    (drgnx-notice-set 'runners (append (drgnx-runners-cards drgnx-runners--state)
+                                       (drgnx-runners-cloud-cards drgnx-runners-cloud--status))))
   (when runners-p (drgnx-runners-view-set (car drgnx-runners--state))))
 
 (defun drgnx-runners--apply (event)
@@ -111,7 +118,8 @@ nothing else — it never reads the key store, never prompts and never calls the
   (when (drgnx-runners--proven-p)
     (pcase event
       ("runners-changed" (drgnx-runners--apply (list 'runners (append (plist-get data :runners) nil))))
-      ("runners/need-keys" (drgnx-runners--apply (list 'need (drgnx-runners--strings (plist-get data :names))))))))
+      ("runners/need-keys" (drgnx-runners--apply (list 'need (drgnx-runners--strings (plist-get data :names)))))
+      ("runners/cloud-changed" (setq drgnx-runners-cloud--status data) (drgnx-runners--publish nil)))))
 
 ;;;; The key handover: only in commands the user ran
 
@@ -282,6 +290,7 @@ keys and the runner may have them, they are read from your key store first (this
 (defun drgnx-runners--setup ()
   "tools/runners' `:setup': the view type, the notice source, the hub hooks and the commands."
   (drgnx-runners-view-define)
+  (drgnx-runners-cloud-define-commands)
   (drgnx-notice-define-source 'runners :title "Runners" :command 'runners-load-keys)
   (add-hook 'drgnx-hub-event-functions #'drgnx-runners--event)
   (add-hook 'drgnx-hub-connected-functions #'drgnx-runners--resend)
@@ -306,6 +315,7 @@ keys and the runner may have them, they are read from your key store first (this
 (defun drgnx-runners--teardown ()
   "tools/runners' `:teardown': the editor forgets the keys it kept, and the list's rows."
   (setq drgnx-runners--session-keys nil
+        drgnx-runners-cloud--status nil
         drgnx-runners--state (drgnx-runners-state))
   (drgnx-runners-view-forget))
 

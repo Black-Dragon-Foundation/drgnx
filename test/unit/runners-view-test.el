@@ -8,9 +8,9 @@
 
 (defun runners-view-test--runner (name state &rest more)
   "A runner record as `runners/list' gives it (a plist, JSON keys as keywords)."
-  (append (list :name name :host "h" :trust "mine" :profile "dedicated" :accept "all" :cores 16 :mem_mib 31744
-                :disk_free_gb 81 :jobs 4 :checked 50520.0 :state state)
-          more))
+  (append more
+          (list :name name :host "h" :trust "mine" :profile "dedicated" :accept "all" :cores 16 :mem_mib 31744
+                :disk_free_gb 81 :jobs 4 :checked 50520.0 :state state)))
 
 (ert-deftest drgnx-runners-view/columns-match-the-design ()
   "Pattern D: a ready runner is two lines, the CLI's columns: state dot, name, trust, profile and accept; then size,
@@ -44,6 +44,18 @@ long name is cut to 14 columns."
       (should (memq 'drgnx-runners-reason (ensure-list (get-text-property pos 'face text)))))
     ;; the dot of a runner out of rotation is the empty one
     (should (string-prefix-p (drgnx-face-glyph 'circle) (nth 0 lines)))))
+
+(ert-deftest drgnx-runners-view/cost-column ()
+  "Pattern D: a cloud runner's cost is its own line, `$0.42/h · $3.10 mo'; a cloud runner without a price shows a dash;
+a machine of yours has no cost line; no line is over 60 columns."
+  (let* ((priced (drgnx-runners-view-row
+                  (runners-view-test--runner "spot-1" "ready" :trust "my-cloud" :cost_h 0.42 :cost_month 3.1)))
+         (unpriced (drgnx-runners-view-row (runners-view-test--runner "spot-2" "ready" :trust "my-cloud")))
+         (mine (drgnx-runners-view-row (runners-view-test--runner "desktop" "ready"))))
+    (should (equal (substring-no-properties (nth 2 (split-string priced "\n" t))) "  cost $0.42/h · $3.10 mo"))
+    (should (equal (substring-no-properties (nth 2 (split-string unpriced "\n" t))) "  cost —"))
+    (should (= 2 (length (split-string mine "\n" t))))
+    (dolist (l (split-string priced "\n" t)) (should (<= (string-width l) 60)))))
 
 (provide 'runners-view-test)
 ;;; runners-view-test.el ends here
