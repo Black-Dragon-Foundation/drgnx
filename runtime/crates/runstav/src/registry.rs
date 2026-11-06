@@ -369,7 +369,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 151, "{names:?}");
+        assert_eq!(names.len(), 155, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -402,6 +402,13 @@ mod tests {
         ]);
         // say's: a planning session, the proposal it writes, its end
         want.extend(["say/end", "say/revise", "say/start"]);
+        // the edit history's: the editor's buffers, as the user's operations
+        want.extend([
+            "history/batch",
+            "history/register",
+            "history/resync",
+            "history/unregister",
+        ]);
         want.extend(
             registry()
                 .iter()
@@ -653,7 +660,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 107);
+        assert_eq!(with, 111);
     }
 
     #[test]
