@@ -25,6 +25,7 @@
 (defvar drgnx-agent-panel-slow-seconds)
 (defvar drgnx-agent-panel-expensive-cost)
 (declare-function drgnx-agent-panel--entry "drgnx-agent-panel")
+(declare-function drgnx-agent-panel--blocks "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--ask "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--thoughts-of "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--duration-string "drgnx-agent-panel")
@@ -412,6 +413,40 @@ hidden (an estimate, marked ~, when the hub kept only the ends of a huge output)
                               'face 'drgnx-agent-panel-subtle))))
             (when (and open-detail (drgnx-agent-panel--text-of (plist-get e :content)))
               (drgnx-agent-panel--detail e)))))
+
+;;;; Agent messages as Markdown blocks
+
+(defun drgnx-agent-panel--style-face (style)
+  "The faces for STYLE, `text' or a space-joined mix of emph, strong, strike, link, code and h1..h6."
+  (let (faces)
+    (dolist (s (split-string (or style "text")))
+      (when-let* ((f (cond ((equal s "emph") 'drgnx-agent-panel-md-emph)
+                           ((equal s "strong") 'drgnx-agent-panel-md-strong)
+                           ((equal s "strike") 'drgnx-agent-panel-md-strike)
+                           ((equal s "link") 'drgnx-agent-panel-md-link)
+                           ((equal s "code") 'drgnx-agent-panel-md-code)
+                           ((string-match-p "\\`h[1-6]\\'" s) 'drgnx-agent-panel-md-heading))))
+        (push f faces)))
+    (nreverse faces)))
+
+(defun drgnx-agent-panel--block-row (idx n)
+  "Block N of the agent message at IDX, one row: its spans in their faces, indented two columns."
+  (let* ((block (let ((bs (drgnx-agent-panel--blocks idx))) (and bs (< n (length bs)) (aref bs n))))
+         (kind (plist-get block :kind))
+         (base (pcase kind
+                 ("code" 'drgnx-agent-panel-md-code)
+                 ("quote" 'drgnx-agent-panel-md-quote)
+                 ("heading" 'drgnx-agent-panel-md-heading)))
+         (pad (if (equal kind "quote") (propertize "  ▎ " 'face 'drgnx-agent-panel-md-quote) "  ")))
+    (if (equal kind "rule")
+        (concat "  " (propertize (make-string 24 ?─) 'face 'drgnx-agent-panel-md-rule) "\n")
+      (let ((text (mapconcat
+                   (lambda (span)
+                     (let ((faces (drgnx-agent-panel--style-face (plist-get span :style))))
+                       (propertize (replace-regexp-in-string "\n" (concat "\n" pad) (or (plist-get span :text) ""))
+                                   'face (delq nil (append faces (list base))))))
+                   (plist-get block :spans) "")))
+        (concat pad text "\n")))))
 
 (defun drgnx-agent-panel--entry-row (idx)
   (let ((e (drgnx-agent-panel--entry idx)))

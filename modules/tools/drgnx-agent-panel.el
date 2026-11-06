@@ -56,6 +56,19 @@ to its top.  The hub gives at most 50."
 (defface drgnx-agent-panel-fail '((t :inherit drgnx-status-fail)) "A step that failed." :group 'drgnx-agent-panel)
 (defface drgnx-agent-panel-run '((t :inherit drgnx-status-info)) "A step that has not finished." :group 'drgnx-agent-panel)
 (defface drgnx-agent-panel-you '((t :inherit drgnx-accent)) "Your messages." :group 'drgnx-agent-panel)
+(defface drgnx-agent-panel-md-emph '((t :inherit italic)) "Emphasis in an agent message." :group 'drgnx-agent-panel)
+(defface drgnx-agent-panel-md-strong '((t :inherit bold)) "Strong text in an agent message." :group 'drgnx-agent-panel)
+(defface drgnx-agent-panel-md-strike '((t :strike-through t)) "Struck-out text in an agent message."
+  :group 'drgnx-agent-panel)
+(defface drgnx-agent-panel-md-link '((t :inherit link)) "A link in an agent message." :group 'drgnx-agent-panel)
+(defface drgnx-agent-panel-md-code '((t :inherit drgnx-code-small)) "Code in an agent message."
+  :group 'drgnx-agent-panel)
+(defface drgnx-agent-panel-md-heading '((t :inherit drgnx-ui-heading)) "A heading in an agent message."
+  :group 'drgnx-agent-panel)
+(defface drgnx-agent-panel-md-quote '((t :inherit (drgnx-text-muted italic))) "A quote in an agent message."
+  :group 'drgnx-agent-panel)
+(defface drgnx-agent-panel-md-rule '((t :inherit drgnx-border)) "A horizontal rule in an agent message."
+  :group 'drgnx-agent-panel)
 
 ;;;; The panel's state, per buffer
 
@@ -81,6 +94,7 @@ to its top.  The hub gives at most 50."
 (declare-function drgnx-agent-panel--header-row "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel--chips-row "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel--entry-row "drgnx-agent-panel-steps")
+(declare-function drgnx-agent-panel--block-row "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel--row-toggle "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel--strip-row "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel-steps-init "drgnx-agent-panel-steps")
@@ -191,6 +205,7 @@ folds under it."
     (:chips (drgnx-agent-panel--chips-row))
     (:more (propertize "  ↑ earlier steps load when you scroll up\n" 'face 'drgnx-agent-panel-subtle))
     (:e (drgnx-agent-panel--entry-row (cadr key)))
+    (:b (drgnx-agent-panel--block-row (cadr key) (nth 2 key)))
     (:strip (drgnx-agent-panel--strip-row))
     (:pin (drgnx-agent-panel-cards--pin-row (cadr key)))
     (:todo (drgnx-agent-panel-cards--todo-row))
@@ -205,6 +220,32 @@ folds under it."
 
 ;;;; Keeping the view's rows in step with the model
 
+(defun drgnx-agent-panel--blocks (idx)
+  "The Markdown blocks of the agent message at IDX (a vector), or nil when the hub sent none."
+  (let ((e (drgnx-agent-panel--entry idx)))
+    (and e (eq (drgnx-agent-panel--type e) 'agent)
+         (let ((b (plist-get e :blocks))) (and (> (length b) 0) b)))))
+
+(defun drgnx-agent-panel--row-keys (idx)
+  "The keys of the rows entry IDX is drawn in: one per Markdown block of an agent message, else one."
+  (if-let* ((blocks (drgnx-agent-panel--blocks idx)))
+      (cl-loop for n below (length blocks) collect (list :b idx n))
+    (list (list :e idx))))
+
+(defun drgnx-agent-panel--merge-blocks (old new)
+  "NEW, an entry as the hub sent it, with its `blocks' complete: the hub's `patch' replaces (or adds) only its blocks of
+OLD's, and an event with neither keeps OLD's.  The result has no `patch'."
+  (let* ((blocks (if (plist-member new :blocks) (plist-get new :blocks) (plist-get old :blocks)))
+         (patch (plist-get new :patch)))
+    (when (> (length patch) 0)
+      (setq blocks (append blocks nil))
+      (seq-doseq (p patch)
+        (let ((n (plist-get p :block)))
+          (while (< (length blocks) n) (setq blocks (append blocks (list nil))))
+          (if (< n (length blocks)) (setcar (nthcdr n blocks) p) (setq blocks (append blocks (list p)))))))
+    (let ((out (cl-loop for (k v) on new by #'cddr unless (memq k '(:patch :blocks)) append (list k v))))
+      (if blocks (append out (list :blocks (vconcat blocks))) out))))
+
 (defun drgnx-agent-panel--wanted-keys ()
   "Every row key the panel should hold now, in order."
   (append (list (list :header) (list :chips))
@@ -212,7 +253,7 @@ folds under it."
           (drgnx-agent-panel-cards-top-keys)
           (and drgnx-agent-panel--more drgnx-agent-panel--loaded (list (list :more)))
           (let ((idxs (sort (hash-table-keys drgnx-agent-panel--entries) #'<)))
-            (mapcar (lambda (i) (list :e i)) (seq-filter #'drgnx-agent-panel--row-p idxs)))
+            (mapcan #'drgnx-agent-panel--row-keys (seq-filter #'drgnx-agent-panel--row-p idxs)))
           (drgnx-agent-panel-cards-keys)
           (drgnx-agent-panel-composer-keys)))
 
@@ -251,17 +292,23 @@ folds under it."
 (defun drgnx-agent-panel--take-entries (pairs &optional from-slice)
   "PAIRS, (INDEX ENTRY) as the hub sends them, are in the transcript: a new entry is appended, a changed one patched.
 FROM-SLICE: they come from a page, which never overwrites an entry the hub sent live."
-  (let (touched)
+  (let (touched block-keys)
     (seq-doseq (pair pairs)
       (let ((idx (elt pair 0)) (e (elt pair 1)))
         (unless (and from-slice (gethash idx drgnx-agent-panel--live))
           (unless from-slice (puthash idx t drgnx-agent-panel--live))
-          (let ((old (gethash idx drgnx-agent-panel--entries)))
+          (let* ((old (gethash idx drgnx-agent-panel--entries))
+                 (e (if (eq (drgnx-agent-panel--type e) 'agent) (drgnx-agent-panel--merge-blocks old e) e)))
             (puthash idx e drgnx-agent-panel--entries)
+            ;; a message's block rows that differ from the ones drawn are the ones to draw again
+            (dotimes (n (length (plist-get e :blocks)))
+              (unless (equal (aref (plist-get e :blocks) n) (and (< n (length (plist-get old :blocks)))
+                                                                 (aref (plist-get old :blocks) n)))
+                (push (list :b idx n) block-keys)))
             (when (or (not old) (not (equal old e))) (push idx touched))))))
     (when touched
       (drgnx-agent-panel--reconcile)
-      (let (keys)
+      (let ((keys block-keys))
         (dolist (idx touched)
           (cl-pushnew (drgnx-agent-panel--row-key-of idx) keys :test #'equal)
           (when (eq (drgnx-agent-panel--type (drgnx-agent-panel--entry idx)) 'tool)
@@ -435,16 +482,18 @@ FROM-SLICE: they come from a page, which never overwrites an entry the hub sent 
 ;;;; The probe
 
 (defun drgnx-agent-panel-stream-probe (buffer n)
-  "Time N batches of 20 new tool entries arriving in BUFFER, each batch taken and drawn: a list of milliseconds
-\(the probe for `agent-panel-stream-tick').  BUFFER is a panel; the entries are made up and stay in it."
+  "Time N updates of one agent message arriving in BUFFER as markdown patches (20 a second), each taken and drawn:
+a list of milliseconds (the probe for `agent-panel-stream-tick').  BUFFER is a panel; the message is made up and
+stays in it.  Every fifth update opens a new block, the others grow the last one."
   (with-current-buffer buffer
-    (let ((base (hash-table-count drgnx-agent-panel--entries)) ms)
-      (dotimes (b n)
-        (let ((pairs (cl-loop for i below 20
-                              collect (list (+ base (* b 20) i)
-                                            (list :type "tool" :id (format "p%d" (+ (* b 20) i)) :title "Read file" :kind "read"
-                                                  :status "completed" :content (list (list :text "ok")))))))
-          (push (* 1000 (car (benchmark-run 1 (drgnx-agent-panel--take-entries pairs)
+    (let ((idx (hash-table-count drgnx-agent-panel--entries)) ms)
+      (dotimes (u n)
+        (let* ((b (/ u 5)) (words (1+ (% u 5)))
+               (block (list :block b :kind "paragraph"
+                            :spans (vector (list :text (mapconcat #'identity (make-list words "word") " ") :style "text")
+                                           (list :text " tail" :style "strong"))))
+               (e (list :type "agent" :text (format "message %d" u) :patch (vector block))))
+          (push (* 1000 (car (benchmark-run 1 (drgnx-agent-panel--take-entries (list (list idx e)))
                                             (drgnx-view-draw-now drgnx-view))))
                 ms)))
       (nreverse ms))))

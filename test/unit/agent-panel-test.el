@@ -67,6 +67,47 @@ unanswered, and panel \"s1\" as `buf'."
       (should (string-match-p "Read a.el" (drgnx-agent-panel-test--text buf)))
       (should (string-match-p "Read b.el" (drgnx-agent-panel-test--text buf))))))
 
+(defun drgnx-agent-panel-test--block (n kind &rest spans)
+  (list :block n :kind kind :spans (vconcat (mapcar (lambda (s) (list :text (car s) :style (cdr s))) spans))))
+
+(ert-deftest drgnx-agent-panel/markdown-patches-draw-only-their-blocks ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-entries
+       (list (list 0 (list :type "agent" :text "# Title\n\npara"
+                           :blocks (vector (drgnx-agent-panel-test--block 0 "heading" '("Title" . "h1"))
+                                           (drgnx-agent-panel-test--block 1 "paragraph" '("para" . "text")))))))
+      (let ((text (drgnx-agent-panel-test--text buf)) (rendered nil))
+        (should (string-match-p "Title\n  para" text))
+        (cl-letf* ((orig (symbol-function 'drgnx-agent-panel--render))
+                   ((symbol-function 'drgnx-agent-panel--render)
+                    (lambda (key) (push key rendered) (funcall orig key))))
+          ;; a patch: block 1 grows and takes a style; block 2 is new (its `kind' creates it); block 0 is not drawn
+          (drgnx-agent-panel--take-entries
+           (list (list 0 (list :type "agent" :text "# Title\n\npara more\n\n```\nx"
+                               :patch (vector (drgnx-agent-panel-test--block 1 "paragraph" '("para " . "text") '("more" . "strong"))
+                                              (drgnx-agent-panel-test--block 2 "code" '("x" . "code")))))))
+          (setq text (drgnx-agent-panel-test--text buf))
+          (should (equal '((:b 0 2) (:b 0 1)) (sort rendered (lambda (a b) (> (nth 2 a) (nth 2 b))))))
+          (should (string-match-p "para more\n  x" text))
+          ;; an event with neither blocks nor patch keeps the blocks it has, and draws nothing
+          (setq rendered nil)
+          (drgnx-agent-panel--take-entries (list (list 0 (list :type "agent" :text "# Title\n\npara more\n\n```\nx"))))
+          (drgnx-agent-panel-test--text buf)
+          (should-not rendered))
+        (goto-char (point-min))
+        (search-forward "more")
+        (should (memq 'drgnx-agent-panel-md-strong (ensure-list (get-text-property (1- (point)) 'face))))
+        (goto-char (point-min))
+        (search-forward "Title")
+        (should (memq 'drgnx-agent-panel-md-heading (ensure-list (get-text-property (1- (point)) 'face))))))))
+
+(ert-deftest drgnx-agent-panel/a-message-without-blocks-falls-back-to-its-text ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-entries (list (list 0 (list :type "agent" :text "plain words"))))
+      (should (string-match-p "plain words" (drgnx-agent-panel-test--text buf))))))
+
 (ert-deftest drgnx-agent-panel/a-chip-without-a-feed-is-hidden ()
   (drgnx-agent-panel-test--with
     (with-current-buffer buf

@@ -16,7 +16,11 @@ Turn it off with the module `tools/agent-panel` (see [modules](modules.md)); eve
   right in the code font. A slow step (over `drgnx-agent-panel-slow-seconds`) or an expensive one (over
   `drgnx-agent-panel-expensive-cost`) shows that figure in the warning colour. The agent's thinking is folded under the
   step it belongs to; `TAB` opens or folds it, with the step's detail.
-- **Messages:** yours, the agent's, and the ends of turns, in order.
+- **Messages:** yours, the agent's, and the ends of turns, in order. The agent's messages are drawn as Markdown:
+  headings, code, quotes, lists, rules and tables, with emphasis, strong, strike-through, links and code in the look's
+  faces. As a message streams, only the blocks that changed are drawn again; a reopened session keeps the styling,
+  because the hub sends each message's blocks with its history.
+
 
 ## Live and paged
 

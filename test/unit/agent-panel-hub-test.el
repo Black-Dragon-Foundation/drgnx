@@ -277,5 +277,31 @@ session.  The module's own setup is not used: the module fixture moves the confi
           (remove-hook 'drgnx-hub-event-functions #'drgnx-agent-panel--event)
           (mapc #'kill-buffer (drgnx-agent-panel-buffers)))))))
 
+;; Pattern B (gate): the reopened panel reads the history through `agents/slice'; the hub's blocks come with it.
+(ert-deftest drgnx-agent-panel/a-reopened-sessions-messages-keep-their-styling ()
+  (drgnx-agents-mirror-test--with '()
+    (drgnx-agents-mirror-test--asking root)   ; the "asks" profile runs ratatoskr-mock, whose messages have ids
+    (add-hook 'drgnx-hub-event-functions #'drgnx-agent-panel--event)
+    (drgnx-agents-mirror-sync)
+    (let* ((m (drgnx-agents-mirror-test--start :profile "asks" :role "worker")) (id (drgnx-agent-session-remote m)))
+      (drgnx-agent-panel-hub-test--turn id "say a **loud** word")
+      (drgnx-agents-mirror-test--settle (lambda () (drgnx-agents-mirror-test--idle-mirror id)) "the turn over")
+      ;; the panel opens after the turn: everything it has came as history
+      (let ((buf (drgnx-agent-panel-buffer id)))
+        (unwind-protect
+            (progn
+              (drgnx-agent-panel-hub-test--show buf)
+              (with-current-buffer buf
+                (drgnx-view-draw-now drgnx-view)
+                (ert-info ((format "%S" (hash-table-values drgnx-agent-panel--entries)))
+                  (should (seq-some (lambda (e) (and (equal (plist-get e :type) "agent") (> (length (plist-get e :blocks)) 0)))
+                                    (hash-table-values drgnx-agent-panel--entries))))
+                (should-not (string-search "**" (buffer-substring-no-properties (point-min) (point-max))))
+                (goto-char (point-min))
+                (should (search-forward "loud" nil t))
+                (should (memq 'drgnx-agent-panel-md-strong (ensure-list (get-text-property (1- (point)) 'face))))))
+          (remove-hook 'drgnx-hub-event-functions #'drgnx-agent-panel--event)
+          (mapc #'kill-buffer (drgnx-agent-panel-buffers)))))))
+
 (provide 'agent-panel-hub-test)
 ;;; agent-panel-hub-test.el ends here
