@@ -268,13 +268,14 @@
 (require 'drgnx-doctor)
 
 (ert-deftest drgnx-pkg/the-guard-refuses-installs-from-automatic-code ()
-  (let ((orig (lambda (&rest _) 'installed)) (after-init-time (current-time)))
-    (let ((this-command nil))                                      ; a timer, a hook at startup, …
-      (should-error (drgnx-pkg--guard orig 'foo) :type 'drgnx-pkg-error))
-    (let ((this-command 'package-install))                         ; the user asked
-      (should (eq (drgnx-pkg--guard orig 'foo) 'installed)))
-    (let ((this-command 'package-install) (after-init-time nil))   ; still starting up
-      (should-error (drgnx-pkg--guard orig 'foo) :type 'drgnx-pkg-error)))
+  (drgnx-pkg-test--with root                                       ; an allowed install takes the sync lock: in the sandbox
+    (let ((orig (lambda (&rest _) 'installed)) (after-init-time (current-time)))
+      (let ((this-command nil))                                    ; a timer, a hook at startup, …
+        (should-error (drgnx-pkg--guard orig 'foo) :type 'drgnx-pkg-error))
+      (let ((this-command 'package-install))                       ; the user asked
+        (should (eq (drgnx-pkg--guard orig 'foo) 'installed)))
+      (let ((this-command 'package-install) (after-init-time nil)) ; still starting up
+        (should-error (drgnx-pkg--guard orig 'foo) :type 'drgnx-pkg-error))))
   (unwind-protect
       (progn (drgnx-pkg-guard-mode 1)
              (dolist (f '(package-install package-refresh-contents package-vc-install package-upgrade package-upgrade-all))
@@ -301,10 +302,11 @@
 (ert-deftest drgnx-pkg/the-guard-allows-installs-the-user-started ()
   ;; Review I1: M-x list-packages, describe-package's Install button (push-button), M-: and a third-party command
   ;; are the user's own: only hooks, timers, startup and automatic code are refused.
-  (let ((orig (lambda (&rest _) 'installed)) (after-init-time (current-time)))
-    (dolist (c '(list-packages push-button eval-expression package-install package-menu-execute auto-package-update-now))
-      (let ((this-command c))
-        (should (eq (drgnx-pkg--guard orig 'foo) 'installed))))))
+  (drgnx-pkg-test--with root                                       ; each install takes the sync lock: in the sandbox
+    (let ((orig (lambda (&rest _) 'installed)) (after-init-time (current-time)))
+      (dolist (c '(list-packages push-button eval-expression package-install package-menu-execute auto-package-update-now))
+        (let ((this-command c))
+          (should (eq (drgnx-pkg--guard orig 'foo) 'installed)))))))
 
 (ert-deftest drgnx-pkg/use-package-ensure-only-records ()
   (drgnx-pkg-test--with root

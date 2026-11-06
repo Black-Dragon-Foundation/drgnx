@@ -74,6 +74,7 @@ PLATFORM (`linux' or `macos'): only run on that platform, as `drgnx-platform' sa
     (error (error-message-string err))))
 
 (declare-function drgnx-pkg-status "drgnx-pkg")
+(declare-function drgnx-pkg-gpg-facts "drgnx-pkg")
 (declare-function drgnx-pkg-service-unit-file "drgnx-pkg")
 (declare-function drgnx-pkg--unit-exec-start "drgnx-pkg")
 (declare-function drgnx-file-read-bounded "drgnx-file")
@@ -482,6 +483,8 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :onboarding (drgnx-doctor--state-file "onboarding.eld")
            :packages (condition-case err (progn (require 'drgnx-pkg) (drgnx-pkg-status))
                        (error (list :error (error-message-string err))))
+           :packages-gpg (condition-case err (progn (require 'drgnx-pkg) (drgnx-pkg-gpg-facts))
+                           (error (list :error (error-message-string err))))
            :sqlite (and (fboundp 'sqlite-available-p) (sqlite-available-p))
            :svg (image-type-available-p 'svg)
            :work-plans (drgnx-doctor--work-plans)
@@ -1082,6 +1085,24 @@ a last check that failed; otherwise `ok', with the last check's start time and p
                                       ((null (plist-get p :manifest)) (list 'ok "no packages needed" nil))
                                       (t (list 'ok (format "%d packages installed, locked; %d generations"
                                                            (length (plist-get p :installed)) (or (plist-get p :generations) 0))
+                                               nil))))))
+
+(defvar drgnx-pkg--gpg-needed)
+(defvar drgnx-pkg--gpg-fix)
+
+(drgnx-doctor-define 'packages-gpg :group "drgnx"
+                     :doc "gpg is there to check the signatures of the archives that sign (GNU and NonGNU ELPA)"
+                     :check (lambda (f)
+                              (let ((g (plist-get f :packages-gpg)))
+                                (cond ((plist-get g :error)
+                                       (list 'warn (plist-get g :error) "fix packages.eld; drgnx sync says the same"))
+                                      ((null (plist-get g :signed)) (list 'ok "no archive in use signs its packages" nil))
+                                      ((null (plist-get g :gpg))
+                                       (list 'fail (format "%s (%s sign; no gpg program found)" drgnx-pkg--gpg-needed
+                                                           (string-join (plist-get g :signed) ", "))
+                                             drgnx-pkg--gpg-fix))
+                                      (t (list 'ok (format "%s checks the signatures of %s" (plist-get g :gpg)
+                                                           (string-join (plist-get g :signed) ", "))
                                                nil))))))
 
 (drgnx-doctor-define 'onboarding :group "drgnx" :doc "The onboarding steps (drgnx onboard, Help → Welcome)"

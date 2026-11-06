@@ -105,14 +105,25 @@ not the user asking to install."
         ((bound-and-true-p drgnx-guard--automatic) "automatic code")
         ((drgnx-pkg--in-hook-p) "a hook")))
 
+(defvar drgnx-pkg--holding-lock)
+(declare-function drgnx-pkg--take-sync-lock "drgnx-pkg" ())
+(declare-function drgnx-pkg--release-sync-lock "drgnx-pkg" (stamp))
+
 (defun drgnx-pkg--guard (orig &rest args)
   "Around ORIG (an install or refresh): signal when the call comes from startup, a timer, a hook or other
-automatic code; a command the user runs (M-x, a menu button, M-:) may install."
+automatic code; a command the user runs (M-x, a menu button, M-:) may install, holding the sync lock as `drgnx sync'
+does (one writer of the packages directory at a time).  While a sync holds it, the install is refused at once (a
+`user-error'): it never waits."
   (if-let* ((why (drgnx-pkg--automatic-context)))
       (signal 'drgnx-pkg-error
               (list (format "drgnx installs packages only with `drgnx sync' or a command you run (refused %s %S from %s)"
                             (if (symbolp orig) orig "an install") args why)))
-    (apply orig args)))
+    (require 'drgnx-pkg)
+    (if drgnx-pkg--holding-lock (apply orig args)   ; an install inside one (list-packages refreshing, then installing)
+      (let ((stamp (condition-case nil (drgnx-pkg--take-sync-lock)
+                     (drgnx-pkg-sync-busy (user-error "a sync is running; try again when it ends")))))
+        (unwind-protect (let ((drgnx-pkg--holding-lock t)) (apply orig args))
+          (drgnx-pkg--release-sync-lock stamp))))))
 
 (define-minor-mode drgnx-pkg-guard-mode
   "Refuse package installs and archive refreshes from automatic code (timers, hooks, startup)."

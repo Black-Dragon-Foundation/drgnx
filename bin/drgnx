@@ -2011,13 +2011,19 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                the exit test of a second machine: install.sh --yes --config … --identity …
                                in a fresh Fedora container (default 45) must end in a green doctor,
                                with the keys in the keyring and a second run changing nothing (slow, network)
-       drgnx sync [--offline] [--seed DIR] [--prune [--dry-run]]
+       drgnx sync [--offline] [--seed DIR] [--prune [--dry-run]] [--add NAME[@V]…] [--remove NAME…] [--pending] [--wait]
                                install the packages drgnx needs (the only thing that installs);
                                --offline: from the lock and the cache; --seed: copy another elpa first;
                                --prune: remove the packages the manifest no longer needs (listed);
-                               --prune --dry-run: only list them
-       drgnx upgrade           newest packages; the previous generation comes back if they break
+                               --prune --dry-run: only list them; --add/--remove: install (and mark as
+                               yours in the lock) or remove packages, all or nothing; --pending: run the
+                               Extensions view's queue; --wait: wait for a running sync instead of refusing
+       drgnx upgrade [--only NAME…] [--stage | --staged]
+                               newest packages; the previous generation comes back if they break;
+                               --only: those (and a dependency too old for them), the rest stays;
+                               --stage: fetch and check into the cache only; --staged: install that
        drgnx rollback [N]      the packages of generation N (default: the one before)
+                               (sync, upgrade and rollback take --progress FILE: JSON steps, for the editor)
        drgnx generations | lock
        drgnx lock --ship       (maintainers) write etc/drgnx.lock.eld, the known-good lock a first sync
                                starts from, from your lock (it must cover every module's packages)
