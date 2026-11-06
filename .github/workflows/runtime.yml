@@ -65,8 +65,9 @@ env:
 jobs:
   # The Fedora 45 job's prebuilt container (`Test images`, images.yml: test/container/Containerfile.rust), by digest: a
   # job's container is named before its steps run, so this job looks it up, by the tag of this checkout's inputs
-  # (test/container/image-tag.sh). The output is empty when GHCR has no image for them (a change not yet on main), and
-  # the job then installs what the image holds itself. (The escape legs look their bubblewrap up in their own step.)
+  # (test/container/image-tag.sh). ci.yml's `images` job built and pushed any missing tag before this workflow ran; the
+  # output is empty when GHCR still has none (a fork's pull request), and the job then installs what the image holds
+  # itself. (The escape legs look their bubblewrap up in their own step.)
   images:
     name: Prebuilt image (Fedora 45 job)
     if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-linux ')) }}
@@ -362,7 +363,8 @@ jobs:
     permissions:
       contents: read
       packages: read
-    timeout-minutes: 45
+    # 60: the browser rows' VM boots emulated where a runner has no KVM
+    timeout-minutes: 60
     # Every runner is pinned (never `ubuntu-latest`, which moves to 26.04 by 2026-11-19). The 24.04 legs lift AppArmor's
     # userns restriction with a global sysctl; the 26.04 legs do not: they test the configuration Gleipnir recommends
     # (bubblewrap 0.12.0 as /usr/bin/bwrap, which 26.04's `bwrap-userns-restrict` profile covers).
@@ -464,11 +466,29 @@ jobs:
       # on the full tier (tests/launch_sandboxed.rs), which needs bubblewrap 0.12 only. --no-fail-fast: every test
       # binary's failures in one run. The crate's timing rows (#[ignore = "timing: …"], test/timing-rust.txt) are
       # ignored too, but they are the timing lane's: a debug build on a shared runner judges no budget, so they are skipped.
+      # The agent browser's rows (tests/browser_sandboxed.rs) need Landlock ABI 9 on both tiers, which these runners'
+      # Linux 7.0 lacks (ABI 8): they run in the Fedora 45 VM of the next step instead, by the names their binary lists.
       - name: agent core, sandbox lane (--ignored)
         if: ${{ !cancelled() && steps.core-build.outcome == 'success' }}
         run: |
           skips=$(sed 's/#.*//' test/timing-rust.txt | awk '$1 == "drgnx-ratatoskr" { printf " --skip %s", $3 }')
+          vm=$(cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --test browser_sandboxed -- --list --format terse --ignored | sed -n 's/: test$//p')
+          [ -n "$vm" ] || { echo "browser_sandboxed lists no rows" >&2; exit 1; }
+          skips="$skips$(printf '%s\n' "$vm" | awk '{ printf " --skip %s", $1 }')"
           cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks -- --ignored --test-threads 1 $skips
+      # The agent browser's rows where they can run: a Fedora 45 VM on this runner (Linux 7.1 or later, Landlock ABI 9 or
+      # later, as the Fedora hosts drgnx supports have), booted under QEMU (KVM where the runner has it, else
+      # emulated) by .github/ci/browser-vm.sh, with this job's bubblewrap and the binaries copied in at their own paths
+      # (the test binary names its data and the hub by their absolute paths). docs/develop/ci.md, "The browser rows in a VM"
+      - name: the agent browser's rows in a Fedora 45 VM (Landlock ABI 9)
+        if: ${{ !cancelled() && steps.core-build.outcome == 'success' }}
+        run: |
+          bin=$(cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --test browser_sandboxed --no-run --message-format=json | jq -r 'select(.executable != null) | .executable')
+          t=$PWD/runtime/target/debug
+          bash .github/ci/browser-vm.sh up "$RUNNER_TEMP/vm"
+          bash .github/ci/browser-vm.sh put "$RUNNER_TEMP/vm" /usr/bin/bwrap "$t/ratatoskr" "$t/gleipnir-probe" "$t/ratatoskr-mock" \
+            "$PWD/runtime/crates/drgnx-ratatoskr/tests/data" "$bin"
+          bash .github/ci/browser-vm.sh run "$RUNNER_TEMP/vm" "cd '$PWD/runtime' && '$bin' --ignored --test-threads 1"
       # The real-start rows (docs/develop/runtime.md, "The real-start rows"): a release hub, no test hooks, so each
       # agents/start goes through the real launch, Gleipnir's validation and bwrap. --require-all: a row that cannot
       # start sandboxed fails here; the browser row is an excused skip on this runner (no Chromium, and a Landlock ABI

@@ -150,6 +150,26 @@
     ;; one report and one cache per image
     (drgnx-ci-test--has job "escape-report-host-${{ matrix.os }}" "-escape-${{ matrix.os }}-")))
 
+(ert-deftest drgnx-ci/the-escape-legs-run-the-browser-rows-in-a-vm ()
+  ;; the agent browser's rows need Landlock ABI 9 (Linux 7.1), and the runners boot Linux 7.0 (ABI 8): every escape
+  ;; leg runs them in a Fedora 45 VM, after its host sandbox lane, which leaves out exactly them (the names their binary
+  ;; lists), so they neither fail there nor go unrun
+  (let* ((rt (drgnx-ci-test--yml "runtime.yml")) (job (and rt (drgnx-ci-test--job rt "escape-host")))
+         (vm (drgnx-ci-test--file ".github/ci/browser-vm.sh")))
+    (skip-unless job)
+    (should vm)
+    (drgnx-ci-test--has job "--test browser_sandboxed -- --list --format terse --ignored"
+                        "bash .github/ci/browser-vm.sh up \"$RUNNER_TEMP/vm\""
+                        "bash .github/ci/browser-vm.sh put \"$RUNNER_TEMP/vm\" /usr/bin/bwrap"
+                        "'$bin' --ignored --test-threads 1")
+    (let ((lane (string-search "name: agent core, sandbox lane" job))
+          (in-vm (string-search "name: the agent browser's rows in a Fedora 45 VM" job)))
+      (should (and lane in-vm (< lane in-vm))))
+    ;; the image of each architecture is pinned by its sha256, which is checked; the script is shellchecked
+    (drgnx-ci-test--has vm "Fedora-Cloud-Base-Generic-45-" "sha256sum -c -" "x86_64)" "aarch64)")
+    (should (= 2 (length (drgnx-ci-test--matches "sha=\\([0-9a-f]\\{64\\}\\)" vm))))
+    (drgnx-ci-test--has (drgnx-ci-test--yml "ci.yml") " .github/ci/browser-vm.sh ")))
+
 (ert-deftest drgnx-ci/the-msrv-is-one-number ()
   ;; 1.95 since 2026-11-06 (wasmtime's 48 LTS needs it): the workspace's rust-version, the job that builds with it, and
   ;; install.sh's floor; the toolchain install.sh's private rustup brings is not older

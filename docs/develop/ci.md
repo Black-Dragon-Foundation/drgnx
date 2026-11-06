@@ -396,6 +396,26 @@ The weekly rebuild picks up Fedora's updates under the same tags. The Ubuntu job
 as a git `safe.directory` system-wide (the tests run git with a temporary `HOME`); without that, every git command
 on the checkout fails with "dubious ownership" (`drgnx test --bootstrap`'s snapshot did).
 
+## The browser rows in a VM
+
+The agent browser's layer needs Landlock ABI 9 (Linux 7.1) on both sandbox tiers, and GitHub's Ubuntu runners, 24.04
+and 26.04 alike, boot Linux 7.0 (ABI 8). So each leg of `runtime.yml`'s `escape-host` runs the browser rows
+(`tests/browser_sandboxed.rs`) in a Fedora 45 VM, whose kernel has ABI 9 or later as the Fedora hosts drgnx supports
+do, right after its own sandbox lane, which leaves out exactly those rows (the names the test binary lists with
+`--list --ignored`). `.github/ci/browser-vm.sh`:
+
+- `up DIR` installs QEMU and cloud-image-utils from apt, fetches the pinned Fedora Cloud image of the runner's
+  architecture and checks its sha256, and boots an overlay of it: KVM where the runner gives it (`/dev/kvm` is
+  opened to the runner's user), emulation otherwise. cloud-init makes a user `runner` with passwordless sudo and a key
+  made for the run; the script waits for ssh on a forwarded loopback port, at most 20 minutes.
+- `put DIR PATH...` copies the job's `/usr/bin/bwrap` (bubblewrap 0.12.0; root's, as Gleipnir requires), `ratatoskr`,
+  `gleipnir-probe`, `ratatoskr-mock`, the crate's `tests/data` and the test binary to the same paths in the VM:
+  the binary names its data and its hub by absolute path. glibc builds of the runner run on Fedora's newer glibc.
+- `run DIR CMD` runs the rows (`--ignored --test-threads 1`) as `runner`; their exit is the step's.
+
+To bump the image, change its name and sha256 for both architectures (the `CHECKSUM` file beside the image, signed by
+Fedora's key); `drgnx-ci/the-escape-legs-run-the-browser-rows-in-a-vm` holds the pins and the step order.
+
 ## What is cached
 
 Measured on the runs of 2026-10-19/20 (`gh run view ID --json jobs`): the unit suite is 3.5–4 min on Linux and about
