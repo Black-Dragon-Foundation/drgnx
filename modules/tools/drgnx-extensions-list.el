@@ -29,7 +29,10 @@
 (declare-function drgnx-extensions-jobs-run "drgnx-extensions-jobs")
 (declare-function drgnx-extensions-jobs-cancel "drgnx-extensions-jobs")
 (declare-function drgnx-extensions-live-restart-pending "drgnx-extensions-live")
-(declare-function drgnx-extensions-live-toggle-project "drgnx-extensions-live")
+(declare-function drgnx-extensions-project-toggle "drgnx-extensions-project" (pkg root))
+(declare-function drgnx-extensions-project-describe "drgnx-extensions-project" (pkg root))
+(declare-function drgnx-extensions-project--root "drgnx-extensions-project" (file))
+(declare-function drgnx-setting-for-root "drgnx-settings-workspace" (var root))
 (declare-function drgnx-extensions-trust-before-install "drgnx-extensions-trust")
 (declare-function drgnx-extensions-trust-update "drgnx-extensions-trust")
 (declare-function drgnx-extensions-trust-review-p "drgnx-extensions-trust")
@@ -124,6 +127,9 @@ word that starts with @ and is none of these is listed under :unknown, never an 
 (defvar drgnx-extensions-list--error nil "The text of the last search the hub could not answer, or nil.")
 (defvar drgnx-extensions-list--restart nil "The ids that wait for a restart (a cached copy of the live layer's answer).")
 (defvar drgnx-extensions-list--updates 0 "How many updates the last unfiltered search found: the status bar's number.")
+(defvar drgnx-extensions-list--root nil
+  "The root of the project the list or a page was last opened from (a file buffer's), or nil: where `p' and a page's
+toggle turn a package off, and what @this-project reads.")
 
 (defun drgnx-extensions-list--reset ()
   "Forget every row, section, job state and query."
@@ -223,7 +229,12 @@ global `drgnx-extensions-recommended'."
                    ('restart (copy-sequence drgnx-extensions-list--restart))
                    ('recommended (drgnx-extensions-list--recommended-ids))
                    ('this-project (append (drgnx-extensions-list--recommended-ids)
-                                          (mapcar (lambda (n) (format "pkg:%s" n)) (bound-and-true-p drgnx-packages-off))))
+                                          (mapcar (lambda (n) (format "pkg:%s" n))
+                                                  (and drgnx-extensions-list--root
+                                                       (seq-filter #'symbolp
+                                                                   (ensure-list (drgnx-setting-for-root
+                                                                                 'drgnx-packages-off
+                                                                                 drgnx-extensions-list--root)))))))
                    (_ 'none))))
         (unless (eq set 'none)
           (setq ids (if present (cl-remove-if-not (lambda (id) (member id set)) ids) set) present t))))
@@ -544,13 +555,21 @@ ticket (an integer) has no row, nil."
     (unless (string-prefix-p "pkg:" id) (user-error "%s is not a package" (drgnx-extensions-list--name id)))
     (drgnx-extensions-list--name id)))
 
+(defun drgnx-extensions-list-note-root ()
+  "Remember the current buffer's project, unless it is the list or a page (opening one from another keeps it)."
+  (unless (or (derived-mode-p 'drgnx-extensions-mode) (bound-and-true-p drgnx-extensions-details--id))
+    (setq drgnx-extensions-list--root
+          (and buffer-file-name (fboundp 'drgnx-extensions-project--root)
+               (drgnx-extensions-project--root buffer-file-name)))))
+
 (defun drgnx-extensions-list--require (fn)
   (unless (fboundp fn) (user-error "%s is not available (its module is off)" fn)))
 
 ;;;###autoload
 (defun drgnx-extensions-open ()
-  "Open the Extensions list."
+  "Open the Extensions list.  Opened from a file of a project, it remembers that project (`p', @this-project)."
   (interactive)
+  (drgnx-extensions-list-note-root)
   (let ((b (drgnx-extensions-list--buffer)))
     (drgnx-extensions-list-refresh)
     (drgnx-extensions-list--maybe-refresh-catalog)
@@ -682,11 +701,19 @@ update is compared with the installed copy before Apply."
         (special-mode)
         (pop-to-buffer (current-buffer))))))
 
+(defun drgnx-extensions-list-project-root ()
+  "The project the list was opened from (`drgnx-extensions-list--root'), or a `user-error' when there is none."
+  (or drgnx-extensions-list--root
+      (user-error "Extensions: open the list from a file of a project to turn a package off there")))
+
 (defun drgnx-extensions-toggle-project ()
-  "Turn the package at point on or off in this project (the live layer does it)."
+  "Turn the package at point on or off in the project the list was opened from (drgnx-extensions-project.el)."
   (interactive)
-  (drgnx-extensions-list--require 'drgnx-extensions-live-toggle-project)
-  (drgnx-extensions-live-toggle-project (drgnx-extensions-list--package-name)))
+  (drgnx-extensions-list--require 'drgnx-extensions-project-toggle)
+  (let ((name (drgnx-extensions-list--package-name)))
+    (drgnx-extensions-project-toggle (intern name) (drgnx-extensions-list-project-root))
+    (message "%s: %s" name (drgnx-extensions-project-describe (intern name) drgnx-extensions-list--root))
+    (drgnx-extensions-list--changed)))
 
 (provide 'drgnx-extensions-list)
 ;;; drgnx-extensions-list.el ends here

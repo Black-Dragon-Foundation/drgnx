@@ -185,6 +185,10 @@ User guide: [In one project](../guide/extensions.md#in-one-project).
   root is remembered by directory (forgotten when settings change), the packages off by root and the modes index as
   the refresh read it (forgotten by the next refresh, which also runs at each job's end). The Extensions module's setup calls
   `drgnx-extensions-project-setup`, its teardown `drgnx-extensions-project-teardown` (both go).
+- **The view's doors.** Opening the list or a page from a file buffer keeps that file's project root in
+  `drgnx-extensions-list--root` (opening one from the other keeps it). `p` in the list and the page's **Turn off in
+  this project** button (for a `narrow` package, with a root) call `drgnx-extensions-project-toggle` with it; the page's
+  header says `drgnx-extensions-project-describe`; `@this-project` reads `drgnx-setting-for-root` at that root.
 - `drgnx doctor`'s `package-modes-off` check lists the open file buffers where such a mode is still on
   (`drgnx-extensions-project-misses`).
 

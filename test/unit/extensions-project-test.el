@@ -221,4 +221,98 @@ the per-project parts set back after."
       (with-current-buffer b (normal-mode))
       (should-not (drgnx-extensions-project-misses)))))
 
+;;;; The view's doors: p in the list, the page's line and toggle, @this-project
+
+(defmacro drgnx-ext-project-test--with-list (&rest body)
+  "BODY with the Extensions list and pages loaded, the hub and the job layer answering nothing, and the list and its
+pages closed after."
+  (declare (indent 0) (debug t))
+  `(progn
+     (load (expand-file-name "modules/tools/drgnx-extensions-list" drgnx-dir) nil t)
+     (load (expand-file-name "modules/tools/drgnx-extensions-details" drgnx-dir) nil t)
+     (let ((drgnx-extensions-list--root nil) (drgnx-extensions-check-updates 'manual))
+       (unwind-protect
+           (cl-letf (((symbol-function 'drgnx-hub-call) #'ignore)
+                     ((symbol-function 'drgnx-extensions-jobs-run) #'ignore))
+             (drgnx-extensions-list--reset)
+             ,@body)
+         (dolist (b (buffer-list))
+           (when (string-prefix-p "*Extension" (buffer-name b)) (kill-buffer b)))
+         (drgnx-view--undefine 'extensions)
+         (drgnx-view--undefine 'extension-details)
+         (drgnx-extensions-list--reset)))))
+
+(defun drgnx-ext-project-test--row (name)
+  (list :id (concat "pkg:" name) :kind "package" :name name :state "installed" :source "melpa" :signed "unsigned-archive"))
+
+(ert-deftest drgnx-extensions-project/p-in-the-list-turns-it-off-in-the-project-it-came-from ()
+  (drgnx-ext-project-test--with
+    (drgnx-ext-project-test--with-list
+      (drgnx-extensions-project-setup)
+      (drgnx-settings-workspace-file drgnx-ext-project-test--p t)       ; P is a project drgnx knows
+      (let ((b (drgnx-ext-project-test--open drgnx-ext-project-test--p "f.fxrs")))
+        (should (eq (drgnx-ext-project-test--mode b) 'drgnx-ext-fx-rust-mode))
+        ;; Extensions opened from a file of P, then p on fx-rust's row
+        (with-current-buffer b (drgnx-extensions-open))
+        (drgnx-extensions-list--receive 'installed (list (drgnx-ext-project-test--row "fx-rust")) 1 0)
+        (with-current-buffer drgnx-extensions-list-buffer-name
+          (drgnx-view-draw-now drgnx-view)
+          (goto-char (drgnx-view-row-start drgnx-view "pkg:fx-rust"))
+          (let ((this-command 'extensions-toggle-project)) (call-interactively #'drgnx-extensions-toggle-project)))
+        (should (drgnx-extensions-project-off-p 'fx-rust drgnx-ext-project-test--p))
+        (should-not (drgnx-extensions-project-off-p 'fx-rust drgnx-ext-project-test--q))
+        (should (eq (drgnx-ext-project-test--mode b) 'drgnx-ext-fx-rust-ts-mode))
+        ;; @this-project lists what is off in P, read by P's root
+        (should (member "pkg:fx-rust" (cdr (drgnx-extensions-list--local-ids '(this-project)))))))))
+
+(ert-deftest drgnx-extensions-project/the-page-says-it-and-turns-it-off-here ()
+  (drgnx-ext-project-test--with
+    (drgnx-ext-project-test--with-list
+      (drgnx-extensions-project-setup)
+      (drgnx-settings-workspace-file drgnx-ext-project-test--p t)
+      (let ((b (drgnx-ext-project-test--open drgnx-ext-project-test--p "g.fxrs")))
+        (with-current-buffer b (drgnx-extensions-open))
+        (dolist (n '("fx-rust" "fx-git"))
+          (puthash (concat "pkg:" n) (drgnx-extensions-list--normalize (drgnx-ext-project-test--row n)) drgnx-extensions-list--rows))
+        (let ((page (with-current-buffer drgnx-extensions-list-buffer-name (drgnx-extensions-details-open "pkg:fx-rust"))))
+          (with-current-buffer page
+            (let ((text (concat (drgnx-extensions-details--render-header) (drgnx-extensions-details--render-actions))))
+              (should (string-search "On in this project" text))
+              (should (string-search "[Turn off in this project]" text)))
+            ;; the page's button, as RET on it runs it
+            (let* ((text (drgnx-extensions-details--render-actions))
+                   (at (string-search "[Turn off in this project]" text))
+                   (cmd (lookup-key (get-text-property at 'keymap text) (kbd "RET"))))
+              (let ((this-command cmd)) (call-interactively cmd)))
+            (should (drgnx-extensions-project-off-p 'fx-rust drgnx-ext-project-test--p))
+            (should (string-search "Off in this project" (drgnx-extensions-details--render-header)))
+            (should (string-search "[Turn on in this project]" (drgnx-extensions-details--render-actions)))))
+        ;; a package that changes Emacs as a whole: said, and no toggle
+        (let ((page (with-current-buffer drgnx-extensions-list-buffer-name (drgnx-extensions-details-open "pkg:fx-git"))))
+          (with-current-buffer page
+            (should (string-search "On in every project: it changes Emacs as a whole" (drgnx-extensions-details--render-header)))
+            (should-not (string-search "in this project]" (drgnx-extensions-details--render-actions)))))))))
+
+(ert-deftest drgnx-extensions-project/no-root-walk-per-mode-change ()
+  (drgnx-ext-project-test--with
+    (drgnx-ext-project-test--off drgnx-ext-project-test--p)
+    (let ((b (drgnx-ext-project-test--open drgnx-ext-project-test--p "h.fxtxt")) (inside nil) (walks 0)
+          (remap (symbol-function 'drgnx-extensions-project--remap))
+          (minor (symbol-function 'drgnx-extensions-project--minor-off)))
+      (cl-letf (((symbol-function 'drgnx-extensions-project--remap)
+                 (lambda (&rest args) (setq inside t) (unwind-protect (apply remap args) (setq inside nil))))
+                ((symbol-function 'drgnx-extensions-project--minor-off)
+                 (lambda () (setq inside t) (unwind-protect (funcall minor) (setq inside nil))))
+                ((symbol-function 'locate-dominating-file)
+                 (let ((f (symbol-function 'locate-dominating-file)))
+                   (lambda (&rest args) (when inside (cl-incf walks)) (apply f args))))
+                ((symbol-function 'file-attributes)
+                 (let ((f (symbol-function 'file-attributes)))
+                   (lambda (&rest args) (when inside (cl-incf walks)) (apply f args)))))
+        (with-current-buffer b (normal-mode))           ; the first may read and remember
+        (setq walks 0)
+        (dotimes (_ 20) (with-current-buffer b (normal-mode)))
+        (should (= walks 0))
+        (should-not (buffer-local-value 'drgnx-ext-fx-lint-mode b))))))
+
 ;;; extensions-project-test.el ends here

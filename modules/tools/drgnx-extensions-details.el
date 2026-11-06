@@ -27,6 +27,13 @@
 (declare-function drgnx-extensions-list--trust "drgnx-extensions-list")
 (declare-function drgnx-extensions-show-log "drgnx-extensions-list")
 (defvar drgnx-extensions-list--rows)
+(defvar drgnx-extensions-list--root)
+(defvar drgnx-extensions-project-global-text)
+(declare-function drgnx-extensions-list-note-root "drgnx-extensions-list")
+(declare-function drgnx-extensions-project-describe "drgnx-extensions-project" (pkg root))
+(declare-function drgnx-extensions-project-scope "drgnx-extensions-project" (pkg))
+(declare-function drgnx-extensions-project-off-p "drgnx-extensions-project" (pkg root))
+(declare-function drgnx-extensions-project-toggle "drgnx-extensions-project" (pkg root))
 
 (declare-function drgnx-hub-call "drgnx-hub-client")
 (declare-function drgnx-extensions--update "drgnx-extensions-list")
@@ -305,6 +312,27 @@ trust card for a source that does not sign."
   "Draw the page again: its state changed."
   (when (drgnx-view-p drgnx-view) (drgnx-view-dirty drgnx-view t)))
 
+(defun drgnx-extensions-details--project-text (name)
+  "What package NAME's page says about the project the list was opened from: a package that changes Emacs as a whole
+says so anywhere; the others need a project.  Nil without the project layer or a project."
+  (when (fboundp 'drgnx-extensions-project-describe)
+    (let ((pkg (intern name)))
+      (cond ((eq (drgnx-extensions-project-scope pkg) 'global) drgnx-extensions-project-global-text)
+            (drgnx-extensions-list--root (drgnx-extensions-project-describe pkg drgnx-extensions-list--root))))))
+
+(defun drgnx-extensions-details--project-button (name buf)
+  "The page's toggle for package NAME in the project the list was opened from: only for a package that can be off in
+one project, and only with a project.  BUF is the page."
+  (let ((pkg (intern name)) (root drgnx-extensions-list--root))
+    (if (and root (fboundp 'drgnx-extensions-project-toggle) (eq (drgnx-extensions-project-scope pkg) 'narrow))
+        (drgnx-extensions-details--button
+         (if (drgnx-extensions-project-off-p pkg root) "Turn on in this project" "Turn off in this project")
+         (lambda ()
+           (drgnx-extensions-project-toggle pkg root)
+           (when (buffer-live-p buf) (with-current-buffer buf (drgnx-extensions-details--refresh))))
+         "Its file modes and buffer modes in this project only")
+      "")))
+
 (defun drgnx-extensions-details--render-header ()
   (let* ((row (drgnx-extensions-details--row)) (info drgnx-extensions-details--info)
          (name (drgnx-extensions-list--name drgnx-extensions-details--id)))
@@ -327,6 +355,9 @@ trust card for a source that does not sign."
      (if-let* ((why (and row (drgnx-extensions-details-why-text (plist-get row :why) name)))) (concat why "\n") "")
      (if (and row (eq (plist-get row :kind) 'package))
          (propertize (concat drgnx-extensions-details--trust-line "\n") 'face 'drgnx-status-warn)
+       "")
+     (if-let* ((here (and row (eq (plist-get row :kind) 'package) (drgnx-extensions-details--project-text name))))
+         (concat here "\n")
        "")
      (if drgnx-extensions-details--error (propertize (concat drgnx-extensions-details--error "\n") 'face 'drgnx-status-fail) "")
      "\n")))
@@ -354,7 +385,8 @@ trust card for a source that does not sign."
                           ((eq (plist-get row :state) 'update)
                            (drgnx-extensions-details--button "Update" (lambda () (drgnx-extensions--update (drgnx-extensions-list--name id)))))))
                   (when (memq (plist-get row :state) '(installed update held dependency incompat))
-                    (drgnx-extensions-details--button "Uninstall" (lambda () (drgnx-extensions-jobs-queue (list :remove (intern (drgnx-extensions-list--name id)))))))))
+                    (drgnx-extensions-details--button "Uninstall" (lambda () (drgnx-extensions-jobs-queue (list :remove (intern (drgnx-extensions-list--name id)))))))
+                  (drgnx-extensions-details--project-button (drgnx-extensions-list--name id) buf)))
        (_ ""))
      (drgnx-extensions-details--button "⋯" (lambda () (with-current-buffer buf (call-interactively #'drgnx-extensions-more)))
                                        "More: another version, copy the name, the repository, its settings, the log")
@@ -559,7 +591,9 @@ trust card for a source that does not sign."
 
 (defun drgnx-extensions-details-open (id &optional pin)
   "Show the page of the extension ID (`pkg:NAME', `module:NAME', `plugin:NAME') in the preview page, which the next
-page replaces; with PIN in a page of its own.  Returns the buffer (the caller shows it)."
+page replaces; with PIN in a page of its own.  Returns the buffer (the caller shows it).  Opened from a file of a
+project, the page's toggle acts there."
+  (drgnx-extensions-list-note-root)
   (let ((buffer (drgnx-extensions-details--buffer id pin)))
     (with-current-buffer buffer
       (unless (equal drgnx-extensions-details--id id)

@@ -233,7 +233,9 @@ header the buttons are:
 
 ## In one project
 
-A package's page can turn the package off **in the project you are in** (its row says "Off in this project"). Its
+A package's page can turn the package off **in the project you are in** (its page says "Off in this project", and
+its **Turn off in this project** button becomes **Turn on in this project**); `p` on its row in the list does the
+same. "The project you are in" is the project of the file you opened Extensions from. Its
 file modes and buffer modes are then off there: a file it would open in its mode opens in the mode it would get
 without the package (`.rs` in `rust-ts-mode` when `rust-mode` is off, for instance), and its buffer minor modes do not
 turn on in that project's files. Other projects, and buffers that are not files (`*scratch*`, Magit's), are not
