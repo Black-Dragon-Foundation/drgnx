@@ -216,17 +216,29 @@ is not a frame line); with fewer, the frame parameter `drgnx-chrome-breadcrumb` 
 and the row is gone, sticky scroll's scopes with it. It comes back with room, and a buffer's own header line (column
 headings) stays.
 
-Hovering a file tab (or its ×) lights that one only. Tabs are dimmed, the shown tab of the active editor group is bold
-in the theme's link colour with an overline, and every row of chrome (tab line, breadcrumb, dock titles, panel tabs,
-the top line) is the theme's tab-line background; customize `drgnx-chrome-tab*` and `drgnx-wb-bar` to change them.
+Hovering a file tab lights that one only, the whole tab. Tabs are dimmed, the shown tab of the active editor group is
+bold in the theme's link colour with an overline, and every row of chrome (tab line, breadcrumb, dock titles, panel
+tabs, the top line) is the theme's tab-line background; customize `drgnx-chrome-tab*` and `drgnx-wb-bar` to change
+them.
+
+**On a graphical frame** the tab row is `tab-row` high (34 logical pixels at the comfortable density) on the `panel`
+surface; each tab is four pixels shorter than the row and two pixels from the next (a terminal separates them with a
+space). The shown tab is on the `editor` colour, so it joins the text below, and has its file's icon before the name.
+A tab that is not shown has no close mark you can see until the pointer is on the tab: the × is drawn in the row's own
+colour and the tab's hover colour brings it out (no Lisp runs while the pointer moves). The × of the shown tab is
+always there, and so is every × on a terminal. A modified file has a dimmed dot after its name, and a tab that is only
+there while it is shown (the scratch buffer, the start page) is in italics. At the right end of the row, an overflow
+button (**Go to Tab…**, in the palette: choose one of the group's tabs by name) and a split button (**Split Editor
+Right**). Under Glitnir the tabs' top corners are rounded (7 pixels).
 
 - **Tabs**: the buffers an editor window has shown, in the order they were opened; switching never reorders them.
   Click a tab to show it, `×` or middle-click closes it (the buffer stays open — close it in the Buffers panel).
   Close Tab `C-<f4>` · palette · `SPC b d`; Next / Previous Tab `C-<next>` / `C-<prior>` · Emacs' `C-x <right>` /
   `C-x <left>` · `SPC b n` / `SPC b p`. `*scratch*` is a tab only while it is shown. Killing a buffer takes its tab
   out of every window at once; closing the shown tab (or killing its buffer) shows the tab you used before it, as in VS Code; with no such tab, the one to its right, else its left. Each window keeps its own history.
-- **Breadcrumb**: project › folders › file, `●` while unsaved. A buffer with a header line of its own (the column
-  headings of a list, clicked to sort) keeps it.
+- **Breadcrumb**: project › folders › file, `●` while unsaved, in the caption type face: a row 26 logical pixels
+  high on a graphical frame, the folders subtle and the file's name muted. A buffer with a header line of its own (the
+  column headings of a list, clicked to sort) keeps it.
 - **At once**: chrome follows the workbench state store, so it is in place before a frame is drawn. A window made by
   anything — a split, a popup, a timer — has its tab line and header at the first redraw; `C-x o` between two windows
   showing one buffer moves the tabs and the breadcrumb on the spot. Saving or reverting a buffer updates its `●` a
