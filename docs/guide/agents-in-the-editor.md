@@ -44,4 +44,14 @@ part that exists so far: which buffers are watched.
 - While the line shows, the breadcrumb shortens to the file name so both fit. A large file's header and sticky
   scroll's scopes come first and are never replaced.
 
-How the Explorer, the status bar and the who-is-here list show agents follows in a later page of this guide.
+## The Explorer, the status bar and who is here
+
+- **Explorer badges.** A file an agent is editing, is about to change or has changed shows the agent's mark and initial
+  at the end of its row: up to three, then "+N". A folder shows one mark per agent with files under it. An agent
+  working in its own worktree of your project lands on your tree's row for the same file.
+- **Status bar.** The segment `agents-here` (after `agents`) shows one mark for each agent working in this project,
+  eight at most, then "+N". An agent that waits on you has its mark in the attention colour. Click it for who is here.
+- **Who is here.** The command **Who Is Here** lists the agents in the project (mark, name, what it does, file and
+  line); RET opens the one you choose at its line and follows it. **Who Is in This File** does the same for the
+  current file. **Follow Agent** (`agents-follow`, `C-c w f` in the Emacs profile, `C-k f` in VS Code, `SPC a f` in Vim)
+  follows the agent nearest your cursor.

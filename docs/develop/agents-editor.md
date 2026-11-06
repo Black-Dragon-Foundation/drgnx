@@ -84,5 +84,19 @@ The draw file adds itself to `drgnx-agents-editor-apply-functions` and draws fro
   next frame. `drgnx-chrome-short-breadcrumb-functions` shortens the breadcrumb to the file name while the line shows.
   `drgnx-agents-editor-line-probe` times the build and a provider call (the probe for `agents-line-tick`; the verdict
   waits for the gate).
+- **Badges, the status segment, who is here (`drgnx-agents-editor-here.el`):** the workspace presence
+  (`agents/presence/subscribe`, then the `agent-presence` event, one `FilePresence` per file) is cached by file name.
+  Each event rebuilds three things from the cache, none in redisplay: the badge string per user path
+  (files: agents with a `pending`, `write` or `edit` entry, three marks with their initials then `+N`; folders: every
+  ancestor up to the root, one mark per agent), the who-is-here rows (each session's newest entry) and the status
+  string (eight marks, `+N`). A file in a linked worktree lands on the user's tree through the main checkout its
+  `.git` file names plus the entry's `rel`; it is shown only when that checkout is a workspace root. The Explorer
+  paints a badge through `drgnx-explorer-add-decorator` (an overlay at the row's end with `drgnx-git` set, so the next
+  paint of the row removes it); the status bar through `drgnx-statusbar-define-segment` and `agents-here` set after
+  `agents` in `drgnx-statusbar-left`. Interim: the mirrored sessions carry no ordinal yet, so
+  `drgnx-agents-editor-here-ordinal-function` is nil and ordinals are numbered in the order sessions are first seen;
+  `drgnx-agents-editor-here-paired-function` (a ring on a paired agent's mark) is nil until the pair feature sets it.
+  `work-who-is-here`, called interactively, ends in `drgnx-agents-editor-here-choose` (RET follows); its `o` (open the
+  panel) comes with the panel.
 - A buffer that stops being watched (`drgnx-agents-editor-unwatch-functions`) or is killed loses its bars, ring
   overlays and tags.

@@ -974,7 +974,8 @@ The commands of modules that need no installed package are in it, the later stag
                               settings-lisp-files-toggle settings-add-lisp-file   ; settings Task 29: t and a there
                               ;; settings Task 26: the Settings page took C-, from Modules, and its own keys
                               preferences-settings settings-page-tab settings-page-group settings-page-search
-                              settings-page-reset settings-page-history settings-page-open-source settings-page-convert))
+                              settings-page-reset settings-page-history settings-page-open-source settings-page-convert
+                              agents-follow))     ; part 3: the agent line's follow key
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))
