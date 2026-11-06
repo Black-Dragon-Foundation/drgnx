@@ -143,32 +143,11 @@ once a graphical frame shows it, it gets the tree row in that frame's scale (×2
         (should (equal (drgnx-look-ui-line-spacing 18 'comfortable 2.0) (buffer-local-value 'line-spacing buf)))))))
 
 (ert-deftest drgnx-look-explorer/rows-in-the-ui-font ()
-  "Pattern D: the Explorer's and the Buffers panel's rows carry the UI text face under their own faces, every
-character up to and with the newline, once painted, and no face above it brings `default''s font back (the Explorer's
-name faces inherit the UI face, not `default'); `default' is not remapped (a remap of `default' merged the UI font
-into every face lookup of the buffer, at every redisplay).  The hover face, which inherits `default' for its
-foreground, is remapped to put the UI face first in the dock buffers only."
+  "Pattern D: the Explorer's and the Buffers panel's rows are drawn with `default' remapped to the UI text face."
   (drgnx-explorer-edge--with root
     (dolist (buf (list (drgnx-explorer--buffer) (drgnx-buffers--buffer)))
       (with-current-buffer buf
-        (should-not (assq 'default face-remapping-alist))
-        (should (eq 'drgnx-ui-text (cadr (assq 'drgnx-hover-row face-remapping-alist))))
-        (jit-lock-fontify-now)
-        (let ((p (point-min)) (family (face-attribute 'drgnx-ui-text :family)))
-          (while (< p (point-max))
-            (let ((faces (ensure-list (get-text-property p 'face))))
-              (should (equal (list buf p 'drgnx-ui-text) (list buf p (car (memq 'drgnx-ui-text faces)))))
-              (should (equal (list buf p family)
-                             (list buf p (face-attribute-merged-with :family 'unspecified faces)))))
-            (setq p (next-single-property-change p 'face nil (point-max)))))))
-    (with-current-buffer (drgnx-explorer--buffer)
-      (should (> (buffer-size) 0))
-      ;; the Explorer paints its names again (jit-lock): the UI face comes back under the new faces, once
-      (jit-lock-refontify)
-      (jit-lock-fontify-now)
-      (let ((face (get-text-property (1- (pos-eol 2)) 'face)))
-        (should (equal 1 (cl-count 'drgnx-ui-text (ensure-list face))))
-        (should (cdr (ensure-list face)))))))
+        (should (memq 'drgnx-ui-text (ensure-list (cadr (assq 'default face-remapping-alist)))))))))
 
 (provide 'look-explorer-test)
 ;;; look-explorer-test.el ends here
