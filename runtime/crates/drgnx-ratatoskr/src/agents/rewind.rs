@@ -33,14 +33,15 @@ pub(crate) fn expected_level(provider: Option<Provider>, caps: Option<&Value>) -
     }
 }
 
-/// What the cut reads of a step: its `seq`, the message and turn ids the `step` table holds, and the `Task` call of
-/// the subagent that made it (`step_detail.parent_tool`).
+/// What the cut reads of a step: its `seq`, the message and turn ids the `step` table holds, the `Task` call of the
+/// subagent that made it (`step_detail.parent_tool`), and the revert that abandoned it (`step.undone_by`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PointStep {
     pub seq: i64,
     pub message_id: Option<String>,
     pub turn_id: Option<String>,
     pub parent_tool: Option<String>,
+    pub undone_by: Option<i64>,
 }
 
 /// Where a conversation is cut for a step: the fork point AT (none: a summary), the step whose message or turn it is
@@ -61,8 +62,26 @@ pub(crate) struct Point {
 /// carries its turn id: an ended turn's id is on all its steps), cut at that turn's last message; a step inside a turn,
 /// running or ended, rounds down, and the steps after the cut are RETAINED.  Neither found, or Summary asked: Summary,
 /// carrying every step up to SEQ.
+///
+/// Only the steps of SEQ's own conversation count: a step a revert abandoned (`undone_by`) before SEQ's step was made
+/// is no cut point, ends no turn and is no part of a summary, since that conversation never held it (a new
+/// conversation may even reuse its turn ids, as Codex's do after a fork).  The steps after a step that is not
+/// abandoned are its conversation's, abandoned or not (a revert to it marks them before it rewinds); a step that is
+/// abandoned has the steps that revert abandoned with it and the ones before them that no revert abandoned.
 pub(crate) fn point_for(steps: &[PointStep], seq: i64, level: RestoreLevel) -> Point {
-    let upto: Vec<&PointStep> = steps.iter().filter(|s| s.seq <= seq).collect();
+    let line = steps
+        .iter()
+        .find(|s| s.seq == seq)
+        .and_then(|s| s.undone_by);
+    let steps: Vec<&PointStep> = steps
+        .iter()
+        .filter(|s| {
+            s.undone_by == line
+                || (s.undone_by.is_none() && s.seq < seq)
+                || (line.is_none() && s.seq > seq)
+        })
+        .collect();
+    let upto: Vec<&PointStep> = steps.iter().copied().filter(|s| s.seq <= seq).collect();
     let summary = Point {
         at: None,
         source_step: None,
@@ -78,6 +97,8 @@ pub(crate) fn point_for(steps: &[PointStep], seq: i64, level: RestoreLevel) -> P
                 .map(|m| (s.seq, m.to_string()))
         })
     };
+    // the first step of the line after step N: where what a cut leaves out begins
+    let after = |n: i64| steps.iter().find(|s| s.seq > n).map_or(seq, |s| s.seq);
     let cut = match level {
         RestoreLevel::Summary => None,
         RestoreLevel::Message => {
@@ -93,15 +114,15 @@ pub(crate) fn point_for(steps: &[PointStep], seq: i64, level: RestoreLevel) -> P
                         .position(|s| s.parent_tool.as_ref() == Some(parent))
                         .unwrap_or(upto.len() - 1);
                     let task_message = upto[first].message_id.as_deref();
-                    last_id(first, task_message).map(|(s, m)| ((s, m), Some((s + 1, seq))))
+                    last_id(first, task_message).map(|(s, m)| ((s, m), Some((after(s), seq))))
                 }
             }
         }
         RestoreLevel::Turn => {
             // once a turn ends every one of its steps carries its id (the step writer's anchors), so its end is
-            // the last step that does, among all the session's steps
+            // the last step that does, among all the steps of the line
             let mut last: std::collections::HashMap<&str, i64> = std::collections::HashMap::new();
-            for s in steps {
+            for s in &steps {
                 if let Some(t) = s.turn_id.as_deref() {
                     last.insert(t, s.seq);
                 }
@@ -113,7 +134,8 @@ pub(crate) fn point_for(steps: &[PointStep], seq: i64, level: RestoreLevel) -> P
             };
             upto.iter().rposition(|s| ends(s)).and_then(|i| {
                 let end = upto[i].seq;
-                last_id(i + 1, None).map(|(_, m)| ((end, m), (end < seq).then_some((end + 1, seq))))
+                last_id(i + 1, None)
+                    .map(|(_, m)| ((end, m), (end < seq).then(|| (after(end), seq))))
             })
         }
     };
@@ -176,6 +198,7 @@ fn cut(
             message_id: s.message_id.clone(),
             turn_id: s.turn_id.clone(),
             parent_tool: parent.clone(),
+            undone_by: s.undone_by,
         })
         .collect();
     let point = point_for(&points, t.seq, level);

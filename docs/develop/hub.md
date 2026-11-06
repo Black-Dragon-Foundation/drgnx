@@ -935,7 +935,11 @@ else (Gemini, an agent without the capability) `summary`.
   and cannot be a turn in progress. A turn's end is its last step: once a turn ends every step of it carries its
   `turn_id` (the step writer's anchors), so a step inside an ended turn rounds down too. The steps a cut drops are
   `retained`: a labelled summary carries them, so the revert needs the user's message (`needs_message`). No id found (or the first turn still running): `summary`, carrying every step up to
-  the one asked for.
+  the one asked for. Only the step's own conversation counts: a step an earlier revert abandoned (`step.undone_by`)
+  is no cut point, ends no turn and is in no summary, since the new conversation never held it and may reuse its turn
+  ids (Codex's restart after a fork). The steps after a step that is not abandoned stay its conversation's, abandoned
+  or not, because a revert marks them before it rewinds; an abandoned step's conversation is the steps its revert
+  abandoned with it and the ones before them that no revert abandoned.
 - **The attach** (`session::Attach`: `New`, `Resume(acp)`, `Fork { source, at, level }`). A fork always runs in a
   fresh process: `launch` spawns the agent in its sandbox as for a new session, then sends `session/fork` with the
   session's `mcpServers` (its drgnx tools) and the lock's `_meta`, and verifies the lock afterwards exactly as after
