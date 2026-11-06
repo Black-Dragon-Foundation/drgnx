@@ -1,0 +1,32 @@
+//! `history.db`'s migrations, as data (urdr runs each batch once, under `BEGIN IMMEDIATE`, and keeps the version in
+//! `meta.schema`).
+
+/// Schema 1: the records and their parents, the documents with their updates and snapshots per branch, the peers,
+/// the branches, the pending revert and the stored previews.
+const V1: &str = "
+create table op(
+  id integer primary key, kind text not null, author integer not null, cause_json text not null,
+  spans_blob blob not null, view_blob blob not null, git text, summary text not null, at real not null);
+create table op_parent(
+  op integer not null references op(id), parent integer not null references op(id),
+  primary key (op, parent)) without rowid;
+create table doc(id integer primary key, path text not null unique, created real not null,
+  class text not null default 'text');
+create table branch(
+  id integer primary key, name text not null unique, kind text not null check (kind in ('wt', 'fork', 'undone')),
+  base_commit text, frontier_blob blob, frozen_at real, pinned integer not null default 0);
+create table doc_update(
+  doc integer not null references doc(id), branch integer not null references branch(id), seq integer not null,
+  bytes blob not null, primary key (doc, branch, seq)) without rowid;
+create table doc_snapshot(
+  doc integer not null references doc(id), branch integer not null references branch(id),
+  upto_seq integer not null, bytes blob not null, primary key (doc, branch)) without rowid;
+create table peer(id integer primary key, author_json text not null, branch integer references branch(id));
+create table pending(op integer primary key references op(id), json text not null, at real not null);
+create table preview(
+  id integer primary key, branch integer not null references branch(id), frontier_blob blob not null,
+  json text not null, at real not null);
+";
+
+/// Every migration, oldest first.
+pub(crate) const MIGRATIONS: &[(u32, &str)] = &[(1, V1)];

@@ -25,6 +25,8 @@ runtime/
 - **`cargo deny check`** runs all four sections (advisories, licenses, bans, sources) on every push and daily. `deny.toml`
   bans OpenSSL and native-tls (one TLS stack), async-std and smol (one runtime), `h2` (HTTP/1.1 only) and `aws-lc-sys`
   (the ring provider), and denies yanked, unmaintained and unsound crates; an exception is an explicit, dated `ignore`.
+  The licence exceptions are Loro's three MPL-2.0 collection crates (`im`, `sized-chunks`, `bitmaps`; the edit history),
+  each named in `deny.toml` with its reason.
 
 ### Crate names
 
@@ -48,6 +50,7 @@ runtime/
 | `forseti` | the scheduler core: the job model, priority, admission, the memory cap and ladder, kill classes, expected times, placement and fairness; pure, `serde` only, shared by the hub, the runners and jobq ([forseti.md](forseti.md)) |
 | `sleipnir` | the runner: the Linux machine probe and runner contract, the reservation files two schedulers share, the executor; its `linux` and `sync` features are blocking, never tokio, so jobq takes them ([sleipnir.md](sleipnir.md)) |
 | `vegvisir` | the Work space's map core: its model (items in six layers, edges, chains, overlaps, needs-you) and its layout, stepped by typed events with effects out; pure, `serde` only ([work-space.md](work-space.md)) |
+| `verdandi` | the edit history: `history.db` (records, documents, branches) on urdr's store, a Loro document per tracked file and branch, the operation log and its settle rule, span revert on element ids; no hub or editor type ([history.md](history.md)) |
 | `skuld` | test support, never shipped: every order of a pure core, and the one real-time wait Rust tests may use ([below](#every-order-skuld)); crates name it under `[dev-dependencies]` only |
 | `heimdall` | the CDP broker's pure part: envelope parsing over `serde_json`'s `RawValue` (params never re-encoded), routing one browser connection between the agent and the hub by session owner, the refusal list, downloads, cleanup when the agent goes, and the pipe's NUL and frame codecs; no I/O, std and serde only, built for Android too ([hub.md](hub.md#the-cdp-broker)) |
 | `domr` (formerly `drgnx-conformance`; lives in `runtime/conformance/`) | the conformance harness (this page) |
