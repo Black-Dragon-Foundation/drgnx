@@ -12,6 +12,7 @@
 pub mod apply;
 pub mod docs;
 pub mod log;
+mod merge;
 pub mod revert;
 #[cfg(test)]
 mod revert_props;

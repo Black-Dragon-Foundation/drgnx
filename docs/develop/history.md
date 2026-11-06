@@ -122,6 +122,16 @@ elements with the same characters and is no hunk. `History::take(from, to, hunks
 source ids as provenance. A range that is not exactly one hunk is refused and nothing changes: a subset of a hunk is never
 imported.
 
+## Merges
+
+`History::record_merge(target, source, git_merged, author, at)` runs after git has merged. Each document of the source is
+imported into the target's (a Loro union), so every element keeps its id and an anchor on it stays true. `git_merged` is
+git's merged text by path: where the union equals it nothing more is written; where it differs (a conflict the user
+resolved, rebased or squashed work) one correction is written as new operations by `author`, one `merge` record for the
+whole merge. For the text a correction inserts, each line the source holds gets the source's element ids as the record's
+provenance (a rebase shares no ids with the original, so this is the only trace). `History::element_ids(doc, branch)`
+lists a text's element ids.
+
 ## The hub
 
 `drgnx-ratatoskr/src/history/` is the hub side: capture, the editor's methods and the watcher feed. One `Hub` per

@@ -207,6 +207,15 @@ impl History {
         blob.map_or(Ok(Vec::new()), |b| decode_spans(&b))
     }
 
+    /// The element id of each character of DOC on BRANCH, in order: (peer, counter).
+    pub fn element_ids(&mut self, doc: DocId, branch: BranchId) -> Result<Vec<(PeerId, u32)>> {
+        let t = self.live(doc, branch)?.get_text(TEXT);
+        Ok(char_ids(&t)
+            .into_iter()
+            .map(|id| (PeerId(id.peer), id.counter as u32))
+            .collect())
+    }
+
     /// Redo REVERT on BRANCH: a revert of the revert (keep mine), as PEER's operations at AT.
     pub fn redo(
         &mut self,
