@@ -837,8 +837,15 @@ mod tests {
     fn the_history_row_names_size_cap_and_what_pins_it() {
         let dir = tempfile::tempdir().unwrap();
         let state = dir.path().join("s");
+        let env = Env::new(
+            &[
+                ("XDG_STATE_HOME", &state.to_string_lossy()),
+                ("HOME", &dir.path().to_string_lossy()),
+            ],
+            1000,
+        );
         for (p, size) in [("p1", 1_900_000_000u64), ("p2", 5_000)] {
-            let d = state.join("hub/history").join(p);
+            let d = paths::state_dir(&env).join("hub/history").join(p);
             std::fs::create_dir_all(&d).unwrap();
             std::fs::write(
                 d.join("size-report.json"),
@@ -849,12 +856,17 @@ mod tests {
             )
             .unwrap();
         }
-        let env = Env::new(
-            &[
-                ("XDG_STATE_HOME", &state.to_string_lossy()),
-                ("HOME", &dir.path().to_string_lossy()),
-            ],
-            1000,
+        // the test writes only inside the drgnx state folder its environment names
+        let top: Vec<_> = std::fs::read_dir(&state)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .collect();
+        assert_eq!(
+            top,
+            [paths::state_dir(&env)],
+            "written outside {}",
+            paths::state_dir(&env).display()
         );
         let mut warnings = Vec::new();
         let rows = history_rows(&env, &mut warnings);
