@@ -483,7 +483,9 @@ jobs:
       - name: the agent browser's rows in a Fedora 45 VM (Landlock ABI 9)
         if: ${{ !cancelled() && steps.core-build.outcome == 'success' }}
         run: |
-          bin=$(cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --test browser_sandboxed --no-run --message-format=json | jq -r 'select(.executable != null) | .executable')
+          bin=$(cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --test browser_sandboxed --no-run --message-format=json | jq -r 'select(.reason == "compiler-artifact" and .executable != null and .target.name == "browser_sandboxed" and (.target.kind | index("test"))) | .executable')
+          # the build also reports the ratatoskr bin (the test depends on it): exactly one path must be the test binary
+          [ -n "$bin" ] && [ "$(printf '%s\n' "$bin" | wc -l)" = 1 ] || { echo "expected one browser_sandboxed test binary, got: ${bin:-none}" >&2; exit 1; }
           t=$PWD/runtime/target/debug
           bash .github/ci/browser-vm.sh up "$RUNNER_TEMP/vm"
           bash .github/ci/browser-vm.sh put "$RUNNER_TEMP/vm" /usr/bin/bwrap "$t/ratatoskr" "$t/gleipnir-probe" "$t/ratatoskr-mock" \
