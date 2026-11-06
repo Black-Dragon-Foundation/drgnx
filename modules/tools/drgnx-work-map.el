@@ -845,7 +845,9 @@ label face (`m' `b' `t' switch)."
 ;;;; Filters: the user's own layouts, which the hub makes at once
 
 (defun drgnx-work-map--send-filters ()
-  "Tell the hub the filters and collapsed layers: it answers with a full frame, laid out again."
+  "Tell the hub the filters and collapsed layers: it answers with a full frame, laid out again.  A layout the user
+asks for moves (`drgnx-work-map--motion-begin')."
+  (drgnx-work-map--motion-begin)
   (when drgnx-work-space--view
     (drgnx-work-client-set drgnx-work-space--view
                            :filters (list :focus (plist-get drgnx-work-map--filters :focus)
@@ -949,6 +951,217 @@ for the whole map."
       (drgnx-timer-start (cons 'work-new drgnx-work-space--view) 4 #'drgnx-work-map--clear-new
                          :args (list (current-buffer)) :owner (current-buffer)))))
 
+;;;; Motion: a layout the user asked for moves, in the compositor
+
+;; Glitnir's layout leg (Nidhogg): the window parameter `glitnir-layout-capture' asks the presenter for a picture of
+;; the window's text area, `glitnir-layout-captured-p' says it holds it, and `glitnir-layout-motion' says what moved
+;; from it.  Without the leg (a terminal, a flat GUI, macOS for now, reduced motion) the map jumps, and says nothing.
+(declare-function glitnir-active-p "glitnir")
+(declare-function glitnir-layout-captured-p "glitnir")
+(declare-function glitnir--reduced-motion-p "glitnir")
+(defvar drgnx-look-motion)
+
+(defvar drgnx-work-map-motion-duration 0.16
+  "Seconds a layout the user asked for takes to move: the look's longest transition.  A test binds it.")
+
+(defconst drgnx-work-map--motion-period (/ 1.0 60)
+  "One frame period: how long the new layout waits for the compositor to hold the old picture.")
+
+(defvar drgnx-work-map-motion-stats (list :legs 0 :skipped 0)
+  "This Emacs's map motion: :legs the layouts that moved, :skipped those whose old picture the compositor did not
+hold within one period (they jumped).")
+
+(defvar-local drgnx-work-map--motion nil
+  "The layout the user asked for, waiting for its frame: (OLD-STATE . WINDOWS), WINDOWS a list of (WINDOW OLD) for
+each window that asked for a capture.  OLD: an alist id → (X Y W H), the cards the window showed, in pixels of its
+text area.  Nil when nothing waits.")
+
+(defvar-local drgnx-work-map--motion-windows nil
+  "The windows this map set `glitnir-layout-capture' on: the leg's end and the teardown take their parameters off.")
+
+(defun drgnx-work-map--motion-p ()
+  "Whether a layout can move here: Glitnir draws the selected frame, it has the layout leg, and motion is not
+reduced (the desktop's setting through Glitnir, or `drgnx-look-motion')."
+  (and (display-graphic-p) (fboundp 'glitnir-layout-captured-p) (fboundp 'glitnir-active-p) (glitnir-active-p)
+       (not (eq (bound-and-true-p drgnx-look-motion) 'reduced))
+       (not (and (fboundp 'glitnir--reduced-motion-p) (glitnir--reduced-motion-p)))))
+
+(defun drgnx-work-map--drawn-rows (state window)
+  "Hash row key → (Y . H): where WINDOW draws STATE's rows, from the one it starts at down to its bottom, in pixels of
+its text area.  The display engine lays them out (`window-text-pixel-size', which needs no redisplay), so a row whose
+text is taller than the layout (an emoji, a larger fallback font) is where it is drawn.  Nil when WINDOW starts inside
+a row or scrolls sideways."
+  (let* ((start (window-start window)) (key (drgnx-view-key-at start)))
+    (when (and key (zerop (window-hscroll window)) (eql start (drgnx-view-row-start drgnx-view key)))
+      (let ((rest (member key (drgnx-work-map--layout-keys state))) (bottom (window-body-height window t))
+            (rows (make-hash-table :test #'equal)) (y 0))
+        (while (and rest (< y bottom))
+          (let* ((from (drgnx-view-row-start drgnx-view (car rest)))
+                 (to (or (and (cdr rest) (drgnx-view-row-start drgnx-view (cadr rest))) (point-max)))
+                 (h (if from (cdr (window-text-pixel-size window from to)) 0)))
+            (puthash (car rest) (cons y h) rows)
+            (setq y (+ y h) rest (cdr rest))))
+        rows))))
+
+(defun drgnx-work-map--checked-rows (state window)
+  "`drgnx-work-map--drawn-rows' of WINDOW, checked against `window-line-height' (WINDOW shows STATE now): (ROWS .
+LIMIT), LIMIT the y of the first row whose drawn top differs (cards there and below are left out), or nil.  Nil when
+WINDOW is not drawn yet or the rows cannot be told."
+  (when-let* ((rows (drgnx-work-map--drawn-rows state window)) (top (nth 2 (window-line-height 0 window))))
+    (let ((vpos 0) (prev nil) (limit nil) (done nil))
+      (save-excursion
+        (goto-char (window-start window))
+        (while (not (or done limit (eobp)))
+          (let ((line (window-line-height vpos window)) (key (drgnx-view-key-at (point))))
+            (if (or (null line) (not (gethash key rows)))
+                (setq done t)                   ; past the window's last line
+              (when (and key (not (equal key prev)))
+                (unless (eql (- (nth 2 line) top) (car (gethash key rows)))
+                  (setq limit (car (gethash key rows))))
+                (setq prev key))
+              (setq vpos (1+ vpos))
+              (forward-line 1)))))
+      (cons rows limit))))
+
+(defun drgnx-work-map--item-rects (state window rows limit)
+  "Alist id → (X Y W H): the cards of STATE that WINDOW shows, at least in part, in pixels of its text area.  X and W
+are the layout's; Y and H the drawn rows' (ROWS, `drgnx-work-map--drawn-rows').  Cards whose row's y is at or below
+LIMIT (nil: none) are left out."
+  (let ((height (window-body-height window t)) (margin (drgnx-work-map--margin-px))
+        (layout-rows (cdr (drgnx-work-map--index-of state))) out)
+    (dolist (id (drgnx-work-client-ids state))
+      (when-let* ((rect (drgnx-work-client-rect state id)) (key (car (drgnx-work-client-rows-of state id)))
+                  (drawn (gethash key rows)) ((or (null limit) (< (car drawn) limit))))
+        (let* ((row (gethash key layout-rows)) (units (max 1 (or (plist-get row :height_units) 1)))
+               (x (+ margin (drgnx-work-map--px (plist-get rect :x))))
+               (w (- (+ margin (drgnx-work-map--px (+ (plist-get rect :x) (plist-get rect :w)))) x))
+               ;; the card's share of its drawn row: the whole row, mostly
+               (y (+ (car drawn) (round (* (cdr drawn) (- (plist-get rect :y) (plist-get row :y))) units)))
+               (h (round (* (cdr drawn) (min (plist-get rect :h) units)) units)))
+          (when (and (> (+ y h) 0) (< y height))
+            (push (list id x y w h) out)))))
+    out))
+
+(defun drgnx-work-map--motion-begin ()
+  "A layout the user asked for is on its way (its frame comes from the hub): each window showing the map asks the
+compositor for the picture of the layout it shows now, and remembers where its cards are.  Nothing when the map
+cannot move here (`drgnx-work-map--motion-p'): the new layout then jumps."
+  (let ((state (drgnx-work-map--state)))
+    (when (and state drgnx-work-space--view (drgnx-view-p drgnx-view) (not (drgnx-work-map--outline-p state))
+               (drgnx-work-map--motion-p))
+      (let ((windows nil))
+        (dolist (w (get-buffer-window-list (current-buffer) nil t))
+          (when-let* ((rows (drgnx-work-map--checked-rows state w)))
+            ;; a new value, not `eq' to the last: the compositor takes a new picture
+            (set-window-parameter w 'glitnir-layout-capture (list 'work-map))
+            (cl-pushnew w drgnx-work-map--motion-windows)
+            (push (list w (drgnx-work-map--item-rects state w (car rows) (cdr rows))) windows)))
+        (when windows
+          (drgnx-timer-cancel (cons 'work-motion-end drgnx-work-space--view))
+          (setq drgnx-work-map--motion (cons state windows))
+          ;; a frame that never comes (no hub, nothing changed) leaves no capture behind
+          (drgnx-timer-start (cons 'work-motion-expire drgnx-work-space--view) 1 #'drgnx-work-map--motion-expire
+                             :args (list (current-buffer)) :owner (current-buffer)))))))
+
+(defun drgnx-work-map--motion-frame ()
+  "The frame of the layout the user asked for came: it is drawn now when every window's old picture is held, else
+one period later (`drgnx-work-map--motion-settle'), moving where it is held."
+  (drgnx-timer-cancel (cons 'work-motion-expire drgnx-work-space--view))
+  (unless (drgnx-work-map--motion-try (current-buffer))
+    (drgnx-timer-poll (cons 'work-motion drgnx-work-space--view) drgnx-work-map--motion-period
+                      #'drgnx-work-map--motion-try :deadline drgnx-work-map--motion-period
+                      :on-timeout #'drgnx-work-map--motion-settle :args (list (current-buffer))
+                      :owner (current-buffer))))
+
+(defun drgnx-work-map--motion-try (buffer)
+  "Draw BUFFER's new layout if every window's old picture is held; non-nil when it is drawn (or nothing waits)."
+  (or (not (buffer-live-p buffer))
+      (with-current-buffer buffer
+        (or (null drgnx-work-map--motion)
+            (when (seq-every-p (lambda (w) (or (not (window-live-p (car w))) (glitnir-layout-captured-p (car w))))
+                               (cdr drgnx-work-map--motion))
+              (drgnx-work-map--motion-draw)
+              t)))))
+
+(defun drgnx-work-map--motion-settle (buffer)
+  "One period passed: BUFFER's new layout is drawn, moving in the windows whose old picture is held."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when drgnx-work-map--motion (drgnx-work-map--motion-draw)))))
+
+(defun drgnx-work-map--motion-of (old-state state window old)
+  "The `glitnir-layout-motion' of WINDOW from OLD-STATE, its cards at OLD (an alist as `drgnx-work-map--item-rects'),
+to STATE, which the buffer holds now and WINDOW has not shown yet; nil when nothing it shows moved."
+  (when-let* ((rows (drgnx-work-map--drawn-rows state window)))
+    (let ((new (drgnx-work-map--item-rects state window rows nil)) moves enters exits)
+      (dolist (n new)
+        (let ((o (assoc (car n) old)))
+          (cond ((and o (not (equal (cdr o) (cdr n)))) (push (list (car n) (cdr o) (cdr n)) moves))
+                ((and (null o) (null (drgnx-work-client-item old-state (car n)))) (push (list (car n) (cdr n)) enters)))))
+      (dolist (o old)
+        (unless (drgnx-work-client-item state (car o)) (push (list (car o) (cdr o)) exits)))
+      (when (or moves enters exits)
+        (list :moves moves :enters enters :exits exits :background 'default
+              :duration drgnx-work-map-motion-duration :curve 'ease-out)))))
+
+(defun drgnx-work-map--motion-draw ()
+  "Draw the new layout and, before the redisplay that shows it, tell the compositor what moved: a window whose old
+picture is held gets `glitnir-layout-motion'; one whose picture is not held drops its capture and jumps (a skipped
+leg, counted in `drgnx-work-map-motion-stats')."
+  (let ((old-state (car drgnx-work-map--motion)) (windows (cdr drgnx-work-map--motion)) (moved nil))
+    (setq drgnx-work-map--motion nil)
+    (drgnx-timer-cancel (cons 'work-motion drgnx-work-space--view))
+    (drgnx-view-touch drgnx-view)
+    (drgnx-view-draw-now drgnx-view)
+    (let* ((state (drgnx-work-map--state)) (layout (and state (not (drgnx-work-map--outline-p state)))))
+      (pcase-dolist (`(,w ,old) windows)
+        (when (window-live-p w)
+          (let* ((held (glitnir-layout-captured-p w))
+                 (motion (and held layout (eq (window-buffer w) (current-buffer))
+                              (drgnx-work-map--motion-of old-state state w old))))
+            (if motion
+                (progn (set-window-parameter w 'glitnir-layout-motion motion)
+                       (setq moved t)
+                       (cl-incf (plist-get drgnx-work-map-motion-stats :legs)))
+              (unless held (cl-incf (plist-get drgnx-work-map-motion-stats :skipped)))
+              (set-window-parameter w 'glitnir-layout-capture nil)
+              (set-window-parameter w 'glitnir-layout-motion nil))))))
+    (when moved
+      ;; the leg is over by then: its parameters go, so the window is an ordinary one again
+      (drgnx-timer-start (cons 'work-motion-end drgnx-work-space--view) (+ drgnx-work-map-motion-duration 0.1)
+                         #'drgnx-work-map--motion-end :args (list (current-buffer)) :owner (current-buffer)))))
+
+(defun drgnx-work-map--motion-off ()
+  "Take the capture and the motion off every window this map set them on (a jump for a leg still running)."
+  (dolist (w drgnx-work-map--motion-windows)
+    (when (window-live-p w)
+      (set-window-parameter w 'glitnir-layout-capture nil)
+      (set-window-parameter w 'glitnir-layout-motion nil)))
+  (setq drgnx-work-map--motion-windows nil))
+
+(defun drgnx-work-map--motion-end (buffer)
+  "The timer function at a leg's end: BUFFER's windows lose their capture and motion, unless a new layout waits."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (unless drgnx-work-map--motion (drgnx-work-map--motion-off)))))
+
+(defun drgnx-work-map--motion-expire (buffer)
+  "The timer function a second after a layout was asked for and its frame did not come: the captures go."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq drgnx-work-map--motion nil)
+      (drgnx-work-map--motion-off))))
+
+(defun drgnx-work-map-motion-clear (&optional buffer)
+  "Stop BUFFER's (default: the current) map motion: nothing waits, its timers stop and its windows lose the capture
+and the motion.  The module's teardown and a map buffer's end call it."
+  (with-current-buffer (or buffer (current-buffer))
+    (when drgnx-work-space--view
+      (dolist (k '(work-motion work-motion-expire work-motion-end))
+        (drgnx-timer-cancel (cons k drgnx-work-space--view))))
+    (setq drgnx-work-map--motion nil)
+    (drgnx-work-map--motion-off)))
+
 ;;;; Marks from the client
 
 (defun drgnx-work-map--changed (view-id marks)
@@ -960,7 +1173,10 @@ for the whole map."
       (when (drgnx-view-p drgnx-view)
         (if (or (eq (plist-get marks :rows) t) (plist-get marks :keys) (plist-get marks :layout)
                 (drgnx-work-map--outline-p (drgnx-work-map--state)))
-            (drgnx-view-touch drgnx-view)
+            ;; the layout the user asked for moves; any other change, live ones included, never does
+            (if (and drgnx-work-map--motion (plist-get marks :layout))
+                (drgnx-work-map--motion-frame)
+              (drgnx-view-touch drgnx-view))
           (when (plist-get marks :rows) (drgnx-view-dirty drgnx-view (plist-get marks :rows)))))
       ;; the selected item went (its agent finished, its branch merged): the selection moves to what it came from,
       ;; the panel says it finished, and nothing signals
