@@ -281,14 +281,16 @@ modus's grey, would stripe the gap).  Non-nil when a face changed."
   (add-hook 'enable-theme-functions #'drgnx-look--islands-refresh 90)
   (add-hook 'disable-theme-functions #'drgnx-look--islands-refresh 90)
   (add-hook 'after-make-frame-functions #'drgnx-look--islands-new-frame)
-  (add-hook 'drgnx-look-density-changed-hook #'drgnx-look--islands-refresh))
+  (add-hook 'drgnx-look-density-changed-hook #'drgnx-look--islands-refresh)
+  (add-hook 'drgnx-look-density-changed-hook #'drgnx-look--edge-follow))
 
 (defun drgnx-look--islands-off ()
   "Undo `drgnx-look--islands-on'."
   (remove-hook 'enable-theme-functions #'drgnx-look--islands-refresh)
   (remove-hook 'disable-theme-functions #'drgnx-look--islands-refresh)
   (remove-hook 'after-make-frame-functions #'drgnx-look--islands-new-frame)
-  (remove-hook 'drgnx-look-density-changed-hook #'drgnx-look--islands-refresh))
+  (remove-hook 'drgnx-look-density-changed-hook #'drgnx-look--islands-refresh)
+  (remove-hook 'drgnx-look-density-changed-hook #'drgnx-look--edge-follow))
 
 (defun drgnx-look--cards-selected-changed (data)
   "The store's `selected-changed' (now lane): the focused tile's ring is the accent, the others' the variant's."
@@ -300,15 +302,30 @@ modus's grey, would stripe the gap).  Non-nil when a face changed."
   "While ui/look is on under Glitnir: `default-frame-alist's `internal-border-width' before the setup put the cards'
 edge there, the edge a frame made since would have had without the module.")
 
+(defvar drgnx-look--edge-door nil
+  "While ui/look runs under Glitnir: `drgnx-look--edge-put' run as the module, so the edge a density change puts in
+`default-frame-alist' is undone with the module too.  nil otherwise.")
+
+(defun drgnx-look--edge-put ()
+  "`default-frame-alist's edge: the density's gap at scale 1."
+  (drgnx-module-alist-put 'default-frame-alist 'internal-border-width (drgnx-look-density-value 'gap)))
+
 (defun drgnx-look--edge-at-birth ()
-  "Under Glitnir, in the setup: windows are made with the cards' edge (`internal-border-width', the density's gap at scale 1)
-from `default-frame-alist', and marked `drgnx-look-edge-born'.  A window is then born at its size: the edge set on a
-shown window made it ask the window manager for a bigger size, and the answer to the size it was made with could
-come after that and put it back, squeezing what was laid out in between (a daemon's restored split, 8 px short)."
+  "Under Glitnir, in the setup: windows are made with the cards' edge (`internal-border-width', the density's gap at
+scale 1) from `default-frame-alist', and marked `drgnx-look-edge-born'.  A window is then born at its size: the edge
+set on a shown window made it ask the window manager for a bigger size, and the answer to the size it was made with
+could come after that and put it back, squeezing what was laid out in between (a daemon's restored split, 8 px short).
+A density change puts its gap there too (`drgnx-look--edge-follow')."
   (when (and (featurep 'glitnir) (bound-and-true-p glitnir-enable))
     (setq drgnx-look--edge-before (alist-get 'internal-border-width default-frame-alist))
-    (drgnx-module-alist-put 'default-frame-alist 'internal-border-width (drgnx-look-density-value 'gap))
-    (drgnx-module-alist-put 'default-frame-alist 'drgnx-look-edge-born t)))
+    (drgnx-look--edge-put)
+    (drgnx-module-alist-put 'default-frame-alist 'drgnx-look-edge-born t)
+    (setq drgnx-look--edge-door (drgnx-modules-with-owner (drgnx-look--edge-put)))
+    (drgnx-modules-push-undo "edge door" (lambda () (setq drgnx-look--edge-door nil)))))
+
+(defun drgnx-look--edge-follow ()
+  "`drgnx-look-density-changed-hook': a window made from now on is born with the new gap, as the shown ones get it."
+  (when drgnx-look--edge-door (funcall drgnx-look--edge-door)))
 
 (defun drgnx-look--edge-without (frame)
   "The `internal-border-width' FRAME would have without the cards: the module's default's for a window born with it."
