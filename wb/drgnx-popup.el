@@ -184,6 +184,9 @@ one; mark it as the lane.  Under `drgnx-popup-style' `float', one child frame in
     (cond
      ((plist-get saved :float)             ; hidden, never deleted while the root lives: the next popup reuses it
       (set-window-dedicated-p lane nil)
+      ;; a popup that selected its window (the calendar) leaves the root's window selected, not a hidden frame
+      (when-let* (((eq (selected-frame) (window-frame lane))) (root (frame-parent (window-frame lane))))
+        (select-window (frame-selected-window root)))
       (make-frame-invisible (window-frame lane) t))
      ((not (plist-get saved :borrowed))
       (delete-window lane))

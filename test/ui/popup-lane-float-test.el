@@ -150,6 +150,19 @@ at most 0.9 of the frame wide and 0.33 high, and not the selected frame."
         (should (eq child (drgnx-popup-float-ui-test--child root)))
         (when (buffer-live-p b) (kill-buffer b))))))
 
+(ert-deftest drgnx-ui-popup-lane-float/an-ended-lane-gives-the-selection-back ()
+  "A popup that selects its window (the calendar: `pop-to-buffer') selects the lane's frame; when the lane ends the
+root's window is selected again, not a hidden frame.  Pattern D (pure)."
+  (drgnx-popup-float-ui-test--with
+    (let* ((editor (selected-window))
+           (w (progn (pop-to-buffer (drgnx-popup-float-ui-test--buffer "*Calendar*")) (selected-window)))
+           (child (window-frame w)))
+      (should (eq (selected-frame) child))
+      (delete-window w)
+      (should-not (frame-visible-p child))
+      (should (eq (selected-frame) root))
+      (should (eq (selected-window) editor)))))
+
 (ert-deftest drgnx-ui-popup-lane-float/frame-reused ()
   "Two popups in a row, and one after the lane ended, use the same child frame; it is the root's only lane frame."
   (drgnx-popup-float-ui-test--with
