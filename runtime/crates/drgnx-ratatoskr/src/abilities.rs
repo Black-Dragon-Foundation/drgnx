@@ -255,9 +255,14 @@ impl AbilityTool {
         gate(&front, ctx, &self.name, &args).await?;
         // the hub's one host, and the plugin as loaded for its approved hash
         let plugins = &front.core.plugins;
-        let (loaded, failed) = crate::hook_points::load(plugins, std::slice::from_ref(&self.plugin));
+        let (loaded, failed) =
+            crate::hook_points::load(plugins, std::slice::from_ref(&self.plugin));
         let Some(loaded) = loaded.into_iter().next() else {
-            return Err(failed.into_iter().next().map(|(_, why)| why).unwrap_or_default());
+            return Err(failed
+                .into_iter()
+                .next()
+                .map(|(_, why)| why)
+                .unwrap_or_default());
         };
         let host = plugins.host()?;
         let io = crate::plugins::host_io(
