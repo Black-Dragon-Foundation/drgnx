@@ -106,7 +106,143 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: true,
             doc: "the editor stops tracking a buffer",
         ),
+        method!(
+            "history/revert/preview", HistoryRevertPreview(RevertPreviewParams) -> RevertCard,
+            classes: [User], writes: false,
+            doc: "what reverting an agent's work to a step would do: the files, the user's later edits it meets, what it cannot undo, and whether it is blocked",
+        ),
+        method!(
+            "history/revert/apply", HistoryRevertApply(RevertApplyParams) -> Applied,
+            classes: [User], writes: true,
+            doc: "apply a revert preview: the files, the steps and conclusions after it, the conversation and one forward commit, as one record; the user's later edits are kept or merged",
+        ),
     ]
+}
+
+/// The step a revert goes back to: SESSION's step SEQ, or the step DECISION was recorded in.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RevertPreviewParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seq: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<i64>,
+}
+
+/// Whether the conversation goes back with the code.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+pub enum ConversationRestore {
+    Restored,
+    /// Why not, as the card says it (`conversation not restored: the agent has finished`).
+    NotRestored {
+        label: String,
+    },
+}
+
+/// A file the user changed after the agent's last step in a way that cannot be merged: what the user has there now and
+/// what the revert would write (none: a file that is not text, or not there).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RevertOverlap {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub users: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reverted: Option<String>,
+}
+
+/// A path a revert leaves as it is, and why (`protected`, `gitlink`, `edited-later`, or what the write said).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RevertSkipped {
+    pub path: String,
+    pub reason: String,
+}
+
+/// `history/revert/preview`: the revert card.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RevertCard {
+    pub preview_id: i64,
+    pub session: String,
+    pub seq: i64,
+    /// Every path the revert writes or removes.
+    pub files: Vec<String>,
+    /// The user's later edits the revert meets, one choice each on apply (in this order).
+    pub overlaps: Vec<RevertOverlap>,
+    /// Files the user edited later where the revert merges with the user's edit.
+    pub non_overlapping_files: Vec<String>,
+    pub effects: RevertEffects,
+    pub level: RestoreLevel,
+    /// The conversation is restored by a summary, which goes with a message of the user's.
+    pub needs_message: bool,
+    /// Non-empty: refused, offered as a fork.
+    pub blocked: Vec<Blocked>,
+    pub skipped: Vec<RevertSkipped>,
+    pub conversation: ConversationRestore,
+    /// A fork from the step is offered beside the revert (a finished worker, a blocked revert).
+    pub fork: bool,
+}
+
+/// How the user's own later edits are treated.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum RevertMode {
+    /// Only the agent's changes go; the user's later edits stay (merged where they meet).
+    KeepMine,
+    /// Every file goes back to the step; the user's later versions are kept under `undone`.
+    RollBackMine,
+}
+
+/// The user's answer to one overlap.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "choice", rename_all = "kebab-case")]
+pub enum RevertChoice {
+    /// The user's file stays (the default).
+    KeepUsers,
+    /// The reverted file; the user's version is kept under `undone`.
+    TakeReverted,
+    /// This text in its place.
+    Edited { text: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RevertApplyParams {
+    pub preview_id: i64,
+    /// `keep-mine` (the default) or `roll-back-mine`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<RevertMode>,
+    /// One per overlap, in the card's order; a missing one keeps the user's.
+    #[serde(default)]
+    pub choices: Vec<RevertChoice>,
+    /// What the restored conversation is told first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// `history/revert/apply`.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Applied {
+    /// The revert's record in the edit history.
+    pub op: i64,
+    pub session: String,
+    /// The level the conversation landed at (none: not restored).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level: Option<RestoreLevel>,
+    /// The forward commit, when the head had moved since the step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
+    pub skipped: Vec<RevertSkipped>,
+    pub conversation: ConversationRestore,
+    /// Runners' patches that returned during the revert: kept on their jobs, never applied.
+    pub kept_patches: Vec<String>,
+    /// Where the files' versions before the revert are kept (a ref of the hub's shadow repository).
+    pub undone: String,
 }
 
 /// How much of an agent's conversation a rewind or a fork restores: up to the step's message (Claude), up to the

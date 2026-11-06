@@ -158,6 +158,8 @@ pub async fn serve(
         Params::HistoryBatch(p) => answer(crate::history::wire::batch(f, c, p).await),
         Params::HistoryResync(p) => answer(crate::history::wire::resync(f, c, p).await),
         Params::HistoryUnregister(p) => answer(crate::history::wire::unregister(f, c, p).await),
+        Params::HistoryRevertPreview(p) => answer(crate::history::revert::preview(f, c, p).await),
+        Params::HistoryRevertApply(p) => answer(crate::history::revert::apply(f, c, p).await),
         Params::RunnersUnbench(p) => answer(runners::methods::unbench(f, c, p).await),
         Params::RunnersRemove(p) => answer(runners::methods::remove(f, c, p).await),
         Params::RunnersKeys(p) => answer(runners::methods::keys(f, c, p).await),

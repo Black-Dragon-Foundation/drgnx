@@ -6,10 +6,6 @@
 //!
 //! Git runs only in a trusted store or an untouched repository ([`crate::runner::effects::store_of`]), off the async
 //! threads.
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by the revert's preview")
-)]
 
 use crate::agents::rewind::Target;
 use crate::front::Front;

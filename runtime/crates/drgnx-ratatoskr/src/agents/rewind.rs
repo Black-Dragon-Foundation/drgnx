@@ -234,7 +234,7 @@ fn needs_message() -> Error {
 
 /// The level PROVIDER's agent would restore: from CAPS when its agent is running, else as if it can fork (a fork it
 /// cannot do lands at Summary at the launch, which says so).
-fn planned_level(provider: Option<Provider>, caps: Option<&Value>) -> RestoreLevel {
+pub(crate) fn planned_level(provider: Option<Provider>, caps: Option<&Value>) -> RestoreLevel {
     let assumed = serde_json::json!({"sessionCapabilities": {"fork": {}}});
     expected_level(provider, Some(caps.unwrap_or(&assumed)))
 }

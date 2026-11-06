@@ -3802,8 +3802,9 @@ impl Session {
         self.perform(fx);
     }
 
-    /// Its new conversation is live (a rewind's): TOLD first, then the queue as the swap kept it.
-    fn reattach(self: &Arc<Self>, told: Option<String>) {
+    /// Its new conversation is live (a rewind's): TOLD first, then the queue as the swap kept it.  Also a revert's
+    /// that stopped before anything changed: the same conversation goes on.
+    pub(crate) fn reattach(self: &Arc<Self>, told: Option<String>) {
         let fx = lock(&self.state).turn_step(TurnEvent::Reattach { told });
         self.perform(fx);
     }

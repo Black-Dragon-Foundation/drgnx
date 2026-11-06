@@ -98,6 +98,19 @@ pub fn blob(root: &Path, worktree: &Path, tree: &str, path: &str) -> Result<Vec<
     )
 }
 
+/// PATH's blob id in TREE of WORKTREE's shadow repository; none when TREE has no such file.
+pub fn blob_id(root: &Path, worktree: &Path, tree: &str, path: &str) -> Option<String> {
+    let repo = repo_of(root, worktree);
+    git(
+        &repo,
+        None,
+        None,
+        &["rev-parse", "--verify", "-q", &format!("{tree}:{path}")],
+    )
+    .ok()
+    .filter(|s| !s.is_empty())
+}
+
 /// The unified diff of PATH between FROM_TREE and TO_TREE of WORKTREE's shadow repository.
 pub fn patch(
     root: &Path,
@@ -442,6 +455,37 @@ fn make_parents(dir: std::os::fd::BorrowedFd<'_>, rel: &Path) -> Result<(), eitr
     Ok(())
 }
 
+/// What TARGET holds now, written as a tree into SOURCE's shadow repository under ROOT (an index of TARGET's own; git
+/// runs in the shadow repository only, with TARGET as its work tree), less the secret files and EXTRA.
+pub fn tree_now(
+    root: &Path,
+    source: &Path,
+    target: &Path,
+    extra: &[String],
+) -> Result<String, String> {
+    let key = repo_of(Path::new(""), target)
+        .to_string_lossy()
+        .trim_end_matches(".git")
+        .to_string();
+    write_tree_in(
+        &repo_of(root, source),
+        target,
+        &format!("restore-{key}"),
+        extra,
+    )
+}
+
+/// TREE kept as the ref NAME (`refs/drgnx/…`) of WORKTREE's shadow repository under ROOT, so it is never pruned.
+pub fn keep(root: &Path, worktree: &Path, name: &str, tree: &str) -> Result<(), String> {
+    git(
+        &repo_of(root, worktree),
+        None,
+        None,
+        &["update-ref", name, tree],
+    )
+    .map(drop)
+}
+
 /// TARGET made equal to tree TO of SOURCE's shadow repository under ROOT (ONLY: just those paths), by mode: a regular
 /// file through `eitri::write_regular` with its mode, a link (`120000`) through `eitri::symlink_beneath` with its
 /// target as bytes, a path TO lacks through `eitri::remove_beneath`; a gitlink (`160000`) is skipped and listed, and so
@@ -458,11 +502,7 @@ pub fn restore_into(
 ) -> Result<Restored, String> {
     use std::os::fd::AsFd;
     let repo = repo_of(root, source);
-    let key = repo_of(Path::new(""), target)
-        .to_string_lossy()
-        .trim_end_matches(".git")
-        .to_string();
-    let now = write_tree_in(&repo, target, &format!("restore-{key}"), extra)?;
+    let now = tree_now(root, source, target, extra)?;
     let changes = changed(root, source, &now, to)?;
     let dir = rustix::fs::open(
         target,

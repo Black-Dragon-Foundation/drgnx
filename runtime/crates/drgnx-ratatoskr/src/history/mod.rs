@@ -8,11 +8,13 @@
 //! - [`methods`]: `register`, `batch`, `resync`, `unregister` on the hub, for the editor's buffers.
 //! - [`watch`]: Hrafn's watcher events into the hub.
 //! - [`tree`]: what may be written into an agent's tree, a commit there inside its sandbox, and a fork's tree.
+//! - [`revert`]: revert to here, the `history/revert/*` methods over the pure order in `revert_core`.
 
 pub mod blob;
 mod capture;
 pub mod methods;
 pub mod origin;
+pub mod revert;
 pub(crate) mod revert_core;
 mod timers;
 pub mod tree;

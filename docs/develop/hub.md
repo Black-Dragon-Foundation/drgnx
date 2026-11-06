@@ -968,6 +968,29 @@ else (Gemini, an agent without the capability) `summary`.
 
 A revert takes an agent's work back to one of its steps: the files, the decisions and the conversation as one record.
 
+- **The methods** (`history::revert`, user only). `history/revert/preview {session, seq} | {decision}` answers the
+  card: the files, the overlaps, the files merged with the user's later edits (`non_overlapping_files`), what the
+  revert cannot undo, the level, `needs_message`, `blocked`, the paths left out, the conversation (`restored`, or
+  `not-restored` with a label: a finished worker's is "conversation not restored: the agent has finished") and
+  `fork` (offered beside Apply for a finished worker or a blocked revert). The preview is kept in memory until it is
+  applied once. `history/revert/apply {preview_id, mode, choices, message}` answers `Applied {op, session, level,
+  commit, skipped, conversation, kept_patches, undone}` and broadcasts `history/applied {op, paths, worktree}`.
+  Refusals start with their reason: `stale` (the files or the session moved since the preview, or no such
+  preview), `blocked`, `needs-message`, `not-revertible` (no checkpoint: older than the history; an agent's call),
+  `busy` (a revert of the tree runs).
+- **The user's work is never lost.** Each path the checkpoint and the files now differ in is the agent's alone when
+  it equals the agent's newest checkpoint (restored from the step's checkpoint), else the user's: a text file whose
+  edits do not meet the agent's is merged (`verdandi::merge3`: base the agent's last version, ours the user's,
+  theirs the step's) and the user's edit stays; where they meet it is an overlap, and its choice decides: keep the
+  user's (the default, also for a missing choice; listed `edited-later`), take the reverted file, or an edited text.
+  `roll-back-mine` writes every path back. Either way the files as they were are kept as a tree under
+  `refs/drgnx/undone/<op>` of the shadow repository (`Applied.undone`).
+- **The record** is one `revert` record in the project's `history.db`, its parents the records the session caused
+  after the step (`History::caused_by`), or one `agent_step` record standing for those steps when the history has
+  none; the pending record (`History::mark_pending`) holds the plan and the answers until the last step clears it.
+  At start-up `agents::Hub::resume_all` first calls `history::revert::finish_pending`, which finishes every pending
+  revert from the files on.
+
 - **What it cannot undo** (`timeline::effects::of(front, target)` → `RevertEffects`, labelled `computed`), each from a
   hub record after the step began, listed first on the card: the session's commits a remote already has (remote
   tracking refs that contain them, read in the trusted store), messages it sent that their recipient has `read` or
@@ -1210,6 +1233,8 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `history/batch` | user | `{buffer_id: string, changes: [{inserted: string, old_len: natnum, origin?: string, start: natnum}], region_hash: string}` | `{ok?: boolean, resync?: boolean}` | yes |
 | `history/register` | user | `{buffer_id: string, path: string, worktree_root: string}` | `{doc: integer, reason?: string, tracked: boolean}` | yes |
 | `history/resync` | user | `{buffer_id: string, text: string}` | `{ok: boolean}` | yes |
+| `history/revert/apply` | user | `{choices?: [{choice: "keep-users"} \| {choice: "take-reverted"} \| {choice: "edited", text: string}], message?: string, mode?: "keep-mine" \| "roll-back-mine", preview_id: integer}` | `Applied` | yes |
+| `history/revert/preview` | user | `{decision?: integer, seq?: integer, session?: string}` | `RevertCard` | no |
 | `history/unregister` | user | `{buffer_id: string}` | `{ok: boolean}` | yes |
 | `job/approve` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes |
 | `job/block` | user | `{reason?: Text, task: TaskRef}` | `JobSummary` | yes |

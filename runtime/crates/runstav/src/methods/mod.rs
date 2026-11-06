@@ -262,6 +262,8 @@ params! {
     HistoryBatch(history::BatchParams),
     HistoryResync(history::ResyncParams),
     HistoryUnregister(history::UnregisterParams),
+    HistoryRevertPreview(history::RevertPreviewParams),
+    HistoryRevertApply(history::RevertApplyParams),
     RunnersUnbench(runners::ByName),
     RunnersRemove(runners::RemoveParams),
     RunnersKeys(runners::KeysParams),

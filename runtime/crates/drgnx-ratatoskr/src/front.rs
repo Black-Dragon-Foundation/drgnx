@@ -678,6 +678,8 @@ impl Front {
             | Params::HistoryBatch(_)
             | Params::HistoryResync(_)
             | Params::HistoryUnregister(_)
+            | Params::HistoryRevertPreview(_)
+            | Params::HistoryRevertApply(_)
             | Params::RunnersUnbench(_)
             | Params::RunnersRemove(_)
             | Params::RunnersKeys(_)

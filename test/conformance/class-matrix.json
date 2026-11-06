@@ -77,6 +77,8 @@
   "history/batch": ["user"],
   "history/register": ["user"],
   "history/resync": ["user"],
+  "history/revert/apply": ["user"],
+  "history/revert/preview": ["user"],
   "history/unregister": ["user"],
   "job/approve": ["user"],
   "job/block": ["user"],

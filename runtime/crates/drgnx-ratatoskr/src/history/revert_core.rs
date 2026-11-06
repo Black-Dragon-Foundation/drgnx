@@ -4,9 +4,9 @@
 //! returned patch, the watcher's event about the restore's own write, and a crash at any step.
 #![cfg_attr(
     not(test),
-    expect(
+    allow(
         dead_code,
-        reason = "the revert's shell drives it with the revert methods"
+        reason = "the racing events are the tests' to feed; the shell feeds its own steps"
     )
 )]
 

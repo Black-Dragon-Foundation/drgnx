@@ -19,6 +19,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 pub struct Hubs {
     open: Mutex<HashMap<String, Arc<Hub>>>,
     buffers: Mutex<HashMap<String, Arc<Hub>>>,
+    /// The revert previews not applied yet, and the worktrees a revert runs in.
+    pub(crate) reverts: super::revert::Reverts,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -78,6 +80,38 @@ impl Hubs {
         hub.start_timers();
         open.insert(key.to_owned(), hub.clone());
         Ok(hub)
+    }
+
+    /// The history of the project worktree ROOT belongs to, and the tree (its git directory read with no link
+    /// followed; nothing here runs git in it).  Every history the state folder STATE holds, for the start-up's pending
+    /// reverts: [`Hubs::all`].
+    pub(crate) fn of_tree(&self, state: &Path, root: &Path) -> Result<(Arc<Hub>, Tree), Error> {
+        let (git_dir, common) = git_dirs(root)
+            .ok_or_else(|| invalid(format!("{} is not a git worktree", root.display())))?;
+        let hub = self.hub_for(&state.join("history"), &key_of(&common))?;
+        let tree = Tree::new(
+            root,
+            &git_dir,
+            crate::timeline::snapshot::head_of(root).as_deref(),
+        );
+        Ok((hub, tree))
+    }
+
+    /// Every project history under STATE (`<state>/history/<project>/`), opened.
+    pub(crate) fn all(&self, state: &Path) -> Vec<Arc<Hub>> {
+        let dir = state.join("history");
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            return Vec::new();
+        };
+        let mut keys: Vec<String> = rd
+            .flatten()
+            .filter(|e| e.path().join("history.db").exists())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        keys.sort();
+        keys.iter()
+            .filter_map(|k| self.hub_for(&dir, k).ok())
+            .collect()
     }
 
     fn of_buffer(&self, id: &str) -> Result<Arc<Hub>, Error> {

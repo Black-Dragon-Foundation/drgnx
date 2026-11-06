@@ -369,7 +369,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 155, "{names:?}");
+        assert_eq!(names.len(), 157, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -409,6 +409,8 @@ mod tests {
             "history/resync",
             "history/unregister",
         ]);
+        // a revert to here: the files, the steps, the conversation and a commit
+        want.push("history/revert/apply");
         want.extend(
             registry()
                 .iter()
@@ -660,7 +662,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 111);
+        assert_eq!(with, 112);
     }
 
     #[test]
