@@ -1467,7 +1467,9 @@ Who is in which file, at which line, now (`work::presence`; agent system part 2 
 and badges build on it). This is its contract.
 
 - **An entry** is one session's latest `{session, file, mode, line?, source, step, at}` in one file
-  (`runstav::methods::work::PresenceEntry`). `file` is an absolute path (links followed when the file exists); `mode`
+  (`runstav::methods::work::PresenceEntry`). `file` is an absolute path, its links followed: a file that does not exist
+  (not made yet, or removed) under the true name of its nearest folder that does, as a workspace root is (on macOS a
+  root asked as `/tmp/…` and a missing file under it are both `/private/tmp/…`); `mode`
   is `read`, `edit`, `listed` (a listing, a recursive search) or `write` (a shell command's); `line` is the last line
   known, or absent ("file only"); `source` is `acp` (a read or search step's fields), `edit` (an edit step), `command`
   (a file a shell step's command names, from `work::shell_read`, only inside the session's folder) or `opened` (a file

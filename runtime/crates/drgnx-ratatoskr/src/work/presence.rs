@@ -232,7 +232,9 @@ pub fn touches_of_detail(d: &norn::write::work::StepDetail, dir: &Path) -> Vec<T
     }]
 }
 
-/// P in DIR as the model keys it: absolute, its links followed when it exists, else lexically clean.
+/// P in DIR as the model keys it: absolute, its links followed when it exists; else lexically clean, under the true name
+/// of its nearest folder that exists, so a file not made yet is named as its folder is (macOS's `/tmp/…` is
+/// `/private/tmp/…`).
 pub fn place(dir: &Path, p: &str) -> RepoPath {
     let joined = dir.join(p);
     if let Ok(c) = std::fs::canonicalize(&joined) {
@@ -247,6 +249,16 @@ pub fn place(dir: &Path, p: &str) -> RepoPath {
             Component::CurDir => {}
             other => out.push(other),
         }
+    }
+    let mut rest = Vec::new();
+    let mut at = out.as_path();
+    while let Some(parent) = at.parent() {
+        rest.extend(at.file_name());
+        if let Ok(mut c) = std::fs::canonicalize(parent) {
+            c.extend(rest.iter().rev());
+            return c.to_string_lossy().into_owned();
+        }
+        at = parent;
     }
     out.to_string_lossy().into_owned()
 }
