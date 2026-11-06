@@ -397,14 +397,15 @@ With LAYOUT (the bar's `drgnx-statusbar--layout-key') the widths are kept (`drgn
 
 (defun drgnx-statusbar--layout-key (window)
   "An integer that changes when the sizes the bar is measured at change: the frame's character size (a scale change
-and a change of the default face's height move it), the buffer's text scale, the font role generation and the row's
-height (the density's, at the frame's scale).  Allocates nothing (a memo key)."
+and a change of the default face's height move it), the buffer's text scale, the font role generation and the
+density's row height (logical: the scale is in the character size; the scaled height would be a float, which a memo
+key must not allocate).  Allocates nothing (a memo key)."
   (let* ((frame (window-frame window))
          (cell (+ (frame-char-width frame) (* 100 (frame-char-height frame))))
          (text (if (bound-and-true-p text-scale-mode) (+ 50 (round (or text-scale-mode-amount 0))) 50)))
     (+ (mod cell 100000) (* 100000 (mod text 100))
        (* 10000000 (mod drgnx-pixels-generation 100000))
-       (* 1000000000000 (mod (drgnx-statusbar--row-height frame) 1000)))))
+       (* 1000000000000 (if (fboundp 'drgnx-look-density-value) (mod (drgnx-look-density-value 'status-bar) 1000) 0)))))
 
 (defun drgnx-statusbar--density-changed ()
   "On `drgnx-look-density-changed-hook': every bar is laid out again at the new height (its layout key moved)."

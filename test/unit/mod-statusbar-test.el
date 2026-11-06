@@ -1619,7 +1619,7 @@ was built once; no other package's entry yet."
       (should (= 0 (drgnx-memo-fixture-alloc (lambda () (drgnx-statusbar--bar w width nil))
                                              'drgnx-statusbar--bar 'drgnx-statusbar--misc 'drgnx-statusbar--misc-entries
                                              'drgnx-statusbar--selected-p 'drgnx-statusbar--which-func
-                                             'drgnx-statusbar--layout-key 'drgnx-statusbar--row-height
+                                             'drgnx-statusbar--layout-key 'drgnx-look-density-value
                                              'drgnx-statusbar--position-key 'drgnx-statusbar--position-text
                                              'drgnx-statusbar--toasts-waiting 'drgnx-notice-toast-more-count)))
       (should (= drgnx-statusbar-test--builds 1)))))

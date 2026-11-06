@@ -480,7 +480,8 @@ owned) and torn down after (the watchers go, the memo empties)."
                                                'drgnx-state-editor-window 'drgnx-state--record 'drgnx-commands-get
                                                'drgnx-cmd-command 'drgnx-cmd-bound 'drgnx-topline--hint-command
                                                'drgnx-topline--hint-bound 'drgnx-git-roots-known
-                                               'drgnx-statusbar--layout-key 'drgnx-topline--attention-count
+                                               'drgnx-statusbar--layout-key 'drgnx-look-density-value
+                                               'drgnx-topline--attention-count
                                                'drgnx-topline--agents-count)))
         (should (eq first (drgnx-topline--line)))))))
 
