@@ -143,6 +143,10 @@ pub fn from_json(name: &str, v: &Value, values: &mut RuntimeValues) -> Result<()
         "drgnx-agents-repeat-limit" => values.agents_repeat_limit = de(v)?,
         "drgnx-agents-no-progress-tokens" => values.agents_no_progress_tokens = de(v)?,
         "drgnx-agents-manager-context" => values.agents_manager_context = de(v)?,
+        "drgnx-agents-model-prices" => {
+            let Alist(pairs) = de::<Alist<super::ModelPrice>>(v)?;
+            values.agents_model_prices = super::prices(pairs).map_err(|m| refused("", m))?;
+        }
         "drgnx-runners-send" => {
             let s: String = de(v)?;
             if !["all", "heavy", "none"].contains(&s.as_str()) {
@@ -278,6 +282,13 @@ pub fn to_json(name: &str, values: &RuntimeValues) -> Option<Value> {
         "drgnx-agents-repeat-limit" => json!(values.agents_repeat_limit),
         "drgnx-agents-no-progress-tokens" => json!(values.agents_no_progress_tokens),
         "drgnx-agents-manager-context" => json!(values.agents_manager_context),
+        "drgnx-agents-model-prices" => object(
+            values
+                .agents_model_prices
+                .iter()
+                .map(|p| (p.key.as_str(), enc(p)))
+                .collect(),
+        ),
         "drgnx-runners-send" => json!(values.runners_send),
         "drgnx-runners-heavy" => json!(values.runners_heavy),
         "drgnx-runners-image" => json!(values.runners_image),

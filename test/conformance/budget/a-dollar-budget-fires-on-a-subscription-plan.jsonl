@@ -1,0 +1,21 @@
+{"scenario": "budget/a-dollar-budget-fires-on-a-subscription-plan", "requires": ["v1", "test-hooks"], "doc": "A plan on a subscription profile (the mock Claude, no gateway) is approved with a dollar budget of 0.005. Subscription spend lands in usd-est, so the budget sets a usd-est limit of the same amount; the mock reports 0.01 after its first turn, the limit fires and the job pauses with a budget card. Before, the usd limit never fired on a subscription and the user believed the plan was capped. Pattern C: the test waits for the agent's own log line before it expects the event."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/w.txt\" \"--log\" \"$ROOT/w.log\")))) (drgnx-agents-routes ((implement \"mock-claude\"))))\n"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# Plan\n\n**Repo:** $ROOT/repo\n\n### Task 1: Add the note\n\n**Role:** implement\n\nAdd note.txt.\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/propose", "params": {"plan": "$ROOT/plan.md", "budget": 0.005}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "status": "proposed", "budget": 0.005}}, "within_ms": 10000}
+{"do": "write_file", "path": "$ROOT/w.txt", "text": "tool:edit note.txt\n"}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "job/approve", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$job"}}, "within_ms": 10000}
+{"do": "file", "path": "$ROOT/w.log", "contains": "\"prompt\"", "within_ms": 90000}
+{"do": "expect", "conn": "e", "json": {"event": "budget-limit", "data": {"data": {"unit": "usd-est", "estimate": true}}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "job/status", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$job", "status": "paused"}}, "within_ms": 5000}
+{"do": "sql_expect", "sql": "select count(*), min(state) from card where job = '$job' and kind = 'budget'", "rows": [[1, "open"]]}

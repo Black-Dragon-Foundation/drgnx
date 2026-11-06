@@ -169,7 +169,10 @@ drgnx job resume job-20261017-101500 --budget 10      # go on (after a stop, or 
 `--json` on `status` gives the same as JSON (an empty list is `[]`); `status` without an id lists every job.
 `--budget` wants a number of USD (`5`, `.5`), nothing else. `propose --auto` starts at once, with no proposal card;
 `--repo DIR` names the repository when the plan is not inside it. `resume` of a proposal you rejected (stopped before you approved it) is refused with "Job ID was
-never approved: propose the plan again", and the job stays stopped; a job you approved and then stopped resumes. In Emacs: **Start Job from Plan…** (the
+never approved: propose the plan again", and the job stays stopped; a job you approved and then stopped resumes. Whether
+a stopped job was still a proposal is decided in the hub's one write of the stop: reject a proposal in one place while
+you approve it in another, and the approval that lands first runs and is then stopped like any job (its work resumes);
+a budget pause never turns a job you just stopped back into a paused one. In Emacs: **Start Job from Plan…** (the
 proposal, with Approve and Reject), **Show Job in Work…**, **Approve Plan Job…**, **Show Plan
 Jobs**, **Stop Plan Job…** — in the palette (no keys by default; module `tools/jobs`).
 
@@ -246,11 +249,23 @@ Each role's value is a list of profile names, or one name. If the entry has a mi
 or `settings.el` does not read, no route is read from it until it is fixed: the roles use `drgnx-job-default-profile`, and
 the message that names the line is said once (Preferences: Open Config File… opens the file).
 
-A role without a route gets `drgnx-job-default-profile` ("claude"). The estimate counts
-`drgnx-job-task-tokens` (150 000 in, 15 000 out) per task at the price of the profile's provider when its traffic
-goes through the gateway; profiles drgnx cannot price (a subscription) are listed as unpriced. With a `--budget`, the
-proposal also warns about a profile on a route whose provider has no `:price` in `drgnx-ai-providers`: the gateway cannot count
-what it spends, so the budget would not stop it.
+A role without a route gets `drgnx-job-default-profile` ("claude"). The estimate on the proposal is a forecast from the
+history of similar finished tasks (same role, profile and model, then wider; with no history, a labelled prior with a
+wide range): tokens, the cost and the time, each as a middle and a high end ("3 tasks, about 12–41 USD (estimate),
+40M–130M tokens, 2 h 10–4 h"). Tokens are priced at the rates of `drgnx-agents-model-prices`; a profile with no price
+(a model with no row and no gateway `:price`) is listed as unpriced and shows tokens only, never a price of 0. A
+subscription's cost is an estimate at API prices and is labelled so. A cost under a cent reads "<0.01", never "0.00".
+With a `--budget`, the proposal warns when the plan's high end, its `usd` and `usd-est` summed, is over it (you decide;
+nothing is refused). How to read
+the range, its basis, the price table's date and the week's share: [Reading a forecast](agents.md#reading-a-forecast).
+After the run, each step, task and plan shows what it really used (`timeline/get` with `rollup`): the same numbers as
+the step records, what `budget/get` booked, and, for a gateway task, the gateway's own spend.
+
+A dollar budget on a plan that has a subscription profile also sets a limit of the same amount in `usd-est`, because a
+subscription's spend lands there; without it the dollar limit would never fire. The two limits bind together: each
+counts the gateway's measured dollars and the subscription's estimated ones summed, so a plan with tasks on both is
+capped once at the budget (not at the budget in each unit), and the proposal's warning reads the two p90s summed. The
+budget view says both limits, and the card when the budget is reached says it is an estimate.
 
 **Only job-safe profiles run a job's agents.** A job's agent works unwatched in a repository you may not have
 written, and that repository's own settings (`.claude/settings.json`, a `.gemini/` folder, …) could let its agent act
@@ -368,7 +383,8 @@ dir), with profiles of your own where the built-in ones do not fit ([agents.md](
 ```
 
 Then **Start Job from Plan…** (or `drgnx job propose PLAN --budget 2`): read the proposal — the tasks, what waits on
-what, the profile per role, the estimate (subscription traffic is unpriced: drgnx does not see it) — and approve.
+what, the profile per role, the estimate (a subscription's cost is an estimate at API prices from the dated price
+table, labelled so) — and approve.
 Watch the job window: agents start per ready task, permissions you did not allow show up as cards, the decision
 log fills. When the job is done, look at its branch (`git log job/ID`, `git diff main...job/ID`) and merge it yourself.
 Things worth trying once: Stop the job and resume it; a budget small enough to pause it; a won't-build decision

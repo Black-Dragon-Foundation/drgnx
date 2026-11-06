@@ -201,6 +201,29 @@ async fn edited_brief_wins() {
     );
 }
 
+/// Pure (D): a temp store.  A graph plan's task body is in its worker's brief, so a proposal from Say needs no
+/// `brief/set`.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_brief_carries_the_body() {
+    use crate::runner::graph_plan_tests::{front, proposed};
+    let dir = tempfile::tempdir().unwrap();
+    let f = front(dir.path());
+    let (id, _) = proposed(
+        &f,
+        dir.path(),
+        json!([{"number": "1", "title": "look", "role": "review",
+                "body": "Read the settings code and list each default."}]),
+    )
+    .await;
+    let b = build(&f, &format!("{id}#1"), None).await.unwrap();
+    assert!(
+        b.text
+            .contains("Read the settings code and list each default."),
+        "{}",
+        b.text
+    );
+}
+
 #[test]
 fn cap_cuts_at_a_heading() {
     let mut section = String::from("### Task 1: big\n\n");

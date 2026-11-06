@@ -520,6 +520,9 @@ An action is one of the matrix's rows (`commit`, `push.main`, `spend`, `network`
 verdict is `allow`, `ask` or `never`; a limit's unit is `count`, `usd`, `usd-est`, `tokens` or `limit-share`. The most
 restrictive matching column wins.
 
+Autonomous is also the only preset under which a plan you described in one prompt can start without your OK, and
+only within its cells ([Say it](#say-it)).
+
 The editor tells the hub when you are **away**: after `drgnx-agents-away-after` seconds (600) without input it sends
 `presence/set`, and again on your next input. The time presets follow from the next action. An agent never sends it.
 
@@ -628,6 +631,88 @@ What an outside agent cannot do:
 hello — will still show there when it works in a git worktree, with the worktree's changes and its ledger, marked
 **not reporting**.
 
+## Say it
+
+Say what you want done in one prompt, and the hub turns it into a proposed job (`say/start`). In the editor, **Say It**
+(from the palette) asks for your words and plans in the current project's repository; nothing blocks while it plans.
+When the proposal is ready you get a notice ("A proposal is waiting for your OK"), and **Show** opens it; when the
+Autonomous preset started it at once (below), the notice says "Started by the Autonomous preset" instead, and **Show**
+opens the running job. A planning chat drafts the plan with no access to your repository or your records: it
+sees only your words and a list of your profiles, routes and roles. Each task gets a role, a profile when it names
+one, and a body that becomes the start of its brief. The hub checks the draft (known roles and profiles, at most 32
+tasks, no task over 16 KiB, no dependency loops, a budget in dollars) and asks the chat again when it does not hold;
+a question from the chat comes back to you instead.
+
+The job then waits for your OK, like any proposal: the proposal card's title is the hub's, never the chat's, and
+nothing either of you writes ("approved", "start now") counts as one. `say/revise` changes it: the proposal standing
+is withdrawn and a new one replaces it. `say/end` closes the planning chat; its proposal stays.
+
+One prompt makes at most one running job. Once its job has started (you approved it, or the Autonomous preset
+started it), the planning is done and the chat closes: `say/revise` is refused with "JOB has started: stop it, then
+say it again", and a revision already on its way when the job started comes back as `say-failed` with the same
+reason. A revision never stops work that is running; stop the job yourself, then say what you want again.
+
+**The proposal buffer** (also **Say It: Show Proposal** in the palette) shows the hub's facts first: status ("not
+known" when the hub did not answer), tasks and profiles, the budget with its unit (on a plan with a subscription it
+says it binds the estimate too), the forecast
+(cost, tokens and time as ranges: a middle and a high end, one run in ten goes past it), the cold wakes inside it
+("of which wakes"), the manager's own spend beside the total, what the plan does to each subscription's week ("at this
+pace: Thursday; with this plan: Wednesday (estimate)", or "no pace yet"), warnings and the date of the price table.
+Under **Basis** each task says what its forecast came from ("12 implement tasks on sonnet"). A profile with no price
+reads "not priced" with its tokens and time, never a zero. The planning agent's job title and task titles come last, under
+"Written by the planning agent". `C-c C-c` approves (the job starts and the planning chat ends), `C-c C-e` asks for a
+change (it reads your words in the command) and `C-c C-k` rejects (the job stops and the chat ends); each is also in
+the palette as **Say It: Approve**, **Say It: Revise** and **Say It: Reject**. A question from the planning chat comes
+as a notice whose **Answer** reads your reply (**Say It: Answer** in the palette answers the latest one), and a planning that failed says why. **Forecast Accuracy** (palette)
+lists, per role and profile, how many finished tasks were forecast, how many stayed within their high end, and the
+median of actual over middle.
+
+**Under the Autonomous preset** a Say proposal starts without the OK when the preset's own cells cover all of it:
+the manager may start that many agents (8), the plan's p90 cost in `usd` and `usd-est` together, counted as dollars,
+is within its spend cell ($150), every task has a price, and no subscription's limit would run out at the plan's p90
+before it resets, whether that is the week, the week's last day or a shorter window. A subscription with no meter reading yet means the week cannot be checked, so the proposal waits.
+When it starts alone, the job's decisions say "started by the Autonomous preset within its cells"; when it waits,
+the job says why.
+
+## Reading a forecast
+
+Every proposal, whether from Say it, `job/propose` or Start as Job, shows a forecast before anything is dispatched:
+tokens, active and wall time, and cost, each as a range ("about 12–41 USD (estimate), 40M–130M tokens, 2 h 10–4 h").
+`forecast/get` gives the same numbers per task.
+
+- **A range, not a promise.** The first number is the middle (p50): half the similar runs took less. The second is the
+  high end (p90): about one run in ten goes past it. Agent runs of one task can differ many times over, so a narrow
+  range is never promised.
+- **Where it comes from.** Each task says its basis: "12 implement tasks on sonnet, this project", "5 implement tasks on
+  claude", "9 review tasks on another model, repriced" or "no history: prior". Until a class has five finished tasks
+  the forecast is a labelled prior with a wide range. Every finished task adds to the history, so the next proposal of
+  the same kind is forecast from it. Once enough of them were forecast and finished, the high end is scaled by how
+  often it was missed (the task says it is calibrated). The plan's total is scaled the same way by how often whole
+  plans went past their high end, once nine finished plans were forecast; that total is what the Autonomous preset
+  checks against its spend cell and the week. `forecast/accuracy` shows, per role and profile, how many tasks
+  finished, the share that stayed within their p90, and the median of actual over p50.
+- **Wakes and the manager.** The wake line ("of which wakes: 1–3 cold, about 3 USD") is part of the total, not added to
+  it. A manager's own spend, where history has one, shows beside the total.
+- **`usd` and `usd-est`.** On a gateway profile the cost is exact dollars (`usd`). On a subscription it is what the
+  tokens would cost at API prices (`usd-est`, labelled estimate): your subscription is not charged that. A profile with
+  no price shows tokens only and is listed as unpriced, never as 0.00.
+- **The price table.** Tokens are priced by `drgnx-agents-model-prices`, shipped with the date its rows were read off
+  the provider's page; the forecast shows that date (`prices_as_of`). The setting's value is the whole table, so to
+  change a row copy the shipped rows (Describe Variable shows them) into `settings.el`, change or add the one you need,
+  and the next forecast uses it.
+- **The week.** On a subscription the forecast says what share of the week's limit the plan would use at this pace and,
+  when its high end would use the limit up before it resets, says so. The meter is the account's, so use outside drgnx
+  counts too: the share is an estimate.
+- **Budgets.** A dollar budget on a plan with a subscription profile also limits the plan's `usd-est`, so the job
+  pauses when the estimate reaches it; the budget view says the limit is an estimate. A proposal whose high end is over
+  its budget warns; you decide.
+- **Autonomous.** Under the Autonomous preset a Say proposal starts without your OK only when the preset's cells cover
+  it (above): the agents it needs, its high-end cost with an estimate counted as dollars (a $100 `usd` p90 plus a $60
+  `usd-est` p90 is $160 against the $150 cell, so it waits), every task priced, and no subscription's week used up
+  before it resets. A plan on a subscription with no meter reading yet waits, since its week cannot be checked.
+- **Fork from here.** The Fork command's prompt shows the same forecast for one more run of that session's role and
+  profile (`forecast/session`).
+
 ## Plans and the board
 
 Imported plan checklists (Onboarding: Import Projects, with TODOs) remember where they came from (`:PLAN_FILE:`,
@@ -729,7 +814,11 @@ A budget is a limit with a unit, set on a project, a plan, a manager or a worker
 (counted per conversation, so a manager's rotation or a fresh start after a restart adds to what the session spent),
 `tokens` and `count` are what they say, and `limit-share` is a share (0 to 1) of a subscription's usage window.
 `usd-est` and `limit-share` are estimates and are labelled so, in the budget card and in `pace/get`. A limit in one
-unit is only ever used up by spending in that unit.
+unit is only ever used up by spending in that unit, with one exception: a job's dollar budget sets a `usd` limit and,
+when a subscription profile can run its tasks, a `usd-est` limit of the same amount, and those two bind together. Each
+counts what the gateway measured plus what the subscription's agents estimated, so "$20" caps the plan's dollars once,
+not $20 of each; the gateway may spend only what that sum leaves, and the card for the limit says it is an estimate
+([jobs.md](jobs.md#routes-and-the-estimate)).
 
 Budgets nest. What a worker spends counts against the worker, its manager, its plan and its project, and what it may
 still spend is the least remaining over that chain. The gateway admits `usd` against the same minimum: a session on a
@@ -742,7 +831,11 @@ with `budget/set` reports again if it is still reached.
 
 Subscription windows (Claude's `_claude/rateLimit`, Codex's rate-limit window) are read from the agent, never from
 your login. `pace/get` gives, per meter, the share used, the rate per hour (linear over the last 24 hours of readings)
-and when the window would run out at that rate, unless it resets first. Its numbers are estimates.
+and when the window would run out at that rate, unless it resets first. Its numbers are estimates. The meter's
+readings are kept for eight days (one every quarter hour) and survive a restart of the hub; the rate itself still
+reads the last 24 hours. A job's forecast uses them to say what share of the week a plan on a subscription would use,
+and warns when its high end would use the limit up before it resets. The meter is the account's, so use outside drgnx
+counts: the share is an estimate.
 
 ## The supervisor
 

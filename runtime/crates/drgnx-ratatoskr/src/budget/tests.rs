@@ -165,6 +165,23 @@ fn state_survives_a_save() {
     assert_eq!(left(&c, &w, Unit::Usd), Some(3.0));
 }
 
+/// Pure (D): joint dollar limits count both units summed, survive a save, and a plain `set` makes them apart again.
+#[test]
+fn joint_dollar_limits_bind_the_sum_and_survive_a_save() {
+    let b = Budgets::default();
+    let p = sc(json!({"plan": "plan:p"}));
+    b.set_joint(&p, vec![lim(10.0, Unit::Usd), lim(10.0, Unit::UsdEst)]);
+    b.spend(&p, Unit::Usd, 4.0);
+    b.spend(&p, Unit::UsdEst, 3.0);
+    assert_eq!(left(&b, &p, Unit::Usd), Some(3.0));
+    assert_eq!(left(&b, &p, Unit::Tokens), None);
+    let c = Budgets::default();
+    c.restore(serde_json::from_str(&serde_json::to_string(&b.saved()).unwrap()).unwrap());
+    assert_eq!(left(&c, &p, Unit::UsdEst), Some(3.0));
+    c.set(&p, vec![lim(10.0, Unit::Usd), lim(10.0, Unit::UsdEst)]);
+    assert_eq!(left(&c, &p, Unit::Usd), Some(6.0));
+}
+
 /// Pure (D): a session's agent that starts a new conversation under the same session (a manager's rotation, a fresh
 /// start after a restart) reports its cumulative cost from zero again; that is spent too.
 #[test]
@@ -186,4 +203,78 @@ fn a_new_conversation_under_one_session_counts_its_cost_from_zero() {
         Some(10.0),
         "7 in the first conversation, 3 in the second"
     );
+}
+
+/// Pure (D): a cumulative reading answers with what it booked, never negative.
+#[test]
+fn a_cumulative_reading_answers_with_the_delta_it_booked() {
+    let b = Budgets::default();
+    let s = sc(json!({"worker": "w1"}));
+    let read = |conv: &str, total: f64| {
+        b.spend_total_in(&s, "usd-est", conv, Unit::UsdEst, total)
+            .delta
+    };
+    assert_eq!(read("c1", 5.0), 5.0);
+    assert_eq!(read("c1", 7.0), 2.0);
+    assert_eq!(read("c1", 6.0), 0.0, "a total that fell books nothing");
+    assert_eq!(read("c2", 3.0), 3.0, "a new conversation counts from zero");
+}
+
+/// Pure (D): readings are read back from what was saved, and a row saved before the readings were kept still loads.
+#[test]
+fn readings_survive_a_save_and_load() {
+    let b = Budgets::default();
+    let w = sc(json!({"worker": "w1"}));
+    b.reading(&w, "claude", 0.5, Some(9.0e9), 1000.0);
+    b.reading(&w, "claude", 0.6, Some(9.0e9), 2000.0);
+    let text = serde_json::to_string(&b.saved()).unwrap();
+    let c = Budgets::default();
+    c.restore(serde_json::from_str(&text).unwrap());
+    assert_eq!(
+        c.history("claude", 2000.0),
+        vec![(1000.0, 0.5), (2000.0, 0.6)]
+    );
+    assert_eq!(c.pace(None, 2000.0), b.pace(None, 2000.0));
+    assert!(!c.pace(None, 2000.0).is_empty());
+    let old = r#"{"limits": [], "spent": [], "parents": []}"#;
+    assert!(serde_json::from_str::<Saved>(old).is_ok());
+}
+
+/// Pure (D): one reading per quarter hour, none older than eight days, at most 768 a provider.
+#[test]
+fn the_history_keeps_one_reading_per_quarter_hour_for_eight_days() {
+    let b = Budgets::default();
+    let w = sc(json!({"worker": "w1"}));
+    let nine_days = 9 * 24 * 3600;
+    for t in (0..=nine_days).step_by(60) {
+        b.reading(&w, "claude", 0.5, None, f64::from(t));
+    }
+    let now = f64::from(nine_days);
+    let h = b.history("claude", now);
+    assert!(h.len() <= 768, "{}", h.len());
+    assert!(h.len() > 760, "{}", h.len());
+    assert!(h.windows(2).all(|p| p[1].0 - p[0].0 >= 900.0));
+    assert!(h.iter().all(|(t, _)| now - t < 8.0 * 24.0 * 3600.0));
+}
+
+/// Pure (D): the pace still reads the last day of readings; the longer history changes nothing there.
+#[test]
+fn the_rate_still_reads_the_last_day() {
+    let b = Budgets::default();
+    let w = sc(json!({"worker": "w1"}));
+    let day = 24.0 * 3600.0;
+    b.reading(&w, "claude", 0.1, None, 0.0);
+    b.reading(&w, "claude", 0.5, None, 2.0 * day);
+    b.reading(&w, "claude", 0.6, None, 2.0 * day + 3600.0);
+    let p = &b.pace(None, 2.0 * day + 3600.0)[0];
+    assert!((p.rate_per_hour - 0.1).abs() < 1e-9, "{}", p.rate_per_hour);
+    assert_eq!(b.history("claude", 2.0 * day + 3600.0).len(), 3);
+}
+
+/// Pure (D): a meter that reset starts a segment; its fall is not a negative rise.
+#[test]
+fn a_meter_reset_is_a_segment_not_a_negative_rise() {
+    let rises = rise_total(&[(0.0, 0.8), (900.0, 0.1), (1800.0, 0.3)]);
+    assert!((rises - 0.2).abs() < 1e-9, "{rises}");
+    assert_eq!(rise_total(&[]), 0.0);
 }

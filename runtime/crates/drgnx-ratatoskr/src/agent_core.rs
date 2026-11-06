@@ -18,6 +18,8 @@
 //! | `brief/*` | [`crate::brief`] |
 //! | `timeline/get` | [`crate::timeline`] |
 //! | `budget/*`, `pace/get` | [`crate::budget`] |
+//! | `forecast/*` | [`crate::forecast`] |
+//! | `say/*` | [`crate::say`] |
 //! | `records/{import,status}` | [`crate::records`] |
 //! | `records/{proposals,decide}` | [`crate::records`] |
 //! | `machines/{report,list}` | [`crate::work::machines`] |
@@ -61,6 +63,8 @@ pub struct Core {
     pub map: std::sync::Arc<crate::work::map::Map>,
     /// The files shell steps opened, from Gleipnir's tracer ([`crate::work::trace`]).
     pub traces: std::sync::Arc<crate::work::trace::Traces>,
+    /// The planning sessions of Say it and the channel to their shell ([`crate::say`]).
+    pub say: crate::say::Say,
 }
 
 fn answer<T: Serialize>(r: Result<T, Error>) -> Result<Value, Error> {
@@ -74,7 +78,8 @@ pub async fn serve(
     p: Params,
 ) -> Result<Result<Value, Error>, Box<Params>> {
     use crate::{
-        agents, brief, budget, exec, manager, matrix_gate, records, runner, runners, timeline, work,
+        agents, brief, budget, exec, forecast, manager, matrix_gate, records, runner, runners, say,
+        timeline, work,
     };
     let (f, c) = (front, caller);
     Ok(match p {
@@ -129,6 +134,12 @@ pub async fn serve(
         Params::BudgetGet(p) => answer(budget::get(f, c, p).await),
         Params::BudgetSet(p) => answer(budget::set(f, c, p).await),
         Params::PaceGet(p) => answer(budget::pace(f, c, p).await),
+        Params::ForecastGet(p) => answer(forecast::get(f, c, p).await),
+        Params::ForecastSession(p) => answer(forecast::session(f, p).await),
+        Params::ForecastAccuracy(p) => answer(forecast::accuracy(f, p).await),
+        Params::SayStart(p) => answer(say::start(f, c, p).await),
+        Params::SayRevise(p) => answer(say::revise(f, c, p).await),
+        Params::SayEnd(p) => answer(say::end(f, c, p).await),
         Params::RecordsImport(p) => answer(records::import(f, c, p).await),
         Params::RecordsStatus(p) => answer(records::status(f, c, p).await),
         Params::RecordsProposals(p) => answer(records::proposals(f, c, p).await),
