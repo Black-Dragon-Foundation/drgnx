@@ -776,15 +776,228 @@ Above this size (MiB) the question's default is chunks, else lean.  Read when a 
 | `:agents` | `grantable` |
 | `:schema` | `(pred drgnx-large-files--mib-p "a size in MiB above 0")` |
 
-## drgnx-look-theme
+## drgnx-look-accent
 
-The colour theme ui/look loads at start (Color Theme picks it); nil: the theme Emacs starts with.  A change
-switches the theme at once while the module runs.
+Where the accent colour comes from: `system' (the desktop's accent colour, as text for the theme's variant) or
+`theme' (the theme's own).  A change applies at once.
 
 | Key | Value |
 | --- | --- |
-| Default | `nil` |
-| Type | `(choice (const :tag "Emacs's own" nil) symbol)` |
+| Default | `system` |
+| Type | `(choice (const :tag "The desktop's" system) (const :tag "The theme's" theme))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look-follow-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum system theme)` |
+
+## drgnx-look-density
+
+How much room the look gives: `compact', `comfortable' or `roomy' (the line, row, tab, bar and gap sizes).  A
+change applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `comfortable` |
+| Type | `(choice (const compact) (const comfortable) (const roomy))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look-density--settings-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum compact comfortable roomy)` |
+
+## drgnx-look-font-agent
+
+The font of the agent panel's prose.  `:family ui' is the UI font.  A change applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `(:family ui)` |
+| Type | `(choice (const :tag "Follow the desktop's font" follow-desktop) (plist :tag "Font" :key-type symbol :value-type sexp))` |
+| `:scope` | `buffer` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look-fonts--settings-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(or (enum follow-desktop) (plist (:family (or string (enum ui code)) "A family name, or ui / code for the same as that role") (:fallback (list-of string) "Families to try when the family is not installed") (:size number "A ratio to the code size (1.0 is the code size)") (:weight symbol "regular, semibold, bold, ...") (:line-height integer "Pixels per line (logical)") (:ligatures boolean "Ligatures on")))` |
+
+## drgnx-look-font-code
+
+The code font: family, fallback list, size (a ratio to the code size, 13.5 px), weight, line height in pixels and
+ligatures.  A change applies at once.  `(:mode MODE ...)' sections give one mode another font.
+
+| Key | Value |
+| --- | --- |
+| Default | `(:family "JetBrains Mono" :fallback ("Adwaita Mono" "monospace") :size 1.0 :weight regular :line-height 21 :ligatures nil)` |
+| Type | `(choice (const :tag "Follow the desktop's font" follow-desktop) (plist :tag "Font" :key-type symbol :value-type sexp))` |
+| `:scope` | `buffer` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look-fonts--settings-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(or (enum follow-desktop) (plist (:family (or string (enum ui code)) "A family name, or ui / code for the same as that role") (:fallback (list-of string) "Families to try when the family is not installed") (:size number "A ratio to the code size (1.0 is the code size)") (:weight symbol "regular, semibold, bold, ...") (:line-height integer "Pixels per line (logical)") (:ligatures boolean "Ligatures on")))` |
+
+## drgnx-look-font-code-small
+
+The font of diffs and output inside cards.  `:family code' is the code font.  A change applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `(:family code :size 0.889 :line-height 19)` |
+| Type | `(choice (const :tag "Follow the desktop's font" follow-desktop) (plist :tag "Font" :key-type symbol :value-type sexp))` |
+| `:scope` | `buffer` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look-fonts--settings-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(or (enum follow-desktop) (plist (:family (or string (enum ui code)) "A family name, or ui / code for the same as that role") (:fallback (list-of string) "Families to try when the family is not installed") (:size number "A ratio to the code size (1.0 is the code size)") (:weight symbol "regular, semibold, bold, ...") (:line-height integer "Pixels per line (logical)") (:ligatures boolean "Ligatures on")))` |
+
+## drgnx-look-font-terminal
+
+The font of the terminal's text.  `:family code' is the code font.  A change applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `(:family code)` |
+| Type | `(choice (const :tag "Follow the desktop's font" follow-desktop) (plist :tag "Font" :key-type symbol :value-type sexp))` |
+| `:scope` | `buffer` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look-fonts--settings-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(or (enum follow-desktop) (plist (:family (or string (enum ui code)) "A family name, or ui / code for the same as that role") (:fallback (list-of string) "Families to try when the family is not installed") (:size number "A ratio to the code size (1.0 is the code size)") (:weight symbol "regular, semibold, bold, ...") (:line-height integer "Pixels per line (logical)") (:ligatures boolean "Ligatures on")))` |
+
+## drgnx-look-font-title
+
+The font of the start page's and the reviews' headings.  A change applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `(:family ui :size 1.259 :weight semibold)` |
+| Type | `(choice (const :tag "Follow the desktop's font" follow-desktop) (plist :tag "Font" :key-type symbol :value-type sexp))` |
+| `:scope` | `buffer` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look-fonts--settings-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(or (enum follow-desktop) (plist (:family (or string (enum ui code)) "A family name, or ui / code for the same as that role") (:fallback (list-of string) "Families to try when the family is not installed") (:size number "A ratio to the code size (1.0 is the code size)") (:weight symbol "regular, semibold, bold, ...") (:line-height integer "Pixels per line (logical)") (:ligatures boolean "Ligatures on")))` |
+
+## drgnx-look-font-ui
+
+The user interface font (tabs, status bar, lists, palette, notices): family, fallback list, size (a ratio to the
+code size) and weight.  A change applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `(:family "Adwaita Sans" :fallback ("Inter" "sans-serif") :size 0.963 :weight regular)` |
+| Type | `(choice (const :tag "Follow the desktop's font" follow-desktop) (plist :tag "Font" :key-type symbol :value-type sexp))` |
+| `:scope` | `buffer` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look-fonts--settings-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(or (enum follow-desktop) (plist (:family (or string (enum ui code)) "A family name, or ui / code for the same as that role") (:fallback (list-of string) "Families to try when the family is not installed") (:size number "A ratio to the code size (1.0 is the code size)") (:weight symbol "regular, semibold, bold, ...") (:line-height integer "Pixels per line (logical)") (:ligatures boolean "Ligatures on")))` |
+
+## drgnx-look-font-ui-caption
+
+The font of the status bar, meta text and the tree's end column.  A change applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `(:family ui :size 0.889)` |
+| Type | `(choice (const :tag "Follow the desktop's font" follow-desktop) (plist :tag "Font" :key-type symbol :value-type sexp))` |
+| `:scope` | `buffer` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look-fonts--settings-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(or (enum follow-desktop) (plist (:family (or string (enum ui code)) "A family name, or ui / code for the same as that role") (:fallback (list-of string) "Families to try when the family is not installed") (:size number "A ratio to the code size (1.0 is the code size)") (:weight symbol "regular, semibold, bold, ...") (:line-height integer "Pixels per line (logical)") (:ligatures boolean "Ligatures on")))` |
+
+## drgnx-look-font-ui-heading
+
+The font of panel titles and section heads.  `:family ui' is the UI font.  A change applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `(:family ui :size 0.963 :weight semibold)` |
+| Type | `(choice (const :tag "Follow the desktop's font" follow-desktop) (plist :tag "Font" :key-type symbol :value-type sexp))` |
+| `:scope` | `buffer` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look-fonts--settings-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(or (enum follow-desktop) (plist (:family (or string (enum ui code)) "A family name, or ui / code for the same as that role") (:fallback (list-of string) "Families to try when the family is not installed") (:size number "A ratio to the code size (1.0 is the code size)") (:weight symbol "regular, semibold, bold, ...") (:line-height integer "Pixels per line (logical)") (:ligatures boolean "Ligatures on")))` |
+
+## drgnx-look-icons
+
+How the look draws its icons: `svg' (Lucide line icons in the text colour, on graphical frames) or `glyphs' (the
+characters of `drgnx-face-glyphs').  Terminal frames always show glyphs.  A change applies to the icons drawn from
+then on.
+
+| Key | Value |
+| --- | --- |
+| Default | `svg` |
+| Type | `(choice (const :tag "Line icons" svg) (const :tag "Glyphs" glyphs))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-icons-clear` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum svg glyphs)` |
+
+## drgnx-look-motion
+
+Motion of popups, the palette and notices under Glitnir: `auto' follows the desktop's reduced-motion
+preference, `full' always moves, `reduced' never does (no transitions; blur and shadows stay).
+A change applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `auto` |
+| Type | `(choice (const auto) (const full) (const reduced))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look--motion-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum auto full reduced)` |
+
+## drgnx-look-theme
+
+The colour theme ui/look loads at start (Color Theme picks it); `auto': drgnx Dark, Light or High Contrast as
+the desktop says, until a theme of yours is loaded; nil: the theme Emacs starts with.  A change switches the theme
+at once while the module runs.
+
+| Key | Value |
+| --- | --- |
+| Default | `auto` |
+| Type | `(choice (const :tag "Follow the desktop" auto) (const :tag "Emacs's own" nil) symbol)` |
 | `:scope` | `global` |
 | `:workspace` | `never` |
 | `:merge` | `replace` |
@@ -793,6 +1006,23 @@ switches the theme at once while the module runs.
 | `:runtime` | - |
 | `:agents` | `never` |
 | `:schema` | `(or null symbol)` |
+
+## drgnx-look-themes-notice
+
+Whether the one-time notice that drgnx now has its own themes was shown.  drgnx sets it; there is no reason to.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
 
 ## drgnx-modules-disabled
 
@@ -862,6 +1092,43 @@ Module flags: ((MODULE FLAG…)…).
 | `:runtime` | - |
 | `:agents` | `never` |
 | `:schema` | `(alist symbol (list-of symbol))` |
+
+## drgnx-notice-style
+
+Where a notice that interrupts shows: `float' (a toast over the editor on any graphical frame, without Glitnir's
+corners and shadow where it does not draw), `echo' (a line in the echo area) or `auto' (`float' while Glitnir draws,
+else `echo').  A terminal frame always echoes.  A change applies to the next notice.
+
+| Key | Value |
+| --- | --- |
+| Default | `auto` |
+| Type | `(choice (const auto) (const echo) (const float))` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum auto echo float)` |
+
+## drgnx-popup-style
+
+How the popup lane shows: `window' (the panel's window, or one under the editors), `float' (one child frame
+over the editor, bottom-centre) or `auto': `float' under Glitnir, `window' without it.
+
+| Key | Value |
+| --- | --- |
+| Default | `auto` |
+| Type | `(choice (const auto) (const window) (const float))` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(or (const auto) (const window) (const float))` |
 
 ## drgnx-runners-heavy
 
@@ -1107,6 +1374,24 @@ Preferences: Keep drgnx Running in the Background, which remembers it in setting
 | `:merge` | `replace` |
 | `:on-error` | `last-good` |
 | `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | - |
+
+## drgnx-speed-gc-census
+
+Non-nil: record every garbage collection's pause, origin and live heap (Help → GC Census shows them).
+Read at every start; a change turns the census on or off at once.  `drgnx-gc-census-mode' does it for this session.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-gc-census--settings-apply` |
 | `:runtime` | - |
 | `:agents` | `never` |
 | `:schema` | - |

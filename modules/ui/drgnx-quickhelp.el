@@ -22,13 +22,13 @@
 (require 'button)
 (require 'eldoc)
 (require 'thingatpt)
-(require 'color)
+(require 'drgnx-color)
 (require 'drgnx-registry)
 (require 'drgnx-modal)
 (require 'drgnx-timer)
 (require 'drgnx-state)
 (declare-function drgnx-face-glyph "drgnx-face")
-(defvar drgnx-look-chrome)
+(declare-function drgnx-look-chrome-current "drgnx-look" (&optional frame))
 (declare-function eldoc--format-doc-buffer "eldoc")
 
 (defgroup drgnx-quickhelp nil
@@ -71,31 +71,6 @@ takes a tint of the text colour instead (`drgnx-quickhelp-colors'), so it always
 (defconst drgnx-quickhelp--distinct 1.15
   "The contrast ratio against the editor's background from which the face's own background is kept.")
 
-(defun drgnx-quickhelp--rgb (color)
-  "COLOR (#RRGGBB, or a name) as (R G B) in 0..1, or nil when it is not a colour (`unspecified', nil).
-A #RRGGBB is read as written: `color-name-to-rgb' would snap it to the palette of a terminal frame."
-  (and (stringp color)
-       (if-let* ((v (color-values-from-color-spec color)))
-           (mapcar (lambda (c) (/ c 65535.0)) v)
-         (color-name-to-rgb color))))
-
-(defun drgnx-quickhelp--mix (from to ratio)
-  "The colour RATIO of the way from FROM to TO (both colour strings), as #RRGGBB; nil when either is no colour."
-  (let ((a (drgnx-quickhelp--rgb from)) (b (drgnx-quickhelp--rgb to)))
-    (when (and a b)
-      (apply #'color-rgb-to-hex (append (cl-mapcar (lambda (p q) (+ p (* ratio (- q p)))) a b) '(2))))))
-
-(defun drgnx-quickhelp--contrast (a b)
-  "The WCAG contrast ratio of colours A and B (1 up to 21), or nil when either is no colour."
-  (let ((l (mapcar (lambda (c)
-                     (when-let* ((rgb (drgnx-quickhelp--rgb c)))
-                       (pcase-let ((`(,r ,g ,b) (mapcar (lambda (v) (if (<= v 0.03928) (/ v 12.92) (expt (/ (+ v 0.055) 1.055) 2.4)))
-                                                        rgb)))
-                         (+ (* 0.2126 r) (* 0.7152 g) (* 0.0722 b)))))
-                   (list a b))))
-    (when (and (car l) (cadr l))
-      (/ (+ 0.05 (max (car l) (cadr l))) (+ 0.05 (min (car l) (cadr l)))))))
-
 (defun drgnx-quickhelp-colors (&optional frame)
   "The card's colours on FRAME's theme: (BACKGROUND . BORDER), or nil when the theme has no colours to go by.
 BACKGROUND is the `drgnx-quickhelp' face's own when it stands out from the editor's (a theme or you set it), else the
@@ -104,12 +79,12 @@ theme and a dark one on a light theme.  BORDER is the card's text colour halfway
   (let* ((face-bg (face-attribute 'drgnx-quickhelp :background frame t))
          (bg0 (face-attribute 'default :background frame))
          (fg (let ((c (face-attribute 'drgnx-quickhelp :foreground frame t)))
-               (if (drgnx-quickhelp--rgb c) c (face-attribute 'default :foreground frame))))
-         (bg (if (let ((r (drgnx-quickhelp--contrast face-bg bg0))) (and r (>= r drgnx-quickhelp--distinct)))
+               (if (drgnx-color-rgb c) c (face-attribute 'default :foreground frame))))
+         (bg (if (let ((r (drgnx-color-contrast face-bg bg0))) (and r (>= r drgnx-quickhelp--distinct)))
                  face-bg
-               (drgnx-quickhelp--mix bg0 (face-attribute 'default :foreground frame) drgnx-quickhelp--tint))))
-    (when (and bg (drgnx-quickhelp--rgb fg))
-      (cons bg (drgnx-quickhelp--mix fg bg 0.5)))))
+               (drgnx-color-mix bg0 (face-attribute 'default :foreground frame) drgnx-quickhelp--tint 'srgb))))
+    (when (and bg (drgnx-color-rgb fg))
+      (cons bg (drgnx-color-mix fg bg 0.5 'srgb)))))
 
 (defun drgnx-quickhelp--text-width (text-w buttons-w char-w max-w)
   "The card's text width in pixels: TEXT-W (the widest line) and a character of room for the ✕, at most MAX-W —
@@ -413,8 +388,8 @@ another display)."
                           (vertical-scroll-bars . nil) (horizontal-scroll-bars . nil) (menu-bar-lines . 0)
                           (tool-bar-lines . 0) (tab-bar-lines . 0) (line-spacing . 0) (cursor-type . nil)
                           (desktop-dont-save . t) (drgnx-quickhelp . t)
-                          ,@(and (featurep 'glitnir) (bound-and-true-p drgnx-look-chrome)
-                                 drgnx-look-chrome))))))
+                          ,@(and (featurep 'glitnir) (fboundp 'drgnx-look-chrome-current)
+                                 (drgnx-look-chrome-current)))))))
   (let ((win (frame-root-window drgnx-quickhelp--frame)))
     (set-window-buffer win (get-buffer-create drgnx-quickhelp--buffer-name))
     (set-window-dedicated-p win t)

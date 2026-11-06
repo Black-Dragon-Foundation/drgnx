@@ -132,20 +132,20 @@ filename a.txt
     (let ((room 60))
       (cl-letf (((symbol-function 'drgnx-blame--room) (lambda () room)))
         (drgnx-blame--show (list :author "Ada" :time 1700000000 :summary (make-string 100 ?x)))
-        (should (= (string-width (drgnx-blame-test--shown)) (+ 3 60)))
+        (should (= (string-width (drgnx-blame-test--shown)) (+ 1 60)))
         (setq room 30)
         (with-temp-buffer (drgnx-blame--resized (selected-window)))   ; hook: another buffer is current
-        (should (= (string-width (drgnx-blame-test--shown)) (+ 3 30)))
+        (should (= (string-width (drgnx-blame-test--shown)) (+ 1 30)))
         (setq room 10)
         (drgnx-blame--resized (selected-window))
         (should-not (drgnx-blame-test--shown))
         (setq room 50)
         (drgnx-blame--resized (selected-window))
-        (should (= (string-width (drgnx-blame-test--shown)) (+ 3 50)))
-        (forward-line 1)                                      ; point left the line: not this line's blame to refit
+        (should (= (string-width (drgnx-blame-test--shown)) (+ 1 50)))      ; the gap is one character drawn 24 px wide
+        (forward-line 1)                                     ; point left the line: not this line's blame to refit
         (setq room 25)
         (drgnx-blame--resized (selected-window))
-        (should (= (string-width (drgnx-blame-test--shown)) (+ 3 50)))))
+        (should (= (string-width (drgnx-blame-test--shown)) (+ 1 50)))))
     (should (memq #'drgnx-blame--resized window-size-change-functions))
     (drgnx-blame-mode -1)
     (should-not (memq #'drgnx-blame--resized window-size-change-functions))))

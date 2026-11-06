@@ -292,6 +292,8 @@
         (previous-tab :none "C-x <left> stays Emacs' previous-buffer")
         (toggle-panel :none "in the palette")
         (focus-panel :none "in the palette")
+        (switch-tab :none "in the palette")
+        (title-row-maximize :none "a double click on the title row; in the palette")
         (toggle-right-dock :none "in the palette")
         (focus-editor :none "C-x o moves between windows")
         (dock-back "q")

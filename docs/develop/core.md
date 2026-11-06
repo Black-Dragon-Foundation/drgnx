@@ -493,15 +493,17 @@ core features that define files are listed in `drgnx-doctor-config-features`: a 
 Tests: `test/unit/config-doc-test.el` and `test/unit/doctor-test.el`.
 
 **The settings reference.** `docs/reference/settings.md` is generated the same way from the settings declared with
-`drgnx-defsetting` (`harness/drgnx-settings-doc.el`; a port that declares settings appends a `(require FEATURE)` line
-to `drgnx-settings-doc-sources`). After declaring or changing one, regenerate it and commit it with the change:
+`drgnx-defsetting` (`harness/drgnx-settings-doc.el`, which loads every file under `core/`, `wb/`, `modules/` and
+`harness/` with a line that starts `(drgnx-defsetting `; nothing to register). After declaring or changing one,
+regenerate it and commit it with the change:
 
 ```sh
 emacs --batch -Q -L core -L wb -L harness -L modules/tools -L modules/editor -L modules/ui -l drgnx-settings-doc \
   --eval '(drgnx-settings-doc-regenerate "docs/reference/settings.md")'
 ```
 
-Test: `test/unit/settings-doc-test.el` runs this very command and compares.
+Test: `test/unit/settings-doc-test.el` runs this very command and compares, and reads the files itself to fail on a
+declared setting the reference lacks.
 
 `onboarding.eld` (state folder, an alist of step → `(:status :message :time)`, `core/drgnx-onboard.el`) is the one
 state file that is not refused when it cannot be read: `drgnx-onboard--record` is a `drgnx-file-update` with
@@ -676,7 +678,12 @@ to nil. Never: `drgnx-notice--can-echo-p` (the seam tests stub) is nil in batch 
 (held until `server-after-make-frame-hook`), and `drgnx-notice--started` is nil until `emacs-startup-hook` (depth 90)
 or a daemon's first client frame, so nothing is echoed during startup; `drgnx-notice--startup-done` then queues one
 line over the `fail` conditions present. A single line names the item's `:command` by its registry title and that
-command's key; a merged line and the startup line name the Notices list and its key. Lines go out as
+command's key; a merged line and the startup line name the Notices list and its key. Where notices float
+(`drgnx-notice-toast-active-p`: `drgnx-notice-style` and Glitnir on a graphical frame) `drgnx-notice--echo-enqueue` hands a
+`problem` or `waiting` entry to `drgnx-notice-toast-offer` (`drgnx-notice-toast.el`) and queues no line: the model is
+`drgnx-notice-toast--visible` (at most three, oldest at the bottom) and `--waiting`, drawn by `drgnx-notice-toast--sync`
+into pooled child frames that take no focus; the layer timer `notice-toast` removes the oldest. The echo mode going off
+deletes them (`drgnx-notice-toast-delete-all`). Lines go out as
 `(let ((message-truncate-lines t)) (message "%s" LINE))`.
 
 **The session file** (`core/drgnx-notice-save.el`, `drgnx-notice-save-mode`, on in `drgnx-init`).
@@ -1479,7 +1486,8 @@ What redisplay reads, built once per change (PERF-L L6):
 | --- | --- | --- | --- |
 | `sticky-segment` (`drgnx-sticky.el`) | window | the window's start moves, it shows another buffer, or the epoch `sticky` of its buffer moves | `sticky` (per buffer), bumped by an edit at or above the start of a window showing the buffer |
 | `live-header` (`drgnx-live.el`) | buffer | the epoch `live-tabs` of the view moves | `live-tabs` (per buffer), bumped where the tabs, the watched tab or driving change (`drgnx-live--tabs-changed`) |
-| `statusbar-bar` (`drgnx-statusbar.el`) | window | one of six epochs moves, or a plain value: point, the change tick, the narrowing, width, full or compact, the selection, the buffer, `default-directory`, `mode-line-process`, a macro being recorded, keycast's keys, which-function's name, the text of other packages' entries this redisplay (21 keys) |
+| `statusbar-bar` (`drgnx-statusbar.el`) | window | one of six epochs moves, or a plain value: the position the bar shows (not point: the text of `statusbar-position`, nil for a bar with no position), the change tick, the narrowing, width, full or compact, the selection, the buffer, `default-directory`, `mode-line-process`, a macro being recorded, keycast's keys, which-function's name, the text of other packages' entries this redisplay, the count of toasts waiting (24 keys). Built again, it measures only texts it has not met: the cache `statusbar-widths` (256, least recently used out) keeps each width per text, face properties, face and layout key, so a cursor move measures the new position alone, and a long branch is cut by halving |
+| `statusbar-position` (`drgnx-statusbar.el`) | window | the point it shows (the window's, or the buffer's when the window shows another), the change tick, the narrowing, the selection, whether you are in it or the large-file flag (7 keys) |
 | `topline` (`drgnx-topline.el`) | frame | the editor buffer, its directory, file or breadcrumb project cache, the frame's width, the drawn title, the glyphs, the count of folders whose repository the git cache knows, or one of the three hint commands or its keys changes, or an epoch moves (16 keys; the git cache itself is read only to build) | the status bar's `buffer-look` (its `vc-mode` text) and `git`; while the status bar is off, the line's own `drgnx-git-changed-functions` hook moves `git` for the root that was read. Named through constants (`drgnx-topline--look-epoch`, `--git-epoch`), because the build compiles the file alone | `buffer-look` (per buffer, `:redisplay`: `after-change-major-mode-hook`; watches `vc-mode`, the encoding, `tab-width`, `indent-tabs-mode`, `drgnx-statusbar-indent-vars`, the modal state, evil's tag, trust, the large-file flag `drgnx-large-file`), `flymake` (per buffer: `flymake-mode-hook`, a backend's report), `eglot` (per buffer: `eglot-managed-mode-hook`; the base: `eglot-server-initialized-hook`), `git` (per root: a branch or its ahead/behind changed), `misc-info` (watches `global-mode-string`, `mode-line-misc-info` and the two lists of what the bar leaves out), `statusbar` (`drgnx-statusbar--bump`; watches the glyphs, the Explorer's roots, the segment lists) |
 
 **Other packages' entries** (`mode-line-misc-info`, `global-mode-string`) stay real time, the user's call, but are
@@ -2689,6 +2697,44 @@ surfaces (for buttons that run registry commands), so the status bar, the lists 
   `drgnx-wb-header-with-close` are one-line wrappers over it, and the face `drgnx-wb-close` is an alias of
   `drgnx-ui-close`. No close or unqueue mark is a literal `×`: the Buffers panel's rows, the find bar and the agents
   queue (glyph `unqueue`) draw kit glyphs, so a terminal that is not UTF-8 shows `x`, `x` and `-`.
+
+## Colour library (`core/drgnx-color.el`)
+
+Every colour computation goes through this file: quick help's card, the panel colours derived when a theme loads,
+and the contrast lint. It holds no colour literals. Inputs are colour strings Emacs knows (`#rrggbb` is read as
+written, never snapped to a terminal's palette); results are `#rrggbb`. A colour a frame does not give (`nil`,
+`unspecified-bg`, an unknown name) is `nil`, and each function answers `nil` for it: a theme that leaves a face
+unspecified never makes colour code signal.
+
+| Function | Returns |
+|---|---|
+| `(drgnx-color-rgb COLOR &optional FRAME)` | `(R G B)` floats in 0..1, or `nil` |
+| `(drgnx-color-hex RGB)` | `"#rrggbb"` |
+| `(drgnx-color-mix A B AMOUNT &optional SPACE)` | AMOUNT (0..1) of the way from A to B; SPACE is `oklab` (default) or `srgb` (per channel in 0..255, rounded half to even) |
+| `(drgnx-color-over FG BG ALPHA)` | FG at ALPHA over BG in sRGB, for tints |
+| `(drgnx-color-contrast A B)` | the WCAG 2.x ratio, 1..21 |
+| `(drgnx-color-solve COLOR TOWARD BG RATIO &optional SPACE)` | the smallest move of COLOR toward TOWARD that reaches RATIO on BG (TOWARD itself when none does) |
+| `(drgnx-color-hue-distance A B)` | the OKLCH hue distance in degrees, 0..180 |
+| `(drgnx-color-delta-e A B)` | the OKLab distance times 100 |
+
+`drgnx-color-black` and `drgnx-color-white` are black and white as `(R G B)`, named once here for the code that moves
+a colour toward one of them (`(drgnx-color-hex drgnx-color-white)`), so no other file spells them.
+
+### Where colours may be written
+
+Colour literals live only in `themes/drgnx-tokens.eld`, the token table of drgnx's three themes. Faces inherit
+semantic or standard faces. A colour worked out from a theme at theme change goes only through this library's callers:
+`drgnx-look-derive` (`modules/ui/drgnx-look-derive.el`, the one function that derives panel, text and agent colours
+for a theme that does not set them), quick help and the adapters' roles.
+
+`drgnx-lint/no-hard-coded-colours` (`test/unit/lint-test.el`) reads every `.el` file under `core/`, `wb/`, `modules/`,
+`harness/` and `themes/` with the Lisp reader and fails on a hex string anywhere and on a string after `:foreground`,
+`:background`, `:distant-foreground` or `:color` (a face spec's `:box` colour is one). The token table is `.eld`, so
+it is not scanned. `test/unit/lint-contrast-test.el` holds the other colour lints: every pair of the look's contrast
+bars under drgnx Dark, Light and High Contrast (`drgnx-lint/contrast-own-themes`; the documented exceptions are
+disabled text, and status marks on the selection at 3:1), the derived colours under modus-operandi, modus-vivendi,
+leuven and a Doom One stand-in (`drgnx-lint/contrast-third-party-themes`), and that no drgnx face's `:inherit` chain
+loops under any of the seven (`drgnx-lint/no-face-inheritance-cycles`). A failure names the face pair and the ratio.
 
 ## Read and write through drgnx-file
 

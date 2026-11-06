@@ -13,6 +13,7 @@
 (require 'drgnx-hooks)
 (require 'drgnx-guard)
 (require 'drgnx-ui-kit)
+(require 'drgnx-icons)
 (require 'drgnx-sandbox-vc)
 (require 'drgnx-registry)
 (require 'drgnx-surfaces)

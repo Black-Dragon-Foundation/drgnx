@@ -130,9 +130,22 @@ reused (`display-buffer-in-child-frame' makes it the first time)."
     (drgnx-popup--float-fit lane)       ; a frame that has just been mapped can take its first size from the toolkit
     lane))
 
+(defun drgnx-popup--fonts (buffer)
+  "In BUFFER, the lane's descriptions take the UI face and the keys of transient and which-key the code face.
+Buffer-local remaps, once per buffer."
+  (with-current-buffer buffer
+    (unless (local-variable-p 'drgnx-popup--fonted)
+      (setq-local drgnx-popup--fonted t)
+      (face-remap-add-relative 'default 'drgnx-ui-text)
+      (dolist (face '(transient-key which-key-key-face))
+        (face-remap-add-relative face 'fixed-pitch)))))
+
+(defvar drgnx-popup--fonted nil "Non-nil in a lane buffer whose faces `drgnx-popup--fonts' has set.")
+
 (defun drgnx-popup--show (buffer alist props)
   "The `popup' place: borrow the panel's window — unless you are typing in it — else a temporary
 one; mark it as the lane.  Under `drgnx-popup-style' `float', one child frame instead."
+  (drgnx-popup--fonts buffer)
   (let ((lane (drgnx-popup--window)) (panel (drgnx-wb-area-window 'panel)))
     (cond
      ((and (drgnx-popup--float-p) (or (not lane) (plist-get (window-parameter lane 'drgnx-popup) :float)))

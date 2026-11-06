@@ -394,7 +394,9 @@ the string made last, and allocates nothing; a renamed buffer or another project
       (should (string-match-p "\\`[[:ascii:]]+\\'" (cdr g)))))
   ;; no two glyphs share an ASCII form: on a terminal that is not UTF-8 each still says which it is
   ;; (the meanings the UI kit added -- fail, stopped, dismiss, unqueue, info, warn -- may look like an older one)
-  (let ((ascii (mapcar #'cddr (seq-remove (lambda (g) (memq (car g) '(fail stopped dismiss unqueue info warn)))
+  ;; nor the glyphs of the icons (`drgnx-ui--icon-glyphs'): they stand in for a picture
+  (let ((ascii (mapcar #'cddr (seq-remove (lambda (g) (or (memq (car g) '(fail stopped dismiss unqueue info warn))
+                                                          (assq (car g) drgnx-ui--icon-glyphs)))
                                           (default-value 'drgnx-face-glyphs)))))
     (should (= (length ascii) (length (delete-dups (copy-sequence ascii))))))
   (should (equal (cdr (alist-get 'flag drgnx-face-glyphs)) "#"))
@@ -516,7 +518,8 @@ The frame is the batch one; its parameters are put back afterwards."
 (ert-deftest drgnx-face/title-follows-the-theme ()
   (drgnx-face-test--settings
     (drgnx-face-test--frame 'pgtk 'dark
-      (should (eq drgnx-face-title-bar 'dark))
+      (should (eq drgnx-face-title-bar 'auto))                       ; dark here: no Nidhogg shell
+      (should (eq 'dark (drgnx-face--title-bar (selected-frame))))
       (should (eq (drgnx-face-title-variant) 'dark))
       (set-frame-parameter nil 'background-mode 'light)
       (should (eq (drgnx-face-title-variant) 'light))

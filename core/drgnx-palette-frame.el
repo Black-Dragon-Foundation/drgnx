@@ -25,6 +25,9 @@
   "The floating palette's distance from the top of the editor frame, as a fraction of its height."
   :type 'number :group 'drgnx-face)
 
+(defconst drgnx-palette-frame-row-px 32 "A palette row's height in logical pixels (the minibuffer's own rows are 24).")
+(defconst drgnx-palette-frame-minibuffer-row-px 24 "A candidate row's height in the echo area, in logical pixels.")
+
 (defvar drgnx-palette-frame--frame nil "The palette's child frame, once made; reused until the module goes off.")
 
 (defconst drgnx-palette-frame--buffer " *drgnx-palette-frame*"
@@ -47,11 +50,30 @@
   `((parent-frame . ,parent) (minibuffer . nil) (name . "drgnx-palette") (drgnx-palette . t)
     (undecorated . t) (no-accept-focus . t) (no-focus-on-map . t) (no-other-frame . t)
     (skip-taskbar . t) (unsplittable . t) (no-special-glyphs . t) (desktop-dont-save . t)
-    (internal-border-width . ,(drgnx-palette-frame--px parent 8)) (border-width . 0) (child-frame-border-width . 0)
+    (internal-border-width . ,(drgnx-palette-frame--px parent 8)) (border-width . 0)
+    (child-frame-border-width . ,(drgnx-palette-frame--px
+                                  parent (or (alist-get 'child-frame-border-width (drgnx-palette-frame--look)) 0)))
     (menu-bar-lines . 0) (tool-bar-lines . 0) (tab-bar-lines . 0) (tab-bar-lines-keep-state . t)
     (left-fringe . 0) (right-fringe . 0) (vertical-scroll-bars) (horizontal-scroll-bars)
     (visibility . nil)
-    ,@(bound-and-true-p drgnx-look-palette)))
+    ,@(assq-delete-all 'child-frame-border-width (copy-sequence (drgnx-palette-frame--look)))))
+
+(defun drgnx-palette-frame--look ()
+  "The look's parameters for the palette's frame (the variant's table, or the user's `drgnx-look-palette')."
+  (if (fboundp 'drgnx-look-palette-current) (drgnx-look-palette-current) (bound-and-true-p drgnx-look-palette)))
+
+(defun drgnx-palette-frame-restyle ()
+  "Give the palette's frame, when it exists, the look's parameters again (a theme changed the variant).  A key the
+new table leaves out is cleared; the border width is in the parent's pixels."
+  (when (frame-live-p drgnx-palette-frame--frame)
+    (let ((look (drgnx-palette-frame--look)) (parent (frame-parent drgnx-palette-frame--frame)))
+      (dolist (k '(shadow backdrop-blur))
+        (unless (assq k look) (set-frame-parameter drgnx-palette-frame--frame k nil)))
+      (set-frame-parameter drgnx-palette-frame--frame 'child-frame-border-width
+                           (drgnx-palette-frame--px (or parent drgnx-palette-frame--frame)
+                                                    (or (alist-get 'child-frame-border-width look) 0)))
+      (dolist (p look)
+        (unless (eq (car p) 'child-frame-border-width) (set-frame-parameter drgnx-palette-frame--frame (car p) (cdr p)))))))
 
 (defun drgnx-palette-frame--ensure (parent)
   "The palette's frame, made if need be, under PARENT."
@@ -64,7 +86,7 @@
 (defun drgnx-palette-frame--place (frame parent)
   "Size FRAME for the candidates and put it top-centre in PARENT.
 The window is `vertico-count' + 2 lines high: `vertico-buffer' takes the mode line and the input line off."
-  (let* ((lh (frame-char-height parent))
+  (let* ((lh (drgnx-palette-frame--px parent drgnx-palette-frame-row-px))
          (width (min (drgnx-palette-frame--px parent drgnx-palette-frame-width)
                      (max (drgnx-palette-frame--px parent 100)
                           (- (frame-pixel-width parent) (drgnx-palette-frame--px parent 32)))))
@@ -73,9 +95,27 @@ The window is `vertico-count' + 2 lines high: `vertico-buffer' takes the mode li
     (set-frame-position frame (max 0 (/ (- (frame-pixel-width parent) (frame-pixel-width frame)) 2))
                         (round (* drgnx-palette-frame-top (frame-pixel-height parent))))))
 
-(defun drgnx-palette-frame--display (_buffer _alist)
+(declare-function drgnx-wb--natural-row-height "drgnx-wb")
+
+(defun drgnx-palette-frame--spacing (rows)
+  "The `line-spacing' that brings a UI row to ROWS logical pixels: the extra half above, half below; nil on a
+terminal or before the dock's measure exists."
+  (when (and (display-graphic-p) (fboundp 'drgnx-wb--natural-row-height))
+    (let* ((scale (if (fboundp 'frame-scale-factor) (float (frame-scale-factor)) 1.0))
+           (extra (max 0 (- (round (* rows scale)) (drgnx-wb--natural-row-height)))))
+      (cons (/ extra 2) (- extra (/ extra 2))))))
+
+(defun drgnx-palette-frame-minibuffer-rows ()
+  "On `minibuffer-setup-hook': this minibuffer's candidate rows are 24 logical pixels in the UI font."
+  (face-remap-add-relative 'default 'drgnx-ui-text)
+  (when-let* ((spacing (drgnx-palette-frame--spacing drgnx-palette-frame-minibuffer-row-px)))
+    (setq-local line-spacing spacing)))
+
+(defun drgnx-palette-frame--display (buffer _alist)
   "The display action of `vertico-buffer-display-action' for the palette: the frame's window, frame shown.
-`vertico-buffer' puts the minibuffer buffer in it."
+`vertico-buffer' puts the minibuffer buffer in it; its rows are the palette's 32 pixels."
+  (when-let* (((buffer-live-p buffer)) (spacing (drgnx-palette-frame--spacing drgnx-palette-frame-row-px)))
+    (with-current-buffer buffer (setq-local line-spacing spacing)))
   (let* ((parent (window-frame (minibuffer-selected-window)))
          (frame (drgnx-palette-frame--ensure parent)))
     (drgnx-palette-frame--place frame parent)

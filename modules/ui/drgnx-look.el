@@ -10,6 +10,7 @@
 ;;; Code:
 (require 'cl-lib)
 (require 'seq)
+(require 'face-remap)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-wb)
@@ -17,46 +18,165 @@
 ;; the decorations module sits beside this file (modules are not on the load path)
 (unless (featurep 'drgnx-decor)
   (load (expand-file-name "drgnx-decor" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+;; so does the font roles' (their settings are declared when it loads)
+(unless (featurep 'drgnx-look-fonts)
+  (load (expand-file-name "drgnx-look-fonts" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-look-density)
+  (load (expand-file-name "drgnx-look-density" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+;; and the colours it derives from other themes
+(unless (featurep 'drgnx-look-derive)
+  (load (expand-file-name "drgnx-look-derive" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-look-follow)
+  (load (expand-file-name "drgnx-look-follow" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(declare-function drgnx-look-variant "drgnx-theme-gen" (&optional frame))
+(declare-function drgnx-look-density-value "drgnx-look-density" (key &optional density))
+(defvar drgnx-look-density-changed-hook)
+(declare-function drgnx-look-follow-on "drgnx-look-follow" ())
+(declare-function drgnx-look-follow-off "drgnx-look-follow" ())
+(declare-function drgnx-look-follow-apply "drgnx-look-follow" ())
+(defvar drgnx-look-follow--loading)
+(declare-function drgnx-look-derive-on "drgnx-look-derive" ())
+(declare-function drgnx-look-derive-off "drgnx-look-derive" ())
+(declare-function drgnx-look-density-on "drgnx-look-density" ())
+(declare-function drgnx-look-density-off "drgnx-look-density" ())
+(declare-function drgnx-look-fonts-on "drgnx-look-fonts" ())
+(declare-function drgnx-look-fonts-off "drgnx-look-fonts" ())
 (declare-function drgnx-decor-faces-on "drgnx-decor" ())
 (declare-function drgnx-decor-activate "drgnx-decor" ())
 
 ;;;; Chrome (Glitnir, the compositor)
 
-(defcustom drgnx-look-chrome
-  '((corner-radius . 8) (shadow . (:blur 16 :offset (0 . 6) :spread 0 :opacity 0.35)) (transition . pop))
+(declare-function drgnx-look-variant "drgnx-theme-gen" (&optional frame))
+
+(drgnx-defsetting drgnx-look-motion 'auto
+  "Motion of popups, the palette and notices under Glitnir: `auto' follows the desktop's reduced-motion
+preference, `full' always moves, `reduced' never does (no transitions; blur and shadows stay).
+A change applies at once."
+  :type '(choice (const auto) (const full) (const reduced)) :group 'drgnx-look
+  :scope 'global :agents 'never :apply #'drgnx-look--motion-apply
+  :schema '(enum auto full reduced))
+
+(defun drgnx-look--float-motion (alist)
+  "ALIST without its `transition' when motion is `reduced'."
+  (if (eq drgnx-look-motion 'reduced) (assq-delete-all 'transition (copy-sequence alist)) alist))
+
+(defun drgnx-look-chrome-for (variant)
+  "The chrome of popups (child frames) under Glitnir in VARIANT (`dark', `light' or `hc'), in logical pixels.
+High contrast has no shadow and a 1 px ring (the `child-frame-border' face, `drgnx-border-strong')."
+  (drgnx-look--float-motion
+   (pcase variant
+     ('hc '((corner-radius . 8) (child-frame-border-width . 1) (transition . pop)))
+     (_ `((corner-radius . 8)
+          (shadow . (:blur 16 :offset (0 . 6) :spread 0 :opacity ,(if (eq variant 'light) 0.14 0.35)))
+          (transition . pop))))))
+
+(defun drgnx-look-palette-for (variant)
+  "The floating command palette's child frame parameters in VARIANT, in logical pixels.
+High contrast is opaque, with no shadow and no blur, and a 2 px ring."
+  (drgnx-look--float-motion
+   (pcase variant
+     ('hc '((corner-radius . 12) (alpha-background . 1.0) (child-frame-border-width . 2) (transition . pop)))
+     (_ `((corner-radius . 12)
+          (shadow . (:blur 48 :offset (0 . 16) :spread 0 :opacity ,(if (eq variant 'light) 0.22 0.50)))
+          (alpha-background . 0.90) (backdrop-blur . 12) (transition . pop))))))
+
+(defcustom drgnx-look-chrome (drgnx-look-chrome-for 'dark)
   "The chrome of popups (child frames) under Glitnir, in logical pixels: `child-frame-chrome' while ui/look is on.
-No colours: the shadow takes the `child-frame-shadow' face, the border what the toolkit drew."
+Left at its standard value, the chrome follows the theme's variant (`drgnx-look-chrome-for'); a value you set stands
+in every variant.  No colours: the shadow takes the `child-frame-shadow' face, the border the `child-frame-border' face."
   :type 'sexp :group 'drgnx-face)
 
-(defcustom drgnx-look-palette
-  '((corner-radius . 12) (shadow . (:blur 60 :offset (0 . 24) :spread 0 :opacity 0.6))
-    (alpha-background . 0.82) (backdrop-blur . 10) (transition . pop))
+(defcustom drgnx-look-palette (drgnx-look-palette-for 'dark)
   "The floating command palette's child frame parameters under Glitnir, in logical pixels.
-The 0.82 is a placeholder the look session tunes.  No colours: the shadow takes the `child-frame-shadow' face."
+Left at its standard value, they follow the theme's variant (`drgnx-look-palette-for'); a value you set stands in
+every variant.  No colours: the shadow takes the `child-frame-shadow' face."
   :type 'sexp :group 'drgnx-face)
+
+(defun drgnx-look--float-customised-p (symbol)
+  "Non-nil when SYMBOL's value is not its standard value (the user, Customize or a settings file set it)."
+  (not (equal (symbol-value symbol) (eval (car (get symbol 'standard-value)) t))))
+
+(defun drgnx-look-chrome-current (&optional _frame)
+  "The popup chrome now: the user's `drgnx-look-chrome' when customised, else the table for the variant.
+Also the function `child-frame-chrome' holds while ui/look is on, so a theme change needs only a refresh."
+  (if (drgnx-look--float-customised-p 'drgnx-look-chrome)
+      drgnx-look-chrome
+    (drgnx-look-chrome-for (drgnx-look-variant))))
+
+(defun drgnx-look-palette-current ()
+  "The palette's frame parameters now: the user's `drgnx-look-palette' when customised, else the table."
+  (if (drgnx-look--float-customised-p 'drgnx-look-palette)
+      drgnx-look-palette
+    (drgnx-look-palette-for (drgnx-look-variant))))
 
 (defvar child-frame-chrome)
+(defvar glitnir-reduced-motion)
 (declare-function glitnir-refresh "glitnir")
+(declare-function drgnx-palette-frame-restyle "drgnx-palette-frame" ())
+
+(defun drgnx-look--float-refresh ()
+  "Popups and the palette take the values for the variant now on, at once (one refresh)."
+  (when (featurep 'glitnir)
+    (when (fboundp 'drgnx-palette-frame-restyle) (drgnx-palette-frame-restyle))
+    (glitnir-refresh)))
+
+(defun drgnx-look--motion-value ()
+  "`glitnir-reduced-motion' for `drgnx-look-motion': `auto' (the desktop says), nil for `full', t for `reduced'."
+  (pcase drgnx-look-motion ('auto 'auto) ('full nil) (_ t)))
+
+(defun drgnx-look--motion-set ()
+  "Set `glitnir-reduced-motion' as ui/look (`drgnx-module-set': a value you gave it stays, and the module's teardown
+gives the option back)."
+  (drgnx-module-set 'glitnir-reduced-motion (drgnx-look--motion-value)))
+
+(defvar drgnx-look--motion-door nil
+  "While ui/look runs under Glitnir: `drgnx-look--motion-set' run as the module, so a later change of
+`drgnx-look-motion' is undone with the module too.  nil otherwise.")
+
+(defun drgnx-look--motion-apply ()
+  "The `:apply' of `drgnx-look-motion': `glitnir-reduced-motion' follows it while ui/look runs under Glitnir, then
+the popups and the palette are styled again."
+  (when drgnx-look--motion-door (funcall drgnx-look--motion-door))
+  (when (drgnx-module-running-p 'ui/look) (drgnx-look--float-refresh)))
+
+(defun drgnx-look--motion-on ()
+  "In ui/look's setup: `glitnir-reduced-motion' follows `drgnx-look-motion' now and on every change, as the module."
+  (drgnx-look--motion-set)
+  (setq drgnx-look--motion-door (drgnx-modules-with-owner (drgnx-look--motion-set)))
+  (drgnx-modules-push-undo "motion door" (lambda () (setq drgnx-look--motion-door nil))))
+
+(defun drgnx-look--float-on-theme (&rest _)
+  "`enable-theme-functions' and `disable-theme-functions': the variant may have changed."
+  (drgnx-look--float-refresh))
 
 (defun drgnx-look--chrome-on ()
   "With Glitnir: popups rounded and shadowed, at once (`child-frame-chrome' set through the module; its undo
-restores the old value, and the refresh recorded before it runs after that).  Without it, nothing."
+restores the old value, and the refresh recorded before it runs after that).  Without it, nothing.  The chrome
+follows the theme's variant: the option holds a function until the module is off."
   (when (featurep 'glitnir)
     (drgnx-modules-push-undo "glitnir chrome refresh" (lambda () (glitnir-refresh)))
-    (drgnx-module-set 'child-frame-chrome drgnx-look-chrome)
+    (drgnx-module-set 'child-frame-chrome #'drgnx-look-chrome-current)
+    (add-hook 'enable-theme-functions #'drgnx-look--float-on-theme)
+    (add-hook 'disable-theme-functions #'drgnx-look--float-on-theme)
+    (drgnx-modules-push-undo "popup variant hooks"
+                             (lambda () (remove-hook 'enable-theme-functions #'drgnx-look--float-on-theme)
+                               (remove-hook 'disable-theme-functions #'drgnx-look--float-on-theme)))
     (drgnx-decor-faces-on)
+    (drgnx-look--motion-on)
     (glitnir-refresh)))
 
 ;;;; Cards (Glitnir, the compositor)
 
 (defcustom drgnx-look-card
   '((corner-radius . 10) (shadow . (:blur 3 :offset (0 . 1) :spread 0 :opacity 0.45))
-    (ring . (vertical-border . 0.6)) (gap . 6))
+    (ring . (drgnx-border . 0.6)))
   "The card look of the docked panes (Explorer, panel, right dock) and the editor groups under Glitnir, in logical pixels.
-`corner-radius', `shadow' and `ring' become the window parameters Glitnir reads; `gap' is the frame's
-`right-divider-width' and `bottom-divider-width', the room the ring and shadow are drawn in (set in device
-pixels: the gap times the frame's scale, and again when the scale changes).  The ring is a face
-\(its foreground) and an opacity: no colour is named here."
+`corner-radius', `shadow' and `ring' become the window parameters Glitnir reads, with the opacities of the active
+variant (`drgnx-look--card-value': ring 0.6 dark, 0.8 light, 1.0 high contrast; shadow 0.45, 0.08, none) and the
+selected window's ring the accent at 1.0.  The gap between cards, the room the ring and shadow are drawn in, is the
+density's (`drgnx-look-density-value' `gap') in the frame's pixels, set as the dividers and the frame's edge, and
+again when the scale or the density changes.  The ring is a face (its foreground) and an opacity: no colour is
+named here."
   :type 'sexp :group 'drgnx-face)
 
 (defun drgnx-look--cards-p ()
@@ -79,10 +199,28 @@ An editor group is an ordinary window: not the minibuffer, a package's side wind
   "The graphical root frames."
   (seq-filter (lambda (f) (and (display-graphic-p f) (not (frame-parent f)))) (frame-list)))
 
+(defun drgnx-look--card-value (key)
+  "Card parameter KEY (`corner-radius', `shadow' or `ring') for the active variant: `drgnx-look-card' with the
+variant's opacities, or nil when it has none (no shadow in high contrast)."
+  (let ((base (alist-get key drgnx-look-card)) (variant (drgnx-look-variant)))
+    (pcase key
+      ('ring (and base (cons 'drgnx-border (pcase variant ('light 0.8) ('hc 1.0) (_ 0.6)))))
+      ('shadow (and base (not (eq variant 'hc))
+                    (plist-put (copy-sequence base) :opacity (if (eq variant 'light) 0.08 0.45))))
+      (_ base))))
+
+(defun drgnx-look--card-focused-p (window)
+  "Non-nil when WINDOW is its frame's selected window (the one under the minibuffer while it is used)."
+  (let ((sel (frame-selected-window (window-frame window))))
+    (eq window (if (window-minibuffer-p sel) (minibuffer-selected-window) sel))))
+
 (defun drgnx-look--card-set (window)
-  "Give WINDOW the card parameters, only those that differ (a setting of one reruns the hooks)."
+  "Give WINDOW the card parameters, only those that differ (a setting of one reruns the hooks).  The selected
+window's ring is the accent."
   (dolist (p drgnx-look--card-parameters)
-    (let ((v (alist-get p drgnx-look-card)))
+    (let ((v (if (and (eq p 'ring) (drgnx-look--card-value 'ring) (drgnx-look--card-focused-p window))
+                 '(drgnx-accent . 1.0)
+               (drgnx-look--card-value p))))
       (unless (equal (window-parameter window p) v) (set-window-parameter window p v))))
   (unless (window-parameter window 'drgnx-look-card) (set-window-parameter window 'drgnx-look-card t)))
 
@@ -92,9 +230,9 @@ An editor group is an ordinary window: not the minibuffer, a package's side wind
     (dolist (p (cons 'drgnx-look-card drgnx-look--card-parameters)) (set-window-parameter window p nil))))
 
 (defun drgnx-look--card-gap-px (frame)
-  "The gap in FRAME's own pixels: `gap' logical pixels times the frame's scale (a frame pixel is a device pixel
-on the native shell)."
-  (round (* (alist-get 'gap drgnx-look-card) (frame-scale-factor frame))))
+  "The gap in FRAME's own pixels: the density's `gap' logical pixels times the frame's scale (a frame pixel is a
+device pixel on the native shell)."
+  (round (* (drgnx-look-density-value 'gap) (frame-scale-factor frame))))
 
 (defun drgnx-look--card-follow-scale (frame)
   "Give FRAME's dividers the gap again when its scale changed under it (a frame that is a card frame only)."
@@ -109,9 +247,59 @@ on the native shell)."
   "The store's `frame-resized': a scale change resizes the frame, so the gap is given again in its pixels."
   (drgnx-look--card-follow-scale (plist-get data :frame)))
 
+(defconst drgnx-look--island-faces
+  '((window-divider . :foreground) (window-divider-first-pixel . :foreground)
+    (window-divider-last-pixel . :foreground) (internal-border . :background))
+  "The faces that paint the gap between cards and at the frame's edge, with the attribute that carries the colour.")
+
+(defun drgnx-look--island-faces-set (frame)
+  "On FRAME alone, paint the gap faces in `drgnx-surface-gap's background (a theme's own divider colour, such as
+modus's grey, would stripe the gap).  Non-nil when a face changed."
+  (let ((gap (face-background 'drgnx-surface-gap frame t)) (changed nil))
+    (when (and (stringp gap) (not (string-prefix-p "unspecified" gap)))
+      (pcase-dolist (`(,face . ,attr) drgnx-look--island-faces)
+        (unless (equal (face-attribute face attr frame) gap)
+          (set-face-attribute face frame attr gap)
+          (setq changed t))))
+    changed))
+
+(defun drgnx-look--island-faces-restore (frame)
+  "Give FRAME's gap faces back to the enabled themes."
+  (pcase-dolist (`(,face . ,_) drgnx-look--island-faces) (face-spec-recalc face frame)))
+
+(defun drgnx-look--islands-refresh (&rest _)
+  "A theme, a density or a frame changed: every card frame has the gap, its faces and its cards again."
+  (dolist (f (frame-list))
+    (when (frame-parameter f 'drgnx-look-card-saved) (drgnx-look--card-frame f))))
+
+(defun drgnx-look--islands-new-frame (&rest _)
+  "`after-make-frame-functions': a new graphical frame gets cards while Glitnir draws them."
+  (drgnx-look-cards-apply))
+
+(defun drgnx-look--islands-on ()
+  "The gap faces and the gap follow themes, new frames and the density, until `drgnx-look--islands-off'."
+  (add-hook 'enable-theme-functions #'drgnx-look--islands-refresh 90)
+  (add-hook 'disable-theme-functions #'drgnx-look--islands-refresh 90)
+  (add-hook 'after-make-frame-functions #'drgnx-look--islands-new-frame)
+  (add-hook 'drgnx-look-density-changed-hook #'drgnx-look--islands-refresh))
+
+(defun drgnx-look--islands-off ()
+  "Undo `drgnx-look--islands-on'."
+  (remove-hook 'enable-theme-functions #'drgnx-look--islands-refresh)
+  (remove-hook 'disable-theme-functions #'drgnx-look--islands-refresh)
+  (remove-hook 'after-make-frame-functions #'drgnx-look--islands-new-frame)
+  (remove-hook 'drgnx-look-density-changed-hook #'drgnx-look--islands-refresh))
+
+(defun drgnx-look--cards-selected-changed (data)
+  "The store's `selected-changed' (now lane): the focused tile's ring is the accent, the others' the variant's."
+  (when-let* ((frame (plist-get data :frame)) ((frame-live-p frame)))
+    (dolist (w (window-list frame 'nomini))
+      (when (window-parameter w 'drgnx-look-card) (drgnx-look--card-set w)))))
+
 (defun drgnx-look--card-frame (frame)
   "Make the docked panes of FRAME cards and widen the dividers to the gap; the frame's own widths are kept.  The
-frame's edge gets the same gap (`internal-border-width'), in the dividers' colour."
+frame's edge gets the same gap (`internal-border-width').  The dividers and the edge are painted in the gap's
+colour on this frame (`drgnx-look--island-faces-set'), whatever the theme says."
   (let ((gap (drgnx-look--card-gap-px frame)) (recolour nil))
     (unless (frame-parameter frame 'drgnx-look-card-saved)
       (set-frame-parameter frame 'drgnx-look-card-saved
@@ -120,13 +308,10 @@ frame's edge gets the same gap (`internal-border-width'), in the dividers' colou
                                  (frame-parameter frame 'internal-border-width))))
     (dolist (p '(right-divider-width bottom-divider-width internal-border-width))
       (unless (eql (frame-parameter frame p) gap) (set-frame-parameter frame p gap)))
-    (let ((colour (face-foreground 'window-divider frame t)))
-      (when (and colour (not (equal colour (face-background 'internal-border frame))))
-        (set-face-background 'internal-border colour frame)
-        (setq recolour t)))
+    (setq recolour (drgnx-look--island-faces-set frame))
     (dolist (w (window-list frame 'nomini))
       (if (drgnx-look--card-window-p w) (drgnx-look--card-set w) (drgnx-look--card-unset w)))
-    ;; Glitnir reads a card's colours (what its corners show: the dividers' colour) when it resolves the card: a
+    ;; Glitnir reads a card's colours (what its corners show: the gap's colour) when it resolves the card: a
     ;; colour set on the frame outside a theme shows after a refresh
     (when (and recolour (fboundp 'glitnir-refresh)) (glitnir-refresh))))
 
@@ -137,7 +322,7 @@ frame's edge gets the same gap (`internal-border-width'), in the dividers' colou
     (set-frame-parameter frame 'right-divider-width (car saved))
     (set-frame-parameter frame 'bottom-divider-width (cadr saved))
     (set-frame-parameter frame 'internal-border-width (or (nth 2 saved) 0))
-    (set-face-background 'internal-border nil frame)
+    (drgnx-look--island-faces-restore frame)
     (set-frame-parameter frame 'drgnx-look-card-saved nil)))
 
 (defun drgnx-look-cards-apply ()
@@ -151,10 +336,11 @@ frame's edge gets the same gap (`internal-border-width'), in the dividers' colou
 
 ;;;; Theme
 
-(drgnx-defsetting drgnx-look-theme nil
-  "The colour theme ui/look loads at start (Color Theme picks it); nil: the theme Emacs starts with.  A change
-switches the theme at once while the module runs."
-  :type '(choice (const :tag "Emacs's own" nil) symbol) :group 'drgnx
+(drgnx-defsetting drgnx-look-theme 'auto
+  "The colour theme ui/look loads at start (Color Theme picks it); `auto': drgnx Dark, Light or High Contrast as
+the desktop says, until a theme of yours is loaded; nil: the theme Emacs starts with.  A change switches the theme
+at once while the module runs."
+  :type '(choice (const :tag "Follow the desktop" auto) (const :tag "Emacs's own" nil) symbol) :group 'drgnx
   :scope 'global :workspace 'never :agents 'never :apply #'drgnx-look--settings-apply
   :schema '(or null symbol))
 
@@ -174,6 +360,11 @@ loaded since.  Its teardown gives the previous ones back.")
   "Zen mode off; the themes the module loaded off, the ones enabled before its setup on again (a theme someone
 else enabled since stays)."
   (when (frame-parameter nil 'drgnx-look-zen) (drgnx-look-zen))
+  (drgnx-look-follow-off)
+  (drgnx-look-echo-area-off)
+  (drgnx-look-density-off)
+  (drgnx-look-fonts-off)
+  (drgnx-look-derive-off)
   (when drgnx-look--taken
     (dolist (theme (plist-get drgnx-look--taken :ours))
       (when (memq theme custom-enabled-themes) (disable-theme theme)))
@@ -184,11 +375,17 @@ else enabled since stays)."
 
 (defun drgnx-look--settings-apply ()
   "The `:apply' of `drgnx-look-theme': switch to it, while the module runs and the theme is installed.  A theme
-that does not load is said, and the colours stay."
-  (when (and drgnx-look-theme (drgnx-module-running-p 'ui/look)
-             (not (equal custom-enabled-themes (list drgnx-look-theme)))
+that does not load is said, and the colours stay.  `auto' hands over to the follower."
+  (when (and drgnx-look-theme (drgnx-module-running-p 'ui/look))
+    (if (eq drgnx-look-theme 'auto)
+        (drgnx-look-follow-apply)
+      (drgnx-look--settings-apply-theme))))
+
+(defun drgnx-look--settings-apply-theme ()
+  "Switch to the theme `drgnx-look-theme' names, when it is installed."
+  (when (and (not (equal custom-enabled-themes (list drgnx-look-theme)))
              (memq drgnx-look-theme (custom-available-themes)))
-    (condition-case e (drgnx-look--load drgnx-look-theme)
+    (condition-case e (let ((drgnx-look-follow--loading t)) (drgnx-look--load drgnx-look-theme))
       (error (require 'drgnx-notice)
              (drgnx-notify 'config 'warn (format "the colour theme %s does not load (%s); Color Theme picks another"
                                                  drgnx-look-theme (error-message-string e))
@@ -196,7 +393,8 @@ that does not load is said, and the colours stay."
 
 (defun drgnx-look-load-theme (theme)
   "Make THEME the only theme and remember it (`drgnx-look-theme', in settings.el).  A settings.el with a mistake
-refuses (`drgnx-settings-refused') before the theme changes."
+refuses (`drgnx-settings-refused') before the theme changes.  THEME is your choice, one of drgnx's own included:
+under `auto' the follower pauses, as for a `load-theme' in config.el."
   (drgnx-settings-area-ensure-writable)
   (drgnx-look--load theme)
   (drgnx-modules-update-state (lambda (state) (plist-put (copy-sequence state) :theme theme))))
@@ -205,6 +403,42 @@ refuses (`drgnx-settings-refused') before the theme changes."
   "Pick the colour theme (remembered for the next start)."
   (interactive (list (intern (completing-read "Color theme: " (mapcar #'symbol-name (custom-available-themes)) nil t))))
   (drgnx-look-load-theme theme))
+
+;;;; The echo area on the gap
+
+(defconst drgnx-look--echo-buffers '(" *Echo Area 0*" " *Echo Area 1*" " *Minibuf-0*")
+  "The echo area's buffers: the two Emacs shows messages in, and the minibuffer window's own while no prompt is open.")
+
+(defvar-local drgnx-look--gap-cookie nil "The cookie of the remap that puts this buffer on the gap surface.")
+
+(defun drgnx-look--gap-on ()
+  "Draw `default' as the gap surface in the current buffer (once)."
+  (unless drgnx-look--gap-cookie
+    (setq drgnx-look--gap-cookie (face-remap-add-relative 'default 'drgnx-surface-gap))))
+
+(defun drgnx-look--gap-off ()
+  "Take the gap surface off the current buffer."
+  (when drgnx-look--gap-cookie
+    (face-remap-remove-relative drgnx-look--gap-cookie)
+    (setq drgnx-look--gap-cookie nil)
+    (when (member (assq 'default face-remapping-alist) '((default) (default default)))
+      (setq face-remapping-alist (assq-delete-all 'default face-remapping-alist)))))
+
+(defun drgnx-look--minibuffer-gap ()
+  "On `minibuffer-setup-hook': the minibuffer is on the gap surface, like the echo area."
+  (drgnx-look--gap-on))
+
+(defun drgnx-look-echo-area-on ()
+  "The echo area and every minibuffer on the gap surface."
+  (add-hook 'minibuffer-setup-hook #'drgnx-look--minibuffer-gap)
+  (dolist (name drgnx-look--echo-buffers)
+    (when-let* ((b (get-buffer name))) (with-current-buffer b (drgnx-look--gap-on)))))
+
+(defun drgnx-look-echo-area-off ()
+  "Undo `drgnx-look-echo-area-on'."
+  (remove-hook 'minibuffer-setup-hook #'drgnx-look--minibuffer-gap)
+  (dolist (b (buffer-list))
+    (when (buffer-local-value 'drgnx-look--gap-cookie b) (with-current-buffer b (drgnx-look--gap-off)))))
 
 ;;;; Zoom
 
@@ -261,7 +495,14 @@ refuses (`drgnx-settings-refused') before the theme changes."
                        ;; change only with the scale, which comes idle
                        (drgnx-state-subscribe 'windows-changed #'drgnx-look--cards-windows-changed :lane 'now)
                        (drgnx-state-subscribe 'frame-resized #'drgnx-look--cards-frame-resized)
+                       (drgnx-state-subscribe 'selected-changed #'drgnx-look--cards-selected-changed :lane 'now)
+                       (drgnx-modules-push-undo "island faces" #'drgnx-look--islands-off)
+                       (drgnx-look--islands-on)
                        (drgnx-look-cards-apply)
+                       (drgnx-look-derive-on)
+                       (drgnx-look-fonts-on)
+                       (drgnx-look-density-on)
+                       (drgnx-look-echo-area-on)
                        (drgnx-command-define 'preferences-theme :category "Preferences" :title "Color Theme"
                                              :command #'drgnx-look-choose-theme :menu '("Options") :doc "Pick the colour theme (remembered)")
                        (drgnx-command-define 'view-zen :category "View" :title "Zen Mode" :scope 'window
@@ -273,8 +514,10 @@ refuses (`drgnx-settings-refused') before the theme changes."
                                              :map 'drgnx-decor-button-map :when (lambda () (get-text-property (point) 'drgnx-decor-action))
                                              :doc "Run the decoration button at point")
                        ;; last, and guarded: a theme that errors leaves the commands (Color Theme picks another)
+                       (drgnx-look-follow-on)
+                       ;; Color Theme's pick of an earlier session: your choice, so the follower pauses for it
                        (when-let* ((theme (drgnx-look--saved-theme)))
-                         (when (memq theme (custom-available-themes))
+                         (when (memq theme (custom-available-themes))      ; `auto' is not one: the follower chose
                            (condition-case e (drgnx-look--load theme)
                              (error (message "drgnx: the colour theme %s does not load (%s); Color Theme picks another"
                                              theme (error-message-string e))))))))

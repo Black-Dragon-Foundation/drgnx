@@ -27,10 +27,23 @@ open: when you have answered, the palette is there as you left it.
 | Parameter | Default | |
 |---|---|---|
 | `corner-radius` | 12 | logical pixels |
-| `shadow` | `(:blur 60 :offset (0 . 24) :spread 0 :opacity 0.6)` | colour comes from the `child-frame-shadow` face |
-| `alpha-background` | 0.82 | a placeholder; the look session tunes it |
-| `backdrop-blur` | 10 | logical pixels of blur radius behind the box |
+| `shadow` | `(:blur 48 :offset (0 . 16) :spread 0 :opacity 0.5)` | 0.22 in the light theme, none in High Contrast; colour comes from the `child-frame-shadow` face |
+| `alpha-background` | 0.90 | 1.0 in High Contrast |
+| `backdrop-blur` | 12 | logical pixels of blur radius behind the box; none in High Contrast |
 | `transition` | `pop` | fade and pop in and out |
 
 `drgnx-palette-frame-width` (640 logical pixels, at any display scale) and `drgnx-palette-frame-top` (0.12, the fraction
 of the frame's height above the box) place it. No colours are set here: the theme's faces colour everything.
+
+## Rows
+
+Rows are in the UI font, 32 logical pixels high in the floating palette and 24 in the minibuffer. The letters you
+typed are in the accent colour, semibold; the current row is the selection colour. Each row shows its key as keycaps
+(`Ctrl` `Shift` `P`), from the key profile you use, and, for a command you ran lately, when ("used 2 min ago").
+The commands you ran from the palette come first, newest first, then the rest in their usual order; the list is grouped
+Commands, Files and Agents, and is kept in `palette-history.eld` in drgnx's state folder (200 commands at most).
+
+## The echo area
+
+With `ui/look` on, the echo area and the minibuffer are drawn on the same surface as the gap between the cards, and the
+prompt is in the accent colour.
