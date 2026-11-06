@@ -203,5 +203,21 @@ answered ok."
       (drgnx-history--forget b)
       (kill-buffer b))))
 
+(ert-deftest drgnx-history/no-prompt-in-event-path ()
+  ;; D lint: the code that runs from the hub's events (between the markers of drgnx-history-revert.el) asks nothing and
+  ;; waits for nothing; the commands and the cards outside it may prompt, as they run when the user asks
+  (let ((file (locate-library "drgnx-history-revert.el")))
+    (should file)
+    (with-temp-buffer
+      (insert-file-contents file)
+      (let* ((from (progn (goto-char (point-min)) (re-search-forward "^;;;; The events") (point)))
+             (to (progn (re-search-forward "^;; end of the event path") (point)))
+             (body (buffer-substring from to)))
+        (should (> (length body) 500))
+        (dolist (fn '("read-string" "read-from-minibuffer" "completing-read" "y-or-n-p" "yes-or-no-p" "read-key"
+                      "read-char" "read-number" "read-file-name" "sit-for" "sleep-for" "accept-process-output"
+                      "drgnx-hub-call-sync" "pop-to-buffer" "ediff-buffers"))
+          (should-not (string-match-p (concat "(" (regexp-quote fn) "[ )\n]") body)))))))
+
 (provide 'history-test)
 ;;; history-test.el ends here
