@@ -33,7 +33,8 @@ compositor's answer to the size it was made with could put that back after the s
          (s (progn (make-directory project t)
                    (dolist (f '("README.md" "a.txt" "b.txt"))
                      (write-region (format "%s\n" f) nil (expand-file-name f project) nil 'silent))
-                   (drgnx-ui-start "drgnx" "1400x800" 30 t)))
+                   ;; the tier's monitor size: mutter has no scale 2 for a 1400x800 one
+                   (drgnx-ui-start "drgnx" nil 30 t)))
          (name (plist-get s :name))
          (sess (drgnx-ui-own-session name)))
     (unwind-protect
