@@ -19,6 +19,7 @@ pub mod mcp;
 pub mod plans;
 pub mod records;
 pub mod runners;
+pub mod say;
 pub mod search;
 pub mod settings;
 pub mod tasks;
@@ -223,6 +224,9 @@ params! {
     ForecastGet(forecast::ForecastParams),
     ForecastSession(forecast::SessionForecastParams),
     ForecastAccuracy(forecast::AccuracyParams),
+    SayStart(say::SayStart),
+    SayRevise(say::SayRevise),
+    SayEnd(say::SayById),
     RecordsImport(records::ImportParams),
     RecordsStatus(records::ByPath),
     RecordsProposals(records::ByPath),
@@ -274,6 +278,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(plans::methods());
     v.extend(timeline::methods());
     v.extend(forecast::methods());
+    v.extend(say::methods());
     v.extend(records::methods());
     v.extend(work::methods());
     v.extend(search::methods());

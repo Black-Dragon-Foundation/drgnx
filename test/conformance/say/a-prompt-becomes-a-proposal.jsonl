@@ -1,0 +1,24 @@
+{"scenario": "say/a-prompt-becomes-a-proposal", "requires": ["v1", "test-hooks"], "doc": "The user says what they want done; the planning chat (the mock Claude, no repository) answers with a drgnx-proposal block among prose. The hub checks it and proposes the job: say-proposal names it, the job is proposed with a proposal card whose title is the hub's (not the block's), its plan is a graph plan with the two tasks, the named profile is the task's, the budget and gate are the block's, and no worker runs: only the planning session. Pattern B: a virtual clock; each expectation waits on an event or an answer the hub sends after the fact it checks."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$ROOT/s.txt", "text": "say Here is the plan.\\nsay ```drgnx-proposal\\nsay {\"title\": \"Settings review\", \"tasks\": [{\"n\": 1, \"title\": \"Read the settings\", \"role\": \"review\", \"profile\": \"mock-claude\", \"deps\": [], \"body\": \"Read the settings code.\"}, {\"n\": 2, \"title\": \"Fix them\", \"role\": \"implement\", \"deps\": [1], \"body\": \"Fix what the review found.\"}], \"budget\": [{\"amount\": 20, \"unit\": \"usd\"}], \"gate\": \"review\"}\\nsay ```\n"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/s.txt\" \"--log\" \"$ROOT/s.log\")))) (drgnx-agents-routes ((implement \"mock-claude\"))))\n"}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "say/start", "params": {"text": "review the settings code, then fix what it finds", "repo": "$ROOT/repo"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "say-proposal", "data": {"id": "$sid", "job": "$capture:job"}}, "within_ms": 30000}
+{"do": "file", "path": "$ROOT/s.log", "contains": "drgnx-proposal", "count": 1}
+{"do": "file", "path": "$ROOT/s.log", "contains": "review the settings code, then fix what it finds", "count": 1}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "job/status", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$job", "status": "proposed", "title": "Settings review", "budget": 20.0}}, "within_ms": 5000}
+{"do": "sql_expect", "sql": "select count(*) from card where job = '$job' and kind = 'proposal' and state = 'open' and title like '%approve to start' and title not like '%Settings review%'", "rows": [[1]]}
+{"do": "sql_expect", "sql": "select count(*) from job where id = '$job' and plan like 'plan:%' and repo like '%/repo/'", "rows": [[1]]}
+{"do": "sql_expect", "sql": "select n, role from jtask where job = '$job' order by n", "rows": [[1, "review"], [2, "implement"]]}
+{"do": "sql_expect", "sql": "select json_extract(data, '$.profiles.\"' || id || '#1\"'), json_extract(data, '$.profiles.\"' || id || '#2\"'), json_extract(data, '$.gate') from job where id = '$job'", "rows": [["mock-claude", null, "review"]]}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/list"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"sessions": [{"id": "$sid", "role": "chat"}]}}, "within_ms": 5000}

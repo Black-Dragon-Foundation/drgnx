@@ -679,17 +679,23 @@ pub(crate) async fn load(
         .map_err(fail)
 }
 
-/// The profiles a role may use, in order (`drgnx-job-route`): the first runs it, the rest are its fallbacks.
+/// The profiles a role may use, in order (`drgnx-job-route`): the first runs it, the rest are its fallbacks.  `say`
+/// (the planning session of Say it) with no route of its own is `implement`'s, so nothing new needs configuring.
 pub(crate) fn route(front: &Front, role: &str) -> Vec<String> {
     let cur = front.settings.current();
-    cur.loaded
+    let found = cur
+        .loaded
         .values
         .agents_routes
         .iter()
         .find(|r| r.role == role)
         .map(|r| r.profiles.clone())
-        .filter(|p| !p.is_empty())
-        .unwrap_or_else(|| vec!["claude".to_owned()])
+        .filter(|p| !p.is_empty());
+    match found {
+        Some(p) => p,
+        None if role == "say" => route(front, "implement"),
+        None => vec!["claude".to_owned()],
+    }
 }
 
 /// The profile TASK gets an agent of: the one it was reassigned to, else its role's first.
@@ -1368,6 +1374,26 @@ pub async fn propose(
         budget: p.budget.map(|b| b.get()),
         auto: p.auto.unwrap_or(false),
         gate: p.gate,
+        only: None,
+    };
+    propose_job(front, caller, proposal).await
+}
+
+/// A graph plan PLAN proposed in REPO with a dollar BUDGET and GATE (Say it's proposal): the user's OK starts it.
+pub(crate) async fn propose_graph(
+    front: &Front,
+    caller: &Caller,
+    plan: &PlanRef,
+    repo: &str,
+    budget: Option<f64>,
+    gate: Option<MergeGate>,
+) -> Result<JobSummary, Error> {
+    let proposal = Proposal {
+        plan,
+        repo: Some(repo),
+        budget,
+        auto: false,
+        gate,
         only: None,
     };
     propose_job(front, caller, proposal).await

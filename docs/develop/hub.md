@@ -1148,6 +1148,9 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `runners/remove` | user | `{confirm: boolean, name: Id}` | `{name: string}` | yes |
 | `runners/set` | user | `{accept?: "all" \| "heavy", name: Id, profile?: "dedicated" \| "workstation", trust?: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |
 | `runners/unbench` | user | `{name: Id}` | `Runner` | yes |
+| `say/end` | user | `{id: Id}` | `boolean` | yes |
+| `say/revise` | user | `{id: Id, text: Text}` | `boolean` | yes |
+| `say/start` | user | `{profile?: string, project?: Id, repo: AbsPath, text: Text}` | `{id: string}` | yes |
 | `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, prefer?: string, servers: [ServerInfo]}` | no |
 | `search/index` | user | `{now?: boolean, rebuild?: boolean, root: AbsPath}` | `{started: boolean}` | yes |
 | `search/model-download` | user | `{consent: {bytes: natnum}, model: Id}` | `{started: boolean}` | yes |
@@ -2579,3 +2582,45 @@ day off, else `short` ("this window"). No spend or no rise: no `added_share`, an
 | `forecast/get` | user | the forecast of a job, from its data as proposed |
 | `forecast/session` | user | one more run like a session: one task of its role and profile, nothing recorded |
 | `forecast/accuracy` | user | per role and profile, the share of finished tasks that took no more than their p90, and the median of actual over p50 |
+
+## Say it
+
+One prompt becomes a proposed plan (`say.rs`). `say/start {text, repo, project?, profile?}` starts a planning session:
+a chat on `profile`, else the `say` route's first profile, which is the first `implement` route's when `say` has none
+(`runner::route`). It runs in a scratch folder of its own (no `cwd`: `spawn_plain`), with no repository, no task and
+no graph, so repository and graph text, the injection surface, never reach the session that shapes the plan. Its
+first prompt (origin `hub`) is the fixed instructions with the one block form, a digest of the profiles a task may
+name (those a job may run on), each role's route, the roles and the project's id (`say::digest`: settings only), and
+the user's words.
+
+The session's turn ends at the shell's `PromptDone` handling (`agents/session.rs`, where the last message is already
+read for `drgnx-report`): when its id is a planning session's (one set lookup), `(sid, message)` goes to `say::run`.
+A message with no `drgnx-proposal` block is a question: `say-message {id, text}` carries it to the editor. A block is
+parsed with every unknown key refused (`grants`, `approved`, `auto`, `repo` and the like: the format has `title`,
+`tasks` of `{n, title, role, profile?, deps, body}`, `budget` and `gate` only), and more than one block is refused.
+`say::check` then refuses, all at once: no title, no tasks or more than 32, a role other than `implement`, `test`,
+`docs`, `review` and `review-long`, a profile the settings do not have or a job may not run on
+(`runner::review::profile_refusal`), a body over 16 KiB, a dependency that is not there or goes round
+(`plan::check`), and a budget that is not a positive amount in `usd` or `usd-est`. A block that does not hold is
+answered with the reasons, twice at most; the third is `say-failed {id, why}` and the session is stopped. A block
+that holds is written as a graph plan as the user would (`plans/write`: each task's `role`, `profile` and `body`)
+and proposed with the repository `say/start` named, the smallest dollar budget of the block and its gate
+(`runner::propose_graph`): the job is `proposed` with its proposal card, whose title is the hub's (`card_title`),
+never the block's, and `say-proposal {id, job}` names it. The planning session's own use is the job's
+`data.planning` (`tokens`, `usd_est`, `usd`: numbers only), shown and not budgeted.
+
+The order of one planning session is a pure core (`say::SayCore`, every order tested with skuld): at most one prompt
+is in flight; a revision (`say/revise {id, text}`) that comes while a prompt, a check or a proposal is under way
+waits for it and replaces what it would have done; a revision of a standing proposal stops it (`job/stop`, while it is
+still proposed) and prompts again. `agents/stop` or `agents/kill` of a planning session stops its planning: nothing
+more is prompted or proposed, and a proposal of it still proposed is stopped. `say/end {id}` stops the session and
+forgets it; its proposal is a job and stays. Say's state is memory only: after a restart `say/revise` answers "the
+planning stopped: say it again", and a proposal it made stays a job with its card.
+
+| Method | Class | Answer |
+|---|---|---|
+| `say/start` | user | the planning session's id |
+| `say/revise` | user | true (refused for a planning session the hub no longer holds) |
+| `say/end` | user | true, or false for a session that is not a planning session |
+
+Events: `say-proposal {id, job}`, `say-message {id, text}` (agent-written), `say-failed {id, why}`.
