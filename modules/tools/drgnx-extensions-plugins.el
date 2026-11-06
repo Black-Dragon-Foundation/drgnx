@@ -103,11 +103,10 @@
 ;;;; The hub's plugins
 
 (defun drgnx-extensions-plugins--redraw ()
-  "Draw the list and the plugin pages again from what the hub said."
+  "Draw the list and every open details page (a plugin's, a package's) again from what the hub said."
   (when (get-buffer drgnx-extensions-list-buffer-name) (drgnx-extensions-list-refresh))
   (dolist (b (buffer-list))
-    (when (and (eq (buffer-local-value 'major-mode b) 'drgnx-extensions-details-mode)
-               (string-prefix-p "plugin:" (or (buffer-local-value 'drgnx-extensions-details--id b) "")))
+    (when (eq (buffer-local-value 'major-mode b) 'drgnx-extensions-details-mode)
       (with-current-buffer b (drgnx-extensions-details--refresh)))))
 
 (defun drgnx-extensions-plugins-refresh ()

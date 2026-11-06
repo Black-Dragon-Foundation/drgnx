@@ -59,6 +59,8 @@
          (drgnx-plugins--rows plugins)
          (default-value-on '("deny-rm")))
     (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (&rest _) nil))
+              ;; the page is shown as it is with the Extensions module on
+              ((symbol-function 'drgnx-module-running-p) (lambda (m) (eq m 'tools/extensions)))
               ((default-value 'drgnx-agents-plugins) default-value-on))
       (unwind-protect
           (progn

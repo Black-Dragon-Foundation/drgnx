@@ -106,5 +106,14 @@
         (should (string-search "Approve this version" text))
         (should (get-text-property (string-search "Approve this version" text) 'action text))))))
 
+(ert-deftest drgnx-extensions-plugins/the-cli-hint-is-only-for-the-page-without-the-view ()
+  (let ((drgnx-plugins--rows (list (drgnx-extensions-plugins-test--row :state "approved"))))
+    (cl-letf (((symbol-function 'drgnx-module-running-p) (lambda (m) (eq m 'tools/extensions))))
+      (should-not (string-search "ratatoskr plugins remove"
+                                 (with-temp-buffer (drgnx-plugins-page-insert "rewrite-msg") (buffer-string)))))
+    (cl-letf (((symbol-function 'drgnx-module-running-p) #'ignore))
+      (should (string-search "ratatoskr plugins remove"
+                             (with-temp-buffer (drgnx-plugins-page-insert "rewrite-msg") (buffer-string)))))))
+
 (provide 'extensions-plugins-test)
 ;;; extensions-plugins-test.el ends here

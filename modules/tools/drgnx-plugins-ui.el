@@ -181,9 +181,12 @@ sections on `drgnx-plugins-page-sections'.  The hash shown is kept (`drgnx-plugi
           (insert (drgnx-plugins--button (if (member name (drgnx-plugins--project-names root)) "[Turn off in this project]" "[Turn on in this project]")
                                          (lambda () (drgnx-plugins-project-toggle name root)))
                   " "))
-        (insert "\n  " (propertize (format "Replace: ratatoskr plugins install PATH --replace · Remove: ratatoskr plugins remove %s" name)
-                                   'face 'drgnx-plugins-label)
-                "\n")))
+        ;; in the Extensions view the page has Replace and Remove buttons of its own
+        (if (drgnx-module-running-p 'tools/extensions)
+            (insert "\n")
+          (insert "\n  " (propertize (format "Replace: ratatoskr plugins install PATH --replace · Remove: ratatoskr plugins remove %s" name)
+                                     'face 'drgnx-plugins-label)
+                  "\n"))))
     (put-text-property start (point) 'drgnx-plugins-name name)
     (put-text-property start (point) 'drgnx-plugins-hash (cdr (assoc name drgnx-plugins--shown)))))
 
