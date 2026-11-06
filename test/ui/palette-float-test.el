@@ -21,7 +21,7 @@
 
 (defvar vertico-multiform-categories)
 (defvar vertico-count)
-(defvar drgnx-look-palette)
+(declare-function drgnx-look-palette-current "drgnx-look" ())
 (defvar drgnx-palette-float-test--ran nil "The command the palette ran.")
 (declare-function glitnir-active-p "glitnir")
 (declare-function vertico-mode "vertico")
@@ -129,9 +129,10 @@ and the probe runs from that minibuffer's `post-command-hook' once the last of t
            (drgnx-test-wait-presented)
            (should (eq (frame-parent f) root))
            (should (frame-visible-p f))
-           ;; the look: the parameters of `drgnx-look-palette'
+           ;; the look: the parameters for the theme's variant (`drgnx-look-palette-for'; the session's theme is a
+           ;; light one, whose shadow is 0.22, not the dark 0.5 `drgnx-look-palette' holds as its standard value)
            (dolist (k '(corner-radius shadow backdrop-blur transition))
-             (should (equal (frame-parameter f k) (alist-get k drgnx-look-palette))))
+             (should (equal (frame-parameter f k) (alist-get k (drgnx-look-palette-current)))))
            ;; top-centre, inside the editor frame, at most 640 logical px wide
            (let ((e (drgnx-palette-float-test--edges f)) (w (frame-pixel-width root)))
              (should (<= (frame-pixel-width f) (drgnx-palette-frame--px root 640)))

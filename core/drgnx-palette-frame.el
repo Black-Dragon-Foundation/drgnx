@@ -83,11 +83,10 @@ new table leaves out is cleared; the border width is in the parent's pixels."
     (set-frame-parameter drgnx-palette-frame--frame 'parent-frame parent))
   drgnx-palette-frame--frame)
 
-(defun drgnx-palette-frame--place (frame parent)
+(defun drgnx-palette-frame--place (frame parent lh)
   "Size FRAME for the candidates and put it top-centre in PARENT.
-The window is `vertico-count' + 2 lines high: `vertico-buffer' takes the mode line and the input line off."
-  (let* ((lh (drgnx-palette-frame--px parent drgnx-palette-frame-row-px))
-         (width (min (drgnx-palette-frame--px parent drgnx-palette-frame-width)
+The window is `vertico-count' + 2 lines of LH pixels high: `vertico-buffer' takes the mode line and the input line off."
+  (let* ((width (min (drgnx-palette-frame--px parent drgnx-palette-frame-width)
                      (max (drgnx-palette-frame--px parent 100)
                           (- (frame-pixel-width parent) (drgnx-palette-frame--px parent 32)))))
          (count (default-value 'vertico-count)))
@@ -105,20 +104,34 @@ terminal or before the dock's measure exists."
            (extra (max 0 (- (round (* rows scale)) (drgnx-wb--natural-row-height)))))
       (cons (/ extra 2) (- extra (/ extra 2))))))
 
-(defun drgnx-palette-frame-minibuffer-rows ()
-  "On `minibuffer-setup-hook': this minibuffer's candidate rows are 24 logical pixels in the UI font."
-  (face-remap-add-relative 'default 'drgnx-ui-text)
-  (when-let* ((spacing (drgnx-palette-frame--spacing drgnx-palette-frame-minibuffer-row-px)))
+(defvar-local drgnx-palette-frame--floats nil
+  "Non-nil in the minibuffer buffer the palette's frame shows: its rows are the palette's, not the echo area's.")
+
+(defun drgnx-palette-frame--rows (row-px)
+  "The current minibuffer buffer's rows are ROW-PX logical pixels high (its `line-spacing')."
+  (when-let* ((spacing (drgnx-palette-frame--spacing row-px)))
     (setq-local line-spacing spacing)))
 
-(defun drgnx-palette-frame--display (buffer _alist)
+(defun drgnx-palette-frame-minibuffer-rows ()
+  "On `minibuffer-setup-hook': this minibuffer's candidate rows are in the UI font, 24 logical pixels high (32 when
+the palette's frame shows it, whichever of the two ran first)."
+  (face-remap-add-relative 'default 'drgnx-ui-text)
+  (drgnx-palette-frame--rows (if drgnx-palette-frame--floats drgnx-palette-frame-row-px
+                               drgnx-palette-frame-minibuffer-row-px)))
+
+(defun drgnx-palette-frame--display (_buffer _alist)
   "The display action of `vertico-buffer-display-action' for the palette: the frame's window, frame shown.
-`vertico-buffer' puts the minibuffer buffer in it; its rows are the palette's 32 pixels."
-  (when-let* (((buffer-live-p buffer)) (spacing (drgnx-palette-frame--spacing drgnx-palette-frame-row-px)))
-    (with-current-buffer buffer (setq-local line-spacing spacing)))
-  (let* ((parent (window-frame (minibuffer-selected-window)))
+`vertico-buffer' puts the minibuffer buffer in it (the buffer given here is a stand-in it kills at once), so the
+minibuffer buffer's rows become the palette's 32 pixels.  The window is as many of its lines high as `vertico-buffer'
+counts in it (`default-line-height'), so the list is `vertico-count' long."
+  (let* ((mb (window-buffer (active-minibuffer-window)))
+         (lh (with-current-buffer mb
+               (setq-local drgnx-palette-frame--floats t)
+               (drgnx-palette-frame--rows drgnx-palette-frame-row-px)
+               (default-line-height)))
+         (parent (window-frame (minibuffer-selected-window)))
          (frame (drgnx-palette-frame--ensure parent)))
-    (drgnx-palette-frame--place frame parent)
+    (drgnx-palette-frame--place frame parent lh)
     (make-frame-visible frame)
     (frame-root-window frame)))
 

@@ -37,6 +37,9 @@
           (delete-other-windows)
           (let* ((editor (selected-window)) (side (split-window editor nil 'right)))
             (switch-to-buffer (get-buffer-create "*look-themes-editor*"))
+            ;; a mode line without text: the default one ends in ERT's progress, the running test's name, which
+            ;; reaches the pixel looked at
+            (setq-local mode-line-format " ")
             (with-current-buffer buf
               (erase-buffer)
               (setq-local face-remapping-alist '((default drgnx-surface-panel)) cursor-type nil mode-line-format nil))

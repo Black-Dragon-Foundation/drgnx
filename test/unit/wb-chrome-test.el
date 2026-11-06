@@ -444,6 +444,26 @@ at once (the density's changed hook).  Race-proof pattern D (the scale is stubbe
           (drgnx-look--islands-off)
           (drgnx-look--card-restore f))))))
 
+(defvar glitnir-enable)
+(defvar drgnx-look--edge-before)
+(defvar drgnx-look--edge-door)
+
+(ert-deftest drgnx-wb-chrome/edge-at-birth-follows-density ()
+  "Under Glitnir a window made from now on is born with the density's gap as its edge (`default-frame-alist'), and
+after a density change with the new gap, so it never grows once shown.  Race-proof pattern D (Glitnir, the density
+and the alist are bound)."
+  (let ((features (cons 'glitnir features)) (glitnir-enable t) (default-frame-alist default-frame-alist)
+        (drgnx-look-density 'comfortable) (drgnx-look--edge-before nil) (drgnx-look--edge-door nil))
+    (unwind-protect
+        (progn
+          (drgnx-look--islands-on)
+          (drgnx-look--edge-at-birth)
+          (should (eql (alist-get 'internal-border-width default-frame-alist) 6))
+          (setq drgnx-look-density 'roomy)
+          (run-hooks 'drgnx-look-density-changed-hook)
+          (should (eql (alist-get 'internal-border-width default-frame-alist) 8)))
+      (drgnx-look--islands-off))))
+
 (ert-deftest drgnx-wb-chrome/divider-faces-restored-when-cards-go ()
   "While cards show, the divider faces and the frame's edge take the gap's background on the frame, whatever the theme
 says (modus's grey stripes); a theme change gives them again; taking the cards off gives the theme's faces back.

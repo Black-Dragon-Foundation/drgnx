@@ -445,8 +445,9 @@ frame's edge gets the same gap (`internal-border-width`), so the outer cards hav
 against a margin and not the frame's edge or the top line. So the ring and shadow have room and never cover text.
 A window made while the module runs is born with the edge (`default-frame-alist`), so it never grows by it once it is
 shown: a shown window that asked the window manager for a bigger size could get the size it was made with back a
-moment later, after a restored workbench was laid out in it, and lose the difference from its split. (On a display
-scaled above 1, or after a density change, the edge is set again in device pixels, so the window grows there once.)
+moment later, after a restored workbench was laid out in it, and lose the difference from its split. A density change
+gives the windows made after it the new edge too. (On a display scaled above 1 the edge is set again in device
+pixels, so the window grows there once, as the windows shown at a density change do.)
 The gap and the frame's edge are painted in the gap colour (`drgnx-surface-gap`) on the frame, whatever the theme
 says: a theme with a grey divider (modus's) does not stripe the gap. The **focused tile**, the selected window, has
 its ring in the accent colour, solid; it moves with the selection. Turning the module off takes the cards away and

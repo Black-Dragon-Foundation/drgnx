@@ -803,7 +803,9 @@ With `extra/completion` on and Glitnir active it floats: the category `drgnx-com
 frame; vertico shows the minibuffer buffer itself there, so the prompt, the text and the candidates float while the
 minibuffer window and focus stay in the editor frame. `vertico-buffer` restores nothing in that window on exit, so
 `minibuffer-exit-hook` runs `drgnx-palette-frame-hide` (hide the frame, clear the dedication and window parameters, show
-a plain buffer); the module's teardown deletes the frame. `vertico-count` follows the window's height. See
+a plain buffer); the module's teardown deletes the frame. `vertico-count` follows the window's height, so the action
+gives the minibuffer buffer (not the stand-in buffer `vertico-buffer` passes it and kills) the palette's 32 px rows and
+makes the window `vertico-count` + 2 of the lines `vertico-buffer` counts there (`default-line-height`). See
 `docs/guide/palette.md`.
 
 **One key label.** `(drgnx-surfaces-key-label CMD-OR-ID &key context any short)` is the only function that turns a
