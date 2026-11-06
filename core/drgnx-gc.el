@@ -65,10 +65,17 @@ function allocates), then how much was allocated at it."
   (and (not noninteractive)
        (or (not (daemonp)) (and (boundp 'server-clients) server-clients t))))
 
+(declare-function malloc-trim "alloc.c")      ; glibc builds only, hence the `fboundp'
+
+(defvar drgnx-gc--trimmed nil "`gcs-done' when the idle collection last trimmed the heap, or nil before the first.")
+
 (defun drgnx-gc--idle ()
   "The idle collection, `drgnx-gc-idle-seconds' into a pause: once per pause, when `drgnx-gc-idle-share' of the
 threshold was consed since the last collection, no input is pending and someone may be typing
-\(`drgnx-gc--someone-waits-p').  The pause's collection then lands there instead of on the next keys."
+\(`drgnx-gc--someone-waits-p').  The pause's collection then lands there instead of on the next keys.
+A collection gives the memory it frees back to malloc, not to the system (a big file's parse trees left hundreds of
+megabytes resident): the first pause after any collection, this one's or an earlier one, trims the heap once
+\(`malloc-trim')."
   (let* ((idle (current-idle-time))
          (pause (and idle (- (float-time) (float-time idle)))))
     (when (and pause
@@ -77,7 +84,10 @@ threshold was consed since the last collection, no input is pending and someone 
                (>= (- (drgnx-gc--consed) drgnx-gc--base) (* drgnx-gc-idle-share gc-cons-threshold))
                (drgnx-gc--someone-waits-p))
       (setq drgnx-gc--idle-pause pause)
-      (let ((inhibit-interaction t) (nidhogg-watchdog-gc-origin 'idle)) (garbage-collect)))))
+      (let ((inhibit-interaction t) (nidhogg-watchdog-gc-origin 'idle)) (garbage-collect)))
+    (when (and pause (fboundp 'malloc-trim) (not (eql gcs-done drgnx-gc--trimmed)) (not (input-pending-p)))
+      (setq drgnx-gc--trimmed gcs-done)
+      (malloc-trim))))
 
 (defun drgnx-gc-gap ()
   "Collect now if this is a quiet gap and memory is nearly full; t when it collected.

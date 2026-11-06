@@ -473,6 +473,11 @@ terminal-typing's p95 is 7 ms: the worst of 16 runs with the module active (1.9 
     once per pause (`drgnx-gc--idle-pause`), never with input pending, and never in a batch Emacs or a daemon no
     client is connected to (`drgnx-gc--someone-waits-p`). It was 8 s and a quarter, which a typist rarely gave it. `drgnx-gc-mode` (on after `drgnx-gc-setup`) owns that hook function, so it is
     one function, removed when the mode turns off.
+  - **The heap goes back to the system at idle:** a collection hands what it frees back to malloc, which keeps it,
+    so after the perf lab's `ts-open` (six 1 and 2 MB tree-sitter files) Emacs stayed at ~845 MB resident with a
+    small live heap (`malloc-trim` gave back ~650 MB). The idle collection's timer therefore trims the heap
+    (`malloc-trim`, glibc builds) once in the first pause after any collection, its own or an earlier one
+    (`drgnx-gc--trimmed` holds `gcs-done` at the last trim), never with input pending.
   - **A gap collection for producers:** `(drgnx-gc-gap)` collects, and returns t, when `drgnx-gc-gap-quiet` (0.02 s,
     nil: never) has passed without input, no input is pending and at least `drgnx-gc-gap-share` (85%) of the
     threshold was allocated since the last collection. A producer that finished a burst of work calls it instead
