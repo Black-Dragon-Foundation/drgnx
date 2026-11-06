@@ -64,8 +64,8 @@ agents with the map shown or hidden, say whether the premise holds and take it a
   (cl-loop for k in '("TAB" "<right>" "<left>" "<down>" "<up>") append (make-list 60 (list :keys k))))
 
 (defun drgnx-perf-work--relayout-keys ()
-  "324 layout commands: the layers 1 to 6, 54 times (the lab's p95 needs 100 samples; each command waits for the
-layout before it to be drawn, so none is lost)."
+  "320 layout commands: f, o and the layers 1 to 6, 40 times.  About one in six makes the hub send a frame with a
+layout, and the lab's p95 needs 100 samples; each command waits up to a second for the layout before it."
   (cl-loop repeat 40 append (mapcar (lambda (k) (list :keys k)) '("f" "o" "1" "2" "3" "4" "5" "6"))))
 
 (defconst drgnx-perf-work--relayout-form

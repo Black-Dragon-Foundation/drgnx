@@ -569,13 +569,19 @@ runs, 40 times: p95 under 16 ms."
 in the drgnx dark, light and high-contrast themes at the session's scale (the lab runs scales 1, 1.25 and 2).  Asserts
 the premise (30 agents streaming and on the map), that the map drew rows, and that each shot exists; the eye judges the
 rest."
-  (skip-unless (and (getenv "DRGNX_RATATOSKR_BIN") (file-executable-p (getenv "DRGNX_RATATOSKR_BIN"))))
+  ;; the UI session does not inherit DRGNX_RATATOSKR_BIN: the checkout's own build is the fallback
+  (let ((bin (or (getenv "DRGNX_RATATOSKR_BIN") (expand-file-name "runtime/target/debug/ratatoskr" drgnx-work-gui--repo))))
+    (unless (file-executable-p bin) (ert-fail (format "needs a test-hooks ratatoskr built in the checkout (%s)" bin)))
+    (drgnx-work-gui--scenes bin)))
+
+(defun drgnx-work-gui--scenes (bin)
+  "The scenes' body: the 30-agent map in the hub BIN, shot in three themes."
   (drgnx-test-with-modules '(tools/work-space)
     (let ((root (drgnx-uitest-root-frame)) buf)
       (unwind-protect
           (with-selected-frame root
             (delete-other-windows)
-            (drgnx-work-thirty-start (getenv "DRGNX_RATATOSKR_BIN"))
+            (drgnx-work-thirty-start bin)
             (setq buf (drgnx-work-thirty-map t))
             (delete-other-windows)
             (set-window-buffer (selected-window) buf)
