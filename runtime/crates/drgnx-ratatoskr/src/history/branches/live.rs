@@ -9,7 +9,7 @@ use crate::history::revert::apply;
 use crate::history::revert::live::{FIVE, Live, git, prompted, row_acp, turn, turn_end, user};
 use runstav::methods::agents::StartParams;
 use runstav::methods::history::RestoreLevel;
-use serde_json::{Value, json};
+use serde_json::json;
 use std::path::Path;
 
 async fn start_as(fx: &Fx, profile: &str) -> String {
@@ -131,7 +131,8 @@ async fn second_agent_runs_from_the_checkpoint() {
 }
 
 /// A Codex fork in its new tree marks that tree untrusted, so a `.codex/config.toml` there is not loaded as the user's
-/// (codex-acp reads `projects."<cwd>".trust_level`; the mock logs the overrides its process was started with).
+/// (codex-acp reads `projects."<cwd>".trust_level`; the lock puts it in the `CODEX_CONFIG` its process starts with, and
+/// the mock logs that config).
 #[tokio::test(flavor = "multi_thread")]
 async fn codex_new_cwd_is_marked_untrusted() {
     let fx = Fx::new();
@@ -140,15 +141,14 @@ async fn codex_new_cwd_is_marked_untrusted() {
     turn(&fx.front, &sid, "zero").await;
     let target = turn(&fx.front, &sid, "one").await;
     let f = fork_at(&fx, &sid, target, "go on").await;
-    let q = f.path.replace('\\', "\\\\").replace('"', "\\\"");
-    let want = json!(format!("projects.\"{q}\".trust_level=\"untrusted\""));
-    let overrides = fx.logged("c.log", "codex_overrides");
-    assert!(
-        overrides
+    let configs = fx.logged("c.log", "codex_config");
+    assert_eq!(
+        configs
             .last()
-            .and_then(Value::as_array)
-            .is_some_and(|o| o.contains(&want)),
-        "{want} in {overrides:?}"
+            .map(|c| &c["config"]["projects"][f.path.as_str()]["trust_level"]),
+        Some(&json!("untrusted")),
+        "{} in {configs:?}",
+        f.path
     );
 }
 
