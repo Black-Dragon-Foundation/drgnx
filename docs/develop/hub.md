@@ -964,6 +964,24 @@ else (Gemini, an agent without the capability) `summary`.
   `TurnCore::resume` does, then starts the next prompt unless the queue is held. The core decides; the rewind only
   sends the two events.
 
+## Revert to here
+
+A revert takes an agent's work back to one of its steps: the files, the decisions and the conversation as one record.
+
+- **What it cannot undo** (`timeline::effects::of(front, target)` → `RevertEffects`, labelled `computed`), each from a
+  hub record after the step began, listed first on the card: the session's commits a remote already has (remote
+  tracking refs that contain them, read in the trusted store), messages it sent that their recipient has `read` or
+  `acted` on, its decisions after the step that another decision depends on (`decisions/effects`' computed
+  dependents), the tasks it filed and the settings it changed (txs of the session; a setting through
+  `mcp:settings_change`), its commits already merged into its job's `job/<job>` branch, what the steps after it spent
+  (cost by unit and tokens), and its jobs that run or wait: the hub's own (`exec::Live`), then the runners queue's
+  queued rows and remote attempts (`runtime.db`'s `rq_job` and `rq_attempt`), each named with where it runs.
+- **When it must become a fork** (`timeline::effects::blocked(front, dependents, sid)` → `[Blocked {decision, commit,
+  session, branch}]`): a dependent commit of another session that the integration branch already holds (`git
+  merge-base --is-ancestor` in the commit's trusted store; the branch is the session's `job/<job>`, or for a session
+  with no job the branch its repository's `HEAD` names). The session's own dependents never block: the revert takes
+  them too.
+
 ## The store
 
 The front serves the store (`work.db`, schema 12) itself: `graph/*` (reads and walks, history, revert, excise, grants,

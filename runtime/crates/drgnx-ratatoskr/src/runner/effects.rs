@@ -930,7 +930,7 @@ pub async fn record_conclusion_fallback(
 
 // ---- commits and decisions --------------------------------------------------------------------------------------
 
-fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     let out = std::process::Command::new("git")
         .args(args)
         .current_dir(dir)

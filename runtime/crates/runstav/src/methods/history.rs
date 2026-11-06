@@ -119,3 +119,52 @@ pub enum RestoreLevel {
     Turn,
     Summary,
 }
+
+/// A commit made after the step that a remote already has: the remote-tracking refs that contain it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Pushed {
+    pub commit: String,
+    pub refs: Vec<String>,
+}
+
+/// What the session spent after the step: cost by unit (`usd`, an agent's own estimate unit) and tokens.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Spent {
+    pub cost_by_unit: std::collections::BTreeMap<String, f64>,
+    pub tokens: i64,
+}
+
+/// What a revert to a step cannot undo, each from a hub record after the step began: listed first on the card.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RevertEffects {
+    pub pushed: Vec<Pushed>,
+    /// Messages the session sent that their recipient has read.
+    pub messages_read: Vec<i64>,
+    /// The session's decisions after the step that another decision depends on (computed).
+    pub decisions_relied_on: Vec<i64>,
+    /// Tasks the session filed.
+    pub tasks_filed: Vec<String>,
+    /// The session's commits already merged into its integration branch (`<commit> into <branch>`).
+    pub merges: Vec<String>,
+    /// The settings the session changed.
+    pub settings: Vec<String>,
+    pub spent: Spent,
+    /// The session's jobs that run or wait now, each with where (`<id> (here)`, `(queued)`, `(on <runner>)`).
+    pub jobs_running: Vec<String>,
+    /// `computed`: dependencies come from git, not from a recorded edge.
+    pub label: String,
+}
+
+/// A commit of another session that depends on what a revert would undo and is already in the integration branch:
+/// the revert is refused and offered as a fork.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Blocked {
+    pub decision: i64,
+    pub commit: String,
+    pub session: String,
+    pub branch: String,
+}
