@@ -83,5 +83,40 @@ evaluation with nothing changed calls the measure function zero times."
         (let ((text-scale-mode-amount 2) (text-scale-mode t))
           (should-not (eq k (drgnx-statusbar--layout-key w))))))))
 
+(defun drgnx-look-bars-test--reaches (face target)
+  "Non-nil when FACE inherits TARGET, directly or through the faces it inherits."
+  (let ((parents (ensure-list (face-attribute face :inherit nil nil))))
+    (or (memq target parents)
+        (seq-some (lambda (p) (and (facep p) (drgnx-look-bars-test--reaches p target))) parents))))
+
+(defun drgnx-look-bars-test--first-face (s)
+  (let ((f (get-text-property 0 'face s))) (if (listp f) (car f) f)))
+
+(ert-deftest drgnx-look-bars/segment-faces ()
+  "Pattern D: the status faces the segments use do not reach the attention face; only the needs-you face does.
+The tests segment uses the ok and fail faces."
+  (dolist (f '(drgnx-status-ok drgnx-status-warn drgnx-status-fail drgnx-status-info))
+    (should-not (drgnx-look-bars-test--reaches f 'drgnx-status-attention)))
+  (should (drgnx-look-bars-test--reaches 'drgnx-statusbar-waiting 'drgnx-status-attention))
+  (drgnx-statusbar-test--with
+    (let ((drgnx-statusbar-tests-state '(:passed 3 :failed 0)))
+      (drgnx-statusbar--bump)
+      (should (eq 'drgnx-status-ok (drgnx-look-bars-test--first-face (drgnx-statusbar--seg-tests)))))
+    (let ((drgnx-statusbar-tests-state '(:passed 3 :failed 2)))
+      (drgnx-statusbar--bump)
+      (should (eq 'drgnx-status-fail (drgnx-look-bars-test--first-face (drgnx-statusbar--seg-tests)))))))
+
+(ert-deftest drgnx-look-bars/magit-gets-the-bar ()
+  "Pattern D: a buffer in a mode derived from `special-mode' (Magit's, Help's) gets the bar too, with the `mode'
+segment showing its `mode-name'; it does not show the stock mode line."
+  (drgnx-statusbar-test--with
+    (let ((drgnx-statusbar-other '(mode)))
+      (drgnx-statusbar-define-segment 'mode :fn #'drgnx-statusbar--seg-mode)
+      (drgnx-statusbar-test--in-buffer 'special-mode
+        (let ((bar (drgnx-statusbar-mode-line)))
+          (should (stringp bar))
+          (should (string-match-p "Special" (substring-no-properties bar)))
+          (should (eq 'mode (get-text-property (string-match "Special" bar) 'drgnx-statusbar-segment bar))))))))
+
 (provide 'look-bars-layout-test)
 ;;; look-bars-layout-test.el ends here

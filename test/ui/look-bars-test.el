@@ -17,6 +17,8 @@
   (add-to-list 'load-path (expand-file-name d drgnx-ui-look-bars--repo)))
 (require 'drgnx)
 (require 'drgnx-state)
+(require 'drgnx-color)
+(load (expand-file-name "themes/drgnx-theme-gen" drgnx-ui-look-bars--repo) nil t)
 (dolist (m '("ui/drgnx-face" "ui/drgnx-look-fonts" "ui/drgnx-look-density" "ui/drgnx-statusbar" "ui/drgnx-topline"))
   (load (expand-file-name (concat "modules/" m) drgnx-ui-look-bars--repo) nil t))
 
@@ -33,7 +35,13 @@
         (setq last x)))
     (and first (cons first last))))
 
-(defun drgnx-ui-look-bars--scale () (float (drgnx-uitest-device-scale (selected-frame))))
+(defun drgnx-ui-look-bars--scale ()
+  "Device pixels per Lisp pixel of a snapshot (1 on the native shell, whose frames are in device pixels)."
+  (float (drgnx-uitest-device-scale (selected-frame))))
+
+(defun drgnx-ui-look-bars--logical (key)
+  "The density size KEY in device pixels: its logical pixels at the frame's scale."
+  (round (* (drgnx-look-density-value key) (if (fboundp 'frame-scale-factor) (frame-scale-factor) 1.0))))
 
 (defmacro drgnx-ui-look-bars--with-bar (&rest body)
   "BODY in a bare frame with one window on an Emacs Lisp buffer, the status bar on, and a right segment `edge' whose
@@ -78,7 +86,7 @@ text is one block on the `region' face.  Everything undone after."
 padding (12 logical pixels at the comfortable density)."
   (skip-unless (display-graphic-p))
   (drgnx-ui-look-bars--with-bar
-    (let ((want (round (* (drgnx-look-density-value 'panel-padding) (drgnx-ui-look-bars--scale)))))
+    (let ((want (drgnx-ui-look-bars--logical 'panel-padding)))
       (should (member (drgnx-ui-look-bars--right-gap) (list (1- want) want (1+ want)))))))
 
 (ert-deftest drgnx-ui-look-bars/right-edge-after-zoom ()
@@ -86,7 +94,7 @@ padding (12 logical pixels at the comfortable density)."
 the segment still ends one padding from the edge."
   (skip-unless (display-graphic-p))
   (drgnx-ui-look-bars--with-bar
-    (let ((want (round (* (drgnx-look-density-value 'panel-padding) (drgnx-ui-look-bars--scale))))
+    (let ((want (drgnx-ui-look-bars--logical 'panel-padding))
           (height (face-attribute 'default :height)))
       ;; `(global-text-scale-adjust 0)' from Lisp recurses in this Emacs, so the height is put back by hand
       (unwind-protect
@@ -99,6 +107,34 @@ the segment still ends one padding from the edge."
             (drgnx-test-wait-presented)
             (should (member (drgnx-ui-look-bars--right-gap) (list (1- want) want (1+ want)))))
         (set-face-attribute 'default nil :height height)))))
+
+(defun drgnx-ui-look-bars--token-rgb (name variant)
+  "The token NAME of VARIANT as the (R G B) a snapshot pixel holds."
+  (mapcar (lambda (c) (round (* 255 c))) (drgnx-color-rgb (drgnx-look-token name variant))))
+
+(ert-deftest drgnx-ui-look-bars/status-bar-height-and-surface ()
+  "Pattern D: the mode line is round (24 x scale) pixels high, and a pixel of it where no text is equals the `gap'
+token under each of the three themes."
+  (skip-unless (display-graphic-p))
+  (drgnx-ui-look-bars--with-bar
+    (unwind-protect
+        (progn
+          (should (= (drgnx-ui-look-bars--logical 'status-bar) (window-mode-line-height)))
+          (pcase-dolist (`(,variant . ,theme) '((dark . drgnx-dark) (light . drgnx-light) (hc . drgnx-high-contrast)))
+            (mapc #'disable-theme custom-enabled-themes)
+            (load-theme theme t)
+            (drgnx-test-wait-presented)
+            (let* ((w (selected-window)) (s (drgnx-ui-look-bars--scale)) (edges (window-pixel-edges w))
+                   (x (round (* s (/ (+ (nth 0 edges) (nth 2 edges)) 2.0))))
+                   (y (round (* s (- (nth 3 edges) (/ (window-mode-line-height w) 2.0)))))
+                   (top (round (* s (- (nth 3 edges) (window-mode-line-height w) -1))))   ; the box's padding row
+                   (snap (drgnx-uitest-snapshot)))
+              (dolist (row (list y top))
+                (let ((px (cdr (drgnx-uitest-pixel snap x row))))
+                  (should (equal (list variant px)
+                                 (list variant (cl-mapcar (lambda (a b) (if (<= (abs (- a b)) 2) b a))
+                                                          px (drgnx-ui-look-bars--token-rgb 'gap variant))))))))))
+      (mapc #'disable-theme custom-enabled-themes))))
 
 (ert-deftest drgnx-ui-look-bars/hint-centred ()
   "Pattern D: the top line's hint (a block on the `region' face, as wide as a hint) is centred on the frame within

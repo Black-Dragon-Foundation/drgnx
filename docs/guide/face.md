@@ -157,6 +157,7 @@ Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
 | `needs-you` | `◐ 2 waiting on you` (in the needs-you colour): the one count of everything that waits for you | the newest item's own command when every item comes from one source, else the Notices list |
 | `drgnx` | `✕ 1`, `⚠ 2` or `✕ 1 ⚠ 2`: drgnx's own failed and warned conditions (a module that did not start …) | the Notices list |
 | `modal` | the modal-editing state (`NORMAL`, `INSERT` …), when that module is loaded | |
+| `mode` | the buffer's `mode-name`: the bar of Magit, Help and the other read-only buffers (`drgnx-statusbar-other`) | |
 | `misc` | what stock Emacs shows beside the file: evil's state tag (`<N>`, when evil runs without drgnx's `editor/evil` module; with it, `modal` shows the state), the last key and command of **Show Keys As I Type** (keycast), a keyboard macro being recorded (`● Rec`), `Narrowed`, `Remote: host`, the buffer's process (`:run`), the function point is in (`which-function-mode`), and what other packages add to `mode-line-misc-info` and `global-mode-string` (the clock, a battery, other modules' marks) without the job badge | |
 
 | Right | Shows | Click |
@@ -175,6 +176,18 @@ padding from the window's edge whatever the font, and when the window is too nar
 when something it shows changes: zooming with `global-text-scale-adjust`, a scale change (the display's scale), another
 density and a change of a font role each lay it out again, so the right edge never goes stale. `drgnx-look-pixel-width`
 is the function that measures a string in a face.
+
+**The look.** The bar is set in the caption type face (`drgnx-ui-caption`, through the face `drgnx-statusbar`) on the
+`gap` surface, which is the themes' mode line, and it is `status-bar` high (24 logical pixels at the comfortable
+density, 22 compact, 28 roomy) at any scale. Each segment is a target that lights with `drgnx-hover` under the pointer.
+On a graphical frame the marks are line icons: `git-branch` before the branch, `circle-x` and `triangle-alert` with the
+error and warning counts (in `drgnx-status-fail` and `drgnx-status-warn`; a zero is dimmed), `circle-check` or
+`circle-x` before the tests. A terminal keeps the glyphs. Only the `needs-you` segment is in the attention colour
+(`drgnx-status-attention`, through `drgnx-statusbar-waiting`); the others use the ok, warn and fail faces.
+
+Windows that are not editors get the bar too: a buffer in a mode derived from one of `drgnx-statusbar-other-modes`
+(`special-mode`: Magit, Help, `*Messages*`) shows the segments of `drgnx-statusbar-other` (`mode`, the buffer's
+`mode-name`, then `misc`) on the left and no line and column.
 
 The most recently used editor window shows the whole bar; the other editor groups show `drgnx-statusbar-compact`
 (position and language). The bar is for the buffers you edit: a buffer that visits a file, an editor made with

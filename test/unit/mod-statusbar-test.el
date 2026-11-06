@@ -333,9 +333,10 @@ active (`drgnx-statusbar-test--epochs')."
 (ert-deftest drgnx-statusbar/only-files-code-and-text-get-the-bar ()
   (drgnx-statusbar-test--with
     (let ((stock (default-value 'mode-line-format)))
-      ;; a special buffer (Magit, Dired, help, Info, the agent pane...) keeps the stock mode line
+      ;; a special buffer (Magit, help...) gets the bar of `drgnx-statusbar-other', not the stock mode line; any other
+      ;; buffer that is not a file (Dired, Info, the agent pane...) keeps it
       (drgnx-statusbar-test--in-buffer #'special-mode
-        (should (equal (drgnx-statusbar-mode-line) stock)))
+        (should-not (equal (drgnx-statusbar-mode-line) stock)))
       ;; code and text get the bar; so does any buffer that visits a file
       (dolist (mode '(emacs-lisp-mode text-mode conf-mode))
         (drgnx-statusbar-test--in-buffer mode
@@ -1141,7 +1142,7 @@ names), again only when the cache learns of a root or the buffer's file changes.
               (progn (drgnx-statusbar--compilation-finished b "exited abnormally with code 1\n")
                      (should (equal (drgnx-statusbar-test--seg 'tests) "× tests 2 failed"))
                      (let ((s (funcall (plist-get (gethash 'tests drgnx-statusbar--segments) :fn))))
-                       (should (eq (get-text-property 0 'face s) 'error))))
+                       (should (eq (get-text-property 0 'face s) 'drgnx-status-fail))))
             (kill-buffer b)))
         ;; bin/drgnx test --ui's line
         (let ((b (drgnx-statusbar-test--compilation "bin/drgnx test --ui" "ui ERT: 25/27 passed")))
