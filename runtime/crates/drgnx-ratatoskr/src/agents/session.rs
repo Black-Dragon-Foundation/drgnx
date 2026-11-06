@@ -11,7 +11,7 @@
 
 #[cfg(test)]
 pub(crate) mod attach_tests;
-mod turn_core;
+pub(crate) mod turn_core;
 
 use super::launch;
 use super::lock as plock;

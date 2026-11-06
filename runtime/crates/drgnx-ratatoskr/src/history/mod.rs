@@ -13,6 +13,7 @@ pub mod blob;
 mod capture;
 pub mod methods;
 pub mod origin;
+pub(crate) mod revert_core;
 mod timers;
 pub mod tree;
 pub mod watch;

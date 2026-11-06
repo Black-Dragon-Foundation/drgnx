@@ -1004,6 +1004,16 @@ A revert takes an agent's work back to one of its steps: the files, the decision
   (`snapshot::head_of`), since the sandboxed run keeps no stdout; nothing to commit is `Ok(None)`, so a retry after a
   crash is quiet. A failure is reported and the files stand; in a linked worktree the sandboxed commit cannot reach
   the common folder and fails.
+- **The order** (`history::revert_core`, pure): after the shell's check, `Quiet` (the session detached from its
+  turn core, its jobs stopped), `Rescan` (a record new since the preview is `stale`), `Record` (the history record and
+  the pending record: durable from here), `Files` (each path announced to the origin core as the hub's write before
+  it is written, so the watcher's event about it is no outside edit), `Graph`, `Conversation` (a finished worker has
+  none: said once, and skipped), `Commit`, `Clear`, then `history/applied` and the manager told. A failure before
+  `Record` reattaches the session and refuses; a conversation that cannot be restored is said and the commit follows;
+  a failed commit is reported and the record cleared. A crash forgets the revert; the next start finishes it from the
+  pending record (`Files` on, each step idempotent). A message or a Stop sent meanwhile is the turn core's (queued or
+  held until the reattach); the cancelled turn's answer changes nothing; a runner's patch returned meanwhile is kept
+  on its job, never applied. Every order of these is tested with skuld, composed with the turn and origin cores.
 - **A fork's tree** (`tree::fork_tree(front, source, new_sid)`): `RunGit::task_worktree(repo, "fork-<sid8>", new_sid,
   base)`, where `repo` is the worktree's recorded repository (`worktree_base`) or the source's own untouched folder,
   and `base` the step's head when that commit verifies there, else the worktree's recorded `base_commit`; the
