@@ -278,3 +278,27 @@ time-out, a preemption or an eviction never is.
 5 minutes the hub checks each runner: its probe and the runner contract, a canary `true` in its image under the job
 caps, its free disk above the floor, and its clock within 2 s of this machine's. A pass brings a benched runner back
 with no strikes; a failure is one more strike. `drgnx runner unbench NAME` brings it back at once.
+
+After a restart of drgnx's hub, a job that holds keys and still runs on a runner waits for them before its log and
+result come back: the hub asks for them ("needs your keys": run Runners: Load Keys), and the editor gives back the
+keys it holds as it connects.
+
+## How it is tested
+
+Runners are tested against containers that act as SSH machines (`test/runners/`): Fedora with `sshd`, systemd and
+rootless podman, reached over real SSH by the hub's own transport and a real `sleipnir serve`. Only cloud APIs are
+mocked. On that fake fleet, the **link drills** run every row 5 times and break the link the ways the world does:
+
+- the hub's SSH master told to stop (`-O stop`) while a job runs;
+- the network cut for 3 minutes under a job that holds a key;
+- `serve` stopped for 5 minutes, as a suspended machine;
+- the hub restarted, with the editor connected and without it;
+- the runner's host key changed: refused, never accepted, until you accept it;
+- the disk falling below its floor, and the memory ladder stopping a job;
+- four jobs at once over one machine that allows 3 SSH sessions.
+
+Each must end with the job's own verdict, never a red, crash or `infra` verdict from the link; the job reattached
+by its nonce rather than run again; the hub's copy of its log equal to the runner's byte for byte; no more than 3
+sessions on one connection; and, for a job with keys, the key sent once and never written on the runner. The time a
+cut or a suspend lasts is moved on the queue's clock, so a drill takes the time its link needs to be called lost (45
+seconds), not the 3 or 5 minutes it stands for.

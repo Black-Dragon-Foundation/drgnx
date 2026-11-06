@@ -1,7 +1,8 @@
 # The Rust timing tests (test/timing-rust.sh): every `#[ignore = "timing: …"]` test under runtime/, one per line,
-#   CRATE TARGET TEST [release]
+#   CRATE TARGET TEST [release|fleet]
 # TARGET is `lib` or an integration test file's name; TEST is a substring of the test's path; `release` builds it
-# optimized (a budget set on the optimized build).  A new `#[ignore = "timing: …"]` test that is not listed here runs
+# optimized (a budget set on the optimized build); `fleet` needs the fake fleet, so test/runners/drills.sh --timing
+# runs it and this lane only names it.  A new `#[ignore = "timing: …"]` test that is not listed here runs
 # nowhere: drgnx-ci/every-rust-timing-test-is-in-the-timing-list fails then.
 draugr reap a_term_ignoring_group_is_killed_only_after_the_grace
 drgnx-ratatoskr sandbox_check doctor_json_answers_within_the_editors_wait
@@ -18,3 +19,4 @@ drgnx-ratatoskr timing tier1_of_a_checkout_and_one_saved_file release
 urdr lib a_lone_write_waits_max_wait_for_company
 vegvisir timing core_step_within_50_us release
 vegvisir timing layout_200_items_within_2_ms release
+drgnx-ratatoskr fleet_drills a_set_spreads_over_two_runners_within_its_bound fleet

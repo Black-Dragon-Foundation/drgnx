@@ -446,9 +446,28 @@ mod tests {
                 .reason,
             Some(WaitReason::DiskLow)
         );
-        // and a broken facts file is a loud refusal, never the host's figures
+        // a broken facts file is a loud refusal, never the host's figures
         facts("{");
         let e = admit(&p, &real, "drgnx-hubA", &[], None, 1000, &offer("q3")).unwrap_err();
         assert!(e.why.contains("test-machine.json"), "{e:?}");
+        // and mains power is in them too (the host's `power_supply` may show a battery): a workstation on battery
+        // admits nothing
+        let ws = Limits::for_profile(Profile::Workstation, 16384, 8);
+        // (a workstation reads its user's apps' pressure too)
+        let apps = d.path().join("manager/app.slice");
+        fs::create_dir_all(&apps).unwrap();
+        fs::write(
+            apps.join("memory.pressure"),
+            "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n",
+        )
+        .unwrap();
+        let mut wp = p;
+        wp.profile = Profile::Workstation;
+        facts(&quiet.replace(
+            "\"mem_available_mib\": 8192",
+            "\"mem_available_mib\": 8192, \"on_ac\": false",
+        ));
+        let e = admit(&wp, &ws, "drgnx-hubA", &[], None, 1000, &offer("q4")).unwrap_err();
+        assert_eq!(e.reason, Some(WaitReason::OnBattery), "{e:?}");
     }
 }

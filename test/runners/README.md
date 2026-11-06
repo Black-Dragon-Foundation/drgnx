@@ -98,9 +98,30 @@ cargo test -p drgnx-ratatoskr --features fleet --test fleet_runners --no-run
 
 `test` copies the `sleipnir` binary beside the test's `deps/` into the share and tells the rows where the share is
 (`DRGNX_FLEET_SHARE`); each row installs it into its own runner root as a bundle (`<root>/bin/<name>/sleipnir`).
-A runner's `/proc/pressure`, `/proc/meminfo` and disk are the host's, so each row also writes `test-machine.json`
-into its root: a quiet machine with room, whose figures the `test-hooks` build admits on (`sleipnir.md`, "The machine
-probe"). A busy or nearly full host never refuses a row's job.
+A runner's `/proc/pressure`, `/proc/meminfo`, disk and power supplies are the host's, so each row also writes
+`test-machine.json` into its root: a quiet machine with room (and, for a `workstation` runner, on mains power), whose
+figures the `test-hooks` build admits on (`sleipnir.md`, "The machine probe"). A busy or nearly full host never
+refuses a row's job; a row that wants the runner busy or full rewrites the file.
 Runner 1 lingers and runner 2 (`--no-linger-on 2`) doesn't. The rows can't be root in a runner, so a row that turns
 linger on writes `enable-linger` into the share: the image's `fleet-linger.path` sees it and runs
 `loginctl enable-linger runner`.
+
+## The link drills
+
+`drgnx-ratatoskr`'s `tests/fleet_drills.rs` holds the drills: rows that break the hub's link to a runner mid-job (a
+master told `-O stop`, the connection frozen 3 minutes under a keyed job, `serve` stopped 5 minutes, the hub restarted
+with and without the editor, a changed host key) or let the runner's own guards stop a job (disk below the floor, the
+memory ladder), and four jobs over one link's three sessions. Each proves its outcome from state: the job's attempts
+in the hub's `runtime.db`, the queue's rows, the runner's own log and attempt record, no key bytes on the runner.
+`drills.sh` runs every row 5 times on a fleet of 2 runners with `--max-sessions 3`, through the heavy slot:
+
+```
+cargo test -p drgnx-ratatoskr --features fleet,test-hooks --test fleet_drills --no-run   # in the dev container
+cargo build -p sleipnir --features test-hooks --bin sleipnir --bin drgnx-key
+DRGNX_FLEET_TEST_BIN=<the binary> $HEAVY test/runners/drills.sh --container [--times N] [--timing] [FILTER]
+```
+
+It prints one line per run and `ROW PASSED/N` per row, keeps each run's log under `.claude/tmp/drills/`, and exits 0
+only when every run passed. The rows play the hub with its own parts (the transport, the link session, the queue on a
+`runtime.db`); the time a cut or a suspend lasts is the queue's clock moved on, never a wait. `--timing` adds the
+fleet throughput row (a 40-job set on 2 runners within 0.6 × its wall on 1), a timing row the timing lane only names.

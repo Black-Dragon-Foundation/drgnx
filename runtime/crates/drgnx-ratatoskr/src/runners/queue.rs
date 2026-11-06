@@ -2618,6 +2618,9 @@ impl Queue {
                     } else if self.keys.missing(&keys).is_empty() {
                         self.new_redactor(st, &r, true)
                     } else {
+                        // its log and result wait for the keys (a hub restart): the user is asked for them, a card
+                        // that is never answered from the event
+                        self.keys.ask(&self.keys.missing(&keys));
                         continue;
                     };
                     // a late attempt whose rows the next attempt reruns is stopped, its log and result kept: no row
