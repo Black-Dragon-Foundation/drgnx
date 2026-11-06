@@ -394,7 +394,11 @@ Customize set."
   (drgnx-look-fonts--apply-alternatives)
   (drgnx-look-fonts--ligatures-sync)
   (drgnx-look-fonts--put-back-lisp)
-  (drgnx-look-fonts--remap-all))
+  (drgnx-look-fonts--remap-all)
+  (run-hooks 'drgnx-look-fonts-applied-hook))
+
+(defvar drgnx-look-fonts-applied-hook nil
+  "Run after the role faces were written: what depends on the code font's size (the code line) follows.")
 
 (defun drgnx-look-fonts--preview ()
   "Write the faces, if ui/look still runs (the debounced end of a setting change)."

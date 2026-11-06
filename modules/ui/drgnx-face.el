@@ -109,6 +109,8 @@ Toggle for this session with the command Toggle Menu Bar."
   "Extra pixels between lines (nil: the default).  A number such as 2 or 3 is calmer for reading code."
   :type '(choice (const :tag "Default" nil) (natnum :tag "Pixels"))
   :set #'drgnx-face--set :group 'drgnx-face)
+(make-obsolete-variable 'drgnx-face-line-spacing
+                        "the code font role's :line-height (`drgnx-look-font-code') or `drgnx-look-density'" "6")
 
 (defcustom drgnx-face-line-wrap 'word
   "What a line longer than its window does: `word' (continue on the next row, breaking at a space, never in the middle

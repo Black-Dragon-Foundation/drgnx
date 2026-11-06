@@ -752,6 +752,24 @@ Above this size (MiB) the question's default is chunks, else lean.  Read when a 
 | `:agents` | `grantable` |
 | `:schema` | `(pred drgnx-large-files--mib-p "a size in MiB above 0")` |
 
+## drgnx-look-density
+
+How much room the look gives: `compact', `comfortable' or `roomy' (the line, row, tab, bar and gap sizes).  A
+change applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `comfortable` |
+| Type | `(choice (const compact) (const comfortable) (const roomy))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look-density--settings-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum compact comfortable roomy)` |
+
 ## drgnx-look-font-agent
 
 The font of the agent panel's prose.  `:family ui' is the UI font.  A change applies at once.

@@ -91,3 +91,25 @@ package to install.
 The role faces are `drgnx-ui-text`, `drgnx-ui-heading`, `drgnx-ui-caption`, `drgnx-ui-title`, `drgnx-code-small`,
 `drgnx-agent-prose` and `drgnx-terminal`; the code role is the `default` and `fixed-pitch` faces and the UI role also
 sets `variable-pitch`. Their specs hold `:family`, `:height` (relative) and `:weight` only, never `:font`.
+
+## Density
+
+`drgnx-look-density` is `compact`, `comfortable` (the default) or `roomy`, and applies at once. Sizes are logical
+pixels (a frame at scale 2 draws twice as many):
+
+| Thing | Compact | Comfortable | Roomy |
+| --- | --- | --- | --- |
+| Code line | 19 | 21 | 23 |
+| Tree and list row | 22 | 26 | 30 |
+| Tab row | 30 | 34 | 38 |
+| Status bar | 22 | 24 | 28 |
+| Title row | 34 | 38 | 42 |
+| Gap between cards, outer gap | 4 | 6 | 8 |
+| Panel padding | 8 | 12 | 16 |
+| Tree indent | 12 | 12 | 14 |
+
+**The code line** is the frame's `line-spacing` parameter, worked out in device pixels (the line less the font's own
+height) for every frame, and again when the frame is resized, its scale changes or the code font changes. Who decides,
+first match: the `:line-height` you set on `drgnx-look-font-code`, then the density. A `line-spacing` you set
+yourself (`setq-default`) stays: drgnx then leaves the frames alone. `drgnx-face-line-spacing` is obsolete (use the
+code role's `:line-height`); while it is set it still wins, as a default `line-spacing`.

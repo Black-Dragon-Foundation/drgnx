@@ -24,7 +24,7 @@ Put your choices in `config.el` ([modules.md](modules.md#your-own-code-configel)
 | `drgnx-face-divider-width` | `1` | The line's width in pixels (graphical frames). |
 | `drgnx-face-line-wrap` | `word` | What a line longer than its window does: `word` wraps it at a space onto the next row (never in the middle of a word, and in narrow windows too, where Emacs would cut the line below 50 columns), `truncate` keeps one row and lets the rest run off the edge, `nil` leaves Emacs's own setting. **Toggle Word Wrap** (palette, View menu) flips one buffer. Buffers that set their own (the Explorer, tables, the work graph) keep it. |
 | `drgnx-face-frame-title` | `t` | The window's title is `FILE — PROJECT — drgnx` (the file's name, else the buffer's; no project: `FILE — drgnx`; the start page: `drgnx`), in the taskbar, the window list and the title bar when the system draws it. It is made again only when the buffer, its file, name, folder, project or mode changes (every redisplay reads it). A `frame-title-format` of your own is left alone. |
-| `drgnx-face-line-spacing` | `nil` | Extra pixels between lines; `2` or `3` reads calmer. `nil` leaves Emacs's (or your own `line-spacing`) alone. |
+| `drgnx-face-line-spacing` | `nil` | Obsolete: with `ui/look` the code line is the `:line-height` of the code font role or the [density](look.md#density). Extra pixels between lines; `2` or `3` reads calmer. `nil` leaves Emacs's (or your own `line-spacing`) alone; set, it still wins over the density. |
 
 The menu bar and the scroll bar are off from the very first moment (no light bar flashes up before the theme
 loads): `init/early-init.el` starts the frame without them (on a Mac the menu bar is the system's and is left alone),
