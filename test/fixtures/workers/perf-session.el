@@ -655,8 +655,19 @@ compared, and a round's own list starts wherever the flood is)."
 (defconst drgnx-perf-w--as-bytes 50000000 "The buffer's size before anything is typed.")
 (defvar drgnx-perf-w--as-point 1 "Where the keys are typed (point, when the buffer was set up).")
 
+(defun drgnx-perf-w--autosave-kill ()
+  "Kill the workload's buffer (auto-save off first) and delete its auto-save file."
+  (when (buffer-live-p drgnx-perf-w--as-buffer)
+    (with-current-buffer drgnx-perf-w--as-buffer (set-buffer-modified-p nil) (auto-save-mode -1))
+    (kill-buffer drgnx-perf-w--as-buffer))
+  (when (and drgnx-perf-w--as-file (file-exists-p drgnx-perf-w--as-file)) (delete-file drgnx-perf-w--as-file))
+  (setq drgnx-perf-w--as-buffer nil))
+
 (defun drgnx-perf-w-autosave-each ()
-  "A 50 MB buffer visiting a file, modified, shown in the selected window."
+  "A 50 MB buffer visiting a file, modified, shown in the selected window.  The buffer an earlier repeat made is
+killed first: the teardown kills only the last one, so three repeats left two 50 MB buffers for the rest of the run
+\(the memory row read them)."
+  (drgnx-perf-w--autosave-kill)
   (let* ((file (expand-file-name "big.txt" (drgnx-perf-w--tmpdir))) (line (concat (make-string 99 ?x) "\n"))
          (chunk (apply #'concat (make-list 10000 line))) (buf (create-file-buffer file)))
     (with-current-buffer buf
@@ -707,11 +718,7 @@ then.  The same whenever the auto-save wrote the untouched 50 MB intact."
 
 (defun drgnx-perf-w-autosave-teardown ()
   (drgnx-perf-w--disarm)
-  (when (buffer-live-p drgnx-perf-w--as-buffer)
-    (with-current-buffer drgnx-perf-w--as-buffer (set-buffer-modified-p nil) (auto-save-mode -1))
-    (kill-buffer drgnx-perf-w--as-buffer))
-  (when (and drgnx-perf-w--as-file (file-exists-p drgnx-perf-w--as-file)) (delete-file drgnx-perf-w--as-file))
-  (setq drgnx-perf-w--as-buffer nil)
+  (drgnx-perf-w--autosave-kill)
   (drgnx-perf-w--clean)
   t)
 
