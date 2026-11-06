@@ -163,6 +163,8 @@ pub async fn serve(
         Params::HistoryFork(p) => answer(crate::history::branches::fork(f, c, p).await),
         Params::HistoryForkDrop(p) => answer(crate::history::branches::drop_fork(f, c, p).await),
         Params::HistoryCompare(p) => answer(crate::history::branches::compare(f, c, p).await),
+        Params::HistoryBlame(p) => answer(crate::history::views::blame(f, c, p).await),
+        Params::HistoryHunks(p) => answer(crate::history::views::hunks(f, c, p).await),
         Params::HistoryTake(p) => answer(crate::history::branches::take(f, c, p).await),
         Params::HistoryRedo(p) => answer(crate::history::branches::redo(f, c, p).await),
         Params::RunnersUnbench(p) => answer(runners::methods::unbench(f, c, p).await),

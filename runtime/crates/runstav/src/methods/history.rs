@@ -132,6 +132,16 @@ pub(crate) fn methods() -> Vec<Method> {
             doc: "the hunks branch B has that branch A does not, per file, each with who wrote it and in which record and step",
         ),
         method!(
+            "history/blame", HistoryBlame(BlameParams) -> Blamed,
+            classes: [User], writes: false,
+            doc: "who wrote a range of a tracked file's text and in which record and step, from the edit history (not git's blame)",
+        ),
+        method!(
+            "history/hunks", HistoryHunks(BranchHunksParams) -> BranchHunks,
+            classes: [User], writes: false,
+            doc: "what changed on a history branch since a record: per file, hunks numbered as git diff --unified=0 numbers them; the edits ledger and the review view read this",
+        ),
+        method!(
             "history/take", HistoryTake(TakeParams) -> Taken,
             classes: [User], writes: true,
             doc: "whole hunks of a branch taken into a worktree's branch as the user's new text, with where it came from; the files are written",
@@ -213,6 +223,74 @@ pub struct ComparedFile {
 #[serde(deny_unknown_fields)]
 pub struct Compared {
     pub files: Vec<ComparedFile>,
+}
+
+/// `history/blame`: who wrote the characters START..END (0-based offsets in the document's LF text) of PATH in the
+/// worktree at WORKTREE_ROOT.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BlameParams {
+    /// Relative to the worktree.
+    pub path: String,
+    pub worktree_root: String,
+    pub start: i64,
+    pub end: i64,
+}
+
+/// A run of one author's text, in the record it was made in.  Typing no record holds yet, and text of the base, are
+/// left out.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BlameSpan {
+    pub start: i64,
+    pub end: i64,
+    /// The author as the history holds it (`{kind: user}`, `{kind: agent, session}`, `{kind: external, source}`, …).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<serde_json::Value>,
+    /// The record the text was made in.
+    pub record: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Blamed {
+    pub spans: Vec<BlameSpan>,
+}
+
+/// `history/hunks`: what changed on the history branch BRANCH since record SINCE.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BranchHunksParams {
+    pub branch: String,
+    pub since: i64,
+}
+
+/// One hunk with git's numbers (`@@ -old_start,old_count +new_start,new_count @@` of `git diff --unified=0`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LineHunk {
+    pub old_start: i64,
+    pub old_count: i64,
+    pub new_start: i64,
+    pub new_count: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileHunks {
+    pub path: String,
+    pub hunks: Vec<LineHunk>,
+}
+
+/// `history/hunks`' answer: the files that changed, in path order of their documents.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BranchHunks {
+    pub files: Vec<FileHunks>,
 }
 
 /// A hunk to take: the file and its exact range in the source branch's text (a `ComparedHunk`'s `theirs_*`).

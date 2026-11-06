@@ -204,7 +204,7 @@ impl Inner {
         let (blob, plan, hash) = match seen {
             Seen::Skip => return Ok(None),
             Seen::Gone => {
-                if self.origin.last(rel).is_none() && base_text(tree, rel).is_none() {
+                if self.origin.last(&tree.id.0, rel).is_none() && base_text(tree, rel).is_none() {
                     return Ok(None);
                 }
                 (None, Plan::Text(String::new()), "gone".to_owned())
@@ -238,7 +238,7 @@ impl Inner {
             Src::Watch => OriginEv::Watch { path, hash },
             Src::Rescan => OriginEv::Rescan { path, hash },
         };
-        if self.origin.step(ev).is_none() {
+        if self.origin.step(&tree.id.0, ev).is_none() {
             return Ok(None);
         }
         let Plan::Text(new) = plan else {
@@ -413,7 +413,7 @@ impl Hub {
 
     /// A rescan of every path the hub knows a version of.
     pub fn rescan_known(&self, tree: &Tree, now: f64) -> Result<Vec<FileVersion>> {
-        let rels: Vec<String> = self.lock().origin.paths().cloned().collect();
+        let rels = self.lock().origin.paths(&tree.id.0);
         self.rescan(tree, &rels, now)
     }
 

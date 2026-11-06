@@ -162,6 +162,38 @@ fn drgnx_write_is_not_recorded_twice() {
     assert_eq!(f.hub.with(|h| h.count("op").unwrap()), 1);
 }
 
+/// The same path with the same bytes in two trees of one project is two files: each tree's write is its own version, and
+/// the watcher's event about one tree's file is not the other's.
+#[test]
+fn the_same_path_in_two_trees_is_two_versions() {
+    let f = fixture(&[("a.txt", "one\n")]);
+    let other = fixture(&[("a.txt", "one\n")]);
+    let bytes = b"one\ntwo\n";
+    let first = f
+        .hub
+        .on_agent_write(&f.tree, "a.txt", bytes, "s1", cause("1"), 10.0)
+        .unwrap();
+    let second = f
+        .hub
+        .on_agent_write(&other.tree, "a.txt", bytes, "s2", cause("1"), 11.0)
+        .unwrap();
+    assert_eq!(first.len(), 1);
+    assert_eq!(
+        second.len(),
+        1,
+        "the second tree's write is its own version"
+    );
+    assert_eq!(
+        f.hub.text(&other.tree, "a.txt").unwrap().as_deref(),
+        Some("one\ntwo\n")
+    );
+    // an outside change in the second tree after the first tree's write is not mistaken for the first tree's version
+    std::fs::write(other.repo.path().join("a.txt"), "one\ntwo\nthree\n").unwrap();
+    let outside = f.hub.on_disk_change(&other.tree, "a.txt", 12.0).unwrap();
+    assert_eq!(outside.len(), 1);
+    assert_eq!(kind(&f, outside[0].op), Kind::External);
+}
+
 #[test]
 fn crlf_file_blob_id_matches_git() {
     let f = fixture(&[("a.txt", "x\n")]);

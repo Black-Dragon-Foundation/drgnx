@@ -230,10 +230,13 @@ impl Fx {
                 .unwrap();
         hub.lock()
             .origin
-            .step(crate::history::origin::OriginEv::Watch {
-                path: rel.into(),
-                hash,
-            })
+            .step(
+                &tree.id.0,
+                crate::history::origin::OriginEv::Watch {
+                    path: rel.into(),
+                    hash,
+                },
+            )
             .is_none()
     }
 }

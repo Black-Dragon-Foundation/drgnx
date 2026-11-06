@@ -464,10 +464,13 @@ fn take_in(hub: &Hub, tree: &Tree, p: &w::TakeParams, now: f64) -> Result<w::Tak
         // the hub's own version: the watcher's event about it is no outside edit
         if let Ok(hash) = super::blob::hash_object(&tree.git_dir, &tree.root, &rel, text.as_bytes())
         {
-            g.origin.step(OriginEv::HubWrite {
-                path: rel.clone(),
-                hash,
-            });
+            g.origin.step(
+                &tree.id.0,
+                OriginEv::HubWrite {
+                    path: rel.clone(),
+                    hash,
+                },
+            );
         }
         let mode = mode_of(dir.as_fd(), &rel).unwrap_or(0o644);
         match eitri::write_regular(dir.as_fd(), Path::new(&rel), text.as_bytes(), mode) {
@@ -607,14 +610,16 @@ pub async fn redo(f: &Front, c: &Caller, p: w::RedoParams) -> Result<w::Redone, 
         for path in &back {
             let rel = path.to_string_lossy().into_owned();
             let hash = snapshot::blob_id(&r, &w2, &ud, &rel).unwrap_or_else(|| "gone".into());
-            g.origin.step(OriginEv::HubWrite { path: rel, hash });
+            g.origin
+                .step(&t2.id.0, OriginEv::HubWrite { path: rel, hash });
         }
         for m in &merges {
             let rel = m.path.to_string_lossy().into_owned();
             if let Ok(hash) =
                 super::blob::hash_object(&t2.git_dir, &t2.root, &rel, m.text.as_bytes())
             {
-                g.origin.step(OriginEv::HubWrite { path: rel, hash });
+                g.origin
+                    .step(&t2.id.0, OriginEv::HubWrite { path: rel, hash });
             }
         }
         drop(g);

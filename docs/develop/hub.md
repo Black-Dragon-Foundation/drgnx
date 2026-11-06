@@ -1280,9 +1280,11 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `graph/sql` | user | `{deadline_ms?: natnum, params?: [SqlParam], rows?: natnum, sql: string}` | `{columns?: [string], rows?: [[any]], truncated: boolean}` | no |
 | `hello` | user, agent, service | `{client?: string, cwd?: AbsPath, drgnx_version?: string, nonce: Nonce, proof?: Hex64, proto: natnum, records?: natnum, schema?: natnum}` | `HelloReply` | no |
 | `history/batch` | user | `{buffer_id: string, changes: [{inserted: string, old_len: natnum, origin?: string, start: natnum}], region_hash: string}` | `{ok?: boolean, resync?: boolean}` | yes |
+| `history/blame` | user | `{end: integer, path: string, start: integer, worktree_root: string}` | `{spans: [BlameSpan]}` | no |
 | `history/compare` | user | `{a: string, b: string}` | `{files: [ComparedFile]}` | no |
 | `history/fork` | user | `{message: string, profile?: string, seq: integer, session: string}` | `{branch: string, id: string, level: "message" \| "turn" \| "summary", path: string, source_branch: string}` | yes |
 | `history/fork/drop` | user | `{id: string}` | `{ok: boolean}` | yes |
+| `history/hunks` | user | `{branch: string, since: integer}` | `{files: [FileHunks]}` | no |
 | `history/redo` | user | `{op: integer, session: string}` | `{commit?: string, op: integer, skipped: [RevertSkipped], written: [string]}` | yes |
 | `history/register` | user | `{buffer_id: string, path: string, worktree_root: string}` | `{doc: integer, reason?: string, tracked: boolean}` | yes |
 | `history/resync` | user | `{buffer_id: string, text: string}` | `{ok: boolean}` | yes |

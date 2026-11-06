@@ -754,9 +754,10 @@ async fn expect(f: &Front, s: &Saved, path: &Path) {
             _ => snapshot::blob_id(&p.root, &p.cwd, &p.checkpoint, &rel)
                 .unwrap_or_else(|| "gone".into()),
         };
-        hub.lock()
-            .origin
-            .step(super::origin::OriginEv::HubWrite { path: rel, hash });
+        hub.lock().origin.step(
+            &tree.id.0,
+            super::origin::OriginEv::HubWrite { path: rel, hash },
+        );
     })
     .await;
 }

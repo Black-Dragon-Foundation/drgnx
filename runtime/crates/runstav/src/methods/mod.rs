@@ -267,6 +267,8 @@ params! {
     HistoryFork(history::ForkParams),
     HistoryForkDrop(history::ForkDropParams),
     HistoryCompare(history::CompareParams),
+    HistoryBlame(history::BlameParams),
+    HistoryHunks(history::BranchHunksParams),
     HistoryTake(history::TakeParams),
     HistoryRedo(history::RedoParams),
     RunnersUnbench(runners::ByName),

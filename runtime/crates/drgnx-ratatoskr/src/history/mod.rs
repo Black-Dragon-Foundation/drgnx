@@ -12,6 +12,7 @@
 //! - [`branches`]: fork from here and the branches it makes: `history/fork`, `history/fork/drop`, `history/compare`,
 //!   `history/take`, `history/redo`.
 //! - [`merge`]: a task's branch merged into the job's tree, as the union of their documents.
+//! - [`views`]: `history/blame` and `history/hunks`: who wrote the text, and what a branch changed since a record.
 
 pub mod blob;
 pub mod branches;
@@ -23,12 +24,13 @@ pub mod revert;
 pub(crate) mod revert_core;
 mod timers;
 pub mod tree;
+pub mod views;
 pub mod watch;
 pub mod wire;
 
 pub use methods::{BATCH_MAX, BatchChange, BatchReply, Registered};
 
-use origin::OriginCore;
+use origin::Origins;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -90,7 +92,7 @@ pub(crate) struct Buffer {
 
 pub(crate) struct Inner {
     pub h: History,
-    pub origin: OriginCore,
+    pub origin: Origins,
     pub settler: Settler,
     pub peers: HashMap<(BranchId, String), PeerId>,
     pub buffers: HashMap<String, Buffer>,
@@ -109,7 +111,7 @@ impl Hub {
         Ok(Hub {
             inner: Mutex::new(Inner {
                 h: History::open(dir)?,
-                origin: OriginCore::default(),
+                origin: Origins::default(),
                 settler: Settler::default(),
                 peers: HashMap::new(),
                 buffers: HashMap::new(),

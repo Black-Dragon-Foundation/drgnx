@@ -93,6 +93,33 @@ impl OriginCore {
     }
 }
 
+/// One [`OriginCore`] per tree: a path in one worktree is not the same file as that path in another, so a write in one
+/// is never the version another tree's watcher saw.
+#[derive(Debug, Default)]
+pub struct Origins {
+    trees: BTreeMap<String, OriginCore>,
+}
+
+impl Origins {
+    /// The version EV is in TREE (a worktree's id), if it is a new one there.
+    pub fn step(&mut self, tree: &str, ev: OriginEv) -> Option<Version> {
+        self.trees.entry(tree.to_owned()).or_default().step(ev)
+    }
+
+    /// The hash of PATH's last recorded version in TREE.
+    pub fn last(&self, tree: &str, path: &str) -> Option<&str> {
+        self.trees.get(tree).and_then(|t| t.last(path))
+    }
+
+    /// The paths of TREE the core knows a version of.
+    pub fn paths(&self, tree: &str) -> Vec<String> {
+        self.trees
+            .get(tree)
+            .map(|t| t.paths().cloned().collect())
+            .unwrap_or_default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

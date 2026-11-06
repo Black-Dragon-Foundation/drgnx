@@ -683,6 +683,8 @@ impl Front {
             | Params::HistoryFork(_)
             | Params::HistoryForkDrop(_)
             | Params::HistoryCompare(_)
+            | Params::HistoryBlame(_)
+            | Params::HistoryHunks(_)
             | Params::HistoryTake(_)
             | Params::HistoryRedo(_)
             | Params::RunnersUnbench(_)

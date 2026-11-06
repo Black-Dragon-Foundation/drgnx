@@ -273,7 +273,28 @@ by `drgnx-history-revert--event`, the only code here that runs from the event co
 lint reads its source): clean buffers revert under `drgnx-history-with-origin "revert"`, buffers with unsaved changes are
 kept in a bounded list and a notice carries `drgnx-history-resolve-dirty`, whose card offers keep mine, take theirs and
 edit. `drgnx-history-who-wrote-this` asks `history/blame {path, worktree_root, start, end}` (0-based offsets) and reads
-`:spans` of `{start, end, author, step}`; the hub half of that method lands with the views.
+`:spans` of `{start, end, author, record, session, step}`; `author` is the history's own object (`{kind: "user"}`,
+`{kind: "agent", session}`, `{kind: "external", source}`, `{kind: "origin", name}`), and the command words it ("you",
+"agent s1", "outside drgnx (disk)").
+
+**Views** (`views.rs`). `history/blame {path, worktree_root, start, end}` answers `{spans}`: one span per run of one
+author's text made in one record, offsets 0-based in the document's LF text, cut to the text; text of the base and typing
+no record holds yet (it settles after 30 s) are left out. `history/hunks {branch, since}` answers `{files: [{path,
+hunks: [{old_start, old_count, new_start, new_count}]}]}`, numbered as `git diff --unified=0` numbers them, from the text
+after record `since` to the text now, in whichever project's history holds the branch. Both are user-only reads. The shape
+of `history/hunks` and of the bus event `history/file-version` is frozen for the Work space and the runners; a change to
+either is a change to those.
+
+**Steps and records.** A step that edited, and the first step of a turn, get `step.history_op`: the newest record the
+session caused at or before the step's end (none for a session outside a git worktree). `timeline/get` then shows the
+step as `revertible`, and a fork from it cuts the history at exactly that record.
+
+**One origin per tree.** The hub keeps an `OriginCore` per worktree (`origin::Origins`): the same path with the same
+bytes in two worktrees of one project is two versions, and the watcher's event about one tree's file is never matched
+against another's write.
+
+A hook that refused an agent's edit (the plugin hooks) is to show on the revert card as a skipped path whose reason
+starts `refused by hook`; the card prints a reason that starts so as it is.
 
 ## Testing
 
