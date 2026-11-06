@@ -12,7 +12,7 @@
 //! | `tool:write N` | a tool call (pending, then completed) whose raw input is a Write of N bytes (nothing is written) |
 //! | `fs:write PATH TEXT` | an edit tool call during which the client writes TEXT (`\n` a line break) to PATH in the cwd (`fs/write_text_file`); its output says `written` or `refused: …` |
 //! | `ask:permission KIND` | `session/request_permission` for a tool call of KIND (read, edit, execute, ...); says `permission: OPTION` |
-//! | `call:TOOL JSON` | calls the hub's MCP tool TOOL through the first stdio server of `mcpServers`; says `call: TEXT` |
+//! | `call:TOOL JSON` | calls the hub's MCP tool TOOL through the first stdio server of `mcpServers`; says `call: TEXT` (`record_decision` and `note_add` also show as a tool call named `mcp__drgnx__TOOL`, as the agents show them, so the hub can stamp the step) |
 //! | `decide TEXT` | `call:record_decision {"text": TEXT}` |
 //! | `commit MSG` | `git add -A && git commit -m MSG` in the cwd |
 //! | `sleep-loop` | asks permission (execute) to run `sleep 30; pgrep -f ratatoskr-mock-sleep-loop`, runs it when allowed |
@@ -784,7 +784,20 @@ impl Agent {
                 std::process::exit(3);
             }
             _ if head.starts_with("call:") => {
-                let r = self.mcp(sid, &head[5..], if rest.is_empty() { "{}" } else { rest });
+                let tool = &head[5..];
+                let r = self.mcp(sid, tool, if rest.is_empty() { "{}" } else { rest });
+                // a call that records a conclusion is also a tool call of the turn, as the agents show it: the hub
+                // finds the step the conclusion was recorded in from it
+                if matches!(tool, "record_decision" | "note_add") {
+                    self.tool(
+                        sid,
+                        turn,
+                        "other",
+                        &format!("mcp__drgnx__{tool}"),
+                        json!({}),
+                        &r,
+                    );
+                }
                 self.say(sid, turn, &format!("call: {r}"));
             }
             _ => {
