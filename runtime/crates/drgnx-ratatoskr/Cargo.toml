@@ -79,6 +79,7 @@ zip.workspace = true  # `browser install` unpacks the pinned archive
 http-body-util.workspace = true  # the download's body
 http = "1"                # the download's request (already in the tree through hyper)
 zeroize.workspace = true  # the line that carries provider keys to the backend is wiped once written
+similar = "2.7"           # a pair write's whole-file text as line hunks (pair::writes; already in the lock)
 
 # runners: the user's OpenSSH through the crate's native mux (no Android: the transport is Unix desktops only)
 [target.'cfg(all(unix, not(target_os = "android")))'.dependencies]

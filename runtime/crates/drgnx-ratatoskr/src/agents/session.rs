@@ -754,6 +754,8 @@ pub struct Session {
     conn: Conn,
     acp: SessionId,
     editors: Arc<crate::settings::agents::Editors>,
+    /// The pair door: a project chat's writes of the checkout go through the editor ([`crate::pair`]).
+    pair: Arc<crate::pair::door::Door>,
     /// The Work map: each snapshot reaches it too ([`crate::work::map`]).
     map: Arc<crate::work::map::Map>,
     /// What the matrix decides at the permission seam: the gate, the settings it reads, the store its cards go to.
@@ -932,6 +934,50 @@ impl Fence {
             Ok(real)
         } else {
             Err(format!("{path}: outside the session's directory"))
+        }
+    }
+}
+
+/// Whether a session in ROLE (a BRAINSTORM, working in its SCRATCH folder) is a chat in a project, whose `fs/*` calls
+/// in the project go to the pair door: every other session keeps the fence and the inline write.
+fn is_project_chat(role: Role, brainstorm: bool, scratch: bool) -> bool {
+    role == Role::Chat && !brainstorm && !scratch
+}
+
+/// An ACP `fs/*` request's `path`.
+fn path_of(req: &Value) -> String {
+    req.get("path")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
+/// TEXT from the request's `line` (1-based), at most `limit` lines.
+fn slice_lines(text: String, req: &Value) -> String {
+    let line = req.get("line").and_then(Value::as_u64).unwrap_or(1).max(1) as usize;
+    let limit = req.get("limit").and_then(Value::as_u64);
+    if line == 1 && limit.is_none() {
+        return text;
+    }
+    let it = text.split_inclusive('\n').skip(line - 1);
+    match limit {
+        Some(n) => it.take(n as usize).collect(),
+        None => it.collect(),
+    }
+}
+
+/// The answer to an `fs/read_text_file`: GOT's text, or its error.
+fn answer_read(resp: hermod::Responder<ReadTextFileResponse>, got: Result<String, String>) {
+    match got {
+        Ok(content) => {
+            if let Ok(r) =
+                serde_json::from_value::<ReadTextFileResponse>(json!({"content": content}))
+            {
+                let _ = resp.respond(r);
+            }
+        }
+        Err(m) => {
+            let _ = resp.fail(-32602, &m);
         }
     }
 }
@@ -1379,6 +1425,15 @@ pub(super) async fn prepare(
     }
     let scratch = launch::scratch_dir(&runstav::paths::Env::process(), sid).unwrap_or_default();
     project_read_allowed(launch::kind(role, cwd, &scratch), &eff)?;
+    if launch::kind(role, cwd, &scratch) == launch::Kind::Chat {
+        // its edits of the checkout go through the pair door only: Claude's own edit tools are off from the start
+        plan = plan.with_project_chat();
+        // paired from the start when the cell allows it; the user's toggle decides under an ask
+        front.pair.started(
+            sid,
+            norn::matrix::decide(&eff, Action::ChatProjectEdit, None),
+        );
+    }
     // the `browser` cell decides whether the session gets the browser (Allow or Ask: at first use, the broker asks)
     let cell = eff.cell(Action::Browser).verdict;
     let (spec, status, unsandboxed, browser) =
@@ -1697,6 +1752,11 @@ async fn launch(
     // the session's MCP session first: a sandboxed gateway profile's token is registered on its gateway.sock, which
     // needs it.  A launch refused before the spawn closes the one it opened (its socket and dir go with it)
     let opened = front.mcp.socket_of(sid).is_none();
+    // a chat in a project gets the pair tools from its start (read_file, edit_file, write_file), paired or not
+    let scratch = launch::scratch_path(&runstav::paths::Env::process(), sid);
+    if launch::kind(role, cwd, &scratch) == launch::Kind::Chat {
+        front.mcp.mark_project_chat(sid);
+    }
     let mcp = bridge(front, profile, sid, cwd, task, job).await;
     let prep = match prepare(front, profile, role, sid, cwd, job, module_env).await {
         Ok(p) => p,
@@ -1910,6 +1970,7 @@ fn assemble(
         conn: l.conn,
         acp: l.acp,
         editors: front.editors.clone(),
+        pair: front.pair.clone(),
         map: front.core.map.clone(),
         gate: front.core.matrix.clone(),
         settings: front.settings.clone(),
@@ -2250,6 +2311,8 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
         st.wheel = Wheel::Held;
         st.wheel_base = base;
         st.core.set_wheel(true);
+        drop(st);
+        s.pair.hold(&sid, true);
     }
     // a job it started still runs (re-attached before the sessions): it waits for it as before the restart
     let waiting = s.has_jobs();
@@ -2987,6 +3050,8 @@ impl Session {
                 Some(self.live.ids(&self.id).join(","))
                     .filter(|j| st.core.status() == SessionStatus::Waiting && !j.is_empty())
             },
+            waiting: self.pair.waiting(&self.id),
+            paired: self.pair.paired_now(&self.id),
             held_by: (st.wheel != Wheel::Free).then(|| "user".to_string()),
         }
     }
@@ -3110,6 +3175,19 @@ impl Session {
                 }
                 Event::Request(Incoming::ReadFile(req, resp)) => {
                     let v = serde_json::to_value(&req).unwrap_or_default();
+                    let path = v.get("path").and_then(Value::as_str).unwrap_or("");
+                    if self.project_chat() && self.in_project(path) {
+                        // the pair door asks the editor: on a task of its own, so this loop never waits on one
+                        let me = self.clone();
+                        crate::clock::spawn("session:pair-read", async move {
+                            let got = match me.pair_read(path_of(&v)).await {
+                                Ok(text) => Ok(slice_lines(text, &v)),
+                                Err(m) => Err(m),
+                            };
+                            answer_read(resp, got);
+                        });
+                        return;
+                    }
                     match self.read_file(&v).await {
                         Ok(content) => {
                             if let Ok(r) = serde_json::from_value::<ReadTextFileResponse>(
@@ -3125,6 +3203,35 @@ impl Session {
                 }
                 Event::Request(Incoming::WriteFile(req, resp)) => {
                     let v = serde_json::to_value(&req).unwrap_or_default();
+                    let path = v.get("path").and_then(Value::as_str).unwrap_or("");
+                    if self.project_chat() && self.in_project(path) {
+                        // a chat's write of its project goes through the pair door, on a task of its own
+                        let me = self.clone();
+                        crate::clock::spawn("session:pair-write", async move {
+                            let w = norn::tools::pair::PairWrite::Whole {
+                                path: path_of(&v),
+                                content: v
+                                    .get("content")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("")
+                                    .to_string(),
+                            };
+                            let r = me.pair_write(w).await;
+                            match r {
+                                Ok(_) => {
+                                    if let Ok(ok) =
+                                        serde_json::from_value::<WriteTextFileResponse>(json!({}))
+                                    {
+                                        let _ = resp.respond(ok);
+                                    }
+                                }
+                                Err(m) => {
+                                    let _ = resp.fail(-32602, &m);
+                                }
+                            }
+                        });
+                        return;
+                    }
                     match self.write_file(&v).await {
                         Ok(()) => {
                             if let Ok(r) =
@@ -3504,6 +3611,8 @@ impl Session {
             stepped.held |= taken == wheel::Taken::Held;
             stepped
         };
+        // a paired chat's door closes at the take: its writes still queued in an editor are dropped
+        self.pair.hold(&self.id, true);
         self.persist_wheel();
         self.perform(stepped);
         self.changed();
@@ -3572,6 +3681,7 @@ impl Session {
             st.wheel_base = None;
             st.stepped(fx)
         };
+        self.pair.hold(&self.id, false);
         self.persist_wheel();
         self.perform(stepped);
         self.editors.broadcast(
@@ -3756,16 +3866,94 @@ impl Session {
         let text = tokio::fs::read_to_string(&real)
             .await
             .map_err(|e| format!("{path}: {e}"))?;
-        let line = req.get("line").and_then(Value::as_u64).unwrap_or(1).max(1) as usize;
-        let limit = req.get("limit").and_then(Value::as_u64);
-        if line == 1 && limit.is_none() {
-            return Ok(text);
+        Ok(slice_lines(text, req))
+    }
+
+    /// A chat in a project (not its scratch folder, not a brainstorm): its edits of the checkout go through the pair
+    /// door, its own tools see the checkout read-only.
+    pub(crate) fn project_chat(&self) -> bool {
+        is_project_chat(
+            self.role,
+            self.document.is_some(),
+            self.cwd == launch::scratch_path(&runstav::paths::Env::process(), &self.id),
+        )
+    }
+
+    /// Whether PATH (absolute) is inside the session's project: a chat's `fs/*` call there goes to the pair door.
+    fn in_project(&self, path: &str) -> bool {
+        let p = Path::new(path);
+        p.is_absolute() && resolve(p).starts_with(resolve(&self.cwd))
+    }
+
+    /// The session's matrix cells now.
+    async fn cells_now(&self) -> Result<norn::matrix::Effective, String> {
+        let who = Who {
+            role: Some(self.role),
+            agent: Some(self.profile.clone()),
+            provider: self.provider.clone(),
+        };
+        self.gate
+            .effective_now(
+                &self.settings,
+                &self.writer,
+                who,
+                ActionCtx::of_session(&self.scopes, &self.id),
+            )
+            .await
+            .map_err(|e| format!("the matrix: {e:?}"))
+    }
+
+    /// The chat's read of PATH through the pair door (`read_file`, `fs/read_text_file` in the project).
+    pub(crate) async fn pair_read(&self, path: String) -> Result<String, String> {
+        if !self.project_chat() {
+            return Err(
+                "read_file is a chat's in a project; read the file with your own tools".into(),
+            );
         }
-        let it = text.split_inclusive('\n').skip(line - 1);
-        Ok(match limit {
-            Some(n) => it.take(n as usize).collect(),
-            None => it.collect(),
-        })
+        let eff = self.cells_now().await?;
+        self.pair
+            .read(&self.id, &self.cwd, &eff, &path)
+            .await
+            .map(|s| s.text)
+            .map_err(|r| r.0)
+    }
+
+    /// The chat's write W through the pair door (`edit_file`, `write_file`, `fs/write_text_file` in the project).
+    pub(crate) async fn pair_write(
+        &self,
+        w: norn::tools::pair::PairWrite,
+    ) -> Result<String, String> {
+        use crate::pair::door::WriteKind;
+        use norn::tools::pair::PairWrite;
+        if !self.project_chat() {
+            return Err("only a chat in your project edits your checkout through drgnx".into());
+        }
+        let eff = self.cells_now().await?;
+        let (path, kind) = match w {
+            PairWrite::Edit { path, old, new } => (path, WriteKind::Edit { old, new }),
+            PairWrite::Whole { path, content } => (path, WriteKind::Whole { content }),
+        };
+        self.pair
+            .write(&self.id, &self.cwd, &eff, &path, kind)
+            .await
+            .map_err(|r| r.0)
+    }
+
+    /// The user's pair toggle ON for this chat: on needs `chat.project-edit` not never; off closes the door at once
+    /// and queues a note to the agent, cancelling nothing.
+    pub(crate) async fn pair_toggle(self: &Arc<Self>, on: bool) -> Result<(), Error> {
+        if !self.project_chat() {
+            return Err(refuse("pair mode is a chat's in a project"));
+        }
+        let eff = self.cells_now().await.map_err(|e| refuse(&e))?;
+        self.pair
+            .toggle(&self.id, on, &eff)
+            .map_err(|r| refuse(&r.0))?;
+        if !on {
+            self.prompt(crate::pair::door::OFF_NOTE.to_string(), Origin::Hub)?;
+        }
+        self.changed();
+        Ok(())
     }
 
     async fn write_file(&self, req: &Value) -> Result<(), String> {
@@ -4269,6 +4457,19 @@ pub async fn wheel_give(f: &Front, c: &Caller, p: ById) -> Result<bool, Error> {
 pub fn wheel_saved(f: &Front, _: &Caller, p: WheelSaved) -> Result<bool, Error> {
     let unsaved = p.unsaved.iter().map(|a| a.as_str().to_string()).collect();
     Ok(f.editors.wheel_saved(p.req, unsaved))
+}
+
+/// `agents/pair`: the user turns pair mode on or off for a chat in a project.
+pub async fn pair(
+    f: &Front,
+    c: &Caller,
+    p: runstav::methods::pair::PairToggle,
+) -> Result<bool, Error> {
+    if c.class != Class::User {
+        return Err(refuse("only the user turns pair mode on or off"));
+    }
+    f.core.agents.find(p.id.as_str())?.pair_toggle(p.on).await?;
+    Ok(true)
 }
 
 /// `agents/pause`: the turn is cancelled once the tool call running now completes.
@@ -5158,6 +5359,30 @@ mod tests {
         assert_eq!(st.commands.len(), 1);
         assert_eq!(st.usage.as_ref().unwrap().used, Some(10.0));
         assert_eq!(st.core.status(), SessionStatus::Starting);
+    }
+
+    /// [D] Only a chat in a project goes to the pair door: a worker's or a manager's `fs/write_text_file` keeps the
+    /// session fence and its inline write, as do a chat in its scratch folder and a brainstorm.
+    #[test]
+    fn a_workers_fs_write_keeps_the_fence() {
+        for role in [Role::Worker, Role::Manager] {
+            assert!(!is_project_chat(role, false, false), "{role:?}");
+        }
+        assert!(!is_project_chat(Role::Chat, false, true), "a scratch chat");
+        assert!(!is_project_chat(Role::Chat, true, false), "a brainstorm");
+        assert!(is_project_chat(Role::Chat, false, false));
+        // the fence still writes a worker's own worktree inline
+        let dir = tempfile::tempdir().unwrap();
+        let f = Fence {
+            cwd: dir.path().to_path_buf(),
+            document: None,
+            read_only: false,
+            held: false,
+        };
+        assert!(
+            f.check(&dir.path().join("a.rs").to_string_lossy(), true)
+                .is_ok()
+        );
     }
 
     #[test]

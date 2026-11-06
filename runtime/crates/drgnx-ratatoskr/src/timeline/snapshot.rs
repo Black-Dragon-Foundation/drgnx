@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Names that never enter a snapshot, besides the sandbox's secret files ([`gleipnir::toolchain::SECRET_FILES`]).
-const ALSO_SECRET: &[&str] = &["secrets.env", "*.pem", "*.key", "id_rsa", "id_ed25519"];
+pub(crate) const ALSO_SECRET: &[&str] = &["secrets.env", "*.pem", "*.key", "id_rsa", "id_ed25519"];
 
 /// What [`prune`] did.
 #[derive(Clone, Debug, PartialEq, Eq)]

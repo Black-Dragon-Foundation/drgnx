@@ -312,6 +312,26 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             crate::methods::agents::WheelSave,
             "the user gives back the wheel of a session in a worktree of its own: the editor saves its buffers there and answers agents/wheel/saved with the files left unsaved"
         ),
+        event!(
+            "pair-apply",
+            crate::methods::pair::PairApply,
+            "a paired chat's write, to the editor that has the file open: it applies it whole or refuses it whole and answers pair/answer; ttl_ms counts from its arrival"
+        ),
+        event!(
+            "pair-read",
+            crate::methods::pair::PairRead,
+            "a paired chat's read of a file the editor may have open: the editor answers pair/read-answer with the buffer's text and version"
+        ),
+        event!(
+            "pair-drop",
+            crate::methods::pair::PairDrop,
+            "the user turned pair off for a chat or took its wheel: the editor drops that session's queued writes, answering each pair/answer dropped with the reason"
+        ),
+        event!(
+            "pair-reconcile",
+            crate::methods::pair::PairReconcile,
+            "a pair write whose answer did not come in its time to live: the editor answers pair/answer from what it applied"
+        ),
     ];
     v.sort_by_key(|e| e.name);
     v
@@ -382,6 +402,11 @@ mod tests {
                     // agent system part 3: take the wheel
                     "agent-wheel",
                     "wheel-save",
+                    // agent system part 3: pair mode
+                    "pair-apply",
+                    "pair-drop",
+                    "pair-read",
+                    "pair-reconcile",
                 ]
                 .contains(&n.as_str())
             })
@@ -396,7 +421,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 29);
+        assert_eq!(events().len(), 33);
         assert!(event("settings/proposed").is_some());
         // ids only: a key-shaped value is no id, and nothing but `providers` is taken
         let changed = event("gateway/keys-changed").unwrap();

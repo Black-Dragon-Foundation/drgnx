@@ -16,6 +16,7 @@ pub mod hub;
 pub mod jobs;
 pub mod matrix;
 pub mod mcp;
+pub mod pair;
 pub mod plans;
 pub mod records;
 pub mod runners;
@@ -262,6 +263,12 @@ params! {
     RunnersSet(runners::SetParams),
     RunnersUnbench(runners::ByName),
     RunnersRemove(runners::RemoveParams),
+    PairAnswer(pair::PairAnswer),
+    PairReadAnswer(pair::PairReadAnswer),
+    PairOpen(pair::OpenParams),
+    PairClosed(pair::ClosedParams),
+    PairOpenSet(pair::OpenSetParams),
+    AgentsPair(pair::PairToggle),
 }
 
 /// Every method, in no order.
@@ -286,6 +293,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(work::methods());
     v.extend(search::methods());
     v.extend(runners::methods());
+    v.extend(pair::methods());
     v
 }
 

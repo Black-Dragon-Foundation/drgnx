@@ -352,6 +352,129 @@ fn a_gateway_session_reaches_the_hubs_gateway_through_its_relay() {
     );
 }
 
+/// The child's side of `hub_socket_identifies_its_session`: MCP over `ratatoskr mcp-bridge` to its own `mcp.sock`
+/// (a coprocess, each answer read before the next line goes), announcing what it got on stdout.
+const IDENTIFY: &str = r#"
+[ -S "$OWN" ] || exit 11
+[ -e "$OTHER" ] && exit 12
+coproc B { "$BRIDGE" mcp-bridge --socket "$OWN"; }
+send() { printf '%s\n' "$1" >&"${B[1]}"; }
+send '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}'
+read -r l <&"${B[0]}" || exit 13
+send '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+send '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"hello","arguments":{}}}'
+read -r l <&"${B[0]}" || exit 14
+echo "hello: $l"
+send '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"hello","arguments":{"session":"S2"}}}'
+read -r l <&"${B[0]}" || exit 15
+echo "as-other: $l"
+eval "exec ${B[1]}>&-"
+wait
+exit 0
+"#;
+
+/// Pattern C (the child announces what its socket answered, then exits).  A session's tools speak only for the
+/// session that owns the socket: a real hub mints `mcp.sock` for S1 and S2 (`mcp/session`), S1's sandboxed child
+/// sees its own socket and not S2's, the hub's answer through its socket names S1's agent, and a call that names S2
+/// is refused before any tool runs.
+#[test]
+#[ignore = "needs the real sandbox (bwrap with user namespaces): the sandbox lane"]
+fn hub_socket_identifies_its_session() {
+    use drgnx_ratatoskr::client::Client;
+    use serde_json::json;
+    let fx = Fx::new();
+    let env = fx.env();
+    let me = std::process::id();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(fx.p("run"), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let mut hub = std::process::Command::new(RATATOSKR)
+        .args(["serve", "--foreground", "--parent-pid", &me.to_string()])
+        .env_clear()
+        .envs([
+            ("HOME", fx.p("home")),
+            ("XDG_RUNTIME_DIR", fx.p("run")),
+            ("TMPDIR", fx.p("t")),
+            ("PATH", PathBuf::from("/usr/bin:/bin")),
+            ("RATATOSKR_SUPERVISOR", PathBuf::from("none")),
+        ])
+        .current_dir(fx.p(""))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::fs::File::create(fx.p("hub.err")).unwrap())
+        .spawn()
+        .expect("the hub");
+    let within = Duration::from_secs(10);
+    // a look repeated: the hub says nothing when it is ready; 30 s only bounds a failure
+    let mut c = skuld::wait_until(
+        "the hub answers a client (its stderr is hub.err)",
+        30,
+        || Client::user(&env, Duration::from_secs(2)).ok(),
+    );
+    let mut sockets = Vec::new();
+    for (agent, sid) in [("agent-one", "S1"), ("agent-two", "S2")] {
+        let r = c
+            .call(
+                "mcp/session",
+                json!({"agent": agent, "sid": sid, "cwd": fx.p("wt"), "owner": me}),
+                within,
+            )
+            .expect("the session's MCP session");
+        sockets.push(r["socket"].as_str().expect("its socket").to_string());
+    }
+    // the bridge is this build's binary, copied where the child may run it
+    let bridge = fx.p("wt/ratatoskr");
+    std::fs::copy(RATATOSKR, &bridge).unwrap();
+    let out = fx.p("wt/child.out");
+    let script = format!("exec >{}\n{IDENTIFY}", out.display())
+        .replace("$OWN", &sockets[0])
+        .replace("$OTHER", &sockets[1])
+        .replace("$BRIDGE", bridge.to_str().unwrap());
+    let launch = launch_on(
+        &env,
+        &sandbox(Tier::Full),
+        &fx.plan(&script),
+        &fx.shape(NetCell::ProviderOnly),
+    )
+    .unwrap_or_else(|r| panic!("refused: {r}"));
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (code, tail) = rt.block_on(async {
+        let mut child = draugr::spawn_pinned(launch.spec).await.expect("spawn");
+        if let Some(fd) = launch.status {
+            gleipnir::read_status(fd, &|| child.stderr_tail(), Duration::from_secs(20))
+                .unwrap_or_else(|r| panic!("the sandbox did not start: {r}"));
+        }
+        let status = child.wait().await.expect("wait").expect("status");
+        (status.code().unwrap_or(-1), child.stderr_tail())
+    });
+    drop(c);
+    let _ = hub.kill();
+    let _ = hub.wait();
+    let said = std::fs::read_to_string(&out).unwrap_or_default();
+    assert_eq!(code, 0, "the child: {said} {tail}");
+    let line = |tag: &str| -> serde_json::Value {
+        let l = said
+            .lines()
+            .find_map(|l| l.strip_prefix(tag))
+            .unwrap_or_else(|| panic!("no {tag} in {said}"));
+        serde_json::from_str(l).unwrap()
+    };
+    let hello = line("hello: ");
+    let text = hello["result"]["content"][0]["text"].as_str().unwrap();
+    let answer: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(answer["agent"], "agent-one", "{hello}");
+    let other = line("as-other: ");
+    assert_eq!(other["result"]["isError"], true, "{other}");
+    assert_eq!(
+        other["result"]["content"][0]["text"],
+        "session: tools never take an identity"
+    );
+}
+
 /// A sandboxed session reaches its provider through its own proxy: the hub's order (the launch makes the session dir,
 /// `agents::net::SessionNet` binds `proxy.sock` in it, then the spawn), and `curl` inside, tunnelling through
 /// `HTTPS_PROXY` (the relay port), reaches `ratatoskr-mock llm` under a pinned name.  The mock is domr's

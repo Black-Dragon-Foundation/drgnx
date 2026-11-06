@@ -21,8 +21,11 @@ use crate::write::cards::{NewCard, card_create};
 use crate::write::meta::{get_text, put_text};
 use urdr::graph::{Class, TxMeta};
 
-/// The arguments that would name who calls (`drgnx-coord-mcp--identity-args`).
-pub const IDENTITY_ARGS: [&str; 5] = ["agent", "from", "sender", "as", "identity"];
+/// The arguments that would name who calls (`drgnx-coord-mcp--identity-args`), a session's id among them: a session's
+/// socket speaks only for that session, so no tool may take another's id (`session`, `sid`) from its arguments.
+pub const IDENTITY_ARGS: [&str; 7] = [
+    "agent", "from", "sender", "as", "identity", "session", "sid",
+];
 
 /// The first identity name among ARGS' keys (present even with a null value, as `plist-member` sees it).
 pub fn identity_arg(args: &Value) -> Option<&'static str> {

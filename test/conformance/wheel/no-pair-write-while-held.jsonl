@@ -1,0 +1,24 @@
+{"scenario": "wheel/no-pair-write-while-held", "requires": ["v1", "test-hooks"], "doc": "Gated (B). A paired chat's edit_file waits in the editor's queue when the user takes the wheel: the editor is told to drop that session's queued writes (pair-drop), the door refuses the session from then on (the user holds the wheel), and nothing of the agent's lands after held. Needs the wheel's protocol (agents/wheel/take)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/project && echo readme > $ROOT/project/README"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-matrix (:preset autonomous)) (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "pair/open", "params": {"file": "$ROOT/project/README", "kind": "normal"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/project"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "call:edit_file {\"path\": \"$ROOT/project/README\", \"old\": \"readme\", \"new\": \"README\"}\ncall:edit_file {\"path\": \"$ROOT/project/README\", \"old\": \"readme\", \"new\": \"README\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "pair-apply", "data": {"write": "$capture:w", "session": "$sid"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/wheel/take", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": "$any"}}
+{"do": "expect", "conn": "e", "json": {"event": "pair-drop", "data": {"session": "$sid"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "pair/answer", "params": {"write": "$w", "result": "dropped", "reason": "held"}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": true}}
+{"do": "count_events", "conn": "e", "for_ms": 1500, "none": ["pair-apply"]}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "cat $ROOT/project/README"], "expect_code": 0, "expect_stdout": "readme\n"}

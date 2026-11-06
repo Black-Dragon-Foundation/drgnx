@@ -407,7 +407,9 @@ never from an argument or an environment variable:
   - no start time: `ext:KIND:PID`;
   - no parent (none, or `1`): the bridge is refused.
 - The identity lives only as long as the connection.
-- **No tool takes an identity:** every tool refuses an `agent`, `from`, `sender`, `as` or `identity` argument.
+- **No tool takes an identity:** every tool refuses an `agent`, `from`, `sender`, `as`, `identity`, `session` or `sid`
+  argument (a session's socket speaks only for its own session: `docs/develop/pair-routing.md`, "The door is per
+  session").
   `hello`'s `name` is a label the user sees, never who the agent is.
 
 **What an outside agent may write:** only its own events and messages, within the report limit.
@@ -492,7 +494,7 @@ from an argument or an environment variable (`DRGNX_AGENT` is never read):
 
 **The guard.** Every tool is a `CoordTool` wrapped by `guard::guarded`, so none can skip it:
 - the identity is checked on every call: `user` in any case, or an id that is not plain, refuses every tool;
-- an argument named `agent`, `from`, `sender`, `as` or `identity` is refused twice: by the tool's check (`agent:
+- an argument named `agent`, `from`, `sender`, `as`, `identity`, `session` or `sid` is refused twice: by the tool's check (`agent:
   tools never take an identity`, a tool error with its path, before the typed check that would also refuse it as an
   unknown key) and again in the call, with the Lisp text (`No tool takes `agent': you are …`).
 

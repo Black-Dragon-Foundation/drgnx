@@ -162,10 +162,26 @@ pub struct Snapshot {
         skip_serializing_if = "Option::is_none"
     )]
     pub waiting_on: Option<String>,
+    /// A paired chat whose writes of one file were refused twice within a minute: it waits for the user (or asks)
+    /// until a write of that file applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting: Option<Waiting>,
+    /// A chat in a project: whether pair mode is on for it (its edits of your checkout go through the editor).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paired: Option<bool>,
     /// Who holds the session's wheel (`user`, from `agents/wheel/take` until the give): the agent stops after its
     /// step and nothing of it is written until the wheel is given back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held_by: Option<String>,
+}
+
+/// The file (and the user's lines in it) a paired chat waits on.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Waiting {
+    pub file: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines: Option<[u64; 2]>,
 }
 
 /// Where a session's wheel is: `held` once the turn the take stopped has ended, `free` once it is given back.

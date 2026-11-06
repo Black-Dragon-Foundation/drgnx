@@ -205,6 +205,10 @@ pub struct Sessions {
     /// Sessions made managers (Task 25): their socket also serves the manager tools.
     managers: Mutex<BTreeSet<String>>,
     manager_list: OnceLock<ToolList>,
+    /// Chats in a project: their socket also serves the pair tools (`read_file`, `edit_file`, `write_file`).
+    project_chats: Mutex<BTreeSet<String>>,
+    /// A project chat's list, without the tracker tools and with them.
+    pair_sets: [OnceLock<ToolList>; 2],
     /// Outside bridges connected now.
     outside: Arc<AtomicUsize>,
     /// The hub ends: every outside bridge's connection closes ([`Sessions::end_outside`]).
@@ -490,6 +494,8 @@ impl Sessions {
             serial: tokio::sync::Mutex::new(()),
             managers: Mutex::new(BTreeSet::new()),
             manager_list: OnceLock::new(),
+            project_chats: Mutex::new(BTreeSet::new()),
+            pair_sets: [OnceLock::new(), OnceLock::new()],
             front: OnceLock::new(),
             search_tools: OnceLock::new(),
         }
@@ -531,6 +537,14 @@ impl Sessions {
     /// again by the caller).
     pub fn mark_manager(&self, sid: &str) {
         self.managers
+            .lock()
+            .expect("sessions")
+            .insert(sid.to_owned());
+    }
+
+    /// Session SID is a chat in a project: its next socket serves the pair tools too.
+    pub fn mark_project_chat(&self, sid: &str) {
+        self.project_chats
             .lock()
             .expect("sessions")
             .insert(sid.to_owned());
@@ -657,6 +671,20 @@ impl Sessions {
                 .get_or_init(|| {
                     let mut all = norn::tools::tools_for(norn::tools::ToolSets::default());
                     all.extend(norn::tools::manager_tools());
+                    after_each(all)
+                })
+                .clone();
+        }
+        if self
+            .project_chats
+            .lock()
+            .expect("sessions")
+            .contains(&row.sid)
+        {
+            return self.pair_sets[usize::from(sets.tracker)]
+                .get_or_init(|| {
+                    let mut all = norn::tools::tools_for(sets);
+                    all.extend(norn::tools::pair_tools());
                     after_each(all)
                 })
                 .clone();

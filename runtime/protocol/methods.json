@@ -200,6 +200,13 @@
                   "null"
                 ]
               },
+              "paired": {
+                "description": "A chat in a project: whether pair mode is on for it (its edits of your checkout go through the editor).",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
               "parent": {
                 "description": "The manager session that started it.",
                 "type": [
@@ -308,6 +315,17 @@
                   }
                 ]
               },
+              "waiting": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Waiting"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "A paired chat whose writes of one file were refused twice within a minute: it waits for the user (or asks)\nuntil a write of that file applies."
+              },
               "waiting-on": {
                 "description": "The job it waits on.",
                 "type": [
@@ -349,6 +367,32 @@
               "direct"
             ],
             "type": "string"
+          },
+          "Waiting": {
+            "additionalProperties": false,
+            "description": "The file (and the user's lines in it) a paired chat waits on.",
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "lines": {
+                "items": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "file"
+            ],
+            "type": "object"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1563,6 +1607,226 @@
     },
     {
       "data": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "Edit": {
+            "description": "One edit of a write, as the editor applies it.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "description": "`old` must match exactly once in the buffer's text when the editor applies it; it becomes `new`.",
+                "properties": {
+                  "kind": {
+                    "const": "replace",
+                    "type": "string"
+                  },
+                  "new": {
+                    "type": "string"
+                  },
+                  "old": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "old",
+                  "new"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Lines `line ..< line + delete` (1-based) of the text read at the write's `version` become `text`.",
+                "properties": {
+                  "delete": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "kind": {
+                    "const": "lines",
+                    "type": "string"
+                  },
+                  "line": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "line",
+                  "delete",
+                  "text"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`pair-apply`: write WRITE of session SESSION to FILE, to the editor that has it open.  `version` is the buffer's\nchange counter the edits are based on (none: `edit_file`, or a new file), `floor` the oldest version the hub\nstill holds for a read of this file (the editor keeps its change log back to it), `ttl_ms` how long the write\nmay wait in the editor's queue, counted from its arrival.",
+        "properties": {
+          "edits": {
+            "items": {
+              "$ref": "#/$defs/Edit"
+            },
+            "type": "array"
+          },
+          "file": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "floor": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ordinal": {
+            "description": "The writes to FILE in the order the hub sends them (1, 2, …).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "session": {
+            "type": "string"
+          },
+          "ttl_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "write": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "write",
+          "session",
+          "ordinal",
+          "file",
+          "edits",
+          "ttl_ms"
+        ],
+        "title": "PairApply",
+        "type": "object"
+      },
+      "doc": "a paired chat's write, to the editor that has the file open: it applies it whole or refuses it whole and answers pair/answer; ttl_ms counts from its arrival",
+      "name": "pair-apply"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`pair-drop`: drop every write of SESSION still queued in the editor (each answered `dropped`): the user turned pair\noff or took the wheel.",
+        "properties": {
+          "reason": {
+            "description": "Why, as the editor's answer gives it back (`pair-off`, `held`).",
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "reason"
+        ],
+        "title": "PairDrop",
+        "type": "object"
+      },
+      "doc": "the user turned pair off for a chat or took its wheel: the editor drops that session's queued writes, answering each pair/answer dropped with the reason",
+      "name": "pair-drop"
+    },
+    {
+      "data": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`pair-read`: the editor's text of FILE, answered by `pair/read-answer` with the same REQ.",
+        "properties": {
+          "file": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "req": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "req",
+          "file"
+        ],
+        "title": "PairRead",
+        "type": "object"
+      },
+      "doc": "a paired chat's read of a file the editor may have open: the editor answers pair/read-answer with the buffer's text and version",
+      "name": "pair-read"
+    },
+    {
+      "data": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`pair-reconcile`: write WRITE's answer did not come in its time to live; the editor answers `pair/answer` from\nwhat it applied (by write id and buffer hash).",
+        "properties": {
+          "file": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "write": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "write",
+          "file"
+        ],
+        "title": "PairReconcile",
+        "type": "object"
+      },
+      "doc": "a pair write whose answer did not come in its time to live: the editor answers pair/answer from what it applied",
+      "name": "pair-reconcile"
+    },
+    {
+      "data": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "description": "One request the gateway forwarded, and what it cost.",
@@ -2694,6 +2958,13 @@
                   "null"
                 ]
               },
+              "paired": {
+                "description": "A chat in a project: whether pair mode is on for it (its edits of your checkout go through the editor).",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
               "parent": {
                 "description": "The manager session that started it.",
                 "type": [
@@ -2802,6 +3073,17 @@
                   }
                 ]
               },
+              "waiting": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Waiting"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "A paired chat whose writes of one file were refused twice within a minute: it waits for the user (or asks)\nuntil a write of that file applies."
+              },
               "waiting-on": {
                 "description": "The job it waits on.",
                 "type": [
@@ -2843,6 +3125,32 @@
               "direct"
             ],
             "type": "string"
+          },
+          "Waiting": {
+            "additionalProperties": false,
+            "description": "The file (and the user's lines in it) a paired chat waits on.",
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "lines": {
+                "items": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "file"
+            ],
+            "type": "object"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -3121,6 +3429,13 @@
                   "null"
                 ]
               },
+              "paired": {
+                "description": "A chat in a project: whether pair mode is on for it (its edits of your checkout go through the editor).",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
               "parent": {
                 "description": "The manager session that started it.",
                 "type": [
@@ -3229,6 +3544,17 @@
                   }
                 ]
               },
+              "waiting": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Waiting"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "A paired chat whose writes of one file were refused twice within a minute: it waits for the user (or asks)\nuntil a write of that file applies."
+              },
               "waiting-on": {
                 "description": "The job it waits on.",
                 "type": [
@@ -3270,6 +3596,32 @@
               "direct"
             ],
             "type": "string"
+          },
+          "Waiting": {
+            "additionalProperties": false,
+            "description": "The file (and the user's lines in it) a paired chat waits on.",
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "lines": {
+                "items": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "file"
+            ],
+            "type": "object"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -3340,6 +3692,46 @@
         "type": "object"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "pair mode on or off for a chat in a project: on needs chat.project-edit not never; off refuses its later writes and drops those queued in the editor, cancelling nothing",
+      "name": "agents/pair",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`agents/pair` (the user): pair mode on or off for chat ID.",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          },
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "on"
+        ],
+        "title": "PairToggle",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
     },
     {
       "classes": [
@@ -14130,7 +14522,8 @@
               "settings.change",
               "user.private",
               "user.emacs",
-              "chat.project-read"
+              "chat.project-read",
+              "chat.project-edit"
             ],
             "type": "string"
           },
@@ -14358,7 +14751,8 @@
               "settings.change",
               "user.private",
               "user.emacs",
-              "chat.project-read"
+              "chat.project-read",
+              "chat.project-edit"
             ],
             "type": "string"
           },
@@ -15282,6 +15676,325 @@
         },
         "title": "Paces",
         "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor's answer to a pair-apply or pair-reconcile: applied (version, saved), refused (reason, lines) or dropped; true when the hub was waiting for it",
+      "name": "pair/answer",
+      "params": {
+        "$defs": {
+          "PairResult": {
+            "description": "What became of a write in the editor.",
+            "oneOf": [
+              {
+                "const": "applied",
+                "description": "Applied whole.",
+                "type": "string"
+              },
+              {
+                "const": "refused",
+                "description": "Refused whole: `reason` says why (`lines` the user's lines it would have touched).",
+                "type": "string"
+              },
+              {
+                "const": "dropped",
+                "description": "Dropped unapplied: its time to live ran out in the queue, or the door closed while it waited.",
+                "type": "string"
+              }
+            ]
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`pair/answer` (the editor): write WRITE's end.  An applied write gives the buffer's `version` after it and whether\nit was saved (`saved`: true for a clean buffer saved, false for one the user's unsaved edits keep unsaved;\n`not_saved`: the save would have asked, or failed, and why).  A refusal names `reason` (`overlap`, `guard`,\n`no-match`, `several`, `gap`, `read-only`, `changed-on-disk`, `locked`, or the editor's own words) and the user's\n`lines` it would have touched.",
+        "properties": {
+          "lines": {
+            "items": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "not_saved": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "result": {
+            "$ref": "#/$defs/PairResult"
+          },
+          "saved": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "write": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "write",
+          "result"
+        ],
+        "title": "PairAnswer",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor no longer has a file open",
+      "name": "pair/closed",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`pair/closed` (the editor): it no longer has FILE open.",
+        "properties": {
+          "file": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "ClosedParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor has a file open now (normal, large or remote): a pair write of it goes to this editor",
+      "name": "pair/open",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "FileKind": {
+            "description": "How the editor has a file open: a pair write goes only to a `normal` buffer (a large-file or remote buffer refuses\nit).",
+            "enum": [
+              "normal",
+              "large",
+              "remote"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`pair/open` (the editor): it has FILE open now, as KIND.",
+        "properties": {
+          "file": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "kind": {
+            "$ref": "#/$defs/FileKind"
+          }
+        },
+        "required": [
+          "file",
+          "kind"
+        ],
+        "title": "OpenParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "every file the editor has open, at its setup and on every connection: it replaces what the hub held for that editor",
+      "name": "pair/open-set",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "FileKind": {
+            "description": "How the editor has a file open: a pair write goes only to a `normal` buffer (a large-file or remote buffer refuses\nit).",
+            "enum": [
+              "normal",
+              "large",
+              "remote"
+            ],
+            "type": "string"
+          },
+          "OpenFile": {
+            "additionalProperties": false,
+            "description": "One file the editor has open.",
+            "properties": {
+              "file": {
+                "$ref": "#/$defs/AbsPath"
+              },
+              "kind": {
+                "$ref": "#/$defs/FileKind"
+              }
+            },
+            "required": [
+              "file",
+              "kind"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`pair/open-set` (the editor, at its module's setup and on every connection): every file it has open; it replaces\nwhat the hub held for that editor.",
+        "properties": {
+          "files": {
+            "items": {
+              "$ref": "#/$defs/OpenFile"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "files"
+        ],
+        "title": "OpenSetParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor's answer to a pair-read: the buffer's text and version, or why not; true when the hub was waiting for it",
+      "name": "pair/read-answer",
+      "params": {
+        "$defs": {
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`pair/read-answer` (the editor): REQ's text and the buffer's version, or why the editor cannot give it.",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "req": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "req"
+        ],
+        "title": "PairReadAnswer",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
       },
       "writes": false
     },
