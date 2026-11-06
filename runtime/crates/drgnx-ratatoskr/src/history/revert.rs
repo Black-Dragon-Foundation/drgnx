@@ -324,9 +324,25 @@ async fn plan_for(f: &Front, t: &Target) -> Result<(Plan, Vec<w::RevertOverlap>)
         .and_then(|s| s.capabilities().cloned());
     let provider = session::find_profile(f, &profile).and_then(|p| p.provider());
     let level = rewind::planned_level(provider, caps.as_ref());
+    // the cut the rewind will make: a summary it tells (a subagent's step, a step inside a turn) needs a message
+    let summary = rewind::planned_point(f, t, level)
+        .await
+        .map_or(level == RestoreLevel::Summary, |p| {
+            rewind::tells_a_summary(&p)
+        });
     let (sid, seq) = (t.sid.clone(), t.seq);
     let (mut plan, cards) = crate::clock::blocking(move || {
-        classify(root, cwd, sid, seq, live, level, step, last_seq, newest)
+        classify(
+            root,
+            cwd,
+            sid,
+            seq,
+            (live, summary),
+            level,
+            step,
+            last_seq,
+            newest,
+        )
     })
     .await
     .map_err(|e| internal(e.to_string()))??;
@@ -335,14 +351,15 @@ async fn plan_for(f: &Front, t: &Target) -> Result<(Plan, Vec<w::RevertOverlap>)
 }
 
 /// The plan's paths: every path the checkpoint and the files now differ in, each the agent's alone (restored), the
-/// user's too and mergeable (merged), or the user's where the edits meet (an overlap).
+/// user's too and mergeable (merged), or the user's where the edits meet (an overlap).  SUMMARY: the rewind tells the
+/// conversation a summary, so a live session's revert needs the user's message.
 #[allow(clippy::too_many_arguments)]
 fn classify(
     root: PathBuf,
     cwd: PathBuf,
     sid: String,
     seq: i64,
-    live: bool,
+    (live, summary): (bool, bool),
     level: RestoreLevel,
     step: norn::read::steps::Step,
     last_seq: i64,
@@ -383,7 +400,7 @@ fn classify(
         live,
         manager: None,
         level,
-        needs_message: live && level == RestoreLevel::Summary,
+        needs_message: live && summary,
         blocked: false,
         checkpoint: checkpoint.clone(),
         now: now.clone(),

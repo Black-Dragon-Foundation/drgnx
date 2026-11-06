@@ -371,7 +371,7 @@ recorded in (`history/revert/preview {decision}`). Things the rows fix as they a
   default answer keeps the user's file.
 - Two edits that touch neighbouring lines of one file are a conflict in the merge, so they too come back as an overlap.
 - A revert to a subagent's step cuts the conversation at the message before the Task call and carries what the cut
-  leaves out in a summary, so it needs the user's message although the card's `needs_message` is false.
+  leaves out in a summary, so it needs the user's message, and the card says so (`needs_message`).
 
 `cargo test -p verdandi --test timing -- --ignored --nocapture` prints the cost of the "undone by" scan (a file with 1,000
 later deletes); it is a measurement, not a gate.

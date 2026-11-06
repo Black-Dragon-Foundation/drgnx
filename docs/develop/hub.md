@@ -973,7 +973,9 @@ A revert takes an agent's work back to one of its steps: the files, the decision
 
 - **The methods** (`history::revert`, user only). `history/revert/preview {session, seq} | {decision}` answers the
   card: the files, the overlaps, the files merged with the user's later edits (`non_overlapping_files`), what the
-  revert cannot undo, the level, `needs_message`, `blocked`, the paths left out, the conversation (`restored`, or
+  revert cannot undo, the level, `needs_message` (the rewind tells the conversation a summary: at Summary level, or
+  for steps the cut leaves out, as at a subagent's step; apply then refuses without a message before anything
+  changes), `blocked`, the paths left out, the conversation (`restored`, or
   `not-restored` with a label: a finished worker's is "conversation not restored: the agent has finished") and
   `fork` (offered beside Apply for a finished worker or a blocked revert). The preview is kept in the project's
   `history.db` (`History::keep_preview`, under a random 52-bit id unique across the projects), so it survives a hub

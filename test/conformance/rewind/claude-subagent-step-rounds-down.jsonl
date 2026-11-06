@@ -18,6 +18,6 @@
 {"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"seq": "$capture:sub", "class": "tool", "tool": "Read README.md"}}}, "within_ms": 15000}
 {"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"seq": "$capture:s2", "class": "think", "turn_id": "t2"}}}, "within_ms": 15000}
 {"do": "send", "conn": "c", "json": {"id": 5, "method": "history/revert/preview", "params": {"session": "$sid", "seq": "$sub"}}}
-{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"preview_id": "$capture:pid", "session": "$sid", "seq": "$sub", "files": "$any", "level": "message", "needs_message": "$any", "blocked": []}}, "within_ms": 15000}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"preview_id": "$capture:pid", "session": "$sid", "seq": "$sub", "files": "$any", "level": "message", "needs_message": true, "blocked": []}}, "within_ms": 15000}
 {"do": "send", "conn": "c", "json": {"id": 6, "method": "history/revert/apply", "params": {"preview_id": "$pid", "mode": "keep-mine", "choices": [], "message": "carry on without the subagent"}}}
 {"do": "expect", "conn": "c", "json": {"id": 6, "result": {"session": "$sid", "level": "message", "conversation": {"state": "restored"}, "op": "$number"}}, "within_ms": 30000}
