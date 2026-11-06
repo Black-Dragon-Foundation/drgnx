@@ -125,6 +125,47 @@ no store. The hub's points (before a tool call, after an edit, before a commit, 
 `hooks::tests::allow_never_widens` checks every cell, both contexts and every list of up to three records of every
 kind (3 200 cases).
 
+## Plugins in the hub
+
+`drgnx_ratatoskr::plugins` (`runtime/crates/drgnx-ratatoskr/src/plugins.rs`) is the hub's side: which plugins are
+installed, which the user approved and with which files, and which run for a project. It runs nothing; it hands the
+host the plugins it would run.
+
+- **Install** is the CLI's: `ratatoskr plugins install PATH [--replace]` (`drgnx plugins …`) reads `plugin.json` and
+  `plugin.wasm` of PATH through `eitri` (no link followed), parses the manifest, and copies both into
+  `<data>/plugins/NAME/` (0700, files 0600) through a staging folder and a rename; an existing name is refused without
+  `--replace`, which puts the new files in the folder's place whole. `list` asks the hub; `remove NAME` deletes the
+  folder. A running hub is told afterwards (`plugins/list`), so its card appears at once.
+- **`Plugins::sync`** runs at hub start and at every `plugins/list`: `brokkr::scan` of the folder, the rows of
+  `runtime.db`'s `plugin` table (migration 10: `name`, `hash`, `approved_hash`, `approved_at`, `enabled`,
+  `approved_reach`), and the five states: `unapproved` (no `approved_hash`), `changed` (`approved_hash` is not the hash
+  on disk), `disabled` (`enabled` is 0), `approved`, and `broken` (the manifest does not read; `problem` says why). The
+  hash on disk is stored at each look; a row is dropped, with the plugin's `plugin_kv` rows, when its folder is gone.
+  It returns the rows and what changed since the last look; the methods turn changes into `plugin` events and cards.
+- **`plugins/approve {name, hash}`** (user class only) reads the folder again and refuses a hash that is not the files'
+  now (`invalid-params` at `hash`; a name not installed or broken at `name`). It stores the hash and the manifest's
+  whole reach as JSON (`approved_reach`), so that a `changed` plugin's `plugins/list` entry carries
+  `approved_reach: {abilities, hosts, hooks: [{point, verdicts, tool_kinds, tools, paths}]}` beside the reach it asks
+  for now. `plugins/disable {name}` sets `enabled` to 0. Neither is reachable by an agent connection (the class
+  matrix) or by a tool.
+- **Cards:** one card of kind `plugin` for each plugin that is `unapproved` or `changed`, with
+  `data: {plugin, hash, why: "unapproved" | "changed", choices: ["review"]}`. A card is raised when the state is entered
+  and withdrawn when the plugin is approved, disabled or removed, or replaced by a new one when the hash moved on.
+- **`Plugins::enabled_for(project)`** gives the approved plugins that run, in the order of `drgnx-agents-plugins`:
+  the project's own list when its set (from `config/settings`) has one, else the global list. **`rules_for(project)`**
+  gives the global `drgnx-agents-hook-rules` minus the project's `drgnx-agents-hook-rules-off` ids, then the project's
+  own rules, a repeat of a global rule counted once (the editor sends the merged list). The three settings are
+  `:scope project :workspace never :agents never`; the editor sends a project's values from the user's private
+  workspace file only. A rule list is checked by `norn::hooks::parse_rules` when a set is taken (keys may be written
+  with `-` or `_`), and a bad rule refuses the whole set at `overrides[N].value[I].KEY`.
+- **`plugins::io`** decides what a plugin's imports may do, without the host: `kv_get`, `kv_put` and `kv_delete` on
+  `plugin_kv` (the manifest's `kv_bytes` is the quota of keys and values together; a write over it changes nothing),
+  and `judge_http`, which turns `host:port` into the addresses to connect to or says why not. A request needs a
+  session's or a job's context; the manifest must name the host; except in the `open` network cell the `plugin` tier
+  of `drgnx-agents-net-hosts` must list it too; the name goes through the web policy's checks, and only a public
+  address passes (a name pinned in `drgnx-sandbox-proxy-pinned-addresses` may also reach a LAN, ULA or CGNAT address;
+  loopback, the host's own, link-local and the policy's nevers never).
+
 ## The interface
 
 `runtime/crates/brokkr/wit/agent-tools.wit` is package `drgnx:agent-tools@0.1.0`. World `plugin` exports

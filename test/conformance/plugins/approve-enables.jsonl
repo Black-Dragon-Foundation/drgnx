@@ -1,0 +1,18 @@
+{"scenario": "plugins/approve-enables", "requires": ["v1"], "doc": "[B] plugins/approve with the hash the list showed makes the plugin approved and its card goes; the hub keeps the approval in runtime.db. plugins/disable switches it off until it is approved again."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "write_file", "path": "$ROOT/src/plugin.json", "json": {"name": "alpha", "version": "1.0.0"}}
+{"do": "write_file", "path": "$ROOT/src/plugin.wasm", "text": "wasm-one"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "run", "args": ["plugins", "install", "$ROOT/src"], "expect_code": 0, "expect_stdout": "installed alpha 1.0.0"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "plugins/list", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"plugins": [{"name": "alpha", "state": "unapproved", "hash": "$capture:h"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "plugins/approve", "params": {"name": "alpha", "hash": "$h"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"name": "alpha", "state": "approved", "hash": "$h"}}, "within_ms": 10000}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select count(*) from card where kind = 'plugin' and state = 'open'", "rows": [[0]]}
+{"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select approved_hash = hash, enabled from plugin where name = 'alpha'", "rows": [[1, 1]]}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "plugins/disable", "params": {"name": "alpha"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"name": "alpha", "state": "disabled"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "plugins/approve", "params": {"name": "alpha", "hash": "$h"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"state": "approved"}}, "within_ms": 10000}

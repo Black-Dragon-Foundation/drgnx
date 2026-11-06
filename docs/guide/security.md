@@ -455,7 +455,9 @@ project).
     `chatgpt.com` and `auth.openai.com`; Gemini's API, `oauth2.googleapis.com` and `cloudcode-pa.googleapis.com`;
   - the hosts you list under `agents-net-hosts` for the session's network tier (`provider-only`; none by default).
 
-  Anything else is refused. Each refused host is recorded once per session as an event (`proxy-denied`, with the
+  A plugin's HTTP is not the agent's: it reaches only the hosts its approved manifest names, and where the session's
+  network is not open, only those you also list on the `plugin` tier of `agents-net-hosts`
+  ([plugins.md](plugins.md)). Anything else is refused. Each refused host is recorded once per session as an event (`proxy-denied`, with the
   host), so you can see what an agent tried to reach; it never raises a card. Optional traffic a CLI sends
   (telemetry, error reports, update checks) is refused the same way; Claude is told not to send it
   (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, [agents.md](agents.md#jobs-and-your-claude-settings)). To let a session reach another host, add it to

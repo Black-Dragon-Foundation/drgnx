@@ -22,6 +22,7 @@
 //! | `records/{proposals,decide}` | [`crate::records`] |
 //! | `machines/{report,list}` | [`crate::work::machines`] |
 //! | `runners/*` | [`crate::runners::methods`] |
+//! | `plugins/*` | [`crate::plugins`] |
 //! | `work/conclusions` | [`crate::work::conclusions`] |
 //! | `agents/presence/{subscribe,get}` | [`crate::work::presence`] |
 //! | `work/{files,hunks,file-at}` | [`crate::work::edits`] |
@@ -51,6 +52,8 @@ pub struct Core {
     pub machines: crate::work::machines::Machines,
     /// The runners' registry ([`crate::runners::methods`]).
     pub runners: crate::runners::methods::Hub,
+    /// The installed plugins and the user's approvals ([`crate::plugins`]).
+    pub plugins: crate::plugins::Plugins,
     /// The sessions' current asks and what links to them ([`crate::work::asks`]).
     pub asks: crate::work::asks::Asks,
     /// The conclusions' step stamps ([`crate::work::conclusions`]).
@@ -143,6 +146,9 @@ pub async fn serve(
         Params::RunnersSet(p) => answer(runners::methods::set(f, c, p).await),
         Params::RunnersUnbench(p) => answer(runners::methods::unbench(f, c, p).await),
         Params::RunnersRemove(p) => answer(runners::methods::remove(f, c, p).await),
+        Params::PluginsList(p) => answer(crate::plugins::list(f, c, p).await),
+        Params::PluginsApprove(p) => answer(crate::plugins::approve(f, c, p).await),
+        Params::PluginsDisable(p) => answer(crate::plugins::disable(f, c, p).await),
         Params::WorkConclusions(p) => answer(work::conclusions::get(f, c, p).await),
         Params::AgentsPresenceSubscribe(p) => answer(work::presence::subscribe(f, c, p).await),
         Params::AgentsPresenceGet(p) => answer(work::presence::get(f, c, p).await),

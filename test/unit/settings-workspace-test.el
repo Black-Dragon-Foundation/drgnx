@@ -22,7 +22,7 @@
 (defvar drgnx-swt-risky-function nil "A variable risky by its name.")
 (defvar drgnx-swt--seen nil "What a W2 :eval saw.")
 
-(defconst drgnx-swt--settings '(drgnx-swt--global drgnx-swt--never drgnx-swt--limit)
+(defconst drgnx-swt--settings '(drgnx-swt--global drgnx-swt--never drgnx-swt--limit drgnx-swt--mine drgnx-swt--nobuf)
   "The fixture settings, declared fresh by `drgnx-swt--with'.")
 
 (defun drgnx-swt--declare ()
@@ -35,6 +35,12 @@
         t)
   (eval '(drgnx-defsetting drgnx-swt--limit 50 "A project's limit, lower only." :type 'integer :group 'drgnx-swt
            :safe #'integerp :scope 'project :merge 'lower-only)
+        t)
+  (eval '(drgnx-defsetting drgnx-swt--mine 1 "A project's own security choice." :type 'integer :group 'drgnx-swt
+           :scope 'project :workspace 'never)
+        t)
+  (eval '(drgnx-defsetting drgnx-swt--nobuf 1 "A buffer setting a workspace never sets." :type 'integer
+           :group 'drgnx-swt :scope 'buffer :workspace 'never)
         t))
 
 (defun drgnx-swt--undeclare ()
@@ -172,6 +178,38 @@ fixture settings; the buffers it opened are killed after."
     (let ((p (drgnx-settings-workspace-problems (drgnx-swt--private-file))))
       (should (equal (mapcar (lambda (x) (plist-get x :line)) p) '(4 5)))
       (should (cl-every (lambda (x) (string-match-p "never set by a workspace" (plist-get x :text))) p)))))
+
+(ert-deftest drgnx-settings-workspace/private-holds-a-never-project-setting ()
+  ;; your own file may hold a `:scope project :workspace never' entry (the plugins a project runs): nobody else writes it
+  (drgnx-swt--with
+    (drgnx-swt--private " (drgnx-swt--mine 7)")
+    (should (equal (drgnx-setting-for-root 'drgnx-swt--mine drgnx-swt--root) 7))
+    (should-not (drgnx-settings-workspace-problems (drgnx-swt--private-file)))
+    (drgnx-swt--in "a.txt"
+      (should-not (local-variable-p 'drgnx-swt--mine)))))
+
+(ert-deftest drgnx-settings-workspace/shared-still-refuses-it ()
+  ;; a repository's .drgnx/settings.el and the old shims still refuse it
+  (drgnx-swt--with
+    (drgnx-swt--shared " (drgnx-swt--mine 7)")
+    (should (equal (drgnx-setting-for-root 'drgnx-swt--mine drgnx-swt--root) 1))
+    (let ((p (drgnx-settings-workspace-problems (expand-file-name ".drgnx/settings.el" drgnx-swt--root))))
+      (should (equal (mapcar (lambda (x) (plist-get x :line)) p) '(3)))
+      (should (string-match-p "never set by a workspace" (plist-get (car p) :text))))
+    (should (string-match-p "never set by a workspace"
+                            (drgnx-settings-workspace--refusal
+                             (make-drgnx-settings-entry :var 'drgnx-swt--mine :value 7) 'shared)))
+    (should-not (drgnx-settings-workspace--refusal
+                 (make-drgnx-settings-entry :var 'drgnx-swt--mine :value 7) 'private))))
+
+(ert-deftest drgnx-settings-workspace/private-still-refuses-a-never-buffer-setting ()
+  (drgnx-swt--with
+    (drgnx-swt--private " (drgnx-swt--nobuf 7)\n (drgnx-swt--global 5)")
+    (drgnx-swt--in "a.txt"
+      (should-not (local-variable-p 'drgnx-swt--nobuf)))
+    (let ((p (drgnx-settings-workspace-problems (drgnx-swt--private-file))))
+      (should (equal (mapcar (lambda (x) (plist-get x :line)) p) '(4 5)))
+      (should (string-match-p "never set by a workspace" (plist-get (car p) :text))))))
 
 (ert-deftest drgnx-settings-workspace/w1-refuses-the-sandbox-settings ()
   ;; US-WORKSPACE-NEVER-1: a repository's .drgnx/settings.el never sets the sandbox's secrets, cap or pinned names

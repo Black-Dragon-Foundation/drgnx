@@ -1129,6 +1129,9 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `ping` | user, agent, service | `{}` | `{pid: natnum}` | no |
 | `plans/get` | user | `{plan: string}` | `PlanView` | no |
 | `plans/write` | user | `{base_version?: natnum, plan?: string, project?: string, tasks?: [{blocks?: [string], interfaces?: Text, model?: string, number: string, status?: Status, steps?: [{done: boolean, text: string}], title?: string}], title?: string}` | `{plan: string, tasks?: [TaskId], tx: natnum}` | yes |
+| `plugins/approve` | user | `{hash: Hex64, name: string}` | `PluginRow` | yes |
+| `plugins/disable` | user | `{name: string}` | `PluginRow` | yes |
+| `plugins/list` | user | `{}` | `{plugins?: [PluginRow]}` | no |
 | `presence/set` | user | `{away: boolean}` | `boolean` | no |
 | `records/decide` | user | `{accept: boolean, id: Id}` | `{backup?: string, id: string, note?: string, status: "open" \| "accepted" \| "rejected" \| "stale"}` | yes |
 | `records/import` | user | `{dry_run?: boolean, only?: "plans" \| "ledgers" \| "deferred" \| "build-board" \| "board", root: AbsPath}` | `{backup?: string, dry_run: boolean, files?: [ImportedFile]}` | yes |
@@ -1258,6 +1261,7 @@ result is (`event(NAME).check`):
 | `settings/explain` | the front (`settings_get`) | `{req, scope, names?, root?}`: the editor answers `settings/explained` with the same `req` |
 | `agent-step` | sessions (the front) | `{session, step: Step}`: a step opened or closed, with its class, the hub's stamps and its anchors |
 | `exec-done` | jobs (the front) | `{id, session?, status, exit?, summary: {exit?, failing, lines, log}}` |
+| `plugin` | plugins (the front) | `{name, state}`: a plugin's state changed (`unapproved`, `approved`, `changed`, `disabled`, `broken`, or `removed` when its folder is gone) |
 | `machines-changed` | machines (the front) | `{machines: [{machine, slots: [{id, holder?, kind}], local}]}`: the whole list, sent when a report, an expiry or the local slots changed it |
 | `agent-presence` | the presence model (to the connections that asked) | `{file, entries: [{session, file, mode, line?, source, step, at}]}`: who is in the file now, at most once per file per 100 ms ("The presence model") |
 | `work-map` | the Work map (to the view's connection only) | `{view, version, base, full?, changed: [Item], removed: [Id], entered: [Id], places?, edges?, layout?, needs_you?, chips?, stale?}`: what changed in one map view since version `base` ("The Work map") |
@@ -1927,7 +1931,7 @@ reading and fallbacks; `profiles.rs`, `providers.rs`: the types).
   `RUNTIME_NAMES` and `value` JSON of the setting's runtime type (alists are objects, keys sorted; `drgnx-ai-roles` a
   list of `{role, chain: [{provider, model}]}`; at most 64 KiB). A call replaces the whole set of that project (none:
   global); an empty list clears it (the project still counts as having sent). A project's set holds only the settings
-  the Lisp declares `:scope project` (`overrides::PER_PROJECT`: `drgnx-ai-roles`, `drgnx-search-include`, `drgnx-search-exclude`, `drgnx-search-off`); every other runtime setting is
+  the Lisp declares `:scope project` (`overrides::PER_PROJECT`: `drgnx-ai-roles`, `drgnx-search-include`, `drgnx-search-exclude`, `drgnx-search-off`, and the user's own `drgnx-agents-plugins`, `drgnx-agents-hook-rules`, `drgnx-agents-hook-rules-off`: see "Plugins"); every other runtime setting is
   global and security-bearing (profiles and their commands, providers and their URLs,
   `drgnx-agents-allow-unsandboxed`), so a project never changes it. A name that is not a runtime setting, a global one
   in a project's set, or a value that does not fit is `invalid-params` at `overrides[N].name` or
@@ -2219,6 +2223,28 @@ of rotation, its reason on a line of its own. `runner remove` without `--yes` on
 Tests: `norn::write::runners::` [D]; `runners::registry::` and `runner_cli::` [D]; `work::machines::` [D]; conformance
 `runners/methods-are-user-only` [B]; `tests/fleet_registry.rs` [C]: add (probe, copy, pull, bench, link), the contract's
 refusal with its list, the hub's own machine, a removal that leaves nothing of ours.
+
+## Plugins
+
+`plugins/list`, `plugins/approve` and `plugins/disable` are the user's alone (`runstav::methods::plugins`); no agent
+connection and no tool reaches them, and `plugins/approve` takes the hash the editor displayed and refuses it when the
+files on disk hash differently. The plugins live in `<data>/plugins/NAME/` (`ratatoskr plugins install PATH
+[--replace] | list | remove NAME` puts them there); the hub reads that folder with `brokkr::scan` at its start and at
+every `plugins/list`.
+
+**`runtime.db`** (migration 10): `plugin` (`name`, `hash` last seen on disk, `approved_hash`, `approved_at`, `enabled`,
+`approved_reach` the manifest's whole reach as JSON) and `plugin_kv` (`plugin`, `key`, `value`: the plugins' key-value
+stores). A plugin is `unapproved`, `approved`, `changed`, `disabled` or `broken`; a `changed` entry of `plugins/list`
+also carries `approved_reach`. A change of state sends the event `plugin {name, state}` (`state` also `removed`) and
+keeps one card of kind `plugin` for each plugin that is `unapproved` or `changed`.
+
+Which approved plugins run for a project, and the hook rules in force, come from three settings the Lisp declares
+`:scope project :workspace never :agents never` (`drgnx-agents-plugins`, `drgnx-agents-hook-rules`,
+`drgnx-agents-hook-rules-off`; `overrides::PER_PROJECT`): `Plugins::enabled_for` and `Plugins::rules_for` read the
+global value and the project's own set from `config/settings` (`Settings::project_value`). A rule list that
+`norn::hooks::parse_rules` refuses refuses the whole set at `overrides[N].value[I].KEY`. `plugins::io` holds the
+decisions a plugin's imports need (the store's quota, `judge_http`); `docs/develop/plugins.md` ("Plugins in the hub")
+has the whole account.
 
 ## The timeline
 

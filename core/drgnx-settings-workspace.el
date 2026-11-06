@@ -147,14 +147,18 @@ The first read of a file records it for live changes and says its problems; a la
 
 ;;;; Refusals and problems
 
-(defun drgnx-settings-workspace--refusal (entry)
-  "Why ENTRY may not be in a workspace file, as text; nil when it may."
+(defun drgnx-settings-workspace--refusal (entry &optional source)
+  "Why ENTRY may not be in a workspace file, as text; nil when it may.
+SOURCE is `private' (W2, your own file under the config folder, which no repository writes) or `shared' (W1, the
+shims and anything else; the default).  Only `private' lets through a `:workspace never' entry of a `:scope project'
+setting: your own per-project security choice."
   (let ((var (drgnx-settings-entry-var entry)))
     (cond ((eq var :eval) nil)
           ((memq var '(eval mode))
            (format "%s is a pseudo-variable of .dir-locals.el; workspace code goes in an (:eval …) section" var))
           (t (let ((meta (drgnx-setting-meta var)))
-               (cond ((eq (plist-get meta :workspace) 'never)
+               (cond ((and (eq (plist-get meta :workspace) 'never)
+                           (not (and (eq source 'private) (eq (plist-get meta :scope) 'project))))
                       (format "%s is never set by a workspace (it guards your security); set it in Settings → User"
                               var))
                      ((eq (plist-get meta :scope) 'global)
@@ -164,32 +168,39 @@ The first read of a file records it for live changes and says its problems; a la
 (defvar drgnx-setting-meta-functions)
 
 (defvar drgnx-settings-workspace--usable-memo (make-hash-table :test 'equal)
-  "File -> (DOC EXTRA RESULT): `drgnx-settings-workspace--usable' of a doc read once, kept while the settings declared
+  "(FILE . SOURCE) -> (DOC EXTRA RESULT): `drgnx-settings-workspace--usable' of a doc read once, kept while the settings declared
 \(which decide what is refused) are the same.  Emptied past `drgnx-settings-workspace-cache-max'.")
 
-(defun drgnx-settings-workspace--usable (file)
+(defun drgnx-settings-workspace--source (file)
+  "FILE's source: `private' when it is in your private workspace folder (W2), else `shared'."
+  (if (file-in-directory-p (expand-file-name file) (drgnx-settings-workspace-private-dir)) 'private 'shared))
+
+(defun drgnx-settings-workspace--usable (file &optional source)
   "Workspace FILE's entries and problems: (ENTRIES . PROBLEMS).  ENTRIES are those not refused, in file order;
 PROBLEMS the file's own and one per refused entry, plists (:file :line :text :var).  Worked out once per read of
-the file, so the same ENTRIES come back at every open."
-  (let* ((doc (drgnx-settings-workspace--doc file)) (key (expand-file-name file))
+the file, so the same ENTRIES come back at every open.  SOURCE (`private' or `shared', see
+`drgnx-settings-workspace--refusal') defaults to where FILE is."
+  (let* ((doc (drgnx-settings-workspace--doc file))
+         (source (or source (drgnx-settings-workspace--source file)))
+         (key (cons (expand-file-name file) source))
          (extra (list (length drgnx-setting--names) drgnx-setting-meta-functions))
          (hit (gethash key drgnx-settings-workspace--usable-memo)))
     (if (and doc hit (eq (nth 0 hit) doc) (equal (nth 1 hit) extra))
         (nth 2 hit)
-      (let ((result (drgnx-settings-workspace--usable-1 file doc)))
+      (let ((result (drgnx-settings-workspace--usable-1 file doc source)))
         (when doc
           (when (>= (hash-table-count drgnx-settings-workspace--usable-memo) drgnx-settings-workspace-cache-max)
             (clrhash drgnx-settings-workspace--usable-memo))
           (puthash key (list doc extra result) drgnx-settings-workspace--usable-memo))
         result))))
 
-(defun drgnx-settings-workspace--usable-1 (_file doc)
-  "`drgnx-settings-workspace--usable' of DOC (the file read), worked out now."
+(defun drgnx-settings-workspace--usable-1 (_file doc source)
+  "`drgnx-settings-workspace--usable' of DOC (the file read, of SOURCE), worked out now."
   (let ((entries nil) (problems nil))
     (when doc
       (setq problems (copy-sequence (drgnx-settings-doc-problems doc)))
       (dolist (e (drgnx-settings-doc-entries doc))
-        (if-let* ((why (drgnx-settings-workspace--refusal e)))
+        (if-let* ((why (drgnx-settings-workspace--refusal e source)))
             (push (list :file (drgnx-settings-doc-file doc) :line (drgnx-settings-entry-line e) :text why
                         :var (drgnx-settings-entry-var e))
                   problems)
@@ -330,12 +341,12 @@ holding DIR; else the file whose `:project' is DIR's Urdr project, with that pro
 
 (defun drgnx-settings-workspace--shared-entries (file root)
   "Shared FILE's entries (of ROOT) that apply: not refused, then passed by `drgnx-settings-workspace-filter-function'."
-  (funcall drgnx-settings-workspace-filter-function root file (car (drgnx-settings-workspace--usable file))))
+  (funcall drgnx-settings-workspace-filter-function root file (car (drgnx-settings-workspace--usable file 'shared))))
 
 (defun drgnx-settings-workspace--private-groups (place)
   "The W2 groups at PLACE ((DIR . NAME)), with the file: (FILE . GROUPS), or nil."
   (when-let* ((match (drgnx-settings-workspace--private-for (car place))))
-    (cons (car match) (drgnx-settings-workspace--groups (car (drgnx-settings-workspace--usable (car match)))
+    (cons (car match) (drgnx-settings-workspace--groups (car (drgnx-settings-workspace--usable (car match) 'private))
                                                         (cdr match) (cdr place)))))
 
 (defun drgnx-settings-workspace--shared-groups (place)
@@ -430,7 +441,7 @@ private file.  Only top-level entries count; refused ones never do.  Never signa
     (dolist (e (append (funcall top (cl-remove-if #'drgnx-settings-workspace--refusal
                                                   (drgnx-settings-workspace--old-entries root)))
                        (funcall top (drgnx-settings-workspace--shared-entries shared root))
-                       (and private (funcall top (car (drgnx-settings-workspace--usable private))))))
+                       (and private (funcall top (car (drgnx-settings-workspace--usable private 'private))))))
       (setq value (drgnx-settings-workspace--merge var e value)))
     value))
 

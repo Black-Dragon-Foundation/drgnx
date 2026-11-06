@@ -25,6 +25,11 @@
 //!   and `rq_rows`, the runners design's §7.4 columns (`rq_input.commit_sha` is its `commit`, a word SQL keeps)
 //!   ([`crate::runners::queue`]).
 //!
+//! - the plugins (10): `plugin` (the hash last seen on disk, the hash the user approved with when and the manifest's
+//!   whole reach as JSON, and whether it is switched on) and `plugin_kv` (a plugin's key-value store, shared by the
+//!   projects it is enabled in) ([`crate::plugins`]). Approvals live here and in no settings file, so a settings file
+//!   copied to another machine never approves code.
+//!
 //! A file of a newer schema (left by a newer binary before an `update --back`) is moved aside, with its `-wal` and
 //! `-shm`, as `runtime.db.newer-N-UNIXTIME`, and a new one made.  From migration 2 that loses the sessions it held:
 //! their sockets do not come back after the restart, which is accepted (installs are disposable).
@@ -94,6 +99,13 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
          create index rq_history_key on rq_history(key, machine, at); \
          create table rq_rows(job text not null, attempt integer not null, row text not null, \
          verdict text not null, machine text not null, primary key(job, attempt, row));",
+    ),
+    (
+        10,
+        "create table plugin(name text primary key, hash text not null, approved_hash text, approved_at real, \
+         enabled integer not null default 1, approved_reach text); \
+         create table plugin_kv(plugin text not null, key text not null, value blob not null, \
+         primary key(plugin, key));",
     ),
 ];
 
@@ -167,7 +179,7 @@ mod tests {
             "{names:?}"
         );
         let fresh = urdr::open_readonly(&file).unwrap();
-        assert_eq!(urdr::meta(&fresh, "schema").unwrap().as_deref(), Some("9"));
+        assert_eq!(urdr::meta(&fresh, "schema").unwrap().as_deref(), Some("10"));
         assert_eq!(
             std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
             0o600
@@ -256,6 +268,18 @@ mod tests {
                 ],
             ),
             ("rq_rows", &["job", "attempt", "row", "verdict", "machine"]),
+            (
+                "plugin",
+                &[
+                    "name",
+                    "hash",
+                    "approved_hash",
+                    "approved_at",
+                    "enabled",
+                    "approved_reach",
+                ],
+            ),
+            ("plugin_kv", &["plugin", "key", "value"]),
         ];
         for (table, cols) in want {
             let mut st = c

@@ -270,6 +270,13 @@ pub async fn run(args: ServeArgs) -> Exit {
     crate::work::machines::seed(&front);
     // the runners recorded before this start are linked (in the background: an unreachable one delays nothing)
     crate::runners::methods::start(&front);
+    // the plugins installed in <data>/plugins: read now, their approval cards raised (nothing runs yet)
+    front.core.plugins.open(
+        paths::data_dir(&env).join("plugins"),
+        runtime.clone(),
+        front.settings.clone(),
+    );
+    crate::plugins::start(&front).await;
     front.core.runs.set_recovering(true);
     {
         let f = front.clone();

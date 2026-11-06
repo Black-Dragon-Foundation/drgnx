@@ -49,6 +49,7 @@ gleipnir = { path = "../gleipnir", version = "0.1.0" }
 eitri = { path = "../eitri", version = "0.1.0" }
 mimir = { path = "../mimir", version = "0.1.0" }
 norn = { path = "../norn", version = "0.1.0" }
+brokkr = { path = "../brokkr", version = "0.1.0" }  # plugin manifests, approval hashes and the install scan (plugins)
 hermod = { path = "../hermod", version = "0.1.0" }  # the ACP client of every session (agents::session)
 bifrost = { path = "../bifrost", version = "0.1.0" }
 sleipnir = { path = "../sleipnir", version = "0.1.0", default-features = false, features = ["linux"] }  # the shared podman argv
