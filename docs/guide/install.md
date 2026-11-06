@@ -336,8 +336,8 @@ installs anything and never asks.
 
 ## Ratatoskr's Rust toolchain
 
-Ratatoskr is built from source (no prebuilt binaries yet) with `cargo build --release --locked`; it needs Rust 1.88
-or newer and a C compiler (`cc`; its bundled SQLite is C). The build takes a few minutes and about 1.5 GiB of memory per
+Ratatoskr is built from source (no prebuilt binaries yet) with `cargo build --release --locked`; it needs Rust 1.95
+or newer (an older distro Rust can't build it) and a C compiler (`cc`; its bundled SQLite is C). The build takes a few minutes and about 1.5 GiB of memory per
 parallel job. The same build (`drgnx runtime build`, which install.sh and `drgnx update` run) also makes `drgnx-fwd`,
 the small forwarder that gives a container job its network (Container jobs in the jobs guide). On Linux it is built for
 `<arch>-unknown-linux-musl` (Rust's self-contained musl, so no static glibc package is needed; Fedora has none) into
@@ -348,19 +348,19 @@ on; without it, a container job that is allowed a network is refused. (macOS bui
 `-C target-feature=+crt-static` and no target.)
 install.sh takes the first of these that applies (`--dry-run` says which):
 
-1. `cargo` and `rustc` 1.88 or newer already on `PATH`.
-2. The distro's default Rust package, only if its version is 1.88 or newer (asked first): Fedora `cargo rust gcc`,
-   Ubuntu and Debian `cargo rustc gcc`, Arch `rust gcc`, macOS `brew install rust`. Fedora 45, Ubuntu 26.04, Debian 13, Arch and
-   Homebrew qualify.
-3. A versioned Debian-family package when the default is too old (Ubuntu 24.04: `rustc-1.91 cargo-1.91`, binaries in
-   `/usr/lib/rust-1.91/bin`).
-4. Otherwise (Debian 13, other distros) a private rustup in `~/.local/share/drgnx/rustup` with Rust 1.93.1. rustup-init
+1. `cargo` and `rustc` 1.95 or newer already on `PATH`.
+2. The distro's default Rust package, only if its version is 1.95 or newer (asked first): Fedora `cargo rust gcc`,
+   Ubuntu and Debian `cargo rustc gcc`, Arch `rust gcc`, macOS `brew install rust`. Fedora 45, Arch and Homebrew
+   qualify; Ubuntu 26.04 (1.93) and Debian 13 (1.85) don't.
+3. A versioned Debian-family package when the default is too old: the newest `rustc-X.Y cargo-X.Y` pair of 1.95 or
+   newer, binaries in `/usr/lib/rust-X.Y/bin`.
+4. Otherwise (Debian 13, other distros) a private rustup in `~/.local/share/drgnx/rustup` with Rust 1.99.1. rustup-init
    is downloaded from the versioned archive on static.rust-lang.org and checked against a sha256 recorded in
    install.sh before it runs; nothing touches `~/.rustup` or `~/.cargo`.
 
 A missing `cc` is named in the plan (`gcc`; on macOS `xcode-select --install`). The choice is recorded in
 `~/.local/share/drgnx/cargo` (the cargo's path, and `RUSTUP_HOME`/`CARGO_HOME` lines for a private rustup) because the
-update timer's `PATH` lacks `~/.cargo/bin` and `/usr/lib/rust-1.91/bin`; `drgnx runtime build` and `drgnx update` use it.
+update timer's `PATH` lacks `~/.cargo/bin` and `/usr/lib/rust-X.Y/bin`; `drgnx runtime build` and `drgnx update` use it.
 
 The build uses `-j` by CPUs and memory (one job per 1.5 GiB available). On Linux with a user systemd it runs inside
 `systemd-run --user --scope` with `MemoryMax` of jobs x 1.5 GiB + 1 GiB (never more than available minus 1 GiB) and no

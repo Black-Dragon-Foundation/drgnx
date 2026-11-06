@@ -16,7 +16,7 @@ runtime/
   fuzz/             cargo-fuzz targets: its own workspace, nightly only
 ```
 
-- **MSRV 1.88**, edition 2024, `license = "GPL-3.0-or-later"` on every crate of ours. There is no
+- **MSRV 1.95**, edition 2024, `license = "GPL-3.0-or-later"` on every crate of ours. There is no
   `rust-toolchain.toml`: distro cargo ignores it.
 - **Dependencies** are declared once in `[workspace.dependencies]`; a crate writes `x.workspace = true`. A new
   dependency needs a line in its commit message saying which job it does and what it adds to `cargo tree`.
@@ -994,8 +994,8 @@ before), which is where a hit opens and what `reanchor` compares against. Versio
 version 1 is chunked again at the next refresh, whether or not a file changed (and, the version being in every
 vector's key, embedded again).
 
-For Emacs Lisp (`tree-sitter` 0.25, ABI 15, with `tree-sitter-elisp` 1.7; 0.26 and later need Rust 1.90, above the
-workspace's 1.88) the units are the top-level forms, each with the comments right above it, and the stretches between
+For Emacs Lisp (`tree-sitter` 0.25, ABI 15, with `tree-sitter-elisp` 1.7; 0.26 and later needed Rust 1.90, above the
+workspace's MSRV of the time, 1.88) the units are the top-level forms, each with the comments right above it, and the stretches between
 them. Adjacent units merge greedily up to the budget and never across a section heading (a `;;;` line with text, at
 column 0). A form over the budget splits at its child forms; every part's header repeats the signature, the first
 docstring line and "part i/n". A `defconst`, `defvar` or `defcustom` whose value is a literal list or vector and

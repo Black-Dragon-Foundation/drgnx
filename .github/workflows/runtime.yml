@@ -1,6 +1,6 @@
 # The Rust runtime (runtime/), Ratatoskr: on Linux (Fedora 45) and macOS 27 the unit tests, the conformance suite
 # against the built binary (every row, the v0 rows through the front too), a release build and the recorded perf
-# baseline; plus the oldest supported compiler (MSRV 1.88), the supply-chain policy and the fuzz targets.
+# baseline; plus the oldest supported compiler (MSRV 1.95), the supply-chain policy and the fuzz targets.
 #
 # Push (main, ci/*) and pull-request runs come from ci.yml, which calls this file (`workflow_call`), so these jobs are
 # part of ci.yml's `CI gate`. Running this file on push as well would build everything twice, so its own triggers are
@@ -267,7 +267,7 @@ jobs:
           key: ${{ steps.registry.outputs.cache-primary-key }}
 
   msrv:
-    name: MSRV 1.88 builds
+    name: MSRV 1.95 builds
     if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-msrv ')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -290,17 +290,17 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: runtime/target
-          key: cargo-${{ runner.os }}-msrv188-mt1-1.88.0-${{ hashFiles('runtime/Cargo.lock', 'runtime/Cargo.toml', 'runtime/*/Cargo.toml', 'runtime/crates/*/Cargo.toml') }}
-          restore-keys: cargo-${{ runner.os }}-msrv188-mt1-1.88.0-
+          key: cargo-${{ runner.os }}-msrv195-mt1-1.95.0-${{ hashFiles('runtime/Cargo.lock', 'runtime/Cargo.toml', 'runtime/*/Cargo.toml', 'runtime/crates/*/Cargo.toml') }}
+          restore-keys: cargo-${{ runner.os }}-msrv195-mt1-1.95.0-
       - name: Each tracked file at its last commit's time (cargo rebuilds only what changed since the cache)
         run: bash .github/ci/commit-times.sh runtime/target/.drgnx-built-from
-      - run: rustup toolchain install 1.88.0 --profile minimal
+      - run: rustup toolchain install 1.95.0 --profile minimal
       - id: build
-        run: cargo +1.88.0 build --locked --manifest-path runtime/Cargo.toml
+        run: cargo +1.95.0 build --locked --manifest-path runtime/Cargo.toml
       - id: prune
         if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
         env:
-          RUSTUP_TOOLCHAIN: 1.88.0
+          RUSTUP_TOOLCHAIN: 1.95.0
         run: |
           bash .github/ci/cargo-prune.sh runtime/Cargo.toml runtime/target
           # the commit it was built from, only when every step before passed: after a step that failed some outputs

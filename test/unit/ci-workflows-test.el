@@ -150,6 +150,20 @@
     ;; one report and one cache per image
     (drgnx-ci-test--has job "escape-report-host-${{ matrix.os }}" "-escape-${{ matrix.os }}-")))
 
+(ert-deftest drgnx-ci/the-msrv-is-one-number ()
+  ;; 1.95 since 2026-11-06 (wasmtime's 48 LTS needs it): the workspace's rust-version, the job that builds with it, and
+  ;; install.sh's floor; the toolchain install.sh's private rustup brings is not older
+  (let* ((rt (drgnx-ci-test--yml "runtime.yml")) (job (and rt (drgnx-ci-test--job rt "msrv")))
+         (cargo (drgnx-ci-test--file "runtime/Cargo.toml")) (install (drgnx-ci-test--file "install.sh"))
+         (private (and install (string-match "\nRUST_PRIVATE=\\([0-9.]+\\)\n" install) (match-string 1 install))))
+    (skip-unless (and job cargo install))
+    (should (string-search "\nrust-version = \"1.95\"\n" cargo))
+    (drgnx-ci-test--has job "name: MSRV 1.95 builds\n" "-msrv195-mt1-1.95.0-" "rustup toolchain install 1.95.0 --profile minimal\n"
+                        "cargo +1.95.0 build --locked --manifest-path runtime/Cargo.toml\n" "RUSTUP_TOOLCHAIN: 1.95.0\n")
+    (should (string-search "\nRUST_MIN=1.95\n" install))
+    (should private)
+    (should (version<= "1.95" private))))
+
 (ert-deftest drgnx-ci/the-runner-crates-are-checked-for-android-built-static-and-denied ()
   ;; forseti and sleipnir's protocol and sync are what jobq and the Android door take; the runner ships static (musl)
   (let* ((rt (drgnx-ci-test--yml "runtime.yml"))
