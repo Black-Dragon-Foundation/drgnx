@@ -104,10 +104,56 @@ settings:
 - `drgnx-runners-heavy`: suite or command patterns whose jobs count as heavy;
 - `drgnx-runners-image`: the image (pinned by digest) a runner runs its command jobs in;
 - `drgnx-runners-weight`: its share against other projects within a priority (default 1);
-- `drgnx-runners-project-visibility`: `"private"` (the default) or `"public"`.
+- `drgnx-runners-project-visibility`: `"private"` (the default) or `"public"` (see below);
+- `drgnx-runners-shared-overlay`: off (the default) or on: whether a `shared` runner may have its uncommitted files.
+  Your own settings only: a repository's files can never turn it on.
 
 A job marked `local_only`, or started with `machine: local`, never leaves this machine; `machine: NAME` pins it to one
 runner.
+
+## What is sent where
+
+A job runs exactly what you had when you started it. At that moment drgnx **freezes its inputs**: the commit, every
+uncommitted change against it (staged, unstaged, new files that aren't ignored, deletions), and a copy of each changed
+file's bytes. Edits you make afterwards never reach that job. A runner checks the commit out in a folder of its own,
+outside anything the job can write, and writes the changed files over it; git there runs none of a repository's hooks
+or settings.
+
+**A job's trust** is worked out then, from your project's word and from what the origin already has:
+
+| The job | is |
+|---|---|
+| names keys | `private+keys` |
+| a `public` project (`drgnx-runners-project-visibility`) whose commit your `origin` remote already has (its `refs/remotes/origin/` reach it) | `public` |
+| anything else: a private project, or a public one with commits not pushed yet | `private` |
+
+drgnx never guesses a project's visibility. The origin it reads is what your repository last fetched or pushed, so
+push (or fetch) first.
+
+**Which runner may take it:**
+
+| Job trust | `mine` | `my-cloud` | `shared` |
+|---|---|---|---|
+| `public` | yes | yes | yes |
+| `private` | yes | yes | no |
+| `private+keys` | yes | when every key is on its list | no |
+
+A job no runner may take runs here, and its row says why: "runs here: 1 commit not on origin", "runs here: project
+alpha is private; the only free runner is shared".
+
+**How the code gets there:**
+
+- **On the public origin:** the runner fetches the commit from the origin itself, at its own speed. This is the only
+  way a `shared` runner ever gets code; nothing of your history is pushed to it.
+- **Anything else, to your own machines:** drgnx sends the commits the runner's copy lacks, as one git bundle (resumed
+  where it stopped after a dropped connection) sent in 1 MiB pieces. A private origin with a deploy key named for the
+  project lets the runner fetch from the origin instead (with the keys).
+- **The uncommitted files** go by content: the runner says which it lacks, and only those are sent. Your `mise.toml`,
+  `.envrc`, `.claude`, `.codex`, `.gemini` and `.git/hooks` are never sent to any runner; it gets their committed
+  versions.
+- **A `shared` runner and uncommitted files:** with `drgnx-runners-shared-overlay` off, a job with uncommitted changes
+  never goes to a shared runner ("runs here: 2 uncommitted files, …"). With it on, each file is scanned first, and one
+  that looks like a secret keeps the job off the shared runner, naming the file.
 
 ## When a machine fails
 

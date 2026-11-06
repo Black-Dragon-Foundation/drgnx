@@ -22,6 +22,7 @@ use crate::runners::local::{Admission, LocalRunner};
 use crate::runners::queue::{
     self, Machine, Origin, Outcome, Placement, Queue, QueueCfg, Submit, priority_of,
 };
+use crate::runners::sync;
 use crate::sandbox::SessionShape;
 use gleipnir::{Refusal, Rule};
 use runstav::methods::exec::{
@@ -767,6 +768,26 @@ impl Inner {
                     .map(|r| r.to_string())
             });
         }
+        let fspec = spec.forseti_spec(id, &self.hooks.memory);
+        // inputs frozen at submit, for a job a runner could take: what it syncs, whatever the worktree holds later.
+        // One that can't be frozen (not a git worktree, a submodule's change) stays on this machine.
+        let mut inputs = None;
+        if self.queue.runners() > 0 && place.may_leave() {
+            let store = self.root.with_file_name("runner-store");
+            match sync::freeze(
+                &fspec.tree,
+                &[],
+                place.visibility,
+                place.shared_overlay,
+                &store,
+            ) {
+                Ok(f) => inputs = Some(f),
+                Err(why) => {
+                    tracing::info!("job {id} runs on this machine only: {why}");
+                    place.local_only = true;
+                }
+            }
+        }
         Submit {
             id: id.to_string(),
             session: match &spec.starter {
@@ -774,9 +795,10 @@ impl Inner {
                 Starter::User => None,
             },
             own: spec.priority(),
-            spec: spec.forseti_spec(id, &self.hooks.memory),
+            spec: fspec,
             place,
             pending: serde_json::to_value(Pending::of(spec)).unwrap_or_default(),
+            inputs,
         }
     }
 
@@ -1660,6 +1682,11 @@ async fn placement(f: &Front, c: &Caller, p: &StartParams, m: Machine, runners: 
     let weight = setting("drgnx-runners-weight")
         .and_then(|v| v.as_f64())
         .unwrap_or(1.0);
+    let visibility = setting("drgnx-runners-project-visibility")
+        .and_then(|v| v.as_str().map(crate::runners::sync::Visibility::parse))
+        .unwrap_or_default();
+    let shared_overlay =
+        setting("drgnx-runners-shared-overlay").and_then(|v| v.as_bool()) == Some(true);
     // the project's heavy patterns mark a job whose command line holds one; nothing else marks a job heavy
     let line = p
         .argv
@@ -1717,6 +1744,8 @@ async fn placement(f: &Front, c: &Caller, p: &StartParams, m: Machine, runners: 
         machines_cell,
         image,
         weight,
+        visibility,
+        shared_overlay,
     }
 }
 

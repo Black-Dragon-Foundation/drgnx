@@ -50,7 +50,7 @@
                 (committed (drgnx-settings-runtime-dump-test--parse
                             (expand-file-name "test/conformance/settings/lisp-dump.json" drgnx-dir))))
             (should (assq 'defaults fresh))
-            (should (= (length (alist-get 'runtime fresh)) 42))
+            (should (= (length (alist-get 'runtime fresh)) 43))
             (unless (equal fresh committed)
               (ert-fail (format "test/conformance/settings/lisp-dump.json is out of date; regenerate it with:\n  %s"
                                 documented)))))

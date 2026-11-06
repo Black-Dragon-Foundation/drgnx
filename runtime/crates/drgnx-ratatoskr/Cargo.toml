@@ -40,6 +40,11 @@ required-features = ["fleet"]
 name = "fleet_registry"
 required-features = ["fleet"]
 
+# sync's rows: job trust from what the origin has, the shared runner's origin fetch and overlay
+[[test]]
+name = "fleet_sync"
+required-features = ["fleet"]
+
 [dependencies]
 runstav = { path = "../runstav", version = "0.1.0" }
 draugr = { path = "../draugr", version = "0.1.0" }
@@ -51,7 +56,7 @@ mimir = { path = "../mimir", version = "0.1.0" }
 norn = { path = "../norn", version = "0.1.0" }
 hermod = { path = "../hermod", version = "0.1.0" }  # the ACP client of every session (agents::session)
 bifrost = { path = "../bifrost", version = "0.1.0" }
-sleipnir = { path = "../sleipnir", version = "0.1.0", default-features = false, features = ["linux"] }  # the shared podman argv
+sleipnir = { path = "../sleipnir", version = "0.1.0", default-features = false, features = ["linux", "sync"] }  # the shared podman argv; inputs frozen at submit
 vegvisir = { path = "../vegvisir", version = "0.1.0" }  # the Work map's model and layout (work::map)
 forseti = { path = "../forseti", version = "0.1.0" }  # the scheduler core: the queue's order, placement and admission
 hrafn-embed = { path = "../hrafn-embed", version = "0.1.0" }  # the model table, the cache's checks, the embed worker's engine

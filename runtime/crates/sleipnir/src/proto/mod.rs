@@ -162,6 +162,7 @@ mod tests {
             },
             Frame::SyncHave {
                 r: r(),
+                repo: "p-0a1b2c3d".into(),
                 input_key: "k1".into(),
                 commit: "c0ffee".into(),
                 tree: "7ree".into(),
@@ -181,10 +182,13 @@ mod tests {
                 r: r(),
                 blobs: vec![Sha256([7; 32])],
                 commit: true,
+                refs: vec!["c0ffee".repeat(6) + "c0ff"],
             },
             Frame::Blob {
                 r: r(),
                 sha256: Sha256([7; 32]),
+                offset: 0,
+                total: 7,
                 bytes: b"\0blob\n\xff".to_vec(),
             },
             Frame::Bundle {
@@ -363,6 +367,8 @@ mod tests {
         let big = Frame::Blob {
             r: r(),
             sha256: Sha256([0; 32]),
+            offset: 0,
+            total: 0,
             bytes: vec![0; MAX_CHUNK + 1],
         };
         let mut w = FrameWriter::new(Vec::new());
@@ -372,6 +378,8 @@ mod tests {
         let ok = Frame::Blob {
             r: r(),
             sha256: Sha256([0; 32]),
+            offset: 0,
+            total: 0,
             bytes: vec![0; MAX_CHUNK],
         };
         assert_eq!(read_all(&wire(&[ok])).unwrap().len(), 1);

@@ -211,5 +211,11 @@ The hub pulls them; a job names one of them and nothing else.  Only you can set 
   :type '(choice (const "public") (const "private")) :group 'drgnx :scope 'project :workspace 'data
   :on-error 'strict :agents 'never :runtime "String" :schema '(string :match "\\`\\(?:public\\|private\\)\\'"))
 
+(drgnx-defsetting drgnx-runners-shared-overlay nil
+  "Non-nil lets a shared runner have a project's uncommitted files, once each passes the secret scan.
+Off, a job with uncommitted changes never runs on a shared runner.  Never set by a repository's own files."
+  :type 'boolean :group 'drgnx :safe #'booleanp :scope 'project :workspace 'never
+  :on-error 'strict :agents 'never :runtime "bool" :schema 'boolean)
+
 (provide 'drgnx-agents-matrix)
 ;;; drgnx-agents-matrix.el ends here

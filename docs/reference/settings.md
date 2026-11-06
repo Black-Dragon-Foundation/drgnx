@@ -908,6 +908,24 @@ Which of the project's jobs may leave this machine for a runner: "all", "heavy" 
 | `:agents` | `never` |
 | `:schema` | `(string :match "\\`\\(?:all\\\|heavy\\\|none\\)\\'")` |
 
+## drgnx-runners-shared-overlay
+
+Non-nil lets a shared runner have a project's uncommitted files, once each passes the secret scan.
+Off, a job with uncommitted changes never runs on a shared runner.  Never set by a repository's own files.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `boolean` |
+| `:scope` | `project` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"bool"` |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
+
 ## drgnx-runners-weight
 
 The project's weight when projects share the machines within a priority (2: twice the share of a project at 1).

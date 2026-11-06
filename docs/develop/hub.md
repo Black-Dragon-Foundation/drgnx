@@ -2110,7 +2110,7 @@ job's log cut mid-stream and reattached equals the runner's file byte for byte.
 One queue holds every job but the user's servers (`runners/queue.rs`), for this machine and the runners alike. The
 job layer (`exec/`) records a job's folder and meta as before, then `Queue::submit`s it: its forseti `JobSpec`, its
 `Placement {machine (auto | local | runner), heavy, keys, local_only, background, writes, priority, send, machines_cell,
-image, weight}` and what to start it from (`Pending`). `exec/start` lost `check_machine` and the agents' semaphore:
+image, weight, visibility, shared_overlay}`, its frozen inputs (below) and what to start it from (`Pending`). `exec/start` lost `check_machine` and the agents' semaphore:
 `machine` names `auto` (the default), `local` or a runner the queue knows (else `invalid-params`); `priority` (1–5) is
 honoured on the user's connections only (a session's is `invalid-params`); `job_start` takes `JobStartParams`,
 `exec/start`'s fields without `priority`, so an agent's request that names one is refused as an unknown field.
@@ -2153,6 +2153,47 @@ runner's `hello` lists them, and jobs running here are adopted by the job layer,
 Tests: `runners::queue::`, `runners::local::`, `runtime_db::`, `exec::tests::a_queued_pending_json_is_read_once` [D];
 `test/conformance/runners/*.jsonl` [B]; `tests/fleet_runners.rs` `queue::` [C] (a heavy job goes to the runner under
 `send heavy` while the light one waits here).
+
+## Runners: sync and job trust
+
+`runners/sync.rs` (design §6.2, §6.6). **Inputs are frozen at submit**: when the queue knows a runner and the job may
+leave this machine (`Placement::may_leave`), `submit_of` calls `sync::freeze(tree, extras, visibility, shared_overlay,
+store)`: sleipnir's `capture` (the commit, its tree, the overlay against it, the input key), the origin's URL and the
+commits its `refs/remotes/origin/*` reach, how many commits of the job's are on none of them (`not_on`), and each
+overlay file's bytes copied into the hub's blob store (`<state>/runner-store/blobs/<sha256>`, sleipnir's `Store`). A file
+that changes while it is read refuses the freeze; a worktree that can't be frozen (not git, a submodule's change)
+makes the job `local_only`, logged. The frozen inputs (`Frozen`) go in the `rq_job` spec as `inputs`, and `rq_input`
+gets the manifest by input key (`rq_job.input_key`). No new migration: both came with runtime.db 9.
+
+**Job trust** (`job_trust(visibility, not_on_origin, keys)`): `private+keys` when the job names keys, `public` when
+`drgnx-runners-project-visibility` is `public` and every commit is on the origin, `private` otherwise. Placement gets
+`commits_not_on_origin` for a public project, so `forseti::why_here` says "runs here: N commits not on origin".
+
+**The overlay** (`overlay_for(job, runner trust)`): the lock's protected files (`agents::lock::PROTECTED_RO`) are left
+out for every runner: worktrees carry stub `.envrc` and `mise.toml` routinely, and the runner gets their committed
+versions. A shared runner gets an overlay only with `drgnx-runners-shared-overlay` on and every file passing
+`runstav::secrets::looks_like_secret`; otherwise the queue keeps the job off shared runners and says why
+(`QJob::shared_why`).
+
+**The sync** (`Queue::sync_have`, `sync_need`): an `admit` of an attempt with inputs is answered with `sync-have`
+(the repository's mirror id, `repo_id`; the commit, the tree, the overlay for that runner's trust) instead of `start`.
+The runner's `sync-need` gets, for the commit, `sync::plan(job, trust, missing, origin key)`:
+
+| Case | What the hub does |
+|---|---|
+| public, the commit on the origin, any runner | `origin-fetch` with the origin's URL |
+| a private origin, a deploy key named, the commit on it (`mine`, `my-cloud`) | `origin-fetch` with the key (no key setting yet: never taken) |
+| over 8 MiB missing (`missing_bytes`: `rev-list --objects --disk-usage` past the runner's ref tips) | one bundle (`make_bundle`: a temporary bare repository borrowing the objects, `refs/hub/job`, the runner's tips left out), in 1 MiB chunks |
+| a small gap | a push; for now a bundle too |
+| a shared runner and anything not on the public origin | never: the attempt is cancelled with the reason |
+
+then the blobs it lacks (only those of its own overlay, `send_blob` in 1 MiB chunks), and asks again; an empty answer
+starts the attempt. Past 6 rounds, or when a step fails, the attempt is cancelled with why logged (`give_up`). A
+verdict, requeue or loss drops the attempt's sync and its bundle file.
+
+Tests: `runners::sync::` [D] (trust from visibility and reachability; the four cases; no lock file in any overlay; a
+bundle sent in chunks from an offset); `tests/fleet_sync.rs` [C] (one unpushed commit keeps a public job off the
+shared runner; the shared runner fetches from origin; the shared overlay off by default, and scanned when on).
 
 ## Runners: health
 

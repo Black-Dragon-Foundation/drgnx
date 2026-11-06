@@ -193,6 +193,7 @@ running.  Nil: only a running server (TEI, Ollama) makes vectors, and with none,
     (drgnx-runners-image . ,(lambda (v) (or (drgnx-settings-runtime--str v) :null)))
     (drgnx-runners-weight . identity)
     (drgnx-runners-project-visibility . drgnx-settings-runtime--str)
+    (drgnx-runners-shared-overlay . drgnx-settings-runtime--bool)
     (drgnx-search-model-mirror . ,(lambda (v) (or (drgnx-settings-runtime--str v) :null)))
     (drgnx-sandbox-proxy-pinned-addresses . ,(lambda (v) (drgnx-settings-runtime--alist v #'identity))))
   "Runtime setting → the function that turns its Lisp value into the JSON of its runtime type.  `drgnx-agents-matrix'
