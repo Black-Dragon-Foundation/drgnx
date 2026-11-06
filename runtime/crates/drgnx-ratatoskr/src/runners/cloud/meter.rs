@@ -467,4 +467,60 @@ mod tests {
         }
         assert_eq!(v["market"], "spot");
     }
+
+    // [D] a graph of its own in a temporary folder: the hub's records go in through `write` and come back as the
+    // hub's readers see them
+    #[tokio::test]
+    async fn write_records_the_spend_in_the_graph_and_it_reads_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = norn::store::CoordDb::spawn(dir.path().join("work.db"));
+        let mut m = Meter::new(NO_EXTRAS, 0.0);
+        m.start(started("i-a", 0.36, 0));
+        let hour = m.tick(3600);
+        let last = m.end("i-a", 5400).expect("the last part-hour");
+        for rec in hour.iter().chain([&last]) {
+            write(&db, rec).await.unwrap();
+        }
+        // a write tried again (a retry after a lost answer) replaces its record: no second one
+        write(&db, &hour[0]).await.unwrap();
+        let rows = db
+            .read(|c| norn::read::runners::list(c, "cloud_spend"))
+            .await
+            .unwrap();
+        let names: Vec<&str> = rows.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["i-a.0", "i-a.3600"], "{rows:?}");
+        let (_, first) = &rows[0];
+        assert_eq!(first["machine"], "i-a");
+        assert_eq!(first["provider"], "aws");
+        assert_eq!(first["region"], "eu-west-1");
+        assert_eq!(first["type"], "c7a.4xlarge");
+        assert_eq!(first["market"], "spot");
+        assert_eq!(
+            (first["from"].as_u64(), first["to"].as_u64()),
+            (Some(0), Some(3600))
+        );
+        assert!(
+            (first["amount"].as_f64().unwrap() - 0.36).abs() < 1e-9,
+            "{first}"
+        );
+        let (_, second) = &rows[1];
+        assert_eq!(
+            (second["from"].as_u64(), second["to"].as_u64()),
+            (Some(3600), Some(5400))
+        );
+        assert!(
+            (second["amount"].as_f64().unwrap() - 0.18).abs() < 1e-9,
+            "{second}"
+        );
+        // the month's spend read back from the graph is what the meter counted
+        let total: f64 = rows
+            .iter()
+            .map(|(_, d)| d["amount"].as_f64().unwrap())
+            .sum();
+        assert!(
+            (total - m.spent(5400)).abs() < 1e-9,
+            "{total} vs {}",
+            m.spent(5400)
+        );
+    }
 }

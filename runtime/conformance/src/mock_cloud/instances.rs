@@ -283,6 +283,10 @@ pub(crate) struct Podman {
     pub run: String,
     /// The mock's own URL as the containers reach it (`--metadata-url`): each gets its instance's metadata under it.
     pub metadata: Option<String>,
+    /// More `podman run` options for each instance (`--run-opt OPT`, repeatable, each one argument such as
+    /// `--volume=SRC:DST:ro`, SRC on the podman host): what the fleet's runners have, their share, base image and the
+    /// devices and caps rootless podman needs inside.
+    pub run_opts: Vec<String>,
 }
 
 impl Podman {
@@ -321,6 +325,7 @@ impl Podman {
                 &format!("DRGNX_FAKE_CLOUD_METADATA={md}/__metadata/{}", i.key()),
             ]);
         }
+        cmd.args(&self.run_opts);
         let out = cmd.args(["--network", &self.network, &self.image]).output();
         match out {
             Ok(o) if o.status.success() => {}

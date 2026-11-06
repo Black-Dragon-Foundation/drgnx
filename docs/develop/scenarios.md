@@ -70,7 +70,8 @@ pieces in tests).
 
 ```
 ratatoskr-mock cloud --listen 127.0.0.1:0 --podman-remote SOCK|none --prefix P --run R [--hub ID]
-                     [--image IMG] [--network NET] [--podman PATH] [--metadata-url URL] [--log FILE] [--parent PID]
+                     [--image IMG] [--network NET] [--podman PATH] [--metadata-url URL] [--run-opt OPT]... [--log FILE]
+                     [--parent PID]
 ```
 
 It prints `MOCK-CLOUD-PORT N`. With `--podman-remote SOCK` each instance that reaches `running` is a container
@@ -78,7 +79,10 @@ It prints `MOCK-CLOUD-PORT N`. With `--podman-remote SOCK` each instance that re
 its `dnsName` is the container's name, its console is the container's `/run/fleet-console`, and with
 `--metadata-url URL` (the mock as the containers reach it) it gets `DRGNX_FAKE_CLOUD_METADATA=URL/__metadata/<id>`,
 which the fake runner's stand-in for cloud-init reads its user-data from (`test/runners/README.md`, "Cloud
-machines"; `fleet.sh up --cloud`). `none` keeps instances in memory. With `--hub ID` it models the fixture policy: tag conditions and the explicit
+machines"; `fleet.sh up --cloud`). Each `--run-opt OPT` (one `podman run` argument, such as `--volume=SRC:DST:ro`
+with SRC on the podman host) is added to every instance's `podman run`: `fleet.sh` gives the machines what its runners
+have (systemd, `/dev/fuse` and `/dev/net/tun`, `unmask=ALL`, `SYS_ADMIN`, the share and the base image), so rootless
+podman runs jobs on them. `none` keeps instances in memory. With `--hub ID` it models the fixture policy: tag conditions and the explicit
 denies (`iam:PassRole`, `ModifyImageAttribute`, `ModifySnapshotAttribute`), answering `UnauthorizedOperation`, and
 `DryRunOperation` for an allowed `DryRun`. It does not evaluate IAM in general.
 

@@ -2,7 +2,8 @@
 //! the knobs that inject every failure the cloud code drills.
 //!
 //! `cloud --listen ADDR --podman-remote SOCK|none --prefix P --run R [--hub ID] [--image IMG] [--network NET]
-//! [--podman PATH] [--metadata-url URL] [--log FILE] [--parent PID]` prints `MOCK-CLOUD-PORT N` and serves:
+//! [--podman PATH] [--metadata-url URL] [--run-opt OPT]... [--log FILE] [--parent PID]` prints `MOCK-CLOUD-PORT N`
+//! and serves:
 //!
 //! - EC2 `POST /` (form body, `Action=`), STS `GetCallerIdentity` and the Pricing `GetProducts` on the same path;
 //! - GCE `/compute/v1/projects/…`, Resource Manager `/v1/projects/P:testIamPermissions`, Billing `/v1/services/…/skus`;
@@ -17,7 +18,8 @@
 //! allowed. `--podman-remote SOCK` makes each instance a container `<P>-cloud-<id>` labelled `drgnx.fleet=<R>`, its
 //! console that container's `/run/fleet-console` and its `dnsName` the container's name; with `--metadata-url URL` (the mock as the
 //! containers reach it) each gets `DRGNX_FAKE_CLOUD_METADATA=URL/__metadata/<id>`, where the fake runner's stand-in for
-//! cloud-init reads its user-data. `none` keeps instances in memory only, with a console made up as cloud-init's. It
+//! cloud-init reads its user-data, and each `--run-opt` added to its `podman run` (one argument each, `--volume=…` with
+//! a source on the podman host), so it has what the fleet's runners have. `none` keeps instances in memory only, with a console made up as cloud-init's. It
 //! never touches a container whose name lacks that prefix.
 
 mod ec2;
@@ -858,6 +860,11 @@ pub fn run(args: &[String]) {
         prefix: prefix.clone(),
         run: run_id.clone(),
         metadata: one("--metadata-url"),
+        run_opts: args
+            .windows(2)
+            .filter(|w| w[0] == "--run-opt")
+            .map(|w| w[1].clone())
+            .collect(),
     };
     let listener = TcpListener::bind(&listen)
         .unwrap_or_else(|e| crate::die(&format!("cannot listen on {listen}: {e}")));

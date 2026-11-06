@@ -152,3 +152,13 @@ cargo test -p drgnx-ratatoskr --features fleet,test-hooks --test fleet_cloud --n
 fleet.sh up --runners 0 --cloud runtime/target/debug/ratatoskr-mock
 DRGNX_FLEET_TEST_BIN=runtime/target/debug/deps/fleet_cloud-HASH fleet.sh test --test-threads=1
 ```
+
+A machine also gets what a runner gets (the mock's `--run-opt`: the devices and caps for rootless podman, the share and
+the base image), so the cloud drills
+(`mod cloud`) install the shared `sleipnir` in a runner root on it and run its watchdog as a user unit with
+`--clock-file` and a `--poweroff-cmd` that posts the mock's `poweroff` knob for that machine: a limit comes due when a
+row writes the clock, and the power-off ends the instance as `InstanceInitiatedShutdownBehavior=terminate` does. The
+drills: a spot notice requeues with no strike and no red, through to the machine taken back; with the hub gone, an
+idle machine ends at its idle time and a busy one at the unattended lifetime after the hub's last contact; with the
+credentials expired nothing starts, the sweeper pauses, a machine's watchdog still ends it, and the sweeper's first
+pass after the login ends what is past its lifetime. Build `sleipnir` with `test-hooks` first (`test` shares it).

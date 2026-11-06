@@ -101,7 +101,9 @@ up() {
 # cloud_up MOCKBIN: ratatoskr-mock cloud in a container of its own on the fleet's network, its machines fake runners it
 # starts through a podman API socket of this run's own (stopped by `down`), named $PREFIX-$RUN-cloud-<id>. The harness
 # reaches it as http://$PREFIX-$RUN-cloud:8080/ (`test` passes DRGNX_TEST_CLOUD_ENDPOINT_AWS); so do its machines, for
-# their metadata. No real cloud: nothing leaves the fleet's network.
+# their metadata. Its machines get what the runners get: the devices and caps rootless podman needs, the share and the
+# base image read-only (the rows install the runner bundle from the share; jobs run in the base image). No real cloud:
+# nothing leaves the fleet's network.
 cloud_up() {
   local bin=$1 c i
   c=$(name cloud)
@@ -116,7 +118,10 @@ cloud_up() {
     -v "$PODMAN_SOCK:/run/podman.sock" -v "$STATE/share:/fleet/share:ro" "$IMAGE" \
     /fleet/share/ratatoskr-mock cloud --listen 0.0.0.0:8080 --podman-remote /run/podman.sock --podman /usr/bin/podman \
     --prefix "$PREFIX-$RUN" --run "$RUN" --hub hub-fleet --image "$IMAGE" --network "$NET" \
-    --metadata-url "http://$c:8080" >/dev/null
+    --metadata-url "http://$c:8080" \
+    --run-opt --systemd=always --run-opt --device=/dev/fuse --run-opt --device=/dev/net/tun \
+    --run-opt --security-opt=unmask=ALL --run-opt --cap-add=SYS_ADMIN \
+    --run-opt "--volume=$STATE/share:/fleet/share:ro" --run-opt "--volume=$STATE/base.tar:/fleet/base.tar:ro" >/dev/null
   # the mock's own announcement: its port line
   for i in $(seq 1 100); do podman logs "$c" 2>/dev/null | grep -q '^MOCK-CLOUD-PORT 8080' && break; sleep 0.1; done
   podman logs "$c" 2>/dev/null | grep -q '^MOCK-CLOUD-PORT 8080' || die "cloud: the mock did not start: $(podman logs "$c" 2>&1)"
