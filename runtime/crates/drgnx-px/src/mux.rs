@@ -24,8 +24,9 @@
 //! Here the bound is [`WINDOW`]: a `CREDIT` that would raise the sending credit above it closes the channel.
 //!
 //! A stream is **counted** from its `OPEN` until the peer's `RST` is received, or this end's `RST` is written, or both
-//! `FIN`s are in and this end's has been written (the writer reports each written `FIN` and `RST` with
-//! [`In::Wrote`]). A `FIN` decided but held behind its stream's `DATA` keeps the stream counted. So an `OPEN` that a
+//! `FIN`s are in and this end's has been written. "Written" means the one writer took it (it reports each `FIN`
+//! and `RST` it takes with [`In::Wrote`]): it writes frames in the order it takes them, so nothing decided after is
+//! ahead of it on the pipe. A `FIN` decided but held behind its stream's `DATA` keeps the stream counted. So an `OPEN` that a
 //! freed place allows is always behind the frame that freed it on the pipe, and a correct sidecar never sends the
 //! owner more than [`MAX_STREAMS`] counted.
 
@@ -78,7 +79,8 @@ pub enum In {
     LocalReset {
         stream: u32,
     },
-    /// The writer wrote this end's `FIN` or `RST` for the stream.
+    /// The writer took this end's `FIN` or `RST` for the stream to write: from here it counts as written, since the
+    /// one writer puts it on the pipe ahead of anything decided after.
     Wrote {
         stream: u32,
         kind: Kind,

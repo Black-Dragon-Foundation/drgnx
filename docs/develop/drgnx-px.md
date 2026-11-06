@@ -56,8 +56,10 @@ the shell does (`Out`).
   queue empties or 64 KiB are uncredited. A `CREDIT` that would raise the sending credit above the window is a
   violation (RFC 9113 §6.9.1), as is `DATA` past the receive credit.
 - **The count.** A stream counts toward the 64 from its `OPEN` until the peer's `RST` arrives, this end's `RST` is
-  written, or both `FIN`s are in and this end's is written. A `FIN` held behind its stream's `DATA` keeps it counted.
-  So an `OPEN` a freed place allows is always behind the frame that freed it, and a correct sidecar never sends a 65th.
+  written, or both `FIN`s are in and this end's is written. "Written" means the writer took the frame: it writes
+  frames in the order it takes them, each in full, so this end steps on at once, and the peer can't answer the frame
+  while this end still counts its stream. A `FIN` held behind its stream's `DATA` keeps it counted. So an `OPEN` a
+  freed place allows is always behind the frame that freed it, and a correct sidecar never sends a 65th.
   The owner still refuses an `OPEN` at 64 counted with `RST` and a tombstone; a further `OPEN` while 64 refusals are
   unwritten is a violation (`TooMany`).
 - **Control.** `READY` once and first from the sidecar; `OPEN`, `READY` and `EVENT` only from the sidecar, `BEAT`
@@ -87,8 +89,8 @@ stop the other's pipe:
 
 1. one reader reads the input unconditionally, decodes and steps the `Mux`; it awaits only the read, and what it does
    never blocks (bytes appended to a stream's queue, a task woken, a hook that must not block);
-2. one writer owns the output, writes the frames `Pending::next` gives one at a time, and after each `FIN` or `RST`
-   steps the `Mux` with `In::Wrote`;
+2. one writer owns the output, writes the frames `Pending::next` gives one at a time, and as it takes each `FIN` or
+   `RST` steps the `Mux` with `In::Wrote`;
 3. two tasks per stream over its consumer (`shell::Consumer`: the job's `TcpStream` in the sidecar, a `DuplexStream`
    in the owner): the queue to the consumer, whose writes become `CREDIT`, and the consumer to `DATA`, never past the
    stream's credit; both are aborted when the stream is dropped;
@@ -108,7 +110,9 @@ drgnx-px --listen <ip:port> --job-ip <ip>
 It binds the listen address with backlog 128 and never `SO_REUSEPORT` (a job running as the same uid could otherwise
 bind the port beside it), sends `READY` with the bound address, and accepts while fewer than 64 streams are counted:
 the 65th connection waits in the backlog until a stream closes. A connection from any address but `--job-ip` is
-closed, and each such address is reported once as an `EVENT` (256 at most). Accepted sockets get 64 KiB `SO_RCVBUF`
+closed, and each such address is reported once as an `EVENT` (256 at most). The report is diagnostic: the connection
+is closed whether or not it goes out, so an `EVENT` past the 256 addresses or past the 16 that may wait for the writer
+is dropped, not counted. Accepted sockets get 64 KiB `SO_RCVBUF`
 and `SO_SNDBUF` (the kernel doubles them, and autotuning is off). An `RST` either way, or any end of the channel,
 closes the stream's job socket with `SO_LINGER {on, 0}`, so the job sees `ECONNRESET`, never a clean end. It runs
 on tokio's current-thread runtime; fds 0, 1 and 2 are set non-blocking and driven through `AsyncFd` (never tokio's

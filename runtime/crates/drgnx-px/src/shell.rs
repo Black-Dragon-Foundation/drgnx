@@ -3,7 +3,7 @@
 //! 1. one reader reads the input unconditionally, decodes, and steps the `Mux`; it awaits nothing but the read, and
 //!    its effects never block (a queue appended to, a task woken, a hook called that must not block);
 //! 2. one writer owns the output and writes what [`Pending::next`] returns, one frame at a time, stepping the `Mux`
-//!    with [`In::Wrote`] after each `FIN` and `RST`;
+//!    with [`In::Wrote`] as it takes each `FIN` and `RST` (`take_next`);
 //! 3. two tasks per stream: the queue to the consumer (reporting `LocalDrained` once written), and the consumer to
 //!    `LocalData` up to the stream's credit; both aborted when the stream is dropped;
 //! 4. the state behind a `std::sync::Mutex`, never held across an `.await`;
@@ -25,7 +25,7 @@ use tokio::task::AbortHandle;
 use tokio::time::Instant;
 
 use crate::frame::{Decoder, Frame, HEADER, Kind, MAX_DATA, MAX_STREAMS, encode};
-use crate::mux::{In, Mux, Out, Side};
+use crate::mux::{In, Mux, Out, Side, StreamViolation};
 use crate::pending::Pending;
 
 /// A channel write without progress for this long ends the channel.
@@ -43,6 +43,28 @@ pub fn beat_lost(since_beat: Duration, limit: Duration) -> bool {
 /// Whether a write that has made no progress for `since_progress` is a stall.
 pub fn stalled(since_progress: Duration, limit: Duration) -> bool {
     since_progress >= limit
+}
+
+/// The writer takes the next frame to write, and what the `Mux` says to that. A `FIN` or `RST` counts as written
+/// from here (`In::Wrote`): the one writer writes frames in the order it takes them, each in full, so anything decided
+/// after this (an `OPEN` its freed place lets in) is behind it on the pipe. Stepping only once `write(2)` returned
+/// would leave a gap in which the peer could read the frame and answer it while this end still counted the stream.
+pub(crate) fn take_next(
+    mux: &mut Mux,
+    pending: &mut Pending,
+) -> Result<Option<(Frame, Vec<Out>)>, StreamViolation> {
+    let Some(f) = pending.next() else {
+        return Ok(None);
+    };
+    let outs = if matches!(f.kind, Kind::Fin | Kind::Rst) {
+        mux.step(In::Wrote {
+            stream: f.stream,
+            kind: f.kind,
+        })?
+    } else {
+        Vec::new()
+    };
+    Ok(Some((f, outs)))
 }
 
 /// Why the channel ended.
@@ -442,7 +464,18 @@ impl<C: Consumer> Shell<C> {
     async fn writer(&self, mut output: impl AsyncWrite + Unpin) -> End {
         let mut buf = Vec::with_capacity(HEADER + MAX_DATA);
         loop {
-            let next = self.lock().pending.next();
+            let next = {
+                let mut st = self.lock();
+                let st = &mut *st;
+                match take_next(&mut st.mux, &mut st.pending) {
+                    Ok(Some((f, outs))) => {
+                        self.apply(st, outs);
+                        Some(f)
+                    }
+                    Ok(None) => None,
+                    Err(v) => return End::Violation(v.to_string()),
+                }
+            };
             let Some(f) = next else {
                 if let Err(e) = output.flush().await {
                     return End::Io(format!("writing the channel: {e}"));
@@ -471,17 +504,7 @@ impl<C: Consumer> Shell<C> {
                     Err(e) => return End::Io(format!("writing the channel: {e}")),
                 }
             }
-            let mut st = self.lock();
-            st.writing_since = None;
-            if matches!(f.kind, Kind::Fin | Kind::Rst) {
-                match st.mux.step(In::Wrote {
-                    stream: f.stream,
-                    kind: f.kind,
-                }) {
-                    Ok(outs) => self.apply(&mut st, outs),
-                    Err(v) => return End::Violation(v.to_string()),
-                }
-            }
+            self.lock().writing_since = None;
         }
     }
 

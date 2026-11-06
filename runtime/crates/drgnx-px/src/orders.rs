@@ -17,8 +17,9 @@ use std::marker::PhantomData;
 use skuld::{Bound, Core, Events, Partial, every_order};
 
 use crate::frame::{Frame, Kind, MAX_DATA, MAX_STREAMS, WINDOW};
-use crate::mux::{In, Mux, Out, Side};
+use crate::mux::{In, Mux, Out, Side, StreamViolation};
 use crate::pending::Pending;
+use crate::shell;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum At {
@@ -39,10 +40,16 @@ enum Ev {
     Reset { at: At, s: u32 },
     /// The end's consumer takes what is queued on the stream.
     Drain { at: At, s: u32 },
-    /// The end's writer writes one frame.
+    /// The end's writer writes one frame (take, write, and what follows the write, at once).
     Write { at: At },
     /// The end's reader steps one frame.
     Read { at: At },
+    /// The writer's steps one by one: it takes the next frame (`shell::take_next`) ...
+    Take { at: At },
+    /// ... `write(2)` takes its last byte, so the peer may read it ...
+    Put { at: At },
+    /// ... and the writer steps on (where `Wrote` was stepped before it moved to `shell::take_next`).
+    Ack { at: At },
 }
 
 impl Ev {
@@ -55,6 +62,9 @@ impl Ev {
             Ev::Drain { .. } => "Drain",
             Ev::Write { .. } => "Write",
             Ev::Read { .. } => "Read",
+            Ev::Take { .. } => "Take",
+            Ev::Put { .. } => "Put",
+            Ev::Ack { .. } => "Ack",
         }
     }
 }
@@ -120,6 +130,10 @@ struct End {
     violation: Option<String>,
     /// Frames written, in order: (stream, kind).
     wire: Vec<(u32, Kind)>,
+    /// Taken by the writer, not yet on the pipe (one at most: the writer writes one frame at a time).
+    in_flight: Option<Frame>,
+    /// On the pipe, the writer's step after the write not yet done.
+    unacked: VecDeque<Frame>,
 }
 
 impl End {
@@ -146,6 +160,8 @@ impl End {
             discarded: Vec::new(),
             violation: None,
             wire: Vec::new(),
+            in_flight: None,
+            unacked: VecDeque::new(),
         }
     }
 
@@ -284,24 +300,76 @@ impl End {
                 }
             }
             Ev::Drain { s, .. } => self.drain(s),
-            Ev::Write { .. } | Ev::Read { .. } => unreachable!("the world's"),
+            Ev::Write { .. }
+            | Ev::Read { .. }
+            | Ev::Take { .. }
+            | Ev::Put { .. }
+            | Ev::Ack { .. } => unreachable!("the world's"),
         }
     }
 
-    /// Writes one frame to `pipe`; false when nothing waits.
-    fn write(&mut self, pipe: &mut VecDeque<Frame>) -> bool {
-        if self.violation.is_some() {
+    fn result(&mut self, r: Result<Vec<Out>, StreamViolation>, what: &str) {
+        match r {
+            Ok(outs) => self.outs(outs),
+            Err(v) => {
+                if self.violation.is_none() {
+                    self.violation = Some(format!("{:?} end, {what}: {v:?}", self.side));
+                }
+            }
+        }
+        self.max_counted = self.max_counted.max(self.mux.counted());
+    }
+
+    /// The writer takes the next frame; false when nothing waits (or one is taken already).
+    fn take(&mut self) -> bool {
+        if self.violation.is_some() || self.in_flight.is_some() {
             return false;
         }
-        let Some(f) = self.pending.next() else {
+        match shell::take_next(&mut self.mux, &mut self.pending) {
+            Ok(Some((f, outs))) => {
+                self.in_flight = Some(f);
+                self.result(Ok(outs), "taking a frame");
+                true
+            }
+            Ok(None) => false,
+            Err(v) => {
+                self.result(Err(v), "taking a frame");
+                false
+            }
+        }
+    }
+
+    /// The taken frame reaches `pipe`.
+    fn put(&mut self, pipe: &mut VecDeque<Frame>) -> bool {
+        let Some(f) = self.in_flight.take() else {
             return false;
         };
         self.wire.push((f.stream, f.kind));
-        let closing = matches!(f.kind, Kind::Fin | Kind::Rst).then_some((f.stream, f.kind));
+        self.unacked.push_back(f.clone());
         pipe.push_back(f);
-        if let Some((stream, kind)) = closing {
-            self.step(In::Wrote { stream, kind });
+        true
+    }
+
+    /// The writer steps on after the oldest unacked write: nothing reaches the `Mux` there (a `FIN` or `RST` counted as
+    /// written when it was taken), so this is only the point at which the shell's old order stepped `Wrote`.
+    fn ack(&mut self) -> bool {
+        self.unacked.pop_front().is_some()
+    }
+
+    /// Writes one frame to `pipe`, all three steps at once; false when nothing waits.
+    fn write(&mut self, pipe: &mut VecDeque<Frame>) -> bool {
+        let mut moved = self.put(pipe);
+        while self.ack() {
+            moved = true;
         }
+        if moved {
+            return true;
+        }
+        if !self.take() {
+            return false;
+        }
+        self.put(pipe);
+        self.ack();
         true
     }
 
@@ -374,6 +442,24 @@ impl World {
             }
             Ev::Read { at: At::O } => {
                 self.o.read(&mut self.s2o);
+            }
+            Ev::Take { at: At::S } => {
+                self.s.take();
+            }
+            Ev::Take { at: At::O } => {
+                self.o.take();
+            }
+            Ev::Put { at: At::S } => {
+                self.s.put(&mut self.s2o);
+            }
+            Ev::Put { at: At::O } => {
+                self.o.put(&mut self.o2s);
+            }
+            Ev::Ack { at: At::S } => {
+                self.s.ack();
+            }
+            Ev::Ack { at: At::O } => {
+                self.o.ack();
             }
             Ev::Accept => self.s.local(ev),
             Ev::Send { at, .. }
@@ -889,6 +975,44 @@ fn every_order_close_then_open_never_exceeds_64() {
                 if !w.o.known.contains(&s) {
                     return Err(format!("stream {s} never opened"));
                 }
+            }
+            Ok(())
+        },
+    );
+}
+
+/// [A] 64 counted streams; the owner resets one (its proxy dropped it) while a 65th client waits at the sidecar. The
+/// owner's writer takes the `RST`, `write(2)` takes it, and the writer steps on, each a step of its own: the sidecar
+/// may read the `RST`, accept the 65th and write its `OPEN` before the owner's writer has stepped on after the write.
+/// The owner still never counts a 65th and never refuses it: its `RST` counts as written from the moment the writer
+/// took it.
+#[test]
+fn every_order_the_owners_rst_frees_its_place_before_the_sidecar_answers() {
+    kinds!(K: "Reset", "Take", "Put", "Ack", "Accept", "Write", "Read");
+    run::<K>(
+        vec![
+            ("owner's upstream", vec![Ev::Reset { at: O, s: 1 }]),
+            (
+                "owner's writer",
+                vec![Ev::Take { at: O }, Ev::Put { at: O }, Ev::Ack { at: O }],
+            ),
+            ("sidecar's reader", n_of(Ev::Read { at: S }, 1)),
+            ("the 65th client", vec![Ev::Accept]),
+            ("sidecar's writer", n_of(Ev::Write { at: S }, 1)),
+            ("owner's reader", n_of(Ev::Read { at: O }, 1)),
+        ],
+        || World::with_streams(MAX_STREAMS),
+        |_, w| {
+            w.no_violation()?;
+            if w.o.max_counted > MAX_STREAMS || w.o.refused > 0 {
+                return Err(format!(
+                    "the owner counted up to {} and refused {}",
+                    w.o.max_counted, w.o.refused
+                ));
+            }
+            let s65 = 2 * MAX_STREAMS as u32 + 1;
+            if !w.o.known.contains(&s65) {
+                return Err(format!("stream {s65} never opened at the owner"));
             }
             Ok(())
         },
