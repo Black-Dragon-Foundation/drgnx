@@ -188,6 +188,13 @@ pub async fn hunks(f: &Front, _: &Caller, p: HunksParams) -> Result<Hunks, Error
     Ok(Hunks { diff })
 }
 
+/// Where session SESSION's base is: the shadow repositories' root, its worktree and its base tree (read a file of it
+/// with [`file_blob`]).
+pub async fn base_of(f: &Front, session: &str) -> Result<(PathBuf, PathBuf, String), Error> {
+    let g = ground(f, session).await?;
+    Ok((g.root, g.worktree, g.base))
+}
+
 /// The lines of one file its latest step snapshot changed against the base, on the snapshot's text.
 pub struct ChangedLines {
     /// The snapshot's step.

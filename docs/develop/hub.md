@@ -1554,6 +1554,14 @@ overlays from it):
   and kind: `pending` for an edit about to land, and `changed` for the lines the session's latest step snapshot changed
   in its own worktree against its base (the interim before the edit history), with a hover that names the handle, the
   step and its age ("Opus · changed in step 14 · 2 min ago").
+- **Other worktrees, projected** (`editor::project`, pure). A session working in another worktree of the file's
+  repository shows on the user's checkout mapped three-way: base (the file at the session's base tree) → agent (its
+  copy now) gives the lines it changed, base → user (the user's text) maps them onto the user's lines. A change that
+  meets a user change is a `conflict` range there; the user's own lines are never in an agent's gutter. The session's
+  entry carries `projected {worktree_label}` (its worktree's folder name) and its cursor mapped the same way; its
+  ranges are `changed` or `conflict`, also `projected`. The user's text is read from disk until the edit history
+  mirrors buffers, so such a frame is `approximate`. Base texts are kept by (base tree, path), the 256 last used. While
+  the user types, a watch is answered from the frame already built; the file is projected again after the quiet.
 - **Test hooks:** `__test_buffer_views` answers `{views, built}`: the views open and the frame bodies built so far.
 
 ### The Work map
