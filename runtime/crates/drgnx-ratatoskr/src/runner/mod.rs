@@ -97,12 +97,14 @@ fn tokens_text(n: f64) -> String {
     }
 }
 
-/// US dollars: whole from 10, else to the cent.
+/// US dollars: whole from 10, else to the cent, and "<0.01" for what rounds to nothing (as the editor prints it).
 fn money_text(x: f64) -> String {
     if x >= 10.0 {
         format!("{x:.0}")
-    } else {
+    } else if x >= 0.005 {
         format!("{x:.2}")
+    } else {
+        "<0.01".to_owned()
     }
 }
 
@@ -123,19 +125,19 @@ fn range_text(r: &runstav::methods::forecast::Range, text: fn(f64) -> String) ->
 }
 
 /// The proposal card's title: the tasks, the cost range (an estimate when it is one), the tokens and the time, or
-/// the word `unpriced` where there is no price.  Never `0.00` for what has no price.
+/// the word `unpriced` where there is no price.  Never `0.00`: a cost of nothing is left off, as the editor leaves it.
 pub(crate) fn card_title(n: usize, f: &Forecast) -> String {
     let mut parts = vec![format!("{n} task{}", if n == 1 { "" } else { "s" })];
-    if !f.cost.is_empty() {
+    let costs: Vec<_> = f.cost.iter().filter(|c| c.p90 > 0.0).collect();
+    if !costs.is_empty() {
         let mut notes: Vec<&str> = Vec::new();
-        if f.cost.iter().any(|c| c.estimate) {
+        if costs.iter().any(|c| c.estimate) {
             notes.push("estimate");
         }
         if !f.unpriced.is_empty() {
             notes.push("some unpriced");
         }
-        let amounts: Vec<String> = f
-            .cost
+        let amounts: Vec<String> = costs
             .iter()
             .map(|c| {
                 range_text(
@@ -159,7 +161,7 @@ pub(crate) fn card_title(n: usize, f: &Forecast) -> String {
     }
     parts.push(format!("{} tokens", range_text(&f.tokens, tokens_text)));
     parts.push(range_text(&f.wall_secs, duration_text));
-    if f.cost.is_empty() && !f.unpriced.is_empty() {
+    if costs.is_empty() && !f.unpriced.is_empty() {
         parts.push("unpriced".to_owned());
     }
     format!("{}: approve to start", parts.join(", "))

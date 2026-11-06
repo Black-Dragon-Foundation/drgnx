@@ -128,10 +128,18 @@ for the job.  Nothing outside what is inserted moves."
          (profiles (delete-dups (delq nil (mapcar (lambda (tk) (plist-get tk :profile)) tasks))))
          (costs (drgnx-say--costs (plist-get forecast :cost)))
          (wake (plist-get forecast :wake)) (manager (plist-get forecast :manager)))
-    (drgnx-say--field "Status" (or (plist-get job-summary :status) "proposed"))
+    ;; no summary (`job/status' failed): the status is not guessed
+    (drgnx-say--field "Status" (or (plist-get job-summary :status) "not known (the hub did not say)"))
     (drgnx-say--field "Tasks" (format "%d%s" (or (and tasks (length tasks)) (length (plist-get job-summary :tasks)))
                                       (if profiles (concat ", on " (string-join profiles ", ")) "")))
-    (drgnx-say--field "Budget" (if (plist-get job-summary :budget) (format "%s USD" (drgnx-say--num (plist-get job-summary :budget))) "none"))
+    ;; on a plan with a subscription the budget binds the estimate too, with the gateway's dollars (docs/guide/jobs.md)
+    (drgnx-say--field "Budget" (if (plist-get job-summary :budget)
+                                   (concat (format "%s USD" (drgnx-say--num (plist-get job-summary :budget)))
+                                           (if (cl-some (lambda (c) (equal (plist-get c :unit) "usd-est"))
+                                                        (plist-get forecast :cost))
+                                               ", binding the estimate on a subscription with the measured dollars"
+                                             ""))
+                                 "none"))
     (when forecast
       (drgnx-say--field "Cost" (if costs (string-join costs ", ")
                                  (format "not priced%s" (if (plist-get forecast :unpriced)
@@ -349,8 +357,16 @@ itself.  Nothing asks, nothing waits: the notice carries the command that does."
                        :id (intern (concat "say-failed-" (or session "x"))) :life 'condition
                        :detail (format "%s" (plist-get params :why))))))))
 
+(defun drgnx-say--asking ()
+  "The planning sessions whose question waits for an answer (their notices), newest first."
+  (delq nil (mapcar (lambda (n) (let ((c (plist-get n :command)))
+                                  (and (eq (car-safe c) 'drgnx-say-answer) (cadr c))))
+                    (drgnx-notices :source 'hub))))
+
 (defun drgnx-say-answer (session)
-  "Answer the planning agent's question in SESSION; the text is read here, in the command."
+  "Answer the planning agent's question in SESSION; the text is read here, in the command.  Interactively, SESSION
+is the planning session of the question shown last."
+  (interactive (list (or (car (drgnx-say--asking)) (user-error "No question from a planning agent"))))
   (drgnx-hub-call "say/revise" (list :id session :text (read-string "Answer: "))
                   (lambda (_r err) (if err (message "Answer: %s" (or (plist-get err :message) err))
                                      (drgnx-notice-clear 'hub (intern (concat "say-ask-" session)))))))
@@ -359,6 +375,10 @@ itself.  Nothing asks, nothing waits: the notice carries the command that does."
   "The palette entries; no key in the Work space."
   (drgnx-command-define 'say-it :category "Agents" :title "Say It" :command #'drgnx-say
                         :doc "Say what you want done; the hub plans it and proposes a job for your OK")
+  (drgnx-command-define 'say-show :category "Agents" :title "Say It: Show Proposal" :command #'drgnx-say-show
+                        :doc "Show a proposal: the hub's facts and forecast, then the plan the planning agent wrote")
+  (drgnx-command-define 'say-answer :category "Agents" :title "Say It: Answer" :command #'drgnx-say-answer
+                        :doc "Answer the planning agent's latest question")
   (drgnx-command-define 'say-approve :category "Agents" :title "Say It: Approve" :command #'drgnx-say-approve
                         :doc "Approve the proposal shown in this buffer")
   (drgnx-command-define 'say-revise :category "Agents" :title "Say It: Revise" :command #'drgnx-say-revise

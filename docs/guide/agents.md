@@ -652,7 +652,9 @@ started it), the planning is done and the chat closes: `say/revise` is refused w
 say it again", and a revision already on its way when the job started comes back as `say-failed` with the same
 reason. A revision never stops work that is running; stop the job yourself, then say what you want again.
 
-**The proposal buffer** shows the hub's facts first: status, tasks and profiles, the budget with its unit, the forecast
+**The proposal buffer** (also **Say It: Show Proposal** in the palette) shows the hub's facts first: status ("not
+known" when the hub did not answer), tasks and profiles, the budget with its unit (on a plan with a subscription it
+says it binds the estimate too), the forecast
 (cost, tokens and time as ranges: a middle and a high end, one run in ten goes past it), the cold wakes inside it
 ("of which wakes"), the manager's own spend beside the total, what the plan does to each subscription's week ("at this
 pace: Thursday; with this plan: Wednesday (estimate)", or "no pace yet"), warnings and the date of the price table.
@@ -661,7 +663,7 @@ reads "not priced" with its tokens and time, never a zero. The planning agent's 
 "Written by the planning agent". `C-c C-c` approves (the job starts and the planning chat ends), `C-c C-e` asks for a
 change (it reads your words in the command) and `C-c C-k` rejects (the job stops and the chat ends); each is also in
 the palette as **Say It: Approve**, **Say It: Revise** and **Say It: Reject**. A question from the planning chat comes
-as a notice whose **Answer** reads your reply, and a planning that failed says why. **Forecast Accuracy** (palette)
+as a notice whose **Answer** reads your reply (**Say It: Answer** in the palette answers the latest one), and a planning that failed says why. **Forecast Accuracy** (palette)
 lists, per role and profile, how many finished tasks were forecast, how many stayed within their high end, and the
 median of actual over middle.
 

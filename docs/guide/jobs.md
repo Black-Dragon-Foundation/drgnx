@@ -254,9 +254,9 @@ history of similar finished tasks (same role, profile and model, then wider; wit
 wide range): tokens, the cost and the time, each as a middle and a high end ("3 tasks, about 12–41 USD (estimate),
 40M–130M tokens, 2 h 10–4 h"). Tokens are priced at the rates of `drgnx-agents-model-prices`; a profile with no price
 (a model with no row and no gateway `:price`) is listed as unpriced and shows tokens only, never a price of 0. A
-subscription's cost is an estimate at API prices and is labelled so. With a `--budget`, the proposal warns when the
-plan's high end is over it (you decide; nothing is refused), and also about a profile on a route whose provider has no
-`:price` in `drgnx-ai-providers`: the gateway cannot count what it spends, so the budget would not stop it. How to read
+subscription's cost is an estimate at API prices and is labelled so. A cost under a cent reads "<0.01", never "0.00".
+With a `--budget`, the proposal warns when the plan's high end, its `usd` and `usd-est` summed, is over it (you decide;
+nothing is refused). How to read
 the range, its basis, the price table's date and the week's share: [Reading a forecast](agents.md#reading-a-forecast).
 After the run, each step, task and plan shows what it really used (`timeline/get` with `rollup`): the same numbers as
 the step records, what `budget/get` booked, and, for a gateway task, the gateway's own spend.
@@ -383,7 +383,8 @@ dir), with profiles of your own where the built-in ones do not fit ([agents.md](
 ```
 
 Then **Start Job from Plan…** (or `drgnx job propose PLAN --budget 2`): read the proposal — the tasks, what waits on
-what, the profile per role, the estimate (subscription traffic is unpriced: drgnx does not see it) — and approve.
+what, the profile per role, the estimate (a subscription's cost is an estimate at API prices from the dated price
+table, labelled so) — and approve.
 Watch the job window: agents start per ready task, permissions you did not allow show up as cards, the decision
 log fills. When the job is done, look at its branch (`git log job/ID`, `git diff main...job/ID`) and merge it yourself.
 Things worth trying once: Stop the job and resume it; a budget small enough to pause it; a won't-build decision

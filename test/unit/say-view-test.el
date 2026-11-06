@@ -117,4 +117,27 @@
                 :pace (list (list :provider "claude" :used_share 0.2 :window "week" :estimate t :runs_out_p90 :false))))))
     (should (string-search "no pace yet" text))))
 
+(ert-deftest drgnx-say/view-says-a-budget-binds-the-estimate ()
+  ;; a plan with a subscription's (estimated) cost: the budget binds the estimate too, and the line says so
+  (let ((text (drgnx-say-view-test--text (drgnx-say-view-test--forecast))))
+    (should (string-match "^Budget: 20 USD[^\n]*estimate" text)))
+  ;; a gateway-only plan's budget is exact
+  (let ((text (drgnx-say-view-test--text
+               (drgnx-say-view-test--forecast :cost (list (list :unit "usd" :p50 1.0 :p90 2.0 :estimate :false))))))
+    (should (string-match "^Budget: 20 USD$" text))))
+
+(ert-deftest drgnx-say/view-without-a-status-does-not-say-proposed ()
+  ;; `job/status' failed: the view has no summary, and does not guess the job's status
+  (let ((text (with-temp-buffer (drgnx-say--render (drgnx-say-view-test--forecast) nil) (buffer-string))))
+    (should-not (string-search "proposed" text))
+    (should (string-match "^Status: not known" text))))
+
+(ert-deftest drgnx-say/every-command-is-registered-and-interactive ()
+  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
+    (drgnx-say-register-commands)
+    (dolist (fn '(drgnx-say drgnx-say-show drgnx-say-approve drgnx-say-revise drgnx-say-reject drgnx-say-answer
+                            drgnx-forecast-accuracy))
+      (should (commandp fn))
+      (should (cl-find fn (drgnx-commands-all) :key #'drgnx-cmd-command)))))
+
 ;;; say-view-test.el ends here
