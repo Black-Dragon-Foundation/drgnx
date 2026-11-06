@@ -108,7 +108,13 @@ fn build(
     fs::create_dir_all(&root).map_err(|e| format!("{}: {e}", root.display()))?;
     let lock = fs::File::create(root.join(format!("{label}.lock"))).map_err(|e| e.to_string())?;
     flock(&lock, FlockOperation::LockExclusive).map_err(|e| format!("lock: {e}"))?;
-    let mut cargo = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+    // DRGNX_WASM_CARGO: a cargo that has the wasm32-wasip2 standard library, when the one running the tests (a
+    // distribution's packaged Rust, say) has none
+    let mut cargo = Command::new(
+        std::env::var_os("DRGNX_WASM_CARGO")
+            .or_else(|| std::env::var_os("CARGO"))
+            .unwrap_or_else(|| "cargo".into()),
+    );
     cargo
         .args([
             "build",

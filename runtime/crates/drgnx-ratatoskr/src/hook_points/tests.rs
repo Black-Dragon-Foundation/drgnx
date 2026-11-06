@@ -240,6 +240,38 @@ async fn an_events_add_hook_row_is_not_provenance() {
     assert!(runstav::registry::find(crate::coord::HOOKS_METHOD).is_none());
 }
 
+// [D] pure: a fork's step the adapter and the seam both hook is one step with one provenance row (the seam's, which
+// has the matrix's cell). A step only the adapter hooked (it refused it, so no permission request followed) keeps its
+// row, and another step's rows are not touched.
+#[tokio::test]
+async fn a_step_hooked_at_the_adapter_and_the_seam_shows_one_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = writer(dir.path());
+    let allow = outcome(
+        Decision::Proceed { changed: None },
+        None,
+        vec![rule("watch", Some(Verdict::Allow))],
+    );
+    let deny = outcome(
+        Decision::Deny("no".into()),
+        Some(0),
+        vec![rule("watch", Some(Verdict::Deny("no".into())))],
+    );
+    let at = |step: i64, at: &'static str| RowCtx {
+        at: Some(at),
+        ..ctx("s1", step)
+    };
+    write_row(&w, Point::BeforeTool, &at(4, "adapter"), &allow).await;
+    write_row(&w, Point::BeforeTool, &at(4, "seam"), &allow).await;
+    write_row(&w, Point::BeforeTool, &at(5, "adapter"), &deny).await;
+    let two = w.db.read(|c| provenance(c, "s1", 4)).await.unwrap();
+    assert_eq!(two.len(), 1, "{two:?}");
+    assert_eq!(two[0]["at"], json!("seam"));
+    let only = w.db.read(|c| provenance(c, "s1", 5)).await.unwrap();
+    assert_eq!(only.len(), 1, "{only:?}");
+    assert_eq!(only[0]["at"], json!("adapter"));
+}
+
 struct Rig {
     _dir: tempfile::TempDir,
     _store: urdr::Store,

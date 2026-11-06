@@ -997,9 +997,8 @@ enum Route {
 /// Which of KINDS (the subscribed kinds; none: `None`) reach the session's `before-tool` hooks under PROFILE's lock
 /// PLAN (its files already added), and which do not, and why. `drgnx` is hooked at the hub's servers whatever the
 /// agent; a kind the agent has no tool of (Claude's `delete` and `move`, Codex's withheld `fetch`) is not listed.
-/// `by_adapter` is Codex's managed hook here (it fails open on a timeout); the panel extension adds a fork's
-/// `_drgnx/before_tool` once the adapter advertises it. A session with `unhooked` kinds is refused
-/// ([`unhooked_refusal`]).
+/// `by_adapter` is Codex's managed hook here (it fails open on a timeout); a fork's `_drgnx/before_tool` adds nothing
+/// to it, as a fork's steps reach the seam. A session with `unhooked` kinds is refused ([`unhooked_refusal`]).
 pub fn hooked(
     p: &AgentProfile,
     kinds: &[String],

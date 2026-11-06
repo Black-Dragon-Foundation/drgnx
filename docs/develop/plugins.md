@@ -154,6 +154,12 @@ one cargo run under a lock file, so parallel tests and test binaries build once,
 (`plugin.json` and `plugin.wasm`) that `scan` reads. It needs the `wasm32-wasip2` target of the toolchain that runs
 the tests. `test_support::template()` builds the template the same way.
 
+CI builds them first, in their own step (`.github/ci/wasm-target.sh`, in the Linux and macOS jobs of `runtime.yml`): with
+rustup it adds the target; the Fedora 45 job's packaged Rust has no `wasm32-wasip2` standard library and cannot use an
+upstream one (its crates are tagged with its own rustc), so the script installs the same rustc version with rustup-init
+(checked against its published SHA-256) for the fixtures alone. `DRGNX_WASM_CARGO` names the cargo the test support
+builds them with, when it is not the one running the tests.
+
 ## The template
 
 `runtime/plugins/template` is a minimal plugin with one ability (`shout`) and one `before-tool` hook, commented for

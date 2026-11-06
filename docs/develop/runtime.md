@@ -905,6 +905,12 @@ budgets (a recorded baseline, not a regression gate); the `agents-*` rows check 
 | `find` | `tasks/find` on 10^5 tasks: a word 1,000 hold, and a word one holds | 20 each |
 | `agents-streaming-20` | 20 mock agents stream at once (25 chunks and 25 tool calls each) with an editor subscribed, 100 `ping` round trips meanwhile. **Budgets in the row** (`/proc`, Linux only): the hub's CPU (utime + stime) under 40 % of one core over the window, resident set under 400 MB. The ping samples are the keystroke-latency proxy (p95 < 16 ms, judged on the desktop lane) |
 | `agents-idle-20` | 20 idle mock agents for 10 s: the hub's CPU under 3 % of one core (budget in the row) |
+| `hook-overhead` | one permission request (an edit the matrix allows), `permission-bare` with no rule subscribed and `permission-hooked` with one annotating rule; the added cost is the difference of the p95s, bound 5 ms | 100 each |
+| `hook-overhead-parallel` | eight permission requests sent before the first answer is read (`ask:burst 8`, as Claude issues parallel tool calls), `burst-bare` and `burst-hooked`; none is refused as busy (the turn says `burst: 8/8 allowed`), same 5 ms bound on the difference | 50 each |
+| `ability-20-sessions` | 20 sessions started with a plugin ability (each holds a `drgnx-plugins` server): the `ping` round trip, `ping-no-sessions` before and `ping-20-ability-sessions` with them idle; bound 100 ms | 200 each |
+
+The three plugin rows only measure; their bounds are judged at the gate, from a run pinned with `DRGNX_PERF_CPUS=4`
+(`builder-run.sh perf-exclusive.sh …`), never from a whole-machine run.
 
 The writer-level group-commit number, with `secure_delete` on and off, is `urdr`'s ignored bench
 (`cargo test -p urdr --bench group_commit --release -- --ignored --nocapture`).
@@ -1283,6 +1289,9 @@ runs each binary as `cargo fuzz run` does (`-artifact_prefix=runtime/fuzz/artifa
 | `saga_plan` | text through `saga::plan::parse` and `render`: the output equals the input |
 | `saga_deferred` | the same through `saga::deferred` |
 | `saga_org` | the same through `saga::org` (`board.org`) |
+| `plugin_manifest` | bytes through `brokkr::manifest::parse`: no panic, and a manifest that is taken keeps its limits (at most 16 hosts, `kv_bytes` within 1 MiB, one hook per point, a deadline within the point's budget, an object schema, a qualified ability name that fits) |
+| `hook_rules` | JSON through `norn::hooks::parse_rules` (`drgnx-agents-hook-rules`): no panic, and a list that is taken has unique ids of 1 to 32 `[a-z0-9-]` and a reason on every rule |
+| `drgnx_context` | JSON as an agent's `_drgnx/context` notification and `_drgnx/before_tool` request through the hub's checks (size, own session, schema with unknown fields refused): no panic, a breakdown that is taken respects its bounds and round-trips, one from another session is never taken |
 | `cdp_envelope` | bytes as one browser connection through heimdall: NUL-split under a limit the first byte picks, each message's first byte choosing the agent, the browser or the agent's close; every envelope parses or is refused without a panic, whatever goes to the browser is a command with an id and no NUL, and no refused method from the agent reaches it; the same bytes through the frame decoder whole and in two pieces give the same frames |
 
 The seed corpus in `fuzz/corpus/<target>/` is the request lines of the conformance rows (phase 1; for `mcp_message` and

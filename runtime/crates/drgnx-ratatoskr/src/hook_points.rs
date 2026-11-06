@@ -862,10 +862,26 @@ pub fn provenance(c: &Tx, sid: &str, step: i64) -> Result<Vec<Value>, CoordError
             r.get::<_, Option<String>>(0)
         })?
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(rows
+    let all: Vec<Value> = rows
         .into_iter()
         .flatten()
         .filter_map(|t| serde_json::from_str(&t).ok())
+        .collect();
+    // a fork hooks its step through `_drgnx/before_tool` and then asks at the seam: one step (one call), two rows.
+    // The seam's row stays (it has the matrix's cell); a step only the adapter hooked keeps its own.
+    let seam_tools: Vec<&Value> = all
+        .iter()
+        .filter(|r| r["at"] == "seam" && r["point"] == "before-tool")
+        .map(|r| &r["tool"])
+        .collect();
+    Ok(all
+        .iter()
+        .filter(|r| {
+            !(r["at"] == "adapter"
+                && r["point"] == "before-tool"
+                && seam_tools.contains(&&r["tool"]))
+        })
+        .cloned()
         .collect())
 }
 

@@ -2013,7 +2013,7 @@ fn assemble(
     }
     let plugins_changed = front.mcp.plugins_flag(&i.id);
     let panel = panel::Panel::new(l.caps.as_ref());
-    let hooked = panel::with_adapter(l.hooked, panel.features());
+    let hooked = l.hooked;
     let s = Arc::new(Session {
         id: i.id,
         started: i.started,
@@ -4977,6 +4977,36 @@ pub fn fuzz_apply(updates: &[Value]) {
         st.apply(u);
     }
     assert_eq!(st.seq, updates.len() as u64);
+}
+
+/// The fuzz target `drgnx_context`'s entry (feature `fuzzing`): PARAMS as an agent's `_drgnx/context` notification
+/// and as its `_drgnx/before_tool` request, from a session `s1` that offers both features. Nothing may panic; a
+/// breakdown that is taken respects the bounds (at most 8 parts, 200 items each, a message within 256 KiB) and
+/// survives a round trip; a message from another session is never taken.
+#[cfg(feature = "fuzzing")]
+pub fn fuzz_context(params: &Value) {
+    let features = ["context".to_owned(), "before-tool".to_owned()];
+    if let Ok(ctx) = panel::check_context(&features, "s1", "_drgnx/context", params.clone()) {
+        assert!(params.to_string().len() <= 256 * 1024);
+        assert_eq!(params.get("sessionId"), Some(&Value::from("s1")));
+        assert!(ctx.parts.len() <= 8);
+        let again = serde_json::to_value(&ctx).expect("a taken breakdown encodes");
+        let mut back = again.clone();
+        back["sessionId"] = Value::from("s1");
+        assert_eq!(
+            panel::check_context(&features, "s1", "_drgnx/context", back).ok(),
+            Some(ctx)
+        );
+    }
+    if let Ok(call) =
+        panel::check_before_tool(&features, "s1", "_drgnx/before_tool", params.clone())
+    {
+        assert_eq!(params.get("sessionId"), Some(&Value::from("s1")));
+        assert!(call.is_object());
+    }
+    if params.get("sessionId") != Some(&Value::from("s2")) {
+        assert!(panel::check_context(&features, "s2", "_drgnx/context", params.clone()).is_err());
+    }
 }
 
 #[cfg(test)]

@@ -2356,8 +2356,11 @@ not: its steps reach the hooks through its lock's managed hook instead ("The `be
   (`hook_points::before_tool` with `At::Adapter`, no matrix cell, so they can only refuse; `change` is not taken), with
   one hook row as at the seam. The answer is `{outcome: "allow"}`, or `{outcome: "deny", reason}` with the hub's words
   and the hook's quoted, and a deny is also steered into the turn. A hub tool's step answers `allow`: it is hooked at its
-  server. The adapter runs inside the agent's sandbox, so these kinds are enforced by the agent's side: the snapshot
-  lists them under `hooked.by_adapter` (the kinds the lock leaves unhooked), apart from the lock's `before_tool`.
+  server. The adapter runs inside the agent's sandbox, so this check is the agent's own and a second line: a fork's
+  steps still reach the seam (its lock makes them ask), so the snapshot's `hooked` comes from the lock alone
+  (`hooked.by_adapter` is Codex's managed hook), and a session whose lock leaves a subscribed kind unhooked is refused
+  whatever the fork advertises. A step both sites hooked has one provenance row, the seam's (`timeline/get`); a step
+  only the adapter hooked keeps its own.
 - **What the agent sends is untrusted.** Every params object is checked against its schema with unknown fields
   refused, so an `outcome` or a verdict of the agent's own in a `_drgnx/before_tool` is refused (`-32602`, the field
   named) and runs nothing: the answer is the hooks' outcome, never the agent's say. A `sessionId` that is not the
@@ -2367,7 +2370,13 @@ not: its steps reach the hooks through its lock's managed hook instead ("The `be
   with a warning in the hub's log. Nothing in the extension changes a session's matrix, grants or lock.
 - **Tests.** `agents::session::panel::tests` (the checks and the context gate, pure), hermod's
   `an_extension_request_comes_with_a_responder` and `ext_request_returns_the_answer_or_ends_at_its_deadline`, and the
-  rows `panel/*` against `ratatoskr-mock acp --panel FEATURES`.
+  rows `panel/*` against `ratatoskr-mock acp --panel FEATURES`. The rows that run the hooks over every profile are
+  `system/hooks-every-profile` and `system/abilities-every-profile` (Claude, Claude through the gateway, Codex's
+  stock adapter, and Gemini, Kimi and DeepSeek stock and as their forks: with `before-tool` the mock asks
+  `_drgnx/before_tool` first, with the step's tool call id, and a deny vetoes it, as the forks' listeners do); each
+  fork's rebase is checked by `adapters/{claude,gemini,kimi,dsh}-rebase` (Codex has no fork). The fuzz targets
+  `drgnx_context`, `plugin_manifest` and `hook_rules` and the `perf/hook-overhead*` and `perf/ability-20-sessions`
+  rows are in [runtime.md](runtime.md).
 
 ## The timeline
 

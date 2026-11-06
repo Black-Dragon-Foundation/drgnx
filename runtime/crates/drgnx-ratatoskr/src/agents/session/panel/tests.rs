@@ -27,25 +27,6 @@ fn features_are_version_1_and_known_names_only() {
     );
 }
 
-#[test]
-fn unhooked_kinds_move_to_the_adapter_only_when_it_offers_before_tool() {
-    let lock = Hooked {
-        before_tool: vec!["execute".into()],
-        by_adapter: vec![],
-        unhooked: vec!["read".into(), "search".into()],
-        why: Some("Gemini runs them without asking".into()),
-    };
-    let h = with_adapter(Some(lock.clone()), &["before-tool".to_owned()]).unwrap();
-    assert_eq!(h.before_tool, vec!["execute"]);
-    assert_eq!(h.by_adapter, vec!["read", "search"]);
-    assert!(h.unhooked.is_empty() && h.why.is_none(), "{h:?}");
-    assert_eq!(
-        with_adapter(Some(lock.clone()), &["context".to_owned()]),
-        Some(lock)
-    );
-    assert_eq!(with_adapter(None, &all()), None, "nothing subscribes");
-}
-
 /// Breakdowns every 10 ms for a second, with the armed timer fired at its time: at most 4 a second are shown (plus
 /// the first), and the last one is.
 #[test]

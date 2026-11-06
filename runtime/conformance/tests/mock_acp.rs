@@ -324,6 +324,49 @@ fn gemini_fork_reports_its_admin_policy() {
     assert_eq!(report(&[], &good, true), Value::Null);
 }
 
+// [C] handshake: a fork that advertises `before-tool` asks `_drgnx/before_tool` about a step before it asks the client
+// for permission, with the same tool call id (the forks' listeners run before the confirmation); the stock adapter, and a
+// fork without the feature, only ask for permission.
+#[test]
+fn a_fork_with_before_tool_asks_the_adapter_site_first() {
+    let d = dir();
+    let order = |extra: &[&str]| {
+        let mut args = vec!["--as", "claude"];
+        args.extend_from_slice(extra);
+        let mut a = Acp::start(&args);
+        a.init();
+        let sid = a.new_session(d.path().to_str().unwrap(), json!({}));
+        a.prompt(
+            &sid,
+            "ask:tool {\"kind\": \"execute\", \"title\": \"ls\", \"rawInput\": {\"command\": \"ls\"}}",
+        );
+        a.seen
+            .iter()
+            .filter_map(|m| {
+                let method = m["method"].as_str()?;
+                matches!(method, "_drgnx/before_tool" | "session/request_permission").then(|| {
+                    (
+                        method.to_owned(),
+                        m["params"]["toolCall"]["toolCallId"].clone(),
+                    )
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    let fork = order(&["--panel", "context,before-tool"]);
+    assert_eq!(fork.len(), 2, "{fork:?}");
+    assert_eq!(fork[0].0, "_drgnx/before_tool");
+    assert_eq!(fork[1].0, "session/request_permission");
+    assert!(fork[0].1.is_string() && fork[0].1 == fork[1].1, "{fork:?}");
+    let no_feature = order(&["--panel", "context"]);
+    assert_eq!(
+        no_feature.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(),
+        ["session/request_permission"]
+    );
+    let stock = order(&[]);
+    assert_eq!(stock.len(), 1, "{stock:?}");
+}
+
 // [C] handshake: Kimi Code's ACP server reports its four modes and `default` when a session opens
 // (`packages/acp-server/src/modes.ts:22-46`), refuses a mode id it does not know (`:52-54`), and tells the client a
 // switch with `current_mode_update` (`session.ts:1138-1156`); the personality's `--start-mode MODE` opens in MODE (a

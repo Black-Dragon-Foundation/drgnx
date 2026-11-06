@@ -12,6 +12,8 @@
 //! | `tool:write N` | a tool call (pending, then completed) whose raw input is a Write of N bytes (nothing is written) |
 //! | `ask:permission KIND` | `session/request_permission` for a tool call of KIND (read, edit, execute, ...); says `permission: OPTION` |
 //! | `ask:tool JSON` | `session/request_permission` for the tool call JSON (`kind`, `title`, `rawInput`, `locations`, `_meta` …; its id is added); says `permission: OPTION` |
+//! | `ask:burst N JSON` | N `session/request_permission` requests for the tool call JSON, all sent before the first answer is read (Claude's parallel tool calls); says `burst: A/N allowed` |
+//! | `ask:announced JSON` | as `ask:tool`, after a pending `tool_call` of that shape (the request keeps its `kind`: Claude, Gemini) |
 //! | `ask:folded JSON` | as `ask:tool`, after a pending `tool_call` of that shape, and the request itself has no `kind` (Kimi Code, DeepSeek Harness) |
 //! | `call:TOOL JSON` | calls the hub's MCP tool TOOL through the first stdio server of `mcpServers`; says `call: TEXT` |
 //! | `decide TEXT` | `call:record_decision {"text": TEXT}` |
@@ -38,7 +40,9 @@
 //! in the process only.
 //!
 //! `--panel FEATURES`: the personality also speaks drgnx's `_drgnx/panel` extension (src/mock_acp/panel.rs: its
-//! `panel:*` words and the client's `_drgnx/*` requests).
+//! `panel:*` words and the client's `_drgnx/*` requests). With `before-tool`, every confirmation it asks for is
+//! preceded by the fork's `_drgnx/before_tool` for the same tool call, and a `deny` answer vetoes the step (logged
+//! `{"vetoed": KIND}`, no permission request), as the forks' listeners do.
 //!
 //! Every prompt answer carries `_meta.turnId` ("t1", "t2", ...).  Messages have ids (`messageId` of chunks); a
 //! fork's `_meta.jetbrains.air.fork.messageId` cuts the history: Claude after that message, Codex after its turn.
@@ -70,10 +74,12 @@ enum Kind {
 }
 
 /// How a permission request carries its tool call: whole; without its `kind`, after a pending `tool_call` of its
-/// shape (Kimi Code); or as its id only, after that `tool_call` (DeepSeek Harness).
+/// shape (Kimi Code); or as its id only, after that `tool_call` (DeepSeek Harness). `Announced`: whole, after a pending
+/// `tool_call` of its shape (Claude and Gemini send the tool call first, so the step exists when the request comes).
 #[derive(Clone, Copy, PartialEq)]
 enum Fold {
     No,
+    Announced,
     NoKind,
     IdOnly,
 }
@@ -762,15 +768,23 @@ impl Agent {
                 let answer = self.permission(sid, turn, kind, &format!("{kind} request"));
                 self.say(sid, turn, &format!("permission: {answer}"));
             }
-            "ask:tool" | "ask:folded" => {
+            "ask:tool" | "ask:folded" | "ask:announced" => {
                 let call = serde_json::from_str(rest).unwrap_or_else(|_| json!({}));
-                let fold = if head == "ask:folded" {
-                    Fold::NoKind
-                } else {
-                    Fold::No
+                let fold = match head {
+                    "ask:folded" => Fold::NoKind,
+                    "ask:announced" => Fold::Announced,
+                    _ => Fold::No,
                 };
                 let answer = self.permission_for(sid, turn, call, fold);
                 self.say(sid, turn, &format!("permission: {answer}"));
+            }
+            "ask:burst" => {
+                let (n, call) = rest.split_once(char::is_whitespace).unwrap_or((rest, "{}"));
+                let n: u64 = n.parse().unwrap_or(1);
+                let call: Value = serde_json::from_str(call.trim()).unwrap_or_else(|_| json!({}));
+                let answers = self.permission_burst(sid, turn, n, &call);
+                let allowed = answers.iter().filter(|a| a.starts_with("allow")).count();
+                self.say(sid, turn, &format!("burst: {allowed}/{n} allowed"));
             }
             "sleep-loop" => {
                 let cmd = "sleep 30; pgrep -f ratatoskr-mock-sleep-loop";
@@ -949,6 +963,49 @@ impl Agent {
         self.say(sid, turn, &format!("{name}: ran\n"));
     }
 
+    /// N permission requests for CALL, all sent before the first answer is read (Claude issues its parallel tool calls
+    /// so); each one's chosen option id, or `cancelled`.
+    fn permission_burst(&mut self, sid: &str, turn: u64, n: u64, call: &Value) -> Vec<String> {
+        let mut pending = Vec::new();
+        for _ in 0..n {
+            let tid = format!("tc-{turn}-{}", self.next_out_id);
+            self.next_out_id += 1;
+            let mut c = call.clone();
+            c["toolCallId"] = json!(tid);
+            pending.push(self.request(
+                "session/request_permission",
+                json!({"sessionId": sid, "toolCall": c,
+                "options": [
+                    {"optionId": "allow_once", "name": "Allow once", "kind": "allow_once"},
+                    {"optionId": "reject_once", "name": "Reject", "kind": "reject_once"}]}),
+            ));
+        }
+        let mut answers = std::collections::HashMap::new();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while answers.len() < pending.len() && Instant::now() < deadline {
+            match self.rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(m)
+                    if m.get("method").is_none() && pending.iter().any(|p| m["id"] == json!(p)) =>
+                {
+                    let answer = m["result"]["outcome"]["optionId"]
+                        .as_str()
+                        .unwrap_or("cancelled")
+                        .to_owned();
+                    answers.insert(m["id"].as_u64().unwrap_or(0), answer);
+                }
+                Ok(m) => self.stash(m),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        let got: Vec<String> = pending
+            .iter()
+            .map(|p| answers.remove(p).unwrap_or_else(|| "cancelled".into()))
+            .collect();
+        self.log("permission_burst", json!(got));
+        got
+    }
+
     /// Ask the client; the chosen option's id, or `cancelled`.
     fn permission(&mut self, sid: &str, turn: u64, kind: &str, title: &str) -> String {
         let call = json!({"title": title, "kind": kind, "status": "pending", "rawInput": {"command": title}});
@@ -967,12 +1024,20 @@ impl Agent {
             _ => serde_json::Map::new(),
         };
         call.insert("toolCallId".into(), json!(tid));
+        let full = Value::Object(call.clone());
         if fold != Fold::No {
             let mut update = call.clone();
             update.insert("sessionUpdate".into(), json!("tool_call"));
             update.insert("status".into(), json!("pending"));
             self.update(sid, Value::Object(update));
-            call.remove("kind");
+            if fold != Fold::Announced {
+                call.remove("kind");
+            }
+        }
+        // a fork's own listener asks the hub before its confirmation, and a refusal vetoes the step there
+        if panel::offers(&self.argv, "before-tool") && panel::vetoed(self, sid, full) {
+            self.log("vetoed", kind);
+            return "reject_once".to_owned();
         }
         if fold == Fold::IdOnly {
             call.retain(|k, _| k == "toolCallId");
