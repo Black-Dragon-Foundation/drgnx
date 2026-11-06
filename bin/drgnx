@@ -2025,7 +2025,10 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx rollback [N]      the packages of generation N (default: the one before)
                                (sync, upgrade and rollback take --progress FILE: JSON steps, for the editor)
        drgnx generations | lock
-       drgnx lock --ship       (maintainers) write etc/drgnx.lock.eld, the known-good lock a first sync
+       drgnx extensions refresh [--progress FILE] | fetch-readme ARCHIVE NAME
+                               write the catalog of the archives' packages (the Extensions view reads it), or cache
+                               one package's readme; reaches the network, changes nothing you have installed
+       drgnx lock --ship      (maintainers) write etc/drgnx.lock.eld, the known-good lock a first sync
                                starts from, from your lock (it must cover every module's packages)
        drgnx onboard [--non-interactive] [--again] [--preset minimal|ide|full-ai] [--keys NAME] [--theme THEME]
                      [--roots DIR…] [--todos] [--step ID]
@@ -2099,6 +2102,9 @@ case "${1:-help}" in
   sync|upgrade|rollback|generations|lock|bisect|service-unit)
         "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-pkg -f drgnx-pkg-cli -- "$@" ;;
+  extensions) shift
+        "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+              -l drgnx-extensions-refresh -f drgnx-extensions-refresh-cli -- "$@" ;;
   onboard) shift
         "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -L "$here/wb" \
               -l drgnx-onboard -f drgnx-onboard-cli -- "$@" ;;

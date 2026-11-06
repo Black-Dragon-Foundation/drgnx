@@ -220,6 +220,7 @@ pub async fn run(args: ServeArgs) -> Exit {
         config: paths::config_dir(&env),
         hub: hub_dir.clone(),
     });
+    front.extensions.configure(&env);
     front.search.bind(&front);
     if let Some(d) = front.dirs.get() {
         front

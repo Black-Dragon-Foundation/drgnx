@@ -3,12 +3,13 @@
 //! ([`coord`]), the graph store ([`graph`]), the settings' history ([`settings`]), the tracker for the editor
 //! ([`tasks`]) and the coordination tools' sockets ([`mcp`]); the agent core's (agent system part 1): jobs
 //! ([`exec`]), the permissions matrix ([`matrix`]), plans, briefs and reports ([`plans`]), records ([`records`]) and
-//! time, budgets and the supervisor ([`timeline`]).  [`crate::registry`] puts them in one sorted table.
+//! time, budgets and the supervisor ([`timeline`]); the Extensions view's catalog ([`extensions`]).  [`crate::registry`] puts them in one sorted table.
 
 pub mod agents;
 pub mod config;
 pub mod coord;
 pub mod exec;
+pub mod extensions;
 pub mod gateway;
 pub mod graph;
 pub mod hub;
@@ -251,6 +252,10 @@ params! {
     RunnersSet(runners::SetParams),
     RunnersUnbench(runners::ByName),
     RunnersRemove(runners::RemoveParams),
+    ExtensionsSearch(extensions::SearchParams),
+    ExtensionsDetails(extensions::DetailsParams),
+    ExtensionsRows(extensions::RowsParams),
+    ExtensionsModules(extensions::ModulesParams),
 }
 
 /// Every method, in no order.
@@ -273,6 +278,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(work::methods());
     v.extend(search::methods());
     v.extend(runners::methods());
+    v.extend(extensions::methods());
     v
 }
 
