@@ -386,7 +386,9 @@ Layer 2 (the files a command's processes opened; labelled "seen open") is Gleipn
   D: the rules through a fake probe, the budget, the skip list, the labels), and the rows
   `trace/claude-bash-reads-are-seen-open` (the mock's `provider:bash` through the wrapper),
   `trace/a-file-seen-open-shows-on-the-map` (a read only the tracer sees, counted on the agent's card) and
-  `trace/macos-says-not-traced` (`DRGNX_TEST_TRACE_PLATFORM=macos`, test hubs only), in the sandbox container.
+  `trace/macos-says-not-traced` (`DRGNX_TEST_TRACE_PLATFORM=macos`, test hubs only), in the sandbox container. The
+  first two need the tracer, which is Linux's alone (macOS has none to offer: no seccomp notification), so they
+  require `linux` and a macOS run lists them as skipped; the third is what macOS shows instead.
 
 ## The editor's side
 
