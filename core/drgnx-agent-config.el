@@ -19,6 +19,8 @@
 (require 'subr-x)
 (require 'json)
 (require 'drgnx-file)
+(require 'drgnx-guard)
+(require 'drgnx-file-stream)
 
 (defconst drgnx-agent-config-kinds '(claude codex gemini kimi)
   "The agents with a settings page.")
@@ -94,12 +96,43 @@ CALLBACK gets (:ok t :note STRING) or (:error STRING): at once for a file, later
 
 ;;;; Files: text, JSON, backups
 
+(defvar drgnx-agent-config--preread nil
+  "((FILE . TEXT)...): files read already, off the main thread, for one reading of the settings (the page's open or
+Refresh binds it around `drgnx-agent-config-read'); `drgnx-agent-config-read-text' answers from it.  Nil everywhere
+else: an edit reads the file itself, at once, so that what it changes is what the file holds now.")
+
 (defun drgnx-agent-config-read-text (file)
   "FILE's text, byte for byte (UTF-8, line ends and a byte order mark kept)."
-  (with-temp-buffer
-    (let ((coding-system-for-read 'utf-8-unix))
-      (insert-file-contents file))
-    (buffer-string)))
+  (if-let* ((hit (assoc (expand-file-name file) drgnx-agent-config--preread)))
+      (cdr hit)
+    (with-temp-buffer
+      (let ((coding-system-for-read 'utf-8-unix))
+        (insert-file-contents file))
+      (buffer-string))))
+
+(declare-function nidhogg-read-file-async "nidhogg-blk.c" (file callback &rest args))
+(declare-function nidhogg-insert-file-block "nidhogg-blk.c" (block))
+
+(defun drgnx-agent-config-read-text-async (file callback)
+  "Call CALLBACK once with FILE's text as `drgnx-agent-config-read-text' gives it, or nil when it cannot be read.
+With Nidhogg's workers on and a local FILE, the read is off the main thread and CALLBACK runs later, from the main
+loop; otherwise it runs before this returns.  Returns non-nil when the read is asynchronous.  For the page's open and
+Refresh only: the read-modify-write of an edit (the re-read and its retry) reads at once, because Claude Code rewrites
+its file every few seconds and a read that lands late would open a lost-update window."
+  (let ((file (expand-file-name file)))
+    (if (and (drgnx-file-stream-available-p file) (fboundp 'nidhogg-read-file-async) (file-regular-p file)
+             (ignore-errors
+               (nidhogg-read-file-async
+                file (drgnx-guard-wrap
+                      (lambda (block _err)
+                        (funcall callback
+                                 (and block (with-temp-buffer
+                                              (let ((coding-system-for-read 'utf-8-unix)) (nidhogg-insert-file-block block))
+                                              (buffer-string)))))
+                      "agent settings read"))))
+        t
+      (funcall callback (ignore-errors (drgnx-agent-config-read-text file)))
+      nil)))
 
 (defun drgnx-agent-config-save-backup (file)
   "Copy FILE to FILE.drgnx-bak (replacing the last backup), atomically, for the owner alone (0600): it holds the

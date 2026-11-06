@@ -391,8 +391,8 @@ on the checkout fails with "dubious ownership" (`drgnx test --bootstrap`'s snaps
 Measured on the runs of 2026-10-19/20 (`gh run view ID --json jobs`): the unit suite is 3.5–4 min on Linux and about
 16 min on macOS, a GUI job 1.5–5.5 min, the image pull 18–28 s, `brew install emacs ripgrep` 8 s. Nothing in the unit
 suite downloads: no grammar, no `drgnx sync`. The unit, GUI and terminal jobs use the `test-elpa` action
-(`.github/actions/test-elpa`): `test/container/modal-elpa.sh` fetches the lock's pinned evil, goto-chg, evil-collection
-and kkp, checks each sha256 against `etc/drgnx.lock.eld`, unpacks them into one directory (cached by the lock's hash,
+(`.github/actions/test-elpa`): `test/container/modal-elpa.sh` fetches the lock's pinned evil, goto-chg, evil-collection,
+kkp, vertico, compat and orderless (vertico needs compat; Quick Open's tests drive real vertico), checks each sha256 against `etc/drgnx.lock.eld`, unpacks them into one directory (cached by the lock's hash,
 saved only by a push to or the daily run of `main`, on its own commit), and the action sets `DRGNX_MODAL_ELPA` and `DRGNX_USER_ELPA` to it. So the evil and real-kkp teardown tests, the modal
 isolation test and kitty's kkp tests run instead of skipping. So the caches are few:
 

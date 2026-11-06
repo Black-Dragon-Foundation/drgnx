@@ -19,6 +19,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-timer)
+(require 'drgnx-quick-open)
 (require 'subr-x)
 (require 'cl-lib)
 (declare-function project-find-regexp "project")
@@ -257,7 +258,7 @@ not there or anything goes wrong.  Never asks anything and never starts the hub.
                      :setup
                      (lambda ()
                        (pcase-dolist (`(,id ,title ,fn ,doc)
-                                      '((go-quick-open "Quick Open" project-find-file "Open a file of the project by name")
+                                      '((go-quick-open "Quick Open" drgnx-quick-open "Open a file of the project by name")
                                         (search-project "Search in Project" drgnx-search-project "Every match in the project (in the panel)")
                                         (go-symbol "Go to Symbol" imenu "Jump to a definition of this file")
                                         (go-symbol-project "Go to Symbol in Project" xref-find-apropos "Search symbols across the project")

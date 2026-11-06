@@ -16,7 +16,10 @@ The page opens in the editor area as `*agent settings: Claude Code*` (or Codex, 
 at the top switch to another agent's page for the same project (also `TAB`, Other Agent…). The rules files
 (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`) come next, as links.
 
-Opening the page and Refresh (`g`) only read files. They never start a server, run a hook or ask for a login. The
+Opening the page and Refresh (`g`) only read files. With Nidhogg's workers on (`nidhogg-workers-framing`), Claude Code's
+`~/.claude.json`, which can be big and which Claude Code rewrites every few seconds, is read off the main thread: the page
+says "Reading the settings…" and draws when the text arrives. Adding, editing, removing and turning on or off read the
+file again at once, just before they write, as they always did. They never start a server, run a hook or ask for a login. The
 status is what the files tell: the file parses, the command is on `PATH`, the URL is set. Test does the rest, only
 when you ask.
 
