@@ -12,6 +12,7 @@
 ;;   self             the changed test file itself
 ;;   rules            the repo-wide rule tests (byte-compile warnings, key snapshots, lints, teardown)
 ;;   (docs FILE…)     the unit test files that read the docs
+;;   (tests FILE…)    those unit test files
 ;;   (rust CRATE)     the crate and every crate in the workspace that depends on it (from `cargo metadata')
 ;;   rust-path        the crate the changed path sits in, and its dependents; no crate there: everything
 ;;   rust-workspace   `cargo test --workspace'
@@ -90,6 +91,9 @@
   ("runtime/crates/*" rust-path rust-rules)
   ("runtime/conformance/*" rust-path rust-rules)
   ("runtime/*" everything)
+  ;; this table and the tool that reads it: nothing else reads either, so the tool's own tests
+  ("test/affected.eld" (tests "test/unit/affected-test.el"))
+  ("core/drgnx-affected.el" (tests "test/unit/affected-test.el") rules)
   ;; Lisp: the tests that name the file; the Rust tests read core/ and modules/ (the doctor, the launch rows)
   ("core/*" names rules (rust drgnx-ratatoskr))
   ("modules/ui/*" names rules (rust drgnx-ratatoskr) ui scenario)

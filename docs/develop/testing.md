@@ -25,6 +25,7 @@ table also holds how each kind of group runs (`:kinds`) and which files key its 
 |---|---|
 | `docs/`, `README.md` only | the docs checks (`docs:test/unit/config-doc-test.el`, `…settings-doc-test.el`) and nothing else |
 | `SECURITY.md`, `LICENSE*` | none |
+| `test/affected.eld`, `core/drgnx-affected.el` | `lisp:test/unit/affected-test.el` (and `rules` for the Lisp): nothing else reads the table or the tool |
 | `core/`, `modules/` Lisp | `lisp:<test file>` for each unit test file that names the file's feature, plus `rules` and `rust:drgnx-ratatoskr` with its dependents (the doctor and the launch rows read `core/` and `modules/`) |
 | `wb/`, `themes/`, `keys/`, `init/`, `modules/ui/`, `etc/icons/` | the same Lisp groups, plus `ui` and `scenario` |
 | `runtime/crates/<c>/` | `rust:<c>` and every crate that depends on it, `rust-rules`; `domr` when the hub or the harness is among them |

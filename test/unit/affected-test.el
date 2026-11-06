@@ -116,13 +116,21 @@
       (should-not (seq-some (lambda (id) (or (string-prefix-p "lisp:" id) (string-prefix-p "rust:" id))) ids))
       (should (equal (length ids) (length (delete-dups (copy-sequence ids))))))))
 
+(ert-deftest drgnx-affected/the-tools-own-files-run-its-own-tests ()
+  "The table and the tool read only each other: a change to either runs the tool's tests (and the rules for the
+Lisp), not every group."
+  (drgnx-affected-test--with-tree root
+    (should (equal (drgnx-affected-test--ids root '("test/affected.eld")) '("lisp:test/unit/affected-test.el")))
+    (should (equal (sort (drgnx-affected-test--ids root '("core/drgnx-affected.el")) #'string<)
+                   '("lisp:test/unit/affected-test.el" "rules")))))
+
 (ert-deftest drgnx-affected/the-map-reads-and-every-row-names-known-actions ()
   (let ((map (drgnx-affected-map drgnx-dir)))
     (should (plist-get map :rules))
     (dolist (row (plist-get map :rules))
       (dolist (a (cdr row))
         (should (memq (if (consp a) (car a) a)
-                      '(everything none unit names self rules docs rust rust-path rust-workspace rust-rules
+                      '(everything none unit names self rules docs tests rust rust-path rust-workspace rust-rules
                                    domr domr-path ui scenario tty perf)))))))
 
 ;;;; The cache
