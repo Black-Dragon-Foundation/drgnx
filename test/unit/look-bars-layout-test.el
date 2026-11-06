@@ -211,16 +211,80 @@ not the font's MAX-WIDTH, which put the spacer wholly above the baseline and gre
     (let* ((fields drgnx-look-bars-test--font-info-fields)
            (info (apply #'vector (number-sequence 100 (+ 99 (length fields)))))
            (drgnx-look-density 'compact))
+      (aset info (seq-position fields 'HEIGHT) 17)
       (aset info (seq-position fields 'ASCENT) 13)
       (aset info (seq-position fields 'DESCENT) 4)
       (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _d) t))
                 ((symbol-function 'face-font) (lambda (&rest _) "a font"))
                 ((symbol-function 'font-info) (lambda (&rest _) info))
-                ((symbol-function 'window-font-height) (lambda (&rest _) 17))
                 ((symbol-function 'drgnx-statusbar--scale) (lambda (&optional _f) 1.0)))
         (let ((spec (get-text-property 0 'display (drgnx-statusbar--lead (selected-window) 12))))
           (should (equal '(22) (plist-get (cdr spec) :height)))
           (should (equal (ceiling (* 100.0 (+ 13 2 1)) 22) (plist-get (cdr spec) :ascent))))))))
+
+(ert-deftest drgnx-look-bars/a-font-is-read-once ()
+  "Pattern D: the bars and the tab rows ask for a font's metrics at every build, and `font-info' makes a new vector
+and strings each time: a font's metrics are read once (by the name `face-font' gives) and asking again allocates
+nothing.  The status bar's row takes its text height from them (the HEIGHT field), not from `window-font-height'.
+The count is printed."
+  (drgnx-statusbar-test--with
+    (let* ((fields drgnx-look-bars-test--font-info-fields)
+           (info (apply #'vector (number-sequence 100 (+ 99 (length fields)))))
+           (font (copy-sequence "a font read once"))
+           (reads 0)
+           (graphic (byte-compile (lambda (&optional _d) t)))
+           (name (byte-compile (lambda (&optional _face _frame _char) font))))
+      (cl-letf (((symbol-function 'display-graphic-p) graphic)
+                ((symbol-function 'face-font) name)
+                ((symbol-function 'font-info) (lambda (&rest _) (cl-incf reads) info)))
+        (should (equal (cons (aref info 8) (aref info 9)) (drgnx-pixels-font-extent 'default)))
+        (drgnx-pixels-font-extent 'default)
+        (should (= 1 reads))
+        (should (= (aref info 3) (nth 1 (drgnx-statusbar--row (selected-window)))))
+        (should (= 1 reads))
+        (let ((n (drgnx-memo-fixture-alloc (lambda () (drgnx-pixels-font-extent 'default))
+                                           'drgnx-pixels-font-extent 'drgnx-pixels-font-metrics)))
+          (message "drgnx-look-bars: a font's metrics asked for again allocate %d" n)
+          (should (= 0 n)))))))
+
+(ert-deftest drgnx-look-bars/a-known-text-is-measured-without-allocating ()
+  "Pattern D: a segment that says the same again gives the bar the same string (`drgnx-statusbar--texts'), whose width
+is kept by the string (`drgnx-statusbar--width-of'): the widths the fit asks for several times per build then cost no
+allocation (building the key of `statusbar-widths' did, for every segment at every ask).  The count is printed."
+  (drgnx-statusbar-test--with
+    (drgnx-memo-fixture--compile 'drgnx-statusbar--measure-fn)
+    (let* ((drgnx-look-bars-measure-function #'drgnx-look-bars-test--ten)
+           (w (selected-window))
+           (drgnx-statusbar--measure (drgnx-statusbar--measure-fn (window-frame w) drgnx-statusbar--bar-face
+                                                                  (drgnx-statusbar--layout-key w)))
+           (texts (lambda () (mapcar (lambda (id) (cons id (drgnx-statusbar--text id))) '(a b c))))
+           (segs (funcall texts)))
+      (should (seq-every-p (lambda (s) (eq (cdr s) (cdr (assq (car s) segs)))) (funcall texts)))
+      (should (= 90 (drgnx-statusbar--run-width segs " · ")))   ; three texts of 10, two separators of 30
+      (let ((n (drgnx-memo-fixture-alloc (lambda () (drgnx-statusbar--run-width segs " · "))
+                                         'drgnx-statusbar--run-width 'drgnx-statusbar--w 'drgnx-statusbar--kept-width)))
+        (message "drgnx-look-bars: the widths of three known texts allocate %d" n)
+        (should (= 0 n))))))
+
+(ert-deftest drgnx-look-bars/a-wide-bar-drops-without-copying ()
+  "Pattern D: a bar too wide for its window drops the segments of `drgnx-statusbar-drop-order' in order until it
+fits (here eol, indent, then tests), making its lists once: it allocates a cell for each dropped and each kept
+segment and the pair it returns, not two copies of both lists for every id it tries.  The count is printed."
+  (let* ((drgnx-statusbar--measure (byte-compile (lambda (s) (* 10 (length s)))))
+         (drgnx-statusbar--pad 10) (drgnx-statusbar--space 10) (drgnx-statusbar--left-sep " · ")
+         (drgnx-statusbar-drop-order '(eol indent encoding lsp language misc tests jobs toasts drgnx trust))
+         (left (list (cons 'a "AAAA") (cons 'b "BBBB") (cons 'tests "TT") (cons 'jobs "J")))
+         (right (list (cons 'c "CC") (cons 'eol "E") (cons 'indent "I")))
+         (fitted (drgnx-statusbar--fit left right 215)))
+    (should (equal (mapcar #'car (car fitted)) '(a b jobs)))
+    (should (equal (mapcar #'car (cdr fitted)) '(c)))
+    (let ((n (drgnx-memo-fixture-alloc (lambda () (drgnx-statusbar--fit left right 215))
+                                       'drgnx-statusbar--fit 'drgnx-statusbar--total 'drgnx-statusbar--run-width
+                                       'drgnx-statusbar--w 'drgnx-statusbar--cut-branch
+                                       'drgnx-statusbar--total-without 'drgnx-statusbar--last-kept
+                                       'drgnx-statusbar--without)))
+      (message "drgnx-look-bars: a fit that drops three of seven segments allocates %d" n)
+      (should (<= n 8)))))
 
 (ert-deftest drgnx-look-bars/a-density-change-lays-the-bar-out-again ()
   "Pattern D: the bar's layout key holds its row height, so a density change builds the bar again at the new

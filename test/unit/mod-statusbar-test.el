@@ -60,6 +60,7 @@ active (`drgnx-statusbar-test--epochs')."
      (drgnx-test-use-editor (selected-window))
      (drgnx-statusbar-test--epochs
        (let ((drgnx-statusbar--segments (make-hash-table :test #'eq))
+             (drgnx-statusbar--texts (make-hash-table :test #'eq))
              (drgnx-statusbar--errors nil)
              (drgnx-statusbar-left '(a b)) (drgnx-statusbar-right '(c))
              (drgnx-statusbar-drop-order drgnx-statusbar-drop-order)

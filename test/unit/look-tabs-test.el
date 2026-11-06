@@ -107,6 +107,33 @@ roomy), although no tab and no buffer changed."
           (should (equal (round (* 38 s))
                          (drgnx-look-tabs-test--row-height (window-parameter (selected-window) 'tab-line-format)))))))))
 
+(defvar drgnx-chrome--buttons)
+
+(ert-deftest drgnx-look-tabs/the-buttons-are-made-once-per-size ()
+  "Pattern D: a tab line is made again at every tab switch, but its overflow and split buttons (their keymaps and their
+pixel measure cost more than the tabs) are made once per frame and size: a second tab line measures nothing, a
+density change (another box) makes them again.  The measures are printed."
+  (drgnx-chrome-test--with dir
+    (drgnx-look-tabs-test--as 'gui
+      (let ((measures 0) (orig (symbol-function 'drgnx-look-pixel-width)))
+        (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _d) t))
+                  ((symbol-function 'drgnx-pixels-font-extent) (lambda (&rest _) '(13 . 4)))
+                  ((symbol-function 'drgnx-look-pixel-width)
+                   (lambda (s &optional face) (cl-incf measures) (funcall orig s face))))
+          (when (boundp 'drgnx-chrome--buttons) (clrhash drgnx-chrome--buttons))
+          (let ((drgnx-look-density 'comfortable))
+            (drgnx-chrome-test--open dir "a.txt")
+            (drgnx-chrome-apply nil t)
+            (let ((first measures))
+              (drgnx-chrome-test--open dir "b.txt")
+              (drgnx-chrome-apply nil t)
+              (message "drgnx-look-tabs: button measures: %d, then %d for two more tab lines" first (- measures first))
+              (should (> first 0))
+              (should (= first measures))
+              (setq drgnx-look-density 'roomy)
+              (run-hooks 'drgnx-look-density-changed-hook)
+              (should (> measures first)))))))))
+
 (ert-deftest drgnx-look-tabs/the-close-is-decided-by-the-tab-s-frame ()
   "Pattern D: whether a tab's close mark is hidden is decided by the frame of the tab's window, never the selected
 frame: a terminal frame's tabs keep their × when a graphical frame refreshes every tab line."

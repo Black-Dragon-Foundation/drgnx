@@ -168,9 +168,32 @@ tabs always show it, whichever frame is selected when the tab lines are made)."
     (when box (add-face-text-property 0 (length s) box nil s))
     s))
 
+(defvar drgnx-chrome--buttons (make-hash-table :test #'eq :weakness 'key)
+  "FRAME → [BOX GENERATION CHAR-WIDTH CHAR-HEIGHT ROUNDED ICONS BUTTONS WIDTH]: the tab lines' buttons on FRAME and
+their measured width, made for a box of BOX pixels, the fonts of `drgnx-pixels-generation', the frame's character
+cell (a zoom or a scale moves it), rounded corners or not and the `drgnx-look-icons' setting.  A tab line is made
+again at every tab switch, and the buttons' keymaps and pixel measure cost more than all its tabs.  Weak on the
+frame.")
+
 (defun drgnx-chrome--tab-buttons (w rows)
-  "The overflow and split buttons at the right end of W's tab line on a graphical frame (ROWS: `drgnx-chrome--tab-rows')."
-  (let* ((frame (nth 2 rows)) (box (drgnx-chrome--tab-box (nth 1 rows)))
+  "The overflow and split buttons at the right end of W's tab line on a graphical frame (ROWS: `drgnx-chrome--tab-rows'),
+made once per frame and size (`drgnx-chrome--buttons')."
+  (let* ((frame (nth 2 rows)) (box (nth 1 rows))
+         (rounded (and (fboundp 'glitnir-active-p) (glitnir-active-p) t))
+         (kept (gethash frame drgnx-chrome--buttons))
+         (made (if (and kept (eql (aref kept 0) box) (eql (aref kept 1) drgnx-pixels-generation)
+                        (eql (aref kept 2) (frame-char-width frame)) (eql (aref kept 3) (frame-char-height frame))
+                        (eq (aref kept 4) rounded) (eq (aref kept 5) (bound-and-true-p drgnx-look-icons)))
+                   kept
+                 (puthash frame (drgnx-chrome--tab-buttons-make frame box rounded) drgnx-chrome--buttons)))
+         (fringe (or (nth 1 (window-fringes w)) 0)))
+    (concat (propertize " " 'face 'drgnx-chrome-tab 'display `(space :align-to (- right (,(max 0 (- (aref made 7) fringe))))))
+            (aref made 6))))
+
+(defun drgnx-chrome--tab-buttons-make (frame box rounded)
+  "The entry of `drgnx-chrome--buttons' for FRAME: the buttons in a box of BOX pixels (ROUNDED: its top corners) and
+their width with the gap before them."
+  (let* ((box-face (drgnx-chrome--tab-box box))
          (button (lambda (icon fallback help command)
                    (let ((s (let ((i (drgnx-look-icon icon 'drgnx-chrome-tab 14)))
                               (if (string-empty-p i) (propertize fallback 'face 'drgnx-chrome-tab) i))))
@@ -181,14 +204,13 @@ tabs always show it, whichever frame is selected when the tab lines are made)."
                                                                           m))
                                           s)
                      (add-face-text-property 0 (length s) 'drgnx-chrome-tab t s)
-                     (add-face-text-property 0 (length s) box nil s)
+                     (add-face-text-property 0 (length s) box-face nil s)
                      s)))
          (buttons (concat (funcall button 'ellipsis "..." "Tabs of this group" #'drgnx-chrome-switch-tab-click)
                           (funcall button 'square "[]" "Split the editor right" #'drgnx-chrome-split-click)))
-         (width (+ (drgnx-look-pixel-width buttons 'drgnx-chrome-tab) (round (* (drgnx-pixels-scale frame) 8))))
-         (fringe (or (nth 1 (window-fringes w)) 0)))
-    (concat (propertize " " 'face 'drgnx-chrome-tab 'display `(space :align-to (- right (,(max 0 (- width fringe))))))
-            buttons)))
+         (width (+ (drgnx-look-pixel-width buttons 'drgnx-chrome-tab) (round (* (drgnx-pixels-scale frame) 8)))))
+    (vector box drgnx-pixels-generation (frame-char-width frame) (frame-char-height frame) rounded
+            (bound-and-true-p drgnx-look-icons) buttons width)))
 
 (defun drgnx-chrome-switch-tab-click (event)
   "A click on the overflow button: choose one of the group's tabs."
