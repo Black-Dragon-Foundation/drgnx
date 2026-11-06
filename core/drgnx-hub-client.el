@@ -1202,12 +1202,16 @@ gone (`drgnx-hub--card-choices-live').")
         (rest (assq-delete-all id (drgnx-hub--card-choices-live))))
     (setq drgnx-hub--card-choices (seq-take (cons entry rest) drgnx-hub--card-choices-cap))))
 
+(defun drgnx-hub--event-proven-p ()
+  "Non-nil when the event now handled came on a connection of a hub that proved itself."
+  (and (processp (bound-and-true-p drgnx-hub--event-conn)) (process-get drgnx-hub--event-conn :drgnx-proven)))
+
 (defun drgnx-hub--note-card (event data)
   "In an editor: a `matrix' card (the permission matrix asks) or a `supervisor' pause from a hub that proved itself is
 a notice.  Nothing asks and nothing waits: a card that lists its answers (a browser row's) keeps them here and its
 notice carries Agents: Answer Permission Card with the card's id; the cockpit's cards answer the others.
 `agent-step' is not handled here: it matters only to a subscriber that asked for it."
-  (when (and (processp (bound-and-true-p drgnx-hub--event-conn)) (process-get drgnx-hub--event-conn :drgnx-proven))
+  (when (drgnx-hub--event-proven-p)
     (cond
      ((and (equal event "card") (equal (plist-get data :kind) "matrix") (numberp (plist-get data :id)))
       (let* ((id (plist-get data :id)) (choices (drgnx-hub--card-choices-of data)))
