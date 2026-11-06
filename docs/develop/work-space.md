@@ -523,7 +523,10 @@ chain, the edge selection, the item that finished) and the commands are in `drgn
 ### Motion: the capture protocol
 
 A layout the user asks for moves in the compositor, through Glitnir's layout leg (Nidhogg; Work space design §12.4).
-The map's side is in `drgnx-work-map.el` ("Motion"); nothing runs in redisplay.
+The map's side is in `drgnx-work-map.el` ("Motion"); nothing runs in redisplay. Where the map cannot move, the frame
+of a layout the user asked for (`drgnx-work-map--asked`, set by `drgnx-work-map--send-filters`) is drawn at the next
+timer pass (`drgnx-view-hurry`), not after the view's 0.1 s throttle: that throttle was most of the relayout time
+(command to frame about 11 ms at p95, frame to drawn 100 ms). Live frames keep the throttle.
 
 1. **Capture.** `drgnx-work-map--send-filters` calls `drgnx-work-map--motion-begin` before it sends. Each window
    showing the map gets a new value of the window parameter `glitnir-layout-capture` (a fresh list, so not `eq` to the

@@ -1712,7 +1712,9 @@ a `:full-draws`.
 
 **The timer.** A mark arms `(drgnx-timer-soon (cons 'drgnx-view BUFFER) DELAY #'drgnx-view--draw-buffer :args
 (list BUFFER) :min-interval DELAY :owner BUFFER)`: one draw DELAY after the first mark of a burst, at most one per
-DELAY. A type with DELAY 0 arms `soon` with 0 and no min-interval. A slice that leaves work re-arms a second key,
+DELAY. A type with DELAY 0 arms `soon` with 0 and no min-interval. `(drgnx-view-hurry VIEW)` arms the draw at the
+next timer pass whatever the DELAY, replacing one armed for later: for a change the user asked for and waits to see
+(the Work map's answer to a layout command; live changes keep the throttle). A slice that leaves work re-arms a second key,
 `(drgnx-timer-start (cons 'drgnx-view-more BUFFER) (drgnx-timer-chain-delay) …)` (0.0, or 16 ms while input is
 pending or the links have run back to back for 100 ms: "A chain yields to input" under Timers), so the throttle never delays the next slice. A mark made
 during a chain arms nothing (`--arm` returns while the continuation is pending): the next slice takes it, so one
