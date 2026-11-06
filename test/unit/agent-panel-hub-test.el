@@ -233,5 +233,49 @@ session.  The module's own setup is not used: the module fixture moves the confi
       (remove-hook 'drgnx-hub-event-functions #'drgnx-agent-panel--event)
       (mapc #'kill-buffer (drgnx-agent-panel-buffers)))))
 
+(declare-function drgnx-agent-panel-output-open "drgnx-agent-panel-steps")
+(declare-function drgnx-agent-panel-output-more "drgnx-agent-panel-steps")
+(declare-function drgnx-agent-panel-output-search "drgnx-agent-panel-steps")
+(defvar drgnx-agent-panel-output--next)
+(defvar drgnx-agent-panel-output--total)
+
+(ert-deftest drgnx-agent-panel/open-in-a-buffer-pages-by-range ()
+  (drgnx-agents-mirror-test--with '()
+    (drgnx-agents-mirror-test--asking root)   ; the "asks" profile runs ratatoskr-mock, which knows the tool words
+    (add-hook 'drgnx-hub-event-functions #'drgnx-agent-panel--event)
+    (drgnx-agents-mirror-sync)
+    (let* ((m (drgnx-agents-mirror-test--start :profile "asks" :role "worker")) (id (drgnx-agent-session-remote m))
+           (buf (drgnx-agent-panel-buffer id)))
+      (drgnx-agent-panel-hub-test--show buf)
+      (drgnx-agent-panel-hub-test--turn id "tool:exec yes x | head -c 600000")
+      (drgnx-agents-mirror-test--settle
+       (lambda () (cl-some (lambda (e) (plist-get e :outputBytes)) (hash-table-values (buffer-local-value 'drgnx-agent-panel--entries buf))))
+       "the large tool entry in the panel")
+      (let* ((idx (car (seq-filter (lambda (i) (plist-get (gethash i (buffer-local-value 'drgnx-agent-panel--entries buf)) :outputBytes))
+                                   (hash-table-keys (buffer-local-value 'drgnx-agent-panel--entries buf)))))
+             (out (with-current-buffer buf
+                    (drgnx-view-draw-now drgnx-view)
+                    (goto-char (drgnx-view-row-start drgnx-view (list :e idx)))
+                    (save-window-excursion (drgnx-agent-panel-output-open)))))
+        (unwind-protect
+            (progn
+              ;; the first range only: never the whole output at once
+              (drgnx-agents-mirror-test--settle (lambda () (> (buffer-local-value 'drgnx-agent-panel-output--next out) 0)) "the first range")
+              (should (= 600000 (buffer-local-value 'drgnx-agent-panel-output--total out)))
+              (should (< (buffer-size out) 600000))
+              (let ((first (buffer-local-value 'drgnx-agent-panel-output--next out)))
+                (with-current-buffer out (drgnx-agent-panel-output-more))
+                (drgnx-agents-mirror-test--settle (lambda () (> (buffer-local-value 'drgnx-agent-panel-output--next out) first))
+                                                  "the second range")
+                (should (= (buffer-size out) (buffer-local-value 'drgnx-agent-panel-output--next out))))
+              ;; and the search pages through the same calls
+              (with-current-buffer buf (drgnx-agent-panel-output-search "x"))
+              (drgnx-agents-mirror-test--settle (lambda () (get-buffer "*drgnx output search: x*")) "the search results")
+              (should (string-search "Stopped at 200 matches." (with-current-buffer "*drgnx output search: x*" (buffer-string)))))
+          (kill-buffer out)
+          (when (get-buffer "*drgnx output search: x*") (kill-buffer "*drgnx output search: x*"))
+          (remove-hook 'drgnx-hub-event-functions #'drgnx-agent-panel--event)
+          (mapc #'kill-buffer (drgnx-agent-panel-buffers)))))))
+
 (provide 'agent-panel-hub-test)
 ;;; agent-panel-hub-test.el ends here

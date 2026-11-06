@@ -57,6 +57,17 @@ What the agent changed and what it asks sit under the transcript as cards.
 - **Permission cards:** a request the agent waits on, ringed in the attention colour. `RET` allows it once, `A` always,
   `D` denies it. The card goes when the hub's next snapshot no longer holds the request.
 
+## Large outputs
+
+An open step whose output is long shows its first ten and last ten lines and, between them, "N lines hidden · / search ·
+O open in a buffer". When the hub kept only the ends of a huge output the count is an estimate, marked `~`.
+
+- `/` asks for a regexp and lists the matching lines of the output (with their byte offsets, at most 200) in a buffer. The
+  panel pages through the whole output for it, 256 KiB at a time.
+- `O` opens the output in a read-only buffer. It holds the first range at once; `n`, or scrolling to the end, adds the
+  next one. The header line says how many bytes are in. The whole output is never in the buffer, or in a single hub
+  answer, at once.
+
 ## Pins, the to-do list and the edits ledger
 
 - `P` on a step or a card pins it under the chips, for this chat; `P` on the pinned card unpins it.

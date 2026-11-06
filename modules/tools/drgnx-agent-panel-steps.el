@@ -25,6 +25,7 @@
 (defvar drgnx-agent-panel-slow-seconds)
 (defvar drgnx-agent-panel-expensive-cost)
 (declare-function drgnx-agent-panel--entry "drgnx-agent-panel")
+(declare-function drgnx-agent-panel--ask "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--thoughts-of "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--duration-string "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--type "drgnx-agent-panel")
@@ -234,13 +235,160 @@ else when the chat's toggle for its type is on."
                         :doc "Every step open, thinking included")
   (drgnx-command-define 'agents-panel-make-default :category "Agents" :title "Make the Panel View the Default"
                         :command #'drgnx-agent-panel-make-default :map 'drgnx-agent-panel-mode-map
-                        :doc "The step types open now are what new panels open"))
+                        :doc "The step types open now are what new panels open")
+  (drgnx-command-define 'agents-panel-output-search :category "Agents" :title "Search a Tool Output"
+                        :command #'drgnx-agent-panel-output-search :map 'drgnx-agent-panel-mode-map
+                        :doc "List the matching lines of the output of the step at point, paging through the hub")
+  (drgnx-command-define 'agents-panel-output-open :category "Agents" :title "Open a Tool Output in a Buffer"
+                        :command #'drgnx-agent-panel-output-open :map 'drgnx-agent-panel-mode-map
+                        :doc "The output of the step at point in a read-only buffer that fills range by range")
+  (drgnx-command-define 'agents-panel-output-more :category "Agents" :title "Load More of the Output"
+                        :command #'drgnx-agent-panel-output-more :map 'drgnx-agent-panel-output-mode-map
+                        :doc "Add the next range of the output to the buffer"))
 
 (defun drgnx-agent-panel-steps-teardown ()
   "A default chosen with `M' that the settings file refused is tried once more before the module goes."
   (when drgnx-agent-panel--defaults-unsaved
     (setq drgnx-agent-panel--defaults-unsaved (not (drgnx-agent-panel--save-defaults)))))
 
+;;;; Large outputs: head and tail here, the rest by range from the hub
+
+(defconst drgnx-agent-panel-output-edge 10 "Lines of a large output shown at its head and at its tail.")
+(defconst drgnx-agent-panel-output-page 262144 "Bytes asked of the hub for one range of an output (its own limit per answer).")
+(defconst drgnx-agent-panel-output-max-hits 200 "Matching lines a search of an output lists.")
+
+(defun drgnx-agent-panel--utf8-length (text) (length (encode-coding-string text 'utf-8)))
+
+(defun drgnx-agent-panel--large-p (e lines)
+  "Whether tool entry E's output, LINES in the text the panel holds, is larger than head and tail show."
+  (or (> (length lines) (* 2 drgnx-agent-panel-output-edge))
+      (let ((total (plist-get e :outputBytes)))
+        (and (numberp total) (> total (drgnx-agent-panel--utf8-length (string-join lines "\n")))))))
+
+(defun drgnx-agent-panel--detail (e)
+  "The detail of tool entry E: its output, or for a large one its first and last lines and a line saying what is
+hidden (an estimate, marked ~, when the hub kept only the ends of a huge output)."
+  (let* ((text (string-trim-right (drgnx-agent-panel--text-of (plist-get e :content))))
+         (lines (split-string text "\n")))
+    (if (not (drgnx-agent-panel--large-p e lines))
+        (drgnx-agent-panel--indented text 'default 12)
+      (let* ((n drgnx-agent-panel-output-edge) (have (length lines))
+             (bytes (max 1 (drgnx-agent-panel--utf8-length text))) (total (plist-get e :outputBytes))
+             (whole (if (and (numberp total) (> total bytes)) (ceiling (* have (/ (float total) bytes))) have))
+             (hidden (max 0 (- whole (* 2 n)))))
+        (concat (drgnx-agent-panel--indented (string-join (seq-take lines n) "\n") 'default n)
+                (propertize (format "    %s%d lines hidden · / search · O open in a buffer\n"
+                                    (if (= whole have) "" "~") hidden)
+                            'face 'drgnx-agent-panel-subtle)
+                (drgnx-agent-panel--indented (string-join (last lines n) "\n") 'default n))))))
+
+(defun drgnx-agent-panel--output-fetch (session tool from callback)
+  "Ask the hub for the page of TOOL's output in SESSION that starts at byte FROM; CALLBACK gets (TEXT TOTAL ERROR)."
+  (drgnx-agent-panel--ask
+   "agents/tool-output" (list :id session :tool_call tool :from from :to (+ from drgnx-agent-panel-output-page))
+   (lambda (r err) (funcall callback (and (not err) (or (plist-get r :text) "")) (and (not err) (plist-get r :total_bytes)) err))))
+
+(defun drgnx-agent-panel--tool-at-point ()
+  "The tool entry at point, or a user error."
+  (let* ((key (and (drgnx-view-p drgnx-view) (drgnx-view-key-at)))
+         (e (and (eq (car-safe key) :e) (drgnx-agent-panel--entry (cadr key)))))
+    (unless (and e (eq (drgnx-agent-panel--type e) 'tool) (plist-get e :id)) (user-error "Point is not on a tool step"))
+    e))
+
+(defvar-local drgnx-agent-panel-output--args nil "(SESSION TOOL) of the output this buffer shows.")
+(defvar-local drgnx-agent-panel-output--next 0 "The first byte of the output not yet in this buffer.")
+(defvar-local drgnx-agent-panel-output--total nil "The whole size of the output in bytes, once the hub has said.")
+(defvar-local drgnx-agent-panel-output--loading nil)
+
+(defun drgnx-agent-panel-output--header ()
+  (setq header-line-format
+        (format " %s of %s bytes%s" drgnx-agent-panel-output--next (or drgnx-agent-panel-output--total "?")
+                (if (and drgnx-agent-panel-output--total (< drgnx-agent-panel-output--next drgnx-agent-panel-output--total))
+                    " · n or scrolling to the end loads more" ""))))
+
+(defun drgnx-agent-panel-output--scrolled (window _start)
+  "WINDOW's end reached the end of the buffer: the next range is asked for."
+  (with-current-buffer (window-buffer window)
+    (when (>= (window-end window t) (point-max)) (drgnx-agent-panel-output-more))))
+
+(define-derived-mode drgnx-agent-panel-output-mode special-mode "Output"
+  "A tool's output, filled range by range."
+  (buffer-disable-undo)
+  (setq-local truncate-lines nil)
+  (add-hook 'window-scroll-functions #'drgnx-agent-panel-output--scrolled nil t))
+
+(defun drgnx-agent-panel-output-more ()
+  "Add the next range of the output to this buffer, when the hub has more."
+  (interactive)
+  (when (and drgnx-agent-panel-output--args (not drgnx-agent-panel-output--loading)
+             (or (null drgnx-agent-panel-output--total) (< drgnx-agent-panel-output--next drgnx-agent-panel-output--total)))
+    (let ((buf (current-buffer)) (from drgnx-agent-panel-output--next))
+      (setq drgnx-agent-panel-output--loading t)
+      (drgnx-agent-panel--output-fetch
+       (car drgnx-agent-panel-output--args) (cadr drgnx-agent-panel-output--args) from
+       (lambda (text total err)
+         (when (buffer-live-p buf)
+           (with-current-buffer buf
+             (setq drgnx-agent-panel-output--loading nil)
+             (if err (message "Output: %s" err)
+               (let ((inhibit-read-only t))
+                 (save-excursion (goto-char (point-max)) (insert text)))
+               (setq drgnx-agent-panel-output--total total
+                     drgnx-agent-panel-output--next (if (string-empty-p text) (or total from)
+                                                      (+ from (drgnx-agent-panel--utf8-length text))))
+               (drgnx-agent-panel-output--header)))))))))
+
+(defun drgnx-agent-panel-output-open ()
+  "Open the output of the tool step at point in a read-only buffer, which fills range by range."
+  (interactive)
+  (let* ((e (drgnx-agent-panel--tool-at-point)) (session drgnx-agent-panel--session)
+         (buf (generate-new-buffer (format "*drgnx output: %s*" (drgnx-agent-panel--one-line (or (plist-get e :title) "tool") 40)))))
+    (with-current-buffer buf
+      (drgnx-agent-panel-output-mode)
+      (setq drgnx-agent-panel-output--args (list session (plist-get e :id))
+            drgnx-agent-panel-output--next 0 drgnx-agent-panel-output--total nil drgnx-agent-panel-output--loading nil)
+      (drgnx-agent-panel-output--header)
+      (drgnx-agent-panel-output-more))
+    (pop-to-buffer buf)
+    buf))
+
+(defun drgnx-agent-panel-output-search (regexp)
+  "List the lines of the output of the tool step at point that match REGEXP, paging through the hub."
+  (interactive (list (read-regexp "Search the output for: ")))
+  (let* ((e (drgnx-agent-panel--tool-at-point)) (session drgnx-agent-panel--session) (tool (plist-get e :id))
+         (out (generate-new-buffer (format "*drgnx output search: %s*" regexp))) (hits nil) (count 0))
+    (cl-labels
+        ((finish (note)
+           (with-current-buffer out
+             (drgnx-agent-panel-output-mode)
+             (let ((inhibit-read-only t))
+               (dolist (h (nreverse hits)) (insert (format "%d: %s\n" (car h) (cdr h))))
+               (insert note "\n")
+               (goto-char (point-min))))
+           (pop-to-buffer out))
+         (scan (data at)
+           ;; the complete lines of DATA, which starts at byte AT, that match; returns the byte after the last one
+           (let ((off at))
+             (dolist (l (split-string data "\n"))
+               (when (and (< count drgnx-agent-panel-output-max-hits) (string-match-p regexp l))
+                 (push (cons off l) hits) (cl-incf count))
+               (cl-incf off (1+ (drgnx-agent-panel--utf8-length l))))
+             off))
+         (step (from carry carry-at)
+           (drgnx-agent-panel--output-fetch
+            session tool from
+            (lambda (text total err)
+              (if err (finish (format "Search stopped: %s" err))
+                (let* ((data (concat carry text)) (cut (string-match "[^\n]*\\'" data))
+                       (head (substring data 0 cut)) (tail (substring data cut))
+                       (next (+ from (drgnx-agent-panel--utf8-length text)))
+                       (off (scan head carry-at))
+                       (done (or (string-empty-p text) (and total (>= next total)))))
+                  (cond ((>= count drgnx-agent-panel-output-max-hits)
+                         (finish (format "Stopped at %d matches." count)))
+                        (done (scan tail off) (finish (format "%d matches." count)))
+                        (t (step next tail off)))))))))
+      (step 0 "" 0))))
 
 (defun drgnx-agent-panel--tool-row (idx e)
   (let* ((key (list :e idx)) (status (format "%s" (or (plist-get e :status) "")))
@@ -263,7 +411,7 @@ else when the chat's toggle for its type is on."
                   (propertize (format "    ▸ thinking · %d lines\n" (length (split-string (string-trim-right text) "\n")))
                               'face 'drgnx-agent-panel-subtle))))
             (when (and open-detail (drgnx-agent-panel--text-of (plist-get e :content)))
-              (drgnx-agent-panel--indented (drgnx-agent-panel--text-of (plist-get e :content)) 'default 12)))))
+              (drgnx-agent-panel--detail e)))))
 
 (defun drgnx-agent-panel--entry-row (idx)
   (let ((e (drgnx-agent-panel--entry idx)))

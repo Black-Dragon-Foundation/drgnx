@@ -271,5 +271,33 @@ unanswered, and panel \"s1\" as `buf'."
       (drgnx-agent-panel--take-snapshot (list :id "s1" :status "busy"))
       (should-not (string-match-p "Allow" (drgnx-agent-panel-test--text buf))))))
 
+;; pattern D: pure rendering of a made-up entry
+(ert-deftest drgnx-agent-panel/large-output-shows-head-and-tail ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (let ((text (mapconcat (lambda (i) (format "line %d" i)) (number-sequence 1 100) "\n")))
+        (drgnx-agent-panel--take-entries
+         (list (list 0 (drgnx-agent-panel-test--tool "t1" "Run it" "completed" :content (list (list :text text))))))
+        (with-current-buffer buf (drgnx-agent-panel-preset-3))
+        (let ((shown (drgnx-agent-panel-test--text buf)))
+          (should (string-match-p "line 1$" shown))
+          (should (string-match-p "line 10$" shown))
+          (should (string-match-p "line 91$" shown))
+          (should (string-match-p "line 100$" shown))
+          (should-not (string-match-p "line 11$" shown))
+          (should-not (string-match-p "line 90$" shown))
+          (should (string-match-p "80 lines hidden · / search · O open in a buffer" shown)))
+        ;; the hub kept only the ends of a huge output: the count is an estimate
+        (drgnx-agent-panel--take-entries
+         (list (list 0 (drgnx-agent-panel-test--tool "t1" "Run it" "completed" :content (list (list :text text))
+                                                     :outputBytes (* 10 (string-bytes text))))))
+        (should (string-match-p "~980 lines hidden" (drgnx-agent-panel-test--text buf)))
+        ;; a short output is shown whole, with nothing hidden
+        (drgnx-agent-panel--take-entries
+         (list (list 0 (drgnx-agent-panel-test--tool "t1" "Run it" "completed" :content (list (list :text "a\nb\nc"))))))
+        (let ((shown (drgnx-agent-panel-test--text buf)))
+          (should (string-match-p "c$" shown))
+          (should-not (string-match-p "hidden" shown)))))))
+
 (provide 'agent-panel-test)
 ;;; agent-panel-test.el ends here
