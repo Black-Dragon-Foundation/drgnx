@@ -39,6 +39,14 @@ for now, so you can see what grew. Approve again, with the new hash, or remove i
 agent can reach can do either. The approval lives in drgnx's own store (not in a settings file), so a settings file
 copied to another machine approves nothing.
 
+**A plugin reaches only the hosts it declared, through drgnx.** Its HTTPS goes out from drgnx itself, never from the
+plugin: to a host its manifest names, and, unless the session's network is `open`, one you also put on the `plugin`
+tier of `drgnx-agents-net-hosts`. drgnx looks the name up once and refuses it when it leads to this machine, your LAN
+(unless you pinned the name in `drgnx-sandbox-proxy-pinned-addresses`), a link-local or a metadata address. A refused
+request fails in the plugin and shows in the session's events as a denied host (once per host per session), just as
+the agent's own proxy reports one. A plugin's key-value store holds at most the `kv_bytes` its manifest declares (1 MiB
+at most).
+
 ## In one project
 
 The plugin list and your hook rules are yours alone. A repository's `.drgnx/settings.el`, its `.dir-locals.el` and an

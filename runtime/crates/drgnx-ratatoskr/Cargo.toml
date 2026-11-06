@@ -79,6 +79,10 @@ sha2.workspace = true  # the merge gate's diff hashes
 zip.workspace = true  # `browser install` unpacks the pinned archive
 http-body-util.workspace = true  # the download's body
 http = "1"                # the download's request (already in the tree through hyper)
+# a plugin's HTTPS to the address the hub judged (plugins::hub_io); all three already in the tree through bifrost
+rustls.workspace = true
+rustls-platform-verifier.workspace = true
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 zeroize.workspace = true  # the line that carries provider keys to the backend is wiped once written
 
 # runners: the user's OpenSSH through the crate's native mux (no Android: the transport is Unix desktops only)
@@ -94,3 +98,6 @@ skuld = { path = "../skuld", version = "0.1.0" }  # waits in tests; every order 
 rmcp = { workspace = true, features = ["client", "transport-async-rw"] }  # the MCP client of tests/search_query.rs (as mimir's interop test)
 tempfile.workspace = true
 proptest.workspace = true  # the shell-command parser never panics and is deterministic (work::shell_read)
+# plugins::hub_io's tests: the fixture plugins, and an in-test TLS server with certificates made at run time
+brokkr = { path = "../brokkr", version = "0.1.0", features = ["test-support"] }
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }

@@ -165,9 +165,10 @@ and reaches nothing else unless `HostIo`, the hub's side, gives it.
   no credentials, no IP literal, and a `host:port` (port 443 when none) equal to a manifest entry. Headers: at most
   64, names are tokens (sent lowercased), values without CR, LF or NUL, and none of `host`, `connection`, `proxy-*`,
   `upgrade`, `content-length`, `transfer-encoding`, `te`, `trailer`, `expect`, `keep-alive`. Bodies are at most
-  1 MiB each way. Only then is `HostIo::http(plugin, HttpReq {method, url, host, port, headers, body})` called, on
-  the caller's runtime; the hub checks the session's network cell and the proxy policy there. A refusal is the
-  import's `Err`.
+  1 MiB each way. A `host:port` the manifest does not name is told to `HostIo::denied(plugin, host, why)`, awaited on
+  the caller's runtime before the plugin gets its `Err`, so the hub records it. Only then is `HostIo::http(plugin,
+  HttpReq {method, url, host, port, headers, body})` called, on the caller's runtime; the hub checks the session's
+  network cell and the proxy policy there. A refusal is the import's `Err`.
 - **KV.** `HostIo::kv(plugin)`, where `plugin` is the name the host loaded, never one the guest gives. Keys are at
   most 256 bytes; a call makes at most 64 `kv-put` and `kv-delete` calls, then gets the import's `Err`.
 - **Log.** `host.log`, stdout and stderr share 64 KiB per call; past it the text is cut and one warning says so.
@@ -182,8 +183,8 @@ by the `wat` crate (a dev-dependency only) for a disabled proposal and for 1 001
 ## Plugins in the hub
 
 `drgnx_ratatoskr::plugins` (`runtime/crates/drgnx-ratatoskr/src/plugins.rs`) is the hub's side: which plugins are
-installed, which the user approved and with which files, and which run for a project. It runs nothing; it hands the
-host the plugins it would run.
+installed, which the user approved and with which files, which run for a project, and the I/O the host's calls get.
+It runs nothing; it hands the host the plugins it would run.
 
 - **Install** is the CLI's: `ratatoskr plugins install PATH [--replace]` (`drgnx plugins …`) reads `plugin.json` and
   `plugin.wasm` of PATH through `eitri` (no link followed), parses the manifest, and copies both into
@@ -219,6 +220,22 @@ host the plugins it would run.
   of `drgnx-agents-net-hosts` must list it too; the name goes through the web policy's checks, and only a public
   address passes (a name pinned in `drgnx-sandbox-proxy-pinned-addresses` may also reach a LAN, ULA or CGNAT address;
   loopback, the host's own, link-local and the policy's nevers never).
+- **`plugins::hub_io::HubIo`** is `brokkr::HostIo` over those decisions. `plugins::host_io(front, ctx, manifests)`
+  makes one per session or job (`IoCtx` and the network cell it launched with; none refuses every request), over the
+  manifests of the plugins it runs, and the host gets it as `Arc<dyn HostIo>` at each call.
+  - HTTP: `judge_http` on the settings as they are at the request and the host's own addresses (`browser::nevers`),
+    the one lookup on a blocking thread after the other checks. The hub connects to a judged address itself (TCP with a
+    10 s connect timeout per address, TLS by the platform's verifier for the request's name, HTTP/1.1 with `host` from
+    the checked name, no redirect followed, the body read up to 1 MiB); the name is never looked up again.
+  - A refusal, the hub's or the host's (`denied`), is the import's `Err`, a log line, and a `status` event
+    `{"proxy-denied": true, session | job, host, plugin}` (the session as its agent, or the job), once per host per
+    `HubIo`: never a silent drop.
+  - KV: `kv_get`/`kv_put`/`kv_delete` with the manifest's `kv_bytes` (default 1 MiB). `brokkr::Kv` is synchronous and
+    called on the guest runtime's thread, which waits for the store there (`block_in_place`), never on a hub worker.
+  - Logs go to the hub's log with the plugin's name.
+  - `plugins/hub_io/tests.rs` runs the `http-ability` fixture through the real host on real time (the host's outer
+    timeout runs on the caller's runtime): an undeclared or off-tier or loopback host refused with its event and no
+    connection, a declared host fetched over TLS at the judged address from an in-test server, the quota across calls.
 
 ## The interface
 

@@ -5,8 +5,9 @@
 //!   all, and a component importing anything outside [`PROVIDED`] fails to load, named. The `WasiCtx` has no
 //!   arguments, an empty environment, stdin closed, stdout and stderr into the log, and no preopened directory.
 //! - HTTP: `https` only, to a `host:port` the manifest names, none of the [`REFUSED_HEADERS`], bodies of at most
-//!   [`MAX_BODY_BYTES`]; checked here before the hub's [`HostIo::http`] is called. The hub then checks the session's
-//!   network cell and the proxy policy. The request runs on the caller's runtime (the hub's), not the guest's.
+//!   [`MAX_BODY_BYTES`]; checked here before the hub's [`HostIo::http`] is called, and a host the manifest does not
+//!   name is told to [`HostIo::denied`]. The hub then checks the session's network cell and the proxy policy. The
+//!   request runs on the caller's runtime (the hub's), not the guest's.
 //! - KV: the plugin's own store, keyed by the name the host loaded it under; at most [`MAX_KV_WRITES`] writes per call.
 //! - Log: `host.log`, stdout and stderr share [`MAX_LOG_BYTES`] per call, then the rest is cut.
 
@@ -50,6 +51,10 @@ pub trait HostIo: Send + Sync {
     /// calling session's network cell and the proxy policy, connects to `req.host:req.port`, and caps the response
     /// body at [`MAX_BODY_BYTES`].
     fn http(&self, plugin: &str, req: HttpReq) -> BoxFuture<'_, Result<HttpResp, String>>;
+    /// A request `brokkr` refused before any I/O because the manifest does not name its `host:port` (`host`): the
+    /// hub records the denial, so it is never a silent drop. Awaited on the caller's runtime before the plugin gets
+    /// its `Err` (`why`).
+    fn denied(&self, plugin: &str, host: &str, why: &str) -> BoxFuture<'_, ()>;
     fn kv(&self, plugin: &str) -> &dyn Kv;
     fn log(&self, plugin: &str, level: Level, text: &str);
 }
@@ -342,8 +347,9 @@ impl wasmtime_wasi_io::IoView for State {
 
 impl types::Host for State {}
 
-/// `https://HOST[:PORT]…`: the authority when it is a host and port the manifest names.
-pub(crate) fn check_url(hosts: &[HostName], url: &str) -> Result<(String, u16), String> {
+/// `https://HOST[:PORT]…`: its authority, lowercased, when the URL is one a plugin may ask for at all. Whether the
+/// manifest names it is the caller's check.
+pub(crate) fn check_url(url: &str) -> Result<(String, u16), String> {
     if url.len() > MAX_URL_BYTES {
         return Err(format!("a URL is at most {} KiB", MAX_URL_BYTES / 1024));
     }
@@ -372,12 +378,7 @@ pub(crate) fn check_url(hosts: &[HostName], url: &str) -> Result<(String, u16), 
             _ => return Err(format!("{p:?} is not a port")),
         },
     };
-    let host = host.to_ascii_lowercase();
-    if hosts.iter().any(|h| h.host() == host && h.port() == port) {
-        Ok((host, port))
-    } else {
-        Err(format!("{host}:{port} is not a host this plugin declared"))
-    }
+    Ok((host.to_ascii_lowercase(), port))
 }
 
 /// The headers, lowercased, when none is refused or malformed.
@@ -414,7 +415,23 @@ impl State {
         headers: Vec<types::Header>,
         body: Vec<u8>,
     ) -> Result<types::Response, String> {
-        let (host, port) = check_url(&self.hosts, &url)?;
+        let (host, port) = check_url(&url)?;
+        if !self
+            .hosts
+            .iter()
+            .any(|h| h.host() == host && h.port() == port)
+        {
+            let target = format!("{host}:{port}");
+            let why = format!("{target} is not a host this plugin declared");
+            // the hub records the denial before the plugin hears of it, on its own runtime like a request
+            let (io, plugin, w) = (self.io.clone(), self.plugin.clone(), why.clone());
+            let _ = AbortOnDrop(
+                self.hub
+                    .spawn(async move { io.denied(&plugin, &target, &w).await }),
+            )
+            .await;
+            return Err(why);
+        }
         let headers = check_headers(headers)?;
         if body.len() > MAX_BODY_BYTES {
             return Err(format!(

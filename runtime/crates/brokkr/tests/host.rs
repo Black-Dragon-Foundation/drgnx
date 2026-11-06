@@ -36,9 +36,11 @@ impl Kv for MemKv {
     }
 }
 
-/// The hub's side, recorded: every request that reached it, a KV store per plugin name, every log line.
+/// The hub's side, recorded: every request that reached it, every denial it was told of, a KV store per plugin name,
+/// every log line.
 struct TestIo {
     requests: Mutex<Vec<(String, HttpReq)>>,
+    denied: Mutex<Vec<(String, String)>>,
     reply_bytes: usize,
     kv: HashMap<String, MemKv>,
     nobody: MemKv,
@@ -49,6 +51,7 @@ impl TestIo {
     fn new(plugins: &[&str], reply_bytes: usize) -> Arc<TestIo> {
         Arc::new(TestIo {
             requests: Mutex::default(),
+            denied: Mutex::default(),
             reply_bytes,
             kv: plugins
                 .iter()
@@ -74,6 +77,13 @@ impl HostIo for TestIo {
                 body,
             })
         })
+    }
+    fn denied(&self, plugin: &str, host: &str, _: &str) -> BoxFuture<'_, ()> {
+        self.denied
+            .lock()
+            .unwrap()
+            .push((plugin.into(), host.into()));
+        Box::pin(async {})
     }
     fn kv(&self, plugin: &str) -> &dyn Kv {
         self.kv.get(plugin).unwrap_or(&self.nobody)
@@ -348,6 +358,26 @@ async fn http_to_an_undeclared_host_is_refused_before_io() {
         }
     }
     assert_eq!(t.requests(), vec![], "a refused request reached the hub");
+    // an undeclared host:port is told to the hub, which records it; a malformed URL names no host
+    let denied: Vec<String> = t
+        .denied
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(p, h)| {
+            assert_eq!(p, "http-ability");
+            h.clone()
+        })
+        .collect();
+    assert_eq!(
+        denied,
+        [
+            "evil.example.org:443",
+            "api.example.com:8443",
+            "api.example.com.evil.org:443",
+            "api.example.com.:443"
+        ]
+    );
     let ok = fetch(
         &host,
         &p,

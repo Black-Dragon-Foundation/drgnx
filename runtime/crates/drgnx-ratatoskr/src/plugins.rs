@@ -11,8 +11,10 @@
 //! - Which approved plugins run for a project is the settings' ([`Plugins::enabled_for`], [`Plugins::rules_for`]): the
 //!   global lists, and a project's own from its private workspace file, which the editor sends as `config/settings`.
 //! - [`io`]: the plugin host's I/O policy (its key-value store with the manifest's quota, and the HTTP address
-//!   decision). Running a plugin is the host's; this module stops at the plugins it would be handed.
+//!   decision); [`hub_io`]: the host's `HostIo` over it ([`host_io`]: one per session or job). Running a plugin is
+//!   the host's.
 
+pub mod hub_io;
 pub mod io;
 
 #[cfg(test)]
@@ -173,6 +175,35 @@ pub struct Plugins {
     snap: Mutex<Snapshot>,
     /// One look at a time: two racing syncs would each announce the same change.
     looking: tokio::sync::Mutex<()>,
+    /// The network plugins reach, made at the first [`host_io`].
+    net: OnceLock<Arc<hub_io::Net>>,
+}
+
+/// The I/O of the plugin calls of CTX (a session or a job, with the network cell it launched with; none: every request
+/// is refused), for the plugins with MANIFESTS: one per session or job, handed to the host at each of its calls.
+pub fn host_io(
+    f: &Front,
+    ctx: Option<(io::IoCtx, crate::agents::launch::NetCell)>,
+    manifests: &[&Manifest],
+) -> Result<Arc<hub_io::HubIo>, Error> {
+    let o = f.core.plugins.opened()?;
+    let net = f
+        .core
+        .plugins
+        .net
+        .get_or_init(|| Arc::new(hub_io::Net::system()))
+        .clone();
+    Ok(Arc::new(hub_io::HubIo::new(
+        ctx,
+        manifests,
+        hub_io::HubParts {
+            db: o.db.clone(),
+            settings: o.settings.clone(),
+            host_addrs: f.browser_nevers.host_addrs.shared(),
+            writer: f.writer.clone(),
+            net,
+        },
+    )))
 }
 
 impl Plugins {

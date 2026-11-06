@@ -32,6 +32,9 @@ impl HostIo for NoIo {
     fn http(&self, _: &str, _: HttpReq) -> BoxFuture<'_, Result<HttpResp, String>> {
         Box::pin(async { Err("no network here".to_string()) })
     }
+    fn denied(&self, _: &str, _: &str, _: &str) -> BoxFuture<'_, ()> {
+        Box::pin(async {})
+    }
     fn kv(&self, _: &str) -> &dyn Kv {
         &NoKv
     }
