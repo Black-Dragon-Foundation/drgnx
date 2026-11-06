@@ -254,3 +254,39 @@ fn rebuild_equals_live() {
     assert_eq!(rebuilt, live);
     assert_eq!(rebuilt.now("/w/x.rs", 9.0).len(), 2);
 }
+
+/// Pattern D. The model knows a file that exists by its true name ([`place`]); asked by a name through a link (macOS's
+/// `/tmp` is `/private/tmp`), it is found, and the answer names it as it was asked. A subscription by that name gets
+/// its changes too.
+#[test]
+fn a_file_is_found_by_a_name_through_a_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = std::fs::canonicalize(dir.path()).unwrap().join("real");
+    std::fs::create_dir(&real).unwrap();
+    std::fs::write(real.join("a.txt"), "one\n").unwrap();
+    let link = real.with_file_name("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let file = place(&link, "a.txt");
+    assert_eq!(file, real.join("a.txt").to_string_lossy());
+    let live = Arc::new(Live::default());
+    live.apply(step(
+        "s",
+        1,
+        T,
+        vec![touch(&file, Mode::Read, None, Source::Command)],
+    ));
+    let asked = link.join("a.txt").to_string_lossy().into_owned();
+    let got = live.file_asked(&asked, T);
+    assert_eq!(got.file, asked);
+    assert_eq!(got.entries.len(), 1, "{got:?}");
+    let sub = Sub {
+        roots: vec![],
+        files: [true_name(&asked)].into(),
+    };
+    assert!(sub.wants(&file));
+    let root = Sub {
+        roots: vec![true_name(&link.to_string_lossy())],
+        files: BTreeSet::new(),
+    };
+    assert!(root.wants(&file));
+}
