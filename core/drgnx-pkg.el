@@ -702,8 +702,9 @@ file that does not byte-compile is a warning (the package runs it uncompiled)."
 
 (defun drgnx-pkg--install (desc lock-entry)
   "Install DESC from the cache, else from its archive, checking the lock's hash.  Returns its new lock
-entry, `:verified t' when the file passed its signature check: fetched now from an archive that signs, or found in
-the cache with LOCK-ENTRY's hash where LOCK-ENTRY is verified (a staged entry too).  Every failure is a
+entry, `:verified t' when the file passed its signature check: fetched now from an archive that signs, found in the
+cache with LOCK-ENTRY's hash where LOCK-ENTRY is verified (a staged entry too), or found in the cache otherwise and
+checked now because its archive signs (`drgnx-pkg--check-cached': a copy that fails stops the run).  Every failure is a
 `drgnx-pkg-error' (the caller drops the staging directory); a file that fails its hash or does not install is
 removed from the cache."
   (let* ((file (drgnx-pkg--file desc)) (cached (drgnx-pkg--cached desc))
@@ -720,13 +721,26 @@ removed from the cache."
         (delete-file cached)
         (drgnx-pkg--error "%s: its sha256 is %s, the lock says %s — refusing (a changed file or a tampered cache; removed from the cache)"
                           file sha want))
-      (condition-case err (drgnx-pkg--unpack desc cached)
-        (error (ignore-errors (delete-file cached))
-               (drgnx-pkg--error "%s does not install (%s); removed from the cache — nothing was changed"
-                                 file (error-message-string err))))
-      (drgnx-pkg--desc-entry desc file sha (file-attribute-size (file-attributes cached))
-                             (if fetched (drgnx-pkg--checks-signature-p desc)
-                               (and (eq (plist-get lock-entry :verified) t) (equal (plist-get lock-entry :sha256) sha)))))))
+      (let ((verified (if fetched (drgnx-pkg--checks-signature-p desc)
+                        (or (and (eq (plist-get lock-entry :verified) t) (equal (plist-get lock-entry :sha256) sha))
+                            (drgnx-pkg--check-cached desc cached)))))
+        (condition-case err (drgnx-pkg--unpack desc cached)
+          (error (ignore-errors (delete-file cached))
+                 (drgnx-pkg--error "%s does not install (%s); removed from the cache — nothing was changed"
+                                   file (error-message-string err))))
+        (drgnx-pkg--desc-entry desc file sha (file-attribute-size (file-attributes cached)) verified)))))
+
+(defun drgnx-pkg--check-cached (desc cached)
+  "DESC's file found in the cache as CACHED, with no verified lock entry of its hash: when its archive signs, check
+its signature now (t), and fail the run when it does not pass (the file leaves the cache); nil when the archive does
+not sign.  Whoever put the file there, it installs only as the archive signed it."
+  (when (and (package-desc-archive desc) (drgnx-pkg--checks-signature-p desc))
+    (condition-case err
+        (progn (package--check-signature (package-archive-base desc) (drgnx-pkg--file desc) (drgnx-pkg--bytes cached))
+               t)
+      (error (ignore-errors (delete-file cached))
+             (drgnx-pkg--error "%s: the cached copy does not pass its signature check (%s); removed from the cache — nothing was changed"
+                               (drgnx-pkg--file desc) (error-message-string err))))))
 
 (defun drgnx-pkg--installed-desc (name) (car (alist-get name package-alist)))
 
@@ -1195,13 +1209,16 @@ packages named REMOVES.  The current generation holds the copies of what goes."
 
 (defun drgnx-pkg--stage (desc)
   "Fetch DESC's file into the cache and check it (as an install does), without installing it: its staged entry
-\(NAME :version V :file F :sha256 S :verified BOOL) — verified when this fetch checked its signature."
+\(NAME :version V :file F :sha256 S :verified BOOL) — verified when its signature was checked: by this fetch, or,
+for a copy found in the cache from an archive that signs, now (`drgnx-pkg--check-cached', which fails the run when it
+does not pass)."
   (let* ((cached (drgnx-pkg--cached desc)) (fetch (not (file-exists-p cached))))
     (apply #'drgnx-pkg-progress 'download (append drgnx-pkg--step-pkg (list :cached (not fetch))))
     (when fetch (drgnx-pkg--fetch desc nil))
-    (list (package-desc-name desc) :version (package-version-join (package-desc-version desc))
-          :file (drgnx-pkg--file desc) :sha256 (drgnx-pkg--sha256 cached)
-          :verified (and fetch (drgnx-pkg--checks-signature-p desc) t))))
+    (let ((verified (if fetch (drgnx-pkg--checks-signature-p desc) (drgnx-pkg--check-cached desc cached))))
+      (list (package-desc-name desc) :version (package-version-join (package-desc-version desc))
+            :file (drgnx-pkg--file desc) :sha256 (drgnx-pkg--sha256 cached)
+            :verified (and verified t)))))
 
 (defun drgnx-pkg--lock-entries (new-entries lock add remove kept)
   "The lock after a run, from the packages directory as loaded (`package-alist'): NEW-ENTRIES for what it installed,

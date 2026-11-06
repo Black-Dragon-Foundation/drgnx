@@ -82,13 +82,31 @@
                                                                             drgnx-pkg-signed-test--env)))
                  0))
     (should (eq (plist-get (alist-get 'fa (drgnx-pkg-child-lock root)) :verified) t))
-    ;; 1.1 is in the cache already, put there without a check: the upgrade takes it from there, unverified
+    ;; 1.1 is in the cache already, put there without a check: its archive signs, so the upgrade checks the cached
+    ;; copy's signature before it installs it, and the lock says so
     (drgnx-pkg-signed-test--signed-archive root '((fa "1.1")))
     (copy-file (concat root "gnu/fa-1.1.el") (concat root "cache/drgnx/packages/fa-1.1.el"))
     (should (eql (car (drgnx-pkg-signed-test--run root "upgrade")) 0))
     (let ((e (alist-get 'fa (drgnx-pkg-child-lock root))))
       (should (equal (plist-get e :version) "1.1"))
-      (should-not (plist-member e :verified)))))
+      (should (eq (plist-get e :verified) t)))))
+
+(ert-deftest drgnx-pkg/a-planted-cache-file-from-a-signing-archive-fails-the-sync ()
+  ;; handshake: each child is waited for to its exit
+  (drgnx-pkg-signed-test--with root
+    (drgnx-pkg-signed-test--signed-archive root '((fa "1.0")))
+    (drgnx-pkg-signed-test--want root "gnu" "gnu")
+    ;; a file no fetch checked waits in the cache under fa-1.0's name, with other bytes than the archive signed
+    (make-directory (concat root "cache/drgnx/packages") t)
+    (write-region ";;; fa.el --- planted -*- lexical-binding: t -*-\n;; Version: 1.0\n(provide 'fa)\n;;; fa.el ends here\n"
+                  nil (concat root "cache/drgnx/packages/fa-1.0.el") nil 'silent)
+    (let ((r (drgnx-pkg-signed-test--run root "sync" "--add" "fa")))
+      (should (eql (car r) 1))
+      (should (string-match-p "fa-1.0.el" (cdr r)))
+      (should (string-match-p "signature" (cdr r)))
+      (should (string-match-p "nothing was changed" (cdr r)))
+      (should-not (drgnx-pkg-child-elpa root))
+      (should-not (file-exists-p (concat root "cache/drgnx/packages/fa-1.0.el"))))))
 
 (ert-deftest drgnx-pkg/an-unlisted-unsigned-archive-names-the-fix ()
   ;; handshake: each child is waited for to its exit

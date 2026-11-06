@@ -138,7 +138,10 @@ archive that does not sign goes in `packages.eld`:
 ```
 
 A lock entry carries `:verified t` when its file passed the check — downloaded now from an archive that signs, or
-taken from the cache with the hash of an entry that was verified (a `--staged` file keeps what `--stage` found).
+taken from the cache with the hash of an entry that was verified (a `--staged` file keeps what `--stage` found). A
+file of an archive that signs found in the cache without such an entry is checked against its signature before it
+is used; one that does not pass stops the run and leaves the cache (`fa-1.0.el: the cached copy does not pass its
+signature check (…) — nothing was changed`). No sandboxed job can write the cache.
 Without gpg, a sync that uses an archive that signs stops before it changes anything ("gpg is needed to check GNU
 ELPA's signatures"); `drgnx doctor` says the same (`packages-gpg`). Install gnupg2 (macOS: `brew install gnupg`).
 

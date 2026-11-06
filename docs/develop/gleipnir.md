@@ -71,7 +71,7 @@ this returns.
 
 - `context(env)` is the `Context`, every path taken to its true name on disk (a link resolved; a path that does
   not exist keeps the true name of its deepest existing ancestor):
-  - `closed`: drgnx's data, config and state dirs; every socket dir a hub may use (`<runtime>/drgnx`,
+  - `closed`: drgnx's data, config, cache (the package cache a sync installs from) and state dirs; every socket dir a hub may use (`<runtime>/drgnx`,
     `<state>/hub`, `<tmp>/drgnx-hub-UID`); `DRGNX_DIR`; Emacs's server dirs (`<tmp>/emacsUID`, `/tmp/emacsUID`,
     `<runtime>/emacs`); and the helper binary's own dir (review M12), so no write bind can replace the helper;
   - `user_sockets`: `SSH_AUTH_SOCK` and the D-Bus session bus's `unix:path=` (and `runtime=yes`);

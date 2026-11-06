@@ -29,7 +29,7 @@ pub const ENV_DENY: &[&str] = &[
 ];
 
 /// What no spec may expose, for the hub `env` describes, as true names (GL-T2-2):
-/// - closed: drgnx's data, config and state dirs; every socket dir a hub may use (`<runtime>/drgnx`, `<state>/hub`,
+/// - closed: drgnx's data, config, cache and state dirs; every socket dir a hub may use (`<runtime>/drgnx`, `<state>/hub`,
 ///   `<tmp>/drgnx-hub-UID`); `DRGNX_DIR` (the checkout); Emacs's server dirs (`<tmp>/emacsUID`, `/tmp/emacsUID`,
 ///   `<runtime>/emacs`); and this binary's own dir (review M12), so no write bind can replace the helper;
 /// - `user_sockets`: `SSH_AUTH_SOCK` and the D-Bus session bus's `unix:path=`;
@@ -71,6 +71,8 @@ pub fn context_for(env: &Env, helper: Option<&Path>) -> Context {
     let mut closed = vec![
         paths::data_dir(env),
         paths::config_dir(env),
+        // the package cache a sync installs from (`<cache>/packages`): no job may plant a file there
+        paths::cache_dir(env),
         state.clone(),
         state.join("hub"),
         socket_dir.clone(),
