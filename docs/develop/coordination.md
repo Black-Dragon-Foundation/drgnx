@@ -786,7 +786,18 @@ reuses a live one, and `agents/stop` and `agents/kill` close it. Test builds run
   (`commit:<sha>`) `implements` to every decision that session recorded and no commit implements yet.
   `decisions/effects` returns a decision's commits and the later commits whose changed lines (`git diff-tree -U0`,
   old side) overlap the lines the decision's commits wrote; line numbers are not followed through the commits in
-  between, and the result says `computed`. It needs the tree (or the repository) to still exist.
+  between, and the result says `computed`. Each linked commit records the run's store beside its task tree
+  (`<run>.git`, `data.store`); history is read there when it exists, so the effects survive the tree's removal, and
+  otherwise in the recorded repository while no sandboxed agent has worked in it. A session with no job task (a chat)
+  links too: its commits start at the first `step.head` it recorded (a hint, skipped when git does not know it).
+  `runner::effects::dependents` follows the effects to a fixed point (decision, its commits, later commits that
+  touch their lines, those commits' decisions), also `computed`.
+- **Withdrawing.** `decisions::withdraw` sets a decision `withdrawn` and `notes::withdraw` a finding; both move the
+  decision log's version and write one event, so `held_check` holds every reader at its next write and
+  `decisions_since` reports the decision. A note with no status is live. `work::conclusions::after(session, seq)`
+  lists the session's live conclusions recorded after a step: those whose stamped step has a later `seq`; one
+  without a stamp counts when a decision's log version is above the step's `log_version`, or a finding was recorded
+  after the step started.
 
 ## Clashes (`runner/clash.rs`)
 

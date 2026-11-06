@@ -293,3 +293,142 @@ fn from_text_block_is_labelled() {
         ("finding", "it is so, because", "own", Some(12))
     );
 }
+
+// ---- conclusions after a step: rows read from a real store (pattern D) ----
+
+mod after_a_step {
+    use super::*;
+    use norn::store::CoordDb;
+    use norn::write::decisions::{Decide, DecideResult, decide};
+    use norn::write::steps::{StepClass, StepNew, open};
+    use urdr::graph::entity::{self, Changes, EntityNew, Origin};
+
+    fn meta() -> urdr::graph::TxMeta {
+        urdr::graph::TxMeta::new("hub", urdr::graph::Class::System, "test")
+    }
+
+    fn step(tx: &mut norn::store::WTx<'_>, log_version: i64) -> i64 {
+        open(
+            tx,
+            StepNew {
+                session: "session:s1".into(),
+                task: None,
+                plan: None,
+                project: None,
+                agent: None,
+                provider: None,
+                class: StepClass::Tool,
+                start: 1.0,
+                tool: None,
+                tool_kind: None,
+                message_id: None,
+                turn_id: None,
+                snapshot: None,
+                log_version: Some(log_version),
+                acp: None,
+            },
+        )
+        .unwrap()
+    }
+
+    /// A decision of session s1, stamped with STEP when it has one.
+    fn decision(tx: &mut norn::store::WTx<'_>, step: Option<i64>) -> i64 {
+        let DecideResult::Ok { n, .. } = decide(
+            tx,
+            Decide {
+                kind: "build".into(),
+                subject: "x".into(),
+                author: "user".into(),
+                ..Decide::default()
+            },
+            2.0,
+        )
+        .unwrap() else {
+            panic!("held")
+        };
+        let e = entity::by_id(tx.sql(), &format!("decision:{n}"))
+            .unwrap()
+            .unwrap();
+        entity::update(
+            tx,
+            e.n,
+            None,
+            Changes {
+                data_patch: Some(json!({"session": "s1", "step": step})),
+                ..Changes::default()
+            },
+        )
+        .unwrap();
+        n
+    }
+
+    fn finding(tx: &mut norn::store::WTx<'_>, id: &str, step: Option<i64>) {
+        let project = tx.meta().project;
+        entity::create(
+            tx,
+            EntityNew {
+                id: id.into(),
+                kind: "note".into(),
+                project,
+                title: Some("f".into()),
+                status: None,
+                body: Some("f".into()),
+                priority: None,
+                assignee: None,
+                data: json!({"kind": "finding", "session": "s1", "step": step}),
+                origin: Origin::Recorded,
+                source: None,
+            },
+        )
+        .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn conclusions_after_use_the_stamped_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        let late = db
+            .write(meta(), |tx| {
+                let (a, b, c) = (step(tx, 0), step(tx, 0), step(tx, 0));
+                decision(tx, Some(a));
+                decision(tx, Some(b));
+                let late = decision(tx, Some(c));
+                finding(tx, "note:early", Some(a));
+                finding(tx, "note:late", Some(c));
+                Ok(late)
+            })
+            .await
+            .unwrap();
+        let got = db.read(|c| after(c, "s1", 2)).await.unwrap();
+        assert_eq!(
+            got,
+            [
+                Concluded::Decision(late),
+                Concluded::Finding("note:late".into())
+            ]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn conclusions_without_a_stamp_fall_back_to_the_log_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        let after_it = db
+            .write(meta(), |tx| {
+                // the target step saw the decision log at version 1; the first decision made it, the second came after
+                let first = decision(tx, None);
+                let _ = step(tx, 0);
+                let target = step(tx, 1);
+                let _ = target;
+                let second = decision(tx, None);
+                finding(tx, "note:unstamped", None);
+                Ok((first, second))
+            })
+            .await
+            .unwrap();
+        let got = db.read(|c| after(c, "s1", 2)).await.unwrap();
+        assert!(got.contains(&Concluded::Decision(after_it.1)), "{got:?}");
+        assert!(!got.contains(&Concluded::Decision(after_it.0)), "{got:?}");
+        assert!(got.contains(&Concluded::Finding("note:unstamped".into())));
+    }
+}
