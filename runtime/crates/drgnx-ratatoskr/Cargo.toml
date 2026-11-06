@@ -49,6 +49,11 @@ required-features = ["fleet"]
 name = "fleet_keys"
 required-features = ["fleet"]
 
+# the link drills (test/runners/drills.sh): the link broken mid-job, the hub restarted, the runner's guards
+[[test]]
+name = "fleet_drills"
+required-features = ["fleet"]
+
 [dependencies]
 runstav = { path = "../runstav", version = "0.1.0" }
 draugr = { path = "../draugr", version = "0.1.0" }

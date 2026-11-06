@@ -2232,7 +2232,8 @@ reads the graph, or memory when the graph can't be read.
 and percent forms, at its own length, so the copy keeps the runner's offsets; the end of a chunk that could begin a
 form is held back until the next one (`Redacting::consumed` is the runner's offset taken in). A redactor exists from
 `start`; a key is added to it before its frame goes. After a hub restart a keyed attempt's log isn't taken in until all
-its keys are held again (`runners/keys`), then it is attached from the copy's end. At `finished` the held tail is
+its keys are held again (`runners/keys`), then it is attached from the copy's end; its runner's `hello` that lists it
+asks for the missing ones (`runners/need-keys`). At `finished` the held tail is
 written and `redact::notices` (the `looks_like_secret` heuristic) sends one `notice` per log that may hold some other
 secret, never masking it.
 
