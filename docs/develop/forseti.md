@@ -335,3 +335,23 @@ job's key, each length-prefixed, so changing any one part changes the key (`any_
 a timing run, nor for a red (`Stored::red`); the verdict is judged again from the stored counts under the job's current
 `expect` (`verdict_of`, the rules a parser's judge applies), so a stricter threshold never reuses an old verdict.
 `is_flaky` marks a key with both a pass and a red. The store itself is the shell's.
+
+## What cloud machines may cost (`cost`)
+
+Pure, for the hub's cloud meter (`docs/develop/hub.md`, "Runners: cloud spend"; design §6.7.5); jobq doesn't use it.
+Amounts are USD, times seconds.
+
+- `projection(month_spent, price_h, expected_busy_s, idle_s, running: &[RunningCost {price_h, remaining_s}])`: this
+  month's spend, plus the new machine's price × (its expected busy time + the idle time), plus each running machine's
+  price × what it is expected to run on until its idle stop. A start whose projection passes the cap doesn't happen.
+- `cap_state(spent, cap, machine_hour) -> CapState {Under, AtCap, PastCapPlusHour}`: at the cap no new cloud work;
+  one machine-hour past it, every machine stops now. `guard(spent, rate_h, check_s, cap, machine_hour)` is the state
+  at the next check (the running machines' hourly total added for `check_s`), so the stop comes before the line.
+- `stated_bound(Kind {Aws, Gcp}, max_machines, Hours {unattended_s, lifetime_s}, price_h) -> Bound {hub_up,
+  hub_down}`: with the hub up, one machine-hour past the cap; with it down, max machines × the unattended lifetime
+  (AWS: the machine's watchdog ends it) or × the lifetime (GCP: the provider's deadline does) × the price.
+
+Tests [D]: the properties `projected_spend_never_passes_the_cap` (starts through the projection, machines running as
+projected, time between the requests) and `the_bound_holds_hub_up_and_down` (machines that overrun, the guard every
+60 s; then the hub gone and every machine ending by its own layer), and `the_bound_is_the_designs` (the design's
+"2 machines × 2 h = about $1.64").

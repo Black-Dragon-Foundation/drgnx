@@ -162,10 +162,21 @@ impl Link {
 
 /// `serve` in ROOT on RUNNER over one `ssh`: its stdin and stdout are the control channel.
 fn serve(runner: &str, root: &str, prefix: &str, hub: &str) -> (Channels, tokio::process::Child) {
+    serve_with(runner, root, prefix, hub, "")
+}
+
+/// [`serve`] with EXTRA options after the usual ones.
+fn serve_with(
+    runner: &str,
+    root: &str,
+    prefix: &str,
+    hub: &str,
+    extra: &str,
+) -> (Channels, tokio::process::Child) {
     let mut child = tokio::process::Command::new("ssh")
             .args(["-F", &ssh_config(), "-o", "BatchMode=yes", runner])
             .arg(format!(
-                "{root}/bin/test/sleipnir serve --root {root} --prefix {prefix} --hub-id {hub} --profile dedicated"
+                "{root}/bin/test/sleipnir serve --root {root} --prefix {prefix} --hub-id {hub} --profile dedicated {extra}"
             ))
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -829,5 +840,155 @@ mod link {
         b.send(Frame::Bye { why: "test".into() });
         b.next("bye", |e| matches!(e, LinkEvent::Bye { .. }).then_some(()))
             .await;
+    }
+}
+
+mod watchdog {
+    use super::*;
+    use std::io::{Read, Write};
+
+    /// `POST /__mock/NAME` with BODY to the fleet's mock cloud (`fleet.sh up --cloud`).
+    fn knob(name: &str, body: &str) {
+        let base = std::env::var("DRGNX_TEST_CLOUD_ENDPOINT_AWS")
+            .expect("a fleet up with --cloud: fleet.sh test passes the mock's endpoint");
+        let addr = base.trim_start_matches("http://").trim_end_matches('/');
+        let mut s = std::net::TcpStream::connect(addr).unwrap();
+        let req = format!(
+            "POST /__mock/{name} HTTP/1.1\r\nHost: mock\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        s.write_all(req.as_bytes()).unwrap();
+        let mut out = String::new();
+        s.read_to_string(&mut out).unwrap();
+        assert!(out.starts_with("HTTP/1.1 200"), "{name}: {out}");
+    }
+
+    /// [C] r1 plays a spot machine (`fleet.sh up --runners 1 --cloud MOCK`): its watchdog reads the mock's IMDSv2 for a
+    /// seeded instance, and `serve` runs with `--watchdog`. A job parks there; the mock posts a spot notice. The watchdog
+    /// sees it and tells `serve`, which sends `preempting`: the hub requeues the attempt at once (the job still runs on
+    /// r1, so this is no job end and no 600 s grace), with no strike and no verdict, and offers r1 nothing more. The
+    /// watchdog's clock is a file, so none of its own limits comes due.
+    #[tokio::test]
+    #[ignore = "fleet"]
+    async fn a_spot_notice_requeues_at_once_with_no_strike() {
+        let (r1, prefix, hub) = ("r1", "flspot", "hubspot");
+        let root = root(r1, "fl-spot");
+        let img = image(r1);
+        let endpoint = std::env::var("DRGNX_TEST_CLOUD_ENDPOINT_AWS")
+            .expect("a fleet up with --cloud: fleet.sh test passes the mock's endpoint");
+        let id = format!("i-spot{}", std::process::id());
+        knob("seed", &format!(r#"{{"provider": "aws", "id": "{id}"}}"#));
+        let wd = format!("{root}/watchdog");
+        sh(
+            r1,
+            &format!(
+                "mkdir -p {wd} && printf 1000 > {wd}/clock && systemd-run --user --collect --unit={prefix}-watchdog \
+                 {root}/bin/test/sleipnir watchdog --provider aws --idle 900 --lifetime 28800 --unattended 7200 \
+                 --root {root} --dir {wd} --clock-file {wd}/clock --poweroff-cmd /bin/true \
+                 --metadata-url {endpoint}__metadata/{id}"
+            ),
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let (q, mut events) = Queue::new(QueueCfg {
+            hub_id: hub.into(),
+            exec_root: dir.path().to_path_buf(),
+            local: LocalRunner::new(Admission::Fixed(1), dir.path()),
+            db: None,
+        });
+        // this machine's one slot is taken, so the requeued job has nowhere to go
+        q.adopt("xbusy", Priority::P1, now());
+        let (channels, _child) = serve_with(r1, &root, prefix, hub, &format!("--watchdog {wd}"));
+        let session = Session::start(r1, channels, q.route(), q.link_events());
+        q.add_runner(
+            RemoteRunner {
+                name: r1.into(),
+                trust: forseti::RunnerTrust::Mine,
+                accept: forseti::Accept::All,
+                grace_s: 600,
+                image: Some(img.clone()),
+            },
+            session,
+        );
+        let mut job = heavy_job("xspot", Some(&img));
+        job.spec.command = vec![
+            "sh".into(),
+            "-c".into(),
+            "echo started; mkfifo /tmp/gate; read x < /tmp/gate".into(),
+        ];
+        q.submit(job, now());
+        let mut outcomes = vec![];
+        let log = dir.path().join("xspot/log");
+        drive(
+            &q,
+            &mut events,
+            &mut outcomes,
+            "the job running on r1",
+            |q, _| {
+                let on_r1 = q.row("xspot")?.machine.as_deref() == Some("r1");
+                let started = std::fs::read(&log).is_ok_and(|l| l.ends_with(b"started\n"));
+                (on_r1 && started).then_some(())
+            },
+        )
+        .await;
+
+        knob("spot-notice", &format!(r#"{{"id": "{id}", "in_s": 0}}"#));
+        // the requeue's reason shows until the next tick says why the job waits now, so each event is looked at as
+        // it is taken in, before any tick
+        let row = skuld::wait_until_async("the attempt requeued for the preemption", WAIT, || {
+            let mut got = None;
+            while got.is_none()
+                && let Ok(ev) = events.try_recv()
+            {
+                if let LinkEvent::Lost { why, .. } = &ev {
+                    panic!("the link was lost waiting for the requeue: {why}");
+                }
+                outcomes.extend(q.on_link(ev, now()));
+                got = q
+                    .row("xspot")
+                    .filter(|r| r.waiting.as_deref().is_some_and(|w| w.contains("requeued")));
+            }
+            if got.is_none() {
+                outcomes.extend(q.tick(now()).outcomes);
+            }
+            std::future::ready(got)
+        })
+        .await;
+        assert_eq!(
+            row.waiting.as_deref(),
+            Some("requeued (infra: preempted)"),
+            "{row:?}"
+        );
+        assert_eq!(row.machine, None, "{row:?}");
+        let runner = q.runner("r1").expect("r1");
+        assert_eq!(
+            (
+                runner.state.as_str(),
+                runner.strikes,
+                runner.last.as_deref()
+            ),
+            ("preempting", 0, None),
+            "a preemption is no strike: {runner:?}"
+        );
+        assert!(
+            !outcomes
+                .iter()
+                .any(|o| matches!(o, Outcome::Done { id, .. } if id == "xspot")),
+            "a preemption is no verdict: {outcomes:?}"
+        );
+        // the job itself still ran: the requeue came from the notice, not from its end
+        let running = sh(
+            r1,
+            &format!("podman ps --filter label=drgnx.runner={hub} --format '{{{{.Names}}}}'"),
+        );
+        assert!(!running.is_empty(), "the job's container ended");
+        let seen = sh(r1, &format!("cat {wd}/preempting"));
+        assert!(!seen.is_empty(), "the watchdog's notice");
+        sh(
+            r1,
+            &format!(
+                "systemctl --user stop {prefix}-watchdog; podman rm -f $(podman ps -q --filter label=drgnx.runner={hub}) \
+                 >/dev/null 2>&1; true"
+            ),
+        );
     }
 }
