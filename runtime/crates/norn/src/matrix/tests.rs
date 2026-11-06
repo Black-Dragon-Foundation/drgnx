@@ -24,7 +24,7 @@ fn balanced_is_the_mockups_table() {
     use Action::*;
     use Verdict::*;
     let p = preset(Preset::Balanced);
-    let rows: [(Action, [Verdict; 3]); 26] = [
+    let rows: [(Action, [Verdict; 3]); 27] = [
         (AgentsStart, [Allow, Never, Never]),
         (AgentsModel, [Allow, Never, Never]),
         (AgentsControl, [Allow, Never, Never]),
@@ -51,8 +51,9 @@ fn balanced_is_the_mockups_table() {
         (UserPrivate, [Never, Never, Never]),
         (UserEmacs, [Ask, Never, Never]),
         (ChatProjectRead, [Never, Never, Ask]),
+        (PluginAbilities, [Allow, Allow, Ask]),
     ];
-    assert_eq!(p.cells.len(), 26 * 3);
+    assert_eq!(p.cells.len(), 27 * 3);
     for (a, vs) in rows {
         for (r, want) in [Role::Manager, Role::Worker, Role::Chat]
             .into_iter()
@@ -102,7 +103,7 @@ fn browser_rows_per_preset() {
             assert_eq!(decide(&eff(&[&m], &who(r)), a, None), want);
         }
     }
-    assert_eq!(Action::ALL.len(), 26);
+    assert_eq!(Action::ALL.len(), 27);
     let at = |a| Action::ALL.iter().position(|x| *x == a).unwrap();
     assert_eq!(
         (at(Browser), at(BrowserWeb), at(BrowserPrivate)),
