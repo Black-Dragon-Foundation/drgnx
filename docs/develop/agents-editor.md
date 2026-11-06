@@ -16,4 +16,12 @@ Measured in the GUI harness (`test/ui/agents-editor-gui-test.el`, mutter, Glitni
 - **Margin form** (terminal): a one-column left margin with a `(margin left-margin)` before-string draws on the marked row
   and not on its neighbour.
 
-Verdict (the manager's): pending.
+## Verdict
+
+- **Ring rows use the background-tint form, with no `:box`.** The rebuild passes its 2 ms bar in both forms (0.36 ms at
+  scale 1, 0.56 ms at scale 2), but the card `:box` form adds about 5 ms per redisplay over bare (8.9-9.4 ms against
+  3.5-3.7 ms p95), which alone breaks the +1 ms budget against no agents. The tint form costs +0.1-0.9 ms.
+- **Fringe owner beside diff-hl:** wrap `diff-hl-highlight-function` so it skips agent lines, and give the agent's
+  `before-string` overlay priority 100. The wrapper alone won in every mode measured; the priority covers creation
+  order. The user's own changed lines keep diff-hl's mark.
+- **Terminal:** a one-column left margin with a `(margin left-margin)` before-string.
