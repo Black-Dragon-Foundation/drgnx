@@ -133,10 +133,13 @@ impl Hub {
         // the hub's own version: the watcher's event about it is no outside edit
         if let Ok(hash) = super::blob::hash_object(&tree.git_dir, &tree.root, rel, after.as_bytes())
         {
-            inner.origin.step(OriginEv::HubWrite {
-                path: rel.to_owned(),
-                hash,
-            });
+            inner.origin.step(
+                &tree.id.0,
+                OriginEv::HubWrite {
+                    path: rel.to_owned(),
+                    hash,
+                },
+            );
         }
         let dir = std::fs::File::open(&tree.root)?;
         let mode = eitri::open_beneath(dir.as_fd(), Path::new(rel), eitri::Kind::File)
