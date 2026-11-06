@@ -17,9 +17,10 @@
 //! - **Which editor** ([`super::open_set`]): a write goes to the editor that has the file open as a normal buffer; a
 //!   large or remote buffer refuses it, a file an editor had when it went away refuses "the editor is away", and a
 //!   file no editor has refuses "not open in the editor".  The hub never writes the disk behind an open file.
-//! - **The toggle and the wheel** ([`Door::toggle`], [`Door::hold`]): pair off, or the user holding the wheel, closes
-//!   the session's door at once: its writes not yet sent are refused, the editor drops those it holds (`pair-drop`,
-//!   each answered `dropped`), and later ones are refused.  Nothing of the session's turn is cancelled.
+//! - **The toggle, the wheel and the matrix** ([`Door::toggle`], [`Door::hold`], [`Door::recheck`]): pair off, the user
+//!   holding the wheel, or a matrix change that makes `chat.project-edit` never ([`follow_matrix`]) closes the
+//!   session's door at once: its writes not yet sent are refused, the editor drops those it holds (`pair-drop`, each
+//!   answered `dropped`), and later ones are refused.  Nothing of the session's turn is cancelled.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -61,6 +62,10 @@ pub const EDITOR_AWAY: &str = "the editor is away";
 
 /// What a chat's writes answer once the user turned pair off for it.
 pub const OFF_BY_USER: &str = "pair mode was turned off by the user";
+
+/// What a paired chat's writes answer once the matrix made its `chat.project-edit` never (a preset or a cell changed).
+pub const NEVER_NOW: &str =
+    "pair mode ended: the matrix's chat.project-edit is now never for this chat; ask the user";
 
 /// What a write of a session whose wheel the user holds answers.
 pub const HELD: &str = "the user holds the wheel; wait until they give it back";
@@ -107,6 +112,7 @@ pub fn refused_text(reason: &str, lines: Option<[u64; 2]>) -> String {
         "not-open" => "not open in the editor; ask the user to open it".to_string(),
         "pair-off" => OFF_BY_USER.to_string(),
         "held" => HELD.to_string(),
+        "never" => NEVER_NOW.to_string(),
         other => other.to_string(),
     }
 }
@@ -254,6 +260,36 @@ impl Door {
         if held {
             self.close(session, HELD, "held");
         }
+    }
+
+    /// The matrix may have changed: SESSION's `chat.project-edit` is decided again from EFF.  A paired session whose
+    /// cell became never closes ([`Door::close`], reason `never`): its writes not yet sent are refused and the editor
+    /// drops those it holds.  True when it closed.
+    pub fn recheck(self: &Arc<Self>, session: &str, eff: &Effective) -> bool {
+        let cell = decide(eff, Action::ChatProjectEdit, None);
+        let closed = {
+            let mut st = lock(&self.st);
+            let Some(s) = st.sessions.get_mut(session) else {
+                return false;
+            };
+            let was = s.paired();
+            s.cell = Some(cell);
+            was && cell == Verdict::Never
+        };
+        if closed {
+            self.close(session, NEVER_NOW, "never");
+        }
+        closed
+    }
+
+    /// The sessions the door holds as paired now: the ones a matrix change may close.
+    pub fn paired_sessions(&self) -> Vec<String> {
+        lock(&self.st)
+            .sessions
+            .iter()
+            .filter(|(_, s)| s.paired())
+            .map(|(id, _)| id.clone())
+            .collect()
     }
 
     /// SESSION's door closes: its writes not yet sent are refused with WHY, and each editor holding one of its writes
@@ -637,19 +673,21 @@ impl Door {
                 });
             }
             // the door closed before it was sent: not the agent's mistake, not counted
-            Outcome::Refused(why) if why == OFF_BY_USER || why == HELD => return Err(Refusal(why)),
+            Outcome::Refused(why) if why == OFF_BY_USER || why == HELD || why == NEVER_NOW => {
+                return Err(Refusal(why));
+            }
             Outcome::Refused(reason) => {
                 let lines = answer.as_ref().and_then(|a| a.lines);
                 refused_text(&reason, lines)
             }
-            // dropped unapplied (its time ran out, the user turned pair off or took the wheel): no refusal of the
-            // agent's text, so not counted towards "wait for the user"
+            // dropped unapplied (its time ran out, the user turned pair off or took the wheel, the matrix made it
+            // never): no refusal of the agent's text, so not counted towards "wait for the user"
             Outcome::Dropped => {
                 return Err(Refusal(
                     answer
                         .as_ref()
                         .and_then(|a| a.reason.as_ref())
-                        .filter(|r| matches!(r.as_str(), "pair-off" | "held"))
+                        .filter(|r| matches!(r.as_str(), "pair-off" | "held" | "never"))
                         .map_or_else(
                             || {
                                 "the editor did not get to it in time; nothing of it was applied: try again"
@@ -698,6 +736,20 @@ fn abs(file: &Path) -> Result<AbsPath, Refusal> {
 /// EV into FILE's queue: the effects it raises.
 fn step(st: &mut St, file: &Path, ev: Ev) -> Vec<Ev> {
     st.files.entry(file.to_path_buf()).or_default().step(ev)
+}
+
+/// The hub's task: each change that may change an answer (`coord::Signals::answers_changed`: the settings in effect, a
+/// project's or a plan's matrix override, the away flag) decides every paired session's `chat.project-edit` again, so
+/// a preset or a cell turned never closes its door at once ([`Door::recheck`]) instead of at its next write.
+pub async fn follow_matrix(front: Arc<crate::front::Front>) {
+    let mut answers = front.writer.signals.answers.subscribe();
+    while answers.changed().await.is_ok() {
+        for sid in front.pair.paired_sessions() {
+            if let Ok(s) = front.core.agents.find(&sid) {
+                s.pair_recheck().await;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -870,5 +922,62 @@ mod tests {
         let sent = events(&out);
         assert_eq!(sent.len(), 1, "{sent:?}");
         assert_eq!(sent[0]["event"], "pair-apply");
+    }
+
+    /// [D] The matrix makes `chat.project-edit` never (a preset or a cell changed) while a write of the paired session
+    /// waits in the editor: the editor is told to drop the session's writes (`pair-drop`, reason `never`), the write's
+    /// answer is the editor's `dropped`, and a later write is refused with nothing sent.  A look that changes nothing
+    /// sends nothing.
+    #[tokio::test]
+    async fn a_never_cell_drops_the_queued_writes() {
+        use super::super::open_set::FileKind;
+        let (_d, root, door, out) = fixture();
+        let eff = chat(Preset::Autonomous);
+        let f = root.join("a.txt");
+        opened(&door, &f, FileKind::Normal);
+        let edit = || WriteKind::Edit {
+            old: "a".into(),
+            new: "b".into(),
+        };
+        let path = f.to_string_lossy().into_owned();
+        assert!(
+            !door.recheck("s1", &eff),
+            "paired and allowed: nothing to close"
+        );
+        let d2 = door.clone();
+        let (r2, p2, e2) = (root.clone(), path.clone(), eff.clone());
+        let first = tokio::spawn(async move { d2.write("s1", &r2, &e2, &p2, edit()).await });
+        tokio::task::yield_now().await;
+        let sent = events(&out);
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(sent[0]["event"], "pair-apply");
+        let id = sent[0]["data"]["write"].as_u64().unwrap();
+        let never = chat(Preset::Cautious);
+        assert!(door.recheck("s1", &never));
+        let sent = events(&out);
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(sent[0]["event"], "pair-drop");
+        assert_eq!(sent[0]["data"]["session"], "s1");
+        assert_eq!(sent[0]["data"]["reason"], "never");
+        assert!(door.answer(
+            1,
+            PairAnswer {
+                write: id,
+                result: PairResult::Dropped,
+                version: None,
+                reason: runstav::types::Text::new("never").ok(),
+                lines: None,
+                saved: None,
+                not_saved: None,
+            }
+        ));
+        assert_eq!(first.await.unwrap().unwrap_err().0, NEVER_NOW);
+        assert!(!door.recheck("s1", &never), "closed already");
+        let r = door
+            .write("s1", &root, &never, &path, edit())
+            .await
+            .unwrap_err();
+        assert!(r.0.contains("chat.project-edit"), "{r}");
+        assert!(events(&out).is_empty(), "nothing after never");
     }
 }

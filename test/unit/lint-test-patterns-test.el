@@ -304,7 +304,8 @@ shrinks (a test that enters the gate, or is deleted, leaves it and this list); a
 which the audit would catch.")
 
 (defconst drgnx-lint-patterns--unnamed-ok-allowed
-  '("test/unit/agents-mirror-test.el" "test/unit/agents-mirror-permission-test.el" "test/unit/say-test.el")
+  '("test/unit/agents-mirror-test.el" "test/unit/agents-mirror-permission-test.el" "test/unit/say-test.el"
+    "test/unit/agent-pair-hub-test.el")
   "The files that may bind or set `drgnx-test-gate-unnamed-ok': a stopgap until the hub's agent-session tasks run on
 its clock.")
 

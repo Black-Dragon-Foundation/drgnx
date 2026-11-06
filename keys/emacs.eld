@@ -358,6 +358,7 @@
         (live-take-over "C-c C-c" :map (drgnx-live . drgnx-live-mode-map))
         (remote-open :none "C-x C-f /ssh:… works as always; the palette")
         (remote-reconnect :none "the palette and the status-line remote")
+        (agents-pair :none "the palette; the Pair chip in the agent panel")
         (agent-settings :none "the palette; , in the Agents list")
         (agent-settings-here "," :map (drgnx-agents-ui . drgnx-agents-list-mode-map))
         (agent-settings-refresh "g" :map (drgnx-agent-settings . drgnx-agent-settings-mode-map))

@@ -328,6 +328,11 @@ pub async fn run(args: ServeArgs) -> Exit {
     );
     crate::records::install_tool(&front);
     crate::clock::spawn("records:follow", crate::records::follow(front.clone()));
+    // a matrix change that makes a paired chat's chat.project-edit never closes its pair door at once
+    crate::clock::spawn(
+        "pair:follow-matrix",
+        crate::pair::door::follow_matrix(front.clone()),
+    );
     let mut git = crate::runner::git::HubGit::new(
         crate::sandbox::runs_root(&env),
         crate::runner::TreeMode::Snapshot,

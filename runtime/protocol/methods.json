@@ -2219,10 +2219,10 @@
       "data": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`pair-drop`: drop every write of SESSION still queued in the editor (each answered `dropped`): the user turned pair\noff or took the wheel.",
+        "description": "`pair-drop`: drop every write of SESSION still queued in the editor (each answered `dropped`): the user turned pair\noff or took the wheel, or the matrix made the chat's `chat.project-edit` never.",
         "properties": {
           "reason": {
-            "description": "Why, as the editor's answer gives it back (`pair-off`, `held`).",
+            "description": "Why, as the editor's answer gives it back (`pair-off`, `held`, `never`).",
             "type": "string"
           },
           "session": {
