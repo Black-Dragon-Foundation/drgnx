@@ -11,6 +11,7 @@ pub mod coord;
 pub mod exec;
 pub mod gateway;
 pub mod graph;
+pub mod history;
 pub mod hub;
 pub mod jobs;
 pub mod matrix;
@@ -249,6 +250,10 @@ params! {
     RunnersCheck(runners::ByName),
     RunnersBench(runners::ByName),
     RunnersSet(runners::SetParams),
+    HistoryRegister(history::RegisterParams),
+    HistoryBatch(history::BatchParams),
+    HistoryResync(history::ResyncParams),
+    HistoryUnregister(history::UnregisterParams),
     RunnersUnbench(runners::ByName),
     RunnersRemove(runners::RemoveParams),
 }
@@ -273,6 +278,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(work::methods());
     v.extend(search::methods());
     v.extend(runners::methods());
+    v.extend(history::methods());
     v
 }
 

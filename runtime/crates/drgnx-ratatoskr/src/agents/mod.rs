@@ -11,6 +11,7 @@
 //! - [`launch`]: the session's Gleipnir spec (Task 10).
 //! - [`net`]: the session's provider proxy on `proxy.sock`, which the spec's relay port reaches.
 //! - [`wake`]: a job's end prompts the session that started it; a queue wait is a step (Task 15).
+//! - [`rewind`]: the restore level a provider gives and where a conversation is cut for a step.
 
 pub mod deliver;
 pub mod handoff;
@@ -19,6 +20,7 @@ pub mod lock;
 pub mod net;
 pub mod probe;
 pub mod queue;
+pub mod rewind;
 pub mod session;
 pub mod transcript;
 pub mod wake;

@@ -4,7 +4,7 @@ use crate::incoming::{Incoming, Responder};
 use crate::schema::v1 as acp;
 use crate::stamp;
 use crate::types::{
-    AgentInfo, ClientCaps, ConnOpts, ContentBlock, Error, Event, ForkPoint, McpServer,
+    AgentInfo, ClientCaps, ConnOpts, ContentBlock, Error, Event, ForkInto, McpServer,
     PromptOutcome, SessionId,
 };
 use bytes::BytesMut;
@@ -293,24 +293,20 @@ impl Conn {
         self.tx.send(line.to_string()).map_err(|_| Error::Closed)
     }
 
-    /// Fork a session, at a message when given (`_meta.jetbrains.air.fork {version: 1, messageId}`).  The new
-    /// session starts in the directory of the one it forks, which this connection must have opened.
-    pub async fn fork(&self, sid: &SessionId, at: Option<ForkPoint>) -> Result<SessionId, Error> {
-        let cwd = self
-            .shared
-            .cwds
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&*sid.0)
-            .cloned()
-            .ok_or_else(|| Error::UnknownSession(sid.0.to_string()))?;
-        let mut params = json!({"sessionId": sid, "cwd": cwd});
-        let meta = at.map(
-            |p| json!({"jetbrains": {"air": {"fork": {"version": 1, "messageId": p.message_id}}}}),
-        );
+    /// Fork F's source into a new session in F's directory, with F's tools and `_meta` (a lock's options), at a
+    /// message when given (`_meta.jetbrains.air.fork {version: 1, messageId}`, merged into F's `_meta`).  The source
+    /// need not be one this connection opened: the agent reads it from its own store.
+    pub async fn fork_into(&self, f: ForkInto) -> Result<SessionId, Error> {
+        let mut meta = f.meta;
+        if let Some(p) = f.at {
+            let point =
+                json!({"jetbrains": {"air": {"fork": {"version": 1, "messageId": p.message_id}}}});
+            merge(meta.get_or_insert_with(|| json!({})), point);
+        }
+        let mut params = json!({"sessionId": f.source, "cwd": f.cwd, "mcpServers": f.mcp});
         set_meta(&mut params, meta);
         let r: acp::ForkSessionResponse = self.typed("session/fork", params).await?;
-        self.remember(&r.session_id, &cwd);
+        self.remember(&r.session_id, &f.cwd);
         Ok(r.session_id)
     }
 
@@ -320,6 +316,18 @@ impl Conn {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(sid.0.to_string(), cwd.to_path_buf());
+    }
+}
+
+/// FROM's keys into INTO, objects merged key by key; anything else in FROM replaces what INTO has.
+fn merge(into: &mut Value, from: Value) {
+    match (into, from) {
+        (Value::Object(a), Value::Object(b)) => {
+            for (k, v) in b {
+                merge(a.entry(k).or_insert(Value::Null), v);
+            }
+        }
+        (slot, v) => *slot = v,
     }
 }
 

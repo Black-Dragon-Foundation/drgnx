@@ -19,6 +19,7 @@
 (require 'drgnx-state)
 (require 'drgnx-view)
 (require 'drgnx-work-client)
+(require 'drgnx-history)
 (unless (featurep 'drgnx-work-map)
   (load (expand-file-name "drgnx-work-map" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-work-detail)
@@ -395,6 +396,7 @@ follows the windows; the commands."
                         :command #'drgnx-work-take-wheel :map 'drgnx-work-live-file-mode-map
                         :doc "Pause the agent that is editing here and make this file editable; saving tells the agent")
   (drgnx-state-subscribe 'windows-changed #'drgnx-work-space--windows-changed)
+  (drgnx-history-mode 1)                ; the editor's side of the edit history (stays off without Nidhogg's change hook)
   (when (fboundp 'drgnx-wb-place) (drgnx-wb-place 'drgnx-work-map-mode 'editor))
   (when (fboundp 'drgnx-wb-place) (drgnx-wb-place 'drgnx-work-files-mode 'popup))
   (drgnx-command-define 'work-files :category "Work" :title "List the Agent's Files"
@@ -495,6 +497,7 @@ follows the windows; the commands."
 
 (defun drgnx-work-space--teardown ()
   "tools/work-space's `:teardown': the views close (the hub forgets them) and the map buffers go."
+  (drgnx-history-mode -1)
   (drgnx-work-client-close-all)
   (dolist (b (drgnx-work-map-buffers))
     (with-current-buffer b (remove-hook 'kill-buffer-hook #'drgnx-work-space--killed t))

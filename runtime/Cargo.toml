@@ -35,6 +35,8 @@ tree-sitter-rust = "0.24"
 tree-sitter-c = "0.24"
 tree-sitter-bash = "0.25"
 notify = "8"
+# verdandi's documents (the edit history; agent system part 4's spike chose it): public API only, pinned, moved on purpose
+loro = { version = "=1.17.1", default-features = false }
 rustix = { version = "1.1", features = ["fs", "process", "net", "thread"] }
 libc = "0.2"
 hyper = { version = "1.12", features = ["server", "client", "http1"] }
@@ -100,4 +102,15 @@ opt-level = 3
 [profile.dev.package.rayon]
 opt-level = 3
 [profile.dev.package.rayon-core]
+opt-level = 3
+# the edit history's documents: its property test makes some hundred thousand records
+[profile.dev.package.loro]
+opt-level = 3
+[profile.dev.package.loro-internal]
+opt-level = 3
+[profile.dev.package.loro-common]
+opt-level = 3
+[profile.dev.package.loro-rle]
+opt-level = 3
+[profile.dev.package.generic-btree]
 opt-level = 3

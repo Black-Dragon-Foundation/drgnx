@@ -861,6 +861,10 @@ impl RunGit for HubGit {
         Box::pin(self.touch(folder))
     }
 
+    fn is_touched<'a>(&'a self, folder: &'a Path) -> GitFuture<'a, bool> {
+        Box::pin(async move { Ok(HubGit::is_touched(self, folder).await) })
+    }
+
     fn prepare<'a>(&'a self, tree: &'a TaskTree) -> GitFuture<'a, ()> {
         Box::pin(async move {
             if tree.mode == TreeMode::Snapshot {
