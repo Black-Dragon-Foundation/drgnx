@@ -25,9 +25,15 @@
 ;; and the colours it derives from other themes
 (unless (featurep 'drgnx-look-derive)
   (load (expand-file-name "drgnx-look-derive" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-look-follow)
+  (load (expand-file-name "drgnx-look-follow" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (declare-function drgnx-look-variant "drgnx-theme-gen" (&optional frame))
 (declare-function drgnx-look-density-value "drgnx-look-density" (key &optional density))
 (defvar drgnx-look-density-changed-hook)
+(declare-function drgnx-look-follow-on "drgnx-look-follow" ())
+(declare-function drgnx-look-follow-off "drgnx-look-follow" ())
+(declare-function drgnx-look-follow-apply "drgnx-look-follow" ())
+(defvar drgnx-look-follow--loading)
 (declare-function drgnx-look-derive-on "drgnx-look-derive" ())
 (declare-function drgnx-look-derive-off "drgnx-look-derive" ())
 (declare-function drgnx-look-density-on "drgnx-look-density" ())
@@ -235,10 +241,11 @@ colour on this frame (`drgnx-look--island-faces-set'), whatever the theme says."
 
 ;;;; Theme
 
-(drgnx-defsetting drgnx-look-theme nil
-  "The colour theme ui/look loads at start (Color Theme picks it); nil: the theme Emacs starts with.  A change
-switches the theme at once while the module runs."
-  :type '(choice (const :tag "Emacs's own" nil) symbol) :group 'drgnx
+(drgnx-defsetting drgnx-look-theme 'auto
+  "The colour theme ui/look loads at start (Color Theme picks it); `auto': drgnx Dark, Light or High Contrast as
+the desktop says, until a theme of yours is loaded; nil: the theme Emacs starts with.  A change switches the theme
+at once while the module runs."
+  :type '(choice (const :tag "Follow the desktop" auto) (const :tag "Emacs's own" nil) symbol) :group 'drgnx
   :scope 'global :workspace 'never :agents 'never :apply #'drgnx-look--settings-apply
   :schema '(or null symbol))
 
@@ -258,6 +265,7 @@ loaded since.  Its teardown gives the previous ones back.")
   "Zen mode off; the themes the module loaded off, the ones enabled before its setup on again (a theme someone
 else enabled since stays)."
   (when (frame-parameter nil 'drgnx-look-zen) (drgnx-look-zen))
+  (drgnx-look-follow-off)
   (drgnx-look-density-off)
   (drgnx-look-fonts-off)
   (drgnx-look-derive-off)
@@ -271,11 +279,17 @@ else enabled since stays)."
 
 (defun drgnx-look--settings-apply ()
   "The `:apply' of `drgnx-look-theme': switch to it, while the module runs and the theme is installed.  A theme
-that does not load is said, and the colours stay."
-  (when (and drgnx-look-theme (drgnx-module-running-p 'ui/look)
-             (not (equal custom-enabled-themes (list drgnx-look-theme)))
+that does not load is said, and the colours stay.  `auto' hands over to the follower."
+  (when (and drgnx-look-theme (drgnx-module-running-p 'ui/look))
+    (if (eq drgnx-look-theme 'auto)
+        (drgnx-look-follow-apply)
+      (drgnx-look--settings-apply-theme))))
+
+(defun drgnx-look--settings-apply-theme ()
+  "Switch to the theme `drgnx-look-theme' names, when it is installed."
+  (when (and (not (equal custom-enabled-themes (list drgnx-look-theme)))
              (memq drgnx-look-theme (custom-available-themes)))
-    (condition-case e (drgnx-look--load drgnx-look-theme)
+    (condition-case e (let ((drgnx-look-follow--loading t)) (drgnx-look--load drgnx-look-theme))
       (error (require 'drgnx-notice)
              (drgnx-notify 'config 'warn (format "the colour theme %s does not load (%s); Color Theme picks another"
                                                  drgnx-look-theme (error-message-string e))
@@ -285,7 +299,7 @@ that does not load is said, and the colours stay."
   "Make THEME the only theme and remember it (`drgnx-look-theme', in settings.el).  A settings.el with a mistake
 refuses (`drgnx-settings-refused') before the theme changes."
   (drgnx-settings-area-ensure-writable)
-  (drgnx-look--load theme)
+  (let ((drgnx-look-follow--loading t)) (drgnx-look--load theme))
   (drgnx-modules-update-state (lambda (state) (plist-put (copy-sequence state) :theme theme))))
 
 (defun drgnx-look-choose-theme (theme)
@@ -366,9 +380,10 @@ refuses (`drgnx-settings-refused') before the theme changes."
                                              :map 'drgnx-decor-button-map :when (lambda () (get-text-property (point) 'drgnx-decor-action))
                                              :doc "Run the decoration button at point")
                        ;; last, and guarded: a theme that errors leaves the commands (Color Theme picks another)
+                       (drgnx-look-follow-on)
                        (when-let* ((theme (drgnx-look--saved-theme)))
-                         (when (memq theme (custom-available-themes))
-                           (condition-case e (drgnx-look--load theme)
+                         (when (memq theme (custom-available-themes))      ; `auto' is not one: the follower chose
+                           (condition-case e (let ((drgnx-look-follow--loading t)) (drgnx-look--load theme))
                              (error (message "drgnx: the colour theme %s does not load (%s); Color Theme picks another"
                                              theme (error-message-string e))))))))
 

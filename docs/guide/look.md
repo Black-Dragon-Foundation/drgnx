@@ -33,6 +33,31 @@ setup.
 
 High Contrast has no tints and no shadow faces; every text pair is at least 7:1.
 
+### Following the desktop
+
+The setting `drgnx-look-theme` is `auto` by default: drgnx Dark, Light or High Contrast, as your desktop says (through
+its settings portal; on macOS, the system appearance).
+
+| The desktop says | Theme |
+|---|---|
+| Contrast: more | High Contrast |
+| Dark | Dark |
+| Light, or no preference | Light |
+| Nothing (no portal, or it has not answered yet) | Dark |
+
+The portal is read in the background and never waited for, so the first frame is drawn at once in Dark and the theme
+switches when the answer comes, and again whenever you change the desktop's setting. A theme you choose yourself
+(Color Theme, `load-theme` in `config.el`, a package) switches `auto` off for the session, and one notice says so
+("Theme follows the desktop: paused while modus-vivendi is on"); drgnx never replaces it. To keep one theme, pick it
+with Color Theme; set `drgnx-look-theme` to `nil` to keep Emacs's own colours.
+
+The first time drgnx starts with `auto` because your `settings.el` named no theme, one notice says "drgnx now has its
+own themes; Color Theme picks another". It is shown once.
+
+`drgnx-look-accent` is `system` by default: the accent and the focus ring take the accent colour the desktop gives,
+made lighter on a dark theme and darker on a light one until it reads at 4.5:1 as text. Set it to `theme` for the
+theme's own accent.
+
 ### Terminals
 
 On a terminal with 256 colours or fewer, the gap, the editor and the panel are one colour: the cards are drawn by the
