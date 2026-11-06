@@ -14,9 +14,14 @@
     (drgnx-exec-listed-hook . drgnx-extensions-jobs--listed)
     (drgnx-extensions-jobs-plan-functions . drgnx-extensions-live-plan)
     (drgnx-extensions-jobs-done-functions . drgnx-extensions-live--done)
+    (drgnx-extensions-jobs-before-functions . drgnx-extensions-live-before)
+    (drgnx-extensions-jobs-plan-gone-functions . drgnx-extensions-live--plan-gone)
     (kill-emacs-hook . drgnx-extensions-live--kill)
-    (drgnx-settings-changed-functions . drgnx-extensions-project--changed))
-  "The hooks the three layers add: (HOOK . FUNCTION).")
+    (drgnx-settings-changed-functions . drgnx-extensions-project--changed)
+    (drgnx-extensions-jobs-done-functions . drgnx-extensions-project--job-done)
+    (drgnx-hub-connected-functions . drgnx-extensions--send-modules)
+    (drgnx-modules-after-teardown-functions . drgnx-extensions--send-modules))
+  "The hooks the layers add: (HOOK . FUNCTION).")
 
 (defun drgnx-extensions-module-test--on ()
   "The hooks of the layers that are on now."
@@ -45,5 +50,25 @@
                              (should (equal (sort (mapcar #'cdr (drgnx-extensions-module-test--on)) #'string<)
                                             (sort (mapcar #'cdr drgnx-extensions-module-test--hooks) #'string<))))
     (should-not (drgnx-extensions-module-test--on))))
+
+(ert-deftest drgnx-extensions-module/the-modules-reach-the-hub-as-built-in-rows ()
+  (drgnx-extensions-module-test--with
+    (let ((calls nil))
+      (cl-letf (((symbol-function 'drgnx-hub-call)
+                 (lambda (method params _callback &rest _) (when (equal method "extensions/modules") (push params calls)))))
+        (drgnx-test-with-modules '(tools/extensions)
+          ;; the hub's subscription is up: the table goes to it, without a wait
+          (run-hooks 'drgnx-hub-connected-functions)
+          (should (= (length calls) 1))
+          (let* ((modules (append (plist-get (car calls) :modules) nil))
+                 (me (seq-find (lambda (m) (equal (plist-get m :name) "tools/extensions")) modules)))
+            (should me)
+            (should (equal (plist-get me :state) "on"))
+            (should (stringp (plist-get me :doc)))
+            (should (vectorp (plist-get me :packages)))
+            (should (vectorp (plist-get me :flags))))
+          ;; a module turned off or on: the table again
+          (run-hooks 'drgnx-modules-after-teardown-functions)
+          (should (= (length calls) 2)))))))
 
 ;;; extensions-module-test.el ends here

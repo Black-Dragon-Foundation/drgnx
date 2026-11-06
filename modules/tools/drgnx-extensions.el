@@ -102,6 +102,35 @@ when you ask (the Refresh command)."
       (drgnx-extensions--start-daily-check 'tools/extensions)
     (drgnx-extensions--stop-daily-check)))
 
+;;;; The modules as Built-in rows
+
+(defvar drgnx-modules--report)
+(defvar drgnx-hub-connected-functions)
+(defvar drgnx-modules-after-teardown-functions)
+(declare-function drgnx-hub-call "drgnx-hub-client" (method params callback &rest keys))
+
+(defun drgnx-extensions--module-state (name)
+  "The hub's word for module NAME's state: on, off, needs-package or failed."
+  (pcase (plist-get (alist-get name drgnx-modules--report) :status)
+    ('ok "on") ('failed "failed") ('missing-packages "needs-package") (_ "off")))
+
+(defun drgnx-extensions--module-rows ()
+  "The module table as `extensions/modules' takes it: a vector of (:name :doc :packages :flags :state)."
+  (vconcat
+   (mapcar (lambda (m)
+             (let ((spec (cdr m)) (names (lambda (xs) (vconcat (mapcar (lambda (x) (format "%s" x)) (ensure-list xs))))))
+               (list :name (symbol-name (car m)) :doc (or (plist-get spec :doc) "")
+                     :packages (funcall names (plist-get spec :packages)) :flags (funcall names (plist-get spec :flags))
+                     :state (drgnx-extensions--module-state (car m)))))
+           drgnx-modules--table)))
+
+(defun drgnx-extensions--send-modules ()
+  "Tell the hub the module table, for the Built-in rows and the modules' toggles: on connect, and after modules were
+turned off or on (`drgnx-modules-after-teardown-functions').  Never waits or signals."
+  (ignore-errors
+    (require 'drgnx-hub-client)
+    (drgnx-hub-call "extensions/modules" (list :modules (drgnx-extensions--module-rows)) #'ignore)))
+
 ;;;; The module
 
 (defconst drgnx-extensions--local-map '(drgnx-extensions-list . drgnx-extensions-mode-map)
@@ -165,6 +194,8 @@ when you ask (the Refresh command)."
   (drgnx-extensions-details--define-view)
   (drgnx-extensions--define-commands)
   (add-hook 'drgnx-extensions-jobs-changed-functions #'drgnx-extensions-list--jobs-changed)
+  (add-hook 'drgnx-hub-connected-functions #'drgnx-extensions--send-modules)
+  (add-hook 'drgnx-modules-after-teardown-functions #'drgnx-extensions--send-modules)
   (when (fboundp 'drgnx-statusbar-define-segment)
     (drgnx-statusbar-define-segment 'extensions :fn #'drgnx-extensions--segment :click 'extensions-open
                                     :help "Extensions; click to open the list"))
@@ -180,6 +211,8 @@ when you ask (the Refresh command)."
 (defun drgnx-extensions--teardown ()
   "Close the list, stop the timers and let go of the job layer's hook."
   (remove-hook 'drgnx-extensions-jobs-changed-functions #'drgnx-extensions-list--jobs-changed)
+  (remove-hook 'drgnx-hub-connected-functions #'drgnx-extensions--send-modules)
+  (remove-hook 'drgnx-modules-after-teardown-functions #'drgnx-extensions--send-modules)
   (drgnx-extensions--stop-daily-check)
   (drgnx-extensions-plugins-teardown)
   (drgnx-extensions-recommend-teardown)

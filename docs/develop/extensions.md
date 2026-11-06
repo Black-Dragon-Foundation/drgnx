@@ -51,6 +51,13 @@ A name with a separator or a leading dot is refused.
   the archive is kept.
 - A reader ignores keys it does not know and refuses a `version` other than 1.
 
+## The modules
+
+The Built-in section's module rows come from the editor: the module sends its table with `extensions/modules` (one
+`drgnx-hub-call`, no wait) each time the hub's subscription is up (`drgnx-hub-connected-functions`) and after modules
+are turned off or on (`drgnx-modules-after-teardown-functions`). Each entry is `(:name :doc :packages :flags :state)`,
+the state `on` (ran), `failed`, `needs-package` (waits for its packages) or `off`.
+
 ## Jobs
 
 Every install, update, removal, rollback and refresh the view asks for is a hub job
