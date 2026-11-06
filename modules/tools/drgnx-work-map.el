@@ -25,6 +25,12 @@
 (unless (featurep 'drgnx-work-edges)
   (load (expand-file-name "drgnx-work-edges" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 
+(unless (featurep 'drgnx-runners-view)
+  (load (expand-file-name "drgnx-runners-view" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+
+(declare-function drgnx-runners-view-dot-face "drgnx-runners-view")
+(declare-function drgnx-work-space--show-detail "drgnx-work-space")
+(declare-function drgnx-face-glyph "drgnx-ui-kit")
 (declare-function drgnx-work-edges-geometry "drgnx-work-edges")
 (declare-function drgnx-work-edges-colours "drgnx-work-edges")
 (declare-function drgnx-work-edges-key "drgnx-work-edges")
@@ -431,7 +437,8 @@ the side panel follows; the chain's edge tiles one frame later (the timer takes 
                        ((fboundp 'magit-status) (funcall #'magit-status root))
                        (t (funcall show (dired-noselect root))))))
       ('file (drgnx-work-code-open-file state sel :beside beside))
-      ('machine (message "Work: %s — its queue is in the side panel" (plist-get (drgnx-work-client-item state id) :label)))
+      ('machine (drgnx-work-space--show-detail (current-buffer))
+                (message "Work: %s — its queue is in the side panel" (plist-get (drgnx-work-client-item state id) :label)))
       ;; a document's key is the hub's: only a plain local file inside a root of the workspace opens, by its true name
       (_ (let ((path (seq-some (lambda (root) (drgnx-work-code-local-file key (list root)))
                                (if-let* ((v (drgnx-work-client--get drgnx-work-space--view)))
@@ -465,12 +472,27 @@ argument): without moving focus."
   (pcase s ("needs-you" "needs you") ((pred stringp) s) (_ "")))
 
 (defun drgnx-work-map--dot (item)
-  "The state dot of ITEM, in the face of its state."
-  (propertize "●" 'face (pcase (drgnx-work-map--field item :state)
-                          ("running" 'drgnx-work-chain)
-                          ("needs-you" 'drgnx-work-needs-you)
-                          ((or "review" "stalled") 'drgnx-work-overlap)
-                          (_ 'drgnx-work-dim))))
+  "The state dot of ITEM, in the face of its state; a runner's follows its own state (`drgnx-runners-*' faces)."
+  (if-let* ((r (drgnx-work-map--field item :runner)))
+      (propertize (drgnx-face-glyph 'dot) 'face
+                  (drgnx-runners-view-dot-face (or (plist-get r :state) "") (plist-get r :jobs)))
+    (propertize "●" 'face (pcase (drgnx-work-map--field item :state)
+                            ("running" 'drgnx-work-chain)
+                            ("needs-you" 'drgnx-work-needs-you)
+                            ((or "review" "stalled") 'drgnx-work-overlap)
+                            (_ 'drgnx-work-dim)))))
+
+(defun drgnx-work-map--job-chip (job &optional now)
+  "The agent card's chip for its JOB (a plist as the hub sends it): \"job · NAME · M:SS/Nm\" at NOW (seconds since the
+epoch; default the present), or \"job · NAME · waiting\" while it has no machine."
+  (if (or (equal (plist-get job :state) "waiting") (not (numberp (plist-get job :started))))
+      (format "job · %s · waiting" (plist-get job :name))
+    (format "job · %s · %s" (or (plist-get job :runner) (plist-get job :name)) (drgnx-work-map--job-time job now))))
+
+(defun drgnx-work-map--job-time (job &optional now)
+  "JOB's elapsed time against its time box, \"M:SS/Nm\", at NOW (seconds since the epoch; default the present)."
+  (let ((secs (max 0 (truncate (- (or now (float-time)) (plist-get job :started))))) (limit (plist-get job :limit_min)))
+    (format "%d:%02d%s" (/ secs 60) (% secs 60) (if limit (format "/%dm" limit) ""))))
 
 (defun drgnx-work-map--badge (item)
   "The agent badge: the model's initial in the agent's colour."
@@ -504,7 +526,8 @@ argument): without moving focus."
                                      (and (funcall f :minutes) (format "%d min" (funcall f :minutes)))
                                      (funcall f :spend)
                                      (and progress (format "%d/%d" (car progress) (cadr progress)))
-                                     (and ctx (> ctx 80) (format "ctx %d %%" ctx))))
+                                     (and ctx (> ctx 80) (format "ctx %d %%" ctx))
+                                     (and (funcall f :job) (drgnx-work-map--job-chip (funcall f :job)))))
                      " · ")
           (if-let* ((c (funcall f :conclusion))) (concat "→ " c) "")
           (cond ((plist-get it :warn)
@@ -524,14 +547,19 @@ argument): without moving focus."
                   (drgnx-work-map--new-chip (plist-get item :id)))
           (concat (mapconcat #'identity
                              (delq nil (list (or (funcall f :activity) (drgnx-work-map--state-word (funcall f :state)))
-                                             (and (funcall f :minutes) (format "%dm" (funcall f :minutes)))))
+                                             (and (funcall f :minutes) (format "%dm" (funcall f :minutes)))
+                                             (and (funcall f :job) (drgnx-work-map--job-chip (funcall f :job)))))
                              " ")
                   (if (plist-get item :warn) (propertize " ⚠" 'face 'drgnx-work-overlap) "")))))
 
 (defun drgnx-work-map--chip-line (item)
   "The one line of a chip item: ask, spec, plan, branch, file or machine."
   (let* ((kind (plist-get item :kind)) (label (plist-get item :label)) (f (lambda (k) (drgnx-work-map--field item k)))
-         (glyph (pcase kind ("ask" "❝") ("spec" "◫") ("plan" "☰") ("branch" "⑂") ("file" "▭") ("machine" "▣") (_ "·")))
+         (runner (and (equal kind "machine") (funcall f :runner)))
+         (glyph (if runner
+                    (concat (drgnx-work-map--dot item) " "
+                            (drgnx-face-glyph (intern (or (plist-get runner :icon) "server"))))
+                  (pcase kind ("ask" "❝") ("spec" "◫") ("plan" "☰") ("branch" "⑂") ("file" "▭") ("machine" "▣") (_ "·"))))
          (extra (pcase kind
                   ("plan" (when-let* ((p (funcall f :progress))) (format "%d/%d" (car p) (cadr p))))
                   ("branch" (let ((bits (delq nil (list (when-let* ((e (funcall f :edits))) (format "edits %d" (car e)))
@@ -541,7 +569,9 @@ argument): without moving focus."
                                                           (format "conflicts with %s" (string-join c ", ")))))))
                               (and bits (string-join bits " · "))))
                   ("file" (when-let* ((c (funcall f :change))) (format "+%d −%d" (car c) (cadr c))))
-                  ("machine" (when-let* ((s (funcall f :slots))) (format "%d/%d" (car s) (cadr s)))))))
+                  ("machine" (let ((bits (delq nil (list (when-let* ((s (funcall f :slots))) (format "%d/%d" (car s) (cadr s)))
+                                                         (when-let* ((c (plist-get runner :cost))) (and (stringp c) c))))))
+                               (and bits (string-join bits " · ")))))))
     (concat (if (plist-get item :needs_you) (propertize "⚑ " 'face 'drgnx-work-needs-you) "")
             glyph " " label (if extra (concat " · " extra) "")
             (if (plist-get item :warn) (propertize " ⚠" 'face 'drgnx-work-overlap) ""))))
@@ -795,8 +825,9 @@ mission chips (the machines' load) at the right."
                        (seq-take entries 9) " ")
             (if (> (length entries) 9) (propertize (format " +%d " (- (length entries) 9)) 'face 'drgnx-work-needs-you) "")
             (propertize " " 'display '(space :align-to right))
-            (mapconcat (lambda (c) (propertize (format " %s %d/%d " (plist-get c :label) (or (plist-get c :used) 0)
-                                                       (or (plist-get c :total) 0))
+            (mapconcat (lambda (c) (propertize (format " %s %d/%d%s " (plist-get c :label) (or (plist-get c :used) 0)
+                                                       (or (plist-get c :total) 0)
+                                                       (if (stringp (plist-get c :cost)) (format " · cloud %s" (plist-get c :cost)) ""))
                                                'face 'drgnx-work-chip))
                        (drgnx-work-client-chips state) " "))))
 

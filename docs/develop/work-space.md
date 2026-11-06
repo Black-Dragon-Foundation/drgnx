@@ -311,6 +311,15 @@ it was recorded in, and computes the steps it rests on. `work/conclusions {sessi
 
 - `Registry` is pure: `report(r, now)`, `expire(now) -> names`, `set_local(slots)`, `list()`; `local` is always first
   and never expires. `Machines` holds one behind a lock in `Core`.
+- The map hears the list with each runner's fact (`MachineFact.runner`: trust, state, jobs, icon, cost; `slots` and
+  `used` are the runner's cores and jobs), from `Registry::map_facts` (`feed_map`, on every change of the runners, every
+  report and every sweep; the model drops a list that did not change). A runner's state and jobs are read from the
+  queue at that moment. The machine item's fields carry `runner`, and the strip's chips carry `cost` when there is one.
+- A session's running or waiting job (`SessionFact.job`: id, name, machine, state, start, time box in minutes, names of
+  the keys sent, from the job tracker, the job row and the key audit) is fed by the same sweep (`Map::jobs`); the
+  session's `machine` is the job's machine, so the "runs on" edge points at the runner. The agent item carries `job`;
+  the Lisp card turns it into `job · MACHINE · M:SS/Nm`, and the side panel of a machine lists the jobs on it
+  (`drgnx-work-detail--machine-queue`), `l` (`work-job-log`) calling `exec/log` for the row's job.
 - `machines/report` takes user connections only (`classes: [User]`, in `test/conformance/class-matrix.json`); a report
   for `local`, a ttl outside 0..86400, more than 256 slots or a slot without id and kind is `invalid-params`.
 - The local pool is read from the job runner (`exec::Runner::slot_counts`, the queue's `local_slots`): one `local-N`

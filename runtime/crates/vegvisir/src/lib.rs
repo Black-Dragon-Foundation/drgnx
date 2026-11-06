@@ -23,8 +23,8 @@ use serde::{Deserialize, Serialize};
 
 pub use chain::Chain;
 pub use model::{
-    CardFact, CardKind, GraphFact, Item, MachineFact, Mode, Model, NeedsYou, PresenceEntry,
-    PresenceFact, RefFact, SessionFact, State, StepFact,
+    CardFact, CardKind, GraphFact, Item, JobFact, MachineFact, Mode, Model, NeedsYou,
+    PresenceEntry, PresenceFact, RefFact, RunnerFact, SessionFact, State, StepFact,
 };
 pub use overlap::Overlap;
 pub use view::{Density, Filters, ViewKey, ViewOp, ViewState};
@@ -161,6 +161,9 @@ pub struct Edge {
 /// What the hub feeds the core: one fact from one of its sources.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "kebab-case")]
+// a session's fact is the biggest by far, and an event is made, fed once and dropped: boxing it would only add a
+// hop to every use
+#[allow(clippy::large_enum_variant)]
 pub enum Event {
     /// An Urdr record: an ask, a spec, a plan, a task, or a link between them. Idempotent: an import again changes
     /// nothing.

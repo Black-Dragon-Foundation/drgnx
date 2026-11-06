@@ -32,7 +32,23 @@
 (defface drgnx-runners-header '((t :inherit header-line)) "The runner list's column titles." :group 'drgnx)
 (defface drgnx-runners-dim '((t :inherit shadow)) "Trust, profile and the separators of a runner's row." :group 'drgnx)
 
+(defface drgnx-runners-running '((t :inherit drgnx-accent)) "The dot of a runner that is running jobs." :group 'drgnx)
+(defface drgnx-runners-attention '((t :inherit drgnx-status-attention))
+  "The dot of a runner that needs a login, your keys or your confirm." :group 'drgnx)
+(defface drgnx-runners-error '((t :inherit error)) "The dot of a runner that cannot be reached." :group 'drgnx)
+(defface drgnx-runners-subtle '((t :inherit shadow)) "The dot of a runner that is draining or being preempted." :group 'drgnx)
+
 (defconst drgnx-runners-view-buffer-name "*drgnx Runners*" "The runner list's buffer.")
+
+(defun drgnx-runners-view-dot-face (state jobs)
+  "The face of a runner's dot for its STATE text (as the list says it) and JOBS running there: in rotation and idle,
+running, out of rotation, needing you, unreachable, or going away."
+  (cond ((equal state "ready") (if (and (numberp jobs) (> jobs 0)) 'drgnx-runners-running 'drgnx-runners-ready))
+        ((string-prefix-p "benched" state) 'drgnx-runners-out)
+        ((or (string-prefix-p "needs" state) (string-prefix-p "waits for your" state)) 'drgnx-runners-attention)
+        ((string-prefix-p "unreachable" state) 'drgnx-runners-error)
+        ((or (string-prefix-p "draining" state) (string-prefix-p "preempting" state)) 'drgnx-runners-subtle)
+        (t 'drgnx-runners-out)))
 
 (defconst drgnx-runners-view-titles '("Runner" "Trust" "Profile" "Accepts")
   "The first line's column titles, in sentence case.")

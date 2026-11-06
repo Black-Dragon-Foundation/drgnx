@@ -129,13 +129,38 @@ mod on {
 
 pub use on::{Hub, start};
 
+/// What the Work map shows of runner R: its icon (a cloud machine, a dedicated host, a machine somebody sits at), its
+/// state as the list says it and its jobs.
+fn map_fact(r: &runstav::methods::runners::Runner) -> vegvisir::RunnerFact {
+    use runstav::methods::runners::{Profile, Trust};
+    let (trust, icon) = match (r.trust, r.profile) {
+        (Trust::MyCloud, _) => ("my-cloud", "cloud"),
+        (Trust::Mine, Profile::Workstation) => ("mine", "monitor"),
+        (Trust::Shared, Profile::Workstation) => ("shared", "monitor"),
+        (Trust::Mine, Profile::Dedicated) => ("mine", "server"),
+        (Trust::Shared, Profile::Dedicated) => ("shared", "server"),
+    };
+    vegvisir::RunnerFact {
+        trust: trust.into(),
+        state: r.state.clone(),
+        jobs: r.jobs,
+        icon: icon.into(),
+        cost: None,
+    }
+}
+
 /// The runners now, sent as `runners-changed` and given to the machine registry.
 #[cfg(all(unix, not(target_os = "android")))]
 async fn changed(f: &Front) {
     if let Ok(reg) = f.core.runners.get(f)
         && let Ok(list) = reg.list().await
     {
-        crate::work::machines::set_runners(f, list.iter().map(|r| r.name.clone()).collect());
+        crate::work::machines::set_runners(
+            f,
+            list.iter()
+                .map(|r| (r.name.clone(), map_fact(r), r.cores))
+                .collect(),
+        );
         f.broadcast("runners-changed", json!(Runners { runners: list }));
     }
 }

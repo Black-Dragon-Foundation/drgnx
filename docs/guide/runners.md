@@ -99,6 +99,28 @@ list or ask no longer says it:
 
 A card only says what to run. The editor never answers a login, and never reads your key store on its own.
 
+## Runners on the Work map
+
+On the Work space map (layer 6, with the files) every runner is a machine chip, and the hub's own machine stays as
+`local`.
+
+- **The icon** says what it is: `cloud` for a machine in your cloud account, `monitor` for a machine somebody sits at,
+  `server` for a dedicated host. Where the font has no icon the glyph stands in (`☁` for cloud).
+- **The chip** is the runner's name, its load as jobs over cores (`3/16`) and, for cloud, the cost. The dot before the
+  icon follows the runner's state: green when it takes jobs, the accent while it runs them, the warning colour when it
+  is benched, the attention colour when it needs a login, your keys or your confirm (each is also a card), the error
+  colour when it cannot be reached, and a dim one while it drains or is being preempted.
+- **A "runs on" edge** joins an agent to the machine its job runs on. It shows on the selected chain, like the others.
+- **An agent's card** says `job · desktop · 3:10/6m` while a job it started runs: the machine, the time so far and the
+  time box. A job that waits says `job · NAME · waiting`.
+- **The strip** shows `desktop 3/16` for each machine, and `cloud $3.10/$50` after a cloud machine's load when cloud
+  is on.
+- **Enter on a machine** opens its queue in the side panel: the jobs running there, each with its agent, state, time and
+  the names of the keys sent to it (never their values), and the jobs that wait for a machine. `l` shows the end of the
+  log of the job on the row point is on (press it again for what came since).
+
+The laptop icon is not used yet: the runner list does not say which hosts have a battery.
+
 ## Keys
 
 Some jobs need a secret: a registry token to publish, a deploy key to fetch a private dependency. A job names the

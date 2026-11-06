@@ -182,6 +182,7 @@ fn session(id: &str, task: Option<&str>, branch: Option<&str>, base: Option<&str
         spend: None,
         context: None,
         progress: None,
+        job: None,
     }
 }
 
@@ -374,6 +375,7 @@ fn same_final_model_in_every_order() {
                 slots: 16,
                 used: 2,
                 reported: true,
+                runner: None,
             }]),
             // the ref move: A's branch merged
             refs(&[
