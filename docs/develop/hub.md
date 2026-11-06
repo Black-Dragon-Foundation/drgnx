@@ -2562,6 +2562,18 @@ the plan's totals by the smallest class's, and scales a task's p90 by its class'
 second simulation with the same seed and a price of each drawn observation's cold wakes × its context at the cache
 write rate. A manager's own spend comes from the `manager` samples, per task, beside the total.
 
+**The week's pace** (`Forecast.pace`, one `PaceEffect` for each subscription meter a task of the plan runs on). A
+meter's readings are kept in a thinned history (`Budgets::history`): one for each quarter hour, none older than 8 days,
+at most 768 a provider, saved with the budgets in `runtime.db` (the `meters` field of the `budgets` row; a row saved
+before has none) and replayed when the hub starts, so a restart keeps the pace. `pace/get`'s rate still reads only the
+last 24 hours. A fall in the meter is a reset, a new segment: only rises count (`budget::rise_total`).
+`share_per_usd` is the rises over the `usd-est` that the provider's steps booked since the first kept reading; the
+account's meter includes use outside drgnx, so it is an estimate, high if anything. The plan's `added_share` is the
+plan's own `usd-est` draws on that provider (a second simulation with the same seed) times that ratio. `runs_out_p90`
+is true when the used share, the plan's p90 share and what the current rate adds before the reset reach 1; the
+forecast then warns, and the Autonomous preset's auto-start waits. `window` is `week` when the reset is more than a
+day off, else `short` ("this window"). No spend or no rise: no `added_share`, and the view says "no pace yet".
+
 | Method | Class | Answer |
 |---|---|---|
 | `forecast/get` | user | the forecast of a job, from its data as proposed |

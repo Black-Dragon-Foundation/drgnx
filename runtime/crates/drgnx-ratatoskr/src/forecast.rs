@@ -106,12 +106,98 @@ pub fn rates_in(
             write_1h: input,
         });
     }
-    let cli = match profile.provider()? {
+    let cli = cli_name(profile.provider()?);
+    prices.iter().find(|r| r.key == cli).map(row_rates)
+}
+
+/// The CLI's name, which is also its meter's and the price table's.
+fn cli_name(p: Provider) -> &'static str {
+    match p {
         Provider::Claude => "claude",
         Provider::Codex => "codex",
         Provider::Gemini => "gemini",
+    }
+}
+
+/// A day, in seconds.
+const DAY: f64 = 86_400.0;
+
+/// A meter that resets more than a day away is the week's; else the pace speaks of this window.
+pub fn window_of(resets_at: Option<f64>, now: f64) -> wire::PaceWindow {
+    match resets_at {
+        Some(r) if r - now > DAY => wire::PaceWindow::Week,
+        _ => wire::PaceWindow::Short,
+    }
+}
+
+/// The meter's share for each estimated dollar: its rises over HISTORY (a reset is not a fall) divided by USD_EST,
+/// what agents on that provider reported in the same time.  The meter is the account's, so use outside drgnx raises
+/// it: an estimate, high if anything.  None with no spend or no rise.
+pub fn share_per_usd_of(history: &[(f64, f64)], usd_est: f64) -> Option<f64> {
+    let rises = crate::budget::rise_total(history);
+    (usd_est > 0.0 && rises > 0.0).then(|| rises / usd_est)
+}
+
+/// [`share_per_usd_of`] over PROVIDER's kept readings and the `usd-est` its steps booked since the first of them.
+pub async fn share_per_usd(front: &Front, provider: &str, now: f64) -> Option<f64> {
+    let history = front.core.budgets.history(provider, now);
+    let first = history.first()?.0;
+    let provider = provider.to_owned();
+    let usd_est = front
+        .writer
+        .db
+        .read(move |c| {
+            Ok(c.query_row(
+                "select coalesce(sum(cost), 0.0) from step where cost_unit = 'usd-est' and provider = ?1 and start >= ?2",
+                (&provider, first),
+                |r| r.get::<_, f64>(0),
+            )?)
+        })
+        .await
+        .ok()?;
+    share_per_usd_of(&history, usd_est)
+}
+
+/// The plan's effect on a meter: ADDED is the share the plan adds.  `runs_out_p90`: the used share, the plan's high
+/// share and what the current rate adds before the reset reach 1 (with no reset known, the first two).  Then the
+/// forecast warns.
+pub fn pace_effect(
+    pace: &runstav::methods::timeline::Pace,
+    added: Option<wire::Range>,
+    now: f64,
+) -> (wire::PaceEffect, Option<String>) {
+    let hours_left = pace
+        .resets_at
+        .map_or(0.0, |r| ((r - now) / 3600.0).max(0.0));
+    let projected =
+        pace.used_share + added.map_or(0.0, |a| a.p90) + pace.rate_per_hour * hours_left;
+    let runs_out_p90 = added.is_some() && projected >= 1.0;
+    let exhausted_after = added.and_then(|a| {
+        let left = 1.0 - pace.used_share - a.p50;
+        if left <= 0.0 {
+            return Some(now);
+        }
+        let at = now + left / pace.rate_per_hour * 3600.0;
+        (pace.rate_per_hour > 0.0 && pace.resets_at.is_none_or(|r| at <= r)).then_some(at)
+    });
+    let effect = wire::PaceEffect {
+        provider: pace.provider.clone(),
+        used_share: pace.used_share,
+        added_share: added,
+        exhausted_at: pace.exhausted_at,
+        exhausted_after,
+        resets_at: pace.resets_at,
+        window: window_of(pace.resets_at, now),
+        estimate: true,
+        runs_out_p90,
     };
-    prices.iter().find(|r| r.key == cli).map(row_rates)
+    let warning = runs_out_p90.then(|| {
+        format!(
+            "the plan's p90 would use up the {} limit before it resets (an estimate)",
+            pace.provider
+        )
+    });
+    (effect, warning)
 }
 
 /// [`rates_in`] with the hub's price table and PROFILE's gateway price.
@@ -367,14 +453,10 @@ async fn build(
             n: u64::try_from(w.n).unwrap_or(0),
             role: w.role.clone(),
             profile: w.profile.clone(),
-            provider: profiles[i].as_ref().and_then(|p| p.provider()).map(|p| {
-                match p {
-                    Provider::Claude => "claude",
-                    Provider::Codex => "codex",
-                    Provider::Gemini => "gemini",
-                }
-                .to_owned()
-            }),
+            provider: profiles[i]
+                .as_ref()
+                .and_then(|p| p.provider())
+                .map(|p| cli_name(p).to_owned()),
             basis: wire::Basis {
                 level: basis_level(class.level),
                 n: class.n,
@@ -431,6 +513,55 @@ async fn build(
         cost: cost_ranges(&wake_totals.cost, min_n, None).0,
     });
     let manager = manager_line(front, &managers);
+    // the effect on each subscription's meter that a task of the plan runs on
+    let on_subscription: Vec<Option<&'static str>> = profiles
+        .iter()
+        .map(|p| {
+            p.as_ref()
+                .filter(|p| p.ai.is_none())
+                .and_then(|p| p.provider())
+                .map(cli_name)
+        })
+        .collect();
+    let mut meters: Vec<&'static str> = Vec::new();
+    for name in on_subscription.iter().flatten() {
+        if !meters.contains(name) {
+            meters.push(name);
+        }
+    }
+    let mut pace = Vec::new();
+    let mut warnings = Vec::new();
+    for name in meters {
+        let Some(meter) = front
+            .core
+            .budgets
+            .pace(Some(name), made_at)
+            .into_iter()
+            .next()
+        else {
+            continue;
+        };
+        let added = match share_per_usd(front, name, made_at).await {
+            Some(ratio) => {
+                let own = |i: usize, o: &Obs| {
+                    if on_subscription[i] == Some(name) {
+                        price(i, o)
+                    } else {
+                        None
+                    }
+                };
+                let t = sim::simulate(&wants, &classes, &all, &own, slots, seed, sim::DRAWS);
+                t.cost.get("usd-est").map(|r| wire::Range {
+                    p50: r.p50 * ratio,
+                    p90: r.p90 * ratio,
+                })
+            }
+            None => None,
+        };
+        let (effect, warning) = pace_effect(&meter, added, made_at);
+        pace.push(effect);
+        warnings.extend(warning);
+    }
     let cur = front.settings.current();
     let forecast = wire::Forecast {
         tasks: out_tasks,
@@ -441,8 +572,8 @@ async fn build(
         unpriced,
         wake,
         manager,
-        pace: Vec::new(),
-        warnings: Vec::new(),
+        pace,
+        warnings,
         prices_as_of: prices_as_of(&cur.loaded.values.agents_model_prices),
         made_at,
     };
@@ -1043,6 +1174,84 @@ mod tests {
         assert!(t.cost[0].estimate && t.cost[0].p50 > 0.0);
         assert!(got.unpriced.is_empty());
         assert_eq!(got.prices_as_of, "2026-11-01");
+    }
+
+    fn meter(used: f64, rate: f64, resets_at: Option<f64>) -> runstav::methods::timeline::Pace {
+        runstav::methods::timeline::Pace {
+            provider: "claude".into(),
+            used_share: used,
+            rate_per_hour: rate,
+            exhausted_at: None,
+            resets_at,
+            estimate: true,
+        }
+    }
+
+    /// Pure (D): the share per dollar is the meter's rises over what was spent in estimated dollars.
+    #[test]
+    fn share_per_usd_divides_rises_by_estimated_spend() {
+        let history = [(0.0, 0.1), (900.0, 0.2)];
+        let got = share_per_usd_of(&history, 20.0).unwrap();
+        assert!((got - 0.005).abs() < 1e-12, "{got}");
+    }
+
+    /// Pure (D): use outside drgnx raises the share per dollar, and the effect says it is an estimate.
+    #[test]
+    fn outside_use_makes_it_higher_and_it_is_labelled_an_estimate() {
+        let ours = share_per_usd_of(&[(0.0, 0.1), (900.0, 0.2)], 20.0).unwrap();
+        let with_outside = share_per_usd_of(&[(0.0, 0.1), (900.0, 0.25)], 20.0).unwrap();
+        assert!(with_outside > ours);
+        let (effect, _) = pace_effect(&meter(0.2, 0.0, None), None, 0.0);
+        assert!(effect.estimate);
+    }
+
+    /// Pure (D): no estimated spend, or a meter that never rose, has no pace: the view says so.
+    #[test]
+    fn no_usd_est_or_no_rises_gives_none() {
+        assert_eq!(share_per_usd_of(&[(0.0, 0.5), (900.0, 0.5)], 20.0), None);
+        assert_eq!(share_per_usd_of(&[(0.0, 0.1), (900.0, 0.2)], 0.0), None);
+        assert_eq!(share_per_usd_of(&[], 5.0), None);
+        let (effect, warning) = pace_effect(&meter(0.2, 0.0, None), None, 0.0);
+        assert_eq!(effect.added_share, None);
+        assert!(!effect.runs_out_p90 && warning.is_none());
+    }
+
+    /// Pure (D): used 0.6 and 0.01 an hour with the reset 72 h away, and a plan whose p90 adds 0.2, runs out first.
+    #[test]
+    fn a_plan_that_outruns_the_reset_warns() {
+        let now = 1_000_000.0;
+        let m = meter(0.6, 0.01, Some(now + 72.0 * 3600.0));
+        let added = wire::Range { p50: 0.1, p90: 0.2 };
+        let (effect, warning) = pace_effect(&m, Some(added), now);
+        assert!(effect.runs_out_p90);
+        assert!(warning.unwrap().contains("claude"));
+        assert_eq!(effect.added_share, Some(added));
+        // the middle share alone also runs out at this rate: when, is before the reset
+        assert!(
+            effect
+                .exhausted_after
+                .is_some_and(|t| t < now + 72.0 * 3600.0)
+        );
+        // a small plan on a slow meter does not
+        let slow = meter(0.3, 0.001, Some(now + 72.0 * 3600.0));
+        let small = wire::Range {
+            p50: 0.01,
+            p90: 0.02,
+        };
+        let (effect, warning) = pace_effect(&slow, Some(small), now);
+        assert!(!effect.runs_out_p90 && warning.is_none());
+    }
+
+    /// Pure (D): a reset more than a day off is the week, else this window.
+    #[test]
+    fn resets_more_than_a_day_off_is_the_week_else_this_window() {
+        let now = 5_000.0;
+        assert_eq!(
+            window_of(Some(now + 2.0 * 86_400.0), now),
+            wire::PaceWindow::Week
+        );
+        assert_eq!(window_of(Some(now + 7_200.0), now), wire::PaceWindow::Short);
+        assert_eq!(window_of(None, now), wire::PaceWindow::Short);
     }
 
     /// Pure (D): the runner's tick and the forecast count slots with one function.

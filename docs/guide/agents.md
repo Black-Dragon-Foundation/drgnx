@@ -743,7 +743,11 @@ with `budget/set` reports again if it is still reached.
 
 Subscription windows (Claude's `_claude/rateLimit`, Codex's rate-limit window) are read from the agent, never from
 your login. `pace/get` gives, per meter, the share used, the rate per hour (linear over the last 24 hours of readings)
-and when the window would run out at that rate, unless it resets first. Its numbers are estimates.
+and when the window would run out at that rate, unless it resets first. Its numbers are estimates. The meter's
+readings are kept for eight days (one every quarter hour) and survive a restart of the hub; the rate itself still
+reads the last 24 hours. A job's forecast uses them to say what share of the week a plan on a subscription would use,
+and warns when its high end would use the limit up before it resets. The meter is the account's, so use outside drgnx
+counts: the share is an estimate.
 
 ## The supervisor
 

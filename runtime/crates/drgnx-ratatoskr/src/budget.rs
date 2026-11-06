@@ -87,16 +87,57 @@ pub fn session_of(s: &BudgetScope) -> Option<&str> {
     }
 }
 
-/// A subscription meter: its readings of the last [`PACE_WINDOW`].
+/// How long a meter's thinned history is kept, in seconds (8 days).
+const HISTORY_SPAN: f64 = 8.0 * 24.0 * 3600.0;
+
+/// The thinned history keeps one reading in each slot of this many seconds (a quarter hour): at most 768 a provider.
+const HISTORY_SLOT: f64 = 900.0;
+
+/// The rise a meter made over READINGS, in time order: every rise added, a fall (the window reset) adds nothing and
+/// starts a new segment.
+pub fn rise_total(readings: &[(f64, f64)]) -> f64 {
+    readings
+        .windows(2)
+        .map(|w| (w[1].1 - w[0].1).max(0.0))
+        .sum()
+}
+
+/// A subscription meter: its readings of the last [`PACE_WINDOW`], and a thinned history of eight days.
 #[derive(Clone, Debug, Default)]
 struct Meter {
     /// `(at, share)` in time order.
     samples: VecDeque<(f64, f64)>,
     resets_at: Option<f64>,
+    /// `(at, share)`: one reading for each [`HISTORY_SLOT`], the slot's first time and its latest share; a fall is
+    /// kept (it is a reset, [`rise_total`] reads it so).
+    history: VecDeque<(f64, f64)>,
 }
 
 impl Meter {
-    fn read(&mut self, at: f64, share: f64, resets_at: Option<f64>) {
+    /// Whether the reading started a new slot of the history (what is worth saving).
+    fn read(&mut self, at: f64, share: f64, resets_at: Option<f64>) -> bool {
+        let fresh = match self.history.back_mut() {
+            Some((slot, latest)) if at - *slot < HISTORY_SLOT => {
+                *latest = share;
+                false
+            }
+            _ => {
+                self.history.push_back((at, share));
+                true
+            }
+        };
+        while self
+            .history
+            .front()
+            .is_some_and(|(t, _)| at - *t >= HISTORY_SPAN)
+        {
+            self.history.pop_front();
+        }
+        self.read_window(at, share, resets_at);
+        fresh
+    }
+
+    fn read_window(&mut self, at: f64, share: f64, resets_at: Option<f64>) {
         // a share that fell is a new window: the earlier readings say nothing about it
         if self.samples.back().is_some_and(|(_, s)| share + 1e-9 < *s) {
             self.samples.clear();
@@ -165,6 +206,16 @@ struct Saved {
     limits: Vec<(BudgetScope, Vec<Limit>)>,
     spent: Vec<(BudgetScope, Vec<Limit>)>,
     parents: Vec<(BudgetScope, BudgetScope)>,
+    /// The meters' thinned histories; a row saved before they were kept has none.
+    #[serde(default)]
+    meters: Vec<SavedMeter>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SavedMeter {
+    provider: String,
+    history: Vec<(f64, f64)>,
+    resets_at: Option<f64>,
 }
 
 struct Inner {
@@ -303,6 +354,15 @@ impl Budgets {
             st.scopes.insert(pk.clone(), p);
             st.parent.insert(ck, pk);
         }
+        // the readings are replayed, so the 24 h window of the pace is rebuilt from the history
+        for m in s.meters {
+            let mut meter = Meter::default();
+            for (at, share) in m.history {
+                meter.read(at, share, None);
+            }
+            meter.resets_at = m.resets_at;
+            st.meters.insert(m.provider, meter);
+        }
     }
 
     fn saved(&self) -> Saved {
@@ -332,6 +392,15 @@ impl Budgets {
                 .parent
                 .iter()
                 .filter_map(|(c, p)| Some((scope(c)?, scope(p)?)))
+                .collect(),
+            meters: st
+                .meters
+                .iter()
+                .map(|(p, m)| SavedMeter {
+                    provider: p.clone(),
+                    history: m.history.iter().copied().collect(),
+                    resets_at: m.resets_at,
+                })
                 .collect(),
         }
     }
@@ -553,11 +622,15 @@ impl Budgets {
         if !(0.0..=1.0 + 1e-9).contains(&share) {
             return Vec::new();
         }
-        self.st()
+        let fresh = self
+            .st()
             .meters
             .entry(provider.to_string())
             .or_default()
             .read(now, share, resets_at);
+        if fresh {
+            self.save();
+        }
         let what = format!("limit-share:{provider}");
         let delta = {
             let mut st = self.st();
@@ -568,6 +641,21 @@ impl Budgets {
             d
         };
         self.spend(scope, Unit::LimitShare, delta)
+    }
+
+    /// PROVIDER's meter readings of the last eight days as of NOW, one for each quarter hour at most, in time order.
+    pub fn history(&self, provider: &str, now: f64) -> Vec<(f64, f64)> {
+        self.st()
+            .meters
+            .get(provider)
+            .map(|m| {
+                m.history
+                    .iter()
+                    .copied()
+                    .filter(|(t, _)| now - *t < HISTORY_SPAN)
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// The pace of PROVIDER's meter, or of every meter, as of NOW.
