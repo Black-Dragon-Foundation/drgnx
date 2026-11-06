@@ -27,6 +27,7 @@ bifrost = { path = "../crates/bifrost", default-features = false }
 http = "1"
 norn = { path = "../crates/norn" }
 urdr = { path = "../crates/urdr", features = ["test-hooks"] }
+drgnx-px = { path = "../crates/drgnx-px" }
 tokio = { version = "1.54", features = ["rt", "io-util", "time"] }
 
 [workspace]
@@ -230,6 +231,13 @@ bench = false
 [[bin]]
 name = "cdp_envelope"
 path = "fuzz_targets/cdp_envelope.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "px_frames"
+path = "fuzz_targets/px_frames.rs"
 test = false
 doc = false
 bench = false

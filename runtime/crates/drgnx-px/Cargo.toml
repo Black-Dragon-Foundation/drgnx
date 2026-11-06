@@ -1,0 +1,12 @@
+[package]
+name = "drgnx-px"
+description = "A networked container job's relay sidecar: the job's TCP connections as framed streams over stdio to the owner's proxy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
