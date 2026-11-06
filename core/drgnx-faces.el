@@ -62,8 +62,9 @@
 ;;;; The hover-revealed control
 
 (defface drgnx-control-hidden '((t :inherit shadow))
-  "A row's × or ⋯ while the row is not hovered.  Themes and derive give it the row's background as its foreground;
-a theme that does not leaves it dim but visible."
+  "A row's × or ⋯ while the row is not hovered.  Themes and derive give it the row's background as its foreground
+\(derive only on a graphical display: a terminal never hides the control); a theme that does not leaves it dim but
+visible."
   :group 'drgnx-look)
 (defface drgnx-hover-row '((t :inherit (drgnx-hover default)))
   "The `mouse-face' of a row with a hidden control: the hover colour and the body foreground, which shows the control."
