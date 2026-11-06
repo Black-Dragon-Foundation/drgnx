@@ -75,6 +75,7 @@ impl Hubs {
             return Ok(h.clone());
         }
         let hub = Arc::new(Hub::open(&dir.join(key)).map_err(|e| internal(e.to_string()))?);
+        hub.start_timers();
         open.insert(key.to_owned(), hub.clone());
         Ok(hub)
     }
@@ -161,9 +162,10 @@ async fn start_watch(f: &Front, hub: Arc<Hub>, tree: Tree, root: PathBuf) {
         loop {
             let Some(hub) = weak.upgrade() else { return };
             let (t, r) = (tree.clone(), rx.clone());
+            let now = crate::clock::wall_secs();
             let _ = crate::clock::blocking(move || {
                 let rx = lock(&r);
-                watch::pump(&hub, &t, &rx, crate::clock::wall_secs());
+                watch::pump(&hub, &t, &rx, now);
             })
             .await;
             crate::clock::sleep(std::time::Duration::from_secs(1)).await;
@@ -185,11 +187,12 @@ pub async fn batch(f: &Front, _: &Caller, p: w::BatchParams) -> Result<w::BatchR
         })
         .collect();
     let (id, hash) = (p.buffer_id, p.region_hash);
-    let reply =
-        crate::clock::blocking(move || hub.batch(&id, &changes, &hash, crate::clock::wall_secs()))
-            .await
-            .map_err(|e| internal(e.to_string()))?
-            .map_err(failed)?;
+    // the time is read here: a blocking thread does not carry the virtual clock
+    let now = crate::clock::wall_secs();
+    let reply = crate::clock::blocking(move || hub.batch(&id, &changes, &hash, now))
+        .await
+        .map_err(|e| internal(e.to_string()))?
+        .map_err(failed)?;
     Ok(match reply {
         BatchReply::Ok => w::BatchResult {
             ok: Some(true),
@@ -205,7 +208,8 @@ pub async fn batch(f: &Front, _: &Caller, p: w::BatchParams) -> Result<w::BatchR
 /// `history/resync`.
 pub async fn resync(f: &Front, _: &Caller, p: w::ResyncParams) -> Result<w::Done, Error> {
     let hub = f.core.history.of_buffer(&p.buffer_id)?;
-    crate::clock::blocking(move || hub.resync(&p.buffer_id, &p.text, crate::clock::wall_secs()))
+    let now = crate::clock::wall_secs();
+    crate::clock::blocking(move || hub.resync(&p.buffer_id, &p.text, now))
         .await
         .map_err(|e| internal(e.to_string()))?
         .map_err(failed)?;

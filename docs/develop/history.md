@@ -136,7 +136,12 @@ are `tracked: false` with the reason. `history/batch {buffer_id, changes, region
 offsets in the document's LF text) as the origin's peer (`user`, or `agent:<session>` for a change merged in) and answers
 `{ok}` or `{resync: true}` when the SHA-256 of the document's text differs from `region_hash`; more than 1 MiB inserted
 is refused as `split-required`. `history/resync {buffer_id, text}` replaces the document's text as the user's change;
-`history/unregister {buffer_id}` stops tracking. Typing is grouped by the settle rule (`Settler`) as in the store.
+`history/unregister {buffer_id}` stops tracking.
+
+**Timers** (`timers.rs`). Started with the project's hub, on the hub's clock (`crate::clock`, so `--test-clock` and
+`__test_advance` decide them): typing settles into one `edits` record per author and document after 30 s without a
+change (looked for every 5 s), and a document unused for 5 minutes is parked (looked for every minute, so a parked
+document leaves memory between 5 and 6 minutes after its last use).
 
 ## Testing
 

@@ -12,6 +12,7 @@ pub mod blob;
 mod capture;
 pub mod methods;
 pub mod origin;
+mod timers;
 pub mod watch;
 pub mod wire;
 
