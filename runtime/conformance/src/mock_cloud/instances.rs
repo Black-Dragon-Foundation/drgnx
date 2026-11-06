@@ -54,6 +54,10 @@ pub(crate) struct Instance {
     pub tokens_required: bool,
     pub hop_limit: u32,
     pub seeded: bool,
+    /// What `RunInstances` passed as `UserData`, decoded: the machine reads it from the metadata.
+    pub user_data: Option<String>,
+    /// Its public name (`dnsName`): its container's name with containers on, else its id.
+    pub address: String,
 }
 
 impl Instance {
@@ -85,6 +89,8 @@ impl Instance {
             tokens_required: false,
             hop_limit: 1,
             seeded: false,
+            user_data: None,
+            address: id.into(),
         }
     }
 
@@ -140,29 +146,62 @@ impl Instance {
         self.state == St::Running && self.notice_at.is_some_and(|n| now >= n)
     }
 
-    pub fn fingerprint(&self, kind: &str) -> String {
-        let d = Sha256::digest(format!("{}/{}/{kind}", self.key(), self.hostkey_gen));
-        format!("SHA256:{}", b64(&d).trim_end_matches('='))
+    /// A host key's wire blob, shaped like a real one of KIND (`ed25519`, `ecdsa`) and made from the instance and its
+    /// key generation: (algorithm, blob).
+    fn host_key(&self, kind: &str) -> (&'static str, Vec<u8>) {
+        let part =
+            |n: u8| Sha256::digest(format!("{}/{}/{kind}/{n}", self.key(), self.hostkey_gen));
+        let mut blob = Vec::new();
+        let mut put = |b: &[u8]| {
+            blob.extend_from_slice(&(b.len() as u32).to_be_bytes());
+            blob.extend_from_slice(b);
+        };
+        let algo = if kind == "ed25519" {
+            put(b"ssh-ed25519");
+            put(&part(0));
+            "ssh-ed25519"
+        } else {
+            put(b"ecdsa-sha2-nistp256");
+            put(b"nistp256");
+            let mut point = vec![4u8];
+            point.extend_from_slice(&part(0));
+            point.extend_from_slice(&part(1));
+            put(&point);
+            "ecdsa-sha2-nistp256"
+        };
+        (algo, blob)
     }
 
-    /// What the image prints at first boot: the host-key fingerprints. Empty until the instance runs.
+    /// What the image prints at first boot, as cloud-init's `write-ssh-key-fingerprints` does: the fingerprints
+    /// through `logger -s -t cloud-init` (a syslog prefix on each line), then the public keys as they are. Empty
+    /// until the instance runs.
     pub fn console_text(&self) -> String {
         if !matches!(self.state, St::Running | St::Ending) {
             return String::new();
         }
+        let host = format!("root@{}", self.key());
+        let pre = format!("<14>{} cloud-init: ", syslog_time(self.ready_at));
+        let keys = [
+            ("ED25519", self.host_key("ed25519")),
+            ("ECDSA", self.host_key("ecdsa")),
+        ];
         let mut t = String::from("[    0.000000] Linux version mock\n");
-        t += "-----BEGIN SSH HOST KEY FINGERPRINTS-----\n";
-        t += &format!(
-            "256 {} root@{} (ED25519)\n",
-            self.fingerprint("ed25519"),
-            self.key()
-        );
-        t += &format!(
-            "256 {} root@{} (ECDSA)\n",
-            self.fingerprint("ecdsa"),
-            self.key()
-        );
-        t += "-----END SSH HOST KEY FINGERPRINTS-----\n";
+        t += &format!("{pre}#############################################################\n");
+        t += &format!("{pre}-----BEGIN SSH HOST KEY FINGERPRINTS-----\n");
+        for (name, (_, blob)) in &keys {
+            let fp = format!(
+                "SHA256:{}",
+                b64(&Sha256::digest(blob)).trim_end_matches('=')
+            );
+            t += &format!("{pre}256 {fp} {host} ({name})\n");
+        }
+        t += &format!("{pre}-----END SSH HOST KEY FINGERPRINTS-----\n");
+        t += &format!("{pre}#############################################################\n");
+        t += "-----BEGIN SSH HOST KEY KEYS-----\n";
+        for (_, (algo, blob)) in &keys {
+            t += &format!("{algo} {} {host}\n", b64(blob));
+        }
+        t += "-----END SSH HOST KEY KEYS-----\n";
         t
     }
 
@@ -242,6 +281,8 @@ pub(crate) struct Podman {
     pub network: String,
     pub prefix: String,
     pub run: String,
+    /// The mock's own URL as the containers reach it (`--metadata-url`): each gets its instance's metadata under it.
+    pub metadata: Option<String>,
 }
 
 impl Podman {
@@ -261,13 +302,26 @@ impl Podman {
             return;
         }
         let name = self.container(i);
-        let out = self
-            .cmd(sock)
-            .args(["run", "-d", "--name", &name])
+        let mut cmd = self.cmd(sock);
+        cmd.args(["run", "-d", "--name", &name])
             .args(["--label", &format!("drgnx.fleet={}", self.run)])
             .args(["--label", &format!("drgnx.cloud-instance={}", i.key())])
-            .args(["--network", &self.network, &self.image])
-            .output();
+            .args([
+                "--memory",
+                "1g",
+                "--memory-swap",
+                "1g",
+                "--security-opt",
+                "label=disable",
+            ]);
+        // the image's stand-in for cloud-init reads the instance's user-data from here (a URL, no secret)
+        if let Some(md) = &self.metadata {
+            cmd.args([
+                "--env",
+                &format!("DRGNX_FAKE_CLOUD_METADATA={md}/__metadata/{}", i.key()),
+            ]);
+        }
+        let out = cmd.args(["--network", &self.network, &self.image]).output();
         match out {
             Ok(o) if o.status.success() => {}
             Ok(o) => eprintln!(
@@ -285,6 +339,40 @@ impl Podman {
             return;
         }
         let _ = self.cmd(sock).args(["rm", "-f", "-t", "0", &name]).output();
+    }
+
+    /// The instance's console, where the image prints its host keys: the fake runner's `/run/fleet-console` (a
+    /// container has no serial port, and systemd as its PID 1 sends nothing to `podman logs`). Empty until the image
+    /// has written it; None without containers.
+    pub fn console(&self, i: &Instance) -> Option<String> {
+        let sock = self.sock.as_ref().filter(|_| !i.seeded)?;
+        let out = self
+            .cmd(sock)
+            .args(["exec", &self.container(i), "cat", "/run/fleet-console"])
+            .output()
+            .ok()?;
+        Some(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    /// New host keys in the instance's container, its sshd restarted on them; returns once it has. False without
+    /// containers.
+    pub fn rotate_hostkeys(&self, i: &Instance) -> bool {
+        let Some(sock) = self.sock.as_ref().filter(|_| !i.seeded) else {
+            return false;
+        };
+        let script = "rm -f /etc/ssh/ssh_host_* && ssh-keygen -A && systemctl restart sshd.service";
+        let ok = self
+            .cmd(sock)
+            .args(["exec", &self.container(i), "sh", "-c", script])
+            .status()
+            .is_ok_and(|s| s.success());
+        if !ok {
+            eprintln!(
+                "ratatoskr-mock cloud: new host keys in {} failed",
+                self.container(i)
+            );
+        }
+        true
     }
 }
 
@@ -315,6 +403,22 @@ pub(crate) fn iso(secs: u64) -> String {
     let r = secs % 86400;
     format!(
         "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        r / 3600,
+        r % 3600 / 60,
+        r % 60
+    )
+}
+
+/// `Nov  6 00:00:00`, a syslog (RFC 3164) time as `logger` prints it.
+pub(crate) fn syslog_time(secs: u64) -> String {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let (_, m, d) = civil_from_days((secs / 86400) as i64);
+    let r = secs % 86400;
+    format!(
+        "{} {d:>2} {:02}:{:02}:{:02}",
+        MONTHS[(m - 1) as usize],
         r / 3600,
         r % 3600 / 60,
         r % 60

@@ -49,6 +49,11 @@ required-features = ["fleet"]
 name = "fleet_keys"
 required-features = ["fleet"]
 
+# cloud machines' SSH: a mock cloud's machine (a fake runner) reached by certificate, its pinned host keys
+[[test]]
+name = "fleet_cloud"
+required-features = ["fleet", "test-hooks"]
+
 [dependencies]
 runstav = { path = "../runstav", version = "0.1.0" }
 draugr = { path = "../draugr", version = "0.1.0" }
@@ -95,6 +100,9 @@ secrecy.workspace = true  # job keys held in memory (runners::keys; already in t
 aws-sigv4 = { version = "1.6.4", default-features = false, features = ["sign-http", "http1"] }
 aws-credential-types = "1.3"  # the credentials aws-sigv4 signs with (in its tree)
 quick-xml = "0.42"            # EC2's XML answers
+# the cloud SSH CA's and each redial's ed25519 keys (runners::cloud::ca; already in the tree through rustls): the
+# runners plan's fallback, since ssh-key 0.6 would add sha2 0.10 beside the workspace's 0.11
+ring = { version = "0.17", default-features = false }
 
 # runners: the user's OpenSSH through the crate's native mux (no Android: the transport is Unix desktops only)
 [target.'cfg(all(unix, not(target_os = "android")))'.dependencies]

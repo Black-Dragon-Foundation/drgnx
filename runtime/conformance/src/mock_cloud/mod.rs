@@ -2,7 +2,7 @@
 //! the knobs that inject every failure the cloud code drills.
 //!
 //! `cloud --listen ADDR --podman-remote SOCK|none --prefix P --run R [--hub ID] [--image IMG] [--network NET]
-//! [--podman PATH] [--log FILE] [--parent PID]` prints `MOCK-CLOUD-PORT N` and serves:
+//! [--podman PATH] [--metadata-url URL] [--log FILE] [--parent PID]` prints `MOCK-CLOUD-PORT N` and serves:
 //!
 //! - EC2 `POST /` (form body, `Action=`), STS `GetCallerIdentity` and the Pricing `GetProducts` on the same path;
 //! - GCE `/compute/v1/projects/…`, Resource Manager `/v1/projects/P:testIamPermissions`, Billing `/v1/services/…/skus`;
@@ -14,8 +14,11 @@
 //! answers 501, is printed on stderr and is listed under `unknown_requests` of `/__mock/resources`.
 //!
 //! With `--hub ID` the mock models the fixture policy (tag conditions, explicit denies); without it every call is
-//! allowed. `--podman-remote SOCK` makes each instance a container `<P>-cloud-<id>` labelled `drgnx.fleet=<R>`;
-//! `none` keeps instances in memory only. It never touches a container whose name lacks that prefix.
+//! allowed. `--podman-remote SOCK` makes each instance a container `<P>-cloud-<id>` labelled `drgnx.fleet=<R>`, its
+//! console that container's `/run/fleet-console` and its `dnsName` the container's name; with `--metadata-url URL` (the mock as the
+//! containers reach it) each gets `DRGNX_FAKE_CLOUD_METADATA=URL/__metadata/<id>`, where the fake runner's stand-in for
+//! cloud-init reads its user-data. `none` keeps instances in memory only, with a console made up as cloud-init's. It
+//! never touches a container whose name lacks that prefix.
 
 mod ec2;
 mod gce;
@@ -258,6 +261,30 @@ pub(crate) fn b64(data: &[u8]) -> String {
         });
     }
     out
+}
+
+/// Standard base64 (padding and whitespace skipped); None on any other byte.
+pub(crate) fn b64_decode(s: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for c in s.bytes() {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' | b'\n' | b'\r' | b' ' => continue,
+            _ => return None,
+        };
+        acc = (acc << 6) | v as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    Some(out)
 }
 
 /// A failure to inject: the next `times` calls of `op` (`*`: any) get it.
@@ -785,6 +812,8 @@ fn knobs(st: &mut State, req: &Req, name: &str) -> Out {
         {
             Some(i) => {
                 i.hostkey_gen += 1;
+                // with containers, the machine's sshd itself gets new keys
+                st.podman.rotate_hostkeys(i);
                 ok()
             }
             None => Out::json(404, json!({"mock": "no such instance"})),
@@ -828,6 +857,7 @@ pub fn run(args: &[String]) {
         network: one("--network").unwrap_or_else(|| format!("fleet-{run_id}")),
         prefix: prefix.clone(),
         run: run_id.clone(),
+        metadata: one("--metadata-url"),
     };
     let listener = TcpListener::bind(&listen)
         .unwrap_or_else(|e| crate::die(&format!("cannot listen on {listen}: {e}")));

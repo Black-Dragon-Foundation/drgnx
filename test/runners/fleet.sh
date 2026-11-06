@@ -2,7 +2,7 @@
 # The fake fleet: N containers acting as SSH runners (fake-runner/Containerfile) and one harness container (the "hub")
 # on one podman network. Run it through the heavy slot (see README.md); it starts only containers named
 # $DRGNX_FLEET_PREFIX-<run>-*.
-#   fleet.sh up --runners N [--max-sessions K] [--no-linger | --no-linger-on I] [--sshd-opt OPT]...
+#   fleet.sh up --runners N [--max-sessions K] [--no-linger | --no-linger-on I] [--sshd-opt OPT]... [--cloud MOCKBIN]
 #   fleet.sh exec I -- CMD...        as `runner` in runner I (1-based)
 #   fleet.sh check I                 runner I's podman has the controllers the caps need (`up` checks every runner)
 #   fleet.sh test FILTER             the test binary $DRGNX_FLEET_TEST_BIN in the harness, with --ignored FILTER
@@ -16,6 +16,8 @@ top=$(cd "$here/../.." && pwd)
 RUN=${DRGNX_FLEET_RUN:-$(basename "$top" | tr -c 'a-zA-Z0-9' '-' | cut -c1-20 | sed 's/-*$//')}
 STATE=${DRGNX_FLEET_DIR:-$top/.claude/tmp/fleet}/$RUN
 NET=fleet-$RUN
+# the mock cloud's podman API socket: a socket path has at most 108 bytes, more than $STATE leaves
+PODMAN_SOCK=${XDG_RUNTIME_DIR:-/tmp}/$PREFIX-$RUN-podman.sock
 # tagged by the hash of its Containerfile and what it copies (test/container/image-tag.sh): built once per content
 IMAGE=localhost/drgnx-fake-runner:$(bash "$top/test/container/image-tag.sh" "$here/fake-runner/Containerfile")
 BASE=registry.fedoraproject.org/fedora:45
@@ -27,10 +29,11 @@ die() { echo "fleet.sh: $*" >&2; exit 2; }
 mine() { podman ps -a --filter "name=^$PREFIX-$RUN-" --format '{{.Names}}'; }
 
 up() {
-  local n=1 max_sessions="" linger=1 no_linger_on="" opts=()
+  local n=1 max_sessions="" linger=1 no_linger_on="" opts=() cloud=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --runners) n=$2; shift 2 ;;
+      --cloud) cloud=$2; shift 2 ;;
       --max-sessions) max_sessions=$2; shift 2 ;;
       --no-linger) linger=0; shift ;;
       --no-linger-on) no_linger_on=$2; shift 2 ;;
@@ -91,7 +94,33 @@ up() {
     printf 'Host r%s\n  User runner\n  IdentityFile %s/home/.ssh/id_ed25519\n  UserKnownHostsFile %s/home/.ssh/known_hosts\n' \
       "$i" "$STATE" "$STATE" >> "$STATE/home/.ssh/config"
   done
-  echo "fleet $RUN up: $n runner(s); harness HOME=$STATE/home"
+  [ -z "$cloud" ] || cloud_up "$cloud"
+  echo "fleet $RUN up: $n runner(s)${cloud:+ and a mock cloud}; harness HOME=$STATE/home"
+}
+
+# cloud_up MOCKBIN: ratatoskr-mock cloud in a container of its own on the fleet's network, its machines fake runners it
+# starts through a podman API socket of this run's own (stopped by `down`), named $PREFIX-$RUN-cloud-<id>. The harness
+# reaches it as http://$PREFIX-$RUN-cloud:8080/ (`test` passes DRGNX_TEST_CLOUD_ENDPOINT_AWS); so do its machines, for
+# their metadata. No real cloud: nothing leaves the fleet's network.
+cloud_up() {
+  local bin=$1 c i
+  c=$(name cloud)
+  cp "$bin" "$STATE/share/ratatoskr-mock"
+  rm -f "$PODMAN_SOCK"
+  podman system service --time=0 "unix://$PODMAN_SOCK" > "$STATE/podman-service.log" 2>&1 &
+  echo $! > "$STATE/podman-service.pid"
+  # the service announces nothing; its socket appearing is the announcement (bounded)
+  for i in $(seq 1 100); do [ -S "$PODMAN_SOCK" ] && break; sleep 0.1; done
+  [ -S "$PODMAN_SOCK" ] || die "cloud: the podman service did not start: $(cat "$STATE/podman-service.log")"
+  podman run -d --name "$c" --network "$NET" --memory 512m --memory-swap 512m --init --security-opt label=disable \
+    -v "$PODMAN_SOCK:/run/podman.sock" -v "$STATE/share:/fleet/share:ro" "$IMAGE" \
+    /fleet/share/ratatoskr-mock cloud --listen 0.0.0.0:8080 --podman-remote /run/podman.sock --podman /usr/bin/podman \
+    --prefix "$PREFIX-$RUN" --run "$RUN" --hub hub-fleet --image "$IMAGE" --network "$NET" \
+    --metadata-url "http://$c:8080" >/dev/null
+  # the mock's own announcement: its port line
+  for i in $(seq 1 100); do podman logs "$c" 2>/dev/null | grep -q '^MOCK-CLOUD-PORT 8080' && break; sleep 0.1; done
+  podman logs "$c" 2>/dev/null | grep -q '^MOCK-CLOUD-PORT 8080' || die "cloud: the mock did not start: $(podman logs "$c" 2>&1)"
+  echo "DRGNX_TEST_CLOUD_ENDPOINT_AWS=http://$c:8080/" > "$STATE/cloud.env"
 }
 
 exec_runner() {
@@ -160,7 +189,8 @@ case "${1:-}" in
         for b in sleipnir drgnx-key; do
           [ ! -x "$(dirname "$bin")/../$b" ] || cp "$(dirname "$bin")/../$b" "$STATE/share/$b"
         done
-        podman exec -e HOME="$STATE/home" -e DRGNX_FLEET_SHARE="$STATE/share" "$(name hub)" "$bin" --ignored "$@" ;;
+        cenv=(); [ ! -f "$STATE/cloud.env" ] || cenv=(-e "$(cat "$STATE/cloud.env")")
+        podman exec -e HOME="$STATE/home" -e DRGNX_FLEET_SHARE="$STATE/share" ${cenv[@]+"${cenv[@]}"} "$(name hub)" "$bin" --ignored "$@" ;;
   put) shift; for f in "$@"; do cp "$f" "$STATE/share/"; done ;;   # files appear in every runner at /fleet/share
   check-linger)   # log in over ssh, start a unit, log out, log in again: the unit is still active
         h=$(name hub)
@@ -180,6 +210,9 @@ case "${1:-}" in
           the_container_gets_its_caps linger_keeps_a_unit_after_the_session_ends ;;
   status) mine ;;
   down) for c in $(mine); do podman rm -f -v "$c" >/dev/null; done
+        # the mock cloud's podman service: ours, by its PID
+        [ ! -f "$STATE/podman-service.pid" ] || kill "$(cat "$STATE/podman-service.pid")" 2>/dev/null || true
+        rm -f "$PODMAN_SOCK"
         podman network rm -f "$NET" >/dev/null 2>&1 || true
         rm -r "$STATE" 2>/dev/null || true ;;
   *) die "usage: fleet.sh up|exec|check|test|host|s1|put|check-linger|status|down" ;;

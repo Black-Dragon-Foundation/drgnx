@@ -276,3 +276,10 @@ limits. It talks to the provider's API directly, over HTTPS, with a role you cre
 Every machine drgnx starts is tagged with your hub's id, ends itself when it powers off, and is started with an
 idempotency token, so a retry after a crash or a lost answer finds the machine the first try made instead of paying
 for a second one.
+
+**SSH to a cloud machine** uses no key of yours and never your `ssh-agent`. drgnx has its own SSH certificate
+authority (kept in your keyring, held in memory while drgnx runs). For each connection it makes a fresh key in memory,
+gives it to an `ssh-agent` of its own, and signs a certificate for it that names only that machine and lasts an hour.
+The machine accepts certificates from that authority and nothing else. Its host keys are read from its console, where
+it prints them at first boot, and pinned: a machine whose console doesn't show them is never connected to, and a host
+key that changes later is refused.

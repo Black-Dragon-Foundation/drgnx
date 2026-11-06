@@ -7,7 +7,7 @@
 //! an allowed `DryRun` answers `DryRunOperation`.
 
 use super::instances::{Instance, Provider, St, iso};
-use super::{Api, Gate, Out, Params, Req, Res, State, b64, error, esc, unknown};
+use super::{Api, Gate, Out, Params, Req, Res, State, b64, b64_decode, error, esc, unknown};
 use serde_json::json;
 use std::collections::BTreeMap;
 
@@ -122,7 +122,7 @@ fn instance_xml(i: &Instance) -> String {
          <metadataOptions><httpTokens>{}</httpTokens><httpPutResponseHopLimit>{}</httpPutResponseHopLimit></metadataOptions></item>",
         i.id,
         esc(&i.image),
-        i.id,
+        esc(&i.address),
         esc(&i.itype),
         iso(i.created),
         i.zone,
@@ -256,6 +256,14 @@ fn run_instances(st: &mut State, p: &Params, region: &str) -> Out {
         .get("MetadataOptions.HttpPutResponseHopLimit")
         .and_then(|h| h.parse().ok())
         .unwrap_or(1);
+    i.user_data = p
+        .get("UserData")
+        .and_then(b64_decode)
+        .map(|b| String::from_utf8_lossy(&b).into_owned());
+    if st.podman.sock.is_some() {
+        // the fleet's network resolves the container's name
+        i.address = st.podman.container(&i);
+    }
     let n = st.add_instance(i);
     if let Some(t) = token {
         st.tokens.insert(t, id);
@@ -403,7 +411,7 @@ fn console(st: &State, p: &Params) -> Out {
     };
     // without Latest the real service may hand back nothing on a fresh machine: the mock does, so a client that forgets it is caught
     let text = if p.flag("Latest") {
-        i.console_text()
+        st.podman.console(i).unwrap_or_else(|| i.console_text())
     } else {
         String::new()
     };

@@ -1,5 +1,5 @@
 //! Instance metadata, per instance under `/__metadata/<id or name>/…`: AWS IMDSv2 (tokens, hop limit, the spot
-//! `instance-action`) and GCE's metadata server (`preempted`, `maintenance-event`).
+//! `instance-action`, `latest/user-data`) and GCE's metadata server (`preempted`, `maintenance-event`).
 //!
 //! A request carrying `X-Mock-Hops: N` has crossed N-1 routers; IMDSv2 drops a token request past the instance's hop
 //! limit (the connection closes with no answer).
@@ -45,6 +45,15 @@ fn answer(st: &State, req: &Req, key: &str, path: &str) -> Result<Out, &'static 
                 ));
             }
             Ok(Out::text(200, &format!("imds-{}", i.id)))
+        }
+        (Provider::Aws, "GET", "/latest/user-data") => {
+            if req.header("x-aws-ec2-metadata-token") != Some(&format!("imds-{}", i.id)) {
+                return Ok(Out::text(401, "Unauthorized"));
+            }
+            Ok(match &i.user_data {
+                Some(ud) => Out::text(200, ud),
+                None => Out::text(404, "Not Found"),
+            })
         }
         (Provider::Aws, "GET", p) if p.starts_with("/latest/meta-data/") => {
             let ok = req.header("x-aws-ec2-metadata-token") == Some(&format!("imds-{}", i.id));

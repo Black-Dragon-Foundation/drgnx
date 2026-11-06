@@ -11,6 +11,7 @@
 //! `DRGNX_TEST_CLOUD_ENDPOINT_GCP`, and only a test build accepts a plain `http://` endpoint.
 
 pub mod aws;
+pub mod ca;
 pub mod creds;
 
 use mimir::BoxFuture;

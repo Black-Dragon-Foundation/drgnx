@@ -4,7 +4,7 @@
 FROM registry.fedoraproject.org/fedora:45
 
 RUN dnf -y install systemd openssh-server openssh-clients podman git fuse-overlayfs slirp4netns shadow-utils \
-        iproute procps-ng passwd util-linux crun \
+        iproute procps-ng passwd util-linux crun curl \
     && dnf clean all
 
 # the user, with a subuid range inside the 65536 ids a rootless outer container maps
@@ -41,6 +41,13 @@ RUN systemctl enable fleet-load-base.service
 # /fleet/share/enable-linger: the tests run as `runner` in the harness and can't be root here
 COPY fleet-linger.path fleet-linger.service /etc/systemd/system/
 RUN systemctl enable fleet-linger.path
+
+# a mock cloud's machine (ratatoskr-mock cloud starts this image with DRGNX_FAKE_CLOUD_METADATA): what the real image
+# does at first boot, cloud-init's part included (new host keys, the CA and principal from user-data, the keys on the
+# console); a plain fake runner skips it
+COPY fleet-cloud-init /usr/local/bin/fleet-cloud-init
+COPY fleet-cloud-init.service /etc/systemd/system/fleet-cloud-init.service
+RUN chmod 755 /usr/local/bin/fleet-cloud-init && systemctl enable fleet-cloud-init.service
 
 STOPSIGNAL SIGRTMIN+3
 CMD ["/sbin/init"]

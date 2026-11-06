@@ -70,12 +70,15 @@ pieces in tests).
 
 ```
 ratatoskr-mock cloud --listen 127.0.0.1:0 --podman-remote SOCK|none --prefix P --run R [--hub ID]
-                     [--image IMG] [--network NET] [--podman PATH] [--log FILE] [--parent PID]
+                     [--image IMG] [--network NET] [--podman PATH] [--metadata-url URL] [--log FILE] [--parent PID]
 ```
 
 It prints `MOCK-CLOUD-PORT N`. With `--podman-remote SOCK` each instance that reaches `running` is a container
-`<P>-cloud-<id>` labelled `drgnx.fleet=<R>` on the network `fleet-<R>` (only such names are ever created or removed);
-`none` keeps instances in memory. With `--hub ID` it models the fixture policy: tag conditions and the explicit
+`<P>-cloud-<id>` labelled `drgnx.fleet=<R>` on the network `fleet-<R>` (only such names are ever created or removed):
+its `dnsName` is the container's name, its console is the container's `/run/fleet-console`, and with
+`--metadata-url URL` (the mock as the containers reach it) it gets `DRGNX_FAKE_CLOUD_METADATA=URL/__metadata/<id>`,
+which the fake runner's stand-in for cloud-init reads its user-data from (`test/runners/README.md`, "Cloud
+machines"; `fleet.sh up --cloud`). `none` keeps instances in memory. With `--hub ID` it models the fixture policy: tag conditions and the explicit
 denies (`iam:PassRole`, `ModifyImageAttribute`, `ModifySnapshotAttribute`), answering `UnauthorizedOperation`, and
 `DryRunOperation` for an allowed `DryRun`. It does not evaluate IAM in general.
 
@@ -91,9 +94,14 @@ denies (`iam:PassRole`, `ModifyImageAttribute`, `ModifySnapshotAttribute`), answ
   `projects:testIamPermissions`; Billing `services/…/skus`. `requestId` makes `insert` idempotent; a `stop` clears
   `scheduling.terminationTime`; a deadline the clock passes deletes (or stops) the instance.
 - Instance metadata at `/__metadata/<id or name>/…`: IMDSv2 (`PUT latest/api/token`, a request with `X-Mock-Hops`
-  above the hop limit is dropped; `spot/instance-action`) and GCE's `preempted` and `maintenance-event`.
-- The console and serial output carry the instance's host-key fingerprints, from `-----BEGIN SSH HOST KEY
-  FINGERPRINTS-----`.
+  above the hop limit is dropped; `spot/instance-action`; `latest/user-data`, what `RunInstances` passed) and GCE's
+  `preempted` and `maintenance-event`.
+- The console and serial output carry the instance's host keys as cloud-init's `write-ssh-key-fingerprints` prints
+  them: the fingerprints through `logger -s -t cloud-init` (each line after a prefix such as
+  `<14>Nov  6 00:00:00 cloud-init: `), between `#####` lines and `-----BEGIN/END SSH HOST KEY FINGERPRINTS-----`,
+  then the public keys as they are between `-----BEGIN/END SSH HOST KEY KEYS-----`. In memory the keys are made up
+  (an ed25519 and an ECDSA one, shaped like real ones) and each fingerprint is its key's SHA-256; with containers the
+  image prints its real ones.
 
 **The clock is virtual.** It starts at 2026-11-06T00:00:00Z and moves only by `POST /__mock/clock`
 (`{"advance_s": n}` or `{"set": t}`), so boot delays, notices and deadlines need no sleeping.
@@ -114,7 +122,7 @@ denies (`iam:PassRole`, `ModifyImageAttribute`, `ModifySnapshotAttribute`), answ
 | `deny-permissions` | `{permissions}` | `testIamPermissions` leaves them out |
 | `prices` | `{aws\|gcp: {spot\|ondemand: {TYPE: n}}}` | the price lists; raising them mid-run makes a projection overrun |
 | `poweroff` | `{id}` | the instance powers itself off (terminate or stop, as started) |
-| `rotate-hostkey` | `{id}` | a new fingerprint in the console |
+| `rotate-hostkey` | `{id}` | new host keys: in the console, and with containers in the machine's sshd (restarted on them before the knob answers) |
 | `seed` | `{provider, id, tags, zone?}` | an instance the hub did not make |
 | `reset` | `{}` | everything but the clock and the configuration |
 

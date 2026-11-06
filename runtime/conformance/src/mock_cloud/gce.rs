@@ -133,7 +133,8 @@ pub(crate) fn handle(st: &mut State, req: &Req) -> Out {
         },
         "instances.getSerialPortOutput" => match st.find(Provider::Gcp, &a[1]) {
             Some(p) => {
-                let text = st.instances[p].console_text();
+                let i = &st.instances[p];
+                let text = st.podman.console(i).unwrap_or_else(|| i.console_text());
                 Out::json(
                     200,
                     json!({"kind": "compute#serialPortOutput", "contents": text, "start": 0, "next": text.len()}),

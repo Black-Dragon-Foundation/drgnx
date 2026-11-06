@@ -857,6 +857,133 @@ fn only_our_region_and_our_images_are_listed() {
     assert!(c.ec2("DescribeSubnets", &[]).body.contains("subnet-"));
 }
 
+/// The SHA256 fingerprints and the `TYPE BASE64` keys of a console, from cloud-init's two blocks.
+fn host_key_blocks(text: &str) -> (Vec<String>, Vec<(String, Vec<u8>)>) {
+    let lines: Vec<&str> = text.lines().collect();
+    let between = |b: &str, e: &str| -> Vec<&str> {
+        let s = lines
+            .iter()
+            .position(|l| l.contains(b))
+            .unwrap_or_else(|| panic!("no {b} in {text}"));
+        let n = lines[s..]
+            .iter()
+            .position(|l| l.contains(e))
+            .unwrap_or_else(|| panic!("no {e}"));
+        lines[s + 1..s + n].to_vec()
+    };
+    let fps = between(
+        "BEGIN SSH HOST KEY FINGERPRINTS",
+        "END SSH HOST KEY FINGERPRINTS",
+    )
+    .iter()
+    .map(|l| {
+        // logger's syslog prefix, then `ssh-keygen -l`'s line
+        let rest = l
+            .split_once("cloud-init: ")
+            .unwrap_or_else(|| panic!("no logger prefix: {l:?}"))
+            .1;
+        let w: Vec<&str> = rest.split_whitespace().collect();
+        assert!(
+            w[0].parse::<u32>().is_ok() && w.last().unwrap().starts_with('('),
+            "{l:?}"
+        );
+        w[1].to_string()
+    })
+    .collect();
+    let keys = between("BEGIN SSH HOST KEY KEYS", "END SSH HOST KEY KEYS")
+        .iter()
+        .map(|l| {
+            let w: Vec<&str> = l.split_whitespace().collect();
+            (w[0].to_string(), b64_decode(w[1]))
+        })
+        .collect();
+    (fps, keys)
+}
+
+// [D] pure: the mock's console is cloud-init's (tools/write-ssh-key-fingerprints), with keys whose hashes are the
+// fingerprints it prints
+#[test]
+fn the_console_prints_host_keys_as_cloud_init_does() {
+    use sha2::Digest;
+    let c = Cloud::start(&[]);
+    let id = first_id(&ec2_run(&c, &[]).body);
+    let console = |c: &Cloud| {
+        let out = c.ec2(
+            "GetConsoleOutput",
+            &[("InstanceId", &id), ("Latest", "true")],
+        );
+        String::from_utf8(b64_decode(xml(&out.body, "output"))).unwrap()
+    };
+    let text = console(&c);
+    let pre = "<14>Nov  6 00:00:00 cloud-init: ";
+    assert!(
+        text.contains(&format!(
+            "{pre}#############################################################\n"
+        )),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("{pre}-----BEGIN SSH HOST KEY FINGERPRINTS-----\n")),
+        "{text}"
+    );
+    let (fps, keys) = host_key_blocks(&text);
+    assert_eq!(keys.len(), 2, "{text}");
+    for (algo, blob) in &keys {
+        let n = u32::from_be_bytes(blob[..4].try_into().unwrap()) as usize;
+        assert_eq!(
+            &blob[4..4 + n],
+            algo.as_bytes(),
+            "the blob names its own type"
+        );
+        let fp = format!(
+            "SHA256:{}",
+            b64(&sha2::Sha256::digest(blob)).trim_end_matches('=')
+        );
+        assert!(fps.contains(&fp), "{fp} is not among {fps:?}");
+    }
+    // new host keys: new blocks
+    c.knob("rotate-hostkey", json!({"id": id}));
+    assert_ne!(host_key_blocks(&console(&c)).1, keys);
+    // GCE's serial port prints the same blocks
+    c.gce(
+        "POST",
+        &format!("{GCE_ZONE}/instances"),
+        Some(gce_body("drgnx-k")),
+    );
+    let s = c
+        .gce(
+            "GET",
+            &format!("{GCE_ZONE}/instances/drgnx-k/serialPort?port=1"),
+            None,
+        )
+        .json();
+    let (fps, keys) = host_key_blocks(s["contents"].as_str().unwrap());
+    assert_eq!((fps.len(), keys.len()), (2, 2));
+}
+
+fn b64(data: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for c in data.chunks(3) {
+        let n = (c[0] as u32) << 16
+            | (*c.get(1).unwrap_or(&0) as u32) << 8
+            | *c.get(2).unwrap_or(&0) as u32;
+        out.push(T[(n >> 18) as usize & 63] as char);
+        out.push(T[(n >> 12) as usize & 63] as char);
+        out.push(if c.len() > 1 {
+            T[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if c.len() > 2 {
+            T[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
 fn first_id(body: &str) -> String {
     xml(body, "instanceId").to_string()
 }

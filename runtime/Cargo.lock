@@ -1015,6 +1015,7 @@ dependencies = [
  "openssh",
  "proptest",
  "quick-xml",
+ "ring",
  "rmcp",
  "runstav",
  "rustix",

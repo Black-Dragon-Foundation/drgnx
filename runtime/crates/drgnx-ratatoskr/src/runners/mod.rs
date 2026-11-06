@@ -58,6 +58,8 @@ pub struct RunnerCfg {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CloudSsh {
     pub identity_agent: PathBuf,
+    /// The public half of the key in that agent: ssh pairs it with the certificate.
+    pub identity_file: PathBuf,
     pub certificate: PathBuf,
     pub known_hosts: PathBuf,
 }
@@ -101,7 +103,12 @@ impl RunnerCfg {
             ));
         }
         if let Some(c) = &self.cloud {
-            for p in [&c.identity_agent, &c.certificate, &c.known_hosts] {
+            for p in [
+                &c.identity_agent,
+                &c.identity_file,
+                &c.certificate,
+                &c.known_hosts,
+            ] {
                 config_path(p)?;
             }
         }
@@ -171,6 +178,7 @@ mod tests {
         ] {
             r.cloud = Some(CloudSsh {
                 identity_agent: bad.into(),
+                identity_file: "/run/id.pub".into(),
                 certificate: "/run/c.pub".into(),
                 known_hosts: "/run/k".into(),
             });
