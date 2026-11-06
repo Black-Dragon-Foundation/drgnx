@@ -9,6 +9,7 @@
 //! - [`log`]: the operation log's records, their causes, and the settle rule that groups typing into them.
 //! - [`revert`]: span revert on element ids, the overlaps a user's later edits make, the 3-way check.
 
+pub mod anchor;
 pub mod apply;
 pub mod docs;
 pub mod log;
@@ -21,6 +22,7 @@ pub mod store;
 pub mod text;
 mod threeway;
 
+pub use anchor::{AnchorId, Blame, FileHunks, LineHunk, Resolved, Side, When};
 pub use apply::{FileDiff, Hunk, HunkRef};
 pub use docs::{ActiveDoc, Change};
 pub use log::{FlushReason, Settler};

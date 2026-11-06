@@ -380,6 +380,7 @@ impl History {
             "pending",
             "preview",
             "provenance",
+            "anchor",
         ];
         if !TABLES.contains(&table) {
             return Err(Error::Refused(format!("no table {table}")));

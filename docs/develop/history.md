@@ -132,6 +132,20 @@ whole merge. For the text a correction inserts, each line the source holds gets 
 provenance (a rebase shares no ids with the original, so this is the only trace). `History::element_ids(doc, branch)`
 lists a text's element ids.
 
+## Anchors, who wrote this, hunks
+
+`History::anchor(doc, branch, pos, side, owner)` keeps a Loro cursor on an element id (`anchor` table, schema 3) with the
+version it was made at. `History::resolve(anchor, When::Now)` follows every edit, and a reload of the document from its
+rows; when the text it held on to is deleted it says so (`deleted`) and where the text was, with the line as it was
+written (`text_then`). `When::Then` answers in the text as it was when the anchor was made. `History::blame(doc, branch,
+range)` names, per run of characters, the peer and the record whose operations made them; base text (the seed's peers)
+and typing no record holds yet are left out.
+
+`History::hunks(branch, since)` is the one list the review view and the edits ledger draw: per file, the hunks from its
+text after record `since` to its text now, numbered as `git diff --unified=0` numbers them (the crate runs `git diff
+--no-index` over two private temporary files, as the 3-way check does `git merge-file`). A file with no change is left
+out.
+
 ## The hub
 
 `drgnx-ratatoskr/src/history/` is the hub side: capture, the editor's methods and the watcher feed. One `Hub` per

@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 /// The peers of a document's seed have the top bit set: nobody wrote their text.
-const SEED_BIT: u64 = 1 << 63;
+pub(crate) const SEED_BIT: u64 = 1 << 63;
 
 /// One place two branches of a file differ.  OURS is the first branch of the comparison, THEIRS the second.
 #[derive(Clone, Debug, PartialEq, Eq)]

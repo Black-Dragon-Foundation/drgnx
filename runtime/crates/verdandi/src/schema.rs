@@ -33,5 +33,13 @@ const V2: &str = "
 create table provenance(op integer primary key references op(id), spans_blob blob not null);
 ";
 
+/// Schema 3: anchors (a cursor on an element id, the version it was made at, who asked).  `op` is the newest record
+/// then (0: none), the oldest history the anchor still needs.
+const V3: &str = "
+create table anchor(
+  id integer primary key, doc integer not null references doc(id), branch integer not null references branch(id),
+  cursor_blob blob not null, frontier_blob blob not null, op integer not null, owner text not null);
+";
+
 /// Every migration, oldest first.
-pub(crate) const MIGRATIONS: &[(u32, &str)] = &[(1, V1), (2, V2)];
+pub(crate) const MIGRATIONS: &[(u32, &str)] = &[(1, V1), (2, V2), (3, V3)];
