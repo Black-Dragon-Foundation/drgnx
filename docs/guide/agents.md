@@ -643,7 +643,7 @@ a question from the chat comes back to you instead.
 
 The job then waits for your OK, like any proposal: the proposal card's title is the hub's, never the chat's, and
 nothing either of you writes ("approved", "start now") counts as one. `say/revise` changes it: the proposal standing
-is rejected and a new one replaces it. `say/end` closes the planning chat; its proposal stays.
+is withdrawn and a new one replaces it. `say/end` closes the planning chat; its proposal stays.
 
 One prompt makes at most one running job. Once its job has started (you approved it, or the Autonomous preset
 started it), the planning is done and the chat closes: `say/revise` is refused with "JOB has started: stop it, then
