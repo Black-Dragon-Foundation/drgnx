@@ -432,12 +432,13 @@ mod tests {
                 (b"old \xc3\xa9\n", b"gone\n"),
             ],
         );
-        let odd: [&[u8]; 4] = [
-            b"a b",
-            b"new\nline",
-            b"\xff\xfe.bin",
-            b"dir with space/\x01ctl",
-        ];
+        // APFS refuses a name that is not UTF-8 (EILSEQ), so macOS gets a multi-byte one in its place
+        let not_utf8: &[u8] = if cfg!(target_os = "macos") {
+            b"\xc3\xbf\xc3\xbe.bin"
+        } else {
+            b"\xff\xfe.bin"
+        };
+        let odd: [&[u8]; 4] = [b"a b", b"new\nline", not_utf8, b"dir with space/\x01ctl"];
         for (n, name) in odd.iter().enumerate() {
             write(&repo, name, format!("odd {n}\n").as_bytes());
         }

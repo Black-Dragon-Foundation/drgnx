@@ -121,6 +121,16 @@ fn provider_hosts_union() {
     }
 }
 
+/// Pattern D. A session's proxy pins the names the setting pins (`drgnx-sandbox-proxy-pinned-addresses`).
+#[test]
+fn a_sessions_pins_are_the_settings() {
+    let v = crate::settings::RuntimeValues {
+        sandbox_proxy_pins: vec![("registry.corp".into(), "10.0.0.5".parse().unwrap())],
+        ..Default::default()
+    };
+    assert_eq!(pins(&v), v.sandbox_proxy_pins);
+}
+
 #[test]
 fn a_base_url_is_its_host_and_port() {
     for (url, want) in [

@@ -426,11 +426,21 @@ impl Budgets {
         hits
     }
 
-    /// A cumulative reading TOTAL of WHAT for SCOPE (a session's cost so far): the rise since the last is spent.
-    pub fn spend_total(&self, scope: &BudgetScope, what: &str, unit: Unit, total: f64) -> Vec<Hit> {
+    /// A cumulative reading TOTAL of WHAT for SCOPE (a session's cost so far) in its agent's CONVERSATION: the rise
+    /// since the last reading of that conversation is spent.  A new conversation under the same session (a manager's
+    /// rotation, a fresh start after a restart) counts from zero.
+    pub fn spend_total_in(
+        &self,
+        scope: &BudgetScope,
+        what: &str,
+        conversation: &str,
+        unit: Unit,
+        total: f64,
+    ) -> Vec<Hit> {
         let delta = {
             let mut st = self.st();
-            let seen = st.seen.entry((key(scope), what.to_string())).or_insert(0.0);
+            let reading = format!("{what} {conversation}");
+            let seen = st.seen.entry((key(scope), reading)).or_insert(0.0);
             let d = total - *seen;
             *seen = total.max(*seen);
             d

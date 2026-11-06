@@ -120,6 +120,13 @@
                   "null"
                 ]
               },
+              "browser_why": {
+                "description": "Why a session whose `browser` cell allows the agent browser started without it, and the fix (a host that\ncannot give one: no full sandbox tier, Landlock below ABI 9, no browser found).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "capabilities": true,
               "commands": {
                 "default": [],
@@ -262,6 +269,15 @@
               "task": {
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "turns": {
+                "description": "How many turns this hub process has started for the session: an editor that saw the count rise and no `busy`\nknows whole turns went by between two snapshots (a turn can be shorter than the update throttle).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
                   "null"
                 ]
               },
@@ -427,8 +443,134 @@
         "title": "AgentEntries",
         "type": "object"
       },
-      "doc": "a session's entries new or changed since the last time",
+      "doc": "a session's entries new or changed since the last time, without `rawInput`, only to the connections that subscribed to the session (`agents/entries/subscribe`)",
       "name": "agent-entries"
+    },
+    {
+      "data": {
+        "$defs": {
+          "PresenceEntry": {
+            "additionalProperties": false,
+            "description": "One session in one file: the presence model's entry.",
+            "properties": {
+              "at": {
+                "description": "The hub's time of the step (seconds since the epoch).",
+                "format": "double",
+                "type": "number"
+              },
+              "file": {
+                "description": "An absolute path in one of the workspace's repositories.",
+                "type": "string"
+              },
+              "line": {
+                "description": "The last line known; absent: the file only.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "mode": {
+                "$ref": "#/$defs/PresenceMode"
+              },
+              "session": {
+                "type": "string"
+              },
+              "source": {
+                "$ref": "#/$defs/PresenceSource"
+              },
+              "step": {
+                "description": "The timeline step it came from.",
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "session",
+              "file",
+              "mode",
+              "source",
+              "step",
+              "at"
+            ],
+            "type": "object"
+          },
+          "PresenceMode": {
+            "description": "How a session is in a file.",
+            "oneOf": [
+              {
+                "enum": [
+                  "read"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "listed",
+                "description": "A directory listing or a recursive search over it.",
+                "type": "string"
+              },
+              {
+                "const": "write",
+                "description": "Written by a shell command.",
+                "type": "string"
+              },
+              {
+                "const": "edit",
+                "description": "Changed by an edit tool.",
+                "type": "string"
+              }
+            ]
+          },
+          "PresenceSource": {
+            "description": "Where the hub saw it.",
+            "oneOf": [
+              {
+                "const": "acp",
+                "description": "A read or search step's ACP fields.",
+                "type": "string"
+              },
+              {
+                "const": "edit",
+                "description": "An edit step.",
+                "type": "string"
+              },
+              {
+                "const": "command",
+                "description": "A file a shell step's command names (\"from the command\").",
+                "type": "string"
+              },
+              {
+                "const": "opened",
+                "description": "A file a shell step's processes opened (\"seen open\").",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "Who is in FILE now; the data of `agent-presence`.",
+        "properties": {
+          "entries": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/PresenceEntry"
+            },
+            "type": "array"
+          },
+          "file": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "FilePresence",
+        "type": "object"
+      },
+      "doc": "who is in a file now changed: its entries, at most once per file per 100 ms, to the connections that asked (agents/presence/subscribe)",
+      "name": "agent-presence"
     },
     {
       "data": {
@@ -478,6 +620,17 @@
                     "type": "null"
                   }
                 ]
+              },
+              "detail": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/StepDetail"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "What the step read, searched or fetched (tool steps)."
               },
               "end": {
                 "format": "double",
@@ -631,6 +784,82 @@
               }
             ]
           },
+          "StepDetail": {
+            "additionalProperties": false,
+            "description": "What a step read, searched or fetched (the `step_detail` table); never the content.",
+            "properties": {
+              "kind": {
+                "description": "`read`, `search`, `fetch`, `edit` or `execute`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "line_end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "line_start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "origin": {
+                "description": "How the hub learned it: `acp`, `acp-title` (parsed from the title), `browser`, `command` or `opened`.",
+                "type": "string"
+              },
+              "parent_tool": {
+                "description": "The `Task` tool call of the subagent that made the step (Claude's `parentToolUseId`); absent: the session's\nown step.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "query": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "title": {
+                "description": "A page's title (the agent browser's).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tool": {
+                "description": "The tool's name as the provider sent it, when it sent one.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "origin"
+            ],
+            "type": "object"
+          },
           "Unit": {
             "description": "What a limit counts.  Limits compare only in the same unit.",
             "oneOf": [
@@ -718,9 +947,45 @@
     },
     {
       "data": {
+        "$defs": {
+          "CardChoice": {
+            "additionalProperties": false,
+            "description": "One answer a card lists.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "label"
+            ],
+            "type": "object"
+          }
+        },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
+          "body": {
+            "description": "What the user should know before answering, in one line (the hub's text).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "choices": {
+            "description": "A card that lists its answers (a browser row's matrix card): the ids `cards/settle` takes, with their labels.",
+            "items": {
+              "$ref": "#/$defs/CardChoice"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "id": {
             "format": "uint64",
             "minimum": 0,
@@ -1144,6 +1409,78 @@
     },
     {
       "data": {
+        "$defs": {
+          "Machine": {
+            "additionalProperties": false,
+            "description": "A machine as the hub lists it.",
+            "properties": {
+              "local": {
+                "description": "The hub's own machine: always listed, never expires.",
+                "type": "boolean"
+              },
+              "machine": {
+                "type": "string"
+              },
+              "slots": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/Slot"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "machine",
+              "local"
+            ],
+            "type": "object"
+          },
+          "Slot": {
+            "additionalProperties": false,
+            "description": "One slot of a machine: where one agent job runs.",
+            "properties": {
+              "holder": {
+                "description": "Who holds it now (a job or a session id); none when free.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "description": "What the slot is for: `agent-job`, `build`, `test`, `gpu`, ...",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`machines/list`'s answer, and the data of `machines-changed`.",
+        "properties": {
+          "machines": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Machine"
+            },
+            "type": "array"
+          }
+        },
+        "title": "MachinesList",
+        "type": "object"
+      },
+      "doc": "the machines the hub lists changed (a report, an expiry, a local slot): the whole list",
+      "name": "machines-changed"
+    },
+    {
+      "data": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "description": "A message for the user from the hub itself (the notices' shape).",
@@ -1256,6 +1593,217 @@
       },
       "doc": "the gateway forwarded a request: its tokens and cost",
       "name": "request"
+    },
+    {
+      "data": {
+        "$defs": {
+          "Accept": {
+            "description": "Which jobs a runner takes.",
+            "enum": [
+              "all",
+              "heavy"
+            ],
+            "type": "string"
+          },
+          "Profile": {
+            "description": "Whether somebody sits at the machine.",
+            "enum": [
+              "dedicated",
+              "workstation"
+            ],
+            "type": "string"
+          },
+          "Runner": {
+            "additionalProperties": false,
+            "description": "A runner as the registry lists it.",
+            "properties": {
+              "accept": {
+                "$ref": "#/$defs/Accept"
+              },
+              "arch": {
+                "type": "string"
+              },
+              "checked": {
+                "description": "When it was last checked (seconds since the epoch).",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "cores": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "disk_free_gb": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "features": {
+                "default": [],
+                "description": "What the host has that a job may ask for (a GPU, ...).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "host": {
+                "type": "string"
+              },
+              "jobs": {
+                "description": "Jobs running there now.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "landlock_abi": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "last_strike": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "linger": {
+                "type": "boolean"
+              },
+              "mem_mib": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "os": {
+                "type": "string"
+              },
+              "podman": {
+                "type": "string"
+              },
+              "prefix": {
+                "type": "string"
+              },
+              "profile": {
+                "$ref": "#/$defs/Profile"
+              },
+              "root": {
+                "type": "string"
+              },
+              "speed": {
+                "description": "Its bench: how many times the reference workload's speed (absent: not benched).",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "state": {
+                "description": "`ready`, `benched: why (times)`, `needs a login: cmd`, `unreachable`, ...: the reason a runner is out of\nrotation is the state itself.",
+                "type": "string"
+              },
+              "strikes": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "trust": {
+                "$ref": "#/$defs/Trust"
+              }
+            },
+            "required": [
+              "name",
+              "host",
+              "trust",
+              "profile",
+              "accept",
+              "root",
+              "prefix",
+              "arch",
+              "os",
+              "cores",
+              "mem_mib",
+              "disk_free_gb",
+              "podman",
+              "linger",
+              "landlock_abi",
+              "state",
+              "strikes",
+              "jobs"
+            ],
+            "type": "object"
+          },
+          "Trust": {
+            "description": "What a runner may see of the user's work.",
+            "oneOf": [
+              {
+                "const": "mine",
+                "description": "The user's own machine: every job, every key.",
+                "type": "string"
+              },
+              {
+                "const": "my-cloud",
+                "description": "A machine drgnx starts in the user's cloud account: private code and only its listed keys.",
+                "type": "string"
+              },
+              {
+                "const": "shared",
+                "description": "Somebody else's: public code only.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/list`'s answer, and the data of `runners-changed`.",
+        "properties": {
+          "runners": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Runner"
+            },
+            "type": "array"
+          }
+        },
+        "title": "Runners",
+        "type": "object"
+      },
+      "doc": "the runners changed (one added, removed, benched or back in rotation, its trust or state, its load): the whole list",
+      "name": "runners-changed"
+    },
+    {
+      "data": {
+        "$defs": {
+          "KeyName": {
+            "description": "a key name: ASCII letters, digits and _ (not a digit first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The names of the job keys the hub holds or needs, never a value: `runners/keys-held`'s answer, and the data of the\nevent `runners/need-keys`.",
+        "properties": {
+          "names": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/KeyName"
+            },
+            "type": "array"
+          }
+        },
+        "title": "KeyNames",
+        "type": "object"
+      },
+      "doc": "a job needs keys the hub does not hold (names only; to user connections): answered only by a command the user runs",
+      "name": "runners/need-keys"
     },
     {
       "data": {
@@ -1502,6 +2050,96 @@
       },
       "doc": "the hub wrote a record view file (never committed)",
       "name": "view-written"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The data of `work-map`: what changed in one view since version `base`.",
+        "properties": {
+          "base": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "changed": {
+            "default": [],
+            "description": "Items new or changed, whole.",
+            "items": true,
+            "type": "array"
+          },
+          "chips": {
+            "items": true,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "edges": {
+            "description": "Every edge between the items shown, when the edge set changed.",
+            "items": true,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "entered": {
+            "default": [],
+            "description": "Ids that arrived live: they fade in at their place in `places`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "full": {
+            "description": "A full frame (a relayout): `changed` is every item shown, `layout` the new one.",
+            "type": "boolean"
+          },
+          "layout": true,
+          "needs_you": {
+            "items": true,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "places": {
+            "description": "The free places the arrivals took (id → rect), and their forms."
+          },
+          "removed": {
+            "default": [],
+            "description": "Ids no longer shown: they fade out and leave their place empty.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "stale": {
+            "description": "The view is hidden and its frame is out of date: shown again, it gets a full frame.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "version",
+          "base"
+        ],
+        "title": "WorkMap",
+        "type": "object"
+      },
+      "doc": "what changed in one Work map view since its version base, to that view's connection only (work/map/subscribe): at most one delta per 100 ms, a full frame on a relayout, a stale mark for a hidden view",
+      "name": "work-map"
     }
   ],
   "methods": [
@@ -1603,6 +2241,88 @@
         "type": "boolean"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "this connection gets the session's `agent-entries` events from now on (they go to no one else); the change number to continue from",
+      "name": "agents/entries/subscribe",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A session, for the entry subscription.",
+        "properties": {
+          "session": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "session"
+        ],
+        "title": "SessionRef",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The change number a subscription to a session's entries continues from.",
+        "properties": {
+          "seq": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq"
+        ],
+        "title": "EntriesSubscribed",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "this connection no longer gets the session's `agent-entries` events",
+      "name": "agents/entries/unsubscribe",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A session, for the entry subscription.",
+        "properties": {
+          "session": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "session"
+        ],
+        "title": "SessionRef",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
     },
     {
       "classes": [
@@ -1779,6 +2499,13 @@
                   "null"
                 ]
               },
+              "browser_why": {
+                "description": "Why a session whose `browser` cell allows the agent browser started without it, and the fix (a host that\ncannot give one: no full sandbox tier, Landlock below ABI 9, no browser found).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "capabilities": true,
               "commands": {
                 "default": [],
@@ -1921,6 +2648,15 @@
               "task": {
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "turns": {
+                "description": "How many turns this hub process has started for the session: an editor that saw the count rise and no `busy`\nknows whole turns went by between two snapshots (a turn can be shorter than the update throttle).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
                   "null"
                 ]
               },
@@ -2183,6 +2919,13 @@
                   "null"
                 ]
               },
+              "browser_why": {
+                "description": "Why a session whose `browser` cell allows the agent browser started without it, and the fix (a host that\ncannot give one: no full sandbox tier, Landlock below ABI 9, no browser found).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "capabilities": true,
               "commands": {
                 "default": [],
@@ -2328,6 +3071,15 @@
                   "null"
                 ]
               },
+              "turns": {
+                "description": "How many turns this hub process has started for the session: an editor that saw the count rise and no `busy`\nknows whole turns went by between two snapshots (a turn can be shorter than the update throttle).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "usage": {
                 "anyOf": [
                   {
@@ -2464,6 +3216,40 @@
       "classes": [
         "user"
       ],
+      "doc": "the session's turn is cancelled once the tool call running now completes, and its queue is held",
+      "name": "agents/pause",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ById",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the user's answer to a permission request: the only way one is answered",
       "name": "agents/permission",
       "params": {
@@ -2518,6 +3304,343 @@
         "type": "boolean"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "who is in a file now: each session's last mode, line, source and step there",
+      "name": "agents/presence/get",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`agents/presence/get`'s params.",
+        "properties": {
+          "file": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "PresenceGet",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "PresenceEntry": {
+            "additionalProperties": false,
+            "description": "One session in one file: the presence model's entry.",
+            "properties": {
+              "at": {
+                "description": "The hub's time of the step (seconds since the epoch).",
+                "format": "double",
+                "type": "number"
+              },
+              "file": {
+                "description": "An absolute path in one of the workspace's repositories.",
+                "type": "string"
+              },
+              "line": {
+                "description": "The last line known; absent: the file only.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "mode": {
+                "$ref": "#/$defs/PresenceMode"
+              },
+              "session": {
+                "type": "string"
+              },
+              "source": {
+                "$ref": "#/$defs/PresenceSource"
+              },
+              "step": {
+                "description": "The timeline step it came from.",
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "session",
+              "file",
+              "mode",
+              "source",
+              "step",
+              "at"
+            ],
+            "type": "object"
+          },
+          "PresenceMode": {
+            "description": "How a session is in a file.",
+            "oneOf": [
+              {
+                "enum": [
+                  "read"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "listed",
+                "description": "A directory listing or a recursive search over it.",
+                "type": "string"
+              },
+              {
+                "const": "write",
+                "description": "Written by a shell command.",
+                "type": "string"
+              },
+              {
+                "const": "edit",
+                "description": "Changed by an edit tool.",
+                "type": "string"
+              }
+            ]
+          },
+          "PresenceSource": {
+            "description": "Where the hub saw it.",
+            "oneOf": [
+              {
+                "const": "acp",
+                "description": "A read or search step's ACP fields.",
+                "type": "string"
+              },
+              {
+                "const": "edit",
+                "description": "An edit step.",
+                "type": "string"
+              },
+              {
+                "const": "command",
+                "description": "A file a shell step's command names (\"from the command\").",
+                "type": "string"
+              },
+              {
+                "const": "opened",
+                "description": "A file a shell step's processes opened (\"seen open\").",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "Who is in FILE now; the data of `agent-presence`.",
+        "properties": {
+          "entries": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/PresenceEntry"
+            },
+            "type": "array"
+          },
+          "file": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "FilePresence",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "this connection gets agent-presence for the files under a workspace's roots, or for one file; the answer is who is in them now",
+      "name": "agents/presence/subscribe",
+      "params": {
+        "$defs": {
+          "Workspace": {
+            "additionalProperties": false,
+            "description": "The workspace a Work view shows: one id, the roots (repositories or folders) it spans. The editor sends it with\nevery subscription; the hub never decides what a workspace is.",
+            "properties": {
+              "id": {
+                "description": "`workspace:` and 12 hex digits.",
+                "type": "string"
+              },
+              "roots": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`agents/presence/subscribe`'s params: a workspace (every file under its roots) or one file.",
+        "properties": {
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workspace": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Workspace"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "PresenceSubscribe",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "FilePresence": {
+            "additionalProperties": false,
+            "description": "Who is in FILE now; the data of `agent-presence`.",
+            "properties": {
+              "entries": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/PresenceEntry"
+                },
+                "type": "array"
+              },
+              "file": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "file"
+            ],
+            "type": "object"
+          },
+          "PresenceEntry": {
+            "additionalProperties": false,
+            "description": "One session in one file: the presence model's entry.",
+            "properties": {
+              "at": {
+                "description": "The hub's time of the step (seconds since the epoch).",
+                "format": "double",
+                "type": "number"
+              },
+              "file": {
+                "description": "An absolute path in one of the workspace's repositories.",
+                "type": "string"
+              },
+              "line": {
+                "description": "The last line known; absent: the file only.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "mode": {
+                "$ref": "#/$defs/PresenceMode"
+              },
+              "session": {
+                "type": "string"
+              },
+              "source": {
+                "$ref": "#/$defs/PresenceSource"
+              },
+              "step": {
+                "description": "The timeline step it came from.",
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "session",
+              "file",
+              "mode",
+              "source",
+              "step",
+              "at"
+            ],
+            "type": "object"
+          },
+          "PresenceMode": {
+            "description": "How a session is in a file.",
+            "oneOf": [
+              {
+                "enum": [
+                  "read"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "listed",
+                "description": "A directory listing or a recursive search over it.",
+                "type": "string"
+              },
+              {
+                "const": "write",
+                "description": "Written by a shell command.",
+                "type": "string"
+              },
+              {
+                "const": "edit",
+                "description": "Changed by an edit tool.",
+                "type": "string"
+              }
+            ]
+          },
+          "PresenceSource": {
+            "description": "Where the hub saw it.",
+            "oneOf": [
+              {
+                "const": "acp",
+                "description": "A read or search step's ACP fields.",
+                "type": "string"
+              },
+              {
+                "const": "edit",
+                "description": "An edit step.",
+                "type": "string"
+              },
+              {
+                "const": "command",
+                "description": "A file a shell step's command names (\"from the command\").",
+                "type": "string"
+              },
+              {
+                "const": "opened",
+                "description": "A file a shell step's processes opened (\"seen open\").",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The files with someone in them now, each with its entries.",
+        "properties": {
+          "files": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/FilePresence"
+            },
+            "type": "array"
+          }
+        },
+        "title": "PresenceFiles",
+        "type": "object"
+      },
+      "writes": false
     },
     {
       "classes": [
@@ -2828,6 +3951,17 @@
                   }
                 ]
               },
+              "detail": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/StepDetail"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "What the step read, searched or fetched (tool steps)."
+              },
               "end": {
                 "format": "double",
                 "type": [
@@ -2979,6 +4113,82 @@
                 "type": "string"
               }
             ]
+          },
+          "StepDetail": {
+            "additionalProperties": false,
+            "description": "What a step read, searched or fetched (the `step_detail` table); never the content.",
+            "properties": {
+              "kind": {
+                "description": "`read`, `search`, `fetch`, `edit` or `execute`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "line_end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "line_start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "origin": {
+                "description": "How the hub learned it: `acp`, `acp-title` (parsed from the title), `browser`, `command` or `opened`.",
+                "type": "string"
+              },
+              "parent_tool": {
+                "description": "The `Task` tool call of the subagent that made the step (Claude's `parentToolUseId`); absent: the session's\nown step.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "query": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "title": {
+                "description": "A page's title (the agent browser's).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tool": {
+                "description": "The tool's name as the provider sent it, when it sent one.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "origin"
+            ],
+            "type": "object"
           },
           "Unit": {
             "description": "What a limit counts.  Limits compare only in the same unit.",
@@ -3265,6 +4475,58 @@
       "classes": [
         "user"
       ],
+      "doc": "a tool call's raw input, which no event carries (at most 256 KiB, else its JSON text cut and `truncated`)",
+      "name": "agents/tool-input",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "session": {
+            "$ref": "#/$defs/Id"
+          },
+          "tool_call": {
+            "description": "The tool call's id (the `id` of its `tool` entry).",
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "tool_call"
+        ],
+        "title": "ToolInputParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A tool call's raw input: the input, or (when `truncated`) its JSON text cut at 256 KiB.",
+        "properties": {
+          "raw_input": true,
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "raw_input",
+          "truncated"
+        ],
+        "title": "ToolInput",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a task's brief from the graph (plan section, AGENTS.md, the matrix as it applies, base branch, earlier interfaces, the check), or the user's edited one",
       "name": "brief/build",
       "params": {
@@ -3315,6 +4577,11 @@
               {
                 "const": "check",
                 "description": "The check to run before reporting.",
+                "type": "string"
+              },
+              {
+                "const": "findings",
+                "description": "How to record what the agent establishes (findings with sources, decisions).",
                 "type": "string"
               },
               {
@@ -3420,6 +4687,70 @@
         "type": "object"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "runs a throwaway browser session (a screenshot of a data: page) and caches the result for the doctor",
+      "name": "browser/check",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`browser/check`: what a throwaway browser session did (the doctor's smoke run).  `browser` is the program found\n(`{path, kind, version, source}`); `start_ms` the time from the start to the first answer; `peak_bytes` the\nscope's peak memory where a user systemd answers; `sys_missed` that the browser's stderr named a `/sys/` path (a\nread the layer does not allow); `why` what stopped it, and `at` when it ran (RFC 3339, UTC).",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "browser": true,
+          "ok": {
+            "type": "boolean"
+          },
+          "peak_bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "screenshot_bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sys_missed": {
+            "type": "boolean"
+          },
+          "why": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "start_ms",
+          "sys_missed",
+          "screenshot_bytes",
+          "at"
+        ],
+        "title": "BrowserCheckResult",
+        "type": "object"
+      },
+      "writes": false
     },
     {
       "classes": [
@@ -11388,12 +12719,211 @@
       "classes": [
         "user"
       ],
+      "doc": "the machines the hub knows: local, and those reported and not yet expired",
+      "name": "machines/list",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Machine": {
+            "additionalProperties": false,
+            "description": "A machine as the hub lists it.",
+            "properties": {
+              "local": {
+                "description": "The hub's own machine: always listed, never expires.",
+                "type": "boolean"
+              },
+              "machine": {
+                "type": "string"
+              },
+              "slots": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/Slot"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "machine",
+              "local"
+            ],
+            "type": "object"
+          },
+          "Slot": {
+            "additionalProperties": false,
+            "description": "One slot of a machine: where one agent job runs.",
+            "properties": {
+              "holder": {
+                "description": "Who holds it now (a job or a session id); none when free.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "description": "What the slot is for: `agent-job`, `build`, `test`, `gpu`, ...",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`machines/list`'s answer, and the data of `machines-changed`.",
+        "properties": {
+          "machines": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Machine"
+            },
+            "type": "array"
+          }
+        },
+        "title": "MachinesList",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a machine's slots and who holds them, valid for ttl seconds (jobq reports; an agent may not)",
+      "name": "machines/report",
+      "params": {
+        "$defs": {
+          "Slot": {
+            "additionalProperties": false,
+            "description": "One slot of a machine: where one agent job runs.",
+            "properties": {
+              "holder": {
+                "description": "Who holds it now (a job or a session id); none when free.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "description": "What the slot is for: `agent-job`, `build`, `test`, `gpu`, ...",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What a reporter (jobq) says about one machine: its slots, valid for `ttl` seconds.",
+        "properties": {
+          "machine": {
+            "type": "string"
+          },
+          "slots": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Slot"
+            },
+            "type": "array"
+          },
+          "ttl": {
+            "description": "Seconds the report stands; after that the machine is gone from the list until it reports again.",
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "machine",
+          "ttl"
+        ],
+        "title": "MachineReport",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Slot": {
+            "additionalProperties": false,
+            "description": "One slot of a machine: where one agent job runs.",
+            "properties": {
+              "holder": {
+                "description": "Who holds it now (a job or a session id); none when free.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "description": "What the slot is for: `agent-job`, `build`, `test`, `gpu`, ...",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A machine as the hub lists it.",
+        "properties": {
+          "local": {
+            "description": "The hub's own machine: always listed, never expires.",
+            "type": "boolean"
+          },
+          "machine": {
+            "type": "string"
+          },
+          "slots": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Slot"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "machine",
+          "local"
+        ],
+        "title": "Machine",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "what the matrix decides for who doing action (no card is made)",
       "name": "matrix/check",
       "params": {
         "$defs": {
           "Action": {
-            "description": "A row of the matrix: one thing an agent may do.  `unsandboxed` and `user.private` are Never in every column of\nevery preset and no override changes them.",
+            "description": "A row of the matrix: one thing an agent may do.  `unsandboxed` and `user.private` are Never in every column of\nevery preset and no override changes them; `browser.private` is at most Ask, whatever a layer says.\n\nThe browser rows: `browser` is the in-sandbox browser itself (its relay ports, its host and the CDP endpoint; its\nnetwork only the session's own local servers), `browser.web` lets that browser reach any public site on ports 80\nand 443, and `browser.private` lets it reach the private targets a grant names.",
             "enum": [
               "agents.start",
               "agents.model",
@@ -11411,7 +12941,11 @@
               "code.ci-config",
               "machines",
               "job.container",
+              "job.keys",
               "network",
+              "browser",
+              "browser.web",
+              "browser.private",
               "unsandboxed",
               "settings.change",
               "user.private",
@@ -11618,7 +13152,7 @@
       "result": {
         "$defs": {
           "Action": {
-            "description": "A row of the matrix: one thing an agent may do.  `unsandboxed` and `user.private` are Never in every column of\nevery preset and no override changes them.",
+            "description": "A row of the matrix: one thing an agent may do.  `unsandboxed` and `user.private` are Never in every column of\nevery preset and no override changes them; `browser.private` is at most Ask, whatever a layer says.\n\nThe browser rows: `browser` is the in-sandbox browser itself (its relay ports, its host and the CDP endpoint; its\nnetwork only the session's own local servers), `browser.web` lets that browser reach any public site on ports 80\nand 443, and `browser.private` lets it reach the private targets a grant names.",
             "enum": [
               "agents.start",
               "agents.model",
@@ -11636,7 +13170,11 @@
               "code.ci-config",
               "machines",
               "job.container",
+              "job.keys",
               "network",
+              "browser",
+              "browser.web",
+              "browser.private",
               "unsandboxed",
               "settings.change",
               "user.private",
@@ -13851,6 +15389,2748 @@
       "classes": [
         "user"
       ],
+      "doc": "a host made a runner: probe and the contract, the bundle for its architecture copied, images pulled, benched, recorded; the hub's own machine is refused",
+      "name": "runners/add",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "Accept": {
+            "description": "Which jobs a runner takes.",
+            "enum": [
+              "all",
+              "heavy"
+            ],
+            "type": "string"
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "Profile": {
+            "description": "Whether somebody sits at the machine.",
+            "enum": [
+              "dedicated",
+              "workstation"
+            ],
+            "type": "string"
+          },
+          "Trust": {
+            "description": "What a runner may see of the user's work.",
+            "oneOf": [
+              {
+                "const": "mine",
+                "description": "The user's own machine: every job, every key.",
+                "type": "string"
+              },
+              {
+                "const": "my-cloud",
+                "description": "A machine drgnx starts in the user's cloud account: private code and only its listed keys.",
+                "type": "string"
+              },
+              {
+                "const": "shared",
+                "description": "Somebody else's: public code only.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/add`'s params.",
+        "properties": {
+          "accept": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Accept"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Default `all`."
+          },
+          "host": {
+            "description": "The host as the user's ssh knows it (`ssh <host>`).",
+            "maxLength": 255,
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Id"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The runner's name (default: the host's first label)."
+          },
+          "prefix": {
+            "description": "What the runner's units and containers are named after (default `drgnx-`).",
+            "maxLength": 32,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Profile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Default `dedicated`."
+          },
+          "root": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The one folder drgnx keeps on the runner (default `~/.drgnx-runner`)."
+          },
+          "trust": {
+            "$ref": "#/$defs/Trust"
+          }
+        },
+        "required": [
+          "host",
+          "trust"
+        ],
+        "title": "AddParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Accept": {
+            "description": "Which jobs a runner takes.",
+            "enum": [
+              "all",
+              "heavy"
+            ],
+            "type": "string"
+          },
+          "Profile": {
+            "description": "Whether somebody sits at the machine.",
+            "enum": [
+              "dedicated",
+              "workstation"
+            ],
+            "type": "string"
+          },
+          "Trust": {
+            "description": "What a runner may see of the user's work.",
+            "oneOf": [
+              {
+                "const": "mine",
+                "description": "The user's own machine: every job, every key.",
+                "type": "string"
+              },
+              {
+                "const": "my-cloud",
+                "description": "A machine drgnx starts in the user's cloud account: private code and only its listed keys.",
+                "type": "string"
+              },
+              {
+                "const": "shared",
+                "description": "Somebody else's: public code only.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A runner as the registry lists it.",
+        "properties": {
+          "accept": {
+            "$ref": "#/$defs/Accept"
+          },
+          "arch": {
+            "type": "string"
+          },
+          "checked": {
+            "description": "When it was last checked (seconds since the epoch).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cores": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "disk_free_gb": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "features": {
+            "default": [],
+            "description": "What the host has that a job may ask for (a GPU, ...).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "host": {
+            "type": "string"
+          },
+          "jobs": {
+            "description": "Jobs running there now.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "landlock_abi": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_strike": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "linger": {
+            "type": "boolean"
+          },
+          "mem_mib": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "os": {
+            "type": "string"
+          },
+          "podman": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/$defs/Profile"
+          },
+          "root": {
+            "type": "string"
+          },
+          "speed": {
+            "description": "Its bench: how many times the reference workload's speed (absent: not benched).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "`ready`, `benched: why (times)`, `needs a login: cmd`, `unreachable`, ...: the reason a runner is out of\nrotation is the state itself.",
+            "type": "string"
+          },
+          "strikes": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "trust": {
+            "$ref": "#/$defs/Trust"
+          }
+        },
+        "required": [
+          "name",
+          "host",
+          "trust",
+          "profile",
+          "accept",
+          "root",
+          "prefix",
+          "arch",
+          "os",
+          "cores",
+          "mem_mib",
+          "disk_free_gb",
+          "podman",
+          "linger",
+          "landlock_abi",
+          "state",
+          "strikes",
+          "jobs"
+        ],
+        "title": "Runner",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the keys sent to jobs (key_sent) and their reads as runners report them (key_use): names, jobs, attempts, runners, times",
+      "name": "runners/audit",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "KeyName": {
+            "description": "a key name: ASCII letters, digits and _ (not a digit first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/audit`'s params: the rows of one job, one key, or every row.",
+        "properties": {
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "key": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/KeyName"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "AuditParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "AuditKind": {
+            "description": "What an audit row records.",
+            "oneOf": [
+              {
+                "const": "sent",
+                "description": "The hub sent the key to the attempt (what the hub knows for sure).",
+                "type": "string"
+              },
+              {
+                "const": "use",
+                "description": "The job read the key, as its runner reports it.",
+                "type": "string"
+              }
+            ]
+          },
+          "AuditRow": {
+            "additionalProperties": false,
+            "description": "One `key_sent` or `key_use` record: the key's name, never its value.",
+            "properties": {
+              "at": {
+                "description": "Seconds since the epoch.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "attempt": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "job": {
+                "type": "string"
+              },
+              "key": {
+                "$ref": "#/$defs/KeyName"
+              },
+              "kind": {
+                "$ref": "#/$defs/AuditKind"
+              },
+              "runner": {
+                "type": "string"
+              },
+              "runner_reported": {
+                "default": false,
+                "description": "The runner said so; the hub can't check it (every `use` row).",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "kind",
+              "job",
+              "attempt",
+              "key",
+              "runner",
+              "at"
+            ],
+            "type": "object"
+          },
+          "KeyName": {
+            "description": "a key name: ASCII letters, digits and _ (not a digit first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/audit`'s answer, oldest first.",
+        "properties": {
+          "rows": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/AuditRow"
+            },
+            "type": "array"
+          }
+        },
+        "title": "Audit",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a runner benched again: the reference workload under the runner's caps",
+      "name": "runners/bench",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A runner by name (`runners/check`, `bench`, `unbench`).",
+        "properties": {
+          "name": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ByName",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Accept": {
+            "description": "Which jobs a runner takes.",
+            "enum": [
+              "all",
+              "heavy"
+            ],
+            "type": "string"
+          },
+          "Profile": {
+            "description": "Whether somebody sits at the machine.",
+            "enum": [
+              "dedicated",
+              "workstation"
+            ],
+            "type": "string"
+          },
+          "Trust": {
+            "description": "What a runner may see of the user's work.",
+            "oneOf": [
+              {
+                "const": "mine",
+                "description": "The user's own machine: every job, every key.",
+                "type": "string"
+              },
+              {
+                "const": "my-cloud",
+                "description": "A machine drgnx starts in the user's cloud account: private code and only its listed keys.",
+                "type": "string"
+              },
+              {
+                "const": "shared",
+                "description": "Somebody else's: public code only.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A runner as the registry lists it.",
+        "properties": {
+          "accept": {
+            "$ref": "#/$defs/Accept"
+          },
+          "arch": {
+            "type": "string"
+          },
+          "checked": {
+            "description": "When it was last checked (seconds since the epoch).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cores": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "disk_free_gb": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "features": {
+            "default": [],
+            "description": "What the host has that a job may ask for (a GPU, ...).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "host": {
+            "type": "string"
+          },
+          "jobs": {
+            "description": "Jobs running there now.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "landlock_abi": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_strike": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "linger": {
+            "type": "boolean"
+          },
+          "mem_mib": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "os": {
+            "type": "string"
+          },
+          "podman": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/$defs/Profile"
+          },
+          "root": {
+            "type": "string"
+          },
+          "speed": {
+            "description": "Its bench: how many times the reference workload's speed (absent: not benched).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "`ready`, `benched: why (times)`, `needs a login: cmd`, `unreachable`, ...: the reason a runner is out of\nrotation is the state itself.",
+            "type": "string"
+          },
+          "strikes": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "trust": {
+            "$ref": "#/$defs/Trust"
+          }
+        },
+        "required": [
+          "name",
+          "host",
+          "trust",
+          "profile",
+          "accept",
+          "root",
+          "prefix",
+          "arch",
+          "os",
+          "cores",
+          "mem_mib",
+          "disk_free_gb",
+          "podman",
+          "linger",
+          "landlock_abi",
+          "state",
+          "strikes",
+          "jobs"
+        ],
+        "title": "Runner",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a runner's health check now: its probe and contract, a canary job, the clock",
+      "name": "runners/check",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A runner by name (`runners/check`, `bench`, `unbench`).",
+        "properties": {
+          "name": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ByName",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Accept": {
+            "description": "Which jobs a runner takes.",
+            "enum": [
+              "all",
+              "heavy"
+            ],
+            "type": "string"
+          },
+          "Profile": {
+            "description": "Whether somebody sits at the machine.",
+            "enum": [
+              "dedicated",
+              "workstation"
+            ],
+            "type": "string"
+          },
+          "Trust": {
+            "description": "What a runner may see of the user's work.",
+            "oneOf": [
+              {
+                "const": "mine",
+                "description": "The user's own machine: every job, every key.",
+                "type": "string"
+              },
+              {
+                "const": "my-cloud",
+                "description": "A machine drgnx starts in the user's cloud account: private code and only its listed keys.",
+                "type": "string"
+              },
+              {
+                "const": "shared",
+                "description": "Somebody else's: public code only.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A runner as the registry lists it.",
+        "properties": {
+          "accept": {
+            "$ref": "#/$defs/Accept"
+          },
+          "arch": {
+            "type": "string"
+          },
+          "checked": {
+            "description": "When it was last checked (seconds since the epoch).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cores": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "disk_free_gb": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "features": {
+            "default": [],
+            "description": "What the host has that a job may ask for (a GPU, ...).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "host": {
+            "type": "string"
+          },
+          "jobs": {
+            "description": "Jobs running there now.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "landlock_abi": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_strike": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "linger": {
+            "type": "boolean"
+          },
+          "mem_mib": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "os": {
+            "type": "string"
+          },
+          "podman": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/$defs/Profile"
+          },
+          "root": {
+            "type": "string"
+          },
+          "speed": {
+            "description": "Its bench: how many times the reference workload's speed (absent: not benched).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "`ready`, `benched: why (times)`, `needs a login: cmd`, `unreachable`, ...: the reason a runner is out of\nrotation is the state itself.",
+            "type": "string"
+          },
+          "strikes": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "trust": {
+            "$ref": "#/$defs/Trust"
+          }
+        },
+        "required": [
+          "name",
+          "host",
+          "trust",
+          "profile",
+          "accept",
+          "root",
+          "prefix",
+          "arch",
+          "os",
+          "cores",
+          "mem_mib",
+          "disk_free_gb",
+          "podman",
+          "linger",
+          "landlock_abi",
+          "state",
+          "strikes",
+          "jobs"
+        ],
+        "title": "Runner",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "job keys to the hub's memory (never a file), sent to the runners' jobs that name them",
+      "name": "runners/keys",
+      "params": {
+        "$defs": {
+          "KeyName": {
+            "description": "a key name: ASCII letters, digits and _ (not a digit first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
+          },
+          "RunnerKeys": {
+            "additionalProperties": {
+              "maxLength": 65536,
+              "type": "string"
+            },
+            "description": "key name → value",
+            "maxProperties": 32,
+            "propertyNames": {
+              "$ref": "#/$defs/KeyName"
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/keys`' params: the job keys the editor read from the user's store. No `Debug`: it holds keys.",
+        "properties": {
+          "keys": {
+            "$ref": "#/$defs/RunnerKeys"
+          }
+        },
+        "required": [
+          "keys"
+        ],
+        "title": "KeysParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the job keys the hub holds (names only)",
+      "name": "runners/keys-held",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "KeyName": {
+            "description": "a key name: ASCII letters, digits and _ (not a digit first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The names of the job keys the hub holds or needs, never a value: `runners/keys-held`'s answer, and the data of the\nevent `runners/need-keys`.",
+        "properties": {
+          "names": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/KeyName"
+            },
+            "type": "array"
+          }
+        },
+        "title": "KeyNames",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the runners: each with its trust, profile, load, jobs and, when it is out of rotation, why",
+      "name": "runners/list",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Accept": {
+            "description": "Which jobs a runner takes.",
+            "enum": [
+              "all",
+              "heavy"
+            ],
+            "type": "string"
+          },
+          "Profile": {
+            "description": "Whether somebody sits at the machine.",
+            "enum": [
+              "dedicated",
+              "workstation"
+            ],
+            "type": "string"
+          },
+          "Runner": {
+            "additionalProperties": false,
+            "description": "A runner as the registry lists it.",
+            "properties": {
+              "accept": {
+                "$ref": "#/$defs/Accept"
+              },
+              "arch": {
+                "type": "string"
+              },
+              "checked": {
+                "description": "When it was last checked (seconds since the epoch).",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "cores": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "disk_free_gb": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "features": {
+                "default": [],
+                "description": "What the host has that a job may ask for (a GPU, ...).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "host": {
+                "type": "string"
+              },
+              "jobs": {
+                "description": "Jobs running there now.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "landlock_abi": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "last_strike": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "linger": {
+                "type": "boolean"
+              },
+              "mem_mib": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "os": {
+                "type": "string"
+              },
+              "podman": {
+                "type": "string"
+              },
+              "prefix": {
+                "type": "string"
+              },
+              "profile": {
+                "$ref": "#/$defs/Profile"
+              },
+              "root": {
+                "type": "string"
+              },
+              "speed": {
+                "description": "Its bench: how many times the reference workload's speed (absent: not benched).",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "state": {
+                "description": "`ready`, `benched: why (times)`, `needs a login: cmd`, `unreachable`, ...: the reason a runner is out of\nrotation is the state itself.",
+                "type": "string"
+              },
+              "strikes": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "trust": {
+                "$ref": "#/$defs/Trust"
+              }
+            },
+            "required": [
+              "name",
+              "host",
+              "trust",
+              "profile",
+              "accept",
+              "root",
+              "prefix",
+              "arch",
+              "os",
+              "cores",
+              "mem_mib",
+              "disk_free_gb",
+              "podman",
+              "linger",
+              "landlock_abi",
+              "state",
+              "strikes",
+              "jobs"
+            ],
+            "type": "object"
+          },
+          "Trust": {
+            "description": "What a runner may see of the user's work.",
+            "oneOf": [
+              {
+                "const": "mine",
+                "description": "The user's own machine: every job, every key.",
+                "type": "string"
+              },
+              {
+                "const": "my-cloud",
+                "description": "A machine drgnx starts in the user's cloud account: private code and only its listed keys.",
+                "type": "string"
+              },
+              {
+                "const": "shared",
+                "description": "Somebody else's: public code only.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/list`'s answer, and the data of `runners-changed`.",
+        "properties": {
+          "runners": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Runner"
+            },
+            "type": "array"
+          }
+        },
+        "title": "Runners",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "what applies to a host's connection (ssh -G under the generated config) and what the host is, or everything the runner contract finds missing, each with its fix; the host is not recorded",
+      "name": "runners/probe-host",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/probe-host`'s params.",
+        "properties": {
+          "host": {
+            "maxLength": 255,
+            "type": "string"
+          }
+        },
+        "required": [
+          "host"
+        ],
+        "title": "ProbeParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Effective": {
+            "additionalProperties": false,
+            "description": "What reaches a host over ssh under the generated config (`ssh -G`): shown before the user adds it.",
+            "properties": {
+              "forward_agent": {
+                "type": "boolean"
+              },
+              "forwards": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "proxy": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "forward_agent"
+            ],
+            "type": "object"
+          },
+          "HostFacts": {
+            "additionalProperties": false,
+            "description": "What a host is, once it meets the runner contract.",
+            "properties": {
+              "arch": {
+                "type": "string"
+              },
+              "battery": {
+                "type": "boolean"
+              },
+              "cores": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "disk_free_gb": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "landlock_abi": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "linger": {
+                "type": "boolean"
+              },
+              "mem_mib": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "os": {
+                "type": "string"
+              },
+              "podman": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "arch",
+              "os",
+              "cores",
+              "mem_mib",
+              "disk_free_gb",
+              "podman",
+              "linger",
+              "landlock_abi",
+              "battery"
+            ],
+            "type": "object"
+          },
+          "Missing": {
+            "additionalProperties": false,
+            "description": "One thing a host lacks, and what the user runs there to fix it.",
+            "properties": {
+              "fix": {
+                "type": "string"
+              },
+              "what": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "what",
+              "fix"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/probe-host`'s answer: what applies to the connection, and the host's facts or what it lacks.",
+        "properties": {
+          "effective": {
+            "$ref": "#/$defs/Effective"
+          },
+          "facts": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/HostFacts"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "missing": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Missing"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "effective"
+        ],
+        "title": "Probed",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a runner removed: our units and containers there stopped, its folder deleted (confirm: true)",
+      "name": "runners/remove",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/remove`'s params: `confirm` must be true.",
+        "properties": {
+          "confirm": {
+            "type": "boolean"
+          },
+          "name": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "name",
+          "confirm"
+        ],
+        "title": "RemoveParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/remove`'s answer.",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "Removed",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a runner's trust, profile or accept changed",
+      "name": "runners/set",
+      "params": {
+        "$defs": {
+          "Accept": {
+            "description": "Which jobs a runner takes.",
+            "enum": [
+              "all",
+              "heavy"
+            ],
+            "type": "string"
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "Profile": {
+            "description": "Whether somebody sits at the machine.",
+            "enum": [
+              "dedicated",
+              "workstation"
+            ],
+            "type": "string"
+          },
+          "Trust": {
+            "description": "What a runner may see of the user's work.",
+            "oneOf": [
+              {
+                "const": "mine",
+                "description": "The user's own machine: every job, every key.",
+                "type": "string"
+              },
+              {
+                "const": "my-cloud",
+                "description": "A machine drgnx starts in the user's cloud account: private code and only its listed keys.",
+                "type": "string"
+              },
+              {
+                "const": "shared",
+                "description": "Somebody else's: public code only.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/set`'s params: what changes.",
+        "properties": {
+          "accept": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Accept"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "$ref": "#/$defs/Id"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Profile"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "trust": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Trust"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "SetParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Accept": {
+            "description": "Which jobs a runner takes.",
+            "enum": [
+              "all",
+              "heavy"
+            ],
+            "type": "string"
+          },
+          "Profile": {
+            "description": "Whether somebody sits at the machine.",
+            "enum": [
+              "dedicated",
+              "workstation"
+            ],
+            "type": "string"
+          },
+          "Trust": {
+            "description": "What a runner may see of the user's work.",
+            "oneOf": [
+              {
+                "const": "mine",
+                "description": "The user's own machine: every job, every key.",
+                "type": "string"
+              },
+              {
+                "const": "my-cloud",
+                "description": "A machine drgnx starts in the user's cloud account: private code and only its listed keys.",
+                "type": "string"
+              },
+              {
+                "const": "shared",
+                "description": "Somebody else's: public code only.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A runner as the registry lists it.",
+        "properties": {
+          "accept": {
+            "$ref": "#/$defs/Accept"
+          },
+          "arch": {
+            "type": "string"
+          },
+          "checked": {
+            "description": "When it was last checked (seconds since the epoch).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cores": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "disk_free_gb": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "features": {
+            "default": [],
+            "description": "What the host has that a job may ask for (a GPU, ...).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "host": {
+            "type": "string"
+          },
+          "jobs": {
+            "description": "Jobs running there now.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "landlock_abi": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_strike": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "linger": {
+            "type": "boolean"
+          },
+          "mem_mib": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "os": {
+            "type": "string"
+          },
+          "podman": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/$defs/Profile"
+          },
+          "root": {
+            "type": "string"
+          },
+          "speed": {
+            "description": "Its bench: how many times the reference workload's speed (absent: not benched).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "`ready`, `benched: why (times)`, `needs a login: cmd`, `unreachable`, ...: the reason a runner is out of\nrotation is the state itself.",
+            "type": "string"
+          },
+          "strikes": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "trust": {
+            "$ref": "#/$defs/Trust"
+          }
+        },
+        "required": [
+          "name",
+          "host",
+          "trust",
+          "profile",
+          "accept",
+          "root",
+          "prefix",
+          "arch",
+          "os",
+          "cores",
+          "mem_mib",
+          "disk_free_gb",
+          "podman",
+          "linger",
+          "landlock_abi",
+          "state",
+          "strikes",
+          "jobs"
+        ],
+        "title": "Runner",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a runner back in rotation, with no strikes",
+      "name": "runners/unbench",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A runner by name (`runners/check`, `bench`, `unbench`).",
+        "properties": {
+          "name": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ByName",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Accept": {
+            "description": "Which jobs a runner takes.",
+            "enum": [
+              "all",
+              "heavy"
+            ],
+            "type": "string"
+          },
+          "Profile": {
+            "description": "Whether somebody sits at the machine.",
+            "enum": [
+              "dedicated",
+              "workstation"
+            ],
+            "type": "string"
+          },
+          "Trust": {
+            "description": "What a runner may see of the user's work.",
+            "oneOf": [
+              {
+                "const": "mine",
+                "description": "The user's own machine: every job, every key.",
+                "type": "string"
+              },
+              {
+                "const": "my-cloud",
+                "description": "A machine drgnx starts in the user's cloud account: private code and only its listed keys.",
+                "type": "string"
+              },
+              {
+                "const": "shared",
+                "description": "Somebody else's: public code only.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A runner as the registry lists it.",
+        "properties": {
+          "accept": {
+            "$ref": "#/$defs/Accept"
+          },
+          "arch": {
+            "type": "string"
+          },
+          "checked": {
+            "description": "When it was last checked (seconds since the epoch).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cores": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "disk_free_gb": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "features": {
+            "default": [],
+            "description": "What the host has that a job may ask for (a GPU, ...).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "host": {
+            "type": "string"
+          },
+          "jobs": {
+            "description": "Jobs running there now.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "landlock_abi": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_strike": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "linger": {
+            "type": "boolean"
+          },
+          "mem_mib": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "os": {
+            "type": "string"
+          },
+          "podman": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/$defs/Profile"
+          },
+          "root": {
+            "type": "string"
+          },
+          "speed": {
+            "description": "Its bench: how many times the reference workload's speed (absent: not benched).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "`ready`, `benched: why (times)`, `needs a login: cmd`, `unreachable`, ...: the reason a runner is out of\nrotation is the state itself.",
+            "type": "string"
+          },
+          "strikes": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "trust": {
+            "$ref": "#/$defs/Trust"
+          }
+        },
+        "required": [
+          "name",
+          "host",
+          "trust",
+          "profile",
+          "accept",
+          "root",
+          "prefix",
+          "arch",
+          "os",
+          "cores",
+          "mem_mib",
+          "disk_free_gb",
+          "podman",
+          "linger",
+          "landlock_abi",
+          "state",
+          "strikes",
+          "jobs"
+        ],
+        "title": "Runner",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the built-in model's state and device, the servers that can embed and which answer, and the model a query prefers",
+      "name": "search/embedders",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "BuiltinInfo": {
+            "additionalProperties": false,
+            "description": "The built-in model.",
+            "properties": {
+              "bytes": {
+                "description": "What the download is, in bytes.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "device": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Device"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "downloaded": {
+                "description": "Bytes held (all of them when ready).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "error": {
+                "description": "Why the last download failed.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "model": {
+                "type": "string"
+              },
+              "state": {
+                "description": "`missing`, `partial`, `downloading`, `ready` or `corrupt`.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "model",
+              "state",
+              "bytes",
+              "downloaded"
+            ],
+            "type": "object"
+          },
+          "Device": {
+            "additionalProperties": false,
+            "description": "The device the built-in worker runs on, as it said first.",
+            "properties": {
+              "kind": {
+                "description": "`gpu` or `cpu`.",
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "name",
+              "why"
+            ],
+            "type": "object"
+          },
+          "ServerInfo": {
+            "additionalProperties": false,
+            "description": "A server that can embed (the `tei` and `ollama` providers).",
+            "properties": {
+              "answering": {
+                "type": "boolean"
+              },
+              "family": {
+                "description": "The address family that answered the probe: `ipv4` or `ipv6`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "url",
+              "model",
+              "answering"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "builtin": {
+            "$ref": "#/$defs/BuiltinInfo"
+          },
+          "prefer": {
+            "description": "The model a query uses when every project is fully indexed: a server that answers, else the built-in model.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "servers": {
+            "items": {
+              "$ref": "#/$defs/ServerInfo"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "builtin",
+          "servers"
+        ],
+        "title": "EmbeddersAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "start or rebuild a project's index; now overrides the battery gate",
+      "name": "search/index",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "now": {
+            "description": "Overrides the battery gate: tier 2 runs until nothing is missing.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "rebuild": {
+            "description": "Drop the index and build it again.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "title": "IndexParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "started": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "started"
+        ],
+        "title": "Started",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "download the built-in model after the user agreed to its size; nothing downloads without this consent",
+      "name": "search/model-download",
+      "params": {
+        "$defs": {
+          "ConsentParam": {
+            "additionalProperties": false,
+            "description": "The user agreed to the download of this size.",
+            "properties": {
+              "bytes": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "bytes"
+            ],
+            "type": "object"
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "consent": {
+            "$ref": "#/$defs/ConsentParam"
+          },
+          "model": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "model",
+          "consent"
+        ],
+        "title": "DownloadParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "started": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "started"
+        ],
+        "title": "Started",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "hybrid keyword, symbol, path and vector results for a question about a project's code; every answer says which model took part and what lags",
+      "name": "search/query",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "Prompt": {
+            "description": "a prompt or a message: at most 1 MiB (1048576 characters)",
+            "maxLength": 1048576,
+            "type": "string"
+          },
+          "Scope": {
+            "description": "Which files a query looks in.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tests",
+                  "docs",
+                  "all"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "code",
+                "description": "Code, and tests below it.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "k": {
+            "description": "How many hits, 1 to 100; default 10.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath",
+            "description": "The project's root: any checkout of it."
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Scope"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Default `code`."
+          },
+          "text": {
+            "$ref": "#/$defs/Prompt"
+          }
+        },
+        "required": [
+          "root",
+          "text"
+        ],
+        "title": "QueryParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Hit": {
+            "additionalProperties": false,
+            "description": "One hit.",
+            "properties": {
+              "line_end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "line_start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "type": "string"
+              },
+              "preview": {
+                "type": "string"
+              },
+              "reanchored": {
+                "description": "Its lines were found again in the file as it is now.",
+                "type": "boolean"
+              },
+              "routes": {
+                "description": "The routes that found it: `symbol`, `name`, `path`, `keyword`, `vector`.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "score": {
+                "format": "double",
+                "type": "number"
+              },
+              "symbol": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "line_start",
+              "line_end",
+              "score",
+              "preview",
+              "routes",
+              "reanchored"
+            ],
+            "type": "object"
+          },
+          "Lag": {
+            "additionalProperties": false,
+            "description": "How far behind the vectors are.",
+            "properties": {
+              "built_from": {
+                "type": "string"
+              },
+              "chunks_behind": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "chunks_total": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "dirty_files": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "files_behind": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "model": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "chunks_total",
+              "chunks_behind",
+              "files_behind",
+              "dirty_files",
+              "built_from"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "hits": {
+            "items": {
+              "$ref": "#/$defs/Hit"
+            },
+            "type": "array"
+          },
+          "lag": {
+            "$ref": "#/$defs/Lag"
+          },
+          "lag_line": {
+            "description": "The line that ends a text answer, e.g. \"vectors: 12 files behind (…); keyword and symbol results are current\".",
+            "type": "string"
+          },
+          "model": {
+            "description": "The model whose vectors took part; none when the answer is keyword, symbol and path results only.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "notice": {
+            "description": "Why there are no vectors, or what else the reader should know.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "hits",
+          "lag",
+          "lag_line"
+        ],
+        "title": "QueryAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "what starting TEI or Ollama would run, shown before the user agrees; runs and writes nothing",
+      "name": "search/server-plan",
+      "params": {
+        "$defs": {
+          "ServerKind": {
+            "description": "A server the wizard can start on request.",
+            "enum": [
+              "tei",
+              "ollama"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "$ref": "#/$defs/ServerKind"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "ServerKindParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What a start would do, shown before the user agrees. A plan runs and writes nothing.",
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "bytes": {
+            "description": "About what the model weighs.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "commands": {
+            "description": "The commands a start runs, in order.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "gpu": {
+            "description": "The GPU image would run.",
+            "type": "boolean"
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "memory_cap": {
+            "description": "The memory cap of the container (TEI) as podman writes it, e.g. `4g`; empty for Ollama.",
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "unit_path": {
+            "description": "The Quadlet file a start writes (TEI).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "why": {
+            "description": "Why not, when it is not available.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "available",
+          "gpu",
+          "memory_cap",
+          "model",
+          "commands"
+        ],
+        "title": "ServerPlan",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "start TEI (a capped podman Quadlet) or Ollama after the user confirmed the plan; the hub never starts one by itself",
+      "name": "search/server-start",
+      "params": {
+        "$defs": {
+          "ServerKind": {
+            "description": "A server the wizard can start on request.",
+            "enum": [
+              "tei",
+              "ollama"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "description": "The user agreed to what `search/server-plan` showed; a start without it is refused.",
+            "type": "boolean"
+          },
+          "kind": {
+            "$ref": "#/$defs/ServerKind"
+          }
+        },
+        "required": [
+          "kind",
+          "confirm"
+        ],
+        "title": "ServerStartParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ProviderEntry": {
+            "additionalProperties": false,
+            "description": "An entry for the settings' provider table; the editor's settings writer adds it, the hub never does.",
+            "properties": {
+              "auth": {
+                "type": "string"
+              },
+              "base": {
+                "type": "string"
+              },
+              "caps": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "base",
+              "auth",
+              "caps"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "$ref": "#/$defs/ProviderEntry"
+          },
+          "started": {
+            "type": "boolean"
+          },
+          "unit": {
+            "description": "The service that runs it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "started",
+          "unit",
+          "provider"
+        ],
+        "title": "ServerStarted",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "stop the server a start began",
+      "name": "search/server-stop",
+      "params": {
+        "$defs": {
+          "ServerKind": {
+            "description": "A server the wizard can start on request.",
+            "enum": [
+              "tei",
+              "ollama"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "$ref": "#/$defs/ServerKind"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "ServerKindParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "stopped": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "stopped"
+        ],
+        "title": "ServerStopped",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a project's index: files and chunks per class, coverage errors, the lag, the models that have vectors, tier 2's state and the embed worker's device",
+      "name": "search/status",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "title": "RootParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ClassCount": {
+            "additionalProperties": false,
+            "description": "Files and chunks of one class.",
+            "properties": {
+              "chunks": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "class": {
+                "type": "string"
+              },
+              "files": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "class",
+              "files",
+              "chunks"
+            ],
+            "type": "object"
+          },
+          "Device": {
+            "additionalProperties": false,
+            "description": "The device the built-in worker runs on, as it said first.",
+            "properties": {
+              "kind": {
+                "description": "`gpu` or `cpu`.",
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "name",
+              "why"
+            ],
+            "type": "object"
+          },
+          "Lag": {
+            "additionalProperties": false,
+            "description": "How far behind the vectors are.",
+            "properties": {
+              "built_from": {
+                "type": "string"
+              },
+              "chunks_behind": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "chunks_total": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "dirty_files": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "files_behind": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "model": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "chunks_total",
+              "chunks_behind",
+              "files_behind",
+              "dirty_files",
+              "built_from"
+            ],
+            "type": "object"
+          },
+          "ModelCount": {
+            "additionalProperties": false,
+            "properties": {
+              "model": {
+                "type": "string"
+              },
+              "vectors": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "model",
+              "vectors"
+            ],
+            "type": "object"
+          },
+          "WorkerStatus": {
+            "additionalProperties": false,
+            "properties": {
+              "crashes": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "device": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Device"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "fallback": {
+                "description": "Set when a lost GPU sent the work to the CPU path: the reason.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "spawns": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "spawns",
+              "crashes"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "chunks": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "coverage_errors": {
+            "description": "Classes with listed files and no chunks, and non-empty files with none (storage design §12A.3 item 9).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "embedded": {
+            "description": "Vectors tier 2 wrote since the hub opened the project.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "files": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lag": {
+            "$ref": "#/$defs/Lag"
+          },
+          "models": {
+            "description": "Models that have vectors here: the model, and how many.",
+            "items": {
+              "$ref": "#/$defs/ModelCount"
+            },
+            "type": "array"
+          },
+          "per_class": {
+            "items": {
+              "$ref": "#/$defs/ClassCount"
+            },
+            "type": "array"
+          },
+          "tier2": {
+            "description": "`stopped`, `idle`, `running`, `typing`, `battery` or `failed`.",
+            "type": "string"
+          },
+          "worker": {
+            "$ref": "#/$defs/WorkerStatus"
+          }
+        },
+        "required": [
+          "files",
+          "chunks",
+          "per_class",
+          "coverage_errors",
+          "lag",
+          "models",
+          "worker",
+          "tier2",
+          "embedded"
+        ],
+        "title": "StatusAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor's keystroke signal: the vectors wait between requests while typing holds",
+      "name": "search/typing",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the editor's answer to settings/proposed: ok accepts the agent's proposed tx (the editor wrote the file), else it is reverted (blocked when a later change of the setting came first); the agent gets a message either way; only a proposed tx of the tool mcp:settings_change",
       "name": "settings/confirm",
       "params": {
@@ -15160,10 +19440,28 @@
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
+          "before": {
+            "description": "Steps before this one (a session's `seq`, else a step id); with `limit`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "id": {
             "description": "The session's id, or the task's, plan's or project's entity id.",
             "maxLength": 4352,
             "type": "string"
+          },
+          "limit": {
+            "description": "Page backwards: the last `limit` steps (1 to 500), newest last; with `before`, those before it.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "rollup": {
             "description": "The rollup only, no steps.",
@@ -15301,6 +19599,17 @@
                     "type": "null"
                   }
                 ]
+              },
+              "detail": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/StepDetail"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "What the step read, searched or fetched (tool steps)."
               },
               "end": {
                 "format": "double",
@@ -15454,6 +19763,82 @@
               }
             ]
           },
+          "StepDetail": {
+            "additionalProperties": false,
+            "description": "What a step read, searched or fetched (the `step_detail` table); never the content.",
+            "properties": {
+              "kind": {
+                "description": "`read`, `search`, `fetch`, `edit` or `execute`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "line_end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "line_start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "origin": {
+                "description": "How the hub learned it: `acp`, `acp-title` (parsed from the title), `browser`, `command` or `opened`.",
+                "type": "string"
+              },
+              "parent_tool": {
+                "description": "The `Task` tool call of the subagent that made the step (Claude's `parentToolUseId`); absent: the session's\nown step.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "query": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "title": {
+                "description": "A page's title (the agent browser's).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tool": {
+                "description": "The tool's name as the provider sent it, when it sent one.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "origin"
+            ],
+            "type": "object"
+          },
           "Tokens": {
             "additionalProperties": false,
             "properties": {
@@ -15552,10 +19937,704 @@
         "type": "object"
       },
       "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a session's decisions and findings, numbered, each with the step the hub stamped and the steps it rests on",
+      "name": "work/conclusions",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/conclusions`'s params: a session id.",
+        "properties": {
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session"
+        ],
+        "title": "ConclusionsParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Conclusion": {
+            "additionalProperties": false,
+            "description": "A decision or a finding, as the Work space shows it.",
+            "properties": {
+              "at": {
+                "description": "When it was recorded (seconds since the epoch).",
+                "format": "double",
+                "type": "number"
+              },
+              "id": {
+                "description": "`decision:N`, or the finding's note id.",
+                "type": "string"
+              },
+              "kind": {
+                "description": "`decision` or `finding`.",
+                "type": "string"
+              },
+              "links": {
+                "$ref": "#/$defs/ConclusionLinks"
+              },
+              "n": {
+                "description": "Its number in the session, from 1.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "origin": {
+                "description": "`own`, `from-brief`, `needs-user`, or `from-text` (a fenced block in a message).",
+                "type": "string"
+              },
+              "sources": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/ConclusionSource"
+                },
+                "type": "array"
+              },
+              "step": {
+                "description": "The timeline step the hub stamped; absent: step unknown.",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "n",
+              "id",
+              "kind",
+              "text",
+              "at",
+              "origin",
+              "links"
+            ],
+            "type": "object"
+          },
+          "ConclusionLinks": {
+            "additionalProperties": false,
+            "description": "The steps a conclusion links back to (timeline step ids).",
+            "properties": {
+              "named": {
+                "default": [],
+                "description": "The steps its named sources match (\"named\").",
+                "items": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "since_last": {
+                "default": [],
+                "description": "The reads, searches, pages and thoughts since the previous conclusion.",
+                "items": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "unmatched": {
+                "default": [],
+                "description": "Named sources no step of the session matches (\"named, not read in this session\").",
+                "items": {
+                  "$ref": "#/$defs/ConclusionSource"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "ConclusionSource": {
+            "additionalProperties": false,
+            "description": "What a conclusion rests on: a file with optional lines, or a page.",
+            "properties": {
+              "lines": {
+                "description": "First and last line, 1-based.",
+                "items": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/conclusions`'s answer.",
+        "properties": {
+          "conclusions": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Conclusion"
+            },
+            "type": "array"
+          }
+        },
+        "title": "Conclusions",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a file's bytes (base64) as the newest step snapshot at or before seq had them",
+      "name": "work/file-at",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/file-at`: a file as a step's snapshot had it.",
+        "properties": {
+          "path": {
+            "description": "Relative to the worktree.",
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "seq": {
+            "description": "The step; the newest snapshot at or before it answers.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "session": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "session",
+          "path",
+          "seq"
+        ],
+        "title": "FileAtParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/file-at`'s answer.",
+        "properties": {
+          "bytes": {
+            "description": "The file's bytes, base64.",
+            "type": "string"
+          },
+          "seq": {
+            "description": "The step whose snapshot this is.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "bytes",
+          "seq"
+        ],
+        "title": "FileAt",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the files a session edited, with added and removed lines against its worktree's base (new files included)",
+      "name": "work/files",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/files`: the files session `session` edited.",
+        "properties": {
+          "session": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "session"
+        ],
+        "title": "EditedFiles",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "EditedFile": {
+            "additionalProperties": false,
+            "description": "One edited file: its added and removed lines against the worktree's base.",
+            "properties": {
+              "minus": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "description": "Relative to the worktree.",
+                "type": "string"
+              },
+              "plus": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "read_at": {
+                "description": "When the agent last read it (seconds); absent until the edit history supplies it.",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "untracked": {
+                "description": "The file is not in the base at all (the agent made it).",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "path",
+              "plus",
+              "minus",
+              "untracked"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/files`' answer.",
+        "properties": {
+          "files": {
+            "items": {
+              "$ref": "#/$defs/EditedFile"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "files"
+        ],
+        "title": "EditedFilesList",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "one edited file's unified diff against its worktree's base",
+      "name": "work/hunks",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/hunks`: one file's changes.",
+        "properties": {
+          "path": {
+            "description": "Relative to the worktree.",
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "session": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "session",
+          "path"
+        ],
+        "title": "HunksParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/hunks`' answer: the unified diff against the base.",
+        "properties": {
+          "diff": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "diff"
+        ],
+        "title": "Hunks",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "end one map view of this connection (a connection's views end with it)",
+      "name": "work/map/close",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/map/close`'s params.",
+        "properties": {
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "MapClose",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "change one map view (filters, collapsed layers, width, density, shown, the selection): a change the user made relayouts at once",
+      "name": "work/map/set",
+      "params": {
+        "$defs": {
+          "MapDensity": {
+            "description": "A map view's density (the look's).",
+            "enum": [
+              "compact",
+              "comfortable",
+              "roomy"
+            ],
+            "type": "string"
+          },
+          "MapFilters": {
+            "additionalProperties": false,
+            "description": "A map view's filters: `f` (only an item's chain), `o` (only overlaps and clashes), `.` (finished items too).",
+            "properties": {
+              "finished": {
+                "default": false,
+                "type": "boolean"
+              },
+              "focus": {
+                "description": "An item id: only its chain.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "overlaps": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/map/set`'s params: what changes in one view (each absent field stays).",
+        "properties": {
+          "collapsed": {
+            "items": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "density": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MapDensity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "filters": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MapFilters"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "selected": {
+            "description": "The selection moved (a map key).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "shown": {
+            "description": "False: hidden (no deltas, one stale mark); true again: a full frame.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "view": {
+            "type": "string"
+          },
+          "width_units": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "MapSet",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/map/set`'s answer: the view's version after it.",
+        "properties": {
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "MapVersion",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "open (or open again) one map view of this connection: the answer is its full frame, and work-map events follow, to this connection only",
+      "name": "work/map/subscribe",
+      "params": {
+        "$defs": {
+          "MapDensity": {
+            "description": "A map view's density (the look's).",
+            "enum": [
+              "compact",
+              "comfortable",
+              "roomy"
+            ],
+            "type": "string"
+          },
+          "MapFilters": {
+            "additionalProperties": false,
+            "description": "A map view's filters: `f` (only an item's chain), `o` (only overlaps and clashes), `.` (finished items too).",
+            "properties": {
+              "finished": {
+                "default": false,
+                "type": "boolean"
+              },
+              "focus": {
+                "description": "An item id: only its chain.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "overlaps": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "Workspace": {
+            "additionalProperties": false,
+            "description": "The workspace a Work view shows: one id, the roots (repositories or folders) it spans. The editor sends it with\nevery subscription; the hub never decides what a workspace is.",
+            "properties": {
+              "id": {
+                "description": "`workspace:` and 12 hex digits.",
+                "type": "string"
+              },
+              "roots": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/map/subscribe`'s params: one map view of this connection (VIEW is the editor's id for it), the workspace it\nshows, and how.",
+        "properties": {
+          "collapsed": {
+            "default": [],
+            "description": "Collapsed layers, 1 to 6.",
+            "items": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "density": {
+            "$ref": "#/$defs/MapDensity",
+            "default": "comfortable"
+          },
+          "filters": {
+            "$ref": "#/$defs/MapFilters",
+            "default": {
+              "finished": false,
+              "overlaps": false
+            }
+          },
+          "selected": {
+            "description": "The selected item: a quiet reflow that would move its chain waits for the user.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "view": {
+            "type": "string"
+          },
+          "width_units": {
+            "description": "The drawing width, in units of 4 px.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "workspace": {
+            "$ref": "#/$defs/Workspace"
+          }
+        },
+        "required": [
+          "view",
+          "workspace",
+          "width_units"
+        ],
+        "title": "MapSubscribe",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A map view's full frame: `work/map/subscribe`'s answer.",
+        "properties": {
+          "chips": {
+            "default": [],
+            "description": "The mission chips (the machines' load).",
+            "items": true,
+            "type": "array"
+          },
+          "edges": {
+            "default": [],
+            "description": "The edges between them.",
+            "items": true,
+            "type": "array"
+          },
+          "items": {
+            "default": [],
+            "description": "The items the view shows, each with its kind, label, flags and card fields.",
+            "items": true,
+            "type": "array"
+          },
+          "layout": {
+            "description": "Rows, positions and forms, lanes, ports and bands, in units of 4 px."
+          },
+          "needs_you": {
+            "default": [],
+            "description": "The needs-you strip.",
+            "items": true,
+            "type": "array"
+          },
+          "version": {
+            "description": "The frame's version; every `work-map` after it names the version it applies to (`base`).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "layout"
+        ],
+        "title": "MapFrame",
+        "type": "object"
+      },
+      "writes": false
     }
   ],
   "proto": 1,
   "proto_min": 1,
   "records": 2,
-  "schema": 8
+  "schema": 10
 }

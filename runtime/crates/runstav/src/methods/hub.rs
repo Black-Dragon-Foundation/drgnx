@@ -73,6 +73,23 @@ pub struct PingResult {
     pub pid: u64,
 }
 
+/// `browser/check`: what a throwaway browser session did (the doctor's smoke run).  `browser` is the program found
+/// (`{path, kind, version, source}`); `start_ms` the time from the start to the first answer; `peak_bytes` the
+/// scope's peak memory where a user systemd answers; `sys_missed` that the browser's stderr named a `/sys/` path (a
+/// read the layer does not allow); `why` what stopped it, and `at` when it ran (RFC 3339, UTC).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserCheckResult {
+    pub ok: bool,
+    pub browser: Option<Value>,
+    pub start_ms: u64,
+    pub peak_bytes: Option<u64>,
+    pub sys_missed: bool,
+    pub screenshot_bytes: u64,
+    pub why: Option<String>,
+    pub at: String,
+}
+
 /// The refusals the hub counted, and the last ones (method, code, class, path; never params).
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -353,6 +370,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "status", Status(Empty) -> HubStatus,
             classes: [User, Agent, Service], writes: false,
             doc: "the hub's state: versions, refusals, read-only, the gateway",
+        ),
+        method!(
+            "browser/check", BrowserCheck(Empty) -> BrowserCheckResult,
+            classes: [User], writes: false,
+            doc: "runs a throwaway browser session (a screenshot of a data: page) and caches the result for the doctor",
         ),
         method!(
             "restart", Restart(Empty) -> bool,

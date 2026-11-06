@@ -289,7 +289,7 @@ stable across updates), which connects to the hub as a service and is ext:KIND:P
             "  ")
     (drgnx-agent-settings--button (if on "[Remove drgnx]" "[Add drgnx]") #'drgnx-agent-settings-report
                                   (if on "Take the coordination server out of this agent's settings"
-                                    "Add the coordination server: the agent then shows in the Work cockpit"))
+                                    "Add the coordination server: the agent then shows in the Work space"))
     (insert "\n")))
 
 (defun drgnx-agent-settings--insert-problems ()
@@ -602,11 +602,34 @@ no longer what the page shows (what was confirmed must be what runs)."
             drgnx-agent-settings--root (drgnx-agent-settings--usable-root root)
             ;; never the caller's (a remote buffer's would be reached for every relative name)
             default-directory (or drgnx-agent-settings--root (expand-file-name "~/")))
-      (drgnx-agent-settings--read)
-      (drgnx-agent-settings--render)
-      (goto-char (point-min)))
+      (drgnx-agent-settings--read-then buffer
+                                       (lambda ()
+                                         (drgnx-agent-settings--render)
+                                         (goto-char (point-min)))))
     (pop-to-buffer buffer)
     buffer))
+
+(defun drgnx-agent-settings--read-then (buffer then &optional keep)
+  "Read the agent's settings for BUFFER's page, then call THEN in BUFFER.  Claude Code's user file (`.claude.json', big,
+rewritten every few seconds) is read off the main thread when Nidhogg's workers are on: THEN runs when it lands, and
+the page says it is reading until then (KEEP: the page stays as it is); otherwise THEN runs before this returns.  Only
+the page's open and Refresh come here: what an edit changes is re-read at once (`drgnx-agent-config-read-text-async')."
+  (let ((done nil))
+    (cl-flet ((finish (text)
+                (when (buffer-live-p buffer)
+                  (with-current-buffer buffer
+                    (let ((drgnx-agent-config--preread
+                           (and text (list (cons (drgnx-agent-config-claude-json-file) text)))))
+                      (drgnx-agent-settings--read))
+                    (funcall then)))
+                (setq done t)))
+      (if (and (eq (buffer-local-value 'drgnx-agent-settings--kind buffer) 'claude)
+               (drgnx-agent-config-read-text-async (drgnx-agent-config-claude-json-file) #'finish))
+          (unless (or done keep)                      ; asynchronous: the page waits for the text
+            (with-current-buffer buffer              ; a new page is empty; one shown before keeps its text meanwhile
+              (when (= (point-min) (point-max))
+                (let ((inhibit-read-only t)) (insert "Reading the settings…\n")))))
+        (unless done (finish nil))))))
 
 (defun drgnx-agent-settings--page ()
   (unless (derived-mode-p 'drgnx-agent-settings-mode) (user-error "Not an agent settings page"))
@@ -688,7 +711,8 @@ Interactively: the agent of the session at point (in the Agents list or a transc
 (defun drgnx-agent-settings-refresh ()
   "Read the agent's files again and redraw the page (nothing is started)."
   (interactive)
-  (drgnx-agent-settings--refresh-buffer (drgnx-agent-settings--page)))
+  (let ((page (drgnx-agent-settings--page)))
+    (drgnx-agent-settings--read-then page (lambda () (drgnx-agent-settings--redraw)) t)))
 
 (defun drgnx-agent-settings-other ()
   "Show another agent's settings, for the same project."
@@ -965,7 +989,7 @@ The answer may hold a secret (a token in a command line or URL): it is kept out 
 
 (defun drgnx-agent-settings-report ()
   "Add the `drgnx' MCP server to this agent's user settings, or take it out when it is there: an agent with it shows
-in the Work cockpit.  Asks first, names the file, and writes no token or key (the server needs none)."
+in the Work space.  Asks first, names the file, and writes no token or key (the server needs none)."
   (interactive)
   (drgnx-agent-settings--page)
   (let ((kind drgnx-agent-settings--kind)
@@ -1050,7 +1074,7 @@ for every OpenRouter route, saved in settings.el; it applies through drgnx's gat
                    (agent-settings-openrouter "OpenRouter Restrictions…" drgnx-agent-settings-openrouter
                                               "Which providers OpenRouter may use for the agents, and whether they may keep data")
                    (agent-settings-report "Report to drgnx" drgnx-agent-settings-report
-                                          "Add the drgnx coordination server to this agent (or take it out): it then shows in the Work cockpit")
+                                          "Add the drgnx coordination server to this agent (or take it out): it then shows in the Work space")
                    (agent-settings-new-skill "New Skill…" drgnx-agent-settings-new-skill "A SKILL.md with its name and description")
                    (agent-settings-open-file "Open Its File" drgnx-agent-settings-open-file "The file this line comes from")
                    (agent-settings-other "Other Agent…" drgnx-agent-settings-other "Another agent's settings, same project")))

@@ -2,7 +2,7 @@
 //! test/runners/): the link session, the queue's placement, the health check. They run in a fleet's harness only:
 //!
 //! ```text
-//! cargo test -p drgnx-ratatoskr --test fleet_runners --no-run
+//! cargo test -p drgnx-ratatoskr --features fleet --test fleet_runners --no-run
 //! cargo build -p sleipnir --features test-hooks        # the bundle each row installs (fleet.sh test shares it)
 //! fleet.sh up --runners 1
 //! DRGNX_FLEET_TEST_BIN=<the test binary> fleet.sh test --test-threads=1
@@ -319,6 +319,7 @@ fn heavy_job(id: &str, image: Option<&str>) -> Submit {
             ..Placement::default()
         },
         pending: serde_json::Value::Null,
+        inputs: None,
     }
 }
 
@@ -498,6 +499,7 @@ mod queue {
                     spec,
                     place: place(heavy),
                     pending: serde_json::Value::Null,
+                    inputs: None,
                 },
                 now(),
             );
@@ -526,6 +528,7 @@ mod queue {
                         id,
                         attempt,
                         result,
+                        ..
                     } if id == "xheavy" => Some((*attempt, result.clone())),
                     _ => None,
                 })
@@ -596,6 +599,7 @@ mod link {
             image: Some(img),
             env: vec![],
             net_hosts: vec![],
+            pins: vec![],
             parser: "exit".into(),
         });
         a.frame("started", |f| {

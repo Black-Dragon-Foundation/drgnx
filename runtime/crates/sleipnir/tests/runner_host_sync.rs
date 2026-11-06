@@ -250,11 +250,9 @@ fn origin_fetch_with_a_token_leaves_no_file() {
     let commit = repo(&src);
     user_git(work.path(), &["clone", "-q", "--bare", "src", "origin.git"]);
 
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let token = format!("tok{nanos:x}p{}", std::process::id());
+    // unique per run: the process and the temp folder's own random name
+    let unique = work.path().file_name().unwrap().to_string_lossy();
+    let token = format!("tok{unique}p{}", std::process::id());
     let auth = format!(
         "Basic {}",
         base64(format!("x-access-token:{token}").as_bytes())
@@ -569,7 +567,11 @@ mod guard {
         std::os::unix::fs::symlink(&outside, root.join("cache/p/private/b")).unwrap();
         std::os::unix::fs::symlink(&outside, root.join("cache/q")).unwrap();
 
-        let items = guard::scan(&root, std::time::SystemTime::now(), 10 << 30).unwrap();
+        // the filesystem's own now: the mtime of a file written just now
+        let probe = t.path().join(".fs-now");
+        fs::write(&probe, b"").unwrap();
+        let now = fs::metadata(&probe).unwrap().modified().unwrap();
+        let items = guard::scan(&root, now, 10 << 30).unwrap();
         let mut plan = guard::plan(low(), &items, &Needs::default());
         assert!(
             plan.iter()

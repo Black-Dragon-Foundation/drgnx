@@ -520,7 +520,7 @@ mod tests {
         let p = paths(&t.path().join("runner"), &key("w"));
         sync(t.path(), &repo, &p);
 
-        let old = SystemTime::now() - Duration::from_secs(86_400);
+        let old = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
         for f in ["a", "b", "c", "d", "x"] {
             backdate(&p.slot.join(f), old);
         }
@@ -640,7 +640,7 @@ mod tests {
         slot.join(".git")
     }
 
-    // [D] pure: H1, a hook a job planted
+    // [D] pure: sync never runs a hook a job planted in its slot
     #[test]
     fn a_planted_post_checkout_hook_never_runs() {
         let t = tempfile::tempdir().unwrap();
@@ -652,7 +652,7 @@ mod tests {
         });
     }
 
-    // [D] pure: H1, core.fsmonitor in a config a job planted
+    // [D] pure: sync never runs a core.fsmonitor from a config a job planted in its slot
     #[test]
     fn core_fsmonitor_in_a_planted_config_never_runs() {
         let t = tempfile::tempdir().unwrap();
@@ -667,7 +667,7 @@ mod tests {
         });
     }
 
-    // [D] pure: H1, core.hooksPath in a config a job planted, at hooks the job wrote
+    // [D] pure: sync never runs the hooks a job wrote and pointed a planted config's core.hooksPath at
     #[test]
     fn a_planted_core_hookspath_never_runs() {
         let t = tempfile::tempdir().unwrap();
@@ -684,7 +684,7 @@ mod tests {
         });
     }
 
-    // [D] pure: H1, a `.git` file (and a `.git` link) naming a git dir the job made outside the slot
+    // [D] pure: sync never follows a `.git` file (or a `.git` link) naming a git dir the job made outside the slot
     #[test]
     fn a_dot_git_file_in_the_slot_is_deleted_not_followed() {
         let t = tempfile::tempdir().unwrap();
@@ -723,7 +723,7 @@ mod tests {
         );
     }
 
-    // [D] pure: H1, links a job planted never lead a write out of the slot
+    // [D] pure: links a job planted never lead sync's writes out of the slot
     #[test]
     fn a_planted_link_never_leads_a_write_outside() {
         let t = tempfile::tempdir().unwrap();
@@ -824,7 +824,7 @@ mod tests {
             sync(t.path(), &repo, p);
             fs::create_dir_all(p.target.join("debug")).unwrap();
         }
-        let now = SystemTime::now();
+        let now = testutil::fs_now(t.path());
         for p in [&old, &held, &busy] {
             backdate(
                 &p.git_dir.join("used"),

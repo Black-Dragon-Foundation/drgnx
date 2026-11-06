@@ -10,22 +10,32 @@
 //! | | |
 //! |---|---|
 //! | `home/` (`${HOME}`) | `.ssh/id_canary`, `other-repo/secret`, `canary-dir/canary.txt` (`${CANARY_DIR}`) |
-//! | `run/` (`${RUNTIME}`) | `drgnx/hub-0000.sock`, `drgnx/hub-0000.d/backend.sock`, `emacs/server`, `bus`, `ssh-agent.sock`; `drgnx/s/S1` is `${RUN}`, holding `proxy.sock` and `gateway.sock`; `drgnx/s/S2/hub.sock` is another session's |
+//! | `run/` (`${RUNTIME}`) | `drgnx/hub-0000.sock`, `drgnx/hub-0000.d/backend.sock`, `emacs/server`, `bus`, `ssh-agent.sock`; `drgnx/s/S1` is `${RUN}`, holding `proxy.sock`, `web.sock` and `gateway.sock`; `drgnx/s/S2/hub.sock` is another session's |
 //! | `data/` (`${DATA}`) | `work.db` |
 //! | `tasks/t1`, `tasks/t2` | `${TASK}`, `${TASK2}` (`t2/canary`) |
 //! | `w/` | `${W}`, an empty work dir; `t/` is `${TMP}` |
 //! | `bin/` | a copy of the probe, bound read-only into the sandbox |
 
 use gleipnir::net::host::parse_target;
-use gleipnir::net::proxy::{self, Listener, ProxyConfig, ProxyEvent, SystemResolver};
-use std::collections::HashMap;
+use gleipnir::net::policy::{HostAddrs, NeverSet, PrivateGrant};
+use gleipnir::net::proxy::{
+    self, Connect, Connecting, Listener, Policy, ProxyConfig, ProxyEvent, Resolver, SystemResolver,
+    WebState,
+};
+use std::collections::{BTreeMap, HashMap};
+use std::future::Future;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::Duration;
+
+/// `${HOST_LAN}`: an address the web proxy's policy counts as one of the host's own (`HostAddrs`). Nothing listens
+/// there: the web proxy never opens a connection to it, and the redirect would take one to `web-upstream`.
+pub const HOST_LAN: Ipv4Addr = Ipv4Addr::new(192, 168, 77, 7);
 
 /// 24 random hex digits from the kernel.
 pub fn random_hex() -> String {
@@ -54,6 +64,40 @@ pub struct Addrs {
     pub upstream: SocketAddr,
     pub proxy_tcp: SocketAddr,
     pub abstract_name: String,
+    /// The web proxy's TCP listener (a control run's `HTTPS_PROXY` in a `web` row).
+    pub web_tcp: SocketAddr,
+    /// Where the web proxy's upstream connections go, except loopback ones: an HTTP server that checks a forwarded
+    /// head (`web_upstream_conn`).
+    pub web_upstream: SocketAddr,
+    /// A hub TCP endpoint on the loopback (`${GATEWAY_PORT}`): in the web policy's `NeverSet`, and it echoes.
+    pub gateway_tcp: SocketAddr,
+}
+
+/// The web proxy's resolver: only the names the row lists (`dns`) resolve, and nothing asks real DNS.
+#[derive(Default)]
+struct ScriptedResolver(Mutex<HashMap<String, Vec<IpAddr>>>);
+
+impl Resolver for ScriptedResolver {
+    fn resolve(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> Pin<Box<dyn Future<Output = io::Result<Vec<SocketAddr>>> + Send>> {
+        let answer = self.0.lock().unwrap().get(host).map(|ips| {
+            ips.iter()
+                .map(|ip| SocketAddr::new(*ip, port))
+                .collect::<Vec<_>>()
+        });
+        let host = host.to_owned();
+        Box::pin(async move {
+            answer.ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("{host}: not in the row's dns"),
+                )
+            })
+        })
+    }
 }
 
 /// The listeners on Unix sockets, by name and path under the root. The Lisp backend's socket sits beside the hub's, and
@@ -67,6 +111,10 @@ const UNIX_LISTENERS: [(&str, &str); 7] = [
     ("ssh-agent", "run/ssh-agent.sock"),
     ("gateway", "run/drgnx/s/S1/gateway.sock"),
 ];
+
+/// A browser session's sockets in its run dir besides `proxy.sock` and `gateway.sock`: the hub's and the MCP
+/// server's, and the web and CDP relays' targets ([`Fixture::session_sockets`]).
+pub const SESSION_SOCKETS: [&str; 4] = ["hub.sock", "mcp.sock", "web.sock", "cdp.sock"];
 
 /// How long a wait of the fixture's may take before it is called failed. Never what makes anything pass.
 const FAILED_AFTER: Duration = Duration::from_secs(30);
@@ -91,6 +139,13 @@ pub struct Fixture {
     asked: AtomicUsize,
     rt: Option<tokio::runtime::Runtime>,
     _proxy: proxy::ProxyHandle,
+    /// The web proxy (`Policy::Web`) on `${RUN}/web.sock`, its state and its resolver, set per row
+    /// ([`Fixture::use_web_proxy`]).
+    _web_proxy: proxy::ProxyHandle,
+    web: Arc<WebState>,
+    dns: Arc<ScriptedResolver>,
+    /// `HTTPS_PROXY` in [`Fixture::env`] is the web proxy's.
+    use_web: bool,
     pub sleep: Option<Child>,
     /// Directories made as root (`/var/lib/glp-XXXXXX`), removed with `sudo -n` when they are not ours.
     pub root_dirs: Vec<PathBuf>,
@@ -156,7 +211,8 @@ impl Fixture {
         let mut counts: HashMap<&'static str, Arc<AtomicUsize>> = HashMap::new();
         let events = Arc::new((Mutex::new(Vec::new()), Condvar::new()));
         let abstract_name = format!("glp-{}", random_hex());
-        let (addrs, handle) = {
+        let dns = Arc::new(ScriptedResolver::default());
+        let (addrs, handle, web_handle, web) = {
             let _g = rt.enter();
             let mut count = |name: &'static str| {
                 let c = Arc::new(AtomicUsize::new(0));
@@ -186,7 +242,7 @@ impl Fixture {
                 pinned: vec![("upstream.test".into(), IpAddr::V4(Ipv4Addr::LOCALHOST))],
                 ..ProxyConfig::default()
             };
-            let handle = proxy::start(cfg, Arc::new(SystemResolver), tx);
+            let handle = proxy::start(cfg, Arc::new(SystemResolver), tx.clone());
             handle.listen(
                 Listener::Unix(tokio::net::UnixListener::bind(p(
                     "run/drgnx/s/S1/proxy.sock",
@@ -196,15 +252,43 @@ impl Fixture {
             let ptcp = bind_tcp(Ipv4Addr::LOCALHOST.into())?;
             let proxy_tcp = ptcp.local_addr()?;
             handle.listen(Listener::Tcp(tokio::net::TcpListener::from_std(ptcp)?), 2);
+
+            // The web proxy shares the event channel, so the provider proxy's sentinel (`proxy_events`) comes after
+            // every web event sent before it.
+            let gateway_tcp =
+                serve_tcp(bind_tcp(Ipv4Addr::LOCALHOST.into())?, count("gateway-tcp"));
+            let web_upstream =
+                serve_web_upstream(bind_tcp(Ipv4Addr::LOCALHOST.into())?, count("web-upstream"));
+            let wtcp = bind_tcp(Ipv4Addr::LOCALHOST.into())?;
+            let web_tcp = wtcp.local_addr()?;
+            let host_addrs = HostAddrs([IpAddr::V4(HOST_LAN)].into_iter().collect());
+            let never = NeverSet {
+                loopback_ports: [gateway_tcp.port(), proxy_tcp.port(), web_tcp.port()]
+                    .into_iter()
+                    .collect(),
+            };
+            let web = Arc::new(WebState::new(
+                Arc::new(RwLock::new(host_addrs)),
+                Arc::new(RwLock::new(never)),
+            ));
+            let web_cfg = ProxyConfig {
+                policy: Policy::Web(web.clone()),
+                ..ProxyConfig::default()
+            };
+            let web_handle =
+                proxy::start_for_tests(web_cfg, dns.clone(), tx, redirect_to(web_upstream));
+            web_handle.listen(
+                Listener::Unix(tokio::net::UnixListener::bind(p(
+                    "run/drgnx/s/S1/web.sock",
+                ))?),
+                3,
+            );
+            web_handle.listen(Listener::Tcp(tokio::net::TcpListener::from_std(wtcp)?), 4);
+
             let sink = events.clone();
             tokio::spawn(async move {
                 while let Some(e) = rx.recv().await {
-                    sink.0.lock().unwrap().push(match e {
-                        ProxyEvent::Denied { target, .. } => format!("Denied {target}"),
-                        ProxyEvent::Refused { target, why, .. } => {
-                            format!("Refused {why:?} {target}")
-                        }
-                    });
+                    sink.0.lock().unwrap().push(event_text(&e));
                     sink.1.notify_all();
                 }
             });
@@ -217,8 +301,13 @@ impl Fixture {
                     upstream,
                     proxy_tcp,
                     abstract_name,
+                    web_tcp,
+                    web_upstream,
+                    gateway_tcp,
                 },
                 handle,
+                web_handle,
+                web,
             )
         };
         let mut sentinels: HashMap<&'static str, Sentinel> = HashMap::new();
@@ -242,6 +331,8 @@ impl Fixture {
             ("tcp-lo", Some(addrs.tcp_lo)),
             ("upstream", Some(addrs.upstream)),
             ("tcp-nl", addrs.tcp_nl),
+            ("gateway-tcp", Some(addrs.gateway_tcp)),
+            ("web-upstream", Some(addrs.web_upstream)),
         ] {
             if let Some(addr) = addr {
                 sentinel(name, Box::new(move || trip_tcp(addr)));
@@ -262,6 +353,10 @@ impl Fixture {
             asked: AtomicUsize::new(0),
             rt: Some(rt),
             _proxy: handle,
+            _web_proxy: web_handle,
+            web,
+            dns,
+            use_web: false,
             sleep: None,
             root_dirs: Vec::new(),
             users_shared,
@@ -307,9 +402,43 @@ impl Fixture {
             ("PATH".into(), path.into()),
             (
                 "HTTPS_PROXY".into(),
-                format!("http://{}", self.addrs.proxy_tcp),
+                format!(
+                    "http://{}",
+                    if self.use_web {
+                        self.addrs.web_tcp
+                    } else {
+                        self.addrs.proxy_tcp
+                    }
+                ),
             ),
         ]
+    }
+
+    /// A `web` row: [`Fixture::env`]'s `HTTPS_PROXY` becomes the web proxy's, and its policy gets the row's state:
+    /// `browser.web` granted or not, the grants, and the names its resolver answers.
+    pub fn use_web_proxy(
+        &mut self,
+        web: bool,
+        grants: Vec<PrivateGrant>,
+        dns: &BTreeMap<String, Vec<String>>,
+    ) -> Result<(), String> {
+        let mut names = HashMap::new();
+        for (name, addrs) in dns {
+            let ips = addrs
+                .iter()
+                .map(|a| {
+                    let a = self.expand(a)?;
+                    a.parse::<IpAddr>()
+                        .map_err(|e| format!("dns {name}: {a:?}: {e}"))
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            names.insert(self.expand(name)?.to_ascii_lowercase(), ips);
+        }
+        *self.dns.0.lock().unwrap() = names;
+        self.web.set_web(web);
+        self.web.set_grants(grants);
+        self.use_web = true;
+        Ok(())
     }
 
     /// How many connections (or datagrams) the named listener has seen.
@@ -399,11 +528,16 @@ impl Fixture {
             "GIT" => s(draugr::git::git_program()
                 .map_err(|e| format!("${{GIT}}: no trusted git here: {e}"))?
                 .path),
+            "HOST_LAN" => HOST_LAN.to_string(),
+            "GATEWAY_PORT" => a.gateway_tcp.port().to_string(),
+            "TCP_LO_PORT" => a.tcp_lo.port().to_string(),
             "FAKE_BWRAP" => s(self
                 .root_dirs
                 .first()
                 .map(|d| d.join("bwrap"))
                 .ok_or("${FAKE_BWRAP} needs the fake-bwrap setup step")?),
+            // Only the probe inside knows the stand-in agent's pid: it fills this in (`gleipnir-probe --as-browser`).
+            "PARENT" => "{agent-pid}".into(),
             other => return Err(format!("undefined placeholder ${{{other}}}")),
         })
     }
@@ -423,6 +557,23 @@ impl Fixture {
         }
         out.push_str(rest);
         Ok(out)
+    }
+
+    /// The browser layer's rows: the session's other sockets in `${RUN}` (`SESSION_SOCKETS`), each a listener that
+    /// echoes, so the stand-in agent reaches them where the browser must not. One that is there already is kept.
+    pub fn session_sockets(&self) -> io::Result<()> {
+        let rt = self.rt.as_ref().expect("the fixture's runtime");
+        let _g = rt.enter();
+        for name in SESSION_SOCKETS {
+            let path = self.path("run/drgnx/s/S1").join(name);
+            if !path.exists() {
+                serve_unix(
+                    tokio::net::UnixListener::bind(&path)?,
+                    Arc::new(AtomicUsize::new(0)),
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Starts the `sleep` that `${SLEEP_PID}` names.
@@ -590,6 +741,125 @@ fn serve_udp(s: std::net::UdpSocket, count: Arc<AtomicUsize>) -> SocketAddr {
     addr
 }
 
+/// The proxies' events as rows name them: `Denied host:port`, `Refused <Why> target` (no target when the request had
+/// none), `WebOff host:port`, `Private <asked> <addr> <Class>`, `Reached host`.
+fn event_text(e: &ProxyEvent) -> String {
+    match e {
+        ProxyEvent::Denied { target, .. } => format!("Denied {target}"),
+        ProxyEvent::Refused { target, why, .. } => {
+            format!("Refused {why:?} {target}").trim_end().to_string()
+        }
+        ProxyEvent::WebOff { target, .. } => format!("WebOff {target}"),
+        ProxyEvent::Private {
+            asked, addr, class, ..
+        } => format!("Private {asked} {addr} {class:?}"),
+        ProxyEvent::Reached { host, .. } => format!("Reached {host}"),
+    }
+}
+
+/// The web proxy's upstream connector: a loopback address (only `host.drgnx.internal` leads there) is connected as
+/// it is; every other address goes to `web_upstream`, so a "public" or LAN target has a server and no row reaches a
+/// real network.
+fn redirect_to(web_upstream: SocketAddr) -> Connect {
+    Arc::new(move |a: SocketAddr| -> Connecting {
+        let to = if a.ip().is_loopback() {
+            a
+        } else {
+            web_upstream
+        };
+        Box::pin(tokio::net::TcpStream::connect(to))
+    })
+}
+
+fn serve_web_upstream(l: std::net::TcpListener, count: Arc<AtomicUsize>) -> SocketAddr {
+    let addr = l.local_addr().expect("local addr");
+    let l = tokio::net::TcpListener::from_std(l).expect("tokio listener");
+    tokio::spawn(async move {
+        while let Ok((s, _)) = l.accept().await {
+            count.fetch_add(1, Ordering::SeqCst);
+            tokio::spawn(web_upstream_conn(s));
+        }
+    });
+    addr
+}
+
+/// One connection to `web-upstream`. A forwarded plain-HTTP head (it starts with a method in capitals) is checked
+/// ([`check_forwarded`]) and answered `200` with `X-Glp-Host: <the Host it got>`, or `412` with `X-Glp-Why`. Other
+/// bytes (a sentinel's) are echoed; a CONNECT tunnel the probe closes at once sends none.
+async fn web_upstream_conn(mut s: tokio::net::TcpStream) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = match tokio::time::timeout(FAILED_AFTER, s.read(&mut chunk)).await {
+            Ok(Ok(n)) if n > 0 => n,
+            _ => return,
+        };
+        buf.extend_from_slice(&chunk[..n]);
+        if !buf[0].is_ascii_uppercase() {
+            if s.write_all(&buf).await.is_ok() {
+                echo(s).await;
+            }
+            return;
+        }
+        if let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            let answer = match check_forwarded(&buf[..end]) {
+                Ok(host) => format!("200 OK\r\nX-Glp-Host: {host}"),
+                Err(why) => format!("412 Precondition Failed\r\nX-Glp-Why: {why}"),
+            };
+            let text =
+                format!("HTTP/1.1 {answer}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            let _ = s.write_all(text.as_bytes()).await;
+            let _ = s.shutdown().await;
+            return;
+        }
+        if buf.len() > 16384 {
+            return;
+        }
+    }
+}
+
+/// A head as the web proxy must forward it (docs/develop/gleipnir.md, "The proxy"): origin-form, one `Host`, none of
+/// the hop-by-hop headers `gleipnir-probe http-get` sends (`Proxy-*`, `Keep-Alive`, `TE`, `Upgrade`, and
+/// `X-Glp-Hop`, which its `Connection` lists), exactly `Connection: close`, and its `X-Glp-End` kept. The `Host` it
+/// got, or why not.
+fn check_forwarded(head: &[u8]) -> Result<String, String> {
+    let text = std::str::from_utf8(head).map_err(|_| "a head that is not UTF-8".to_string())?;
+    let mut lines = text.split("\r\n");
+    let line = lines.next().unwrap_or_default();
+    if !line.split(' ').nth(1).is_some_and(|t| t.starts_with('/')) {
+        return Err(format!("not origin-form: {line}"));
+    }
+    let (mut hosts, mut connection, mut end) = (Vec::new(), Vec::new(), false);
+    for l in lines {
+        let (name, value) = l
+            .split_once(':')
+            .ok_or_else(|| format!("not a header: {l}"))?;
+        let (name, value) = (name.to_ascii_lowercase(), value.trim().to_string());
+        if name.starts_with("proxy-")
+            || ["keep-alive", "te", "upgrade", "x-glp-hop"].contains(&name.as_str())
+        {
+            return Err(format!("{name} was forwarded"));
+        }
+        match name.as_str() {
+            "host" => hosts.push(value),
+            "connection" => connection.push(value),
+            "x-glp-end" => end = true,
+            _ => {}
+        }
+    }
+    if connection != ["close"] {
+        return Err(format!("Connection {connection:?}"));
+    }
+    if !end {
+        return Err("X-Glp-End was dropped".into());
+    }
+    match hosts.as_slice() {
+        [h] => Ok(h.clone()),
+        _ => Err(format!("Host {hosts:?}")),
+    }
+}
+
 async fn echo<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static>(s: S) {
     let (mut r, mut w) = tokio::io::split(s);
     let _ = tokio::io::copy(&mut r, &mut w).await;
@@ -687,5 +957,61 @@ mod tests {
         assert!(ask_proxy(&socket, "x.test:443").unwrap().contains(" 403 "));
         assert_eq!(f.proxy_events(), vec!["Denied x.test:443".to_string()]);
         assert_eq!(f.proxy_events(), vec!["Denied x.test:443".to_string()]);
+    }
+
+    #[test]
+    fn the_web_proxy_takes_the_rows_state_and_redirects() {
+        let mut f = Fixture::new().unwrap();
+        // a grant never opens the host's own address
+        let grants = [format!("{HOST_LAN}:80"), "192.168.1.20:8080".into()]
+            .map(|t| {
+                serde_json::from_value(serde_json::json!({"target": {"host_port": t}})).unwrap()
+            })
+            .to_vec();
+        let dns = BTreeMap::from([("Web.Test".to_string(), vec!["93.184.216.34".to_string()])]);
+        f.use_web_proxy(true, grants, &dns).unwrap();
+        assert!(
+            f.env("/usr/bin")
+                .contains(&("HTTPS_PROXY".into(), format!("http://{}", f.addrs.web_tcp)))
+        );
+        let socket = f.path("run/drgnx/s/S1/web.sock");
+        let lan = format!("{HOST_LAN}:80");
+        for (target, status) in [
+            ("web.test:443", " 200 "),
+            ("192.168.1.20:8080", " 200 "),
+            ("192.168.1.20:8081", " 403 "),
+            (lan.as_str(), " 403 "),
+            ("other.test:443", " 502 "),
+        ] {
+            let got = ask_proxy(&socket, target).unwrap();
+            assert!(got.contains(status), "{target}: {got:?}");
+        }
+        assert_eq!(f.seen("web-upstream"), 2, "both through the redirect");
+        assert_eq!(
+            f.proxy_events(),
+            [
+                "Private 192.168.1.20:8081 192.168.1.20:8081 Lan".to_string(),
+                "Reached 192.168.1.20".into(),
+                "Reached web.test".into(),
+                format!("Refused Loopback {HOST_LAN}:80"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_forwarded_head_is_checked() {
+        let good = "GET /x?q=1 HTTP/1.1\r\nHost: web.test\r\nX-Glp-End: 1\r\nConnection: close";
+        assert_eq!(check_forwarded(good.as_bytes()), Ok("web.test".into()));
+        for bad in [
+            "GET http://web.test/x HTTP/1.1\r\nHost: web.test\r\nX-Glp-End: 1\r\nConnection: close",
+            "GET /x HTTP/1.1\r\nHost: web.test\r\nKeep-Alive: 5\r\nX-Glp-End: 1\r\nConnection: close",
+            "GET /x HTTP/1.1\r\nHost: web.test\r\nX-Glp-Hop: 1\r\nX-Glp-End: 1\r\nConnection: close",
+            "GET /x HTTP/1.1\r\nHost: web.test\r\nProxy-Authorization: x\r\nX-Glp-End: 1\r\nConnection: close",
+            "GET /x HTTP/1.1\r\nHost: web.test\r\nX-Glp-End: 1\r\nConnection: keep-alive",
+            "GET /x HTTP/1.1\r\nHost: web.test\r\nConnection: close",
+            "GET /x HTTP/1.1\r\nHost: a\r\nHost: b\r\nX-Glp-End: 1\r\nConnection: close",
+        ] {
+            assert!(check_forwarded(bad.as_bytes()).is_err(), "{bad:?}");
+        }
     }
 }

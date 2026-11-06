@@ -207,19 +207,18 @@ connects inside `drgnx-test-gated'.  `hub' is the hub's process; the fixture dis
   (cl-count method drgnx-hub-client-test--traffic :key #'car :test #'equal))
 
 (ert-deftest drgnx-hub-client/editor-traffic-over-ratatoskr ()
-  ;; binary + the Lisp backend (review I6): the calls the cockpit, the job UI, the agents mirror and `drgnx job' make,
-  ;; with the params their own code builds, over a store with a proposed job, a card and a mock-acp session: none is
+  ;; binary + the Lisp backend (review I6): the calls the job UI, the agents mirror and `drgnx job' make,
+  ;; with the params their own code builds, over a store with a proposed job and a mock-acp session: none is
   ;; refused for its params, and none fails inside.  :frozen until agent system part 1's Task 16a: the hub serves
-  ;; job/* itself and answers "not yet" until 16a ports plan runs from the frozen Lisp (the job UI and cockpit are
-  ;; frozen Lisp too)
+  ;; job/* itself and answers "not yet" until 16a ports plan runs from the frozen Lisp (the job UI is frozen Lisp too)
   :tags '(:frozen)
   (let ((load-path (append (list (expand-file-name "modules/tools" drgnx-dir) (expand-file-name "modules/ui" drgnx-dir))
                            load-path)))
-    (dolist (f '(drgnx-job drgnx-job-ui drgnx-cockpit-cards drgnx-cockpit-feed drgnx-agents-ui)) (require f)))
+    (dolist (f '(drgnx-job drgnx-job-ui drgnx-agents-ui)) (require f)))
   (drgnx-hub-client-test--with-ratatoskr
     (drgnx-hub-client-test--mock-profile root)
     (let ((plan (concat root "plan.md")) (drgnx-hub-client-test--traffic nil)
-          (drgnx-agents--sessions nil) (drgnx-agents-profiles nil) job card)
+          (drgnx-agents--sessions nil) (drgnx-agents-profiles nil) job)
       (with-temp-file plan
         (insert "# Two tasks\n\n**Repo:** " root "repo\n\n### Task 1: Do the thing\n\n**Role:** implement\n\nNothing.\n\n"
                 "### Task 2: Check the thing\n\n**Role:** review\n\nNeeds Task 1.\n"))
@@ -231,8 +230,7 @@ connects inside `drgnx-test-gated'.  `hub' is the hub's process; the fixture dis
       (let ((r (drgnx-hub-client-test--cli "job" "status" "--json"))) (should (equal r (cons 0 (cdr r)))))
       (let ((r (drgnx-hub-client-test--cli "job" "status" job))) (should (equal r (cons 0 (cdr r)))))
       (advice-add 'drgnx-hub-call :around #'drgnx-hub-client-test--record)
-      ;; the filter the cockpit's graph would hold (not loaded here)
-      (cl-letf* ((filter nil) ((symbol-function 'drgnx-cockpit-cards-job) (lambda () filter)))
+      (progn
         (unwind-protect
             (progn
               ;; the job UI: propose (with this Emacs's gate), list, reject
@@ -241,31 +239,15 @@ connects inside `drgnx-test-gated'.  `hub' is the hub's process; the fixture dis
                   (drgnx-job-ui-start plan))
                 (drgnx-job-ui-status)
                 (drgnx-job-ui-stop second))
-              ;; a card of the CLI's job, and the cockpit's parts: every job, then the job with its decisions
-              (drgnx-work-fixture-as-hub
-                (let ((db (sqlite-open (concat root "data/work.db"))))
-                  (sqlite-execute db "insert into card (job, task, kind, title, data, state, at) values (?, null, 'note', 'a note', '{}', 'open', 1.5)"
-                                  (list job))
-                  (sqlite-close db)))
-              (drgnx-cockpit-cards-refresh)
-              (setq filter job)
-              (drgnx-cockpit-cards-refresh)
-              (drgnx-hub-client-test--wait (lambda () (>= (drgnx-hub-client-test--answered "job/status") 3)) "the cockpit's answers")
-              (setq card (seq-find (lambda (c) (equal (plist-get c :kind) "note"))
-                                   (plist-get (drgnx-hub-call-sync "job/status" (list :id job) 10) :cards)))
-              (should card)
-              (drgnx-cockpit-cards--act job card "dismiss")
-              (drgnx-hub-client-test--wait (lambda () (>= (drgnx-hub-client-test--answered "job/card") 1)) "the card's answer")
-              ;; a durable session and its mirror: the agents UI starts it, the mirror and the feed drive it
+              (drgnx-hub-client-test--wait (lambda () (>= (drgnx-hub-client-test--answered "job/status") 2)) "the job UI's answers")
+              ;; a durable session and its mirror: the agents UI starts it, the mirror drives it
               (cl-letf (((symbol-function 'drgnx-agents-ui--cwd) (lambda () root))) (drgnx-agents-ui-new-durable "mock"))
               (let ((m (drgnx-hub-client-test--wait (lambda () (seq-find #'drgnx-agent-session-remote drgnx-agents--sessions))
                                                     "the mirror")))
                 (drgnx-hub-client-test--wait (lambda () (eq (drgnx-agent-session-status m) 'idle)) "the mirror is idle")
                 (drgnx-agents-send m "hello mirror")
-                (drgnx-cockpit-feed--queue (drgnx-agent-session-remote m) "and again" #'ignore)
-                (drgnx-agents-deliver-queue m)
-                (drgnx-hub-client-test--wait (lambda () (and (>= (drgnx-hub-client-test--answered "agents/send") 2)
-                                                             (>= (drgnx-hub-client-test--answered "agents/do") 1)))
+                (drgnx-agents-send m "and again")
+                (drgnx-hub-client-test--wait (lambda () (>= (drgnx-hub-client-test--answered "agents/send") 2))
                                              "the mirror's answers")
                 (drgnx-agents-kill m)
                 (drgnx-hub-client-test--wait (lambda () (>= (drgnx-hub-client-test--answered "agents/kill") 1)) "the kill's answer")))
@@ -426,7 +408,18 @@ connects inside `drgnx-test-gated'.  `hub' is the hub's process; the fixture dis
   ;; the hub's schema 7 is read through the compatibility views: not a reason to restart
   (cl-letf (((symbol-function 'drgnx-hub-client-binary-version) #'ignore))
     (should (eq (drgnx-hub-skew (list :proto 1 :proto_min 1 :records 2 :schema 7)) 'ok))
-    (should (eq (drgnx-hub-skew (list :proto 1 :proto_min 1 :records 2 :schema 8)) 'restart-when-idle))))
+    (should (eq (drgnx-hub-skew (list :proto 1 :proto_min 1 :records 2 :schema (1+ drgnx-hub-schema-readable-max)))
+                'restart-when-idle))))
+
+(ert-deftest drgnx-hub-client/the-hubs-own-schema-is-no-skew ()
+  ;; Pattern D.  The schema this checkout's hub writes (its protocol file, runtime/protocol/methods.json) keeps the
+  ;; compatibility views: a hub at it is no reason to restart.  Each branch that moves work.db on moves this.
+  (let ((schema (with-temp-buffer
+                  (insert-file-contents (expand-file-name "runtime/protocol/methods.json" drgnx-dir))
+                  (gethash "schema" (json-parse-buffer)))))
+    (should (natnump schema))
+    (cl-letf (((symbol-function 'drgnx-hub-client-binary-version) #'ignore))
+      (should (eq (drgnx-hub-skew (list :proto 1 :proto_min 1 :records 2 :schema schema)) 'ok)))))
 
 (ert-deftest drgnx-hub-client/mcp-session-passes-the-profile ()
   (let (sent)
@@ -1304,6 +1297,35 @@ token and the held keys at the end, and whether the token reached `drgnx-hub-edi
                 (drgnx-hub--note-card "card" '(:id 7 :kind "matrix" :title "Run make?"))
                 (drgnx-hub--note-card "supervisor" '(:rule "loop" :session "s1" :card 8 :text "same call 5 times"))))
             (should (= (length (drgnx-notices :source 'hub)) 2)))
+        (delete-process conn)))))
+
+(ert-deftest drgnx-hub-client/matrix-notice-carries-the-command ()
+  ;; a matrix card that lists its answers: its notice runs Agents: Answer Permission Card on that card, and its choices
+  ;; are kept (at most 64 cards, gone with their notice); a card with no choices gets no command
+  (drgnx-notice-test-with-model
+    (let ((conn (make-pipe-process :name "matrix-notice-test" :noquery t))
+          (drgnx-hub--card-choices nil))
+      (unwind-protect
+          (let ((drgnx-hub--event-conn conn)
+                (choices '((:id "once" :label "Allow once (10 minutes)") (:id "refuse" :label "Refuse"))))
+            (process-put conn :drgnx-proven t)
+            (drgnx-hub--note-card "card" (list :id 7 :kind "matrix" :title "s1 wants a browser in its sandbox"
+                                               :choices choices))
+            (drgnx-hub--note-card "card" '(:id 8 :kind "matrix" :title "commit: git commit"))
+            (let ((notice (lambda (id) (cl-find id (drgnx-notices :source 'hub) :key (lambda (n) (plist-get n :id))))))
+              (should (equal (plist-get (funcall notice 'matrix-card-7) :command) '(drgnx-agents-answer-card 7)))
+              (should-not (plist-get (funcall notice 'matrix-card-8) :command)))
+            (should (equal (drgnx-hub--card-choices-live)
+                           '((7 :title "s1 wants a browser in its sandbox" :body nil
+                                :choices (("once" . "Allow once (10 minutes)") ("refuse" . "Refuse"))))))
+            ;; the cap: the newest 64
+            (dotimes (i 70)
+              (drgnx-hub--note-card "card" (list :id (+ 100 i) :kind "matrix" :title "t" :choices choices)))
+            (should (= (length drgnx-hub--card-choices) 64))
+            (should (equal (caar drgnx-hub--card-choices) 169))
+            ;; a cleared notice takes its card's choices with it
+            (drgnx-notice-clear 'hub 'matrix-card-169)
+            (should-not (assq 169 (drgnx-hub--card-choices-live))))
         (delete-process conn)))))
 
 ;;; hub-client-test.el ends here

@@ -4,7 +4,7 @@
 //! start anywhere else.
 //!
 //! ```text
-//! cargo test -p drgnx-ratatoskr --test fleet_link --no-run
+//! cargo test -p drgnx-ratatoskr --features fleet --test fleet_link --no-run
 //! L=$PWD/test/runners/link
 //! DRGNX_FLEET_RUNNER_OPTS="-v $L/sshd-agent-forwarding.conf:/etc/ssh/sshd_config.d/05-link.conf:ro" \
 //!   fleet.sh up --runners 1 --max-sessions 3

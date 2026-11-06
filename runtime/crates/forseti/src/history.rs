@@ -80,7 +80,7 @@ fn normalise(arg: &str, tree: &str) -> String {
 /// The last [`LAST_RUNS`] undisturbed rows, newest first.
 fn last_undisturbed(rows: &[HistRow]) -> Vec<&HistRow> {
     let mut good: Vec<&HistRow> = rows.iter().filter(|r| !r.disturbed).collect();
-    good.sort_by(|a, b| b.at.cmp(&a.at));
+    good.sort_by_key(|r| std::cmp::Reverse(r.at));
     good.truncate(LAST_RUNS);
     good
 }

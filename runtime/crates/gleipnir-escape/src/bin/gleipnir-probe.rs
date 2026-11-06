@@ -42,11 +42,157 @@ fn unsupported(why: &str) -> (i32, Option<String>) {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
+        Some("--as-browser") => as_browser(&args[1..]),
+        Some("--stand-in") => stand_in(&args[1..]),
+        _ => {
+            if args.is_empty() {
+                usage("needs probes separated by --and");
+            }
+            run_probes(&args, &mut std::io::stdout(), None);
+        }
+    }
+}
+
+/// What a browser-layer probe line writes `{agent-pid}` as: the stand-in agent's pid, which only the processes
+/// inside know (the escape rows' `${PARENT}`).
+const AGENT_PID: &str = "{agent-pid}";
+
+/// How long the browser probe and the stand-in agent wait for each other.
+const HANDSHAKE: Duration = Duration::from_secs(40);
+
+/// `--as-browser DIR [PROBES]`: the escape probe as the browser host, under the browser layer. It writes its pid
+/// to `DIR/browser.pid`, says `ready` on fd 4 (the helper then runs the agent), waits for the stand-in agent's
+/// `DIR/go`, and runs its probes with `{agent-pid}` as its parent's pid (the agent: the helper forked this process
+/// and then became the agent). Its stdout is `/dev/null`, so the lines go to `DIR/lines`, which the agent prints.
+fn as_browser(a: &[String]) -> ! {
+    const MODE: &str = "--as-browser";
+    let Some(dir) = a.first().map(std::path::Path::new) else {
+        usage("--as-browser needs DIR")
+    };
+    let tmp = dir.join("browser.pid.tmp");
+    if let Err(e) = std::fs::write(&tmp, std::process::id().to_string())
+        .and_then(|()| std::fs::rename(&tmp, dir.join("browser.pid")))
+    {
+        die(MODE, "browser.pid", e);
+    }
+    // SAFETY: fd 4 is the ready pipe the helper gave this process; it is written once and closed.
+    unsafe {
+        if libc::write(4, b"ready\n".as_ptr().cast(), 6) != 6 {
+            die(MODE, "the ready pipe", std::io::Error::last_os_error());
+        }
+        libc::close(4);
+    }
+    if !wait_for(|| dir.join("go").exists()) {
+        die(MODE, "the stand-in agent's go", timed_out());
+    }
+    let mut out = Vec::new();
+    if a.len() > 1 {
+        // SAFETY: getppid has no failure mode.
+        run_probes(&a[1..], &mut out, Some(unsafe { libc::getppid() }));
+    }
+    let tmp = dir.join("lines.tmp");
+    if let Err(e) =
+        std::fs::write(&tmp, out).and_then(|()| std::fs::rename(&tmp, dir.join("lines")))
+    {
+        die(MODE, "lines", e);
+    }
+    std::process::exit(0)
+}
+
+/// `--stand-in DIR ABSTRACT PORT [PROBES]`: the agent of a browser-layer row. It holds what a browser must not
+/// reach: `/tmp/agent-file`, the abstract socket `ABSTRACT` and a TCP listener on `127.0.0.1:PORT` (the agent's
+/// local server). With probes it runs them itself first (the control run: the agent reaches each), with
+/// `{agent-pid}` as its own pid. Then it tells the browser probe to go, waits for it to exit and prints its lines.
+fn stand_in(a: &[String]) -> ! {
+    const MODE: &str = "--stand-in";
+    if a.len() < 3 {
+        usage("--stand-in needs DIR ABSTRACT PORT");
+    }
+    let dir = std::path::Path::new(&a[0]);
+    let port: u16 = a[2]
+        .parse()
+        .unwrap_or_else(|_| usage("--stand-in: PORT is a number"));
+    if let Err(e) = std::fs::write("/tmp/agent-file", "the agent's own file\n") {
+        die(MODE, "/tmp/agent-file", e);
+    }
+    let _abstract = listen_abstract(&a[1]).unwrap_or_else(|e| die(MODE, "the abstract socket", e));
+    let _local = std::net::TcpListener::bind(("127.0.0.1", port))
+        .unwrap_or_else(|e| die(MODE, "the local server", e));
+    let mut stdout = std::io::stdout();
+    if a.len() > 3 {
+        run_probes(&a[3..], &mut stdout, Some(std::process::id() as i32));
+    }
+    let pid: i32 = std::fs::read_to_string(dir.join("browser.pid"))
+        .unwrap_or_else(|e| die(MODE, "browser.pid", e))
+        .trim()
+        .parse()
+        .unwrap_or_else(|_| die(MODE, "browser.pid", std::io::ErrorKind::InvalidData.into()));
+    if let Err(e) = std::fs::write(dir.join("go"), "") {
+        die(MODE, "go", e);
+    }
+    let mut status = 0;
+    // SAFETY: waitpid on the browser probe, this process's child (forked by the helper before it became this).
+    let gone = wait_for(|| unsafe { libc::waitpid(pid, &raw mut status, libc::WNOHANG) } == pid);
+    if !gone {
+        // SAFETY: kill(2) of our own child.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+        die(MODE, "the browser probe", timed_out());
+    }
+    if let Ok(lines) = std::fs::read(dir.join("lines")) {
+        let _ = stdout.write_all(&lines);
+        let _ = stdout.flush();
+    }
+    std::process::exit(0)
+}
+
+fn die(mode: &str, what: &str, e: std::io::Error) -> ! {
+    eprintln!("gleipnir-probe {mode}: {what}: {e}");
+    std::process::exit(1)
+}
+
+fn timed_out() -> std::io::Error {
+    std::io::ErrorKind::TimedOut.into()
+}
+
+/// Polls `done` every 20 ms for at most [`HANDSHAKE`].
+fn wait_for(mut done: impl FnMut() -> bool) -> bool {
+    let end = std::time::Instant::now() + HANDSHAKE;
+    while std::time::Instant::now() < end {
+        if done() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    false
+}
+
+#[cfg(target_os = "linux")]
+fn listen_abstract(name: &str) -> std::io::Result<UnixListener> {
+    use std::os::linux::net::SocketAddrExt;
+    let addr = std::os::unix::net::SocketAddr::from_abstract_name(name.trim_start_matches('@'))?;
+    UnixListener::bind_addr(&addr)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn listen_abstract(_: &str) -> std::io::Result<UnixListener> {
+    Err(std::io::ErrorKind::Unsupported.into())
+}
+
+/// The probes in `args` (separated by `--and`), one JSON line each to `out`. With `agent`, `{agent-pid}` in an
+/// argument is that pid.
+fn run_probes(args: &[String], out: &mut dyn Write, agent: Option<i32>) {
+    let args: Vec<String> = match agent {
+        Some(pid) => args
+            .iter()
+            .map(|a| a.replace(AGENT_PID, &pid.to_string()))
+            .collect(),
+        None => args.to_vec(),
+    };
     let groups: Vec<&[String]> = args.split(|a| a == "--and").collect();
-    if args.is_empty() || groups.iter().any(|g| g.is_empty()) {
+    if groups.iter().any(|g| g.is_empty()) {
         usage("needs probes separated by --and");
     }
-    let stdout = std::io::stdout();
     for g in groups {
         let (name, rest) = (g[0].as_str(), &g[1..]);
         let outcome = probe(name, rest);
@@ -69,7 +215,6 @@ fn main() {
                 line.detail = detail;
             }
         }
-        let mut out = stdout.lock();
         let _ = writeln!(out, "{}", serde_json::to_string(&line).unwrap());
         let _ = out.flush();
     }
@@ -149,10 +294,39 @@ fn probe(name: &str, a: &[String]) -> Full {
         "spawn-sleep-setsid" => spawn_sleep(&need(name, a, 1)[0], true),
         "kill" => kill(&need(name, a, 2)[0], &a[1]),
         "http-connect" => http_connect(&need(name, a, 1)[0]),
+        "http-get" => http_get(&need(name, a, 1)[0]),
         "landlock-abi" => landlock_abi(),
+        "serve-http" => serve_http(need(name, a, 3)),
         other => usage(&format!("unknown probe {other:?}")),
     };
     r.map(|d| (d, None))
+}
+
+/// `serve-http PORT N TEXT`: a dev server stand-in on `127.0.0.1:PORT` that answers N requests, each `200` with TEXT
+/// as its body, then ends; `reached` says how many it served.
+fn serve_http(a: &[String]) -> Res {
+    let port: u16 = a[0].parse().map_err(|_| (libc::EINVAL, None))?;
+    let n: usize = a[1].parse().map_err(|_| (libc::EINVAL, None))?;
+    let listener = std::net::TcpListener::bind(("127.0.0.1", port)).map_err(os)?;
+    for _ in 0..n {
+        let (mut c, _) = listener.accept().map_err(os)?;
+        let mut head = Vec::new();
+        let mut b = [0u8; 1024];
+        while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+            match c.read(&mut b) {
+                Ok(0) | Err(_) => break,
+                Ok(k) => head.extend_from_slice(&b[..k]),
+            }
+        }
+        let body = a[2].as_bytes();
+        let _ = write!(
+            c,
+            "HTTP/1.0 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let _ = c.write_all(body);
+    }
+    Ok(Some(format!("served {n}")))
 }
 
 fn read(path: &str) -> Res {
@@ -556,8 +730,8 @@ fn run(cmd: &[String]) -> Full {
     }
 }
 
-/// A CONNECT through `$HTTPS_PROXY`; the detail is the status code.
-fn http_connect(target: &str) -> Res {
+/// A connection to `$HTTPS_PROXY`.
+fn to_proxy() -> Result<TcpStream, (i32, Option<String>)> {
     let proxy = std::env::var("HTTPS_PROXY")
         .or_else(|_| std::env::var("https_proxy"))
         .map_err(|_| (libc::ENOENT, Some("HTTPS_PROXY is not set".into())))?;
@@ -566,9 +740,61 @@ fn http_connect(target: &str) -> Res {
         .map_or(proxy.as_str(), |(_, rest)| rest)
         .trim_end_matches('/');
     let addr = resolve(hostport)?;
-    let mut s = TcpStream::connect_timeout(&addr, TIMEOUT).map_err(os)?;
+    let s = TcpStream::connect_timeout(&addr, TIMEOUT).map_err(os)?;
     s.set_read_timeout(Some(Duration::from_secs(3)))
         .map_err(os)?;
+    Ok(s)
+}
+
+/// A plain-HTTP `GET URL` in absolute-form through `$HTTPS_PROXY`, as a browser sends one to its proxy, with the
+/// hop-by-hop headers a proxy must drop (`Proxy-*`, `Keep-Alive`, `TE`, `Upgrade`, and `X-Glp-Hop`, which
+/// `Connection` lists) and one it must keep (`X-Glp-End`). Reached on a 200. The detail is the status code, then
+/// each `X-Glp-NAME: VALUE` header of the answer as ` name=VALUE` (the escape fixture's upstream says what it got).
+fn http_get(url: &str) -> Res {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let mut s = to_proxy()?;
+    write!(
+        s,
+        "GET {url} HTTP/1.1\r\nHost: {host}\r\nProxy-Connection: keep-alive\r\n\
+         Proxy-Authorization: Basic Z2xwOmdscA==\r\nKeep-Alive: timeout=5\r\nTE: trailers\r\nUpgrade: websocket\r\n\
+         Connection: keep-alive, X-Glp-Hop\r\nX-Glp-Hop: 1\r\nX-Glp-End: 1\r\n\r\n"
+    )
+    .map_err(os)?;
+    let mut head = Vec::new();
+    let mut b = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") && head.len() < 4096 {
+        if s.read(&mut b).map_err(os)? == 0 {
+            break;
+        }
+        head.push(b[0]);
+    }
+    let text = String::from_utf8_lossy(&head);
+    let mut lines = text.split("\r\n");
+    let code = lines
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .filter(|c| c.len() == 3 && c.bytes().all(|b| b.is_ascii_digit()))
+        .ok_or((libc::EPROTONOSUPPORT, Some("no status line".into())))?;
+    let mut detail = code.to_string();
+    for l in lines {
+        if let Some((name, value)) = l.split_once(':')
+            && let Some(n) = name.to_ascii_lowercase().strip_prefix("x-glp-")
+        {
+            detail.push_str(&format!(" {n}={}", value.trim()));
+        }
+    }
+    if code == "200" {
+        Ok(Some(detail))
+    } else {
+        Err((0, Some(detail)))
+    }
+}
+
+/// A CONNECT through `$HTTPS_PROXY`; the detail is the status code.
+fn http_connect(target: &str) -> Res {
+    let mut s = to_proxy()?;
     write!(s, "CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n").map_err(os)?;
     let mut head = Vec::new();
     let mut b = [0u8; 1];
@@ -668,6 +894,8 @@ const SYSCALLS: &[&str] = &[
     "i386-int80",
     "setsid",
     "setpgid",
+    "pidfd-getfd",
+    "process-vm-readv",
 ];
 
 /// `setsid()` or `setpgid(0, 0)` in the forked child (which leads no group, so both work unconfined): its errno, 0
@@ -784,6 +1012,42 @@ fn attempt(name: &str) -> i32 {
             }
             "x32-getpid" => x32_getpid(),
             "i386-int80" => i386_int80(),
+            // A copy of the process's own stdin through a pidfd of itself: what would take another process's fd.
+            "pidfd-getfd" => {
+                let pidfd = libc::syscall(libc::SYS_pidfd_open, libc::getpid(), 0u32);
+                if pidfd < 0 {
+                    return *libc::__errno_location();
+                }
+                let r = libc::syscall(libc::SYS_pidfd_getfd, pidfd as i32, 0i32, 0u32);
+                let e = ret(r);
+                if r >= 0 {
+                    libc::close(r as i32);
+                }
+                libc::close(pidfd as i32);
+                e
+            }
+            // Four bytes of the process's own memory, read as another process's would be.
+            "process-vm-readv" => {
+                let src = [7u8; 4];
+                let mut dst = [0u8; 4];
+                let local = libc::iovec {
+                    iov_base: dst.as_mut_ptr().cast(),
+                    iov_len: 4,
+                };
+                let remote = libc::iovec {
+                    iov_base: src.as_ptr() as *mut libc::c_void,
+                    iov_len: 4,
+                };
+                ret(libc::syscall(
+                    libc::SYS_process_vm_readv,
+                    libc::getpid(),
+                    &raw const local,
+                    1usize,
+                    &raw const remote,
+                    1usize,
+                    0usize,
+                ))
+            }
             _ => libc::ENOSYS,
         }
     }

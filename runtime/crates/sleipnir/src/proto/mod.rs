@@ -162,6 +162,7 @@ mod tests {
             },
             Frame::SyncHave {
                 r: r(),
+                repo: "p-0a1b2c3d".into(),
                 input_key: "k1".into(),
                 commit: "c0ffee".into(),
                 tree: "7ree".into(),
@@ -181,10 +182,13 @@ mod tests {
                 r: r(),
                 blobs: vec![Sha256([7; 32])],
                 commit: true,
+                refs: vec!["c0ffee".repeat(6) + "c0ff"],
             },
             Frame::Blob {
                 r: r(),
                 sha256: Sha256([7; 32]),
+                offset: 0,
+                total: 7,
                 bytes: b"\0blob\n\xff".to_vec(),
             },
             Frame::Bundle {
@@ -200,12 +204,14 @@ mod tests {
                 repo: "p".into(),
                 url: "https://example.org/p.git".into(),
                 commit: "c0ffee".into(),
+                cred: Some("DEPLOY".into()),
             },
             Frame::Start {
                 r: r(),
                 image: Some("fedora@sha256:00".into()),
                 env: vec![("CI".into(), "1".into())],
                 net_hosts: vec!["crates.io:443".into()],
+                pins: vec![("registry.corp".into(), "10.0.0.5".parse().unwrap())],
                 parser: "cargo-test".into(),
             },
             Frame::Started {
@@ -362,6 +368,8 @@ mod tests {
         let big = Frame::Blob {
             r: r(),
             sha256: Sha256([0; 32]),
+            offset: 0,
+            total: 0,
             bytes: vec![0; MAX_CHUNK + 1],
         };
         let mut w = FrameWriter::new(Vec::new());
@@ -371,6 +379,8 @@ mod tests {
         let ok = Frame::Blob {
             r: r(),
             sha256: Sha256([0; 32]),
+            offset: 0,
+            total: 0,
             bytes: vec![0; MAX_CHUNK],
         };
         assert_eq!(read_all(&wire(&[ok])).unwrap().len(), 1);

@@ -36,7 +36,9 @@ it does not depend on the agent that started it or on the editor, and it survive
 - **The end.** The `exec-done` event carries the exit code and a summary: the names of the failing tests (read from
   `cargo test`, ERT and domr output, by the job's kind: `cargo`, `ert`, `domr`, `other`) and at most 20 lines of the log
   (failure lines first, then the end of the log), plus the log's path. Nothing is polled: the agent that started the job
-  waits at no cost and is woken by the end.
+  waits at no cost and is woken by the end. A job that ran on a `shared` runner has a summary that begins "output from
+  runner NAME (shared)", so the woken agent reads it as untrusted, and its result never counts for a gate (see
+  `docs/guide/runners.md`, "What comes back").
 - **Methods.** `exec/start`, `exec/get`, `exec/list`, `exec/stop`, `exec/log` (at most 1000 lines a call from line
   `from`, or with `tail_bytes` the log's last bytes, up to 1 MiB, read from the file's end; bytes that are not UTF-8
   come back replaced), `exec/bump` (yours only: a queued job to priority 1); agents use the `job_*` tools.
@@ -52,7 +54,7 @@ it does not depend on the agent that started it or on the editor, and it survive
 
 ### The editor's jobs
 
-The editor's own background work (tree-sitter grammars, mermaid, the browser for agents, local AI servers, onboarding
+The editor's own background work (tree-sitter grammars, mermaid, local AI servers, onboarding
 installs, the search indexer) is a job of the same list: you see it beside the agents' jobs, and it keeps running when
 Emacs closes. A job you start (through the editor or `exec/start`) may carry four things an agent's job never does; an
 agent that sends any of them is refused with `invalid-params`:
@@ -75,7 +77,7 @@ and never call the hub, so timers and redisplay may use them; `drgnx-exec-log` a
 (one call, `tail_bytes`; waiting up to 5 s: for commands only) and end it. A job's status there is `running`, `done`, `failed` (a non-zero exit
 or the time box), `stopped` or `gone` (lost). A job's time box is an hour unless the caller passes `:timebox` (up to 24
 hours) or `:no-timebox`. The servers the editor starts and leaves up (the local AI runner, the Playwright server of Test
-Report, the browser for agents) run without a time box, so a daemon that stays up for days never loses them: they end
+Report) run without a time box, so a daemon that stays up for days never loses them: they end
 when you stop them, when the editor's teardown does, or when the hub stops. The search indexer is a batch job (it exits
 when the index is built) and has the longest time box, 24 hours; tree-sitter grammar builds and mermaid drawings keep the
 hour. Onboarding runs its installs and downloads as jobs too and waits for
@@ -170,7 +172,7 @@ drgnx job resume job-20261017-101500 --budget 10      # go on (after a stop, or 
 `--budget` wants a number of USD (`5`, `.5`), nothing else. `propose --auto` starts at once, with no proposal card;
 `--repo DIR` names the repository when the plan is not inside it. `resume` of a proposal you rejected (stopped before you approved it) is refused with "Job ID was
 never approved: propose the plan again", and the job stays stopped; a job you approved and then stopped resumes. In Emacs: **Start Job from Plan…** (the
-proposal, in the Work cockpit, with Approve and Reject), **Show Job in Work…**, **Approve Plan Job…**, **Show Plan
+proposal, with Approve and Reject), **Show Job in Work…**, **Approve Plan Job…**, **Show Plan
 Jobs**, **Stop Plan Job…** — in the palette (no keys by default; module `tools/jobs`).
 
 ### From the command line
@@ -194,32 +196,12 @@ with: drgnx job approve ID`. `--json` prints the hub's answer on one line. The e
 was asked, 1 when it answered with an error (its text goes to stderr), and 2 when the arguments do not parse (an
 unknown option, a missing plan or id, a `--budget` that is not a number).
 
-## A job in the Work cockpit
+## A job in the Work space
 
-**Show Job in Work…** (`job-show`) filters the [Work cockpit](cockpit.md) to a job: the Work graph shows that job's
-tasks, agents and reviews (with their plan and spec), and two panes of the right dock, stacked with What happened,
-show the rest. No window of its own opens. Until M12f a job had a frame of its own, the job window; a workbench saved
-with one comes back as the cockpit's filter on that job: the restored workbench keeps its panes, sizes and focus,
-and no frame opens.
-
-- **What needs you** (pane `needs-you`; **Show What Needs You**, `cockpit-needs-you`): the cards, each with its
-  actions as buttons (a clash shows both sides and the reviewer's recommendation; **Accept the reviewer** is there
-  only when it recommended a side; a clash whose reviewer was lost twice says so), then the messages agents sent
-  you, each with **Reply…** (answers the agent) or **Dismiss** (needs no answer: it is acted on, and stops counting
-  in the "needs you" number). Below them, the job's tasks (each one's status, profile and what it waits on), the budget, spent
-  against the limit, and the agents at work, each with **Transcript** and **Message…** (queued: the agent gets it,
-marked as yours, when its turn ends).
-- **Decisions** (pane `decisions`; **Show Decisions**, `cockpit-decisions`): the job's decision log, newest first:
-  replaced decisions dimmed, disputed ones (in an open clash) marked.
-
-Without a job filter, What needs you lists every proposed, running or paused job that waits on you, each under its
-name; a click on the name filters the cockpit to that job. **Show What Needs You** (also a click on the status bar's
-jobs count) drops the job filter; **Filter Graph…** (`f` in the graph) asks for the job too, and an empty answer is every job. The graph's first line says which job it shows, and
-the filter is saved with the workbench.
-
-The panes follow the hub's events and redraw only what changed, at most twice a second, and only while one shows (a
-hidden one keeps no timer and catches up when it shows). Hiding them stops nothing of the job. Without a hub What needs you says so, and fills in
-when the hub runs again; if the hub does not know the job (it was deleted), the cockpit shows every job again.
+**Show Job in Work…** (`job-show`) opens the [Work space](work-space.md): the job's agents are on the map (what needs
+you is the strip along its top, `n` and `g 1` to `g 9` select the chips), its tasks are on the Board (`b`), an agent's
+decisions and edits are in its review (`v`), and its steps are in the research trail (`r`). No window of its own opens.
+The Work cockpit and the job window before it are gone: a workbench saved with either comes back as the Work space.
 
 You do not have to watch it: the open cards and the messages to you (not yet acted on) of the proposed, running and
 paused jobs are the **Jobs** source of [Notices](notices.md), so they count in the one "needs you" number (the status
@@ -333,19 +315,15 @@ why. Details in [agents.md](agents.md#jobs-and-your-claude-settings).
 
 The job is **done** when every task is done (or dropped). Review the job's branch and merge it yourself.
 
-From the Work graph you can also reassign a job's task to another profile, mark it blocked, move it in the order
-ready tasks start in, and propose a job of one plan task and the tasks it needs (**Start as Job**):
-[cockpit.md](cockpit.md#changing-jobs-from-the-graph).
-
 ## The merge gate
 
-`drgnx-job-merge-gate` (Customize group `drgnx-cockpit`) says what a finished task needs before it is merged into
+`drgnx-job-merge-gate` (Customize group `drgnx`) says what a finished task needs before it is merged into
 the job's branch:
 
 - `review` (the default): its reviewer's pass, as above.
 - `review+accept`: the pass, then every file its agent changed accepted by you. Until then the task waits on you
-  with a `review` card: "waiting on your review: N of M files accepted". **Open its edits** shows the agent's edits
-  ([cockpit.md](cockpit.md#an-agents-edits)), where `a` accepts a file. Once every file is accepted and its
+  with a `review` card: "waiting on your review: N of M files accepted". The agent's review (`v` in the
+  [Work space](work-space.md)) shows its edits, where `a` accepts a file. Once every file is accepted and its
   worktree is clean, the task is merged, within the hub's next tick (2 s).
 
 The details:
@@ -367,7 +345,7 @@ The details:
 - **When files cannot be checked.** Some files count but can never be accepted, so the task waits:
   - a file the edits refuse to show (a link out of the worktree, a dangling link, a submodule);
   - a file whose diff is too large to show;
-  - the files past `drgnx-cockpit-changed-files-max`.
+  - the files past the cap on how many files the edits list.
 
   A task whose edits show no file at all never merges by itself either. For all of these, use **Merge as it is**.
 - **Your other actions.** Accepting never merges by itself, and the card's other actions stay yours: **Merge as it

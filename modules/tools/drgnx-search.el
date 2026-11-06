@@ -7,17 +7,19 @@
 ;; Go to Symbol in the file and in the project, Find in File, Replace in Project, Recent Buffers.
 ;; Built on project.el, xref and imenu (consult when installed).  See docs/guide/modules.md.
 ;;
-;; Semantic Search (docs/guide/search.md): a question in words finds the code that means it.  The hits are xref
-;; items, shown the way Search in Project shows its matches, so they land in the panel's Results tab with the
-;; same jump and preview.  Index Project / Index Status drive the background indexer; a saved file of an indexed
-;; project schedules an incremental re-index 30 s after the last save, started at the next idle moment (one timer
-;; per project, never a prompt; the project's lock file, not the job list, says whether an indexer runs).
-;; Set Up Semantic Search (core/drgnx-search-setup.el) finds and tests the embedding model and starts the first index.
+;; Semantic Search (docs/guide/search.md): a question in words finds the code that means it.  The search itself is
+;; Hrafn, inside the hub: the index, the model and the query live there (`search/*' methods).  This file only asks and
+;; renders: the hits are xref items, shown the way Search in Project shows its matches, so they land in the panel's
+;; Results tab with the same jump and preview, under a line that says which model answered and what lags.  Index
+;; Project / Index Status drive the hub's indexer; the hub's watcher keeps the index current (no save hook here).  A
+;; keystroke signal (`search/typing') tells the hub to hold the vectors back while you type.  Set Up Semantic Search
+;; (core/drgnx-search-setup.el) offers the built-in model and a server.
 
 ;;; Code:
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-timer)
+(require 'drgnx-quick-open)
 (require 'subr-x)
 (require 'cl-lib)
 (declare-function project-find-regexp "project")
@@ -26,22 +28,10 @@
 (declare-function xref-make "xref")
 (declare-function xref-make-file-location "xref")
 (declare-function xref-show-xrefs "xref")
-(declare-function drgnx-search-async "drgnx-search-query")
-(declare-function drgnx-search-store-file "drgnx-search-store")
-(declare-function drgnx-search-store-open-read "drgnx-search-store")
-(declare-function drgnx-search-store-meta "drgnx-search-store")
-(declare-function drgnx-search-config "drgnx-search-chunk")
-(declare-function drgnx-search--dot-path-p "drgnx-search-chunk")
-(declare-function drgnx-search--sensitive-name-p "drgnx-search-chunk")
-(declare-function drgnx-search--glob-regexp "drgnx-search-chunk")
-(declare-function drgnx-search--matches-p "drgnx-search-chunk")
-(declare-function drgnx-search-index-start "drgnx-search-index")
+(declare-function drgnx-hub-call "drgnx-hub-client")
+(declare-function drgnx-hub-ensure "drgnx-hub-client")
 (declare-function drgnx-search-setup "drgnx-search-setup")
 (declare-function drgnx-search-setup--current-root "drgnx-search-setup")
-(declare-function drgnx-search-index-running-p "drgnx-search-index")
-(declare-function drgnx-search-index-busy-p "drgnx-search-index")
-(declare-function drgnx-search-hit-line "drgnx-search-query")
-(defvar drgnx-search-last-notice)
 
 (defun drgnx-search-project (regexp)
   "Search the project for REGEXP; the results go to the panel."
@@ -61,8 +51,6 @@
 
 ;;;; Semantic Search
 
-(defconst drgnx-search-reindex-delay 30 "Seconds after the last save of a project's file before it is re-indexed.")
-
 (defun drgnx-search--root ()
   "The root of the current project, as a directory name, or nil outside a project.  Never asks."
   (require 'project)
@@ -76,198 +64,162 @@
 (declare-function drgnx-ai-confirm-project-route "drgnx-ai")
 
 (defun drgnx-search--confirm-route (root)
-  "Ask, once, about the remote providers the project at ROOT routes AI roles to (its .drgnx/ai.eld) — here, in the
-command the user ran, never later from a job or timer.  Denied or not asked, the remote steps are simply left out."
+  "Ask, once per project root, about the remote providers the project at ROOT routes AI roles to (its .drgnx/ai.eld)
+— here, in the command the user ran, never later from a job or timer and never for several projects at once.
+Denied or not asked, the remote steps are simply left out."
   (require 'drgnx-ai)
   (let ((default-directory (file-name-as-directory root))) (drgnx-ai-confirm-project-route)))
 
-(defun drgnx-search--xref (root hit)
-  "An xref item for HIT (a result plist of `drgnx-search') in the project at ROOT: the chunk's first top-level line,
-at that line (`drgnx-search-hit-line', the rule the MCP tool and the command line use too)."
-  (require 'drgnx-search-query)
-  (pcase-let ((`(,line . ,summary) (drgnx-search-hit-line hit)))
-    (xref-make (if (string-empty-p summary) (plist-get hit :path) summary)
-               (xref-make-file-location (expand-file-name (plist-get hit :path) root) line 0))))
+(defun drgnx-search--why (err)
+  "ERR (a signal's data) as the sentence a search command says when the hub cannot be asked."
+  (format "the drgnx hub is not available (%s)" (error-message-string err)))
 
-(defun drgnx-search--show (root query hits notice)
-  "Show HITS for QUERY in the project at ROOT as an xref list (the panel's Results tab); say NOTICE.
-Non-nil when a list was shown."
-  (require 'xref)
-  (if (null hits)
-      (progn (message "No semantic matches for \"%s\"%s" query (if notice (concat ": " notice) ""))
-             nil)
-    (let ((items (mapcar (lambda (h) (drgnx-search--xref root h)) hits)))
-      (xref-show-xrefs (lambda () items) nil)
-      (when-let* ((buf (get-buffer "*xref*")))
-        (with-current-buffer buf (setq header-line-format (and notice (concat " " notice)))))
-      (when notice (message "%s" notice))
-      t)))
-
-(defun drgnx-search--show-safely (buffer window root query hits notice)
-  "`drgnx-search--show' as the command had it: BUFFER current and WINDOW selected (when still live, else
-whatever is now), so xref's marker goes on the right buffer and the panel routing sees the right window.
-Called from a process sentinel: an error becomes one message, never a signal."
+(defun drgnx-search--ask (method params callback)
+  "Ask the hub METHOD with PARAMS from a command, starting it when it is not running (`drgnx-hub-ensure'); CALLBACK
+gets (RESULT WHY) once: RESULT the answer, or nil with WHY a sentence.  Never signals."
   (condition-case err
-      (let ((show (lambda ()
-                    (if (buffer-live-p buffer)
-                        (with-current-buffer buffer (drgnx-search--show root query hits notice))
-                      (drgnx-search--show root query hits notice)))))
-        (when (if (window-live-p window) (with-selected-window window (funcall show)) (funcall show))
-          ;; the answer came after the command returned: the results get the focus, as for Search in Project
-          ;; not while the user is in the minibuffer (another command began), nor in another frame
-          (when-let* (((not (active-minibuffer-window)))
-                      (buf (get-buffer "*xref*")) (win (get-buffer-window buf)))
-            (select-window win))))
+      (progn (drgnx-hub-ensure)
+             (drgnx-hub-call method params (lambda (result why) (funcall callback result why))))
+    (error (funcall callback nil (drgnx-search--why err)))))
+
+(defun drgnx-search--model-line (answer)
+  "The line over a list of hits: the model that took part, and what lags (the hub's own words)."
+  (let ((model (plist-get answer :model)))
+    (concat (if model (format "model %s" model) "keyword and symbol results only")
+            (when-let* ((notice (plist-get answer :notice))) (format " (%s)" notice))
+            "; " (or (plist-get answer :lag_line) ""))))
+
+(defun drgnx-search--xref (root hit)
+  "An xref item for HIT (a hit of `search/query') in the project at ROOT: at its first line, summarised by the first
+line of its text, else its symbol, else its path."
+  (let* ((preview (string-trim (or (plist-get hit :preview) "")))
+         (summary (string-trim (car (split-string preview "\n"))))
+         (summary (cond ((not (string-empty-p summary)) summary)
+                        ((plist-get hit :symbol))
+                        (t (plist-get hit :path)))))
+    (xref-make summary (xref-make-file-location (expand-file-name (plist-get hit :path) root)
+                                                (max 1 (plist-get hit :line_start)) 0))))
+
+(defun drgnx-search--show (root query answer)
+  "Show the hits of ANSWER for QUERY in the project at ROOT as an xref list (the panel's Results tab), under the model
+and lag line.  Non-nil when a list was shown."
+  (require 'xref)
+  (let ((hits (plist-get answer :hits)) (line (drgnx-search--model-line answer)))
+    (if (null hits)
+        (progn (message "No semantic matches for \"%s\": %s" query line) nil)
+      (let ((items (mapcar (lambda (h) (drgnx-search--xref root h)) hits)))
+        (xref-show-xrefs (lambda () items) nil)
+        (when-let* ((buf (get-buffer "*xref*")))
+          (with-current-buffer buf (setq header-line-format (concat " " line))))
+        (message "%s" line)
+        t))))
+
+(defun drgnx-search--show-safely (buffer window root query answer why)
+  "`drgnx-search--show' as the command had it: BUFFER current and WINDOW selected (when still live, else
+whatever is now), so xref's marker goes on the right buffer and the panel routing sees the right window.  WHY: the
+sentence to say when there is no ANSWER.  Called from a callback: an error becomes one message, never a signal."
+  (condition-case err
+      (if (null answer)
+          (message "Semantic search: %s" (or why "no answer"))
+        (let ((show (lambda ()
+                      (if (buffer-live-p buffer)
+                          (with-current-buffer buffer (drgnx-search--show root query answer))
+                        (drgnx-search--show root query answer)))))
+          (when (if (window-live-p window) (with-selected-window window (funcall show)) (funcall show))
+            ;; the answer came after the command returned: the results get the focus, as for Search in Project
+            ;; not while the user is in the minibuffer (another command began), nor in another frame
+            (when-let* (((not (active-minibuffer-window)))
+                        (buf (get-buffer "*xref*")) (win (get-buffer-window buf)))
+              (select-window win)))))
     (error (message "Semantic search could not show its results: %s" (error-message-string err)))))
 
 (defun drgnx-search-semantic (query)
   "Search the project by meaning: QUERY in words; the best chunks of code land in the panel's Results tab.
-Needs the project's index (Index Project); without an embedding provider only the keyword hits are shown,
-and the echo area says why."
+The hub answers with keyword, symbol and path results at once, and with vectors when a model is ready; the
+line over the list says which, and the echo area says why when there are none."
   (interactive (progn (drgnx-search--root-or-error) ; a project first, then the question
                       (let ((symbol (thing-at-point 'symbol t)))   ; the default (RET), not text to delete
                         (list (read-string (format-prompt "Semantic search" symbol) nil nil symbol)))))
   (let ((root (drgnx-search--root-or-error)) (query (string-trim query))
         (buffer (current-buffer)) (window (selected-window)))
     (when (string-empty-p query) (user-error "Semantic search needs a question"))
-    (require 'drgnx-search-query)
     (drgnx-search--confirm-route root)
     (message "Searching %s…" (abbreviate-file-name root))
-    (drgnx-search-async root query
-                        (lambda (hits &optional notice)
-                          (drgnx-search--show-safely buffer window root query hits notice)))))
-
-(defconst drgnx-search--no-sqlite "this Emacs has no SQLite — semantic search needs Emacs built with SQLite"
-  "What every search command says, and all it does, in an Emacs without SQLite.")
+    (drgnx-search--ask "search/query" (list :root (directory-file-name root) :text query :scope "code" :k 10)
+                       (lambda (answer why)
+                         (drgnx-search--show-safely buffer window root query answer why)))))
 
 (defun drgnx-search-index-project (&optional rebuild)
-  "Index (or bring up to date) this project for Semantic Search, in a background job.
-With a prefix argument REBUILD, start from scratch — the way to change the embedding model."
+  "Index (or bring up to date) this project for Semantic Search, in the hub.
+With a prefix argument REBUILD, start from scratch — the way to change the chunking."
   (interactive "P")
-  (let ((root (drgnx-search--root-or-error)))
-    (if (not (sqlite-available-p))
-        (message "%s" drgnx-search--no-sqlite)
-      (require 'drgnx-search-index)
-      (drgnx-search--confirm-route root)
-      (let ((config (drgnx-search-config root)) (name (abbreviate-file-name (directory-file-name root))))
-        (cond ((plist-get config :error) (message "%s" (plist-get config :error)))
-              ((plist-get config :off) (message "Search is turned off for this project (.drgnx/search.eld)"))
-              ((drgnx-search-index-busy-p root)
-               (if rebuild
-                   (message "an index job is already running for %s; rebuild after it finishes" name)
-                 (message "%s is already being indexed — Index Status shows how far it is" name)))
-              ((drgnx-search-index-start root (and rebuild t))
-               (message "Indexing %s in the background — Index Status shows how far it is" name))
-              (t (message "an index job for %s started a moment ago and is still being cleaned up; try again shortly" name)))))))
+  (let* ((root (drgnx-search--root-or-error)) (name (abbreviate-file-name (directory-file-name root))))
+    (drgnx-search--confirm-route root)
+    (drgnx-search--ask "search/index" (list :root (directory-file-name root) :rebuild (if rebuild t :false))
+                       (lambda (_result why)
+                         (message "%s" (if why (format "Semantic search: %s" why)
+                                         (format "Indexing %s in the background — Index Status shows how far it is" name)))))))
 
 (defun drgnx-search-set-up ()
-  "Set Up Semantic Search: find an embedding model, test it, and index this project in the background (or,
-when the index is current, run a test query).  Outside a project it only finds and tests the model."
+  "Set Up Semantic Search: offer the built-in model (and, when one can run, a server), then index this project in the
+background (or, when the index is current, run a test query).  Asks only in a frame; confirms this project's remote
+route once, here."
   (interactive)
   (require 'drgnx-search-setup)
-  (drgnx-search--confirm-route (or (drgnx-search-setup--current-root) default-directory))
-  (message "Setting up semantic search…")
-  (pcase-let ((`(,status ,text) (drgnx-search-setup (drgnx-search-setup--current-root) :interactive t)))
-    (message "%s%s" (if (memq status '(warn fail)) "Semantic search: " "") text)))
+  (let ((root (drgnx-search-setup--current-root)))
+    (when root (drgnx-search--confirm-route root))
+    (message "Setting up semantic search…")
+    (pcase-let ((`(,status ,text) (drgnx-search-setup root :interactive (called-interactively-p 'any))))
+      (message "%s%s" (if (memq status '(warn fail)) "Semantic search: " "") text))))
 
-(defun drgnx-search-status (root)
-  "One line about the index of the project at ROOT: chunks, files, model, when, whether a job runs, the index file
-\(delete it to drop the index) and what is wrong with the project's .drgnx/search.eld."
-  (if (not (sqlite-available-p))
-      drgnx-search--no-sqlite
-    (require 'drgnx-search-index)
-    (let* ((root (directory-file-name (expand-file-name root)))
-           (file (drgnx-search-store-file root))
-           (db (ignore-errors (drgnx-search-store-open-read root)))
-           (running (drgnx-search-index-busy-p root))
-           (config (drgnx-search-config root)))
-      (concat
-       (if (null db)
-           (if (file-exists-p file)
-               "the index cannot be read — Search: Index Project with C-u rebuilds it"
-             "no index for this project — Search: Index Project")
-         (unwind-protect
-             (condition-case nil
-                 (let* ((meta (drgnx-search-store-meta db))
-                        (chunks (caar (sqlite-select db "select count(*) from chunk")))
-                        (files (caar (sqlite-select db "select count(*) from file")))
-                        (at (plist-get meta :indexed-at)))
-                   (format "%d chunk%s in %d file%s; model %s (%s dims); last indexed %s"
-                           chunks (if (= chunks 1) "" "s") files (if (= files 1) "" "s")
-                           (or (plist-get meta :model) (plist-get meta :provider) "unknown") (or (plist-get meta :dims) "?")
-                           (if at (format-time-string "%Y-%m-%d %H:%M" at) "never")))
-               (error "the index cannot be read — Search: Index Project with C-u rebuilds it"))
-           (ignore-errors (sqlite-close db))))
-       (if running "; indexing now" "; indexer not running")
-       (if (file-exists-p file) (format "; index file %s" (abbreviate-file-name file)) "")
-       (cond ((plist-get config :error) (concat "; " (plist-get config :error)))
-             ((plist-get config :off) "; search is off for this project")
-             (t ""))))))
+(defun drgnx-search--device-text (worker)
+  "WORKER (the `worker' of `search/status' or the `device' of `search/embedders') as words, or nil."
+  (let ((device (plist-get worker :device)) (fallback (plist-get worker :fallback)))
+    (when device
+      (concat (format "%s %s" (upcase (or (plist-get device :kind) "")) (or (plist-get device :name) ""))
+              (when fallback (format " (fell back to the CPU: %s)" fallback))))))
+
+(defun drgnx-search-status-line (status)
+  "One line about a project's index from STATUS, the answer of `search/status': files and chunks, the models that
+have vectors, the device, what tier 2 is doing, coverage errors, and the lag."
+  (let* ((lag (plist-get status :lag)) (models (plist-get status :models))
+         (errors (plist-get status :coverage_errors)) (device (drgnx-search--device-text (plist-get status :worker))))
+    (concat
+     (format "%d chunk%s in %d file%s" (plist-get status :chunks) (if (eql (plist-get status :chunks) 1) "" "s")
+             (plist-get status :files) (if (eql (plist-get status :files) 1) "" "s"))
+     (if models
+         (format "; vectors: %s" (mapconcat (lambda (m) (format "%s (%d)" (plist-get m :model) (plist-get m :vectors)))
+                                            models ", "))
+       "; vectors: none (keyword and symbol results only)")
+     (when device (format "; device: %s" device))
+     (format "; tier 2 %s" (or (plist-get status :tier2) "unknown"))
+     (when errors (format "; coverage: %s" (string-join errors ", ")))
+     (when lag (format "; behind: %d chunk%s in %d file%s"
+                       (or (plist-get lag :chunks_behind) 0) (if (eql (plist-get lag :chunks_behind) 1) "" "s")
+                       (or (plist-get lag :files_behind) 0) (if (eql (plist-get lag :files_behind) 1) "" "s"))))))
 
 (defun drgnx-search-index-status ()
   "Say how this project's index stands."
   (interactive)
-  (message "%s" (drgnx-search-status (drgnx-search--root-or-error))))
+  (let ((root (drgnx-search--root-or-error)))
+    (drgnx-search--ask "search/status" (list :root (directory-file-name root))
+                       (lambda (status why)
+                         (message "%s" (if status (drgnx-search-status-line status)
+                                         (format "Semantic search: %s" why)))))))
 
-;;;; Index on save
+;;;; The editor's keystrokes, for the hub's pacing
 
-(defun drgnx-search--indexed-p (root)
-  "Non-nil when the project at ROOT has a search index, and its .drgnx/search.eld neither turns search off nor
-is broken (the indexer would refuse it; Index Status and Index Project say why)."
-  (require 'drgnx-search-store)
-  (require 'drgnx-search-chunk)
-  (and (file-exists-p (drgnx-search-store-file root))
-       (let ((config (drgnx-search-config root)))
-         (not (or (plist-get config :off) (plist-get config :error))))))
+(defconst drgnx-search-typing-interval 2
+  "Seconds between the keystroke signals the hub gets: it holds the vectors back for 3 s after each.")
 
-(defun drgnx-search--indexable-p (root file)
-  "Non-nil when FILE could be indexed in the project at ROOT: not a dot file, not named like a secret, and
-passing the project's :include and :exclude (the size and binary tests are the indexer's)."
-  (let* ((rel (file-relative-name file root)) (config (drgnx-search-config root))
-         (include (mapcar #'drgnx-search--glob-regexp (plist-get config :include)))
-         (exclude (mapcar #'drgnx-search--glob-regexp (plist-get config :exclude))))
-    (and (not (string-prefix-p ".." rel))
-         (not (drgnx-search--dot-path-p rel))
-         (not (drgnx-search--sensitive-name-p rel))
-         (or (null include) (drgnx-search--matches-p rel include))
-         (not (drgnx-search--matches-p rel exclude)))))
+(defvar drgnx-search--typed nil "Non-nil when a command ran since the last `search/typing' went out.")
 
-(defconst drgnx-search-reindex-idle 2
-  "Seconds Emacs must be idle before a due re-index starts: starting the job never lands in the middle of typing.")
-
-(defun drgnx-search--reindex (root)
-  "Start the incremental indexing of the project at ROOT (an idle timer calls this); while an indexer holds the
-project's lock, wait again.  Does nothing when the index is gone, or search was turned off or its config broken
-since the save.  Never lists the jobs: the lock file says whether an indexer runs."
-  (condition-case nil
-      (when (drgnx-search--indexed-p root)
-        (require 'drgnx-search-index)
-        (if (drgnx-search-index-running-p root)
-            (drgnx-search--schedule root)   ; that job may have passed the saved file already
-          (drgnx-search-index-start root)))
-    (error nil)))
-
-(defun drgnx-search--reindex-when-idle (root)
-  "The re-index of ROOT is due (30 s after the last save): start it at the next idle moment (a save before then
-schedules it again)."
-  (drgnx-timer-start (cons 'search-reindex root) drgnx-search-reindex-idle #'drgnx-search--reindex
-                     :idle t :args (list root) :owner 'tools/search))
-
-(defun drgnx-search--schedule (root)
-  "Re-index the project at ROOT `drgnx-search-reindex-delay' seconds after the last save of one of its files."
-  (drgnx-timer-debounce (cons 'search-reindex root) drgnx-search-reindex-delay #'drgnx-search--reindex-when-idle
-                        :args (list root) :owner 'tools/search))
-
-(defun drgnx-search--after-save ()
-  "`after-save-hook': a saved file of a project that has a search index schedules that project's re-index.
-Never prompts and does nothing without an index file, with search off, outside a project, or for a file the
-indexer would never index (dot files, secrets by name, the project's :exclude)."
-  (when-let* ((file buffer-file-name)
-              ((not (file-remote-p file)))
-              (project (ignore-errors (project-current nil (file-name-directory file))))
-              (root (expand-file-name (project-root project))))
-    (when (and (drgnx-search--indexed-p root) (drgnx-search--indexable-p root file))
-      (drgnx-search--schedule root))))
+(defun drgnx-search--send-typing ()
+  "Tell the hub the user is typing, when a command ran since the last time; never waits for the answer and never
+starts the hub."
+  (when drgnx-search--typed
+    (setq drgnx-search--typed nil)
+    (condition-case nil (drgnx-hub-call "search/typing" nil #'ignore) (error nil))))
 
 ;;;; Ask the Codebase
 
@@ -275,23 +227,19 @@ indexer would never index (dot files, secrets by name, the project's :exclude)."
 
 (defun drgnx-search--retriever (question root done)
   "Ask the Codebase's semantic retriever: the best chunks of the project at ROOT for QUESTION, to DONE as snippets
-\((:file :line :text)…).  DONE is called once — without waiting for the embedding provider — and with nil when
-the project has no index or anything goes wrong.  Never asks anything."
+\((:file :line :text)…).  DONE is called once, without waiting for the hub's model, and with nil when the hub is
+not there or anything goes wrong.  Never asks anything and never starts the hub."
   (let ((called nil))
     (cl-flet ((finish (snippets) (unless called (setq called t) (funcall done snippets))))
       (condition-case nil
-          (if (not (drgnx-search--indexed-p root))
-              (finish nil)
-            (require 'drgnx-search-query)
-            (drgnx-search-async
-             root question
-             (lambda (hits &optional _notice)
-               (finish (condition-case nil
-                           (mapcar (lambda (h) (list :file (plist-get h :path) :line (max 1 (plist-get h :start))
-                                                     :text (plist-get h :text)))
-                                   hits)
-                         (error nil))))
-             :k 5))
+          (drgnx-hub-call "search/query" (list :root (directory-file-name root) :text question :scope "code" :k 5)
+                          (lambda (answer _why)
+                            (finish (condition-case nil
+                                        (mapcar (lambda (h) (list :file (plist-get h :path)
+                                                                  :line (max 1 (plist-get h :line_start))
+                                                                  :text (plist-get h :preview)))
+                                                (plist-get answer :hits))
+                                      (error nil)))))
         (error (finish nil))))))
 
 (defun drgnx-search--register-retriever ()
@@ -304,35 +252,13 @@ the project has no index or anything goes wrong.  Never asks anything."
         (drgnx-modules-push-undo "retriever drgnx-search--retriever"
                                  (lambda () (setq drgnx-ai-retrievers (remq #'drgnx-search--retriever drgnx-ai-retrievers))))))))
 
-(declare-function drgnx-exec-list "drgnx-exec")
-(declare-function drgnx-exec-stop "drgnx-exec")
-(declare-function drgnx-search-index--lock-file "drgnx-search-index")
-
-(defun drgnx-search--stop-indexers ()
-  "Ask every running index job to stop, without waiting, and remove the lock each held.
-The hub is asked (`drgnx-exec-stop', asynchronous).  A killed indexer leaves
-no partial index (every write of the index is one SQLite transaction) and its lock would only be stale, so the lock
-file goes with it.  Only when the indexer library is loaded: otherwise nothing ever ran."
-  (when (and (featurep 'drgnx-search-index) (featurep 'drgnx-exec))
-    (dolist (job (ignore-errors (drgnx-exec-list)))
-      (when (and (eq (plist-get job :status) 'running) (string-prefix-p "search-index:" (or (plist-get job :name) "")))
-        (ignore-errors (drgnx-exec-stop (plist-get job :id)))
-        (when-let* ((root (cadr (member "drgnx-search-index-cli" (plist-get job :argv)))))
-          (ignore-errors (delete-file (drgnx-search-index--lock-file root))))))))
-
-(defun drgnx-search--teardown ()
-  "Stop the indexers running.  The re-indexes waiting after saves are layer keys the module owns: its run's end
-cancels them before this runs."
-  (drgnx-search--stop-indexers))
-
 (drgnx-module-define 'tools/search
                      :doc "Quick Open, Search in Project, Go to Symbol, Semantic Search."
                      :stage 'startup
-                     :teardown #'drgnx-search--teardown
                      :setup
                      (lambda ()
                        (pcase-dolist (`(,id ,title ,fn ,doc)
-                                      '((go-quick-open "Quick Open" project-find-file "Open a file of the project by name")
+                                      '((go-quick-open "Quick Open" drgnx-quick-open "Open a file of the project by name")
                                         (search-project "Search in Project" drgnx-search-project "Every match in the project (in the panel)")
                                         (go-symbol "Go to Symbol" imenu "Jump to a definition of this file")
                                         (go-symbol-project "Go to Symbol in Project" xref-find-apropos "Search symbols across the project")
@@ -343,11 +269,15 @@ cancels them before this runs."
                        (pcase-dolist (`(,id ,title ,fn ,doc)
                                       '((search-semantic "Semantic Search" drgnx-search-semantic "Find code by meaning (in the panel)")
                                         (search-index-project "Index Project" drgnx-search-index-project "Build or refresh the semantic search index of this project")
-                                        (search-index-status "Index Status" drgnx-search-index-status "Chunks, files, model and age of this project's index")
-                                        (search-set-up "Set Up Semantic Search" drgnx-search-set-up "Find and test an embedding model, then index this project in the background")))
+                                        (search-index-status "Index Status" drgnx-search-index-status "Chunks, files, models, device and lag of this project's index")
+                                        (search-set-up "Set Up Semantic Search" drgnx-search-set-up "Offer the built-in model and a server, then index this project in the background")))
                          (drgnx-command-define id :category "Search" :title title :command fn :doc doc))
                        (drgnx-search--register-retriever)
-                       (add-hook 'after-save-hook #'drgnx-search--after-save)))
+                       ;; the hook only sets a flag; the timer tells the hub at most once per interval
+                       (drgnx-module-hook 'post-command-hook typing ()
+                         (setq drgnx-search--typed t))
+                       (drgnx-timer-start 'search-typing drgnx-search-typing-interval #'drgnx-search--send-typing
+                                          :repeat drgnx-search-typing-interval :owner 'tools/search)))
 
 (provide 'drgnx-search)
 ;;; drgnx-search.el ends here

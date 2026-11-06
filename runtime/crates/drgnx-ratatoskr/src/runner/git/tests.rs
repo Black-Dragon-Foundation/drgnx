@@ -205,6 +205,49 @@ async fn a_protected_file_stub_in_the_branch_is_refused() {
     }
 }
 
+/// Make a FIFO at P.
+fn mkfifo(p: &Path) {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(p.as_os_str().as_bytes()).unwrap();
+    // SAFETY: a valid NUL-terminated path.
+    assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+}
+
+/// Pattern D with a hang guard (a pass never waits; only a reader that blocks meets it).  A snapshot tree's `.git` is
+/// the agent's: a FIFO it leaves where a ref file belongs (the branch's loose ref, `packed-refs`) is refused at once,
+/// never read, so neither the tip's read nor a task asked for again blocks the hub.
+#[test]
+fn a_fifo_at_a_ref_file_never_blocks_the_hub() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let e = env();
+        let (h, _) = shared(&e, TreeMode::Snapshot, Policy::default(), None);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let a = rt
+            .block_on(h.task_worktree(&e.repo, "r1", "a", &base(&e)))
+            .unwrap();
+        let dot = a.path.join(".git");
+        let loose = dot.join("refs/heads").join(&a.branch);
+        let _ = std::fs::remove_file(&loose);
+        mkfifo(&loose);
+        let tip = snapshot_tip(&a.path, &a.branch);
+        std::fs::remove_file(&loose).unwrap();
+        let _ = std::fs::remove_file(dot.join("packed-refs"));
+        mkfifo(&dot.join("packed-refs"));
+        let packed = snapshot_tip(&a.path, &a.branch);
+        // whatever it answers (the branch is gone, so the tree is made again), it answers
+        let _ = rt.block_on(h.task_worktree(&e.repo, "r1", "a", &base(&e)));
+        tx.send((tip, packed)).unwrap();
+    });
+    let got = rx
+        .recv_timeout(Duration::from_secs(60))
+        .expect("a FIFO at a ref file blocked the hub's read");
+    assert_eq!(got, (None, None));
+}
+
 /// A snapshot task asked for again (a review begins, a mark is made) is the same tree: the agent's commits survive,
 /// and its branch, which is not in the trusted repository yet, is found in the tree's own `.git`.  A manager's trial
 /// merge of snapshot workers imports their branches first.

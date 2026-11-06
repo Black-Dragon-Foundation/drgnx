@@ -85,6 +85,7 @@ pub const RUNTIME: &[RuntimeSetting] = &[
         "Vec<String>",
         OnError::Strict,
     ),
+    setting("drgnx-agents-trace-opens", "Vec<String>", OnError::Strict),
     setting(
         "drgnx-ai-providers",
         "Vec<ProviderConfig>",
@@ -108,6 +109,26 @@ pub const RUNTIME: &[RuntimeSetting] = &[
     setting("drgnx-agents-repeat-limit", "u32", OnError::Strict),
     setting("drgnx-agents-no-progress-tokens", "u64", OnError::Strict),
     setting("drgnx-agents-manager-context", "f64", OnError::Strict),
+    setting(
+        "drgnx-agents-browser-program",
+        "Option<String>",
+        OnError::Strict,
+    ),
+    setting(
+        "drgnx-agents-browser-local-ports",
+        "Vec<u16>",
+        OnError::Strict,
+    ),
+    setting(
+        "drgnx-agents-browser-deny-hosts",
+        "Vec<String>",
+        OnError::Strict,
+    ),
+    setting("drgnx-agents-browser-max-message", "u64", OnError::Strict),
+    setting("drgnx-agents-browser-idle", "u64", OnError::Strict),
+    setting("drgnx-agents-browser-once-window", "u64", OnError::Strict),
+    setting("drgnx-agents-session-memory", "String", OnError::Strict),
+    setting("drgnx-agents-browser-memory-high", "u32", OnError::Strict),
     setting("drgnx-runners-send", "String", OnError::Strict),
     setting("drgnx-runners-heavy", "Vec<String>", OnError::Strict),
     setting("drgnx-runners-image", "Option<String>", OnError::Strict),
@@ -117,6 +138,27 @@ pub const RUNTIME: &[RuntimeSetting] = &[
         "String",
         OnError::Strict,
     ),
+    setting("drgnx-runners-shared-overlay", "bool", OnError::Strict),
+    setting("drgnx-runners-job-keys", "Vec<String>", OnError::Strict),
+    setting(
+        "drgnx-runners-origin-key",
+        "Option<String>",
+        OnError::Strict,
+    ),
+    setting(
+        "drgnx-sandbox-proxy-pinned-addresses",
+        "ProxyPins",
+        OnError::LastGood,
+    ),
+    setting(
+        "drgnx-search-model-mirror",
+        "Option<String>",
+        OnError::Strict,
+    ),
+    setting("drgnx-search-builtin", "bool", OnError::Strict),
+    setting("drgnx-search-include", "Vec<String>", OnError::Strict),
+    setting("drgnx-search-exclude", "Vec<String>", OnError::Strict),
+    setting("drgnx-search-off", "bool", OnError::Strict),
 ];
 
 /// The names of [`RUNTIME`].
@@ -142,6 +184,8 @@ pub struct RuntimeValues {
     pub agents_allow_unsandboxed: bool,
     /// The names an editor module may add to a session's environment (`agents/start`'s `env`).
     pub agents_start_env_names: Vec<String>,
+    /// The providers whose shell steps' opens are traced on Linux (`work::trace`).
+    pub agents_trace_opens: Vec<String>,
     /// The user's providers, each replacing the preset of its id.
     pub ai_providers: Vec<ProviderEntry>,
     /// The user's role chains (a role not named here has its shipped chain, [`Defaults::roles`]).
@@ -160,6 +204,22 @@ pub struct RuntimeValues {
     pub agents_repeat_limit: u32,
     pub agents_no_progress_tokens: u64,
     pub agents_manager_context: f64,
+    /// The browser an agent session gets (an absolute path), or none to find one.
+    pub agents_browser_program: Option<String>,
+    /// The ports on the sandbox's own loopback that a session with the browser lets its agent and browser connect to
+    /// (the agent's own servers).
+    pub agents_browser_local_ports: Vec<u16>,
+    pub agents_browser_deny_hosts: Vec<String>,
+    /// Bytes.
+    pub agents_browser_max_message: u64,
+    /// Seconds.
+    pub agents_browser_idle: u64,
+    /// Seconds.
+    pub agents_browser_once_window: u64,
+    /// The memory cap of a session with its browser (`4G`).
+    pub agents_session_memory: String,
+    /// Percent (1 to 99) of the session's cap at which the browser is stopped.
+    pub agents_browser_memory_high: u32,
     /// Which of a project's jobs may leave this machine: `all`, `heavy` or `none` (per project).
     pub runners_send: String,
     /// The suite or command patterns whose jobs are heavy (per project).
@@ -170,6 +230,69 @@ pub struct RuntimeValues {
     pub runners_weight: f64,
     /// `public` or `private` (per project): with the commit on the public origin, what makes a job `public`.
     pub runners_project_visibility: String,
+    /// A shared runner may get a project's uncommitted files, once each passes the secret scan (per project).
+    pub runners_shared_overlay: bool,
+    /// The keys a project's jobs may name, by name (per project): any other is refused at submit.
+    pub runners_job_keys: Vec<String>,
+    /// The name of a project's read-only deploy key or token for its private origin (per project).
+    pub runners_origin_key: Option<String>,
+    pub sandbox_proxy_pins: ProxyPins,
+    /// Where models come from instead of the Hugging Face host.
+    pub search_model_mirror: Option<String>,
+    /// Whether the built-in embedding model indexes (the floor under any server).
+    pub search_builtin: bool,
+    /// A project's search globs: only these files (none: all), not these, and search off. Per project
+    /// ([`overrides::PER_PROJECT`]).
+    pub search_include: Vec<String>,
+    pub search_exclude: Vec<String>,
+    pub search_off: bool,
+}
+
+/// The browser program setting: absolute, or none.
+pub(crate) fn check_browser_program(p: &Option<String>) -> Result<(), String> {
+    match p {
+        Some(p) if !p.starts_with('/') => Err(format!("{p:?} is not an absolute path")),
+        _ => Ok(()),
+    }
+}
+
+/// The local ports setting: each 1 to 65535 (a u16 already holds the upper bound).
+pub(crate) fn check_browser_ports(ports: &[u16]) -> Result<(), String> {
+    match ports.iter().find(|p| **p == 0) {
+        Some(_) => Err("a port is 1 to 65535, not 0".into()),
+        None => Ok(()),
+    }
+}
+
+/// A memory cap like `4G` or `512M`: digits (no leading 0) and an optional K, M, G or T.
+pub(crate) fn check_memory(m: &str) -> Result<(), String> {
+    let digits = m.strip_suffix(['K', 'M', 'G', 'T']).unwrap_or(m);
+    let ok = !digits.is_empty()
+        && !digits.starts_with('0')
+        && digits.bytes().all(|b| b.is_ascii_digit());
+    if ok {
+        Ok(())
+    } else {
+        Err(format!("{m:?} is not a size like \"4G\" or \"512M\""))
+    }
+}
+
+/// The high mark: a percent from 1 to 99.
+pub(crate) fn check_memory_high(n: u32) -> Result<(), String> {
+    if (1..=99).contains(&n) {
+        Ok(())
+    } else {
+        Err(format!("{n} is not a percent from 1 to 99"))
+    }
+}
+
+/// The browser max message: at least 1 byte.
+pub(crate) fn check_max_message(n: u64) -> Result<(), String> {
+    if n >= 1 {
+        Ok(())
+    } else {
+        Err("a message limit is at least 1 byte".into())
+    }
 }
 
 /// One entry of `drgnx-agents-container-images`: a name and its image reference pinned by digest (the shared podman
@@ -181,6 +304,10 @@ pub type NetHosts = Vec<(String, Vec<String>)>;
 
 /// `drgnx-agents-silent-after`: seconds without an update per kind of work, in order.
 pub type SilentAfter = Vec<(String, u64)>;
+
+/// `drgnx-sandbox-proxy-pinned-addresses`: the names the proxies (a session's provider proxy, a container job's)
+/// resolve to a fixed address instead of asking DNS, in order.
+pub type ProxyPins = Vec<(String, std::net::IpAddr)>;
 
 /// An `agents-matrix` value that is valid, as a message when it is not.
 pub(crate) fn check_matrix(v: &Value) -> Result<(), String> {
@@ -250,6 +377,7 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-agents-openrouter" => values.agents_openrouter = profiles::openrouter(node)?,
         "drgnx-agents-allow-unsandboxed" => values.agents_allow_unsandboxed = de(node)?,
         "drgnx-agents-start-env-names" => values.agents_start_env_names = de(node)?,
+        "drgnx-agents-trace-opens" => values.agents_trace_opens = de(node)?,
         "drgnx-ai-providers" => values.ai_providers = providers::entries(node)?,
         "drgnx-ai-roles" => values.ai_roles = providers::roles(node)?,
         "drgnx-agents-matrix" => {
@@ -294,6 +422,46 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
                 return Err(Bad::at(node, None, "\"public\" or \"private\""));
             }
             values.runners_project_visibility = v;
+        }
+        "drgnx-runners-shared-overlay" => values.runners_shared_overlay = de(node)?,
+        "drgnx-runners-job-keys" => values.runners_job_keys = de(node)?,
+        "drgnx-runners-origin-key" => values.runners_origin_key = de(node)?,
+        "drgnx-sandbox-proxy-pinned-addresses" => {
+            let profiles::Alist(pairs) = de::<profiles::Alist<std::net::IpAddr>>(node)?;
+            values.sandbox_proxy_pins = pairs;
+        }
+        "drgnx-search-model-mirror" => values.search_model_mirror = de(node)?,
+        "drgnx-search-builtin" => values.search_builtin = de(node)?,
+        "drgnx-search-include" => values.search_include = de(node)?,
+        "drgnx-search-exclude" => values.search_exclude = de(node)?,
+        "drgnx-search-off" => values.search_off = de(node)?,
+        "drgnx-agents-browser-program" => {
+            let v = de(node)?;
+            check_browser_program(&v).map_err(|m| Bad::at(node, None, m))?;
+            values.agents_browser_program = v;
+        }
+        "drgnx-agents-browser-local-ports" => {
+            let v: Vec<u16> = de(node)?;
+            check_browser_ports(&v).map_err(|m| Bad::at(node, None, m))?;
+            values.agents_browser_local_ports = v;
+        }
+        "drgnx-agents-browser-deny-hosts" => values.agents_browser_deny_hosts = de(node)?,
+        "drgnx-agents-browser-max-message" => {
+            let v = de(node)?;
+            check_max_message(v).map_err(|m| Bad::at(node, None, m))?;
+            values.agents_browser_max_message = v;
+        }
+        "drgnx-agents-browser-idle" => values.agents_browser_idle = de(node)?,
+        "drgnx-agents-browser-once-window" => values.agents_browser_once_window = de(node)?,
+        "drgnx-agents-session-memory" => {
+            let v: String = de(node)?;
+            check_memory(&v).map_err(|m| Bad::at(node, None, m))?;
+            values.agents_session_memory = v;
+        }
+        "drgnx-agents-browser-memory-high" => {
+            let v = de(node)?;
+            check_memory_high(v).map_err(|m| Bad::at(node, None, m))?;
+            values.agents_browser_memory_high = v;
         }
         other => {
             return Err(Bad::at(
@@ -600,7 +768,7 @@ impl Settings {
                 .as_deref(),
         );
         let (dir2, kv2) = (dir.clone(), kv.clone());
-        let loaded = match tokio::task::spawn_blocking(move || load::load(&dir2, &kv2)).await {
+        let loaded = match crate::clock::blocking(move || load::load(&dir2, &kv2)).await {
             Ok(l) => l,
             Err(e) => {
                 tracing::warn!("settings.el was not read: {e}");

@@ -83,6 +83,20 @@ pub struct Card {
     pub kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// A card that lists its answers (a browser row's matrix card): the ids `cards/settle` takes, with their labels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choices: Option<Vec<CardChoice>>,
+    /// What the user should know before answering, in one line (the hub's text).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+}
+
+/// One answer a card lists.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CardChoice {
+    pub id: String,
+    pub label: String,
 }
 
 /// A job's status, tasks or open cards changed.
@@ -177,7 +191,7 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
         event!(
             "agent-entries",
             AgentEntries,
-            "a session's entries new or changed since the last time"
+            "a session's entries new or changed since the last time, without `rawInput`, only to the connections that subscribed to the session (`agents/entries/subscribe`)"
         ),
         event!(
             "events",
@@ -232,6 +246,31 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "agent-step",
             crate::methods::timeline::AgentStep,
             "a session's step opened or closed, with its class, stamps and anchors (to subscribers that asked)"
+        ),
+        event!(
+            "machines-changed",
+            crate::methods::work::MachinesList,
+            "the machines the hub lists changed (a report, an expiry, a local slot): the whole list"
+        ),
+        event!(
+            "runners-changed",
+            crate::methods::runners::Runners,
+            "the runners changed (one added, removed, benched or back in rotation, its trust or state, its load): the whole list"
+        ),
+        event!(
+            "runners/need-keys",
+            crate::methods::runners::KeyNames,
+            "a job needs keys the hub does not hold (names only; to user connections): answered only by a command the user runs"
+        ),
+        event!(
+            "agent-presence",
+            crate::methods::work::FilePresence,
+            "who is in a file now changed: its entries, at most once per file per 100 ms, to the connections that asked (agents/presence/subscribe)"
+        ),
+        event!(
+            "work-map",
+            crate::methods::work::WorkMap,
+            "what changed in one Work map view since its version base, to that view's connection only (work/map/subscribe): at most one delta per 100 ms, a full frame on a relayout, a stale mark for a hidden view"
         ),
         event!(
             "exec-done",
@@ -311,6 +350,12 @@ mod tests {
                     "supervisor",
                     "view-written",
                     "view-proposal",
+                    // agent system part 2
+                    "machines-changed",
+                    "runners-changed",
+                    "runners/need-keys",
+                    "agent-presence",
+                    "work-map",
                 ]
                 .contains(&n.as_str())
             })
@@ -325,7 +370,15 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 20);
+        assert_eq!(events().len(), 25);
+        // names only: a value-shaped name is no key name, and nothing but `names` is taken
+        let need = event("runners/need-keys").unwrap();
+        assert_eq!(
+            (need.check)(&json!({"names": ["CRATES_IO_TOKEN"]})).unwrap(),
+            json!({"names": ["CRATES_IO_TOKEN"]})
+        );
+        assert!((need.check)(&json!({"names": ["sk or-v1 x"]})).is_err());
+        assert!((need.check)(&json!({"names": [], "keys": {"a": "k"}})).is_err());
         assert!(event("settings/proposed").is_some());
         // ids only: a key-shaped value is no id, and nothing but `providers` is taken
         let changed = event("gateway/keys-changed").unwrap();

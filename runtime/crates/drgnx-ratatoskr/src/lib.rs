@@ -27,6 +27,9 @@
 //!   excise, scrub, grants, sql, compact, proposed), a client of the running hub.
 //! - [`job_cli`]: `ratatoskr job …`, plan runs from a terminal (propose, approve, status, stop, resume), a client of
 //!   the running hub.
+//! - [`machines_cli`]: `ratatoskr machines report …`, a machine's slots from jobq, a client of the running hub.
+//! - [`runner_cli`]: `ratatoskr runner …`, the runners from a terminal, a client of the running hub.
+//! - [`work`]: the Work space's hub side (machines, shell reads).
 //! - [`sessions`]: the coordination tools on a socket per session (the socket is the identity) and for outside
 //!   agents' bridges (`mcp/session`, `mcp/session-close`, `mcp/attach`), kept in `runtime.db`.
 //! - [`peer`]: the process behind a connection: its parent and start time, for an outside agent's identity; the
@@ -64,6 +67,7 @@ pub mod agents;
 pub mod backup_timer;
 pub mod bridge;
 pub mod brief;
+pub mod browser;
 pub mod budget;
 pub mod cli;
 pub mod client;
@@ -73,6 +77,7 @@ pub mod coord;
 pub mod dispatch;
 pub mod doctor;
 pub mod embed;
+pub mod eval_cli;
 pub mod exec;
 pub mod front;
 pub mod gateway;
@@ -84,15 +89,19 @@ pub mod job_cli;
 pub mod legacy;
 pub mod lock;
 pub mod log;
+pub mod machines_cli;
 pub mod manager;
 pub mod matrix_gate;
 pub mod peer;
 pub mod records;
 pub mod runner;
+pub mod runner_cli;
 pub mod runners;
 pub mod runtime_db;
 pub mod sandbox;
 pub mod sandbox_settings;
+pub mod search;
+pub mod search_cli;
 #[cfg(feature = "test-hooks")]
 pub mod sequencer;
 pub mod server;
@@ -106,6 +115,7 @@ pub mod supervise;
 pub mod supervisor;
 pub mod timeline;
 pub mod version;
+pub mod work;
 
 /// How the process ends (design 3.2): supervisors restart on 75 and never on 1, 2 or 3.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -1,26 +1,31 @@
-//! The agent core's methods, routed (agent system part 1, Task 0): every method the plan adds, and `agents/*` and
-//! `job/*` (which the hub now serves itself), go to the function of the module whose task fills it.  Until then each
-//! answers `internal`, "not yet".  This file's arms are Task 0's: a task fills its own module's functions and state
+//! The agent core's methods, routed: every method of the agent system, and `agents/*` and `job/*` (which the hub now
+//! serves itself), go to the function of the module that serves it.  A module fills its own functions and state
 //! ([`Core`]'s field), never this match.
 //!
-//! | Methods | Module | Task |
-//! |---|---|---|
-//! | `agents/{list,start,get,stop,kill,permission,do}` | [`crate::agents::session`] | 8a |
-//! | `agents/send` | [`crate::agents::session`] | 8b |
-//! | `agents/move` | [`crate::agents::session`] | 26 |
-//! | `agents/probe` | [`crate::agents::probe`] | P7 |
-//! | `messages/retract` | [`crate::agents::deliver`] | 24 |
-//! | `agents/role`, `agents/slice` | [`crate::manager`] | 25 |
-//! | `exec/*` | [`crate::exec`] | 11 |
-//! | `job/{propose,start-task,approve,order,block,unblock,stop,status}` | [`crate::runner`] | 16a |
-//! | `job/{card,reply,dismiss,reassign,resume}` | [`crate::runner`] | 16b |
-//! | `matrix/*`, `presence/set` | [`crate::matrix_gate`] | 12 |
-//! | `plans/*`, `reports/get`, `decisions/effects` | [`crate::runner::effects`] | 21 |
-//! | `brief/*` | [`crate::brief`] | 22 |
-//! | `timeline/get` | [`crate::timeline`] | 19 |
-//! | `budget/*`, `pace/get` | [`crate::budget`] | 20 |
-//! | `records/{import,status}` | [`crate::records`] | 14 |
-//! | `records/{proposals,decide}` | [`crate::records`] | 14b |
+//! | Methods | Module |
+//! |---|---|
+//! | `agents/{list,start,get,stop,kill,permission,do}` | [`crate::agents::session`] |
+//! | `agents/send` | [`crate::agents::session`] |
+//! | `agents/move` | [`crate::agents::session`] |
+//! | `agents/probe` | [`crate::agents::probe`] |
+//! | `messages/retract` | [`crate::agents::deliver`] |
+//! | `agents/role`, `agents/slice` | [`crate::manager`] |
+//! | `exec/*` | [`crate::exec`] |
+//! | `job/{propose,start-task,approve,order,block,unblock,stop,status}` | [`crate::runner`] |
+//! | `job/{card,reply,dismiss,reassign,resume}` | [`crate::runner`] |
+//! | `matrix/*`, `presence/set` | [`crate::matrix_gate`] |
+//! | `plans/*`, `reports/get`, `decisions/effects` | [`crate::runner::effects`] |
+//! | `brief/*` | [`crate::brief`] |
+//! | `timeline/get` | [`crate::timeline`] |
+//! | `budget/*`, `pace/get` | [`crate::budget`] |
+//! | `records/{import,status}` | [`crate::records`] |
+//! | `records/{proposals,decide}` | [`crate::records`] |
+//! | `machines/{report,list}` | [`crate::work::machines`] |
+//! | `runners/*` | [`crate::runners::methods`] |
+//! | `work/conclusions` | [`crate::work::conclusions`] |
+//! | `agents/presence/{subscribe,get}` | [`crate::work::presence`] |
+//! | `work/{files,hunks,file-at}` | [`crate::work::edits`] |
+//! | `work/map/{subscribe,set,close}` | [`crate::work::map`] |
 
 use crate::dispatch::Caller;
 use crate::front::Front;
@@ -43,6 +48,19 @@ pub struct Core {
     pub briefs: crate::brief::Briefs,
     pub manager: crate::manager::Managers,
     pub records: crate::records::Views,
+    pub machines: crate::work::machines::Machines,
+    /// The runners' registry ([`crate::runners::methods`]).
+    pub runners: crate::runners::methods::Hub,
+    /// The sessions' current asks and what links to them ([`crate::work::asks`]).
+    pub asks: crate::work::asks::Asks,
+    /// The conclusions' step stamps ([`crate::work::conclusions`]).
+    pub stamps: std::sync::Arc<crate::work::conclusions::Stamps>,
+    /// Who is in which file now ([`crate::work::presence`]).
+    pub presence: std::sync::Arc<crate::work::presence::Live>,
+    /// The Work map's views and the model behind them ([`crate::work::map`]).
+    pub map: std::sync::Arc<crate::work::map::Map>,
+    /// The files shell steps opened, from Gleipnir's tracer ([`crate::work::trace`]).
+    pub traces: std::sync::Arc<crate::work::trace::Traces>,
 }
 
 fn answer<T: Serialize>(r: Result<T, Error>) -> Result<Value, Error> {
@@ -55,7 +73,9 @@ pub async fn serve(
     caller: &Caller,
     p: Params,
 ) -> Result<Result<Value, Error>, Box<Params>> {
-    use crate::{agents, brief, budget, exec, manager, matrix_gate, records, runner, timeline};
+    use crate::{
+        agents, brief, budget, exec, manager, matrix_gate, records, runner, runners, timeline, work,
+    };
     let (f, c) = (front, caller);
     Ok(match p {
         Params::AgentsList(p) => answer(agents::session::list(f, c, p).await),
@@ -71,6 +91,12 @@ pub async fn serve(
         Params::MessagesRetract(p) => answer(agents::deliver::retract(f, c, p).await),
         Params::AgentsRole(p) => answer(manager::role(f, c, p).await),
         Params::AgentsSlice(p) => answer(manager::slice(f, c, p).await),
+        Params::AgentsEntriesSubscribe(p) => answer(agents::session::entries_subscribe(f, c, p)),
+        Params::AgentsEntriesUnsubscribe(p) => {
+            answer(agents::session::entries_unsubscribe(f, c, p))
+        }
+        Params::AgentsToolInput(p) => answer(agents::session::tool_input(f, c, p)),
+        Params::AgentsPause(p) => answer(agents::session::pause(f, c, p)),
         Params::ExecStart(p) => answer(exec::start(f, c, p).await),
         Params::ExecGet(p) => answer(exec::get(f, c, p).await),
         Params::ExecList(p) => answer(exec::list(f, c, p).await),
@@ -107,6 +133,28 @@ pub async fn serve(
         Params::RecordsStatus(p) => answer(records::status(f, c, p).await),
         Params::RecordsProposals(p) => answer(records::proposals(f, c, p).await),
         Params::RecordsDecide(p) => answer(records::decide(f, c, p).await),
+        Params::MachinesReport(p) => answer(work::machines::report(f, c, p).await),
+        Params::MachinesList(p) => answer(work::machines::list(f, c, p).await),
+        Params::RunnersList(p) => answer(runners::methods::list(f, c, p).await),
+        Params::RunnersProbeHost(p) => answer(runners::methods::probe_host(f, c, p).await),
+        Params::RunnersAdd(p) => answer(runners::methods::add(f, c, p).await),
+        Params::RunnersCheck(p) => answer(runners::methods::check(f, c, p).await),
+        Params::RunnersBench(p) => answer(runners::methods::bench(f, c, p).await),
+        Params::RunnersSet(p) => answer(runners::methods::set(f, c, p).await),
+        Params::RunnersUnbench(p) => answer(runners::methods::unbench(f, c, p).await),
+        Params::RunnersRemove(p) => answer(runners::methods::remove(f, c, p).await),
+        Params::RunnersKeys(p) => answer(runners::methods::keys(f, c, p).await),
+        Params::RunnersKeysHeld(p) => answer(runners::methods::keys_held(f, c, p).await),
+        Params::RunnersAudit(p) => answer(runners::methods::audit(f, c, p).await),
+        Params::WorkConclusions(p) => answer(work::conclusions::get(f, c, p).await),
+        Params::AgentsPresenceSubscribe(p) => answer(work::presence::subscribe(f, c, p).await),
+        Params::AgentsPresenceGet(p) => answer(work::presence::get(f, c, p).await),
+        Params::WorkMapSubscribe(p) => answer(work::map::subscribe(f, c, p).await),
+        Params::WorkMapSet(p) => answer(work::map::set(f, c, p)),
+        Params::WorkMapClose(p) => answer(work::map::close(f, c, p)),
+        Params::WorkFiles(p) => answer(work::edits::files(f, c, p).await),
+        Params::WorkHunks(p) => answer(work::edits::hunks(f, c, p).await),
+        Params::WorkFileAt(p) => answer(work::edits::file_at(f, c, p).await),
         other => return Err(Box::new(other)),
     })
 }

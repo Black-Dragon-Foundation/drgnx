@@ -15,16 +15,39 @@
 (require 'seq)
 (require 'drgnx-ui)
 (require 'drgnx-perf)
+(require 'drgnx-perf-settings)
+(require 'drgnx-perf-workloads)
 
 (defvar drgnx-perf-run--fixture nil "The typing fixture of this run (one file, reused, deleted at the end).")
 
+(defconst drgnx-perf-run--fixture-mark ";; drgnx-perf: the keys go on the next line"
+  "The comment in `drgnx-perf-run--fixture-spot' above the line the keys go to.")
+
+(defconst drgnx-perf-run--fixture-spot
+  (concat "\n(defun drgnx-perf-fixture-spot (items)
+  \"Where the perf lab types: six lists deep, so a list the keys leave open ends in here.\"
+  (dolist (item items)
+    (when (consp item)
+      (with-temp-buffer
+        (save-excursion
+          (progn
+            " drgnx-perf-run--fixture-mark "
+            (insert (format \"%s\" item))))))))\n")
+  "The form the keys go into, the same in every tree.  Where the middle of core/ falls changes with every core file:
+on a line with too few lists around it, each `(let ((x' typed left a list open past its form, and Emacs Lisp's
+font-lock (`lisp--el-funcall-position-p', through `forward-sexp') scanned the rest of the file at every key.")
+
 (defun drgnx-perf-run--make-fixture ()
-  "A large Emacs Lisp file — drgnx's own core three times (~12k lines) — written once per run."
-  (let ((f (make-temp-file "drgnx-perf-" nil ".el")))
+  "A large Emacs Lisp file — drgnx's own core three times (~140k lines) — written once per run, with
+`drgnx-perf-run--fixture-spot' between two files near its middle."
+  (let* ((f (make-temp-file "drgnx-perf-" nil ".el"))
+         (files (directory-files (expand-file-name "core" drgnx-ui-repo-dir) t "\\.el\\'"))
+         (middle (nth (/ (length files) 2) files)))
     (with-temp-file f
-      (dotimes (_ 3)
-        (dolist (x (directory-files (expand-file-name "core" drgnx-ui-repo-dir) t "\\.el\\'"))
-          (insert-file-contents x) (goto-char (point-max)))))
+      (dotimes (i 3)
+        (dolist (x files)
+          (insert-file-contents x) (goto-char (point-max))
+          (when (and (= i 1) (eq x middle)) (insert drgnx-perf-run--fixture-spot)))))
     f))
 
 (defun drgnx-perf-run--session-size ()
@@ -32,9 +55,10 @@
   (let ((e (getenv "DRGNX_UI_SIZE"))) (if (member e '(nil "")) "1400x800" e)))
 
 (defun drgnx-perf-run--visit-fixture-form ()
+  "The form that visits the fixture and puts point where the keys go: the line under `drgnx-perf-run--fixture-mark'."
   (format "(let ((f %S)) (when-let* ((b (find-buffer-visiting f))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))
-                         (find-file f) (goto-char (/ (point-max) 2)) (forward-line 0) t)"
-          drgnx-perf-run--fixture))
+                         (find-file f) (goto-char (point-min)) (search-forward %S) (forward-line 1) t)"
+          drgnx-perf-run--fixture drgnx-perf-run--fixture-mark))
 
 (defun drgnx-perf-run--replace-setup-form ()
   "The replace-typing workload's setup: 100 files of 100 matching lines, and the session functions it uses."
@@ -138,11 +162,12 @@ chain without reading any socket, finished them while the harness's next call go
 
 (defun drgnx-perf-run--live-setup-form ()
   "The live-view workload's setup: websocket (from the user's packages if need be), the mock browser as the browser
-for agents, the Live view open, and the session functions it uses."
+for agents, the Live view open, the blank-frame count, and the session functions it uses."
   (prin1-to-string
    `(progn
       (unless (require 'websocket nil t)
-        (let* ((elpa (expand-file-name (or (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa")))
+        ;; the lab's $DRGNX_USER_ELPA, put in here: the session does not inherit it
+        (let* ((elpa (expand-file-name (or ,(drgnx-perf-run--user-elpa) "~/.config/emacs/elpa")))
                (dir (car (last (and (file-directory-p elpa) (directory-files elpa t "\\`websocket-[0-9]"))))))
           (unless dir (error "The Live view needs the websocket package"))
           (add-to-list 'load-path dir)
@@ -150,29 +175,31 @@ for agents, the Live view open, and the session functions it uses."
       (load ,(expand-file-name "test/fixtures/mock-cdp" drgnx-ui-repo-dir) nil t)
       (require 'drgnx-live)
       (require 'drgnx-exec)
-      (defvar drgnx-perf--live-jpeg nil "The frames' bytes, base64.")
       (defvar drgnx-perf--live-timer nil "Sends the frames.")
-      (defvar drgnx-perf--live-message nil "A frame's message, as the browser sends it: an encoded websocket frame.")
+      (defvar drgnx-perf--live-message nil
+        "Two frames' messages, as the browser sends them: encoded websocket frames, one after the other as the view draws
+them.  Two, because a page's
+frames differ: the view's last frame stays in the image cache while the next one decodes (its stand-in); identical
+frames would share one cache entry, and flushing the old frame would flush the new one.")
       (setq drgnx-perf--live-message nil)
       (defvar drgnx-perf--live-width nil "The frames' width.")
       (setq drgnx-perf--live-width nil)
       (defvar drgnx-perf--live-sent 0 "How many messages the mock had received when it sent the last frame.")
       (setq drgnx-perf--live-sent 0)
       (defvar drgnx-perf--live-drawn 0 "Frames drawn when the typing began.")
-      (defvar drgnx-perf--jobs-get nil "The real `drgnx-exec-get'.")
-      (defun drgnx-perf--live-make-jpeg (width)
-        "A real JPEG WIDTH pixels wide, as Chrome sends at the view's maxWidth (ImageMagick's built-in logo, a
-1280×800 page scaled); without ImageMagick nil: the frames are then a few bytes no decoder accepts, cheaper to draw."
+      (defvar drgnx-perf--live-endpoint nil "The mock browser's endpoint (:port :ws).")
+      (defun drgnx-perf--live-make-jpeg (width quality)
+        "A real JPEG WIDTH pixels wide at QUALITY, base64, as Chrome sends at the view's maxWidth (ImageMagick's
+built-in logo, a 1280×800 page scaled); without ImageMagick nil: the frames are then a few bytes no decoder accepts,
+cheaper to draw."
         (when-let* ((magick (or (executable-find "magick") (executable-find "convert"))))
           (with-temp-buffer
             (set-buffer-multibyte nil)
-            (and (eq 0 (call-process magick nil t nil "logo:" "-resize" (format "%dx%d!" width (round (* width 0.625))) "jpeg:-"))
+            (and (eq 0 (call-process magick nil t nil "logo:" "-resize" (format "%dx%d!" width (round (* width 0.625)))
+                                     "-quality" (number-to-string quality) "jpeg:-"))
                  (base64-encode-string (buffer-string) t)))))
-      (setq drgnx-perf--live-jpeg nil)
-      (setq drgnx-perf--jobs-get (symbol-function 'drgnx-exec-get))
-      (fset 'drgnx-exec-get (lambda (id) (if (equal id "job-perf-live") (list :id id :status 'running) (funcall drgnx-perf--jobs-get id))))
       (let ((port (drgnx-mock-cdp-start)))
-        (setq drgnx-live--browser (list :port port :ws (format "ws://127.0.0.1:%d/devtools/browser/mock" port) :job "job-perf-live")))
+        (setq drgnx-perf--live-endpoint (list :port port :ws (format "ws://127.0.0.1:%d/devtools/browser/mock" port))))
       (defun drgnx-perf--live-view () (get-buffer drgnx-live-buffer-name))
       (defun drgnx-perf--live-frame ()
         "A frame, once the last one was acknowledged (as Chrome sends them)."
@@ -185,44 +212,79 @@ for agents, the Live view open, and the session functions it uses."
                            1280)))
             (unless (eql width drgnx-perf--live-width) (setq drgnx-perf--live-message nil drgnx-perf--live-width width)))
           (unless drgnx-perf--live-message
-            (setq drgnx-perf--live-jpeg (drgnx-perf--live-make-jpeg drgnx-perf--live-width))
             (setq drgnx-perf--live-message
-                  (websocket-encode-frame
-                   (make-websocket-frame
-                    :opcode 'text :completep t
-                    :payload (encode-coding-string
-                              (json-serialize
-                               (list :method "Page.screencastFrame" :sessionId "S-T1"
-                                     :params (list :data (or drgnx-perf--live-jpeg (base64-encode-string "frame")) :sessionId 1
-                                                   :metadata (list :deviceWidth 1280 :deviceHeight 800 :offsetTop 0 :pageScaleFactor 1
-                                                                   :scrollOffsetX 0 :scrollOffsetY 0 :timestamp (float-time)))))
-                              'raw-text))
-                   nil)))
-          (dolist (ws (drgnx-mock-cdp-clients)) (process-send-string (websocket-conn ws) drgnx-perf--live-message))))
+                  (mapcar (lambda (quality)
+                            (websocket-encode-frame
+                             (make-websocket-frame
+                              :opcode 'text :completep t
+                              :payload (encode-coding-string
+                                        (json-serialize
+                                         (list :method "Page.screencastFrame" :sessionId "S-T1"
+                                               :params (list :data (or (drgnx-perf--live-make-jpeg drgnx-perf--live-width quality)
+                                                                       (base64-encode-string (format "frame %d" quality)))
+                                                             :sessionId 1
+                                                             :metadata (list :deviceWidth 1280 :deviceHeight 800 :offsetTop 0 :pageScaleFactor 1
+                                                                             :scrollOffsetX 0 :scrollOffsetY 0 :timestamp (float-time)))))
+                                        'raw-text))
+                             nil))
+                          '(60 61))))
+          ;; by the count of frames drawn: frames sent between two draws are the same, so the next drawn frame always
+          ;; differs from the last drawn one, however many the view drops
+          (let* ((view (drgnx-perf--live-view))
+                 (msg (nth (% (if view (buffer-local-value 'drgnx-live--drawn view) 0) 2) drgnx-perf--live-message)))
+            (dolist (ws (drgnx-mock-cdp-clients)) (process-send-string (websocket-conn ws) msg)))))
       (defun drgnx-perf--live-arm ()
         "The Live view beside the file, frames arriving."
         (let* ((editor (selected-window)) (file (window-buffer editor)))
           (unless (drgnx-perf--live-view)
             (drgnx-live-view)
+            (drgnx-live--open (drgnx-perf--live-view) drgnx-perf--live-endpoint)   ; the product's view is dormant: the frozen client, on the mock
             (drgnx-mock-cdp-wait (lambda () (drgnx-mock-cdp-received "Page.startScreencast")) 10))
           (set-window-buffer editor file)               ; the view may have taken the file's window
           (unless (get-buffer-window (drgnx-perf--live-view))
             (set-window-buffer (split-window editor nil 'right) (drgnx-perf--live-view)))
           (select-window editor))
         (unless drgnx-perf--live-timer (setq drgnx-perf--live-timer (run-with-timer 0 (/ 1.0 30) #'drgnx-perf--live-frame)))
-        (setq drgnx-perf--live-drawn (buffer-local-value 'drgnx-live--drawn (drgnx-perf--live-view))))
+        (setq drgnx-perf--live-drawn (buffer-local-value 'drgnx-live--drawn (drgnx-perf--live-view)))
+        (setq drgnx-perf--live-blank 0
+              drgnx-perf--live-seen (plist-get (drgnx-perf--live-images) :deferred))
+        (when (fboundp 'nidhogg-workers--test-image-timing) (nidhogg-workers--test-image-timing t))        (add-hook 'pre-redisplay-functions #'drgnx-perf--live-blank-sample)
+        (advice-add 'drgnx-live--draw-frame :before #'drgnx-perf--live-blank-sample))
+      ;; "No blank frame" (off-the-main-thread design §17.6): with Nidhogg's image worker a frame's decode may outlast
+      ;; the redisplay's wait budget; its entry is then pending and draws the last frame's picture (the stand-in) or
+      ;; nothing.  Pending entries are made only inside a redisplay, so before the next one (and before the next frame
+      ;; replaces the image) the image counters tell whether the last redisplay drew a pending entry without a
+      ;; stand-in; each newly deferred decode is judged once.  Without the worker nothing defers: 0.
+      (defvar drgnx-perf--live-blank 0 "Redisplays that drew a frame's space with no picture.")
+      (defvar drgnx-perf--live-seen 0 "The image worker's deferred count already judged.")
+      (defun drgnx-perf--live-images ()
+        (and (fboundp 'nidhogg-workers--test-image-info) (nidhogg-workers--test-image-info)))
+      (defun drgnx-perf--live-blank-sample (&rest _)
+        (when-let* ((i (drgnx-perf--live-images)))
+          (when (and (> (plist-get i :deferred) (or drgnx-perf--live-seen 0))
+                     (> (plist-get i :pending) (plist-get i :standing)))
+            (setq drgnx-perf--live-blank (1+ drgnx-perf--live-blank)))
+          (setq drgnx-perf--live-seen (plist-get i :deferred))))
+      (defun drgnx-perf--live-measure ()
+        (let ((i (drgnx-perf--live-images)))
+          (list :live (list :blank drgnx-perf--live-blank
+                            :frames (- (buffer-local-value 'drgnx-live--drawn (drgnx-perf--live-view)) drgnx-perf--live-drawn)
+                            :deferred (or (plist-get i :deferred) 0)
+                            :timing (and (fboundp 'nidhogg-workers--test-image-timing)
+                                         (nidhogg-workers--test-image-timing))))))
       (defun drgnx-perf--live-check ()
         "Frames were drawn while the keys were typed."
         (and (>= (- (buffer-local-value 'drgnx-live--drawn (drgnx-perf--live-view)) drgnx-perf--live-drawn) 5) t))
       (defun drgnx-perf--live-teardown ()
+        (remove-hook 'pre-redisplay-functions #'drgnx-perf--live-blank-sample)
+        (advice-remove 'drgnx-live--draw-frame #'drgnx-perf--live-blank-sample)
         (when (timerp drgnx-perf--live-timer) (cancel-timer drgnx-perf--live-timer))
         (setq drgnx-perf--live-timer nil)
         (when-let* ((v (drgnx-perf--live-view)))
           (when-let* ((w (get-buffer-window v))) (ignore-errors (delete-window w)))
           (kill-buffer v))
         (drgnx-mock-cdp-stop)
-        (setq drgnx-live--browser nil)
-        (fset 'drgnx-exec-get drgnx-perf--jobs-get))
+        (setq drgnx-perf--live-endpoint nil))
       t)))
 
 (defun drgnx-perf-run--agent-settings-setup-form ()
@@ -328,40 +390,41 @@ local sh) listed in the Explorer, remembered as a remote root, its connection op
   "The remote-typing workload's teardown: the Explorer's folders put back, the connections closed, the mock removed.")
 
 (defun drgnx-perf-run--index-setup-form ()
-  "The typing-with-index workload's setup: the drgnx repo indexed into the session's own state dir by a stub
-embedder (384 numbers per chunk, no provider, no network), the index read into memory by one query, and the
-session functions the check and the teardown use."
-  (prin1-to-string
-   `(progn
-      (require 'drgnx-search)
-      (require 'drgnx-search-index)
-      (require 'drgnx-search-query)
-      (unless (sqlite-available-p) (error "This Emacs has no SQLite: no index to load"))
-      (unless (memq 'drgnx-search--after-save after-save-hook) (error "The search module (tools/search) is not on"))
-      (defvar drgnx-perf--index-root nil "The indexed project.")
-      (defun drgnx-perf--index-embed (inputs &rest _)
-        "Unit vectors of 384 numbers from the text's hashes."
-        (setq drgnx-ai-embed-last-info (list :provider 'perf-stub :model "perf-stub"))
-        (vconcat
-         (mapcar (lambda (text)
-                   (let* ((bytes (apply #'append (mapcar (lambda (i) (append (secure-hash 'sha256 (format "%d%s" i text) nil nil t) nil))
-                                                         (number-sequence 1 12))))
-                          (v (mapcar (lambda (b) (/ (- b 127.5) 127.5)) bytes))
-                          (norm (sqrt (apply #'+ (mapcar (lambda (x) (* x x)) v)))))
-                     (vconcat (mapcar (lambda (x) (/ x norm)) v))))
-                 inputs)))
-      (setq drgnx-perf--index-root ,(file-name-as-directory drgnx-ui-repo-dir))
-      (let ((r (drgnx-search-index drgnx-perf--index-root :embed #'drgnx-perf--index-embed)))
-        (when (plist-get r :error) (error "Indexing the repo: %s" (plist-get r :error)))
-        (when (< (plist-get r :chunks) 100) (error "Only %s chunks indexed" (plist-get r :chunks))))
-      (drgnx-search drgnx-perf--index-root "where does the program start" :embed #'drgnx-perf--index-embed)
-      (defun drgnx-perf--index-check ()
-        "The index is in memory: the query cache holds its fingerprints."
-        (and (> (length (nth 1 (car (hash-table-values drgnx-search--cache)))) 0) t))
-      (defun drgnx-perf--index-teardown ()
-        (clrhash drgnx-search--cache)
-        (ignore-errors (delete-file (drgnx-search-store-file drgnx-perf--index-root))))
-      t)))
+  "The typing-with-index workload's setup, as a form string: a hub of the workload (`drgnx-perf-run--hub-form'; the
+session's environment starts none) indexes a git project made of the checkout's own code (the container's /src is
+not a git project; Hrafn; tier 1 done before the typing starts), and the session functions the check and the
+teardown use."
+  (concat
+   "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) "
+   (prin1-to-string
+    `(progn
+       (require 'drgnx-search)
+       (unless (memq 'drgnx-tools/search--typing post-command-hook) (error "The search module (tools/search) is not on"))
+       (defvar drgnx-perf--index-root nil "The indexed project, without a trailing slash.")
+       (defun drgnx-perf--index-chunks ()
+         "How many chunks the hub holds of the project."
+         (or (plist-get (drgnx-hub-call-sync "search/status" (list :root drgnx-perf--index-root) 10) :chunks) 0))
+       (setq drgnx-perf--index-root (directory-file-name (make-temp-file "drgnx-perf-index" t)))
+       (dolist (dir '("core" "wb"))
+         (copy-directory (expand-file-name dir ,(directory-file-name drgnx-ui-repo-dir))
+                         (expand-file-name dir drgnx-perf--index-root) nil t t))
+       (let ((default-directory (file-name-as-directory drgnx-perf--index-root)))
+         (dolist (args '(("init" "-q") ("add" "-A")
+                         ("-c" "user.name=perf" "-c" "user.email=perf@localhost" "commit" "-q" "-m" "perf")))
+           (unless (zerop (apply #'call-process "git" nil nil nil args)) (error "git %S failed" args))))
+       (drgnx-hub-call-sync "search/index" (list :root drgnx-perf--index-root :now t) 30)
+       (let ((deadline (+ (float-time) 120)))
+         (while (and (< (drgnx-perf--index-chunks) 100) (< (float-time) deadline)) (accept-process-output nil 0.5)))
+       (when (< (drgnx-perf--index-chunks) 100) (error "The hub holds only %s chunks of the project" (drgnx-perf--index-chunks)))
+       (defun drgnx-perf--index-check ()
+         "The hub holds the index."
+         (>= (drgnx-perf--index-chunks) 100))
+       (defun drgnx-perf--index-teardown ()
+         (drgnx-perf--hub-stop)
+         (ignore-errors (delete-directory drgnx-perf--index-root t))
+         t)
+       t))
+   ")"))
 
 (defun drgnx-perf-run--window-switch-setup-form ()
   "The window-switch workload's setup: 3 editor groups with the dock, the panel and the right dock shown, and
@@ -411,13 +474,29 @@ order.  A name that is no workload is an error: a typo must not run nothing and 
         (unless (assq (intern n) workloads) (error "DRGNX_PERF_WORKLOADS: no workload %S" n)))
       (seq-filter (lambda (w) (member (symbol-name (car w)) names)) workloads))))
 
+(defun drgnx-perf-run--user-elpa ()
+  "The package directory $DRGNX_USER_ELPA names, or nil."
+  (let ((dir (getenv "DRGNX_USER_ELPA")))
+    (and dir (not (string-empty-p dir)) (expand-file-name dir))))
+
+(defun drgnx-perf-run--eat-elpa-p ()
+  "Non-nil when $DRGNX_USER_ELPA holds an eat package (the terminal workloads can then run in the container)."
+  (let ((elpa (drgnx-perf-run--user-elpa)))
+    (and elpa (file-directory-p elpa) (directory-files elpa nil "\\`eat-[0-9.]+\\'") t)))
+
+(defun drgnx-perf-run--websocket-elpa-p ()
+  "Non-nil when $DRGNX_USER_ELPA holds a websocket package (the Live view workload can then run in the container)."
+  (let ((elpa (drgnx-perf-run--user-elpa)))
+    (and elpa (file-directory-p elpa) (directory-files elpa nil "\\`websocket-[0-9]") t)))
+
 (defun drgnx-perf-run--terminal-setup-form (command &rest switches)
   "The terminal workloads' setup: eat (from the user's packages if need be) and the session functions they use.
 The eat terminal runs COMMAND with SWITCHES directly: no shell, so no shell configuration is involved."
   (prin1-to-string
    `(progn
       (unless (require 'eat nil t)
-        (let* ((elpa (expand-file-name (or (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa")))
+        ;; the lab's $DRGNX_USER_ELPA, put in here: the session does not inherit it
+        (let* ((elpa (expand-file-name (or ,(drgnx-perf-run--user-elpa) "~/.config/emacs/elpa")))
                (dir (car (last (and (file-directory-p elpa) (directory-files elpa t "\\`eat-[0-9.]+\\'"))))))
           (unless dir (error "The terminal workloads need the eat package"))
           (add-to-list 'load-path dir)
@@ -539,8 +618,10 @@ every tenth of a second) for thirty seconds: the typing of six strings takes lon
        t))
    ")"))
 
+(defvar drgnx-perf-ab-min-rounds)   ; below, with the A/B
+
 (defun drgnx-perf-run--workloads ()
-  "The workloads: (NAME :setup FORM :each FORM :actions ACTIONS :check FORM :measure FORM :teardown FORM :repeat N).
+  "The workloads:(NAME :setup FORM :each FORM :actions ACTIONS :check FORM :measure FORM :teardown FORM :repeat N).
 Every workload runs three times (medians are kept); :each runs before each repeat, :check after it (an
 error if it does not hold).  With :actions, :measure runs after the input and its plist joins the run's."
   (let ((type (lambda (s) (list :type s))) (keys (lambda (k n) (make-list n (list :keys k))))
@@ -575,8 +656,11 @@ error if it does not hold).  With :actions, :measure runs after the input and it
       ;; 100-character chunks, 50 a second: a chunk costs the chunk (model) and only the new text is drawn (view)
       ;; (the mock's turn is that: a first chunk of 400 kB, then five chunks every tenth of a second, 300 times; the
       ;; run waits for the 400 kB to be in the transcript before it types)
+      ;; the mock runs a prompt past its script's last line as its own words (a turn that ends at once): one line for
+      ;; every run of a setup, both sides' warm-ups and rounds of an A/A included
       (agent-stream :setup ,(concat "(progn " (drgnx-perf-run--hub-form)
-                                    " (drgnx-perf--hub-start (make-list 5 (drgnx-perf--stream)))"
+                                    (format " (drgnx-perf--hub-start (make-list %d (drgnx-perf--stream)))"
+                                            (* 2 (1+ drgnx-perf-ab-min-rounds)))
                                     " (setq drgnx-perf--stream (drgnx-agents-mirror-start \"mock\" temporary-file-directory))"
                                     " (drgnx-perf--wait 10 (lambda () (eq (drgnx-agent-session-status drgnx-perf--stream) 'idle)))"
                                     " t)")
@@ -585,6 +669,9 @@ error if it does not hold).  With :actions, :measure runs after the input and it
                                    " (let ((editor (selected-window)) (b (drgnx-agents-ui-transcript-buffer drgnx-perf--stream)))"
                                    "   (unless (get-buffer-window b) (set-window-buffer (split-window editor nil 'right) b))"
                                    "   (select-window editor))"
+                                   ;; the hub sends entries to the editors that showed the session: the editor does it from
+                                   ;; `window-buffer-change-functions', which a run of workloads in one session may have removed
+                                   " (drgnx-agents-mirror-show (drgnx-agent-session-remote drgnx-perf--stream))"
                                    " (drgnx-perf--send drgnx-perf--stream \"stream 1500\")"
                                    " (drgnx-perf--wait 30 (lambda () (let ((e (car (last (drgnx-agent-session-entries drgnx-perf--stream)))))"
                                    "   (and (eq (plist-get e :type) 'agent) (>= (drgnx-agents-entry-length e) 409600)))))"
@@ -609,46 +696,6 @@ error if it does not hold).  With :actions, :measure runs after the input and it
                          :actions ,(make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) "))
                          :check "(> (drgnx-perf-replay-count \"replay\") drgnx-perf--replay-mark)"   ; typed while it streamed
                          :teardown ,(concat "(progn (drgnx-perf-replay-stop \"replay\") " kill-fixture ")"))
-      ;; the Work cockpit filtered to a job (Show Job in Work: the graph, what needs you), following three agents that
-      ;; stream (as it follows the hub's events)
-      (cockpit-cards
-       :setup ,(format "(progn %s (drgnx-perf--hub-start (make-list 6 (drgnx-perf--slow)))
-                              (setq drgnx-perf--agents (mapcar (lambda (n) (drgnx-agents-mirror-start \"mock\" temporary-file-directory (format \"perf#%%d\" n) \"perf\")) '(1 2 3)))
-                              (drgnx-perf--wait 10 (lambda () (seq-every-p (lambda (s) (eq (drgnx-agent-session-status s) 'idle)) drgnx-perf--agents)))
-                              (setq drgnx-perf--spent 0.0)
-                              (defun drgnx-perf--job-summary ()   ; what the hub would answer: spend and agents change
-                         (list :id \"perf\" :title \"Perf\" :status \"running\" :repo temporary-file-directory :budget 5.0 :spent drgnx-perf--spent
-                               :tasks (mapcar (lambda (n) (list :n n :title (format \"task %%d\" n) :role \"implement\" :profile \"mock\" :status \"running\" :agent :null :deps :null)) '(1 2 3))
-                               :agents (mapcar (lambda (s) (list :id (drgnx-agent-session-id s) :profile \"mock\" :task (drgnx-agent-session-task s) :status (symbol-name (drgnx-agent-session-status s)) :review :false)) drgnx-perf--agents)
-                               :cards (mapcar (lambda (n) (list :id n :kind \"stalled\" :task (format \"perf#%%d\" n) :title \"waiting\" :actions '((\"retry\" \"Retry\") (\"drop\" \"Drop the task\")) :data :null)) '(1 2 3 4))
-                               :messages :null
-                               :decisions (mapcar (lambda (n) (list :n n :kind \"build\" :subject (format \"part %%d\" n) :author \"user\" :status \"current\")) (number-sequence 20 1 -1))))
-                       (require 'drgnx-hub-client)         ; loaded first: the stub below stays
-                       (setq drgnx-perf--hub-call (symbol-function 'drgnx-hub-call))
-                       (fset 'drgnx-hub-call (lambda (method &rest args)   ; the hub answers all but the job's summary
-                                               (if (not (equal method \"job/status\"))
-                                                   (apply drgnx-perf--hub-call method args)
-                                                 (setq drgnx-perf--spent (+ drgnx-perf--spent 0.01))
-                                                 (when (cadr args) (funcall (cadr args) (drgnx-perf--job-summary) nil)))))
-                       (setq drgnx-perf--dock (cons (and (drgnx-wb--dock-windows) t) (drgnx-wb-sidebar-view)))
-                       (let ((editor (selected-window)))
-                         (drgnx-cockpit-show-job \"perf\")
-                         (drgnx-cockpit-cards--draw \"perf\" (drgnx-perf--job-summary))
-                         (select-window editor))
-                       t)"
-                       (drgnx-perf-run--hub-form))
-       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form)
-                      " (drgnx-perf--wait 15 (lambda () (not (seq-some #'drgnx-perf--running-p drgnx-perf--agents))))"
-                      " (dolist (s drgnx-perf--agents) (drgnx-perf--send s \"slow\")) t)")
-       :actions ,(make-list 2 (funcall type "(setq y 2) "))
-       :check "(seq-some #'drgnx-perf--running-p drgnx-perf--agents)"   ; typed while they streamed
-       :teardown ,(concat "(progn (fset 'drgnx-hub-call drgnx-perf--hub-call)"
-                          " (dolist (s drgnx-perf--agents) (ignore-errors (drgnx-agents-kill s)))"
-                          " (drgnx-perf--hub-stop)"
-                          " (ignore-errors (drgnx-pane-hide 'needs-you))"
-                          " (if (car drgnx-perf--dock) (drgnx-wb-show-view (or (cdr drgnx-perf--dock) 'explorer)) (drgnx-wb-hide-sidebar))"
-                          " (dolist (n '(\"*Needs You*\" \"*Decisions*\")) (when (get-buffer n) (kill-buffer n)))"
-                          " (setq drgnx-cockpit-graph-current-filter nil) " kill-fixture ")"))
       ;; a long code file with sticky scroll, indent guides (when installed) and smooth scrolling on
       (code-scrolling
        :setup ,(format "(progn (dolist (m '(\"editor/drgnx-sticky\" \"ui/drgnx-smooth\" \"extra/drgnx-guides\")) (load (expand-file-name (concat \"modules/\" m) %S) nil t)) (drgnx-smooth--setup) t)"
@@ -721,6 +768,7 @@ error if it does not hold).  With :actions, :measure runs after the input and it
        :setup ,(drgnx-perf-run--live-setup-form)
        :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (drgnx-perf--live-arm) t)")
        :actions ,(make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) "))
+       :measure "(drgnx-perf--live-measure)"
        :check "(drgnx-perf--live-check)"
        :teardown ,(concat "(progn (drgnx-perf--live-teardown) " kill-fixture ")"))
       ;; opening the Claude Code settings page on a 5 MB .claude.json, 50 MCP servers and 200 skills: drawn, no process
@@ -729,6 +777,7 @@ error if it does not hold).  With :actions, :measure runs after the input and it
        :each "(progn (dolist (b (buffer-list)) (when (string-prefix-p \"*agent settings: \" (buffer-name b)) (kill-buffer b))) t)"
        :measure ,drgnx-perf-run--agent-settings-measure-form
        :teardown ,drgnx-perf-run--agent-settings-teardown-form)
+      ,@(drgnx-perf-settings-workloads)
       ;; typing in a local file while a remote root is listed in the Explorer and its connection is dead
       (remote-typing
        :setup ,(drgnx-perf-run--remote-setup-form)
@@ -767,10 +816,13 @@ error if it does not hold).  With :actions, :measure runs after the input and it
        :setup ,(drgnx-perf-run--terminal-setup-form "sh" "-c" "while :; do seq 1 2000; done")
        :each ,(concat "(progn (drgnx-wb-focus-editor) " (drgnx-perf-run--visit-fixture-form)
                       " (drgnx-perf--term-show) (setq drgnx-perf--term-tick (buffer-chars-modified-tick drgnx-perf--term)) t)")
+       :timers t
        :actions ,(make-list 6 (funcall type "echo hello world 123"))
        :check "(and (process-live-p (get-buffer-process drgnx-perf--term)) (get-buffer-window drgnx-perf--term)
                     (> (buffer-chars-modified-tick drgnx-perf--term) drgnx-perf--term-tick) t)"   ; output streamed while typing
        :teardown ,(concat "(progn (drgnx-perf--term-teardown) " kill-fixture ")"))
+      ;; the off-the-main-thread workloads (§17.6): report-only until their step lands (harness/drgnx-perf-workloads.el)
+      ,@(drgnx-perf-workers-workloads)
       (frames :measure "(list :frame (drgnx-perf-frame-ms 5))")
       (redisplay :each ,(drgnx-perf-run--visit-fixture-form) :measure "(list :redisplay (drgnx-perf-redisplay-ms 30))" :teardown ,kill-fixture)
       (startup :daemon t)
@@ -993,7 +1045,11 @@ INIT-DIR: drgnx's init/ (default).  (:server_ms STATS :modules_ms N)."
     (list :server_ms (mapcar #'drgnx-perf--round (drgnx-perf-stats times)) :modules_ms modules)))
 
 (defun drgnx-perf-run--call (sess form &optional timeout)
-  (drgnx-ui-call sess (format "(progn (require 'drgnx-perf) (drgnx-uitest--json %s))" form) (or timeout 60)))
+  "FORM (a string) in SESS, its value as JSON.  $DRGNX_PERF_WORKERS is applied first (once per session), so a
+workload's `:setup' already runs under it: a connection Nidhogg would frame is framed only if the switch is on when it
+opens (lsp-burst's servers), and applied at the first recording the first workload of a session ran without it."
+  (drgnx-ui-call sess (format "(progn (require 'drgnx-perf) (drgnx-perf--workers-env) (drgnx-uitest--json %s))" form)
+                 (or timeout 60)))
 
 (defun drgnx-perf-run--median (runs path)
   (plist-get (drgnx-perf-stats (delq nil (mapcar (lambda (r) (let ((v r)) (dolist (k path) (setq v (plist-get v k))) (and (numberp v) v))) runs)))
@@ -1011,6 +1067,36 @@ over the runs."
                                            (t v)))))
     out))
 
+(defun drgnx-perf-run--begin-form (spec &optional audit)
+  "The form that starts recording for workload SPEC: the probes, the audit when AUDIT, and the completion timer when
+SPEC has `:complete-when' (a form that is true once the work the actions started is done)."
+  (format "(progn %s (drgnx-perf-begin%s) %s t)" (if audit "(drgnx-perf-audit-begin)" "")
+          (if (plist-get spec :timers) " t" "")
+          (if-let* ((cw (plist-get spec :complete-when))) (format "(drgnx-perf-complete-begin (lambda () %s))" cw) "")))
+
+(defconst drgnx-perf-run-complete-wait 60
+  "Seconds the lab waits after a workload's actions for its `:complete-when' to hold.  The work the keys started (a
+compile flood, the reparse after a paste) can outlast the keys; `:complete-ms', the digest and the check are read once
+it is done, or after this wait.")
+
+(defun drgnx-perf-run--await-complete (sess)
+  "Wait until SESS's completion poll has noted `:complete-ms', at most `drgnx-perf-run-complete-wait' seconds.  The
+session stays idle between the calls, so its idle poll and redisplay run as they do for a user."
+  (let ((deadline (+ (float-time) drgnx-perf-run-complete-wait)))
+    (while (and (not (eq t (drgnx-perf-run--call sess "(and drgnx-perf--complete (nth 2 drgnx-perf--complete) t)")))
+                (< (float-time) deadline))
+      (sleep-for 0.05))))
+
+(defun drgnx-perf-run--extras (sess spec)
+  "What SPEC adds to a run, read in SESS after the actions: `:complete-ms' (`:complete-when', once it holds: see
+`drgnx-perf-run--await-complete') and `:digest' (the string SPEC's `:digest' form returns: buffer text and faces,
+filter-call arguments or a message sequence)."
+  (when (plist-get spec :complete-when) (drgnx-perf-run--await-complete sess))
+  (append (and (plist-get spec :complete-when) (drgnx-perf-run--call sess "(drgnx-perf-complete-end)"))
+          (and (plist-get spec :digest)
+               (list :digest (plist-get (drgnx-perf-run--call sess (format "(list :digest (format \"%%s\" %s))" (plist-get spec :digest)))
+                                        :digest)))))
+
 (defun drgnx-perf-run-workload (sess spec &optional audit)
   "Run workload SPEC in SESS: its setup, then :repeat (3) runs, the medians of their numbers.  AUDIT:
 the hook audit on (its rows under :audit).  The probes, the audit and the teardown are undone even
@@ -1025,9 +1111,10 @@ when a step fails."
                 (when (plist-get spec :each) (drgnx-perf-run--call sess (plist-get spec :each) 120) (drgnx-ui-measure sess nil))
                 (if (not actions)
                     (push (drgnx-perf-run--call sess measure 120) runs)
-                  (drgnx-perf-run--call sess (format "(progn %s (drgnx-perf-begin) t)" (if audit "(drgnx-perf-audit-begin)" "")))
+                  (drgnx-perf-run--call sess (drgnx-perf-run--begin-form spec audit))
                   (drgnx-ui-measure sess actions)
                   (push (append (drgnx-perf-run--call sess "(drgnx-perf-end)")
+                                (drgnx-perf-run--extras sess spec)
                                 (and measure (drgnx-perf-run--call sess measure 120)))   ; what input cannot show
                         runs)
                   (when audit
@@ -1043,7 +1130,7 @@ when a step fails."
                                :hooks (plist-get (drgnx-perf-run--medians audit-hooks) :hooks))
                   r))))
         ;; never leave the probes or the audit on, nor what the workload made
-        (ignore-errors (drgnx-perf-run--call sess "(progn (when drgnx-perf--audit (drgnx-perf-audit-end)) (drgnx-perf-end) t)"))
+        (ignore-errors (drgnx-perf-run--call sess "(progn (when drgnx-perf--audit (drgnx-perf-audit-end)) (drgnx-perf-complete-end) (drgnx-perf-end) t)"))
         (when (plist-get spec :teardown) (ignore-errors (drgnx-perf-run--call sess (plist-get spec :teardown))))))))
 
 (defun drgnx-perf-run--budgets ()
@@ -1075,7 +1162,9 @@ when a step fails."
              results "\n"))
 
 (defun drgnx-perf-run--json-ready (v)
-  "V (a result: plists, stats, vectors) for `json-serialize': nil is null, a boolean :loaded is true or false."
+  "V (a result: plists, stats, vectors, lists) for `json-serialize': nil is null, a boolean :loaded is true or false,
+any other proper list (an A/B's side order, (\"a\" \"b\" ...)) an array, a dotted pair (a Nidhogg decision count,
+((AREA OUTCOME REASON) . N)) a two-element array, and any other symbol its name."
   (cond ((null v) :null)
         ((vectorp v) (vconcat (mapcar #'drgnx-perf-run--json-ready v)))
         ((and (consp v) (keywordp (car v)))
@@ -1083,10 +1172,9 @@ when a step fails."
            (cl-loop for (k x) on v by #'cddr
                     do (setq out (nconc out (list k (if (eq k :loaded) (if x t :false) (drgnx-perf-run--json-ready x))))))
            out))
-        ;; a plain list (the A/B's `:order' of sides, its `:rounds') is an array, its symbols strings: `json-serialize'
-        ;; takes a list for an object and refuses a symbol that is not a keyword
-        ((consp v) (vconcat (mapcar #'drgnx-perf-run--json-ready v)))
-        ((and (symbolp v) (not (keywordp v)) (not (eq v t))) (symbol-name v))
+        ((proper-list-p v) (vconcat (mapcar #'drgnx-perf-run--json-ready v)))
+        ((consp v) (vector (drgnx-perf-run--json-ready (car v)) (drgnx-perf-run--json-ready (cdr v))))
+        ((and (symbolp v) (not (memq v '(t :false :null)))) (symbol-name v))
         (t v)))
 
 (defun drgnx-perf-run--write-results (file results)
@@ -1100,13 +1188,14 @@ version and the commit, as JSON in FILE."
     (write-region (concat (json-serialize doc) "\n") nil file nil 'silent)))
 
 (defconst drgnx-perf-run-unseeded
-  '((agent-stream . "errored in the Emacs 31.1 container: the mock agent was not busy at the end (2026-10-20)")
-    (cockpit-cards . "errored in the container: no agent busy at the end")
+  `((agent-stream . "errored in the Emacs 31.1 container: the mock agent was not busy at the end (2026-10-20)")
     (live-view . "the container image has no websocket package")
     (typing-with-index . "the container's /src is not a git project; the workload indexes the repo")
     (terminal-typing . "the container image has no eat package")
     (terminal-output . "the container image has no eat package")
     (transcript-replay . "measured and recorded only, until the watchdog's gate runs seed it (the synthetic day's stream)")
+    ,@(mapcar (lambda (w) (cons w "report-only until its step lands (§17.6); no allocation, CPU or rows budget: they follow the worker's design, not today's code"))
+              drgnx-perf-workers-names)
     (typing-evil . "needs DRGNX_MODAL_ELPA (evil); not run in the container")
     (motions-evil . "needs DRGNX_MODAL_ELPA")
     (explorer-evil . "needs DRGNX_MODAL_ELPA")
@@ -1124,6 +1213,13 @@ container.  Seed one (budgets.eld) and take it off this list.")
   "Workloads that error in the GUI container (seen 2026-10-20, CI perf lab), and why.  In a container the lab names
 them and leaves them out (as it leaves out the evil workloads without evil), so one that cannot run there does not
 fail the whole run; they still run on a host.  Each is also in `drgnx-perf-run-unseeded'.")
+
+(defun drgnx-perf-run--container-skip (workload)
+  "Why WORKLOAD is left out in the container (`drgnx-perf-run-container-skipped'), or nil.  The terminal workloads
+run when $DRGNX_USER_ELPA holds eat (`bin/drgnx' mounts it in the perf tier), the Live view when it holds websocket."
+  (unless (or (and (memq workload '(terminal-typing terminal-output)) (drgnx-perf-run--eat-elpa-p))
+              (and (eq workload 'live-view) (drgnx-perf-run--websocket-elpa-p)))
+    (cdr (assq workload drgnx-perf-run-container-skipped))))
 
 (defconst drgnx-perf-run-hook-budget 2 "ms: any hook function's p90 (the spec), judged in the --audit pass.")
 (defconst drgnx-perf-run-hook-command-budget 1.5
@@ -1157,6 +1253,12 @@ its own cost to the other numbers)."
   (unless (drgnx-perf-run--childframe-elpa) (princ (concat drgnx-perf-run-childframe-skipped "\n")))
   (drgnx-perf-run--judged audit))
 
+(defconst drgnx-perf-ab--settle-form
+  "(progn (let ((d (+ (float-time) 180))) (while (and (fboundp 'comp--async-runnings) (boundp 'comp-files-queue)
+         (or comp-files-queue (> (comp--async-runnings) 0)) (< (float-time) d)) (accept-process-output nil 0.2))) t)"
+  "Wait until the session's background native compilation has drained (PERF-ELN-1: a fresh tree compiles its files
+to the eln cache while it runs, and the wall clock pays for it).  A plain run waits too, before its first workload.")
+
 (defun drgnx-perf-run--judged (audit)
   "The run of `drgnx-perf-run'."
   (let* ((loads (list (drgnx-perf-load)))
@@ -1166,8 +1268,9 @@ its own cost to the other numbers)."
     (unwind-protect
         (progn
           (drgnx-perf-run--check-gc sess)
+          (drgnx-perf-run--call sess drgnx-perf-ab--settle-form 200)   ; the first workload must not pay for it
           (dolist (w selected)
-            (if-let* ((why (and (drgnx-env-container) (cdr (assq (car w) drgnx-perf-run-container-skipped)))))
+            (if-let* ((why (and (drgnx-env-container) (drgnx-perf-run--container-skip (car w)))))
                 (princ (format "perf: %s skipped in the container — %s\n" (car w) why))
               (message "perf: %s…" (car w))
               (let* ((cal (drgnx-perf-run--call sess "(drgnx-perf-calibrate)"))
@@ -1206,6 +1309,7 @@ its own cost to the other numbers)."
           ;; wall clock is reported, never judged here: the paired A/B run at n >= 100 judges it
           (dolist (l (append (drgnx-perf-report results judged) (drgnx-perf-run--relative-fails results)))
             (princ (format "report %s\n" l)))
+          (dolist (l (drgnx-perf-cal-lines results)) (princ (format "report %s\n" l)))
           (dolist (r worse) (princ (format "regression (reported, local history): %s\n" r)))
           (when-let* ((note (drgnx-perf-run--relative-note results))) (princ (concat note "\n")))
           (unless (or errors partial) (drgnx-perf-history-append history (drgnx-perf-run--commit) results (seq-max (cons 0 (delq nil loads)))))
@@ -1591,18 +1695,13 @@ ENV (\"K=V\" strings, `drgnx-ui-session-extra-env-names' only) is added to its e
       (list (match-string 1 spec) (match-string 2 spec) (match-string 3 spec))
     (error "usage: drgnx test --perf --ab-env VAR=JUDGED,REF (two values, comma-separated)")))
 
-(defconst drgnx-perf-ab--settle-form
-  "(progn (let ((d (+ (float-time) 180))) (while (and (fboundp 'comp--async-runnings) (boundp 'comp-files-queue)
-         (or comp-files-queue (> (comp--async-runnings) 0)) (< (float-time) d)) (accept-process-output nil 0.2))) t)"
-  "Wait until the session's background native compilation has drained (PERF-ELN-1: a fresh tree compiles its files
-to the eln cache while it runs, and the wall clock pays for it).")
-
 (defun drgnx-perf-ab--one (sess spec)
   "One repeat of the input workload SPEC in SESS: (:samples (ms per command…) :run RESULT)."
   (when (plist-get spec :each) (drgnx-perf-run--call sess (plist-get spec :each) 120) (drgnx-ui-measure sess nil))
-  (drgnx-perf-run--call sess "(progn (drgnx-perf-begin) t)")
+  (drgnx-perf-run--call sess (drgnx-perf-run--begin-form spec))
   (drgnx-ui-measure sess (plist-get spec :actions))
   (let* ((run (append (drgnx-perf-run--call sess "(drgnx-perf-end)")
+                      (drgnx-perf-run--extras sess spec)
                       (and (plist-get spec :measure) (drgnx-perf-run--call sess (plist-get spec :measure) 120))))
          (samples (append (drgnx-perf-run--call sess "(vconcat drgnx-perf--latencies)") nil)))
     (when (and (plist-get spec :check) (not (eq t (drgnx-perf-run--call sess (plist-get spec :check)))))
@@ -1670,6 +1769,22 @@ workloads judged before this one (e.g. scroll-under-popup against scrolling); a 
                       out))))))))
     (nreverse out)))
 
+(defconst drgnx-perf-ab--quiet-form
+  "(if (and (fboundp 'drgnx-perf--running-p) (boundp 'drgnx-perf--hub) (process-live-p drgnx-perf--hub))
+     (drgnx-perf--wait 60 (lambda ()
+       (not (or (and (boundp 'drgnx-perf--stream) drgnx-perf--stream (drgnx-perf--running-p drgnx-perf--stream))
+                (and (boundp 'drgnx-perf--agent) drgnx-perf--agent (drgnx-perf--running-p drgnx-perf--agent))
+                (and (boundp 'drgnx-perf--agents) (seq-some #'drgnx-perf--running-p drgnx-perf--agents))))))
+   t)"
+  "Waits (at most 60 s) until the session's agent workloads have no turn running: a stream that outlives its run is the
+session's own background work, and a calibration taken beside it reads loaded.")
+
+(defun drgnx-perf-ab--calibrate (call s &rest others)
+  "The calibration of session S through CALL (session, form), taken once S and every session in OTHERS are quiet
+(`drgnx-perf-ab--quiet-form'): the other side's stream, still running from its last run, shares the host's cores."
+  (dolist (x (cons s others)) (funcall call x drgnx-perf-ab--quiet-form))
+  (funcall call s "(drgnx-perf-calibrate)"))
+
 (defun drgnx-perf-ab--workload (name spec sa sb n &optional others)
   "A/B workload NAME between sessions SA (the REF) and SB (the work tree): an entry plist, :status one of
 judged, not-comparable, error, not-judged.  OTHERS: the work tree's runs of the workloads judged before it, an alist
@@ -1687,7 +1802,7 @@ judged, not-comparable, error, not-judged.  OTHERS: the work tree's runs of the 
                     (condition-case e (funcall call sa (plist-get spec :setup))
                       (error (signal 'drgnx-perf-ab-ref-error (list (error-message-string e)))))
                     (funcall call sb (plist-get spec :setup)))
-                  (setq cal-a (list (funcall call sa "(drgnx-perf-calibrate)")) cal-b (list (funcall call sb "(drgnx-perf-calibrate)")))
+                  (setq cal-a (list (drgnx-perf-ab--calibrate call sa sb)) cal-b (list (drgnx-perf-ab--calibrate call sb sa)))
                   ;; one run each, discarded: the same warm-up for both (the first run pays for lazy loading and eln)
                   (setq warm (list (plist-get (drgnx-perf-stats (plist-get (condition-case e (drgnx-perf-ab--one sa spec)
                                                                              (error (signal 'drgnx-perf-ab-ref-error (list (error-message-string e)))))
@@ -1698,20 +1813,27 @@ judged, not-comparable, error, not-judged.  OTHERS: the work tree's runs of the 
                                                         (push (plist-get one :run) (if (eq side 'a) runs-a runs-b))
                                                         (plist-get one :samples)))))
                          (a (plist-get r :a)) (b (plist-get r :b)))
-                    (push (funcall call sa "(drgnx-perf-calibrate)") cal-a)
-                    (push (funcall call sb "(drgnx-perf-calibrate)") cal-b)
+                    (push (drgnx-perf-ab--calibrate call sa sb) cal-a)
+                    (push (drgnx-perf-ab--calibrate call sb sa) cal-b)
                     (let* ((loaded (seq-some (lambda (c) (plist-get c :loaded)) (append cal-a cal-b)))
                            (sa-stats (drgnx-perf-stats a)) (sb-stats (drgnx-perf-stats b)))
                       (append (list :name name :status (if loaded 'not-judged 'judged) :a sa-stats :b sb-stats
                                     :warm warm :calibration (list :a cal-a :b cal-b)
                                     :a-run (drgnx-perf-run--medians runs-a) :b-run (drgnx-perf-run--medians runs-b)
-                                    :runs (/ (length (plist-get r :order)) 2) :order (plist-get r :order))
+                                    :runs (/ (length (plist-get r :order)) 2) :order (plist-get r :order)
+                                    :wall-rounds (plist-get r :rounds)
+                                    :run-rounds (cl-mapcar (lambda (x y) (list :a x :b y)) (reverse runs-a) (reverse runs-b))
+                                    :phase-sum (drgnx-perf-ab-phase-sum (drgnx-perf-run--medians runs-a) (drgnx-perf-run--medians runs-b)))
                               (and (not loaded)
                                    (list :verdict (drgnx-perf-ab-verdict a b (plist-get r :rounds))
                                          :p95-verdict (drgnx-perf-ab-verdict a b (plist-get r :rounds) :stat 'p95 :threshold 1.0)
                                          :probe-verdict (drgnx-perf-ab-probe-verdict
                                                          (cl-mapcar (lambda (x y) (list :a x :b y)) (reverse runs-a) (reverse runs-b))
-                                                         '(:compose :draw-ms :p95))))
+                                                         '(:compose :draw-ms :p95))
+                                         :metric-verdicts (drgnx-perf-ab-metric-verdicts
+                                                           (cl-mapcar (lambda (x y) (list :a x :b y)) (reverse runs-a) (reverse runs-b)))
+                                         :digest-verdict (drgnx-perf-ab-digest-verdict
+                                                          (cl-mapcar (lambda (x y) (list :a x :b y)) (reverse runs-a) (reverse runs-b)))))
                               (list :budget-fails
                                     (drgnx-perf-ab--budget-fails
                                      name sb-stats (drgnx-perf-run--budgets) (drgnx-perf-run--medians runs-b)
@@ -1726,6 +1848,46 @@ judged, not-comparable, error, not-judged.  OTHERS: the work tree's runs of the 
 
 (define-error 'drgnx-perf-ab-ref-error "The workload failed on REF")
 
+(defun drgnx-perf-ab--per-round (e key path)
+  "One value per round for each arm of entry E: the value at PATH in every round's run, null where a run has none.
+The :a-run and :b-run medians keep one run's digest and a median blank count; this keeps them all."
+  (cl-flet ((arm (side) (vconcat (mapcar (lambda (r) (let ((v (plist-get r side)))
+                                                       (dolist (k path) (setq v (plist-get v k)))
+                                                       v))
+                                         (plist-get e :run-rounds)))))
+    (and (plist-get e :run-rounds) (list key (list :a (arm :a) :b (arm :b))))))
+
+(defun drgnx-perf-ab--round-data (e)
+  "A vector, one element per round of entry E: (:a ARM :b ARM), each arm's input p95/p99/max and stall counts in that
+round's run (null where the run has none)."
+  (when (plist-get e :run-rounds)
+    (cl-flet ((arm (run)
+                (let ((in (plist-get run :input)))
+                  (list :input_p95 (plist-get in :p95) :input_p99 (plist-get in :p99) :input_max (plist-get in :max)
+                        :stalls_ge16 (plist-get run :stalls-ge16) :stalls_ge100 (plist-get run :stalls-ge100)))))
+      (vconcat (mapcar (lambda (r) (list :a (arm (plist-get r :a)) :b (arm (plist-get r :b))))
+                       (plist-get e :run-rounds))))))
+
+(defun drgnx-perf-ab--result-entry (e)
+  "The results-file record of entry E: (NAME . PLIST)."
+  (let ((v (plist-get e :verdict)))
+    (cons (plist-get e :name)
+          (append
+           (list :status (symbol-name (plist-get e :status))
+                 :verdict (and v (symbol-name (plist-get v :verdict)))
+                 :diff (and v (list :diff (plist-get v :diff) :lo (plist-get v :lo) :hi (plist-get v :hi)))
+                 :p95_verdict (and (plist-get e :p95-verdict) (symbol-name (plist-get (plist-get e :p95-verdict) :verdict)))
+                 :probe_verdict (and (plist-get e :probe-verdict) (symbol-name (plist-get (plist-get e :probe-verdict) :verdict)))
+                 :digest_verdict (and (plist-get e :digest-verdict) (symbol-name (plist-get (plist-get e :digest-verdict) :verdict)))
+                 :metric_verdicts (mapcan (lambda (m) (list (intern (concat ":" (drgnx-perf--path-name (car m))))
+                                                            (symbol-name (plist-get (cdr m) :verdict))))
+                                          (plist-get e :metric-verdicts))
+                 :a (plist-get e :a) :b (plist-get e :b)
+                 :a_run (plist-get e :a-run) :b_run (plist-get e :b-run) :order (mapcar (function symbol-name) (plist-get e :order)) :why (plist-get e :why))
+           (and (plist-get e :run-rounds) (list :run_rounds (drgnx-perf-ab--round-data e)))
+           (drgnx-perf-ab--per-round e :digests '(:digest))
+           (drgnx-perf-ab--per-round e :blanks '(:live :blank))))))
+
 (defun drgnx-perf-ab--line (e)
   (let* ((st (plist-get e :status)) (v (plist-get e :verdict)) (a (plist-get e :a)) (b (plist-get e :b))
          (side (lambda (x) (format "n=%s p50 %s p90 %s p95 %s" (plist-get x :n) (drgnx-perf--round (plist-get x :p50)) (drgnx-perf--round (plist-get x :p90))
@@ -1733,6 +1895,9 @@ judged, not-comparable, error, not-judged.  OTHERS: the work tree's runs of the 
     (pcase st
       ('not-comparable (format "%-13s not comparable: %s" (plist-get e :name) (plist-get e :why)))
       ('error (format "%-13s ERROR: %s" (plist-get e :name) (plist-get e :why)))
+      ('aa-failed (format "%-13s A/A failed: %s (the A/B was not run: the lab, not the change, differs between the sides)%s"
+                          (plist-get e :name) (plist-get e :why)
+                          (mapconcat (lambda (n) (format "\n%-13s %s" "" n)) (plist-get e :notes) "")))
       (_ (format "%-13s %s\n%-13s REF  %s\n%-13s tree %s\n%-13s diff %s ms [%s, %s] threshold %s; warm-up p50 REF %s tree %s; alloc p50 %s/%s, cpu p90 %s/%s, rows %s/%s"
                  (plist-get e :name)
                  (if (eq st 'not-judged) "not judged: loaded calibration (wall clock is the machine's)" (symbol-name (plist-get v :verdict)))
@@ -1752,8 +1917,26 @@ judged, not-comparable, error, not-judged.  OTHERS: the work tree's runs of the 
 (defun drgnx-perf-ab--extra-lines (e)
   "The p95 verdict and, when the runs carry it, the probe verdict of the judged entry E, each on a line of its own."
   (let ((p95 (plist-get e :p95-verdict)) (probe (plist-get e :probe-verdict))
+        (digest (plist-get e :digest-verdict))
         (pa (plist-get (plist-get e :a-run) :present)) (pb (plist-get (plist-get e :b-run) :present)))
     (concat (and p95 (concat "\n" (drgnx-perf-ab--verdict-line "p95" p95)))
+            (mapconcat (lambda (m) (concat "\n" (drgnx-perf-ab--verdict-line (drgnx-perf--path-name (car m)) (cdr m))))
+                       (plist-get e :metric-verdicts) "")
+            (and digest (not (eq (plist-get digest :verdict) 'not-comparable))
+                 (format "\n%-13s digest %s" "" (if (plist-get digest :why) "regressed (digest)" "same")))
+            (and (plist-member e :aa) (format "\n%-13s A/A %s" "" (plist-get e :aa)))
+            (mapconcat (lambda (n) (format "\n%-13s %s" "" n)) (plist-get e :aa-notes) "")
+            (let ((d (drgnx-perf-ab-phase-delta-line (plist-get e :a-run) (plist-get e :b-run))))
+              (and d (format "\n%-13s explain %s" "" d)))
+            (and (plist-member e :phase-sum)
+                 (format "\n%-13s phase-sum %s" "" (if-let* ((m (plist-get e :phase-sum)))
+                                                       (format "MISMATCH: %s" (plist-get (cdr m) :why))
+                                                     "ok")))
+            ;; the phases explain a verdict, they do not make one
+            (let ((ex (drgnx-perf-ab-phase-explain (plist-get e :a-run) (plist-get e :b-run))))
+              (and ex (concat "\n" (format "%-13s explain (worker phases, ms: REF / tree; not judged)" "")
+                              (mapconcat (lambda (p) (format "\n%-13s   %s %s / %s" "" (nth 0 p) (or (nth 1 p) "-") (or (nth 2 p) "-")))
+                                         ex ""))))
             (and probe (not (eq (plist-get probe :verdict) 'not-comparable))
                  (concat "\n" (drgnx-perf-ab--verdict-line "probe compose draw-ms p95" probe)))
             (and pa pb (format "\n%-13s key to present (ms, REF/tree): p50 %s/%s p90 %s/%s" ""
@@ -1764,7 +1947,67 @@ judged, not-comparable, error, not-judged.  OTHERS: the work tree's runs of the 
 workload of the run, and a full tier at 2880x1800 took over 30 min, the default cap, which ended both sessions
 mid-run (\"can't find socket\").  The run stops them when it ends.")
 
-(cl-defun drgnx-perf-ab (ref &key (n 100) env)
+(defun drgnx-perf-ab--deciding (a b wall-rounds run-rounds)
+  "((LABEL . VERDICT-SYMBOL)…): the verdicts an `--ab-env' A/B counts, for the wall samples A and B (WALL-ROUNDS) and
+the runs RUN-ROUNDS: median, p95, the compose probe and the probe metrics."
+  (append (list (cons "median" (plist-get (drgnx-perf-ab-verdict a b wall-rounds) :verdict))
+                (cons "p95" (plist-get (drgnx-perf-ab-verdict a b wall-rounds :stat 'p95 :threshold 1.0) :verdict))
+                (cons "compose draw-ms p95" (plist-get (drgnx-perf-ab-probe-verdict run-rounds '(:compose :draw-ms :p95)) :verdict)))
+          (mapcar (lambda (m) (cons (drgnx-perf--path-name (car m)) (plist-get (cdr m) :verdict)))
+                  (drgnx-perf-ab-metric-verdicts run-rounds))))
+
+(defun drgnx-perf-ab--swap (rounds)
+  "ROUNDS with the sides exchanged."
+  (mapcar (lambda (r) (list :a (plist-get r :b) :b (plist-get r :a))) rounds))
+
+(defun drgnx-perf-ab--aa-labelled (e)
+  "((LABEL VERDICT DIRECTION)…): the deciding verdicts of the A/A entry E, read forward and reverse."
+  (let* ((rounds (plist-get e :wall-rounds)) (runs (plist-get e :run-rounds))
+         (a (apply #'append (mapcar (lambda (r) (plist-get r :a)) rounds)))
+         (b (apply #'append (mapcar (lambda (r) (plist-get r :b)) rounds))) out)
+    (cl-loop for (dir . vs) in (list (cons "forward" (drgnx-perf-ab--deciding a b rounds runs))
+                                     (cons "reverse" (drgnx-perf-ab--deciding b a (drgnx-perf-ab--swap rounds)
+                                                                              (drgnx-perf-ab--swap runs))))
+             do (dolist (v vs) (push (list (car v) (cdr v) dir) out)))
+    (nreverse out)))
+
+(defun drgnx-perf-ab-aa-problems (e &optional labelled)
+  "Why the A/A entry E (a workload run against itself) refuses the A/B, a list of strings, nil when it passes: a
+deciding verdict of `regressed' in either direction (the build reads worse than itself: the lab is broken), a digest
+that differs, or a per-arm phase-sum mismatch.  `inconclusive' does not refuse (`drgnx-perf-ab-aa-notes').  LABELLED
+is `drgnx-perf-ab--aa-labelled' of E when the caller has it."
+  (let ((runs (plist-get e :run-rounds)) out)
+    (dolist (v (or labelled (drgnx-perf-ab--aa-labelled e)))
+      (when (eq (nth 1 v) 'regressed) (push (format "%s regressed (%s)" (nth 0 v) (nth 2 v)) out)))
+    (when (eq (plist-get (drgnx-perf-ab-digest-verdict runs) :verdict) 'regressed) (push "digest differs" out))
+    (when-let* ((m (plist-get e :phase-sum))) (push (format "phase-sum: %s" (plist-get (cdr m) :why)) out))
+    (nreverse out)))
+
+(defun drgnx-perf-ab-aa-notes (e &optional labelled)
+  "The A/A entry E's `inconclusive' deciding verdicts as lines to print, e.g. \"A/A: p95 inconclusive (forward)\"."
+  (cl-loop for v in (or labelled (drgnx-perf-ab--aa-labelled e))
+           when (eq (nth 1 v) 'inconclusive) collect (format "A/A: %s inconclusive (%s)" (nth 0 v) (nth 2 v))))
+
+(defun drgnx-perf-ab--aa (name spec s n)
+  "The A/A before an A/B: workload NAME run against itself on the session S (the same build, the same setting; the
+rounds alternate as in an A/B).  An entry with `:status' `aa-passed' or, when `drgnx-perf-ab-aa-problems' finds
+any, `aa-failed' and `:why' naming them.  An A/A that was not judged (a loaded calibration, an error, not comparable)
+proves nothing about the lab, so it is `aa-failed' too, with the status and its reason."
+  (let ((e (drgnx-perf-ab--workload name spec s s n)))
+    (if (not (eq (plist-get e :status) 'judged))
+        (list :name name :status 'aa-failed
+              :why (format "the A/A was %s%s" (plist-get e :status)
+                           (cond ((plist-get e :why) (format " (%s)" (plist-get e :why)))
+                                 ((eq (plist-get e :status) 'not-judged) " (loaded calibration)")
+                                 (t "")))
+              :notes nil)
+      (let* ((labelled (drgnx-perf-ab--aa-labelled e))
+             (problems (drgnx-perf-ab-aa-problems e labelled)))
+        (list :name name :status (if problems 'aa-failed 'aa-passed)
+              :why (and problems (string-join problems "; "))
+              :notes (drgnx-perf-ab-aa-notes e labelled))))))
+
+(cl-defun drgnx-perf-ab (ref &key (n 100) env (aa t))
   "`drgnx test --perf --ab REF': wall clock judged by interleaving two trees.  REF is exported with `git archive'
 and both trees are built; one session each; per workload one discarded warm-up run per side, then runs
 A, B, A, B… until each side has at least N per-command samples (and `drgnx-perf-ab-min-rounds' rounds), with the
@@ -1776,7 +2019,13 @@ tree instead.
 Each judged workload also prints the p95 verdict (T = 1 ms) and, when the runs carry it, the verdict on
 `(:compose :draw-ms :p95)'; with ENV they count in the exit code as well, and `:compose' budget rows are judged.
 ENV, (VAR JUDGED REF) from `drgnx-perf-ab-env-parse', makes it an A/B on one tree (REF is nil, nothing is exported):
-the work-tree side (the judged one) runs with VAR=JUDGED, the REF side with VAR=REF."
+the work-tree side (the judged one) runs with VAR=JUDGED, the REF side with VAR=REF.
+With ENV and AA (the default; `--no-aa' clears it) the first selected workload runs against itself once, on the REF
+side's session (`drgnx-perf-ab--aa'), before any A/B round: the A/A proves the lab is quiet now, whatever the
+workload.  With a `regressed' deciding verdict either way, a differing digest or a failing per-arm phase-sum check no
+workload gets an A/B round, and the exit code is 4 (\"A/A failed\", printed under that workload's name); else every
+workload gets its A/B.  `inconclusive' verdicts are printed once as \"A/A (WORKLOAD): …\" lines and do not block.
+The results file records the A/A once, as `aa', with the workload it ran on."
   (if (getenv "DRGNX_LEASE_BUSY")
       (let ((code (drgnx-perf-run)))
         (princ "wall clock not judged: host busy\n")
@@ -1789,7 +2038,7 @@ the work-tree side (the judged one) runs with VAR=JUDGED, the REF side with VAR=
            (process-environment (if (getenv "DRGNX_UI_MAX_RUNTIME") process-environment
                                   (cons (format "DRGNX_UI_MAX_RUNTIME=%d" drgnx-perf-ab-session-runtime)
                                         process-environment)))
-           sa-name sb-name entries)
+           sa-name sb-name entries aa-entry)
       (unwind-protect
           (progn
             (unless env
@@ -1803,55 +2052,67 @@ the work-tree side (the judged one) runs with VAR=JUDGED, the REF side with VAR=
             (let ((sa (drgnx-ui-own-session sa-name)) (sb (drgnx-ui-own-session sb-name)))
               (drgnx-perf-run--call sa drgnx-perf-ab--settle-form 200)
               (drgnx-perf-run--call sb drgnx-perf-ab--settle-form 200)
-              (dolist (w workloads)
-                (message "perf ab: %s…" (car w))
-                (push (drgnx-perf-ab--workload
-                       (car w) (cdr w) sa sb n
-                       (mapcar (lambda (e) (cons (plist-get e :name) (plist-get e :b-run))) entries))
-                      entries))))
+              ;; one A/A per invocation, on the first selected workload: it proves the lab is quiet now
+              (when (and env aa workloads)
+                (message "perf ab: %s: A/A first…" (car (car workloads)))
+                (setq aa-entry (drgnx-perf-ab--aa (car (car workloads)) (cdr (car workloads)) sa n)))
+              (if (eq (plist-get aa-entry :status) 'aa-failed)
+                  (push aa-entry entries)       ; refused: no A/B round for any workload
+                (dolist (w workloads)
+                  (message "perf ab: %s…" (car w))
+                  (push (drgnx-perf-ab--workload
+                         (car w) (cdr w) sa sb n
+                         (mapcar (lambda (e) (cons (plist-get e :name) (plist-get e :b-run))) entries))
+                        entries)))))
         (when sa-name (ignore-errors (drgnx-ui-stop sa-name)))
         (when sb-name (ignore-errors (drgnx-ui-stop sb-name)))
         ;; the runner deletes its DRGNX_RUN_TMP; a directory made here is removed here
         (when own-tmp (ignore-errors (delete-directory own-tmp t)))
         (delete-file drgnx-perf-run--fixture))
       (setq entries (nreverse entries))
+      (when (eq (plist-get aa-entry :status) 'aa-passed) ; a failed one is an entry, printed under its workload
+        (princ (format "A/A (%s): passed\n" (plist-get aa-entry :name)))
+        (dolist (note (plist-get aa-entry :notes))
+          (princ (concat (string-replace "A/A: " (format "A/A (%s): " (plist-get aa-entry :name)) note) "\n"))))
       (dolist (e entries) (princ (concat (drgnx-perf-ab--line e) (drgnx-perf-ab--extra-lines e) "\n")))
       (when-let* ((file (getenv "DRGNX_PERF_RESULTS")))
         (unless (string-empty-p file)
           (drgnx-perf-run--write-results
-           file (mapcar (lambda (e)
-                          (let ((v (plist-get e :verdict)))
-                            (cons (plist-get e :name)
-                                  (list :status (symbol-name (plist-get e :status))
-                                        :verdict (and v (symbol-name (plist-get v :verdict)))
-                                        :diff (and v (list :diff (plist-get v :diff) :lo (plist-get v :lo) :hi (plist-get v :hi)))
-                                        :p95_verdict (and (plist-get e :p95-verdict) (symbol-name (plist-get (plist-get e :p95-verdict) :verdict)))
-                                        :probe_verdict (and (plist-get e :probe-verdict) (symbol-name (plist-get (plist-get e :probe-verdict) :verdict)))
-                                        :a (plist-get e :a) :b (plist-get e :b)
-                                        :a_run (plist-get e :a-run) :b_run (plist-get e :b-run) :order (mapcar (function symbol-name) (plist-get e :order)) :why (plist-get e :why)))))
-                        entries))))
+           file (append
+                 (mapcar #'drgnx-perf-ab--result-entry entries)
+                 ;; the A/A once, with the workload it ran on
+                 (and aa-entry (list (cons 'aa (list :status (symbol-name (plist-get aa-entry :status))
+                                                     :workload (symbol-name (plist-get aa-entry :name))
+                                                     :why (plist-get aa-entry :why)
+                                                     :notes (plist-get aa-entry :notes)))))))))
       (let* ((verdicts (append (mapcar (lambda (e) (plist-get (plist-get e :verdict) :verdict)) entries)
                                ;; --ab-env also judges the p95 and the probe verdicts; --ab only prints the p95 one
                                (and env (mapcar (lambda (e) (plist-get (plist-get e :p95-verdict) :verdict)) entries))
-                               (and env (mapcar (lambda (e) (plist-get (plist-get e :probe-verdict) :verdict)) entries))))
+                               (and env (mapcar (lambda (e) (plist-get (plist-get e :probe-verdict) :verdict)) entries))
+                               ;; items 2-4 of §17.6 (metrics, completion, digest): judged with --ab-env, printed by --ab
+                               (and env (seq-mapcat (lambda (e) (mapcar (lambda (m) (plist-get (cdr m) :verdict)) (plist-get e :metric-verdicts)))
+                                                    entries))
+                               (and env (mapcar (lambda (e) (plist-get (plist-get e :digest-verdict) :verdict)) entries))))
              (rows (seq-mapcat (lambda (e) (plist-get e :budget-fails)) entries))
              (known (seq-filter (lambda (f) (eq (car-safe f) :known)) rows))
              (fails (append (seq-remove (lambda (f) (eq (car-safe f) :known)) rows)
                             (seq-filter (lambda (e) (eq (plist-get e :status) 'error)) entries))))
         (dolist (k known) (princ (format "KNOWN %s\n" (cadr k))))
         (dolist (f (seq-filter #'stringp fails)) (princ (format "FAIL %s\n" f)))
-        (cond ((or (memq 'regressed verdicts) fails) 1)
+        (cond ((seq-some (lambda (e) (eq (plist-get e :status) 'aa-failed)) entries)
+               (princ "perf ab: A/A failed, the A/B is refused\n") 4)
+              ((or (memq 'regressed verdicts) fails) 1)
               ((or (memq 'inconclusive verdicts) (seq-some (lambda (e) (eq (plist-get e :status) 'not-judged)) entries)
                    (null (seq-filter (lambda (e) (eq (plist-get e :status) 'judged)) entries)))
                (princ "wall clock not judged: loaded calibration, inconclusive interval or nothing comparable\n") 3)
               (t (princ "perf ab: no regression, wall budgets hold\n") 0))))))
 
-(cl-defun drgnx-perf-ab-env (spec &key (n 100))
+(cl-defun drgnx-perf-ab-env (spec &key (n 100) (aa t))
   "`drgnx test --perf --ab-env VAR=JUDGED,REF' (SPEC): `drgnx-perf-ab' between two sessions of this tree whose
 environments differ in VAR.  The first value is the judged side (the A/B tool's work tree), the second the reference,
 so \"regressed\" means the judged value is slower.  N is the minimum per-command samples per side (default 100,
-what makes p95 non-null; gate runs do not pass it)."
-  (drgnx-perf-ab nil :n n :env (drgnx-perf-ab-env-parse spec)))
+what makes p95 non-null; gate runs do not pass it).  AA nil skips the A/A that runs first."
+  (drgnx-perf-ab nil :n n :env (drgnx-perf-ab-env-parse spec) :aa aa))
 
 (provide 'drgnx-perf-run)
 ;;; drgnx-perf-run.el ends here

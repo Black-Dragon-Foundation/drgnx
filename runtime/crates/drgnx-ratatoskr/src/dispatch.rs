@@ -251,7 +251,7 @@ pub struct Caller {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::conn::Outbox;
     use crate::front::Front;
@@ -274,7 +274,7 @@ mod tests {
     #[test]
     fn the_steps_come_in_the_contracts_order() {
         use Class::*;
-        let ro = Some(9);
+        let ro = Some(99);
         // 1 before 2: an unknown method is no-method for every class
         assert_eq!(
             code(prelude(Service, 0, ro, r#"{"id":1,"method":"no/such"}"#)),
@@ -337,7 +337,7 @@ mod tests {
         assert_eq!(r.error.code, ErrorCode::Schema);
         assert_eq!(
             r.error.message,
-            "work.db is schema 9, newer than this hub's 8: update drgnx"
+            "work.db is schema 99, newer than this hub's 10: update drgnx"
         );
         // a method that only reads still runs on a read-only hub, and its dropped keys are listed
         let c = prelude(
@@ -472,8 +472,8 @@ mod tests {
 
     /// Capture this thread's log lines (TRACE and up, JSON).  The subscriber is the global one, for every test
     /// thread: a subscriber scoped to one thread misses events whose call site another test thread hit first
-    /// (tracing caches each call site's interest across threads).
-    fn capture_log() -> Arc<Mutex<Vec<u8>>> {
+    /// (tracing caches each call site's interest across threads). The browser broker's log test uses it too.
+    pub(crate) fn capture_log() -> Arc<Mutex<Vec<u8>>> {
         static INIT: std::sync::Once = std::sync::Once::new();
         INIT.call_once(|| {
             let subscriber = tracing_subscriber::fmt()

@@ -35,11 +35,100 @@ terminal". That covers:
 **A changed host key is never accepted.** The runner stops until you have found out why the key changed and fixed your
 `known_hosts` yourself.
 
+## Adding and removing a machine
+
+```
+drgnx runner add desktop --trust mine            # a host as your ssh knows it
+drgnx runner list                                # every runner, in 60 columns; one out of rotation says why
+drgnx runner check desktop | bench desktop | unbench desktop
+drgnx runner trust desktop shared                # mine, my-cloud or shared
+drgnx runner remove desktop --yes                # stops our units and containers there, deletes its folder
+```
+
+`add` options: `--name` (default: the host's first label), `--profile dedicated|workstation` (default dedicated: nobody
+sits at the machine), `--accept all|heavy`, `--root DIR` (the one folder drgnx keeps there, default `~/.drgnx-runner`)
+and `--prefix` (what its units and containers are named after, default `drgnx`).
+
+What `add` does, in order, and stops at the first thing that is wrong:
+
+1. Asks the host for its architecture and home folder through your ssh.
+2. Copies the runner (one small static program) for that architecture into the runner folder. When none is built it
+   says so and names the command: `drgnx build runner-bundle --arch aarch64`.
+3. Asks the runner about the host. It **refuses the machine drgnx itself runs on** (it already runs jobs as `local`),
+   and a host that lacks something a runner needs: a systemd user manager, cgroup v2 with the memory, pids and cpu
+   controllers delegated to you and podman on the systemd cgroup manager, rootless podman 5 or newer, git. The refusal
+   lists **everything** that is missing, each with what to run there to fix it.
+4. Pulls the image in `drgnx-runners-image` (pinned by digest) and times a reference workload in it under the runner's
+   caps.
+5. Records the runner and connects it.
+
+The runner list is yours alone: an agent can't add, bench, change or remove a machine. A runner that can't be reached
+when drgnx starts stays in the list as `not connected`; `drgnx runner check NAME` connects it again. Removing a runner
+refuses while a job is on it.
+
+## The runner list
+
+**Show Runners** (palette) opens the list in the editor: a row per runner, the same as `drgnx runner list`, in at most
+60 columns. A runner is a dot (full while it takes jobs, empty while it is out of rotation), its name, trust, profile and
+what it accepts; the second line is its size, the jobs running there, its free disk and when it was last checked (UTC),
+with the numbers in the code face. A runner out of rotation says why on lines of its own, for example
+`benched: image pull failed twice (14:02, 14:20)`. A runner of trust `my-cloud` carries a cloud mark. The list follows the
+hub: a change shows at once, and **g** reads it again.
+
+The commands for the row at point (all in the palette; none has a key of its own):
+
+| Command | Does |
+|---|---|
+| Check Runner | its probe, its contract and a canary, now |
+| Bench Runner / Unbench Runner | out of rotation / back in rotation at once |
+| Set Runner Trust… | `mine`, `my-cloud` or `shared` |
+| Set Runner Jobs… | accepts `all` jobs or only the `heavy` ones |
+| Remove Runner | stops our units and containers there and deletes its folder (asks first) |
+| Show Runner Log | what the hub knows of it: state, strikes, last strike |
+
+Global: **Add Runner…** (a host as your ssh knows it, and its trust) and **Runners: Load Keys**. Which settings a
+project and you choose for runners are listed under "Which jobs go where"; `drgnx-runners-key-host` (default
+`drgnx-runner-keys`) is the host your job keys are filed under in your key store.
+
+**Cards.** What waits for you is a card in the Notices list and the needs-you count, and goes by itself when the hub's
+list or ask no longer says it:
+
+- "Log in to desktop: run `ssh desk true` in a terminal" while a runner waits for a login;
+- "desktop benched: image pull failed twice (14:02, 14:20)" while a runner is benched;
+- "needs your keys: run Runners: Load Keys" while the hub asks for job keys it doesn't hold.
+
+A card only says what to run. The editor never answers a login, and never reads your key store on its own.
+
 ## Keys
 
 Some jobs need a secret: a registry token to publish, a deploy key to fetch a private dependency. A job names the
 keys it needs (names only); drgnx gets them to the job on the runner without writing them anywhere there:
 
+- **Only keys the project lists.** A job may name only keys on the project's `drgnx-runners-job-keys` list (names,
+  like `("CRATES_IO_TOKEN")`); one naming any other is refused when it is started. An agent's job also needs the
+  matrix's `job.keys` (ask by default, allowed under Autonomous for the manager and workers, never for chat). A
+  repository's own files can't set either.
+- **You hand them over, the hub keeps them in memory.** When a job needs a key the hub doesn't hold, the hub asks
+  (`runners/need-keys`, names only); your editor answers from your key store with `runners/keys`, from a command you
+  run, never by itself. The hub holds the values in memory only, until it stops; `runners/keys-held` lists the names.
+  In the editor the ask is a card, "needs your keys: run Runners: Load Keys". **Runners: Load Keys** (and **Add
+  Runner…**, for the keys the project lists) read each key from your key store (an auth-source entry: host
+  `drgnx-runners-key-host`, user the key's name; it may ask for a passphrase, because you ran it) and send it. The
+  editor keeps what it sent in its own memory for the session, sends it again whenever a hub proves itself after a
+  reconnect or restart, and forgets it when the runners module is turned off.
+- **Only where trust allows, only after the job started.** Keys go to a `mine` runner, to a `my-cloud` runner only
+  those on its own list, and never to a `shared` one; and only once the job has started there, one at a time. A
+  keyed job never runs on this machine for now: it waits for a runner and says so.
+- **What went where is recorded.** Each key sent is a `key_sent` record (the job, attempt, key name, runner and time);
+  each read by the job, as the runner reports it, is a `key_use` record marked runner-reported. `runners/audit` lists
+  them (by job or by key); the values are never in them.
+- **The returned log has them masked.** The hub knows the values it sent a job, so its copy of the job's log has every
+  one masked (`*`, the same length): raw, in base64 and percent-encoded, even split across two pieces of the log.
+  drgnx also tells you when a line looks like some other secret ("this log may hold a secret at line N"), but never
+  masks those: it would shred hashes and digests.
+- **A private origin's deploy key.** With `drgnx-runners-origin-key` naming a read-only deploy key or token (a key
+  like any other, held the same way), your own runners fetch a private project from its origin with it instead of
+  being sent a bundle; an `https://` origin takes it as a token, an SSH one as a key.
 - **Only in memory.** The key travels inside drgnx's own connection and goes straight to a small helper that lives
   exactly as long as the job. The helper keeps it in memory that is never swapped, never in a core dump and not
   readable by other programs, and wipes it when the job ends. Nothing is written to the runner's disk, and podman's
@@ -73,10 +162,82 @@ settings:
 - `drgnx-runners-heavy`: suite or command patterns whose jobs count as heavy;
 - `drgnx-runners-image`: the image (pinned by digest) a runner runs its command jobs in;
 - `drgnx-runners-weight`: its share against other projects within a priority (default 1);
-- `drgnx-runners-project-visibility`: `"private"` (the default) or `"public"`.
+- `drgnx-runners-project-visibility`: `"private"` (the default) or `"public"` (see below);
+- `drgnx-runners-shared-overlay`: off (the default) or on: whether a `shared` runner may have its uncommitted files.
+  Your own settings only: a repository's files can never turn it on.
 
 A job marked `local_only`, or started with `machine: local`, never leaves this machine; `machine: NAME` pins it to one
 runner.
+
+## What is sent where
+
+A job runs exactly what you had when you started it. At that moment drgnx **freezes its inputs**: the commit, every
+uncommitted change against it (staged, unstaged, new files that aren't ignored, deletions), and a copy of each changed
+file's bytes. Edits you make afterwards never reach that job. A runner checks the commit out in a folder of its own,
+outside anything the job can write, and writes the changed files over it; git there runs none of a repository's hooks
+or settings.
+
+**A job's trust** is worked out then, from your project's word and from what the origin already has:
+
+| The job | is |
+|---|---|
+| names keys | `private+keys` |
+| a `public` project (`drgnx-runners-project-visibility`) whose commit your `origin` remote already has (its `refs/remotes/origin/` reach it) | `public` |
+| anything else: a private project, or a public one with commits not pushed yet | `private` |
+
+drgnx never guesses a project's visibility. The origin it reads is what your repository last fetched or pushed, so
+push (or fetch) first.
+
+**Which runner may take it:**
+
+| Job trust | `mine` | `my-cloud` | `shared` |
+|---|---|---|---|
+| `public` | yes | yes | yes |
+| `private` | yes | yes | no |
+| `private+keys` | yes | when every key is on its list | no |
+
+A job no runner may take runs here, and its row says why: "runs here: 1 commit not on origin", "runs here: project
+alpha is private; the only free runner is shared".
+
+**How the code gets there:**
+
+- **On the public origin:** the runner fetches the commit from the origin itself, at its own speed. This is the only
+  way a `shared` runner ever gets code; nothing of your history is pushed to it.
+- **Anything else, to your own machines:** drgnx sends the commits the runner's copy lacks, as one git bundle (resumed
+  where it stopped after a dropped connection) sent in 1 MiB pieces. A private origin with a deploy key named for the
+  project lets the runner fetch from the origin instead (with the keys).
+- **The uncommitted files** go by content: the runner says which it lacks, and only those are sent. Your `mise.toml`,
+  `.envrc`, `.claude`, `.codex`, `.gemini` and `.git/hooks` are never sent to any runner; it gets their committed
+  versions.
+- **A `shared` runner and uncommitted files:** with `drgnx-runners-shared-overlay` off, a job with uncommitted changes
+  never goes to a shared runner ("runs here: 2 uncommitted files, …"). With it on, each file is scanned first, and one
+  that looks like a secret keeps the job off the shared runner, naming the file.
+
+## What comes back
+
+A job on a runner returns its log, its result and what it declared into its folder here (`<state>/hub/exec/<id>/`),
+so `exec/get`, `exec/log` and the summary work as for a job on this machine. For now a runner sends back its log and
+its result only; its reports, declared outputs and `changes.patch` (and `drgnx job fetch` for the larger ones) are
+still to come, and go through these checks when they do. Nothing a runner returns touches your tree until the hub has
+checked it:
+
+- **Paths.** Every returned path is relative and normalised: one with `..`, an absolute name or a NUL byte is refused.
+  Files are written beneath the job's folder without following a link (a link planted there is replaced or refused,
+  never written through), and an archive holding a link, a device or a FIFO is refused.
+- **Never returned,** whatever a job declares: a cargo `target/` (at any depth), a build tree (`CMakeFiles`,
+  `CMakeCache.txt`, `build.ninja`, `config.status`) or an image (`oci-layout`, `.oci`, `.qcow2`, `.vmdk`, `.vdi`,
+  `.iso`, `.img`).
+- **Limits:** the hub keeps 64 MiB of a job's log (cut in the middle beyond that; the whole stays on the runner), 16 MiB
+  of reports, 256 MiB of outputs and a 16 MiB `changes.patch`.
+- **A patch is applied only when all of these hold:** every file it touches matches one of the job's `writes` globs
+  (`*` and `?` stay within a folder, `**` is any number of folders, a trailing `/` is the whole folder); it touches no
+  protected file (`.envrc`, `.claude`, `.codex`, `.gemini`, `mise.toml`, at any depth) and nothing under a `.git`
+  folder; it adds no symbolic link or submodule and changes no executable bit (a new executable file counts); each
+  file it changes is still the one the job was submitted with; it comes from the job's current attempt (its number
+  and nonce); and its runner isn't `shared`. Otherwise it is kept, with the card "desktop returned changes to 3 files;
+  review them".
+- **A `shared` runner's results** never count for a gate or a job's `needs`, and are never promoted. Their summary, and
+  so the wake of the agent that started the job, begins "output from runner NAME (shared)".
 
 ## When a machine fails
 

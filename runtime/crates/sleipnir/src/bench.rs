@@ -91,6 +91,7 @@ pub fn argv(image: &str, src: &Path, target: &Path) -> Result<Vec<String>, Strin
         pids: podman::PIDS,
         proxy: None,
         net_hosts: vec![],
+        pins: vec![],
     };
     let req = ContainerReq {
         image: "bench".into(),

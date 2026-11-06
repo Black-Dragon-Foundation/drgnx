@@ -6,17 +6,7 @@
 ;; drgnx-lint/no-stale-exempt-rows fails a row whose file is gone (remove the row when the file goes);
 ;; drgnx-lint/every-test-has-a-class fails a file with neither a class line nor a row.
 (
- ("test/unit/search-chunk-test.el" :off t :why "Ratatoskr P8 deletes the Lisp search")
- ("test/unit/search-index-test.el" :off t :why "Ratatoskr P8 deletes the Lisp search")
- ("test/unit/search-store-test.el" :off t :why "Ratatoskr P8 deletes the Lisp search")
- ("test/unit/search-query-test.el" :off t :why "Ratatoskr P8 deletes the Lisp search")
- ("test/unit/search-mcp-test.el" :off t :why "Ratatoskr P8 deletes the Lisp search")
  ("test/unit/agents-ui-test.el" :why "frozen UI: the agent panel, cockpit, job window, review and Work UI are replaced")
- ("test/unit/cockpit-model-test.el" :why "frozen UI: the agent panel, cockpit, job window, review and Work UI are replaced")
- ("test/unit/mod-cockpit-cards-test.el" :why "frozen UI: the agent panel, cockpit, job window, review and Work UI are replaced")
- ("test/unit/mod-cockpit-edits-test.el" :why "frozen UI: the agent panel, cockpit, job window, review and Work UI are replaced")
- ("test/unit/mod-cockpit-feed-test.el" :why "frozen UI: the agent panel, cockpit, job window, review and Work UI are replaced")
- ("test/unit/mod-cockpit-graph-test.el" :why "frozen UI: the agent panel, cockpit, job window, review and Work UI are replaced")
  ("test/unit/job-ui-test.el" :why "frozen UI: the agent panel, cockpit, job window, review and Work UI are replaced")
  ("test/unit/mod-review-test.el" :why "frozen UI: the agent panel, cockpit, job window, review and Work UI are replaced")
  ("test/unit/work-ui-test.el" :why "frozen UI: the agent panel, cockpit, job window, review and Work UI are replaced")

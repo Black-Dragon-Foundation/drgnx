@@ -29,3 +29,25 @@ pub fn after_turn(sid: &str, turn: u64, prompt_len: usize) -> Vec<(&'static str,
         ),
     ]
 }
+
+/// The `tool_call` fields codex-acp sends for WHAT (see the Claude personality): parsed reads and searches are kind
+/// `read`/`search` with a path and no line; a web search is kind `fetch` with `rawInput {query, action}`.  No tool name.
+pub fn tool_shape(what: &str, arg: &str) -> Option<Value> {
+    let file = arg.split_whitespace().next().unwrap_or("");
+    Some(match what {
+        "read" => {
+            json!({"title": format!("Read {file}"), "kind": "read", "locations": [{"path": file}]})
+        }
+        "grep" => {
+            json!({"title": format!("Search {arg}"), "kind": "search", "rawInput": {"query": arg}})
+        }
+        "web-search" => json!({"title": "Searching the web", "kind": "fetch",
+            "rawInput": {"query": arg, "action": {"type": "search", "query": arg}}}),
+        "web-fetch" => json!({"title": "Opening a page", "kind": "fetch",
+            "rawInput": {"action": {"type": "open_page", "url": arg}}}),
+        "write" => {
+            json!({"title": format!("Edit {arg}"), "kind": "edit", "locations": [{"path": arg}]})
+        }
+        _ => return None,
+    })
+}

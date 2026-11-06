@@ -22,6 +22,7 @@ use crate::runners::local::{Admission, LocalRunner};
 use crate::runners::queue::{
     self, Machine, Origin, Outcome, Placement, Queue, QueueCfg, Submit, priority_of,
 };
+use crate::runners::sync;
 use crate::sandbox::SessionShape;
 use gleipnir::{Refusal, Rule};
 use runstav::methods::exec::{
@@ -353,6 +354,8 @@ const KEEP_DAYS: f64 = 14.0;
 const KEEP_GRACE_S: f64 = 3600.0;
 /// How long a stop waits for the job's end to be recorded.
 const STOP_WAIT: Duration = Duration::from_secs(5);
+/// The job folder's file naming the `shared` runner the job ran on: its result is labelled and never counts for a gate.
+const SHARED: &str = "shared";
 
 /// The jobs the hub runs.
 pub struct Runner {
@@ -431,6 +434,16 @@ impl Runner {
         self.events.subscribe()
     }
 
+    /// This machine's job slots in the queue: `(all, free)` ([`Queue::local_slots`]); none before the runner is open.
+    pub fn slot_counts(&self) -> Option<(usize, usize)> {
+        self.inner.get().map(|i| i.queue.local_slots())
+    }
+
+    /// Every machine's queue (the runners register in it); none before the runner is open.
+    pub fn queue(&self) -> Option<Arc<Queue>> {
+        self.inner.get().map(|i| i.queue.clone())
+    }
+
     fn inner(&self) -> Result<&Arc<Inner>, Refusal> {
         self.inner
             .get()
@@ -482,6 +495,14 @@ impl Runner {
             exit: end.exit,
             summary: end.summary,
         })
+    }
+
+    /// Whether job ID's result may count for a gate or a job's `needs`: the job is known and didn't run on a `shared`
+    /// runner.
+    pub fn counts_for_gates(&self, id: &str) -> bool {
+        self.inner
+            .get()
+            .is_some_and(|i| i.meta(id).is_some() && !i.dir(id).join(SHARED).exists())
     }
 
     /// Whether the job's row says running but its process is gone (the supervisor's `dead-wait`).
@@ -757,6 +778,26 @@ impl Inner {
                     .map(|r| r.to_string())
             });
         }
+        let fspec = spec.forseti_spec(id, &self.hooks.memory);
+        // inputs frozen at submit, for a job a runner could take: what it syncs, whatever the worktree holds later.
+        // One that can't be frozen (not a git worktree, a submodule's change) stays on this machine.
+        let mut inputs = None;
+        if self.queue.runners() > 0 && place.may_leave() {
+            let store = self.root.with_file_name("runner-store");
+            match sync::freeze(
+                &fspec.tree,
+                &[],
+                place.visibility,
+                place.shared_overlay,
+                &store,
+            ) {
+                Ok(f) => inputs = Some(f),
+                Err(why) => {
+                    tracing::info!("job {id} runs on this machine only: {why}");
+                    place.local_only = true;
+                }
+            }
+        }
         Submit {
             id: id.to_string(),
             session: match &spec.starter {
@@ -764,9 +805,10 @@ impl Inner {
                 Starter::User => None,
             },
             own: spec.priority(),
-            spec: spec.forseti_spec(id, &self.hooks.memory),
+            spec: fspec,
             place,
             pending: serde_json::to_value(Pending::of(spec)).unwrap_or_default(),
+            inputs,
         }
     }
 
@@ -864,12 +906,15 @@ impl Inner {
     }
 
     /// What ended on a runner: its verdict becomes the job's end (`exit` and `why` as a job here writes them), a lost
-    /// job ends lost, a late result stays in the folder as that attempt's.
+    /// job ends lost, a late result stays in the folder as that attempt's. A `shared` runner's name goes to the job's
+    /// [`SHARED`] file: its summary is labelled, and it never counts for a gate.
     fn outcomes(self: &Arc<Self>, outs: Vec<Outcome>) {
         for o in outs {
-            let (id, verdict) = match o {
-                Outcome::Done { id, result, .. } => (id, queue::verdict_of(&result)),
-                Outcome::Lost { id } => (id, None),
+            let (id, verdict, shared) = match o {
+                Outcome::Done {
+                    id, result, shared, ..
+                } => (id, queue::verdict_of(&result), shared),
+                Outcome::Lost { id } => (id, None, None),
                 Outcome::Late { id, attempt, .. } => {
                     tracing::info!(
                         "job {id}: attempt {attempt} finished late; its result is kept, not applied"
@@ -897,6 +942,9 @@ impl Inner {
                     },
                 ),
                 None => {}
+            }
+            if let Some(runner) = shared {
+                write(SHARED, &runner);
             }
             let me = self.clone();
             crate::clock::spawn("exec:remote-end", async move { me.finish(&id).await });
@@ -964,7 +1012,15 @@ impl Inner {
                 .parent()
                 .map(Path::to_path_buf)
                 .unwrap_or_else(std::env::temp_dir);
-            let jp = container::prepare_proxy(id, dir, &run_dir, &forwarder, n, &caps.net_hosts)?;
+            let jp = container::prepare_proxy(
+                id,
+                dir,
+                &run_dir,
+                &forwarder,
+                n,
+                &caps.net_hosts,
+                &caps.pins,
+            )?;
             caps.proxy = Some(jp.mounts.clone());
             proxy = Some(jp);
         }
@@ -991,7 +1047,7 @@ impl Inner {
         );
         // caps podman cannot enforce refuse the job: a container without its limits is never run
         let shell = self.hooks.shell_env.clone();
-        tokio::task::spawn_blocking(move || {
+        crate::clock::blocking(move || {
             container::check_limits(&shell, &p, Duration::from_secs(30))?;
             container::ensure_image(&shell, &p, &reference, container::PULL_TIMEOUT)
         })
@@ -1048,6 +1104,7 @@ impl Inner {
                     login_dir: None,
                     enforced: Enforced::Yes,
                     gateway: false,
+                    trace: None,
                 };
                 let shape = SessionShape {
                     sid: sid.clone(),
@@ -1055,6 +1112,7 @@ impl Inner {
                     write: vec![worktree],
                     read: vec![],
                     net: NetCell::ProviderAndPackages,
+                    browser: None,
                 };
                 let l = launch::launch(&self.hooks.shell_env.paths_env(), &plan, &shape).await?;
                 (l.spec, l.status)
@@ -1091,7 +1149,7 @@ impl Inner {
         // The sandbox helper reports on a pipe; a launch whose status is not read hangs (Task 10).
         if let Some(fd) = status {
             let log = dir.join("log");
-            let read = tokio::task::spawn_blocking(move || {
+            let read = crate::clock::blocking(move || {
                 gleipnir::read_status(
                     fd,
                     &|| {
@@ -1143,8 +1201,9 @@ impl Inner {
         crate::clock::spawn("exec:watch", async move {
             // a container job's proxy answers for as long as the job runs
             let _proxy = proxy;
-            // a real wait (the child's end): a test's barrier waits for a job that ends, and names one that does not
-            crate::clock::real(me.clone().watch(&id, Some(child))).await;
+            // a real wait (the child's end): a test's barrier waits for a job that ends, and names one that does not;
+            // an advance does not wait for it (the job's time box may be what ends it)
+            crate::clock::real_long(me.clone().watch(&id, Some(child))).await;
             drop(permit);
             me.pump();
         });
@@ -1196,8 +1255,12 @@ impl Inner {
                     _ = c.wait() => {}
                     () = time_up => {
                         let _ = std::fs::write(dir.join("why"), "timed-out");
-                        let _ = draugr::kill_group(c.id(), Duration::from_secs(2), &draugr::RealSignaller).await;
-                        let _ = c.wait().await;
+                        // the kill ends by itself, within its grace: an advance past the time box waits for it
+                        crate::clock::real(async {
+                            let _ = draugr::kill_group(c.id(), Duration::from_secs(2), &draugr::RealSignaller).await;
+                            let _ = c.wait().await;
+                        })
+                        .await;
                     }
                 }
             }
@@ -1212,8 +1275,12 @@ impl Inner {
                     () = time_up => {
                         let _ = std::fs::write(dir.join("why"), "timed-out");
                         if let Some(p) = meta.pid {
-                            let _ = draugr::kill_group(p, Duration::from_secs(2), &draugr::RealSignaller)
-                                .await;
+                            let _ = crate::clock::real(draugr::kill_group(
+                                p,
+                                Duration::from_secs(2),
+                                &draugr::RealSignaller,
+                            ))
+                            .await;
                         }
                     }
                 }
@@ -1238,12 +1305,18 @@ impl Inner {
             _ => ExecStatus::Lost,
         };
         let text = tail_of(&dir.join("log"));
-        let summary = summary::summarise(
+        let mut summary = summary::summarise(
             CheckKind::from_name(&meta.kind),
             exit,
             &text,
             &dir.join("log").display().to_string(),
         );
+        // a shared runner's output reaches the summary, and so the starter's wake, labelled untrusted
+        if let Ok(runner) = std::fs::read_to_string(dir.join(SHARED)) {
+            summary
+                .lines
+                .insert(0, crate::runners::returned::shared_label(runner.trim()));
+        }
         let end = End {
             status,
             exit,
@@ -1413,7 +1486,7 @@ impl Inner {
                 }
                 let me = self.clone();
                 crate::clock::spawn("exec:watch", async move {
-                    crate::clock::real(me.watch(&id, None)).await;
+                    crate::clock::real_long(me.watch(&id, None)).await;
                 });
             }
         }
@@ -1428,9 +1501,7 @@ impl Inner {
         // a podman client that died with the last hub leaves its container: remove those no running job owns
         if let Some(podman) = self.hooks.podman.clone() {
             let shell = self.hooks.shell_env.clone();
-            tokio::task::spawn_blocking(move || {
-                container::remove_leftovers(&shell, &podman, &running)
-            });
+            crate::clock::blocking(move || container::remove_leftovers(&shell, &podman, &running));
         }
     }
 }
@@ -1559,6 +1630,13 @@ pub fn ensure_open(f: &Front) {
     }
 }
 
+/// The queue of every machine, opening the runner first when it is not open yet.
+pub fn queue(f: &Front) -> Result<Arc<Queue>, Error> {
+    runner(f)?
+        .queue()
+        .ok_or_else(|| error(ErrorCode::Internal, "exec: the queue is not open yet"))
+}
+
 fn runner(f: &Front) -> Result<&Runner, Error> {
     let r = &f.core.exec;
     if r.inner.get().is_none() {
@@ -1598,6 +1676,14 @@ fn runner(f: &Front) -> Result<&Runner, Error> {
             hooks.admission = Admission::Fixed(n);
         }
         r.open(dirs.hub.join("exec"), hooks);
+        // the job keys' events go to the user's connections, their audit to the graph
+        if let Some(q) = r.queue() {
+            let editors = f.editors.clone();
+            q.keys()
+                .set_tell(move |event, data| editors.broadcast(event, data));
+            q.keys()
+                .set_sink(crate::runners::keys::graph_sink(f.writer.db.clone()));
+        }
     }
     Ok(r)
 }
@@ -1626,6 +1712,14 @@ async fn placement(f: &Front, c: &Caller, p: &StartParams, m: Machine, runners: 
     let weight = setting("drgnx-runners-weight")
         .and_then(|v| v.as_f64())
         .unwrap_or(1.0);
+    let visibility = setting("drgnx-runners-project-visibility")
+        .and_then(|v| v.as_str().map(crate::runners::sync::Visibility::parse))
+        .unwrap_or_default();
+    let shared_overlay =
+        setting("drgnx-runners-shared-overlay").and_then(|v| v.as_bool()) == Some(true);
+    let origin_key = setting("drgnx-runners-origin-key")
+        .and_then(|v| v.as_str().map(String::from))
+        .filter(|s| !s.is_empty());
     // the project's heavy patterns mark a job whose command line holds one; nothing else marks a job heavy
     let line = p
         .argv
@@ -1683,7 +1777,41 @@ async fn placement(f: &Front, c: &Caller, p: &StartParams, m: Machine, runners: 
         machines_cell,
         image,
         weight,
+        visibility,
+        shared_overlay,
+        origin_key,
     }
+}
+
+/// The keys REQUESTED by name, when each is on the project's `drgnx-runners-job-keys` list and, for a session's job,
+/// the matrix's `job.keys` allows it (an Ask refuses the start with its card, as `code.edit`'s does).
+async fn job_keys(
+    f: &Front,
+    c: &Caller,
+    p: &StartParams,
+    cwd: &std::path::Path,
+) -> Result<(), Error> {
+    let names: Vec<String> = p
+        .keys
+        .iter()
+        .flat_map(|k| k.iter())
+        .map(|k| k.to_string())
+        .collect();
+    if names.is_empty() {
+        return Ok(());
+    }
+    let list = f
+        .settings
+        .effective("drgnx-runners-job-keys", None)
+        .and_then(|(v, _)| serde_json::from_value::<Vec<String>>(v).ok())
+        .unwrap_or_default();
+    crate::runners::keys::on_the_project_list(&names, &list)
+        .map_err(|why| error(ErrorCode::InvalidParams, format!("keys: {why}")))?;
+    if let Some(sid) = &c.sid {
+        let argv: Vec<String> = p.argv.iter().map(|a| a.to_string()).collect();
+        gate_session_job(f, sid, cwd, &argv, norn::matrix::Action::JobKeys).await?;
+    }
+    Ok(())
 }
 
 /// A session's job runs commands in its worktree: the matrix's `code.edit` decides, as for the session's own tool
@@ -1796,6 +1924,7 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
         let argv: Vec<String> = p.argv.iter().map(|a| a.to_string()).collect();
         gate_session_job(f, sid, &cwd, &argv, action).await?;
     }
+    job_keys(f, c, &p, &cwd).await?;
     // The Network cell: an Allow gives the job its proxy (never a network of its own), a Never leaves it with none, an
     // Ask refuses the start with the card (the matrix keeps one open card per question, so a start while it is open
     // finds it and makes no second).  A job the user starts has no cell: it gets the proxy only when it asks.

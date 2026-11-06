@@ -648,6 +648,7 @@ fn container_spec(cwd: &Path) -> ExecSpec {
                 pids: container::PIDS,
                 proxy: None,
                 net_hosts: vec![],
+                pins: vec![],
             },
             net: None,
         }),
@@ -895,6 +896,7 @@ fn a_container_job_in_a_subfolder_mounts_the_worktree() {
         pids: container::PIDS,
         proxy: None,
         net_hosts: vec![],
+        pins: vec![],
     };
     let a: Vec<String> = container::argv(&req, &caps)
         .unwrap()
@@ -1010,6 +1012,47 @@ async fn a_queued_job_can_be_stopped_and_survives_a_restart() {
     let row = ended(&next, "xwaiting").await;
     assert_eq!(row.status, ExecStatus::Done);
     assert_eq!(row.summary.unwrap().lines, vec!["late".to_string()]);
+}
+
+/// [D] (files): a runner's verdict for a job that ran on a `shared` runner reaches the job's summary, and so its
+/// starter's wake, labelled ("output from runner uni-box (shared)"), and the job never counts for a gate; a verdict
+/// from a runner of yours has no label and counts. No slot here (fixed 0): both jobs stay queued until their verdicts.
+#[tokio::test]
+async fn a_shared_runners_result_is_labelled_and_never_counts_for_a_gate() {
+    let d = tempfile::tempdir().unwrap();
+    let r = plain(d.path(), 0);
+    let shared = r.start(agents(d.path(), "true")).await.unwrap();
+    let mine = r.start(agents(d.path(), "true")).await.unwrap();
+    assert_eq!(r.get(&shared).unwrap().status, ExecStatus::Queued);
+    let done = |id: &str, shared: Option<&str>| Outcome::Done {
+        id: id.into(),
+        attempt: 1,
+        result: json!({"verdict": "Pass"}),
+        shared: shared.map(String::from),
+    };
+    r.inner
+        .get()
+        .unwrap()
+        .outcomes(vec![done(&shared, Some("uni-box")), done(&mine, None)]);
+    let label = "output from runner uni-box (shared)";
+    let row = ended(&r, &shared).await;
+    assert_eq!(row.status, ExecStatus::Done);
+    let lines = row.summary.unwrap().lines;
+    assert_eq!(lines.first().map(String::as_str), Some(label), "{lines:?}");
+    let wake = crate::agents::wake::wake_text(&r.done(&shared).unwrap());
+    assert!(wake.contains(label), "{wake}");
+    assert!(!r.counts_for_gates(&shared));
+    let row = ended(&r, &mine).await;
+    assert_eq!(row.status, ExecStatus::Done);
+    assert!(
+        !row.summary
+            .unwrap()
+            .lines
+            .iter()
+            .any(|l| l.contains("(shared)"))
+    );
+    assert!(r.counts_for_gates(&mine));
+    assert!(!r.counts_for_gates("xunknown"));
 }
 
 /// [D] (files and a store): a queued job an older hub left as `pending.json` is read into `rq_job` once, its file

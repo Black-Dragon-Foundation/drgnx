@@ -127,6 +127,33 @@ integer beyond 64 bits."
         ((integerp x)
          (and (not (<= -9223372036854775808 x 9223372036854775807)) '(integer-range)))))
 
+(defvar drgnx-file--scan-fast t
+  "Non-nil: `drgnx-file--scan' steps over a plain symbol, a plain number and a string with no backslash by a
+regexp instead of reading it.  The result is the same either way (a test feeds both the same hostile text); nil
+is for that test.")
+
+(defconst drgnx-file--plain-atom-re "[^]\0-  \"';`,#()[\\?][^]\0-  \"';`,#()[\\]*"
+  "A symbol or a number as `read' ends it (lread.c's `read_symbol'): from a character that is not `?' or a backslash
+to the next whitespace or one of \"';#()[]`, and not through a backslash (an escape in a symbol is left to `read').")
+
+(defconst drgnx-file--big-integer-re "\\`[+-]?[0-9]\\{19,\\}\\.?\\'"
+  "An integer of 19 digits or more, which may be beyond 64 bits (`drgnx-file--atom-why'): `read' gives it.")
+
+(defun drgnx-file--skip-plain-atom ()
+  "Move over the plain atom at point and return t, or return nil and stay: a symbol or number (not an integer of 19
+digits or more, not followed by a backslash) or a string with no backslash.  These give `drgnx-file--atom-why' nothing
+to refuse, so `read' need not look at them."
+  (let ((c (char-after)))
+    (cond ((eq c ?\")
+           (and (looking-at "\"[^\"\\\\]*\"") (goto-char (match-end 0)) t))
+          ((and (not (memq c '(?? ?\\))) (looking-at drgnx-file--plain-atom-re))
+           (let ((end (match-end 0)))
+             (unless (or (eq (char-after end) ?\\)
+                         (and (> (- end (point)) 18)
+                              (string-match-p drgnx-file--big-integer-re (buffer-substring-no-properties (point) end))))
+               (goto-char end)
+               t))))))
+
 (defun drgnx-file--scan (&optional atom-why)
   "The first refused token in the current buffer from point on, scanned as `read' reads (lread.c's `read0'):
 \(POS . WHY), POS where it starts and WHY `backquote', `comma' (`,' and `,@') or `reader-macro' (every `#' syntax
@@ -148,6 +175,7 @@ skipped.  With ATOM-WHY, a function of an atom giving (WHY) or nil, the first at
                (setq found (cons pos 'reader-macro)))
               ((and (eq c ?.) (or (null next) (<= next 32) (memq next '(#xa0 ?\" ?\' ?\; ?\( ?\[ ?# ?? ?\` ?\,))))
                (forward-char))                          ; a dotted pair's dot
+              ((and drgnx-file--scan-fast (drgnx-file--skip-plain-atom)))
               (t (let ((x (read (current-buffer))))
                    (when-let* ((why (and atom-why (car (funcall atom-why x)))))
                      (setq found (cons pos why))))))))
@@ -260,7 +288,25 @@ unibyte and raw-byte strings, integers beyond 64 bits."
       (end-of-file (cons 'problem (drgnx-file--problem "the file ends inside a form" (point-max))))
       (error (cons 'problem (drgnx-file--problem (error-message-string err) (point)))))))
 
+(defvar drgnx-file--read-share nil
+  "Nil, or a holder (t . LAST) a caller binds around code that reads one file twice in a row: `drgnx-file-read' keeps
+its last result in LAST, and a second read of the same file with the same limit and the same stamp returns a copy of
+it instead of scanning and reading the text again.  The extent of the binding is one call, so the file cannot change.")
+
 (cl-defun drgnx-file-read (file &key max-bytes)
+  "`drgnx-file--read-1', but within `drgnx-file--read-share' a repeat of the last read is not parsed again."
+  (if (null drgnx-file--read-share)
+      (drgnx-file--read-1 file max-bytes)
+    (let ((key (list (expand-file-name file) (or max-bytes drgnx-file-max-bytes) (drgnx-file-stamp file)))
+          (last (cdr drgnx-file--read-share)))
+      (if (and last (equal (car last) key))
+          (let ((r (copy-sequence (cdr last))))     ; the data is the second reader's own: a migration changes it in place
+            (plist-put r :data (copy-tree (plist-get r :data))))
+        (let ((r (drgnx-file--read-1 file max-bytes)))
+          (setcdr drgnx-file--read-share (cons key r))
+          r)))))
+
+(defun drgnx-file--read-1 (file max-bytes)
   "FILE read as one data form: (:status S :data D :text T :problem P :stamp ST).
 S is `absent' (missing, empty, or only whitespace and comments), `ok' or `unreadable'.  D is the data (ok only), T
 the decoded text, P (:text STRING :line N :column N) (lines and columns 1-based) and ST `drgnx-file-stamp'.

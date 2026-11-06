@@ -730,6 +730,7 @@ impl Runner<'_> {
                     .expect_closed(ms(&step.obj, "within_ms", 5000), silent)
             }
             "expect_silent" => self.conn(step)?.expect_silent(ms(&step.obj, "for_ms", 300)),
+            "count_events" => self.count_events(step),
             "kill" => self.kill(step),
             "expect_exit" => self.expect_exit(step),
             "file" => self.file(step),
@@ -749,6 +750,42 @@ impl Runner<'_> {
             "file_grep" => self.file_grep(step),
             v => Err(format!("verb {v} has no executor")),
         }
+    }
+
+    /// `count_events`: the events the connection gets in `for_ms`, counted by name against `at_most` (name → N) and
+    /// `none` (names that must not arrive); no line may hold the text `lacks`.
+    fn count_events(&mut self, step: &Step) -> R {
+        let lines = self.conn(step)?.drain_for(ms(&step.obj, "for_ms", 1000));
+        let mut counts: BTreeMap<String, u64> = BTreeMap::new();
+        for l in &lines {
+            if let Some(name) = serde_json::from_str::<Value>(l)
+                .ok()
+                .and_then(|v| v.get("event").and_then(Value::as_str).map(str::to_string))
+            {
+                *counts.entry(name).or_insert(0) += 1;
+            }
+        }
+        if let Some(most) = step.obj.get("at_most").and_then(Value::as_object) {
+            for (name, n) in most {
+                let got = counts.get(name).copied().unwrap_or(0);
+                if got > n.as_u64().unwrap_or(0) {
+                    return Err(format!(
+                        "{got} {name} events, at most {n} wanted ({counts:?})"
+                    ));
+                }
+            }
+        }
+        for name in self.strings(None, step, "none")? {
+            if let Some(got) = counts.get(&name) {
+                return Err(format!("{got} {name} events arrived, none wanted"));
+            }
+        }
+        if let Some(text) = str_of(&step.obj, "lacks")
+            && let Some(l) = lines.iter().find(|l| l.contains(text))
+        {
+            return Err(format!("a line holds {text:?}: {}", &l[..l.len().min(200)]));
+        }
+        Ok(())
     }
 
     fn conn(&mut self, step: &Step) -> R<&mut Conn> {

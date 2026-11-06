@@ -274,6 +274,7 @@ fn report() -> LayersReport {
         new_session: true,
         relay: true,
         seatbelt: false,
+        browser: false,
     }
 }
 
@@ -282,6 +283,7 @@ fn helper() -> InnerCommand {
         source: std::env::current_exe().unwrap(),
         inner_args: vec!["sandbox-inner".into()],
         relay_args: vec!["relay".into()],
+        browser_host_args: vec!["browser-host".into()],
     }
 }
 

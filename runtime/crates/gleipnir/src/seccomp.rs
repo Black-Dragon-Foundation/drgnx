@@ -61,7 +61,10 @@ const SYSCALLS: &[(&str, u32, u32)] = &[
     ("open_tree", 428, 428),
     ("open_tree_attr", 467, 467),
     ("perf_event_open", 298, 241),
+    ("pidfd_getfd", 438, 438),
     ("pivot_root", 155, 41),
+    ("process_vm_readv", 310, 270),
+    ("process_vm_writev", 311, 271),
     ("ptrace", 101, 117),
     ("request_key", 249, 218),
     ("sendmmsg", 307, 269),
@@ -70,6 +73,7 @@ const SYSCALLS: &[(&str, u32, u32)] = &[
     ("setns", 308, 268),
     ("setpgid", 109, 154),
     ("setsid", 112, 157),
+    ("setsockopt", 54, 208),
     ("socket", 41, 198),
     ("umount2", 166, 39),
     ("unshare", 272, 97),
@@ -180,6 +184,10 @@ const DENIED_ALWAYS: &[&str] = &[
     "perf_event_open",
     "bpf",
     "userfaultfd",
+    // another process's fds and memory (ptrace-mode checks only; refused like ptrace itself)
+    "pidfd_getfd",
+    "process_vm_readv",
+    "process_vm_writev",
     // io_uring
     "io_uring_setup",
     "io_uring_enter",
@@ -229,6 +237,8 @@ const IPPROTO_TCP: u32 = 6;
 const MSG_FASTOPEN: u32 = 0x2000_0000;
 /// The calls that take `MSG_FASTOPEN`, and the index of their flags argument.
 const FASTOPEN_SENDS: [(&str, u8); 3] = [("sendto", 3), ("sendmsg", 2), ("sendmmsg", 3)];
+/// `TCP_FASTOPEN_CONNECT`: the next `connect(2)` returns at once and the first write sends the SYN with its data.
+const TCP_FASTOPEN_CONNECT: u32 = 30;
 
 fn deny(syscall: &'static str, errno: i32, args: Vec<ArgMatch>) -> DenyRule {
     DenyRule {
@@ -309,17 +319,25 @@ pub fn reduced_rules() -> Vec<DenyRule> {
         let not_tcp = [0, IPPROTO_TCP].map(|value| ArgMatch::Ne { index: 2, value });
         rules.push(deny("socket", EPERM, [&[family][..], &not_tcp].concat()));
     }
-    for (call, index) in FASTOPEN_SENDS {
-        let fastopen = ArgMatch::MaskedEq {
-            index,
-            mask: MSG_FASTOPEN,
-        };
-        rules.push(deny(call, EPERM, vec![fastopen]));
-    }
+    rules.extend(fastopen_send_rules());
     for call in ["setsid", "setpgid"] {
         rules.push(deny(call, EPERM, vec![]));
     }
     rules
+}
+
+/// `sendto`, `sendmsg` and `sendmmsg` with `MSG_FASTOPEN` in their flags: EPERM.
+fn fastopen_send_rules() -> Vec<DenyRule> {
+    FASTOPEN_SENDS
+        .iter()
+        .map(|&(call, index)| {
+            let fastopen = ArgMatch::MaskedEq {
+                index,
+                mask: MSG_FASTOPEN,
+            };
+            deny(call, EPERM, vec![fastopen])
+        })
+        .collect()
 }
 
 /// The deny-list of `tier`: [`rules`], and for the reduced tier [`reduced_rules`] too.
@@ -331,10 +349,52 @@ pub fn rules_for(tier: Tier) -> Vec<DenyRule> {
     all
 }
 
+/// The browser host's own filter, stacked on the agent's on both tiers: [`rules`], plus TCP Fast Open both ways:
+/// - the sends with `MSG_FASTOPEN` ([`reduced_rules`] has them too), which unfixed kernels never show Landlock's
+///   `connect_tcp`;
+/// - `setsockopt(fd, IPPROTO_TCP, TCP_FASTOPEN_CONNECT, …)`. Landlock sees that connect, so the reduced tier allows
+///   it; refusing it here costs Chromium nothing and leaves no Fast Open path at all below the browser.
+///
+/// The full tier's agent filter has neither: its network namespace holds TCP to the relay ports, and the browser
+/// layer narrows those further, so a Fast Open bypass there would reach the provider or the CDP relay.
+pub fn browser_rules() -> Vec<DenyRule> {
+    let mut all = rules();
+    all.extend(fastopen_send_rules());
+    all.push(deny(
+        "setsockopt",
+        EPERM,
+        vec![
+            ArgMatch::Eq {
+                index: 1,
+                value: IPPROTO_TCP,
+            },
+            ArgMatch::Eq {
+                index: 2,
+                value: TCP_FASTOPEN_CONNECT,
+            },
+        ],
+    ));
+    all
+}
+
 /// [`compile_for`] the full tier: the base deny-list alone.
 #[cfg(target_os = "linux")]
 pub fn compile(arch: Arch) -> Result<Vec<SockFilter>, SeccompError> {
     compile_for(arch, Tier::Full)
+}
+
+/// Compiles [`browser_rules`] for `arch`, as [`compile_for`] does a tier's list.
+#[cfg(target_os = "linux")]
+pub fn compile_browser(arch: Arch) -> Result<Vec<SockFilter>, SeccompError> {
+    compile_rules(arch, browser_rules())
+}
+
+/// Compiles [`browser_rules`]: Unsupported off Linux (Android: no backend; apps get no user namespaces; fails
+/// closed).
+#[cfg(not(target_os = "linux"))]
+pub fn compile_browser(arch: Arch) -> Result<Vec<SockFilter>, SeccompError> {
+    let _ = arch;
+    Err(SeccompError::Unsupported)
 }
 
 /// Compiles [`rules_for`] `tier` for `arch`: allow by default, the EPERM rules through seccompiler `=0.5.0` (whose own
@@ -350,6 +410,12 @@ pub fn compile(arch: Arch) -> Result<Vec<SockFilter>, SeccompError> {
 /// follows it unchanged.
 #[cfg(target_os = "linux")]
 pub fn compile_for(arch: Arch, tier: Tier) -> Result<Vec<SockFilter>, SeccompError> {
+    compile_rules(arch, rules_for(tier))
+}
+
+/// The compiler behind [`compile_for`] and [`compile_browser`], for any deny-list.
+#[cfg(target_os = "linux")]
+fn compile_rules(arch: Arch, rules: Vec<DenyRule>) -> Result<Vec<SockFilter>, SeccompError> {
     use seccompiler::{
         BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter,
         SeccompRule, TargetArch,
@@ -385,7 +451,7 @@ pub fn compile_for(arch: Arch, tier: Tier) -> Result<Vec<SockFilter>, SeccompErr
     // Per call: None = denied whatever the arguments; Some(rules) = denied when every condition of any one rule
     // holds. An unconditional entry wins over conditional ones for the same call (never narrows a denial).
     let mut eperm: BTreeMap<i64, Option<Vec<Vec<ArgMatch>>>> = BTreeMap::new();
-    for rule in rules_for(tier) {
+    for rule in rules {
         let nr = arch
             .syscall_nr(rule.syscall)
             .ok_or(SeccompError::UnknownSyscall {
@@ -522,6 +588,9 @@ mod tests {
         "perf_event_open",
         "bpf",
         "userfaultfd",
+        "pidfd_getfd",
+        "process_vm_readv",
+        "process_vm_writev",
         "io_uring_setup",
         "io_uring_enter",
         "io_uring_register",
@@ -729,7 +798,10 @@ mod tests {
             ("move_mount", libc::SYS_move_mount),
             ("open_tree", libc::SYS_open_tree),
             ("perf_event_open", libc::SYS_perf_event_open),
+            ("pidfd_getfd", libc::SYS_pidfd_getfd),
             ("pivot_root", libc::SYS_pivot_root),
+            ("process_vm_readv", libc::SYS_process_vm_readv),
+            ("process_vm_writev", libc::SYS_process_vm_writev),
             ("ptrace", libc::SYS_ptrace),
             ("request_key", libc::SYS_request_key),
             ("sendmmsg", libc::SYS_sendmmsg),
@@ -738,6 +810,7 @@ mod tests {
             ("setns", libc::SYS_setns),
             ("setpgid", libc::SYS_setpgid),
             ("setsid", libc::SYS_setsid),
+            ("setsockopt", libc::SYS_setsockopt),
             ("socket", libc::SYS_socket),
             ("umount2", libc::SYS_umount2),
             ("unshare", libc::SYS_unshare),
@@ -754,7 +827,7 @@ mod tests {
             libc_nrs.len() + 1,
             "every row is checked against libc or above"
         );
-        for rule in rules_for(Tier::Reduced) {
+        for rule in rules_for(Tier::Reduced).into_iter().chain(browser_rules()) {
             assert!(
                 Arch::Aarch64.syscall_nr(rule.syscall).is_some(),
                 "{}",
@@ -802,6 +875,16 @@ mod tests {
     #[test]
     fn bpf_golden_aarch64_reduced() {
         insta::assert_json_snapshot!(listing(&compile_for(Arch::Aarch64, Tier::Reduced).unwrap()));
+    }
+
+    #[test]
+    fn bpf_golden_x86_64_browser() {
+        insta::assert_json_snapshot!(listing(&compile_browser(Arch::X86_64).unwrap()));
+    }
+
+    #[test]
+    fn bpf_golden_aarch64_browser() {
+        insta::assert_json_snapshot!(listing(&compile_browser(Arch::Aarch64).unwrap()));
     }
 
     // ---- a classic-BPF interpreter over the compiled program (review B2) ----
@@ -1249,6 +1332,132 @@ mod tests {
         assert_eq!(run(&reduced, &x32), Act::Kill);
     }
 
+    /// The browser host's filter refuses TCP Fast Open both ways: the three sends with MSG_FASTOPEN (0x20000000) in
+    /// their flags (as the reduced tier does), and `setsockopt(fd, IPPROTO_TCP = 6, TCP_FASTOPEN_CONNECT = 30, …)`,
+    /// comparing the low 32 bits only. Every other call it answers as the full tier's filter does.
+    #[test]
+    fn browser_rules_refuse_fastopen_both_ways() {
+        const TFO: u64 = 0x2000_0000;
+        let mut want = rules();
+        for (syscall, index) in [("sendto", 3), ("sendmsg", 2), ("sendmmsg", 3)] {
+            let args = vec![ArgMatch::MaskedEq {
+                index,
+                mask: 0x2000_0000,
+            }];
+            want.push(DenyRule {
+                syscall,
+                errno: EPERM_,
+                args,
+            });
+        }
+        want.push(DenyRule {
+            syscall: "setsockopt",
+            errno: EPERM_,
+            args: vec![
+                ArgMatch::Eq { index: 1, value: 6 },
+                ArgMatch::Eq {
+                    index: 2,
+                    value: 30,
+                },
+            ],
+        });
+        let mut got = browser_rules();
+        want.sort();
+        got.sort();
+        assert_eq!(got, want);
+        assert_eq!(libc::TCP_FASTOPEN_CONNECT, 30);
+        let mut wrong = Vec::new();
+        for arch in ARCHES {
+            let full = compile(arch).unwrap();
+            let browser = compile_browser(arch).unwrap();
+            let mut check = |label: String, d: Data, want: Act| {
+                let got = run(&browser, &d);
+                if got != want {
+                    wrong.push(format!("{arch:?} {label}: got {got:?}, want {want:?}"));
+                }
+            };
+            for (name, index) in [("sendto", 3), ("sendmsg", 2), ("sendmmsg", 3)] {
+                for (flags, refused) in [
+                    (0, false),
+                    (TFO, true),
+                    (TFO | 0x4000, true),
+                    (TFO | 1 << 32, true),
+                    (0xDFFF_FFFF, false),
+                    (TFO << 32, false),
+                ] {
+                    let mut args = [3, 0x1000, 3, 0, 0x2000, 16];
+                    args[index] = flags;
+                    let want = if refused {
+                        Act::Errno(EPERM_)
+                    } else {
+                        Act::Allow
+                    };
+                    let d = Data::call(arch, nr(arch, name), &args);
+                    check(format!("{name} flags {flags:#x}"), d, want);
+                }
+            }
+            let setsockopt = nr(arch, "setsockopt");
+            for (level, opt, want) in [
+                (6, 30, Act::Errno(EPERM_)),
+                (6 | 1 << 32, 30 | 1 << 32, Act::Errno(EPERM_)),
+                (6, 23, Act::Allow),  // TCP_FASTOPEN (the server side)
+                (6, 1, Act::Allow),   // TCP_NODELAY
+                (1, 30, Act::Allow),  // SOL_SOCKET, SO_PASSSEC: not TCP's option
+                (41, 30, Act::Allow), // IPPROTO_IPV6
+            ] {
+                let d = Data::call(arch, setsockopt, &[3, level, opt, 0x1000, 4]);
+                check(format!("setsockopt({level:#x}, {opt:#x})"), d, want);
+            }
+            let own: Vec<u32> = ["sendto", "sendmsg", "sendmmsg", "setsockopt"]
+                .iter()
+                .map(|s| nr(arch, s))
+                .collect();
+            for n in (0..1024).filter(|n| !own.contains(n)) {
+                for args in [[0; 6], [u64::MAX; 6]] {
+                    let d = Data::call(arch, n, &args);
+                    assert_eq!(run(&full, &d), run(&browser, &d), "{arch:?} nr {n}");
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// Every session, on both tiers, and the browser host refuse `pidfd_getfd`, `process_vm_readv` and
+    /// `process_vm_writev` (EPERM): a process's fds and memory are reached without ptrace(2) through them. Every
+    /// filter still compiles for both arches and fits the kernel's 4096 instructions.
+    #[test]
+    fn every_session_refuses_fd_and_memory_theft() {
+        let theft = ["pidfd_getfd", "process_vm_readv", "process_vm_writev"];
+        for list in [rules(), rules_for(Tier::Reduced), browser_rules()] {
+            for name in theft {
+                assert!(
+                    list.iter()
+                        .any(|r| r.syscall == name && r.errno == EPERM_ && r.args.is_empty()),
+                    "{name}"
+                );
+            }
+        }
+        for arch in ARCHES {
+            for (label, prog) in [
+                ("full", compile(arch).unwrap()),
+                ("reduced", compile_for(arch, Tier::Reduced).unwrap()),
+                ("browser", compile_browser(arch).unwrap()),
+            ] {
+                assert!(prog.len() <= 4096, "{arch:?} {label}: {}", prog.len());
+                for name in theft {
+                    for args in [[0; 6], [u64::MAX; 6]] {
+                        let d = Data::call(arch, nr(arch, name), &args);
+                        assert_eq!(
+                            run(&prog, &d),
+                            Act::Errno(EPERM_),
+                            "{arch:?} {label} {name}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     // ---- the real install, in a child process per case ----
     //
     // `installed_filter_denies` re-runs this test binary once per case, selecting only `seccomp_case_child`, with
@@ -1391,15 +1600,47 @@ mod tests {
             unfiltered: &[Outcome::Ok],
             filtered: Outcome::Ok,
         },
+        // Its own memory and its own fd: allowed unfiltered (the ptrace-mode check passes on itself), EPERM filtered.
+        Case {
+            name: "process-vm-readv-self",
+            unfiltered: &[Outcome::Ok],
+            filtered: Outcome::Errno(EPERM_),
+        },
+        Case {
+            name: "pidfd-getfd-self",
+            unfiltered: &[Outcome::Ok],
+            filtered: Outcome::Errno(EPERM_),
+        },
+        // The browser host's filter: Fast Open refused both ways; a plain TCP option still set.
+        Case {
+            name: "browser-setsockopt-fastopen-connect",
+            unfiltered: &[Outcome::Ok],
+            filtered: Outcome::Errno(EPERM_),
+        },
+        Case {
+            name: "browser-setsockopt-nodelay",
+            unfiltered: &[Outcome::Ok],
+            filtered: Outcome::Ok,
+        },
+        Case {
+            name: "browser-sendto-fastopen",
+            unfiltered: &[Outcome::Ok, Outcome::Errno(libc::EOPNOTSUPP)],
+            filtered: Outcome::Errno(EPERM_),
+        },
     ];
 
-    /// The filter a case runs under: the reduced tier's for `reduced-…`, the full tier's otherwise.
-    fn tier_of(name: &str) -> Tier {
+    /// The filter a case runs under: the reduced tier's for `reduced-…`, the browser host's for `browser-…`, the
+    /// full tier's otherwise.
+    fn filter_of(name: &str) -> Vec<SockFilter> {
+        let arch = native().expect("a native arch");
         if name.starts_with("reduced-") {
-            Tier::Reduced
+            compile_for(arch, Tier::Reduced)
+        } else if name.starts_with("browser-") {
+            compile_browser(arch)
         } else {
-            Tier::Full
+            compile(arch)
         }
+        .expect("compiles")
     }
 
     fn errno() -> i32 {
@@ -1602,7 +1843,7 @@ mod tests {
                     }
                     result(i64::from(libc::setpgid(0, 0)))
                 }
-                "reduced-sendto-fastopen" => {
+                "reduced-sendto-fastopen" | "browser-sendto-fastopen" => {
                     let Ok(listener) = std::net::TcpListener::bind("127.0.0.1:0") else {
                         return 201;
                     };
@@ -1644,6 +1885,67 @@ mod tests {
                     let flags = libc::MSG_DONTWAIT | libc::MSG_NOSIGNAL;
                     result(libc::send(pair[0], b"x".as_ptr().cast(), 1, flags) as i64)
                 }
+                "process-vm-readv-self" => {
+                    let src = [7u8; 8];
+                    let mut dst = [0u8; 8];
+                    let local = libc::iovec {
+                        iov_base: dst.as_mut_ptr().cast(),
+                        iov_len: dst.len(),
+                    };
+                    let remote = libc::iovec {
+                        iov_base: src.as_ptr().cast_mut().cast(),
+                        iov_len: src.len(),
+                    };
+                    if !install_now() {
+                        return 254;
+                    }
+                    let (pid, n, flags): (libc::c_long, libc::c_ulong, libc::c_ulong) =
+                        (libc::c_long::from(libc::getpid()), 1, 0);
+                    result(libc::syscall(
+                        libc::SYS_process_vm_readv,
+                        pid,
+                        &raw const local,
+                        n,
+                        &raw const remote,
+                        n,
+                        flags,
+                    ))
+                }
+                "pidfd-getfd-self" => {
+                    let (pid, zero): (libc::c_long, libc::c_long) =
+                        (libc::c_long::from(libc::getpid()), 0);
+                    let pidfd = libc::syscall(libc::SYS_pidfd_open, pid, zero);
+                    if pidfd < 0 {
+                        return 201;
+                    }
+                    if !install_now() {
+                        return 254;
+                    }
+                    // fd 0 of this very process, through its pidfd.
+                    result(libc::syscall(libc::SYS_pidfd_getfd, pidfd, zero, zero))
+                }
+                "browser-setsockopt-fastopen-connect" | "browser-setsockopt-nodelay" => {
+                    let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+                    if fd < 0 {
+                        return 201;
+                    }
+                    if !install_now() {
+                        return 254;
+                    }
+                    let opt = if name.ends_with("nodelay") {
+                        libc::TCP_NODELAY
+                    } else {
+                        libc::TCP_FASTOPEN_CONNECT
+                    };
+                    let on: libc::c_int = 1;
+                    result(i64::from(libc::setsockopt(
+                        fd,
+                        libc::IPPROTO_TCP,
+                        opt,
+                        (&raw const on).cast(),
+                        size_of::<libc::c_int>() as libc::socklen_t,
+                    )))
+                }
                 _ => 200,
             }
         }
@@ -1679,8 +1981,7 @@ mod tests {
             return;
         };
         let case = CASES.iter().find(|c| c.name == name).expect("a known case");
-        let prog =
-            compile_for(native().expect("a native arch"), tier_of(case.name)).expect("compiles");
+        let prog = filter_of(case.name);
         let control = fork_run(case.name, None);
         if !case.unfiltered.contains(&control) {
             eprintln!(

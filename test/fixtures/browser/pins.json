@@ -1,0 +1,18 @@
+[
+  {
+    "version": "100.0.0.1",
+    "released": "2026-01-02",
+    "platforms": {
+      "linux64": { "url": "https://example.invalid/100.0.0.1/linux64/chrome-headless-shell-linux64.zip", "sha256": "bc4414a7dfd7513042c168853ce46d89f5f1d98dd693623c82dcd0d688eac003" },
+      "linux-arm64": { "url": "https://example.invalid/100.0.0.1/linux-arm64/chrome-headless-shell-linux-arm64.zip", "sha256": "10906940fa77bab16b77b701162bb14b26985400bdca3eaefa4842c1d92936cf" }
+    }
+  },
+  {
+    "version": "100.0.0.2",
+    "released": "2026-01-03",
+    "platforms": {
+      "linux64": { "url": "https://example.invalid/100.0.0.2/linux64/chrome-headless-shell-linux64.zip", "sha256": "abababababababababababababababababababababababababababababababab" },
+      "linux-arm64": { "url": "https://example.invalid/100.0.0.2/linux-arm64/chrome-headless-shell-linux-arm64.zip", "sha256": "abababababababababababababababababababababababababababababababab" }
+    }
+  }
+]

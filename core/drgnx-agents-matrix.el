@@ -23,8 +23,8 @@
 
 (defconst drgnx-agents-matrix-actions
   '(agents.start agents.model agents.control graph.change task.done spend spend.over code.read code.edit commit
-                 merge.integration push.ci push.main code.ci-config machines job.container network unsandboxed
-                 settings.change user.private user.emacs chat.project-read)
+                 merge.integration push.ci push.main code.ci-config machines job.container job.keys network browser
+                 browser.web browser.private unsandboxed settings.change user.private user.emacs chat.project-read)
   "The matrix's rows, as the hub spells them (`Action::id' in runstav::methods::matrix).")
 
 (defconst drgnx-agents-matrix-schema
@@ -108,6 +108,54 @@ repository."
   :type 'sexp :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
   :runtime "NetHosts" :schema '(alist symbol (list-of (string :match ":[0-9]+\\'"))))
 
+(drgnx-defsetting drgnx-agents-browser-program nil
+  "The browser an agent session gets: the absolute path of a Chromium, Chrome or headless shell, or nil to find one
+(a distro package first, then the one `drgnx browser install' downloaded).  Only you can set it, never a repository."
+  :type '(choice (const :tag "find one" nil) file) :group 'drgnx :scope 'global :workspace 'never
+  :on-error 'strict :agents 'never :runtime "Option<String>" :schema '(or null (string :match "\\`/")))
+
+(drgnx-defsetting drgnx-agents-browser-local-ports '(3000 3001 4173 4200 5000 5173 8000 8080 8888)
+  "The TCP ports on the sandbox's own loopback that a session with the browser lets its agent and browser
+connect to, for the servers the agent starts there (a list of port numbers, 1 to 65535).  Servers on this machine are
+reached only as host.drgnx.internal:PORT, through a grant.  Only you can set it, never a repository."
+  :type '(repeat integer) :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "Vec<u16>" :schema '(list-of (integer :min 1 :max 65535)))
+
+(drgnx-defsetting drgnx-agents-browser-deny-hosts nil
+  "Host names (like \"example.com\") a session's browser never reaches, whatever you grant: a list of strings.
+Only you can set it, never a repository."
+  :type '(repeat string) :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "Vec<String>" :schema '(list-of string))
+
+(drgnx-defsetting drgnx-agents-browser-max-message 67108864
+  "The largest message, in bytes, that passes between an agent and its session's browser (64 MiB).
+Only you can set it, never a repository."
+  :type 'natnum :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "u64" :schema '(integer :min 1))
+
+(drgnx-defsetting drgnx-agents-browser-idle 600
+  "Seconds without a command after which a session's browser is stopped; the next command starts it again.
+Only you can set it, never a repository."
+  :type 'natnum :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "u64" :schema 'natnum)
+
+(drgnx-defsetting drgnx-agents-browser-once-window 600
+  "Seconds a one-time browser grant lasts after you give it.  Only you can set it, never a repository."
+  :type 'natnum :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "u64" :schema 'natnum)
+
+(drgnx-defsetting drgnx-agents-session-memory "4G"
+  "The memory cap of one agent session with its browser, like \"4G\" or \"512M\".
+Only you can set it, never a repository."
+  :type 'string :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "String" :schema '(string :match "\\`[1-9][0-9]*[KMGT]?\\'"))
+
+(drgnx-defsetting drgnx-agents-browser-memory-high 75
+  "The share of the session's memory cap (1 to 99, a percent) at which its browser is stopped.
+Only you can set it, never a repository."
+  :type 'natnum :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "u32" :schema '(integer :min 1 :max 99))
+
 (drgnx-defsetting drgnx-agents-container-images nil
   "The images container jobs may run: an alist NAME → image reference pinned by digest (\"registry/name@sha256:…\").
 The hub pulls them; a job names one of them and nothing else.  Only you can set it, never a repository."
@@ -162,6 +210,26 @@ The hub pulls them; a job names one of them and nothing else.  Only you can set 
   "\"public\" or \"private\": a public project's job whose commit the public origin has may run on a shared runner."
   :type '(choice (const "public") (const "private")) :group 'drgnx :scope 'project :workspace 'data
   :on-error 'strict :agents 'never :runtime "String" :schema '(string :match "\\`\\(?:public\\|private\\)\\'"))
+
+(drgnx-defsetting drgnx-runners-shared-overlay nil
+  "Non-nil lets a shared runner have a project's uncommitted files, once each passes the secret scan.
+Off, a job with uncommitted changes never runs on a shared runner.  Never set by a repository's own files."
+  :type 'boolean :group 'drgnx :safe #'booleanp :scope 'project :workspace 'never
+  :on-error 'strict :agents 'never :runtime "bool" :schema 'boolean)
+
+(drgnx-defsetting drgnx-runners-job-keys nil
+  "The keys the project's jobs may name, by name (\"CRATES_IO_TOKEN\"): a job naming any other is refused.
+Names only, never a value: the values stay in your key store and reach a job's own process only.  Never set by a
+repository's own files."
+  :type '(repeat string) :group 'drgnx :scope 'project :workspace 'never :on-error 'strict :agents 'never
+  :runtime "Vec<String>" :schema '(list-of (string :match "\\`[A-Za-z_][A-Za-z0-9_]*\\'")))
+
+(drgnx-defsetting drgnx-runners-origin-key nil
+  "The name of the project's read-only deploy key or token for its private origin, or nil.
+Your own runners fetch the project from its origin with it instead of being sent a bundle.  A name only: the value
+stays in your key store.  Never set by a repository's own files."
+  :type '(choice (const nil) string) :group 'drgnx :scope 'project :workspace 'never :on-error 'strict
+  :agents 'never :runtime "Option<String>" :schema '(or null (string :match "\\`[A-Za-z_][A-Za-z0-9_]*\\'")))
 
 (provide 'drgnx-agents-matrix)
 ;;; drgnx-agents-matrix.el ends here

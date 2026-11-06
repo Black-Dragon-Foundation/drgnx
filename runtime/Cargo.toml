@@ -8,7 +8,7 @@ resolver = "3"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 license = "GPL-3.0-or-later"
 
 # Library evaluation section 17, nothing else.  Only crates a member uses enter Cargo.lock.
@@ -17,8 +17,8 @@ tokio = { version = "1.54", features = ["rt-multi-thread", "net", "io-util", "pr
 tokio-util = { version = "0.7", features = ["codec"] }
 serde = { version = "1", features = ["derive"] }
 # float_roundtrip: a stored f64 (a grant's expiry, any time in an entity's data) reads back exactly; the default parser
-# may land one ulp off (URDR-SCOPE-GRANT-FLAKE-1)
-serde_json = { version = "1", features = ["float_roundtrip"] }
+# may land one ulp off (URDR-SCOPE-GRANT-FLAKE-1). raw_value: the CDP broker (heimdall) keeps params as the bytes it got
+serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
 schemars = "1.2"
 serde_path_to_error = "0.1"
 serde_ignored = "0.1"
@@ -28,11 +28,22 @@ sha1 = "0.11"              # the socket name is sha1(data-dir)[0:8] (design 3.1)
 subtle = "2.6"
 getrandom = "0.4"
 rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }
+# hrafn's structural chunker; the grammars arrive with the languages that use them
+tree-sitter = "0.25"   # 0.26 and 0.27 need Rust 1.90, above the MSRV when this was pinned (1.88); not moved since
+tree-sitter-elisp = "1.7"
+tree-sitter-rust = "0.24"
+tree-sitter-c = "0.24"
+tree-sitter-bash = "0.25"
+notify = "8"
 rustix = { version = "1.1", features = ["fs", "process", "net", "thread"] }
 libc = "0.2"
 hyper = { version = "1.12", features = ["server", "client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "http1", "client-legacy", "client-proxy"] }
 http-body-util = "0.1"
+# the CDP broker's websocket server on cdp.sock, on the hyper above; `unstable-split` reads and writes it from two tasks
+fastwebsockets = { version = "0.10", features = ["upgrade", "unstable-split"] }
+# `drgnx browser install` unpacks the pinned Chrome for Testing archive; read only, deflate only
+zip = { version = "9.3", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 # `rustls-platform-verifier` is turned on by bifrost's default feature `platform-verifier`, so an Android build can drop it
 hyper-rustls = { version = "0.27", default-features = false, features = ["ring", "http1", "tls12", "logging"] }
 rustls = { version = ">=0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
@@ -55,8 +66,38 @@ insta = { version = "1.49", features = ["json"] }
 proptest = "1.12"
 tempfile = "3"
 rmcp = { version = "3.6", default-features = false }   # dev only (mimir's interop test); a member names its features
+# hrafn-embed, pure Rust: a tokeniser with no C regex engine (default-features alone does not compile), and the model file
+tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
+safetensors = "0.8"
+half = "2"
+bytemuck = { version = "1", features = ["extern_crate_alloc"] }
+# hrafn-embed's GPU path. wgpu breaks its API about every 3 months: pinned, moved on purpose
+wgpu = { version = "=30.0.1", default-features = false, features = ["vulkan", "metal", "wgsl"] }
+pollster = "0.4"
+# f32 matmuls only: no `f16` feature, whose gemm-f16 has aarch64 asm that needs FEAT_FP16 (fullfp16), which baseline
+# aarch64 (Linux arm64, Android) doesn't have; the CPU path runs on baseline NEON there
+gemm = { version = "=0.19.0", default-features = false, features = ["std", "rayon"] }
+rayon = "1"
 
 [profile.release]
 strip = true
 lto = "thin"
 panic = "unwind"
+
+# `cargo test` is a debug build, and a real-model test would crawl in one
+[profile.dev.package.hrafn-embed]
+opt-level = 3
+[profile.dev.package.tokenizers]
+opt-level = 3
+[profile.dev.package.sha2]
+opt-level = 3
+[profile.dev.package.gemm]
+opt-level = 3
+[profile.dev.package.gemm-common]
+opt-level = 3
+[profile.dev.package.gemm-f32]
+opt-level = 3
+[profile.dev.package.rayon]
+opt-level = 3
+[profile.dev.package.rayon-core]
+opt-level = 3

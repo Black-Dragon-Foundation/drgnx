@@ -382,6 +382,16 @@ test_orders() { # [--only FILE] [--container] — each gated file once per K of 
     while IFS= read -r f; do files+=("$f"); done < <(orders_files)
     [ ${#files[@]} -gt 0 ] || { echo "drgnx: test --orders: no gated files" >&2; return 2; }
   fi
+  # Several files: one `--orders --only FILE' per file, DRGNX_ORDERS_JOBS at a time (default: the CPUs), each one's output
+  # printed whole when it ends. A file's own Ks stay in sequence (K goes up to the largest pair count seen so far); a red
+  # file stops only its own loop, and the others finish, so one run names every red file.
+  if [ -z "$only" ] && [ ${#files[@]} -gt 1 ]; then
+    printf '%s\0' "${files[@]}" | xargs -0 -n1 -P "${DRGNX_ORDERS_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)}" \
+      sh -c 'out=$(mktemp "${TMPDIR:-/tmp}/drgnx-orders-file.XXXXXX"); "$0" test --orders "$@" >"$out" 2>&1; rc=$?; cat "$out"; rm -f -- "$out"; exit "$rc"' \
+      "$here/bin/drgnx" ${container[@]+"${container[@]}"} --only || return 1
+    echo "drgnx: orders: green, ${#files[@]} gated file(s)" >&2
+    return 0
+  fi
   log="$(mktemp "${TMPDIR:-/tmp}/drgnx-orders.XXXXXX")"
   for f in "${files[@]}"; do
     f="${f#"$here"/}"; pairs=0; k=0; skipped0=""
@@ -434,7 +444,7 @@ env_eval() { # FORM — evaluate with harness/drgnx-env.el loaded, print the res
 test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --day [MIN] | --tty [--fedora 45]] — the batch (GUI, scenario, perf, terminal) tier inside a fedora:45 / Nidhogg 31.1 container
   # DRGNX_TEST_IMAGE / DRGNX_TEST_GUI_IMAGE / DRGNX_TEST_TTY_IMAGE: use that image (CI pulls a prebuilt one) instead of building it
   # --tty --fedora 45 (the default and the only release drgnx supports)
-  local rt mount image file elpa prebuilt="${DRGNX_TEST_IMAGE:-}" args=() cmd=(bin/drgnx test) build=() tier="" fedora="" compositor="" abenv="" abn="" soakmin=""
+  local rt mount image file elpa prebuilt="${DRGNX_TEST_IMAGE:-}" args=() cmd=(bin/drgnx test) build=() tier="" fedora="" compositor="" abenv="" abn="" noaa="" soakmin=""
   while (($#)); do
     case "$1" in
       --ui|--tty|--scenario|--perf|--soak|--day)
@@ -445,14 +455,16 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=
                 abenv="$2"; shift ;;
       --n) [[ "${2:-}" =~ ^[0-9]+$ ]] || { echo "usage: drgnx test --container --perf --ab-env VAR=JUDGED,REF [--n N]" >&2; return 2; }
            abn="$2"; shift ;;
+      --aa) ;;   # the default with --ab-env: every workload runs against itself first
+      --no-aa) noaa=1 ;;
       --fedora) fedora="${2:-?}"; if (($# > 1)); then shift; fi ;;
       --compositor) compositor="${2:-}"; ui_compositor_ok "$compositor" || return 2; shift ;;
       *) echo "drgnx: unknown option for test --container: $1 (--ui [--compositor C] | --scenario | --perf [--ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --day [MIN] | --tty [--fedora 45])" >&2; return 2 ;;
     esac
     shift
   done
-  if { [ -n "$abenv" ] || [ -n "$abn" ]; } && { [ "$tier" != perf ] || [ -z "$abenv" ]; }; then
-    echo "drgnx: --ab-env VAR=JUDGED,REF [--n N] goes with --perf" >&2; return 2
+  if { [ -n "$abenv" ] || [ -n "$abn" ] || [ -n "$noaa" ]; } && { [ "$tier" != perf ] || [ -z "$abenv" ]; }; then
+    echo "drgnx: --ab-env VAR=JUDGED,REF [--n N] [--no-aa] goes with --perf" >&2; return 2
   fi
   if [ -n "$fedora" ] && { [ "$tier" != tty ] || [[ ! "$fedora" =~ ^45$ ]]; }; then
     echo "drgnx: --fedora 45 goes with --tty (the terminal tier's image); got: $fedora" >&2; return 2
@@ -463,25 +475,38 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=
   rt="${DRGNX_CONTAINER:-$(env_eval '(drgnx-env-container-runtime)')}"   # set: no host Emacs needed (CI)
   [ -n "$rt" ] || { echo "drgnx: no container runtime found (podman, docker, nerdctl); set DRGNX_CONTAINER" >&2; return 1; }
   mount="$here:/src:ro"; [ "$rt" = podman ] && mount="$mount,Z"
-  image=drgnx-test:f45; file=Containerfile
+  image=drgnx-test; file=Containerfile   # a local build is tagged below with test/container/image-tag.sh
   if [ "$tier" = ui ] || [ "$tier" = scenario ] || [ "$tier" = perf ] || [ "$tier" = soak ] || [ "$tier" = day ]; then   # the GUI image: sessions under headless mutter
-    image=drgnx-test-gui:f45; file=Containerfile.gui; cmd=(bin/drgnx test --ui); prebuilt="${DRGNX_TEST_GUI_IMAGE:-}"
+    image=drgnx-test-gui; file=Containerfile.gui; cmd=(bin/drgnx test --ui); prebuilt="${DRGNX_TEST_GUI_IMAGE:-}"
     [ "$tier" = scenario ] && cmd=(bin/drgnx test --scenario --config drgnx)
     [ "$tier" = perf ] && cmd=(bin/drgnx test --perf)
-    if [ -n "$abenv" ]; then cmd+=(--ab-env "$abenv"); [ -z "$abn" ] || cmd+=(--n "$abn"); fi
+    if [ -n "$abenv" ]; then cmd+=(--ab-env "$abenv"); [ -z "$abn" ] || cmd+=(--n "$abn"); [ -z "$noaa" ] || cmd+=(--no-aa); fi
     if [ "$tier" = soak ]; then cmd=(bin/drgnx test --soak); [ -z "$soakmin" ] || cmd+=("$soakmin"); fi
     if [ "$tier" = day ]; then cmd=(bin/drgnx test --day); [ -z "$soakmin" ] || cmd+=("$soakmin"); fi
     local comp="${DRGNX_UI_COMPOSITOR:-}"
     if [ -n "$compositor" ]; then cmd+=(--compositor "$compositor"); comp="$compositor"; fi
     # KWin and niri are in an image of their own (Containerfile.wm); DRGNX_TEST_WM_IMAGE: a prebuilt one
-    case "$comp" in kwin|niri) image=drgnx-test-wm:f45; file=Containerfile.wm; prebuilt="${DRGNX_TEST_WM_IMAGE:-}" ;; esac
+    case "$comp" in kwin|niri) image=drgnx-test-wm; file=Containerfile.wm; prebuilt="${DRGNX_TEST_WM_IMAGE:-}" ;; esac
     # --memory: a GUI run (sessions, compositors, the X11 Emacs) must never push the host into the OOM killer;
     # --memory-swap the same: no swap on top.  DRGNX_TEST_GUI_MEMORY (default 3g) for a bigger run
     local mem="${DRGNX_TEST_GUI_MEMORY:-3g}"
+    # an --ab-env A/B runs two sessions side by side, so it gets two sessions' room (6g): at 3g the kernel's OOM killer
+    # took one of them in every compile-flood A/B (each session peaks near 1.8 GB), and the harness lost it
+    if [ -n "$abenv" ]; then mem="${DRGNX_TEST_GUI_MEMORY:-6g}"; fi
     # the synthetic day keeps a long session, more than a GUI test needs: DRGNX_TEST_DAY_MEMORY (default 6g, a desktop
     # size; a laptop sets 4g or less); the results name this host, not the container's id
     if [ "$tier" = day ]; then mem="${DRGNX_TEST_DAY_MEMORY:-6g}"; DRGNX_PERF_MACHINE="${DRGNX_PERF_MACHINE:-$(hostname 2>/dev/null || echo unknown)}"; fi
     args=(--memory "$mem" --memory-swap "$mem" --security-opt seccomp=unconfined --security-opt label=disable)
+    # DRGNX_PERF_CPUS=2|4: the machine shape of the workers' A/B (review M14), the cores the run may use (as `drgnx-perf-cpuset-args')
+    # one thread of each of the first N physical cores (a 7900X: 0,1; a 4900HS, whose core's threads sit side by side: 0,2)
+    case "${DRGNX_PERF_CPUS:-}" in
+      "") ;;
+      2|4)
+        cpus=$(lscpu -p=CPU,CORE 2>/dev/null | awk -F, -v n="$DRGNX_PERF_CPUS" '/^#/ {next} !seen[$2]++ && k < n {printf "%s%s", (k++ ? "," : ""), $1}')
+        [ "$(printf '%s' "$cpus" | tr ',' '\n' | grep -c .)" = "$DRGNX_PERF_CPUS" ] || cpus=""
+        args+=(--cpuset-cpus "${cpus:-0-$((DRGNX_PERF_CPUS - 1))}") ;;
+      *) echo "drgnx: DRGNX_PERF_CPUS must be 2 or 4, not ${DRGNX_PERF_CPUS}" >&2; return 2 ;;
+    esac
     mount="$here:/src:ro"
     # an A/B compiles the tree (`bin/drgnx build`) before its sessions start: under podman the checkout is an overlay,
     # so the .elc files go to a layer the run throws away and the checkout stays as it was
@@ -489,7 +514,7 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=
     if [ -n "${DRGNX_UI_COMPOSITOR:-}" ]; then args+=(-e "DRGNX_UI_COMPOSITOR=$DRGNX_UI_COMPOSITOR"); fi
   elif [ "$tier" = tty ]; then
     fedora="${fedora:-45}"
-    image="drgnx-test-tty:f$fedora"; file=Containerfile.tty; cmd=(bin/drgnx test --tty); prebuilt="${DRGNX_TEST_TTY_IMAGE:-}"
+    image=drgnx-test-tty; file=Containerfile.tty; cmd=(bin/drgnx test --tty); prebuilt="${DRGNX_TEST_TTY_IMAGE:-}"
     build=(--build-arg "FEDORA=$fedora")
     args=(--security-opt seccomp=unconfined --security-opt label=disable --memory 3g)   # the GUI tier's options; tmux and Emacs sessions
     mount="$here:/src:ro"
@@ -513,17 +538,17 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=
     [[ $prebuilt =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ ]] || { echo "drgnx: '$prebuilt' is not an image reference" >&2; return 2; }
     image="$prebuilt"; echo "image: $image (prebuilt)" >&2
   else
-    # an image build is capped too: an uncapped one once pushed the host into the OOM killer
-    # (DRGNX_TEST_BUILD_MEMORY, default 3g; podman only, as docker's buildx ignores --memory)
-    local bmem="${DRGNX_TEST_BUILD_MEMORY:-3g}" bargs=()
-    [ "$rt" = podman ] && bargs=(--memory "$bmem" --memory-swap "$bmem")
-    "$rt" build ${bargs[@]+"${bargs[@]}"} -q -t "$image" ${build[@]+"${build[@]}"} -f "$here/test/container/$file" "$here/test/container" >/dev/null
+    # tagged with the hash of its inputs (the Containerfile and every file it copies), as CI's images, so worktrees with
+    # other inputs never race for one tag; used from the local store, else pulled from GHCR (CI's copy of the same tag),
+    # else built, capped (image.sh; DRGNX_TEST_IMAGE_PULL=0 never pulls, DRGNX_TEST_BUILD_MEMORY sizes the build)
+    image="$(bash "$here/test/container/image.sh" "$rt" "$image" "$here/test/container/$file" ${build[@]+"${build[@]}"})" || return 1
   fi
   # the run-control variables go in with their values when set: a narrowed run stays narrow, the files run at once
   # (CI: the runner's cores), a failed file reruns once, wall clock is skipped, the perf run's results and factors,
   # the sessions' monitor size, count and scales
-  local v pass=(DRGNX_TEST_SELECTOR DRGNX_TEST_JOBS DRGNX_TEST_RERUN DRGNX_TEST_NO_TIMING DRGNX_TEST_FROZEN DRGNX_WORK_DB_GATE NIDHOGG_TEST_CLOCK NIDHOGG_TEST_SEED DRGNX_TEST_HUB_CHAOS DRGNX_TEST_GATE_SWAP DRGNX_TEST_ONLY DRGNX_TEST_SHUFFLE DRGNX_TEST_AUDIT DRGNX_TEST_AUDIT_ALL DRGNX_TEST_AUDIT_FAIL DRGNX_PERF_RESULTS
-                DRGNX_PERF_CPU_FACTOR DRGNX_PERF_WORKLOADS DRGNX_PERF_MACHINE DRGNX_UITEST_SETTLE_SCALE DRGNX_UI_TEST_TIMEOUT
+  local v pass=(DRGNX_TEST_SELECTOR DRGNX_TEST_JOBS DRGNX_TEST_RERUN DRGNX_TEST_NO_TIMING DRGNX_TEST_FROZEN DRGNX_WORK_DB_GATE NIDHOGG_TEST_CLOCK NIDHOGG_TEST_SEED NIDHOGG_WORKERS DRGNX_TEST_HUB_CHAOS DRGNX_TEST_GATE_SWAP DRGNX_TEST_ONLY DRGNX_TEST_SHUFFLE DRGNX_TEST_LEAKS DRGNX_TEST_AUDIT DRGNX_TEST_AUDIT_ALL DRGNX_TEST_AUDIT_FAIL DRGNX_PERF_RESULTS
+                DRGNX_PERF_CPU_FACTOR DRGNX_PERF_WORKLOADS DRGNX_PERF_MACHINE DRGNX_PERF_WORKERS DRGNX_PERF_LANDED
+                DRGNX_PERF_WATCHDOG DRGNX_UITEST_SETTLE_SCALE DRGNX_UITEST_TICK DRGNX_UI_TEST_TIMEOUT
                 DRGNX_UI_SIZE DRGNX_UI_MONITORS DRGNX_UI_SCALE DRGNX_UI_SCALES)
   for v in "${pass[@]}"; do
     [ "$v" = DRGNX_PERF_RESULTS ] && continue   # below: the checkout is read-only, so the file goes through a mount
@@ -953,7 +978,9 @@ cmd_test() {
                     if [ "${3:-}" = --n ]; then [[ "${4:-}" =~ ^[0-9]+$ ]] || { echo "usage: drgnx test --perf --ab REF [--n N]" >&2; exit 2; }; export DRGNX_PERF_AB_N="$4"; fi ;;
               --ab-env) [[ "${2:-}" =~ ^[A-Z_][A-Z0-9_]*=[^,=]+,[^,=]+$ ]] || { echo "usage: drgnx test --perf --ab-env VAR=JUDGED,REF [--n N]  (the first value is the judged side)" >&2; exit 2; }
                     export DRGNX_PERF_AB_ENV="$2"
-                    if [ "${3:-}" = --n ]; then [[ "${4:-}" =~ ^[0-9]+$ ]] || { echo "usage: drgnx test --perf --ab-env VAR=JUDGED,REF [--n N]" >&2; exit 2; }; export DRGNX_PERF_AB_N="$4"; fi ;;
+                    if [ "${3:-}" = --n ]; then [[ "${4:-}" =~ ^[0-9]+$ ]] || { echo "usage: drgnx test --perf --ab-env VAR=JUDGED,REF [--n N]" >&2; exit 2; }; export DRGNX_PERF_AB_N="$4"; fi
+                    # --aa is the default (every workload runs against itself first); --no-aa is for debugging
+                    case " $* " in *" --no-aa "*) export DRGNX_PERF_NO_AA=1 ;; esac ;;
             esac
             run_in_tmp ui_exec test-perf ;;
     --soak) shift; run_in_tmp ui_exec test-soak "${1:-30}" ;;
@@ -1962,7 +1989,8 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx test --perf [--audit | --ab REF [--n N] | --ab-env VAR=JUDGED,REF [--n N]]
                                input latency, redisplay, frames, GC, startup, memory against budgets
                                (--audit: what each hook function costs, not judged; --ab-env: the paired A/B on
-                               one tree, the first value the judged side, e.g. DRGNX_PERF_GLITNIR=on,off)
+                               one tree, the first value the judged side, e.g. DRGNX_PERF_GLITNIR=on,off; each workload runs
+                               against itself first (--aa, the default; --no-aa for debugging): exit 4 "A/A failed")
        drgnx test --soak [MIN] the workloads in a loop for MIN minutes (30); memory must hold
        drgnx test --day [MIN]  the synthetic day: a build-up (files, Org, eglot on a replay server, vc-git,
                                transcript replays) then rounds of workloads for MIN minutes (30); RSS growth
@@ -1970,8 +1998,8 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx test --scenario [--config drgnx|gryphn|DIR]
                                behaviour scenarios in a session of that configuration
        drgnx test --container [--ui [--compositor C]]
-                               the same inside a fedora:45 / Nidhogg 31.1 container (GUI: capped at 3 GB, no swap;
-                               DRGNX_TEST_GUI_MEMORY overrides; image builds 3 GB, DRGNX_TEST_BUILD_MEMORY)
+                               the same inside a fedora:45 / Nidhogg 31.1 container (GUI: capped at 3 GB, no swap,
+                               6 GB for --perf --ab-env's two sessions; DRGNX_TEST_GUI_MEMORY overrides; image builds 3 GB, DRGNX_TEST_BUILD_MEMORY)
                                (podman, else docker, else nerdctl; DRGNX_CONTAINER overrides); also --perf [--ab-env VAR=JUDGED,REF [--n N]]
                                and --soak [MIN] and --day [MIN] (capped at DRGNX_TEST_DAY_MEMORY, 6g); DRGNX_CONTAINER_NIDHOGG=PREFIX runs an unpacked Nidhogg instead of the image's
        drgnx test --container --tty [--fedora 45]
@@ -2015,10 +2043,15 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                a job from a plan: tasks, routes, estimate; nothing starts before approve
        drgnx job approve|resume ID [--budget USD] | stop ID | status [ID] [--json]
                                run, pause and inspect jobs in the hub (docs/guide/jobs.md)
-       drgnx search index ROOT [--rebuild]
+       drgnx runner list [--json] | add HOST --trust mine|my-cloud|shared [--name N] [--profile P] [--accept A]
+                               the machines that run jobs: list, add, check, bench, trust, unbench, remove (docs/guide/runners.md)
+       drgnx browser install [--version V] [--json] | list [--json]
+                               the browser sandboxed agents get: a sha256-pinned download, only when you run it
+                               (docs/guide/agent-browser.md)
+       drgnx search index ROOT [--rebuild] [--now]
                                build or refresh a project's semantic search index (docs/guide/search.md)
-       drgnx search query ROOT QUESTION… [-k N]
-                               the best chunks as PATH:LINE: first line (the notice, if any, on stderr)
+       drgnx search query ROOT QUESTION… [-k N] [--scope code|tests|docs|all] [--json]
+                               the best chunks, then what lags (the hub answers; Ratatoskr's `search')
        drgnx search mcp [ROOT] serve the `search' tool to an agent over stdio (MCP; ROOT default: here)
        drgnx coord mcp --kind KIND
                                serve the coordination tools to an agent outside drgnx (claude, codex, zed…)
@@ -2086,20 +2119,33 @@ case "${1:-help}" in
         if [[ ! -f "$rtsk" || ! -x "$rtsk" ]]; then echo "drgnx: Ratatoskr is not built: run \`drgnx runtime build'" >&2; exit 1; fi
         if [[ -z "${DRGNX_EMACS:-}" ]] && DRGNX_EMACS="$(emacs_bin 2>/dev/null)"; then export DRGNX_EMACS; fi
         DRGNX_DIR="$here" exec "$rtsk" job "$@" ;;
+  runner) shift   # the runners (list, add, check, bench, trust, unbench, remove, audit): Ratatoskr's, a client of the running hub
+        case "${1:-}" in
+          list|add|check|bench|trust|unbench|remove|audit) ;;
+          *) echo "usage: drgnx runner list [--json] | add HOST --trust mine|my-cloud|shared | check|bench|unbench NAME | trust NAME TRUST | remove NAME [--yes] | audit" >&2; exit 2 ;;
+        esac
+        rtsk="${DRGNX_RATATOSKR_BIN:-}"
+        if [[ "$rtsk" != /* || ! -f "$rtsk" || ! -x "$rtsk" ]]; then rtsk="$(drgnx_dir data)/bin/ratatoskr"; fi
+        if [[ ! -f "$rtsk" || ! -x "$rtsk" ]]; then echo "drgnx: Ratatoskr is not built: run \`drgnx runtime build'" >&2; exit 1; fi
+        if [[ -z "${DRGNX_EMACS:-}" ]] && DRGNX_EMACS="$(emacs_bin 2>/dev/null)"; then export DRGNX_EMACS; fi
+        DRGNX_DIR="$here" exec "$rtsk" runner "$@" ;;
+  browser) shift   # the agent browser: install a pinned headless shell, or list what sessions get (Ratatoskr's)
+        rtsk="${DRGNX_RATATOSKR_BIN:-}"
+        if [[ "$rtsk" != /* || ! -f "$rtsk" || ! -x "$rtsk" ]]; then rtsk="$(drgnx_dir data)/bin/ratatoskr"; fi
+        if [[ ! -f "$rtsk" || ! -x "$rtsk" ]]; then echo "drgnx: Ratatoskr is not built: run \`drgnx runtime build'" >&2; exit 1; fi
+        exec "$rtsk" browser "$@" ;;
   work) shift
         "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-work -f drgnx-work-cli -- "$@" ;;
-  search) shift
-        sub="${1:-}"; [ "$#" -gt 0 ] && shift
-        case "$sub" in
-          index) "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
-                       -l drgnx-search-index -f drgnx-search-index-cli "$@" ;;
-          query) "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
-                       -l drgnx-search-mcp -f drgnx-search-mcp-query-cli -- "$@" ;;
-          mcp) "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
-                     -l drgnx-search-mcp -f drgnx-search-mcp-main -- "$@" ;;
+  search) shift   # code search (Hrafn): Ratatoskr's, a client of the running hub
+        case "${1:-}" in
+          index|query|mcp) ;;
           *) echo "usage: drgnx search index ROOT [--rebuild] | query ROOT QUESTION… [-k N] | mcp [ROOT]" >&2; exit 2 ;;
-        esac ;;
+        esac
+        rtsk="${DRGNX_RATATOSKR_BIN:-}"
+        if [[ "$rtsk" != /* || ! -f "$rtsk" || ! -x "$rtsk" ]]; then rtsk="$(drgnx_dir data)/bin/ratatoskr"; fi
+        if [[ ! -f "$rtsk" || ! -x "$rtsk" ]]; then echo "drgnx: Ratatoskr is not built: run \`drgnx runtime build'" >&2; exit 1; fi
+        DRGNX_DIR="$here" exec "$rtsk" search "$@" ;;
   coord) shift
         # an agent outside drgnx (configs written before the bridge keep working through this): exec Ratatoskr's
         # bridge, so its parent is the agent (its identity, computed by the hub); no cd (the folder it starts in is

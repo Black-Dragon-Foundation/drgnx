@@ -752,6 +752,19 @@ impl Conn {
         }
     }
 
+    /// Every line that is buffered or arrives in the next FOR (a quiet connection ends early only at the deadline).
+    pub fn drain_for(&mut self, window: Duration) -> Vec<String> {
+        let mut lines: Vec<String> = self.buf.drain(..).collect();
+        let end = std::time::Instant::now() + window;
+        while let Some(left) = end.checked_duration_since(std::time::Instant::now()) {
+            match self.fetch(left) {
+                Ok(Some(l)) => lines.push(l),
+                _ => break,
+            }
+        }
+        lines
+    }
+
     pub fn expect_silent(&mut self, quiet: Duration) -> Result<(), String> {
         match self.fetch(quiet) {
             Err(_) => Ok(()),

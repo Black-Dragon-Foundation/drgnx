@@ -69,147 +69,6 @@
           drgnx-job-ui/the-recount-timer-has-an-owner
           drgnx-job-ui/events-recount-once-and-the-module-owns-the-recount)
   :keep ())
- ("test/unit/mod-cockpit-cards-test.el"
-  :by "2026-10-24-agent-system-design:9; 2026-11-01-agent-system-p4:44" :since "2026-11-04"
-  :tests (drgnx-cockpit-cards/cards-and-actions-as-the-job-window-had
-          drgnx-cockpit-cards/an-access-card-offers-its-four-choices
-          drgnx-cockpit-cards/a-settings-card-offers-once-session-deny
-          drgnx-cockpit-cards/a-close-card-offers-accept-and-reject
-          drgnx-cockpit-cards/a-part-redraws-only-when-what-it-shows-changed
-          drgnx-cockpit-cards/events-are-one-refresh-and-only-while-shown
-          drgnx-cockpit-cards/a-hidden-pane-keeps-no-timer
-          drgnx-cockpit-cards/showing-starts-it-again
-          drgnx-cockpit-cards/without-a-hub-it-says-so-and-looks-again
-          drgnx-cockpit-cards/a-deleted-job-shows-every-job-again
-          drgnx-cockpit-cards/discuss-looks-once-more-for-a-reviewer-not-mirrored-yet
-          drgnx-cockpit-cards/a-part-is-drawn-only-where-it-lives
-          drgnx-cockpit-cards/one-pane-for-all-jobs-or-one
-          drgnx-cockpit-cards/f-changes-or-clears-the-job
-          drgnx-cockpit-cards/the-pane-and-the-notice-model-count-alike
-          drgnx-cockpit-cards/heads-show-the-one-count
-          drgnx-cockpit-cards/an-old-job-window-state-opens-the-cockpit
-          drgnx-cockpit-cards/the-filter-is-kept-with-the-workbench
-          drgnx-cockpit-cards/the-commands-are-registered
-          drgnx-cockpit-cards/the-module-s-teardown-leaves-nothing
-          drgnx-cockpit-cards/turning-the-module-off-leaves-no-timer-subscription-or-buffer)
-  :keep (drgnx-cockpit-cards/what-reaches-an-agent-is-the-user-s-and-its-own-words-stay-quoted))
- ("test/unit/cockpit-model-test.el"
-  :by "2026-11-01-agent-system-p4:44; 2026-11-01-agent-system-p5:25" :since "2026-11-04"
-  :tests (drgnx-cockpit-model/spec-plan-task-agent-chain
-          drgnx-cockpit-model/needs-and-blocks-from-job-deps
-          drgnx-cockpit-model/plan-only-tasks-are-read-only
-          drgnx-cockpit-model/the-board-is-one-more-source
-          drgnx-cockpit-model/waiting-from-questions-and-cards
-          drgnx-cockpit-model/filter-keeps-ancestors
-          drgnx-cockpit-model/happened-is-one-line-per-event
-          drgnx-cockpit-model/edit-sources-per-kind-of-agent
-          drgnx-cockpit-model/silent-worktrees-are-found
-          drgnx-cockpit-model/a-deleted-big-file-stops-at-the-cap
-          drgnx-cockpit-model/many-untracked-files-never-block
-          drgnx-cockpit-model/closed-jobs-only-when-asked
-          drgnx-cockpit-model/changed-files-and-diff-are-async
-          drgnx-cockpit-model/changed-files-checks-at-most-the-cap
-          drgnx-cockpit-model/git-answers-once-however-often-its-sentinel-runs
-          drgnx-cockpit-model/changed-files-listing-is-capped-and-answers-once
-          drgnx-cockpit-model/summary-names-are-unquoted
-          drgnx-cockpit-model/a-git-that-cannot-start-leaves-no-buffers
-          drgnx-cockpit-model/closed-jobs-deps-are-not-read
-          drgnx-cockpit-model/paused-and-stopped-jobs-are-shown
-          drgnx-cockpit-model/silent-worktrees-three-git-at-a-time
-          drgnx-cockpit-model/plan-cache-is-capped-and-follows-mtime
-          drgnx-cockpit-model/job-agents-registered-by-the-hub-are-job-agents
-          drgnx-cockpit-model/turns-are-not-an-agent-s-life
-          drgnx-cockpit-model/turns-come-from-the-turn-column)
-  :keep (drgnx-cockpit-model/remote-names-are-never-expanded
-         drgnx-cockpit-model/only-regular-files-inside-and-a-size-cap
-         drgnx-cockpit-model/an-agents-links-are-checked-with-no-file-name-handler
-         drgnx-cockpit-model/a-files-diff-reads-its-true-name-with-no-file-name-handler
-         drgnx-cockpit-model/a-link-loop-is-no-file-to-show))
- ("test/unit/mod-cockpit-edits-test.el"
-  :by "2026-11-01-agent-system-p4:44; 2026-11-01-agent-system-p5:25" :since "2026-11-04"
-  :tests (drgnx-cockpit-edits/lists-changed-files-with-counts
-          drgnx-cockpit-edits/a-burst-of-writes-is-one-redraw
-          drgnx-cockpit-edits/a-listing-less-than-a-millisecond-early-is-due
-          drgnx-cockpit-edits/accept-marks-and-a-change-unmarks
-          drgnx-cockpit-edits/accept-never-merges
-          drgnx-cockpit-edits/comment-queues-a-message
-          drgnx-cockpit-edits/the-pane-is-never-cloned
-          drgnx-cockpit-edits/a-hidden-pane-keeps-no-timer
-          drgnx-cockpit-edits/hidden-edits-keep-no-watches
-          drgnx-cockpit-edits/following-walks-only-the-panes
-          drgnx-cockpit-edits/showing-starts-it-again
-          drgnx-cockpit-edits/a-patch-keeps-each-window-on-its-hunk
-          drgnx-cockpit-edits/a-listing-waiting-for-its-turn-never-holds-a-touch-back
-          drgnx-cockpit-edits/diff-commands-by-name-and-g-change-no-file
-          drgnx-cockpit-edits/the-graph-opens-an-agents-edits
-          drgnx-cockpit-edits/keys-in-every-profile
-          drgnx-cockpit-edits/the-pane-is-no-diff-or-patch-buffer
-          drgnx-cockpit-edits/a-silent-worktree-takes-no-messages-and-shows-first-writes)
-  :keep (drgnx-cockpit-edits/a-native-session-is-never-reverted-here
-         drgnx-cockpit-edits/revert-queues-unless-stopped-in-its-own-worktree
-         drgnx-cockpit-edits/revert-direct-asks-first
-         drgnx-cockpit-edits/a-job-worktree-is-reverted-only-when-its-agent-is-known-stopped
-         drgnx-cockpit-edits/a-job-folder-must-be-its-worktrees-top-on-its-branch
-         drgnx-cockpit-edits/a-revert-checks-again-after-the-question
-         drgnx-cockpit-edits/a-git-failure-never-deletes
-         drgnx-cockpit-edits/an-agents-folder-through-a-link-runs-no-file-name-handler
-         drgnx-cockpit-edits/a-file-is-opened-by-the-name-it-was-checked-by
-         drgnx-cockpit-edits/visiting-a-link-out-through-a-remote-name-never-loads-tramp
-         drgnx-cockpit-edits/an-agents-names-are-watched-and-placed-with-no-file-name-handler))
- ("test/unit/mod-cockpit-feed-test.el"
-  :by "2026-11-01-agent-system-p4:44; 2026-11-01-agent-system-p5:25" :since "2026-11-04"
-  :tests (drgnx-cockpit-feed/happened-lines-and-transcript-link
-          drgnx-cockpit-feed/a-silent-worktree-says-how-to-make-it-report
-          drgnx-cockpit-feed/answer-routes-by-kind-of-agent
-          drgnx-cockpit-feed/answers-never-interrupt
-          drgnx-cockpit-feed/a-second-answer-waits-for-the-first
-          drgnx-cockpit-feed/the-count-moves-when-another-process-asks
-          drgnx-cockpit-feed/questions-are-the-questions-set
-          drgnx-cockpit-feed/an-ask-card-counts-once
-          drgnx-cockpit-feed/a-job-message-question-counts-once
-          drgnx-cockpit-feed/heads-show-the-one-count
-          drgnx-cockpit-feed/the-status-bar-is-not-called
-          drgnx-cockpit-feed/timeline-chips-in-time-order
-          drgnx-cockpit-feed/a-held-answer-is-not-said-to-be-queued
-          drgnx-cockpit-feed/waiting-chips-stay-in-their-row
-          drgnx-cockpit-feed/an-old-open-question-stays-in-the-timeline
-          drgnx-cockpit-feed/a-question-shows-in-all-three-places
-          drgnx-cockpit-feed/terminals-get-the-same-text-in-ascii
-          drgnx-cockpit-feed/buffers-own-their-hooks
-          drgnx-cockpit-feed/a-hidden-pane-keeps-no-timer
-          drgnx-cockpit-feed/showing-starts-it-again
-          drgnx-cockpit-feed/a-hidden-pane-draws-nothing
-          drgnx-cockpit-feed/a-new-event-draws-one-row
-          drgnx-cockpit-feed/commands-and-keys-in-every-profile
-          drgnx-cockpit-feed/loads-alone-in-a-fresh-emacs)
-  :keep ())
- ("test/unit/mod-cockpit-graph-test.el"
-  :by "2026-11-01-agent-system-p4:44; 2026-11-01-agent-system-p5:25" :since "2026-11-04"
-  :tests (drgnx-cockpit-graph/columns-and-edges
-          drgnx-cockpit-graph/waiting-nodes-have-the-dot
-          drgnx-cockpit-graph/svg-has-no-colour-literal-not-from-a-face
-          drgnx-cockpit-graph/terminal-gets-the-outline
-          drgnx-cockpit-graph/clicks-open-the-right-tab
-          drgnx-cockpit-graph/a-file-is-opened-by-its-true-name-with-no-file-name-handler
-          drgnx-cockpit-graph/redraw-only-when-changed
-          drgnx-cockpit-graph/a-hidden-pane-keeps-no-timer
-          drgnx-cockpit-graph/showing-starts-it-again
-          drgnx-cockpit-graph/its-check-follows-every-window-not-only-its-pane
-          drgnx-cockpit-graph/a-hidden-pane-draws-nothing
-          drgnx-cockpit-graph/a-store-change-redraws-only-changed-nodes
-          drgnx-cockpit-graph/commands-and-keys-in-every-profile
-          drgnx-cockpit-graph/write-back-commands-ask-the-hub
-          drgnx-cockpit-graph/options-and-fonts-reach-the-drawing
-          drgnx-cockpit-graph/old-band-images-are-flushed
-          drgnx-cockpit-graph/nothing-changed-builds-no-model
-          drgnx-cockpit-graph/writes-of-other-processes-show
-          drgnx-cockpit-graph/silent-worktrees-show-as-not-reporting
-          drgnx-cockpit-graph/keyboard-selects-in-column-order
-          drgnx-cockpit-graph/streaming-builds-no-model
-          drgnx-cockpit-graph/a-theme-redraws
-          drgnx-cockpit-graph/the-drawing-tells-the-question-and-keeps-the-selection
-          drgnx-cockpit-graph/the-focus-stroke-stands-out)
-  :keep ())
  ("test/unit/mod-review-test.el"
   :by "2026-11-01-agent-system-p4:44" :since "2026-11-04"
   :tests (drgnx-review/parse-findings-and-verdict
@@ -406,25 +265,11 @@
   :by "onboarding rebuilt on the Rust runtime (2026-11-05): 2026-11-04-race-proof-tests.ledger:137" :since "2026-11-05"
   :tests (drgnx-onboard/desktop-files-are-machine-local)
   :keep ())
- ("test/unit/search-setup-test.el"
-  :by "onboarding rebuilt on the Rust runtime (2026-11-05): 2026-11-04-race-proof-tests.ledger:137" :since "2026-11-05"
-  :tests (drgnx-onboard/search-step-non-interactive-detects
-          drgnx-onboard/search-step-interactive-runs-the-wizard)
-  :keep ())
  ("test/unit/tty-onboard-test.el"
   :by "onboarding rebuilt on the Rust runtime (2026-11-05): 2026-11-04-race-proof-tests.ledger:137" :since "2026-11-05"
   :tests (drgnx-onboard/the-daemon-step-names-good-terminals
           drgnx-onboard/run-in-a-terminal-shows-its-row
           drgnx-onboard/a-limited-terminal-gets-the-recommendation)
-  :keep ())
- ("test/unit/mod-live-test.el"
-  :by "2026-11-04-agent-browser-p1:100,1133-1145" :since "2026-11-04"
-  :tests (drgnx-live/agents-get-the-endpoint
-          drgnx-live/the-module-turns-off-and-stops-the-browser
-          drgnx-live/failures-say-why
-          drgnx-live/quit-while-starting-leaks-nothing
-          drgnx-live/watch-needs-websocket-before-chrome
-          drgnx-live/the-browser-runs-without-a-time-box)
   :keep ())
  ("test/unit/hub-client-test.el"
   :by "2026-10-24-agent-system-p1:258" :since "2026-10-24"

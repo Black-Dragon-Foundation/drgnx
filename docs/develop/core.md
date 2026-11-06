@@ -185,8 +185,8 @@ it. Its `owner` file holds `(:pid :host :started :time)`. `(drgnx-file-lock-hold
 - A stale lock is renamed to `.NAME.lock.stale-PID-RANDOM` and deleted, then `make-directory` decides again. A lock
   is released only while its owner file is still the holder's.
 - **Limits.** Two processes stealing one stale lock within milliseconds can both hold it: the second renames the
-  first's fresh lock away. Plain files cannot compare-and-swap; the search index's lock takeover has the same
-  limit. A holder that keeps the lock over 10 s loses it, so FN must stay a quick change of data. A call to
+  first's fresh lock away. Plain files cannot compare-and-swap.
+  A holder that keeps the lock over 10 s loses it, so FN must stay a quick change of data. A call to
   `drgnx-file-update` inside FN on the same file waits for itself and ends busy. On a network filesystem the
   rename and `make-directory` are only as atomic as the server makes them.
 - The clock and the wait go through `drgnx-file--now` and `drgnx-file--sleep`, which tests replace.
@@ -224,19 +224,28 @@ check passes. `find-file` on `TREE/x` then resolves it again, with handlers on, 
 - `(drgnx-file-inside-p FILE DIR)` says whether FILE is DIR or inside it by those true names. A name for which
   `drgnx-file-truename` gives nil is not inside.
 - Code that does more with such a path binds `file-name-handler-alist` to nil around it:
-  - the Work cockpit's file checks (`drgnx-cockpit--file-ok`, `drgnx-cockpit--true-dir`,
-    `drgnx-cockpit-edits--inside-p`);
-  - the cockpit's file watches and edit-event paths (`drgnx-cockpit-edits--update-watches`,
-    `drgnx-cockpit-edits--event-paths`), a file's diff (`drgnx-cockpit-file-diff` reads its size by the true
-    name) and the git it runs in an agent's folder (`drgnx-cockpit--git`).
+  - the Work space's checks of the hub's names (`modules/tools/drgnx-work-code.el`): `drgnx-work-code-local-dir`
+    (a session's folder: nil when it is, or leads to, a remote or quoted name) and `drgnx-work-code-local-file` (a
+    file: its true name when that is a plain regular file inside the agent's folder or the workspace; nil for a
+    device, FIFO, folder, a link out or into a loop, and a name a file name handler would read: compressed,
+    encrypted, inside an archive);
+  - the names it builds from them (`drgnx-work-code--paths`, the files picker's rows), a linked worktree's `.git`
+    file (`drgnx-work-code--repo-of`, its first 4 KB) and the lock check of a live agent's file
+    (`drgnx-work-live-file--session`).
 - These commands open the true name, checked with no handler:
   - Review's RET on a finding (`drgnx-review-visit`);
-  - RET in an agent's edits (`drgnx-cockpit-edits-visit`);
-  - a node of the cockpit's Work graph: a spec, a plan, a task (`drgnx-cockpit-graph-open-node`,
-    `drgnx-cockpit--show-file`);
+  - the Work space's Enter on a file, its files picker and who is here (`drgnx-work-code-open-file`), a document of
+    the map (`drgnx-work-map--open-item`) and a trail step's read (`drgnx-work-trail-open-step`);
   - the diff's Open File at Line (`drgnx-diff-visit`);
   - Work's open of a row and of a graph box (`drgnx-work-ui-open`, `drgnx-work-ui--graph-open`).
   The buffer visits the file under that name: a link's target, not the link.
+- **Work, agents and AI links never open a remote name.** A session whose folder is remote has no file the Work
+  space opens, searches or locks; its diffs show as text only. An agent's diff is shown in `drgnx-work-hunk-mode`
+  (the side-by-side diffs and a step's hunk), which is no `diff-mode` buffer: `diff-mode` reads the names in it with
+  handlers on (its syntax colouring, which-func), and its keys, VC and ediff open, apply or revert the files they
+  name. Nothing in the Work space writes into an agent's folder: a rejected hunk is marked pending and the agent is
+  told, queued. What the user sends an agent keeps the agent's own words (a path, a hunk's header) on one line
+  (`drgnx-work-code-one-line`), so none reads as a forged header or a plan's task.
 - **Agents never write a file Emacs keeps encrypted or compressed.** `(drgnx-file-sealed-p FILE &optional DIR)`
   says whether FILE matches one of these, as written or through its links:
   - EasyPG's `epa-file-name-regexp` (`.gpg`);
@@ -258,7 +267,9 @@ check passes. `find-file` on `TREE/x` then resolves it again, with handlers on, 
     Homebrew, Debian/Ubuntu and Fedora; a visit can autoload `image.el`): it keeps the real handlers, unrecorded;
   - `drgnx-test-visit` opens a name the way each command above does;
   - a test checks end to end in a fresh `emacs -Q`:
-    `drgnx-cockpit-edits/visiting-a-link-out-through-a-remote-name-never-loads-tramp` (the visits).
+    `drgnx-work-names/visiting-a-link-out-through-a-remote-name-never-loads-tramp` (the visits);
+  - `test/unit/work-names-test.el` holds the Work space's cases: the cockpit's security and data-loss tests, ported
+    when the cockpit went.
 
 ## Schema (`drgnx-schema.el`)
 
@@ -358,8 +369,8 @@ header doc)` returns NAME:
   has a mistake or is newer, so call it before the flow's first side effect (Import, Save Layout As…, a settings page
   that asks questions first) and a refusal changes nothing.
 - A project file is untrusted data: it is read, never evaluated. `search-project` (`.drgnx/search.eld`, in
-  `core/drgnx-search-chunk.el`) is the first: `drgnx-search-config` asks `drgnx-config-problem` and turns a mistake into
-  `(:error …)`, because a search must fail closed rather than fall back to the defaults the layer applies.
+  `core/drgnx-settings-runtime.el`) is the first: Hrafn, in the hub, reads the file itself as data and fails closed (a file
+  that does not read turns the project's search off) rather than fall back to the defaults the layer applies.
 - `:last-good` (t) applies the last good copy on a mistake. `:max-bytes` (1 MiB) caps reads and writes.
 - `:on-mistake` is a string saying what happens instead of using the file when it is not the last good copy or the
   defaults ("drgnx sync stops until it is fixed; nothing is changed"). The mistake notice and the reference's "On a
@@ -779,6 +790,14 @@ right-click menus (contexts via `drgnx-surfaces-define-context`), which-key labe
 the **key sheet** ("Keyboard Shortcuts", `*drgnx keys*`), a markdown cheat sheet (`drgnx-surfaces-export-markdown`), "next time:
 KEY" tips after a command run from a menu or the palette, and the **command palette** (`C-S-p` in every profile): every available
 command as "Category: Title" with its key and description beside it, through the normal completion UI.
+With `extra/completion` on and Glitnir active it floats: the category `drgnx-command` is in
+`vertico-multiform-categories`, which turns on `vertico-buffer` with `drgnx-palette-frame--display`
+(`core/drgnx-palette-frame.el`) as its display action. The action returns the root window of drgnx's own reused child
+frame; vertico shows the minibuffer buffer itself there, so the prompt, the text and the candidates float while the
+minibuffer window and focus stay in the editor frame. `vertico-buffer` restores nothing in that window on exit, so
+`minibuffer-exit-hook` runs `drgnx-palette-frame-hide` (hide the frame, clear the dedication and window parameters, show
+a plain buffer); the module's teardown deletes the frame. `vertico-count` follows the window's height. See
+`docs/guide/palette.md`.
 
 **One key label.** `(drgnx-surfaces-key-label CMD-OR-ID &key context any short)` is the only function that turns a
 command's key into text: the key sheet, the menus, the palette, the tips, the start page, the top line and the
@@ -1238,16 +1257,10 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   them and belong to `:core`: `ai-load-keys` (once per daemon, after `drgnx open`), `ai-first-window` (the idle look at
   the local AI runner) and a finished check's 0.1 s `(agent-check-finish . PROC)`, whose process is already dead. The status bar's debounced refresh is a fourth, `statusbar-refresh`, cancelled when the bar's mode turns off."
 
-The Work cockpit's panes start their checks on the workbench state store's `pane-shown` and cancel them on
-`pane-hidden` (lane `now`), so a hidden pane keeps no timer: the Work graph's `(cockpit-check . BUFFER)`, owned by its
-buffer, every `drgnx-cockpit-check-interval` (it also hears `windows-changed`, lane `idle`, since it can show in any
-window); an agent's edits pane's `(cockpit-edits-check . BUFFER)` (with its one-shots `-tick`, `-turn` and `-flush`,
-and its file watches, all dropped when it is hidden; it also hears `windows-changed`, lane `idle`, since its buffers
-swap in one window); a feed buffer's `(cockpit-feed-check . BUFFER)` (also on
-`windows-changed`). What needs you and the decision log share `cockpit-cards-refresh` and `cockpit-cards-retry`
-(`:core`), cancelled when neither shows. Their draws are their views' timers. `tools/cockpit` owns `cockpit-waiting`
-(its setup's: the status bar's count of what waits on you, every `drgnx-cockpit-check-interval`); its `:teardown`
-kills the cockpit's buffers, so turning it off leaves no timer.
+The Work space's views keep no timer of their own while hidden: a map tells the hub it is hidden and gets nothing
+(`work/map/set {shown: false}`), the Board, the Timeline and the trail ask the hub only on events, through
+`drgnx-timer-soon` keys owned by their buffers (`(work-board . VIEW)`, `(work-timeline . LANE)`,
+`(work-trail-conclusions . NAME)`), and the module's `:teardown` kills the buffers.
 
 The Explorer's three timers are owned by its buffer, so killing it ends them (and with no Explorer none starts):
 `explorer-file-events` (`drgnx-timer-soon`, a wall timer `drgnx-explorer-event-delay` after a burst's first file event;
@@ -1492,6 +1505,18 @@ the mode) moves `flymake` like a report does. Tests: `drgnx-statusbar/` (`a-memo
 `a-buffer-dependent-entry-shows-each-buffers-own-value`, `a-let-of-global-mode-string-is-seen`,
 `a-slow-entry-falls-back-alone`) and `drgnx-doctor/statusbar-*`.
 
+**A keystroke's bar.** Point and the change tick are keys, so every keystroke builds the bar again; what that build
+reads is kept so that it costs the segments, not the buffer. The line number (`drgnx-statusbar--line-cache`) and the
+indentation scan of the first 300 lines (`drgnx-statusbar--indent-cache`) each keep LOW, the lowest position an edit
+touched since they were made: a buffer-local `after-change-functions` entry (`drgnx-statusbar--note-edit`, added with
+the first cache, taken out of every buffer when the mode turns off) lowers it, allocating nothing. An edit at or below
+the line (below the 300 lines) keeps the answer; one above it, or a change no hook saw (LOW stays nil), counts again
+from the top. The branch segment keeps its buffer's repository root (`drgnx-statusbar--git-root`) until the buffer's
+file name is another string or the git cache finds a folder's root (`drgnx-git-roots-known`): the lookup builds file
+names, and on every bar it allocated more than the other segments together. Tests:
+`a-keystroke-counts-no-lines-from-the-top`, `an-edit-below-the-first-lines-scans-nothing`,
+`the-branch-segment-finds-its-root-once-per-buffer`.
+
 Each module activates its memo in its `:setup` (`drgnx-memo-activate`), so turning the module off empties it. The Live
 view bumps by hand rather than by `:watch`: its tests and its use do not wait for the module's setup, and the sites are
 all in one file. The segment and the header are read per redisplay; a hit allocates 0 (tests: `mod-sticky-test.el`,
@@ -1510,9 +1535,30 @@ cap or is weak**; the docstring or `:doc` says which event or cap bounds it.
 The workbench has two string caches, both activated by `core/workbench`: `git-status` (repository root → its status
 plist, 16 roots; `wb/drgnx-git.el`) and `explorer-listing` (folder → `(MTIME . CHILDREN)`, 64 folders;
 `wb/drgnx-explorer.el`). A root pushed out of `git-status` while its `git status` runs is not killed: the finished
-run puts the root back (`drgnx-git--done` sees no entry and no earlier read of that process). A folder the Explorer shows
+run puts the root back (`drgnx-git--done` sees no entry and no earlier read of that process).
+
+With Nidhogg's framing on (`nidhogg-workers-framing`), the status process is framed as `records` split at NUL
+(`drgnx-git--frame`) and its batches are read as they arrive (`drgnx-git--batch`) into an accumulator on the process
+(`drgnx-git--acc`); the sentinel takes the result from it instead of from the process buffer, and every other rule of
+`drgnx-git--done` (the rerun, a stale run, eviction) is the same. All batches come before the sentinel, so the buffer
+`drgnx-git--done` kills holds no batch still to be delivered. A rename (`2 …`) is followed by its origin path as a
+record of its own, possibly in the next batch: the accumulator carries that. Without the feature or with the switch
+off (or if the reader refuses), the output goes to the buffer and is parsed at the sentinel, as before; both paths
+use the same record reader, so they give the same status (`test/unit/git-records-test.el`). A folder the Explorer shows
 is got on every render and stays recent; a tree with more than 64 expanded folders re-lists the oldest on each
 render (an `mtime` check, then a directory read).
+
+`core/drgnx-file-stream.el` lists a local folder's files in batches (`git ls-files -z` through the same `records`
+framing in a repository, `nidhogg-directory-files-async` elsewhere), only with the feature and the switch on; Quick Open
+(`core/drgnx-quick-open.el`) and Find in Explorer (`drgnx-explorer--find-load`, one generation per listing, a
+late batch is dropped) use it, and keep their synchronous path otherwise and for a remote folder. Quick Open's list and
+highlight are a pure core (`drgnx-quick-open--step`; events `batch`, `input`, `move`, `done`; the highlight is kept by the
+file's name and moves only on `input` and `move`), tested in every order (`test/unit/quick-open-stream-test.el`). The shell
+touches vertico's `vertico--input`, `vertico--candidates`, `vertico--index` and `vertico--exhibit` to show a batch with the
+highlight where the core says; a vertico update can break them, so `test/unit/quick-open-vertico-test.el` drives the command under real vertico (needs
+vertico and compat in `DRGNX_USER_ELPA`, else it skips). Quick Open reads with its own completion style, which keeps the
+core's candidates as they are (a user's prefix or orderless style would filter them a second time). Not checked under
+`vertico-buffer`.
 
 ### Declarations, activation and ownership
 
@@ -1627,6 +1673,14 @@ A draw (`drgnx-view--draw`) runs SYNC when touched, the self-check, then two ste
    `new` rendered and inserted, a dirty row deleted and inserted again at its integer start, a growing row gets an
    `insert` before SUFFIX. Dirty marks are moved onto the entries first (`patch` wins over `grow`). When every entry
    is done, the empty entries are dropped and the index follows the rows that moved.
+   A slice costs the rows it passes, not the view's length. The sweep over every entry starts at `lo`, the first entry
+   that may have work (a mark lowers it, the sweep moves it to where it stopped), so the rows done by earlier slices
+   are not walked again. A slice that stops after a changed row does not rewrite every start after it: it leaves that
+   shift to the next one (`shift-at`, `shift`; `drgnx-view--at` adds it to a start), which takes it on as it goes.
+   When a sweep would leave two shifts (the window's rows above or below the one left), the shorter run of starts is
+   written. Code that rewrites the vectors (the fold, the compaction) applies the shift first. Before this, a slice
+   of 8 rows on 64,000 rows cost 3.9 ms of CPU against 0.13 ms on 2,000, and drawing a large Search view was
+   quadratic in its rows (`drgnx-view/a-slice-costs-its-rows-not-the-rows-before-or-after`).
 
 It returns the number of rows drawn, grown or removed, clears the modified flag and calls PATCHED. It binds
 `inhibit-read-only` and `inhibit-interaction`. A RENDER or GROW that signals draws the row `⚠ KEY: MESSAGE` in the
@@ -1635,8 +1689,10 @@ It returns the number of rows drawn, grown or removed, clears the modified flag 
 raised. Between two slices the vectors always describe the buffer: `key-at`, `row-start` and the self-check stay
 right while work is left.
 
-`(drgnx-view-draw-now VIEW)` draws everything at once, even when the view is hidden (`g` and tests); it returns 0
-for a view object no longer attached to its buffer, or whose type was removed.
+`(drgnx-view-draw-now VIEW &optional KEYS)` draws everything at once, even when the view is hidden (`g` and tests); it
+returns 0 for a view object no longer attached to its buffer, or whose type was removed. With KEYS (a list of row
+keys) it does only the work on those rows, in the caller's own redisplay (the Work map's selection move); the marks of
+the other rows stay, the view reports itself pending, and its own draw takes them.
 
 **Self-check:** before a draw, when the region (START to the end of the buffer) is not as long as the entries, a
 foreign edit moved them: the view deletes the region, draws every row again before the pending changes, and counts
@@ -1723,10 +1779,10 @@ edits pane.
 nothing), `(drgnx-view-row-start VIEW KEY)`, `(drgnx-view-row-count VIEW)` (rows in the buffer; between slices, rows
 still to delete count), `(drgnx-view-pending-p VIEW)` (marks not drawn, or work left by a slice),
 `(drgnx-view-body-length VIEW KEY)`, `(drgnx-view-shown-p VIEW)`, and `(drgnx-view-stats &optional VIEW)` →
-`(:rows-drawn :rows-grown :appended :removed :slices :max-slice-rows :full-draws :stale-skips)`. `:rows-drawn`
+`(:rows-drawn :rows-grown :appended :removed :slices :max-slice-rows :full-draws :stale-skips :draw-ms)`. `:rows-drawn`
 counts every row rendered (patched, inserted or appended, an error row too); `:rows-grown` the rows that took GROW's
-text; `:appended` the rows added; `:removed` the rows deleted. Without VIEW it sums every live view
-(`:max-slice-rows`: the largest).
+text; `:appended` the rows added; `:removed` the rows deleted; `:draw-ms` the milliseconds spent in draws that did
+work. Without VIEW it sums every live view (`:max-slice-rows`: the largest).
 
 ### Consumers
 
@@ -1797,19 +1853,10 @@ text; `:appended` the rows added; `:removed` the rows deleted. Without VIEW it s
   Folding, the filter and a scan's sentinel only touch the view; point and window start stay on their row.
   `drgnx-work-ui-buffer` draws a new buffer at once and only marks an existing one.
 
-- **The Work graph** (`work-graph`, `modules/tools/drgnx-cockpit.el`; DELAY `drgnx-cockpit-redraw-delay`, `equal`
-  keys): hub events, agent sessions, scans and themes only touch the view; SYNC compares a cheap key before it builds
-  the model. Outline rows are the lines keyed by node, `(:node ID N)`; the drawing's rows are its head lines and its
-  bands of image slices, `(:head N)` and `(:band N)`. Each row's signature is a generation that moves only when its
-  text changed (`drgnx-cockpit-row-cell`). A drawing whose boxes did not move changes band images in place and marks
-  nothing. Its check timer runs only while its pane shows (the store's `pane-shown` and `pane-hidden`).
-  [cockpit.md](cockpit.md#redraws) has the rest.
-
-- **The cockpit's feed and parts** (`modules/tools/drgnx-cockpit-feed.el`, `-cards.el`): What happened
-  (`cockpit-happened`: `:head`, a row per event line, `:footer`), the timeline (`cockpit-timeline`: `:head`, a row per
-  agent's chips) and What needs you and the decision log (`cockpit-cards`, DELAY 0: a row per part of the hub's answer,
-  kept while what it shows of it is the same). Events touch the feed's views; a hub answer marks the parts'. A new
-  event draws one row in each feed pane. [cockpit.md](cockpit.md) has the rest.
+- **The Work space's views** (`work-map`, `work-detail`, `work-board`, `work-timeline`, `work-trail`, `work-review`,
+  `modules/tools/drgnx-work-*.el`): the map's rows are the layout's, the Board's are cards across columns, the trail's
+  follow the tail and take older steps with `drgnx-view-insert`; [work-space.md](work-space.md) has the rest. (The
+  cockpit's Work graph and feed views are gone.)
 
 ### The invariant
 
@@ -1993,8 +2040,13 @@ editor with `drgnx-state-use-editor`.
 `drgnx-signal-mode` listens to the raw buffer hooks, and on the store's `now` lane to `windows-changed`,
 `editor-changed` and `selected-changed` (`drgnx-signal--store-events`); it emits deduplicated edges after an idle
 delay (`drgnx-signal-delay`). There is one idle flush, `drgnx-signal--flush`, for the bus and the store: the store's
-idle lane arms it too, and its timer (`signal-flush`) is cancelled only when both modes are off. It observes the selected frame (`drgnx-state-sync`), makes the store's waiting idle calls
-(`drgnx-state--deliver-idle`), then compares the buffer state:
+idle lane arms it too, and its timer (`signal-flush`) is cancelled only when both modes are off. It observes the
+selected frame as `drgnx-state-sync` does, but without comparing the frame parameters the record copies (their
+writers sync themselves; `frame-parameter` copies them all) and without copying the record, makes the store's waiting
+idle calls (`drgnx-state--deliver-idle`), then compares the buffer state, which it keeps when nothing changed. The
+bus's `post-command-hook` arms the flush after every command, so it runs at every pause in typing: a flush that finds
+nothing changed allocates nothing (`drgnx-signal/a-quiet-flush-allocates-nothing`; it was 157 objects on a batch
+frame, more on a graphical frame, whose parameter list is longer).
 
 - `editor-changed` gets the *buffer* of the selected frame's MRU editor, only when it is not the one it sent last
   (`drgnx-signal--editor`): `C-x o` between two windows on one buffer is the store's `editor-changed`, not the bus's,
@@ -2046,6 +2098,16 @@ runs it only after reading what the process left in its pipe), never when `proce
 load that came before the output, and a finished compile looked like one that ended without a result. The whole build takes about as long as the single-Emacs one did (3 s
 on 16 cores). Warnings are printed, and the build test fails on any; `bin/drgnx build` exits 1 only on errors, so a
 warning a newer Emacs adds never stops an install or an update.
+
+**Trampolines.** After a build without errors, `drgnx-build-trampolines` compiles the native trampolines of the
+primitives drgnx advises or `cl-letf`s, so the first start after an install or `drgnx update` (a new Nidhogg
+invalidates them all) does not wait for gcc inside a command. The list is a static scan
+(`drgnx-build-advised-primitives`) of `core/`, `modules/` and `wb/` for `advice-add`, `drgnx-module-advice` and
+`(symbol-function 'NAME)`, plus the two lists advised in a loop (`drgnx-guard-prompt-functions`,
+`drgnx-sandbox-vc--advised`), kept to C primitives. They go to the first writable directory of
+`native-comp-eln-load-path` (`DRGNX_TEST_ELN_DIR` first when a test run gives one: tests never write the user's
+cache); one that fails to compile is skipped, and Emacs compiles it when it is first advised, as before. Without native
+compilation the step does nothing.
 
 ## The Emacs `bin/drgnx` runs in
 
@@ -2304,7 +2366,8 @@ OK    git                  git found
 ```
 
 `security` lists the CVEs that apply to this Emacs version (`drgnx-doctor-security-issues`: below each issue's fixed-in
-version, with a "partly fixed" note from the version that closes some ways in) and reads the guards from the
+version, with a "partly fixed" note from the version that closes some ways in; an issue's optional last element is the
+first Nidhogg release that backports its fix, compared with the `:nidhogg` fact) and reads the guards from the
 `:trust-guards` fact, `drgnx-trust-guards-status`. In a batch doctor (a bare Emacs where drgnx's startup has not run)
 the fact gatherer switches `drgnx-trust-mode` on, reads the status and switches it off again, so the answer is about the
 guards drgnx's startup installs (Flymake's check, added when Flymake loads, is then marked "not verified in a batch
@@ -2886,11 +2949,9 @@ inside `drgnx-automatic`) keyed `(EVENT . FN)`, text `"EVENT FN: message"`, and 
 (newest first, at most 20; kept one release for its tests), never raised.
 Subscribers of one event run in subscription order.
 
-The Work cockpit's panes are such consumers ([cockpit.md](cockpit.md)): `pane-shown` and `pane-hidden` on `now` start
-and cancel each pane's check (and an agent's edits' file watches), so a hidden pane keeps no timer; `pane-resized` on
-`idle` re-fits the graph and the feed. A kind whose buffers swap in one window (an agent's edits, What happened) hears
-`windows-changed` too: one buffer replacing another in a pane's window is no pane event. Whether a buffer shows is
-`drgnx-cockpit-shown-p`: a window the store recorded on a visible frame shows it.
+The Work space's map is such a consumer ([work-space.md](work-space.md)): `windows-changed` tells the hub which maps
+a window shows (`drgnx-work-space-sync-shown`), so a hidden map draws nothing and gets no deltas. Whether a buffer
+shows is `drgnx-view-shown-p`: a window the store recorded on a visible frame shows it.
 
 **The fixture** (`test/fixtures/state-fixture.el`): `(drgnx-test-with-state BODY…)` runs BODY with a fresh store
 and bus and the store's hooks off. It saves every bound variable listed in `drgnx-state-test--variables` (the

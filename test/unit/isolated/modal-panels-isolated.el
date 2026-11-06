@@ -21,6 +21,8 @@
 (declare-function drgnx-close-pane "drgnx-close")
 (declare-function evil-normal-state "evil-states")
 (declare-function evil-insert-state "evil-states")
+(declare-function evil-motion-state "evil-states")
+(declare-function drgnx-decor-button "drgnx-decor")
 (declare-function evil-emacs-state "evil-states")
 (declare-function drgnx-evil-stop "drgnx-evil")
 (declare-function drgnx-diff-mode "drgnx-diff")
@@ -352,6 +354,26 @@
         (drgnx-modal-panels-test--outline (walk)))
       (should (= (length cursors) 9))
       (dolist (c cursors) (should (eq (cdr c) nil))))))
+
+(ert-deftest drgnx-modal-panels/enter-activates-a-decoration-button-in-a-read-only-buffer ()
+  ;; The button's keymap is a text property, which Emacs consults before evil's state maps: Enter runs the action
+  ;; once in every state a read-only view can be in.
+  (drgnx-modal-panels-test--with
+    (let ((ran 0) (b (generate-new-buffer "decor-button")))
+      (unwind-protect
+          (with-current-buffer b
+            (special-mode)
+            (let ((inhibit-read-only t))
+              (insert (drgnx-decor-button "Go" (lambda () (cl-incf ran))) " tail"))
+            (should buffer-read-only)
+            (drgnx-modal-panels-test--show b
+              (dolist (state '(evil-normal-state evil-emacs-state evil-motion-state))
+                (funcall state)
+                (goto-char 2)
+                (let ((before ran))
+                  (drgnx-modal-panels-test--press "RET")
+                  (should (= (1+ before) ran))))))
+        (kill-buffer b)))))
 
 (provide 'modal-panels-isolated)
 ;;; modal-panels-isolated.el ends here

@@ -23,7 +23,10 @@
 (defvar drgnx-uitest-session-id nil
   "This session's id (DRGNX_UI_NAME, set by harness/init/prelude.el): `drgnx-uitest-api-as' runs only for it.")
 
-(defvar drgnx-uitest-tick 0.04 "Seconds between two delivered input events.")
+(defvar drgnx-uitest-tick
+  (let ((v (string-to-number (or (getenv "DRGNX_UITEST_TICK") ""))))   ; a probe of the pacing, e.g. 0.03
+    (if (> v 0) v 0.04))
+  "Seconds between two delivered input events ($DRGNX_UITEST_TICK overrides the default 0.04 for a probe).")
 (defvar drgnx-uitest-quiet 0.3
   "Seconds without delivered input or visible change after which the session counts as settled.")
 

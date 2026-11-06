@@ -1,0 +1,17 @@
+{"scenario": "work/provider-facts-gemini", "requires": ["v1", "test-hooks"], "doc": "A Gemini session sends a title, a kind and for files locations, no tool name and no rawInput: a read's path is the provider's field (acp), a search's query and a page's URL come from the title and are labelled acp-title. Read back from timeline/get. Pattern B."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-gemini\" :provider gemini :command (\"$MOCK\" \"acp\" \"--as\" \"gemini\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-gemini", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "provider:read src/a.rs\nprovider:grep needle\nprovider:web-search rust release\nprovider:web-fetch https://example.test/a\nsay done"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"turn_id": "t1", "class": "think"}}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "timeline/get", "params": {"scope": "session", "id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"steps": {"$contains": [{"class": "tool", "tool_kind": "read", "detail": {"kind": "read", "path": "src/a.rs", "origin": "acp"}}, {"class": "tool", "tool_kind": "search", "detail": {"kind": "search", "query": "needle", "origin": "acp-title"}}, {"class": "tool", "tool_kind": "fetch", "detail": {"kind": "search", "query": "rust release", "origin": "acp-title"}}, {"class": "tool", "tool_kind": "fetch", "detail": {"kind": "fetch", "url": "https://example.test/a", "origin": "acp-title"}}]}}}}

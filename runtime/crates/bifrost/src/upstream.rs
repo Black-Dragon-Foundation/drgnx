@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use http::Uri;
-use http_body_util::Full;
+use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
@@ -182,6 +182,53 @@ impl Upstream {
     ) -> Result<http::Response<Incoming>, UpstreamError> {
         self.client.request(req).await.map_err(|e| classify(&e))
     }
+
+    /// A GET of `url` (absolute) for a caller with no HTTP types of its own. `headers` are all it sends.
+    pub async fn get(
+        &self,
+        url: &Uri,
+        headers: &[(&str, String)],
+    ) -> Result<Fetched, UpstreamError> {
+        let mut req = http::Request::get(url.clone());
+        for (name, value) in headers {
+            req = req.header(*name, value);
+        }
+        let req = req
+            .body(Full::new(Bytes::new()))
+            .map_err(|e| UpstreamError::Protocol(e.to_string()))?;
+        let (head, body) = self.send(req).await?.into_parts();
+        Ok(Fetched { head, body })
+    }
+}
+
+/// The response of [`Upstream::get`]; the body is read a piece at a time.
+pub struct Fetched {
+    head: http::response::Parts,
+    body: Incoming,
+}
+
+impl Fetched {
+    pub fn status(&self) -> u16 {
+        self.head.status.as_u16()
+    }
+
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.head.headers.get(name)?.to_str().ok()
+    }
+
+    /// The next piece of the body; none at its end. An error is a connection that broke before the end.
+    pub async fn chunk(&mut self) -> Option<Result<Bytes, UpstreamError>> {
+        loop {
+            match self.body.frame().await? {
+                Ok(frame) => {
+                    if let Ok(data) = frame.into_data() {
+                        return Some(Ok(data));
+                    }
+                }
+                Err(e) => return Some(Err(UpstreamError::Protocol(e.to_string()))),
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -233,7 +280,6 @@ fn classify(e: &legacy::Error) -> UpstreamError {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use http_body_util::BodyExt;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio::sync::oneshot;
@@ -282,6 +328,33 @@ mod tests {
         assert_eq!(resp.status(), 200);
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(&body[..], b"hello");
+    }
+
+    #[tokio::test]
+    async fn get_sends_the_headers_and_reads_the_body() {
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        let (tx, rx) = oneshot::channel();
+        tokio::spawn(async move {
+            let (mut s, _) = l.accept().await.unwrap();
+            let _ = tx.send(read_head(&mut s).await);
+            s.write_all(b"HTTP/1.1 206 Partial Content\r\nContent-Length: 5\r\nContent-Range: bytes 2-6/7\r\nConnection: close\r\n\r\nhello")
+                .await
+                .unwrap();
+        });
+        let url: Uri = format!("http://127.0.0.1:{port}/x").parse().unwrap();
+        let mut got = direct()
+            .get(&url, &[("range", "bytes=2-".to_string())])
+            .await
+            .unwrap();
+        assert_eq!(got.status(), 206);
+        assert_eq!(got.header("content-range"), Some("bytes 2-6/7"));
+        let mut body = Vec::new();
+        while let Some(piece) = got.chunk().await {
+            body.extend_from_slice(&piece.unwrap());
+        }
+        assert_eq!(body, b"hello");
+        assert!(rx.await.unwrap().to_lowercase().contains("range: bytes=2-"));
     }
 
     #[tokio::test]

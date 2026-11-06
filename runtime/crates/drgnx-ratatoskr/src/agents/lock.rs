@@ -52,13 +52,16 @@ pub struct LaunchPlan {
     pub session_meta: Option<Value>,
     pub protected_ro: Vec<PathBuf>,
     /// The one place under the home where the CLI keeps its login token (`~/.claude`, `~/.codex`, `~/.gemini`): the
-    /// sandbox binds it for this CLI alone (Task 10).
+    /// sandbox shows this CLI alone what [`login_entries`] names of it (Task 10).
     pub login_dir: Option<PathBuf>,
     pub enforced: Enforced,
     /// The session's gateway token is good on its `gateway.sock`: the sandbox relays a port to that socket and points
     /// `ANTHROPIC_BASE_URL` at it (`sandbox::session_spec`).  Set by the session's start for a gateway profile, never
     /// by a lock.
     pub gateway: bool,
+    /// The session's shell steps are traced (`work::trace`): per step through Gleipnir's wrapper, or over the whole
+    /// tree; the spec gets the hand-off socket (`sandbox::session_spec`).  Set by the session's start, never by a lock.
+    pub trace: Option<gleipnir::trace::Scope>,
 }
 
 /// A lock that does not hold: the session is killed.
@@ -192,7 +195,88 @@ pub fn plan(p: &AgentProfile, role: Role, _e: &Effective) -> LaunchPlan {
         login_dir,
         enforced,
         gateway: false,
+        trace: None,
     }
+}
+
+/// How a session's CLI uses one entry of its login dir.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoginUse {
+    /// It loads it (its settings, your instructions and commands): readable, never writable.
+    Read,
+    /// A file it rewrites in place: its token.
+    File,
+    /// A folder of its own state it writes (made when missing).
+    Dir,
+    /// The folder where it keeps every session it runs, yours too: each sandboxed session gets an empty one of its
+    /// own in that place (`sandbox::login_grants`), never yours.
+    Own,
+}
+
+/// What a CLI uses in its login dir LOGIN_DIR during a session, relative to it: what it loads, the token file it
+/// refreshes in place, and its sessions' state.  Nothing else of the login dir is shown: not the dir itself, so not
+/// the keys of your own CLI's daemon and live sessions, its prompt history, shell snapshots, IDE locks or another
+/// project's transcripts.  Nothing your own CLI runs or reads as instructions later (settings and their hooks,
+/// commands, agents, skills, plugins, `CLAUDE.md`/`AGENTS.md`/`GEMINI.md`, Codex's `config.toml` and rules) is
+/// writable.  Claude's project folder is [`claude_project`]'s.
+pub fn login_entries(login_dir: &Path) -> &'static [(&'static str, LoginUse)] {
+    use LoginUse::{Dir, File, Own, Read};
+    match login_dir.file_name().and_then(|n| n.to_str()) {
+        Some(".claude") => &[
+            (".credentials.json", File),
+            ("settings.json", Read),
+            ("CLAUDE.md", Read),
+            ("agents", Read),
+            ("commands", Read),
+            ("skills", Read),
+            ("plugins", Read),
+            ("output-styles", Read),
+            ("keybindings.json", Read),
+            ("todos", Dir),
+        ],
+        Some(".codex") => &[
+            ("auth.json", File),
+            ("config.toml", Read),
+            ("AGENTS.md", Read),
+            ("prompts", Read),
+            ("skills", Read),
+            ("rules", Read),
+            ("sessions", Own),
+            ("log", Dir),
+        ],
+        Some(".gemini") => &[
+            ("oauth_creds.json", File),
+            ("google_accounts.json", Read),
+            ("settings.json", Read),
+            ("GEMINI.md", Read),
+            ("commands", Read),
+            ("extensions", Read),
+            ("tmp", Own),
+        ],
+        _ => &[],
+    }
+}
+
+/// The longest folder name Claude Code uses as it is under `projects`; a longer one it cuts and gives a hash.
+const CLAUDE_PROJECT_MAX: usize = 200;
+
+/// The folder under Claude's login dir LOGIN_DIR (`projects/NAME`) where Claude Code keeps the sessions it runs in CWD:
+/// NAME is CWD with every UTF-16 unit that is not an ASCII letter or digit made `-` (`/srv/u/p.x` →
+/// `-srv-u-p-x`).  None for another CLI's login dir, a CWD that is not UTF-8, or a name over
+/// [`CLAUDE_PROJECT_MAX`] (Claude Code's own hash is not repeated here: such a session keeps no transcript).
+pub fn claude_project(login_dir: &Path, cwd: &Path) -> Option<PathBuf> {
+    if login_dir.file_name()? != ".claude" {
+        return None;
+    }
+    let mut name = String::new();
+    for c in cwd.to_str()?.chars() {
+        if c.is_ascii_alphanumeric() {
+            name.push(c);
+        } else {
+            name.extend(std::iter::repeat_n('-', c.len_utf16()));
+        }
+    }
+    (name.len() <= CLAUDE_PROJECT_MAX).then(|| login_dir.join("projects").join(name))
 }
 
 /// The deny and ask rules of one Claude settings file, `(deny, ask)`; none when it is not a regular file (a link is

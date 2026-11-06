@@ -621,7 +621,8 @@ paths no WM serves."
     (unwind-protect
         (progn
           (make-directory path)
-          (write-region (format "#!/bin/sh\necho --- >> %s\nfor a in \"$@\"; do printf '%%s\\n' \"$a\" >> %s; done\n" log log)
+          ;; an empty store and no GHCR copy (`image inspect' and `pull' fail, unlogged): the image is built
+          (write-region (format "#!/bin/sh\ncase \"$1\" in image|pull) exit 1 ;; esac\necho --- >> %s\nfor a in \"$@\"; do printf '%%s\\n' \"$a\" >> %s; done\n" log log)
                         nil (expand-file-name "podman" path) nil 'silent)
           (set-file-modes (expand-file-name "podman" path) #o755)
           (dolist (c '("kwin" "niri"))
@@ -635,9 +636,10 @@ paths no WM serves."
             (let* ((args (split-string (with-temp-buffer (insert-file-contents log) (buffer-string)) "\n" t))
                    (build (cdr (member "build" args)))
                    (run (cdr (member "run" args))))
-              (should (equal (cadr (member "-t" build)) "drgnx-test-wm:f45"))
+              ;; tagged with the hash of its inputs (test/container/image-tag.sh)
+              (should (string-match-p "\\`drgnx-test-wm:[0-9a-f]\\{16\\}\\'" (cadr (member "-t" build))))
               (should (string-suffix-p "test/container/Containerfile.wm" (cadr (member "-f" build))))
-              (should (member "drgnx-test-wm:f45" run))
+              (should (member (cadr (member "-t" build)) run))
               ;; the build is capped too (an uncapped image build once took the whole session down)
               (should (equal (cadr (member "--memory" build)) "3g"))
               (should (equal (cadr (member "--memory-swap" build)) "3g"))
@@ -660,7 +662,7 @@ paths no WM serves."
                                "test" "--container" "--ui"))))
           (let* ((args (split-string (with-temp-buffer (insert-file-contents log) (buffer-string)) "\n" t))
                  (build (cdr (member "build" args))))
-            (should (equal (cadr (member "-t" build)) "drgnx-test-wm:f45"))
+            (should (string-match-p "\\`drgnx-test-wm:[0-9a-f]\\{16\\}\\'" (cadr (member "-t" build))))
             (should (equal (cadr (member "--memory" build)) "4g"))
             (should (equal (cadr (member "--memory-swap" build)) "4g")))
           (delete-file log)
@@ -668,8 +670,13 @@ paths no WM serves."
            dir (list (concat "PATH=" path ":/usr/bin:/bin") "DRGNX_CONTAINER=podman" "DRGNX_TEST_BUILD_MEMORY=4g"
                      "DRGNX_UI_COMPOSITOR" "DRGNX_TEST_GUI_IMAGE")
            "test" "--container" "--ui")
-          (let ((build (cdr (member "build" (split-string (with-temp-buffer (insert-file-contents log) (buffer-string)) "\n" t)))))
-            (should (equal (cadr (member "-t" build)) "drgnx-test-gui:f45"))
+          ;; the GUI image is built on its base: the base's build comes first
+          (let* ((args (split-string (with-temp-buffer (insert-file-contents log) (buffer-string)) "\n" t))
+                 (base (cdr (member "build" args)))
+                 (build (cdr (member "build" base))))
+            (should (string-match-p "\\`drgnx-base-gui:[0-9a-f]\\{16\\}\\'" (cadr (member "-t" base))))
+            (should (equal (cadr (member "--build-arg" build)) (concat "BASE=" (cadr (member "-t" base)))))
+            (should (string-match-p "\\`drgnx-test-gui:[0-9a-f]\\{16\\}\\'" (cadr (member "-t" build))))
             (should (equal (cadr (member "--memory" build)) "4g")))
           ;; an image override is an image reference, never an option for podman
           (delete-file log)

@@ -248,7 +248,7 @@ levels that enclose it (a `let' binding, a call's argument); inside a branching 
     "test/unit/perf-day-test.el" "test/unit/platform-hypr-niri-test.el" "test/unit/platform-kwin-test.el"
     "test/unit/platform-test.el" "test/unit/platform-wm-test.el" "test/unit/projects-eld-test.el"
     "test/unit/remote-automatic-test.el" "test/unit/run-ert-audit-test.el" "test/unit/run-ert-test.el"
-    "test/unit/sandbox-vc-test.el" "test/unit/scripted-process-test.el" "test/unit/search-setup-test.el"
+    "test/unit/sandbox-vc-test.el" "test/unit/scripted-process-test.el"
     "test/unit/secrets-test.el" "test/unit/settings-agents-test.el" "test/unit/settings-apply-test.el"
     "test/unit/settings-child-test.el" "test/unit/settings-compat-custom-test.el"
     "test/unit/settings-compat-global-test.el" "test/unit/settings-compat-lisp-files-test.el"

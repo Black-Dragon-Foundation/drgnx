@@ -12,7 +12,7 @@ case ${BASH_SOURCE[0]-} in
   */*) _drgnx_dir=$PWD/${BASH_SOURCE[0]%/*} ;;
   *) _drgnx_dir=$PWD ;;
 esac
-_drgnx_commands='open doctor build test ui macos-app sync upgrade rollback generations lock bisect service-unit onboard check lease fmt work hub runtime job search keys safe help shell secrets bootstrap update coord graph childframe-elpa'
+_drgnx_commands='open doctor build test ui macos-app sync upgrade rollback generations lock bisect service-unit onboard check lease fmt work hub runtime job runner search keys safe help shell secrets bootstrap update coord graph childframe-elpa browser'
 _drgnx_steps='environment look-and-keys projects ai search agents daemon portability finish'
 _drgnx_bootstrap_steps='preflight config keys sync onboard desktop shell doctor'
 _drgnx_presets='minimal ide full-ai'
@@ -62,7 +62,7 @@ _drgnx() {
         case "$cmd $sub" in
           'open '*) words='--check --wait -t --gui' ;;
           'doctor '*) words='--json --dev' ;;
-          'test '*) words='--one-process --leaks --shuffle --find-polluter --stress --load --ui --compositor --tty --scenario --config --bench --perf --audit --ab --ab-env --n --soak --day --preflight --out --seeds --nidhogg-tarball --container --install --bootstrap --fedora' ;;
+          'test '*) words='--one-process --leaks --shuffle --find-polluter --stress --load --ui --compositor --tty --scenario --config --bench --perf --audit --ab --ab-env --n --aa --no-aa --soak --day --preflight --out --seeds --nidhogg-tarball --container --install --bootstrap --fedora' ;;
           'sync '*) words='--offline --seed --prune --dry-run' ;;
           'lock '*) words='--ship' ;;
           'onboard '*) words='--non-interactive --again --preset --keys --theme --roots --todos --step' ;;
@@ -75,11 +75,17 @@ _drgnx() {
           'hub '*) words='--json' ;;
           'runtime build') words='--install --prefix' ;;
           'runtime install') words='--prefix' ;;
+          'browser install') words='--version --json' ;;
+          'browser list') words='--json' ;;
           'job propose') words='--repo --budget --auto' ;;
           'job approve' | 'job resume') words='--budget' ;;
           'job status') words='--json' ;;
-          'search index') words='--rebuild' ;;
-          'search query') words='-k' ;;
+          'runner list') words='--json' ;;
+          'runner add') words='--trust --name --profile --accept --root --prefix' ;;
+          'runner remove') words='--yes' ;;
+          'search index') words='--rebuild --now' ;;
+          'search query') words='-k --scope' ;;
+          'build runner-bundle') words='--arch' ;;
           'keys diff') words='--against' ;;
           'ui start') words='--config --size --daemon' ;;
           'ui click') words='--buffer --text --button --count --hold-ms' ;;
@@ -96,8 +102,11 @@ _drgnx() {
         case $cmd in
           work) words='record scan status' ;;
           hub) words='start stop status' ;;
+          build) words='runner-bundle' ;;
           runtime) words='build install' ;;
+          browser) words='install list' ;;
           job) words='propose approve resume stop status' ;;
+          runner) words='list add check bench trust unbench remove audit' ;;
           search) words='index query mcp' ;;
           keys) words='diff' ;;
           ui) words=$_drgnx_uis ;;

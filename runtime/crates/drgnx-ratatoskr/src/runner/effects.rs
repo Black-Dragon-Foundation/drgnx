@@ -134,7 +134,7 @@ pub(crate) async fn scope_of_session(f: &Front, sid: &str) -> Result<Scope, Erro
             jobs.extend(s.job_id().map(str::to_owned));
         }
     }
-    let found = tokio::task::spawn_blocking(move || norn::project::resolve(&cwd))
+    let found = crate::clock::blocking(move || norn::project::resolve(&cwd))
         .await
         .ok()
         .flatten();
@@ -788,6 +788,121 @@ pub async fn submit_fallback(
     }
 }
 
+/// A conclusion an agent without drgnx's tools put in a fenced `drgnx-conclusion` block: `{kind, text, sources}`.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
+pub struct ConclusionBlock {
+    /// `finding` or `decision`.
+    pub kind: String,
+    pub text: String,
+    #[serde(default)]
+    pub sources: Vec<norn::write::work::Source>,
+}
+
+/// The last fenced `drgnx-conclusion` block of TEXT; `None` when there is none, or it is not a valid conclusion
+/// (unknown kind, no text, a bad or too long source list): a malformed block is ignored, never half-recorded.
+pub fn conclusion_block(text: &str) -> Option<ConclusionBlock> {
+    let start = text.rfind("```drgnx-conclusion")?;
+    let rest = &text[start + "```drgnx-conclusion".len()..];
+    let body = rest.split("```").next().unwrap_or(rest);
+    let block: ConclusionBlock = serde_json::from_str(body.trim()).ok()?;
+    let ok = matches!(block.kind.as_str(), "finding" | "decision")
+        && !block.text.trim().is_empty()
+        && norn::write::work::check_sources(&block.sources).is_ok();
+    ok.then_some(block)
+}
+
+/// A session without drgnx's tools ended its turn with a `drgnx-conclusion` block in MESSAGE: record it as that
+/// session's finding (a note about its task) or decision, labelled `from-text`.  Nothing happens without a valid block
+/// or a task.  Answers the new entity's id.
+pub async fn record_conclusion_fallback(
+    writer: &Writer,
+    session: &str,
+    task: Option<&str>,
+    job: Option<&str>,
+    message: &str,
+) -> Option<Result<String, String>> {
+    let block = conclusion_block(message)?;
+    let task = task_entity(task?, job)?;
+    let caller = crate::runner::service();
+    let sid = session.to_owned();
+    let out = writer
+        .write(&caller, "conclusions/fallback", move |tx| {
+            let Some(task_ent) = entity::by_id(tx.sql(), &task)? else {
+                return Ok(None);
+            };
+            let sources = (!block.sources.is_empty()).then(|| json!(block.sources));
+            if block.kind == "decision" {
+                let d = norn::write::decisions::Decide {
+                    kind: "build".into(),
+                    subject: runstav::text::one_line(&block.text, 80, false),
+                    task: Some(task.clone()),
+                    reason: Some(block.text.clone()),
+                    author: format!("agent:{sid}"),
+                    ..Default::default()
+                };
+                let norn::write::decisions::DecideResult::Ok { n, .. } =
+                    norn::write::decisions::decide(tx, d, now())?
+                else {
+                    return Ok(None);
+                };
+                let id = format!("decision:{n}");
+                if let Some(e) = entity::by_id(tx.sql(), &id)? {
+                    let patch = json!({"origin": "from-text", "session": sid, "sources": sources});
+                    entity::update(
+                        tx,
+                        e.n,
+                        None,
+                        Changes {
+                            data_patch: Some(patch),
+                            ..Changes::default()
+                        },
+                    )?;
+                }
+                return Ok(Some(id));
+            }
+            let id = norn::tracker::new_id(tx, "note", task_ent.project)?;
+            let mut data = json!({"kind": "finding", "origin": "from-text", "session": sid});
+            if let Some(s) = sources {
+                data["sources"] = s;
+            }
+            let note = entity::create(
+                tx,
+                EntityNew {
+                    id: id.clone(),
+                    kind: "note".into(),
+                    project: task_ent.project,
+                    title: Some(runstav::text::one_line(&block.text, 80, false)),
+                    status: None,
+                    body: Some(block.text.clone()),
+                    priority: None,
+                    assignee: None,
+                    data,
+                    origin: Origin::Recorded,
+                    source: None,
+                },
+            )?;
+            link::add(
+                tx,
+                note.n,
+                "about",
+                task_ent.n,
+                None,
+                Origin::Recorded,
+                None,
+            )?;
+            Ok(Some(id))
+        })
+        .await;
+    match out {
+        Ok(Some(id)) => {
+            writer.signals.events_soon();
+            Some(Ok(id))
+        }
+        Ok(None) => None,
+        Err(e) => Some(Err(e.to_string())),
+    }
+}
+
 // ---- commits and decisions --------------------------------------------------------------------------------------
 
 fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
@@ -888,7 +1003,7 @@ pub async fn link_new_commits(writer: &Writer, session: &str, task: &str, cwd: &
         return;
     };
     let (dir, base) = (cwd.to_path_buf(), format!("job/{}", job.0));
-    let commits = tokio::task::spawn_blocking(move || commits_since(&dir, &base))
+    let commits = crate::clock::blocking(move || commits_since(&dir, &base))
         .await
         .unwrap_or_default();
     if commits.is_empty() {
@@ -1039,7 +1154,7 @@ pub async fn decision_effects(f: &Front, _: &Caller, p: EffectsParams) -> Result
     let later_hunks = match repo {
         Some(repo) => {
             let shas = shas.clone();
-            tokio::task::spawn_blocking(move || later_hunks(&repo, &shas))
+            crate::clock::blocking(move || later_hunks(&repo, &shas))
                 .await
                 .map_err(|e| internal(e.to_string()))?
         }
@@ -1457,5 +1572,80 @@ mod tests {
                 .await
                 .is_none()
         );
+    }
+
+    /// Pattern D (the parse) and B (the write is the gate): a finding from text is a note about the task, labelled.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn conclusion_block_parses_and_labels_from_text() {
+        let msg = "ok\n```drgnx-conclusion\n{\"kind\": \"finding\", \"text\": \"x is y\", \"sources\": [{\"path\": \"a.rs\", \"lines\": [1, 4]}, {\"url\": \"https://example.test\"}]}\n```\n";
+        let b = conclusion_block(msg).unwrap();
+        assert_eq!((b.kind.as_str(), b.sources.len()), ("finding", 2));
+        let dir = tempfile::tempdir().unwrap();
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        let job = norn::write::jobs::NewJob {
+            id: "J".into(),
+            title: "j".into(),
+            plan: None,
+            repo: None,
+            tasks: vec![norn::write::jobs::NewTask {
+                n: 1,
+                title: "t".into(),
+                role: None,
+                deps: vec![],
+            }],
+            data: None,
+        };
+        db.write(meta(), move |tx| {
+            norn::write::jobs::job_create(tx, job, 1.0)
+        })
+        .await
+        .unwrap();
+        let w = Writer {
+            db: db.clone(),
+            signals: Default::default(),
+        };
+        let id = record_conclusion_fallback(&w, "s1", Some("1"), Some("J"), msg)
+            .await
+            .unwrap()
+            .unwrap();
+        let (origin, path, about) = db
+            .read(move |c| {
+                let e = entity::by_id(c, &id)?.unwrap();
+                let about: i64 = c.query_row(
+                    "select count(*) from link l join entity t on t.n = l.dst where l.src = ?1 and l.kind = 'about' and t.id = 'task:J#1'",
+                    [e.n],
+                    |r| r.get(0),
+                )?;
+                Ok((
+                    str_of(&e, "origin"),
+                    e.data.pointer("/sources/0/path").and_then(Value::as_str).map(str::to_owned),
+                    about,
+                ))
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            (origin.as_deref(), path.as_deref(), about),
+            (Some("from-text"), Some("a.rs"), 1)
+        );
+    }
+
+    #[test]
+    fn a_malformed_block_is_ignored() {
+        for bad in [
+            "```drgnx-conclusion\nnot json\n```",
+            "```drgnx-conclusion\n{\"kind\": \"opinion\", \"text\": \"t\"}\n```",
+            "```drgnx-conclusion\n{\"kind\": \"finding\", \"text\": \"  \"}\n```",
+            "```drgnx-conclusion\n{\"kind\": \"finding\", \"text\": \"t\", \"sources\": [{\"nope\": 1}]}\n```",
+            "no block at all",
+        ] {
+            assert!(conclusion_block(bad).is_none(), "{bad}");
+        }
+        let many: Vec<_> = (0..13).map(|i| json!({"path": format!("f{i}")})).collect();
+        let over = format!(
+            "```drgnx-conclusion\n{}\n```",
+            json!({"kind": "finding", "text": "t", "sources": many})
+        );
+        assert!(conclusion_block(&over).is_none());
     }
 }

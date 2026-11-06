@@ -83,6 +83,51 @@
       (run-hook-with-args 'drgnx-settings-file-written-functions "/c/workspace.el" nil nil)
       (should-not calls))))
 
+;; Pattern D.  A runtime setting with no encoder never reaches the hub when only your Lisp or Customize sets it: every
+;; one has one but the matrix itself, whose plist the hub reads from settings.el alone.
+(ert-deftest drgnx-settings-runtime/every-runtime-setting-but-the-matrix-has-an-encoder ()
+  (require 'drgnx-agents-matrix)
+  (let (missing)
+    (dolist (var (drgnx-setting-names))
+      (when (and (plist-get (drgnx-setting-meta var) :runtime) (not (eq var 'drgnx-agents-matrix))
+                 (not (assq var drgnx-settings-runtime--encoders)))
+        (push var missing)))
+    (should-not missing)))
+
+;; Pattern D.  The pins and the agent limits go as the JSON the hub's `from_json' takes for their runtime types.
+(ert-deftest drgnx-settings-runtime/pins-and-limits-encode-as-the-hub-reads-them ()
+  (let ((enc (lambda (var value)
+               (json-serialize (funcall (alist-get var drgnx-settings-runtime--encoders) value)))))
+    (should (equal (funcall enc 'drgnx-sandbox-proxy-pinned-addresses
+                            '(("registry.corp" . "10.0.0.5") ("v6.test" . "::1")))
+                   "{\"registry.corp\":\"10.0.0.5\",\"v6.test\":\"::1\"}"))
+    (should (equal (funcall enc 'drgnx-agents-net-hosts '((packages "crates.io:443")))
+                   "{\"packages\":[\"crates.io:443\"]}"))
+    (should (equal (funcall enc 'drgnx-agents-silent-after '((task . 600))) "{\"task\":600}"))
+    (should (equal (funcall enc 'drgnx-agents-container-images '(("tools" . "r@sha256:00")))
+                   "{\"tools\":\"r@sha256:00\"}"))
+    (should (equal (funcall enc 'drgnx-agents-away-after 600) "600"))
+    (should (equal (funcall enc 'drgnx-agents-job-memory "4G") "\"4G\""))
+    (should (equal (funcall enc 'drgnx-agents-manager-context 0.7) "0.7"))
+    ;; the runners' per-project settings and Hrafn's model mirror, as their runtime types
+    (should (equal (funcall enc 'drgnx-runners-send "heavy") "\"heavy\""))
+    (should (equal (funcall enc 'drgnx-runners-heavy '("cargo test" "fleet")) "[\"cargo test\",\"fleet\"]"))
+    (should (equal (funcall enc 'drgnx-runners-heavy nil) "[]"))
+    (should (equal (funcall enc 'drgnx-runners-image nil) "null"))
+    (should (equal (funcall enc 'drgnx-runners-image "r/n@sha256:00") "\"r/n@sha256:00\""))
+    (should (equal (funcall enc 'drgnx-runners-weight 2) "2"))
+    (should (equal (funcall enc 'drgnx-runners-project-visibility "public") "\"public\""))
+    (should (equal (funcall enc 'drgnx-search-model-mirror nil) "null"))
+    (should (equal (funcall enc 'drgnx-search-model-mirror "https://m.test") "\"https://m.test\""))
+    ;; the agent browser's settings
+    (should (equal (funcall enc 'drgnx-agents-browser-program nil) "null"))
+    (should (equal (funcall enc 'drgnx-agents-browser-program "/usr/bin/chromium") "\"/usr/bin/chromium\""))
+    (should (equal (funcall enc 'drgnx-agents-browser-local-ports '(3000 8080)) "[3000,8080]"))
+    (should (equal (funcall enc 'drgnx-agents-browser-deny-hosts nil) "[]"))
+    (should (equal (funcall enc 'drgnx-agents-browser-deny-hosts '("example.com")) "[\"example.com\"]"))
+    (should (equal (funcall enc 'drgnx-agents-browser-idle 600) "600"))
+    (should (equal (funcall enc 'drgnx-agents-session-memory "4G") "\"4G\""))))
+
 (ert-deftest drgnx-settings-runtime/the-old-sender-is-gone ()
   (dolist (f '(drgnx-hub--send-providers drgnx-hub--providers-table drgnx-hub--provider-json drgnx-hub-resend-providers
                                          drgnx-ai--settings-changed drgnx-ai--config-changed))

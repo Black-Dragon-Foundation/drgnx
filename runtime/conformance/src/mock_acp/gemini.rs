@@ -15,3 +15,17 @@ pub fn after_turn(_sid: &str, _turn: u64, _prompt_len: usize) -> Vec<(&'static s
 pub fn note() -> Value {
     json!({"gemini": "loadSession only"})
 }
+
+/// The `tool_call` fields Gemini CLI sends for WHAT (see the Claude personality): a title, a kind and, for files,
+/// `locations`; no tool name and no `rawInput`, so the query or URL is only in the title.
+pub fn tool_shape(what: &str, arg: &str) -> Option<Value> {
+    let file = arg.split_whitespace().next().unwrap_or("");
+    Some(match what {
+        "read" => json!({"title": file, "kind": "read", "locations": [{"path": file}]}),
+        "grep" => json!({"title": format!("grep_search: \"{arg}\""), "kind": "search"}),
+        "web-search" => json!({"title": format!("google_web_search: \"{arg}\""), "kind": "fetch"}),
+        "web-fetch" => json!({"title": format!("web_fetch {arg}"), "kind": "fetch"}),
+        "write" => json!({"title": arg, "kind": "edit", "locations": [{"path": arg}]}),
+        _ => return None,
+    })
+}

@@ -89,7 +89,7 @@ impl Snap {
             return None;
         }
         let (root, wt, sid_) = (self.root.clone(), worktree.to_path_buf(), sid.to_string());
-        let tree = tokio::task::spawn_blocking(move || snapshot::take(&root, &wt, &sid_, seq, &[]))
+        let tree = crate::clock::blocking(move || snapshot::take(&root, &wt, &sid_, seq, &[]))
             .await
             .ok()?
             .map_err(|e| tracing::warn!(sid, "snapshot not taken: {e}"))
@@ -99,7 +99,7 @@ impl Snap {
             self.root.clone(),
             self.state.finished.lock().expect("timeline").clone(),
         );
-        let pruned = tokio::task::spawn_blocking(move || {
+        let pruned = crate::clock::blocking(move || {
             let repos: Vec<PathBuf> = std::fs::read_dir(&root)
                 .into_iter()
                 .flatten()
@@ -169,6 +169,7 @@ pub(crate) fn step_of(s: table::Step) -> Step {
         cache_write: Some(s.cache_write as u64),
         cost: s.cost,
         cost_unit: s.cost_unit.as_deref().and_then(unit_of),
+        detail: None,
     }
 }
 
@@ -214,23 +215,62 @@ pub async fn get(front: &Front, _: &Caller, p: TimelineParams) -> Result<Timelin
         table::Scope::Session if !id.starts_with("session:") => format!("session:{id}"),
         _ => id,
     };
+    // a session says it is idle before the row of the step that ended its turn is written: the steps it closed are
+    // rows before they are read (a scope wider than a session waits for every session the hub holds)
+    let sessions = match (scope, id.strip_prefix("session:")) {
+        (table::Scope::Session, Some(sid)) => front.core.agents.find(sid).into_iter().collect(),
+        _ => front.core.agents.live_sessions(),
+    };
+    for s in sessions {
+        s.steps_written().await;
+    }
     let since = p.since.unwrap_or(0) as i64;
     let rollup_only = p.rollup == Some(true);
-    let (steps, roll) = front
+    // backwards paging: `limit` and/or `before` (the newest `limit` steps before it, newest last)
+    let back = if p.limit.is_some() || p.before.is_some() {
+        let limit = i64::from(p.limit.unwrap_or(PAGE as u32));
+        if !(1..=PAGE).contains(&limit) {
+            return Err(crate::runner::invalid(format!(
+                "limit is 1 to {PAGE}, not {limit}"
+            )));
+        }
+        Some((
+            p.before.map_or(i64::MAX, |b| b.min(i64::MAX as u64) as i64),
+            limit,
+        ))
+    } else {
+        None
+    };
+    let (steps, details, roll) = front
         .writer
         .db
         .read(move |c| {
             let steps = if rollup_only {
                 Vec::new()
+            } else if let Some((before, limit)) = back {
+                table::before_scope(c, scope, &id, before, limit)?
             } else {
                 table::for_scope(c, scope, &id, since, PAGE + 1)?
             };
-            Ok((steps, table::rollup(c, scope, &id)?))
+            let mut details = Vec::with_capacity(steps.len());
+            for s in &steps {
+                details.push(norn::read::work::step_detail(c, s.id)?);
+            }
+            Ok((steps, details, table::rollup(c, scope, &id)?))
         })
         .await
         .map_err(internal)?;
-    let mut steps: Vec<Step> = steps.into_iter().map(step_of).collect();
-    let next = if steps.len() as i64 > PAGE {
+    let mut steps: Vec<Step> = steps
+        .into_iter()
+        .zip(details)
+        .map(|(s, d)| Step {
+            detail: d.as_ref().map(crate::work::detail::wire),
+            ..step_of(s)
+        })
+        .collect();
+    let next = if back.is_some() {
+        None
+    } else if steps.len() as i64 > PAGE {
         steps.truncate(PAGE as usize);
         steps.last().map(|s| match p.scope {
             Scope::Session => s.seq,

@@ -10,8 +10,11 @@
 
 use super::attempts::{self, Effect, Event as AEvent, Listed};
 use super::health::{self, Facts, StrikeCtx, Strikes};
+use super::keys::{self, Keys};
 use super::link::{LinkEvent, Route, Session};
 use super::local::LocalRunner;
+use super::redact::{self, Redactor};
+use super::sync::{self, Frozen, SyncPlan};
 use crate::exec::Starter;
 use forseti::{
     Accept, Candidate, Drr, Expect, Expected, Job, JobId, JobSpec, JobState, JobTrust, Kind, Lane,
@@ -19,7 +22,7 @@ use forseti::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sleipnir::proto::{Frame, JobRef, Nonce, PROTO_VERSION};
+use sleipnir::proto::{Frame, JobRef, ManifestEntry, Nonce, PROTO_VERSION, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
@@ -131,6 +134,14 @@ pub struct Placement {
     pub image: Option<String>,
     /// The project's weight in fairness (`drgnx-runners-weight`).
     pub weight: f64,
+    /// The project's visibility (`drgnx-runners-project-visibility`): with the commit on the origin, what makes a job
+    /// public.
+    pub visibility: sync::Visibility,
+    /// The project lets a shared runner have its overlay, once scanned (`drgnx-runners-shared-overlay`).
+    pub shared_overlay: bool,
+    /// The name of the project's read-only deploy key or token (`drgnx-runners-origin-key`): a `mine` or `my-cloud`
+    /// runner fetches a private origin with it. A key like any other: held in memory, sent in a `key` frame.
+    pub origin_key: Option<String>,
 }
 
 impl Default for Placement {
@@ -147,7 +158,17 @@ impl Default for Placement {
             machines_cell: true,
             image: None,
             weight: 1.0,
+            visibility: sync::Visibility::Private,
+            shared_overlay: false,
+            origin_key: None,
         }
+    }
+}
+
+impl Placement {
+    /// Whether a job placed so could leave this machine at all, so its inputs are frozen for a runner.
+    pub fn may_leave(&self) -> bool {
+        self.machine != Machine::Local && !self.local_only && self.send != SendMode::None
     }
 }
 
@@ -204,6 +225,8 @@ pub struct Submit {
     pub place: Placement,
     /// What the job layer starts it from (its `Pending`), kept with it.
     pub pending: Value,
+    /// Its inputs, frozen at submit: what a runner syncs. None: it can only run here, in its worktree as it is.
+    pub inputs: Option<Frozen>,
 }
 
 /// A runner the queue may place on, as its registry record says (Task 19 fills these in).
@@ -229,11 +252,13 @@ pub struct RunnerRow {
 /// What the queue tells the job layer.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Outcome {
-    /// A runner's verdict for the job's current attempt (its `result.json`).
+    /// A runner's verdict for the job's current attempt (its `result.json`). SHARED: the runner's name when it is a
+    /// `shared` one (its result is labelled and never counts for a gate).
     Done {
         id: String,
         attempt: u32,
         result: Value,
+        shared: Option<String>,
     },
     /// The job's runner is gone and the job isn't restartable.
     Lost { id: String },
@@ -297,6 +322,41 @@ struct QJob {
     waiting: Option<String>,
     attempt: u32,
     machine: Option<String>,
+    /// Why a `shared` runner may not get its overlay (`sync::overlay_for`), scanned once at submit.
+    shared_why: Option<String>,
+}
+
+impl QJob {
+    fn new(s: Submit, submitted: u64, state: QState, attempt: u32) -> QJob {
+        let shared_why = s
+            .inputs
+            .as_ref()
+            .and_then(|f| sync::overlay_for(f, RunnerTrust::Shared).err());
+        let machine = match &state {
+            QState::Remote(r) => Some(r.clone()),
+            QState::Local => Some(LOCAL.into()),
+            QState::Queued => None,
+        };
+        QJob {
+            s,
+            submitted,
+            state,
+            waiting: None,
+            attempt,
+            machine,
+            shared_why,
+        }
+    }
+}
+
+/// How many `sync-need` answers one attempt's sync may take before the hub gives it up.
+const SYNC_ROUNDS: u32 = 6;
+
+/// One attempt's sync under way (design §6.2): the answers so far, and the bundle the hub is sending it.
+#[derive(Default)]
+struct SyncSt {
+    rounds: u32,
+    bundle: Option<sync::BundleFile>,
 }
 
 struct Remote {
@@ -347,6 +407,16 @@ struct St {
     drr: Drr,
     attempts: attempts::Core,
     runners: BTreeMap<String, Remote>,
+    syncs: BTreeMap<(String, u32), SyncSt>,
+    /// The started attempts of keyed jobs: the keys sent to each so far.
+    keyed: BTreeMap<(String, u32), Vec<String>>,
+}
+
+/// A keyed attempt's log as the hub writes it: every key sent masked, and how far into the runner's log it has read.
+struct Redacting {
+    r: Redactor,
+    /// The runner's offset the hub's copy has taken in (what it wrote, and what the redactor holds back).
+    consumed: u64,
 }
 
 /// How the queue is made.
@@ -370,6 +440,10 @@ pub struct Queue {
     links: mpsc::UnboundedSender<LinkEvent>,
     /// Told when a job enters the queue, so an idle tick loop wakes.
     wake: tokio::sync::Notify,
+    /// The job keys the hub holds, and their audit.
+    keys: Arc<Keys>,
+    /// The logs of keyed attempts, redacted as they are written (by attempt).
+    redact: Mutex<HashMap<(String, u32), Redacting>>,
 }
 
 /// The log file of attempt R of a job whose current attempt is CURRENT.
@@ -398,6 +472,67 @@ impl Route for QRoute {
         }
         Some(path)
     }
+
+    /// A keyed job's log goes through its attempt's redactor: every key sent to it masked before the hub's copy holds
+    /// it. One with no redactor (a hub restarted before its keys came back) keeps none of it.
+    fn write_log(
+        &self,
+        runner: &str,
+        r: &JobRef,
+        offset: u64,
+        bytes: &[u8],
+    ) -> Option<std::io::Result<u64>> {
+        let q = self.0.upgrade()?;
+        let keyed = q
+            .lock()
+            .jobs
+            .get(&r.job)
+            .is_some_and(|j| !j.s.place.keys.is_empty());
+        if !keyed {
+            let path = self.log_path(runner, r)?;
+            return Some(super::link::append_at(&path, offset, bytes));
+        }
+        // the path first: the queue's lock is never taken under the redactors' (the queue takes them in that order)
+        let path = self.log_path(runner, r)?;
+        let key = (r.job.clone(), r.attempt);
+        let mut red = q.redact.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(rd) = red.get_mut(&key) else {
+            tracing::info!(
+                "runners: {runner}: the log of keyed job {} attempt {} is not kept: its keys aren't back yet",
+                r.job,
+                r.attempt
+            );
+            return None;
+        };
+        if offset > rd.consumed {
+            return Some(Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "a log chunk at {offset}, past the copy's end at {}",
+                    rd.consumed
+                ),
+            )));
+        }
+        let skip = (rd.consumed - offset) as usize;
+        if skip < bytes.len() {
+            let out = rd.r.redact(&bytes[skip..]);
+            rd.consumed += (bytes.len() - skip) as u64;
+            if let Err(e) = append_end(&path, &out) {
+                return Some(Err(e));
+            }
+        }
+        Some(Ok(rd.consumed))
+    }
+}
+
+/// Appends BYTES at the end of the file at PATH.
+fn append_end(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?
+        .write_all(bytes)
 }
 
 fn nonce() -> Nonce {
@@ -481,12 +616,151 @@ impl Queue {
             db,
             links,
             wake: tokio::sync::Notify::new(),
+            keys: Arc::default(),
+            redact: Mutex::default(),
         };
         (Arc::new(q), rx)
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, St> {
         self.st.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn redactors(&self) -> std::sync::MutexGuard<'_, HashMap<(String, u32), Redacting>> {
+        self.redact.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The job keys the hub holds, and their audit.
+    pub fn keys(&self) -> &Arc<Keys> {
+        &self.keys
+    }
+
+    /// `runners/keys`: PAIRS held from now on. Started attempts still waiting for one get it now; a keyed attempt
+    /// whose log waited for its keys (a hub restart) is attached again from where the hub's copy ends. The names now
+    /// held.
+    pub fn take_keys(
+        &self,
+        pairs: impl IntoIterator<Item = (String, secrecy::SecretString)>,
+        now: u64,
+    ) -> Vec<String> {
+        let held = self.keys.take(pairs);
+        let mut st = self.lock();
+        let waiting: Vec<(String, u32)> = st.keyed.keys().cloned().collect();
+        for (job, attempt) in waiting {
+            self.send_keys(&mut st, &job, attempt, now);
+        }
+        // the keyed attempts on runners with no redactor yet: once every key of theirs is held, their logs are taken
+        // in again
+        let mut attach = vec![];
+        for (id, j) in &st.jobs {
+            let QState::Remote(runner) = &j.state else {
+                continue;
+            };
+            if j.s.place.keys.is_empty() || !self.keys.missing(&j.s.place.keys).is_empty() {
+                continue;
+            }
+            let Some((attempt, a)) = st.attempts.current(id) else {
+                continue;
+            };
+            if !a.state.open() || self.redactors().contains_key(&(id.clone(), attempt)) {
+                continue;
+            }
+            attach.push((id.clone(), attempt, a.nonce, runner.clone()));
+        }
+        for (job, attempt, nonce, runner) in attach {
+            let r = JobRef {
+                job: job.clone(),
+                attempt,
+                nonce,
+            };
+            let from = self.new_redactor(&st, &r, true);
+            if let Some(rr) = st.runners.get(&runner) {
+                rr.session.send(Frame::Attach {
+                    r,
+                    log_offset: from,
+                });
+            }
+        }
+        held
+    }
+
+    /// Attempt R's redactor, over every key of its job the hub holds; its log is taken in from where the hub's copy
+    /// ends (FROM_COPY), or from the start (a new attempt). Where it starts.
+    fn new_redactor(&self, st: &St, r: &JobRef, from_copy: bool) -> u64 {
+        let names = st
+            .jobs
+            .get(&r.job)
+            .map(|j| j.s.place.keys.clone())
+            .unwrap_or_default();
+        let values: Vec<secrecy::SecretString> =
+            names.iter().filter_map(|n| self.keys.value(n)).collect();
+        let late = st
+            .attempts
+            .current(&r.job)
+            .is_some_and(|(n, _)| n != r.attempt);
+        let consumed = if from_copy {
+            std::fs::metadata(log_file(&self.exec_root, r, late)).map_or(0, |m| m.len())
+        } else {
+            0
+        };
+        self.redactors().insert(
+            (r.job.clone(), r.attempt),
+            Redacting {
+                r: Redactor::new(&values),
+                consumed,
+            },
+        );
+        consumed
+    }
+
+    /// Sends JOB's started attempt ATTEMPT the keys it hasn't had yet (those the hub holds), and masks each in its log.
+    fn send_keys(&self, st: &mut St, job: &str, attempt: u32, now: u64) {
+        let Some(q) = st.jobs.get(job) else {
+            st.keyed.remove(&(job.to_string(), attempt));
+            return;
+        };
+        let names = q.s.place.keys.clone();
+        let QState::Remote(runner) = q.state.clone() else {
+            return;
+        };
+        let Some(a) = st.attempts.attempt(job, attempt) else {
+            return;
+        };
+        let r = JobRef {
+            job: job.to_string(),
+            attempt,
+            nonce: a.nonce,
+        };
+        let sent = st
+            .keyed
+            .get(&(job.to_string(), attempt))
+            .cloned()
+            .unwrap_or_default();
+        let want: Vec<String> = names.into_iter().filter(|n| !sent.contains(n)).collect();
+        if want.is_empty() {
+            return;
+        }
+        let Some(rr) = st.runners.get(&runner) else {
+            return;
+        };
+        // masked before it can reach the job, so before it can reach its log
+        {
+            let mut red = self.redactors();
+            if let Some(rd) = red.get_mut(&(job.to_string(), attempt)) {
+                for v in want.iter().filter_map(|n| self.keys.value(n)) {
+                    rd.r.add(&v);
+                }
+            }
+        }
+        let link = |f: Frame| rr.session.send(f);
+        let out = keys::send(&link, &runner, rr.r.trust, &[], &r, &want, &self.keys, now);
+        if let Some(why) = out.refused {
+            tracing::warn!("runners: {job}: {why}");
+        }
+        st.keyed
+            .entry((job.to_string(), attempt))
+            .or_default()
+            .extend(out.sent);
     }
 
     fn persist(&self, op: DbOp) {
@@ -556,6 +830,14 @@ impl Queue {
         self.lock().runners.len()
     }
 
+    /// This machine's job slots, `(all, free)`: what it takes at once ([`LocalRunner::slots`], never fewer than run
+    /// here now) and how many of them no queued job here holds.
+    pub fn local_slots(&self) -> (usize, usize) {
+        let running = self.lock().local_running.len();
+        let all = self.local.slots().max(running);
+        (all, all - running)
+    }
+
     /// Whether a tick has work: a job waits, or an attempt is on a runner (its grace may end).
     pub fn busy(&self) -> bool {
         let st = self.lock();
@@ -606,6 +888,65 @@ impl Queue {
         }
     }
 
+    /// Runner NAME's session now (to end it before a new link is made).
+    pub fn session(&self, name: &str) -> Option<Session> {
+        self.lock().runners.get(name).map(|r| r.session.clone())
+    }
+
+    /// Runner NAME on a new SESSION (a reconnect, or a changed profile): it says `hello` now and is ready at its
+    /// `hello-ok`; its strikes stay. False when no runner of that name is known.
+    pub fn set_session(&self, name: &str, session: Session) -> bool {
+        let mut st = self.lock();
+        let Some(r) = st.runners.get_mut(name) else {
+            return false;
+        };
+        session.send(Frame::Hello {
+            version: PROTO_VERSION,
+            hub_id: self.hub_id.clone(),
+        });
+        r.session = session;
+        r.state = RunnerState::Unreachable { since: 0 };
+        true
+    }
+
+    /// Runner NAME's trust and accept as its registry record now says.
+    pub fn set_runner(&self, name: &str, trust: RunnerTrust, accept: Accept) -> bool {
+        match self.lock().runners.get_mut(name) {
+            Some(r) => {
+                r.r.trust = trust;
+                r.r.accept = accept;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// How many jobs are offered to, or running on, runner NAME.
+    pub fn runner_jobs(&self, name: &str) -> u32 {
+        let st = self.lock();
+        st.jobs
+            .values()
+            .filter(|j| matches!(&j.state, QState::Remote(r) if r == name))
+            .count() as u32
+    }
+
+    /// Runner NAME forgotten (its session ends). Refused, with the reason, while a job is on it.
+    pub fn remove_runner(&self, name: &str) -> Result<(), String> {
+        let mut st = self.lock();
+        let busy = st
+            .jobs
+            .values()
+            .filter(|j| matches!(&j.state, QState::Remote(r) if r == name))
+            .count();
+        if busy > 0 {
+            return Err(format!(
+                "{busy} job(s) are on {name}: stop them or wait for them to end"
+            ));
+        }
+        st.runners.remove(name);
+        Ok(())
+    }
+
     fn put_job(&self, j: &QJob, eff: Priority) {
         let id = j.s.id.clone();
         let spec = json!({
@@ -613,6 +954,7 @@ impl Queue {
             "place": j.s.place,
             "pending": j.s.pending,
             "session": j.s.session,
+            "inputs": j.s.inputs,
         })
         .to_string();
         let (own, eff) = (j.s.own.number(), eff.number());
@@ -626,6 +968,7 @@ impl Queue {
             Machine::Runner(n) => Some(n.clone()),
         };
         let project = j.s.spec.project.clone();
+        let input_key = j.s.inputs.as_ref().map(|f| f.input_key.clone());
         let state = match j.state {
             QState::Queued => "queued",
             QState::Local | QState::Remote(_) => "running",
@@ -634,8 +977,37 @@ impl Queue {
         self.persist(Box::new(move |c| {
             c.execute(
                 "insert or replace into rq_job(id, spec, own, effective, trust, pin, project, input_key, state, \
-                 submitted, attempt) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, null, ?8, ?9, ?10)",
-                (id, spec, own, eff, trust, pin, project, state, submitted, attempt),
+                 submitted, attempt) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                (
+                    id, spec, own, eff, trust, pin, project, input_key, state, submitted, attempt,
+                ),
+            )?;
+            Ok(())
+        }));
+    }
+
+    /// Writes frozen inputs F to `rq_input` (design §7.4), or marks them used again at NOW.
+    fn put_input(&self, f: &Frozen, now: u64) {
+        let manifest = serde_json::to_vec(&f.manifest).unwrap_or_default();
+        let manifest_hash = {
+            use sha2::Digest;
+            sha2::Sha256::digest(&manifest)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        };
+        let extras = serde_json::to_string(&f.extras).unwrap_or_default();
+        let (key, commit, tree, at) = (
+            f.input_key.clone(),
+            f.commit.clone(),
+            f.tree.clone(),
+            now as f64,
+        );
+        self.persist(Box::new(move |c| {
+            c.execute(
+                "insert into rq_input(key, commit_sha, tree, manifest_hash, manifest, extras, created, last_used) \
+                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7) on conflict(key) do update set last_used = excluded.last_used",
+                (key, commit, tree, manifest_hash, manifest, extras, at),
             )?;
             Ok(())
         }));
@@ -702,16 +1074,14 @@ impl Queue {
         }))
     }
 
-    /// A job enters the queue at NOW.
-    pub fn submit(&self, s: Submit, now: u64) {
-        let j = QJob {
-            submitted: now,
-            state: QState::Queued,
-            waiting: None,
-            attempt: 0,
-            machine: None,
-            s,
-        };
+    /// A job enters the queue at NOW. With frozen inputs, its trust is theirs (design §6.6: from what the public
+    /// origin has, and the keys it names), whatever the spec said, and they are kept in `rq_input`.
+    pub fn submit(&self, mut s: Submit, now: u64) {
+        if let Some(f) = &s.inputs {
+            s.spec.trust = f.trust(&s.place.keys);
+            self.put_input(f, now);
+        }
+        let j = QJob::new(s, now, QState::Queued, 0);
         self.put_job(&j, j.s.own);
         self.lock().jobs.insert(j.s.id.clone(), j);
         self.wake.notify_one();
@@ -732,20 +1102,9 @@ impl Queue {
                 ("running", None) => continue,
                 _ => QState::Queued,
             };
-            let machine = match &state {
-                QState::Remote(r) => Some(r.clone()),
-                _ => None,
-            };
             st.jobs.insert(
                 s.submit.id.clone(),
-                QJob {
-                    submitted: s.submitted,
-                    state,
-                    waiting: None,
-                    attempt: s.attempt,
-                    machine,
-                    s: s.submit,
-                },
+                QJob::new(s.submit, s.submitted, state, s.attempt),
             );
         }
         let mut jobs_with_attempts = Vec::new();
@@ -792,20 +1151,17 @@ impl Queue {
         let mut st = self.lock();
         st.local_running
             .insert(id.to_string(), running(id, own, now, 512, 1));
-        let j = st.jobs.entry(id.to_string()).or_insert_with(|| QJob {
-            s: Submit {
+        let j = st.jobs.entry(id.to_string()).or_insert_with(|| {
+            let s = Submit {
                 id: id.into(),
                 session: None,
                 own,
                 spec: blank_spec(id),
                 place: Placement::default(),
                 pending: Value::Null,
-            },
-            submitted: now,
-            state: QState::Local,
-            waiting: None,
-            attempt: 0,
-            machine: Some(LOCAL.into()),
+                inputs: None,
+            };
+            QJob::new(s, now, QState::Local, 0)
         });
         j.state = QState::Local;
         j.machine = Some(LOCAL.into());
@@ -995,7 +1351,20 @@ impl Queue {
             history: vec![],
             cloud: None,
         }];
+        // a keyed job's keys reach a runner's job only: this machine is no candidate for it (it never runs without them)
+        let keyed = !job.spec.keys.is_empty();
+        if keyed {
+            cands.clear();
+        }
+        // a shared runner the job's overlay may not reach is no candidate; the job says why if nothing else takes it
+        let mut held_off = None;
         for (name, r) in &st.runners {
+            if r.r.trust == RunnerTrust::Shared
+                && let Some(why) = &q.shared_why
+            {
+                held_off.get_or_insert_with(|| why.clone());
+                continue;
+            }
             cands.push(Candidate {
                 name: name.clone(),
                 local: false,
@@ -1020,7 +1389,7 @@ impl Queue {
             gates_allowed: false,
             cloud_after_s: CLOUD_AFTER_S,
             now,
-            commits_not_on_origin: 0,
+            commits_not_on_origin: q.s.inputs.as_ref().map_or(0, Frozen::commits_not_on_origin),
         };
         // the pick, then this machine's own admission: refused here, the job may still go to a runner
         let mut here: Option<WaitReason> = None;
@@ -1058,6 +1427,21 @@ impl Queue {
             }
             Placed::There(name) => self.offer(st, job, eff, &name, now),
             Placed::Wait(r) => {
+                let why = forseti::place::why_here(job, &cands, &ctx).or(held_off);
+                if keyed {
+                    let base = "waits for a runner: its keys reach no job on this machine";
+                    q.waiting = Some(match (why, &r) {
+                        (Some(w), _) => format!("{base} ({})", w.trim_start_matches("runs here: ")),
+                        (None, WaitReason::NoRunner) => base.to_string(),
+                        (None, r) => format!("{base} ({})", wait_text(r)),
+                    });
+                    return;
+                }
+                // trust alone keeps it off every runner: the design's "runs here: …" words say why
+                if let Some(why) = why {
+                    q.waiting = Some(why);
+                    return;
+                }
                 // a runner's refusal stays shown until something else holds the job
                 let refused = q.waiting.as_deref().is_some_and(|w| w.contains(": "));
                 if !refused || !matches!(r, WaitReason::Mode | WaitReason::NoRunner) {
@@ -1100,7 +1484,12 @@ impl Queue {
                 r: r.clone(),
                 spec: Box::new(job.spec.clone()),
                 priority: eff,
-                input_key: String::new(),
+                input_key: j
+                    .s
+                    .inputs
+                    .as_ref()
+                    .map(|f| f.input_key.clone())
+                    .unwrap_or_default(),
                 grant_hint: None,
                 expected: None,
             });
@@ -1322,20 +1711,11 @@ impl Queue {
             }
             Frame::Admit { r, grant } => {
                 if st.attempts.frame_ok(runner, &r) == Some(false) {
-                    // a health check's canary runs in the runner's own image
-                    let image = if is_canary(&r.job) {
-                        st.runners.get(runner).and_then(|rr| rr.r.image.clone())
-                    } else {
-                        st.jobs.get(&r.job).and_then(|j| j.s.place.image.clone())
-                    };
-                    if let Some(rr) = st.runners.get(runner) {
-                        rr.session.send(Frame::Start {
-                            r: r.clone(),
-                            image,
-                            env: vec![],
-                            net_hosts: vec![],
-                            parser: "exit".into(),
-                        });
+                    // a job with frozen inputs syncs them first; its start follows the last `sync-need`
+                    let frozen = st.jobs.get(&r.job).and_then(|j| j.s.inputs.clone());
+                    match frozen {
+                        Some(f) if !is_canary(&r.job) => Self::sync_have(st, runner, &r, &f),
+                        _ => self.start(st, runner, &r),
                     }
                     let (job, attempt, runner) = (r.job.clone(), r.attempt, runner.to_string());
                     let grant = serde_json::to_string(&grant).unwrap_or_default();
@@ -1376,6 +1756,17 @@ impl Queue {
                 }
                 return;
             }
+            Frame::SyncNeed {
+                r,
+                blobs,
+                commit,
+                refs,
+            } => {
+                if st.attempts.frame_ok(runner, &r) == Some(false) {
+                    self.sync_need(st, runner, &r, &blobs, commit, &refs, now);
+                }
+                return;
+            }
             Frame::ProbeResult {
                 facts,
                 missing,
@@ -1393,12 +1784,42 @@ impl Queue {
                 }
                 return;
             }
-            Frame::Started { r, .. } => AEvent::Started {
-                runner: runner.into(),
-                r,
-            },
+            Frame::Started { r, .. } => {
+                // a keyed job's keys go now, after `started` only, one frame each
+                let keyed = st
+                    .jobs
+                    .get(&r.job)
+                    .is_some_and(|j| !j.s.place.keys.is_empty());
+                if keyed && st.attempts.frame_ok(runner, &r) == Some(false) {
+                    st.keyed.entry((r.job.clone(), r.attempt)).or_default();
+                    self.send_keys(st, &r.job, r.attempt, now);
+                }
+                AEvent::Started {
+                    runner: runner.into(),
+                    r,
+                }
+            }
+            Frame::KeyUse { r, name, at } => {
+                // the runner's word: recorded as runner-reported, for an attempt the hub placed there only
+                if st.attempts.frame_ok(runner, &r).is_some()
+                    && let Some(row) = keys::row(
+                        runstav::methods::runners::AuditKind::Use,
+                        &r,
+                        &name,
+                        runner,
+                        if at > 0 { at } else { now },
+                    )
+                {
+                    self.keys.record(row);
+                }
+                AEvent::FrameFrom {
+                    runner: runner.into(),
+                    r,
+                }
+            }
             Frame::Finished { r, result } => {
                 let job = r.job.clone();
+                self.end_redaction(st, runner, &r);
                 let late = st.attempts.frame_ok(runner, &r) == Some(true)
                     || st
                         .attempts
@@ -1467,9 +1888,267 @@ impl Queue {
         }
     }
 
+    /// Attempt R on RUNNER sent its result: its log's redactor gives back what it held, and the heuristic's notices
+    /// (never a change to the log) go to the user, read off the queue's lock.
+    fn end_redaction(&self, st: &mut St, runner: &str, r: &JobRef) {
+        st.keyed.remove(&(r.job.clone(), r.attempt));
+        let Some(late) = st.attempts.frame_ok(runner, r) else {
+            return;
+        };
+        let path = log_file(&self.exec_root, r, late);
+        if let Some(mut rd) = self.redactors().remove(&(r.job.clone(), r.attempt)) {
+            let tail = rd.r.finish();
+            if !tail.is_empty()
+                && let Err(e) = append_end(&path, &tail)
+            {
+                tracing::warn!("runners: {}: {e}", path.display());
+            }
+        }
+        if is_canary(&r.job) {
+            return;
+        }
+        let (keys, job, attempt, runner) = (
+            self.keys.clone(),
+            r.job.clone(),
+            r.attempt,
+            runner.to_string(),
+        );
+        std::thread::spawn(move || {
+            let log = std::fs::read(&path).unwrap_or_default();
+            let found = redact::notices(&log);
+            // one notice per log: the first line, and how many more
+            if let Some(first) = found.first() {
+                let text = match found.len() - 1 {
+                    0 => first.clone(),
+                    more => format!("{first} (and {more} more lines)"),
+                };
+                keys.tell_event(
+                    "notice",
+                    json!({
+                        "source": "hub",
+                        "severity": "warn",
+                        "id": format!("runners-log-{job}-{attempt}"),
+                        "life": "event",
+                        "text": format!("job {job} on {runner}: {text}"),
+                    }),
+                );
+            }
+        });
+    }
+
+    /// Starts admitted attempt R on RUNNER, in the job's image (a health check's canary in the runner's own). A keyed
+    /// job's log is redacted from its first byte.
+    fn start(&self, st: &St, runner: &str, r: &JobRef) {
+        let image = if is_canary(&r.job) {
+            st.runners.get(runner).and_then(|rr| rr.r.image.clone())
+        } else {
+            st.jobs.get(&r.job).and_then(|j| j.s.place.image.clone())
+        };
+        let keyed = st
+            .jobs
+            .get(&r.job)
+            .is_some_and(|j| !j.s.place.keys.is_empty());
+        if keyed {
+            self.new_redactor(st, r, false);
+        }
+        if let Some(rr) = st.runners.get(runner) {
+            rr.session.send(Frame::Start {
+                r: r.clone(),
+                image,
+                env: vec![],
+                net_hosts: vec![],
+                // no network reaches a runner job yet (`net_hosts`), so no names to pin either
+                pins: vec![],
+                parser: "exit".into(),
+            });
+        }
+    }
+
+    /// Tells RUNNER what attempt R's inputs F are, with the part of the overlay its trust may get; it answers with
+    /// what it lacks (`sync-need`).
+    fn sync_have(st: &mut St, runner: &str, r: &JobRef, f: &Frozen) {
+        let Some(rr) = st.runners.get(runner) else {
+            return;
+        };
+        match sync::overlay_for(f, rr.r.trust) {
+            Ok(manifest) => {
+                rr.session.send(Frame::SyncHave {
+                    r: r.clone(),
+                    repo: f.repo.clone(),
+                    input_key: f.input_key.clone(),
+                    commit: f.commit.clone(),
+                    tree: f.tree.clone(),
+                    manifest,
+                });
+                st.syncs.entry((r.job.clone(), r.attempt)).or_default();
+            }
+            Err(why) => Self::give_up(st, runner, r, &why),
+        }
+    }
+
+    /// Attempt R's sync can't go on: RUNNER cancels the attempt (its reservation goes there), and why is logged.
+    fn give_up(st: &mut St, runner: &str, r: &JobRef, why: &str) {
+        tracing::warn!("runners: {}: the sync to {runner} stops: {why}", r.job);
+        st.syncs.remove(&(r.job.clone(), r.attempt));
+        if let Some(rr) = st.runners.get(runner) {
+            rr.session.send(Frame::Cancel { r: r.clone() });
+        }
+    }
+
+    /// RUNNER's answer for attempt R: it lacks the commit (an origin fetch, or a bundle), or these BLOBS of the
+    /// overlay (sent, then asked again), or nothing (the attempt starts). Its mirror holds REFS.
+    #[allow(clippy::too_many_arguments)]
+    fn sync_need(
+        &self,
+        st: &mut St,
+        runner: &str,
+        r: &JobRef,
+        blobs: &[Sha256],
+        commit: bool,
+        refs: &[String],
+        now: u64,
+    ) {
+        let Some(f) = st.jobs.get(&r.job).and_then(|j| j.s.inputs.clone()) else {
+            return;
+        };
+        let Some(trust) = st.runners.get(runner).map(|rr| rr.r.trust) else {
+            return;
+        };
+        // the project's deploy key for a runner of the user's, when the hub holds it (one it doesn't is asked for, and
+        // the commit goes another way meanwhile)
+        let origin_key = st
+            .jobs
+            .get(&r.job)
+            .and_then(|j| j.s.place.origin_key.clone())
+            .filter(|_| commit && trust != RunnerTrust::Shared);
+        let origin_cred = origin_key.as_ref().and_then(|n| {
+            let v = self.keys.value(n);
+            if v.is_none() {
+                self.keys.ask(std::slice::from_ref(n));
+            }
+            v.map(|v| (n.clone(), v))
+        });
+        let key = (r.job.clone(), r.attempt);
+        let s = st.syncs.entry(key.clone()).or_default();
+        s.rounds += 1;
+        // a bundle sent before has been taken in, or failed: its file goes, and a new one is made if still needed
+        s.bundle = None;
+        if s.rounds > SYNC_ROUNDS {
+            let why = format!("the runner still lacks the inputs after {SYNC_ROUNDS} rounds");
+            return Self::give_up(st, runner, r, &why);
+        }
+        let Some(rr) = st.runners.get(runner) else {
+            return;
+        };
+        let send = |fr: Frame| rr.session.send(fr);
+        if commit {
+            let missing = match trust {
+                RunnerTrust::Shared => Ok(0),
+                _ => sync::missing_bytes(&f.worktree, &f.commit, refs),
+            };
+            let key_name = origin_cred.as_ref().map(|(n, _)| n.clone());
+            let done = missing.and_then(|m| match sync::plan(&f, trust, m, key_name.as_deref()) {
+                SyncPlan::Origin { url, cred } => {
+                    // the deploy key goes first, in a `key` frame like any key, and the fetch names it
+                    let cred = match (cred, origin_cred) {
+                        (Some(name), Some((_, value))) => {
+                            let sent = send(Frame::Key(sleipnir::proto::Key {
+                                r: r.clone(),
+                                name: name.clone(),
+                                value: sleipnir::proto::KeyValue::new(value),
+                            }));
+                            if sent
+                                && let Some(row) = keys::row(
+                                    runstav::methods::runners::AuditKind::Sent,
+                                    r,
+                                    &name,
+                                    runner,
+                                    now,
+                                )
+                            {
+                                self.keys.record(row);
+                            }
+                            Some(name)
+                        }
+                        _ => None,
+                    };
+                    send(Frame::OriginFetch {
+                        r: r.clone(),
+                        repo: f.repo.clone(),
+                        url,
+                        commit: f.commit.clone(),
+                        cred,
+                    });
+                    Ok(None)
+                }
+                // a push goes as a bundle too, until the hub pushes over the runner's master
+                SyncPlan::Bundle { .. } | SyncPlan::Push => {
+                    let b =
+                        sync::make_bundle(&f.worktree, &f.commit, refs, &f.blobs.join("bundles"))?;
+                    let id = format!("{}.{}", r.job, r.attempt);
+                    sync::send_bundle(&send, r, &id, &b, 0)?;
+                    Ok(Some(b))
+                }
+                SyncPlan::Never(why) => Err(why),
+            });
+            match done {
+                Ok(b) => {
+                    if let Some(s) = st.syncs.get_mut(&key) {
+                        s.bundle = b;
+                    }
+                }
+                Err(why) => Self::give_up(st, runner, r, &why),
+            }
+            return;
+        }
+        // only the blobs of this attempt's own overlay, in chunks
+        let ours: Vec<[u8; 32]> = sync::overlay_for(&f, trust)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|e| match e {
+                ManifestEntry::File {
+                    sha256: Sha256(s), ..
+                } => Some(*s),
+                ManifestEntry::Deleted { .. } => None,
+            })
+            .collect();
+        let mut failed = None;
+        for Sha256(sha) in blobs {
+            if !ours.contains(sha) {
+                tracing::warn!(
+                    "runners: {runner} asked {} for a blob not in its overlay",
+                    r.job
+                );
+                continue;
+            }
+            if let Err(e) = sync::send_blob(&send, r, &f, sha) {
+                failed = Some(e);
+                break;
+            }
+        }
+        if let Some(why) = failed {
+            return Self::give_up(st, runner, r, &why);
+        }
+        if !blobs.is_empty() {
+            return Self::sync_have(st, runner, r, &f);
+        }
+        st.syncs.remove(&key);
+        self.start(st, runner, r);
+    }
+
     /// Carries out the attempt state machine's EFFECTS.
     fn apply(&self, st: &mut St, effects: Vec<Effect>, now: u64, out: &mut Vec<Outcome>) {
         for e in effects {
+            // an attempt that ended, or went back to the queue, syncs no more (its bundle file goes)
+            if let Effect::Verdict { job, .. }
+            | Effect::Requeue { job, .. }
+            | Effect::Lost { job } = &e
+            {
+                st.syncs.retain(|(j, _), _| j != job);
+                // and is sent no more keys; what its redactor held back goes with it (it could begin a key)
+                st.keyed.retain(|(j, _), _| j != job);
+                self.redactors().retain(|(j, _), _| j != job);
+            }
             match e {
                 Effect::Verdict {
                     job,
@@ -1477,6 +2156,11 @@ impl Queue {
                     result,
                 } => {
                     let runner = st.attempts.attempt(&job, attempt).map(|a| a.runner.clone());
+                    let shared = runner.clone().filter(|r| {
+                        st.runners
+                            .get(r)
+                            .is_some_and(|x| x.r.trust == RunnerTrust::Shared)
+                    });
                     let verdict = verdict_of(&result)
                         .unwrap_or_else(|| forseti::Verdict::Infra("no verdict".into()));
                     if is_canary(&job) {
@@ -1493,6 +2177,7 @@ impl Queue {
                         id: job,
                         attempt,
                         result,
+                        shared,
                     });
                 }
                 Effect::Requeue { job, reason } => {
@@ -1535,7 +2220,28 @@ impl Queue {
                         attempt,
                         nonce: a.nonce,
                     };
-                    if let Some(rr) = st.runners.get(&a.runner) {
+                    let runner = a.runner.clone();
+                    // a keyed job's log is taken in again only through a redactor of all its keys, from where the
+                    // hub's copy ends; with a key not back yet it waits for `runners/keys`
+                    let keys = st
+                        .jobs
+                        .get(&job)
+                        .map(|j| j.s.place.keys.clone())
+                        .unwrap_or_default();
+                    let copied = self
+                        .redactors()
+                        .get(&(job.clone(), attempt))
+                        .map(|rd| rd.consumed);
+                    let offset = if keys.is_empty() {
+                        offset
+                    } else if let Some(c) = copied {
+                        c
+                    } else if self.keys.missing(&keys).is_empty() {
+                        self.new_redactor(st, &r, true)
+                    } else {
+                        continue;
+                    };
+                    if let Some(rr) = st.runners.get(&runner) {
                         rr.session.send(Frame::Attach {
                             r,
                             log_offset: offset,
@@ -1645,6 +2351,9 @@ pub async fn stored(db: &urdr::Handle) -> (Vec<Stored>, Vec<StoredAttempt>) {
                     spec: serde_json::from_value(v.get("job")?.clone()).ok()?,
                     place: serde_json::from_value(v.get("place")?.clone()).ok()?,
                     pending: v.get("pending").cloned().unwrap_or(Value::Null),
+                    inputs: v
+                        .get("inputs")
+                        .and_then(|i| serde_json::from_value(i.clone()).ok()),
                 },
                 submitted: submitted as u64,
                 state,

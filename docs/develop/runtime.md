@@ -16,7 +16,7 @@ runtime/
   fuzz/             cargo-fuzz targets: its own workspace, nightly only
 ```
 
-- **MSRV 1.88**, edition 2024, `license = "GPL-3.0-or-later"` on every crate of ours. There is no
+- **MSRV 1.95**, edition 2024, `license = "GPL-3.0-or-later"` on every crate of ours. There is no
   `rust-toolchain.toml`: distro cargo ignores it.
 - **Dependencies** are declared once in `[workspace.dependencies]`; a crate writes `x.workspace = true`. A new
   dependency needs a line in its commit message saying which job it does and what it adds to `cargo tree`.
@@ -41,12 +41,15 @@ runtime/
 | `norn` | `work.db`'s coordination writer, its readers and the 16 coordination tools on `mimir` ([coordination.md](coordination.md)); drgnx's policy over `urdr::graph` (closed kinds and links, the personal-notes deny-list, scopes, grants, trust marking, projects), the schema 6 → 7 migration, the tracker and its tools ([store.md](store.md)); pure Rust but for urdr's bundled SQLite, so off the Android cross-check |
 | `bifrost` | the gateway: admission, tokens, chain fallback, the SSE usage scanner, budget, the HTTP/1.1 upstream client over rustls; self-contained (certificate checks behind its default feature `platform-verifier`). Rust but for `ring`'s C and assembly, so its cross-checks stub the C compiler as urdr's do (below) |
 | `hrafn` | search and the indexer |
+| `hrafn-embed` | Hrafn's embedding side: the pinned model table, the model cache's checks and the built-in embedder; pure Rust, no C, builds for Android ("Hrafn" below) |
 | `huginn` | a reader for the data subset of Emacs Lisp: literal values with byte spans, never evaluated, every reader macro refused; settings files and a serde deserializer (feature `serde`); generic ([settings.md](settings.md#the-data-subset)). `drgnx-ratatoskr` reads `settings.el` and the shipped `runtime-defaults.el` with it ([hub.md](hub.md#settings)) |
 | `hermod` | an ACP client on `agent-client-protocol-schema`'s types and runstav's line codec (no SDK role framework): stamped updates, message ids, fork at a message, exactly-once exit; generic (agent system part 1, Task 1) |
 | `saga` | the org folder's record formats (plans, ledgers, DEFERRED, the build board, `board.org`) parsed and rendered back byte-exact, turned into graph operations; pure, `pulldown-cmark` for Markdown (agent system part 1, Tasks 5, 6, 14) |
 | `forseti` | the scheduler core: the job model, priority, admission, the memory cap and ladder, kill classes, expected times, placement and fairness; pure, `serde` only, shared by the hub, the runners and jobq ([forseti.md](forseti.md)) |
 | `sleipnir` | the runner: the Linux machine probe and runner contract, the reservation files two schedulers share, the executor; its `linux` and `sync` features are blocking, never tokio, so jobq takes them ([sleipnir.md](sleipnir.md)) |
+| `vegvisir` | the Work space's map core: its model (items in six layers, edges, chains, overlaps, needs-you) and its layout, stepped by typed events with effects out; pure, `serde` only ([work-space.md](work-space.md)) |
 | `skuld` | test support, never shipped: every order of a pure core, and the one real-time wait Rust tests may use ([below](#every-order-skuld)); crates name it under `[dev-dependencies]` only |
+| `heimdall` | the CDP broker's pure part: envelope parsing over `serde_json`'s `RawValue` (params never re-encoded), routing one browser connection between the agent and the hub by session owner, the refusal list, downloads, cleanup when the agent goes, and the pipe's NUL and frame codecs; no I/O, std and serde only, built for Android too ([hub.md](hub.md#the-cdp-broker)) |
 | `domr` (formerly `drgnx-conformance`; lives in `runtime/conformance/`) | the conformance harness (this page) |
 
 The protocol is still called "the hub protocol", and the socket, cap and lock files keep their `hub-HASH.*` names.
@@ -74,7 +77,7 @@ Android stance. Rust's Android target is `target_os = "android"`, not `"linux"`,
 bwrap) `target_os = "linux"` alone with the Android stance (a stub, or "unsupported") in a comment. Every `cfg` chain
 ends in a fallback that returns `None` or `Unsupported`, never a missing item. Platform code sits in one module or
 function per crate. The type-check (`rustup target add aarch64-linux-android` first) is
-`cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p drgnx-ratatoskr`.
+`cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p heimdall -p drgnx-ratatoskr`.
 `drgnx-ratatoskr` depends on `urdr`, whose bundled SQLite is C, and compiling C for Android needs the NDK. A type-check
 does not link, so without the NDK stub the C compiler and archiver: `CC_aarch64_linux_android=/usr/bin/true
 AR_aarch64_linux_android=/usr/bin/true` (the Rust is still checked in full; only the C object files are fake).
@@ -598,8 +601,13 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 **Tags** (`requires`): `v1` (hello v1: every row), `sudo` (euid 0, or `sudo -n true` succeeds), `test-hooks` (the
 binary's `version --json` says `"test_hooks": true`), `linux`, `macos`, `perf`, `agent-locks`, `podman` (`podman` is on
 the PATH; an excused skip otherwise), `real-sandbox` (the binary has **no** test hooks and its `sandbox check --json`
-says `ok`; an excused skip otherwise, with the reason: [the real-start rows](#the-real-start-rows)). A tag that is not in
-this list is a parse error naming it. A row whose requirement is missing is skipped.
+says `ok`; an excused skip otherwise, with the reason: [the real-start rows](#the-real-start-rows)), `chromium` (the hub
+gives sessions a browser here: its `sandbox check` reports Landlock ABI 9 or later, and `browser list --json` resolves a
+Chromium), `playwright-mcp` (`node` on the PATH and Playwright MCP in `/opt/pw-mcp`, as the browser test image has them),
+`internet` (the row reaches the outside network; it runs only with `DRGNX_TEST_INTERNET=1`). `chromium` and
+`playwright-mcp` are excused skips where they are missing, except with `DRGNX_TEST_REAL_BROWSER=1` in domr's
+environment: real browsers were asked for, so a missing one fails `--require-all`. A tag that is not in this list is a
+parse error naming it. A row whose requirement is missing is skipped.
 
 **Known reds** (`"pending": "REASON"` in the header, REASON naming the task that turns it green): the row runs, and a
 failure is listed as `PENDING` and counted apart (`N pending` in the summary), never as a failure; a row that passes
@@ -626,6 +634,7 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
 | `poll` | `conn`, `json` (a request with an `id`), `expect` (pattern), `within_ms` (5000), `every_ms` (200) | send the request and take its reply (by id) again until one matches: for state the hub reaches in the background (sessions resumed after a restart), read back instead of an event that may have gone before the row subscribed |
 | `expect_closed` | `conn`, `within_ms`, `silent` | the hub closed the connection; with `"silent": true`, without sending a line first (a refusal answers nothing) |
 | `expect_silent` | `conn`, `for_ms` (300) | no line arrives |
+| `count_events` | `conn`, `for_ms` (1000), `at_most` (event name → N), `none` (event names), `lacks` | read the connection for `for_ms` (lines already buffered included) and count its events by name: no name over its `at_most`, none of `none` at all, no line holding the text `lacks`. For traffic budgets |
 | `kill` | `hub` or `pid`, `signal` (`TERM KILL STOP CONT INT HUP QUIT USR1 USR2`) | signal the hub (or a captured pid) |
 | `expect_exit` | `hub`, `pid` or `conn`, `code`, `signal`, `within_ms` (10000) | the process ended with this status (a `pid` must be one the scenario spawned; a `conn` one a `spawn_conn` started) |
 | `file` | `path`, `exists`, `mode`, `owner` (`"user"` or a uid), `json`, `contains`, `count` (1), `at_most`, `lacks`, `within_ms` (5000) | inspect a file the contract names. A `*` or `?` in the last component picks the first matching name (`hub-*.jsonl`). `contains` waits up to `within_ms` until the file's text holds the string `count` times (a log is written a moment later), and then no more than `at_most` times when given (a line logged once); `lacks` is a string the text must not hold |
@@ -645,7 +654,7 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
 
 - `acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] [--refuse-mode MODE]` is a scripted ACP agent on stdio
   (`conformance/src/mock_acp/`, the stand-in for the outside agents' CLIs; wire of `agent-client-protocol-schema
-  =1.12.0`). A prompt's lines are its program: `tool:read|edit PATH`, `tool:exec CMD`, `ask:permission KIND`,
+  =1.12.0`). A prompt's lines are its program: `tool:read|edit PATH`, `tool:exec CMD`, `tool:write N` (a Write of N bytes of input), `ask:permission KIND`,
   `call:MCPTOOL JSON` (through the first stdio server of `mcpServers`), `decide TEXT` (`record_decision`),
   `commit MSG`, `sleep-loop` (asks to run `sleep 30; pgrep …`), `silent N` (a `session/cancel` ends it),
   `crash` (exit 3); anything else is echoed. `--script` gives the n-th prompt its n-th line. Every answer carries
@@ -654,6 +663,14 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
   `_claude/rateLimit`), codex (same set; logs `-c` overrides of argv; forks at a turn; `usage_update` and
   `_codex/rateLimits`), gemini (`loadSession` only; the rest answers -32601). `--refuse-mode MODE` refuses `session/set_mode` to MODE (a lock that does not hold; the `agent-locks` rows); other modes are accepted. `--log` is JSONL; `--llm URL` POSTs
   to a `ratatoskr-mock llm` once per turn, so its log counts requests.
+- `http-serve PORT TEXT` prints `MOCK-HTTP-PORT N` and serves on 127.0.0.1:PORT (0: any free port) a page whose title
+  and text are TEXT, and `/download`, TEXT as an attachment: an agent's dev server inside its sandbox, or a site on the
+  host's loopback.
+- `cdp-drive URL…` is an outside agent's browser tool: it runs Playwright MCP (`node
+  /opt/pw-mcp/node_modules/@playwright/mcp/cli.js`, the browser test image's) over stdio with its own environment, so
+  Playwright reaches the browser that `PLAYWRIGHT_MCP_CDP_ENDPOINT` names (never in an argv), and for each URL calls
+  `browser_navigate` and `browser_snapshot` and prints `TITLE <the page's title>` or `ERROR <url>: <why>`; it exits 1
+  when any failed.
 - `llm --script FILE [--log FILE] [--tls CA_FILE] [--parent PID]` prints `MOCK-LLM-PORT N` and serves a scripted
   provider on 127.0.0.1 (a port of `test/fixtures/mock-llm.el`). With `--tls` it makes a certificate authority and a
   leaf for `localhost` and 127.0.0.1 at start (`rcgen`), writes the CA's certificate (no key) to CA_FILE, prints
@@ -668,6 +685,11 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
   wait on). It ends when `--parent` is gone.
 - `proxy [--log FILE]` prints `MOCK-PROXY-PORT N`; `CONNECT host:port` is logged (`{"connect": "host:port"}`) and
   tunnelled, anything else gets 405 (`{"refused": "METHOD TARGET"}`).
+- `hf --dir DIR [--log FILE] [--cut FILE BYTES] [--bad FILE] [--location URL] [--no-range]` is the model host. It prints
+  `MOCK-HF-PORT N` and `MOCK-HF-CDN-PORT M`: `/…/resolve/REV/FILE` on N answers 302 to `FILE?sig=1` on M, as the real host
+  sends a download to its CDN, or to URL with `--location`; M serves DIR's files and honours `Range: bytes=START-` unless
+  `--no-range`. `--cut` stops the first response for FILE after BYTES, `--bad` flips FILE's last byte. The log is JSONL:
+  `{server, path, range, credentials}` per request.
 
 **Variables** in strings: `$MOCK $ROOT $HOME $RUN $STATE $DATA $CONFIG $SOCKET $SOCKET_DIR $BACKEND_SOCKET $CAP $LOCK $PID(hub)
 $HARNESS_PID` (of the step's `hub`, else the latest started; `$BACKEND_SOCKET` is where an older hub's Emacs child
@@ -758,7 +780,7 @@ Rows with `"requires": ["v1"]` (all of them) run against Ratatoskr:
 | `agents/` (`test-hooks`, probe) | `probe-answers` (a mock ACP agent answers `agents/probe` with its name and version; no session; an unknown profile and `wait_s` over 60 are `invalid-params`), `probe-times-out` (an agent that never answers: `ok: false`, "did not answer within 1 seconds"), `probe-bad-command` (a missing program, and one that exits 7 with a line on stderr: `ok: false`, the status and the stderr tail), `send-if-free-never-interrupts` (`agents/send` with `if_free` on a busy steer-mode session: false, nothing queued, steered or cancelled; on a free one: a turn) |
 | `hub/` | `env-set-served-by-the-front` (no backend: the front answers, a `PATH` that is no list of absolute directories is `invalid-params`), `env-set-applies-path` (the next job's `PATH` has the sent directory), `env-set-refuses-key-names` (a secret-looking name and a provider's key variable are left out of `applied` and out of the job's environment), `env-set-refuses-path-rule-names` (`HOME`, `TMPDIR`, `XDG_RUNTIME_DIR`, `DRGNX_DIR`, `SSH_AUTH_SOCK` are left out of `applied` and out of the job's environment; a plain name is kept) |
 | `errors/` | `every-error-has-a-code` (each code but `schema`; a refused notification gets no answer), `empty-lists-are-arrays` (A-17: an empty list is `[]` on the wire, never null), `results-match-schemas` (a populated store: a proposed job, a review card, a mock agent session with entries; every read method answers without `internal`; `test-hooks`) |
-| `readonly/` | `a-newer-work-db-refuses-writes` (work.db at schema 9: `schema` for a writing method within the 2 s tick) |
+| `readonly/` | `a-newer-work-db-refuses-writes` (work.db at schema 99: `schema` for a writing method within the 2 s tick) |
 | `basics/` | `status-shape-v1`, `events-since-without-a-work-db`, `events-since-from-the-store` (rows written into work.db with `sqlite`) |
 | `gateway/` ([hub.md](hub.md#registrations)) | `register-keeps-only-the-hash` (the token's SHA-256, computed by `sh`, is the row's `hash`; `file_grep` finds the token in no file under the root), `a-gone-owners-registrations-are-pruned` (owner a `spawn`ed `sleep`, killed: `status --json` with `retry_ms`), `config-providers-refuses-a-bad-url`, `a-lan-http-provider-is-allowed-with-a-warning` (logged once after two calls: `file` with `count` and `at_most`; `doctor --json`), `a-spend-over-the-budget-is-recorded` (a request through the gateway to `ratatoskr-mock llm`, the spend row in work.db), `keys-are-never-on-disk` (`file_grep` over the hub's roots), `no-usable-step-is-refused`; with `test-hooks` too: `keys-only-on-a-user-connection` (service and agent connections), `spend-is-own-job-for-an-agent` (summed from work.db's rows) |
 | `coord/` | the front's writes (`sqlite` makes a schema-6 work.db from `fixtures/work-db-6.sql`): `cards-settle-once`, `messages-send-held-by-version`, `events-add-is-broadcast-once`, `review-mark-and-its-event-commit-together` (a trigger refuses the second event: neither is written), `a-write-before-work-db-is-ready-says-so`, `a-newer-work-db-refuses-coord-writes` (a `sender` on `messages/send`: `messages/a-sender-is-refused`) |
@@ -798,6 +820,31 @@ excused skips that name the reason.
 | Row | Proves |
 |---|---|
 | `an-agent-starts-sandboxed` | the editor's shape (a project cwd, no task) through `launch::spawn_chat`, Gleipnir's validation and the sandbox: the mock agent is a link in `~/.local/bin` to a versioned install under `~/.local/share/claude/versions` (Claude's own layout), so the [toolchain roots](gleipnir.md#toolchain-roots) must be bound for it to exec; it answers a prompt, cannot write the home, `agents/get` says `enforced: true`, and `agents/stop` leaves no process and no session dir |
+| `the-agent-drives-its-browser` | (also `chromium`, `playwright-mcp`: Landlock ABI 9, the browser test image) the agent browser as a user gets it: under Autonomous the agent runs `ratatoskr-mock cdp-drive` with the endpoint from its environment and reaches its own `http-serve` on local port 5173 inside the sandbox; a server on the host's loopback, as `host.drgnx.internal:PORT`, is refused with one `browser.private` card offering `session`; settled `session`, the retry reaches it and a second retry makes no card; `agents/stop` leaves no Chromium, no session dir and no `drgnx-session-SID` scope |
+| `no-browser-below-abi9` | [OD1](hub.md#the-cdp-broker): a session whose host cannot give it a browser starts without one: a notice with the fix, `browser_why` in `agents/get`, no endpoint variable in the agent's environment. Below ABI 9 the kernel is the reason; on ABI 9 the row's setting names a missing program, so it holds on every kernel |
+| `local-network-access-smoke` | (also `internet`: the gate only, once) Playwright opens `http://example.com/` through the web proxy under Autonomous; whether Chromium's Local Network Access blocked the proxied fetch is in the agent's `drive.out` (a block is a deferred item, not a red) |
+
+A chat's project cwd is read-only to the session, so the rows' agent writes what they read back (`endpoint.out`,
+`drive*.out`) in its scratch dir, `$TMPDIR/drgnx-scratch-UID/SID` of the hub's `TMPDIR`, and Playwright MCP's
+snapshots go to a temp dir `cdp-drive` removes. CI's sandbox lane (`escape-host` in `runtime.yml`) runs these on its runner: the first and the third run there (bwrap,
+user namespaces, a kernel below ABI 9), the browser rows are excused skips. The Fedora VM runs all four at the gate.
+
+### The real browser tests
+
+`drgnx-ratatoskr/tests/browser_real.rs` (`test-hooks`) runs the CDP broker against real browsers, one test per kind:
+Fedora's `chromium-headless` (the headless shell) and the full `chromium`. Each starts `ratatoskr browser-host
+--unconfined` with the real program, a broker over it, and `ratatoskr-mock cdp-drive` as the agent, which navigates a
+`data:` page and an `http-serve` page; a raw CDP client of the test then checks that `Target.exposeDevToolsProtocol` is
+refused, that a download lands in the browser's own `downloads/` with its `Browser.downloadProgress` event and the
+broker's `Download`, and that a page the agent left paused (`waitForDebuggerOnStart`) loads once the agent's websocket
+closes. It prints whether the hub's `Target.attachToBrowserTarget` worked on that Chromium, or the fallback ran.
+
+It runs only with `DRGNX_TEST_REAL_BROWSER=1`, in the browser test image (`test/container/browser/Containerfile`: the
+image the Rust tests run in, plus Chromium, Node and Playwright MCP pinned in `/opt/pw-mcp`), with `ratatoskr-mock`
+built beside `ratatoskr`; with the variable set, a missing browser, Node or Playwright MCP fails the test.
+`DRGNX_TEST_RECORD_DIR=DIR` writes the browser side of each run to `DIR/real-KIND.jsonl`, which `heimdall`'s tests read
+from its `tests/data`. No page comes from the network: `http-serve` serves them on loopback, which Chromium reaches
+without its proxy.
 
 ### The perf rows
 
@@ -890,6 +937,251 @@ mock's answers are `fixtures/llm-*.json` or a `write_file` in the row. All rows 
   scheme, so it proves the `NO_PROXY` rule without TLS). A kill -9 between a registration's row write and its answer is
   declined (phase 6's `op` rows are the target).
 
+## Hrafn
+
+`runtime/crates/hrafn` is the code-search indexer. It is generic: it has no hub types, and the binary passes in its
+paths. Its git and file-watcher doors sit behind the traits `Git` and `Watch` under the default feature `host`.
+
+### The code store
+
+`CodeStore::open(<state>/code/<project-id>.db)` opens one SQLite file through `urdr` (one owning thread, WAL, mode
+0600, migrations as data). Schema v1:
+
+| Table | Holds |
+|---|---|
+| `file` | path, git blob, class, language, generated flag, size, indexed time |
+| `chunk` | byte and line span, symbol, content `key`, `embed` flag, and `embed_text` (the only copy of a chunk's text, because `chunk_fts` is contentless) |
+| `chunk_fts` | FTS5 over `path, symbols, doc, body`, contentless with `contentless_delete=1`; rowid = `chunk.id`; a trigger removes the row, and the chunk's symbols, with the chunk |
+| `symbol`, `symbol_fts` | defined names with kind, span, chunk and definer; a trigram FTS over the names |
+| `vec` | one quantized vector per `(model, key)` |
+| `meta` | `urdr`'s table: the schema version, `chunker_version`, `built_from` and the like |
+
+`vec_key(chunker, embed_text)` is sha256 over the length-prefixed chunker version and text. A chunk has one key; each
+model that embeds it adds a `vec` row, so a branch switch back embeds nothing.
+
+FTS5 has one tokenizer per table, and `tokenchars '-'` would hide `timer` in `drgnx-timer--fire` from the `body`
+column. So the `symbols` column holds names encoded by `encode_symbol`, which maps each ASCII punctuation character to a
+private-use character (a token character in `unicode61`): a whole name matches only the whole name, and `body`
+still splits it. Queries encode the same way.
+
+### The file list and coverage
+
+`files::list(root, git, config, allow)` is the one place a path enters the index. Git sits behind the `Git` trait
+(`GitCli` runs the `git` executable; `blobs` hashes the working tree with `hash-object --stdin-paths`, so an
+uncommitted edit changes the blob), file bytes are read through `eitri` (a link, FIFO, missing or over-1-MiB file is
+skipped), and `allow` is the hub's deny-list check on the relative path. A path is listed unless:
+
+- a component starts with a dot, or the basename looks like a key, certificate, secret or credential file;
+- it is inside a nested repository (an untracked clone or a submodule);
+- it has a NUL byte in its first 8,000 bytes;
+- the project's `include`/`exclude` globs (the editor sends `drgnx-search-{include,exclude,off}` per project) leave it out, or `off` is set.
+
+`.drgnx/search.eld` that is there but cannot be read (a directory, a link, empty, over 64 KiB) is an error that
+stops the listing, never the defaults. Each file gets a class (`code`, `test`, `docs`) and a language, from its extension, or
+from a `#!` line when it has none. A file is marked `generated` (listed, not dropped) by `.gitattributes`
+`linguist-generated`/`linguist-vendored`, by "generated" or "DO NOT EDIT" in its first five lines, or by a name like
+`*-autoloads.el`, `loaddefs.el`, `*.lock` or `*.min.*`.
+
+`coverage(listed, chunks_per_file)` reports a class with files but no chunks, and any non-empty file with no chunk.
+
+### Chunks and symbols
+
+`chunk::chunk_file(path, lang, generated, text, budget)` returns the file's chunks and symbols. A file's chunks put
+together give back the file, byte for byte (offsets are bytes). The budget is 1,800 non-whitespace characters
+(`BUDGET`); `CHUNKER_VERSION` is part of every vector's content key. A chunk's `line_start` is the line of its first
+non-blank character (chunks are cut on the previous chunk's last newline, so the byte offset alone would name the line
+before), which is where a hit opens and what `reanchor` compares against. Version 2 is that rule: an index made by
+version 1 is chunked again at the next refresh, whether or not a file changed (and, the version being in every
+vector's key, embedded again).
+
+For Emacs Lisp (`tree-sitter` 0.25, ABI 15, with `tree-sitter-elisp` 1.7; 0.26 and later needed Rust 1.90, above the
+workspace's MSRV of the time, 1.88) the units are the top-level forms, each with the comments right above it, and the stretches between
+them. Adjacent units merge greedily up to the budget and never across a section heading (a `;;;` line with text, at
+column 0). A form over the budget splits at its child forms; every part's header repeats the signature, the first
+docstring line and "part i/n". A `defconst`, `defvar` or `defcustom` whose value is a literal list or vector and
+which is over the budget is one chunk that embeds only its first line and docstring (the FTS body keeps all of it).
+The header (path, title line, section, defined symbols and kinds) is in `embed_text` and the FTS `path` and `symbols`
+columns, never in `body`; a generated file gets `embed = false`.
+
+The definer table (`chunk/definers.rs`) is closed: it names `defun`, `defvar`, `defcustom`, `defmacro`, `cl-defun`,
+`defconst`, `defvar-local`, `defface`, `defgroup`, `defsubst`, `cl-defmacro`, `defvar-keymap`, `defalias`,
+`define-obsolete-function-alias`, `define-error`, `cl-defgeneric`, `cl-defmethod`, `cl-defstruct` (type, constructors,
+predicate, accessors), `define-minor-mode` and `define-derived-mode` (mode, `-hook`, `-map`), and drgnx's
+`drgnx-defsetting`, `drgnx-memo-define`, `drgnx-module-define`, `drgnx-doctor-define`, `drgnx-config-define` and
+`drgnx-command-define`. Project code is read, never evaluated.
+
+Rust, C and shell (`tree-sitter-rust` 0.24, `tree-sitter-c` 0.24, `tree-sitter-bash` 0.25, all ABI 15) use the same
+pipeline over their top-level items. Definitions are `function_item`, `impl_item`, `struct_item`, `enum_item`,
+`trait_item`, `mod_item` and `macro_definition` (and type, const, static and union items) in Rust, with the
+methods of an `impl`, trait or module as symbols of their own; `function_definition`, the struct, union and enum
+specifiers, typedefs and `#define`s in C; `function_definition` in shell. The comment lines directly above an item
+(`///`, `//`, `#`) are its docstring. An oversized item is cut before the members of its body.
+
+Org and Markdown chunk by the heading tree (`chunk/outline.rs`): a chunk's header is its outline path (`A > B`), a
+heading with nothing under it joins the next one, source blocks and fences stay whole under the budget, property
+drawers and logbooks are left out of `embed_text` (the FTS body keeps them), and a table over the budget splits by
+rows with its header rows repeated in `embed_text`. Plain text is line windows under the budget, with no symbols
+(`chunk/text.rs`); a line over the budget is cut inside.
+
+The test fixtures' form spans come from the Emacs reader: `tests/fixtures/elisp/gen.el` writes `NAME.forms.json` for
+each `NAME.el` next to it (run it once in a Nidhogg 31 container, `emacs --batch -Q -l …/gen.el`), and the test holds
+the grammar's top-level spans to them.
+
+### The embedder
+
+Hrafn is the code search behind `search/*` and the MCP `search` tool. `hrafn-embed` holds its embedding side, in pure Rust
+with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-android`.
+
+- **The model table (`models.rs`).** `MODELS` lists gte-modernbert-base, Granite small r2 (the default, `default_model()`: the
+  eval on drgnx's own queries put it ahead overall, 0.312 against 0.271 MRR@10, and 2.7 times faster to embed; gte-modernbert-base stays
+  selectable by id) and CodeRankEmbed, each at a pinned revision. A row names exactly four files with their sizes and sums:
+  `model.safetensors`, `tokenizer.json`, `config.json` and `1_Pooling/config.json`. There is no ONNX file and no GGUF.
+  `ModelConfig::read` takes the network's shape from the model's own `config.json`, so a model of the same family needs
+  a table row and nothing else. All three pool on CLS.
+- **The cache (`cache.rs`).** A model lives in `<root>/<id>-<revision[..12]>/`. `<file>.part` is a transfer in progress; a file
+  under its real name has passed its sum. `state` is `Missing`, `Partial`, `Ready` or `Corrupt`, and `Ready` means every byte was
+  hashed (about a second). `import` copies a model from a directory, for an air-gapped machine.
+- **Weights and tokens.** `Weights` reads F16, BF16 and F32 tensors, drops the `model.` prefix, and gives a tensor as f32 or as
+  f16 bytes, transposed on request. `Tokens` truncates at `max_tokens` (1,024), never pads, and applies the model's prefixes.
+
+- **The embedder (`local.rs`).** `LocalEmbedder` is one interface over a private `Engine` trait, with one impl per path, so a
+  different engine replaces an impl and nothing else. `embed_ids` takes one batch of at most `TOKEN_CAP` (4,096) tokens and
+  returns unit vectors; it checks every id against the vocabulary before anything reaches an engine. `embed_docs` and
+  `embed_query` are conveniences at a 2,048-token budget. Tokens are flat, with no padding: token t of the batch is row t,
+  and the softmax is streamed, so no S × S matrix exists. Word embeddings are gathered on the CPU, so the table costs no
+  VRAM and fits any adapter's largest binding.
+- **The GPU path (`gpu/`).** ModernBERT's forward pass in WGSL on raw `wgpu`: `lineart`, `norm`, `rope`, `attn`, `glu` and `add`.
+  Weights stay f16 where the adapter has `SHADER_F16`, with an f32 sum (`kernels-f16.wgsl`); otherwise f32, at about 0.7× the
+  speed and 2× the weights' VRAM. Linear weights are always transposed. Sizes come from `ModelConfig`: the model's shape
+  is written in front of `kernels.wgsl` as constants, because WGSL sizes a function's arrays with constants only, and a
+  kernel's input and output widths are pipeline overrides. There is one submit per layer, each waited for up to 10 s, so
+  there is a pause point between any two layers and no submit can run into a driver's watchdog (Forward's `worst_submit`
+  reports the longest). The shaders run without `wgpu`'s bounds checks, which cost 14 to 29 % on the Radeon; `embed_ids`
+  bounds every id and length, and `load` checks each weight's shape. `load` refuses an adapter whose limits don't fit a
+  buffer. A timeout, the device-lost callback, any
+  uncaptured error, or the panic `wgpu` raises out of `poll` on a lost device all end in `EmbedFail::DeviceLost`, so the
+  caller can take the CPU path. `libvulkan` is opened at run time, so a machine with no loader has no adapters.
+- **The CPU path (`cpu/`).** The same forward pass in pure Rust, for machines with no usable GPU and for a lost device, and it
+  must agree with the GPU path because vectors from both land in one index. `gemm` does the matmuls and the rest runs row by
+  row, on a `rayon` pool of `threads` that the embedder owns. The non-linear kernels are built twice on x86-64, baseline and
+  AVX2 + FMA, and chosen at run time; the build itself stays baseline. aarch64 uses baseline NEON, so `gemm` is built without
+  its `f16` feature, whose kernels need FEAT_FP16 (an aarch64 build failed on them). No AVX-512: it ran slower
+  here. `worst_submit` is zero on this path.
+
+- **The download (`drgnx-ratatoskr/src/search/`).** `download` fetches exactly a table row's files into `<cache>/models`, from
+  `drgnx-search-model-mirror` or the Hugging Face host at `{base}/{repo}/resolve/{revision}/{file}`, and only with a `Consent`
+  whose model and bytes match; the consent is kept in `runtime.db`'s `kv` (`search.consent`). The target of `resolve/` is a
+  signed URL on another host, so redirects are followed by hand: at most 3, to https only (plain http only between loopback
+  addresses, for a local mirror and the test host), with no credentials in the URL. Each file is written to `<file>.part`,
+  verified and renamed. A failed run keeps its parts, and the next one asks `resolve/` again and resumes with `Range`. Nothing
+  retries: `Offline` is reported once, and the hub tries again at its next start or on `search/model-download`. Proxies come
+  from the environment, through `bifrost::upstream::Upstream::get`. `test-tiny` (test-hooks builds, `test/fixtures/test-tiny/`)
+  is a model of no weights for the flows that need no inference. The download's stall limit runs on the hub's clock.
+
+### The index: tier 1, tier 2 and the embed worker
+
+- **Tier 1 (`hrafn::index::refresh`).** The file list against the store's blobs: rows (chunks, FTS, symbols) are rebuilt
+  only for files whose blob changed, all of them after a chunker change, 64 files to a transaction; files gone from the
+  list leave the store. Vectors are keyed by content, so a branch switch back embeds nothing. `vec.last_used` is a
+  logical clock (one past the store's highest), moved when a vector is written and when tier 1 writes a chunk that
+  refers to its key; `collect` keeps unreferenced keys up to twice the live set, the least recently referenced going
+  first. A vector row holds the sign bits and then the int8 values of `urdr`'s `quantize` (`bits` = 8).
+- **When tier 1 runs (`hrafn::fresh`).** `Settle` is a pure core over the watcher's events: a change under the gitdir is
+  due once `index.lock` is gone and the gitdir has been quiet for 2 s; a saved file once it has been quiet for 30 s.
+  `NotifyWatch` (feature `host`, the `notify` crate) feeds it. A project without watches diffs the blobs at query time
+  (`fresh::diff`, at most 2,000 differences named).
+- **The device (`hrafn_embed::device`).** A cached choice whose key (model, `ENGINE_VERSION`, each adapter's name and
+  driver) matches; on battery the CPU path with nothing measured or cached; otherwise the first adapter of `order`
+  (software adapters dropped, discrete and Metal before integrated) that passes its self-check and the CPU path are
+  probed on the model's `data/<model>.selfcheck.json`, and the faster wins. A cosine under 0.999 puts a device out; when
+  the CPU path misses too, nothing embeds and only keyword and symbol results remain.
+- **Pacing (`hrafn_embed::pace`).** A batch's worst submit over 8 ms halves the token budget, under 4 ms doubles it, up to
+  `TOKEN_CAP`; it starts at 2,048 and never stays below the chunk that leads the next batch.
+- **The embed worker (`ratatoskr embed-worker`, `drgnx-ratatoskr/src/search/worker.rs`).** A child process, the only one
+  that opens a GPU, started by `WorkerEmbedder` on demand: JSON lines in (`{"id", "kind": "doc"|"query", "texts"}`) and
+  out (`{"id", "vectors"}` or `{"id", "error"}`), first `{"ready": {"device", "name", "why"}}`, and `{"fallback": {"from",
+  "reason"}}` when a lost GPU sends the batch again on the CPU path. A query that arrives during a request is answered
+  before its next batch. It runs at nice 10, caps its address space at 2 GiB on the CPU path (llvmpipe could not start a
+  thread under the cap, so the GPU path runs without it). On the GPU path it reads its peak resident memory (`getrusage`'s `ru_maxrss`, so on macOS too)
+  before each batch instead: over 1.5 GiB it answers the request with the reason and `"exit": true` and exits, and the hub
+  starts a fresh worker for the next request (no crash is counted, nothing is retried). It also exits after 300 s idle and
+  at the end of its stdin. The hub
+  starts it with `--device auto` on AC and `--device cpu` on battery; a query uses whatever worker runs. A worker that dies
+  inside a request is started again and the request sent again, once.
+- **A project (`search/project.rs`).** The store is `<state>/code/<id>.db`, `id` the first 16 hex characters of the
+  sha256 of the main checkout's real path, so a linked worktree shares its main checkout's store. A root the deny-list
+  refuses is refused before anything is listed; inside an allowed root every file is checked again. Tier 2 sends requests
+  of 8 missing keys to each embedder; between requests it waits while typing holds (3 s from the last `note_typing`) and,
+  on battery, until AC or `index_now`. Its state (`Stopped`, `Idle`, `Running`, `Typing`, `Battery`, `Failed`) and the
+  vectors written are published for `search/status`. Its embedders are `DocEmbedder`s: the built-in model's worker and
+  each server that answers, every one filling its own model's `vec` rows.
+- **The query (`hrafn::query`).** Lists from the routes, fused by RRF (k = 60): an exact one-identifier query pins its
+  definitions first (non-test before test, then by kind); prefix and trigram name matches from the identifier-like
+  tokens of a question add a list that is never pinned; a token that names a file adds a path list; `bm25(chunk_fts, 5,
+  5, 2, 1)` ranks identifier phrases on `symbols` and words over `doc` and `body`; vectors are scanned by Hamming
+  distance over the sign bits and the nearest 200 re-ranked by their int8 values. A test or generated file keeps half
+  its score. Hits in files changed since indexing are looked for again by their first line, else their symbol (20 files,
+  50 ms). The scope (`code`, which holds tests below it, `tests`, `docs`, `all`) filters by file class. Every answer has
+  the lag line.
+  A query reads indexes and small tables, never the `chunk` table (its rows hold their text): the lag's counts run on
+  `chunk_embed`, name prefixes on `symbol_name_nc` (`like` ignores case, so the index has the same collation), path
+  tokens on `file`, and the vector scan reads `vec` alone, looking a chunk up only for a vector that can enter the best
+  200. Each is a plan test in `hrafn/tests/query.rs`. Store schema 2 adds the two indexes.
+- **The methods (`search/methods.rs`).** `Hub` (`Front::search`) opens a project on first use of its root and runs its
+  driver (`Project::tick` every 500 ms on the hub clock, dropped with the project); `search/query` refreshes tier 1 when
+  the files changed (the watcher's events, else a blob diff), picks the model (`search::prefer`), embeds the question
+  with it and answers; `search/status`, `search/index`, `search/embedders`, `search/model-download` (consent checked
+  against the model's size; the projects open again once it lands) and `search/typing` are the others. All are the
+  user's: an agent has no search method. A project's globs are `.drgnx/search.eld` (a file that does not read turns
+  its search off) and the editor's per-project `drgnx-search-{include,exclude,off}` (`overrides::PER_PROJECT`).
+- **Servers on request (`search/servers.rs`).** `search/server-plan` shows what starting TEI or Ollama would run (it
+  writes and runs nothing); `search/server-start` needs `confirm: true` and answers the provider entry for the settings'
+  provider table (the hub writes no settings: the editor's writer adds it); `search/server-stop` stops it. TEI is a
+  podman Quadlet `drgnx-tei.container` under `$XDG_CONFIG_HOME/containers/systemd/` (CPU image, or the GPU tag of the
+  card when the NVIDIA CDI device is present; 4 GiB or 2 GiB memory cap, loopback port 8087, a named cache volume, no
+  `[Install]`): Linux with podman and a systemd user session, and not inside a container. Ollama needs `ollama` on the
+  PATH; its service starts only when it does not answer (`systemctl --user`, or `launchctl` on macOS), then the model
+  is pulled. Nothing in the hub's idle paths reaches a start. With test-hooks the runner only records the commands in
+  `$XDG_STATE_HOME/drgnx/servers-test.log`. The macOS Ollama start (`launchctl start com.ollama.ollama`) is unverified
+  on a Mac.
+- **The eval (`hrafn::eval`, `ratatoskr search eval`).** `eval gen ROOT` makes questions from the project's own history
+  (commit subjects without ticket ids, dropping those that name an identifier; the answer is the top-level forms the
+  commit changed, found again at HEAD by name) into `runtime/crates/hrafn/eval/<project>/{dev,test}.jsonl`, which are
+  frozen once written. `eval run ROOT --model ID --device cpu|gpu:ADAPTER` indexes the project into a scratch store,
+  embeds it in-process with the model, asks the set and prints MRR@10 and nDCG@10 (chunk level) and recall@5/@10 (file
+  level) with bootstrap intervals per stratum, and writes the run as JSON. `eval compare A.json B.json` is the gate:
+  the lower bound of the paired MRR@10 difference must be at least -0.01 overall and -0.03 per stratum, the index has no
+  coverage error and exact-symbol recall@1 is 1.0. It needs no hub.
+- **The MCP tool (`search/mcp.rs`).** A session whose `mcp/session` came while `drgnx-agents-mcp` holds `search` gets
+  `search.sock` beside `mcp.sock` (recorded in the session's row, so it is bound again at a restart and closed with the
+  session): the `search` tool (`query`, `scope`, `k`), pinned to the session's `cwd`. The agent's `mcpServers` list it
+  as `drgnx-search`. `ratatoskr search mcp [ROOT]` serves the same tool on stdio for an agent outside drgnx, its
+  questions going to the hub; `ratatoskr search index|query` are terminal clients of `search/index` and `search/query`.
+- **Servers as embedders (`embed.rs`, `Gate::embedders`).** The providers of kind `tei` and `ollama` with the `embed`
+  capability embed through the hub's own gateway listener (`/p/ID/embed`, `/p/ID/api/embed`), so each request is in
+  `spend`. An Ollama provider needs the model the `embed` role names for it, and its model name is
+  `ollama:<provider>:<model>` (TEI's is `tei:<provider>`). A query to a server carries `Instruct: <task>\nQuery:<q>`;
+  documents go plain. `search::prefer` picks the model a query uses: an answering server with at least 95 % of the live
+  chunks covered, else the built-in model (unless `drgnx-search-builtin` is nil), else an answering server whatever it
+  covers. `embed::answered_family` is the doctor's probe of which address family answers; `localhost` of a local
+  server's URL is used as `127.0.0.1`. The hub never starts a server. The entity embedder (`embed::run`) fills with the
+  first embedder in line that answers, a server before the built-in model, and each model keeps its own vector
+  (`entity_vec` is keyed `(n, model)`), so a server that comes back finds its vectors still there.
+  `ratatoskr-mock embed` is the test stand-in for TEI and Ollama (`tests/search_prefer.rs`).
+
+Tests read the real models from a read-only volume (`DRGNX_TEST_MODELS`) and **fail** when it's unset; they never skip.
+`tests/fixtures/<model>.json` holds what CI can't make: reference vectors for token-id lists of 1, 2, 128, 129, 130, 1,023
+and 1,024 tokens (the edges of the 129-token local span and of the 1,024 cap), and for 4 chunks and 2 queries. Those come
+from a direct forward pass in Transformers, f32, batch 1, CLS, L2-normalised. `data/<model>.selfcheck.json` is one fixed
+text of 167 tokens, longer than the local span so both attention paths run, with its vector.
+
+GPU tests name their adapter in `DRGNX_TEST_ADAPTER` (a substring of its name) and fail when it's unset or matches nothing;
+production skips software adapters, a test's named adapter doesn't. `tests/parity_gpu.rs` runs the real shaders on llvmpipe, Mesa's
+software Vulkan, so no GPU is needed; `full_references_*` (`#[ignore]`) are for a real GPU, as are the rows of `tests/timing.rs` (a timing file: the real-time lint exempts it),
+which print throughput, query time and the stall a second process sees on the same card, and assert nothing. Its `bench_cpu`
+row prints the CPU path's figures and needs no GPU. `tests/parity_cpu.rs` holds the CPU path against the references, and
+`cpu_and_gpu_agree` in `parity_gpu.rs` holds the two paths against each other.
+
 ## Building and installing Ratatoskr
 
 Users get the binary from install.sh and `drgnx update`; both call `drgnx runtime` (bin/drgnx, plain bash):
@@ -918,8 +1210,11 @@ for real.
 `runtime/fuzz/` is a cargo-fuzz crate with its own `[workspace]` (the product workspace excludes it). It builds on
 nightly only: the pin is `nightly-2026-10-15`, set by the CI job and by local runs, never by a `rust-toolchain.toml`
 (a toolchain file would make a plain `cargo` there install a nightly). cargo-fuzz needs a C++ compiler for libFuzzer
-(`g++`: CI's `fuzz` job runs on the Ubuntu runner, which has it; 60 s a target on a push to `main` or `ci/*`, 10 minutes a target
-daily, `fuzz_minutes` on demand: [ci.md](ci.md)).
+(`g++`: CI's `fuzz-build` job runs on the Ubuntu runner, which has it; 60 s a target on a push to `main` or `ci/*`, 10 minutes a target
+daily, `fuzz_minutes` on demand: [ci.md](ci.md)). CI builds every target once (`cargo fuzz build`, the build `cargo fuzz
+run` makes) and passes each of the four shards its targets' binaries as an artifact (`fuzz-bins-N`, one day); a shard
+runs each binary as `cargo fuzz run` does (`-artifact_prefix=runtime/fuzz/artifacts/<target>/`, the corpus directory,
+`ASAN_OPTIONS=detect_odr_violation=0`).
 
 | Target | What it feeds |
 |---|---|
@@ -927,6 +1222,7 @@ daily, `fuzz_minutes` on demand: [ci.md](ci.md)).
 | `request_prelude` | a line through `dispatch::prelude` (steps 1 to 5, no handler) for every class and several protocol states |
 | `hello` | hello params decoded from arbitrary JSON, then `hello()` against a fixed cap: as given, with the correct proof, on a main and on an agent socket, and a second hello |
 | `connect_head` | bytes as a proxy request head: the blank-line search, the exactly-`CONNECT target HTTP/1.x` line, then `parse_target` on the target (gleipnir's `fuzzing` feature exposes the entry point) |
+| `absolute_head` | bytes as a web proxy's plain-HTTP head: the blank-line search, the absolute-form line and headers, `parse_target`, then the rewritten head, which must have one blank line (at its end), no bare CR or LF, and end in `Connection: close` |
 | `host_target` | text through `parse_target`; a success must `Display` back to a string that parses to the same target |
 | `sbpl_quote` | text through `sbpl::quote`; a success must read back through `sbpl::sexp` as one string equal to the input |
 | `bwrap_version` | text as `bwrap --version` output through `parse_version` and `version_at_floor` |
@@ -949,11 +1245,14 @@ daily, `fuzz_minutes` on demand: [ci.md](ci.md)).
 | `saga_plan` | text through `saga::plan::parse` and `render`: the output equals the input |
 | `saga_deferred` | the same through `saga::deferred` |
 | `saga_org` | the same through `saga::org` (`board.org`) |
+| `cdp_envelope` | bytes as one browser connection through heimdall: NUL-split under a limit the first byte picks, each message's first byte choosing the agent, the browser or the agent's close; every envelope parses or is refused without a panic, whatever goes to the browser is a command with an id and no NUL, and no refused method from the agent reaches it; the same bytes through the frame decoder whole and in two pieces give the same frames |
 
 The seed corpus in `fuzz/corpus/<target>/` is the request lines of the conformance rows (phase 1; for `mcp_message` and
 `jsonrpc_parse` the JSON-RPC lines the `mcp/*` and `bridge/*` rows send), the unit tables (gleipnir's targets) and, for
 the gateway's targets, the SSE fixtures (`test/fixtures/sse`) and a few hand-made heads and bodies; for `huginn_read`
-it is huginn's hand corpus (`test/fixtures/huginn/corpus/`, copied as `accept-NAME` and `refuse-NAME`). The
+it is huginn's hand corpus (`test/fixtures/huginn/corpus/`, copied as `accept-NAME` and `refuse-NAME`); for
+`cdp_envelope` it is heimdall's transcripts (`crates/heimdall/tests/data/*.jsonl`, one seed each: `0` agent, `1`
+browser, `2` close before each message, NUL after). The
 bridge's `classify`, `id_in_prefix` and `read_bounded` are private to `mimir::bridge`; mimir's `fuzzing` feature
 exposes them through `bridge::fuzzing` for `bridge_line` (seeds: the `mcp_message` corpus behind a limit byte). A run adds files to the
 corpus directory, so run on a scratch copy and keep the repository's seeds as they are.

@@ -19,9 +19,11 @@ pub mod options;
 pub mod prune;
 pub mod reports;
 pub mod review;
+pub mod runners;
 pub mod spend;
 pub mod steps;
 pub mod tasks;
+pub mod work;
 
 /// A coordination writer's error as the graph writer's.
 fn writer_error(e: CoordError) -> WriteError {

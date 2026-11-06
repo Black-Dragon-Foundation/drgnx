@@ -8,7 +8,8 @@
 //!   thread and sends `events` `{since, last, events}` to the subscribers: at most 200 rows a batch, every 0.25 s at
 //!   most.  The 2 s schema tick wakes it too.
 //! - **The tools' hub** ([`ToolHub`]): `sessions()` is the front's session table, read at once; `notify()` wakes the
-//!   broadcast, the records' views and the delivery.
+//!   broadcast, the records' views and the delivery; `after_tool()` holds a session's tool answer until its writes are
+//!   linked to its current ask ([`crate::work::asks`]).
 //! - **One writer:** the hub. A `tx` row's actor comes from the connection ([`tx_meta`]); no param names a writer, and
 //!   `messages/send` refuses `sender` from every caller.
 
@@ -44,8 +45,13 @@ pub struct Signals {
     writes: AtomicU64,
     /// A write the record views may follow ([`crate::records::follow`]).
     pub records: Notify,
+    /// A write the Work map may follow: asks, specs, plans, tasks, worktree bases, cards ([`crate::work::map::run`]).
+    pub map: Notify,
     /// What the proposal tools ask of the records (set once the hub's front is built).
     pub records_tool: std::sync::OnceLock<RecordsTool>,
+    /// Counts the changes that may change what a browser session may reach ([`Signals::answers_changed`]): each
+    /// session's web proxy reads its cells, grants and cards again at once ([`crate::browser::web`]).
+    pub answers: tokio::sync::watch::Sender<u64>,
 }
 
 /// The proposal tools' door into the records: the proposal ID, `None` to read it or `Some(accept)` to decide it,
@@ -61,6 +67,7 @@ impl Signals {
     pub fn wrote(&self) {
         self.writes.fetch_add(1, Ordering::Relaxed);
         self.records.notify_one();
+        self.map.notify_one();
         self.deliver.notify_one();
         self.events_soon();
     }
@@ -73,6 +80,12 @@ impl Signals {
     /// A message may be waiting for a hub session: the delivery looks (coalesced).
     pub fn notify_soon(&self) {
         self.deliver.notify_one();
+    }
+
+    /// What the user answered may have changed: a write of theirs (a card settled, a grant made or revoked, a plan's or
+    /// a project's matrix override), the settings in effect, or the away flag.  Every web proxy reads again.
+    pub fn answers_changed(&self) {
+        self.answers.send_modify(|n| *n += 1);
     }
 
     /// The transactions the front's methods committed since the hub started.
@@ -105,6 +118,9 @@ impl Writer {
         let r = self.db.write(tx_meta(caller, method), f).await;
         if r.is_ok() {
             self.signals.wrote();
+            if caller.class == Class::User || matches!(method, "cards/settle" | "graph/grants") {
+                self.signals.answers_changed();
+            }
         }
         r
     }
@@ -622,6 +638,7 @@ impl Hub for ToolHub {
     fn notify(&self) {
         // every tool write says so: the record views follow it too
         self.signals.records.notify_one();
+        self.signals.map.notify_one();
         self.signals.events_soon();
         self.signals.notify_soon();
     }
@@ -668,6 +685,16 @@ impl Hub for ToolHub {
                 .and_then(std::sync::Weak::upgrade)
                 .ok_or("the hub is starting")?;
             crate::manager::tool(&front, &sid, op, args).await
+        })
+    }
+
+    /// A session's tool call ended: its graph writes link to its current ask before it answers.
+    fn after_tool(&self, _sid: &str, _tool: &'static str) -> BoxFuture<'_, ()> {
+        let front = self.front.get().and_then(std::sync::Weak::upgrade);
+        Box::pin(async move {
+            if let Some(f) = front {
+                f.core.asks.handle().flush().await;
+            }
         })
     }
 
@@ -853,7 +880,7 @@ mod tests {
         urdr::Connection::open(dir.path().join("work.db"))
             .unwrap()
             .execute_batch(
-                "create table meta (key text primary key, value text); insert into meta values ('schema', '9');",
+                "create table meta (key text primary key, value text); insert into meta values ('schema', '99');",
             )
             .unwrap();
         let w = writer(dir.path());
@@ -864,7 +891,7 @@ mod tests {
             (e.code, e.message.as_str()),
             (
                 ErrorCode::Schema,
-                "work.db is schema 9, newer than this drgnx: read-only"
+                "work.db is schema 99, newer than this drgnx: read-only"
             )
         );
     }

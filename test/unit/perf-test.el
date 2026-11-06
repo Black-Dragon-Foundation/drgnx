@@ -53,6 +53,17 @@
   (mapc #'drgnx-perf-test--command works)
   (drgnx-perf-end))
 
+(ert-deftest drgnx-perf/a-commands-latency-ends-with-its-post-command-hook ()
+  "The latency was recorded by a 0 s timer after the hook, so it ended when the session's event loop next ran a timer:
+under the harness that is the next tick of its paced input (40 ms: input p95 40.3, 30.3 at a 30 ms tick).  The sample
+is complete when the hook returns.  Pattern D: no turn of the event loop between the hook and the check."
+  (drgnx-perf-begin)
+  (unwind-protect
+      (progn (run-hooks 'pre-command-hook)
+             (run-hooks 'post-command-hook)
+             (should (= (length drgnx-perf--latencies) 1)))
+    (drgnx-perf-end)))
+
 (ert-deftest drgnx-perf/per-command-alloc-cpu-and-wall ()
   :tags '(:cond)
   ;; three commands that cons nothing, 1000 and 5000 conses; the CPU clock is stubbed to advance 1 ms per reading

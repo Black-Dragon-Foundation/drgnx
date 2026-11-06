@@ -13,7 +13,6 @@
  (:file "core/drgnx-agent-config-claude.el" :form make-process :near "drgnx-agent-config-claude--cli" :why "the claude CLI run (sweep Task 8)" :until "runner")
  (:file "core/drgnx-ai-client.el" :form make-process :near "drgnx-ai--curl" :why "an AI request's curl (sweep Task 8)" :until "runner")
  (:file "core/drgnx-ai.el" :form make-process :near "drgnx-ai--security-call" :why "the Keychain call (sweep Task 8)" :until "runner")
- (:file "core/drgnx-cockpit-model.el" :form make-process :near "drgnx-cockpit--git" :why "the cockpit's git (sweep Task 6)" :until "runner")
  (:file "core/drgnx-platform.el" :form make-process :near "drgnx-platform-call" :why "a platform command (sweep Task 8)" :until "runner")
  (:file "core/drgnx-platform.el" :form set-process-sentinel :near "drgnx-platform-call" :why "a platform command's stderr end (sweep Task 8)" :until "runner")
  (:file "core/drgnx-shell-env.el" :form make-process :near "drgnx-shell-env-start" :why "the login shell's environment (sweep Task 8)" :until "runner")

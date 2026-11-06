@@ -69,6 +69,7 @@ impl Fx {
             login_dir: Some(self.p("home/.claude")),
             enforced: Enforced::Yes,
             gateway: false,
+            trace: None,
         }
     }
 
@@ -113,6 +114,7 @@ impl Fx {
             write: vec![self.p("wt")],
             read: vec![],
             net,
+            browser: None,
         }
     }
 }
@@ -458,22 +460,112 @@ fn network_is_provider_only_under_balanced() {
     assert_eq!(code, 0, "a live listener outside was reachable");
 }
 
+/// The folder Claude Code keeps a project's sessions in, under `~/.claude/projects`: its path with every character
+/// that is not an ASCII letter or digit made `-`.
+fn claude_folder(project: &Path) -> String {
+    project
+        .to_str()
+        .unwrap()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
+/// Pattern D (one run, its exit code, then the files on the host), on the full tier and on the reduced one where the
+/// kernel has ABI 9.  An agent must never plant what your own, unsandboxed CLI runs or reads later: `settings.json`
+/// and its hooks, commands, the shell snapshots its Bash tool sources.  The CLI still refreshes its token in place and
+/// keeps its session's transcript, and it never sees another CLI's login.  (The fixture's home lies under `/tmp`, the
+/// full tier's private one: a new file in a folder the sandbox shows only as a path may land there, never on the
+/// host, so the host's files are what is checked.)
 #[test]
 #[ignore = "needs the real sandbox (bwrap with user namespaces): the sandbox lane"]
-fn the_login_token_dir_is_bound_for_its_own_cli_only() {
+fn the_login_dir_takes_only_the_token_and_the_sessions_state() {
     let fx = Fx::new();
+    let c = fx.p("home/.claude");
+    for d in ["hooks", "commands", "shell-snapshots"] {
+        std::fs::create_dir_all(c.join(d)).unwrap();
+    }
+    std::fs::write(c.join("settings.json"), "{}").unwrap();
+    std::fs::write(c.join("commands/c.md"), "orig").unwrap();
+    std::fs::write(c.join(".credentials.json"), "old").unwrap();
+    std::fs::write(c.join("shell-snapshots/snapshot-zsh-1.sh"), "orig").unwrap();
+    let project = c.join("projects").join(claude_folder(&fx.p("wt")));
     let script = format!(
-        "echo t > {c}/token || exit 11; cat {x}/auth.json 2>/dev/null && exit 12; exit 0",
-        c = fx.p("home/.claude").display(),
+        "cat {c}/settings.json >/dev/null || exit 10; \
+         for f in settings.json commands/c.md; do echo x >> {c}/$f 2>/dev/null && exit 13; done; \
+         for f in settings.local.json CLAUDE.md hooks/h.sh shell-snapshots/snapshot-zsh-1.sh; do \
+           echo x >> {c}/$f 2>/dev/null; done; \
+         mv {c}/settings.json {c}/moved 2>/dev/null && exit 14; mkdir {c}/plugins 2>/dev/null; \
+         cat {x}/auth.json 2>/dev/null && exit 16; \
+         echo new > {c}/.credentials.json || exit 11; echo t >> {p}/s.jsonl || exit 12; exit 0",
+        c = c.display(),
+        p = project.display(),
         x = fx.p("home/.codex").display()
     );
-    let code = fx.run(
-        reduced(),
-        &fx.plan(&script),
-        &fx.shape(NetCell::ProviderOnly),
+    let mut tiers = vec![Tier::Full];
+    if reduced() == Tier::Reduced {
+        tiers.push(Tier::Reduced);
+    }
+    for tier in tiers {
+        let code = fx.run(tier, &fx.plan(&script), &fx.shape(NetCell::ProviderOnly));
+        assert_eq!(code, 0, "{tier:?}");
+    }
+    for (f, was) in [
+        ("settings.json", "{}"),
+        ("commands/c.md", "orig"),
+        ("shell-snapshots/snapshot-zsh-1.sh", "orig"),
+    ] {
+        assert_eq!(std::fs::read_to_string(c.join(f)).unwrap(), was, "{f}");
+    }
+    for f in [
+        "settings.local.json",
+        "CLAUDE.md",
+        "hooks/h.sh",
+        "plugins",
+        "moved",
+    ] {
+        assert!(!c.join(f).exists(), "{f} was made");
+    }
+    assert_eq!(
+        std::fs::read_to_string(c.join(".credentials.json")).unwrap(),
+        "new\n"
     );
+    assert!(project.join("s.jsonl").exists());
+}
+
+/// Pattern D (one run, its exit code).  A chat in your project, on the full tier: Claude's folder for that project is
+/// the chat's own, bound over yours, so the chat cannot read your transcripts or plant auto memory your own CLI loads,
+/// and what it writes there lands in its scratch.
+#[test]
+#[ignore = "needs the real sandbox (bwrap with user namespaces): the sandbox lane"]
+fn a_project_chat_has_a_claude_project_folder_of_its_own() {
+    let fx = Fx::new();
+    let env = fx.env();
+    let project = fx.p("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    let yours = fx.p("home/.claude/projects").join(claude_folder(&project));
+    std::fs::create_dir_all(yours.join("memory")).unwrap();
+    std::fs::write(yours.join("you.jsonl"), "yours").unwrap();
+    std::fs::write(yours.join("memory/MEMORY.md"), "yours").unwrap();
+    let script = format!(
+        "cat {y}/you.jsonl 2>/dev/null && exit 11; echo x >> {y}/memory/MEMORY.md 2>/dev/null; \
+         echo t > {y}/chat.jsonl || exit 12; exit 0",
+        y = yours.display()
+    );
+    let (plan, shape) = chat_launch(&env, &fx.plan(&script), "C1", &project).unwrap();
+    let code = fx.run(Tier::Full, &plan, &shape);
     assert_eq!(code, 0);
-    assert!(fx.p("home/.claude/token").exists());
+    assert_eq!(
+        std::fs::read_to_string(yours.join("memory/MEMORY.md")).unwrap(),
+        "yours"
+    );
+    assert!(!yours.join("chat.jsonl").exists());
+    assert!(
+        scratch_dir(&env, "C1")
+            .unwrap()
+            .join("claude-project/chat.jsonl")
+            .exists()
+    );
 }
 
 #[test]
@@ -488,6 +580,7 @@ fn plain_chat_cannot_read_home() {
         write: vec![scratch.clone()],
         read: vec![],
         net: NetCell::ProviderOnly,
+        browser: None,
     };
     // Home lists nothing but the login dir: on the full tier home is the empty folder bwrap makes for that bind, on the
     // reduced tier it cannot be listed at all.
@@ -577,6 +670,89 @@ fn a_project_chat_reads_the_project_and_writes_only_its_scratch() {
     );
 }
 
+/// Pattern D (one run, its exit code), on the full tier and on the reduced one where the kernel has ABI 9.  The
+/// session reads only what its CLI loads from the login dir: not the keys of your own Claude Code's daemon and live
+/// sessions, not another project's transcript or auto memory, not your prompt history or shell snapshots.  A settings
+/// file that is a link into your dotfiles still reads.
+#[test]
+#[ignore = "needs the real sandbox (bwrap with user namespaces): the sandbox lane"]
+fn the_login_dir_shows_only_what_the_cli_loads() {
+    let fx = Fx::new();
+    let c = fx.p("home/.claude");
+    for d in [
+        "daemon",
+        "sessions",
+        "projects/-other/memory",
+        "shell-snapshots",
+        "commands",
+    ] {
+        std::fs::create_dir_all(c.join(d)).unwrap();
+    }
+    for f in [
+        "daemon/control.key",
+        "sessions/9.key",
+        "projects/-other/t.jsonl",
+        "projects/-other/memory/MEMORY.md",
+        "history.jsonl",
+        "shell-snapshots/snapshot-zsh-1.sh",
+        "commands/c.md",
+    ] {
+        std::fs::write(c.join(f), "x").unwrap();
+    }
+    std::fs::create_dir_all(fx.p("home/dotfiles")).unwrap();
+    std::fs::write(fx.p("home/dotfiles/settings.json"), "dotfile").unwrap();
+    std::os::unix::fs::symlink(fx.p("home/dotfiles/settings.json"), c.join("settings.json"))
+        .unwrap();
+    let script = format!(
+        "for f in daemon/control.key sessions/9.key projects/-other/t.jsonl projects/-other/memory/MEMORY.md \
+           history.jsonl shell-snapshots/snapshot-zsh-1.sh; do cat {c}/$f >/dev/null 2>&1 && exit 13; done; \
+         ls -A {c} {c}/projects 2>/dev/null | grep -qx -- '-other\\|daemon\\|history.jsonl' && exit 14; \
+         grep -q dotfile {c}/settings.json || exit 11; cat {c}/commands/c.md >/dev/null || exit 12; exit 0",
+        c = c.display()
+    );
+    let mut tiers = vec![Tier::Full];
+    if reduced() == Tier::Reduced {
+        tiers.push(Tier::Reduced);
+    }
+    for tier in tiers {
+        let code = fx.run(tier, &fx.plan(&script), &fx.shape(NetCell::ProviderOnly));
+        assert_eq!(code, 0, "{tier:?}");
+    }
+}
+
+/// Pattern D (one run, its exit code), full tier.  Codex keeps every session it runs, yours too, in its `sessions`
+/// folder: a sandboxed session gets an empty one of its own bound there, so it can neither read nor change yours, and
+/// what it records lands in its scratch.
+#[test]
+#[ignore = "needs the real sandbox (bwrap with user namespaces): the sandbox lane"]
+fn a_codex_session_records_into_a_sessions_folder_of_its_own() {
+    let fx = Fx::new();
+    let env = fx.env();
+    let s = fx.p("home/.codex/sessions");
+    std::fs::create_dir_all(s.join("2026")).unwrap();
+    std::fs::write(s.join("2026/old.jsonl"), "yours").unwrap();
+    let script = format!(
+        "cat {s}/2026/old.jsonl 2>/dev/null && exit 11; echo x >> {s}/2026/old.jsonl 2>/dev/null; \
+         mkdir -p {s}/2026/11 && echo t > {s}/2026/11/new.jsonl || exit 12; exit 0",
+        s = s.display()
+    );
+    let mut plan = fx.plan(&script);
+    plan.login_dir = Some(fx.p("home/.codex"));
+    let code = fx.run(Tier::Full, &plan, &fx.shape(NetCell::ProviderOnly));
+    assert_eq!(code, 0);
+    assert_eq!(
+        std::fs::read_to_string(s.join("2026/old.jsonl")).unwrap(),
+        "yours"
+    );
+    assert!(!s.join("2026/11").exists());
+    assert!(
+        scratch_dir(&env, "S1")
+            .unwrap()
+            .join("login/sessions/2026/11/new.jsonl")
+            .exists()
+    );
+}
+
 /// B3 + B4 on the shipped layout: the worktree sits under `<state>/hub/runs` (inside Gleipnir's closed folders) and
 /// the lock's real, relative `PROTECTED_RO` list is pinned inside it, `.envrc` and `mise.toml` included, though none
 /// exists yet.  Pinning needs bwrap's read-only bind, so the full tier.
@@ -600,6 +776,7 @@ fn a_worker_under_the_hub_run_root_cannot_write_the_protected_files() {
         write: vec![wt.clone()],
         read: vec![],
         net: NetCell::ProviderOnly,
+        browser: None,
     };
     let code = fx.run(Tier::Full, &plan, &shape);
     assert_eq!(code, 0);

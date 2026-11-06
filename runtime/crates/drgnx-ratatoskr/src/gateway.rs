@@ -19,7 +19,9 @@
 //! - **The provider table** is the settings' (`crate::settings`: `settings.el` and the editor's `config/settings`
 //!   overrides), replaced whole whenever they change; its last good copy is the settings' (it holds no key).  A keyed provider over clear-text `http` off loopback is applied, with a
 //!   warning in the answer, logged once per provider per start (the user's answer 4).
-//! - **The port:** `kv.gateway_port` is tried first, else a free one, and the result stored.
+//! - **The port:** `kv.gateway_port` is tried first, else a free one, and the result stored.  When the kept one is
+//!   taken, the loopback registrations kept for it are dropped at start: a process squatting the old port collects
+//!   only dead tokens.
 //! - **Spend** is `work.db`'s `spend` table (`norn`): the engine records a row per request ([`WorkLedger`]), and the
 //!   budget is read from it.  A job's budget is the registration's, else the job's `data.budget`.
 //! - **Events:** the engine's `request`, `fallback`, `budget` and `gateway/need-keys` go to the subscribers.  The
@@ -184,6 +186,8 @@ pub struct Gate {
     embed_token: OnceLock<String>,
     /// The engine and the loopback port, once it listens.
     engine: OnceLock<(Arc<Gateway>, u16)>,
+    /// The kept port, when it was taken at start and the gateway listens on another: the tokens issued for it go.
+    moved_from: Mutex<Option<u16>>,
     warnings: Mutex<Vec<ProviderWarning>>,
     /// Providers whose clear-text warning was logged since start.
     warned: Mutex<BTreeSet<String>>,
@@ -210,6 +214,7 @@ impl Gate {
             budgets: OnceLock::new(),
             embed_token: OnceLock::new(),
             engine: OnceLock::new(),
+            moved_from: Mutex::new(None),
             warnings: Mutex::new(Vec::new()),
             warned: Mutex::new(BTreeSet::new()),
             pending: Mutex::new(BTreeSet::new()),
@@ -244,8 +249,14 @@ impl Gate {
             .ok_or_else(|| internal("the gateway is not listening"))
     }
 
+    /// The gateway's port on 127.0.0.1, once it listens.
+    pub fn port(&self) -> Option<u16> {
+        self.engine.get().map(|e| e.1)
+    }
+
     /// Listen on 127.0.0.1: PORT when given (`--gateway-port`, test hooks), else `kv.gateway_port`, else a free one;
-    /// the port is stored.  The engine's events come out of the receiver ([`run_events`]).
+    /// the port is stored.  A kept port that is taken is remembered, so [`Gate::restore`] drops the tokens issued for
+    /// it.  The engine's events come out of the receiver ([`run_events`]).
     pub async fn listen(
         &self,
         port: Option<u16>,
@@ -259,7 +270,10 @@ impl Gate {
                 Ok(l) => l,
                 // the stored port is taken now: any free one (a port asked for is not given up on)
                 Err(e) if port.is_none() => {
-                    tracing::info!("the gateway's port {p} is taken ({e}): another one");
+                    tracing::warn!(
+                        "the gateway's port {p} is taken ({e}): another one, and the tokens issued for {p} go"
+                    );
+                    *lock(&self.moved_from) = Some(p);
                     TcpListener::bind(("127.0.0.1", 0))
                         .await
                         .map_err(|e| e.to_string())?
@@ -289,23 +303,69 @@ impl Gate {
         if self.engine.set((gw.clone(), port)).is_err() {
             return Err("the gateway listens already".into());
         }
+        // a test's barrier waits until every request it saw answered has its events in the channel
+        #[cfg(feature = "test-hooks")]
+        {
+            let in_flight = gw.in_flight();
+            crate::clock::outside("gateway:requests", move || in_flight.get());
+        }
         tokio::spawn(bifrost::listen::serve_tcp(gw, listener, port));
         tracing::info!(port, "the gateway on 127.0.0.1:{port}");
         Ok(rx)
     }
 
-    /// The embedder for the first provider of kind `tei` that can embed (by id), through this gateway's loopback
-    /// listener with an editor token of its own (kept in memory only, never in `runtime.db`); `None` when there is no
-    /// such provider.  Err: the gateway is not listening.
-    pub fn embedder(&self) -> Result<Option<crate::embed::Tei>, Error> {
+    /// The embedders of the providers of kind `tei` and `ollama` that can embed (by id), through this gateway's
+    /// loopback listener with an editor token of its own (kept in memory only, never in `runtime.db`).  An Ollama
+    /// provider embeds with the model the embed role's CHAIN names for it, and is left out when the chain names none.
+    /// Err: the gateway is not listening.
+    pub fn embedders(
+        &self,
+        chain: &[crate::settings::ChainStep],
+    ) -> Result<Vec<crate::embed::ProviderEmbedder>, Error> {
         let (_, port) = self.engine()?;
-        let Some(id) = read(&self.providers)
+        let found: Vec<(String, Kind)> = read(&self.providers)
             .values()
-            .find(|p| p.kind == Kind::Tei && p.caps.embed)
-            .map(|p| p.id.clone())
-        else {
-            return Ok(None);
-        };
+            .filter(|p| matches!(p.kind, Kind::Tei | Kind::Ollama) && p.caps.embed)
+            .map(|p| (p.id.clone(), p.kind))
+            .collect();
+        if found.is_empty() {
+            return Ok(Vec::new());
+        }
+        let token = self.hub_embed_token()?;
+        let mut out = Vec::new();
+        for (id, kind) in found {
+            match kind {
+                Kind::Tei => out.push(crate::embed::ProviderEmbedder::tei(
+                    *port,
+                    token.clone(),
+                    &id,
+                )),
+                _ => {
+                    if let Some(model) = chain
+                        .iter()
+                        .find(|s| s.provider == id)
+                        .and_then(|s| s.model.as_deref())
+                    {
+                        out.push(crate::embed::ProviderEmbedder::ollama(
+                            *port,
+                            token.clone(),
+                            &id,
+                            model,
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Provider ID's URL, as the table has it.
+    pub fn base_of(&self, id: &str) -> Option<String> {
+        read(&self.providers).get(id).map(|p| p.base.to_string())
+    }
+
+    /// The editor token the hub's own embedders use (made when first asked for).
+    fn hub_embed_token(&self) -> Result<String, Error> {
         let token = match self.embed_token.get() {
             Some(t) => t.clone(),
             None => {
@@ -320,14 +380,17 @@ impl Gate {
                 self.embed_token.get_or_init(|| t).clone()
             }
         };
-        Ok(Some(crate::embed::Tei::new(*port, token, &id)))
+        Ok(token)
     }
 
     /// At start, after the sessions came back: the last provider table, then the registrations of live owners (each
     /// bound to its session's socket again), the others deleted; the providers they need whose key is absent are kept
-    /// to tell each new subscriber.
+    /// to tell each new subscriber.  When the kept port was taken ([`Gate::listen`]), every loopback registration (the
+    /// editor's tokens, agents' on 127.0.0.1) is deleted: its holder still knows the old port, where whoever took it
+    /// would collect the token, so it must ask again (the editor does on its next proven connect).
     pub async fn restore(&self, sessions: &Sessions) {
         let Ok(db) = self.db() else { return };
+        let moved_from = *lock(&self.moved_from);
         let rows = match rows(db).await {
             Ok(r) => r,
             Err(e) => {
@@ -347,6 +410,16 @@ impl Gate {
             };
             if let Some(why) = gone(&kept, sessions) {
                 tracing::info!(agent = kept.reg.agent, "dropped a registration: {why}");
+                delete(db, &hash).await;
+                continue;
+            }
+            if let Some(old) = moved_from
+                && kept.reg.listener == ListenerId::Loopback
+            {
+                tracing::warn!(
+                    agent = kept.reg.agent,
+                    "dropped a registration: its token was issued for port {old}, which another process holds now"
+                );
                 delete(db, &hash).await;
                 continue;
             }
@@ -726,7 +799,7 @@ impl Gate {
     /// TABLE made the provider table (the settings', [`crate::front::Front::apply_settings`]): its warnings, or the
     /// first provider that does not convert (nothing changed).  The clear-text warnings are logged once per provider
     /// per start.
-    pub(crate) fn apply(&self, table: &[ProviderConfig]) -> Result<Vec<ProviderWarning>, Error> {
+    pub fn apply(&self, table: &[ProviderConfig]) -> Result<Vec<ProviderWarning>, Error> {
         let mut next = BTreeMap::new();
         let mut warnings = Vec::new();
         for (i, c) in table.iter().enumerate() {
@@ -976,11 +1049,23 @@ fn restrictions(
     Ok(((!r.is_empty()).then_some(r), kept))
 }
 
+/// A local server's `localhost` as `127.0.0.1`: `localhost` can resolve to `::1` first, and these servers listen on the
+/// IPv4 loopback (storage design §12A.3 item 11).
+fn loopback_literal(kind: ProviderKind, base: &str) -> std::borrow::Cow<'_, str> {
+    if matches!(
+        kind,
+        ProviderKind::Tei | ProviderKind::Ollama | ProviderKind::Llamacpp
+    ) && let Some(rest) = base.strip_prefix("http://localhost")
+        && matches!(rest.chars().next(), None | Some(':' | '/'))
+    {
+        return std::borrow::Cow::Owned(format!("http://127.0.0.1{rest}"));
+    }
+    std::borrow::Cow::Borrowed(base)
+}
+
 /// C as the engine's provider (the URL was checked when it was decoded; it must also be an `http::Uri`).
 fn provider(c: &ProviderConfig) -> Result<Provider, String> {
-    let base: bifrost::Uri = c
-        .base
-        .as_str()
+    let base: bifrost::Uri = loopback_literal(c.kind, c.base.as_str())
         .parse()
         .map_err(|e| format!("not a provider's URL: {e}"))?;
     let caps = c.caps.0.iter().fold(Caps::default(), |mut caps, cap| {
@@ -1232,6 +1317,14 @@ mod tests {
 
     /// A front with runtime.db and work.db (schema 7, made by the writer's opening rule), its gateway listening.
     async fn hub() -> Hub {
+        let h = unopened().await;
+        h.front.gate.listen(None).await.unwrap();
+        h.front.gate.set_hardened(Ok(())); // as `serve` does once `harden` succeeded
+        h
+    }
+
+    /// [`hub`] before its gateway listens.
+    async fn unopened() -> Hub {
         let dir = tempfile::tempdir().unwrap();
         let coord = CoordDb::spawn(dir.path().join("work.db"));
         // the opening rule has run once a request is served: the file is there for the raw seeds below
@@ -1247,8 +1340,6 @@ mod tests {
         let env = runstav::paths::Env::new(&[("TMPDIR", dir.path().to_str().unwrap())], front.uid);
         front.mcp.open_store(env, socket, db.clone());
         front.gate.open_store(db);
-        front.gate.listen(None).await.unwrap();
-        front.gate.set_hardened(Ok(())); // as `serve` does once `harden` succeeded
         Hub {
             dir,
             front,
@@ -1473,6 +1564,43 @@ mod tests {
             "an owner-less one stays until unregistered"
         );
         assert_eq!(g.status().registrations, 2);
+    }
+
+    /// Pattern D (the squatter holds the port before the hub listens: nothing races).  The kept port is taken at start:
+    /// the hub listens on another, and the tokens issued for the old one (the editor's, a loopback agent's) are
+    /// dropped, so a process squatting it collects only dead tokens; their holders ask again.
+    #[tokio::test]
+    async fn a_moved_port_drops_the_tokens_issued_for_the_old_one() {
+        let h = unopened().await;
+        let g = &h.front.gate;
+        let squatter = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let old = squatter.local_addr().unwrap().port();
+        let db = g.db().unwrap().clone();
+        kv_set(&db, KV_PORT, &old.to_string()).await;
+        let me = me();
+        let mine = sessions::owner_start(me).unwrap();
+        db.write(move |c| {
+            c.execute_batch(&format!(
+                "insert into registration(hash, class, listener, chain, owner, owner_start, at) values \
+                 ('e', 'editor', 'loopback', '[]', {me}, {mine}, 1), \
+                 ('a', 'agent', 'loopback', '[[\"local\",null]]', {me}, {mine}, 1)"
+            ))?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        g.listen(None).await.unwrap();
+        let now = g.status().port.unwrap();
+        assert_ne!(now, u64::from(old));
+        assert_eq!(kv_get(&db, KV_PORT).await, Some(now.to_string()));
+        g.restore(&h.front.mcp).await;
+        assert_eq!(
+            rows_of(h.dir.path(), "select hash from registration"),
+            Vec::<Vec<Value>>::new(),
+            "a token issued for port {old} outlived the move"
+        );
+        assert_eq!(g.status().registrations, 0);
+        drop(squatter);
     }
 
     #[tokio::test]

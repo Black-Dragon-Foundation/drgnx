@@ -6,7 +6,10 @@
 //! are bound by path. No environment value is ever in the argv: bwrap gets `--clearenv` and no `--setenv`, and the
 //! program's environment travels in the inner spec (fd 3).
 
-use crate::spec::{Bind, HELPER_INSIDE, Mode, Net, RESERVED_DESTS, SYSTEM_CLOSED, Spec, ValidSpec};
+use crate::spec::{
+    Bind, HELPER_INSIDE, Mode, Net, RESERVED_DESTS, SYSTEM_CLOSED, Spec, TRACE_INSIDE, Trace,
+    ValidSpec,
+};
 use crate::validate::{Refusal, Rule};
 use eitri::Kind;
 use std::ffi::OsString;
@@ -21,8 +24,11 @@ pub const FLOOR: (u32, u32, u32) = (0, 12, 0);
 pub const SPEC_FD: i32 = 3;
 /// The status pipe's write end inside bwrap (Task 8).
 pub const STATUS_FD: i32 = 4;
+/// The browser host's socketpair end (the hub's other end stays outside), inside bwrap and in the helper. Left
+/// unused when the spec has no browser.
+pub const BROWSER_FD: i32 = 5;
 /// The first bind's fd; the binds follow in argv order, and the helper's is the last.
-pub const FIRST_BIND_FD: i32 = 5;
+pub const FIRST_BIND_FD: i32 = 6;
 
 /// Root-owned system trees bound read-only by path where they exist (`--ro-bind-try`). `/usr` is always bound.
 pub const SYSTEM_READS: &[&str] = &["/etc", "/opt", "/nix", "/gnu", "/var/lib/flatpak"];
@@ -33,12 +39,14 @@ pub const USR_MERGED: &[&str] = &["bin", "lib", "lib64", "sbin"];
 
 /// How the helper (the `ratatoskr` binary) is started inside: `source` is its path outside, bound read-only at
 /// [`HELPER_INSIDE`] and run as `HELPER_INSIDE <inner_args> --spec-fd 3 -- <command>`. `relay_args` are what the
-/// inner spec's relay runs (`Sandbox::prepare`); the argv does not use them.
+/// inner spec's relay runs, and `browser_host_args` what its browser host runs (`Sandbox::prepare`); the argv uses
+/// neither.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InnerCommand {
     pub source: PathBuf,
     pub inner_args: Vec<OsString>,
     pub relay_args: Vec<OsString>,
+    pub browser_host_args: Vec<OsString>,
 }
 
 /// One source opened without links, and where it is bound. `dev` and `ino` are the identity it was checked under.
@@ -291,6 +299,10 @@ pub fn argv(
     // 8. The helper last, read-only, so that no later mount covers it (review S1).
     push(&[&"--ro-bind-fd", &next.to_string(), &HELPER_INSIDE]);
     fds.push((opened.helper.fd, next));
+    // 8a. Per-step tracing: the wrapper is the helper started by another name (`crate::trace::wrapper_main`).
+    if matches!(s.trace, Trace::PerStep { .. }) {
+        push(&[&"--symlink", &"helper", &TRACE_INSIDE]);
+    }
     // 9. The program: the helper, which applies Landlock and seccomp, then the command.
     push(&[&"--chdir", &s.chdir, &"--", &HELPER_INSIDE]);
     for x in &opened.inner_args {
@@ -367,6 +379,8 @@ mod tests {
             tmp: None,
             layers: Layers::for_target(Target::LinuxBwrap),
             extra_tcp_ports: vec![],
+            trace: Default::default(),
+            browser: None,
         }
     }
 
@@ -569,6 +583,29 @@ mod tests {
         }
     }
 
+    /// Per-step tracing puts the wrapper beside the helper, as a link to it, after the helper's bind; nothing is
+    /// linked without it.
+    #[test]
+    fn per_step_tracing_links_the_wrapper_to_the_helper() {
+        let (plain, _) = run(spec(Net::Shared), merged(), &["/usr/bin/agent"]);
+        assert!(!plain.iter().any(|a| a == TRACE_INSIDE), "{plain:?}");
+        let traced = Spec {
+            trace: Trace::PerStep {
+                socket: "/rt/s/S1/proxy.sock".into(),
+            },
+            ..spec(Net::Shared)
+        };
+        let (argv, _) = run(traced, merged(), &["/usr/bin/agent"]);
+        let opts = options(&argv);
+        let helper = opts.iter().rposition(|a| a == HELPER_INSIDE).unwrap();
+        let link = opts.iter().position(|a| a == TRACE_INSIDE).unwrap();
+        assert_eq!(
+            &opts[link - 2..=link],
+            ["--symlink", "helper", TRACE_INSIDE]
+        );
+        assert!(link > helper, "{opts:?}");
+    }
+
     /// Each bind keeps its mode, and nothing is widened: a home asked `ro` is bound read-only, and `run` is read-only
     /// even when a spec that skipped validation says `rw` (Task 0's note).
     #[test]
@@ -604,9 +641,14 @@ mod tests {
         );
     }
 
-    /// The fds are numbered from 5 in argv order, each passed once, the helper's last.
+    /// The fds are numbered from 6 in argv order, each passed once, the helper's last; 3, 4 and the browser's 5 are
+    /// the caller's.
     #[test]
-    fn fds_follow_the_argv_from_5() {
+    fn fds_follow_the_argv_from_6() {
+        assert_eq!(
+            (SPEC_FD, STATUS_FD, BROWSER_FD, FIRST_BIND_FD),
+            (3, 4, 5, 6)
+        );
         let s = spec(isolated());
         let want = planned(&s).len() + 1;
         let (argv, fds) = run(s, merged(), &["/bin/true"]);
@@ -619,7 +661,7 @@ mod tests {
         let expected: Vec<i32> = (FIRST_BIND_FD..FIRST_BIND_FD + want as i32).collect();
         assert_eq!(in_argv, expected);
         assert_eq!(fds, expected);
-        assert!(!fds.contains(&SPEC_FD) && !fds.contains(&STATUS_FD));
+        assert!(!fds.contains(&SPEC_FD) && !fds.contains(&STATUS_FD) && !fds.contains(&BROWSER_FD));
     }
 
     /// A hide covers the place it is seen at: its own path, and inside a bind whose dest differs from its source

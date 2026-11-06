@@ -67,7 +67,7 @@ logging to PATHLOG), CONFIG (a DRGNX_CONFIG_DIR) and ENV (the environment lists 
           (fake (expand-file-name "recorded-emacs" dir)))
       (drgnx-bin-test--fake fake log)
       (write-region (concat fake "\n") nil (expand-file-name "emacs" config))
-      (dolist (args '(("build") ("keys" "diff" "--help") ("ui" "--help") ("search" "index" "--help") ("macos-app")))
+      (dolist (args '(("build") ("keys" "diff" "--help") ("ui" "--help") ("work" "--help") ("macos-app")))
         (delete-file log)
         (apply #'drgnx-bin-test--call drgnx-bin-test--bin env args)
         (should (string-search fake (drgnx-bin-test--slurp log))))
@@ -125,16 +125,23 @@ logging to PATHLOG), CONFIG (a DRGNX_CONFIG_DIR) and ENV (the environment lists 
     (should (string-empty-p (drgnx-bin-test--slurp pathlog)))))
 
 (ert-deftest drgnx-bin/no-emacs-stops-every-subcommand-cleanly ()
-  ;; with no Emacs found, a subcommand prints the message and exits non-zero; it never runs an empty command
-  ;; (CI once ended in "env: '': No such file or directory", exit 127)
+  ;; with no Emacs found, a subcommand that runs Emacs prints the message and exits non-zero; it never runs an empty
+  ;; command (CI once ended in "env: '': No such file or directory", exit 127).  Ratatoskr's subcommands run no Emacs:
+  ;; with no Emacs and no Ratatoskr built they say how to build it
   (drgnx-bin-test--with-setup ()
     (delete-file (expand-file-name "nidhogg" pathdir))
-    (dolist (args '(("build") ("test") ("safe") ("search" "index")))
-      (let ((r (apply #'drgnx-bin-test--call drgnx-bin-test--bin env args)))
-        (should-not (eql 0 (car r)))
-        (should (string-search "no Nidhogg found" (cdr r)))
-        (should-not (string-search "No such file" (cdr r)))
-        (should-not (string-search "command not found" (cdr r)))))))
+    (let ((env (cons "DRGNX_RATATOSKR_BIN=/nonexistent/ratatoskr" env)))
+      (pcase-dolist (`(,want . ,args)
+                     '(("no Nidhogg found" "build") ("no Nidhogg found" "test") ("no Nidhogg found" "safe")
+                       ("no Nidhogg found" "work" "--help")
+                       ("Ratatoskr is not built" "search" "index") ("Ratatoskr is not built" "runner" "list")
+                       ("Ratatoskr is not built" "browser" "install") ("Ratatoskr is not built" "hub" "status")
+                       ("Ratatoskr is not built" "graph" "backup") ("Ratatoskr is not built" "job" "status")))
+        (let ((r (apply #'drgnx-bin-test--call drgnx-bin-test--bin env args)))
+          (should-not (eql 0 (car r)))
+          (should (string-search want (cdr r)))
+          (should-not (string-search "No such file" (cdr r)))
+          (should-not (string-search "command not found" (cdr r))))))))
 
 (ert-deftest drgnx-bin/a-container-run-names-the-images-emacs ()
   ;; the container has no Nidhogg and no record: the run passes DRGNX_EMACS, so drgnx needs no bare `emacs'
@@ -968,6 +975,34 @@ macOS (no /proc there)."
             (should (equal (funcall ks) '("0" "1")))))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-bin/orders-runs-its-files-at-the-same-time ()
+  ;; test-pattern: C (handshake): a file's run leaves its marker and waits for another file's; run one file at a time
+  ;; and the first run never sees a second marker.  The wait is bounded (10 s) so a serial run fails instead of hanging
+  (let* ((dir (make-temp-file "drgnx-bin-orders" t))
+         (parent (expand-file-name "parent" dir))
+         (marks (expand-file-name "marks" dir))
+         (drgnx-bin-test--cwd dir))
+    (unwind-protect
+        (progn
+          (make-directory parent)
+          (make-directory marks)
+          (let ((r (drgnx-bin-test--call
+                    drgnx-bin-test--bin
+                    (append
+                     (drgnx-bin-test--env
+                      dir parent
+                      (concat "DRGNX_EMACS="
+                              (drgnx-bin-test--fake-emacs
+                               (expand-file-name "fake-emacs" dir)
+                               (concat "echo \"drgnx-gate-swap-pairs: 0\"; : > " marks "/$(basename \"$DRGNX_TEST_ONLY\"); n=0;"
+                                       " while [ \"$(ls " marks " | wc -l)\" -lt 2 ]; do n=$((n + 1));"
+                                       " [ $n -gt 100 ] && { echo 'no other file ran at the same time'; exit 1; }; sleep 0.1; done"))))
+                     '("DRGNX_ORDERS_JOBS=2"))
+                    "test" "--orders")))
+            (should (eql 0 (car r)))
+            (should (string-match-p "green, [0-9]+ gated file" (cdr r)))))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-bin/a-container-run-forwards-the-test-selector ()
   ;; A narrowed `bin/drgnx test --container' stays narrow inside the container.
   (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
@@ -1059,7 +1094,7 @@ macOS (no /proc there)."
   ;; inside; the perf results file goes through a writable /out mount, since the checkout is read-only.
   (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
          (vars '("DRGNX_TEST_SELECTOR=\"x\"" "DRGNX_TEST_JOBS=4" "DRGNX_TEST_RERUN=1" "DRGNX_TEST_NO_TIMING=1"
-                 "DRGNX_PERF_CPU_FACTOR=2" "DRGNX_PERF_WORKLOADS=typing" "DRGNX_UITEST_SETTLE_SCALE=3" "DRGNX_UI_TEST_TIMEOUT=3000"
+                 "DRGNX_PERF_CPU_FACTOR=2" "DRGNX_PERF_WORKLOADS=typing" "DRGNX_UITEST_SETTLE_SCALE=3" "DRGNX_UITEST_TICK=0.03" "DRGNX_UI_TEST_TIMEOUT=3000"
                  ;; UI-SCALE-1: the sessions' size and scale (without them a container run was silently 1600x900 at 1)
                  "DRGNX_UI_SIZE=2880x1800" "DRGNX_UI_SCALE=1.5" "DRGNX_UI_SCALES=1 2")))
     (unwind-protect
@@ -1155,6 +1190,26 @@ macOS (no /proc there)."
             (should (member "DRGNX_EMACS=/opt/nidhogg-built/bin/nidhogg" args))))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-bin/container-nidhogg-prefix-applies-to-every-tier ()
+  ;; A branch's Nidhogg is tested by mounting it, never by building an image per prefix: the batch, GUI, scenario,
+  ;; perf, soak and terminal tiers all run the mounted Emacs, in the image they use without it.
+  (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
+         (pfx (file-truename (expand-file-name "nid" dir))))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "bin" pfx) t)
+          (dolist (c '((nil "cpu-image") ("--ui" "gui-image") ("--scenario" "gui-image") ("--perf" "gui-image")
+                       ("--soak" "gui-image") ("--tty" "tty-image")))
+            (let ((args (apply #'drgnx-bin-test--container-argv dir
+                               (list (concat "DRGNX_CONTAINER_NIDHOGG=" pfx) "DRGNX_TEST_GUI_IMAGE=gui-image"
+                                     "DRGNX_TEST_TTY_IMAGE=tty-image")
+                               (and (car c) (list (car c))))))
+              (should (member (concat pfx ":" pfx ":ro") args))
+              (should (member (concat "DRGNX_EMACS=" pfx "/bin/nidhogg") args))
+              (should-not (member "DRGNX_EMACS=/usr/local/bin/emacs" args))
+              (should (member (cadr c) args)))))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-bin/container-soak-accepted ()
   ;; --soak [MIN] runs the soak in the GUI image, memory-capped like --ui; combined with another tier it is refused.
   (let ((dir (make-temp-file "drgnx-bin-tmp" t)))
@@ -1188,17 +1243,27 @@ macOS (no /proc there)."
       (delete-directory dir t))))
 
 (ert-deftest drgnx-bin/container-perf-ab-env-passed ()
-  ;; --perf --ab-env VAR=JUDGED,REF [--n N] reaches the command inside the GUI image; a malformed pair is a usage
-  ;; error; --ab-env without --perf is refused.
+  ;; --perf --ab-env VAR=JUDGED,REF [--n N] reaches the command inside the GUI image, capped at two sessions' memory
+  ;; (6g, swap equal; a plain --perf run gets one session's 3g; DRGNX_TEST_GUI_MEMORY overrides both); a malformed
+  ;; pair is a usage error; --ab-env without --perf is refused.
   (let ((dir (make-temp-file "drgnx-bin-tmp" t)))
     (unwind-protect
         (progn
-          (let ((args (drgnx-bin-test--container-argv
-                       dir '("DRGNX_TEST_GUI_IMAGE=gui-image" "DRGNX_PERF_WORKLOADS=popup-typing")
-                       "--perf" "--ab-env" "DRGNX_PERF_GLITNIR=on,off" "--n" "20")))
+          (let* ((args (drgnx-bin-test--container-argv
+                        dir '("DRGNX_TEST_GUI_IMAGE=gui-image" "DRGNX_PERF_WORKLOADS=popup-typing")
+                        "--perf" "--ab-env" "DRGNX_PERF_GLITNIR=on,off" "--n" "20"))
+                 (opts (butlast args (length (member "gui-image" args)))))
             (should (equal (cdr (member "gui-image" args))
                            '("bin/drgnx" "test" "--perf" "--ab-env" "DRGNX_PERF_GLITNIR=on,off" "--n" "20")))
-            (should (member "DRGNX_PERF_WORKLOADS=popup-typing" args)))
+            (should (member "DRGNX_PERF_WORKLOADS=popup-typing" args))
+            (should (equal (cadr (member "--memory" opts)) "6g"))
+            (should (equal (cadr (member "--memory-swap" opts)) "6g")))
+          (let ((args (drgnx-bin-test--container-argv dir '("DRGNX_TEST_GUI_IMAGE=gui-image") "--perf")))
+            (should (equal (cadr (member "--memory" args)) "3g")))
+          (let ((args (drgnx-bin-test--container-argv
+                       dir '("DRGNX_TEST_GUI_IMAGE=gui-image" "DRGNX_TEST_GUI_MEMORY=8g")
+                       "--perf" "--ab-env" "DRGNX_PERF_GLITNIR=on,off")))
+            (should (equal (cadr (member "--memory" args)) "8g")))
           (should (drgnx-bin-test--container-refused-p dir nil "--perf" "--ab-env" "X=on"))
           (should (drgnx-bin-test--container-refused-p dir nil "--perf" "--ab-env"))
           (should (drgnx-bin-test--container-refused-p dir nil "--ab-env" "X=a,b")))

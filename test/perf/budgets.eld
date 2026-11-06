@@ -3,6 +3,8 @@
 ;; Input (set from the first measurements, 2026-10-17: p95 0.4–7.9 ms, max ≤ 25 ms): p95 within one 60 Hz frame
 ;; (16 ms), max 50 ms; redisplay p95 16 ms; GC while typing 100 ms; a GC pause p95 50 ms (spec).
 ;; Any hook function p95 2 ms (spec): judged by `drgnx test --perf --audit'.
+;; A row may end in `:report-only STEP': it is reported, never failed, until $DRGNX_PERF_LANDED names STEP (the workers'
+;; rows, Task 8; docs/develop/perf.md, "The workers probe").
 ((frames (:frame :p95) 500)
  (startup (:server_ms :p50) 1000)
  (startup (:modules_ms) 1800)
@@ -13,9 +15,6 @@
  (explorer (:input :p95) 16) (explorer (:input :max) 50)
  (agent-typing (:input :p95) 16) (agent-typing (:input :max) 50)
  (agent-stream (:input :p95) 16) (agent-stream (:input :max) 50)
- ;; cockpit-cards: PROVISIONAL — the job-window rows renamed (M12f, the job window is the cockpit's), measured on a
- ;; busy machine; part C's close (C12) confirms them
- (cockpit-cards (:input :p95) 16) (cockpit-cards (:input :max) 50)
  (code-scrolling (:input :p95) 16) (code-scrolling (:input :max) 50)
  (typing-with-ghost (:input :p95) 16) (typing-with-ghost (:input :max) 50)
  (diff-scrolling (:input :p95) 16) (diff-scrolling (:input :max) 50)
@@ -24,6 +23,14 @@
  (replace-retype (:input :p95) 16) (replace-retype (:input :max) 50) (replace-retype (:slice_ms :max) 6)
  (live-view (:input :p95) 16) (live-view (:input :max) 50)
  (agent-settings-open (:draw_ms) 150) (agent-settings-open (:processes) 0)
+ ;; the unified settings layer (design 16): read+apply of a 200-entry settings.el 2 ms; the page open 100 ms and a search
+ ;; keystroke (worst of the typed name) 16 ms over 5,000 settings; provenance 5 % of a 500-line config.el's load; the
+ ;; index of 200 packages 2 s; a file open with the workspace and language layers in against out, per open
+ (settings-start (:read_ms) 2)
+ (settings-page (:open_ms) 100) (settings-page (:key_max_ms) 16)
+ (settings-prov (:prov_pct) 5)
+ (settings-sync (:index_ms) 2000)
+ (settings-open (:delta_ms) 1)
  (remote-typing (:input :p95) 16) (remote-typing (:input :max) 50)
  (window-switch (:input :p95) 16) (window-switch (:input :max) 50)
  (redisplay (:redisplay :p95) 16)
@@ -73,25 +80,28 @@
 ;; Gated budgets (Task 16 of the determinism plan), seeded 2026-10-20 from two runs of the perf tier in the Emacs 31.1 GUI
 ;; container (source, not built: compiled code allocates less): :alloc :p50 = the larger of the runs x 1.25, rounded up;
 ;; :rows = exact (equal in both runs); :cpu_ms :p90 = the larger of the runs' p90 x 2 (scaled by DRGNX_PERF_CPU_FACTOR; 2
-;; on hosted runners).  The CPU rows of the typing workloads are large because about one key in ten spends 100-200 ms of
-;; CPU in these runs (DEFERRED PERF-KEYSPIKE-1); they tighten when that is fixed.  Workloads that could not run in the
-;; container are in `drgnx-perf-run-unseeded'.  Raise a row only in the commit that needs it, with the reason.
+;; on hosted runners).  Workloads that could not run in the container are in `drgnx-perf-run-unseeded'.  Raise a row only
+;; in the commit that needs it, with the reason.
 ;; replace-typing :alloc :p50 41340 = 33072 x 1.25 (CI's GUI-container run of 83e460be; the seed run was 25252): the number is
 ;; timing-coupled, not a code cost (docs/develop/perf.md, "Allocation that follows the wall clock").
-;; :cpu_ms :p50 (typing, typing-with-ghost, remote-typing) ~30 ms: a normal key, which the p90 (the 1-in-10 spike, PERF-KEYSPIKE-1) does not gate.
- (typing (:alloc :p50) 13757) (typing (:cpu_ms :p50) 30) (typing (:cpu_ms :p90) 420.1) (typing (:rows) 1)
+;; The typing workloads' CPU rows (typing, typing-with-ghost, remote-typing) were 350-420 ms at p90 while one key in ten
+;; spent 100-200 ms (the typing fixture's open list scanned to the end of the file, and Nidhogg's full redisplay after an
+;; insertion, both fixed).  Seeded again 2026-11-05 from two source runs in the GUI container on the desktop island
+;; (4 CPUs, Nidhogg 31.1-nidhogg.5): cpu p50 3.9 / 5.9, 4.0 / 6.0, 3.9 / 4.0 ms and p90 5.1 / 7.8, 5.2 / 8.4, 5.2 / 5.3
+;; ms; the rows are the larger run x 2, rounded up, so a key spike fails the run again.
+ (typing (:alloc :p50) 13757) (typing (:cpu_ms :p50) 12) (typing (:cpu_ms :p90) 16) (typing (:rows) 1)
  (scrolling (:alloc :p50) 14840) (scrolling (:cpu_ms :p90) 28.4) (scrolling (:rows) 0)
  (tabs (:alloc :p50) 6234) (tabs (:cpu_ms :p90) 11.2) (tabs (:rows) 0)
  (explorer (:alloc :p50) 5115) (explorer (:cpu_ms :p90) 6.0) (explorer (:rows) 0)
  (agent-typing (:alloc :p50) 15008) (agent-typing (:cpu_ms :p90) 23.1) (agent-typing (:rows) 1)
  (code-scrolling (:alloc :p50) 15439) (code-scrolling (:cpu_ms :p90) 26.9) (code-scrolling (:rows) 0)
  (diff-scrolling (:alloc :p50) 6027) (diff-scrolling (:cpu_ms :p90) 26.7) (diff-scrolling (:rows) 0)
- (typing-with-ghost (:alloc :p50) 18385) (typing-with-ghost (:cpu_ms :p50) 30) (typing-with-ghost (:cpu_ms :p90) 402.9) (typing-with-ghost (:rows) 1)
+ (typing-with-ghost (:alloc :p50) 18385) (typing-with-ghost (:cpu_ms :p50) 12) (typing-with-ghost (:cpu_ms :p90) 17) (typing-with-ghost (:rows) 1)
  (replace-typing (:alloc :p50) 41340) (replace-typing (:cpu_ms :p90) 183.7) (replace-typing (:rows) 1)
  ;; replace-retype seeded 2026-10-20 from two GUI-container runs at --cpus 2 (alloc 4097 / 4097, cpu p90 4.97 / 5.93,
  ;; rows 0 / 0; a third at --cpus 1 gave 4097, 6.22, 0): the keys only edit the field, the rows are patched by timers
  (replace-retype (:alloc :p50) 5122) (replace-retype (:cpu_ms :p90) 11.9) (replace-retype (:rows) 0)
- (remote-typing (:alloc :p50) 17300) (remote-typing (:cpu_ms :p50) 30) (remote-typing (:cpu_ms :p90) 349.0) (remote-typing (:rows) 1)
+ (remote-typing (:alloc :p50) 17300) (remote-typing (:cpu_ms :p50) 8) (remote-typing (:cpu_ms :p90) 11) (remote-typing (:rows) 1)
  (window-switch (:alloc :p50) 29638) (window-switch (:cpu_ms :p90) 43.6) (window-switch (:rows) 0)
  ;; Watchdog rows, REPORTED until seeded (`drgnx-perf-watchdog-gated'): no stall in any input
  ;; workload; a collection at most 250 ms; the GC p95 at most 50 ms, judged only over >= 20 collections.
@@ -102,7 +112,6 @@
  (explorer (:stalls) 0) (explorer (:gc :max) 250) (explorer (:gc :p95) 50)
  (agent-typing (:stalls) 0) (agent-typing (:gc :max) 250) (agent-typing (:gc :p95) 50)
  (agent-stream (:stalls) 0) (agent-stream (:gc :max) 250) (agent-stream (:gc :p95) 50)
- (cockpit-cards (:stalls) 0) (cockpit-cards (:gc :max) 250) (cockpit-cards (:gc :p95) 50)
  (code-scrolling (:stalls) 0) (code-scrolling (:gc :max) 250) (code-scrolling (:gc :p95) 50)
  (typing-with-ghost (:stalls) 0) (typing-with-ghost (:gc :max) 250) (typing-with-ghost (:gc :p95) 50)
  (diff-scrolling (:stalls) 0) (diff-scrolling (:gc :max) 250) (diff-scrolling (:gc :p95) 50)
@@ -116,4 +125,27 @@
  (motions-evil (:stalls) 0) (motions-evil (:gc :max) 250) (motions-evil (:gc :p95) 50)
  (explorer-evil (:stalls) 0) (explorer-evil (:gc :max) 250) (explorer-evil (:gc :p95) 50)
  (terminal-typing (:stalls) 0) (terminal-typing (:gc :max) 250) (terminal-typing (:gc :p95) 50)
- (terminal-output (:stalls) 0) (terminal-output (:gc :max) 250) (terminal-output (:gc :p95) 50))
+ (terminal-output (:stalls) 0) (terminal-output (:gc :max) 250) (terminal-output (:gc :p95) 50)
+ ;; The off-the-main-thread workloads (Task 8; off-the-main-thread design §17.6, harness/drgnx-perf-workloads.el).  Every
+ ;; budget is the design's table (V2 §1: 16 ms a key, 50 ms the worst key, 100 ms a stall; or drgnx's existing row), fixed
+ ;; here, never taken from a first run.  Report-only until the step that moves the work lands (DRGNX_PERF_LANDED names it).
+ ;; :stalls-ge16 / :stalls-ge100 count the watchdog's stalls (DRGNX_PERF_WATCHDOG=16 or on for the 16 ms ones); :ts, :lsp, :image
+ ;; and :expand_ms are the workload's own measures.
+ (lsp-burst (:input :p95) 16 :report-only ot4) (lsp-burst (:stalls-ge16) 0 :report-only ot4)
+ (lsp-burst (:lsp :handler_ms :max) 50 :report-only ot4)       ; a response's handler within 50 ms of its last byte
+ (lsp-typing (:input :p95) 16 :report-only ot4) (lsp-typing (:input :max) 50 :report-only ot4)
+ (ts-open (:ts :draw_ms) 16 :report-only ot2)                  ; first draw within one frame of the visit's end
+ (ts-open (:ts :colored_ms) 500 :report-only ot2)              ; last visible region coloured within 500 ms
+ (ts-open (:stalls-ge100) 0 :report-only ot2)
+ (ts-paste (:input :p95) 16 :report-only ot2) (ts-paste (:complete-ms) 300 :report-only ot2)
+ (ts-typing (:input :p95) 16 :report-only ot2) (ts-typing-unclosed (:input :p95) 16 :report-only ot2)
+ (compile-flood (:input :p95) 16 :report-only ot3) (compile-flood (:input :p99) 50 :report-only ot3)
+ (compile-flood (:input :max) 50 :report-only ot3)
+ (image-open (:stalls-ge16) 0 :report-only ot6)
+ (image-open (:image :screenshot_ms) 16 :report-only ot6)      ; first draw within one frame
+ (image-open (:image :preview_drawn_ms) 500 :report-only ot6)  ; every picture drawn within 500 ms
+ (explorer-expand (:expand_ms) 80 :report-only ot8) (explorer-expand (:stalls-ge16) 0 :report-only ot8)
+ (explorer-git (:input :p95) 16 :report-only ot5) (explorer-git (:stalls-ge16) 0 :report-only ot5)
+ (quick-open-large (:complete-ms) 100 :report-only ot5)        ; first candidates within 100 ms
+ (quick-open-large (:stalls-ge16) 0 :report-only ot5)
+ (autosave-typing (:input :max) 50 :report-only ot8) (autosave-typing (:complete-ms) 1000 :report-only ot8))

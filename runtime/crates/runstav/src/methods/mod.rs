@@ -17,9 +17,12 @@ pub mod matrix;
 pub mod mcp;
 pub mod plans;
 pub mod records;
+pub mod runners;
+pub mod search;
 pub mod settings;
 pub mod tasks;
 pub mod timeline;
+pub mod work;
 
 use crate::registry::Method;
 use crate::wire::{Error, ErrorCode};
@@ -109,6 +112,7 @@ params! {
     Hello(hub::HelloParams),
     Ping(Empty),
     Status(Empty),
+    BrowserCheck(Empty),
     Restart(Empty),
     Shutdown(Empty),
     Subscribe(Empty),
@@ -190,6 +194,10 @@ params! {
     AgentsMove(agents::MoveParams),
     AgentsRole(agents::RoleParams),
     AgentsSlice(agents::SliceParams),
+    AgentsEntriesSubscribe(agents::SessionRef),
+    AgentsEntriesUnsubscribe(agents::SessionRef),
+    AgentsToolInput(agents::ToolInputParams),
+    AgentsPause(agents::ById),
     AgentsProbe(agents::ProbeParams),
     ExecStart(exec::StartParams),
     ExecGet(exec::ById),
@@ -215,6 +223,37 @@ params! {
     RecordsStatus(records::ByPath),
     RecordsProposals(records::ByPath),
     RecordsDecide(records::DecideParams),
+    MachinesReport(work::MachineReport),
+    MachinesList(Empty),
+    WorkConclusions(work::ConclusionsParams),
+    AgentsPresenceSubscribe(work::PresenceSubscribe),
+    AgentsPresenceGet(work::PresenceGet),
+    WorkMapSubscribe(work::MapSubscribe),
+    WorkMapSet(work::MapSet),
+    WorkMapClose(work::MapClose),
+    WorkFiles(work::EditedFiles),
+    WorkHunks(work::HunksParams),
+    WorkFileAt(work::FileAtParams),
+    SearchQuery(search::QueryParams),
+    SearchStatus(search::RootParams),
+    SearchIndex(search::IndexParams),
+    SearchEmbedders(Empty),
+    SearchModelDownload(search::DownloadParams),
+    SearchTyping(Empty),
+    SearchServerPlan(search::ServerKindParams),
+    SearchServerStart(search::ServerStartParams),
+    SearchServerStop(search::ServerKindParams),
+    RunnersList(Empty),
+    RunnersProbeHost(runners::ProbeParams),
+    RunnersAdd(runners::AddParams),
+    RunnersCheck(runners::ByName),
+    RunnersBench(runners::ByName),
+    RunnersSet(runners::SetParams),
+    RunnersUnbench(runners::ByName),
+    RunnersRemove(runners::RemoveParams),
+    RunnersKeys(runners::KeysParams),
+    RunnersKeysHeld(Empty),
+    RunnersAudit(runners::AuditParams),
 }
 
 /// Every method, in no order.
@@ -234,6 +273,9 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(plans::methods());
     v.extend(timeline::methods());
     v.extend(records::methods());
+    v.extend(work::methods());
+    v.extend(search::methods());
+    v.extend(runners::methods());
     v
 }
 

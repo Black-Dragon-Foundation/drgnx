@@ -12,10 +12,14 @@
 (declare-function eglot-booster-mode "eglot-booster")
 (defvar eglot-booster-mode)
 (defvar eglot-booster-no-remote-boost)
+(defvar nidhogg-workers-framing)
 
 (defun drgnx-booster--setup ()
-  "eglot through the booster when `emacs-lsp-booster' is installed; else eglot as it is."
-  (when (executable-find "emacs-lsp-booster")
+  "eglot through the booster when `emacs-lsp-booster' is installed and Nidhogg's own framed reading is not in effect
+\(`nidhogg-workers-framing'): the booster advises jsonrpc's reader, which makes Nidhogg's adoption stand back; else
+eglot as it is."
+  (when (and (executable-find "emacs-lsp-booster")
+             (not (and (featurep 'nidhogg-workers) (bound-and-true-p nidhogg-workers-framing))))
     (require 'eglot-booster)
     (drgnx-module-set 'eglot-booster-no-remote-boost t)  ; a remote host (TRAMP) seldom has the program
     (eglot-booster-mode 1)))

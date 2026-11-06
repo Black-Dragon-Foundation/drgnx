@@ -176,12 +176,11 @@
               (if (not drgnx-m11c1-ui-test--websocket)
                   (message "m11c-1: no websocket package, the Live view is not shown")
                 (let* ((port (drgnx-mock-cdp-start))
-                       (drgnx-live--browser (list :port port :ws (format "ws://127.0.0.1:%d/devtools/browser/mock" port) :job "job-live"))
                        (jpeg (drgnx-m11c1-ui-test--jpeg)))
                   (unwind-protect
-                      (cl-letf (((symbol-function 'drgnx-exec-get)
-                                 (lambda (id) (and (equal id "job-live") (list :id id :status 'running)))))
-                        (drgnx-live-view)
+                      (progn
+                        ;; the product's view is dormant: the frozen client, on the mock
+                        (drgnx-live--open (drgnx-live-view) (list :port port :ws (format "ws://127.0.0.1:%d/devtools/browser/mock" port)))
                         (should (drgnx-mock-cdp-wait (lambda () (drgnx-mock-cdp-received "Page.startScreencast"))))
                         (if jpeg
                             (drgnx-mock-cdp-event "Page.screencastFrame"

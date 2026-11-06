@@ -19,7 +19,7 @@
 
 (ert-deftest drgnx-ci/test-images-run-nidhogg ()
   (let ((files (directory-files (drgnx-ci-test--path "test/container") t "\\`Containerfile")))
-    (should (= 5 (length files)))
+    (should (= 6 (length files)))
     (dolist (f files)
       (let ((s (drgnx-ci-test--slurp f)))
         (should-not (string-match-p "dnf[^\n]*install[^\n]*emacs-pgtk" s))

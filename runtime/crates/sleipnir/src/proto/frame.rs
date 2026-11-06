@@ -335,9 +335,12 @@ pub enum Frame {
     },
 
     // ---- sync
-    /// hub → runner: what the attempt's inputs are.
+    /// hub → runner: what the attempt's inputs are: the commit of repository REPO (its mirror's id) and the overlay
+    /// the runner's trust may get. The runner answers with a `sync-need`.
     SyncHave {
         r: JobRef,
+        #[serde(default)]
+        repo: String,
         #[serde(default)]
         input_key: String,
         commit: String,
@@ -346,22 +349,30 @@ pub enum Frame {
         #[serde(default)]
         manifest: Vec<ManifestEntry>,
     },
-    /// runner → hub: the blobs it lacks, and whether it lacks the commit.
+    /// runner → hub: the blobs it lacks, whether it lacks the commit, and the commits its mirror's refs hold (what a
+    /// bundle leaves out). Sent for every `sync-have`, and again once an origin fetch or a bundle is in.
     SyncNeed {
         r: JobRef,
         #[serde(default)]
         blobs: Vec<Sha256>,
         #[serde(default)]
         commit: bool,
+        #[serde(default)]
+        refs: Vec<String>,
     },
-    /// hub → runner: one blob (its bytes follow).
+    /// hub → runner: a blob's chunk at OFFSET of TOTAL bytes (its bytes follow); TOTAL 0 (an older hub): the bytes
+    /// are the whole blob.
     Blob {
         r: JobRef,
         sha256: Sha256,
+        #[serde(default)]
+        offset: u64,
+        #[serde(default)]
+        total: u64,
         #[serde(skip)]
         bytes: Vec<u8>,
     },
-    /// hub → runner: a bundle chunk at OFFSET of TOTAL (its bytes follow); the last carries the bundle's hash.
+    /// hub → runner: a bundle chunk at OFFSET of TOTAL (its bytes follow), each with the bundle's hash.
     Bundle {
         r: JobRef,
         id: String,
@@ -373,12 +384,15 @@ pub enum Frame {
         #[serde(skip)]
         bytes: Vec<u8>,
     },
-    /// hub → runner: fetch COMMIT from the project's origin.
+    /// hub → runner: fetch COMMIT from the project's origin; with CRED, through the deploy key or token of that name,
+    /// sent just before in a `key` frame of the attempt's (held in memory for the fetch only).
     OriginFetch {
         r: JobRef,
         repo: String,
         url: String,
         commit: String,
+        #[serde(default)]
+        cred: Option<String>,
     },
 
     // ---- a job's run
@@ -392,6 +406,10 @@ pub enum Frame {
         env: Vec<(String, String)>,
         #[serde(default)]
         net_hosts: Vec<String>,
+        /// Names the job's proxy resolves to a fixed address instead of asking DNS (the hub's
+        /// `drgnx-sandbox-proxy-pinned-addresses`); an older hub sends none.
+        #[serde(default)]
+        pins: Vec<(String, std::net::IpAddr)>,
         /// The row parser (`ert`, `cargo-test`, `plist`, `exit`).
         #[serde(default)]
         parser: String,

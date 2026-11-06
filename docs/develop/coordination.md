@@ -17,8 +17,7 @@ review,event,prune}` implements.
 
 What the editor reads of it lives in `core/drgnx-coord-read.el`, on `drgnx-work-db-read` (the read-only handle):
 `drgnx-coord-version`, `-events`, `-open-questions`, `-agent`, `-agents`, `-review-marks`, `-job`, `-message`,
-`-message-answers` and `-message-prompt` (with `drgnx-coord--event-cols`/`-event-plist` for the cockpit's own
-queries). The cockpit requires `drgnx-coord-read`.
+`-message-answers` and `-message-prompt` (with `drgnx-coord--event-cols`/`-event-plist` for event queries).
 
 Schema 6 (Ratatoskr): every `data` column (`node`, `job`, `jtask`, `card`, `event`) is JSON text, checked by the
 database (`check (data is null or json_valid(data))`), written and read through the record schemas of
@@ -264,20 +263,18 @@ thread is the file's one writer. No Lisp opens it read-write:
 
 ### The editor writes through the hub
 
-The cockpit (`modules/tools/drgnx-cockpit*.el`) writes nothing to `work.db`; its five writes are hub calls
-(`drgnx-hub-call`, asynchronous: a path the user did not wait on never waits):
+The Work space (`modules/tools/drgnx-work-*.el`) writes nothing to `work.db`; its writes are hub calls
+(`drgnx-hub-call`, asynchronous: a path the user did not wait on never waits). The Work cockpit that made these calls
+before it is gone; the review view makes the last two:
 
 | Where | Call |
 |---|---|
-| answering an ask card (`drgnx-cockpit-answer`) | `cards/settle`; `{settled: false}` says "That card was settled already" |
-| an answer to a message, a message to an agent (feed, cards, edits) | `messages/send`; a held one says why |
-| an answer closes its question | `events/add` (the `answer` event), then `messages/mark` `acted`, in that order |
-| a comment or a revert request in the edits pane | `messages/send`, then `events/add` once it was sent |
-| accepting a file | one `review/mark` with its `accept` event |
+| a message to an agent (steer, resume) | `agents/send` |
+| accepting a file in the review view (`a`) | one `review/mark` with its `accept` event |
+| rejecting a hunk in the review view (`D`) | `review/mark` `pending`, and an `agents/send` naming the hunk |
 
 An error is said once as "drgnx hub: TEXT". The editor sends no `coord/notify` after a send: the front notifies
-itself after a write. Reads stay on the read-only path. `drgnx-cockpit/no-writer-call-in-the-modules` walks the cockpit
-modules and `core/drgnx-cockpit-model.el` for a `drgnx-coord-` writer or a `sqlite-execute`.
+itself after a write. Reads stay on the read-only path.
 
 ## The tracker (`runtime/crates/norn/src/tracker`)
 
@@ -782,8 +779,9 @@ reuses a live one, and `agents/stop` and `agents/kill` close it. Test builds run
   refused. An agent without drgnx's tools ends its last message with a fenced `drgnx-report` block of the same
   schema; the hub validates it when the turn ends and files it as that session (once: not for a task already in
   review or done). `reports/get` reads them back.
-- **Decisions and commits.** `record_decision` takes `step` and `origin` (`from-brief`, `own`, `needs-user`) and
-  keeps them, with the session, in the decision. After each shell step of a plan-run session the hub lists the new
+- **Decisions and commits.** `record_decision` takes `origin` (`from-brief`, `own`, `needs-user`) and keeps it, with
+  the session, in the decision. Its `step` argument is ignored: the hub stamps the timeline step of the call itself
+  (`work::conclusions`, `docs/develop/work-space.md`, "Conclusions"). After each shell step of a plan-run session the hub lists the new
   non-merge commits of its tree beyond `job/<job>` (git in a blocking task) and links each new commit
   (`commit:<sha>`) `implements` to every decision that session recorded and no commit implements yet.
   `decisions/effects` returns a decision's commits and the later commits whose changed lines (`git diff-tree -U0`,
@@ -832,29 +830,35 @@ clears the count after carding.
 ## The permissions matrix
 
 `norn::matrix` (`runtime/crates/norn/src/matrix/`) is the policy on the wire's vocabulary
-(`runstav::methods::matrix`). Rows are the 22 `Action`s (ids such as `agents.start`, `push.main`); columns are
+(`runstav::methods::matrix`). Rows are the 25 `Action`s (ids such as `agents.start`, `push.main`); columns are
 roles (manager, worker, chat), named agents and providers; a cell is `Allow`, `Ask` or `Never` with an optional
 limit (`amount` in a `Unit`).
 
 - **Presets:** `preset(Cautious | Balanced | Autonomous)` builds a layer with every action in the three role columns.
   Balanced is the design mockup's table. `JobContainer` is Allow for managers and workers under Balanced and
   Autonomous, Ask under Cautious, Never for chat. A cell has one limit, so Balanced `spend` carries the dollar cap
-  (manager $40, worker $10, chat $2); the weekly-limit share is the gateway's budget check, not the cell.
+  (manager $40, worker $10, chat $2); the weekly-limit share is the gateway's budget check, not the cell. The
+  browser rows (after `network`): `browser` is Ask in Cautious, Allow for managers and workers in Balanced (Ask for
+  chat) and Allow everywhere in Autonomous; `browser.web` is Allow only in Autonomous, Ask otherwise;
+  `browser.private` is Ask in every column of every preset.
 - **Combination:** `effective(layers, who)` applies the layers in order (preset, user overrides, project, plan; a
   later layer replaces a cell), then takes the most restrictive of the columns that match the session: `Never >
   Ask > Allow`. A provider or agent column can tighten a role, never widen it. At the same verdict a limit beats
   none and the smaller limit wins; limits in different units do not compare, so the cell becomes Ask with no limit.
-  `unsandboxed` and `user.private` are Never whatever a layer says; an action without a cell is Never.
+  `unsandboxed` and `user.private` are Never whatever a layer says (`always_never`); an action without a cell is
+  Never. `browser.private` is capped at Ask (`always_ask`): after the merge an Allow there becomes Ask with its limit
+  kept, whichever layer or column said Allow; a Never stays Never.
 - **Deciding:** `decide(effective, action, amount)` is the cell's verdict; over the cell's limit it is Ask if
-  `spend.over` is not Never, else Never.
+  `spend.over` is not Never, else Never. It applies both caps itself, so a row capped at Ask answers Ask for an
+  Allow cell whatever `Effective` it is handed.
 - **Narrowing:** `narrow(parent, asked)` returns `asked` only if no cell is wider than the parent's: a verdict at
   least as restrictive and, where the parent has a limit, a limit in the same unit that is no greater (a child with
   no limit, or in another unit, is wider). Otherwise `Widening { action }` names the first offender.
 - **Time presets:** `active(base, time_presets, away, minute)` picks the first `Away` preset while the user is away,
   else the first `Between(from, to)` holding at that minute of day (wrapping past midnight), else the base.
 
-Tests: `cargo test -p norn matrix` (the Balanced table cell by cell, combination, overrides, narrowing as a
-property test, units, time presets).
+Tests: `cargo test -p norn matrix` (the Balanced table cell by cell, the browser rows in every preset, the Ask cap
+in every layer, combination, overrides, narrowing as a property test and for the browser rows, units, time presets).
 
 ### The matrix in the hub (`drgnx-ratatoskr/src/matrix_gate.rs`)
 
@@ -870,6 +874,36 @@ its entity's data and counts only when the user's tx wrote that field: urdr keep
 `field_tx` as `data.<key>`, and the gate reads `data.matrix` (an agent's write of the field, or of another data key,
 never decides it). `ActionCtx::of_session` fills a session's project and plan from the runner's scope table (a plan
 run's, or the one `open_as` derives from the task a session starts on).
+
+**Grant records (the browser rows).** A matrix card is otherwise one answer to one question, so a retry after a yes
+would make a new card. For `browser`, `browser.web` and `browser.private` the user's yes is a `grant` entity of
+access `matrix` (`norn::grants::create_matrix`; [store.md](store.md), "Grants"), with a scope: once (the session,
+`expires` now + `agents-browser-once-window`), the session (no expiry) or the plan (`who: {plan: ID}`, every session
+of that plan). When the verdict is Ask, `check` and `recheck` read the active grants for the session or its plan
+(`matrix_grants_for`) and answer Allow, with no card, when one covers the hub's facts: for `browser` any grant; for
+`browser.web` one with no host or with `facts.host`; for `browser.private` one whose target is exactly
+`facts.target` (the web proxy matches CIDR and all-private grants itself). `Facts.host` and `Facts.target` are the
+web proxy's, never an agent's. A Never verdict ignores every grant, and `browser.private` stays capped at Ask, so its
+grants are the only way it is ever allowed. `recheck` reads the card's own facts back from its data.
+
+**Browser cards.** The card of a browser row lists its answers in its data (`choices: [{id, label}]`, also in the
+`card` event with `body`), with `once_window` (the setting's seconds when the card was made). Its title is the hub's
+(`matrix_gate::card_title`): the session id and, for `browser.web`, the first host; for `browser.private` the target,
+`Facts.addr` (the pinned address) and the class of `Facts.class` (the web policy's `Class` in snake case).
+- The ids: `once`, `session`, `plan` (only when the card's ctx has a plan) and `refuse`. A `browser.private` card whose
+  target is a LAN or ULA literal (`cidr_of`) adds `session/cidr`, `plan/cidr`, `session/all-private` and
+  `plan/all-private`. A name, `host.drgnx.internal`, CGNAT and link-local get the one target only.
+- `cards/settle` on such a card (`graph::settle_browser`): `allow` is read as `once` and `deny` as `refuse`; any id
+  the card does not list is `invalid-params` at `choice`, and the card stays open. An allow writes the grant in the
+  same user tx (`who` from the scope; `expires` now + `once_window` for once; for `browser.web` a once names the
+  card's `facts.host`, the others no host; for `browser.private` the target is `facts.target`, `Cidr {the /24 or
+  /64, the target's port}` or `"all_private"`, in `gleipnir::net::policy::PrivateTarget`'s wire form). `refuse`
+  writes no grant and sets `refused: true` in the card's data, which the web proxy reads so the session gets no more
+  cards. The session gets a message either way.
+- `recheck` of a settled browser card allows while the grant it wrote (`grant.card`) is live, so a once ends with its
+  window.
+- `Facts.target` is that wire form for one target, `{"host_port": "H:P"}` with the name or literal as asked, so a
+  grant for exactly that target matches it by equal JSON.
 
 `effective_for(conn, who, ctx, now)` is what a session may do now; the permission seam, the brief and the launch
 plan all call it. A worker a manager started gets `meet` (the cellwise tighter) of its own cells from every layer, its
@@ -892,7 +926,10 @@ Methods: `matrix/get`, `matrix/check` (no card), `presence/set`.
   work comes back as a bundle (`<task>.bundle`). The store is cloned, or fetched from the repository, before every
   tree is made from it, one store operation at a time (a run's tasks start together). A manager worker's tree that is made again
   after a restart reads its base in the store, fetched first (its own `.git` holds the integration branch as it was
-  when the tree was made), with the tree's objects lent to it; no git runs in the tree.
+  when the tree was made), with the tree's objects lent to it; no git runs in the tree. Whether a snapshot tree's
+  branch is there and where its tip is are read from its ref files (`.git/refs/heads/…`, `.git/packed-refs`), which
+  the agent writes, as `eitri::read_regular` reads (`runner::git::agent_text`): no link followed below the task folder,
+  a FIFO or device refused without blocking, 64 MiB at most; anything else counts as no ref.
 - **The gate reads the trusted repository only** (never a task folder; this removes the VC-guard refusals of the Lisp
   gate in snapshot mode). A snapshot bundle is first imported: `git bundle verify`, `fetch` with
   `fetch.fsckObjects`/`transfer.fsckObjects`, a branch that descends from the task's base, and the ref written

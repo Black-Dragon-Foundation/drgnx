@@ -91,6 +91,19 @@
   (should (string-search "31.2" (nth 1 (drgnx-doctor-check 'security (drgnx-doctor-test--facts)))))
   (should (eq (drgnx-doctor-test--status 'security (drgnx-doctor-test--facts :version "31.2")) 'ok)))
 
+(ert-deftest drgnx-doctor/security-knows-nidhogg-backports ()
+  ;; Nidhogg 4 and later backport the TRAMP and Flymake fixes; the shorthands issue stays (fixed only in Emacs 32).
+  (let ((old (nth 1 (drgnx-doctor-check 'security (drgnx-doctor-test--facts :nidhogg "31.1-nidhogg.3"))))
+        (new (nth 1 (drgnx-doctor-check 'security (drgnx-doctor-test--facts :nidhogg "31.1-nidhogg.4"))))
+        (newer (nth 1 (drgnx-doctor-check 'security (drgnx-doctor-test--facts :nidhogg "31.1-nidhogg.10")))))
+    (should (string-search "CVE-2026-108976" old))
+    (should (string-search "CVE-2026-96442" old))
+    (dolist (m (list new newer))
+      (should-not (string-search "CVE-2026-108976" m))
+      (should-not (string-search "CVE-2026-96442" m))
+      (should (string-search "CVE-2026-96269 (partly fixed here)" m)))
+    (should (eq 'warn (drgnx-doctor-test--status 'security (drgnx-doctor-test--facts :nidhogg "31.1-nidhogg.4"))))))
+
 (ert-deftest drgnx-doctor/dev-checks-only-with-dev ()
   (let ((names (lambda (results) (mapcar (lambda (r) (plist-get r :name)) results))))
     ;; ui-magick: a dev check on every platform (ui-mutter is Linux-only)
@@ -112,6 +125,65 @@
     (plist-put f :ratatoskr
                (plist-put (copy-sequence (plist-get f :ratatoskr)) :report
                           (append report (plist-get (plist-get f :ratatoskr) :report))))))
+
+(defun drgnx-doctor-test--browser (&rest overrides)
+  "Facts whose `browser' section is a healthy one with OVERRIDES (plist keys) applied."
+  (let ((b (list :found '(:path "/usr/bin/chrome-headless-shell" :version "157.0.8103.38" :kind "headless-shell")
+                 :fix nil :tier "full" :landlock_abi 10 :verdict "full tier: Mode A" :modes ["A"] :cap "systemd"
+                 :proxy_refusals [(:target "example.com:22" :refused t) (:target "host.drgnx.internal:1" :refused t)]
+                 :last_check '(:ok t :start_ms 812 :peak_bytes 314572800) :age_warning nil)))
+    (while overrides (setq b (plist-put b (pop overrides) (pop overrides))))
+    (drgnx-doctor-test--report :browser b)))
+
+(ert-deftest drgnx-doctor/agent-browser-ok ()
+  (should (equal (plist-get (alist-get 'agent-browser drgnx-doctor--checks) :group) "Agents"))
+  (let ((r (drgnx-doctor-check 'agent-browser (drgnx-doctor-test--browser))))
+    (should (eq (car r) 'ok))
+    (should (string-search "full tier: Mode A" (nth 1 r)))
+    (should (string-search "started in 812 ms, peak memory 300 MiB" (nth 1 r))))
+  (should (string-search "no check run yet"
+                         (nth 1 (drgnx-doctor-check 'agent-browser (drgnx-doctor-test--browser :last_check nil)))))
+  ;; no section (an older binary) or no answer at all
+  (should (eq (drgnx-doctor-test--status 'agent-browser (drgnx-doctor-test--facts)) 'info))
+  (should (eq (drgnx-doctor-test--status 'agent-browser (drgnx-doctor-test--facts :ratatoskr nil)) 'info)))
+
+(ert-deftest drgnx-doctor/agent-browser-no-browser ()
+  (let ((r (drgnx-doctor-check 'agent-browser (drgnx-doctor-test--browser :found nil :fix "install chromium-headless"))))
+    (should (eq (car r) 'warn))
+    (should (string-search "without a browser" (nth 1 r)))
+    (should (equal (nth 2 r) "install chromium-headless")))
+  (let ((r (drgnx-doctor-check 'agent-browser (drgnx-doctor-test--browser :age_warning t))))
+    (should (eq (car r) 'warn))
+    (should (string-search "28 days" (nth 1 r))))
+  (let ((r (drgnx-doctor-check 'agent-browser (drgnx-doctor-test--browser :last_check '(:ok nil :why "no screenshot")))))
+    (should (eq (car r) 'warn))
+    (should (string-search "no screenshot" (nth 1 r)))
+    (should (string-search "Check the Agent Browser" (nth 2 r)))))
+
+(ert-deftest drgnx-doctor/agent-browser-abi-below-9 ()
+  (let ((r (drgnx-doctor-check 'agent-browser
+                               (drgnx-doctor-test--browser :landlock_abi 8 :modes [] :found nil
+                                                           :verdict "refused: Landlock ABI 8 < 9 (fix: run a newer kernel)"))))
+    (should (eq (car r) 'info))
+    (should (string-search "Landlock ABI 8 < 9" (nth 1 r))))
+  (should (eq (drgnx-doctor-test--status 'agent-browser
+                                         (drgnx-doctor-test--browser :tier "reduced" :modes []
+                                                                     :verdict "reduced tier: not yet (phase 2)"))
+              'info)))
+
+(ert-deftest drgnx-doctor/agent-browser-refusal-failed ()
+  (let ((r (drgnx-doctor-check 'agent-browser
+                               (drgnx-doctor-test--browser
+                                :proxy_refusals [(:target "example.com:22" :refused t)
+                                                 (:target "169.254.169.254:80" :refused nil)]))))
+    (should (eq (car r) 'fail))
+    (should (string-search "169.254.169.254:80" (nth 1 r)))
+    (should-not (string-search "example.com" (nth 1 r)))))
+
+(ert-deftest drgnx-doctor/agent-browser-no-cap ()
+  (let ((r (drgnx-doctor-check 'agent-browser (drgnx-doctor-test--browser :cap "none"))))
+    (should (eq (car r) 'warn))
+    (should (string-search "memory cap" (nth 1 r)))))
 
 (ert-deftest drgnx-doctor/job-sandbox-from-ratatoskr ()
   "In the Agents group, from Ratatoskr's `sandbox' section: the back end and version, or the reason and fix."
@@ -434,74 +506,80 @@
 
 ;;;; search
 
-(defun drgnx-doctor-test--search (&rest kv)
-  "The `search' check on healthy search facts changed by KV (:indexes, :embed-dims …)."
-  (drgnx-doctor-check 'search (drgnx-doctor-test--facts
-                               :search (append kv (list :sqlite t :fts5 t :embed-up t :embed-dims 384 :unindexed 0
-                                                        :indexes '(("/p/a" :chunks 120 :files 9 :dims 384 :stale 0)))))))
+(defun drgnx-doctor-test--embedders (&rest kv)
+  "What `search/embedders' answers on a healthy install (the built-in model ready on a GPU), changed by KV."
+  (append kv (list :builtin '(:model "granite-embedding-small-english-r2" :state "ready" :bytes 100 :downloaded 100
+                                     :device (:kind "gpu" :name "AMD Radeon RX 7900" :why "fastest"))
+                   :servers nil :prefer "granite-embedding-small-english-r2")))
 
-(ert-deftest drgnx-doctor/search-ok ()
+(defun drgnx-doctor-test--search (&rest kv)
+  "The `search' check on the facts of a running hub with a ready built-in model, changed by KV (the keys of
+`drgnx-doctor--search')."
+  (drgnx-doctor-check 'search (drgnx-doctor-test--facts
+                               :search (append kv (list :hub t :root "/p/a" :embedders (drgnx-doctor-test--embedders)
+                                                        :status '(:files 9 :chunks 120 :coverage_errors nil
+                                                                         :worker (:device (:kind "gpu" :name "AMD Radeon RX 7900"))))))))
+
+(ert-deftest drgnx-doctor/search-names-embedder ()
   (let ((r (drgnx-doctor-test--search)))
     (should (eq (car r) 'ok))
-    (should (string-match-p "1 index" (nth 1 r)))
-    (should (string-match-p "120 chunks" (nth 1 r)))))
+    (should (string-match-p "granite-embedding-small-english-r2" (nth 1 r)))
+    (should (string-match-p "GPU AMD Radeon RX 7900" (nth 1 r)))
+    (should (string-match-p "120 chunks in 9 files" (nth 1 r)))))
 
-(ert-deftest drgnx-doctor/search-dims-mismatch-warns ()
-  (let ((r (drgnx-doctor-test--search :embed-dims 768 :embed-provider 'tei :embed-model "bge"
-                                      :indexes '(("/p/a" :chunks 5 :provider tei :model "bge" :dims 384 :stale 0)))))
+(ert-deftest drgnx-doctor/search-names-the-address-family-of-a-server ()
+  (let ((r (drgnx-doctor-test--search
+            :embedders (drgnx-doctor-test--embedders
+                        :servers '((:kind "tei" :url "http://127.0.0.1:8087" :model "tei:local" :answering t :family "ipv6"))
+                        :prefer "tei:local"))))
+    (should (eq (car r) 'ok))
+    (should (string-match-p "tei:local (ipv6)" (nth 1 r)))))
+
+(ert-deftest drgnx-doctor/search-says-the-cpu-fallback ()
+  (let ((r (drgnx-doctor-test--search
+            :status '(:files 9 :chunks 120 :worker (:device (:kind "cpu" :name "4 threads")
+                                                            :fallback "the GPU was lost (device lost)")))))
     (should (eq (car r) 'warn))
-    (should (string-match-p "built with tei/bge (384), the provider gives 768" (nth 1 r)))
-    (should (string-match-p "Search: Index Project with rebuild" (nth 1 r)))
-    (should (string-match-p "Index Project" (nth 2 r)))))
+    (should (string-match-p "embeds on the CPU" (nth 1 r)))
+    (should (string-match-p "device lost" (nth 1 r)))))
 
-(ert-deftest drgnx-doctor/search-model-mismatch-names-both-models ()
-  (let ((r (drgnx-doctor-test--search :embed-dims 384 :embed-provider 'ollama :embed-model "nomic"
-                                      :indexes '(("/p/a" :chunks 5 :provider tei :model "bge" :dims 384 :stale 0)))))
+(ert-deftest drgnx-doctor/search-keyword-only-is-warn ()
+  (let ((r (drgnx-doctor-test--search
+            :embedders '(:builtin (:model "granite-embedding-small-english-r2" :state "missing" :bytes 100 :downloaded 0)
+                                  :servers nil))))
     (should (eq (car r) 'warn))
-    (should (string-match-p "built with tei/bge, the provider is ollama/nomic" (nth 1 r)))))
-
-(ert-deftest drgnx-doctor/search-wrapper-turns-a-signal-into-an-error-fact ()
-  (require 'drgnx-search-setup)
-  (cl-letf (((symbol-function 'drgnx-search-setup--roots) (lambda () nil))
-            ((symbol-function 'drgnx-search-doctor-facts) (lambda (_) (error "boom"))))
-    (should (equal (drgnx-doctor--search) '(:error "boom")))))
-
-(ert-deftest drgnx-doctor/search-stale-warns ()
-  (let ((few (drgnx-doctor-test--search :indexes '(("/p/a" :chunks 5 :dims 384 :stale 20))))
-        (many (drgnx-doctor-test--search :indexes '(("/p/a" :chunks 5 :dims 384 :stale 21)))))
-    (should (eq (car few) 'ok))                                 ; more than 20 files
-    (should (eq (car many) 'warn))
-    (should (string-match-p "21 files" (nth 1 many)))
-    (should (string-match-p "Index Project" (nth 2 many)))))
-
-(ert-deftest drgnx-doctor/search-no-fts5-fails ()
-  (let ((r (drgnx-doctor-test--search :fts5 nil)))
-    (should (eq (car r) 'fail))
-    (should (string-match-p "FTS5" (nth 1 r))))
-  (let ((r (drgnx-doctor-test--search :sqlite nil :fts5 nil)))
-    (should (eq (car r) 'fail))
-    (should (string-match-p "SQLite" (nth 1 r)))))
-
-(ert-deftest drgnx-doctor/search-no-provider-is-info ()
-  (let ((r (drgnx-doctor-test--search :embed-up nil :embed-dims nil)))
-    (should (eq (car r) 'info))
+    (should (string-match-p "keyword only" (nth 1 r)))
+    (should (string-match-p "missing" (nth 1 r)))
     (should (string-match-p "Set Up Semantic Search" (nth 2 r)))))
 
-(ert-deftest drgnx-doctor/search-unindexed-projects-are-not-stale ()
-  (let ((r (drgnx-doctor-test--search :indexes nil :unindexed 3)))
-    (should (eq (car r) 'ok))
-    (should (string-match-p "3 projects not indexed" (nth 1 r)))))
+(ert-deftest drgnx-doctor/search-flags-coverage-errors ()
+  (let ((r (drgnx-doctor-test--search
+            :status '(:files 9 :chunks 0 :coverage_errors ("docs: 3 listed files, no chunks")))))
+    (should (eq (car r) 'warn))
+    (should (string-match-p "coverage errors: docs: 3 listed files, no chunks" (nth 1 r)))))
+
+(ert-deftest drgnx-doctor/search-without-a-hub-is-info ()
+  (let ((r (drgnx-doctor-check 'search (drgnx-doctor-test--facts :search '(:hub nil)))))
+    (should (eq (car r) 'info))
+    (should (string-match-p "hub is not running" (nth 1 r)))))
+
+(ert-deftest drgnx-doctor/search-reads-the-hub-and-signals-become-facts ()
+  (require 'drgnx-hub-client)
+  (let (asked)
+    (cl-letf (((symbol-function 'drgnx-hub-running-p) (lambda () t))
+              ((symbol-function 'drgnx-doctor--search-root) (lambda () "/p/a"))
+              ((symbol-function 'drgnx-hub-call-sync)
+               (lambda (method params &optional _timeout) (push method asked) (list :method method :params params))))
+      (let ((f (drgnx-doctor--search)))
+        (should (equal (nreverse asked) '("search/embedders" "search/status")))
+        (should (equal (plist-get (plist-get f :status) :params) '(:root "/p/a")))
+        (should (plist-get f :hub)))))
+  (cl-letf (((symbol-function 'drgnx-hub-running-p) (lambda () (error "boom"))))
+    (should (equal (drgnx-doctor--search) '(:error "boom")))))
 
 (ert-deftest drgnx-doctor/search-fact-failure-is-a-warning-not-a-crash ()
   (should (eq (car (drgnx-doctor-check 'search (drgnx-doctor-test--facts :search '(:error "boom")))) 'warn))
   (should (eq (car (drgnx-doctor-check 'search (drgnx-doctor-test--facts))) 'info)))   ; facts without :search
-
-(ert-deftest drgnx-doctor/search-a-broken-config-warns ()
-  (let ((r (drgnx-doctor-test--search
-            :config-errors '(("/p/a" . ".drgnx/search.eld cannot be read: :off must be t or nil")))))
-    (should (eq (car r) 'warn))
-    (should (string-match-p "a: \\.drgnx/search\\.eld cannot be read: :off must be t or nil" (nth 1 r)))
-    (should (string-match-p "search\\.eld" (nth 2 r)))))
 
 (ert-deftest drgnx-doctor/drgnx-on-path-skips-a-profile-it-cannot-read ()
   ;; M12a-3 (review): a profile that is a directory, or unreadable, is skipped quietly: no signal, no stack trace.

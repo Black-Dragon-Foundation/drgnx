@@ -12,7 +12,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// A row of the matrix: one thing an agent may do.  `unsandboxed` and `user.private` are Never in every column of
-/// every preset and no override changes them.
+/// every preset and no override changes them; `browser.private` is at most Ask, whatever a layer says.
+///
+/// The browser rows: `browser` is the in-sandbox browser itself (its relay ports, its host and the CDP endpoint; its
+/// network only the session's own local servers), `browser.web` lets that browser reach any public site on ports 80
+/// and 443, and `browser.private` lets it reach the private targets a grant names.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize, Serialize, JsonSchema,
 )]
@@ -49,8 +53,18 @@ pub enum Action {
     Machines,
     #[serde(rename = "job.container")]
     JobContainer,
+    // a job names keys: they reach the job's own process only, and only names on the project's
+    // `drgnx-runners-job-keys` list (a plain comment: a doc comment on one variant makes the schema a `oneOf`)
+    #[serde(rename = "job.keys")]
+    JobKeys,
     #[serde(rename = "network")]
     Network,
+    #[serde(rename = "browser")]
+    Browser,
+    #[serde(rename = "browser.web")]
+    BrowserWeb,
+    #[serde(rename = "browser.private")]
+    BrowserPrivate,
     #[serde(rename = "unsandboxed")]
     Unsandboxed,
     #[serde(rename = "settings.change")]
@@ -65,7 +79,7 @@ pub enum Action {
 
 impl Action {
     /// Every action, in the matrix's row order.
-    pub const ALL: [Action; 22] = [
+    pub const ALL: [Action; 26] = [
         Action::AgentsStart,
         Action::AgentsModel,
         Action::AgentsControl,
@@ -82,7 +96,11 @@ impl Action {
         Action::CodeCiConfig,
         Action::Machines,
         Action::JobContainer,
+        Action::JobKeys,
         Action::Network,
+        Action::Browser,
+        Action::BrowserWeb,
+        Action::BrowserPrivate,
         Action::Unsandboxed,
         Action::SettingsChange,
         Action::UserPrivate,
@@ -109,7 +127,11 @@ impl Action {
             Action::CodeCiConfig => "code.ci-config",
             Action::Machines => "machines",
             Action::JobContainer => "job.container",
+            Action::JobKeys => "job.keys",
             Action::Network => "network",
+            Action::Browser => "browser",
+            Action::BrowserWeb => "browser.web",
+            Action::BrowserPrivate => "browser.private",
             Action::Unsandboxed => "unsandboxed",
             Action::SettingsChange => "settings.change",
             Action::UserPrivate => "user.private",
@@ -254,6 +276,20 @@ pub struct Facts {
     pub paths: Bounded<Vec<AbsPath>, 64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff_hash: Option<Hex64>,
+    /// `browser.web`: the first `host:port` the session's browser was refused (the web proxy's, never the agent's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<Text>,
+    /// `browser.private`: the one target the web proxy refused, in the grant's wire form (`{"host_port": "H:P"}`, the
+    /// name or the literal as asked), which a grant for exactly that target matches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<serde_json::Value>,
+    /// `browser.private`: the address the target resolved to and was pinned to (`ADDR:PORT`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub addr: Option<Text>,
+    /// `browser.private`: that address's class, as the web policy names it (`lan`, `ula`, `link_local`, `cgnat`,
+    /// `loopback`, `host_own`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class: Option<Text>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]

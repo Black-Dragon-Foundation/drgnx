@@ -106,12 +106,19 @@ but never watched for changes (a remote watch starts a process that blocks); ref
 
 **Typing** in the Explorer jumps to the next row starting with what you typed (letters a profile does not use).
 **Find** filters the tree live to the files whose names contain the text — also inside collapsed folders — and the
-title shows it; an empty text (or `C-g`) brings back the tree, its open folders, the view and the selection.
+title shows it; an empty text (or `C-g`) brings back the tree, its open folders, the view and the selection. In a big
+project the files are listed in the background and the tree fills in while they arrive (with Nidhogg's framing on,
+`nidhogg-workers-framing`; a remote folder, or no framing, lists them first as before). **Quick Open** (`C-p` in the VS
+Code profile) does the same: the list grows while the project is still being listed, and the file you have highlighted
+stays highlighted wherever the new ones sort; it moves when you type or move it.
 
 **Live**: files created, deleted or renamed outside Emacs appear within ~150 ms (only the changed folder is read
 again; the view and selection stay; nothing changes while a mouse button is held — a press whose release never
 reaches the Explorer, because Emacs lost focus or the release came with a modifier or in another window, ends
-there).
+there). With Nidhogg's workers on (`nidhogg-workers-framing`), a local folder you open, or one that changed, is read off the
+main thread: it keeps showing the rows it had (a folder never listed shows one row, "…") and its rows change when the
+last part of the listing is in. A folder you close before that shows nothing, and a listing that a newer change or a
+Refresh overtook is not shown. A remote folder is listed as before.
 
 **Git**: `M` modified, `A` added, `U` untracked, `R` renamed, `D` deleted, `C` conflict, in the colours of your
 theme's version-control faces; a folder with changes inside shows `●` (also one whose only change is a new file;
@@ -119,7 +126,10 @@ a new folder itself shows `U`), and so does a root; ignored files are dimmed. On
 repository on screen (never holding your git lock), repositories nested inside the tree included; a repository made
 after the tree was shown (`git init`) is picked up at the next refresh (a save, or Emacs getting the focus back).
 The status of at most 16 repositories is kept, so the Explorer reads at most the top 16 it shows; a repository
-scrolled into view, or one that was pushed out, is read when its rows are drawn. `drgnx-explorer-git` turns it off. What git complains
+scrolled into view, or one that was pushed out, is read when its rows are drawn. A repository whose index holds more
+than 50,000 entries gets one notice per session offering `core.untrackedCache` and, where your git has its built-in
+file system monitor (`git fsmonitor--daemon status` answers), `core.fsmonitor`; the button sets them in that
+repository, and drgnx never remembers that you declined. `drgnx-explorer-git` turns it off. What git complains
 about is kept in the hidden buffer ` *drgnx git errors*` (its last `drgnx-git-errors-max` characters).
 
 ### Buffers panel
@@ -246,8 +256,8 @@ into the frame you start in, the others follow in order): the left dock (and the
 Search), the panel and its tab, the right dock — each with its pixel size — the layout you were in
 ([layouts.md](layouts.md#after-a-restart)), the editor groups with their sizes, tabs and shown files, and the
 Explorer's folders. A window that rebuilds itself comes back where and how big it was (only where a monitor still is; never bigger than its screen).
-A job window saved before M12f comes back as the Work cockpit's filter on that job: no frame of its own, and the
-restored panes, sizes and focus stay as they were ([jobs.md](jobs.md#a-job-in-the-work-cockpit)).
+A job window saved before M12f comes back as the Work space: no frame of its own, and the
+restored panes, sizes and focus stay as they were ([jobs.md](jobs.md#a-job-in-the-work-space)).
 
 At the first graphical frame it comes back as it was (`drgnx-persist-restore-on-start`) — with a daemon, in the first
 `emacsclient -c` frame, once the server has shown its `*scratch*` there (the restored files replace it); closing the
@@ -387,9 +397,28 @@ The lane always has a one-line header: the popup's name (`Calendar`, `which-key`
 click it, or press `Esc` or `q` while the lane has focus (**Close Pane**), to end the popup. Because the header is
 there whether the popup borrows the panel or has a window of its own, borrowing never changes the header's height.
 
+**Floating lane.** `drgnx-popup-style` is `auto` (the default), `window` or `float`. Under Glitnir (Nidhogg's
+compositor) `auto` is `float`: the popup shows in one child frame of the window, bottom-centre above the echo area,
+as wide as its text (at most 0.9 of the frame) and at most a third of the frame high. The frame is made once per
+window and reused; ending the popup (`delete-window`, `quit-window`, `bury-buffer`, killing the buffer) hides it, and
+it is never deleted while the window lives. It never takes focus: transient and which-key keep their keys in the
+editor, and a click on a candidate in `*Completions*` chooses it. Without Glitnir, or with `window`, the lane is the
+window described above.
+
 In a terminal window the lane works the same, and the line you are on stays visible. Completion as you type
 (corfu) shows as a child frame there. See
 [terminal.md](terminal.md#popups).
+
+### Docked panes as cards
+
+While `ui/look` runs under Glitnir, the Explorer, the panel, the right dock and every editor group are **cards**: corner radius 10, a
+1 px ring just outside in the divider colour (60 % opaque) and a soft shadow, on a 6 px gap. `drgnx-look-card` holds
+the numbers (logical pixels; the ring is a face and an opacity, never a colour). The gap is the frame's
+`right-divider-width` and `bottom-divider-width` (set in device pixels, so the gap is 6 logical pixels at any display
+scale, and set again when the scale changes); the frame's edge gets the same gap (`internal-border-width`, painted in
+the divider colour), so the outer cards have their corners, ring and shadow against a margin and not the frame's edge or the top line. So the ring and shadow have room and never cover text. Turning the
+module off takes the cards away and gives the frame its divider widths back. An editor card keeps its corners while it scrolls. Without
+Glitnir nothing changes.
 
 ### The panel and the right dock
 

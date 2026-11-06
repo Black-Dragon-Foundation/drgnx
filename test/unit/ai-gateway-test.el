@@ -12,7 +12,6 @@
 (require 'drgnx-ai-client)
 (require 'drgnx-ai-probe)
 (require 'drgnx-hub-client)
-(require 'drgnx-search-index)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/ratatoskr-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/delivery-gate-fixture" drgnx-dir) nil t)
@@ -253,15 +252,6 @@ no provider key; the mock got the hub's key and never the editor's token."
         (let ((first (car (last seen))) (second (car (last seen 2))))
           (should (equal (cdr first) "one"))
           (should (>= (- (car second) (car first)) 0.5)))))))
-
-(ert-deftest drgnx-ai-gateway/the-indexer-gets-no-url-and-no-key ()
-  ;; no key, no token, and (review m4) no address either: the job's token brings the gateway's current one
-  (drgnx-ai-gateway-test--with nil
-    (let ((env (drgnx-search-index--job-env)))
-      (should-not (seq-find (lambda (e) (string-search (cdr drgnx-hub--editor) e)) env))
-      (should-not (seq-find (lambda (e) (string-match-p "_API_KEY=\\|\\`[AB]_KEY=" e)) env))
-      (should-not (string-search drgnx-ai-gateway-test--key (prin1-to-string env)))
-      (should-not (string-search (car drgnx-hub--editor) (prin1-to-string env))))))
 
 (ert-deftest drgnx-ai-gateway/the-indexer-asks-for-a-token-of-its-own ()
   ;; a batch Emacs as the job is: no key, no token; it ensures the hub and takes a token of its own, and the hub's key

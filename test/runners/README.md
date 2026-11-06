@@ -88,6 +88,14 @@ fleet.sh up --runners 2 --no-linger-on 2
 DRGNX_FLEET_TEST_BIN=runtime/target/debug/deps/fleet_serve-HASH fleet.sh test --test-threads=1 serve::
 ```
 
+The hub's transport rows (`drgnx-ratatoskr`'s `tests/fleet_link.rs`) and its runner rows (`tests/fleet_runners.rs`)
+are gated the same way, by the `fleet` feature:
+
+```
+cargo test -p drgnx-ratatoskr --features fleet --test fleet_link --no-run      # in the dev container
+cargo test -p drgnx-ratatoskr --features fleet --test fleet_runners --no-run
+```
+
 `test` copies the `sleipnir` binary beside the test's `deps/` into the share and tells the rows where the share is
 (`DRGNX_FLEET_SHARE`); each row installs it into its own runner root as a bundle (`<root>/bin/<name>/sleipnir`).
 A runner's `/proc/pressure`, `/proc/meminfo` and disk are the host's, so each row also writes `test-machine.json`

@@ -293,7 +293,9 @@ never asked.  Event lines (Ratatoskr's challenge comes first) are skipped: the f
     (when-let* ((why (drgnx-hub--untrusted socket)))
       (error "Not connecting to the drgnx hub: %s" why))
     (make-network-process :name "drgnx-hub-client" :family 'local :service socket :noquery t
-                          :coding 'utf-8-unix :filter (drgnx-guard-wrap filter "hub connection"))))
+                          ;; binary in, UTF-8 out: Nidhogg's `lines' framing needs a decoding without state; the
+                          ;; filter's `drgnx-hub--lines' parses UTF-8 bytes as well as characters
+                          :coding '(binary . utf-8-unix) :filter (drgnx-guard-wrap filter "hub connection"))))
 
 ;;;; Proofs and the binary on disk
 
@@ -409,6 +411,36 @@ path: a filter, a timer) never waits: the cached value, or nil while the read it
   "A client connection's filter: the challenge starts the hello, an answer settles its call, an event (on the
 subscribed connection) goes to `drgnx-hub-event-functions'."
   (drgnx-hub--lines conn chunk (lambda (json) (drgnx-hub--client-line conn json))))
+
+(defvar nidhogg-workers-framing)
+(declare-function nidhogg-set-process-framing "nidhogg-io.c")
+
+(defun drgnx-hub--frame (conn)
+  "Have Nidhogg's reader thread split CONN's input into lines and parse them, when `nidhogg-workers-framing' is on:
+the main thread then gets batches (`drgnx-hub--client-batch') where it gets chunks (`drgnx-hub--client-filter').
+Without the feature or the switch, or on an error from the framing, the filter reads, as it always did.  No
+`:max-message': the client has no line limit.  A connection whose filter is replaced (the delivery gate's, in tests)
+is unframed again by the reader itself."
+  (when (and (fboundp 'nidhogg-set-process-framing) (bound-and-true-p nidhogg-workers-framing))
+    (condition-case nil
+        (nidhogg-set-process-framing conn 'lines :parse 'string :object-type 'plist :array-type 'list
+                                     :null-object nil :false-object nil
+                                     :batch-function (drgnx-guard-wrap #'drgnx-hub--client-batch "hub connection"))
+      (error nil))))
+
+(defun drgnx-hub--client-batch (conn batch)
+  "The framed counterpart of `drgnx-hub--lines' with `drgnx-hub--client-line': BATCH is a list of (MESSAGE RAW ERROR)
+from CONN's reader, in the order the hub wrote them.  One whose line is not JSON (ERROR), or is JSON `null' or
+`false' (no MESSAGE), is skipped as `drgnx-hub--lines' skips it.  Nothing is read once CONN, live when the batch
+began, is not any more (nothing after `closed').  Each message runs in a guard of its own: one that fails never drops
+the rest of the batch.  A last line with no newline before the end of the stream is a message here, where the filter
+drops it."
+  (let ((live (process-live-p conn)) (one (drgnx-guard-wrap #'drgnx-hub--client-line "hub connection")))
+    (dolist (entry batch)
+      (when (or (not live) (process-live-p conn))
+        (let ((message (nth 0 entry)))
+          (when (and message (null (nth 2 entry)))
+            (funcall one conn message)))))))
 
 (defun drgnx-hub--client-line (conn json)
   "One line JSON read on CONN, as the core's event: the challenge, an event, or an answer."
@@ -570,7 +602,8 @@ two within `drgnx-hub--challenge-wait' closes the connection (`drgnx-hub--challe
 makes a hub `legacy'.  The process."
   (let ((c (drgnx-hub--connect-socket #'drgnx-hub--client-filter)))
     (set-process-sentinel c (drgnx-guard-wrap #'drgnx-hub--client-sentinel "hub connection"))
-    (drgnx-hub-client-binary-version t)         ; read now, never waiting: for this hello and the skew
+    (drgnx-hub--frame c)
+    (drgnx-hub-client-binary-version t)        ; read now, never waiting: for this hello and the skew
     (drgnx-hub--step (list 'open c events))
     c))
 
@@ -1136,17 +1169,58 @@ the command it names (Hub: Restart Now).  A condition: the hub, or the next hell
                       :command (let ((sym (and (stringp command) (intern-soft command))))
                                  (and sym (fboundp 'drgnx-commands-get) (drgnx-commands-get sym) sym)))))))
 
+(defvar drgnx-hub--card-choices nil
+  "The matrix cards that list their answers, newest first: (ID :title TITLE :body BODY :choices ((CHOICE . LABEL)…)),
+as their `card' events said.  At most `drgnx-hub--card-choices-cap' entries; an entry goes once its card's notice is
+gone (`drgnx-hub--card-choices-live').")
+
+(defconst drgnx-hub--card-choices-cap 64 "How many cards' choices `drgnx-hub--card-choices' keeps.")
+
+(defun drgnx-hub--card-notice-id (id)
+  "The notice id of matrix card ID."
+  (intern (format "matrix-card-%d" id)))
+
+(defun drgnx-hub--card-choices-live ()
+  "`drgnx-hub--card-choices' without the cards whose notice is gone (answered, or cleared with the hub)."
+  (when drgnx-hub--card-choices
+    (let ((live (mapcar (lambda (n) (plist-get n :id)) (drgnx-notices :source 'hub :life 'condition))))
+      (setq drgnx-hub--card-choices
+            (cl-remove-if-not (lambda (e) (memq (drgnx-hub--card-notice-id (car e)) live)) drgnx-hub--card-choices))))
+  drgnx-hub--card-choices)
+
+(defun drgnx-hub--card-choices-of (data)
+  "The choices a `card' event's DATA lists, as ((CHOICE . LABEL)…); nil when it lists none."
+  (let (out)
+    (dolist (c (plist-get data :choices))
+      (let ((id (plist-get c :id)) (label (plist-get c :label)))
+        (when (and (stringp id) (stringp label)) (push (cons id label) out))))
+    (nreverse out)))
+
+(defun drgnx-hub--card-choices-put (id data choices)
+  "Keep CHOICES of card ID with its DATA's title and body, newest first, within the cap."
+  (let ((entry (list id :title (plist-get data :title) :body (plist-get data :body) :choices choices))
+        (rest (assq-delete-all id (drgnx-hub--card-choices-live))))
+    (setq drgnx-hub--card-choices (seq-take (cons entry rest) drgnx-hub--card-choices-cap))))
+
+(defun drgnx-hub--event-proven-p ()
+  "Non-nil when the event now handled came on a connection of a hub that proved itself."
+  (and (processp (bound-and-true-p drgnx-hub--event-conn)) (process-get drgnx-hub--event-conn :drgnx-proven)))
+
 (defun drgnx-hub--note-card (event data)
   "In an editor: a `matrix' card (the permission matrix asks) or a `supervisor' pause from a hub that proved itself is
-a notice.  Nothing asks and nothing waits: the cockpit's cards answer.  `agent-step' is not handled here: it matters
-only to a subscriber that asked for it."
-  (when (and (processp (bound-and-true-p drgnx-hub--event-conn)) (process-get drgnx-hub--event-conn :drgnx-proven))
+a notice.  Nothing asks and nothing waits: a card that lists its answers (a browser row's) keeps them here and its
+notice carries Agents: Answer Permission Card with the card's id; the cockpit's cards answer the others.
+`agent-step' is not handled here: it matters only to a subscriber that asked for it."
+  (when (drgnx-hub--event-proven-p)
     (cond
      ((and (equal event "card") (equal (plist-get data :kind) "matrix") (numberp (plist-get data :id)))
-      (drgnx-notify 'hub 'info
-                    (format "The permission matrix asks: %s" (or (plist-get data :title) "a question is waiting"))
-                    :id (intern (format "matrix-card-%d" (plist-get data :id))) :life 'condition
-                    :scope (plist-get data :job)))
+      (let* ((id (plist-get data :id)) (choices (drgnx-hub--card-choices-of data)))
+        (drgnx-notify 'hub 'info
+                      (format "The permission matrix asks: %s" (or (plist-get data :title) "a question is waiting"))
+                      :id (drgnx-hub--card-notice-id id) :life 'condition
+                      :scope (plist-get data :job)
+                      :command (and choices (list 'drgnx-agents-answer-card id)))
+        (when choices (drgnx-hub--card-choices-put id data choices))))
      ((and (equal event "supervisor") (stringp (plist-get data :text)))
       (drgnx-notify 'hub 'warn (format "An agent was paused: %s" (plist-get data :text))
                     :id (intern (format "supervisor-%s" (or (plist-get data :card) (plist-get data :session) "rule")))
