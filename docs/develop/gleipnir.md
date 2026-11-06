@@ -990,7 +990,12 @@ The relay (`gleipnir::net::relay`) is the process that makes those ports: for ea
 An isolated sandbox has no network, only its own loopback. Its programs reach the outside through `HTTPS_PROXY`,
 which the relay forwards to a CONNECT proxy outside the sandbox (`net::proxy`). One proxy serves one job: the caller
 starts it with `proxy::start(config, resolver, events)` and hands it each session's listener with
-`listen(listener, tag)` (a Unix socket on Linux, a `127.0.0.1:0` TCP listener on macOS). Every listener shares one
+`listen(listener, tag)` (a Unix socket on Linux, a `127.0.0.1:0` TCP listener on macOS, or `Listener::Streams`: the
+streams a container's relay channel hands over, each a `Relayed` with its bytes, a `DuplexStream`, and `gone`, a
+`oneshot::Receiver` that resolves when the channel's owner drops its sender). A relayed stream is judged like a socket
+client and counts against the same `max_conns`. When its `gone` resolves (the stream closed, or the channel ended),
+its connection ends at once, wherever it was (reading the head, resolving, connecting, copying), and its place is free
+again. A closed channel ends its listener and every connection on it, as `close(tag)` does. Every listener shares one
 policy, `ProxyConfig::policy`:
 - `Policy::Allowlist`, the default and the provider proxy's: exact targets, changed at run time with `allow(target)`
   and `deny(&target)`, CONNECT only. A caller that builds `ProxyConfig { allow, pinned, ..Default::default() }` gets
@@ -1019,7 +1024,7 @@ it looks only at the request line, never at `Host:`:
 | another method, a malformed line or target, a head over `max_head` (8192) or slower than `head_timeout` (10 s) | 400 | `Refused { BadRequest }` |
 | a first byte of `0x04` or `0x05` (a SOCKS greeting) | closed, no answer | — |
 | a connection over `max_conns` (64, across all listeners) | 403 | — |
-| listed, but it does not resolve or no address connects | 502 | — |
+| listed, but it does not resolve or no address connects (each attempt within `connect_timeout`, 10 s; a slower one counts as that address failing) | 502 | — |
 
 Each event is sent once per target per tag, before the client is answered; the tag tells the caller which session
 asked. Only `Denied` may become a question to the user: a private address, a wildcard or a malformed request is never
