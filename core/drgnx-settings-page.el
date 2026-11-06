@@ -44,6 +44,7 @@
     (agents "Agents" "\\`drgnx-\\(?:agents?\\|hub\\|cockpit\\|work\\|jobs\\)")
     (ai "AI" "\\`drgnx-\\(?:ai\\|embed\\|llm\\)")
     (search "Search" "\\`drgnx-\\(?:search\\|replace\\)")
+    (extensions "Extensions" "\\`drgnx-\\(?:extensions\\|packages\\)-")
     (files "Files" "\\`drgnx-\\(?:files?\\|recent\\|backup\\|autosave\\|trash\\|explorer\\|buffers\\|remote\\|project\\)")
     (look "Look" "\\`drgnx-\\(?:look\\|face\\|theme\\|font\\|colou?r\\|icon\\|zen\\|quickhelp\\|topline\\|statusbar\\|cursor\\)"))
   "The areas of drgnx's own settings: (ID LABEL REGEXP).  A drgnx variable goes to the first area whose REGEXP matches
@@ -569,6 +570,44 @@ Ends with a blank line."
                        files "\n")
             "\n\n")))
 
+(declare-function drgnx-pkg-read-lock "drgnx-pkg" ())
+(declare-function drgnx-pkg--wanted-names "drgnx-pkg" (entries))
+
+(defun drgnx-settings-page-wants-line ()
+  "The packages you asked for, read from the lock, as a line of text; nil when there are none.  Read-only."
+  (unless (featurep 'drgnx-pkg) (require 'drgnx-pkg nil t))
+  (when (fboundp 'drgnx-pkg-read-lock)
+    (when-let* ((names (ignore-errors (drgnx-pkg--wanted-names (drgnx-pkg-read-lock)))))
+      (format "Wanted by you (from the lock, read-only): %s" (mapconcat #'symbol-name names ", ")))))
+
+(defun drgnx-settings-page--extensions-line (group)
+  "What the header of GROUP adds about Extensions: a package group's version and a link back to the Extensions
+list; the Extensions area's read-only wants.  Empty for any other group."
+  (let ((open (lambda () (when (fboundp 'drgnx-extensions-open) (call-interactively #'drgnx-extensions-open)))))
+    (pcase group
+      (`(package . ,g)
+       (unless (featurep 'drgnx-pkg) (require 'drgnx-pkg nil t))
+       (let ((version (and (fboundp 'drgnx-pkg-read-lock)
+                           (plist-get (cdr (assq g (ignore-errors (drgnx-pkg-read-lock)))) :version))))
+         (concat "  " (if version (format "%s %s · " g version) "")
+                 (drgnx-settings-page--button "Extensions" open "Open this package in the Extensions list"))))
+      ('(area . extensions)
+       (concat (when-let* ((line (drgnx-settings-page-wants-line))) (concat "\n" line))
+               "  " (drgnx-settings-page--button "Extensions" open "Open the Extensions list")))
+      (_ ""))))
+
+(defun drgnx-settings-page-package-count (name)
+  "How many settings the package NAME (a string) has: the members of its group, from the index when it is not loaded."
+  (length (drgnx-settings-page--group-members (intern name))))
+
+(defun drgnx-settings-page-show-package (name)
+  "Show the Settings page filtered to the settings of the package NAME (a string): `@package:NAME'."
+  (let ((buf (drgnx-settings-page)))
+    (with-current-buffer buf
+      (setq drgnx-settings-page--group 'all drgnx-settings-page--query (format "@package:%s" name))
+      (drgnx-settings-page-refresh t))
+    (pop-to-buffer-same-window buf)))
+
 (defun drgnx-settings-page--header ()
   "The text above the rows."
   (let* ((root drgnx-settings-page--root)
@@ -592,6 +631,7 @@ Ends with a blank line."
                        (drgnx-settings-page-groups) " ")
             (if (memq (car-safe drgnx-settings-page--group) '(package emacs))
                 (format "  (%s)" (drgnx-settings-page--group-label drgnx-settings-page--group)) "")
+            (drgnx-settings-page--extensions-line drgnx-settings-page--group)
             "\n"
             (propertize "Search: " 'face 'shadow)
             (if (string-empty-p drgnx-settings-page--query) (propertize "(s to search; @modified @overridden @source:lisp @package:NAME @runtime @needs-trust @needs-review @lang:MODE)" 'face 'shadow)

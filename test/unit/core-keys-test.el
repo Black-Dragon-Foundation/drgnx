@@ -965,6 +965,10 @@ The commands of modules that need no installed package are in it, the later stag
                               agent-settings-new-skill agent-settings-open-file agent-settings-other
                               agent-settings-openrouter agent-settings-report
                               shortcuts-tty-fallback  ; M12b's terminal fallback in the Shortcuts editor
+                              ;; the Extensions list: its open key and its own keys
+                              extensions-open extensions-search extensions-details extensions-install extensions-update
+                              extensions-update-all extensions-uninstall extensions-toggle-project extensions-refresh
+                              extensions-cancel extensions-show-log
                               quit preferences edit-line-start edit-line-end edit-buffer-start edit-buffer-end edit-word-left
                               edit-word-right edit-delete-word-back edit-delete-line-back edit-copy edit-cut edit-paste
                               code-next-problem code-previous-problem ; M12d: F8 / S-F8
