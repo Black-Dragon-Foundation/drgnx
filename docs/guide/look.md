@@ -134,15 +134,18 @@ When several places name a font for a role, the first match wins:
 1. **Your Lisp and Customize.** A `custom-set-faces` entry in `custom.el`, or a `set-face-attribute` on a role face
    in `config.el`. drgnx then leaves that face alone, and the settings page says where the value is set
    (`config.el:31`, `custom.el:9`). A theme load wipes `set-face-attribute`, so drgnx puts your attributes back after
-   every theme change.
+   every theme change. This holds for the code font too: a `(set-face-attribute 'default nil :family "Iosevka")` in
+   `config.el` stays, under drgnx's themes and without one.
 2. **A per-mode override**, a `(:mode MODE ...)` section of `settings.el` (for example Org's prose in the UI font).
 3. **The setting.**
 4. **The theme.** A theme may name fonts for the role faces.
 5. **The desktop**, only for roles set to `follow-desktop`.
 6. **drgnx's defaults** (the table above).
 
-A setting changes only the attributes you set; the theme's other attributes show through. A family that is not
-installed falls back down its `:fallback` list, then to the generic family.
+A setting changes only the attributes you set; the theme's other attributes show through. A theme that paints a role
+face without naming a font (drgnx's three themes paint `default`, its colours) leaves the role's font as the list
+says: the desktop's or drgnx's defaults, so the code font is JetBrains Mono 13.5 px under drgnx Dark. A family that
+is not installed falls back down its `:fallback` list, then to the generic family.
 
 Terminal frames ignore families and sizes and keep only the weight.
 

@@ -11,8 +11,11 @@
 ;; The mechanism per source: your Lisp and Customize are left alone (a theme load wipes `set-face-attribute', so
 ;; the attributes found when init ended are put back); a setting is the face's `face-override-spec' (above every
 ;; theme spec, untouched by a theme load), written for the attributes the user set only; the desktop's answer and
-;; drgnx's defaults are the face's defface spec.  A spec holds `:family', `:height' (relative) and `:weight' only,
-;; never `:font'.  `drgnx-look-fonts-resolve-in' is the pure core: layers in, one resolution out.
+;; drgnx's defaults are the face's defface spec, and also its override spec while a theme styles the face (Emacs
+;; skips the defface spec of a themed face, and drgnx's themes style `default'), for the attributes the theme does
+;; not name.  `default's attributes are your Lisp's when they changed between ui/look's setup and the end of init
+;; (config.el runs in between).  A spec holds `:family', `:height' (relative) and `:weight' only, never `:font'.
+;; `drgnx-look-fonts-resolve-in' is the pure core: layers in, one resolution out.
 
 ;;; Code:
 (require 'cl-lib)
@@ -286,23 +289,48 @@ file and line of your Lisp or Customize entry, the theme, or the place."
 
 ;;;; Snapshot: your Lisp
 
+(defvar drgnx-look-fonts--default-before nil
+  "`default's family, height and weight for new frames when ui/look's setup ran, before config.el loaded: a plist,
+or nil when the module came on after init.  What differs from it when init ends is your Lisp's.")
+
+(defun drgnx-look-fonts--default-attrs ()
+  "`default's family, height and weight for new frames (what a `set-face-attribute' with no frame sets), a plist."
+  (let (plist)
+    (dolist (a '(:family :height :weight) plist)
+      (setq plist (plist-put plist a (face-attribute 'default a t))))))
+
+(defun drgnx-look-fonts--note-default ()
+  "Note `default's attributes before your Lisp runs: ui/look's setup comes before config.el."
+  (setq drgnx-look-fonts--default-before (drgnx-look-fonts--default-attrs)))
+
+(defun drgnx-look-fonts--face-snapshot (face)
+  "What your Lisp set on FACE, a plist of `:family', `:height' and `:weight': the attributes of the faces' default
+frame; for `default', whose attributes Emacs sets from the frame, only those that changed since
+`drgnx-look-fonts--note-default' (nothing when it was not called)."
+  (let (plist)
+    (if (eq face 'default)
+        (when drgnx-look-fonts--default-before
+          (let ((now (drgnx-look-fonts--default-attrs)))
+            (dolist (a '(:family :height :weight))
+              (let ((v (plist-get now a)))
+                (unless (or (eq v 'unspecified) (equal v (plist-get drgnx-look-fonts--default-before a)))
+                  (setq plist (plist-put plist a v)))))))
+      (dolist (a '(:family :height :weight))
+        (let ((v (face-attribute face a t)))
+          (unless (eq v 'unspecified) (setq plist (plist-put plist a v))))))
+    plist))
+
 (defun drgnx-look-fonts-snapshot (&optional config custom)
-  "Record what your Lisp set on the role faces (a `set-face-attribute' in CONFIG, default config.el): the
-attributes of the faces' default frame.  CUSTOM is the file Customize writes.  The faces are the role faces except
-`default', whose attributes belong to the frame."
+  "Record what your Lisp set on the role faces (a `set-face-attribute' in CONFIG, default config.el): see
+`drgnx-look-fonts--face-snapshot'.  CUSTOM is the file Customize writes."
   (setq drgnx-look-fonts--lisp-layer nil
         drgnx-look-fonts--custom-file custom)
   (let ((file (or config (expand-file-name "config.el" (drgnx-user-dir)))))
     (dolist (spec drgnx-look-fonts-roles)
       (dolist (face (cddr spec))
-        (unless (eq face 'default)
-          (let (plist)
-            (dolist (a '(:family :height :weight))
-              (let ((v (face-attribute face a t)))
-                (unless (eq v 'unspecified) (setq plist (plist-put plist a v)))))
-            (when plist
-              (push (cons face (plist-put plist :where (drgnx-look-fonts--find-line file face)))
-                    drgnx-look-fonts--lisp-layer))))))
+        (when-let* ((plist (drgnx-look-fonts--face-snapshot face)))
+          (push (cons face (plist-put plist :where (drgnx-look-fonts--find-line file face)))
+                drgnx-look-fonts--lisp-layer))))
     (setq drgnx-look-fonts--lisp-layer (nreverse drgnx-look-fonts--lisp-layer))))
 
 (defun drgnx-look-fonts--put-back-lisp ()
@@ -378,19 +406,26 @@ role's first face."
           (push e drgnx-look-fonts--alternatives)
           (push e face-font-family-alternatives))))))
 
+(defun drgnx-look-fonts--themed-p (face)
+  "Non-nil when an enabled theme (not Customize's own) has a spec for FACE: Emacs then skips FACE's defface spec."
+  (cl-some (lambda (entry) (and (not (eq (car entry) 'user)) (custom-theme-enabled-p (car entry))))
+           (get face 'theme-face)))
+
 (defun drgnx-look-fonts-apply (&optional roles)
   "Write the faces of ROLES (default all) from the settings, at once on every frame: an override spec for what the
-setting set, the defface spec for the desktop's fonts and drgnx's defaults, nothing for a face your Lisp or
-Customize set."
+setting set, the defface spec for the desktop's fonts and drgnx's defaults, nothing from the setting for a face your
+Lisp or Customize set.  A face an enabled theme styles (drgnx's themes style `default') never shows its defface
+spec, so its desktop and default attributes go in the override spec too: only those the theme does not name, as
+the resolution says.  Runs again whenever a theme is enabled or disabled."
   (dolist (role (or roles (mapcar #'car drgnx-look-fonts-roles)))
     (let ((res (drgnx-look-fonts-resolve role)))
       (dolist (face (drgnx-look-fonts--faces role))
-        (let ((own (drgnx-look-fonts--own-face-p face)))
+        (let ((base (if (drgnx-look-fonts--own-face-p face) '(desktop) '(default desktop))))
           (drgnx-look-fonts--set-override
-           face (and (not (drgnx-look-fonts--owned-p face))
-                     (drgnx-look-fonts--plist-for role face res '(setting))))
-          (drgnx-look-fonts--set-defface
-           face (drgnx-look-fonts--plist-for role face res (if own '(desktop) '(default desktop))))))))
+           face (drgnx-look-fonts--plist-for role face res
+                                             (append (unless (drgnx-look-fonts--owned-p face) '(setting))
+                                                     (when (drgnx-look-fonts--themed-p face) base))))
+          (drgnx-look-fonts--set-defface face (drgnx-look-fonts--plist-for role face res base))))))
   (drgnx-look-fonts--apply-alternatives)
   (drgnx-look-fonts--ligatures-sync)
   (drgnx-look-fonts--put-back-lisp)
@@ -592,8 +627,9 @@ ENTRIES (ROLE WANTED GOT) of every checked display, TEXT how to install the fami
 ;;;; On and off
 
 (defun drgnx-look-fonts--after-theme (_theme)
-  "A theme was enabled: it recalculated the faces, so give your Lisp's attributes back."
-  (drgnx-look-fonts--put-back-lisp))
+  "A theme was enabled or disabled: it changed which faces it styles and recalculated them, so write the faces
+again (which gives your Lisp's attributes back)."
+  (drgnx-look-fonts-apply))
 
 (defun drgnx-look-fonts--after-init ()
   "Init ended: record your Lisp's attributes, then write the faces."
@@ -602,12 +638,15 @@ ENTRIES (ROLE WANTED GOT) of every checked display, TEXT how to install the fami
 
 (defun drgnx-look-fonts-reset ()
   "Forget what was recorded (your Lisp's attributes, the desktop's answer); the specs stay."
-  (setq drgnx-look-fonts--lisp-layer nil drgnx-look-fonts--custom-file nil drgnx-look-fonts--desktop nil))
+  (setq drgnx-look-fonts--lisp-layer nil drgnx-look-fonts--custom-file nil drgnx-look-fonts--desktop nil
+        drgnx-look-fonts--default-before nil))
 
 (defun drgnx-look-fonts-on ()
-  "The role faces follow the settings: snapshot your Lisp's attributes (when init has ended, else at its end),
-write the specs, put your Lisp back after every theme load."
+  "The role faces follow the settings: snapshot your Lisp's attributes (when init has ended, else at its end;
+`default' is noted now, before config.el), write the specs, write them again after every theme change."
+  (unless after-init-time (drgnx-look-fonts--note-default))
   (add-hook 'enable-theme-functions #'drgnx-look-fonts--after-theme)
+  (add-hook 'disable-theme-functions #'drgnx-look-fonts--after-theme)
   (add-hook 'after-change-major-mode-hook #'drgnx-look-fonts--mode-hook)
   (add-hook 'server-after-make-frame-hook #'drgnx-look-fonts--check-frame)
   (when (display-graphic-p) (drgnx-look-fonts--check-frame))
@@ -619,6 +658,7 @@ write the specs, put your Lisp back after every theme load."
   "Undo `drgnx-look-fonts-on': no override spec, the defface specs as they were, the family alternatives gone.
 Your Lisp's attributes and Customize entries stay."
   (remove-hook 'enable-theme-functions #'drgnx-look-fonts--after-theme)
+  (remove-hook 'disable-theme-functions #'drgnx-look-fonts--after-theme)
   (remove-hook 'after-init-hook #'drgnx-look-fonts--after-init)
   (remove-hook 'after-change-major-mode-hook #'drgnx-look-fonts--mode-hook)
   (remove-hook 'server-after-make-frame-hook #'drgnx-look-fonts--check-frame)

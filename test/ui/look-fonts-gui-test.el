@@ -40,6 +40,31 @@ back with the old value."
       (drgnx-look-fonts-off)
       (delete-frame second))))
 
+(ert-deftest drgnx-ui-look-fonts/the-code-font-under-each-theme ()
+  "Pattern D: under each of drgnx's themes (they style `default', so Emacs skips its defface spec) the frame's
+`default' is the code role's: 13.5 px (`:height' 101), the family when it is installed; a theme loaded before the
+faces are written and one loaded after alike."
+  (skip-unless (display-graphic-p))
+  (let ((was custom-enabled-themes)
+        (installed (find-font (font-spec :family "JetBrains Mono"))))
+    (unwind-protect
+        (progn
+          (mapc #'disable-theme custom-enabled-themes)
+          (load-theme 'drgnx-dark t)
+          (drgnx-look-fonts-on)
+          (dolist (theme '(drgnx-dark drgnx-light drgnx-high-contrast))
+            (unless (equal custom-enabled-themes (list theme))
+              (mapc #'disable-theme custom-enabled-themes)
+              (load-theme theme t))
+            (drgnx-test-wait-presented)
+            (should (equal (list theme 101) (list theme (face-attribute 'default :height (selected-frame)))))
+            (when installed
+              (should (equal (list theme "JetBrains Mono")
+                             (list theme (face-attribute 'default :family (selected-frame))))))))
+      (drgnx-look-fonts-off)
+      (mapc #'disable-theme custom-enabled-themes)
+      (mapc (lambda (th) (load-theme th t)) (reverse was)))))
+
 (ert-deftest drgnx-ui-look-fonts/fallback-names-the-role ()
   "Pattern D: a family that is not installed is reported for the role that asked for it."
   (skip-unless (display-graphic-p))
