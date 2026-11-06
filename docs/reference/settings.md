@@ -752,6 +752,25 @@ Above this size (MiB) the question's default is chunks, else lean.  Read when a 
 | `:agents` | `grantable` |
 | `:schema` | `(pred drgnx-large-files--mib-p "a size in MiB above 0")` |
 
+## drgnx-look-icons
+
+How the look draws its icons: `svg' (Lucide line icons in the text colour, on graphical frames) or `glyphs' (the
+characters of `drgnx-face-glyphs').  Terminal frames always show glyphs.  A change applies to the icons drawn from
+then on.
+
+| Key | Value |
+| --- | --- |
+| Default | `svg` |
+| Type | `(choice (const :tag "Line icons" svg) (const :tag "Glyphs" glyphs))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-icons-clear` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum svg glyphs)` |
+
 ## drgnx-look-theme
 
 The colour theme ui/look loads at start (Color Theme picks it); nil: the theme Emacs starts with.  A change

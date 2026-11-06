@@ -111,6 +111,10 @@ drawn title bar) uses the one `close` glyph, `×`, which every monospace font ha
 The table is in Customize's group `drgnx` (not `drgnx-face`), because it is part of the core. A table you saved
 before drgnx added a glyph still works: a glyph missing from it is drawn as the standard one.
 
+Every [Lucide icon](look.md#icons) has a glyph of the same name in the table (`file-code`, `chevron-right`,
+`git-branch`, `circle-check`, ...): it is what a terminal frame, or the setting `drgnx-look-icons` set to `glyphs`,
+shows in the icon's place. They are not in the table below.
+
 | Name | Unicode | ASCII | Name | Unicode | ASCII |
 |---|---|---|---|---|---|
 | `handle` | ⠿ | `::` | `paused` | ⏸ | `\|\|` |
