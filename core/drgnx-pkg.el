@@ -1667,9 +1667,18 @@ when there is an icon to name, and a `StartupWMClass=' line is added when it has
              (drgnx-pkg--print "settings index: %d entries" (drgnx-settings-index-build)))
     (error (drgnx-pkg--print "WARNING settings index not written: %s" (error-message-string err)))))
 
-(defvar drgnx-pkg-after-change-functions nil
+(declare-function drgnx-extensions-index-build "drgnx-extensions-index" (&optional elpa file))
+
+(defun drgnx-pkg--index-modes ()
+  "Write the modes index of the installed packages (their autoloads read as data); a failure is only said."
+  (condition-case err
+      (progn (require 'drgnx-extensions-index)
+             (drgnx-pkg--print "modes index: %d packages" (length (drgnx-extensions-index-build))))
+    (error (drgnx-pkg--print "WARNING modes index not written: %s" (error-message-string err)))))
+
+(defvar drgnx-pkg-after-change-functions (list #'drgnx-pkg--index-modes)
   "Functions called with no arguments after a `drgnx sync', `upgrade' or `rollback' that worked, once the settings
-index is written.  A failure of one is only said.")
+index is written.  A failure of one is only said.  The modes index (`drgnx-pkg--index-modes') is one.")
 
 (defun drgnx-pkg--after-change ()
   "What follows a change of the packages directory that worked: the settings index, then

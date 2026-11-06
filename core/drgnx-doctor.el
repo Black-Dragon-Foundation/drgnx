@@ -485,6 +485,7 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
                        (error (list :error (error-message-string err))))
            :packages-gpg (condition-case err (progn (require 'drgnx-pkg) (drgnx-pkg-gpg-facts))
                            (error (list :error (error-message-string err))))
+           :package-modes-off (drgnx-doctor--package-modes-off)
            :sqlite (and (fboundp 'sqlite-available-p) (sqlite-available-p))
            :svg (image-type-available-p 'svg)
            :work-plans (drgnx-doctor--work-plans)
@@ -1104,6 +1105,23 @@ a last check that failed; otherwise `ok', with the last check's start time and p
                                       (t (list 'ok (format "%s checks the signatures of %s" (plist-get g :gpg)
                                                            (string-join (plist-get g :signed) ", "))
                                                nil))))))
+
+(declare-function drgnx-extensions-project-misses "drgnx-extensions-project" ())
+
+(defun drgnx-doctor--package-modes-off ()
+  "The open buffers where a package's mode is on though the package is off in their project: ((BUFFER PKG MODE)…),
+or nil (also when per-project packages are not loaded, as in `drgnx doctor' from the shell)."
+  (and (fboundp 'drgnx-extensions-project-misses) (ignore-errors (drgnx-extensions-project-misses))))
+
+(drgnx-doctor-define 'package-modes-off :group "drgnx"
+                     :doc "A package off in a project has its modes off in that project's open files"
+                     :check (lambda (f)
+                              (if-let* ((misses (plist-get f :package-modes-off)))
+                                  (list 'warn (mapconcat (lambda (m) (format "%s on in %s (%s is off in its project)"
+                                                                             (nth 2 m) (nth 0 m) (nth 1 m)))
+                                                         misses "; ")
+                                        "M-x normal-mode in that buffer, or reopen it")
+                                (list 'ok "no package mode is on where its package is off" nil))))
 
 (drgnx-doctor-define 'onboarding :group "drgnx" :doc "The onboarding steps (drgnx onboard, Help → Welcome)"
                      :check (lambda (f)

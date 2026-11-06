@@ -313,8 +313,9 @@ the generations it uses in `~/.local/state/drgnx/elpa-in-use/PID.eld` (`(:pid P 
 the rotation of generations keeps every one a live session names, beyond the five; the file of a session that is
 gone (its pid not running since that start time) is deleted at the next rotation.
 
-A running drgnx keeps the packages it loaded: **restart it** after a sync, upgrade or rollback (the command says
-so). One writer at a time: a sync, upgrade or rollback refuses while another runs (`drgnx sync --wait` waits for it
+A running drgnx keeps the packages it loaded: **restart it** after a sync, upgrade or rollback from the command line
+(the command says so). A change the Extensions view makes works at once where it can ([When a restart is
+needed](extensions.md#when-a-restart-is-needed)). One writer at a time: a sync, upgrade or rollback refuses while another runs (`drgnx sync --wait` waits for it
 instead); a lock left by one that died is taken over. The lock (`~/.local/share/drgnx/sync.lock`) names its process by pid and start time, so a pid reused
 after a reboot does not hold it, and of two commands taking over the same stale lock only one gets it.
 
