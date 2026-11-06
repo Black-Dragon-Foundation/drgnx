@@ -311,12 +311,18 @@ full-width band (the first draft) for comparison; size in device pixels at the d
   "BODY with tools/work-space on and the fixture frame's map alone in the root frame's selected window, drawn and
 presented; `buf' and `win' are bound.  The view is the client's, with no hub: events are fed to it."
   (declare (indent 0))
+  `(drgnx-work-gui--with-frame-map (drgnx-work-fixture-frame) ,@body))
+
+(defmacro drgnx-work-gui--with-frame-map (frame &rest body)
+  "BODY with tools/work-space on and the map of FRAME (a form) alone in the root frame's selected window, drawn and
+presented; `buf' and `win' are bound.  The view is the client's, with no hub: events are fed to it."
+  (declare (indent 1))
   `(drgnx-test-with-modules '(tools/work-space)
      (let* ((drgnx-work-client--views (make-hash-table :test #'equal))
             (root (drgnx-uitest-root-frame)) (buf (generate-new-buffer " *work-motion*")) (win nil))
        (puthash drgnx-work-gui--view
                 (drgnx-work-client--make-view :id drgnx-work-gui--view
-                                              :state (drgnx-work-client-init (drgnx-work-fixture-frame)) :status 'live)
+                                              :state (drgnx-work-client-init ,frame) :status 'live)
                 drgnx-work-client--views)
        (unwind-protect
            (with-selected-frame root
@@ -599,5 +605,65 @@ rest."
         (mapc #'disable-theme custom-enabled-themes)
         (when (buffer-live-p buf) (kill-buffer buf))
         (drgnx-work-thirty-stop)))))
+
+;;;; Cards inside their rectangles
+
+(defun drgnx-work-gui--golden-frame (name)
+  "A frame of vegvisir's golden layout NAME (runtime/crates/vegvisir/tests/golden/NAME.json): an item per placed id,
+each with a label and fields far longer than its card, as a busy agent's are."
+  (let* ((layout (with-temp-buffer
+                   (insert-file-contents (expand-file-name (format "runtime/crates/vegvisir/tests/golden/%s.json" name)
+                                                           drgnx-work-gui--repo))
+                   (json-parse-buffer :object-type 'plist :array-type 'list :null-object nil :false-object nil)))
+         (i 0) items)
+    (cl-loop for (k _) on (plist-get layout :at) by #'cddr
+             do (let* ((id (substring (symbol-name k) 1)) (kind (car (split-string id ":"))))
+                  (push (list :id id :kind (if (and (equal kind "agent") (string-search "/" id)) "subagent" kind)
+                              :label (format "perf-%s-toolu-%d · the agent's task, far longer than any card" id i)
+                              :live t :order (cl-incf i) :warn (zerop (% i 7)) :needs_you nil
+                              :fields (list :state "running" :minutes 12 :model "Opus" :task "SESSION-END-LOSES-STARTED-1"
+                                            :spend "$1.20" :progress '(3 6) :activity "reading a long file name"
+                                            :conclusion "turn_core drops the started flag" :edits '(2 52 4) :reads 14))
+                        items)))
+    (list :version 1 :items (nreverse items) :edges nil :layout layout :needs_you nil :chips nil)))
+
+(defun drgnx-work-gui--card-runs ()
+  "Each card text run in the current buffer: (ID FROM TO), TO after its closing `align-to' space."
+  (let ((pos (point-min)) out)
+    (while (< pos (point-max))
+      (let ((next (or (next-single-property-change pos 'drgnx-work-id) (point-max))) (id (get-text-property pos 'drgnx-work-id)))
+        (when id (push (list id pos next) out))
+        (setq pos next)))
+    (nreverse out)))
+
+(ert-deftest drgnx-work-gui/thirty-cards-stay-inside-their-rectangles ()
+  "The 30-agent golden layout at 1000 px (and every card's label far longer than its card), drawn by the map view in
+the drgnx dark theme: each card line starts at its rectangle's left and its text ends by its right, so the space
+that closes it starts no later than the right edge and no card is drawn over the next (the map once ran off the
+right edge, each card pushing the next)."
+  (drgnx-work-gui--with-frame-map (drgnx-work-gui--golden-frame "thirty-1000")
+    (unwind-protect
+        (progn
+          (load-theme 'drgnx-dark t)
+          (drgnx-view-touch drgnx-view)
+          (drgnx-view-draw-now drgnx-view)
+          (set-window-start win (point-min))
+          (redisplay t)
+          (let ((state (drgnx-work-map--state)) (bad nil) (n 0))
+            ;; the cards on screen (the map is taller than the window)
+            (pcase-dolist (`(,id ,from ,to) (drgnx-work-gui--card-runs))
+              (let ((rect (drgnx-work-client-rect state id))
+                    (p0 (posn-at-point from win)) (p1 (posn-at-point (1- to) win)))
+                (when (and rect p0 p1)
+                  (let ((left (+ (drgnx-work-map--margin-px) (drgnx-work-map--px (plist-get rect :x))))
+                        (right (+ (drgnx-work-map--margin-px) (drgnx-work-map--px (+ (plist-get rect :x) (plist-get rect :w)))))
+                        (x0 (car (posn-x-y p0))) (x1 (car (posn-x-y p1))))
+                    (cl-incf n)
+                    (unless (and (<= (abs (- x0 left)) 2) (<= x1 right))
+                      (push (list id :left left :drawn-at x0 :right right :closes-at x1) bad))))))
+            (drgnx-work-gui--log "cards checked %d, outside %d: %S" n (length bad) (seq-take bad 6))
+            (should (> n 30))
+            (should-not bad)))
+      (disable-theme 'drgnx-dark))))
 
 ;;; work-space-gui-test.el ends here
