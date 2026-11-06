@@ -253,7 +253,10 @@ wide range): tokens, the cost and the time, each as a middle and a high end ("3 
 (a model with no row and no gateway `:price`) is listed as unpriced and shows tokens only, never a price of 0. A
 subscription's cost is an estimate at API prices and is labelled so. With a `--budget`, the proposal warns when the
 plan's high end is over it (you decide; nothing is refused), and also about a profile on a route whose provider has no
-`:price` in `drgnx-ai-providers`: the gateway cannot count what it spends, so the budget would not stop it.
+`:price` in `drgnx-ai-providers`: the gateway cannot count what it spends, so the budget would not stop it. How to read
+the range, its basis, the price table's date and the week's share: [Reading a forecast](agents.md#reading-a-forecast).
+After the run, each step, task and plan shows what it really used (`timeline/get` with `rollup`): the same numbers as
+the step records, what `budget/get` booked, and, for a gateway task, the gateway's own spend.
 
 A dollar budget on a plan that has a subscription profile also sets a limit of the same amount in `usd-est`, because a
 subscription's spend lands there; without it the dollar limit would never fire. The budget view says both.

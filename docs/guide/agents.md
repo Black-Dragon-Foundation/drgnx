@@ -656,6 +656,43 @@ before it resets. A subscription with no meter reading yet means the week cannot
 When it starts alone, the job's decisions say "started by the Autonomous preset within its cells"; when it waits,
 the job says why.
 
+## Reading a forecast
+
+Every proposal, whether from Say it, `job/propose` or Start as Job, shows a forecast before anything is dispatched:
+tokens, active and wall time, and cost, each as a range ("about 12–41 USD (estimate), 40M–130M tokens, 2 h 10–4 h").
+`forecast/get` gives the same numbers per task.
+
+- **A range, not a promise.** The first number is the middle (p50): half the similar runs took less. The second is the
+  high end (p90): about one run in ten goes past it. Agent runs of one task can differ many times over, so a narrow
+  range is never promised.
+- **Where it comes from.** Each task says its basis: "12 implement tasks on sonnet, this project", "5 implement tasks on
+  claude", "9 review tasks on another model, repriced" or "no history: prior". Until a class has five finished tasks
+  the forecast is a labelled prior with a wide range. Every finished task adds to the history, so the next proposal of
+  the same kind is forecast from it. Once enough of them were forecast and finished, the high end is scaled by how
+  often it was missed (the task says it is calibrated). `forecast/accuracy` shows, per role and profile, how many tasks
+  finished, the share that stayed within their p90, and the median of actual over p50.
+- **Wakes and the manager.** The wake line ("of which wakes: 1–3 cold, about 3 USD") is part of the total, not added to
+  it. A manager's own spend, where history has one, shows beside the total.
+- **`usd` and `usd-est`.** On a gateway profile the cost is exact dollars (`usd`). On a subscription it is what the
+  tokens would cost at API prices (`usd-est`, labelled estimate): your subscription is not charged that. A profile with
+  no price shows tokens only and is listed as unpriced, never as 0.00.
+- **The price table.** Tokens are priced by `drgnx-agents-model-prices`, shipped with the date its rows were read off
+  the provider's page; the forecast shows that date (`prices_as_of`). The setting's value is the whole table, so to
+  change a row copy the shipped rows (Describe Variable shows them) into `settings.el`, change or add the one you need,
+  and the next forecast uses it.
+- **The week.** On a subscription the forecast says what share of the week's limit the plan would use at this pace and,
+  when its high end would use the limit up before it resets, says so. The meter is the account's, so use outside drgnx
+  counts too: the share is an estimate.
+- **Budgets.** A dollar budget on a plan with a subscription profile also limits the plan's `usd-est`, so the job
+  pauses when the estimate reaches it; the budget view says the limit is an estimate. A proposal whose high end is over
+  its budget warns; you decide.
+- **Autonomous.** Under the Autonomous preset a Say proposal starts without your OK only when the preset's cells cover
+  it (above): the agents it needs, its high-end cost with an estimate counted as dollars (a $100 `usd` p90 plus a $60
+  `usd-est` p90 is $160 against the $150 cell, so it waits), every task priced, and no subscription's week used up
+  before it resets. A plan on a subscription with no meter reading yet waits, since its week cannot be checked.
+- **Fork from here.** The Fork command's prompt shows the same forecast for one more run of that session's role and
+  profile (`forecast/session`).
+
 ## Plans and the board
 
 Imported plan checklists (Onboarding: Import Projects, with TODOs) remember where they came from (`:PLAN_FILE:`,
