@@ -20,7 +20,7 @@
   (load (expand-file-name "drgnx-extensions-list" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-extensions-details)
   (load (expand-file-name "drgnx-extensions-details" (file-name-directory (or load-file-name buffer-file-name))) nil t))
-(dolist (part '(drgnx-extensions-jobs drgnx-extensions-live drgnx-extensions-project))
+(dolist (part '(drgnx-extensions-jobs drgnx-extensions-live drgnx-extensions-project drgnx-extensions-trust))
   (unless (featurep part)
     (load (expand-file-name (symbol-name part) (file-name-directory (or load-file-name buffer-file-name))) nil t)))
 (require 'drgnx-restart)
@@ -32,6 +32,11 @@
 (declare-function drgnx-extensions-live-setup "drgnx-extensions-live")
 (declare-function drgnx-extensions-project-setup "drgnx-extensions-project")
 (declare-function drgnx-extensions-project-teardown "drgnx-extensions-project")
+(declare-function drgnx-extensions-trust-setup "drgnx-extensions-trust")
+(declare-function drgnx-extensions-trust-teardown "drgnx-extensions-trust")
+(declare-function drgnx-extensions-trust-install "drgnx-extensions-trust")
+(declare-function drgnx-extensions-trust-cancel "drgnx-extensions-trust")
+(declare-function drgnx-extensions-trust-apply "drgnx-extensions-trust")
 (declare-function drgnx-extensions-details--define-view "drgnx-extensions-details")
 (declare-function drgnx-extensions-details-forget-generations "drgnx-extensions-details")
 (declare-function drgnx-extensions-list--define-view "drgnx-extensions-list")
@@ -92,6 +97,9 @@ when you ask (the Refresh command)."
 (defconst drgnx-extensions--local-map '(drgnx-extensions-list . drgnx-extensions-mode-map)
   "The keymap of the list's own keys.")
 
+(defconst drgnx-extensions--trust-map '(drgnx-extensions-trust . drgnx-extensions-trust-mode-map)
+  "The keymap of a trust card.")
+
 (defun drgnx-extensions--define-commands ()
   (pcase-dolist (`(,id ,title ,fn ,doc ,local)
                  '((extensions-open "Open Extensions" drgnx-extensions-open
@@ -123,7 +131,17 @@ when you ask (the Refresh command)."
                                     "Install another version, copy the name, open the repository, show the settings or the log" nil)))
     (apply #'drgnx-command-define id :category "Extensions" :title title :command fn :doc doc
            (append (and local (list :map drgnx-extensions--local-map))
-                   (and (eq id 'extensions-open) (list :menu '("View")))))))
+                   (and (eq id 'extensions-open) (list :menu '("View"))))))
+  ;; the trust card's buttons and the reviewed update's Apply: a click of yours, never an automatic path
+  (drgnx-command-define 'extensions-trust-install :category "Extensions" :title "Install After the Trust Card"
+                        :command #'drgnx-extensions-trust-install :map drgnx-extensions--trust-map
+                        :doc "Install the package of this trust card and what it brings; the card is not shown for them again")
+  (drgnx-command-define 'extensions-trust-cancel :category "Extensions" :title "Cancel the Trust Card"
+                        :command #'drgnx-extensions-trust-cancel :map drgnx-extensions--trust-map
+                        :doc "Close this trust card; nothing is installed")
+  (drgnx-command-define 'extensions-review-apply :category "Extensions" :title "Apply Reviewed Update"
+                        :command #'drgnx-extensions-trust-apply
+                        :doc "Install exactly the update this page shows, as it was downloaded and checked"))
 
 (defun drgnx-extensions--setup ()
   (drgnx-extensions-list--define-view)
@@ -137,12 +155,14 @@ when you ask (the Refresh command)."
   (drgnx-extensions-jobs-setup)
   (drgnx-extensions-live-setup)
   (drgnx-extensions-project-setup)
+  (drgnx-extensions-trust-setup)
   (when (eq drgnx-extensions-check-updates 'daily) (drgnx-extensions--start-daily-check)))
 
 (defun drgnx-extensions--teardown ()
   "Close the list, stop the timers and let go of the job layer's hook."
   (remove-hook 'drgnx-extensions-jobs-changed-functions #'drgnx-extensions-list--jobs-changed)
   (drgnx-extensions--stop-daily-check)
+  (drgnx-extensions-trust-teardown)
   (drgnx-extensions-project-teardown)
   (drgnx-extensions-jobs-teardown)
   (dolist (b (buffer-list))

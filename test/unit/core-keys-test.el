@@ -969,6 +969,7 @@ The commands of modules that need no installed package are in it, the later stag
                               extensions-open extensions-search extensions-details extensions-install extensions-update
                               extensions-update-all extensions-uninstall extensions-toggle-project extensions-refresh
                               extensions-cancel extensions-show-log
+                              extensions-trust-install extensions-trust-cancel ; the trust card's own keys
                               quit preferences edit-line-start edit-line-end edit-buffer-start edit-buffer-end edit-word-left
                               edit-word-right edit-delete-word-back edit-delete-line-back edit-copy edit-cut edit-paste
                               code-next-problem code-previous-problem ; M12d: F8 / S-F8

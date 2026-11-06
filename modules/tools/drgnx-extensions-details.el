@@ -6,7 +6,8 @@
 ;; The page of one extension: what it is, where it comes from and how far to trust that, why it is here, and tabs for
 ;; its readme, changes, settings, dependencies and files.  A package that is installed shows its own text (the
 ;; `;;; Commentary:' of its main file, its README and NEWS files) as plain text: no mode function runs on it, no local
-;; variable is applied, nothing is fontified.  Text fetched from an archive waits for the trust layer.  The page is a
+;; variable is applied, nothing is fontified.  Text fetched from an archive, a reviewed update and the files of a
+;; package that is not installed go through the trust layer's inert text (drgnx-extensions-trust.el).  The page is a
 ;; view of four rows (header, actions, tabs, body) drawn from state kept in the page's buffer.  The Generations section
 ;; of the list (the packages as they were after each change, and Roll back) is here too.  See docs/guide/extensions.md.
 
@@ -28,6 +29,14 @@
 (defvar drgnx-extensions-list--rows)
 
 (declare-function drgnx-hub-call "drgnx-hub-client")
+(declare-function drgnx-extensions--update "drgnx-extensions-list")
+(declare-function drgnx-extensions-trust-apply "drgnx-extensions-trust")
+(declare-function drgnx-extensions-trust-discard "drgnx-extensions-trust")
+(declare-function drgnx-extensions-trust-fetch-readme "drgnx-extensions-trust")
+(declare-function drgnx-extensions-trust-inert-string "drgnx-extensions-trust")
+(declare-function drgnx-extensions-trust-list-files "drgnx-extensions-trust")
+(declare-function drgnx-extensions-trust-review "drgnx-extensions-trust")
+(declare-function drgnx-extensions-trust-review-text "drgnx-extensions-trust")
 (declare-function drgnx-extensions-jobs-queue "drgnx-extensions-jobs")
 (declare-function drgnx-extensions-jobs-run "drgnx-extensions-jobs")
 (declare-function drgnx-plugins-page-insert "drgnx-plugins")
@@ -52,6 +61,13 @@
 (defvar-local drgnx-extensions-details--error nil "What the hub said when it could not answer, or nil.")
 (defvar-local drgnx-extensions-details--tab 'readme "The tab shown: readme, changes, settings, dependencies or files.")
 (defvar-local drgnx-extensions-details--log nil "The text of `git log' for a Git package, once its process ended.")
+(defvar-local drgnx-extensions-details--readme nil
+  "The readme job of a package that is not installed: (:state S :job ID :error TEXT), S `fetching', `fetched' or
+`failed'; nil before one was needed.")
+(defvar-local drgnx-extensions-details--readme-text nil "(README . its inert text): the readme the hub sent, made inert once.")
+(defvar-local drgnx-extensions-details--files nil
+  "The file list of a package that is not installed, from its cached archive: (:state S :text TEXT :error TEXT), S
+`listing', `ready' or `failed'.")
 
 (defvar drgnx-extensions-details-mode-map (make-sparse-keymap) "Keys of an extension page.")
 
@@ -162,10 +178,9 @@ text; nil when it is not installed or has none."
 ;;;; Actions
 
 (defun drgnx-extensions-details-install-version (id version)
-  "Queue the install of the version VERSION of the package ID (`pkg:NAME' or NAME): the job layer runs it."
-  (let ((entry (drgnx-extensions--before-install
-                (list :add (intern (drgnx-extensions-list--name id)) :version version))))
-    (when entry (drgnx-extensions-jobs-queue entry))))
+  "Queue the install of the version VERSION of the package ID (`pkg:NAME' or NAME): the job layer runs it, after the
+trust card for a source that does not sign."
+  (drgnx-extensions--before-install (list :add (intern (drgnx-extensions-list--name id)) :version version)))
 
 (defun drgnx-extensions-details-toggle-module (module)
   "Turn MODULE (a symbol) on or off through its setting: `drgnx-modules-disabled' for a module that runs by default,
@@ -323,8 +338,17 @@ text; nil when it is not installed or has none."
        ('package (concat
                   (when (memq (plist-get row :state) '(available missing))
                     (drgnx-extensions-details--button "Install" (lambda () (drgnx-extensions-details-install-version* id nil))))
-                  (when (eq (plist-get row :state) 'update)
-                    (drgnx-extensions-details--button "Update" (lambda () (drgnx-extensions-jobs-run 'upgrade (list (drgnx-extensions-list--name id))))))
+                  (let ((review (and (fboundp 'drgnx-extensions-trust-review)
+                                     (drgnx-extensions-trust-review (drgnx-extensions-list--name id)))))
+                    (cond ((eq (plist-get review :state) 'ready)
+                           (concat (drgnx-extensions-details--button "Apply update" 'extensions-review-apply
+                                                                     "Install exactly the update shown below")
+                                   (drgnx-extensions-details--button
+                                    "Discard" (lambda () (drgnx-extensions-trust-discard (drgnx-extensions-list--name id)))
+                                    "Forget this update; nothing is installed")))
+                          (review "")
+                          ((eq (plist-get row :state) 'update)
+                           (drgnx-extensions-details--button "Update" (lambda () (drgnx-extensions--update (drgnx-extensions-list--name id)))))))
                   (when (memq (plist-get row :state) '(installed update held dependency incompat))
                     (drgnx-extensions-details--button "Uninstall" (lambda () (drgnx-extensions-jobs-queue (list :remove (intern (drgnx-extensions-list--name id)))))))))
        (_ ""))
@@ -335,8 +359,7 @@ text; nil when it is not installed or has none."
 (defun drgnx-extensions-details-install-version* (id version)
   "Queue the install of ID, at VERSION when given."
   (if version (drgnx-extensions-details-install-version id version)
-    (when-let* ((entry (drgnx-extensions--before-install (list :add (intern (drgnx-extensions-list--name id))))))
-      (drgnx-extensions-jobs-queue entry))))
+    (drgnx-extensions--before-install (list :add (intern (drgnx-extensions-list--name id))))))
 
 (defconst drgnx-extensions-details--tabs '(readme changes settings dependencies files) "The tabs, in order.")
 
@@ -354,9 +377,7 @@ text; nil when it is not installed or has none."
                   (if (eq tab drgnx-extensions-details--tab)
                       (propertize (drgnx-extensions-details--tab-label tab) 'face '(bold underline))
                     (drgnx-ui-button (drgnx-extensions-details--tab-label tab)
-                                     (lambda () (with-current-buffer buf
-                                                  (setq drgnx-extensions-details--tab tab)
-                                                  (drgnx-extensions-details--refresh))))))
+                                     (lambda () (drgnx-extensions-details--tab-clicked buf tab)))))
                 drgnx-extensions-details--tabs " · ")
      "\n\n")))
 
@@ -384,40 +405,83 @@ text; nil when it is not installed or has none."
            (drgnx-extensions-details--plain (with-temp-buffer (drgnx-plugins-page-insert name) (buffer-string)))
          "The plugin page comes with the plugin host.\n"))
       (_
-       (pcase drgnx-extensions-details--tab
-         ('readme
-          (drgnx-extensions-details--plain
-           (or (and (memq (plist-get row :state) '(installed update held dependency incompat))
-                    (drgnx-extensions-details-readme-text name))
-               (concat (or (plist-get row :summary) "") "\n\nThe readme comes with the trust layer."))))
-         ('changes
-          (drgnx-extensions-details--plain
-           (string-join
-            (delq nil (list (and (plist-get info :revdesc) (format "Version: %s" (plist-get info :revdesc)))
-                            (and (plist-get info :commit) (format "Commit: %s" (plist-get info :commit)))
-                            (when-let* ((link (drgnx-extensions-details-compare-url (plist-get info :url) (plist-get info :commit) "HEAD")))
-                              (format "Compare: %s" link))
-                            drgnx-extensions-details--log
-                            (drgnx-extensions-details-news-text name)))
-            "\n\n")))
-         ('settings
-          (concat (format "%s\n" (let ((n (ignore-errors (drgnx-settings-page-package-count name))))
-                                   (if n (format "%d settings" n) "No settings found")))
-                  (drgnx-extensions-details--button "Show in Settings"
-                                                    (lambda () (drgnx-settings-page-show-package name)))
-                  "\n"))
-         ('dependencies
-          (concat "Requires:\n"
-                  (mapconcat (lambda (r) (format "  %s%s\n" (plist-get r :name)
-                                                 (if (plist-get r :version) (format " %s" (plist-get r :version)) "")))
-                             (plist-get info :requires) "")
-                  "Needed by:\n"
-                  (mapconcat (lambda (n) (format "  %s\n" n)) (plist-get info :required-by) "")))
-         ('files
-          (drgnx-extensions-details--plain
-           (if-let* ((dir (drgnx-extensions-details--package-dir name)))
-               (mapconcat (lambda (f) (file-relative-name f dir)) (directory-files-recursively dir "") "\n")
-             "Not installed."))))))))
+       (concat
+        (or (and (fboundp 'drgnx-extensions-trust-review-text) (drgnx-extensions-trust-review-text name)) "")
+        (drgnx-extensions-details--tab-body row info name))))))
+
+(defun drgnx-extensions-details--fetched-readme (row info)
+  "The readme the hub sent for a package that is not installed, made inert once; else what its job is doing."
+  (let ((readme (plist-get info :readme)))
+    (cond ((and (stringp readme) (fboundp 'drgnx-extensions-trust-inert-string))
+           (unless (eq (car drgnx-extensions-details--readme-text) readme)
+             (setq drgnx-extensions-details--readme-text (cons readme (drgnx-extensions-trust-inert-string readme 'text))))
+           (cdr drgnx-extensions-details--readme-text))
+          ((eq (plist-get drgnx-extensions-details--readme :state) 'failed)
+           (concat (or (plist-get row :summary) "") "\n\nNo readme: "
+                   (substring-no-properties (format "%s" (plist-get drgnx-extensions-details--readme :error)))))
+          ((memq (plist-get drgnx-extensions-details--readme :state) '(fetching fetched))
+           (concat (or (plist-get row :summary) "") "\n\nFetching the readme…"))
+          (t (or (plist-get row :summary) "")))))
+
+(defun drgnx-extensions-details--cached-archive (name row)
+  "The archive of the package NAME at ROW's version in the package cache, or nil."
+  (let ((dir (drgnx-package-cache-dir)) (v (or (plist-get row :latest) (plist-get row :version))))
+    (and v (seq-find #'file-readable-p
+                     (mapcar (lambda (ext) (expand-file-name (format "%s-%s%s" name v ext) dir)) '(".tar" ".el"))))))
+
+(defun drgnx-extensions-details--tab-body (row info name)
+  "The text of the page's tab for a package."
+  (pcase drgnx-extensions-details--tab
+    ('readme
+     (drgnx-extensions-details--plain
+      (or (and (memq (plist-get row :state) '(installed update held dependency incompat))
+               (drgnx-extensions-details-readme-text name))
+          (drgnx-extensions-details--fetched-readme row info))))
+    ('changes
+     (drgnx-extensions-details--plain
+      (string-join
+       (delq nil (list (and (plist-get info :revdesc) (format "Version: %s" (plist-get info :revdesc)))
+                       (and (plist-get info :commit) (format "Commit: %s" (plist-get info :commit)))
+                       (when-let* ((link (drgnx-extensions-details-compare-url (plist-get info :url) (plist-get info :commit) "HEAD")))
+                         (format "Compare: %s" link))
+                       drgnx-extensions-details--log
+                       (drgnx-extensions-details-news-text name)))
+       "\n\n")))
+    ('settings
+     (concat (format "%s\n" (let ((n (ignore-errors (drgnx-settings-page-package-count name))))
+                              (if n (format "%d settings" n) "No settings found")))
+             (drgnx-extensions-details--button "Show in Settings"
+                                               (lambda () (drgnx-settings-page-show-package name)))
+             "\n"))
+    ('dependencies
+     (concat "Requires:\n"
+             (mapconcat (lambda (r) (format "  %s%s\n" (plist-get r :name)
+                                            (if (plist-get r :version) (format " %s" (plist-get r :version)) "")))
+                        (plist-get info :requires) "")
+             "Needed by:\n"
+             (mapconcat (lambda (n) (format "  %s\n" n)) (plist-get info :required-by) "")))
+    ('files
+     (drgnx-extensions-details--plain
+      (if-let* ((dir (drgnx-extensions-details--package-dir name)))
+          (mapconcat (lambda (f) (file-relative-name f dir)) (directory-files-recursively dir "") "\n")
+        (pcase (plist-get drgnx-extensions-details--files :state)
+          ('ready (plist-get drgnx-extensions-details--files :text))
+          ('listing "Listing the files of the downloaded archive…")
+          ('failed (format "Cannot list its files: %s" (plist-get drgnx-extensions-details--files :error)))
+          (_ "Not installed: its files are listed here once it is downloaded (an Install, or an update's review)")))))))
+
+(defun drgnx-extensions-details--tab-clicked (buffer tab)
+  "TAB was clicked on BUFFER's page: show it; Files of a package that is not installed lists its downloaded archive."
+  (with-current-buffer buffer
+    (setq drgnx-extensions-details--tab tab)
+    (let* ((row (drgnx-extensions-details--row)) (name (drgnx-extensions-list--name drgnx-extensions-details--id)))
+      (when-let* (((eq tab 'files)) ((eq (plist-get row :kind) 'package)) ((null drgnx-extensions-details--files))
+                  ((fboundp 'drgnx-extensions-trust-list-files))
+                  ((not (drgnx-extensions-details--package-dir name)))
+                  (file (drgnx-extensions-details--cached-archive name row))
+                  ((string-suffix-p ".tar" file)))
+        (drgnx-extensions-trust-list-files buffer file)))
+    (drgnx-extensions-details--refresh)))
 
 (defun drgnx-extensions-details--render (key)
   "The view's RENDER for the page in the current buffer."
@@ -481,7 +545,9 @@ text; nil when it is not installed or has none."
                                 (setq drgnx-extensions-details--error (format "%s" error))
                               (setq drgnx-extensions-details--error nil drgnx-extensions-details--info result)
                               (when (equal (plist-get (plist-get result :row) :source) "git")
-                                (drgnx-extensions-details--git-log buffer (drgnx-extensions-list--name id) (plist-get result :commit))))
+                                (drgnx-extensions-details--git-log buffer (drgnx-extensions-list--name id) (plist-get result :commit)))
+                              ;; a package not installed whose readme the hub has not cached: a job fetches it
+                              (when (fboundp 'drgnx-extensions-trust-fetch-readme) (drgnx-extensions-trust-fetch-readme buffer)))
                             (drgnx-extensions-details--refresh)))))
     (error (with-current-buffer buffer
              (setq drgnx-extensions-details--error (error-message-string err))
@@ -494,7 +560,8 @@ page replaces; with PIN in a page of its own.  Returns the buffer (the caller sh
     (with-current-buffer buffer
       (unless (equal drgnx-extensions-details--id id)
         (setq drgnx-extensions-details--id id drgnx-extensions-details--info nil drgnx-extensions-details--error nil
-              drgnx-extensions-details--log nil drgnx-extensions-details--tab 'readme)
+              drgnx-extensions-details--log nil drgnx-extensions-details--tab 'readme drgnx-extensions-details--readme nil
+              drgnx-extensions-details--readme-text nil drgnx-extensions-details--files nil)
         (drgnx-extensions-details--refresh)
         (when (string-prefix-p "pkg:" id) (drgnx-extensions-details--fetch buffer id))))
     buffer))

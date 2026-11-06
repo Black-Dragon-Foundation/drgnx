@@ -31,6 +31,9 @@
 (declare-function drgnx-extensions-live-restart-pending "drgnx-extensions-live")
 (declare-function drgnx-extensions-live-toggle-project "drgnx-extensions-live")
 (declare-function drgnx-extensions-trust-before-install "drgnx-extensions-trust")
+(declare-function drgnx-extensions-trust-update "drgnx-extensions-trust")
+(declare-function drgnx-extensions-trust-review-p "drgnx-extensions-trust")
+(defvar drgnx-extensions-review)
 (declare-function drgnx-extensions-details-open "drgnx-extensions-details")
 (declare-function drgnx-extensions-details-generation-keys "drgnx-extensions-details")
 (declare-function drgnx-extensions-details-generation-row "drgnx-extensions-details")
@@ -572,15 +575,19 @@ ticket (an integer) has no row, nil."
     (setq drgnx-extensions-list--details-id id)))
 
 (defun drgnx-extensions--before-install (entry)
-  "ENTRY (an `:add' entry) as the trust step lets it through; identity until that step exists."
-  (if (fboundp 'drgnx-extensions-trust-before-install) (drgnx-extensions-trust-before-install entry) entry))
+  "Queue ENTRY (an `:add' entry) once the trust layer lets it through: at once for a signed source or a package whose
+trust card was seen here, else when the card's Install is clicked (`drgnx-extensions-trust-before-install')."
+  (let ((queue (lambda () (drgnx-extensions-jobs-queue entry))))
+    (if (fboundp 'drgnx-extensions-trust-before-install)
+        (drgnx-extensions-trust-before-install (format "pkg:%s" (plist-get entry :add)) queue)
+      (funcall queue))))
 
 (defun drgnx-extensions-install ()
-  "Queue the install of the package at point: the job layer runs it, the row shows its progress."
+  "Queue the install of the package at point: the job layer runs it, the row shows its progress.  A package from a
+source that does not sign shows its trust card first, the first time."
   (interactive)
   (drgnx-extensions-list--require 'drgnx-extensions-jobs-queue)
-  (when-let* ((entry (drgnx-extensions--before-install (list :add (intern (drgnx-extensions-list--package-name))))))
-    (drgnx-extensions-jobs-queue entry)))
+  (drgnx-extensions--before-install (list :add (intern (drgnx-extensions-list--package-name)))))
 
 (defun drgnx-extensions-uninstall ()
   "Queue the removal of the package at point (no question: a rollback brings it back).  A package something else
@@ -589,17 +596,35 @@ needs is refused, and the row says why."
   (drgnx-extensions-list--require 'drgnx-extensions-jobs-queue)
   (drgnx-extensions-jobs-queue (list :remove (intern (drgnx-extensions-list--package-name)))))
 
+(defun drgnx-extensions--update (name)
+  "Update the package NAME; when its updates are reviewed first (`drgnx-extensions-review'), show its page, where the
+update is compared with the installed copy before Apply."
+  (if (and (fboundp 'drgnx-extensions-trust-update) (eq (drgnx-extensions-trust-update name) 'review))
+      (pop-to-buffer (drgnx-extensions-details-open (concat "pkg:" name) t))
+    (unless (fboundp 'drgnx-extensions-trust-update) (drgnx-extensions-jobs-run 'upgrade (list name)))))
+
 (defun drgnx-extensions-update ()
   "Update the package at point."
   (interactive)
   (drgnx-extensions-list--require 'drgnx-extensions-jobs-run)
-  (drgnx-extensions-jobs-run 'upgrade (list (drgnx-extensions-list--package-name))))
+  (drgnx-extensions--update (drgnx-extensions-list--package-name)))
 
 (defun drgnx-extensions-update-all ()
-  "Update every package that has an update."
+  "Update every package that has an update, except those whose updates you review first: they wait on their pages."
   (interactive)
   (drgnx-extensions-list--require 'drgnx-extensions-jobs-run)
-  (drgnx-extensions-jobs-run 'upgrade-all))
+  (if (not (bound-and-true-p drgnx-extensions-review))
+      (drgnx-extensions-jobs-run 'upgrade-all)
+    (let (names reviewed)
+      (dolist (id (plist-get (cdr (assq 'updates drgnx-extensions-list--sections)) :ids))
+        (let* ((row (gethash id drgnx-extensions-list--rows)) (name (plist-get row :name)))
+          (when (and name (eq (plist-get row :kind) 'package))
+            (if (and (fboundp 'drgnx-extensions-trust-review-p) (drgnx-extensions-trust-review-p name (plist-get row :source)))
+                (push name reviewed)
+              (push name names)))))
+      (when names (drgnx-extensions-jobs-run 'upgrade (nreverse names)))
+      (when reviewed
+        (message "Not updated, you review them first: %s (Update on each)" (string-join (nreverse reviewed) ", "))))))
 
 (defun drgnx-extensions-refresh ()
   "Read the archives again (a job), then the list again."

@@ -65,7 +65,9 @@ and the tabs **Readme**, **Changes**, **Settings (N)**, **Dependencies** and **F
 
 The readme of an installed package is its own text: the `;;; Commentary:` of its main file and the README files in its
 folder, shown as plain text. No mode runs on it, no `-*- eval: … -*-` line is obeyed, nothing is coloured. A package
-you have not installed shows its summary; its readme comes with the trust layer. Changes shows the installed commit, a
+you have not installed shows the readme its archive publishes: the first time its page opens, a background job fetches
+it ("Fetching the readme…"), and it is shown as the same inert text (see [Where it comes from](#where-it-comes-from)).
+Its **Files** tab lists the files of its archive once it was downloaded. Changes shows the installed commit, a
 compare link for GitHub, GitLab, Codeberg and sourcehut repositories, `git log` since this version for a Git package,
 and its NEWS or CHANGELOG file. A module's page shows what the module is for, its packages, flags, stage and how long
 it took to start, with a button that turns it on or off through its setting. The **⋯** button (and **More About
@@ -74,6 +76,43 @@ repository, the package's settings and the job's log.
 
 Settings has a **Preferences: Settings** side: under Extensions it lists the packages you asked for, read-only, from the
 lock, and each package's settings group says *magit 4.1 · Extensions* with a link back to this list.
+
+## Where it comes from
+
+Every package runs inside Emacs as you, so its page says how far its source can be trusted. GNU ELPA and NonGNU ELPA
+sign their packages, and drgnx checks the signature: *signed*. MELPA and stable MELPA do not sign (*unsigned archive*);
+a directory archive is *local*; a Git package is pinned to a *Git commit*; a plugin is *hash approved*.
+
+The first time you install a package from a source that does not sign, a **trust card** opens before anything is
+queued. It names the package's source and commit, its downloads and maintainer, says *Runs inside Emacs as you: it
+can read your files and reach the network.*, and lists every package it brings that is not installed and comes from
+an unsigned source too ("It also brings 3 unsigned packages it needs: magit-section, transient, with-editor"). After
+the install drgnx pins the package's hash in the lock, so a later sync installs exactly that file.
+
+| On the card | VS Code | Emacs | Vim |
+|---|---|---|---|
+| Install | `i` | `i` | `i` |
+| Cancel | `q` | `q` | `q` |
+
+**Install** queues the install and remembers, on this machine, that you saw the card for that package and the ones it
+brings (`~/.local/state/drgnx/extensions/trusted.eld`): the card does not come back for them here, and does on a new
+machine. **Cancel** queues nothing. A signed package installs with no card. The card is only ever opened by your own
+Install: nothing that runs by itself (a timer, a hook, an agent) can open it, answer it or install anything. An agent
+can only suggest a package, and its suggestion has no Install button.
+
+Text that comes with a package and is not yet installed code (a readme fetched from its archive, a reviewed update,
+the files of a package you have not installed) is shown as **inert text**: no mode runs on it, no local variable or
+`-*- eval: … -*-` line is obeyed, no link in it runs anything, and it is never passed to an agent as an instruction. A
+reviewed update is coloured as a diff, and only as a diff.
+
+## Review before an update
+
+`drgnx-extensions-review` lists packages (`magit`) and archives (`"melpa"`) whose updates you want to read before they
+install. For those, **Update** first downloads the update and checks it, in the background (`drgnx upgrade --only
+magit --stage`); the package's page then shows the version and hash it fetched and what differs from the copy you
+have, file by file. **Apply update** installs exactly that download (`drgnx upgrade --staged`, which checks its hash
+again); **Discard** forgets it. If another review downloaded something else in between, Apply refuses and asks you to
+Update again. **Update All** leaves these packages out and says which wait for your review.
 
 ## Generations and rollback
 

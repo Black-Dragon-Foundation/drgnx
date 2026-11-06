@@ -294,8 +294,9 @@ refusal for now, never `failed').  Never waits."
            (list (cond (stage (concat "download the update of " said))
                        (staged (concat "install the reviewed update of " said))
                        (t (concat "update " said)))
-                 (append '("upgrade" "--only") (mapcar #'symbol-name names)
-                         (cond (stage '("--stage")) (staged '("--staged"))) '(progress))
+                 ;; --staged goes alone: it installs exactly the entries --stage listed, hashes checked
+                 (if staged '("upgrade" "--staged" progress)
+                   (append '("upgrade" "--only") (mapcar #'symbol-name names) (and stage '("--stage")) '(progress)))
                  names))))
       ('upgrade-all (list "update every package" '("upgrade" progress) nil))
       ('rollback
