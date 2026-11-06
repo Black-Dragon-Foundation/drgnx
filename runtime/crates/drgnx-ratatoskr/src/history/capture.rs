@@ -170,11 +170,7 @@ pub(crate) fn diff(old: &str, new: &str) -> Vec<Change> {
 
 impl Inner {
     pub(crate) fn branch(&mut self, tree: &Tree) -> Result<BranchId> {
-        self.h.branch(
-            &tree.branch_name(),
-            verdandi::BranchKind::Worktree,
-            tree.base.as_deref(),
-        )
+        tree.branch_in(&mut self.h)
     }
 
     /// The peer of AUTHOR (named KEY) on BRANCH, made on first use.

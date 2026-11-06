@@ -66,6 +66,18 @@ impl Tree {
     pub(crate) fn branch_name(&self) -> String {
         format!("wt/{}", self.id.0)
     }
+
+    /// This worktree's branch in H, made on first use, with the folder it is for (a sweep freezes it when the folder
+    /// is gone).
+    pub(crate) fn branch_in(&self, h: &mut History) -> verdandi::Result<BranchId> {
+        let b = h.branch(
+            &self.branch_name(),
+            verdandi::BranchKind::Worktree,
+            self.base.as_deref(),
+        )?;
+        h.set_root(b, &self.root.to_string_lossy())?;
+        Ok(b)
+    }
 }
 
 /// Where a version's content is kept.
@@ -159,11 +171,7 @@ impl Hub {
     /// TREE's document of REL as text on the tree's branch; none when it was never tracked.
     pub fn text(&self, tree: &Tree, rel: &str) -> verdandi::Result<Option<String>> {
         let mut g = self.lock();
-        let branch = g.h.branch(
-            &tree.branch_name(),
-            verdandi::BranchKind::Worktree,
-            tree.base.as_deref(),
-        )?;
+        let branch = tree.branch_in(&mut g.h)?;
         let doc = g.h.doc_for(rel)?;
         g.h.activate(doc, branch, || {
             Ok(capture::base_text(tree, rel).unwrap_or_default())

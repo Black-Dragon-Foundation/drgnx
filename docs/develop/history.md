@@ -211,9 +211,14 @@ of a record at or before a cut is refused with the reason (the file was compacte
 gone). `History::pins()` names what keeps the size up, the biggest first: pinned branches, set-aside branches, and each
 owner's anchors, for the doctor's `history` row (with the hub's watch budget and resync counter).
 
+A worktree's branch remembers the folder it was made for (`branch.root`, schema 5, `History::set_root`, set on first
+use). The sweep freezes the branch of a worktree whose folder, or its `.git`, is gone, so it is kept for compare and
+expires 90 days on like a dropped fork (`History::roots` lists the live ones). A worktree removed while the hub is down
+is found by the first sweep after it starts.
+
 The hub runs this on its clock: `Hub::sweep(now, cap)` expires, compacts when over the cap (by a `system` peer's
 `compact` record) and writes `size-report.json` (size, cap, the eight biggest pins) beside `history.db`. The first sweep
-comes a minute after the history opens, then every six hours. The doctor reads the report files and never opens the live
+comes a minute after the history opens, then every hour. The doctor reads the report files and never opens the live
 database: its `history` row gives each project's size against its cap and the biggest pin, and warns at 80 % of the cap
 naming what keeps the size up.
 

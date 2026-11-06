@@ -107,6 +107,8 @@
   "drgnx-say/approve-starts-and-ends-the-session"
   "drgnx-say/reject-stops-the-job"
   "drgnx-say/an-unproven-connection-raises-nothing"
+  "drgnx-history/three-worktrees-keep-their-own-authors"
+  "drgnx-history/a-removed-worktree-is-frozen-and-still-comparable"
   "drgnx-history/card-shows-effects-before-files"
   "drgnx-history/card-keep-mine-and-roll-back"
   "drgnx-history/card-labels-a-summary-and-asks-a-message"

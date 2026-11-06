@@ -9,7 +9,7 @@ use norn::deny::{DenyList, Verdict};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use verdandi::redact::redact;
-use verdandi::{BranchKind, Change, DocId, Error, PeerId, Result};
+use verdandi::{Change, DocId, Error, PeerId, Result};
 
 /// A batch with more inserted bytes than this is refused with `split-required`: the editor splits it.
 pub const BATCH_MAX: usize = 1 << 20;
@@ -92,11 +92,7 @@ impl Hub {
             return Ok(no("ignored"));
         }
         let mut g = self.lock();
-        let branch = g.h.branch(
-            &tree.branch_name(),
-            BranchKind::Worktree,
-            tree.base.as_deref(),
-        )?;
+        let branch = tree.branch_in(&mut g.h)?;
         let doc = g.h.doc_for(rel)?;
         g.h.activate(doc, branch, || {
             Ok(super::capture::base_text(tree, rel).unwrap_or_default())

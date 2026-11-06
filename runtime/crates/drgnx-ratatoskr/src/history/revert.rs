@@ -136,11 +136,7 @@ async fn keep(f: &Front, plan: &Plan) -> Result<i64, Error> {
     let (id, now) = (preview_id()?, crate::clock::wall_secs());
     crate::clock::blocking(move || {
         let mut g = hub.lock();
-        let br = g.h.branch(
-            &tree.branch_name(),
-            verdandi::BranchKind::Worktree,
-            tree.base.as_deref(),
-        )?;
+        let br = tree.branch_in(&mut g.h)?;
         g.h.keep_preview(id, br, &json, now)
     })
     .await

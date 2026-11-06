@@ -255,6 +255,22 @@ fn a_dropped_fork_expires_like_a_frozen_worktree() {
 }
 
 #[test]
+fn a_worktree_branch_remembers_its_folder_and_is_listed_until_frozen() {
+    let mut f = fx();
+    // a folder is named once; the first name stays
+    f.h.set_root(f.br, "/work/a").unwrap();
+    f.h.set_root(f.br, "/work/elsewhere").unwrap();
+    let fork = f.h.branch("fork/y", BranchKind::Fork, None).unwrap();
+    f.h.set_root(fork, "/work/fork").unwrap();
+    // only live worktree branches are listed: not forks, not frozen ones
+    assert_eq!(f.h.roots().unwrap(), vec![(f.br, "/work/a".to_owned())]);
+    f.h.freeze(f.br, 5.0).unwrap();
+    assert!(f.h.roots().unwrap().is_empty());
+    // it expires like any frozen worktree, 90 days on
+    assert_eq!(f.h.expire(5.0 + 91.0 * DAY).unwrap(), vec![f.br]);
+}
+
+#[test]
 fn doctor_names_what_pins_size() {
     let mut f = fx();
     let (rev, ub) = f.rolled_back(10.0);

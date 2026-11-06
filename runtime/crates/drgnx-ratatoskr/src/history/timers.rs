@@ -14,7 +14,7 @@ const PARK_EVERY: Duration = Duration::from_secs(60);
 const IDLE_SECS: f64 = 300.0;
 /// The first sweep comes this long after the hub opens the history, the next ones every [`SWEEP_EVERY`].
 const SWEEP_FIRST: Duration = Duration::from_secs(60);
-const SWEEP_EVERY: Duration = Duration::from_secs(6 * 3600);
+const SWEEP_EVERY: Duration = Duration::from_secs(3600);
 /// How many of the biggest pins the report names.
 const PINS_SHOWN: usize = 8;
 /// The file the sweep leaves beside `history.db` for the doctor, which never opens the live database.
@@ -43,6 +43,12 @@ impl Hub {
     /// (`size-report.json`: size, cap, and the biggest things that pin it) beside `history.db`.
     pub fn sweep(&self, now: f64, cap: u64) -> verdandi::Result<Swept> {
         let mut g = self.lock();
+        // a worktree whose folder (or its `.git`) is gone is set aside: its branch is kept, frozen, for compare
+        for (branch, root) in g.h.roots()? {
+            if !std::path::Path::new(&root).join(".git").exists() {
+                g.h.freeze(branch, now)?;
+            }
+        }
         let expired = g.h.expire(now)?.len();
         let compacted = if g.h.size()? > cap {
             let author = g.h.peer(
@@ -197,6 +203,27 @@ mod tests {
             .unwrap();
         assert_eq!((late.expired, branches(&hub)), (1, 1));
         assert!(late.compacted.is_none(), "under the cap nothing is cut");
+    }
+
+    // pattern: D
+    #[test]
+    fn a_sweep_freezes_the_branch_of_a_worktree_that_is_gone() {
+        let (hub, repo, _hist) = typed();
+        let now = crate::clock::wall_secs();
+        let live = |hub: &Hub| hub.with(|h| h.roots().unwrap().len());
+        assert_eq!(live(&hub), 1, "the worktree's folder was recorded");
+        hub.sweep(now, verdandi::compact::DEFAULT_CAP).unwrap();
+        assert_eq!(live(&hub), 1, "a worktree that is there is not frozen");
+        std::fs::remove_dir_all(repo.path()).unwrap();
+        hub.sweep(now + 1.0, verdandi::compact::DEFAULT_CAP)
+            .unwrap();
+        assert_eq!(live(&hub), 0);
+        // frozen, not removed: it is kept for compare until it expires
+        assert_eq!(hub.with(|h| h.count("branch").unwrap()), 1);
+        let late = hub
+            .sweep(now + 92.0 * 86_400.0, verdandi::compact::DEFAULT_CAP)
+            .unwrap();
+        assert_eq!(late.expired, 1);
     }
 
     // pattern: D

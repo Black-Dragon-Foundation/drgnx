@@ -82,6 +82,26 @@ impl History {
         Ok(())
     }
 
+    /// BRANCH's worktree is the folder ROOT.  The first folder named stays.
+    pub fn set_root(&mut self, branch: BranchId, root: &str) -> Result<()> {
+        self.conn.execute(
+            "update branch set root = ?2 where id = ?1 and root is null",
+            rusqlite::params![branch.0, root],
+        )?;
+        Ok(())
+    }
+
+    /// The worktree branches not frozen yet, each with the folder it was made for (those never told one are left out).
+    pub fn roots(&self) -> Result<Vec<(BranchId, String)>> {
+        let mut st = self.conn.prepare(
+            "select id, root from branch where kind = 'wt' and root is not null and frozen_at is null order by id",
+        )?;
+        let rows = st
+            .query_map([], |r| Ok((BranchId(r.get(0)?), r.get(1)?)))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// Remove the undone branches, frozen worktrees and dropped forks set aside 90 days or more before NOW, unless
     /// pinned, with their documents and anchors.  The branches removed.
     pub fn expire(&mut self, now: f64) -> Result<Vec<BranchId>> {

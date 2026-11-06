@@ -10,7 +10,7 @@ use runstav::methods::history as w;
 use runstav::wire::Error;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use verdandi::{BranchKind, OpId};
+use verdandi::OpId;
 
 fn store(e: verdandi::Error) -> Error {
     match e {
@@ -34,11 +34,7 @@ impl Hub {
         range: Range<usize>,
     ) -> verdandi::Result<Vec<w::BlameSpan>> {
         let mut g = self.lock();
-        let branch = g.h.branch(
-            &tree.branch_name(),
-            BranchKind::Worktree,
-            tree.base.as_deref(),
-        )?;
+        let branch = tree.branch_in(&mut g.h)?;
         let doc = g.h.doc_for(rel)?;
         let len =
             g.h.activate(doc, branch, || {
