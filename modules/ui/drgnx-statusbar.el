@@ -818,11 +818,13 @@ dir (the doctor's `statusbar-misc' check reads it).  Never prompts and never rai
   (if (fboundp 'drgnx-notice-toast-more-count) (drgnx-notice-toast-more-count) 0))
 
 (drgnx-memo-define statusbar-position :on window
-                   :keys ((current-buffer) (window-point object) (buffer-chars-modified-tick) (point-min)
-                          (and mark-active (mark t)) (drgnx-statusbar--selected-p object))
+                   :keys ((current-buffer)
+                          (if (eq (window-buffer object) (current-buffer)) (window-point object) (point))
+                          (buffer-chars-modified-tick) (point-min) (and mark-active (mark t))
+                          (drgnx-statusbar--selected-p object) drgnx-large-file)
                    :doc "A window's position segment text (`drgnx-statusbar--position-text'), evaluated in its
-buffer: made again when the window's point, the text, the narrowing, the selection or whether you are in the window
-changed.")
+buffer: made again when the point it shows (the window's, or the buffer's when the window shows another), the text,
+the narrowing, the selection, whether you are in the window or the large-file flag (no line count) changed.")
 
 (defun drgnx-statusbar--position-text (w)
   "The position segment's text for window W, in W's buffer (the memo `statusbar-position')."
