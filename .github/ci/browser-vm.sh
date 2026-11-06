@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# A Fedora 45 VM on a CI runner, for the tests that need a kernel the runner lacks: the agent browser's layer needs
+# A Fedora 45 VM on an x64 CI runner, for the tests that need a kernel the runner lacks: the agent browser's layer needs
 # Landlock ABI 9 (Linux 7.1), and GitHub's Ubuntu runners boot Linux 7.0 (ABI 8). Fedora 45's kernel has it, as the
 # Fedora hosts drgnx supports do. The VM boots the pinned Fedora Cloud image (its sha256 checked) under QEMU, with KVM
 # when the runner allows it, else emulated; cloud-init gives it a user `runner` with passwordless sudo and the key
@@ -35,12 +35,7 @@ case "$cmd" in
         url=$rel/x86_64/images/$img
         pkgs=(qemu-system-x86 qemu-utils cloud-image-utils openssh-client)
         qemu=(qemu-system-x86_64 -machine q35) ;;
-      aarch64)
-        img=Fedora-Cloud-Base-Generic-45-1.4.aarch64.qcow2
-        sha=1632acc8bc14d45b6c9596a0acc71b070d3748d1abdcf1a519be5c983bb0286c
-        url=$rel/aarch64/images/$img
-        pkgs=(qemu-system-arm qemu-efi-aarch64 qemu-utils cloud-image-utils openssh-client)
-        qemu=(qemu-system-aarch64 -machine virt -bios /usr/share/qemu-efi-aarch64/QEMU_EFI.fd) ;;
+      # no arm64 image: the arm runners have no KVM, and emulated the guest never answered (docs/develop/ci.md)
       *) echo "browser-vm.sh: no image for $(uname -m)" >&2; exit 1 ;;
     esac
     root apt-get update -q

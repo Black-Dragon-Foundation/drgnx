@@ -152,9 +152,11 @@
     (drgnx-ci-test--has job "escape-report-host-${{ matrix.os }}" "-escape-${{ matrix.os }}-")))
 
 (ert-deftest drgnx-ci/the-escape-legs-run-the-browser-rows-in-a-vm ()
-  ;; the agent browser's rows need Landlock ABI 9 (Linux 7.1), and the runners boot Linux 7.0 (ABI 8): every escape
-  ;; leg runs them in a Fedora 45 VM, after its host sandbox lane, which leaves out exactly them (the names their binary
-  ;; lists), so they neither fail there nor go unrun
+  ;; the agent browser's rows need Landlock ABI 9 (Linux 7.1), and the runners boot Linux 7.0 (ABI 8): the x64 escape
+  ;; legs run them in a Fedora 45 VM under KVM, after the host sandbox lane, which leaves out exactly them (the names
+  ;; their binary lists), so they neither fail there nor go unrun. The arm legs have no KVM, and emulated the guest
+  ;; never answered; the rows' one arm64-specific part, the browser's seccomp filter, is installed for real by gleipnir's
+  ;; own tests on the arm runner, so the arm legs skip the VM and say why
   (let* ((rt (drgnx-ci-test--yml "runtime.yml")) (job (and rt (drgnx-ci-test--job rt "escape-host")))
          (vm (drgnx-ci-test--file ".github/ci/browser-vm.sh")))
     (skip-unless job)
@@ -163,12 +165,17 @@
                         "bash .github/ci/browser-vm.sh up \"$RUNNER_TEMP/vm\""
                         "bash .github/ci/browser-vm.sh put \"$RUNNER_TEMP/vm\" /usr/bin/bwrap"
                         "'$bin' --ignored --test-threads 1")
-    (let ((lane (string-search "name: agent core, sandbox lane" job))
-          (in-vm (string-search "name: the agent browser's rows in a Fedora 45 VM" job)))
-      (should (and lane in-vm (< lane in-vm))))
-    ;; the image of each architecture is pinned by its sha256, which is checked; the script is shellchecked
-    (drgnx-ci-test--has vm "Fedora-Cloud-Base-Generic-45-" "sha256sum -c -" "x86_64)" "aarch64)")
-    (should (= 2 (length (drgnx-ci-test--matches "sha=\\([0-9a-f]\\{64\\}\\)" vm))))
+    (let* ((lane (string-search "name: agent core, sandbox lane" job))
+           (in-vm (string-search "name: the agent browser's rows in a Fedora 45 VM" job))
+           (step (and in-vm (substring job in-vm (string-search "\n      - " job in-vm))))
+           (arm (string-search "name: the agent browser's rows skip on arm64" job)))
+      (should (and lane in-vm (< lane in-vm)))
+      (should (string-search "runner.arch == 'X64'" step))
+      (should (and arm (string-search "runner.arch == 'ARM64'" job arm))))
+    ;; the x86_64 image is pinned by its sha256, which is checked; no arm64 image; the script is shellchecked
+    (drgnx-ci-test--has vm "Fedora-Cloud-Base-Generic-45-" "sha256sum -c -" "x86_64)")
+    (should-not (string-search "aarch64)" vm))
+    (should (= 1 (length (drgnx-ci-test--matches "sha=\\([0-9a-f]\\{64\\}\\)" vm))))
     (drgnx-ci-test--has (drgnx-ci-test--yml "ci.yml") " .github/ci/browser-vm.sh ")))
 
 (ert-deftest drgnx-ci/the-msrv-is-one-number ()

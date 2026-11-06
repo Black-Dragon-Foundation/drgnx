@@ -363,8 +363,7 @@ jobs:
     permissions:
       contents: read
       packages: read
-    # 60: the browser rows' VM boots emulated where a runner has no KVM
-    timeout-minutes: 60
+    timeout-minutes: 45
     # Every runner is pinned (never `ubuntu-latest`, which moves to 26.04 by 2026-11-19). The 24.04 legs lift AppArmor's
     # userns restriction with a global sysctl; the 26.04 legs do not: they test the configuration Gleipnir recommends
     # (bubblewrap 0.12.0 as /usr/bin/bwrap, which 26.04's `bwrap-userns-restrict` profile covers).
@@ -467,7 +466,8 @@ jobs:
       # binary's failures in one run. The crate's timing rows (#[ignore = "timing: …"], test/timing-rust.txt) are
       # ignored too, but they are the timing lane's: a debug build on a shared runner judges no budget, so they are skipped.
       # The agent browser's rows (tests/browser_sandboxed.rs) need Landlock ABI 9 on both tiers, which these runners'
-      # Linux 7.0 lacks (ABI 8): they run in the Fedora 45 VM of the next step instead, by the names their binary lists.
+      # Linux 7.0 lacks (ABI 8): they run in the Fedora 45 VM of the next step instead (x64 only), by the names their
+      # binary lists.
       - name: agent core, sandbox lane (--ignored)
         if: ${{ !cancelled() && steps.core-build.outcome == 'success' }}
         run: |
@@ -476,12 +476,12 @@ jobs:
           [ -n "$vm" ] || { echo "browser_sandboxed lists no rows" >&2; exit 1; }
           skips="$skips$(printf '%s\n' "$vm" | awk '{ printf " --skip %s", $1 }')"
           cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks -- --ignored --test-threads 1 $skips
-      # The agent browser's rows where they can run: a Fedora 45 VM on this runner (Linux 7.1 or later, Landlock ABI 9 or
-      # later, as the Fedora hosts drgnx supports have), booted under QEMU (KVM where the runner has it, else
-      # emulated) by .github/ci/browser-vm.sh, with this job's bubblewrap and the binaries copied in at their own paths
-      # (the test binary names its data and the hub by their absolute paths). docs/develop/ci.md, "The browser rows in a VM"
+      # The agent browser's rows where they can run: a Fedora 45 VM on the x64 runners (Linux 7.1 or later, Landlock ABI 9
+      # or later, as the Fedora hosts drgnx supports have), booted under QEMU with KVM by .github/ci/browser-vm.sh, with
+      # this job's bubblewrap and the binaries copied in at their own paths (the test binary names its data and the hub by
+      # their absolute paths). docs/develop/ci.md, "The browser rows in a VM"
       - name: the agent browser's rows in a Fedora 45 VM (Landlock ABI 9)
-        if: ${{ !cancelled() && steps.core-build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.core-build.outcome == 'success' && runner.arch == 'X64' }}
         run: |
           bin=$(cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --test browser_sandboxed --no-run --message-format=json | jq -r 'select(.reason == "compiler-artifact" and .executable != null and .target.name == "browser_sandboxed" and (.target.kind | index("test"))) | .executable')
           # the build also reports the ratatoskr bin (the test depends on it): exactly one path must be the test binary
@@ -491,6 +491,13 @@ jobs:
           bash .github/ci/browser-vm.sh put "$RUNNER_TEMP/vm" /usr/bin/bwrap "$t/ratatoskr" "$t/gleipnir-probe" "$t/ratatoskr-mock" \
             "$PWD/runtime/crates/drgnx-ratatoskr/tests/data" "$bin"
           bash .github/ci/browser-vm.sh run "$RUNNER_TEMP/vm" "cd '$PWD/runtime' && '$bin' --ignored --test-threads 1"
+      # The arm runners have no KVM, and an emulated guest never answered within 20 minutes. The rows' only arm64-specific
+      # part, the browser host's seccomp filter, is installed for real by gleipnir's own tests above
+      # (`installed_filter_denies`, its `browser-` cases); the rest is the same code as on x64, whose VM runs it.
+      - name: the agent browser's rows skip on arm64 (Landlock ABI 8 here; they run in the x64 legs' VM)
+        if: ${{ !cancelled() && steps.core-build.outcome == 'success' && runner.arch == 'ARM64' }}
+        run: |
+          echo "::notice title=browser rows skipped::the arm runners have no KVM for the Fedora 45 VM and boot Linux $(uname -r), whose Landlock ABI the browser's rows need at 9 or later: tests/browser_sandboxed.rs runs in the x64 legs' VM"
       # The real-start rows (docs/develop/runtime.md, "The real-start rows"): a release hub, no test hooks, so each
       # agents/start goes through the real launch, Gleipnir's validation and bwrap. --require-all: a row that cannot
       # start sandboxed fails here; the browser row is an excused skip on this runner (no Chromium, and a Landlock ABI
