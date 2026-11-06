@@ -137,9 +137,10 @@ reviewed update is coloured as a diff, and only as a diff.
 `drgnx-extensions-review` lists packages (`magit`) and archives (`"melpa"`) whose updates you want to read before they
 install. For those, **Update** first downloads the update and checks it, in the background (`drgnx upgrade --only
 magit --stage`); the package's page then shows the version and hash it fetched and what differs from the copy you
-have, file by file. **Apply update** installs exactly that download (`drgnx upgrade --staged`, which checks its hash
-again); **Discard** forgets it. If another review downloaded something else in between, Apply refuses and asks you to
-Update again. **Update All** leaves these packages out and says which wait for your review.
+have, file by file. An update that brings new versions of packages it needs downloads those too, and the page shows
+each of them the same way. **Apply update** installs exactly that download, all of it (`drgnx upgrade --staged`,
+which checks its hashes again); **Discard** forgets it. If another review downloaded something else in between, Apply
+refuses and asks you to Update again. **Update All** leaves these packages out and says which wait for your review.
 
 ## Recommended
 

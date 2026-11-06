@@ -312,9 +312,11 @@ then the install is queued."
 ;;;; Review before an update
 
 (defvar drgnx-extensions-trust--reviews (make-hash-table :test #'equal)
-  "Package name → its review: (:state S :job ID :entry STAGED :diff TEXT :error TEXT), S `staging', `comparing',
-`ready', `applying' or `failed'; STAGED the entry `drgnx upgrade --stage' wrote (NAME :version :file :sha256
-:verified).  An entry goes when its update was applied or discarded; emptied by the teardown.")
+  "Package name → its review: (:state S :job ID :entry STAGED :entries ALL :diff TEXT :error TEXT), S `staging',
+`comparing', `ready', `applying' or `failed'; STAGED the package's entry `drgnx upgrade --stage' wrote (NAME :version
+:file :sha256 :verified), ALL every entry it wrote (the update's new dependencies too), each compared and shown, and
+what Apply checks the staged list against.  An entry goes when its update was applied or discarded; emptied by the
+teardown.")
 
 (defun drgnx-extensions-trust-review (name)
   "NAME's review, or nil."
@@ -396,30 +398,43 @@ ERROR), TEXT the output of `diff -ruN'.  Two processes (unpack, compare), never 
                        "unpacking a reviewed update"))))))
 
 (defun drgnx-extensions-trust--staging-done (name result)
-  "NAME's staging job ended with RESULT: compare what it fetched with the installed copy."
+  "NAME's staging job ended with RESULT: compare every package it fetched (NAME and the ones its update brings) with
+the installed copy; the review is ready when every comparison is."
   (if (not (eq (plist-get result :status) 'done))
       (drgnx-extensions-trust--review-put name :state 'failed :error (or (plist-get result :error) "the download failed"))
-    (if-let* ((entry (assq (intern name) (drgnx-extensions-trust--staged))))
-        (progn
-          (drgnx-extensions-trust--review-put name :state 'comparing :entry entry)
-          (drgnx-extensions-trust--diff
-           name entry
-           (lambda (text err)
-             (if err (drgnx-extensions-trust--review-put name :state 'failed :error err)
-               (drgnx-extensions-trust--review-put
-                name :state 'ready
-                :diff (if (string-empty-p text) "No file differs.\n" (drgnx-extensions-trust-inert-string text 'diff)))))))
-      (drgnx-extensions-trust--review-put name :state 'failed :error "nothing to update: the archive has no newer version"))))
+    (let* ((staged (drgnx-extensions-trust--staged)) (entry (assq (intern name) staged)))
+      (if (not entry)
+          (drgnx-extensions-trust--review-put name :state 'failed :error "nothing to update: the archive has no newer version")
+        (let ((left (length staged)) (texts nil) (failed nil))
+          (drgnx-extensions-trust--review-put name :state 'comparing :entry entry :entries staged)
+          (dolist (e staged)
+            (let ((pkg (symbol-name (car e))))
+              (drgnx-extensions-trust--diff
+               pkg e
+               (lambda (text err)
+                 (cl-decf left)
+                 (if err (setq failed (or failed err)) (push (cons pkg text) texts))
+                 (when (= left 0)
+                   (if failed (drgnx-extensions-trust--review-put name :state 'failed :error failed)
+                     (drgnx-extensions-trust--review-put
+                      name :state 'ready
+                      :diff (mapconcat
+                             (lambda (e)
+                               (let ((text (cdr (assoc (symbol-name (car e)) texts))))
+                                 (concat (if (cdr staged) (propertize (format "%s\n" (car e)) 'face 'bold) "")
+                                         (if (string-empty-p text) "No file differs.\n"
+                                           (drgnx-extensions-trust-inert-string text 'diff)))))
+                             staged "")))))))))))))
 
 (defun drgnx-extensions-trust-apply (&optional name)
   "Install the reviewed update of NAME (the page's package): exactly what was downloaded and checked."
   (interactive)
   (let* ((name (or name (and drgnx-extensions-details--id (substring drgnx-extensions-details--id 4))
                    (user-error "No extension here")))
-         (review (drgnx-extensions-trust-review name)) (entry (plist-get review :entry)))
+         (review (drgnx-extensions-trust-review name)))
     (unless (eq (plist-get review :state) 'ready) (user-error "No reviewed update of %s is ready" name))
     (let ((staged (drgnx-extensions-trust--staged)))
-      (unless (and (= (length staged) 1) (equal (car staged) entry))
+      (unless (and staged (equal staged (plist-get review :entries)))   ; every package the page showed, and only those
         (drgnx-extensions-trust--review-put name :state 'failed
                                             :error "the downloaded update changed since you reviewed it: Update again")
         (user-error "The downloaded update of %s changed since you reviewed it: Update again" name)))
@@ -437,7 +452,7 @@ ERROR), TEXT the output of `diff -ruN'.  Two processes (unpack, compare), never 
 (defun drgnx-extensions-trust-review-text (name)
   "The page's review section for NAME, or nil when none runs.  Cached text only."
   (when-let* ((r (drgnx-extensions-trust-review name)))
-    (let ((entry (cdr (plist-get r :entry))))
+    (let ((entries (or (plist-get r :entries) (and (plist-get r :entry) (list (plist-get r :entry))))))
       (concat (propertize "Review the update\n" 'face 'bold)
               (pcase (plist-get r :state)
                 ('staging "Downloading and checking the update…\n")
@@ -445,9 +460,10 @@ ERROR), TEXT the output of `diff -ruN'.  Two processes (unpack, compare), never 
                 ('applying "Installing the reviewed update…\n")
                 ('failed (propertize (format "%s\n" (drgnx-extensions-trust--line (plist-get r :error))) 'face 'drgnx-status-fail))
                 (_ ""))
-              (if entry (format "%s %s · sha256 %s%s\n" name (plist-get entry :version) (plist-get entry :sha256)
-                                (if (plist-get entry :verified) " · signed" ""))
-                "")
+              (mapconcat (lambda (e)
+                           (format "%s %s · sha256 %s%s\n" (car e) (plist-get (cdr e) :version) (plist-get (cdr e) :sha256)
+                                   (if (plist-get (cdr e) :verified) " · signed" "")))
+                         entries "")
               (or (plist-get r :diff) "")
               "\n"))))
 
