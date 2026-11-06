@@ -417,10 +417,11 @@ While `ui/look` runs under Glitnir, the Explorer, the panel, the right dock and 
 the numbers (logical pixels; the ring is a face and an opacity, never a colour). The gap is the frame's
 `right-divider-width` and `bottom-divider-width` (set in device pixels, so the gap is 6 logical pixels at any display
 scale, and set again when the scale changes); the frame's edge gets the same gap (`internal-border-width`, painted in
-the divider colour), so the outer cards have their corners, ring and shadow against a margin and not the frame's edge or the top line. So the ring and shadow have room and never cover text. The edge
-comes out of the window's own size: a window never grows by it, so it never asks the window manager for a new size
-once it is shown. A new window gets its gap as it is made (each window is asked whether Glitnir draws it), before
-anything is laid out in it, so a workbench restored into it keeps its split to the pixel. Turning the
+the divider colour), so the outer cards have their corners, ring and shadow against a margin and not the frame's edge or the top line. So the ring and shadow have room and never cover text. A window
+made while the module runs is born with the edge (`default-frame-alist`), so it never grows by it once it is shown:
+a shown window that asked the window manager for a bigger size could get the size it was made with back a moment
+later, after a restored workbench was laid out in it, and lose the difference from its split. (On a display scaled
+above 1 the gap is set again in device pixels when the window comes up, so the window still grows there once.) Turning the
 module off takes the cards away and gives the frame its divider widths back. An editor card keeps its corners while it scrolls. Without
 Glitnir nothing changes.
 

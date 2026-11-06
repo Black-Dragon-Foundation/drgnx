@@ -24,7 +24,7 @@
         (mapcar #'window-pixel-width (drgnx-groups-list)))"
   "What a restore must bring back, as the session sees it.  The window's own size is in it: both windows are made the
 same way, so a different one is a frame that resized itself after it was shown (the cards' edge once did, and the
-compositor's answer to the earlier size could put that back after the split was laid out, 8 px short).")
+compositor's answer to the size it was made with could put that back after the split was laid out, 8 px short).")
 
 (ert-deftest drgnx-persist/reopen-brings-the-split-the-file-and-the-folders-back ()
   (let* ((root (make-temp-file "drgnx-reopen" t))
