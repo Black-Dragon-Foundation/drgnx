@@ -395,9 +395,12 @@ refuses (`drgnx-settings-refused') before the theme changes."
 (defvar-local drgnx-look--gap-cookie nil "The cookie of the remap that puts this buffer on the gap surface.")
 
 (defun drgnx-look--gap-on ()
-  "Draw `default' as the gap surface in the current buffer (once)."
+  "Draw `default' as the gap surface in the current buffer (once).
+`face-remap-add-relative' puts the face into the remap entry in place, after its last `setq'; in the echo area's
+buffers that change did not reach redisplay (the empty part kept the editor colour), so the list is set again."
   (unless drgnx-look--gap-cookie
-    (setq drgnx-look--gap-cookie (face-remap-add-relative 'default 'drgnx-surface-gap))))
+    (setq drgnx-look--gap-cookie (face-remap-add-relative 'default 'drgnx-surface-gap))
+    (setq face-remapping-alist (copy-sequence face-remapping-alist))))
 
 (defun drgnx-look--gap-off ()
   "Take the gap surface off the current buffer."
@@ -408,18 +411,21 @@ refuses (`drgnx-settings-refused') before the theme changes."
       (setq face-remapping-alist (assq-delete-all 'default face-remapping-alist)))))
 
 (defun drgnx-look--minibuffer-gap ()
-  "On `minibuffer-setup-hook': the minibuffer is on the gap surface, like the echo area."
+  "On `minibuffer-setup-hook' and `minibuffer-inactive-mode-hook': the minibuffer is on the gap surface, like the
+echo area.  A prompt that ends puts its minibuffer in `minibuffer-inactive-mode', which clears the remap."
   (drgnx-look--gap-on))
 
 (defun drgnx-look-echo-area-on ()
   "The echo area and every minibuffer on the gap surface."
   (add-hook 'minibuffer-setup-hook #'drgnx-look--minibuffer-gap)
+  (add-hook 'minibuffer-inactive-mode-hook #'drgnx-look--minibuffer-gap)
   (dolist (name drgnx-look--echo-buffers)
     (when-let* ((b (get-buffer name))) (with-current-buffer b (drgnx-look--gap-on)))))
 
 (defun drgnx-look-echo-area-off ()
   "Undo `drgnx-look-echo-area-on'."
   (remove-hook 'minibuffer-setup-hook #'drgnx-look--minibuffer-gap)
+  (remove-hook 'minibuffer-inactive-mode-hook #'drgnx-look--minibuffer-gap)
   (dolist (b (buffer-list))
     (when (buffer-local-value 'drgnx-look--gap-cookie b) (with-current-buffer b (drgnx-look--gap-off)))))
 
