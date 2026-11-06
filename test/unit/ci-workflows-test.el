@@ -347,9 +347,11 @@
         (should (equal (sort (copy-sequence needs) #'string<)
                        (sort (cl-set-difference (drgnx-ci-test--job-ids yml) (cons "gate" (nth 2 spec)) :test #'equal)
                              #'string<)))
-        ;; besides the gate's, the only `needs:' is the path filter's (no job waits on another it does not take data
-        ;; from); a job's own key, not the gate action's `needs' input
-        (should (= 1 (length (drgnx-ci-test--matches "^    needs: \\(\\[\\)" yml))))
+        ;; besides the gate's, a job waits only for the path filter and the images it pulls (no job waits on another it
+        ;; does not take data from); a job's own key, not the gate action's `needs' input
+        (dolist (n (drgnx-ci-test--matches "^    needs: \\[\\([^]]*\\)\\]$"
+                                           (substring yml 0 (string-search "\n  gate:\n" yml))))
+          (should (equal (split-string n ", *" t) '("changes" "images"))))
         (dolist (n (drgnx-ci-test--matches "^    needs: \\([^[\n]*\\)$" yml))
           (should (equal n "changes")))
         ;; the gate lets a job be skipped only when the path filter skipped it (or on a joint round, below)
@@ -536,7 +538,7 @@
   ;; main moves to a pull request's head by fast-forward: every checkout of the workflows a pull request runs takes the
   ;; head (on other events the expression is empty: the event's own commit), the path filter diffs the head, and the
   ;; head must descend from main's tip
-  (dolist (name '("ci.yml" "macos.yml" "gui.yml" "runtime.yml" "drgnx-tiers.yml"))
+  (dolist (name '("ci.yml" "macos.yml" "gui.yml" "runtime.yml" "drgnx-tiers.yml" "images.yml"))
     (let ((yml (drgnx-ci-test--yml name)))
       (skip-unless yml)
       (should (= (length (drgnx-ci-test--matches "\\(uses: actions/checkout@\\)" yml))
@@ -689,18 +691,34 @@
     (drgnx-ci-test--has images "needs: bases" "BASE_FILE: ${{ matrix.base-file }}"
                         "--build-arg \"BASE=$base\"")))
 
-(ert-deftest drgnx-ci/images-are-published-only-by-main-and-manual-runs ()
-  ;; a pull request or a ci/* push never publishes: a run whose inputs have no image yet builds its own. A release's
-  ;; staging branch (rel/*, which main fast-forwards to) publishes too, so a round after one that changed an image's
-  ;; inputs pulls it; the moving `f45' name stays main's
-  (let ((images (drgnx-ci-test--yml "images.yml")))
+(ert-deftest drgnx-ci/a-round-builds-each-missing-image-once-before-its-jobs ()
+  ;; The tiers' and the runtime's images were built by every job of a round whose inputs changed (seven builds a run):
+  ;; images.yml published only on main. Now ci.yml and gui.yml call it first, for this repository's own pushes and
+  ;; pull requests (never a fork's: its token cannot push, and its jobs build their own), and the jobs that pull
+  ;; images wait for it whatever it did; the gate lets it be skipped only on a fork's pull request
+  (let ((images (drgnx-ci-test--yml "images.yml"))
+        (own "if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}")
+        (fork "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'images' || '' }}"))
     (skip-unless images)
-    (drgnx-ci-test--has images "push:\n    branches: [main, \"rel/*\"]\n" "workflow_dispatch:" "schedule:"
-                        "if [ \"$REF\" = refs/heads/main ]; then podman tag")
-    (should-not (string-search "pull_request" images))
-    (should-not (string-search "ci/**" images))
-    ;; a push or a manual run builds only the tags GHCR lacks; the weekly run rebuilds them all
-    (drgnx-ci-test--has images "if [ \"$EVENT\" != schedule ] && [ -n \"$(bash .github/ci/ghcr.sh ref \"$NAME\" \"$tag\")\" ]")))
+    (drgnx-ci-test--has images "on:\n  workflow_call:\n" "workflow_dispatch:" "schedule:"
+                        "group: images-${{ github.workflow }}-${{ github.ref }}")
+    (should-not (string-match-p "^  \\(push\\|pull_request\\):" images))
+    ;; a call or a manual run builds only the tags GHCR lacks; this workflow's own weekly run rebuilds them all (a
+    ;; caller's nightly does not); main moves the `f45' name to a tag an earlier round built
+    (drgnx-ci-test--has images
+                        "REBUILD: ${{ github.workflow == 'Test images' && github.event_name == 'schedule' }}"
+                        "if [ \"$REBUILD\" != true ] && have=\"$(bash .github/ci/ghcr.sh ref \"$NAME\" \"$tag\")\" && [ -n \"$have\" ]; then"
+                        "podman tag \"$have\" \"$image:f45\"" "if [ \"$moving\" = refs/heads/main ]; then podman tag")
+    (should-not (string-search "$EVENT" images))
+    (dolist (spec '(("ci.yml" "runtime" "tiers") ("gui.yml" "tiers")))
+      (let ((yml (drgnx-ci-test--yml (car spec))))
+        (drgnx-ci-test--has (drgnx-ci-test--job yml "images") own "packages: write"
+                            "uses: ./.github/workflows/images.yml")
+        (dolist (j (cdr spec))
+          (drgnx-ci-test--has (drgnx-ci-test--job yml j) "needs: [changes, images]" "if: ${{ !cancelled() && "))
+        (drgnx-ci-test--has (drgnx-ci-test--job yml "gate") fork)
+        ;; no other job may push: only the images job asks for packages: write
+        (should (= 1 (length (drgnx-ci-test--matches "\\(packages: write\\)" yml))))))))
 
 (ert-deftest drgnx-ci/an-image-tag-hashes-every-file-it-copies ()
   :tags '(:cond)
