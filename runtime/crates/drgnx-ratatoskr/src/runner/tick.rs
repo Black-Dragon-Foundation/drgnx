@@ -540,12 +540,7 @@ pub async fn start(
         }
     };
     // the session's steps are filed under its plan and project
-    let plan = l
-        .job
-        .plan
-        .as_deref()
-        .map(|p| format!("plan:{p}"))
-        .unwrap_or_else(|| format!("plan:{job}"));
+    let plan = super::plan_scope(&l.job);
     let project = {
         let dir = repo.clone();
         crate::clock::blocking(move || norn::project::resolve(&dir).map(|p| p.id))

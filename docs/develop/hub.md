@@ -2246,6 +2246,15 @@ one `notice` (a running task's refs are never removed). Restore and fork are par
 `timeline/get {scope, id, since?, rollup?}` answers the steps of a session, task, plan or project (500 a page, `next`
 continues) and their rollup: seconds by class (closed steps), cost by unit (never summed across units) and tokens.
 
+A step's `cost` is what the budget booked from the agent's cost readings (ACP's `usage_update`) during the turn the
+step closes, on the turn's last step, with the unit `usd-est`: an estimate, since a subscription agent reports an
+API-equivalent price. Both the step and the budget book the same delta, keyed by the agent's conversation, so a new
+conversation (a rotation, a fresh start, a rewind or fork) counts from its first reading in both and `budget/get`
+never disagrees with the steps. An agent that reports no cost leaves `cost` empty (never `0`). The rollup of a task
+or plan adds a `usd` line with what the gateway charged (the `spend` table), next to the estimate. A plan scope is
+`plan:<id>` for a graph plan, `plan:<path>` for a plan file and `plan:<job>` for a job with none; steps and budget of
+a job use the same key. Rows written before this keep their old key.
+
 ## The CDP broker
 
 A session with the browser drives a Chromium inside its own sandbox over CDP. The hub is the broker between the

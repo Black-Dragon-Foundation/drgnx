@@ -153,6 +153,46 @@ mod tests {
     use crate::read::steps::{Rollup, Scope, for_session, rollup};
     use crate::store::tests::{db7, tx_of};
 
+    /// Pure (D): the gateway's charge is exact dollars beside the agents' estimates.
+    #[test]
+    fn a_gateway_tasks_rollup_shows_exact_dollars() {
+        use crate::write::spend::{SpendRow, add_spend};
+        let mut c = db7();
+        let tx = tx_of(&mut c);
+        for (id, plan) in [
+            ("J", Some("plan:ab-1")),
+            ("K", Some("/p/x.md")),
+            ("L", None),
+        ] {
+            tx.sql()
+                .execute(
+                    "insert into job (id, title, plan, status, created) values (?1, 't', ?2, 'running', 1.0)",
+                    (id, plan),
+                )
+                .unwrap();
+        }
+        let row = |job: &str, task: &str, cost: f64| SpendRow {
+            job: Some(job.into()),
+            task: Some(task.into()),
+            provider: "openrouter".into(),
+            cost,
+            status: 200,
+            ..SpendRow::default()
+        };
+        add_spend(&tx, &row("J", "J#1", 1.5), 1.0).unwrap();
+        add_spend(&tx, &row("J", "J#1", 0.5), 2.0).unwrap();
+        add_spend(&tx, &row("J", "J#2", 4.0), 3.0).unwrap();
+        add_spend(&tx, &row("K", "K#1", 8.0), 4.0).unwrap();
+        add_spend(&tx, &row("L", "L#1", 16.0), 5.0).unwrap();
+        let t = rollup(tx.sql(), Scope::Task, "J#1").unwrap();
+        assert_eq!(t.cost_by_unit["usd"], 2.0);
+        let plan = |s: &str| rollup(tx.sql(), Scope::Plan, s).unwrap().cost_by_unit;
+        assert_eq!(plan("plan:ab-1")["usd"], 6.0);
+        assert_eq!(plan("plan:/p/x.md")["usd"], 8.0);
+        assert_eq!(plan("plan:L")["usd"], 16.0);
+        assert!(!plan("plan:none").contains_key("usd"));
+    }
+
     pub(crate) fn new(session: &str, task: &str, class: StepClass, start: f64) -> StepNew {
         StepNew {
             session: session.into(),

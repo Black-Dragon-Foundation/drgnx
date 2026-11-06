@@ -178,6 +178,15 @@ pub fn rollup(conn: &Tx, scope: Scope, id: &str) -> Result<Rollup, CoordError> {
         let (unit, cost) = row?;
         out.cost_by_unit.insert(unit, cost);
     }
+    // the gateway's own charge is exact dollars, kept beside the agents' estimates
+    let usd = match scope {
+        Scope::Task => super::spend::spend_sum(conn, None, Some(id), None)?.cost,
+        Scope::Plan => super::spend::plan_usd(conn, id)?,
+        _ => 0.0,
+    };
+    if usd > 0.0 {
+        out.cost_by_unit.insert("usd".into(), usd);
+    }
     Ok(out)
 }
 

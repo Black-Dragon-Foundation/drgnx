@@ -168,6 +168,8 @@ struct State {
     max_repeat: u32,
     /// Tokens the finished turns used.
     tokens: u64,
+    /// What the budget booked from the agent's cost readings since the last turn ended.
+    turn_cost: f64,
     /// Turns started by this hub process (the snapshot's `turns`).
     turns: u64,
     /// The steps begun so far (each step's key).
@@ -253,6 +255,7 @@ impl State {
             cmd_counts: HashMap::new(),
             max_repeat: 0,
             tokens: 0,
+            turn_cost: 0.0,
             turns: 0,
             steps_begun: 0,
             mcp_begun: Vec::new(),
@@ -269,6 +272,18 @@ impl State {
             exit: None,
             stderr: None,
         }
+    }
+
+    /// The budget booked DELTA of cost; the turn running owns it.
+    fn add_turn_cost(&mut self, delta: f64) {
+        self.turn_cost += delta;
+    }
+
+    /// What the turn that just ended cost: what the budget booked during it.  None when nothing was booked (an agent
+    /// that reports no cost, or a total that did not move), never 0.0.
+    fn take_turn_cost(&mut self) -> Option<f64> {
+        let cost = std::mem::take(&mut self.turn_cost);
+        (cost > 0.0).then_some(cost)
     }
 
     /// Close the step running (if any) at END, carrying USE.
@@ -2287,7 +2302,7 @@ async fn write_steps(
             cache_read: c.cache_read,
             cache_write: c.cache_write,
             cost: c.cost,
-            cost_unit: c.cost.map(|_| "usd".to_string()),
+            cost_unit: c.cost.map(|_| "usd-est".to_string()),
             snapshot: None,
             log_version: None,
         };
@@ -2351,7 +2366,7 @@ async fn write_steps(
             cache_read: Some(c.cache_read as u64),
             cache_write: Some(c.cache_write as u64),
             cost: c.cost,
-            cost_unit: None,
+            cost_unit: c.cost.map(|_| Unit::UsdEst),
             detail: c.detail.as_ref().map(crate::work::detail::wire),
         };
         // the files the step was in: the presence model (a shell step's command looked up off the async threads)
@@ -2947,14 +2962,15 @@ impl Session {
                             .and_then(Value::as_f64)
                             .filter(|_| v.get("sessionUpdate") == Some(&json!("usage_update")))
                         {
-                            let hits = self.budgets.spend_total_in(
+                            let booked = self.budgets.spend_total_in(
                                 &self.scope(),
                                 "usd-est",
                                 &self.acp.0,
                                 Unit::UsdEst,
                                 total,
                             );
-                            self.budgets.notify(hits);
+                            lock(&self.state).add_turn_cost(booked.delta);
+                            self.budgets.notify(booked.hits);
                         }
                         let (stepped, begun) = {
                             let mut st = lock(&self.state);
@@ -3720,6 +3736,7 @@ impl Session {
                     rest.insert("stop".into(), json!(format!("{:?}", o.stop)));
                     st.push(EntryType::Stop, rest);
                     used = turn_use(o);
+                    used.cost = st.take_turn_cost();
                     let tokens = (used.tokens_in + used.tokens_out) as f64;
                     st.tokens += tokens as u64;
                     self.spend(vec![(Unit::Tokens, tokens)]);
@@ -4278,7 +4295,9 @@ pub fn fuzz_apply(updates: &[Value]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::budget::Budgets;
     use runstav::methods::agents::SessionStatus;
+    use runstav::methods::timeline::BudgetScope;
 
     #[tokio::test]
     async fn rekey_runs_before_the_first_prompt() {
@@ -4373,6 +4392,75 @@ mod tests {
 
     fn upd(v: Value) -> Value {
         v
+    }
+
+    /// A cost reading TOTAL of conversation CONV, as `Session::handle` books it: the budget's delta is also the turn's.
+    fn read_cost(b: &Budgets, st: &mut State, conv: &str, total: f64) {
+        let scope: BudgetScope = serde_json::from_value(json!({"worker": "w1"})).unwrap();
+        let booked = b.spend_total_in(&scope, "usd-est", conv, Unit::UsdEst, total);
+        st.add_turn_cost(booked.delta);
+    }
+
+    fn spent_est(b: &Budgets) -> f64 {
+        let scope: BudgetScope = serde_json::from_value(json!({"worker": "w1"})).unwrap();
+        b.view(&scope)
+            .spent
+            .into_iter()
+            .find(|l| l.unit == Unit::UsdEst)
+            .map_or(0.0, |l| l.amount)
+    }
+
+    // test-pattern: D
+    #[test]
+    fn a_turns_cost_is_what_the_budget_booked_in_it() {
+        let (b, mut st) = (Budgets::default(), State::new());
+        read_cost(&b, &mut st, "c1", 0.10);
+        let first = st.take_turn_cost().unwrap();
+        assert!((first - 0.10).abs() < 1e-9, "{first}");
+        read_cost(&b, &mut st, "c1", 0.25);
+        let second = st.take_turn_cost().unwrap();
+        assert!((second - 0.15).abs() < 1e-9, "{second}");
+    }
+
+    // test-pattern: D
+    #[test]
+    fn no_cost_reported_leaves_the_step_unpriced() {
+        let mut st = State::new();
+        st.apply(&upd(
+            json!({"sessionUpdate": "usage_update", "used": 10, "size": 100}),
+        ));
+        assert_eq!(st.take_turn_cost(), None);
+        let b = Budgets::default();
+        read_cost(&b, &mut st, "c1", 0.10);
+        st.take_turn_cost();
+        // a turn in which the total did not move has no cost, not 0.0
+        read_cost(&b, &mut st, "c1", 0.10);
+        assert_eq!(st.take_turn_cost(), None);
+    }
+
+    // test-pattern: D
+    #[test]
+    fn the_step_and_the_budget_book_the_same_delta() {
+        let (b, mut st) = (Budgets::default(), State::new());
+        read_cost(&b, &mut st, "a", 0.10);
+        let one = st.take_turn_cost().unwrap();
+        // a new conversation starts at its own first reading, even above the old total
+        read_cost(&b, &mut st, "b", 0.30);
+        let two = st.take_turn_cost().unwrap();
+        assert!((two - 0.30).abs() < 1e-9, "{two}");
+        assert!((spent_est(&b) - (one + two)).abs() < 1e-9);
+    }
+
+    // test-pattern: D
+    #[test]
+    fn a_fork_that_reports_its_parents_total_is_booked_alike() {
+        let (b, mut st) = (Budgets::default(), State::new());
+        read_cost(&b, &mut st, "a", 0.10);
+        let one = st.take_turn_cost().unwrap();
+        read_cost(&b, &mut st, "b", 0.15);
+        let two = st.take_turn_cost().unwrap();
+        assert!((two - 0.15).abs() < 1e-9, "{two}");
+        assert!((spent_est(&b) - (one + two)).abs() < 1e-9);
     }
 
     #[test]
@@ -4544,6 +4632,68 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    // test-pattern: D
+    #[tokio::test]
+    async fn the_step_event_carries_the_unit() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = crate::coord::Writer {
+            db: norn::store::CoordDb::spawn(dir.path().join("work.db")),
+            signals: Arc::new(crate::coord::Signals::default()),
+        };
+        let (bus, mut seen) = tokio::sync::broadcast::channel(16);
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let ctx = StepCtx {
+            session: "a1".into(),
+            task: Some("task:7".into()),
+            agent: "mock".into(),
+            provider: None,
+            cwd: PathBuf::new(),
+        };
+        let sink = StepSink {
+            writer: writer.clone(),
+            editors: Arc::new(crate::settings::agents::Editors::default()),
+            bus,
+            snap: None,
+            scopes: None,
+            tools: None,
+            asks: None,
+            stamps: None,
+            presence: None,
+            map: None,
+            traces: None,
+        };
+        tokio::spawn(write_steps(rx, sink, ctx));
+        for cost in [Some(0.15), None] {
+            tx.send(ClosedStep {
+                open: OpenStep {
+                    class: StepClass::Think,
+                    start: 10.0,
+                    tool: None,
+                    tool_kind: None,
+                    tool_id: None,
+                    message_id: None,
+                    key: 0,
+                    mcp: false,
+                    parent_tool: None,
+                },
+                end: 11.0,
+                turn_id: None,
+                tokens_in: 1,
+                tokens_out: 1,
+                cache_read: 0,
+                cache_write: 0,
+                cost,
+                detail: None,
+                command: None,
+            })
+            .unwrap();
+        }
+        let priced = seen.recv().await.unwrap().step;
+        let unpriced = seen.recv().await.unwrap().step;
+        assert_eq!(priced.cost_unit, Some(Unit::UsdEst));
+        assert_eq!(unpriced.cost_unit, None);
     }
 
     /// Three steps of a turn through the writer: a think, an edit tool call, the turn's last think (with the turn id).

@@ -258,11 +258,7 @@ pub async fn pause_job(front: &Front, job: &str, title: &str, data: Value) -> Op
 /// The USD budget of JOB's plan scope: USD in all.  BIND books the gateway's spend of the job under it (the approval
 /// does; a resume keeps what the sessions bound).
 pub(crate) fn set_budget(front: &Front, job: &Job, usd: f64, bind: bool) {
-    let plan = job
-        .plan
-        .as_deref()
-        .map(|p| format!("plan:{p}"))
-        .unwrap_or_else(|| format!("plan:{}", job.id));
+    let plan = super::plan_scope(job);
     let scope = BudgetScope::Plan(Bounded(plan));
     let b = &front.core.budgets;
     b.enroll(&scope);
