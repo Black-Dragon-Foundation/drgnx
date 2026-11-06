@@ -13935,7 +13935,8 @@
               "settings.change",
               "user.private",
               "user.emacs",
-              "chat.project-read"
+              "chat.project-read",
+              "chat.project-edit"
             ],
             "type": "string"
           },
@@ -14163,7 +14164,8 @@
               "settings.change",
               "user.private",
               "user.emacs",
-              "chat.project-read"
+              "chat.project-read",
+              "chat.project-edit"
             ],
             "type": "string"
           },

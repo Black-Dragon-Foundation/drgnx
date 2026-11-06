@@ -1082,6 +1082,30 @@ for every OpenRouter route, saved in settings.el; it applies through drgnx's gat
                           :map '(drgnx-agent-settings . drgnx-agent-settings-mode-map)
                           :when #'drgnx-agent-settings--on-page-p)))
 
+;;;; The Pair row of the matrix
+
+(defconst drgnx-agent-settings-pair-row
+  '(chat.project-edit "Pair: a chat edits your checkout"
+                      "A chat in your project edits your own files live, through the editor (pair mode).  Its own edit \
+tools and commands still cannot write the checkout; the chat's code.edit stays never.")
+  "The matrix row behind pair mode: (ACTION TITLE EXPLANATION).")
+
+(defun drgnx-agent-settings-project-edit-explain (verdict preset &optional column)
+  "What VERDICT of `chat.project-edit' means for pair mode, under PRESET.
+COLUMN is the matrix column that set it, (:agent NAME), (:provider NAME) or (:role ROLE); nil: the preset did."
+  (pcase verdict
+    ('never
+     (concat "chat.project-edit is never: "
+             (pcase column
+               (`(:agent ,name) (format "the column of agent %s says so" name))
+               (`(:provider ,name) (format "the column of provider %s says so" name))
+               (`(:role ,role) (format "the %s column says so" role))
+               (_ (format "the %s preset says so" (capitalize (symbol-name preset)))))
+             "; the Pair toggle is off and cannot be turned on"))
+    ('ask "chat.project-edit is ask: you may turn Pair on for a chat in your project, and off again at any time")
+    ('allow "chat.project-edit is allow: chats in your project start paired; you may turn Pair off for one")
+    (_ (format "chat.project-edit: %s" verdict))))
+
 (drgnx-module-define 'tools/agent-settings
                      :doc "Agents: Settings — routes, MCP servers, hooks and skills of Claude Code, Codex, Gemini and Kimi Code"
                      :stage 'idle

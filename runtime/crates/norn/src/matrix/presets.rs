@@ -79,6 +79,11 @@ fn row(a: Action, p: Preset) -> [Cell; 3] {
         (UserEmacs, Cautious) => [NEVER, NEVER, NEVER],
         (UserEmacs, _) => [ASK, NEVER, NEVER],
         (ChatProjectRead, _) => [NEVER, NEVER, ASK],
+        // a chat edits your checkout through the pair door: ask = the Pair toggle is allowed, allow = paired from
+        // the start; the chat's code.edit stays never
+        (ChatProjectEdit, Cautious) => [NEVER, NEVER, NEVER],
+        (ChatProjectEdit, Balanced) => [NEVER, NEVER, ASK],
+        (ChatProjectEdit, Autonomous) => [NEVER, NEVER, ALLOW],
     }
 }
 

@@ -93,6 +93,7 @@ pub mod log;
 pub mod machines_cli;
 pub mod manager;
 pub mod matrix_gate;
+pub mod pair;
 pub mod peer;
 pub mod records;
 pub mod runner;
