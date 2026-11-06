@@ -3,7 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::history::{HistRow, expected};
+use crate::history::HistRow;
+use crate::learn::{Learned, Warmth};
 use crate::model::{Job, JobTrust, Priority, RunnerTrust, WaitReason};
 
 /// A runner's state as the hub knows it.
@@ -234,15 +235,26 @@ pub fn filter(
     check(job, c, send, machines_cell_allows, true).map_err(|(_, r)| r)
 }
 
-/// When `job` would finish on `c`: its wait, its start, the transfer (`missing_bytes / link_bps`, 0 on the local
-/// machine) and the expected time from the history on `c`, else other machines' × `c.speed`, else 10 minutes. `job`
-/// and `now` aren't read by F1's estimate.
+/// When `job` would finish on `c` by the static rule: its wait, its start, the transfer (`missing_bytes / link_bps`, 0
+/// on the local machine) and the expected time from the history on `c`, else other machines' × `c.speed`, else 10
+/// minutes. [`finish_with`] with nothing learned and no warmth known. `job` and `now` aren't read.
 pub fn finish(job: &Job, c: &Candidate, now: u64) -> FinishEstimate {
+    finish_with(job, c, now, &Learned::default(), None)
+}
+
+/// When `job` would finish on `c`, with what placement has learned: the transfer at the learned link rate (else the
+/// measured `c.link_bps`), and the expected time from [`Learned::expected_for`] (warm or cold when `warmth` is
+/// known, learned speed ratios, else the static rule). `job` and `now` aren't read.
+pub fn finish_with(
+    job: &Job,
+    c: &Candidate,
+    now: u64,
+    learned: &Learned,
+    warmth: Option<Warmth>,
+) -> FinishEstimate {
     let _ = (job, now);
-    let (own, other): (Vec<HistRow>, Vec<HistRow>) =
-        c.history.iter().cloned().partition(|r| r.machine == c.name);
-    let expected_s = expected(&own, &other, c.speed, None).minutes * 60.0;
-    let transfer_s = match c.link_bps {
+    let expected_s = learned.expected_for(c, warmth).minutes * 60.0;
+    let transfer_s = match learned.link(&c.name).or(c.link_bps) {
         Some(bps) if !c.local && bps > 0.0 => c.missing_bytes as f64 / bps,
         _ => 0.0,
     };
@@ -282,8 +294,21 @@ pub fn cloud_counts(
 
 /// The smallest estimated finish among the candidates that pass [`filter`] (and, for cloud machines,
 /// [`cloud_counts`]); ties go to the local machine, then `mine`, `my-cloud`, `shared`. With none, the job waits with
-/// the reason of the candidate that came closest (the latest check it failed).
+/// the reason of the candidate that came closest (the latest check it failed). The static rule: [`pick_with`] with
+/// nothing learned and no warmth known.
 pub fn pick(job: &Job, cands: &[Candidate], ctx: &PlaceCtx) -> Pick {
+    pick_with(job, cands, ctx, &Learned::default(), &|_| None)
+}
+
+/// [`pick`] with what placement has learned: each estimate is [`finish_with`] with `warmth(c)`, and on an equal
+/// estimate and tie order a warm start wins before the name. The filters and the cloud's terms are [`pick`]'s.
+pub fn pick_with(
+    job: &Job,
+    cands: &[Candidate],
+    ctx: &PlaceCtx,
+    learned: &Learned,
+    warmth: &dyn Fn(&Candidate) -> Option<Warmth>,
+) -> Pick {
     // The refusal that came closest: the latest stage, the local machine first on a tie, then the given order.
     let mut closest: Option<(u8, bool, WaitReason)> = None;
     let mut refuse = |stage: u8, local: bool, r: WaitReason| {
@@ -294,21 +319,26 @@ pub fn pick(job: &Job, cands: &[Candidate], ctx: &PlaceCtx) -> Pick {
             closest = Some((stage, local, r));
         }
     };
-    let mut passing: Vec<(&Candidate, f64)> = Vec::new();
+    // (candidate, estimate, cold: a warm start sorts first)
+    let mut passing: Vec<(&Candidate, f64, bool)> = Vec::new();
     for c in cands {
         match check(job, c, ctx.send, ctx.machines_cell_allows, true) {
-            Ok(()) => passing.push((c, finish(job, c, ctx.now).total_s)),
+            Ok(()) => {
+                let w = warmth(c);
+                let total = finish_with(job, c, ctx.now, learned, w).total_s;
+                passing.push((c, total, !w.is_some_and(Warmth::warm)));
+            }
             Err((stage, r)) => refuse(stage, c.local, r),
         }
     }
     let best_own_s = passing
         .iter()
-        .filter(|(c, _)| c.cloud.is_none())
-        .map(|&(_, t)| t)
+        .filter(|(c, _, _)| c.cloud.is_none())
+        .map(|&(_, t, _)| t)
         .fold(f64::INFINITY, f64::min);
     let is_gate = job.spec.gate.is_some();
-    let mut best: Option<(&Candidate, f64)> = None;
-    for (c, total) in passing {
+    let mut best: Option<(&Candidate, f64, bool)> = None;
+    for (c, total, cold) in passing {
         if let Some(terms) = &c.cloud {
             let counts = cloud_counts(
                 ctx.eff,
@@ -326,20 +356,21 @@ pub fn pick(job: &Job, cands: &[Candidate], ctx: &PlaceCtx) -> Pick {
                 continue;
             }
         }
-        let better = best.is_none_or(|(b, bt)| {
+        let better = best.is_none_or(|(b, bt, b_cold)| {
             total
                 .total_cmp(&bt)
                 .then(tie_rank(c).cmp(&tie_rank(b)))
+                .then(cold.cmp(&b_cold))
                 .then(c.name.cmp(&b.name))
                 .is_lt()
         });
         if better {
-            best = Some((c, total));
+            best = Some((c, total, cold));
         }
     }
     match best {
-        Some((c, _)) if c.local => Pick::Local,
-        Some((c, _)) => Pick::Runner(c.name.clone()),
+        Some((c, _, _)) if c.local => Pick::Local,
+        Some((c, _, _)) => Pick::Runner(c.name.clone()),
         None => Pick::Wait(closest.map_or(WaitReason::NoRunner, |(_, _, r)| r)),
     }
 }

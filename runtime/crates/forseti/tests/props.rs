@@ -557,6 +557,353 @@ proptest! {
     }
 }
 
+/// Generated machines for backfill: per machine its available memory and running jobs `(reserve, current, end in s,
+/// CPU in half cores)`; and a queue of `(priority, memory, CPU in half cores, expected s)`.
+type Fleet = Vec<(u64, Vec<(u64, u64, u64, u8)>)>;
+type Queue = Vec<(u8, u64, u8, u32)>;
+
+const NOW: u64 = 1_000_000;
+
+fn fleet() -> impl Strategy<Value = Fleet> {
+    prop::collection::vec(
+        (
+            2000u64..40_000,
+            prop::collection::vec((0u64..8000, 0u64..8000, 0u64..3600, 0u8..8), 0..5),
+        ),
+        1..4,
+    )
+}
+
+fn queue() -> impl Strategy<Value = Queue> {
+    prop::collection::vec((1u8..=5, 256u64..20_000, 1u8..16, 0u32..7200), 1..10)
+}
+
+struct Built2 {
+    machines: Vec<MachineState>,
+    ends: HashMap<JobId, u64>,
+    order: Vec<(JobId, Need)>,
+    eff: HashMap<JobId, Priority>,
+    expected_s: HashMap<JobId, f64>,
+}
+
+fn limits16() -> Limits {
+    Limits::for_profile(Profile::Dedicated, 65536, 16)
+}
+
+fn run_job(id: JobId, reserve: u64, current: u64, cpu: f64, minutes: f64) -> RunningJob {
+    RunningJob {
+        id,
+        priority: Priority::P4,
+        started: NOW - 1000,
+        reserve_mib: reserve,
+        current_mib: current,
+        cores: 1,
+        expected: Expected {
+            minutes,
+            cpu,
+            mem_p95_mib: Some(reserve),
+        },
+        restartable: true,
+        evicted_once: false,
+        long_build: false,
+    }
+}
+
+fn build_fleet(f: &Fleet, q: &Queue) -> Built2 {
+    let mut ends = HashMap::new();
+    let machines = f
+        .iter()
+        .enumerate()
+        .map(|(i, (avail, running))| {
+            let mut m = machine(Profile::Dedicated, *avail, NOW);
+            m.name = format!("m{i}");
+            m.running = running
+                .iter()
+                .enumerate()
+                .map(|(k, &(reserve, current, end, cpu))| {
+                    let id = JobId(format!("m{i}r{k}"));
+                    ends.insert(id.clone(), NOW + end);
+                    run_job(id, reserve, current, f64::from(cpu) / 2.0, 10.0)
+                })
+                .collect();
+            m
+        })
+        .collect();
+    let mut eff = HashMap::new();
+    let mut expected_s = HashMap::new();
+    let order = q
+        .iter()
+        .enumerate()
+        .map(|(i, &(p, mem, cpu, secs))| {
+            let id = JobId(format!("q{i}"));
+            eff.insert(id.clone(), Priority::from_number(p));
+            expected_s.insert(id.clone(), f64::from(secs));
+            (
+                id,
+                Need {
+                    mem_mib: mem,
+                    cpu: f64::from(cpu) / 2.0,
+                },
+            )
+        })
+        .collect();
+    Built2 {
+        machines,
+        ends,
+        order,
+        eff,
+        expected_s,
+    }
+}
+
+fn with_budgets(ms: &[MachineState]) -> Vec<(&MachineState, Budget)> {
+    ms.iter().map(|m| (m, budget(m, &limits16()))).collect()
+}
+
+proptest! {
+    /// Only the first job of the highest waiting priority reserves, so a reservation never holds a job of a higher
+    /// priority than its own: a P1–P3 job is never held by P4 or P5 work. The same inputs, in any machine order,
+    /// give the same reservation.
+    #[test]
+    fn no_priority_le_3_job_delayed_by_a_reservation(f in fleet(), q in queue()) {
+        let b = build_fleet(&f, &q);
+        let ms = with_budgets(&b.machines);
+        let r = reservation(&b.order, &b.eff, &ms, &b.ends);
+        let mut reversed = ms.clone();
+        reversed.reverse();
+        prop_assert_eq!(&reservation(&b.order, &b.eff, &reversed, &b.ends), &r);
+        prop_assert_eq!(&reservation(&b.order, &b.eff, &ms, &b.ends), &r);
+        let highest = b.order.iter().map(|(j, _)| b.eff[j]).max().unwrap();
+        let head = b.order.iter().find(|(j, _)| b.eff[j] == highest).unwrap();
+        let Some(r) = r else {
+            // No reservation only when the head fits nowhere, even once every running job has ended.
+            for (m, now_b) in &ms {
+                let last = budget_at(m, now_b, &b.ends, u64::MAX);
+                prop_assert!(last.mem_mib < head.1.mem_mib as i64 || last.cpu < head.1.cpu, "{} fits on {}", head.0, m.name);
+            }
+            return Ok(());
+        };
+        prop_assert_eq!(&r.job, &head.0);
+        prop_assert_eq!(r.priority, highest);
+        for (j, _) in &b.order {
+            let p = b.eff[j];
+            for m in &b.machines {
+                let held = !backfill_ok(j, p, &m.name, b.expected_s[j], &r, NOW);
+                prop_assert!(!held || p <= r.priority, "{j} ({p:?}) held by {:?}", r);
+                prop_assert!(!held || p.number() > 3 || r.priority.number() <= 3);
+            }
+        }
+    }
+
+    /// What backfill starts on the reserved machine never moves the head's start: start every job it allows that
+    /// fits now, and the head's reservation is unchanged.
+    #[test]
+    fn backfill_never_delays_the_heads_start(f in fleet(), q in queue()) {
+        let mut b = build_fleet(&f, &q);
+        let Some(r) = reservation(&b.order, &b.eff, &with_budgets(&b.machines), &b.ends) else {
+            return Ok(());
+        };
+        let at = b.machines.iter().position(|m| m.name == r.machine).unwrap();
+        let mut started = Vec::new();
+        for (j, need) in &b.order {
+            let secs = b.expected_s[j];
+            let room = budget(&b.machines[at], &limits16());
+            let fits = room.mem_mib >= need.mem_mib as i64 && room.cpu >= need.cpu;
+            if *j == r.job || !fits || !backfill_ok(j, b.eff[j], &r.machine, secs, &r, NOW) {
+                continue;
+            }
+            let mut rj = run_job(j.clone(), need.mem_mib, 0, need.cpu, secs / 60.0);
+            rj.started = NOW;
+            b.machines[at].running.push(rj);
+            b.ends.insert(j.clone(), expected_end(NOW, secs));
+            started.push(j.clone());
+        }
+        let left: Vec<(JobId, Need)> =
+            b.order.iter().filter(|(j, _)| !started.contains(j)).cloned().collect();
+        let again = reservation(&left, &b.eff, &with_budgets(&b.machines), &b.ends);
+        prop_assert_eq!(again, Some(r), "after backfilling {:?}", started);
+    }
+}
+
+fn cand(name: String, local: bool, trust: RunnerTrust) -> Candidate {
+    Candidate {
+        name,
+        local,
+        trust,
+        keys_allowed: vec![],
+        features: vec![],
+        state: RunnerState::Ready,
+        accept: Accept::All,
+        link_bps: None,
+        missing_bytes: 0,
+        start_s: 0.0,
+        wait_s: 0.0,
+        speed: 1.0,
+        history: vec![],
+        cloud: None,
+    }
+}
+
+fn hist(machine: &str, wall_s: f64, warm: bool, at: u64, disturbed: bool) -> HistRow {
+    HistRow {
+        key: "k".into(),
+        machine: machine.into(),
+        grant: Grant {
+            cores: 1,
+            mem_cap_mib: 1024,
+            reserve_mib: 1024,
+        },
+        wall_s,
+        cpu_s: wall_s,
+        mem_peak_mib: 512,
+        verdict: Verdict::Pass,
+        disturbed,
+        at,
+        warm,
+    }
+}
+
+/// A generated runner: trust, allowed keys, wait, accepts heavy only, cloud terms (none, or whether the projection
+/// fits), benched, missing bytes, a measured link rate.
+type GenRunner = (u8, u8, u32, bool, Option<bool>, bool, u32, Option<u32>);
+
+fn gen_runner() -> impl Strategy<Value = GenRunner> {
+    (
+        0u8..3,
+        0u8..8,
+        0u32..3600,
+        prop::bool::weighted(0.2),
+        prop::option::weighted(0.3, any::<bool>()),
+        prop::bool::weighted(0.15),
+        0u32..2_000_000_000,
+        prop::option::of(1u32..2_000_000_000),
+    )
+}
+
+proptest! {
+    /// Learning changes estimates only: the trust filter, the pin, the modes, the runner's state and the cloud's
+    /// terms hold whatever was learned. With nothing learned and no warmth known it is the static rule, with no
+    /// history every estimate is the default, and the same inputs give the same pick whatever order they were
+    /// learned in.
+    #[test]
+    fn rules_still_hold_under_learning(
+        trust in 0u8..3,
+        key_mask in 0u8..8,
+        local_only in prop::bool::weighted(0.2),
+        heavy in any::<bool>(),
+        eff in 1u8..=5,
+        send in 0u8..3,
+        cell in any::<bool>(),
+        has_local in any::<bool>(),
+        runners in prop::collection::vec(gen_runner(), 0..5),
+        rows in prop::collection::vec((0usize..6, 1u32..3600, any::<bool>(), 0u64..100, prop::bool::weighted(0.2)), 0..12),
+        links in prop::collection::vec((0usize..6, 1u32..2_000_000_000), 0..6),
+        speeds in prop::collection::vec((0usize..6, 0usize..6, 1u32..60), 0..8),
+        warm_bits in 0u8..64,
+    ) {
+        let mut j = job("j", Priority::from_number(eff), 0);
+        j.spec.trust = [JobTrust::Public, JobTrust::Private, JobTrust::PrivateKeys][usize::from(trust)];
+        j.spec.keys = pick_keys(key_mask);
+        j.spec.local_only = local_only;
+        j.spec.weight = if heavy { Weight::Heavy } else { Weight::Light };
+        let send = [forseti::place::Send::All, forseti::place::Send::Heavy, forseti::place::Send::None][usize::from(send)];
+        let mut cands = Vec::new();
+        if has_local {
+            cands.push(cand("local".into(), true, RunnerTrust::Mine));
+        }
+        for (i, &(t, allowed, wait, accept_heavy, cloud, benched, missing, link)) in runners.iter().enumerate() {
+            let mut c = cand(format!("r{i}"), false, runner_trust(t));
+            c.keys_allowed = pick_keys(allowed);
+            c.wait_s = f64::from(wait);
+            c.accept = if accept_heavy { Accept::Heavy } else { Accept::All };
+            c.cloud = cloud.map(|projection_ok| CloudTerms { projection_ok, cap: "cap".into() });
+            if benched {
+                c.state = RunnerState::Benched("disk".into());
+            }
+            c.missing_bytes = u64::from(missing);
+            c.link_bps = link.map(f64::from);
+            c.speed = 1.0 + (i as f64) / 4.0;
+            cands.push(c);
+        }
+        let names: Vec<String> = cands.iter().map(|c| c.name.clone()).chain(["gone".to_string()]).collect();
+        let name = |i: usize| names[i % names.len()].clone();
+        let history: Vec<HistRow> = rows
+            .iter()
+            .map(|&(m, wall, warm, at, disturbed)| hist(&name(m), f64::from(wall), warm, at, disturbed))
+            .collect();
+        for c in &mut cands {
+            c.history = history.clone();
+        }
+        // Each key learned once (the last value wins), then inserted forwards and backwards.
+        let link_vals: std::collections::BTreeMap<String, f64> =
+            links.iter().map(|&(i, bps)| (name(i), f64::from(bps))).collect();
+        let speed_vals: std::collections::BTreeMap<(String, String), f64> =
+            speeds.iter().map(|&(a, b, r)| ((name(a), name(b)), f64::from(r) / 10.0)).collect();
+        let learn = |rev: bool| {
+            let mut l = Learned::default();
+            let mut ls: Vec<_> = link_vals.iter().collect();
+            let mut ss: Vec<_> = speed_vals.iter().collect();
+            if rev {
+                ls.reverse();
+                ss.reverse();
+            }
+            for (k, v) in ls {
+                l.link_bps.insert(k.clone(), Ewma { value: Some(*v) });
+            }
+            for (k, v) in ss {
+                l.speed.insert(k.clone(), Ewma { value: Some(*v) });
+            }
+            l
+        };
+        let learned = learn(false);
+        let warm_of = |c: &Candidate| {
+            let i = names.iter().position(|n| *n == c.name).unwrap();
+            Some(Warmth { slot_near: warm_bits & (1 << i) != 0, images_present: warm_bits & (1 << ((i + 3) % 6)) != 0 })
+        };
+        let ctx = PlaceCtx {
+            eff: Priority::from_number(eff),
+            send,
+            machines_cell_allows: cell,
+            gates_allowed: false,
+            cloud_after_s: 120.0,
+            now: 0,
+            commits_not_on_origin: 0,
+        };
+        let got = pick_with(&j, &cands, &ctx, &learned, &warm_of);
+        prop_assert_eq!(&pick_with(&j, &cands, &ctx, &learn(true), &warm_of), &got);
+        prop_assert_eq!(&pick_with(&j, &cands, &ctx, &learned, &warm_of), &got);
+        let total = |c: &Candidate| finish_with(&j, c, 0, &learned, warm_of(c)).total_s;
+        let passes = |c: &Candidate| filter(&j, c, send, cell).is_ok();
+        let best_own = cands
+            .iter()
+            .filter(|c| c.cloud.is_none() && passes(c))
+            .map(total)
+            .fold(f64::INFINITY, f64::min);
+        match &got {
+            Pick::Runner(n) => {
+                let c = cands.iter().find(|c| c.name == *n).unwrap();
+                prop_assert!(!c.local && passes(c));
+                prop_assert!(trust_ok(j.spec.trust, &j.spec.keys, c.trust, &c.keys_allowed));
+                prop_assert!(!j.spec.local_only);
+                if let Some(terms) = &c.cloud {
+                    prop_assert!(terms.projection_ok && eff <= 3);
+                    prop_assert!(best_own - total(c) >= 120.0);
+                }
+            }
+            Pick::Local => prop_assert!(has_local && passes(&cands[0])),
+            Pick::Wait(_) => prop_assert!(best_own.is_infinite(), "an own machine passed but the job waits"),
+        }
+        // Nothing learned and no warmth known: exactly the static rule.
+        prop_assert_eq!(pick_with(&j, &cands, &ctx, &Learned::default(), &|_| None), pick(&j, &cands, &ctx));
+        // No history: every estimate is the default, whatever was learned.
+        for c in &cands {
+            let mut bare = c.clone();
+            bare.history.clear();
+            prop_assert_eq!(finish_with(&j, &bare, 0, &learned, warm_of(c)).expected_s, history::DEFAULT_MINUTES * 60.0);
+        }
+    }
+}
+
 proptest! {
     /// Within one priority every project's first job comes within a bound set by the use gaps and weights alone,
     /// however many jobs the other projects queue; each project keeps its own order and nothing is lost.
