@@ -4,7 +4,9 @@
 # runner jobs (.github/ci/bwrap, one per architecture). Each is tagged with test/container/image-tag.sh: a hash of the
 # Containerfile and every file it copies. CI looks the tag of its checkout up (.github/ci/ghcr.sh ref) and pulls that
 # digest, else builds the image itself. Published only by `main` (a push that changes their inputs, the weekly
-# rebuild) and this repository's manual runs, never by a pull request or a ci/* push: a run whose inputs have no image
+# rebuild), a release's staging branch `rel/*` (the line main fast-forwards to, pushed only by the maintainer: its
+# images are main's next ones, so the staging pull request's later rounds pull them instead of installing everything)
+# and this repository's manual runs, never by a pull request or a ci/* push: a run whose inputs have no image
 # yet builds its own and pushes nothing. A push or a manual run builds only the tags GHCR lacks; the weekly run
 # rebuilds every one, so distribution updates arrive (each run pins the digest it looked up). No gate: it makes a
 # cache, not a verdict (a job without its image builds it), and its paths filter means most pushes never run it.
@@ -13,7 +15,7 @@ name: Test images
 
 on:
   push:
-    branches: [main]
+    branches: [main, "rel/*"]
     paths: ["test/container/**", ".github/ci/bwrap/**", ".github/workflows/images.yml"]
   schedule:
     - cron: "41 2 * * 1"

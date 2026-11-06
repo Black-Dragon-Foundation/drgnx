@@ -101,15 +101,16 @@ jobs:
     permissions:
       contents: read
       packages: read
-    # the prebuilt image (Fedora 45 with rust-packages.sh and Nidhogg), else plain Fedora 45 and the steps install them
-    container:
-      image: ${{ needs.images.outputs.rust || 'registry.fedoraproject.org/fedora:45' }}
-      credentials:
-        username: ${{ needs.images.outputs.rust && github.actor || '' }}
-        password: ${{ needs.images.outputs.rust && github.token || '' }}
-      # a real PID 1 that reaps orphans: draugr's reap tests check a killed group is gone, and an unreaped zombie
-      # still answers kill(-pgid, 0) (the same reason ctr.sh runs podman with --init)
-      options: --init
+    # the prebuilt image (Fedora 45 with rust-packages.sh and Nidhogg) with a token to pull it, else plain Fedora 45
+    # and the steps install them. One expression for the whole container: GitHub refuses a job whose `credentials`
+    # come out empty ("Unexpected value ''") before any step runs, so the fallback names none.
+    # --init: a real PID 1 that reaps orphans: draugr's reap tests check a killed group is gone, and an unreaped zombie
+    # still answers kill(-pgid, 0) (the same reason ctr.sh runs podman with --init)
+    container: >-
+      ${{ needs.images.outputs.rust
+      && fromJSON(format('{{"image":"{0}","options":"--init","credentials":{{"username":"{1}","password":"{2}"}}}}',
+      needs.images.outputs.rust, github.actor, github.token))
+      || fromJSON('{"image":"registry.fedoraproject.org/fedora:45","options":"--init"}') }}
     timeout-minutes: 45
     defaults:
       run:

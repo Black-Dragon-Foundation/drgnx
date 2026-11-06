@@ -642,8 +642,28 @@
                         "ghcr.sh ref drgnx-bwrap \"$(bash test/container/image-tag.sh .github/ci/bwrap/Containerfile)-$ARCH\"")
     (should-not (string-search "needs: images" (drgnx-ci-test--job rt "escape-host")))
     (drgnx-ci-test--has (drgnx-ci-test--job rt "linux")
-                        "image: ${{ needs.images.outputs.rust || 'registry.fedoraproject.org/fedora:45' }}"
+                        "|| fromJSON('{\"image\":\"registry.fedoraproject.org/fedora:45\",\"options\":\"--init\"}') }}"
                         "run: sh test/container/rust-packages.sh" "if: ${{ env.PREBUILT == '' }}")))
+
+(ert-deftest drgnx-ci/a-job-container-names-credentials-only-with-its-image ()
+  ;; GitHub refuses a job whose container `credentials' come out empty ("Unexpected value ''") before any step runs:
+  ;; the Rust job's fallback to plain Fedora (no prebuilt image for its inputs yet) never started. So no workflow
+  ;; has a `credentials:' block, and the Rust job's container is one expression: the prebuilt image with a token to
+  ;; pull it, else plain Fedora with none
+  (dolist (f '("ci.yml" "macos.yml" "gui.yml" "drgnx-tiers.yml" "tty.yml" "images.yml" "bootstrap.yml" "runtime.yml"))
+    (let ((yml (drgnx-ci-test--yml f)))
+      (skip-unless yml)
+      (should-not (string-match-p "^ +credentials:" yml))))
+  (let* ((linux (drgnx-ci-test--job (drgnx-ci-test--yml "runtime.yml") "linux"))
+         (start (string-search "\n    container: >-\n      ${{ needs.images.outputs.rust\n" linux))
+         (end (and start (string-search " }}\n" linux start)))
+         (expr (and end (substring linux start end)))
+         (or-at (and expr (string-search "\n      || " expr))))
+    (should or-at)
+    (drgnx-ci-test--has (substring expr 0 or-at) "\"credentials\":{{\"username\":\"{1}\",\"password\":\"{2}\"}}"
+                        "needs.images.outputs.rust, github.actor, github.token" "\"options\":\"--init\"")
+    (should (equal (substring expr or-at)
+                   "\n      || fromJSON('{\"image\":\"registry.fedoraproject.org/fedora:45\",\"options\":\"--init\"}')"))))
 
 (ert-deftest drgnx-ci/test-images-are-built-on-published-bases ()
   ;; each test image adds Nidhogg and a few small files to a base of only the Fedora packages (test/container/base/);
@@ -670,10 +690,13 @@
                         "--build-arg \"BASE=$base\"")))
 
 (ert-deftest drgnx-ci/images-are-published-only-by-main-and-manual-runs ()
-  ;; a pull request or a ci/* push never publishes: a run whose inputs have no image yet builds its own
+  ;; a pull request or a ci/* push never publishes: a run whose inputs have no image yet builds its own. A release's
+  ;; staging branch (rel/*, which main fast-forwards to) publishes too, so a round after one that changed an image's
+  ;; inputs pulls it; the moving `f45' name stays main's
   (let ((images (drgnx-ci-test--yml "images.yml")))
     (skip-unless images)
-    (drgnx-ci-test--has images "push:\n    branches: [main]\n" "workflow_dispatch:" "schedule:")
+    (drgnx-ci-test--has images "push:\n    branches: [main, \"rel/*\"]\n" "workflow_dispatch:" "schedule:"
+                        "if [ \"$REF\" = refs/heads/main ]; then podman tag")
     (should-not (string-search "pull_request" images))
     (should-not (string-search "ci/**" images))
     ;; a push or a manual run builds only the tags GHCR lacks; the weekly run rebuilds them all
