@@ -14,8 +14,10 @@ network.
   `elpa/` while a refresh runs changes nothing the refresh reads.
 - **It fails whole.** An archive that does not answer, or whose signature does not verify, fails the refresh (exit 1)
   and the old `catalog.json` stays: the file is written as a `.tmp` file and renamed.
-- **Signatures.** URL archives sign their contents unless they are MELPA's or listed in `packages.eld`'s
-  `:unsigned-archives`; a directory archive does not. The refresh runs under the archive settings sync uses.
+- **Signatures.** The refresh runs under the archive settings a sync uses (`drgnx-pkg-with-archive-settings`), so it
+  checks what a sync checks: every archive signs its contents except MELPA and stable MELPA (by name or by URL),
+  directory archives and those listed in `packages.eld`'s `:unsigned-archives` (`drgnx-pkg-unsigned-archives`). The
+  catalog's `signed` says which.
 - **Download counts** come from MELPA's `download_counts.json`, kept at `<cache>/extensions/download_counts.json`; the
   job fetches it when MELPA is an archive, and a failed fetch is a message, not a failed refresh.
 - **Progress.** With `--progress FILE` the job appends one line per step (`fetching the archives`, `reading the
