@@ -87,7 +87,8 @@
 
 (defun drgnx-look-derive--clear-p (colour others)
   "Non-nil when COLOUR is the ring's delta E from each of OTHERS (nils are no colour)."
-  (cl-every (lambda (o) (>= (drgnx-color-delta-e colour o) drgnx-look-derive--ring-apart)) (delq nil (copy-sequence others))))
+  (cl-every (lambda (o) (>= (drgnx-color-delta-e colour o) drgnx-look-derive--ring-apart))
+            (delq nil (copy-sequence others))))
 
 (defun drgnx-look-derive--variant (colour bg dark)
   "COLOUR's hue and chroma at OKLCH lightness 0.13 higher (DARK) or lower, solved to 3:1 on BG; nil without a colour."
@@ -101,8 +102,8 @@
 (defun drgnx-look-derive--ring-two (ring1 bg dark cursor)
   "Ring 2 for the six RING1 colours on BG: ((FACE :foreground COLOUR)... (:ring . FACES)).
 Each variant is kept only at delta E 12 from every kept agent colour and the cursor; a ring-1 colour that sits within 12
-of the cursor is replaced by its variant when that clears them, else it stands.  FACES is the display's colours in order:
-the six slots, then the variants kept besides."
+of the cursor is replaced by its variant when that clears them, else it stands.  FACES is the display's colours in
+order: the six slots, then the variants kept besides."
   (let* ((start (float-time))
          (colours (copy-sequence ring1))
          (variants (mapcar (lambda (c) (drgnx-look-derive--variant c bg dark)) ring1))
@@ -149,7 +150,8 @@ the six slots, then the variants kept besides."
              (text (let ((c (or shadow f)))
                      (dolist (surface (list e panel raised) c)
                        (setq c (or (drgnx-color-solve c f surface 4.5) c))))))
-        (unless shadow (push (cons 'drgnx-text-muted "no `shadow' colour: derived from `default'") drgnx-look-derive-gaps))
+        (unless shadow
+          (push (cons 'drgnx-text-muted "no `shadow' colour: derived from `default'") drgnx-look-derive-gaps))
         (unless link (push (cons 'drgnx-accent "no `link' colour: the body text's") drgnx-look-derive-gaps))
         `((drgnx-surface-panel :background ,panel) (drgnx-surface-gap :background ,gap)
           (drgnx-surface-raised :background ,raised) (drgnx-surface-overlay :background ,raised)
