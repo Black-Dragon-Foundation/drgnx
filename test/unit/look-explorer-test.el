@@ -110,6 +110,38 @@ face; every row carries the one mouse face that lights the control."
           (should (eq (get-text-property (1+ a) 'mouse-face)
                       (get-text-property (1- (save-excursion (goto-char a) (pos-eol))) 'mouse-face))))))))
 
+(load (expand-file-name "modules/ui/drgnx-look-density" drgnx-dir) nil t)
+
+(ert-deftest drgnx-look-explorer/rows-follow-a-density-change ()
+  "Pattern D: a density change reaches the dock's rows at once: the Explorer's and the Buffers panel's line spacing
+makes the tree row of the new density (26 → 30 at roomy), with no new buffer or restart."
+  (drgnx-explorer-edge--with root
+    (let ((drgnx-look-density 'comfortable) (s (drgnx-pixels-scale)))
+      (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _d) t))
+                ((symbol-function 'drgnx-wb--natural-row-height) (lambda (&rest _) 18)))
+        (dolist (buf (list (drgnx-explorer--buffer) (drgnx-buffers--buffer)))
+          (with-current-buffer buf (drgnx-wb-rows-setup))
+          (should (equal (drgnx-look-ui-line-spacing 18 'comfortable s) (buffer-local-value 'line-spacing buf))))
+        (setq drgnx-look-density 'roomy)
+        (run-hooks 'drgnx-look-density-changed-hook)
+        (dolist (buf (list (drgnx-explorer--buffer) (drgnx-buffers--buffer)))
+          (should (equal (drgnx-look-ui-line-spacing 18 'roomy s) (buffer-local-value 'line-spacing buf))))))))
+
+(ert-deftest drgnx-look-explorer/rows-made-before-a-graphical-frame ()
+  "Pattern D: a dock buffer made while no frame is graphical (a daemon before its first frame) has no row spacing;
+once a graphical frame shows it, it gets the tree row in that frame's scale (×2 here)."
+  (drgnx-explorer-edge--with root
+    (let ((drgnx-look-density 'comfortable) (gui nil) (buf (drgnx-explorer--buffer)))
+      (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _d) gui))
+                ((symbol-function 'drgnx-wb--natural-row-height) (lambda (&rest _) 18))
+                ((symbol-function 'drgnx-pixels-scale) (lambda (&optional _f) 2.0)))
+        (with-current-buffer buf (kill-local-variable 'line-spacing) (drgnx-wb-rows-setup))
+        (should-not (buffer-local-value 'line-spacing buf))
+        (setq gui t)
+        (set-window-buffer (selected-window) buf)
+        (drgnx-wb-rows-refresh (selected-frame))
+        (should (equal (drgnx-look-ui-line-spacing 18 'comfortable 2.0) (buffer-local-value 'line-spacing buf)))))))
+
 (ert-deftest drgnx-look-explorer/rows-in-the-ui-font ()
   "Pattern D: the Explorer's and the Buffers panel's rows are drawn with `default' remapped to the UI text face."
   (drgnx-explorer-edge--with root

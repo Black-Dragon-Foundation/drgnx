@@ -334,6 +334,7 @@ While a button is held in the panel, wait for the release: rows never move under
   (drgnx-wb-define-section 'buffers :slot -1 :title #'drgnx-buffers--current-title :height 0.3
                            :buffer #'drgnx-buffers--buffer)
   (drgnx-state-subscribe 'selected-changed #'drgnx-wb--selected-changed)
+  (drgnx-wb-rows-follow)
   (drgnx-signal-subscribe 'buffer-set-changed #'drgnx-buffers--refresh)
   (drgnx-signal-subscribe 'modified-changed #'drgnx-buffers--refresh)
   (drgnx-signal-subscribe 'editor-changed #'drgnx-buffers--mark-active)

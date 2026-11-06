@@ -22,6 +22,7 @@
 (require 'drgnx-icons)                  ; `drgnx-look-icon'
 (require 'drgnx-type-faces)             ; `drgnx-ui-text', `drgnx-ui-heading'
 (declare-function drgnx-look-ui-line-spacing "drgnx-look-density" (&optional line-px density scale))
+(declare-function drgnx-look-density-value "drgnx-look-density" (key &optional density))
 
 (defcustom drgnx-wb-dock-columns 32
   "Width of the left dock, in columns, the first time it shows (later: the width it had)."
@@ -178,24 +179,66 @@ again.  Cheap: two overlays are touched."
     (with-current-buffer (window-buffer w)
       (when (local-variable-p 'drgnx-wb--selected-overlay) (drgnx-wb-selection-sync)))))
 
+(defvar drgnx-wb--rows-buffers nil
+  "The dock buffers whose rows are UI rows (`drgnx-wb-rows-setup'); killed ones are dropped as the list is walked.")
+
+(defvar-local drgnx-wb--rows-key nil
+  "What this dock buffer's row spacing was made for (`drgnx-wb--rows-fit'), an integer; nil: none made yet.")
+
 (defun drgnx-wb-rows-setup ()
   "Make the current dock buffer's rows UI rows: `default' remapped to the UI text face and the row height of the
-density.  Call it from the buffer's major mode."
+density, on the graphical frame that shows it (or the selected one).  Call it from the buffer's major mode; a density
+change, a scale change and the buffer's first showing on a graphical frame fit the rows again
+\(`drgnx-wb-rows-follow')."
   (face-remap-add-relative 'default 'drgnx-ui-text)
-  (setq-local drgnx-wb--selected-overlay nil drgnx-wb--tail-shown nil)
+  (setq-local drgnx-wb--selected-overlay nil drgnx-wb--tail-shown nil drgnx-wb--rows-key nil)
   (add-hook 'post-command-hook #'drgnx-wb-selection-sync nil t)
-  (when (and (fboundp 'drgnx-look-ui-line-spacing) (display-graphic-p))
-    (setq-local line-spacing (drgnx-look-ui-line-spacing (drgnx-wb--natural-row-height)))))
+  (unless (memq (current-buffer) drgnx-wb--rows-buffers) (push (current-buffer) drgnx-wb--rows-buffers))
+  (drgnx-wb--rows-fit (let ((w (get-buffer-window nil t))) (if w (window-frame w) (selected-frame)))))
 
-(defun drgnx-wb--natural-row-height ()
-  "The height in pixels of a dock row before any line spacing: text in the UI face with an icon, a git mark in the
-small code face and the ⋯ on it, measured in a scratch buffer (the tallest of them sets the line)."
+(defun drgnx-wb--rows-fit (frame)
+  "Give the current dock buffer the density's tree row on FRAME (its `line-spacing'), when FRAME is graphical and
+what the spacing depends on moved since: the row at FRAME's scale, FRAME's line height, the fonts.  A terminal frame
+leaves the spacing as it is."
+  (when (and (fboundp 'drgnx-look-ui-line-spacing) (frame-live-p frame) (display-graphic-p frame))
+    (let* ((scale (drgnx-pixels-scale frame))
+           (key (+ (round (* scale (drgnx-look-density-value 'tree-row))) (* 1000 (frame-char-height frame))
+                   (* 1000000 (mod drgnx-pixels-generation 1000)))))
+      (unless (eql key drgnx-wb--rows-key)
+        (setq-local drgnx-wb--rows-key key)
+        (setq-local line-spacing (drgnx-look-ui-line-spacing (drgnx-wb--natural-row-height frame) nil scale))))))
+
+(defun drgnx-wb-rows-refresh (&optional frame)
+  "Fit the dock buffers' rows again (`drgnx-wb--rows-fit'): those shown on FRAME, or with no FRAME every one, on the
+frame that shows it (else the selected frame).  On `drgnx-look-density-changed-hook'."
+  (setq drgnx-wb--rows-buffers (seq-filter #'buffer-live-p drgnx-wb--rows-buffers))
+  (dolist (b drgnx-wb--rows-buffers)
+    (let ((w (get-buffer-window b (or frame t))))
+      (when (or w (null frame))
+        (with-current-buffer b (drgnx-wb--rows-fit (if w (window-frame w) (selected-frame))))))))
+
+(defun drgnx-wb--rows-frame-changed (data)
+  "The store's `windows-changed' and `frame-resized' (idle): the dock buffers FRAME shows fit its scale (a dock
+buffer made before any graphical frame, in a daemon, gets its rows when one first shows it)."
+  (when-let* ((frame (plist-get data :frame)) ((frame-live-p frame))) (drgnx-wb-rows-refresh frame)))
+
+(defun drgnx-wb-rows-follow ()
+  "The dock's rows follow the density, the scale and the frames that show them.  From a dock section's setup (the
+subscriptions and the hook are recorded there, and go with the module)."
+  (drgnx-state-subscribe 'windows-changed #'drgnx-wb--rows-frame-changed)
+  (drgnx-state-subscribe 'frame-resized #'drgnx-wb--rows-frame-changed)
+  (add-hook 'drgnx-look-density-changed-hook #'drgnx-wb-rows-refresh))
+
+(defun drgnx-wb--natural-row-height (&optional frame)
+  "The height in pixels of a dock row on FRAME (default: the selected one) before any line spacing: text in the UI
+face with an icon, a git mark in the small code face and the ⋯ on it, measured in a scratch buffer (the tallest of
+them sets the line)."
   (with-temp-buffer
     (face-remap-add-relative 'default 'drgnx-ui-text)
     (setq-local line-spacing 0)         ; the frame's own spacing (the code line) is not part of the row
     (insert "Xg " (drgnx-look-icon 'file) (propertize "M" 'face 'drgnx-code-small) (propertize drgnx-wb--control 'face 'drgnx-ui-text))
     (cl-progv drgnx-pixels--quiet-hooks (make-list (length drgnx-pixels--quiet-hooks) nil)
-      (cdr (buffer-text-pixel-size (current-buffer))))))
+      (cdr (buffer-text-pixel-size (current-buffer) (and frame (frame-first-window frame)))))))
 
 (defun drgnx-wb-display-name (name)
   "NAME as it can be shown on one row: control characters (a newline in a file name) as ^X."

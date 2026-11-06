@@ -222,5 +222,15 @@ not the font's MAX-WIDTH, which put the spacer wholly above the baseline and gre
           (should (equal '(22) (plist-get (cdr spec) :height)))
           (should (equal (ceiling (* 100.0 (+ 13 2 1)) 22) (plist-get (cdr spec) :ascent))))))))
 
+(ert-deftest drgnx-look-bars/a-density-change-lays-the-bar-out-again ()
+  "Pattern D: the bar's layout key holds its row height, so a density change builds the bar again at the new
+height (the memo would keep the old box otherwise)."
+  (drgnx-statusbar-test--with
+    (let ((w (selected-window)) (drgnx-look-density 'comfortable))
+      (let ((k (drgnx-statusbar--layout-key w)))
+        (let ((drgnx-look-density 'roomy)) (should-not (eq k (drgnx-statusbar--layout-key w))))
+        (let ((drgnx-look-density 'compact)) (should-not (eq k (drgnx-statusbar--layout-key w))))
+        (should (eq k (drgnx-statusbar--layout-key w)))))))
+
 (provide 'look-bars-layout-test)
 ;;; look-bars-layout-test.el ends here

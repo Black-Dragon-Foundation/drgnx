@@ -84,5 +84,28 @@ included."
         (should (eq 'drgnx-ui-close (drgnx-look-tabs-test--close-face tabs a)))
         (should (eq 'drgnx-ui-close (drgnx-look-tabs-test--close-face tabs b)))))))
 
+(load (expand-file-name "modules/ui/drgnx-look-density" drgnx-dir) nil t)
+
+(defun drgnx-look-tabs-test--row-height (tabs)
+  "The height in pixels the tab line TABS asks for: its first character's spacer."
+  (car (plist-get (cdr (get-text-property 0 'display tabs)) :height)))
+
+(ert-deftest drgnx-look-tabs/the-tab-row-follows-a-density-change ()
+  "Pattern D: a density change reaches every editor's tab row at once: the row is the new `tab-row' (34 → 38 at
+roomy), although no tab and no buffer changed."
+  (drgnx-chrome-test--with dir
+    (drgnx-look-tabs-test--as 'gui
+      (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _d) t))
+                ((symbol-function 'drgnx-pixels-font-extent) (lambda (&rest _) '(13 . 4))))
+        (let ((drgnx-look-density 'comfortable) (s (drgnx-pixels-scale)))
+          (drgnx-chrome-test--open dir "a.txt")
+          (drgnx-chrome-apply nil t)
+          (should (equal (round (* 34 s))
+                         (drgnx-look-tabs-test--row-height (window-parameter (selected-window) 'tab-line-format))))
+          (setq drgnx-look-density 'roomy)
+          (run-hooks 'drgnx-look-density-changed-hook)
+          (should (equal (round (* 38 s))
+                         (drgnx-look-tabs-test--row-height (window-parameter (selected-window) 'tab-line-format)))))))))
+
 (provide 'look-tabs-test)
 ;;; look-tabs-test.el ends here

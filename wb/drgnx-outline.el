@@ -225,7 +225,8 @@ window above it."
   (drgnx-wb-define-section 'outline :slot 1 :title drgnx-outline-title :height 0.25 :buffer #'drgnx-outline--buffer
                            :on-show (lambda (_w) (drgnx-outline-refresh)))
   (drgnx-signal-subscribe 'editor-changed #'drgnx-outline-refresh)
-  (drgnx-signal-subscribe 'editor-point-changed #'drgnx-outline--mark-current))
+  (drgnx-signal-subscribe 'editor-point-changed #'drgnx-outline--mark-current)
+  (drgnx-wb-rows-follow))
 
 (provide 'drgnx-outline)
 ;;; drgnx-outline.el ends here

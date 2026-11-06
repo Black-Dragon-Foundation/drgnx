@@ -1393,6 +1393,7 @@ is over — its release will not come here (Wayland)."
                            :on-show (lambda (_w) (drgnx-explorer--follow (window-buffer (drgnx-wb-editor-window)))))
   (drgnx-signal-subscribe 'editor-changed #'drgnx-explorer--follow)
   (drgnx-state-subscribe 'selected-changed #'drgnx-wb--selected-changed)
+  (drgnx-wb-rows-follow)                ; rows of the density, at the scale of the frame that shows them
   ;; A save changes git status; so does git itself (another window, a terminal): check on focus.
   (drgnx-signal-subscribe 'modified-changed (lambda (_) (drgnx-explorer--git-refresh)))
   (add-function :after after-focus-change-function #'drgnx-explorer--focus-changed '((name . drgnx-explorer)))

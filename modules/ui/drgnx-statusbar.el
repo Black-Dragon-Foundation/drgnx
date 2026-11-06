@@ -323,8 +323,7 @@ nil: columns on a terminal frame, `drgnx-look-pixel-width' on a graphical one.  
   "(HEIGHT TEXT BOX LEFTOVER) for window W's bar, in device pixels: the row's HEIGHT (`status-bar' at the frame's
 scale), the TEXT height of the bar's font, the BOX width above and below the text that makes up the difference, and
 the LEFTOVER pixel (0 or 1) an odd difference leaves."
-  (let* ((scale (drgnx-statusbar--scale (window-frame w)))
-         (height (round (* (if (fboundp 'drgnx-look-density-value) (drgnx-look-density-value 'status-bar) 24) scale)))
+  (let* ((height (drgnx-statusbar--row-height (window-frame w)))
          (text (window-font-height w drgnx-statusbar--bar-face))
          (box (max 0 (/ (- height text) 2))))
     (list height text box (max 0 (- height text (* 2 box))))))
@@ -357,15 +356,25 @@ pixel: the text then sits a pixel lower, and the row is exactly `status-bar' hig
          (let ((f drgnx-look-bars-measure-function)) (lambda (s) (funcall f s face))))
         ((display-graphic-p frame) (lambda (s) (drgnx-look-pixel-width s face)))))
 
+(defun drgnx-statusbar--row-height (frame)
+  "The bar's row height on FRAME in its pixels: the density's `status-bar' at the frame's scale."
+  (round (* (if (fboundp 'drgnx-look-density-value) (drgnx-look-density-value 'status-bar) 24)
+            (drgnx-statusbar--scale frame))))
+
 (defun drgnx-statusbar--layout-key (window)
   "An integer that changes when the sizes the bar is measured at change: the frame's character size (a scale change
-and a change of the default face's height move it), the buffer's text scale, the font role generation.  Allocates
-nothing (a memo key)."
+and a change of the default face's height move it), the buffer's text scale, the font role generation and the row's
+height (the density's, at the frame's scale).  Allocates nothing (a memo key)."
   (let* ((frame (window-frame window))
          (cell (+ (frame-char-width frame) (* 100 (frame-char-height frame))))
          (text (if (bound-and-true-p text-scale-mode) (+ 50 (round (or text-scale-mode-amount 0))) 50)))
     (+ (mod cell 100000) (* 100000 (mod text 100))
-       (* 10000000 (mod drgnx-pixels-generation 100000)))))
+       (* 10000000 (mod drgnx-pixels-generation 100000))
+       (* 1000000000000 (mod (drgnx-statusbar--row-height frame) 1000)))))
+
+(defun drgnx-statusbar--density-changed ()
+  "On `drgnx-look-density-changed-hook': every bar is laid out again at the new height (its layout key moved)."
+  (force-mode-line-update t))
 
 (defvar drgnx-statusbar--measure #'string-width "The function the layout counts a string with.")
 (defvar drgnx-statusbar--space 1 "One space in the layout's units.")
@@ -1009,6 +1018,7 @@ moves, so other packages' entries are formatted again, once per buffer the bars 
 (defconst drgnx-statusbar--hooks
   '((post-command-hook . drgnx-statusbar--post-command)
     (drgnx-look-fonts-applied-hook . drgnx-statusbar--fonts-applied)
+    (drgnx-look-density-changed-hook . drgnx-statusbar--density-changed)
     (drgnx-hub-event-functions . drgnx-statusbar--hub-tests)
     (drgnx-git-changed-functions . drgnx-statusbar--git-changed)
     (compilation-finish-functions . drgnx-statusbar--compilation-finished)

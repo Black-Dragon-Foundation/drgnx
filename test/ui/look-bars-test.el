@@ -136,6 +136,23 @@ token under each of the three themes."
                                                           px (drgnx-ui-look-bars--token-rgb 'gap variant))))))))))
       (mapc #'disable-theme custom-enabled-themes))))
 
+(ert-deftest drgnx-ui-look-bars/status-bar-height-at-every-density ()
+  "Pattern D: after a density change, with no restart, the mode line is round (H x scale) pixels high, H the
+density's `status-bar' (22, 24, 28): an odd difference between the row and its text included."
+  (skip-unless (display-graphic-p))
+  (drgnx-ui-look-bars--with-bar
+    (let ((was drgnx-look-density) (got nil))
+      (unwind-protect
+          (dolist (d '(compact roomy comfortable))
+            (setq drgnx-look-density d)
+            (run-hooks 'drgnx-look-density-changed-hook)
+            (drgnx-test-wait-presented)
+            (push (list d (drgnx-ui-look-bars--logical 'status-bar) (window-mode-line-height)) got))
+        (setq drgnx-look-density was)
+        (run-hooks 'drgnx-look-density-changed-hook))
+      (should (equal (mapcar (lambda (r) (list (nth 0 r) (nth 1 r))) got)
+                     (mapcar (lambda (r) (list (nth 0 r) (nth 2 r))) got))))))
+
 (ert-deftest drgnx-ui-look-bars/double-click-on-the-title-row-is-bound ()
   "Pattern D: with the top line on, a double click in the tab bar finds Maximize or Restore Window in the keymap Emacs
 builds for the bar (the harness's synthetic clicks do not reach the tab bar's own prefix, so the binding is read, not
