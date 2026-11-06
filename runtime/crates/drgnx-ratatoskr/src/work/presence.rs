@@ -531,7 +531,9 @@ pub async fn get(
     _: &Caller,
     p: PresenceGet,
 ) -> Result<FilePresence, runstav::wire::Error> {
-    Ok(f.core.presence.file_asked(&p.file, crate::clock::wall_secs()))
+    Ok(f.core
+        .presence
+        .file_asked(&p.file, crate::clock::wall_secs()))
 }
 
 #[cfg(test)]
