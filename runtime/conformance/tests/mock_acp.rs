@@ -189,6 +189,41 @@ fn gemini_has_no_fork_list_resume_or_close() {
     assert!(r["result"].is_object());
 }
 
+// [C] handshake: Gemini CLI 0.67 loads an `--admin-policy` file whose every rule has a toolName, a known decision and
+// a priority in 0..=999 (`packages/core/src/policy/toml-loader.ts:39-70`), and drops a file that has not, running on
+// without it (`:376-389`); the Gemini personality logs which.
+#[test]
+fn gemini_loads_or_drops_its_admin_policy() {
+    let d = dir();
+    let good = "[[rule]]\ntoolName = \"read_file\"\ndecision = \"ask_user\"\npriority = 999\n\n\
+                [[rule]]\nmcpName = \"*\"\ntoolName = \"*\"\ndecision = \"ask_user\"\npriority = 999\n";
+    let bad = "[[rule]]\ntoolName = \"read_file\"\ndecision = \"ask_user\"\npriority = 999\n\n\
+               [[rule]]\nmcpName = \"*\"\ndecision = \"ask_user\"\npriority = 999\n";
+    for (name, text, want) in [("good", good, "loaded"), ("bad", bad, "dropped")] {
+        let file = d.path().join(format!("{name}.toml"));
+        let log = d.path().join(format!("{name}.log"));
+        std::fs::write(&file, text).unwrap();
+        let mut a = Acp::start(&[
+            "--as",
+            "gemini",
+            "--log",
+            log.to_str().unwrap(),
+            "--admin-policy",
+            file.to_str().unwrap(),
+        ]);
+        a.init();
+        let sid = a.new_session(d.path().to_str().unwrap(), json!({}));
+        assert!(!sid.is_empty(), "{name}: the session starts either way");
+        let l = log_lines(&log);
+        let note = l.iter().find_map(|v| v.get("gemini")).unwrap();
+        let got = note["admin_policy"].as_str().unwrap_or_default();
+        assert!(got.starts_with(want), "{name}: {note}");
+        if want == "dropped" {
+            assert!(got.contains("rule 2") && got.contains("toolName"), "{got}");
+        }
+    }
+}
+
 #[test]
 fn claude_logs_its_options_and_sends_usage_and_a_rate_limit() {
     let d = dir();

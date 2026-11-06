@@ -226,6 +226,11 @@ fn gemini_gets_an_admin_policy_for_subscribed_kinds() {
         assert!(policy.contains(want), "{want} in {policy}");
     }
     assert!(!policy.contains("write_file"), "{policy}");
+    // every MCP tool: the loader needs a toolName on every rule, the MCP one too
+    assert!(
+        policy.contains("mcpName = \"*\"\ntoolName = \"*\"\ndecision = \"ask_user\""),
+        "{policy}"
+    );
     assert_eq!(plan.enforced, Enforced::Yes);
     // a kind with no tool names drgnx knows asks for every tool
     let wide = file_of(
@@ -237,6 +242,50 @@ fn gemini_gets_an_admin_policy_for_subscribed_kinds() {
     let none = locked(&g, &[], d.path());
     assert!(!args(&none).iter().any(|a| a == "--admin-policy"));
     assert!(none.ro_files.is_empty());
+}
+
+// [D] pure: Gemini CLI 0.67 drops a whole policy file whose rules miss what its schema needs, and runs on without it
+// (`packages/core/src/policy/toml-loader.ts:376-389`, `config.ts:361-370`), so the lock's policy is checked as Gemini
+// reads it: every policy it writes passes, and a rule with no toolName, an unknown decision or a priority out of
+// 0..=999 fails, naming the rule.
+#[test]
+fn gemini_policy_is_checked_as_gemini_loads_it() {
+    for kinds in [
+        &["read", "execute"][..],
+        &["think"],
+        &["edit", "fetch", "search"],
+    ] {
+        let policy = String::from_utf8(gemini_policy(kinds)).unwrap();
+        assert_eq!(gemini_policy_problem(&policy), None, "{kinds:?}: {policy}");
+    }
+    for (bad, want) in [
+        (
+            "[[rule]]\nmcpName = \"*\"\ndecision = \"ask_user\"\npriority = 999\n",
+            "toolName",
+        ),
+        (
+            "[[rule]]\ntoolName = \"\"\ndecision = \"ask_user\"\npriority = 1\n",
+            "toolName",
+        ),
+        (
+            "[[rule]]\ntoolName = \"*\"\ndecision = \"ask\"\npriority = 1\n",
+            "decision",
+        ),
+        (
+            "[[rule]]\ntoolName = \"*\"\ndecision = \"deny\"\npriority = 1000\n",
+            "priority",
+        ),
+        (
+            "[[rule]]\ntoolName = \"*\"\ndecision = \"deny\"\n",
+            "priority",
+        ),
+    ] {
+        let why = gemini_policy_problem(&format!(
+            "# x\n\n[[rule]]\ntoolName = \"a\"\ndecision = \"deny\"\npriority = 1\n\n{bad}"
+        ))
+        .unwrap_or_else(|| panic!("{bad} passed"));
+        assert!(why.contains("rule 2") && why.contains(want), "{why}");
+    }
 }
 
 // [D] pure: a policy in Gemini's system folder makes it ignore `--admin-policy`: the lock says so, the kinds are

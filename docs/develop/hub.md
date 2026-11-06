@@ -874,7 +874,7 @@ the lock's parts that depend on the session's subscribed `before-tool` kinds and
 managed ask rules; `with_locks`: Codex's untrusted worktree and managed hook, Gemini's `--admin-policy`, Kimi Code's
 ask rules, DeepSeek Harness's `--patch` overlay; `with_gateway_env`), a refusal of a session that would run a
 subscribed kind unhooked (`lock::hooked`, `lock::unhooked_refusal`: an agent with no lock, a Gemini whose system policy
-shadows the admin policy), a refusal of a worker or manager whose
+shadows the admin policy or whose admin policy Gemini's loader would drop, `gemini_policy_problem`), a refusal of a worker or manager whose
 lock is not enforced unless the preset is autonomous, a refusal of a chat in a project whose `chat.project-read`
 cell is never (the message names the row; it is not started without the project instead), `launch::spawn` (`spawn_plain` for a chat in its own scratch
 directory, `spawn_chat` for a chat in a project: the project read-only, its scratch directory the only writable path;

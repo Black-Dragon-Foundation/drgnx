@@ -335,7 +335,10 @@ impl Agent {
                 let c = codex::config(&self.argv);
                 self.log("codex_config", c);
             }
-            Kind::Gemini => self.log("gemini", gemini::note()),
+            Kind::Gemini => {
+                let n = gemini::note(&self.argv);
+                self.log("gemini", n);
+            }
             Kind::Kimi => {
                 let n = kimi::note(&self.argv);
                 self.log("kimi", n);

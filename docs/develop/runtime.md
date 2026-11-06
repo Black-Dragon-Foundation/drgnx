@@ -675,7 +675,10 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
   `_claude/rateLimit`), codex (same set; logs `-c` overrides of argv; forks at a turn; `usage_update` and
   `_codex/rateLimits`; its answers that open a session report `modes` as codex-acp 2.5.0 picks them: one of its four
   mode ids from `INITIAL_AGENT_MODE`, `agent` for an unset or unknown one, and `session/set_mode` to an unknown id is
-  -32602; a `CODEX_CONFIG` with `approval_policy = "untrusted"` fails `session/new`, as Codex 0.165 refuses it), gemini (`loadSession` only; the rest answers -32601). `--refuse-mode MODE` refuses `session/set_mode` to MODE (a lock that does not hold; the `agent-locks` rows); other modes are accepted. `--log` is JSONL; `--llm URL` POSTs
+  -32602; a `CODEX_CONFIG` with `approval_policy = "untrusted"` fails `session/new`, as Codex 0.165 refuses it), gemini
+(`loadSession` only; the rest answers -32601; its log's `admin_policy` says whether an `--admin-policy` file passes
+Gemini CLI 0.67's loader, `loaded`, or would be dropped, `dropped: WHY`; the session starts either way, as Gemini's
+does). `--refuse-mode MODE` refuses `session/set_mode` to MODE (a lock that does not hold; the `agent-locks` rows); other modes are accepted. `--log` is JSONL; `--llm URL` POSTs
   to a `ratatoskr-mock llm` once per turn, so its log counts requests. `--state DIR` keeps each session's history in
   `DIR/<sessionId>.json` (at its start and after every turn); `session/fork` and `session/resume` read a session this
   process does not hold from there, so a second process forks or resumes it (ids skip the ones the folder holds). A

@@ -421,7 +421,9 @@ fn gemini_policy(kinds: &[&str]) -> Vec<u8> {
         }
         None => t.push_str(&rule("toolName", "*", "ask_user")),
     }
-    t.push_str(&rule("mcpName", "*", "ask_user"));
+    t.push_str(
+        "\n[[rule]]\nmcpName = \"*\"\ntoolName = \"*\"\ndecision = \"ask_user\"\npriority = 999\n",
+    );
     t.push_str(
         "\n[[rule]]\ntoolName = \"*\"\nsubagent = \"*\"\ndecision = \"deny\"\npriority = 999\n",
     );
@@ -430,6 +432,54 @@ fn gemini_policy(kinds: &[&str]) -> Vec<u8> {
     }
     t.into_bytes()
 }
+
+/// Why Gemini CLI 0.67 would drop the policy TEXT, if it would.  Its loader drops a whole file that fails its schema
+/// and runs on without it, telling only its stderr at exit in ACP mode (`packages/core/src/policy/toml-loader.ts:
+/// 376-389`, `config.ts:361-370`; `packages/cli/src/gemini.tsx:478-483`), so the lock checks what the schema needs
+/// (`toml-loader.ts:39-70`) on every `[[rule]]` of the TOML it writes (`key = value` lines): `toolName`, a non-empty
+/// string or an array (`:40`, `:419-430`), `decision` one of `allow`, `deny`, `ask_user` (`:46`, `types.ts:10-14`),
+/// `priority` an integer in 0..=999 (`:52-62`).
+fn gemini_policy_problem(text: &str) -> Option<String> {
+    let mut rules: Vec<Vec<(&str, &str)>> = Vec::new();
+    for line in text.lines().map(str::trim) {
+        if line == "[[rule]]" {
+            rules.push(Vec::new());
+        } else if !line.starts_with('#')
+            && let (Some(rule), Some((k, v))) = (rules.last_mut(), line.split_once('='))
+        {
+            rule.push((k.trim(), v.trim()));
+        }
+    }
+    rules.iter().enumerate().find_map(|(i, rule)| {
+        let get = |k: &str| rule.iter().find(|(key, _)| *key == k).map(|(_, v)| *v);
+        let n = i + 1;
+        let tool_ok = get("toolName")
+            .is_some_and(|v| v != "\"\"" && (v.starts_with('"') || v.starts_with('[')));
+        let decision_ok = matches!(
+            get("decision"),
+            Some("\"allow\"" | "\"deny\"" | "\"ask_user\"")
+        );
+        let priority_ok = get("priority")
+            .and_then(|p| p.parse::<i64>().ok())
+            .is_some_and(|p| (0..=999).contains(&p));
+        if !tool_ok {
+            Some(format!(
+                "rule {n}: toolName must be a non-empty string or an array"
+            ))
+        } else if !decision_ok {
+            Some(format!(
+                "rule {n}: decision must be allow, deny or ask_user"
+            ))
+        } else if !priority_ok {
+            Some(format!("rule {n}: priority must be an integer in 0..=999"))
+        } else {
+            None
+        }
+    })
+}
+
+const GEMINI_POLICY_DROPPED: &str =
+    "drgnx's admin policy would not load in Gemini CLI, which would run without it";
 
 /// Whether DIR (Gemini's system policies) holds a `.toml`, which makes Gemini ignore `--admin-policy`.
 fn gemini_shadowed(dir: &Path) -> bool {
@@ -504,13 +554,19 @@ impl LaunchPlan {
                 );
             }
             Some(Provider::Gemini) if !kinds.is_empty() => {
+                let policy = gemini_policy(&kinds);
+                let dropped = gemini_policy_problem(&String::from_utf8_lossy(&policy));
                 if gemini_shadowed(&at.gemini_policies) {
                     self.enforced = Enforced::No(GEMINI_SHADOWED);
+                } else if let Some(why) = dropped {
+                    // never passed: Gemini would drop it and run on, so the kinds are unhooked and the session refused
+                    tracing::warn!("{GEMINI_POLICY_DROPPED}: {why}");
+                    self.enforced = Enforced::No(GEMINI_POLICY_DROPPED);
                 } else {
                     let file = at.dir.join("gemini-policy.toml");
                     self.argv.push("--admin-policy".into());
                     self.argv.push(file.clone().into());
-                    self.put_file(file, gemini_policy(&kinds));
+                    self.put_file(file, policy);
                 }
             }
             Some(Provider::Kimi) => {
