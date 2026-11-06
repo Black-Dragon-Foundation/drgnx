@@ -579,6 +579,13 @@
             "additionalProperties": false,
             "description": "One row of the `step` table.",
             "properties": {
+              "acp": {
+                "description": "The agent conversation (ACP session id) the step ran in: a session runs another one after a revert.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "agent": {
                 "type": [
                   "string",
@@ -639,6 +646,22 @@
                   "null"
                 ]
               },
+              "head": {
+                "description": "The worktree's commit when the step's snapshot was taken, read from its ref files: the agent's claim, a hint.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "history_op": {
+                "description": "The edit history's record the step anchors.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "id": {
                 "format": "int64",
                 "type": "integer"
@@ -675,6 +698,11 @@
                   "string",
                   "null"
                 ]
+              },
+              "revertible": {
+                "default": false,
+                "description": "Whether \"Revert to here\" can act on the step: it has an edit history record and its checkpoint is kept.",
+                "type": "boolean"
               },
               "seq": {
                 "description": "The step's place in its session.",
@@ -734,6 +762,15 @@
               "turn_id": {
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "undone_by": {
+                "description": "The revert record that abandoned the step (the session went back to a step before it).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
                   "null"
                 ]
               }
@@ -3881,6 +3918,13 @@
             "additionalProperties": false,
             "description": "One row of the `step` table.",
             "properties": {
+              "acp": {
+                "description": "The agent conversation (ACP session id) the step ran in: a session runs another one after a revert.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "agent": {
                 "type": [
                   "string",
@@ -3941,6 +3985,22 @@
                   "null"
                 ]
               },
+              "head": {
+                "description": "The worktree's commit when the step's snapshot was taken, read from its ref files: the agent's claim, a hint.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "history_op": {
+                "description": "The edit history's record the step anchors.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "id": {
                 "format": "int64",
                 "type": "integer"
@@ -3977,6 +4037,11 @@
                   "string",
                   "null"
                 ]
+              },
+              "revertible": {
+                "default": false,
+                "description": "Whether \"Revert to here\" can act on the step: it has an edit history record and its checkpoint is kept.",
+                "type": "boolean"
               },
               "seq": {
                 "description": "The step's place in its session.",
@@ -4036,6 +4101,15 @@
               "turn_id": {
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "undone_by": {
+                "description": "The revert record that abandoned the step (the session went back to a step before it).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
                   "null"
                 ]
               }
@@ -19309,6 +19383,13 @@
             "additionalProperties": false,
             "description": "One row of the `step` table.",
             "properties": {
+              "acp": {
+                "description": "The agent conversation (ACP session id) the step ran in: a session runs another one after a revert.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "agent": {
                 "type": [
                   "string",
@@ -19369,6 +19450,22 @@
                   "null"
                 ]
               },
+              "head": {
+                "description": "The worktree's commit when the step's snapshot was taken, read from its ref files: the agent's claim, a hint.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "history_op": {
+                "description": "The edit history's record the step anchors.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "id": {
                 "format": "int64",
                 "type": "integer"
@@ -19405,6 +19502,11 @@
                   "string",
                   "null"
                 ]
+              },
+              "revertible": {
+                "default": false,
+                "description": "Whether \"Revert to here\" can act on the step: it has an edit history record and its checkpoint is kept.",
+                "type": "boolean"
               },
               "seq": {
                 "description": "The step's place in its session.",
@@ -19464,6 +19566,15 @@
               "turn_id": {
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "undone_by": {
+                "description": "The revert record that abandoned the step (the session went back to a step before it).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
                   "null"
                 ]
               }
@@ -20387,5 +20498,5 @@
   "proto": 1,
   "proto_min": 1,
   "records": 2,
-  "schema": 11
+  "schema": 12
 }

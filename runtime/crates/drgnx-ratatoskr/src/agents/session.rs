@@ -1817,6 +1817,7 @@ fn assemble(
         agent: profile.name.clone(),
         provider: step_provider(profile),
         cwd: i.cwd.clone(),
+        acp: Some(l.acp.0.to_string()),
     };
     tokio::spawn(write_steps(
         rx,
@@ -2281,6 +2282,8 @@ struct StepCtx {
     provider: Option<String>,
     /// The worktree its edits are snapshotted from.
     cwd: PathBuf,
+    /// The agent conversation its steps run in.
+    acp: Option<String>,
 }
 
 /// Write a session's closed steps to the `step` table in order, and announce each as an `agent-step` event (editors)
@@ -2325,6 +2328,7 @@ async fn write_steps(
             turn_id: c.turn_id.clone(),
             snapshot: None,
             log_version: None,
+            acp: ctx.acp.clone(),
         };
         let mut end = table::StepEnd {
             end: c.end,
@@ -2364,7 +2368,7 @@ async fn write_steps(
             }
         };
         ctx.flow.written.send_modify(|w| *w += 1);
-        let snapshot = anchor(
+        let (snapshot, head) = anchor(
             &sink,
             &ctx,
             &caller,
@@ -2401,6 +2405,11 @@ async fn write_steps(
             cost: c.cost,
             cost_unit: c.cost.map(|_| Unit::UsdEst),
             detail: c.detail.as_ref().map(crate::work::detail::wire),
+            acp: ctx.acp.clone(),
+            head,
+            history_op: None,
+            undone_by: None,
+            revertible: false,
         };
         // the files the step was in: the presence model (a shell step's command looked up off the async threads)
         if let Some(live) = &sink.presence
@@ -2498,7 +2507,8 @@ async fn write_steps(
 }
 
 /// The anchors a step gets once it is written: the turn id on the turn's earlier steps (it arrives with the turn's
-/// last), and a snapshot of the worktree after a completed edit and at the turn's first step.  Best effort.
+/// last), and a snapshot of the worktree after a completed edit and at the turn's first step, with the worktree's
+/// commit then (from its ref files).  Best effort; answers the snapshot and the commit.
 #[allow(clippy::too_many_arguments)]
 async fn anchor(
     sink: &StepSink,
@@ -2509,9 +2519,9 @@ async fn anchor(
     turn: Option<&str>,
     open: &OpenStep,
     turn_start: bool,
-) -> Option<String> {
+) -> (Option<String>, Option<String>) {
     if id == 0 {
-        return None;
+        return (None, None);
     }
     let edit = open.class == StepClass::Tool
         && matches!(open.tool_kind.as_deref(), Some("edit" | "delete" | "move"));
@@ -2523,18 +2533,32 @@ async fn anchor(
         _ => None,
     };
     if snapshot.is_none() && turn.is_none() {
-        return None;
+        return (None, None);
     }
-    let (turn, tree, sid) = (
+    let head = match &snapshot {
+        Some(_) => {
+            let wt = ctx.cwd.clone();
+            crate::clock::blocking(move || crate::timeline::snapshot::head_of(&wt))
+                .await
+                .ok()
+                .flatten()
+        }
+        None => None,
+    };
+    let (turn, tree, sid, head_) = (
         turn.map(str::to_string),
         snapshot.clone(),
         format!("session:{}", ctx.session),
+        head.clone(),
     );
     let r = sink
         .writer
         .write(caller, "agents/step", move |tx| {
             if let Some(t) = &tree {
                 tx.sql().execute("update step set snapshot = ?2 where id = ?1", (id, t))?;
+            }
+            if let Some(h) = &head_ {
+                norn::write::steps::set_head(tx, id, h)?;
             }
             if let Some(t) = &turn {
                 tx.sql().execute(
@@ -2548,7 +2572,7 @@ async fn anchor(
     if let Err(e) = r {
         tracing::warn!(sid = ctx.session, "step anchors not recorded: {e}");
     }
-    snapshot
+    (snapshot, head)
 }
 
 async fn insert_row(db: &urdr::Handle, s: &Session) {
@@ -4622,6 +4646,7 @@ mod tests {
             agent: "mock".into(),
             provider: None,
             cwd: PathBuf::new(),
+            acp: None,
         };
         let sink = StepSink {
             writer: writer.clone(),
@@ -4714,11 +4739,13 @@ mod tests {
         let (bus, mut seen) = tokio::sync::broadcast::channel(16);
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let ctx = StepCtx {
+            flow: Arc::default(),
             session: "a1".into(),
             task: Some("task:7".into()),
             agent: "mock".into(),
             provider: None,
             cwd: PathBuf::new(),
+            acp: None,
         };
         let sink = StepSink {
             writer: writer.clone(),
@@ -4799,6 +4826,7 @@ mod tests {
             agent: "mock".into(),
             provider: None,
             cwd: wt.clone(),
+            acp: None,
         };
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let done = tokio::spawn(write_steps(rx, sink, ctx));

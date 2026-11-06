@@ -536,14 +536,14 @@ the same directory.
 
 **The store at start.** Before it serves anything the hub opens `<data>/work.db` with the graph writer and
 `norn::migrate7`'s opening rule ([store.md](store.md#migration-from-schema-6-task-11)), and waits for its answer: a
-missing file is made at schema 11, a schema-6 one is copied to `<data>/backup/work-pre7-<unix>.db`, checked, and
-migrated in one transaction, so the first request sees schema 11. A newer file (above 11) makes the hub read-only; a
+missing file is made at schema 12, a schema-6 one is copied to `<data>/backup/work-pre7-<unix>.db`, checked, and
+migrated in one transaction, so the first request sees schema 12. A newer file (above 12) makes the hub read-only; a
 file below 6, or a migration that failed, leaves the writer not ready (writes answer its text) and the hub serves
 the rest. A failed migration is not tried again until the hub restarts. The coordination writer
 (`norn::store::CoordDb`) and the coordination tools' graph store run on the same file.
 
 **`work.db` read-only.** The front reads work.db through `urdr::open_readonly` on a thread of its own (`store.rs`).
-It reads `meta.schema` (schema 7's `meta` view over `kv`) at the start and every 2 s. While it is above this hub's 11,
+It reads `meta.schema` (schema 7's `meta` view over `kv`) at the start and every 2 s. While it is above this hub's 12,
 the hub is read-only: a method that writes is `schema`, and `status.read_only` is the schema.
 
 **Rolling back.** The way back from schema 7 is `drgnx hub stop`, then `ratatoskr store restore-pre7 --yes`: the
@@ -920,7 +920,7 @@ resume, the tick goes on from the store with the same workers, and the wakes sti
 
 ## The store
 
-The front serves the store (`work.db`, schema 11) itself: `graph/*` (reads and walks, history, revert, excise, grants,
+The front serves the store (`work.db`, schema 12) itself: `graph/*` (reads and walks, history, revert, excise, grants,
 proposed txs, read-only SQL, export, import, backup, settings, the personal-notes opt-ins) and `tasks/*` (the tracker
 for the editor), all class `user`. `cards/settle` of an `access` card makes a grant (or refuses) and of a `close`
 card closes the task (or rejects), in the settle's tx. `mcp/session` takes the session's `profile` and its tool sets (`tools: {tracker}`), and
@@ -2233,7 +2233,11 @@ column still matches `:ai` only).
 
 Anchors of a step (part 4's rewind): `message_id` (the last message id seen, so tool calls carry their turn's
 message), `turn_id` (it arrives with the turn's last step; the turn's earlier rows get it then), `log_version` (the
-decision log's version when the step closed) and `snapshot`.
+decision log's version when the step closed) and `snapshot`; from schema 12 also `acp` (the agent conversation the
+step ran in), `head` (the worktree's commit when its snapshot was taken, read from the ref files without git), and
+`history_op` and `undone_by` (the edit history's record it anchors, and the revert that abandoned it). The wire step
+adds `revertible`: it has a history record and its session's snapshots were not removed at the cap in this hub's run
+([store.md](store.md#schema-12-the-timelines-step-facts-agent-system-part-4)).
 
 A **step snapshot** is a tree of the session's worktree, written at the first step of each turn and after each completed edit (`edit`, `delete`, `move`
 tool kinds) into a shadow repository `<state>/hub/checkpoints/<hash>.git` and kept as `refs/drgnx/s/<sid>/<seq>`. Each

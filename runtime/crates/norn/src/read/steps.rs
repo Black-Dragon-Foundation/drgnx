@@ -31,6 +31,14 @@ pub struct Step {
     pub cache_write: i64,
     pub cost: Option<f64>,
     pub cost_unit: Option<String>,
+    /// The agent conversation the step ran in.
+    pub acp: Option<String>,
+    /// The worktree's commit when the step's snapshot was taken (from ref files: a hint, checked before use).
+    pub head: Option<String>,
+    /// The edit history's record the step anchors.
+    pub history_op: Option<i64>,
+    /// The revert record that abandoned the step.
+    pub undone_by: Option<i64>,
 }
 
 /// SESSION's steps with `seq` above SINCE_SEQ, in order.
@@ -81,7 +89,7 @@ fn query(
     let mut st = conn.prepare(&format!(
         "select id, session, task, plan, project, agent, provider, seq, class, start, end, tool, tool_kind, \
          message_id, turn_id, snapshot, log_version, tokens_in, tokens_out, cache_read, cache_write, cost, \
-         cost_unit from step where {col} = ?1 and {key} {cmp} ?2 order by {key}{dir} limit ?3",
+         cost_unit, acp, head, history_op, undone_by from step where {col} = ?1 and {key} {cmp} ?2 order by {key}{dir} limit ?3",
     ))?;
     let rows = st.query_map((id, since, limit), |r| {
         let class: String = r.get(8)?;
@@ -109,6 +117,10 @@ fn query(
             cache_write: r.get(20)?,
             cost: r.get(21)?,
             cost_unit: r.get(22)?,
+            acp: r.get(23)?,
+            head: r.get(24)?,
+            history_op: r.get(25)?,
+            undone_by: r.get(26)?,
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
