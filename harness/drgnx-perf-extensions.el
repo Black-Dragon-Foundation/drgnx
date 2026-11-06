@@ -141,13 +141,14 @@ one is in force returns it (the comparison's setup calls the common one inside i
                        (cons 'plugins (funcall mk "enabled" "perf-plugin" (drgnx-perf-extensions--size 'plugins))))))))
 
      (defun drgnx-perf-extensions--answer (query)
-       "(ROWS . TOTAL) for the typed QUERY: the first 200 pool rows whose name has it, kept once made."
+       "(ROWS . TOTAL) for the typed QUERY: every pool row whose name has it (the stub sends them a page at a time),
+kept once made."
        (or (gethash query drgnx-perf-extensions--answers)
            (puthash query
                     (let ((hits nil) (total 0))
                       (mapc (lambda (r)
                               (when (string-search query (plist-get r :name))
-                                (cl-incf total) (when (< total 201) (push r hits))))
+                                (cl-incf total) (push r hits)))
                             drgnx-perf-extensions--pool)
                       (cons (nreverse hits) total))
                     drgnx-perf-extensions--answers)))
@@ -217,33 +218,74 @@ one is in force returns it (the comparison's setup calls the common one inside i
        t)
 
      ;; the view's measures, shared by the rows and by the comparison
+     (defun drgnx-perf-extensions--settle (buf)
+       "Paint BUF's view as the editor would: fire the draw timers it armed (`:delay 0', then each slice of the
+chain) through the timer layer's own wrapper, in order, until none is armed; draw what is still marked; redisplay.
+A timed form that ends with this stops the clock on painted rows, not on armed timers."
+       (let ((n 0))
+         (while (and (< n 10000)
+                     (let ((e (or (gethash (cons 'drgnx-view buf) drgnx-timer--table)
+                                  (gethash (cons 'drgnx-view-more buf) drgnx-timer--table))))
+                       (when e (drgnx-timer--fire e) t)))
+           (cl-incf n)))
+       (let ((v (and (buffer-live-p buf) (buffer-local-value 'drgnx-view buf))))
+         (when (and (drgnx-view-p v) (drgnx-view-pending-p v)) (drgnx-view-draw-now v)))
+       (redisplay t))
+
+     (defun drgnx-perf-extensions--drawn (buf)
+       "The rows BUF's view has in the buffer."
+       (let ((v (and (buffer-live-p buf) (buffer-local-value 'drgnx-view buf))))
+         (if (drgnx-view-p v) (drgnx-view-row-count v) 0)))
+
+     (defun drgnx-perf-extensions--list () (get-buffer drgnx-extensions-list-buffer-name))
+
      (defun drgnx-perf-extensions--open-ms ()
-       "Open the list and draw it: (MS . PROCESSES)."
+       "Open the list and paint it: (MS . PROCESSES)."
        (drgnx-perf-extensions--count-start)
-       (let ((ms (drgnx-perf-extensions--ms (lambda () (drgnx-extensions-open) (redisplay t)))))
+       (let ((ms (drgnx-perf-extensions--ms
+                  (lambda () (drgnx-extensions-open) (drgnx-perf-extensions--settle (drgnx-perf-extensions--list))))))
          (cons ms drgnx-perf-extensions--procs)))
 
      (defun drgnx-perf-extensions--type-ms (word)
-       "The milliseconds of each key of WORD typed into the search, the result drawn: a list."
+       "The milliseconds of each key of WORD typed into the search, the result painted: a list."
        (let (times)
          (dotimes (k (length word))
            (let ((text (substring word 0 (1+ k))))
-             (push (drgnx-perf-extensions--ms (lambda () (drgnx-extensions-list--apply-query text) (redisplay t))) times)))
+             (push (drgnx-perf-extensions--ms
+                    (lambda () (drgnx-extensions-list--apply-query text)
+                      (drgnx-perf-extensions--settle (drgnx-perf-extensions--list))))
+                   times)))
          (nreverse times)))
 
+     (defun drgnx-perf-extensions--local-post-command ()
+       "Run the current buffer's own `post-command-hook' functions (not the global ones): what a key there adds, the
+same for the view and for the package menu."
+       (run-hook-wrapped 'post-command-hook (lambda (f) (unless (eq f t) (funcall f)) nil)))
+
+     (defvar drgnx-perf-extensions--slices nil "The milliseconds of each view draw the timers ran, newest first.")
+     (defun drgnx-perf-extensions--time-slice (fn &rest args)
+       (let ((t0 (float-time)))
+         (prog1 (apply fn args) (push (* 1000 (- (float-time) t0)) drgnx-perf-extensions--slices))))
+
      (defun drgnx-perf-extensions--scroll-ms (n)
-       "Scroll the list N pages down and N up, each drawn, with its post-command work: the milliseconds of each."
-       (let ((buf (get-buffer drgnx-extensions-list-buffer-name)) times)
+       "Scroll the list N pages down and N up: each key's milliseconds (the command, the list's own `post-command-hook'
+and the redisplay; a next page it asks for is drawn after, in slices timed apart).  (KEYS . SLICES)."
+       (let ((buf (drgnx-perf-extensions--list)) times)
+         (setq drgnx-perf-extensions--slices nil)
          (with-current-buffer buf (goto-char (point-min)))
-         (dotimes (i (* 2 n))
-           (push (drgnx-perf-extensions--ms
-                  (lambda ()
-                    (with-current-buffer buf
-                      (condition-case nil (if (< i n) (scroll-up-command) (scroll-down-command)) (error nil))
-                      (run-hooks 'post-command-hook))
-                    (redisplay t)))
-                 times))
-         (nreverse times)))
+         (advice-add 'drgnx-view--draw-buffer :around #'drgnx-perf-extensions--time-slice)
+         (unwind-protect
+             (dotimes (i (* 2 n))
+               (push (drgnx-perf-extensions--ms
+                      (lambda ()
+                        (with-current-buffer buf
+                          (condition-case nil (if (< i n) (scroll-up-command) (scroll-down-command)) (error nil))
+                          (drgnx-perf-extensions--local-post-command))
+                        (redisplay t)))
+                     times)
+               (drgnx-perf-extensions--settle buf))
+           (advice-remove 'drgnx-view--draw-buffer #'drgnx-perf-extensions--time-slice))
+         (cons (nreverse times) drgnx-perf-extensions--slices)))
 
      ;; extensions-open
      (defun drgnx-perf-extensions-open-setup () (drgnx-perf-extensions--common-setup))
@@ -252,7 +294,8 @@ one is in force returns it (the comparison's setup calls the common one inside i
        (let ((r (drgnx-perf-extensions--open-ms)))
          (unless (> (hash-table-count drgnx-extensions-list--rows) 0) (error "the list opened with no rows"))
          (list :open_ms (drgnx-perf-extensions--r (car r)) :processes (cdr r)
-               :rows (hash-table-count drgnx-extensions-list--rows))))
+               :rows (hash-table-count drgnx-extensions-list--rows)
+               :rows_drawn (drgnx-perf-extensions--drawn (drgnx-perf-extensions--list)))))
      (defun drgnx-perf-extensions-open-teardown () (drgnx-perf-extensions--common-teardown))
 
      ;; extensions-search: "magit-todos" typed a key at a time over the 7,150 rows (the hub's ranking is the Rust bench's)
@@ -267,34 +310,44 @@ one is in force returns it (the comparison's setup calls the common one inside i
        (drgnx-perf-extensions--open-ms)
        (let ((times (drgnx-perf-extensions--type-ms drgnx-perf-extensions--word)))
          (list :key_p50_ms (drgnx-perf-extensions--r (drgnx-perf-extensions--pct times 0.5))
-               :key_max_ms (drgnx-perf-extensions--r (apply #'max times)) :keys (length times))))
+               :key_max_ms (drgnx-perf-extensions--r (apply #'max times)) :keys (length times)
+               :rows_drawn (drgnx-perf-extensions--drawn (drgnx-perf-extensions--list)))))
      (defun drgnx-perf-extensions-search-teardown () (drgnx-perf-extensions--common-teardown))
 
-     ;; extensions-scroll: 200 rows, pages down and up
+     ;; extensions-scroll: the whole catalog by name (pages of 200 as the hub sends them), pages down and up
      (defun drgnx-perf-extensions-scroll-setup ()
        (drgnx-perf-extensions--common-setup)
-       (drgnx-perf-extensions--answer "e")
+       (drgnx-perf-extensions--answer "")
        t)
      (defun drgnx-perf-extensions-scroll-each () (drgnx-perf-extensions--common-each))
      (defun drgnx-perf-extensions-scroll-measure ()
        (drgnx-perf-extensions--open-ms)
-       (drgnx-extensions-list--apply-query "e") (redisplay t)
-       (let ((times (drgnx-perf-extensions--scroll-ms (drgnx-perf-extensions--size 'scroll))))
+       (drgnx-extensions-list--apply-query "@sort:name")
+       (drgnx-perf-extensions--settle (drgnx-perf-extensions--list))
+       (let* ((drawn (drgnx-perf-extensions--drawn (drgnx-perf-extensions--list)))
+              (r (drgnx-perf-extensions--scroll-ms (drgnx-perf-extensions--size 'scroll))) (times (car r)))
          (list :key_p50_ms (drgnx-perf-extensions--r (drgnx-perf-extensions--pct times 0.5))
-               :key_max_ms (drgnx-perf-extensions--r (apply #'max times)) :keys (length times))))
+               :key_max_ms (drgnx-perf-extensions--r (apply #'max times)) :keys (length times)
+               :slice_max_ms (drgnx-perf-extensions--r (if (cdr r) (apply #'max (cdr r)) 0))
+               :rows (plist-get (cdr (assq 'search drgnx-extensions-list--sections)) :total)
+               :rows_drawn drawn)))
      (defun drgnx-perf-extensions-scroll-teardown () (drgnx-perf-extensions--common-teardown))
 
      ;; extensions-details: the page of an installed package, five of them, opened and drawn
      (defun drgnx-perf-extensions-details-setup () (drgnx-perf-extensions--common-setup "details"))
      (defun drgnx-perf-extensions-details-each () (drgnx-perf-extensions--common-each))
      (defun drgnx-perf-extensions-details-measure ()
-       (let (times)
+       (let (times page)
          (dotimes (k 5)
            (push (drgnx-perf-extensions--ms
-                  (lambda () (pop-to-buffer (drgnx-extensions-details-open (format "pkg:perf-installed-%d" k) t)) (redisplay t)))
+                  (lambda ()
+                    (setq page (drgnx-extensions-details-open (format "pkg:perf-installed-%d" k) t))
+                    (pop-to-buffer page)
+                    (drgnx-perf-extensions--settle page)))
                  times))
          (list :open_ms (drgnx-perf-extensions--r (drgnx-perf-extensions--pct times 0.5))
-               :open_max_ms (drgnx-perf-extensions--r (apply #'max times)))))
+               :open_max_ms (drgnx-perf-extensions--r (apply #'max times))
+               :rows_drawn (drgnx-perf-extensions--drawn page))))
      (defun drgnx-perf-extensions-details-teardown () (drgnx-perf-extensions--common-teardown))
 
      ;; extensions-progress: a job writes steps, the layer reads them at most four times a second (no two reads closer
@@ -520,7 +573,7 @@ written, or nil."
               (scroll (let ((times nil) (n (drgnx-perf-extensions--size 'scroll)))
                         (with-current-buffer "*Packages*" (goto-char (point-min)))
                         (dotimes (i (* 2 n))
-                          (push (drgnx-perf-extensions--ms (lambda () (with-current-buffer "*Packages*" (condition-case nil (if (< i n) (scroll-up-command) (scroll-down-command)) (error nil))) (redisplay t))) times))
+                          (push (drgnx-perf-extensions--ms (lambda () (with-current-buffer "*Packages*" (condition-case nil (if (< i n) (scroll-up-command) (scroll-down-command)) (error nil)) (drgnx-perf-extensions--local-post-command)) (redisplay t))) times))
                         times)))
          (list :first_ms first :key_p50_ms (drgnx-perf-extensions--pct keys 0.5) :key_max_ms (apply #'max keys)
                :scroll_max_ms (apply #'max scroll) :heap_kb (/ heap 1024))))
@@ -530,8 +583,8 @@ written, or nil."
               (first (car (drgnx-perf-extensions--open-ms)))
               (heap (- (drgnx-perf-extensions--heap) h0))
               (keys (drgnx-perf-extensions--type-ms drgnx-perf-extensions--word))
-              (scroll (progn (drgnx-extensions-list--apply-query "e") (redisplay t)
-                             (drgnx-perf-extensions--scroll-ms (drgnx-perf-extensions--size 'scroll)))))
+              (scroll (progn (drgnx-extensions-list--apply-query "e") (drgnx-perf-extensions--settle (drgnx-perf-extensions--list))
+                             (car (drgnx-perf-extensions--scroll-ms (drgnx-perf-extensions--size 'scroll))))))
          (list :first_ms first :key_p50_ms (drgnx-perf-extensions--pct keys 0.5) :key_max_ms (apply #'max keys)
                :scroll_max_ms (apply #'max scroll) :heap_kb (/ heap 1024))))
      (defun drgnx-perf-extensions-compare-measure ()

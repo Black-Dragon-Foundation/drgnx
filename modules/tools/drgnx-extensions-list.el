@@ -130,7 +130,8 @@ word that starts with @ and is none of these is listed under :unknown, never an 
   (clrhash drgnx-extensions-list--rows)
   (clrhash drgnx-extensions-list--jobs)
   (clrhash drgnx-extensions-list--asked)
-  (setq drgnx-extensions-list--sections nil drgnx-extensions-list--query "" drgnx-extensions-list--parsed nil
+  (setq drgnx-extensions-list--sections nil drgnx-extensions-list--installed-ids nil
+        drgnx-extensions-list--query "" drgnx-extensions-list--parsed nil
         drgnx-extensions-list--error nil drgnx-extensions-list--restart nil drgnx-extensions-list--updates 0
         drgnx-extensions-list--epoch (1+ drgnx-extensions-list--epoch)))
 
@@ -157,11 +158,17 @@ word that starts with @ and is none of these is listed under :unknown, never an 
     (builtin . "Built-in") (search . "Search results") (generations . "Generations"))
   "SECTION → the header's text.")
 
+(defvar drgnx-extensions-list--installed-ids nil
+  "Installed's ids without the rows that wait in Updates, made once per answer: emptied by the reset and by each
+answer the hub sends (which may change a row's state).")
+
 (defun drgnx-extensions-list--section-ids (section)
   "The ids SECTION shows: a row with an update waits in Updates, not in Installed."
   (let ((ids (plist-get (cdr (assq section drgnx-extensions-list--sections)) :ids)))
     (if (eq section 'installed)
-        (cl-remove-if (lambda (id) (eq (plist-get (gethash id drgnx-extensions-list--rows) :state) 'update)) ids)
+        (or drgnx-extensions-list--installed-ids
+            (setq drgnx-extensions-list--installed-ids
+                  (cl-remove-if (lambda (id) (eq (plist-get (gethash id drgnx-extensions-list--rows) :state) 'update)) ids)))
       ids)))
 
 (defun drgnx-extensions-list--keys ()
@@ -191,7 +198,8 @@ While a query is typed: the search results alone, or with @generations the gener
         (old (plist-get (cdr (assq section drgnx-extensions-list--sections)) :ids)))
     (setq drgnx-extensions-list--sections
           (cons (cons section (list :ids (if (> offset 0) (append old ids) ids) :total total))
-                (assq-delete-all section drgnx-extensions-list--sections)))
+                (assq-delete-all section drgnx-extensions-list--sections))
+          drgnx-extensions-list--installed-ids nil)
     (when (eq section 'updates) (setq drgnx-extensions-list--updates total))
     (drgnx-extensions-list--changed)))
 
@@ -459,7 +467,8 @@ ticket (an integer) has no row, nil."
 
 (defun drgnx-extensions-list--define-view ()
   "Define the view type `extensions' (its undo goes with the module that calls this in its setup)."
-  (drgnx-view-define 'extensions :render #'drgnx-extensions-list--render :sync #'drgnx-extensions-list--sync :delay 0))
+  (drgnx-view-define 'extensions :render #'drgnx-extensions-list--render :sync #'drgnx-extensions-list--sync :delay 0
+                     :slice drgnx-view-slice))
 
 (defun drgnx-extensions-list--header ()
   "Set the header line of the list: the query and its chips, an error, and the restart note.  Cached values only."

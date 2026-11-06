@@ -845,16 +845,20 @@ rows), written by `drgnx-perf-extensions-write-archives`; no network. To write t
 
 | Workload | What it measures | Budget (`:report-only ext-pass`) |
 |---|---|---|
-| `extensions-open` | `Open Extensions` to the first drawn sections; `:processes` counts processes started | `:open_ms` 100, `:processes` 0 |
-| `extensions-search` | each key of a search over 7,150 rows | `:key_p50_ms` 8, `:key_max_ms` 16 |
-| `extensions-scroll` | scrolling the full list, per key | `:key_max_ms` 16 |
-| `extensions-details` | opening a details page | `:open_ms` 50 |
+| `extensions-open` | `Open Extensions` to the painted sections (`:rows_drawn`); `:processes` counts processes started | `:open_ms` 100, `:processes` 0 |
+| `extensions-search` | each key of a search over 7,150 rows, to the painted results | `:key_p50_ms` 8, `:key_max_ms` 16 |
+| `extensions-scroll` | scrolling the whole catalog by name (`@sort:name`, pages of 200), per key: the command, the list's own `post-command-hook` and the redisplay; the slices that draw a next page are timed apart (`:slice_max_ms`) | `:key_max_ms` 16 |
+| `extensions-details` | opening a details page, to its painted rows | `:open_ms` 50 |
 | `extensions-progress` | a running job's progress-file reads while it writes a step every key (each event names the file): the smallest gap between two reads (`:read_gap_min_ms`, `:reads`), how many gaps fall under 240 ms, whether the last write was read; and typing's p95 against idle | `:reads_too_close` 0, `:last_unread` 0, `:typing_delta_ms` 1 |
 | `activate-live` | a job's plan step: repointing the 40 package directories of a running session into the generation that holds the old copies (one walk of `load-path`) | `:activate_ms` 20 |
 | `activate-live-new` | a job's end that added a package, as the job layer passes it (`drgnx-extensions-live-after` of `(:status done)`): the new package activated from its own descriptor, the session holding 40 others | `:activate_ms` 20 |
 | `install-overhead` | an install's cost beyond the package manager's own, both children run | `:overhead_ms` 3000 (reported on ext4; macOS has APFS clones) |
 | `refresh-job` | the catalog refresh from the archives | none (reported) |
 | `list-packages-compare` | `list-packages` on the same fixtures, offline: first render, a `package-menu-filter-by-name` keystroke, scrolling, memory | none; `:beats_*` flags say whether the view wins each |
+
+The view draws from timers (`:delay 0`, then slices of at most `drgnx-view-slice`), so a timed form ends with the
+harness's settle: it fires the draw timers the view armed through the timer layer's own wrapper until none is left,
+draws what is still marked and redisplays. The clock stops on painted rows, never on armed timers.
 
 The rows are provisional: they report and never fail until `DRGNX_PERF_LANDED` names `ext-pass`, the combined gate pass
 that judges them. Run them pinned, alone on the perf island:
