@@ -16,6 +16,7 @@
 (require 'subr-x)
 (require 'drgnx-registry)
 (require 'drgnx-surfaces)
+(require 'drgnx-faces)
 
 (defconst drgnx-ui--default-glyphs
   '((handle "⠿" . "::") (close "×" . "x") (branch "⑂" . "Y") (warning "⚠" . "!") (ok "✓" . "+")
@@ -55,7 +56,7 @@ neither has it."
 (defface drgnx-status-info '((t :inherit shadow)) "Something to know." :group 'drgnx)
 (defface drgnx-status-warn '((t :inherit warning)) "Something to look at." :group 'drgnx)
 (defface drgnx-status-fail '((t :inherit error)) "Something failed." :group 'drgnx)
-(defface drgnx-status-needs-you '((t :inherit error)) "Something waits for you." :group 'drgnx)
+(defface drgnx-status-needs-you '((t :inherit drgnx-status-attention)) "Something waits for you." :group 'drgnx)
 
 (defconst drgnx-ui--severities
   '((ok ok drgnx-status-ok) (info info drgnx-status-info) (warn warn drgnx-status-warn)

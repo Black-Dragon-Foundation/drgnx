@@ -2690,6 +2690,25 @@ surfaces (for buttons that run registry commands), so the status bar, the lists 
   `drgnx-ui-close`. No close or unqueue mark is a literal `×`: the Buffers panel's rows, the find bar and the agents
   queue (glyph `unqueue`) draw kit glyphs, so a terminal that is not UTF-8 shows `x`, `x` and `-`.
 
+## Colour library (`core/drgnx-color.el`)
+
+Every colour computation goes through this file: quick help's card, the panel colours derived when a theme loads,
+and the contrast lint. It holds no colour literals. Inputs are colour strings Emacs knows (`#rrggbb` is read as
+written, never snapped to a terminal's palette); results are `#rrggbb`. A colour a frame does not give (`nil`,
+`unspecified-bg`, an unknown name) is `nil`, and each function answers `nil` for it: a theme that leaves a face
+unspecified never makes colour code signal.
+
+| Function | Returns |
+|---|---|
+| `(drgnx-color-rgb COLOR &optional FRAME)` | `(R G B)` floats in 0..1, or `nil` |
+| `(drgnx-color-hex RGB)` | `"#rrggbb"` |
+| `(drgnx-color-mix A B AMOUNT &optional SPACE)` | AMOUNT (0..1) of the way from A to B; SPACE is `oklab` (default) or `srgb` (per channel in 0..255, rounded half to even) |
+| `(drgnx-color-over FG BG ALPHA)` | FG at ALPHA over BG in sRGB, for tints |
+| `(drgnx-color-contrast A B)` | the WCAG 2.x ratio, 1..21 |
+| `(drgnx-color-solve COLOR TOWARD BG RATIO &optional SPACE)` | the smallest move of COLOR toward TOWARD that reaches RATIO on BG (TOWARD itself when none does) |
+| `(drgnx-color-hue-distance A B)` | the OKLCH hue distance in degrees, 0..180 |
+| `(drgnx-color-delta-e A B)` | the OKLab distance times 100 |
+
 ## Read and write through drgnx-file
 
 A file drgnx keeps (a config file, a state file, a report) is read and written through `drgnx-file`
