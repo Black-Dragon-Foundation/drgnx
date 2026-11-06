@@ -676,7 +676,12 @@ to nil. Never: `drgnx-notice--can-echo-p` (the seam tests stub) is nil in batch 
 (held until `server-after-make-frame-hook`), and `drgnx-notice--started` is nil until `emacs-startup-hook` (depth 90)
 or a daemon's first client frame, so nothing is echoed during startup; `drgnx-notice--startup-done` then queues one
 line over the `fail` conditions present. A single line names the item's `:command` by its registry title and that
-command's key; a merged line and the startup line name the Notices list and its key. Lines go out as
+command's key; a merged line and the startup line name the Notices list and its key. Where notices float
+(`drgnx-notice-toast-active-p`: `drgnx-notice-style` and Glitnir on a graphical frame) `drgnx-notice--echo-enqueue` hands a
+`problem` or `waiting` entry to `drgnx-notice-toast-offer` (`drgnx-notice-toast.el`) and queues no line: the model is
+`drgnx-notice-toast--visible` (at most three, oldest at the bottom) and `--waiting`, drawn by `drgnx-notice-toast--sync`
+into pooled child frames that take no focus; the layer timer `notice-toast` removes the oldest. The echo mode going off
+deletes them (`drgnx-notice-toast-delete-all`). Lines go out as
 `(let ((message-truncate-lines t)) (message "%s" LINE))`.
 
 **The session file** (`core/drgnx-notice-save.el`, `drgnx-notice-save-mode`, on in `drgnx-init`).
