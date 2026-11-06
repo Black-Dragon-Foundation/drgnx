@@ -203,10 +203,12 @@ files, the key's public half is in the sandbox's package keyring, and a director
       (should (equal (mapcar (lambda (p) (alist-get 'name p)) (alist-get 'packages c)) '("magit"))))))
 
 (ert-deftest drgnx-extensions-refresh/a-stripped-sig-fails-the-refresh ()
-  ;; The signed fixture archive and the archive settings that check its signature come with the signature task; the
-  ;; refresh already runs inside them when they exist.
-  (skip-unless (fboundp 'drgnx-pkg-with-archive-settings))
-  (ert-skip "needs the signed fixture archive"))
+  (drgnx-extensions-refresh-test--signed root
+    (should (eql 0 (drgnx-extensions-refresh-test--run "refresh")))
+    (let ((before (drgnx-pkg-test--bytes (drgnx-extensions-refresh-file))))
+      (delete-file (concat root "arch-gnu/archive-contents.sig"))            ; stripped
+      (should (eql 1 (drgnx-extensions-refresh-test--run "refresh")))
+      (should (equal before (drgnx-pkg-test--bytes (drgnx-extensions-refresh-file)))))))
 
 (ert-deftest drgnx-extensions-refresh/the-command-line-has-a-usage ()
   (should (eql 2 (drgnx-extensions-refresh-test--run "frobnicate")))
