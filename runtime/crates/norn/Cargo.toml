@@ -34,6 +34,8 @@ urdr = { path = "../urdr", version = "0.1.0", features = ["test-hooks"] }
 # tests/canary.rs: the hub's entity embedder (door 4) over the canary store (a dev-dependency cycle cargo allows)
 drgnx-ratatoskr = { path = "../drgnx-ratatoskr", version = "0.1.0" }
 tempfile.workspace = true
+# tests/plugin_hooks.rs: the engine through the plugin host, over the fixture plugins
+brokkr = { path = "../brokkr", version = "0.1.0", features = ["test-support"] }
 # hooks::tests: the point's budget on paused time
 tokio = { workspace = true, features = ["test-util"] }
 proptest.workspace = true

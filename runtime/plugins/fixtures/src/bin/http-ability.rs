@@ -1,6 +1,6 @@
 //! Three abilities that use the host's imports.
 //!
-//! - `fetch`: `{"url", "method": "get" | "post", "body"?, "headers"?: [[name, value]]}`; answers
+//! - `fetch`: `{"url", "method": "get" | "post", "body"? | "body_bytes"?, "headers"?: [[name, value]]}`; answers
 //!   `{"status", "body"}`, or the import's error.
 //! - `kv`: `{"op": "get" | "put" | "delete", "key", "value"?, "repeat"?}`; `repeat` N makes N writes with the keys
 //!   `key0`, `key1`, ... and answers how many succeeded and the first error.
@@ -33,8 +33,13 @@ fn fetch(args: &str) -> Result<String, String> {
         })
         .collect();
     let url = text(args, "url");
+    // `body_bytes` N: a body of N bytes made here, past what the arguments may carry
+    let body = match arg(args, "body_bytes").and_then(|v| v.as_u64()) {
+        Some(n) => vec![b'b'; n as usize],
+        None => text(args, "body").into_bytes(),
+    };
     let response = if text(args, "method") == "post" {
-        host::http_post(&url, &headers, text(args, "body").as_bytes())
+        host::http_post(&url, &headers, &body)
     } else {
         host::http_get(&url, &headers)
     }?;

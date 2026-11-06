@@ -1,6 +1,6 @@
 [package]
 name = "brokkr"
-description = "The plugin host: plugin manifests, approval hashes, the install scan and the agent-tools WIT world"
+description = "The plugin host: plugin manifests, approval hashes, the install scan, the agent-tools WIT world and the WASM host that runs plugins"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -20,7 +20,24 @@ serde_json.workspace = true
 serde_path_to_error.workspace = true
 sha2.workspace = true
 rustix = { workspace = true, optional = true }
+# the host: guests run on a runtime of its own, behind two semaphores
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
+wasmtime.workspace = true
+wasmtime-wasi.workspace = true
+wasmtime-wasi-io.workspace = true
+# wasi:io's stream type, for the stdout and stderr that go to the log
+bytes.workspace = true
+
+# against the fixture plugins, which `test-support` builds
+[[test]]
+name = "host"
+required-features = ["test-support"]
 
 [dev-dependencies]
 rustix.workspace = true
 tempfile.workspace = true
+tokio = { workspace = true, features = ["macros"] }
+wat.workspace = true
+skuld = { path = "../skuld", version = "0.1.0" }
+# a_fault_outside_wasm_still_reaches_the_hubs_handler: a handler of the test's own, installed before wasmtime's
+libc.workspace = true

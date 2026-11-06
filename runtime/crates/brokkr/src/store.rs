@@ -70,6 +70,16 @@ fn read_one(root: &Path, name: &str, dir: &eitri::Pinned) -> Result<Installed, M
     })
 }
 
+/// `plugin.json` and `plugin.wasm` of the install folder `dir`, read again with no link followed anywhere on the way:
+/// what the host hashes before it loads a plugin.
+pub(crate) fn read_files(dir: &Path) -> Result<(Vec<u8>, Vec<u8>), ManifestError> {
+    let pinned = eitri::open_path(dir, Kind::Dir).map_err(|e| io_error("", &e))?;
+    Ok((
+        read(&pinned, "plugin.json", MAX_MANIFEST_BYTES)?,
+        read(&pinned, "plugin.wasm", MAX_WASM_BYTES)?,
+    ))
+}
+
 fn read(dir: &eitri::Pinned, file: &str, cap: u64) -> Result<Vec<u8>, ManifestError> {
     eitri::read_regular(dir.fd.as_fd(), Path::new(file), cap).map_err(|e| io_error(file, &e))
 }
