@@ -147,5 +147,77 @@
         (goto-char (point-min))
         (should-not (re-search-forward (concat "(" (regexp-quote fn) "[ )]") nil t))))))
 
+(defmacro drgnx-history-test--draining (sent &rest body)
+  "BODY with the hub's calls caught: every `history/batch' call's params are pushed on SENT (newest first) and
+answered ok."
+  (declare (indent 1))
+  `(cl-letf (((symbol-function 'drgnx-history--connected-p) (lambda () t))
+             ((symbol-function 'drgnx-hub-call)
+              (lambda (method params callback &rest _)
+                (when (equal method "history/batch") (push params ,sent))
+                (funcall callback (list :ok t) nil)
+                1)))
+     ,@body))
+
+(ert-deftest drgnx-history/drain-tells-the-listeners-what-it-sent ()
+  ;; D: after each drain `drgnx-history-drained-functions' runs with the buffer, the buffer's count of drains and the
+  ;; changes sent (the hub's shape, in order); a drain that finds nothing tells nobody
+  (skip-unless (drgnx-history-test--hooked-p))
+  (let ((b (generate-new-buffer "history-drained")) (sent nil) (told nil)
+        (drgnx-history-drained-functions nil))
+    (unwind-protect
+        (drgnx-history-test--draining sent
+          (with-current-buffer b (insert "one two"))
+          (drgnx-history--adopt b "b-1")
+          (add-hook 'drgnx-history-drained-functions (lambda (&rest args) (push args told)))
+          (with-current-buffer b (goto-char 4) (insert "!"))
+          (drgnx-history--drain)
+          (drgnx-history--drain)                ; nothing pending: nobody is told
+          (with-current-buffer b (goto-char 1) (insert ">"))
+          (drgnx-history--drain)
+          (should (= (length told) 2))
+          (should (equal (mapcar (lambda (a) (nth 1 a)) (reverse told)) '(1 2)))
+          (should (eq (car (car told)) b))
+          (should (equal (nth 2 (cadr told)) '((:start 3 :old_len 0 :inserted "!"))))
+          (should (equal (nth 2 (car told)) '((:start 0 :old_len 0 :inserted ">"))))
+          (should (equal (plist-get (car (last sent)) :changes) (nth 2 (cadr told)))))
+      (drgnx-history--forget b)
+      (kill-buffer b))))
+
+(ert-deftest drgnx-history/drain-without-a-listener-is-quiet ()
+  ;; D: with nothing on the hook the drain sends as before and the hook costs nothing; a listener that signals does
+  ;; not stop the buffer being tracked
+  (skip-unless (drgnx-history-test--hooked-p))
+  (let ((b (generate-new-buffer "history-quiet")) (sent nil) (drgnx-history-drained-functions nil))
+    (unwind-protect
+        (drgnx-history-test--draining sent
+          (drgnx-history--adopt b "b-1")
+          (with-current-buffer b (insert "a"))
+          (drgnx-history--drain)
+          (should (= (length sent) 1))
+          (add-hook 'drgnx-history-drained-functions (lambda (&rest _) (error "a listener fails")))
+          (with-current-buffer b (insert "b"))
+          (drgnx-history--drain)
+          (should (= (length sent) 2))
+          (should (drgnx-history-tracked-p b)))
+      (drgnx-history--forget b)
+      (kill-buffer b))))
+
+(ert-deftest drgnx-history/no-prompt-in-event-path ()
+  ;; D lint: the code that runs from the hub's events (between the markers of drgnx-history-revert.el) asks nothing and
+  ;; waits for nothing; the commands and the cards outside it may prompt, as they run when the user asks
+  (let ((file (locate-library "drgnx-history-revert.el")))
+    (should file)
+    (with-temp-buffer
+      (insert-file-contents file)
+      (let* ((from (progn (goto-char (point-min)) (re-search-forward "^;;;; The events") (point)))
+             (to (progn (re-search-forward "^;; end of the event path") (point)))
+             (body (buffer-substring from to)))
+        (should (> (length body) 500))
+        (dolist (fn '("read-string" "read-from-minibuffer" "completing-read" "y-or-n-p" "yes-or-no-p" "read-key"
+                      "read-char" "read-number" "read-file-name" "sit-for" "sleep-for" "accept-process-output"
+                      "drgnx-hub-call-sync" "pop-to-buffer" "ediff-buffers"))
+          (should-not (string-match-p (concat "(" (regexp-quote fn) "[ )\n]") body)))))))
+
 (provide 'history-test)
 ;;; history-test.el ends here

@@ -10,6 +10,7 @@
 //! | `provider:read FILE [OFFSET LIMIT]` / `provider:grep PAT` / `provider:web-search Q` / `provider:web-fetch URL` / `provider:write FILE` | a tool call in the personality's own shape (Claude: `_meta.claudeCode.toolName`, `locations`, `rawInput`; Codex: kind and `action`; Gemini: kind and title only); nothing runs |
 //! | `provider:bash CMD` (Claude) | a `Bash` call: pending, then CMD run as Claude Code runs it (through `$CLAUDE_CODE_SHELL_PREFIX` with CMD as its one argument, else `sh -c`), then completed with its output |
 //! | `tool:write N` | a tool call (pending, then completed) whose raw input is a Write of N bytes (nothing is written) |
+//! | `fs:write PATH TEXT` | an edit tool call during which the client writes TEXT (`\n` a line break) to PATH in the cwd (`fs/write_text_file`); its output says `written` or `refused: …` |
 //! | `ask:permission KIND` | `session/request_permission` for a tool call of KIND (read, edit, execute, ...); says `permission: OPTION` |
 //! | `ask:tool JSON` | `session/request_permission` for the tool call JSON (`kind`, `title`, `rawInput`, `locations`, `_meta` …; its id is added); says `permission: OPTION` |
 //! | `ask:burst N JSON` | N `session/request_permission` requests for the tool call JSON, all sent before the first answer is read (Claude's parallel tool calls); says `burst: A/N allowed` |
@@ -746,6 +747,33 @@ impl Agent {
             }
             _ if head.starts_with("provider:") => {
                 self.provider_tool(sid, turn, &head[9..], rest);
+            }
+            "fs:write" => {
+                // an edit the client writes: `fs/write_text_file` while the tool call is pending
+                let (rel, text) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+                let content = text.replace("\\n", "\n");
+                let tid = format!("tc-{turn}-{}", self.next_out_id);
+                self.next_out_id += 1;
+                self.update(
+                    sid,
+                    json!({"sessionUpdate": "tool_call", "toolCallId": tid, "title": format!("Write {rel}"),
+                    "kind": "edit", "status": "pending", "rawInput": {"path": rel}}),
+                );
+                let path = cwd.join(rel).to_string_lossy().into_owned();
+                let rid = self.request(
+                    "fs/write_text_file",
+                    json!({"sessionId": sid, "path": path, "content": content}),
+                );
+                let out = match self.response(rid) {
+                    Some(r) if r.get("error").is_none() => "written".to_string(),
+                    Some(r) => format!("refused: {}", r["error"]["message"]),
+                    None => "no answer".to_string(),
+                };
+                self.update(
+                    sid,
+                    json!({"sessionUpdate": "tool_call_update", "toolCallId": tid, "status": "completed",
+                    "content": [{"type": "content", "content": {"type": "text", "text": out}}]}),
+                );
             }
             "tool:write" => {
                 // a Write whose input is N bytes of file (no file is written)

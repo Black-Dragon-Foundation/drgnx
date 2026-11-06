@@ -66,10 +66,10 @@ pub struct Core {
     pub map: std::sync::Arc<crate::work::map::Map>,
     /// The files shell steps opened, from Gleipnir's tracer ([`crate::work::trace`]).
     pub traces: std::sync::Arc<crate::work::trace::Traces>,
+    /// The edit history of each open project ([`crate::history`]).
+    pub history: std::sync::Arc<crate::history::wire::Hubs>,
     /// The planning sessions of Say it and the channel to their shell ([`crate::say`]).
     pub say: crate::say::Say,
-    /// The edit history of each open project ([`crate::history`]).
-    pub history: crate::history::wire::Hubs,
 }
 
 fn answer<T: Serialize>(r: Result<T, Error>) -> Result<Value, Error> {
@@ -166,6 +166,15 @@ pub async fn serve(
         Params::HistoryBatch(p) => answer(crate::history::wire::batch(f, c, p).await),
         Params::HistoryResync(p) => answer(crate::history::wire::resync(f, c, p).await),
         Params::HistoryUnregister(p) => answer(crate::history::wire::unregister(f, c, p).await),
+        Params::HistoryRevertPreview(p) => answer(crate::history::revert::preview(f, c, p).await),
+        Params::HistoryRevertApply(p) => answer(crate::history::revert::apply(f, c, p).await),
+        Params::HistoryFork(p) => answer(crate::history::branches::fork(f, c, p).await),
+        Params::HistoryForkDrop(p) => answer(crate::history::branches::drop_fork(f, c, p).await),
+        Params::HistoryCompare(p) => answer(crate::history::branches::compare(f, c, p).await),
+        Params::HistoryTake(p) => answer(crate::history::branches::take(f, c, p).await),
+        Params::HistoryRedo(p) => answer(crate::history::branches::redo(f, c, p).await),
+        Params::HistoryOpHunks(p) => answer(crate::history::hunk::op_hunks(f, c, p).await),
+        Params::HistoryRevertHunk(p) => answer(crate::history::hunk::revert_hunk(f, c, p).await),
         Params::RunnersUnbench(p) => answer(runners::methods::unbench(f, c, p).await),
         Params::RunnersRemove(p) => answer(runners::methods::remove(f, c, p).await),
         Params::PluginsList(p) => answer(crate::plugins::list(f, c, p).await),

@@ -27,6 +27,7 @@
 (declare-function drgnx-exec-unsync "drgnx-exec")
 (declare-function drgnx-settings-agents--event "drgnx-settings-agents")
 (declare-function drgnx-records-review--event "drgnx-records-review")
+(declare-function drgnx-history-revert--event "drgnx-history-revert")
 (declare-function drgnx-say-event "drgnx-say")
 (declare-function drgnx-ai-providers "drgnx-ai")
 (declare-function drgnx-settings-runtime-send "drgnx-settings-runtime")
@@ -741,6 +742,7 @@ closes it when this Emacs dies."
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--note-plugin)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-settings-agents--event)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-records-review--event)
+  (remove-hook 'drgnx-hub-event-functions #'drgnx-history-revert--event)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-say-event))
 
 ;;;; Skew: another drgnx's hub
@@ -1104,6 +1106,7 @@ end is said by its sentinel."
     (add-hook 'drgnx-hub-event-functions #'drgnx-hub--note-plugin)
     (when (require 'drgnx-settings-agents nil t) (add-hook 'drgnx-hub-event-functions #'drgnx-settings-agents--event))
     (when (require 'drgnx-records-review nil t) (add-hook 'drgnx-hub-event-functions #'drgnx-records-review--event))
+    (when (require 'drgnx-history-revert nil t) (add-hook 'drgnx-hub-event-functions #'drgnx-history-revert--event))
     (when (require 'drgnx-say nil t) (add-hook 'drgnx-hub-event-functions #'drgnx-say-event))
     (drgnx-hub-send-settings)
     (when (fboundp 'drgnx-settings-history-connected) (drgnx-settings-history-connected))))

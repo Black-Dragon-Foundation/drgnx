@@ -12,7 +12,7 @@
 #[cfg(test)]
 pub(crate) mod attach_tests;
 pub(crate) mod panel;
-mod turn_core;
+pub(crate) mod turn_core;
 
 use super::launch;
 use super::lock as plock;
@@ -797,6 +797,9 @@ pub struct Session {
     hooked: Option<runstav::methods::agents::Hooked>,
     /// Its agent's `_drgnx/panel` extension: what it offers, its context breakdown.
     panel: panel::Panel,
+    /// The projects' edit histories and the hub's state folder they live under: every write the hub serves for the
+    /// agent is recorded there (none: the hub has no state folder).
+    history: Option<(Arc<crate::history::wire::Hubs>, PathBuf)>,
 }
 
 /// What `Conn::prompt` answered for a turn.
@@ -2074,6 +2077,10 @@ fn assemble(
         project: std::sync::OnceLock::new(),
         hooked,
         panel,
+        history: front
+            .dirs
+            .get()
+            .map(|d| (front.core.history.clone(), d.hub.clone())),
     });
     (s, done_rx)
 }
@@ -4095,8 +4102,9 @@ impl Session {
         self.perform(fx);
     }
 
-    /// Its new conversation is live (a rewind's): TOLD first, then the queue as the swap kept it.
-    fn reattach(self: &Arc<Self>, told: Option<String>) {
+    /// Its new conversation is live (a rewind's): TOLD first, then the queue as the swap kept it.  Also a revert's
+    /// that stopped before anything changed: the same conversation goes on.
+    pub(crate) fn reattach(self: &Arc<Self>, told: Option<String>) {
         let fx = lock(&self.state).turn_step(TurnEvent::Reattach { told });
         self.perform(fx);
     }
@@ -4128,7 +4136,8 @@ impl Session {
     }
 
     /// The agent's `fs/write_text_file`: the after-edit hooks see the content first. A deny refuses the write (-32000),
-    /// a change is what gets written (and the agent is told), a note goes under the step.
+    /// a change is what gets written (and the agent is told), a note goes under the step. What is written goes to the
+    /// project's edit history first ([`Self::record_write`]).
     async fn write_file(self: &Arc<Self>, req: &Value) -> Result<(), (i64, String)> {
         let path = req.get("path").and_then(Value::as_str).unwrap_or("");
         let mut content = req
@@ -4158,6 +4167,8 @@ impl Session {
                 self.steer_in(crate::hook_points::change_notice(&hook, path));
             }
         }
+        // the edit history records what is written: the content after the hooks' change, never a refused write
+        self.record_write(&real, &content).await;
         tokio::fs::write(&real, content)
             .await
             .map_err(|e| (-32602, format!("{path}: {e}")))
@@ -4250,6 +4261,47 @@ impl Session {
             }
         }
         self.changed();
+    }
+
+    /// The agent's write of CONTENT to REAL (a path the fence allowed), recorded in its project's history before the
+    /// file is written, so the watcher's event about it finds the version known: operations by the agent's peer on its
+    /// worktree's branch, one `agent_step` record caused by this session.  A folder that is no git worktree, a path
+    /// outside it (a brainstorm's document) or a history that fails leave the write as it is: best effort.
+    async fn record_write(&self, real: &Path, content: &str) {
+        let Some((hubs, state)) = &self.history else {
+            return;
+        };
+        let Some(rel) = real
+            .strip_prefix(resolve(&self.cwd))
+            .ok()
+            .and_then(|r| r.to_str())
+            .filter(|r| !r.is_empty())
+            .map(str::to_owned)
+        else {
+            return;
+        };
+        let Ok((hub, tree)) = hubs.of_tree(state, &self.cwd) else {
+            return;
+        };
+        let cause = verdandi::Cause {
+            session: Some(self.id.clone()),
+            ..Default::default()
+        };
+        let (sid, bytes, now) = (
+            self.id.clone(),
+            content.as_bytes().to_vec(),
+            crate::clock::wall_secs(),
+        );
+        let r = crate::clock::blocking(move || {
+            hub.on_agent_write(&tree, &rel, &bytes, &sid, cause, now)
+        })
+        .await;
+        if let Ok(Err(e)) = r {
+            tracing::info!(
+                sid = self.id,
+                "the agent's write is not in the history: {e}"
+            );
+        }
     }
 
     /// Cancel the turn and end the process group.

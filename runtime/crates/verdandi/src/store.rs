@@ -247,6 +247,17 @@ impl History {
         Ok(BranchId(self.conn.last_insert_rowid()))
     }
 
+    /// The branch NAME, when there is one (none made).
+    pub fn find_branch(&self, name: &str) -> Result<Option<BranchId>> {
+        Ok(self
+            .conn
+            .query_row("select id from branch where name = ?1", [name], |r| {
+                r.get(0)
+            })
+            .optional()?
+            .map(BranchId))
+    }
+
     /// BRANCH's base commit.
     pub fn base_of(&self, branch: BranchId) -> Result<Option<String>> {
         self.conn

@@ -99,7 +99,9 @@ text after the scope; theirs: the text before it), run over three temporary file
 that differs is a bug in the span revert: the preview says `threeway_differs` and carries git's text, which the apply
 then writes. `src/revert_props.rs` holds the property in 10,000 seeded cases (the spike's, through the history's own
 records and a reload of each document from its rows): every case without an overlap equals git, and every overlap the
-case made is found, and no other.
+case made is found, and no other. `verdandi::threeway::conflicts(base, ours, theirs)` is the public count of the same
+merge's conflicting hunks (0: clean; git counts at most 127, more is an error), for callers that only need to know
+whether two edits meet.
 
 **Roll back mine too** (`Mode::RollBackMine`). The text goes back to what it was before the scope, applied as new
 operations; the document as it was is kept as branch `undone/<record>`, so its hunks can be redone.
@@ -148,6 +150,31 @@ text after record `since` to its text now, numbered as `git diff --unified=0` nu
 --no-index` over two private temporary files, as the 3-way check does `git merge-file`). A file with no change is left
 out.
 
+## One hunk of a record
+
+`src/revert_hunk.rs`: Reject on one hunk of an agent's record, with the user's later typing kept, and who undid it.
+
+- **A record's hunks** (`History::op_hunks(branch, op)`) come from element ids at the record's own version: each element
+  it inserted has its line, each deletion the line of the point it left (after its nearest surviving left neighbour).
+  Sorted by line, an unchanged line between two effects starts a new hunk, so the hunks are what `git diff -U0` shows
+  for that record alone. Each `OpHunk` has its lines now, the record's text still there, the text it deleted, a state
+  (`Live`, `PartlyUndone`, `Undone`) and `undone_by`. `History::records_of(branch, session)` lists the `edits` records
+  of a session's agent on a branch (a paired chat's, on the user's).
+- **Reverting one** (`History::plan_hunk_revert(branch, op, doc, index)`) is keep mine on that hunk's part of the
+  record's scope, run on a fork: its elements still there are deleted, the text it deleted goes back after its
+  surviving neighbour, and the characters the user typed inside the agent's text are other elements, so they stay. The
+  plan is the fork's deletes and inserts as `Change`s in order; `History::apply_hunk_revert` replays them on the live
+  document as the user's operations with one `revert` record (parent the record, its cause), and an editor applying
+  them in its buffer replays the same operations (`History::record_hunk_revert` then writes the record). A **conflict**
+  is a hunk whose deleted text has no place to go back to: a neighbour it sat between is gone, or other text now sits
+  beside it outside the agent's own text; the plan says so and nothing changes. An undone hunk plans nothing.
+- **Who undid it.** Loro names no deleter of an element, but every delete operation's position at its own version
+  names what it removed: the delete operations ordered after the record (Lamport) are read at their versions, and those
+  that removed the hunk's elements name their records through the op index; text the record deleted that is back at
+  its place (an editor's undo inserts it again as new elements) names the record that inserted it. Nothing is stored,
+  so it holds for any history; the scan costs a version checkout per later delete operation in the document and runs
+  only for a hunk with something gone.
+
 ## Privacy: redaction and excise
 
 `redact::scan(batch)` runs on capture, before a change reaches a document: the shapes of well-known keys (`sk-…`,
@@ -168,8 +195,8 @@ deny-list names is never registered, so the notes are in no document, snapshot o
 ## Size, expiry, compaction
 
 `History::size()` is the database's size (pages in use, the log included); the cap is `DEFAULT_CAP`, 2 GiB per project.
-`History::expire(now)` removes the undone branches and frozen worktrees (`History::freeze(branch, at)`; a roll back
-freezes its `undone/<record>` at once) set aside 90 days or more before `now`, unless pinned (`History::pin`), with their
+`History::expire(now)` removes the undone branches, frozen worktrees and dropped forks (`History::freeze(branch, at)`;
+a roll back freezes its `undone/<record>` at once, `history/fork/drop` its fork's branch) set aside 90 days or more before `now`, unless pinned (`History::pin`), with their
 documents and anchors. `History::compact(cap, author, now)`, when the history is over the cap, cuts every document
 shallow (Loro's shallow snapshot) at the oldest live reference: an anchor's record, or another branch of the document,
 live, frozen or undone, from its first record on (an undone branch from its roll back's); with nothing pinning it, just
@@ -198,6 +225,20 @@ document. The blob id is `git hash-object --path` over the bytes read (the repos
 directory the tree names: the run's trusted store for a tree a sandboxed agent worked in, never plain git in such a tree.
 Each version is published as the bus event `history/file-version {worktree, path, blob, op}`; its shape is frozen for its
 consumers.
+
+Every `fs/write_text_file` the session handler serves (`agents/session.rs`, after the fence allowed the path) calls
+`on_agent_write` first, in its worktree's project history, with the session as the cause; the step is not named, since
+its row is written when the step ends. A folder that is no git worktree or a path outside it (a brainstorm's document)
+is not recorded, and a history that fails never fails the write. A Fork from here of a worker starts a worker in its new
+tree, so its writes are served (a chat's fork stays a chat, its project read-only).
+
+**Merges** (`merge.rs`). After git merged a task's branch into the job's tree (the review's merge and a manager's
+`merge` tool), `Hub::on_git_merge(target, source, old, new, now)` reads git's text of every file the merge changed from
+the merge commit, in the job tree's repository (after git's own hooks; never git in the task's tree), and writes one
+`merge` record with `History::record_merge` by the peer `external:git-merge`. The task's tree of another project (a
+snapshot task's own repository) is no source: then only git's result is recorded. What the job tree's files hold beyond
+the union (a file no branch had a document of, a deletion) follows as the git event's `external` record. The merge
+itself never waits on the history: a failure is logged.
 
 **Whose version** (`origin.rs`, pure). The hub registers a write before the file is written; the watcher's event about it
 and a rescan then find it known. `OriginCore` takes `HubWrite`, `Watch` and `Rescan` events (a path and a content hash)
@@ -233,7 +274,10 @@ pieces of at most a quarter of that many characters, and batches are filled up t
 against the hash of the buffer's whole text, which costs time in proportion to the buffer (about 4 ms per MB), so a
 buffer over 256 K characters is drained only after 0.3 s of idleness and its changes wait in the ring meanwhile. When the hub answers
 `resync` (or Nidhogg drains the symbol `resync`), the ring is dropped and the whole text goes as `history/resync`. A hub
-that goes drops every registration; the next connection registers the buffers again.
+that goes drops every registration; the next connection registers the buffers again. After a drain that sent changes,
+`drgnx-history-drained-functions` runs with `(BUFFER COUNTER CHANGES)`: the buffer, the number of its drains that sent
+changes so far, and the changes sent (the hub's shape, 0-based `:start`). With no listener it costs nothing; a listener
+that signals is skipped.
 
 The module `tools/work-space` turns the mode on in its setup and off in its teardown.
 A buffer that holds a large file (`drgnx-large-file-p`) is never registered, and one that becomes a large file is
@@ -243,6 +287,18 @@ An indirect buffer shares its base's text, so only the base is registered and ea
 `drgnx-history-with-origin` binds `nidhogg-history-origin` for code that writes into buffers for someone else (a merge,
 a revert, git): the changes carry that origin. Emacs's own undo of them runs outside the macro, so it is the user's
 change. Auto-revert binds `external:disk`.
+
+`core/drgnx-history-revert.el` and `core/drgnx-history-compare.el` hold the commands (`drgnx-history-revert-to-here`,
+`-fork-here`, `-redo`, each `(SESSION SEQ)`; `-compare (A B)`; `-who-wrote-this`). The step defaults to `timeline/get`'s
+newest, and redo finds the revert record in the step's `undone_by`. The revert card is drawn from `history/revert/preview`
+and sent by `history/revert/apply` (mode, one choice per overlap in the card's order, the message); a skipped path whose
+reason names a hook shows as "refused by hook". The fork prompt reads the message with `read-string` in the command and
+adds `drgnx-forecast-line`'s line when that function exists and `forecast/session` answers. `history/applied` is handled
+by `drgnx-history-revert--event`, the only code here that runs from the event connection (it never prompts or waits; a
+lint reads its source): clean buffers revert under `drgnx-history-with-origin "revert"`, buffers with unsaved changes are
+kept in a bounded list and a notice carries `drgnx-history-resolve-dirty`, whose card offers keep mine, take theirs and
+edit. `drgnx-history-who-wrote-this` asks `history/blame {path, worktree_root, start, end}` (0-based offsets) and reads
+`:spans` of `{start, end, author, step}`; the hub half of that method lands with the views.
 
 ## Testing
 

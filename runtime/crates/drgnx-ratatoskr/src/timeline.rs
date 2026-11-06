@@ -7,6 +7,7 @@
 //! calls is `think`, a tool call runs from `in_progress` to `completed`, a permission request is `user-wait` because
 //! the hub answers it, a paused session is `paused`); this module reads the table back and takes the snapshots.
 
+pub mod effects;
 pub mod snapshot;
 
 use crate::dispatch::Caller;

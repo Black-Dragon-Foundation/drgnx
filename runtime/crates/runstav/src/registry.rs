@@ -369,7 +369,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 165, "{names:?}");
+        assert_eq!(names.len(), 174, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -404,12 +404,21 @@ mod tests {
         want.extend(["say/end", "say/revise", "say/start"]);
         // the plugins': an approval and a switch-off change what the hub may run
         want.extend(["plugins/approve", "plugins/disable"]);
-        // the editor's tracking: every history method changes what the hub tracks
+        // the edit history's: the editor's buffers, as the user's operations
         want.extend([
             "history/batch",
             "history/register",
             "history/resync",
             "history/unregister",
+        ]);
+        // a revert to here: the files, the steps, the conversation and a commit; and one hunk of a record
+        want.extend(["history/revert/apply", "history/revert/hunk"]);
+        // a fork from here, its drop, and the text taken across or redone
+        want.extend([
+            "history/fork",
+            "history/fork/drop",
+            "history/redo",
+            "history/take",
         ]);
         want.extend(
             registry()
@@ -662,7 +671,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 119);
+        assert_eq!(with, 127);
     }
 
     #[test]

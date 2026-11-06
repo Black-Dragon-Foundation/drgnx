@@ -221,6 +221,13 @@ cap }`, `Escapes`, `Untrusted { path, why }`, `Unsupported` or `Io`.
   with `O_CREAT | O_EXCL | O_NOFOLLOW` and `mode` (at most 0o777, less the umask), writes, `fsync`s and `renameat`s
   it over `rel`. A link at `rel` is replaced, never followed; anything else that is not a regular file is
   `NotRegular`. The temporary file is removed on every error.
+- **`remove_beneath(dir, rel)`** opens the parent with `open_beneath` (a link in any component before the leaf is
+  refused) and `unlinkat`s the leaf at the parent's held fd: a leaf that is a link goes as a link, and what it names
+  is never touched. A leaf already gone is done; a directory is `NotRegular`.
+- **`symlink_beneath(dir, rel, target)`** opens the parent the same way, makes the link at `.eitri-<16 hex>` with
+  `symlinkat` (the target copied as bytes, never resolved; empty or with a NUL byte refused) and `renameat`s it over
+  `rel`: an old leaf that is a link or a regular file is replaced, never followed. The same on Linux and macOS (no
+  `openat2` branch).
 - **`trusted_program(candidates)`** returns the first candidate that only root can change, as a `TrustedProgram {
   path, dev, ino }`: an absolute path with no `.` or `..`, opened with `open_path`, a regular file with an execute
   bit, owned by uid 0 and not group- or world-writable, in directories up to `/` that are owned by uid 0 and not

@@ -161,6 +161,12 @@ impl Live {
         self.0.lock().unwrap().remove(id);
     }
 
+    /// Job ID of SESSION runs, as a start records it (for the tests of the modules that read the running jobs).
+    #[cfg(test)]
+    pub(crate) fn started(&self, id: &str, session: &str) {
+        self.add(id, Some(session.to_string()));
+    }
+
     /// The running jobs SESSION started.
     pub fn ids(&self, session: &str) -> Vec<String> {
         let mut ids: Vec<String> = self

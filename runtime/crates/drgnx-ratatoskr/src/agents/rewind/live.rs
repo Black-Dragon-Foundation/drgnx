@@ -365,6 +365,8 @@ async fn fork_keeps_the_source_running() {
         &cwd,
         None,
         "go on".into(),
+        None,
+        None,
     )
     .await
     .expect("a fork");
@@ -414,6 +416,8 @@ async fn fork_cross_provider_is_a_labelled_summary() {
         &fx.work(),
         Some("mock-gemini"),
         "go on".into(),
+        None,
+        None,
     )
     .await
     .unwrap();
@@ -447,6 +451,8 @@ async fn fork_of_a_finished_session_reads_its_entity() {
         &fx.work(),
         None,
         "go on".into(),
+        None,
+        None,
     )
     .await
     .expect("a fork of what the session left");

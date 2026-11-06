@@ -29,8 +29,6 @@ pub const REPORTS_MAX: u64 = 16 << 20;
 pub const OUTPUTS_MAX: u64 = 256 << 20;
 /// A job's `changes.patch`.
 pub const PATCH_MAX: u64 = 16 << 20;
-/// The lock's protected files: a patch that touches one, at any depth, is never applied (`.git` is refused whole).
-pub const PROTECTED: [&str; 5] = [".envrc", ".claude", ".codex", ".gemini", "mise.toml"];
 
 /// Why something a runner returned was refused.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -426,17 +424,21 @@ fn side(p: &[u8], prefix: &[u8]) -> Option<Option<Vec<u8>>> {
     p.strip_prefix(prefix).map(|p| Some(p.to_vec()))
 }
 
-/// The protected name REL holds at any depth (one of [`PROTECTED`], or `.git`).
-fn protected(rel: &Path) -> Option<String> {
+/// The protected name REL holds at any depth (one of the lock's [`NEVER_RESTORED`], which a revert never writes either,
+/// or `.git`): a patch that touches one is never applied.
+///
+/// [`NEVER_RESTORED`]: crate::agents::lock::NEVER_RESTORED
+pub(crate) fn protected(rel: &Path) -> Option<String> {
+    use crate::agents::lock::NEVER_RESTORED;
     rel.components()
         .map(|c| c.as_os_str())
-        .find(|c| *c == ".git" || PROTECTED.iter().any(|p| c == p))
+        .find(|c| *c == ".git" || NEVER_RESTORED.iter().any(|p| c == p))
         .map(|c| c.to_string_lossy().into_owned())
 }
 
 /// Whether PATH matches the `writes` glob PATTERN: `*` and `?` within one name, `**` as a whole segment any number of
 /// folders, a trailing `/` the folder and all in it.
-fn glob_ok(pattern: &str, path: &str) -> bool {
+pub(crate) fn glob_ok(pattern: &str, path: &str) -> bool {
     let whole;
     let pattern = match pattern.strip_suffix('/') {
         Some(dir) => {

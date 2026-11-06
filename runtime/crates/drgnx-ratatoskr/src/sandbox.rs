@@ -661,10 +661,43 @@ pub fn remove_stubs(scratch: &Path, worktree: &Path) {
     let Ok(text) = std::fs::read_to_string(&list) else {
         return;
     };
+    remove_listed(text.lines(), worktree);
+    let _ = std::fs::remove_file(list);
+}
+
+/// How many stubs SCRATCH's list names now: a one-shot run in the session's tree (a commit) takes this mark before its
+/// launch and removes what it added after it ([`remove_stubs_since`]).
+pub fn stubs_mark(scratch: &Path) -> usize {
+    std::fs::read_to_string(stubs_file(scratch)).map_or(0, |t| t.lines().count())
+}
+
+/// Remove the stubs SCRATCH's list names after its first MARK lines (those one run made), as [`remove_stubs`] does,
+/// and keep the first MARK in the list: a one-shot run never ends a session, so nothing else would remove them.  The
+/// session's own stubs, made at its launch, stay: its sandbox may still have them bound.
+pub fn remove_stubs_since(scratch: &Path, worktree: &Path, mark: usize) {
+    let list = stubs_file(scratch);
+    let Ok(text) = std::fs::read_to_string(&list) else {
+        return;
+    };
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.len() <= mark {
+        return;
+    }
+    remove_listed(lines[mark..].iter().copied(), worktree);
+    let kept: String = lines[..mark].iter().map(|l| format!("{l}\n")).collect();
+    let _ = if kept.is_empty() {
+        std::fs::remove_file(&list)
+    } else {
+        std::fs::write(&list, kept)
+    };
+}
+
+/// The stubs LINES name in WORKTREE removed, when still empty and not in the git index.
+fn remove_listed<'a>(lines: impl Iterator<Item = &'a str>, worktree: &Path) {
     let index = git_dirs(worktree)
         .and_then(|g| std::fs::read(g.gitdir.join("index")).ok())
         .unwrap_or_default();
-    for line in text.lines() {
+    for line in lines {
         let p = Path::new(line);
         let Ok(rel) = p.strip_prefix(worktree) else {
             continue;
@@ -687,7 +720,6 @@ pub fn remove_stubs(scratch: &Path, worktree: &Path) {
             Ok(())
         };
     }
-    let _ = std::fs::remove_file(list);
 }
 
 /// A worktree's git folders: its own (`gitdir`; `.git` itself in a plain checkout) and the common one (`common`),

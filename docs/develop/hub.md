@@ -999,6 +999,159 @@ else (Gemini, an agent without the capability) `summary`.
   `TurnCore::resume` does, then starts the next prompt unless the queue is held. The core decides; the rewind only
   sends the two events.
 
+## Revert to here
+
+A revert takes an agent's work back to one of its steps: the files, the decisions and the conversation as one record.
+
+- **The methods** (`history::revert`, user only). `history/revert/preview {session, seq} | {decision}` answers the
+  card: the files, the overlaps, the files merged with the user's later edits (`non_overlapping_files`), what the
+  revert cannot undo, the level, `needs_message`, `blocked`, the paths left out, the conversation (`restored`, or
+  `not-restored` with a label: a finished worker's is "conversation not restored: the agent has finished") and
+  `fork` (offered beside Apply for a finished worker or a blocked revert). The preview is kept in the project's
+  `history.db` (`History::keep_preview`, under a random 52-bit id unique across the projects), so it survives a hub
+  restart, and is taken once on apply (`take_preview`, from whichever project holds it).
+  `history/revert/apply {preview_id, mode, choices, message}` answers `Applied {op, session, level,
+  commit, skipped, conversation, kept_patches, undone}` and broadcasts `history/applied {op, paths, worktree}`.
+  Refusals start with their reason: `stale` (the files or the session moved since the preview, or no such
+  preview), `blocked`, `needs-message`, `not-revertible` (no checkpoint: older than the history; an agent's call),
+  `busy` (a revert of the tree runs).
+- **The user's work is never lost.** Each path the checkpoint and the files now differ in is the agent's alone when
+  it equals the agent's newest checkpoint (restored from the step's checkpoint), else the user's: a text file whose
+  edits do not meet the agent's is merged (`verdandi::merge3`: base the agent's last version, ours the user's,
+  theirs the step's) and the user's edit stays; where they meet it is an overlap, and its choice decides: keep the
+  user's (the default, also for a missing choice; listed `edited-later`), take the reverted file, or an edited text.
+  `roll-back-mine` writes every path back. Either way the files as they were are kept as a tree under
+  `refs/drgnx/undone/<op>` of the shadow repository (`Applied.undone`).
+- **The record** is one `revert` record in the project's `history.db`, its parents the records the session caused
+  after the step (`History::caused_by`), or one `agent_step` record standing for those steps when the history has
+  none; the pending record (`History::mark_pending`) holds the plan and the answers until the last step clears it.
+  At start-up `agents::Hub::resume_all` first calls `history::revert::finish_pending`, which finishes every pending
+  revert from the files on.
+
+- **What it cannot undo** (`timeline::effects::of(front, target)` → `RevertEffects`, labelled `computed`), each from a
+  hub record after the step began, listed first on the card: the session's commits a remote already has (remote
+  tracking refs that contain them, read in the trusted store), messages it sent that their recipient has `read` or
+  `acted` on, its decisions after the step that another decision depends on (`decisions/effects`' computed
+  dependents), the tasks it filed and the settings it changed (txs of the session; a setting through
+  `mcp:settings_change`), its commits already merged into its job's `job/<job>` branch, what the steps after it spent
+  (cost by unit and tokens), and its jobs that run or wait: the hub's own (`exec::Live`), then the runners queue's
+  queued rows and remote attempts (`runtime.db`'s `rq_job` and `rq_attempt`), each named with where it runs.
+- **When it must become a fork** (`timeline::effects::blocked(front, dependents, sid)` → `[Blocked {decision, commit,
+  session, branch}]`): a dependent commit of another session that the integration branch already holds (`git
+  merge-base --is-ancestor` in the commit's trusted store; the branch is the session's `job/<job>`, or for a session
+  with no job the branch its repository's `HEAD` names). The session's own dependents never block: the revert takes
+  them too.
+- **Writing into an agent's tree** (`history::tree`, `timeline::snapshot`). `tree::restorable(rel, extra)` refuses
+  the lock's `NEVER_RESTORED` (`PROTECTED_RO`: `.claude`, `.codex`, `.gemini`, `.envrc`, `.git/hooks`,
+  `mise.toml`; the same list a runner's returned patch is refused by) at any depth, any `.git` component, and the
+  secret files a snapshot leaves out (`snapshot::excludes`, with the settings' extra paths), component by component
+  (case-folded on macOS). `snapshot::restore_into(root, source, target, tree, only, extra)` makes a tree equal to a
+  checkpoint: what it holds now is written as a tree into the source's shadow repository, `snapshot::changed`
+  (`diff-tree -r -z --raw`, both sides' git modes) lists what differs, and each path is written by mode through
+  `eitri`: `100644`/`100755` with `write_regular` and the mode, `120000` with `symlink_beneath` (the target as
+  bytes), a path the checkpoint lacks with `remove_beneath`; a gitlink (`160000`) and a refused path are skipped and
+  listed. Nothing is chmodded through a path. `snapshot::tree_at(root, worktree, sid, seq)` is the nearest snapshot
+  at or below a step.
+- **The forward commit** (`tree::commit_in_sandbox(front, sid, cwd, paths, subject)`), as `git commit --only` but
+  quiet about a path neither side has (a deletion committed before a crash, a file never added): HEAD is read into
+  the commit's own index (`GIT_INDEX_FILE=.git/drgnx-commit-index`), the paths updated there (`update-index --add
+  --remove`), the index compared with HEAD (`diff-index --cached --quiet`: equal is nothing to commit), committed
+  (`commit --no-verify`, `core.hooksPath=/dev/null`, no signing), and the same paths updated in the worktree's own
+  index; what the agent staged besides them stays staged. In a folder a sandboxed agent worked in
+  (`RunGit::is_touched`) each run is a Gleipnir one-shot of the session's worktree shape
+  (`launch::worktree_launch`: the folder writable, the protected paths and the git folder's hooks and config
+  read-only, the provider's relay only), and the placeholders that launch made to pin absent protected files
+  (`.envrc`, `mise.toml`) are removed when it ends (`sandbox::remove_stubs_since`: only the ones after the mark it
+  took, so the session's own stubs stay bound); elsewhere with plain git. The commit is read from the ref files after
+  (`snapshot::head_of`), since the sandboxed run keeps no stdout; nothing to commit is `Ok(None)`, so a retry after a
+  crash is quiet. A failure is reported and the files stand; in a linked worktree the sandboxed commit cannot reach
+  the common folder and fails.
+- **The order** (`history::revert_core`, pure): after the shell's check, `Quiet` (the session detached from its
+  turn core, its jobs stopped), `Rescan` (a record new since the preview is `stale`), `Record` (the history record and
+  the pending record: durable from here), `Files` (each path announced to the origin core as the hub's write before
+  it is written: the checkpoint's blob, or the blob of the merged or edited text hashed as the watcher hashes what it
+  reads, so the watcher's event about it is no outside edit), `Graph`, `Conversation` (a finished worker has
+  none: said once, and skipped), `Commit`, `Clear`, then `history/applied` and the manager told: a worker's manager
+  (its row's `parent`) gets a message from the hub naming the worker, the step, the conversation and the commit. A
+  failure before
+  `Record` reattaches the session and refuses; a conversation that cannot be restored is said and the commit follows;
+  a failed commit is reported and the record cleared. A crash forgets the revert; the next start finishes it from the
+  pending record (`Files` on, each step idempotent). A message or a Stop sent meanwhile is the turn core's (queued or
+  held until the reattach); the cancelled turn's answer changes nothing; a runner's patch returned meanwhile is kept
+  on its job, never applied: the returned-patch path asks `history::revert::patch_returned(front, sid, job)` first,
+  which is true while the session's revert runs, and the job is listed in `Applied.kept_patches`. Every order of these
+  is tested with skuld, composed with the turn and origin cores; the steps on a live session of the mock agent, a
+  hub stopped after a step and a second one finishing, are tested with a park hook (test builds only).
+- **A fork's tree** (`tree::fork_tree(front, source, new_sid)`): `RunGit::task_worktree(repo, "fork-<sid8>", new_sid,
+  base)`, where `repo` is the worktree's recorded repository (`worktree_base`) or the source's own untouched folder,
+  and `base` the step's head when that commit verifies there (a snapshot task's branch, named by its `.git/HEAD`, is
+  brought into the repository through its bundle first, `RunGit::import`: verified, fsck'd, written
+  compare-and-swap), else the worktree's recorded `base_commit`; the
+  checkpoint (`step.snapshot`, else `tree_at`) is then written over it with `restore_into` and the folder marked
+  touched.
+
+## Fork from here
+
+A fork starts a second agent from one of a session's steps, in its own tree, while the source runs on
+(`history::branches`, user only, a direct act of the user's: no task, no job, no `job/propose`, no approval card, no
+budget chain; the forecast line the user saw is the editor's).
+
+- **`history/fork {session, seq, message, profile?}`** answers `Forked {id, branch, source_branch, path, level}`. In
+  order: the tree (`tree::fork_tree`, above), then the fork's history branch, then the conversation
+  (`rewind::fork_conversation` with the new session id the tree was named for, told the user's `message`, which is
+  required). The branch is named for the fork's tree (`wt/<id>`), so the tree's later changes land on it; it holds
+  the source tree's documents as they were at the step: `History::fork` at the record the step anchors
+  (`step.history_op`), else the newest record the session caused by the step's end. A step whose record holds none of
+  the source's documents (the history has none of its files yet) starts the branch from its base. Either way there
+  is one `fork` record. A conversation that cannot start removes the tree again and freezes the branch. A Codex fork
+  marks its new tree untrusted, as every Codex launch marks its folder (`projects."<cwd>".trust_level`).
+- **`history/fork/drop {id}`** (a session linked `forked_from` another): its agent stopped, its tree removed (only a
+  tree the hub made for this fork, `fork-<sid8>`: `git worktree remove --force` and `worktree prune` in the trusted
+  repository the fork was made from, never git in the tree, then what is left with `remove_dir_all`, which follows no
+  link), its history branch frozen. The branch is kept for compare and expires 90 days later as a frozen worktree does
+  (`History::expire`); its git branch stays.
+- **`history/compare {a, b}`** (two branch names, from `Forked`): the hunks B has that A does not, per file, each
+  with who wrote B's text (the peer's author), the record and the session and step that record names
+  (`History::compare`), from whichever project's history holds both.
+- **`history/take {from, worktree, hunks}`**: whole hunks of branch FROM (a hunk's `theirs_start`/`theirs_end` from
+  compare) into the worktree's branch as the user's new text, one `merge` record whose provenance is the source
+  element ids (`History::take`; part of a hunk is refused and nothing changes), then the files written through
+  `eitri`, each announced to the origin core first. A file whose disk differs from what its history holds is refused
+  (`stale`), so the user's unsaved or unrecorded work is never overwritten; a protected path is refused.
+- **`history/redo {session, op}`**: the revert OP put back. Each path the revert changed (the step's checkpoint
+  against `refs/drgnx/undone/<op>`) goes back to the files as the revert found them when the user has not touched it
+  since, is merged with the user's later edit where they do not meet (`merge3`: base the checkpoint's, ours the
+  user's, theirs the undone), and is left, listed `edited-later`, where they meet. One `redo` record naming the
+  revert, one forward commit (`tree::commit_in_sandbox`), `history/applied`, and the agent told by a message from the
+  hub: its conversation is not restored.
+- The methods are tested on live sessions of the mock agent in a real repository: an agent's writes recorded as the
+  session handler records them (`Hub::on_agent_write`), stamped at the steps' own times.
+
+## One hunk of a record
+
+What Reject on one agent hunk calls, a worktree agent's or a paired chat's (whose writes land in the user's buffers,
+as the peer `agent:<session>` on the user's branch). Both user only; `history/hunk.rs` over `verdandi::revert_hunk`.
+
+- **`history/op/hunks {worktree, op? | session?}`**: the hunks of record OP, or of every `edits` record of SESSION's
+  agent on the worktree's branch, each `{op, path, index, start_line, end_line, text, deleted, state, undone_by}`:
+  lines 1-based in the text now, `text` the record's text still there, `deleted` what it removed, `state` `live`,
+  `partly-undone` or `undone`, and `undone_by` the records that took its text away or put back what it deleted, each
+  with its author (the user's `C-/` of an agent's write is `{"kind": "user"}`: "undone by you"). Settling typing is
+  written into its records first.
+- **`history/revert/hunk {worktree, op, path, hunk}`**: hunk HUNK of record OP reverted as the user's operations,
+  keeping what the user typed since. `state`:
+  - `applied`: no editor buffer tracks the file, so the hub applied it, wrote one `revert` record (parent OP, OP's
+    cause) and the file through `eitri`, announced to the origin core first, then `history/applied`. A file whose
+    disk differs from its history is refused (`stale`), as `history/take` is.
+  - `in-buffer`: an editor buffer tracks the file, so the hub changes nothing (it never writes behind an open buffer)
+    and answers `buffer_id`, `version` (the SHA-256 of the text the edits apply to, the hash `history/batch` carries)
+    and `edits` (`history/batch` changes, in order, with the origin `revert:<op>`). The editor applies them when its
+    buffer hashes to `version`; its batch then records them as the user's operations in one `revert` record naming OP.
+  - `conflict`: the text the hunk deleted has no place to go back to (a neighbour it sat between is gone, or other
+    text now sits beside it outside the agent's own text): `conflict {start_line, end_line, users, reverted}`,
+    nothing changed.
+  - `undone`: nothing to do; `undone_by` names who did.
+
 ## The store
 
 The front serves the store (`work.db`, schema 12) itself: `graph/*` (reads and walks, history, revert, excise, grants,
@@ -1194,8 +1347,17 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `graph/sql` | user | `{deadline_ms?: natnum, params?: [SqlParam], rows?: natnum, sql: string}` | `{columns?: [string], rows?: [[any]], truncated: boolean}` | no |
 | `hello` | user, agent, service | `{client?: string, cwd?: AbsPath, drgnx_version?: string, nonce: Nonce, proof?: Hex64, proto: natnum, records?: natnum, schema?: natnum}` | `HelloReply` | no |
 | `history/batch` | user | `{buffer_id: string, changes: [{inserted: string, old_len: natnum, origin?: string, start: natnum}], region_hash: string}` | `{ok?: boolean, resync?: boolean}` | yes |
+| `history/compare` | user | `{a: string, b: string}` | `{files: [ComparedFile]}` | no |
+| `history/fork` | user | `{message: string, profile?: string, seq: integer, session: string}` | `{branch: string, id: string, level: "message" \| "turn" \| "summary", path: string, source_branch: string}` | yes |
+| `history/fork/drop` | user | `{id: string}` | `{ok: boolean}` | yes |
+| `history/op/hunks` | user | `{op?: integer, session?: string, worktree: string}` | `{hunks: [OpHunk]}` | no |
+| `history/redo` | user | `{op: integer, session: string}` | `{commit?: string, op: integer, skipped: [RevertSkipped], written: [string]}` | yes |
 | `history/register` | user | `{buffer_id: string, path: string, worktree_root: string}` | `{doc: integer, reason?: string, tracked: boolean}` | yes |
 | `history/resync` | user | `{buffer_id: string, text: string}` | `{ok: boolean}` | yes |
+| `history/revert/apply` | user | `{choices?: [{choice: "keep-users"} \| {choice: "take-reverted"} \| {choice: "edited", text: string}], message?: string, mode?: "keep-mine" \| "roll-back-mine", preview_id: integer}` | `Applied` | yes |
+| `history/revert/hunk` | user | `{hunk: integer, op: integer, path: string, worktree: string}` | `HunkReverted` | yes |
+| `history/revert/preview` | user | `{decision?: integer, seq?: integer, session?: string}` | `RevertCard` | no |
+| `history/take` | user | `{from: string, hunks: [{path: string, theirs_end: integer, theirs_start: integer}], worktree: string}` | `{op: integer, skipped: [RevertSkipped], written: [string]}` | yes |
 | `history/unregister` | user | `{buffer_id: string}` | `{ok: boolean}` | yes |
 | `job/approve` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes |
 | `job/block` | user | `{reason?: Text, task: TaskRef}` | `JobSummary` | yes |
@@ -2617,7 +2779,7 @@ wait for their callers (reports, outputs, `changes.patch`, `exec/fetch`); the `s
   (none: created or deleted), the modes and the blob before. A quoted path, a copy, a binary change without its data,
   text before the first `diff --git` or an unknown header line can't be read: the patch is kept. `patch_ok(patch, spec,
   attempt, submit, runner_trust)` lists every reason not to apply it: a path outside `spec.writes` (`*`/`?` within a
-  segment, `**` any segments, `dir/` the folder), a protected name (`PROTECTED`) or `.git` at any depth, a bad path,
+  segment, `**` any segments, `dir/` the folder), a protected name (`lock::NEVER_RESTORED`, the list a revert never writes either) or `.git` at any depth, a bad path,
   a symlink or submodule mode, a changed mode or a new executable file, a blob before that isn't the file's `submit`
   hash (or a created file that had one), another job, attempt number or nonce than `attempt`, a `shared` runner, more
   than `PATCH_MAX`. A refused patch is kept with `review_card(runner, n)`.

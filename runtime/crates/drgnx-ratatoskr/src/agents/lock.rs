@@ -37,6 +37,10 @@ pub const PROTECTED_RO: [&str; 6] = [
     "mise.toml",
 ];
 
+/// What the hub never writes into an agent's tree and a runner's returned patch never touches, at any depth: the
+/// lock's protected paths (with `.envrc` and `mise.toml`).  Anything under `.git` is refused beside them.
+pub const NEVER_RESTORED: [&str; 6] = PROTECTED_RO;
+
 /// The entries of [`PROTECTED_RO`] that are files (the others are folders): a missing one is created empty to be pinned.
 pub const PROTECTED_FILES: [&str; 2] = [".envrc", "mise.toml"];
 
