@@ -740,6 +740,8 @@ pub struct Session {
     enforced_why: Option<String>,
     /// Why its `browser` cell allows the browser but it has none (OD1 (b)).
     browser_why: Option<String>,
+    /// The plugins that run for it differ from the ones it started with ([`crate::sessions::Sessions::plugins_flag`]).
+    plugins_changed: Arc<AtomicBool>,
     capabilities: Option<Value>,
     conn: Conn,
     acp: SessionId,
@@ -1638,6 +1640,7 @@ pub(crate) async fn open_with(
 async fn bridge(
     front: &Front,
     profile: &AgentProfile,
+    who: Who,
     sid: &str,
     cwd: &Path,
     task: Option<&str>,
@@ -1646,6 +1649,8 @@ async fn bridge(
     let socket = match front.mcp.socket_of(sid) {
         Some(path) => path,
         None => {
+            // the columns its abilities run as, before the session opens (a `plugins.sock` is bound with it)
+            front.mcp.note_who(sid, who);
             // the tools act as the session id: the id a plan run claims its task for (`runner::tick::start`)
             let params = serde_json::from_value(json!({
                 "agent": sid,
@@ -1680,6 +1685,11 @@ async fn bridge(
     if let Some(search) = front.mcp.search_socket_of(sid) {
         servers.push(("drgnx-search", search));
     }
+    // the plugins' abilities, a server of their own: only for a session that starts with an enabled ability
+    // (`mcpServers` are fixed at `session/new`)
+    if let Some(plugins) = front.mcp.plugins_socket_of(sid) {
+        servers.push(("drgnx-plugins", plugins));
+    }
     servers
         .into_iter()
         .filter_map(|(name, socket)| {
@@ -1710,7 +1720,7 @@ async fn launch(
     // the session's MCP session first: a sandboxed gateway profile's token is registered on its gateway.sock, which
     // needs it.  A launch refused before the spawn closes the one it opened (its socket and dir go with it)
     let opened = front.mcp.socket_of(sid).is_none();
-    let mcp = bridge(front, profile, sid, cwd, task, job).await;
+    let mcp = bridge(front, profile, who_of(role, profile), sid, cwd, task, job).await;
     let prep = match prepare(front, profile, role, sid, cwd, job, module_env).await {
         Ok(p) => p,
         Err(e) => {
@@ -1931,6 +1941,7 @@ fn assemble(
     if let Some(m) = &i.parent {
         front.core.budgets.link(&scope, &scope_of(Role::Manager, m));
     }
+    let plugins_changed = front.mcp.plugins_flag(&i.id);
     let s = Arc::new(Session {
         id: i.id,
         started: i.started,
@@ -1957,6 +1968,7 @@ fn assemble(
         enforced: l.enforced,
         enforced_why: l.enforced_why,
         browser_why: l.browser_why,
+        plugins_changed,
         capabilities: l.caps,
         conn: l.conn,
         acp: l.acp,
@@ -3128,6 +3140,7 @@ impl Session {
             enforced: Some(self.enforced),
             enforced_why: self.enforced_why.clone(),
             browser_why: self.browser_why.clone(),
+            plugins_changed: self.plugins_changed.load(Ordering::SeqCst),
             role: Some(self.role),
             provider: self.provider.clone(),
             parent: self.parent.clone(),

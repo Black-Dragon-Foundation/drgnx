@@ -47,6 +47,28 @@ request fails in the plugin and shows in the session's events as a denied host (
 the agent's own proxy reports one. A plugin's key-value store holds at most the `kv_bytes` its manifest declares (1 MiB
 at most).
 
+## Abilities
+
+An ability is a tool a plugin gives to agents. A session whose plugin list has an ability when it **starts** gets a
+second tool server, `drgnx-plugins`, next to drgnx's own: its tools are named `PLUGIN_ABILITY` (an agent shows them as
+`mcp__drgnx-plugins__PLUGIN_ABILITY`), with the description and argument schema from the manifest. Every agent profile
+gets them, whichever provider it runs on.
+
+- **Fixed at start.** An agent learns its tool servers when it starts, so a plugin you enable later reaches new
+  sessions only; a running session shows a note that its plugins changed. Turning a plugin off or changing the list
+  takes the abilities out of the list a running session is offered at its next connection.
+- **Only what you grant.** A plugin's abilities are offered only while the plugin is approved and on the project's
+  list, and only if the session's `plugin.abilities` cell in the permissions matrix is not Never. By default managers
+  and workers may use them and a chat is asked each time (Cautious asks everywhere). Every call is checked again: a
+  plugin you switched off, or a cell you set to Never, refuses the call.
+- **Ask makes a card.** With the cell on Ask, a call shows a card naming the tool and the arguments it will run with,
+  and waits for you with no time limit. Cancelling the call, or its connection closing, withdraws the card. The 30 second limit covers the plugin's own run, never the wait for you.
+- **Arguments are checked** against the manifest's schema before the plugin sees them. The schema may use `type`,
+  `properties`, `required`, `enum`, `items`, `maxLength` and `additionalProperties`, plus the notes `description`,
+  `title`, `default`, `examples`, `deprecated`, `readOnly`, `writeOnly`, `$schema` and `$comment`; a manifest with any
+  other keyword is refused when it is read.
+- **Network** is the plugin's declared hosts, as above, and nothing else.
+
 ## In one project
 
 The plugin list and your hook rules are yours alone. A repository's `.drgnx/settings.el`, its `.dir-locals.el` and an

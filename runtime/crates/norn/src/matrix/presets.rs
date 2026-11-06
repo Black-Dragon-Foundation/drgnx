@@ -79,6 +79,8 @@ fn row(a: Action, p: Preset) -> [Cell; 3] {
         (UserEmacs, Cautious) => [NEVER, NEVER, NEVER],
         (UserEmacs, _) => [ASK, NEVER, NEVER],
         (ChatProjectRead, _) => [NEVER, NEVER, ASK],
+        (PluginAbilities, Cautious) => [ASK, ASK, ASK],
+        (PluginAbilities, _) => [ALLOW, ALLOW, ASK],
     }
 }
 

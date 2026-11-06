@@ -12,6 +12,7 @@ pub mod host;
 mod imports;
 pub mod limits;
 pub mod manifest;
+pub mod schema;
 pub mod store;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
@@ -25,4 +26,5 @@ pub use manifest::{
     AbilityDecl, Filter, HookDecl, HostName, Manifest, ManifestError, PluginName, Point,
     TOOL_KINDS, ToolName, VerdictKind, parse, plugin_hash,
 };
+pub use schema::SchemaError;
 pub use store::{Installed, scan};

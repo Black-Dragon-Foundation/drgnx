@@ -177,6 +177,47 @@ pub struct Plugins {
     looking: tokio::sync::Mutex<()>,
     /// The network plugins reach, made at the first [`host_io`].
     net: OnceLock<Arc<hub_io::Net>>,
+    /// The WASM host, made at the first call.
+    host: OnceLock<Arc<brokkr::Host>>,
+    /// The ability calls waiting for a card's answer.
+    waits: Arc<Waits>,
+    /// The ability tools of the last plugin set asked for, by its [`Plugins::set_key`].
+    pub(crate) tools: Mutex<BTreeMap<String, Arc<Vec<crate::abilities::AbilityTool>>>>,
+}
+
+/// The ability calls waiting on matrix cards: who waits on which card, how many wait, and how many cards a call that
+/// ended withdrew. Tests wait on the two counters (the handshake), never on a clock.
+pub struct Waits {
+    next: std::sync::atomic::AtomicU64,
+    by_id: Mutex<BTreeMap<u64, (i64, tokio::sync::oneshot::Sender<()>)>>,
+    count: tokio::sync::watch::Sender<usize>,
+    withdrawn: tokio::sync::watch::Sender<u64>,
+}
+
+impl Default for Waits {
+    fn default() -> Self {
+        Waits {
+            next: std::sync::atomic::AtomicU64::new(0),
+            by_id: Mutex::new(BTreeMap::new()),
+            count: tokio::sync::watch::channel(0).0,
+            withdrawn: tokio::sync::watch::channel(0).0,
+        }
+    }
+}
+
+/// One call's place among the waiters of a card; leaving it (the answer came, or the call ended) takes it out.
+pub struct CardWait {
+    waits: Arc<Waits>,
+    id: u64,
+    /// Resolves when the card is settled.
+    pub settled: tokio::sync::oneshot::Receiver<()>,
+}
+
+impl Drop for CardWait {
+    fn drop(&mut self) {
+        lock(&self.waits.by_id).remove(&self.id);
+        self.waits.count.send_modify(|n| *n -= 1);
+    }
 }
 
 /// The I/O of the plugin calls of CTX (a session or a job, with the network cell it launched with; none: every request
@@ -210,6 +251,76 @@ impl Plugins {
     /// The plugins under ROOT (`<data>/plugins`), their approvals in DB (`runtime.db`) and the lists in SETTINGS.
     pub fn open(&self, root: PathBuf, db: urdr::Handle, settings: Arc<Settings>) {
         let _ = self.open.set(Open { root, db, settings });
+    }
+
+    /// The WASM host (made at the first call).
+    pub fn host(&self) -> Result<Arc<brokkr::Host>, Error> {
+        if let Some(h) = self.host.get() {
+            return Ok(h.clone());
+        }
+        let made = Arc::new(brokkr::Host::new(brokkr::Limits::default()).map_err(internal)?);
+        Ok(self.host.get_or_init(|| made).clone())
+    }
+
+    /// The approved plugins that run for PROJECT and have an ability, as of the last [`Plugins::sync`].
+    pub fn abilities_for(&self, project: Option<&str>) -> Vec<Arc<Plugin>> {
+        let mut all = self.enabled_for(project);
+        all.retain(|p| !p.manifest.abilities.is_empty());
+        all
+    }
+
+    /// What identifies a set of plugins: their hashes in order (empty for none).
+    pub fn set_key(set: &[Arc<Plugin>]) -> String {
+        set.iter()
+            .map(|p| hex(&p.hash))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    /// A call starts waiting for CARD's answer.
+    pub fn wait_card(&self, card: i64) -> CardWait {
+        let (tx, settled) = tokio::sync::oneshot::channel();
+        let id = self
+            .waits
+            .next
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        lock(&self.waits.by_id).insert(id, (card, tx));
+        self.waits.count.send_modify(|n| *n += 1);
+        CardWait {
+            waits: self.waits.clone(),
+            id,
+            settled,
+        }
+    }
+
+    /// CARD was settled: the calls waiting on it go on.
+    pub fn card_settled(&self, card: i64) {
+        let mut by = lock(&self.waits.by_id);
+        let ids: Vec<u64> = by
+            .iter()
+            .filter(|(_, (c, _))| *c == card)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            if let Some((_, tx)) = by.remove(&id) {
+                let _ = tx.send(());
+            }
+        }
+    }
+
+    /// How many calls wait on a card now.
+    pub fn waiting(&self) -> tokio::sync::watch::Receiver<usize> {
+        self.waits.count.subscribe()
+    }
+
+    /// How many cards calls that ended have withdrawn so far.
+    pub fn withdrawn(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.waits.withdrawn.subscribe()
+    }
+
+    /// A card withdrawn because its call ended.
+    pub(crate) fn note_withdrawn(&self) {
+        self.waits.withdrawn.send_modify(|n| *n += 1);
     }
 
     fn opened(&self) -> Result<&Open, Error> {
@@ -566,6 +677,8 @@ pub async fn start(f: &Front) {
 /// CHANGES as `plugin` events, and the cards of the plugins ROWS shows: one for each that waits for the user
 /// (`unapproved`, `changed`), none for the others, and the ones of a removed plugin withdrawn.
 async fn announce(f: &Front, rows: &[PluginRow], changes: &[Change]) {
+    // the plugins that run for a session may have moved: its snapshot says so
+    f.mcp.plugins_refresh();
     if changes.is_empty() {
         return;
     }

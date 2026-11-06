@@ -268,6 +268,10 @@ pub const SESSION_MCP_SOCKET: &str = "mcp.sock";
 /// the session's working folder.
 pub const SESSION_SEARCH_SOCKET: &str = "search.sock";
 
+/// The plugins' abilities socket in a session dir (when the session starts with an enabled ability): the `drgnx-plugins`
+/// MCP server, apart from the hub's own tools.
+pub const SESSION_PLUGINS_SOCKET: &str = "plugins.sock";
+
 /// The gateway's socket in a session dir (`gateway/register` with `sid`): a token issued for it is good only there.
 pub const SESSION_GATEWAY_SOCKET: &str = "gateway.sock";
 
@@ -594,6 +598,7 @@ mod tests {
             SESSION_HUB_SOCKET,
             SESSION_MCP_SOCKET,
             SESSION_SEARCH_SOCKET,
+            SESSION_PLUGINS_SOCKET,
             SESSION_GATEWAY_SOCKET,
             SESSION_PROXY_SOCKET,
             SESSION_TRACE_SOCKET,

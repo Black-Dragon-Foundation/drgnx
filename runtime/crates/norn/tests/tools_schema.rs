@@ -55,7 +55,7 @@ fn tool_names_are_the_lisp_names() {
 /// `tools/list`'s `tools` as `mimir` serves it: in name order, each with its description, input schema and (when it
 /// declares one) output schema.
 fn listing(mut all: Vec<Box<dyn Tool<Ctx>>>) -> Value {
-    all.sort_by_key(|t| t.name());
+    all.sort_by(|a, b| a.name().cmp(b.name()));
     Value::Array(
         all.iter()
             .map(|t| {

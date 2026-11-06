@@ -1302,11 +1302,11 @@ struct Brief {
 }
 
 impl Tool<Ctx> for Brief {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         self.inner.name()
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         self.inner.description()
     }
 

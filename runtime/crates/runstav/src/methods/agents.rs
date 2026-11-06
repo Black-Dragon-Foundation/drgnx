@@ -162,6 +162,10 @@ pub struct Snapshot {
         skip_serializing_if = "Option::is_none"
     )]
     pub waiting_on: Option<String>,
+    /// The plugins that run for the session differ from the ones it started with: abilities are fixed when the agent
+    /// starts, so a new set reaches it only through a new session.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plugins_changed: bool,
 }
 
 /// What a transcript entry is (`usage`, `notice` and `compaction` are reserved).
