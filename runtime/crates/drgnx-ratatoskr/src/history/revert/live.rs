@@ -32,7 +32,7 @@ pub(crate) fn user() -> Caller {
 }
 
 /// The next step of SID that ends a turn, from STEPS: its `seq`.
-async fn turn_end(
+pub(crate) async fn turn_end(
     steps: &mut tokio::sync::broadcast::Receiver<crate::agents::StepEvent>,
     sid: &str,
 ) -> i64 {

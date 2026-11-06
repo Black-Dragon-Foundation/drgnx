@@ -199,6 +199,12 @@ directory the tree names: the run's trusted store for a tree a sandboxed agent w
 Each version is published as the bus event `history/file-version {worktree, path, blob, op}`; its shape is frozen for its
 consumers.
 
+Every `fs/write_text_file` the session handler serves (`agents/session.rs`, after the fence allowed the path) calls
+`on_agent_write` first, in its worktree's project history, with the session as the cause; the step is not named, since
+its row is written when the step ends. A folder that is no git worktree or a path outside it (a brainstorm's document)
+is not recorded, and a history that fails never fails the write. A Fork from here of a worker starts a worker in its new
+tree, so its writes are served (a chat's fork stays a chat, its project read-only).
+
 **Merges** (`merge.rs`). After git merged a task's branch into the job's tree (the review's merge and a manager's
 `merge` tool), `Hub::on_git_merge(target, source, old, new, now)` reads git's text of every file the merge changed from
 the merge commit, in the job tree's repository (after git's own hooks; never git in the task's tree), and writes one

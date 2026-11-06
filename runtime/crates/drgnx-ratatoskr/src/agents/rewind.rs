@@ -336,7 +336,7 @@ pub(crate) async fn source_of(
 /// user's message): the source keeps running.  The same provider forks the conversation the step ran in, at the cut;
 /// another provider starts a new conversation told the labelled summary.  A finished source is read from its entity.
 /// The new session is linked `forked_from` its source with `{seq, level}`.  SID is its id when the caller made one
-/// first (the fork's tree is named for it), else a new one.
+/// first (the fork's tree is named for it), else a new one; ROLE its matrix column (none: as a start without a task).
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn fork_conversation(
     hub: &Hub,
@@ -347,6 +347,7 @@ pub(crate) async fn fork_conversation(
     profile: Option<&str>,
     first: String,
     sid: Option<String>,
+    role: Option<runstav::methods::matrix::Role>,
 ) -> Result<(Started, RestoreLevel), Error> {
     let (src_profile, src_cwd, task) = source_of(hub, front, &t.sid).await?;
     let name = profile.unwrap_or(&src_profile).to_owned();
@@ -378,8 +379,9 @@ pub(crate) async fn fork_conversation(
     };
     let ctx = (src_cwd.as_path(), task.as_deref());
     let told = first_text(point.level, &point, front, t, ctx, Some(first.clone())).await?;
-    let p: StartParams = serde_json::from_value(serde_json::json!({"profile": name, "cwd": cwd}))
-        .map_err(|e| session::invalid("cwd", e.to_string()))?;
+    let p: StartParams =
+        serde_json::from_value(serde_json::json!({"profile": name, "cwd": cwd, "role": role}))
+            .map_err(|e| session::invalid("cwd", e.to_string()))?;
     let (started, landed) = session::open_with(hub, front, p, caller, None, sid, &attach).await?;
     let level = landed.unwrap_or(RestoreLevel::Summary);
     let text = if level == point.level {

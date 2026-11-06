@@ -781,6 +781,9 @@ pub struct Session {
     stamps: Arc<crate::work::conclusions::Stamps>,
     /// A planning session's turn ends go to Say it ([`crate::say`]).
     say: crate::say::SayTx,
+    /// The projects' edit histories and the hub's state folder they live under: every write the hub serves for the
+    /// agent is recorded there (none: the hub has no state folder).
+    history: Option<(Arc<crate::history::wire::Hubs>, PathBuf)>,
 }
 
 /// What `Conn::prompt` answered for a turn.
@@ -1984,6 +1987,10 @@ fn assemble(
         asks: front.core.asks.handle(),
         stamps: front.core.stamps.clone(),
         say: front.core.say.handle(),
+        history: front
+            .dirs
+            .get()
+            .map(|d| (front.core.history.clone(), d.hub.clone())),
     });
     (s, done_rx)
 }
@@ -3839,9 +3846,51 @@ impl Session {
         let path = req.get("path").and_then(Value::as_str).unwrap_or("");
         let content = req.get("content").and_then(Value::as_str).unwrap_or("");
         let real = self.fence().check(path, true)?;
+        self.record_write(&real, content).await;
         tokio::fs::write(&real, content)
             .await
             .map_err(|e| format!("{path}: {e}"))
+    }
+
+    /// The agent's write of CONTENT to REAL (a path the fence allowed), recorded in its project's history before the
+    /// file is written, so the watcher's event about it finds the version known: operations by the agent's peer on its
+    /// worktree's branch, one `agent_step` record caused by this session.  A folder that is no git worktree, a path
+    /// outside it (a brainstorm's document) or a history that fails leave the write as it is: best effort.
+    async fn record_write(&self, real: &Path, content: &str) {
+        let Some((hubs, state)) = &self.history else {
+            return;
+        };
+        let Some(rel) = real
+            .strip_prefix(resolve(&self.cwd))
+            .ok()
+            .and_then(|r| r.to_str())
+            .filter(|r| !r.is_empty())
+            .map(str::to_owned)
+        else {
+            return;
+        };
+        let Ok((hub, tree)) = hubs.of_tree(state, &self.cwd) else {
+            return;
+        };
+        let cause = verdandi::Cause {
+            session: Some(self.id.clone()),
+            ..Default::default()
+        };
+        let (sid, bytes, now) = (
+            self.id.clone(),
+            content.as_bytes().to_vec(),
+            crate::clock::wall_secs(),
+        );
+        let r = crate::clock::blocking(move || {
+            hub.on_agent_write(&tree, &rel, &bytes, &sid, cause, now)
+        })
+        .await;
+        if let Ok(Err(e)) = r {
+            tracing::info!(
+                sid = self.id,
+                "the agent's write is not in the history: {e}"
+            );
+        }
     }
 
     /// Cancel the turn and end the process group.

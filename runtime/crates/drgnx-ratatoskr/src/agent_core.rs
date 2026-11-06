@@ -64,7 +64,7 @@ pub struct Core {
     /// The files shell steps opened, from Gleipnir's tracer ([`crate::work::trace`]).
     pub traces: std::sync::Arc<crate::work::trace::Traces>,
     /// The edit history of each open project ([`crate::history`]).
-    pub history: crate::history::wire::Hubs,
+    pub history: std::sync::Arc<crate::history::wire::Hubs>,
     /// The planning sessions of Say it and the channel to their shell ([`crate::say`]).
     pub say: crate::say::Say,
 }

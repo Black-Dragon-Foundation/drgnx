@@ -229,6 +229,14 @@ pub async fn fork(f: &Front, c: &Caller, p: w::ForkParams) -> Result<w::Forked, 
                 return Err(e);
             }
         };
+    // a worker's fork works in its own tree as its source did; a chat's stays a chat (its project read-only)
+    let role = f
+        .core
+        .agents
+        .find(&t.sid)
+        .ok()
+        .map(|s| s.role())
+        .filter(|r| *r == runstav::methods::matrix::Role::Worker);
     let started = rewind::fork_conversation(
         &f.core.agents,
         f,
@@ -238,6 +246,7 @@ pub async fn fork(f: &Front, c: &Caller, p: w::ForkParams) -> Result<w::Forked, 
         p.profile.as_deref(),
         p.message,
         Some(sid),
+        role,
     )
     .await;
     match started {

@@ -6,15 +6,21 @@
 use super::*;
 use crate::agents::session::attach_tests::Fx;
 use crate::history::revert::apply;
-use crate::history::revert::live::{FIVE, Live, git, prompted, row_acp, turn, user};
+use crate::history::revert::live::{FIVE, Live, git, prompted, row_acp, turn, turn_end, user};
 use runstav::methods::agents::StartParams;
 use runstav::methods::history::RestoreLevel;
 use serde_json::{Value, json};
 use std::path::Path;
 
 async fn start_as(fx: &Fx, profile: &str) -> String {
+    start_in(fx, profile, None).await
+}
+
+/// A session of PROFILE in the work folder, in the matrix column ROLE (none: a chat).
+async fn start_in(fx: &Fx, profile: &str, role: Option<&str>) -> String {
     let p: StartParams =
-        serde_json::from_value(json!({"profile": profile, "cwd": fx.work()})).unwrap();
+        serde_json::from_value(json!({"profile": profile, "cwd": fx.work(), "role": role}))
+            .unwrap();
     fx.front
         .core
         .agents
@@ -199,53 +205,51 @@ struct Two {
     f: w::Forked,
 }
 
-/// The agent SID's write of TEXT to REL in the tree ROOT: on disk, and recorded as the session handler records an
-/// agent's write (`Hub::on_agent_write`) at AT, caused by step STEP.
-fn agent_writes(fx: &Fx, sid: &str, root: &Path, rel: &str, text: &str, at: f64, step: i64) {
-    std::fs::write(root.join(rel), text).unwrap();
-    let dirs = fx.front.dirs.get().unwrap();
-    let (hub, tree) = fx.front.core.history.of_tree(&dirs.hub, root).unwrap();
-    let cause = verdandi::Cause {
-        session: Some(sid.into()),
-        step: Some(step.to_string()),
-        ..Default::default()
-    };
-    let v = hub
-        .on_agent_write(&tree, rel, text.as_bytes(), sid, cause, at)
-        .unwrap();
-    assert!(!v.is_empty(), "a new version of {rel}");
-}
-
-/// The source agent wrote `b.txt` as "one\n" before the step began and "one\ntwo\n" after it ended; the fork's agent
-/// wrote "one\nthree\n" in its tree.
+/// The source agent (a worker) wrote `b.txt` as "one\n" in the turn before the step and "one\ntwo\n" in the turn after
+/// it; the fork's agent wrote "one\nthree\n" in its tree in its first turn.  Every write is the agent's own
+/// `fs/write_text_file`, served and recorded by the session's handler.
 async fn two() -> Two {
     let fx = Fx::new();
     repo(&fx);
-    let wt = fx.work();
-    let sid = start_as(&fx, "mock-claude").await;
-    let zero = turn(&fx.front, &sid, "zero").await;
-    agent_writes(&fx, &sid, &wt, "b.txt", "one\n", 1.0, zero);
+    let sid = start_in(&fx, "mock-claude", Some("worker")).await;
+    turn(&fx.front, &sid, "fs:write b.txt one\\n").await;
+    assert_eq!(fx.read("b.txt"), "one\n", "the handler wrote it");
     let target = turn(&fx.front, &sid, "one").await;
-    let st = steps(&fx, &sid).await;
-    let (_, _, start, end) = st.iter().find(|s| s.0 == target).unwrap().clone();
-    let after = end.unwrap_or(start) + 1.0;
-    agent_writes(&fx, &sid, &wt, "b.txt", "one\ntwo\n", after, target + 1);
-    let f = fork_at(&fx, &sid, target, "go on").await;
+    turn(&fx.front, &sid, "fs:write b.txt one\\ntwo\\n").await;
+    let mut steps = fx.front.core.agents.subscribe_steps();
+    let f = fork_at(&fx, &sid, target, "fs:write b.txt one\\nthree\\n").await;
+    turn_end(&mut steps, &f.id).await;
     assert_eq!(
         std::fs::read_to_string(Path::new(&f.path).join("b.txt")).unwrap(),
-        "one\n",
-        "the checkpoint"
-    );
-    agent_writes(
-        &fx,
-        &f.id,
-        Path::new(&f.path),
-        "b.txt",
         "one\nthree\n",
-        after + 1.0,
-        1,
+        "the fork's agent wrote over the checkpoint"
     );
     Two { fx, sid, f }
+}
+
+/// Every write the handler serves is in the history before the file is written: one `agent_step` record per write,
+/// by the agent's peer, caused by its session, the document's text the written text.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_handlers_writes_are_the_agents_records() {
+    let t = two().await;
+    let mine: Vec<_> = records(&t.fx, verdandi::Kind::AgentStep)
+        .into_iter()
+        .filter(|r| r.cause.session.as_deref() == Some(t.sid.as_str()))
+        .collect();
+    assert_eq!(mine.len(), 2, "{mine:?}");
+    let dirs = t.fx.front.dirs.get().unwrap();
+    let (hub, tree) =
+        t.fx.front
+            .core
+            .history
+            .of_tree(&dirs.hub, &t.fx.work())
+            .unwrap();
+    assert_eq!(
+        hub.text(&tree, "b.txt").unwrap().as_deref(),
+        Some("one\ntwo\n")
+    );
+    let author = hub.with(|h| h.author_of(mine[0].author).unwrap().unwrap());
+    assert_eq!(author, json!({"kind": "agent", "session": t.sid}));
 }
 
 async fn compared(t: &Two, a: &str, b: &str) -> w::Compared {
@@ -277,10 +281,8 @@ async fn compare_names_author_and_step() {
         ("two\n", "three\n")
     );
     assert_eq!(h.author, Some(json!({"kind": "agent", "session": t.f.id})));
-    assert_eq!(
-        (h.session.as_deref(), h.step.as_deref()),
-        (Some(t.f.id.as_str()), Some("1"))
-    );
+    // the write's step is not known yet when it is recorded (its row is written when the step ends): its session is
+    assert_eq!(h.session.as_deref(), Some(t.f.id.as_str()));
     assert!(h.record.is_some());
     let back = compared(&t, &t.f.branch, &t.f.source_branch).await;
     let h = &back.files[0].hunks[0];
