@@ -146,6 +146,23 @@ text after record `since` to its text now, numbered as `git diff --unified=0` nu
 --no-index` over two private temporary files, as the 3-way check does `git merge-file`). A file with no change is left
 out.
 
+## Privacy: redaction and excise
+
+`redact::scan(batch)` runs on capture, before a change reaches a document: the shapes of well-known keys (`sk-…`,
+GitHub tokens, `AKIA…`, `AIza…`, Slack and GitLab tokens, private key blocks) at a word boundary, inside one change, become
+`*`, a character for a character so the buffer's offsets hold. `Batch::hash` is the SHA-256 of the inserted texts after
+redaction. A key typed one character at a time is not seen by the scan; excise takes it out afterwards.
+
+`History::excise(doc, branch, target, author, at)` removes text for good: `Target::Range` (characters of the text now on
+`branch`) or `Target::Pattern` (every place the text was typed, deleted or not, on any branch). Each branch's document is
+exported as JSON updates, the characters become `*`, and the result is imported into a fresh document that replaces the
+rows, so every element id, position and anchor stays. Then `secure_delete` is on, previews are dropped, backups
+(`History::backup(name)` → `<dir>/backup/<name>.db`, `VACUUM INTO`) are deleted, and `VACUUM` plus a truncating WAL
+checkpoint leave the secret in no file. The `excise` record says how many characters, never which.
+
+`history.db` is the sixth door of the personal-notes canary (`runtime/crates/norn/tests/canary.rs`): a file the
+deny-list names is never registered, so the notes are in no document, snapshot or log.
+
 ## The hub
 
 `drgnx-ratatoskr/src/history/` is the hub side: capture, the editor's methods and the watcher feed. One `Hub` per

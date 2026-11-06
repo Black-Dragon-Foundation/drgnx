@@ -12,8 +12,10 @@
 pub mod anchor;
 pub mod apply;
 pub mod docs;
+pub mod excise;
 pub mod log;
 mod merge;
+pub mod redact;
 pub mod revert;
 #[cfg(test)]
 mod revert_props;
@@ -25,6 +27,7 @@ mod threeway;
 pub use anchor::{AnchorId, Blame, FileHunks, LineHunk, Resolved, Side, When};
 pub use apply::{FileDiff, Hunk, HunkRef};
 pub use docs::{ActiveDoc, Change};
+pub use excise::Target;
 pub use log::{FlushReason, Settler};
 pub use revert::{FilePreview, Mode, Overlap, OverlapChoice, RevertPreview};
 pub use store::{BranchKind, Cause, DocUpdate, History, Kind, OpRecord, Record};

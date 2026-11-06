@@ -149,6 +149,8 @@ pub struct DocUpdate {
 pub struct History {
     pub(crate) conn: rusqlite::Connection,
     pub(crate) active: crate::docs::Active,
+    /// The folder `history.db` is in.
+    pub(crate) dir: std::path::PathBuf,
 }
 
 impl History {
@@ -177,6 +179,7 @@ impl History {
         Ok(History {
             conn,
             active: Default::default(),
+            dir: dir.to_path_buf(),
         })
     }
 
