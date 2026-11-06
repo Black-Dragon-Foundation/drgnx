@@ -2110,6 +2110,46 @@ classes, the policy's statements, a prompting credential command, the market's f
 rows against the mock with its virtual clock (`start_describe_end_round_trip`,
 `a_retry_after_a_crash_returns_the_same_instance`).
 
+## Runners: cloud spend, the sweeper, the network rule
+
+**The meter** (`meter.rs`, design §6.7.5): `Meter::new(Rates, month_spent)` per month, from that month's records.
+Per machine (`Started {machine, runner, provider, region, size, market, price_h, disk_gb, at}`): running seconds ×
+the price at its start, its disk's GB-hours, its public IPv4 address-hours (`Rates`, AWS's list prices by default)
+and the bytes it sent back (`sent`) at the egress price; and the images' storage (`images(gb, now)`, the `images`
+record). `tick(now)` gives one `CloudSpend {machine, provider, region, type, market, from, to, amount}` per whole
+machine-hour, each once; `end(machine, now)` the last part-hour; `write(db, rec)` puts it in the graph as
+`cloud_spend:<machine>.<from>` (`("hub", Class::System)`, `norn::write::runners`). `spent(now)` is the records and
+what runs since.
+
+- `gate(now, cap, size, price_h, busy_s, idle_s, running, needs_login)`: while the credentials need a login, the
+  card's text (`needs_login_text`: "Run CMD, then Runners: Retry Cloud", CMD in backquotes); at the cap `"cloud cap: $50 of $50 used; no new cloud work"`; and a
+  start whose `forseti::cost::projection` passes the cap `"cloud cap: $41 of $50 used; a c7a.4xlarge for ~40 min would
+  pass it"` (dollars from $10, cents below; the minutes are busy + idle).
+- `check(now, cap, machine_hour, CHECK_S) -> CapAct {Go, NoNewWork, StopAll([(instance, runner)])}`, through
+  `forseti::cost::guard` one check (10 s) ahead: on `StopAll` the hub runs a sweep with `CapState::PastCapPlusHour`,
+  which ends every machine, and `Queue::cloud_gone(runner, now)` requeues their attempts at once
+  (`attempts::Event::CloudGone`; a job that can't be restarted ends lost).
+
+**The sweeper** (`sweep.rs`, design §6.7.6 layer 3): `Sweeper::new(hub_id, Bounds {lifetime_s, unreachable_s})`;
+`pass(provider, now, reached, cap) -> Pass {Done(Swept), Paused(cmd), Failed(e)}`, at hub start, every `EVERY_S`
+(600 s) and on the cap's stop. It lists the provider's tagged machines and skips (into `Swept::not_ours`) any without
+`drgnx-hub=<this hub>`, whatever the list returned. A running machine `reached` says the hub has no link to goes into
+`reattach`, and is ended after `UNREACHABLE_S` (300 s) unreached in a row; a machine past its lifetime (its
+`launchTime`, `InstanceInfo::launched`), a stopped one, and with `PastCapPlusHour` every one is ended
+(`Ended {Unreachable, Lifetime, Stopped, Cap}`). A `NeedsLogin` pauses it (`paused()` names the command, nothing is
+ended); the next pass the credentials work for resumes and ends what is past its bound by then.
+
+**The network rule** (`net.rs`): `ensure_rule(&Aws)` finds or makes the region's one security group
+`drgnx-<hub id>-ssh` in the default VPC, tagged `drgnx-hub` at creation, and gives it the one rule TCP 22 from
+`0.0.0.0/0` and `::/0`. A group of ours with no rule (a crash between the calls) gets it; one with any other rule is
+refused, never used.
+
+Tests: `forseti::cost::` [D] (`docs/develop/forseti.md`); `runners::cloud::meter::` [D]
+(`the_reason_text_is_the_designs`, `cap_plus_one_hour_stops_now`, `the_meter_counts_disk_ipv4_egress_and_images`); and
+against the mock with its virtual clock [B]: `sweep::ends_an_unreachable_tagged_machine_after_5_minutes`,
+`sweep::stops_every_machine_past_the_cap`, `sweep::never_touches_an_untagged_instance` (with a list that returns the
+whole account), `sweep::creds::expired_pauses_the_sweeper_and_it_resumes`, `net::the_rule_is_port_22_only_and_tagged`.
+
 ## Runners: cloud SSH
 
 `runners/cloud/ca.rs` (design §6.7.4). Keys are `ring` ed25519 (the plan's fallback: `ssh-key` 0.6 would add sha2

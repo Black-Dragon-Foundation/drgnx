@@ -14,6 +14,11 @@ pub mod aws;
 pub mod ca;
 pub mod creds;
 pub mod market;
+pub mod meter;
+pub mod net;
+pub mod sweep;
+#[cfg(test)]
+pub(crate) mod testmock;
 
 use mimir::BoxFuture;
 use std::collections::BTreeMap;
@@ -117,6 +122,8 @@ pub struct InstanceInfo {
     pub zone: String,
     pub spot: bool,
     pub tags: BTreeMap<String, String>,
+    /// When it was launched, as the provider says (the sweeper's lifetime bound).
+    pub launched: Option<SystemTime>,
 }
 
 /// An hourly price, in USD.

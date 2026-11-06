@@ -297,6 +297,37 @@ with two minutes' notice (drgnx asks GCP for the same two minutes).
 - **A job that can't be restarted** never runs on spot: with `spot-then-on-demand` it gets an on-demand machine, and
   with `spot` it doesn't go to the cloud.
 
+### What cloud can cost
+
+You type a monthly cap at setup; there is no default. drgnx's own meter is the gate: each machine's running time at
+its price when it started, its disk, its public IPv4 address and the data it sent back, and the storage of drgnx's
+images. Each machine-hour is recorded.
+
+- **Before a machine starts,** drgnx adds up this month's spend, the new machine's price for its expected work plus
+  the idle time, and what already runs until its idle stop. If that passes the cap, the machine doesn't start, and the
+  job waits or runs on what you have. The job says why, for example "cloud cap: $41 of $50 used; a c7a.4xlarge for
+  ~40 min would pass it".
+- **At the cap,** no new work goes to cloud machines, and each stops when its current jobs end.
+- **At the cap plus one machine-hour,** every machine stops at once, and its jobs go back to the queue.
+
+The bound you're shown at setup, with its dollar figure: while drgnx runs and has credentials, the cap plus one
+machine-hour; with drgnx down, asleep or without credentials, at most your maximum machines × the unattended lifetime
+(AWS) or × the lifetime (GCP) × the price. The provider's bill can differ (late charges, taxes, transfer drgnx didn't
+see), so drgnx's figure is its estimate.
+
+**Expired credentials:** when the credential command fails, or the provider says the session expired, the card says
+"Run `aws sso login`, then Runners: Retry Cloud" (with your command), and no new machine starts. Machines that run keep
+their jobs while drgnx reaches them and end by themselves (below). Once you've logged in, drgnx's next sweep ends
+whatever is past its limits.
+
+**The sweep:** when drgnx starts and every 10 minutes, it lists the machines tagged with its hub id in your regions,
+reconnects to the running ones, and ends any it couldn't reach for 5 minutes, any past its lifetime, and any stopped
+one. It never touches a machine without its tag.
+
+**The network:** one security group per region, tagged with your hub id: SSH (TCP 22) in, from anywhere, IPv4 and IPv6,
+and nothing else. Your address changes behind carrier NAT, so the rule can't name it; the machines accept drgnx's
+short-lived certificates only.
+
 ### When a cloud machine ends itself
 
 Each machine drgnx starts runs a small watchdog of its own, so it ends even when drgnx doesn't come back:

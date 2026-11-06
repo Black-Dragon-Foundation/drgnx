@@ -1207,6 +1207,21 @@ impl Queue {
         }
     }
 
+    /// The cloud machine of RUNNER is gone (the sweeper ended it, or the cap did): its open attempts requeue at once,
+    /// or end lost when they can't be restarted.
+    pub fn cloud_gone(&self, runner: &str, now: u64) -> Vec<Outcome> {
+        let mut st = self.lock();
+        let effects = st.attempts.step(
+            now,
+            AEvent::CloudGone {
+                runner: runner.into(),
+            },
+        );
+        let mut out = vec![];
+        self.apply(&mut st, effects, now, &mut out);
+        out
+    }
+
     /// Job ID is bumped to priority 1 (the user's `exec/bump`); false when the queue doesn't hold it.
     pub fn bump(&self, id: &str) -> bool {
         let mut st = self.lock();

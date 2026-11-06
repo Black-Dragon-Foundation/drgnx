@@ -138,8 +138,17 @@ impl Aws {
         p
     }
 
+    /// The hub id its machines are tagged with.
+    pub fn hub_id(&self) -> &str {
+        &self.cfg.hub_id
+    }
+
     /// One EC2 Query call: ACTION with PARAMS, its answer's root element.
-    async fn ec2(&self, action: &str, params: Vec<(String, String)>) -> Result<El, CloudError> {
+    pub(crate) async fn ec2(
+        &self,
+        action: &str,
+        params: Vec<(String, String)>,
+    ) -> Result<El, CloudError> {
         let mut form = vec![
             ("Action".to_string(), action.to_string()),
             ("Version".to_string(), EC2_VERSION.to_string()),
@@ -680,6 +689,7 @@ fn instance_info(item: &El) -> InstanceInfo {
             .to_string(),
         spot: item.text_at("instanceLifecycle") == Some("spot"),
         tags,
+        launched: item.text_at("launchTime").and_then(super::parse_time),
     }
 }
 
