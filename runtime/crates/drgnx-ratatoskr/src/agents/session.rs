@@ -9,11 +9,14 @@
 //! design document).  Changes reach the editors as `agent` and `agent-entries` events, at most one pair per session
 //! per 50 ms.
 
+#[cfg(test)]
+pub(crate) mod attach_tests;
 mod turn_core;
 
 use super::launch;
 use super::lock as plock;
 use super::queue::{Origin, Queued};
+use super::rewind::RestoreLevel;
 use super::transcript;
 use crate::dispatch::Caller;
 use crate::front::Front;
@@ -168,6 +171,8 @@ struct State {
     max_repeat: u32,
     /// Tokens the finished turns used.
     tokens: u64,
+    /// What the budget booked from the agent's cost readings since the last turn ended.
+    turn_cost: f64,
     /// Turns started by this hub process (the snapshot's `turns`).
     turns: u64,
     /// The steps begun so far (each step's key).
@@ -219,6 +224,8 @@ struct ClosedStep {
     detail: Option<norn::write::work::StepDetail>,
     /// A shell step's command, taken then too: the files it names are its presence ([`crate::work::presence`]).
     command: Option<String>,
+    /// The session's context size in tokens when the step closed: kept on a turn's last step and on a job wait.
+    context: Option<i64>,
 }
 
 /// What a provider says of a tool call beyond ACP's fields: Claude's `_meta.claudeCode`.
@@ -253,6 +260,7 @@ impl State {
             cmd_counts: HashMap::new(),
             max_repeat: 0,
             tokens: 0,
+            turn_cost: 0.0,
             turns: 0,
             steps_begun: 0,
             mcp_begun: Vec::new(),
@@ -271,9 +279,25 @@ impl State {
         }
     }
 
+    /// The budget booked DELTA of cost; the turn running owns it.
+    fn add_turn_cost(&mut self, delta: f64) {
+        self.turn_cost += delta;
+    }
+
+    /// What the turn that just ended cost: what the budget booked during it.  None when nothing was booked (an agent
+    /// that reports no cost, or a total that did not move), never 0.0.
+    fn take_turn_cost(&mut self) -> Option<f64> {
+        let cost = std::mem::take(&mut self.turn_cost);
+        (cost > 0.0).then_some(cost)
+    }
+
     /// Close the step running (if any) at END, carrying USE.
     fn step_close(&mut self, end: f64, turn_use: Option<TurnUse>) {
         if let Some(open) = self.cur.take() {
+            let context = (turn_use.is_some() || open.class == StepClass::JobWait)
+                .then(|| self.usage.as_ref().and_then(|u| u.used))
+                .flatten()
+                .map(|used| used as i64);
             let u = turn_use.unwrap_or_default();
             let mut detail = open.tool_id.as_deref().and_then(|id| self.tool_detail(id));
             // a subagent's step keeps its parent, with a detail of its own if it has none
@@ -303,6 +327,7 @@ impl State {
                 cache_read: u.cache_read,
                 cache_write: u.cache_write,
                 cost: u.cost,
+                context,
             });
         }
     }
@@ -746,6 +771,8 @@ pub struct Session {
     store: Option<transcript::Store>,
     /// Closed steps, in order, to the task that writes them to the `step` table.
     steps: tokio::sync::mpsc::UnboundedSender<ClosedStep>,
+    /// The count of those steps sent and written.
+    flow: Arc<StepFlow>,
     /// How a turn ended, to the reader task.
     done: tokio::sync::mpsc::UnboundedSender<TurnEnd>,
     /// The user's messages as they reach the agent: its current ask ([`crate::work::asks`]).
@@ -754,8 +781,8 @@ pub struct Session {
     stamps: Arc<crate::work::conclusions::Stamps>,
 }
 
-/// What `Conn::prompt` answered.
-struct TurnEnd(Result<hermod::PromptOutcome, hermod::Error>);
+/// What `Conn::prompt` answered for a turn.
+struct TurnEnd(u64, Result<hermod::PromptOutcome, hermod::Error>);
 
 /// Where a session's steps are written and announced.
 #[derive(Clone)]
@@ -795,10 +822,31 @@ struct Ident {
     document: Option<PathBuf>,
 }
 
+/// How a launched agent gets its conversation: a new one, the recorded one again (`session/resume`, else
+/// `session/load`), or a fork of SOURCE at AT expected to restore LEVEL (`session/fork` in this new process).
+#[derive(Clone, Debug)]
+pub(crate) enum Attach {
+    New,
+    Resume(String),
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "made by the rewind and the fork")
+    )]
+    Fork {
+        source: String,
+        at: Option<hermod::ForkPoint>,
+        level: RestoreLevel,
+    },
+}
+
 /// A launched agent with its handshake done.
 struct Launched {
     conn: Conn,
     acp: SessionId,
+    /// The level an attach by fork really restored: its own, or `Summary` when the agent cannot fork or the fork failed
+    /// (a new conversation, LEVEL_WHY saying why).  None for a new or resumed conversation.
+    level: Option<RestoreLevel>,
+    level_why: Option<String>,
     caps: Option<Value>,
     enforced: bool,
     enforced_why: Option<String>,
@@ -1474,6 +1522,21 @@ pub(crate) async fn open_as(
     parent: Option<String>,
     sid: Option<String>,
 ) -> Result<Started, Error> {
+    open_with(hub, front, p, caller, parent, sid, &Attach::New)
+        .await
+        .map(|(started, _)| started)
+}
+
+/// [`open_as`] on the conversation ATTACH names (a fork from a step): the session, and the level a fork landed at.
+pub(crate) async fn open_with(
+    hub: &super::Hub,
+    front: &Front,
+    p: StartParams,
+    caller: &Caller,
+    parent: Option<String>,
+    sid: Option<String>,
+    attach: &Attach,
+) -> Result<(Started, Option<RestoreLevel>), Error> {
     if caller.class != Class::User {
         return Err(refuse("only the user starts a session"));
     }
@@ -1523,7 +1586,7 @@ pub(crate) async fn open_as(
         role,
         &sid,
         &cwd,
-        None,
+        attach,
         (
             p.task.as_ref().map(|t| t.as_str()),
             p.job.as_ref().map(|j| j.as_str()),
@@ -1543,6 +1606,7 @@ pub(crate) async fn open_as(
         about: p.about.as_ref().map(|a| a.to_string()),
         document: p.document.as_ref().map(|d| PathBuf::from(d.as_str())),
     };
+    let level = l.level;
     let (s, done) = assemble(ident, &profile, l, front, hub.step_bus());
     if let Some(store) = &s.store {
         // the module env too: a restart or resume of the session passes it again (`kept_env`)
@@ -1565,7 +1629,7 @@ pub(crate) async fn open_as(
     // its starter's ask is its own: the manager that started it, or the session that made its plan run
     s.asks.started(&s.id, s.parent.as_deref(), s.job.as_deref());
     s.changed();
-    Ok(Started { id: sid, name })
+    Ok((Started { id: sid, name }, level))
 }
 
 /// The `mcpServers` entry that gives the session SID the coordination tools (`job_start` among them): Ratatoskr's
@@ -1630,16 +1694,17 @@ async fn bridge(
         .collect()
 }
 
-/// PROFILE's agent in CWD: started in its sandbox, initialized, on a session (a new one, or EXISTING by
-/// `session/resume`, else `session/load` when the agent can only load) and its lock verified: a lock that does not
-/// hold kills the session.
+/// PROFILE's agent in CWD: started in its sandbox, initialized, on a conversation ATTACH names (a new one; the
+/// recorded one by `session/resume`, else `session/load` when the agent can only load; or a fork, which falls back to a
+/// new conversation at Summary level when the agent cannot fork or the fork fails) and its lock verified, after a fork
+/// as after `session/new`: a lock that does not hold kills the session.
 async fn launch(
     front: &Front,
     profile: &AgentProfile,
     role: Role,
     sid: &str,
     cwd: &Path,
-    existing: Option<&str>,
+    attach: &Attach,
     (task, job, module_env): (Option<&str>, Option<&str>, &[(String, String)]),
 ) -> Result<(Launched, tokio::sync::mpsc::Receiver<Event>), Error> {
     // the session's MCP session first: a sandboxed gateway profile's token is registered on its gateway.sock, which
@@ -1714,9 +1779,36 @@ async fn launch(
                 .map_err(|e| hermod::Error::Decode(e.to_string()))?;
         let info = conn.initialize(caps).await?;
         let caps = serde_json::to_value(&info.caps).ok();
-        let acp = match existing {
-            None => conn.new_session(cwd, mcp.clone(), meta).await?,
-            Some(id) => {
+        let mut landed = (None, None);
+        let acp = match attach {
+            Attach::New => conn.new_session(cwd, mcp.clone(), meta).await?,
+            Attach::Fork { source, at, level } => {
+                let fork = if super::rewind::can_fork(caps.as_ref()) {
+                    conn.fork_into(hermod::ForkInto {
+                        source: SessionId::new(source.clone()),
+                        cwd: cwd.to_path_buf(),
+                        mcp: mcp.clone(),
+                        at: at.clone(),
+                        meta: meta.clone(),
+                    })
+                    .await
+                    .map_err(|e| format!("the fork failed: {e}"))
+                } else {
+                    Err("the agent cannot fork a session".to_string())
+                };
+                match fork {
+                    Ok(id) => {
+                        landed = (Some(*level), None);
+                        id
+                    }
+                    Err(why) => {
+                        tracing::warn!(sid, "{why}: a new conversation, restored by a summary");
+                        landed = (Some(RestoreLevel::Summary), Some(why));
+                        conn.new_session(cwd, mcp.clone(), meta).await?
+                    }
+                }
+            }
+            Attach::Resume(id) => {
                 let sid = SessionId::new(id.to_string());
                 let can = |p: &str| {
                     caps.as_ref()
@@ -1737,9 +1829,9 @@ async fn launch(
                 sid
             }
         };
-        Ok::<_, hermod::Error>((caps, acp))
+        Ok::<_, hermod::Error>((caps, acp, landed))
     };
-    let (capabilities, acp) = match init.await {
+    let (capabilities, acp, (level, level_why)) = match init.await {
         Ok(x) => x,
         Err(e) => {
             kill().await;
@@ -1764,6 +1856,8 @@ async fn launch(
         Launched {
             conn,
             acp,
+            level,
+            level_why,
             caps: capabilities,
             enforced: prep.enforced,
             enforced_why: prep.enforced_why,
@@ -1783,14 +1877,25 @@ fn assemble(
     front: &Front,
     bus: tokio::sync::broadcast::Sender<AgentStep>,
 ) -> (Arc<Session>, tokio::sync::mpsc::UnboundedReceiver<TurnEnd>) {
+    if let Some(level) = l.level {
+        tracing::info!(
+            sid = i.id,
+            ?level,
+            why = l.level_why.as_deref(),
+            "attached by fork"
+        );
+    }
     let (done, done_rx) = tokio::sync::mpsc::unbounded_channel();
     let (steps, rx) = tokio::sync::mpsc::unbounded_channel();
+    let flow = Arc::new(StepFlow::default());
     let ctx = StepCtx {
+        flow: flow.clone(),
         session: i.id.clone(),
         task: i.task.clone(),
         agent: profile.name.clone(),
         provider: step_provider(profile),
         cwd: i.cwd.clone(),
+        acp: Some(l.acp.0.to_string()),
     };
     tokio::spawn(write_steps(
         rx,
@@ -1872,6 +1977,7 @@ fn assemble(
         state: Mutex::new(State::new()),
         store: front.dirs.get().map(|d| transcript::Store::new(&d.hub)),
         steps,
+        flow,
         done,
         asks: front.core.asks.handle(),
         stamps: front.core.stamps.clone(),
@@ -1895,7 +2001,7 @@ pub(crate) async fn resume_all(hub: &super::Hub, front: &Front) {
 }
 
 /// A recorded session: sid, name, profile, role, cwd, task, job, acp id, parent, started.
-type Row = (
+pub(crate) type Row = (
     String,
     String,
     String,
@@ -1909,7 +2015,7 @@ type Row = (
 );
 
 /// The recorded sessions (only ONLY when given), oldest first.
-async fn read_rows(hub: &super::Hub, only: Option<&str>) -> Vec<Row> {
+pub(crate) async fn read_rows(hub: &super::Hub, only: Option<&str>) -> Vec<Row> {
     let Some(db) = hub.db() else {
         return Vec::new();
     };
@@ -1960,13 +2066,19 @@ pub(crate) async fn rotate(hub: &super::Hub, front: &Front, sid: &str, first: St
     let Ok(old) = hub.find(sid) else {
         return false;
     };
-    old.close_now().await;
-    gateway_gone(front, sid).await;
-    let _ = front.mcp.close(sid).await;
+    close_for_swap(front, &old).await;
     let Some(row) = read_rows(hub, Some(sid)).await.into_iter().next() else {
         return false;
     };
     resume_row_with(hub, front, row, Some(first)).await
+}
+
+/// OLD's agent ends so another conversation can take its hub session (a rotation, a rewind): its transcript and queue
+/// kept on disk, its gateway registration and MCP session closed.  Its row stays.
+pub(crate) async fn close_for_swap(front: &Front, old: &Session) {
+    old.close_now().await;
+    gateway_gone(front, &old.id).await;
+    let _ = front.mcp.close(&old.id).await;
 }
 
 /// Session SID's recorded role is now ROLE (the user made it a manager).
@@ -2063,6 +2175,40 @@ async fn resume_row(hub: &super::Hub, front: &Front, row: Row) -> bool {
 /// [`resume_row`], or with FIRST (a manager's restart or rotation, Task 25): a new agent session in the same hub
 /// session, no `session/resume`, that is told FIRST (its digest and open decisions) instead of [`RESTART_NOTICE`].
 async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Option<String>) -> bool {
+    let again = match first {
+        Some(f) => Again::Fresh(f),
+        None => Again::Resume,
+    };
+    relaunch(hub, front, row, again).await.is_ok()
+}
+
+/// How [`relaunch`] brings a recorded session back.
+pub(crate) enum Again {
+    /// Its recorded conversation (`session/resume`, else `session/load`), else a fresh one told what happened.
+    Resume,
+    /// A fresh conversation told this first (a manager's restart or rotation).
+    Fresh(String),
+    /// A fork (a rewind): ATTACH, its new conversation told TOLD first when the fork lands at its own level.  When it
+    /// lands at Summary instead (the agent cannot fork, or the fork failed), it is told SUMMARY and the user's
+    /// MESSAGE; with no message the summary waits, held, at the queue's front, so no turn starts unasked.
+    #[cfg_attr(not(test), allow(dead_code, reason = "made by the rewind"))]
+    Fork {
+        attach: Attach,
+        told: Option<String>,
+        summary: String,
+        message: Option<String>,
+    },
+}
+
+/// ROW's session running again as AGAIN says, under its own id, row, transcript and queue: the level a fork landed at
+/// (none for any other way back), or why it is not running.  The row's conversation is written only once the launch
+/// has landed, so a launch that fails leaves the row as it was, resumable.
+pub(crate) async fn relaunch(
+    hub: &super::Hub,
+    front: &Front,
+    row: Row,
+    again_how: Again,
+) -> Result<Option<RestoreLevel>, Error> {
     let (sid, name, profile_name, role, cwd, task, job, acp, parent, at) = row;
     // a worker a manager started gets back what the manager delegated, before its first tool call
     if parent.is_some() {
@@ -2073,7 +2219,10 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
             sid,
             "session not resumed: no agent profile {profile_name:?}"
         );
-        return false;
+        return Err(invalid(
+            "profile",
+            format!("no agent profile {profile_name:?}"),
+        ));
     };
     let store = front.dirs.get().map(|d| transcript::Store::new(&d.hub));
     let meta = store
@@ -2101,7 +2250,7 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
     let role_of = serde_json::from_value(json!(role)).unwrap_or(Role::Chat);
     // what the editor's modules added at its start goes again
     let env = kept_env(front, &sid, &meta);
-    let again = |existing: Option<String>| {
+    let again = |attach: Attach| {
         let (front, profile, sid, cwd, task, job, env) = (
             front,
             profile.clone(),
@@ -2118,7 +2267,7 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
                 role_of,
                 &sid,
                 Path::new(&cwd),
-                existing.as_deref(),
+                &attach,
                 (task.as_deref(), job.as_deref(), &env),
             )
             .await
@@ -2127,18 +2276,24 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
     // `session/resume`, else `session/load` (both inside `launch`), else the summary handoff of Task 26, else a fresh
     // session that is told what happened (its transcript stays)
     let mut handoff: Option<String> = None;
-    let tried = match first {
-        Some(_) => None,
-        None => Some(again(Some(acp.clone())).await),
+    let tried = match &again_how {
+        Again::Resume => Some(again(Attach::Resume(acp.clone())).await),
+        Again::Fresh(_) | Again::Fork { .. } => None,
     };
     let (l, rx, fresh) = match tried {
-        None => match again(None).await {
-            Ok((l, rx)) => (l, rx, true),
-            Err(e) => {
-                tracing::warn!(sid, "session not started afresh: {}", e.message);
-                return false;
+        None => {
+            let attach = match &again_how {
+                Again::Fork { attach, .. } => attach.clone(),
+                _ => Attach::New,
+            };
+            match again(attach).await {
+                Ok((l, rx)) => (l, rx, true),
+                Err(e) => {
+                    tracing::warn!(sid, "session not started afresh: {}", e.message);
+                    return Err(e);
+                }
             }
-        },
+        }
         Some(Ok((l, rx))) => (l, rx, false),
         Some(Err(e)) if e.code == ErrorCode::Internal => {
             tracing::warn!(
@@ -2147,28 +2302,56 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
                 e.message
             );
             // the summary handoff (Task 26): a new session on the same hub id, told what the old one left
-            handoff =
-                Some(super::handoff::summary(front, &sid, Path::new(&cwd), task.as_deref()).await);
-            match again(None).await {
+            handoff = Some(
+                super::handoff::summary(front, &sid, Path::new(&cwd), task.as_deref(), None).await,
+            );
+            match again(Attach::New).await {
                 Ok((l, rx)) => (l, rx, true),
                 Err(e) => {
                     tracing::warn!(sid, "session not resumed: {}", e.message);
-                    return false;
+                    return Err(e);
                 }
             }
         }
         Some(Err(e)) => {
             tracing::warn!(sid, "session not resumed: {}", e.message);
-            return false;
+            return Err(e);
         }
     };
+    let level = l.level;
     let (s, done) = assemble(ident, &profile, l, front, hub.step_bus());
-    // a manager's restart or rotation is told FIRST; any other fresh start the notice and the summary handoff
-    let told = fresh.then(|| match (first, handoff) {
-        (Some(f), _) => f,
-        (None, Some(h)) => format!("{RESTART_NOTICE}\n\n{h}"),
-        (None, None) => RESTART_NOTICE.to_string(),
-    });
+    // a manager's restart or rotation is told FIRST; a fork what its level needs; any other fresh start the notice
+    // and the summary handoff
+    let (told, hold, reattach) = match again_how {
+        Again::Fork {
+            attach,
+            told,
+            summary,
+            message,
+        } => {
+            let wanted = match attach {
+                Attach::Fork { level, .. } => Some(level),
+                _ => Some(RestoreLevel::Summary),
+            };
+            if level == wanted {
+                (told, false, true)
+            } else {
+                match message {
+                    Some(m) => (Some(format!("{summary}\n\n{m}")), false, true),
+                    None => (Some(summary), true, true),
+                }
+            }
+        }
+        Again::Fresh(f) => (fresh.then_some(f), false, false),
+        Again::Resume => (
+            fresh.then(|| match handoff {
+                Some(h) => format!("{RESTART_NOTICE}\n\n{h}"),
+                None => RESTART_NOTICE.to_string(),
+            }),
+            false,
+            false,
+        ),
+    };
     if fresh && let Some(db) = hub.db() {
         insert_row(db, &s).await;
     }
@@ -2184,7 +2367,15 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
         }
         None => Default::default(),
     };
-    lock(&s.state).core.resume(queue, paused, told);
+    // a fork's first words come through the core's reattach, after the queue the swap kept
+    let (resume_told, reattach_told) = if reattach {
+        (None, Some(told))
+    } else {
+        (told, None)
+    };
+    lock(&s.state)
+        .core
+        .resume(queue, paused || hold, resume_told);
     // a job it started still runs (re-attached before the sessions): it waits for it as before the restart
     let waiting = s.has_jobs();
     {
@@ -2200,8 +2391,11 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
     if waiting {
         s.close_when_idle();
     }
-    s.next();
-    true
+    match reattach_told {
+        Some(told) => s.reattach(told),
+        None => s.next(),
+    }
+    Ok(level)
 }
 
 /// The session SID if it was closed while it waited on a job: resumed now (its agent started again on the same
@@ -2227,14 +2421,35 @@ pub(crate) async fn resume_closed(
     hub.find(sid)
 }
 
+/// How many of a session's closed steps went to its writer task and how many rows that task has written.  A reader
+/// of the `step` table that must see every step the session closed so far waits on it ([`Session::steps_written`]):
+/// the row is written after the session already says it is idle.
+pub(crate) struct StepFlow {
+    sent: AtomicU64,
+    written: tokio::sync::watch::Sender<u64>,
+}
+
+impl Default for StepFlow {
+    fn default() -> Self {
+        StepFlow {
+            sent: AtomicU64::new(0),
+            written: tokio::sync::watch::channel(0).0,
+        }
+    }
+}
+
 /// What a session's step rows say of it.
 struct StepCtx {
+    /// Counts the rows written, for [`StepFlow`].
+    flow: Arc<StepFlow>,
     session: String,
     task: Option<String>,
     agent: String,
     provider: Option<String>,
     /// The worktree its edits are snapshotted from.
     cwd: PathBuf,
+    /// The agent conversation its steps run in.
+    acp: Option<String>,
 }
 
 /// Write a session's closed steps to the `step` table in order, and announce each as an `agent-step` event (editors)
@@ -2279,6 +2494,7 @@ async fn write_steps(
             turn_id: c.turn_id.clone(),
             snapshot: None,
             log_version: None,
+            acp: ctx.acp.clone(),
         };
         let mut end = table::StepEnd {
             end: c.end,
@@ -2287,9 +2503,10 @@ async fn write_steps(
             cache_read: c.cache_read,
             cache_write: c.cache_write,
             cost: c.cost,
-            cost_unit: c.cost.map(|_| "usd".to_string()),
+            cost_unit: c.cost.map(|_| "usd-est".to_string()),
             snapshot: None,
             log_version: None,
+            context: c.context,
         };
         let detail = c.detail.clone();
         let (id, seq, log_version) = match sink
@@ -2316,7 +2533,8 @@ async fn write_steps(
                 (0, local as i64, None)
             }
         };
-        let snapshot = anchor(
+        ctx.flow.written.send_modify(|w| *w += 1);
+        let (snapshot, head) = anchor(
             &sink,
             &ctx,
             &caller,
@@ -2351,8 +2569,13 @@ async fn write_steps(
             cache_read: Some(c.cache_read as u64),
             cache_write: Some(c.cache_write as u64),
             cost: c.cost,
-            cost_unit: None,
+            cost_unit: c.cost.map(|_| Unit::UsdEst),
             detail: c.detail.as_ref().map(crate::work::detail::wire),
+            acp: ctx.acp.clone(),
+            head,
+            history_op: None,
+            undone_by: None,
+            revertible: false,
         };
         // the files the step was in: the presence model (a shell step's command looked up off the async threads)
         if let Some(live) = &sink.presence
@@ -2431,12 +2654,16 @@ async fn write_steps(
             .await;
         }
         // a shell step may have committed: link the new commits to the decisions this session recorded
-        if let Some(task) = &ctx.task
-            && step.class == StepClass::Tool
+        if step.class == StepClass::Tool
             && matches!(step.tool_kind.as_deref(), None | Some("execute"))
         {
-            crate::runner::effects::link_new_commits(&sink.writer, &ctx.session, task, &ctx.cwd)
-                .await;
+            crate::runner::effects::link_new_commits(
+                &sink.writer,
+                &ctx.session,
+                ctx.task.as_deref(),
+                &ctx.cwd,
+            )
+            .await;
         }
         let ev = AgentStep {
             session: ctx.session.clone(),
@@ -2445,10 +2672,13 @@ async fn write_steps(
         sink.editors.broadcast("agent-step", json!(ev));
         let _ = sink.bus.send(ev);
     }
+    // no more rows will come: whoever waits for one stops waiting
+    ctx.flow.written.send_replace(u64::MAX);
 }
 
 /// The anchors a step gets once it is written: the turn id on the turn's earlier steps (it arrives with the turn's
-/// last), and a snapshot of the worktree after a completed edit and at the turn's first step.  Best effort.
+/// last), and a snapshot of the worktree after a completed edit and at the turn's first step, with the worktree's
+/// commit then (from its ref files).  Best effort; answers the snapshot and the commit.
 #[allow(clippy::too_many_arguments)]
 async fn anchor(
     sink: &StepSink,
@@ -2459,9 +2689,9 @@ async fn anchor(
     turn: Option<&str>,
     open: &OpenStep,
     turn_start: bool,
-) -> Option<String> {
+) -> (Option<String>, Option<String>) {
     if id == 0 {
-        return None;
+        return (None, None);
     }
     let edit = open.class == StepClass::Tool
         && matches!(open.tool_kind.as_deref(), Some("edit" | "delete" | "move"));
@@ -2473,18 +2703,32 @@ async fn anchor(
         _ => None,
     };
     if snapshot.is_none() && turn.is_none() {
-        return None;
+        return (None, None);
     }
-    let (turn, tree, sid) = (
+    let head = match &snapshot {
+        Some(_) => {
+            let wt = ctx.cwd.clone();
+            crate::clock::blocking(move || crate::timeline::snapshot::head_of(&wt))
+                .await
+                .ok()
+                .flatten()
+        }
+        None => None,
+    };
+    let (turn, tree, sid, head_) = (
         turn.map(str::to_string),
         snapshot.clone(),
         format!("session:{}", ctx.session),
+        head.clone(),
     );
     let r = sink
         .writer
         .write(caller, "agents/step", move |tx| {
             if let Some(t) = &tree {
                 tx.sql().execute("update step set snapshot = ?2 where id = ?1", (id, t))?;
+            }
+            if let Some(h) = &head_ {
+                norn::write::steps::set_head(tx, id, h)?;
             }
             if let Some(t) = &turn {
                 tx.sql().execute(
@@ -2498,7 +2742,7 @@ async fn anchor(
     if let Err(e) = r {
         tracing::warn!(sid = ctx.session, "step anchors not recorded: {e}");
     }
-    snapshot
+    (snapshot, head)
 }
 
 async fn insert_row(db: &urdr::Handle, s: &Session) {
@@ -2671,8 +2915,21 @@ impl Session {
     fn drain_steps(&self) {
         let closed = std::mem::take(&mut lock(&self.state).closed);
         for c in closed {
+            self.flow.sent.fetch_add(1, Ordering::SeqCst);
             let _ = self.steps.send(c);
         }
+    }
+
+    /// Returns once every step this session has closed so far is a row of the `step` table.
+    pub(crate) async fn steps_written(&self) {
+        self.drain_steps();
+        let target = self.flow.sent.load(Ordering::SeqCst);
+        let _ = self
+            .flow
+            .written
+            .subscribe()
+            .wait_for(|w| *w >= target)
+            .await;
     }
 
     /// The entries not yet in the transcript file, written (redacted) now; a turn not yet sent to the agent waits.
@@ -2947,14 +3204,15 @@ impl Session {
                             .and_then(Value::as_f64)
                             .filter(|_| v.get("sessionUpdate") == Some(&json!("usage_update")))
                         {
-                            let hits = self.budgets.spend_total_in(
+                            let booked = self.budgets.spend_total_in(
                                 &self.scope(),
                                 "usd-est",
                                 &self.acp.0,
                                 Unit::UsdEst,
                                 total,
                             );
-                            self.budgets.notify(hits);
+                            lock(&self.state).add_turn_cost(booked.delta);
+                            self.budgets.notify(booked.hits);
                         }
                         let (stepped, begun) = {
                             let mut st = lock(&self.state);
@@ -3527,6 +3785,26 @@ impl Session {
         });
     }
 
+    /// What its agent answered to `initialize` (`agentCapabilities`).
+    #[cfg_attr(not(test), allow(dead_code, reason = "read by the rewind"))]
+    pub(crate) fn capabilities(&self) -> Option<&Value> {
+        self.capabilities.as_ref()
+    }
+
+    /// Its conversation is about to be swapped (a rewind): the running turn is cancelled and cut off, a prompt that
+    /// has not reached the agent goes back to the queue, and the queue is kept on disk for the session that follows.
+    #[cfg_attr(not(test), allow(dead_code, reason = "called by the rewind"))]
+    pub(crate) fn detach(self: &Arc<Self>) {
+        let fx = lock(&self.state).turn_step(TurnEvent::Detach);
+        self.perform(fx);
+    }
+
+    /// Its new conversation is live (a rewind's): TOLD first, then the queue as the swap kept it.
+    fn reattach(self: &Arc<Self>, told: Option<String>) {
+        let fx = lock(&self.state).turn_step(TurnEvent::Reattach { told });
+        self.perform(fx);
+    }
+
     pub(crate) async fn close_now(&self) {
         self.closed.store(true, Ordering::SeqCst);
         self.flush_transcript();
@@ -3687,11 +3965,11 @@ impl Session {
         let blocks = serde_json::from_value(json!([block])).unwrap_or_default();
         let out = self.conn.prompt(&self.acp, blocks, None).await;
         // the reader task ends the turn, after the updates the agent sent before its answer
-        let _ = self.done.send(TurnEnd(out));
+        let _ = self.done.send(TurnEnd(turn, out));
     }
 
     fn finish_turn(self: &Arc<Self>, end: TurnEnd) {
-        let out = end.0;
+        let TurnEnd(turn, out) = end;
         let mut message: Option<String> = None;
         let jobs = self.has_jobs();
         // ENDING as the step saw it, under its lock: a hub that begins ending after the step ends what it started
@@ -3720,21 +3998,28 @@ impl Session {
                     rest.insert("stop".into(), json!(format!("{:?}", o.stop)));
                     st.push(EntryType::Stop, rest);
                     used = turn_use(o);
+                    used.cost = st.take_turn_cost();
                     let tokens = (used.tokens_in + used.tokens_out) as f64;
                     st.tokens += tokens as u64;
                     self.spend(vec![(Unit::Tokens, tokens)]);
                     TurnEvent::PromptDone {
+                        turn,
                         cancelled: serde_json::to_value(o.stop).ok() == Some(json!("cancelled")),
                         jobs,
                     }
                 }
-                Err(hermod::Error::Closed) => TurnEvent::PromptFailed { closed: true, jobs },
+                Err(hermod::Error::Closed) => TurnEvent::PromptFailed {
+                    turn,
+                    closed: true,
+                    jobs,
+                },
                 Err(e) => {
                     rest.insert("text".into(), json!(e.to_string()));
                     // the editor tells this error, which ends the turn, from one inside a turn (a refused wait)
                     rest.insert("stop".into(), json!("Error"));
                     st.push(EntryType::Error, rest);
                     TurnEvent::PromptFailed {
+                        turn,
                         closed: false,
                         jobs,
                     }
@@ -4190,7 +4475,7 @@ pub async fn move_session(
         }
         crate::clock::sleep(Duration::from_millis(50)).await;
     }
-    let text = super::handoff::summary(front, id, &old.cwd, old.task.as_deref()).await;
+    let text = super::handoff::summary(front, id, &old.cwd, old.task.as_deref(), None).await;
     let start: StartParams = serde_json::from_value(json!({
         "profile": profile,
         "cwd": old.cwd,
@@ -4278,7 +4563,9 @@ pub fn fuzz_apply(updates: &[Value]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::budget::Budgets;
     use runstav::methods::agents::SessionStatus;
+    use runstav::methods::timeline::BudgetScope;
 
     #[tokio::test]
     async fn rekey_runs_before_the_first_prompt() {
@@ -4375,6 +4662,94 @@ mod tests {
         v
     }
 
+    /// A cost reading TOTAL of conversation CONV, as `Session::handle` books it: the budget's delta is also the turn's.
+    fn read_cost(b: &Budgets, st: &mut State, conv: &str, total: f64) {
+        let scope: BudgetScope = serde_json::from_value(json!({"worker": "w1"})).unwrap();
+        let booked = b.spend_total_in(&scope, "usd-est", conv, Unit::UsdEst, total);
+        st.add_turn_cost(booked.delta);
+    }
+
+    fn spent_est(b: &Budgets) -> f64 {
+        let scope: BudgetScope = serde_json::from_value(json!({"worker": "w1"})).unwrap();
+        b.view(&scope)
+            .spent
+            .into_iter()
+            .find(|l| l.unit == Unit::UsdEst)
+            .map_or(0.0, |l| l.amount)
+    }
+
+    // test-pattern: D
+    #[test]
+    fn a_turns_cost_is_what_the_budget_booked_in_it() {
+        let (b, mut st) = (Budgets::default(), State::new());
+        read_cost(&b, &mut st, "c1", 0.10);
+        let first = st.take_turn_cost().unwrap();
+        assert!((first - 0.10).abs() < 1e-9, "{first}");
+        read_cost(&b, &mut st, "c1", 0.25);
+        let second = st.take_turn_cost().unwrap();
+        assert!((second - 0.15).abs() < 1e-9, "{second}");
+    }
+
+    // test-pattern: D
+    #[test]
+    fn a_step_keeps_the_context_at_its_close() {
+        let mut st = State::new();
+        st.step_begin(StepClass::Think, None);
+        st.step_close(now(), None);
+        st.apply(&upd(
+            json!({"sessionUpdate": "usage_update", "used": 300000, "size": 1000000}),
+        ));
+        st.step_begin(StepClass::Think, None);
+        st.step_close(now(), Some(TurnUse::default()));
+        st.step_begin(StepClass::JobWait, None);
+        st.step_close(now(), None);
+        st.step_begin(StepClass::Tool, None);
+        st.step_close(now(), None);
+        let got: Vec<Option<i64>> = st.closed.iter().map(|c| c.context).collect();
+        assert_eq!(got, [None, Some(300000), Some(300000), None]);
+    }
+
+    // test-pattern: D
+    #[test]
+    fn no_cost_reported_leaves_the_step_unpriced() {
+        let mut st = State::new();
+        st.apply(&upd(
+            json!({"sessionUpdate": "usage_update", "used": 10, "size": 100}),
+        ));
+        assert_eq!(st.take_turn_cost(), None);
+        let b = Budgets::default();
+        read_cost(&b, &mut st, "c1", 0.10);
+        st.take_turn_cost();
+        // a turn in which the total did not move has no cost, not 0.0
+        read_cost(&b, &mut st, "c1", 0.10);
+        assert_eq!(st.take_turn_cost(), None);
+    }
+
+    // test-pattern: D
+    #[test]
+    fn the_step_and_the_budget_book_the_same_delta() {
+        let (b, mut st) = (Budgets::default(), State::new());
+        read_cost(&b, &mut st, "a", 0.10);
+        let one = st.take_turn_cost().unwrap();
+        // a new conversation starts at its own first reading, even above the old total
+        read_cost(&b, &mut st, "b", 0.30);
+        let two = st.take_turn_cost().unwrap();
+        assert!((two - 0.30).abs() < 1e-9, "{two}");
+        assert!((spent_est(&b) - (one + two)).abs() < 1e-9);
+    }
+
+    // test-pattern: D
+    #[test]
+    fn a_fork_that_reports_its_parents_total_is_booked_alike() {
+        let (b, mut st) = (Budgets::default(), State::new());
+        read_cost(&b, &mut st, "a", 0.10);
+        let one = st.take_turn_cost().unwrap();
+        read_cost(&b, &mut st, "b", 0.15);
+        let two = st.take_turn_cost().unwrap();
+        assert!((two - 0.15).abs() < 1e-9, "{two}");
+        assert!((spent_est(&b) - (one + two)).abs() < 1e-9);
+    }
+
     #[test]
     fn chunks_of_one_message_join_into_one_entry() {
         let mut st = State::new();
@@ -4461,11 +4836,13 @@ mod tests {
         let (bus, mut seen) = tokio::sync::broadcast::channel(16);
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let ctx = StepCtx {
+            flow: Arc::default(),
             session: "a1".into(),
             task: Some("task:7".into()),
             agent: "mock".into(),
             provider: None,
             cwd: PathBuf::new(),
+            acp: None,
         };
         let sink = StepSink {
             writer: writer.clone(),
@@ -4507,6 +4884,7 @@ mod tests {
                 cost: None,
                 detail: None,
                 command: None,
+                context: None,
             })
             .unwrap();
         }
@@ -4546,6 +4924,71 @@ mod tests {
         );
     }
 
+    // test-pattern: D
+    #[tokio::test]
+    async fn the_step_event_carries_the_unit() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = crate::coord::Writer {
+            db: norn::store::CoordDb::spawn(dir.path().join("work.db")),
+            signals: Arc::new(crate::coord::Signals::default()),
+        };
+        let (bus, mut seen) = tokio::sync::broadcast::channel(16);
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let ctx = StepCtx {
+            flow: Arc::default(),
+            session: "a1".into(),
+            task: Some("task:7".into()),
+            agent: "mock".into(),
+            provider: None,
+            cwd: PathBuf::new(),
+            acp: None,
+        };
+        let sink = StepSink {
+            writer: writer.clone(),
+            editors: Arc::new(crate::settings::agents::Editors::default()),
+            bus,
+            snap: None,
+            scopes: None,
+            tools: None,
+            asks: None,
+            stamps: None,
+            presence: None,
+            map: None,
+            traces: None,
+        };
+        tokio::spawn(write_steps(rx, sink, ctx));
+        for cost in [Some(0.15), None] {
+            tx.send(ClosedStep {
+                open: OpenStep {
+                    class: StepClass::Think,
+                    start: 10.0,
+                    tool: None,
+                    tool_kind: None,
+                    tool_id: None,
+                    message_id: None,
+                    key: 0,
+                    mcp: false,
+                    parent_tool: None,
+                },
+                end: 11.0,
+                turn_id: None,
+                tokens_in: 1,
+                tokens_out: 1,
+                cache_read: 0,
+                cache_write: 0,
+                cost,
+                detail: None,
+                command: None,
+                context: None,
+            })
+            .unwrap();
+        }
+        let priced = seen.recv().await.unwrap().step;
+        let unpriced = seen.recv().await.unwrap().step;
+        assert_eq!(priced.cost_unit, Some(Unit::UsdEst));
+        assert_eq!(unpriced.cost_unit, None);
+    }
+
     /// Three steps of a turn through the writer: a think, an edit tool call, the turn's last think (with the turn id).
     async fn written_turn(
         dir: &Path,
@@ -4573,11 +5016,13 @@ mod tests {
             traces: None,
         };
         let ctx = StepCtx {
+            flow: Arc::default(),
             session: "a1".into(),
             task: Some("task:7".into()),
             agent: "mock".into(),
             provider: None,
             cwd: wt.clone(),
+            acp: None,
         };
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let done = tokio::spawn(write_steps(rx, sink, ctx));
@@ -4608,6 +5053,7 @@ mod tests {
                 cost: None,
                 detail: None,
                 command: None,
+                context: None,
             })
             .unwrap();
         }

@@ -1,10 +1,12 @@
-//! hermod against scripted children: `/bin/sh` scripts that print canned JSON-RPC lines (the mock agent is Task 2).
+//! hermod against scripted children: `/bin/sh` scripts that print canned JSON-RPC lines, and for a fork the mock agent
+//! (`ratatoskr-mock acp`, a real process; a test waits for its answers and reads its log after them).
 
 use hermod::schema::v1::{
     PermissionOptionId, RequestPermissionOutcome, RequestPermissionResponse, SessionUpdate,
 };
-use hermod::{ClientCaps, Conn, ConnOpts, Error, Event, ForkPoint, Incoming};
-use std::path::Path;
+use hermod::{ClientCaps, Conn, ConnOpts, Error, Event, ForkInto, ForkPoint, Incoming};
+use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 
@@ -240,38 +242,252 @@ async fn a_deadline_fails_the_call_not_the_conn() {
     assert_eq!(&*sid.0, "s9");
 }
 
+fn fork_of(source: &hermod::SessionId, cwd: &str, at: Option<&str>) -> ForkInto {
+    ForkInto {
+        source: source.clone(),
+        cwd: cwd.into(),
+        mcp: vec![],
+        at: at.map(|m| ForkPoint {
+            message_id: m.into(),
+        }),
+        meta: None,
+    }
+}
+
 #[tokio::test]
 async fn fork_sends_the_jetbrains_meta() {
     let rest = r#"read f; echo "$f" >&2; printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"sessionId":"s2"}}'; cat >/dev/null"#;
     let (conn, mut rx) = start(&script(rest), opts()).await;
     let sid = open(&conn).await;
-    let forked = conn
-        .fork(
-            &sid,
-            Some(ForkPoint {
-                message_id: "m7".into(),
-            }),
-        )
-        .await
-        .unwrap();
+    let mut f = fork_of(&sid, "/elsewhere", Some("m7"));
+    // a meta of the caller's own under `jetbrains` stays beside the fork point
+    f.meta = Some(json!({"jetbrains": {"other": 1}, "claudeCode": {"options": {"x": 1}}}));
+    let forked = conn.fork_into(f).await.unwrap();
     assert_eq!(&*forked.0, "s2");
-    assert!(matches!(
-        conn.fork(&hermod::SessionId::new("nope"), None).await,
-        Err(Error::UnknownSession(_))
-    ));
     drop(conn);
     let Event::Exit { stderr, .. } = next(&mut rx).await else {
         panic!("exit")
     };
-    let sent: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap();
+    let sent: Value = serde_json::from_str(stderr.trim()).unwrap();
     assert_eq!(sent["method"], "session/fork");
     assert_eq!(sent["params"]["sessionId"], "s1");
-    assert_eq!(sent["params"]["cwd"], "/work");
-    let fork = &sent["params"]["_meta"]["jetbrains"]["air"]["fork"];
+    assert_eq!(sent["params"]["cwd"], "/elsewhere");
+    assert_eq!(sent["params"]["mcpServers"], json!([]));
+    let meta = &sent["params"]["_meta"];
+    let fork = &meta["jetbrains"]["air"]["fork"];
     assert_eq!(
         (fork["version"].as_i64(), fork["messageId"].as_str()),
         (Some(1), Some("m7"))
     );
+    assert_eq!(meta["jetbrains"]["other"], 1);
+    assert_eq!(meta["claudeCode"]["options"]["x"], 1);
+}
+
+/// `ratatoskr-mock` (domr's binary): `RATATOSKR_MOCK`, else beside this test's binary (`target/<profile>/`), built
+/// there once when it is missing.
+fn mock_bin() -> PathBuf {
+    static BIN: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    BIN.get_or_init(|| {
+        if let Some(p) = std::env::var_os("RATATOSKR_MOCK") {
+            return p.into();
+        }
+        let exe = std::env::current_exe().unwrap();
+        let dir = exe.parent().and_then(Path::parent).unwrap().to_path_buf();
+        let bin = dir.join("ratatoskr-mock");
+        if !bin.exists() {
+            let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+            let profile = dir.file_name().unwrap().to_str().unwrap();
+            let profile = if profile == "debug" { "dev" } else { profile };
+            let ok = std::process::Command::new(cargo)
+                .args([
+                    "build",
+                    "-p",
+                    "domr",
+                    "--bin",
+                    "ratatoskr-mock",
+                    "--profile",
+                ])
+                .arg(profile)
+                .arg("--target-dir")
+                .arg(dir.parent().unwrap())
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok && bin.exists(), "ratatoskr-mock is not built");
+        }
+        bin
+    })
+    .clone()
+}
+
+/// The mock agent's files, in a folder of the test's own under the temporary directory: its `--state` folder and its
+/// logs, one per process.  Removed when dropped.
+struct Mock {
+    dir: PathBuf,
+}
+
+impl Drop for Mock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+impl Mock {
+    fn new() -> Mock {
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("hermod-mock-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(dir.join("state")).unwrap();
+        Mock { dir }
+    }
+
+    /// A mock `--as claude` process with the shared state and its own LOG, initialized; its events drained.
+    async fn start(&self, log: &str) -> Conn {
+        let p = |s: &str| self.dir.join(s).into_os_string();
+        let spec = draugr::Spec {
+            program: mock_bin(),
+            args: vec![
+                "acp".into(),
+                "--as".into(),
+                "claude".into(),
+                "--log".into(),
+                p(log),
+                "--state".into(),
+                p("state"),
+            ],
+            env: draugr::env::build(&["PATH"], &[], &[]),
+            cwd: None,
+            stdin_null: false,
+            pass_fds: vec![],
+            new_session: false,
+        };
+        let (conn, mut rx) = Conn::spawn(spec, opts()).await.expect("spawn the mock");
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        conn.initialize(ClientCaps::default())
+            .await
+            .expect("initialize");
+        conn
+    }
+
+    /// The values of KEY in LOG, in order.
+    fn logged(&self, log: &str, key: &str) -> Vec<Value> {
+        std::fs::read_to_string(self.dir.join(log))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .filter_map(|v| v.get(key).cloned())
+            .collect()
+    }
+}
+
+async fn say(conn: &Conn, sid: &hermod::SessionId, text: &str) {
+    let block = hermod::ContentBlock::Text(hermod::schema::v1::TextContent::new(text));
+    conn.prompt(sid, vec![block], None).await.expect("a turn");
+}
+
+#[tokio::test]
+async fn fork_into_carries_cwd_mcp_and_lock_meta() {
+    let m = Mock::new();
+    let conn = m.start("a.log").await;
+    let sid = conn
+        .new_session(Path::new("/work"), vec![], None)
+        .await
+        .unwrap();
+    let mcp: hermod::McpServer = serde_json::from_value(
+        json!({"name": "drgnx", "command": "/bin/true", "args": ["mcp-bridge"], "env": []}),
+    )
+    .unwrap();
+    let mut f = fork_of(&sid, "/elsewhere", None);
+    f.mcp = vec![mcp];
+    f.meta = Some(json!({"claudeCode": {"options": {"permissionMode": "default"}}}));
+    let forked = conn.fork_into(f).await.unwrap();
+    let line = &m.logged("a.log", "session/fork")[0];
+    assert_eq!(line["sessionId"], json!(&*forked.0));
+    assert_eq!(line["cwd"], "/elsewhere");
+    assert_eq!(line["mcpServers"][0]["name"], "drgnx");
+    assert_eq!(line["claude_options"]["permissionMode"], "default");
+}
+
+#[tokio::test]
+async fn fork_into_keeps_the_lock_meta_beside_the_fork_point() {
+    let m = Mock::new();
+    let conn = m.start("a.log").await;
+    let sid = conn
+        .new_session(Path::new("/work"), vec![], None)
+        .await
+        .unwrap();
+    say(&conn, &sid, "hello").await;
+    let mut f = fork_of(&sid, "/work", Some("a-1-1"));
+    f.meta = Some(json!({"claudeCode": {"options": {"permissionMode": "default"}}}));
+    conn.fork_into(f).await.unwrap();
+    let line = &m.logged("a.log", "session/fork")[0];
+    assert_eq!(line["claude_options"]["permissionMode"], "default");
+    assert_eq!(line["messageId"], "a-1-1");
+    assert_eq!(line["kept"], 2, "the user's message and the first answer");
+}
+
+#[tokio::test]
+async fn fork_into_works_on_a_connection_that_never_saw_the_session() {
+    let m = Mock::new();
+    let first = m.start("a.log").await;
+    let sid = first
+        .new_session(Path::new("/work"), vec![], None)
+        .await
+        .unwrap();
+    say(&first, &sid, "hello").await;
+    drop(first);
+    let second = m.start("b.log").await;
+    let forked = second
+        .fork_into(fork_of(&sid, "/work", None))
+        .await
+        .expect("a fork on a fresh connection");
+    assert_ne!(forked, sid);
+    let line = &m.logged("b.log", "session/fork")[0];
+    assert_eq!(line["from"], json!(&*sid.0));
+    assert_eq!(line["kept"], 3, "the whole history");
+}
+
+#[tokio::test]
+async fn fork_into_unknown_message_is_an_error() {
+    let m = Mock::new();
+    let conn = m.start("a.log").await;
+    let sid = conn
+        .new_session(Path::new("/work"), vec![], None)
+        .await
+        .unwrap();
+    say(&conn, &sid, "hello").await;
+    let r = conn.fork_into(fork_of(&sid, "/work", Some("nope"))).await;
+    assert!(matches!(r, Err(Error::Rpc { code: -32602, .. })), "{r:?}");
+    assert!(m.logged("a.log", "session/fork").is_empty());
+}
+
+#[tokio::test]
+async fn fork_from_a_second_process_reads_state() {
+    let m = Mock::new();
+    let first = m.start("a.log").await;
+    let sid = first
+        .new_session(Path::new("/work"), vec![], None)
+        .await
+        .unwrap();
+    say(&first, &sid, "one").await;
+    say(&first, &sid, "two").await;
+    drop(first);
+    let second = m.start("b.log").await;
+    let forked = second
+        .fork_into(fork_of(&sid, "/work", Some("a-1-2")))
+        .await
+        .unwrap();
+    let line = &m.logged("b.log", "session/fork")[0];
+    assert_eq!(
+        (line["kept"].as_u64(), line["turns"].as_u64()),
+        (Some(3), Some(1)),
+        "the cut: turn one's three messages"
+    );
+    // the fork goes on from the cut: its next turn is the second
+    say(&second, &forked, "three").await;
+    let prompts = m.logged("b.log", "prompt");
+    assert_eq!(prompts[0]["turn"], 2);
+    assert_eq!(prompts[0]["sessionId"], json!(&*forked.0));
 }
 
 #[tokio::test]

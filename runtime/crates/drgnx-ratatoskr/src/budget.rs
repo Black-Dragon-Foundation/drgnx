@@ -40,6 +40,13 @@ pub struct Hit {
     pub spent: f64,
 }
 
+/// What a cumulative reading booked: the rise it added (never negative) and the limits that rise reached.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Booked {
+    pub delta: f64,
+    pub hits: Vec<Hit>,
+}
+
 impl Hit {
     pub fn estimate(&self) -> bool {
         is_estimate(self.unit)
@@ -436,16 +443,19 @@ impl Budgets {
         conversation: &str,
         unit: Unit,
         total: f64,
-    ) -> Vec<Hit> {
+    ) -> Booked {
         let delta = {
             let mut st = self.st();
             let reading = format!("{what} {conversation}");
             let seen = st.seen.entry((key(scope), reading)).or_insert(0.0);
             let d = total - *seen;
             *seen = total.max(*seen);
-            d
+            d.max(0.0)
         };
-        self.spend(scope, unit, delta)
+        Booked {
+            delta,
+            hits: self.spend(scope, unit, delta),
+        }
     }
 
     /// The session SCOPE's requests are booked under job JOB at the gateway.

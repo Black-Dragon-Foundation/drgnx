@@ -198,6 +198,15 @@ running.  Nil: only a running server (TEI, Ollama) makes vectors, and with none,
     (drgnx-agents-repeat-limit . identity)
     (drgnx-agents-no-progress-tokens . identity)
     (drgnx-agents-manager-context . identity)
+    ;; the agent browser and its session's memory cap
+    (drgnx-agents-browser-program . ,(lambda (v) (or v :null)))
+    (drgnx-agents-browser-local-ports . vconcat)
+    (drgnx-agents-browser-deny-hosts . vconcat)
+    (drgnx-agents-browser-max-message . identity)
+    (drgnx-agents-browser-idle . identity)
+    (drgnx-agents-browser-once-window . identity)
+    (drgnx-agents-session-memory . identity)
+    (drgnx-agents-browser-memory-high . identity)
     ;; the runners' per-project settings (`drgnx-agents-matrix.el') and Hrafn's model mirror
     (drgnx-runners-send . drgnx-settings-runtime--str)
     (drgnx-runners-heavy . drgnx-settings-runtime--strings)

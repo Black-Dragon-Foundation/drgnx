@@ -41,9 +41,10 @@ fn commit(dir: &Path, day: u32, subject: &str, files: &[(&str, String)]) {
     git(dir, day, &["commit", "-q", "-m", subject]);
 }
 
-/// The fixture's history; the subject of each commit says what the generator must do with it.
+/// The fixture's history; the subject of each commit says what the generator must do with it. Under the temp dir's real
+/// path: a root with a link in its path is refused (macOS's /var is one).
 fn fixture() -> tempfile::TempDir {
-    let t = tempfile::tempdir().unwrap();
+    let t = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
     let d = t.path();
     git(d, 1, &["init", "-q"]);
     let timer =

@@ -101,11 +101,10 @@ pub fn chunks(
         })
         .collect();
     let n = chunk_count(rest.len(), set_minutes, overhead_s, quiet_parallel);
-    let (base, extra) = if n == 0 {
-        (0, 0)
-    } else {
-        (rest.len() / n, rest.len() % n)
-    };
+    let (base, extra) = (
+        rest.len().checked_div(n).unwrap_or(0),
+        rest.len().checked_rem(n).unwrap_or(0),
+    );
     let mut at = 0;
     for i in 0..n {
         let len = base + usize::from(i < extra);

@@ -57,6 +57,8 @@ vegvisir = { path = "../vegvisir", version = "0.1.0" }  # the Work map's model a
 forseti = { path = "../forseti", version = "0.1.0" }  # the scheduler core: the queue's order, placement and admission
 hrafn-embed = { path = "../hrafn-embed", version = "0.1.0" }  # the model table, the cache's checks, the embed worker's engine
 hrafn = { path = "../hrafn", version = "0.1.0" }  # each project's code store, tier 1 and the store side of tier 2
+verdandi = { path = "../verdandi", version = "0.1.0" }  # the edit history's store (history::)
+similar = "2.7"  # history::capture's disk diffs (a text onto a document); 3.x is not in the lock file yet
 heimdall = { path = "../heimdall", version = "0.1.0" }  # the CDP broker's routing and codecs (browser::{host,broker})
 fastwebsockets.workspace = true  # the CDP broker's websocket (browser::broker)
 hyper.workspace = true           # the CDP broker's HTTP/1.1 upgrade (already in the tree through bifrost)

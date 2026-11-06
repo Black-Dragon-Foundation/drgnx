@@ -990,7 +990,7 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
 
 (ert-deftest drgnx-install/plan-names-the-rust-toolchain-path ()
   (drgnx-install-test--with-tmp tmp
-    ;; 1. cargo and rustc >= 1.88 on PATH
+    ;; 1. cargo and rustc >= 1.95 on PATH
     (let ((out (cdr (drgnx-install-test--rust-plan "fedora-45" tmp (list drgnx-install-test--cargo drgnx-install-test--rustc
                                                                          drgnx-install-test--cc drgnx-install-test--dnf)
                                                    "RUST_CAND=1.99.0"))))
@@ -998,26 +998,27 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
       (should (string-search "C compiler: cc" out))
       (should-not (string-search "dnf install -y cargo" out))
       (should (string-search "/cargo (the update timer finds the same cargo)" out)))
-    ;; 2. the distro's default package, when its candidate is >= 1.88
+    ;; 2. the distro's default package, when its candidate is >= 1.95
     (let ((out (cdr (drgnx-install-test--rust-plan "fedora-45" tmp (list drgnx-install-test--dnf) "RUST_CAND=1.99.0"))))
       (should (string-search "Rust toolchain: sudo dnf install -y cargo rust gcc (the distro's rust 1.99.0)" out)))
-    (let ((out (cdr (drgnx-install-test--rust-plan "ubuntu-26.04" tmp (list drgnx-install-test--apt-cache) "RUST_CAND=1.93.1+dfsg1-0ubuntu1"))))
-      (should (string-search "Rust toolchain: sudo apt-get install -y cargo rustc gcc (the distro's rust 1.93.1)" out)))
-    ;; 3. a versioned package where the default is too old (Ubuntu 24.04: 1.75 and rustc-1.91); the newest >= 1.88 is taken
+    (let ((out (cdr (drgnx-install-test--rust-plan "ubuntu-26.04" tmp (list drgnx-install-test--apt-cache) "RUST_CAND=1.96.0+dfsg1-0ubuntu1"))))
+      (should (string-search "Rust toolchain: sudo apt-get install -y cargo rustc gcc (the distro's rust 1.96.0)" out)))
+    ;; 3. a versioned package where the default is too old (Ubuntu 26.04's 1.93); the newest >= 1.95 with its cargo is
+    ;; taken (rustc-1.97 has none here)
     (let ((out (cdr (drgnx-install-test--rust-plan
-                     "ubuntu-26.04" tmp (list drgnx-install-test--apt-cache) "RUST_CAND=1.75.0+dfsg0ubuntu1"
-                     (concat "APT_SEARCH=rustc-1.91 - Rust\ncargo-1.91 - Cargo\nrustc-1.85 - Rust\ncargo-1.85 - Cargo\n"
-                             "rustc-1.89 - Rust\nrustc-1.75 - Rust\ncargo-1.75 - Cargo\n")))))
-      (should (string-search "Rust toolchain: sudo apt-get install -y rustc-1.91 cargo-1.91 gcc" out))
-      (should (string-search "/usr/lib/rust-1.91/bin" out))
-      (should-not (string-search "1.75" out)))
+                     "ubuntu-26.04" tmp (list drgnx-install-test--apt-cache) "RUST_CAND=1.93.1+dfsg1-0ubuntu1"
+                     (concat "APT_SEARCH=rustc-1.96 - Rust\ncargo-1.96 - Cargo\nrustc-1.93 - Rust\ncargo-1.93 - Cargo\n"
+                             "rustc-1.97 - Rust\nrustc-1.91 - Rust\ncargo-1.91 - Cargo\n")))))
+      (should (string-search "Rust toolchain: sudo apt-get install -y rustc-1.96 cargo-1.96 gcc" out))
+      (should (string-search "/usr/lib/rust-1.96/bin" out))
+      (should-not (string-search "rustc-1.93" out)))
     ;; 4. Debian trixie (1.85) and no versioned package: a private rustup, from the versioned archive
     (let ((out (cdr (drgnx-install-test--rust-plan "debian-13" tmp (list drgnx-install-test--apt-cache) "RUST_CAND=1.85.0+dfsg1-1"
                                                    ;; no Nidhogg recipe for Debian 13: a Nidhogg already installed is kept
                                                    (concat "DRGNX_INSTALL_EMACS=" (drgnx-install-test--fake-emacs tmp "31.1 t pgtk 31.1-nidhogg.5"))
                                                    "APT_SEARCH=rustc-1.85 - Rust\ncargo-1.85 - Cargo\n"))))
       (should (string-search "Rust toolchain: a private rustup 1.28.2" out))
-      (should (string-search "/rustup with Rust 1.93.1" out))
+      (should (string-search "/rustup with Rust 1.99.1" out))
       (should (string-search "https://static.rust-lang.org/rustup/archive/1.28.2/x86_64-unknown-linux-gnu/rustup-init" out))
       (should (string-search "sha256" out)))))
 

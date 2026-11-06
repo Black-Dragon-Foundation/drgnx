@@ -1,8 +1,9 @@
 //! The personal-notes canary over the Rust-only doors (Urdr Task 19; storage §5.6): `graph/put-parsed` with crafted
 //! payloads (door 1, without the Lisp scan in front of it), the 6 → 7 migration (door 2,
 //! `test/fixtures/work-db-6-canary.sql`), `graph/import` of a tampered export (door 2), `graph/export` (door 5) and
-//! the hub's entity embedder (door 4, `drgnx_ratatoskr::embed::fill`, a dev-dependency) over everything stored. The
-//! Lisp scan and indexer are the row `privacy/personal-notes-canary`'s.
+//! the hub's entity embedder (door 4, `drgnx_ratatoskr::embed::fill`, a dev-dependency) over everything stored, and
+//! the edit history's `history.db` (door 6: a file the deny-list names is never registered, so it is never a document).
+//! The Lisp scan and indexer are the row `privacy/personal-notes-canary`'s.
 //!
 //! Everything lives under a temp HOME. The canaries are random bytes generated here, written only into fixture files
 //! under that HOME's `org/`; nothing reads the real `~`.
@@ -558,4 +559,52 @@ async fn the_hub_never_writes_org() {
     assert_eq!(row(), read, "the board's TODO is as the scan left it");
     // No file under HOME/org changed: the same files, bytes, times and modes.
     assert_eq!(fx.org_snapshot(), before);
+}
+
+/// Door 6, `history.db`: the edit history registers a file only when the deny-list lets it, so the notes never reach a
+/// document, a snapshot or the write-ahead log.  The project is the whole HOME here, so `org/` is inside the tree the
+/// history watches.
+#[test]
+fn history_db_is_the_sixth_door() {
+    use drgnx_ratatoskr::history::{Hub, Tree};
+
+    let fx = Fx::new();
+    let git = |args: &[&str]| {
+        let ok = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&fx.home)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "git {args:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    let deny = fx.deny();
+    let dir = fx.root.join("history");
+    let hub = Hub::open(&dir).unwrap();
+    let tree = Tree::new(&fx.home, &fx.home.join(".git"), None);
+
+    let notes = hub.register(&tree, "org/notes.org", "b1", &deny).unwrap();
+    assert!(!notes.tracked, "the notes are not tracked");
+    assert_eq!(notes.reason.as_deref(), Some("personal"));
+    // a file the deny-list lets in is tracked, so the absence below means something
+    let plan = hub.register(&tree, "proj/plans/p.md", "b2", &deny).unwrap();
+    assert!(plan.tracked, "{plan:?}");
+    hub.close().unwrap();
+    drop(hub);
+
+    let files = files_under(&dir);
+    assert!(files.iter().any(|f| f.ends_with("history.db")));
+    for f in &files {
+        assert!(
+            !holds(f, &fx.notes),
+            "door 6: the hard-tier notes are in {f:?}"
+        );
+        assert!(
+            !holds(f, &fx.other),
+            "door 6: the soft-tier notes are in {f:?}"
+        );
+    }
 }

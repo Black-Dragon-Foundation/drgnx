@@ -17,6 +17,7 @@ use runstav::methods::timeline::{
     ClassSecs, Rollup, Scope, Step, StepClass, Timeline as TimelineAnswer, TimelineParams, Tokens,
 };
 use runstav::wire::{Error, ErrorCode};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -24,11 +25,27 @@ use std::sync::{Arc, Mutex};
 /// The most steps one `timeline/get` answers.
 const PAGE: i64 = 500;
 
-/// The snapshots' shared state: whether they stopped at the cap, and the sessions that finished (oldest first).
+/// The snapshots' shared state: whether they stopped at the cap, the sessions that finished (oldest first), and the
+/// sessions whose snapshots the cap removed in this hub's run.
 #[derive(Default)]
 pub struct SnapState {
     stopped: AtomicBool,
     finished: Mutex<Vec<String>>,
+    pruned: Mutex<BTreeSet<String>>,
+}
+
+impl SnapState {
+    /// GONE's snapshots were removed at the cap.
+    fn pruned(&self, gone: &[String]) {
+        self.pruned
+            .lock()
+            .expect("timeline")
+            .extend(gone.iter().cloned());
+    }
+
+    fn is_pruned(&self, sid: &str) -> bool {
+        self.pruned.lock().expect("timeline").contains(sid)
+    }
 }
 
 /// The timeline's state (one per hub).
@@ -38,6 +55,14 @@ pub struct Timeline {
 }
 
 impl Timeline {
+    /// Step row S as the wire has it: `revertible` while it has an edit history record and its session's
+    /// checkpoints are kept.
+    pub(crate) fn wire(&self, s: table::Step) -> Step {
+        let mut w = step_of(s);
+        w.revertible &= !self.state.is_pruned(&w.session);
+        w
+    }
+
     /// SID's task is done: its snapshots may go when the cap needs room.
     pub fn session_finished(&self, sid: &str) {
         let mut f = self.state.finished.lock().expect("timeline");
@@ -111,6 +136,9 @@ impl Snap {
         })
         .await
         .ok()?;
+        if let snapshot::Pruned::Freed(gone) = &pruned {
+            self.state.pruned(gone);
+        }
         if pruned == snapshot::Pruned::Stop {
             self.state.stopped.store(true, Ordering::Relaxed);
             editors.broadcast(
@@ -143,7 +171,8 @@ fn class_of(c: norn::write::steps::StepClass) -> StepClass {
     serde_json::from_value(serde_json::json!(c.as_str())).unwrap_or(StepClass::Think)
 }
 
-pub(crate) fn step_of(s: table::Step) -> Step {
+/// Step row S as the wire has it, without the checkpoints' state: [`Timeline::wire`] adds it.
+fn step_of(s: table::Step) -> Step {
     let plain = |v: String, p: &str| v.strip_prefix(p).map(str::to_string).unwrap_or(v);
     Step {
         id: s.id,
@@ -170,6 +199,11 @@ pub(crate) fn step_of(s: table::Step) -> Step {
         cost: s.cost,
         cost_unit: s.cost_unit.as_deref().and_then(unit_of),
         detail: None,
+        acp: s.acp,
+        head: s.head,
+        revertible: s.history_op.is_some(),
+        history_op: s.history_op.map(|v| v as u64),
+        undone_by: s.undone_by.map(|v| v as u64),
     }
 }
 
@@ -215,6 +249,15 @@ pub async fn get(front: &Front, _: &Caller, p: TimelineParams) -> Result<Timelin
         table::Scope::Session if !id.starts_with("session:") => format!("session:{id}"),
         _ => id,
     };
+    // a session says it is idle before the row of the step that ended its turn is written: the steps it closed are
+    // rows before they are read (a scope wider than a session waits for every session the hub holds)
+    let sessions = match (scope, id.strip_prefix("session:")) {
+        (table::Scope::Session, Some(sid)) => front.core.agents.find(sid).into_iter().collect(),
+        _ => front.core.agents.live_sessions(),
+    };
+    for s in sessions {
+        s.steps_written().await;
+    }
     let since = p.since.unwrap_or(0) as i64;
     let rollup_only = p.rollup == Some(true);
     // backwards paging: `limit` and/or `before` (the newest `limit` steps before it, newest last)
@@ -256,7 +299,7 @@ pub async fn get(front: &Front, _: &Caller, p: TimelineParams) -> Result<Timelin
         .zip(details)
         .map(|(s, d)| Step {
             detail: d.as_ref().map(crate::work::detail::wire),
-            ..step_of(s)
+            ..front.core.timeline.wire(s)
         })
         .collect();
     let next = if back.is_some() {
@@ -275,4 +318,82 @@ pub async fn get(front: &Front, _: &Caller, p: TimelineParams) -> Result<Timelin
         rollup: Some(rollup_of(roll)),
         next,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    fn row(history_op: Option<i64>) -> table::Step {
+        table::Step {
+            id: 7,
+            session: "session:a1".into(),
+            task: None,
+            plan: None,
+            project: None,
+            agent: Some("agent:mock".into()),
+            provider: None,
+            seq: 3,
+            class: norn::write::steps::StepClass::Tool,
+            start: 1.0,
+            end: Some(2.0),
+            tool: None,
+            tool_kind: Some("edit".into()),
+            message_id: Some("m1".into()),
+            turn_id: None,
+            snapshot: Some("tree".into()),
+            log_version: Some(4),
+            tokens_in: 0,
+            tokens_out: 0,
+            cache_read: 0,
+            cache_write: 0,
+            cost: None,
+            cost_unit: None,
+            acp: Some("acp-2".into()),
+            head: Some(HEAD.into()),
+            history_op,
+            undone_by: Some(9),
+        }
+    }
+
+    /// Pattern D: a row's conversation, head, history record and revert mark reach the wire; a step with a history
+    /// record is revertible until its session's checkpoints are pruned, and one without never is.
+    #[test]
+    fn step_carries_acp_head_and_revertible() {
+        let t = Timeline::default();
+        let w = t.wire(row(Some(5)));
+        assert_eq!(
+            (
+                w.acp.as_deref(),
+                w.head.as_deref(),
+                w.history_op,
+                w.undone_by,
+                w.revertible
+            ),
+            (Some("acp-2"), Some(HEAD), Some(5), Some(9), true)
+        );
+        let j = serde_json::to_value(&w).unwrap();
+        assert_eq!(
+            (&j["acp"], &j["head"], &j["revertible"]),
+            (
+                &serde_json::json!("acp-2"),
+                &serde_json::json!(HEAD),
+                &serde_json::json!(true)
+            )
+        );
+        // a step from before the history began
+        let old = t.wire(row(None));
+        assert!(!old.revertible);
+        assert!(
+            serde_json::to_value(&old)
+                .unwrap()
+                .get("history_op")
+                .is_none()
+        );
+        // the session's checkpoints were pruned at the cap
+        t.state.pruned(&["a1".to_string()]);
+        assert!(!t.wire(row(Some(5))).revertible);
+    }
 }

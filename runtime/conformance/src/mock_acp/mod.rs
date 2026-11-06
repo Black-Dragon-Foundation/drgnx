@@ -26,6 +26,10 @@
 //! "session/load"|"session/resume"|"session/close"|"prompt"|"permission"|"llm"|"claude_options"|"codex_overrides"|"gemini": ...}`.  `--llm URL`: each turn first
 //! POSTs a small JSON body to URL (a `ratatoskr-mock llm`), so its log counts one request per turn.
 //! `--refuse-mode MODE`: `session/set_mode` to MODE is refused (a lock that does not hold); other modes are accepted.
+//! `--state DIR`: each session's history is kept in `DIR/<sessionId>.json` (written at its start and after every turn),
+//! and `session/fork` and `session/resume` read it there for a session this process does not hold, so a second process
+//! forks or resumes what the first left; session ids then skip the ones the folder holds.  Without it, history lives
+//! in the process only.
 //!
 //! Every prompt answer carries `_meta.turnId` ("t1", "t2", ...).  Messages have ids (`messageId` of chunks); a
 //! fork's `_meta.jetbrains.air.fork.messageId` cuts the history: Claude after that message, Codex after its turn.
@@ -74,6 +78,8 @@ struct Agent {
     prompts: usize,
     /// Set by the `error` word: the turn answers this JSON-RPC error instead of a result.
     fail: Option<(i64, String)>,
+    /// `--state DIR`: where each session's history is kept.
+    state: Option<PathBuf>,
 }
 
 fn flag(args: &[String], name: &str) -> Option<String> {
@@ -90,7 +96,7 @@ pub fn run(args: &[String]) -> ! {
         Some("codex") => Kind::Codex,
         Some("gemini") => Kind::Gemini,
         _ => crate::die(
-            "usage: ratatoskr-mock acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] [--refuse-mode MODE]",
+            "usage: ratatoskr-mock acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] [--refuse-mode MODE] [--state DIR]",
         ),
     };
     let script = flag(args, "--script")
@@ -136,6 +142,7 @@ pub fn run(args: &[String]) -> ! {
         script,
         prompts: 0,
         fail: None,
+        state: flag(args, "--state").map(PathBuf::from),
     };
     a.serve();
     std::process::exit(0)
@@ -243,9 +250,49 @@ impl Agent {
         }
     }
 
+    /// Session SID's file in the state folder.
+    fn state_file(&self, sid: &str) -> Option<PathBuf> {
+        self.state.as_ref().map(|d| d.join(format!("{sid}.json")))
+    }
+
+    /// Session SID's history into its state file (with `--state`).
+    fn save(&self, sid: &str) {
+        let (Some(path), Some(s)) = (self.state_file(sid), self.sessions.get(sid)) else {
+            return;
+        };
+        let body = json!({"cwd": s.cwd, "turns": s.turns, "history": s.history});
+        let tmp = path.with_extension("tmp");
+        if std::fs::write(&tmp, body.to_string()).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
+        }
+    }
+
+    /// Session SID as its state file kept it (with `--state`), with the tools PARAMS give it now.
+    fn load(&self, sid: &str, params: &Value) -> Option<Session> {
+        let v: Value =
+            serde_json::from_str(&std::fs::read_to_string(self.state_file(sid)?).ok()?).ok()?;
+        let history = v["history"]
+            .as_array()?
+            .iter()
+            .filter_map(|h| Some((h[0].as_u64()?, h[1].as_str()?.to_string())))
+            .collect();
+        Some(Session {
+            cwd: v["cwd"].as_str().map(PathBuf::from)?,
+            mcp: params["mcpServers"].as_array().cloned().unwrap_or_default(),
+            turns: v["turns"].as_u64().unwrap_or(0),
+            history,
+        })
+    }
+
     fn open(&mut self, params: &Value) -> String {
-        let sid = format!("s{}", self.next_session);
+        let mut sid = format!("s{}", self.next_session);
         self.next_session += 1;
+        // another process's sessions in the state folder keep their ids
+        while self.sessions.contains_key(&sid) || self.state_file(&sid).is_some_and(|p| p.exists())
+        {
+            sid = format!("s{}", self.next_session);
+            self.next_session += 1;
+        }
         let session = Session {
             cwd: params["cwd"]
                 .as_str()
@@ -296,6 +343,7 @@ impl Agent {
             }
             "session/new" => {
                 let sid = self.open(&params);
+                self.save(&sid);
                 self.log("session/new", json!({"sessionId": sid, "mcpServers": params["mcpServers"], "cwd": params["cwd"]}));
                 reply(json!({"sessionId": sid}));
             }
@@ -327,9 +375,18 @@ impl Agent {
                     json!({"sessionId": sid, "mcpServers": params["mcpServers"]}),
                 );
                 if !self.sessions.contains_key(&sid) {
-                    let s = self.open(&params);
-                    let v = self.sessions.remove(&s).unwrap();
-                    self.sessions.insert(sid, v);
+                    let v = match self.load(&sid, &params) {
+                        Some(v) => {
+                            self.personality_log(&params);
+                            v
+                        }
+                        None => {
+                            let s = self.open(&params);
+                            self.sessions.remove(&s).unwrap()
+                        }
+                    };
+                    self.sessions.insert(sid.clone(), v);
+                    self.save(&sid);
                 }
                 reply(json!({}));
             }
@@ -372,12 +429,19 @@ impl Agent {
     }
 
     fn fork(&mut self, id: &Value, params: &Value) {
-        let Some(src) = params["sessionId"]
-            .as_str()
-            .and_then(|s| self.sessions.get(s))
-        else {
-            return rpc_error(id, -32602, "unknown session");
+        let src_id = params["sessionId"].as_str().unwrap_or_default();
+        let loaded;
+        let src = match self.sessions.get(src_id) {
+            Some(s) => s,
+            None => match self.load(src_id, params) {
+                Some(s) => {
+                    loaded = s;
+                    &loaded
+                }
+                None => return rpc_error(id, -32602, "unknown session"),
+            },
         };
+        let src_cwd = src.cwd.clone();
         let at = params
             .pointer("/_meta/jetbrains/air/fork/messageId")
             .and_then(Value::as_str);
@@ -401,16 +465,22 @@ impl Agent {
         let turns = history.iter().map(|(t, _)| *t).max().unwrap_or(0);
         let mut cwd = params.clone();
         if cwd["cwd"].is_null() {
-            cwd["cwd"] = json!(src.cwd);
+            cwd["cwd"] = json!(src_cwd);
         }
         let kept = history.len();
         let sid = self.open(&cwd);
         let s = self.sessions.get_mut(&sid).unwrap();
         s.history = history;
         s.turns = turns;
+        self.save(&sid);
+        let options = match self.kind {
+            Kind::Claude => claude::options(params),
+            _ => Value::Null,
+        };
         self.log(
             "session/fork",
-            json!({"from": params["sessionId"], "sessionId": sid, "level": level, "messageId": at, "kept": kept, "turns": turns}),
+            json!({"from": params["sessionId"], "sessionId": sid, "level": level, "messageId": at, "kept": kept,
+                "turns": turns, "cwd": cwd["cwd"], "mcpServers": params["mcpServers"], "claude_options": options}),
         );
         send(
             &json!({"jsonrpc": "2.0", "id": id, "result": {"sessionId": sid,
@@ -486,6 +556,7 @@ impl Agent {
         for (method, p) in extras {
             send(&json!({"jsonrpc": "2.0", "method": method, "params": p}));
         }
+        self.save(&sid);
         if let Some((code, message)) = self.fail.take() {
             return rpc_error(id, code, &message);
         }

@@ -1,7 +1,7 @@
 //! One row of each non-linear step. The bodies are written so the compiler vectorises them, and are built twice on x86-64:
 //! baseline, and under AVX2 + FMA, chosen at run time. The build itself stays baseline, and aarch64 uses baseline NEON.
 //!
-//! No AVX-512: it ran slower here (1.02 against 1.15 chunks/s), and its target features need a newer Rust than the MSRV.
+//! No AVX-512: it ran slower here (1.02 against 1.15 chunks/s).
 
 /// A model's sizes, in floats.
 #[derive(Clone, Copy)]

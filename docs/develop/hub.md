@@ -536,14 +536,14 @@ the same directory.
 
 **The store at start.** Before it serves anything the hub opens `<data>/work.db` with the graph writer and
 `norn::migrate7`'s opening rule ([store.md](store.md#migration-from-schema-6-task-11)), and waits for its answer: a
-missing file is made at schema 10, a schema-6 one is copied to `<data>/backup/work-pre7-<unix>.db`, checked, and
-migrated in one transaction, so the first request sees schema 10. A newer file (above 10) makes the hub read-only; a
+missing file is made at schema 12, a schema-6 one is copied to `<data>/backup/work-pre7-<unix>.db`, checked, and
+migrated in one transaction, so the first request sees schema 12. A newer file (above 12) makes the hub read-only; a
 file below 6, or a migration that failed, leaves the writer not ready (writes answer its text) and the hub serves
 the rest. A failed migration is not tried again until the hub restarts. The coordination writer
 (`norn::store::CoordDb`) and the coordination tools' graph store run on the same file.
 
 **`work.db` read-only.** The front reads work.db through `urdr::open_readonly` on a thread of its own (`store.rs`).
-It reads `meta.schema` (schema 7's `meta` view over `kv`) at the start and every 2 s. While it is above this hub's 10,
+It reads `meta.schema` (schema 7's `meta` view over `kv`) at the start and every 2 s. While it is above this hub's 12,
 the hub is read-only: a method that writes is `schema`, and `status.read_only` is the schema.
 
 **Rolling back.** The way back from schema 7 is `drgnx hub stop`, then `ratatoskr store restore-pre7 --yes`: the
@@ -918,9 +918,55 @@ resume, the tick goes on from the store with the same workers, and the wakes sti
   ([coordination.md](coordination.md#delivery-the-hub)); a prompt queued in a session is read back from its
   `<sid>.queue.json`.
 
+## Rewind and fork
+
+A step of an agent is a point its conversation can go back to (`agents/rewind.rs`). How much of the conversation comes
+back is its **restore level** (`runstav::methods::history::RestoreLevel`, `message` / `turn` / `summary`):
+`rewind::expected_level` gives Claude with `sessionCapabilities.fork` `message`, Codex with it `turn`, and anything
+else (Gemini, an agent without the capability) `summary`.
+
+- **The cut** (`rewind::point_for`, pure). Message: the last `step.message_id` at or before the step; the steps of one
+  assistant message share it. A subagent's step (part 2's `step_detail.parent_tool`) rounds down to the message before
+  the one that holds its `Task` call, so the fork never lands inside a call with no result. Turn: the end of the last
+  turn that completed at or before the step (the step that carries its `turn_id`), cut at that turn's last message,
+  because a Codex fork point is inclusive and cannot be a turn in progress. The steps a cut drops are `retained`: a
+  labelled summary carries them. No id found (or the first turn still running): `summary`, carrying every step up to
+  the one asked for.
+- **The attach** (`session::Attach`: `New`, `Resume(acp)`, `Fork { source, at, level }`). A fork always runs in a
+  fresh process: `launch` spawns the agent in its sandbox as for a new session, then sends `session/fork` with the
+  session's `mcpServers` (its drgnx tools) and the lock's `_meta`, and verifies the lock afterwards exactly as after
+  `session/new` (a lock that does not hold kills it). An agent without the fork capability, or a fork the agent
+  refuses (its transcript is gone, the message is unknown), gets a new conversation on the same process instead:
+  `Launched.level` is then `summary`, with the reason logged and returned, and the session is alive.
+- **The rewind** (`rewind::rewind_conversation(hub, front, target, first)`, `Target { sid, seq }`) keeps the hub
+  session: its id, `asession` row, budget, task, queue and workers. It starts from the row, not a live session, so it
+  runs at start-up too; a session with no row (a finished one) is `session-gone`. It forks the conversation the
+  step ran in (`step.acp`), so a second rewind to a point before the first forks the older conversation. A live
+  session gets the turn core's `Detach` (below), then is closed as a rotation closes it (`close_for_swap`: transcript
+  and queue kept on disk); `relaunch` launches it again with `Attach::Fork` and writes the row's `acp` only once that
+  launch has landed, so a failed launch leaves the row resumable. The new conversation then gets `Reattach` with what
+  it is told first. Steps go on with the session's `seq` and name their conversation; the budget counts the new
+  conversation's spend from its first reading (`spend_total_in` names `self.acp`).
+- **What it is told first** (`rewind::first_text`): at Message or Turn level, the user's message alone, or nothing
+  (no turn starts). When a summary must be delivered (Summary level, or steps a cut dropped), it is the labelled
+  summary of the session's facts cut at the step (`handoff::summary(.., up_to)`: its steps up to that `seq` and the
+  head recorded there) joined with the user's message, which is then required: without one the rewind is refused
+  (`needs-message`) before anything changes. A fork that lands at Summary though it was planned higher is told the
+  summary and the message; with no message the summary waits, held, at the front of the queue.
+- **The fork** (`rewind::fork_conversation`): a new session in another directory, from the step, while the source
+  keeps running. The same provider forks the step's conversation at the cut; another provider gets a new
+  conversation told the labelled summary. A finished source is read from its `session:<sid>` entity (profile, cwd).
+  The new session is linked `forked_from` its source with `{seq, level}`, and the user's message is its first prompt.
+- **The turn core across the swap** (`TurnEvent::Detach`, `TurnEvent::Reattach { told }`): `Detach` cancels a
+  running turn (`CancelTurn`) and cuts it off, so its later `PromptDone`/`PromptFailed` (which name their turn)
+  changes nothing; a prompt whose `Sending` had not answered `Prompt` goes back to the queue's front; no turn starts
+  while detached, a `Send` queues and a Stop holds the queue. `Reattach` puts `told` ahead of the queue, as
+  `TurnCore::resume` does, then starts the next prompt unless the queue is held. The core decides; the rewind only
+  sends the two events.
+
 ## The store
 
-The front serves the store (`work.db`, schema 10) itself: `graph/*` (reads and walks, history, revert, excise, grants,
+The front serves the store (`work.db`, schema 12) itself: `graph/*` (reads and walks, history, revert, excise, grants,
 proposed txs, read-only SQL, export, import, backup, settings, the personal-notes opt-ins) and `tasks/*` (the tracker
 for the editor), all class `user`. `cards/settle` of an `access` card makes a grant (or refuses) and of a `close`
 card closes the task (or rejects), in the settle's tx. `mcp/session` takes the session's `profile` and its tool sets (`tools: {tracker}`), and
@@ -1102,6 +1148,10 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `graph/settings` | user | `{get?: Empty, set?: {only_user_closes?: boolean}}` | `{only_user_closes: boolean}` | yes |
 | `graph/sql` | user | `{deadline_ms?: natnum, params?: [SqlParam], rows?: natnum, sql: string}` | `{columns?: [string], rows?: [[any]], truncated: boolean}` | no |
 | `hello` | user, agent, service | `{client?: string, cwd?: AbsPath, drgnx_version?: string, nonce: Nonce, proof?: Hex64, proto: natnum, records?: natnum, schema?: natnum}` | `HelloReply` | no |
+| `history/batch` | user | `{buffer_id: string, changes: [{inserted: string, old_len: natnum, origin?: string, start: natnum}], region_hash: string}` | `{ok?: boolean, resync?: boolean}` | yes |
+| `history/register` | user | `{buffer_id: string, path: string, worktree_root: string}` | `{doc: integer, reason?: string, tracked: boolean}` | yes |
+| `history/resync` | user | `{buffer_id: string, text: string}` | `{ok: boolean}` | yes |
+| `history/unregister` | user | `{buffer_id: string}` | `{ok: boolean}` | yes |
 | `job/approve` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes |
 | `job/block` | user | `{reason?: Text, task: TaskRef}` | `JobSummary` | yes |
 | `job/card` | user | `{action: CardAction, arg?: StringOrNumber, card: natnum}` | `JobSummary` | yes |
@@ -1352,7 +1402,8 @@ event and performs what it answers; the entries, steps and transcript stay with 
   `PromptFailed` (closed or not), `Stop` (or the pause after a tool call), `Kill` (`agents/kill`, the hub ending, or
   a Stop's deadline for its turn), `PermissionAsked` (with the turn it came in), `PermissionAnswered`,
   `ToolCompleted`, `EmitTick`, `QueueEdited` (deliver, unqueue, requeue, the freshness gate's notice), `Changed`,
-  `Exited`, and `Sending` (the turn's task is about to hand its prompt to the agent).
+  `Exited`, `Sending` (the turn's task is about to hand its prompt to the agent), and `Detach` / `Reattach` (a rewind
+  swaps the conversation: [Rewind and fork](#rewind-and-fork)). `PromptDone` and `PromptFailed` name their turn.
 - Effects: start a turn with the next prompt, send its prompt now (`Prompt`) or put it back (`PutBack`, the hub's
   end), name what a user's kill drops (`Discard`), end it (waiting on a job, or held), tell the agent to cancel, arm a
   Stop's deadline, end the process group, hold a permission request for the user, answer it or answer it cancelled,
@@ -2259,7 +2310,11 @@ column still matches `:ai` only).
 
 Anchors of a step (part 4's rewind): `message_id` (the last message id seen, so tool calls carry their turn's
 message), `turn_id` (it arrives with the turn's last step; the turn's earlier rows get it then), `log_version` (the
-decision log's version when the step closed) and `snapshot`.
+decision log's version when the step closed) and `snapshot`; from schema 12 also `acp` (the agent conversation the
+step ran in), `head` (the worktree's commit when its snapshot was taken, read from the ref files without git), and
+`history_op` and `undone_by` (the edit history's record it anchors, and the revert that abandoned it). The wire step
+adds `revertible`: it has a history record and its session's snapshots were not removed at the cap in this hub's run
+([store.md](store.md#schema-12-the-timelines-step-facts-agent-system-part-4)).
 
 A **step snapshot** is a tree of the session's worktree, written at the first step of each turn and after each completed edit (`edit`, `delete`, `move`
 tool kinds) into a shadow repository `<state>/hub/checkpoints/<hash>.git` and kept as `refs/drgnx/s/<sid>/<seq>`. Each
@@ -2271,6 +2326,24 @@ one `notice` (a running task's refs are never removed). Restore and fork are par
 
 `timeline/get {scope, id, since?, rollup?}` answers the steps of a session, task, plan or project (500 a page, `next`
 continues) and their rollup: seconds by class (closed steps), cost by unit (never summed across units) and tokens.
+
+A step's `cost` is what the budget booked from the agent's cost readings (ACP's `usage_update`) during the turn the
+step closes, on the turn's last step, with the unit `usd-est`: an estimate, since a subscription agent reports an
+API-equivalent price. Both the step and the budget book the same delta, keyed by the agent's conversation, so a new
+conversation (a rotation, a fresh start, a rewind or fork) counts from its first reading in both and `budget/get`
+never disagrees with the steps. An agent that reports no cost leaves `cost` empty (never `0`). The rollup of a task
+or plan adds a `usd` line with what the gateway charged (the `spend` table), next to the estimate. A plan scope is
+`plan:<id>` for a graph plan, `plan:<path>` for a plan file and `plan:<job>` for a job with none; steps and budget of
+a job use the same key. Rows written before this keep their old key.
+
+**Forecast samples.** Every task that finished (`done` or `dropped`) and ran a turn becomes one `forecast_sample` row
+(`forecast.rs`, `norn::forecast::sample`), and so does a finished job's manager (`JOB#manager`). The sweep runs once
+at hub start, which backfills the history of earlier runs, and at the end of each runner tick; it takes what is due in
+pages of 100. A task is due when every step of it has closed and no sample covers its newest step, so a restart, a
+second sweep and a task reopened after review are all the same query and leave one row per task. Every step with the
+task counts, whichever session wrote it (a fallback, a move, a reviewer) and whatever a rewind marked: spent is spent.
+A session with no task (a chat, a fork) makes no sample. The row's profile is the last session's, its model comes
+from the profile's setting, a wake is a job wait and a cold one is longer than the cache TTL (assumed 300 s).
 
 ## The CDP broker
 
@@ -2485,3 +2558,64 @@ dir, and answers `Target.attachToBrowserTarget` and `Target.detachFromTarget` as
 sends a paused child target, on `Fake.crash` it dies by SIGKILL, and on `Fake.stubborn` it ignores SIGTERM and the
 pipe's end. `tests/browser_sandboxed.rs` (`#[ignore]`, the
 VM) starts the host under a real bwrap launch with the stand-in.
+
+## Forecasts
+
+A forecast comes from the history of similar finished tasks, never from a model's own guess. `norn::forecast` is pure:
+no store and no clock, so the same history and the same seed give the same numbers.
+
+**The reference class** (`model::reference_class`). A task is compared with finished tasks at each level in turn, and
+the first level with at least 5 observations (`MIN_CLASS`) wins:
+
+| Level | Same | |
+|---|---|---|
+| `Project` | role, profile, model and project | a task with no project skips this level |
+| `Profile` | role, profile and model | |
+| `Role` | role | `other_model` says when some ran on another model: their tokens are carried and priced at the task's rates |
+| `Any` | nothing | |
+| `Prior` | | `n` is 0, and the answer says it has no history |
+
+`other_model` compares models: another profile on the same model is the same model. A profile with no model set is
+the CLI's choice, so across profiles it counts as another model.
+
+Within a class an observation weighs `exp(-(ln b - ln b0)² / (2 · 0.7²))`, where `b` and `b0` are the two briefs'
+bytes, floored at 1 KiB: a brief twice the size weighs 0.61, four times 0.14. The prior is unweighted.
+
+**The prior** (`model::prior`) is one base task at ×⅓, ×½, ×1, ×2 and ×3: 19M cache reads, 600k cache writes, 60k input,
+90k output, 40 minutes active, 60 minutes of wall time. The cache reads and the output's share (under 0.5 %) are
+measured on this project's agents; the other figures are judgement. Its 2 wakes (1 cold) and 300k context are not
+scaled: the first is an assumed count, the second a level a task reaches.
+
+**Rates** (`model::usd`) are USD per million tokens, per token class. A cache write pays the 5 minute rate at a TTL of
+300 s or less, else the 1 hour rate. Every token class counts towards a forecast's tokens (`Usage::total`).
+
+**A wake** (`model::wake_usd`) costs the session's context × the cache read rate if the job ended within the TTL,
+and × the write rate after it, because the whole context is written again. At Opus 5.5's rates, 300k of context costs
+$0.06 within the TTL, $1.50 after a 5 minute TTL and $2.40 after an hour's. History already contains its wakes, so a
+forecast shows the wake as a part of the total, never added to it.
+
+**The simulation** (`sim::simulate`) runs the plan 2000 times (`DRAWS`). Each draw takes one whole observation per task,
+by weight, so one run's tokens, time and cost stay together. Time is a list schedule of each observation's wall time:
+whenever one of the slots is free it takes the ready task with the lowest `n`, as the runner does, and a task starts
+once its parents have finished. So wall time shows merge bias: three parallel tasks together end later than the p50 of
+any of them. Each range comes from the plan's own draws, because p90s do not add up.
+
+The stream is SplitMix64, and `seed_of` is FNV-1a over the inputs: both are written here so that the numbers do not move
+with a library or a compiler. Quantiles are nearest-rank (`quantile`).
+
+`price` answers a task's unit and amount for an observation, or nothing. Units are never summed. A pick with no price is
+not a zero: the task's cost comes from its priced picks, and a task with none is in no unit. Run again with the same
+seed and a `price` of a wake's cost, and the draws are the same, which gives the plan's wake cost.
+
+The class's picks count into the history, and a prior's count on past its end, so `simulate` takes the history followed
+by the prior. A prior serves only when the whole history is under 5 rows, because the `Any` level takes the rest.
+
+**The small-class floor** (`sim::widen`): below 20 observations a p90 is at least 1.5 × p50, whatever the draws say, so
+a class of five near-identical runs cannot print a tight range.
+
+**Calibration** (`sim::conformal`) is split conformal scaling. Past pairs of (p90, actual), per role, profile and model,
+give the actual/p90 ratios, and the factor is the ratio at rank ⌈(n+1)·0.9⌉, so it needs 9 pairs. `p90 × factor` then
+covers the next run at least 9 times in 10, provided past and future runs are exchangeable, which a change of model
+breaks; hence the model in the key and a recent window. Keep the p90 of each pair as it stood before calibration:
+ratios against a calibrated p90 say only how the last factor did, and the factor would swing. The factor can be below
+1, so the caller holds a scaled p90 at its p50 or above.

@@ -105,8 +105,47 @@ fn report_text(r: &runstav::methods::plans::Report) -> String {
     s
 }
 
-/// The facts of session SID working in CWD on TASK (an entity id, `JOB#N` or none), read from the graph and the tree.
-pub async fn gather(front: &Front, sid: &str, cwd: &Path, task: Option<&str>) -> Facts {
+/// What SESSION's STEPS say, cut at step UP_TO when given: how many there are and their last tools, the last
+/// snapshot, and the worktree's head recorded at the cut (`step.head`; none without a cut: the tree's own is read).
+pub(crate) fn step_facts(
+    steps: &[norn::read::steps::Step],
+    up_to: Option<i64>,
+) -> (Option<String>, Option<String>, Option<String>) {
+    let steps: Vec<&norn::read::steps::Step> = steps
+        .iter()
+        .filter(|s| up_to.is_none_or(|u| s.seq <= u))
+        .collect();
+    let tools: Vec<String> = steps
+        .iter()
+        .rev()
+        .filter_map(|x| x.tool.clone())
+        .take(8)
+        .collect();
+    let snapshot = steps.iter().rev().find_map(|x| x.snapshot.clone());
+    let summary = (!steps.is_empty()).then(|| {
+        format!(
+            "{} steps; last tools (newest first): {}",
+            steps.len(),
+            if tools.is_empty() {
+                "none".to_owned()
+            } else {
+                tools.join(", ")
+            }
+        )
+    });
+    let head = up_to.and_then(|_| steps.iter().rev().find_map(|x| x.head.clone()));
+    (summary, snapshot, head)
+}
+
+/// The facts of session SID working in CWD on TASK (an entity id, `JOB#N` or none), read from the graph and the tree;
+/// with UP_TO, its steps cut at that `seq` and the head the step recorded there.
+pub async fn gather(
+    front: &Front,
+    sid: &str,
+    cwd: &Path,
+    task: Option<&str>,
+    up_to: Option<i64>,
+) -> Facts {
     let brief = match task {
         Some(t) => crate::brief::for_dispatch(front, t, Some(sid)).await,
         None => None,
@@ -158,40 +197,28 @@ pub async fn gather(front: &Front, sid: &str, cwd: &Path, task: Option<&str>) ->
                 }
                 None => None,
             };
-            let steps = norn::read::steps::for_session(c, &s, 0)?;
-            let tools: Vec<String> = steps
-                .iter()
-                .rev()
-                .filter_map(|x| x.tool.clone())
-                .take(8)
-                .collect();
-            let snap = steps.iter().rev().find_map(|x| x.snapshot.clone());
-            let summary = (!steps.is_empty()).then(|| {
-                format!(
-                    "{} steps; last tools (newest first): {}",
-                    steps.len(),
-                    if tools.is_empty() {
-                        "none".to_owned()
-                    } else {
-                        tools.join(", ")
-                    }
-                )
-            });
-            Ok((decisions, report, summary, snap))
+            // a step names its session by entity id
+            let steps = norn::read::steps::for_session(c, &format!("session:{s}"), 0)?;
+            Ok((decisions, report, step_facts(&steps, up_to)))
         })
         .await;
-    let (decisions, report, steps, snapshot) = match read {
+    let (decisions, report, (steps, snapshot, at_cut)) = match read {
         Ok(x) => x,
         Err(e) => {
             tracing::warn!(sid, "handoff: the graph could not be read: {e}");
-            (Vec::new(), None, None, None)
+            (Vec::new(), None, (None, None, None))
         }
     };
-    let cwd = cwd.to_owned();
-    let head = crate::clock::blocking(move || head_of(&cwd))
-        .await
-        .ok()
-        .flatten();
+    let head = match (up_to, at_cut) {
+        (Some(_), head) => head,
+        (None, _) => {
+            let cwd = cwd.to_owned();
+            crate::clock::blocking(move || head_of(&cwd))
+                .await
+                .ok()
+                .flatten()
+        }
+    };
     Facts {
         brief,
         decisions,
@@ -202,9 +229,15 @@ pub async fn gather(front: &Front, sid: &str, cwd: &Path, task: Option<&str>) ->
     }
 }
 
-/// The summary a session that replaces SID is prompted with.
-pub async fn summary(front: &Front, sid: &str, cwd: &Path, task: Option<&str>) -> String {
-    compose(&gather(front, sid, cwd, task).await)
+/// The summary a session that replaces SID is prompted with; with UP_TO, of SID as it was at that step.
+pub async fn summary(
+    front: &Front,
+    sid: &str,
+    cwd: &Path,
+    task: Option<&str>,
+    up_to: Option<i64>,
+) -> String {
+    compose(&gather(front, sid, cwd, task, up_to).await)
 }
 
 #[cfg(test)]
@@ -231,6 +264,60 @@ mod tests {
         ] {
             assert!(s.contains(want), "{want:?} missing in {s}");
         }
+    }
+
+    fn step(seq: i64, tool: &str, snapshot: &str, head: Option<&str>) -> norn::read::steps::Step {
+        norn::read::steps::Step {
+            id: seq,
+            session: "a1".into(),
+            task: None,
+            plan: None,
+            project: None,
+            agent: None,
+            provider: None,
+            seq,
+            class: norn::write::steps::StepClass::Tool,
+            start: seq as f64,
+            end: Some(seq as f64),
+            tool: Some(tool.into()),
+            tool_kind: None,
+            message_id: None,
+            turn_id: None,
+            snapshot: Some(snapshot.into()),
+            log_version: None,
+            tokens_in: 0,
+            tokens_out: 0,
+            cache_read: 0,
+            cache_write: 0,
+            cost: None,
+            cost_unit: None,
+            acp: None,
+            head: head.map(Into::into),
+            history_op: None,
+            undone_by: None,
+        }
+    }
+
+    // test-pattern: D
+    #[test]
+    fn up_to_cuts_steps_and_head() {
+        let steps = [
+            step(1, "read", "refs/drgnx/s/a1/1", Some("aaaa111")),
+            step(2, "edit", "refs/drgnx/s/a1/2", None),
+            step(3, "bash", "refs/drgnx/s/a1/3", Some("cccc333")),
+        ];
+        let (summary, snapshot, head) = step_facts(&steps, Some(2));
+        assert_eq!(
+            summary.as_deref(),
+            Some("2 steps; last tools (newest first): edit, read")
+        );
+        assert_eq!(snapshot.as_deref(), Some("refs/drgnx/s/a1/2"));
+        assert_eq!(head.as_deref(), Some("aaaa111"), "the head at the cut");
+        // no cut: every step, and the head is the tree's own (read by the caller)
+        let (summary, snapshot, head) = step_facts(&steps, None);
+        assert!(summary.unwrap().starts_with("3 steps"));
+        assert_eq!(snapshot.as_deref(), Some("refs/drgnx/s/a1/3"));
+        assert_eq!(head, None);
     }
 
     #[test]

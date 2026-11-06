@@ -155,12 +155,12 @@
 		    "Show current command and its binding" :commit
 		    "a6518e1b48b08ba883e9b1a2db0872d5bf3d85f4" :url
 		    "https://github.com/tarsius/keycast")
-	   (kkp :version "20260706.858" :archive "melpa" :kind tar
-		:file "kkp-20260706.858.tar" :sha256
-		"1ef566f8cc68cc0bf8cb3ee4aaffa63b258be8621a89229d2d3b2df4b945c8e5"
+	   (kkp :version "20261105.1240" :archive "melpa" :kind tar
+		:file "kkp-20261105.1240.tar" :sha256
+		"8dd61adbaf03f0702bb27025f26873d468a3c6f21a3e577fd0c5d1227ee1aaa2"
 		:size 71680 :requires ((compat "29.1.3.4")) :summary
 		"Enable support for the Kitty Keyboard Protocol"
-		:commit "82b7443e10a2ba287467b62e90b6adb6dd93dc99"
+		:commit "f6e9f8166995591a3ac1f62c79deebe93865ac49"
 		:url "https://github.com/benotn/kkp")
 	   (llama :version "1.0.6" :archive "nongnu" :kind tar :file
 		  "llama-1.0.6.tar" :sha256

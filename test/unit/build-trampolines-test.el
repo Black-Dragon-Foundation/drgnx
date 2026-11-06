@@ -42,8 +42,20 @@
           (dolist (s '(require call-process make-process read-from-minibuffer))
             (should (memq s want)))
           (should-not (memq 'flymake-start want))
-          (dolist (s want) (should (subr-primitive-p (symbol-function s)))))
+          (dolist (s want)
+            (should (subr-primitive-p (let ((f (symbol-function s))) (if (advice--p f) (advice--cd*r f) f))))))
       (delete-directory dir t))))
+
+(ert-deftest drgnx-build/a-primitive-already-advised-is-still-found ()
+  ;; Pattern D.  A run that advises a primitive (the test audit does, on `make-process') leaves `symbol-function' an
+  ;; advice object, not a subr: the scan still finds the primitive underneath
+  (let ((root (drgnx-build-trampolines-test--root '(("core/a.el" . "(advice-add 'make-process :around #'ignore)\n")))))
+    (unwind-protect
+        (progn
+          (advice-add 'make-process :around #'ignore '((name . drgnx-build-test-advice)))
+          (should (equal (drgnx-build-advised-primitives root) '(make-process))))
+      (advice-remove 'make-process 'drgnx-build-test-advice)
+      (delete-directory root t))))
 
 (ert-deftest drgnx-build/trampolines-skip-what-is-there ()
   (let ((compiled nil) (dir (make-temp-file "drgnx-eln" t)))

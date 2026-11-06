@@ -11,11 +11,14 @@
 //! - [`hooks`]: the hook engine, which combines rules' and plugins' verdicts under the matrix (narrowing only).
 
 pub mod deny;
+pub mod forecast;
 pub mod grants;
 pub mod hooks;
 pub mod kinds;
 pub mod matrix;
 pub mod migrate10;
+pub mod migrate11;
+pub mod migrate12;
 pub mod migrate7;
 pub mod migrate8;
 pub mod migrate9;

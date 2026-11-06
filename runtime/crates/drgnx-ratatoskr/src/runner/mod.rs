@@ -341,6 +341,10 @@ pub trait RunGit: std::marker::Send + Sync {
     fn touched<'a>(&'a self, _folder: &'a Path) -> GitFuture<'a, ()> {
         Box::pin(async { Ok(()) })
     }
+    /// Whether a sandboxed agent worked in FOLDER (plain git never runs there).
+    fn is_touched<'a>(&'a self, _folder: &'a Path) -> GitFuture<'a, bool> {
+        Box::pin(async { Ok(false) })
+    }
 }
 
 // ---- small helpers ------------------------------------------------------------------------------------------
@@ -387,6 +391,16 @@ pub(crate) fn user() -> Caller {
 
 /// The job's data key `job/stop` sets on a proposal (a rejected one): it never started, `job/resume` refuses it.
 pub(crate) const NEVER_APPROVED: &str = "never_approved";
+
+/// The plan scope JOB's steps and budget are filed under: a graph plan's id already carries `plan:`, a plan file's
+/// path does not, and a job with no plan has its own.
+pub(crate) fn plan_scope(job: &Job) -> String {
+    match job.plan.as_deref() {
+        Some(p) if p.starts_with("plan:") => p.to_string(),
+        Some(p) => format!("plan:{p}"),
+        None => format!("plan:{}", job.id),
+    }
+}
 
 fn data_of(job: &Job) -> Map<String, Value> {
     match &job.data {
@@ -1447,6 +1461,23 @@ pub async fn resume(front: &Front, caller: &Caller, p: WithBudget) -> Result<Job
 #[cfg(test)]
 mod price_tests {
     use super::*;
+
+    /// Pure (D).
+    #[test]
+    fn plan_scope_does_not_double_the_prefix() {
+        let job = |plan: Option<&str>| Job {
+            id: "JOB".into(),
+            title: None,
+            plan: plan.map(str::to_string),
+            repo: None,
+            status: None,
+            created: None,
+            data: None,
+        };
+        assert_eq!(plan_scope(&job(Some("plan:ab-1"))), "plan:ab-1");
+        assert_eq!(plan_scope(&job(Some("/p/x.md"))), "plan:/p/x.md");
+        assert_eq!(plan_scope(&job(None)), "plan:JOB");
+    }
 
     #[test]
     fn a_task_costs_its_tokens_at_the_configured_price() {
