@@ -287,6 +287,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "brokkr"
+version = "0.1.0"
+dependencies = [
+ "eitri",
+ "gleipnir",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "bs58"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,0 +1,20 @@
+[package]
+name = "brokkr"
+description = "The plugin host: plugin manifests, approval hashes, the install scan and the agent-tools WIT world"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+eitri = { path = "../eitri", version = "0.1.0" }
+# NAME_NEVER, so a manifest can never name a host the web policy refuses by name
+gleipnir = { path = "../gleipnir", version = "0.1.0" }
+serde.workspace = true
+serde_json.workspace = true
+serde_path_to_error.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
