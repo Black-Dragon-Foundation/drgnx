@@ -24,4 +24,14 @@ part that exists so far: which buffers are watched.
 - In a terminal the bar is the character under it in the agent's colour, inverted; the tint becomes a background
   colour; tags appear only in the agent line.
 
-How the gutter and the agent line draw follows in later pages of this guide.
+## The gutter
+
+- On the lines an agent changed, the gutter shows the agent's colour in place of git's mark. A range the agent is about
+  to change shows a hollow mark, a range that is in conflict with your own changes a hatched one; the first line of a
+  changed range carries the agent's own shape (circle, square, triangle or diamond).
+- Hover a mark for what it is ("Opus · changed in step 14 · 2 min ago"). The marks never rely on colour alone.
+- Your own changed lines keep the git mark; where an agent and git mark the same line, the agent's wins. The strip
+  works with git marks off.
+- A terminal has no fringe, so the buffer gets a one-column left margin while an agent's lines are showing.
+
+How the agent line draws follows in a later page of this guide.

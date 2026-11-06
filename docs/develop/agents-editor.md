@@ -63,5 +63,15 @@ The draw file adds itself to `drgnx-agents-editor-apply-functions` and draws fro
 - **Tags:** `drgnx-agents-tags` and `drgnx-decor-cursor-keep-label`: `always` keeps every tag on, `never` turns decor's
   tags off, `activity` leaves decor's 2 s after a move; a shared identity face or `drgnx-agents-editor-followed` keeps
   a tag on. Without Glitnir the tag text is the bar's `help-echo`.
+- **Gutter strip:** the frame's `:gutter` ranges become a line table (`--lines`), one `before-string` overlay per visible
+  row at priority 100 (the fringe spec in GUI frames, a `(margin left-margin)` display in terminals, where the buffer
+  also gets `left-margin-width` 1 for as long as the table is not empty). The first row of a changed range uses the
+  identity's gutter shape; pending and conflict rows keep the hollow and hatched shapes, so the kind stays readable.
+  Hover text is the frame's `help` as the string's `help-echo`.
+- **diff-hl:** `drgnx-agents-editor--diff-hl-highlight` is set as the default `diff-hl-highlight-function` through
+  `drgnx-module-set` once diff-hl is loaded (undone with the module). It skips the lines in the table and gives the
+  rest to the function that was set before; it reads the cached table, nothing else. When the table goes empty the
+  buffer's diff-hl is redrawn so its marks come back, and on teardown every diff-hl buffer is redrawn. A range that
+  changes shape while diff-hl is on leaves diff-hl's marks on lines the agent stopped owning until diff-hl's next update.
 - A buffer that stops being watched (`drgnx-agents-editor-unwatch-functions`) or is killed loses its bars, ring
   overlays and tags.
