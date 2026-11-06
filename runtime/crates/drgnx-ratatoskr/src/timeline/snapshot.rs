@@ -256,6 +256,63 @@ pub fn numstat(
     Ok(out)
 }
 
+/// The commit WORKTREE's `HEAD` names, from its ref files: `HEAD`, then the loose ref, then `packed-refs`, each read
+/// through `eitri` (a link in any component and a FIFO are refused at once).  A `.git` file (a linked worktree) is
+/// followed through its `gitdir:` and that folder's `commondir`.  Runs no git.  An agent writes these files, so a ref
+/// name must stay under `refs/` and only a full hex object id is ever answered: a hint, checked before use.
+pub fn head_of(worktree: &Path) -> Option<String> {
+    use eitri::{Kind, open_beneath, open_path, read_regular};
+    use std::os::fd::{AsFd, BorrowedFd};
+    const MAX: u64 = 1 << 20;
+    let text = |dir: BorrowedFd<'_>, rel: &str| -> Option<String> {
+        String::from_utf8(read_regular(dir, Path::new(rel), MAX).ok()?).ok()
+    };
+    let is_id = |s: &str| matches!(s.len(), 40 | 64) && s.bytes().all(|b| b.is_ascii_hexdigit());
+    let wt = rustix::fs::open(
+        worktree,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .ok()?;
+    let dot = open_beneath(wt.as_fd(), Path::new(".git"), Kind::Any).ok()?;
+    // the folder HEAD is in, and the one the refs are in (the same unless a linked worktree)
+    let (gitdir, common) = if dot.is_dir {
+        (dot.fd, None)
+    } else {
+        let line = text(wt.as_fd(), ".git")?;
+        let to = worktree.join(line.trim_end().strip_prefix("gitdir: ")?);
+        let gitdir = open_path(&to, Kind::Dir).ok()?.fd;
+        let common = text(gitdir.as_fd(), "commondir")
+            .and_then(|c| open_path(&to.join(c.trim_end()), Kind::Dir).ok());
+        (gitdir, common.map(|p| p.fd))
+    };
+    let refs = common.as_ref().unwrap_or(&gitdir).as_fd();
+    let head = text(gitdir.as_fd(), "HEAD")?;
+    let head = head.trim_end();
+    let id = match head.strip_prefix("ref: ") {
+        None => head.to_string(),
+        Some(name) => {
+            let parts: Vec<&str> = name.split('/').collect();
+            if parts.len() < 2
+                || parts[0] != "refs"
+                || parts
+                    .iter()
+                    .any(|p| p.is_empty() || *p == "." || *p == "..")
+            {
+                return None;
+            }
+            match text(refs, name) {
+                Some(t) => t.trim_end().to_string(),
+                None => text(refs, "packed-refs")?.lines().find_map(|l| {
+                    let (sha, n) = l.split_once(' ')?;
+                    (n == name).then(|| sha.to_string())
+                })?,
+            }
+        }
+    };
+    is_id(&id).then_some(id)
+}
+
 /// Bytes under DIR (files only).
 fn size_of(dir: &Path) -> u64 {
     let Ok(rd) = std::fs::read_dir(dir) else {
@@ -477,6 +534,205 @@ mod tests {
         )
         .unwrap();
         assert_eq!(refs, "refs/drgnx/s/live/1");
+    }
+
+    /// Plain git in DIR, for the fixtures only (never the code under test), with no outside config.
+    fn fixture_git(dir: &Path, args: &[&str]) -> String {
+        let out = Command::new("git")
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+            .args(["-c", "init.defaultBranch=main"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// A repository at DIR with one commit on `main`; the commit's id.
+    fn repo_with_a_commit(dir: &Path) -> String {
+        std::fs::create_dir_all(dir).unwrap();
+        fixture_git(dir, &["init", "-q", "."]);
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        fixture_git(dir, &["add", "a.txt"]);
+        fixture_git(dir, &["commit", "-q", "-m", "one"]);
+        fixture_git(dir, &["rev-parse", "HEAD"])
+    }
+
+    fn mkfifo(p: &Path) {
+        use std::os::unix::ffi::OsStrExt;
+        let c = std::ffi::CString::new(p.as_os_str().as_bytes()).unwrap();
+        // SAFETY: a valid NUL-terminated path.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+    }
+
+    /// Pattern D: the branch's loose ref, then (after `pack-refs`) `packed-refs`, a newer loose ref over a packed one,
+    /// then a detached `HEAD`; no repository answers None.
+    #[test]
+    fn head_of_reads_loose_and_packed_refs() {
+        let d = tempfile::tempdir().unwrap();
+        let wt = d.path().join("wt");
+        let one = repo_with_a_commit(&wt);
+        assert!(wt.join(".git/refs/heads/main").is_file());
+        assert_eq!(head_of(&wt).as_deref(), Some(one.as_str()));
+        fixture_git(&wt, &["pack-refs", "--all"]);
+        assert!(
+            !wt.join(".git/refs/heads/main").exists(),
+            "the ref is packed"
+        );
+        assert_eq!(head_of(&wt).as_deref(), Some(one.as_str()));
+        std::fs::write(wt.join("a.txt"), "two\n").unwrap();
+        fixture_git(&wt, &["commit", "-q", "-am", "two"]);
+        let two = fixture_git(&wt, &["rev-parse", "HEAD"]);
+        assert_eq!(head_of(&wt).as_deref(), Some(two.as_str()));
+        fixture_git(&wt, &["checkout", "-q", "--detach", &one]);
+        assert_eq!(head_of(&wt).as_deref(), Some(one.as_str()));
+        assert_eq!(head_of(&d.path().join("none")), None);
+    }
+
+    /// The variable that makes [`head_of_in_a_child_without_path`] read a worktree.
+    const CHILD: &str = "DRGNX_TEST_HEAD_OF_IN";
+
+    /// Pattern D: the read runs in a child of this test binary whose PATH is empty, so no git could be found, and still
+    /// answers the commit.
+    #[test]
+    fn head_of_never_runs_git() {
+        let d = tempfile::tempdir().unwrap();
+        let wt = d.path().join("wt");
+        let one = repo_with_a_commit(&wt);
+        let out = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "timeline::snapshot::tests::head_of_in_a_child_without_path",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("PATH", "")
+            .env(CHILD, &wt)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "{stdout}{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(stdout.contains(&format!("head={one}\n")), "{stdout}");
+    }
+
+    /// Pattern D: [`head_of_never_runs_git`]'s child; on its own it has nothing to read.
+    #[test]
+    fn head_of_in_a_child_without_path() {
+        if let Some(wt) = std::env::var_os(CHILD) {
+            assert_eq!(std::env::var_os("PATH").unwrap_or_default(), "");
+            println!("head={}", head_of(Path::new(&wt)).unwrap_or_default());
+        }
+    }
+
+    /// Pattern D with a hang guard (a pass never waits): `.git` as a link to a good repository's, `HEAD` as a link to a
+    /// good `HEAD`, the branch's loose ref as a link, and `HEAD` as a FIFO all answer None, the FIFO at once.
+    #[test]
+    fn head_of_refuses_a_link_and_a_fifo() {
+        use std::os::unix::fs::symlink;
+        let d = tempfile::tempdir().unwrap();
+        let good = d.path().join("good");
+        let one = repo_with_a_commit(&good);
+        assert_eq!(head_of(&good).as_deref(), Some(one.as_str()), "the control");
+        let linked = d.path().join("linked");
+        std::fs::create_dir_all(&linked).unwrap();
+        symlink(good.join(".git"), linked.join(".git")).unwrap();
+        assert_eq!(head_of(&linked), None, ".git a link");
+        let wt = d.path().join("wt");
+        repo_with_a_commit(&wt);
+        std::fs::remove_file(wt.join(".git/HEAD")).unwrap();
+        symlink(good.join(".git/HEAD"), wt.join(".git/HEAD")).unwrap();
+        assert_eq!(head_of(&wt), None, "HEAD a link");
+        std::fs::remove_file(wt.join(".git/HEAD")).unwrap();
+        std::fs::write(wt.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::remove_file(wt.join(".git/refs/heads/main")).unwrap();
+        symlink(
+            good.join(".git/refs/heads/main"),
+            wt.join(".git/refs/heads/main"),
+        )
+        .unwrap();
+        assert_eq!(head_of(&wt), None, "the loose ref a link");
+        std::fs::remove_file(wt.join(".git/HEAD")).unwrap();
+        mkfifo(&wt.join(".git/HEAD"));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let p = wt.clone();
+        std::thread::spawn(move || tx.send(head_of(&p)).unwrap());
+        let got = rx
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("a FIFO at HEAD blocked the read");
+        assert_eq!(got, None);
+    }
+
+    /// Pattern D: a linked worktree's `.git` file is followed to its folder in the main repository: `HEAD` is read
+    /// there and the branch's ref in the common folder, loose and then packed.
+    #[test]
+    fn head_of_reads_a_linked_worktree() {
+        let d = tempfile::tempdir().unwrap();
+        let (main, wt) = (d.path().join("main"), d.path().join("wt"));
+        let one = repo_with_a_commit(&main);
+        fixture_git(
+            &main,
+            &["worktree", "add", "-q", "-b", "feat", wt.to_str().unwrap()],
+        );
+        assert!(wt.join(".git").is_file());
+        std::fs::write(wt.join("b.txt"), "b\n").unwrap();
+        fixture_git(&wt, &["add", "b.txt"]);
+        fixture_git(&wt, &["commit", "-q", "-m", "b"]);
+        let feat = fixture_git(&wt, &["rev-parse", "HEAD"]);
+        assert_ne!(feat, one);
+        assert_eq!(head_of(&wt).as_deref(), Some(feat.as_str()));
+        assert_eq!(head_of(&main).as_deref(), Some(one.as_str()));
+        fixture_git(&main, &["pack-refs", "--all"]);
+        assert_eq!(head_of(&wt).as_deref(), Some(feat.as_str()));
+    }
+
+    /// Pattern D: what an agent points these files at never reaches the record: `.git` naming a text file or a folder
+    /// whose `HEAD` is text, `HEAD` naming a file outside `refs/` or through `..`, and a ref file holding text.
+    #[test]
+    fn head_of_keeps_only_an_object_id() {
+        let d = tempfile::tempdir().unwrap();
+        let notes = d.path().join("notes.txt");
+        std::fs::write(&notes, "a private note\n").unwrap();
+        let wt = d.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join(".git"), format!("gitdir: {}\n", notes.display())).unwrap();
+        assert_eq!(head_of(&wt), None, "gitdir a text file");
+        let fake = d.path().join("fake");
+        std::fs::create_dir_all(&fake).unwrap();
+        std::fs::copy(&notes, fake.join("HEAD")).unwrap();
+        std::fs::write(wt.join(".git"), format!("gitdir: {}\n", fake.display())).unwrap();
+        assert_eq!(head_of(&wt), None, "HEAD text");
+        let r = d.path().join("r");
+        let one = repo_with_a_commit(&r);
+        // an object id where no ref may be, so only the name checks keep it out
+        std::fs::write(r.join(".git/sneaky"), format!("{one}\n")).unwrap();
+        std::fs::write(r.join(".git/refs/heads/text"), "a private note\n").unwrap();
+        for head in [
+            "ref: sneaky",
+            "ref: refs/../sneaky",
+            "ref: refs/heads/../../sneaky",
+            "ref: /etc/passwd",
+            "ref: refs/heads/text",
+            "0123abc",
+        ] {
+            std::fs::write(r.join(".git/HEAD"), format!("{head}\n")).unwrap();
+            assert_eq!(head_of(&r), None, "{head}");
+        }
+        std::fs::write(r.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        assert_eq!(head_of(&r).as_deref(), Some(one.as_str()), "the control");
     }
 
     #[test]

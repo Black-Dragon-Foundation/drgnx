@@ -4,7 +4,7 @@
 //!
 //! The file is made through the real opening rule (a fresh file at the current schema), closed, and given the table
 //! schema 8 shipped with its rows, without the tables schema 9 adds; then the hub opens it, which moves it through 9
-//! and 10 to 11.  Pattern D (pure: a file, one open, one write).
+//! and 10 to 12.  Pattern D (pure: a file, one open, one write).
 
 use norn::store::CoordDb;
 use urdr::graph::search::vec_put;
@@ -27,6 +27,10 @@ const SHIPPED: &str = concat!(
     drop table forecast_sample;
     drop table forecast_made;
     alter table step drop column context;
+    alter table step drop column acp;
+    alter table step drop column head;
+    alter table step drop column history_op;
+    alter table step drop column undone_by;
     update kv set value = '8' where key = 'schema';"
 );
 
