@@ -58,6 +58,36 @@ installed falls back down its `:fallback` list, then to the generic family.
 
 Terminal frames ignore families and sizes and keep only the weight.
 
+### Per-mode overrides
+
+A `(:mode MODE ...)` section of `settings.el` gives one mode another font, for example Org's prose in the UI font:
+
+```elisp
+(:mode org-mode
+ (drgnx-look-font-code (:family ui :size 1.05)))
+```
+
+drgnx installs a remap of the role's faces in each buffer of that mode (after the mode starts, and again when the
+setting changes) and removes it when the override goes. Buffers without an override get nothing, so they stay on
+Emacs's fast paths for the default face.
+
+### Live changes
+
+A change applies at once to every frame. The settings page waits 300 ms after the last change of a role before it
+redraws, so a size slider or typed digits do not redraw on every key.
+
+### Ligatures
+
+`:ligatures t` on the code role installs composition rules for the usual programming sequences (`->`, `=>`, `!=`,
+`<=`, `::` and so on); `nil` takes them away. They only show with a font that has the ligatures: the default prefers
+the `-nl` build of JetBrains Mono, which has none, so turning them on also means installing the regular build.
+The rules are global (they are Emacs's composition table), and turning the module off gives the table back.
+
+### Missing fonts
+
+[`drgnx doctor`](install.md#fonts) names each role whose family is not installed, the family it fell back to and the
+package to install.
+
 The role faces are `drgnx-ui-text`, `drgnx-ui-heading`, `drgnx-ui-caption`, `drgnx-ui-title`, `drgnx-code-small`,
 `drgnx-agent-prose` and `drgnx-terminal`; the code role is the `default` and `fixed-pitch` faces and the UI role also
 sets `variable-pitch`. Their specs hold `:family`, `:height` (relative) and `:weight` only, never `:font`.

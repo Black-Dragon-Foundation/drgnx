@@ -19,6 +19,8 @@
 (require 'subr-x)
 (require 'drgnx-setting)
 (require 'drgnx-type-faces)
+(require 'drgnx-timer)
+(require 'face-remap)
 
 (declare-function drgnx-module-running-p "drgnx-modules" (module))
 (declare-function drgnx-user-dir "drgnx-paths" ())
@@ -245,8 +247,8 @@ size and family and weight, the others' family and weight, whichever face names 
     (drgnx-look-fonts--face-layer role (nreverse out))))
 
 (defun drgnx-look-fonts--value (role)
-  "ROLE's setting value."
-  (symbol-value (nth 1 (assq role drgnx-look-fonts-roles))))
+  "ROLE's setting value, the global one: a buffer's own value is a per-mode override, read by the remaps."
+  (default-value (nth 1 (assq role drgnx-look-fonts-roles))))
 
 (defun drgnx-look-fonts--setting-attrs (role value)
   "The attributes VALUE, a role plist, sets that differ from ROLE's default."
@@ -390,11 +392,192 @@ Customize set."
           (drgnx-look-fonts--set-defface
            face (drgnx-look-fonts--plist-for role face res (if own '(desktop) '(default desktop))))))))
   (drgnx-look-fonts--apply-alternatives)
-  (drgnx-look-fonts--put-back-lisp))
+  (drgnx-look-fonts--ligatures-sync)
+  (drgnx-look-fonts--put-back-lisp)
+  (drgnx-look-fonts--remap-all))
+
+(defun drgnx-look-fonts--preview ()
+  "Write the faces, if ui/look still runs (the debounced end of a setting change)."
+  (when (drgnx-module-running-p 'ui/look) (drgnx-look-fonts-apply)))
 
 (defun drgnx-look-fonts--settings-apply ()
-  "The `:apply' of every role setting: write the faces while ui/look runs."
-  (when (drgnx-module-running-p 'ui/look) (drgnx-look-fonts-apply)))
+  "The `:apply' of every role setting: write the faces while ui/look runs.  A change redraws every frame, so the
+settings page's size slider and typed digits are debounced: 300 ms after the last change, once."
+  (when (drgnx-module-running-p 'ui/look)
+    (drgnx-timer-debounce 'look-fonts-preview 0.3 #'drgnx-look-fonts--preview :owner :core)))
+
+;;;; Per-mode overrides: buffer-local remaps
+
+(defvar-local drgnx-look-fonts--remap nil
+  "(SPECS . COOKIES) of the remaps this module installed in the buffer: SPECS is an alist (FACE . PLIST).")
+
+(defun drgnx-look-fonts--mode-specs ()
+  "The remaps the current buffer's own role values ask for: an alist (FACE . PLIST of family, relative height and
+weight), only the attributes that differ from the global value."
+  (let (out)
+    (pcase-dolist (`(,role ,var . ,faces) drgnx-look-fonts-roles)
+      (when (local-variable-p var)
+        (let ((local (symbol-value var)) (global (default-value var)))
+          (when (consp local)
+            (let* ((global (if (consp global) global (cdr (assq role drgnx-type-defaults))))
+                   (res (drgnx-look-fonts-resolve role))
+                   (f (plist-get local :family)) (s (plist-get local :size)) (w (plist-get local :weight))
+                   (fam (and f (not (equal f (plist-get global :family)))
+                             (if (memq f '(ui code)) (plist-get (drgnx-look-fonts-resolve f) :family) f)))
+                   (rel (and s (not (equal s (plist-get global :size)))
+                             (/ (round (* 1000 (/ s (float (or (plist-get res :size) 1.0))))) 1000.0)))
+                   (wt (and w (not (equal w (plist-get global :weight))) w)))
+              (dolist (face faces)
+                (let (plist)
+                  (when fam (setq plist (plist-put plist :family fam)))
+                  (when (and rel (eq face (car faces))) (setq plist (plist-put plist :height rel)))
+                  (when wt (setq plist (plist-put plist :weight wt)))
+                  (when plist (push (cons face plist) out)))))))))
+    (nreverse out)))
+
+(defun drgnx-look-fonts-remap-buffer ()
+  "Install the current buffer's per-mode font remaps, or take them away when its own values are gone.  Only a buffer
+that has an override gets a remap: a non-nil `face-remapping-alist' takes a buffer off the default-face fast paths."
+  (let ((specs (drgnx-look-fonts--mode-specs)))
+    (unless (equal specs (car drgnx-look-fonts--remap))
+      (dolist (c (cdr drgnx-look-fonts--remap)) (face-remap-remove-relative c))
+      (setq drgnx-look-fonts--remap
+            (and specs (cons specs (mapcar (lambda (s) (apply #'face-remap-add-relative (car s) (cdr s))) specs)))))))
+
+(defun drgnx-look-fonts--mode-hook ()
+  "`after-change-major-mode-hook': a mode section of settings.el has set the buffer's values by now."
+  (drgnx-look-fonts-remap-buffer))
+
+(defun drgnx-look-fonts--remap-all ()
+  "Every buffer that has an override or a remap: install, rewrite or remove its remaps."
+  (dolist (b (buffer-list))
+    (with-current-buffer b
+      (when (or drgnx-look-fonts--remap
+                (cl-some (lambda (spec) (local-variable-p (nth 1 spec))) drgnx-look-fonts-roles))
+        (drgnx-look-fonts-remap-buffer)))))
+
+;;;; Ligatures: composition rules, a switch
+
+(defconst drgnx-look-fonts--ligatures
+  '("<=>" "<==" "==>" "===" "!==" "=/=" "<->" "<--" "-->" "..." "<$>" "<*>" "<|>" "|>" "<|" "->" "<-" "=>" "==" "!="
+    "<=" ">=" "&&" "||" "::" ".." "++" "--" "//" "/*" "*/" "<<" ">>" "?." "??")
+  "The sequences the ligature rules compose when the code role has `:ligatures t'.")
+
+(defvar drgnx-look-fonts--ligatures-saved 'none
+  "The composition rules the ligature characters had before this module added its own: an alist (CHAR . RULES), or
+`none' while the rules are off.")
+
+(defun drgnx-look-fonts--ligatures-sync ()
+  "Rules on when the code role has `:ligatures t', off when it does not.  A font without the ligatures shapes
+the sequences as they are.  The default prefers the `-nl' build, which has none."
+  (let* ((value (default-value 'drgnx-look-font-code))
+         (want (and (consp value) (plist-get value :ligatures)))
+         (on (not (eq drgnx-look-fonts--ligatures-saved 'none))))
+    (cond ((and want (not on))
+           (let* ((sorted (sort (copy-sequence drgnx-look-fonts--ligatures)
+                                (lambda (a b) (> (length a) (length b)))))
+                  (rule (vector (mapconcat #'regexp-quote sorted "\\|") 0 #'font-shape-gstring))
+                  saved)
+             (dolist (c (delete-dups (mapcar (lambda (s) (aref s 0)) sorted)))
+               (let ((old (char-table-range composition-function-table c)))
+                 (push (cons c old) saved)
+                 (set-char-table-range composition-function-table c
+                                       (cons rule (and (listp old) old)))))
+             (setq drgnx-look-fonts--ligatures-saved saved)))
+          ((and on (not want)) (drgnx-look-fonts--ligatures-off)))))
+
+(defun drgnx-look-fonts--ligatures-off ()
+  "Give the composition rules of the ligature characters back."
+  (unless (eq drgnx-look-fonts--ligatures-saved 'none)
+    (pcase-dolist (`(,c . ,old) drgnx-look-fonts--ligatures-saved)
+      (set-char-table-range composition-function-table c old))
+    (setq drgnx-look-fonts--ligatures-saved 'none)))
+
+;;;; Fallbacks: what the doctor says
+
+(defconst drgnx-look-fonts-packages
+  '(("Adwaita Sans" :fedora "adwaita-sans-fonts" :arch "adwaita-fonts" :ubuntu "fonts-adwaita-sans"
+     :homebrew "font-adwaita")
+    ("JetBrains Mono" :fedora "jetbrains-mono-nl-fonts" :arch "ttf-jetbrains-mono" :ubuntu "fonts-jetbrains-mono"
+     :homebrew "font-jetbrains-mono")
+    ("Inter" :fedora "rsms-inter-fonts" :arch "inter-font" :ubuntu "fonts-inter" :homebrew "font-inter"))
+  "The packages that carry the default families: (FAMILY :fedora P :arch P :ubuntu P :homebrew P).  Arch and Ubuntu
+\(26.04) names were read from their package indexes; Inter is the fallback where Adwaita Sans is not packaged.")
+
+(defvar drgnx-look-fonts--fallback-report nil
+  "An alist (TERMINAL . ENTRIES): what each graphical display's last check found, ENTRIES as `drgnx-look-fonts-fallbacks'.")
+
+(defun drgnx-look-fonts--fallback-list (role)
+  "The families ROLE falls back to: its own list, else its defaults', else its class's (UI or code)."
+  (let ((class (if (memq role '(code code-small terminal)) 'code 'ui)))
+    (cl-some (lambda (r)
+               (let ((v (drgnx-look-fonts--value r)))
+                 (or (and (consp v) (plist-get v :fallback))
+                     (plist-get (cdr (assq r drgnx-type-defaults)) :fallback))))
+             (list role class))))
+
+(defun drgnx-look-fonts-fallbacks (frame)
+  "The roles on FRAME's display whose family is not installed: ((ROLE WANTED GOT) ...), GOT the first fallback that
+is (nil: none).  A role whose family an earlier role named is not repeated.  nil on a terminal frame.
+Checked per display, with a graphical frame: `find-font' in a daemon with no such frame says nothing."
+  (when (display-graphic-p frame)
+    (let (seen out)
+      (dolist (spec drgnx-look-fonts-roles)
+        (let* ((role (car spec)) (family (plist-get (drgnx-look-fonts-resolve role) :family)))
+          (when (and (stringp family) (not (member family seen)))
+            (push family seen)
+            (unless (find-font (font-spec :family family) frame)
+              (push (list role family
+                          (cl-find-if (lambda (f) (find-font (font-spec :family f) frame))
+                                      (drgnx-look-fonts--fallback-list role)))
+                    out)))))
+      (nreverse out))))
+
+(defun drgnx-look-fonts--check-frame ()
+  "`server-after-make-frame-hook': check the new frame's display."
+  (let ((frame (selected-frame)))
+    (when (display-graphic-p frame)
+      (setf (alist-get (terminal-name frame) drgnx-look-fonts--fallback-report nil nil #'equal)
+            (list (drgnx-look-fonts-fallbacks frame))))))
+
+(defun drgnx-look-fonts--distro ()
+  "`fedora', `arch', `ubuntu' (or Debian-like), `homebrew' on a Mac, else nil; and whether Fedora is image-based."
+  (cond ((eq system-type 'darwin) 'homebrew)
+        (t (let ((id (ignore-errors
+                       (with-temp-buffer
+                         (insert-file-contents "/etc/os-release")
+                         (string-join (delq nil (list (and (re-search-forward "^ID=\"?\\([^\"\n]+\\)" nil t) (match-string 1))
+                                                      (progn (goto-char (point-min))
+                                                             (and (re-search-forward "^ID_LIKE=\"?\\([^\"\n]+\\)" nil t)
+                                                                  (match-string 1)))))
+                                      " ")))))
+             (cond ((null id) nil)
+                   ((string-match-p "\\<fedora\\>" id) 'fedora)
+                   ((string-match-p "\\<arch\\>" id) 'arch)
+                   ((string-match-p "\\<\\(ubuntu\\|debian\\)\\>" id) 'ubuntu))))))
+
+(defun drgnx-look-fonts--install-hint (families)
+  "How to install FAMILIES (those with a known package) on this machine, or nil."
+  (let* ((distro (drgnx-look-fonts--distro))
+         (pkgs (and distro (delq nil (mapcar (lambda (f) (plist-get (cdr (assoc f drgnx-look-fonts-packages)) (intern (format ":%s" distro))))
+                                             families)))))
+    (when pkgs
+      (let ((list (string-join pkgs " ")))
+        (pcase distro
+          ('fedora (if (file-exists-p "/run/ostree-booted")
+                       (format "image-based Fedora: in the toolbox, sudo dnf install %s" list)
+                     (format "sudo dnf install %s" list)))
+          ('arch (format "sudo pacman -S %s" list))
+          ('ubuntu (format "sudo apt install %s" list))
+          ('homebrew (format "brew install --cask %s" list)))))))
+
+(defun drgnx-look-fonts-fallback-report ()
+  "What the doctor says about fonts: nil before any graphical display was checked, else (:fallbacks ENTRIES :fix TEXT),
+ENTRIES (ROLE WANTED GOT) of every checked display, TEXT how to install the families (nil: none known)."
+  (when drgnx-look-fonts--fallback-report
+    (let ((entries (delete-dups (apply #'append (mapcar #'cadr drgnx-look-fonts--fallback-report)))))
+      (list :fallbacks entries
+            :fix (drgnx-look-fonts--install-hint (delete-dups (mapcar #'cadr entries)))))))
 
 (defun drgnx-look-fonts-desktop-answer (answer)
   "The desktop's fonts arrived: ANSWER is (:ui (FAMILY . PX) :code (FAMILY . PX)).  The roles set to
@@ -421,6 +604,9 @@ Customize set."
   "The role faces follow the settings: snapshot your Lisp's attributes (when init has ended, else at its end),
 write the specs, put your Lisp back after every theme load."
   (add-hook 'enable-theme-functions #'drgnx-look-fonts--after-theme)
+  (add-hook 'after-change-major-mode-hook #'drgnx-look-fonts--mode-hook)
+  (add-hook 'server-after-make-frame-hook #'drgnx-look-fonts--check-frame)
+  (when (display-graphic-p) (drgnx-look-fonts--check-frame))
   (if after-init-time
       (drgnx-look-fonts--after-init)
     (add-hook 'after-init-hook #'drgnx-look-fonts--after-init 90)))
@@ -430,6 +616,15 @@ write the specs, put your Lisp back after every theme load."
 Your Lisp's attributes and Customize entries stay."
   (remove-hook 'enable-theme-functions #'drgnx-look-fonts--after-theme)
   (remove-hook 'after-init-hook #'drgnx-look-fonts--after-init)
+  (remove-hook 'after-change-major-mode-hook #'drgnx-look-fonts--mode-hook)
+  (remove-hook 'server-after-make-frame-hook #'drgnx-look-fonts--check-frame)
+  (setq drgnx-look-fonts--fallback-report nil)
+  (drgnx-look-fonts--ligatures-off)
+  (dolist (b (buffer-list))
+    (with-current-buffer b
+      (when drgnx-look-fonts--remap
+        (dolist (c (cdr drgnx-look-fonts--remap)) (face-remap-remove-relative c))
+        (setq drgnx-look-fonts--remap nil))))
   (dolist (face (copy-sequence drgnx-look-fonts--written))
     (face-spec-set face nil))
   (setq drgnx-look-fonts--written nil)
