@@ -957,8 +957,10 @@ else (Gemini, an agent without the capability) `summary`.
   conversation's spend from its first reading (`spend_total_in` names `self.acp`).
 - **What it is told first** (`rewind::first_text`): at Message or Turn level, the user's message alone, or nothing
   (no turn starts). When a summary must be delivered (Summary level, or steps a cut dropped), it is the labelled
-  summary of the session's facts cut at the step (`handoff::summary(.., up_to)`: its steps up to that `seq` and the
-  head recorded there) joined with the user's message, which is then required: without one the rewind is refused
+  summary of the session's facts cut at the step (`handoff::summary(.., up_to)`: its steps up to that `seq` in the
+  step's own conversation, by the cut's own filter (`rewind::same_line`, so no step an earlier revert abandoned), the
+  head recorded there, and the decisions stamped in those steps; an unstamped decision unless its version is after
+  the step's `log_version`) joined with the user's message, which is then required: without one the rewind is refused
   (`needs-message`) before anything changes. A fork that lands at Summary though it was planned higher is told the
   summary and the message; with no message the summary waits, held, at the front of the queue.
 - **The fork** (`rewind::fork_conversation`): a new session in another directory, from the step, while the source

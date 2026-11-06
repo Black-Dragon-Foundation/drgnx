@@ -54,6 +54,12 @@ pub(crate) struct Point {
     pub level: RestoreLevel,
 }
 
+/// Whether the step S_SEQ (abandoned by S_UNDONE, if a revert abandoned it) is of the conversation step SEQ ran in,
+/// LINE being SEQ's own `undone_by`: the filter of [`point_for`], and of the summary a cut tells (`handoff`).
+pub(crate) fn same_line(line: Option<i64>, seq: i64, s_seq: i64, s_undone: Option<i64>) -> bool {
+    s_undone == line || (s_undone.is_none() && s_seq < seq) || (line.is_none() && s_seq > seq)
+}
+
 /// The cut for step SEQ of STEPS (one session's, in `seq` order) at LEVEL.
 ///
 /// Message: the last message id at or before SEQ (the steps of one message share it).  A subagent's step rounds down
@@ -75,11 +81,7 @@ pub(crate) fn point_for(steps: &[PointStep], seq: i64, level: RestoreLevel) -> P
         .and_then(|s| s.undone_by);
     let steps: Vec<&PointStep> = steps
         .iter()
-        .filter(|s| {
-            s.undone_by == line
-                || (s.undone_by.is_none() && s.seq < seq)
-                || (line.is_none() && s.seq > seq)
-        })
+        .filter(|s| same_line(line, seq, s.seq, s.undone_by))
         .collect();
     let upto: Vec<&PointStep> = steps.iter().copied().filter(|s| s.seq <= seq).collect();
     let summary = Point {
