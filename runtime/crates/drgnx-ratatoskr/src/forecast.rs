@@ -1391,7 +1391,11 @@ mod tests {
         );
         assert_eq!(fc.tokens.p50, plan.tokens_p50);
         let (cost, kept) = (&fc.cost[0], plan.cost_p90.unwrap());
-        assert!((cost.p90 - 3.0 * kept).abs() < 1e-6, "{} against {kept}", cost.p90);
+        assert!(
+            (cost.p90 - 3.0 * kept).abs() < 1e-6,
+            "{} against {kept}",
+            cost.p90
+        );
         assert_eq!(cost.p50, plan.cost_p50.unwrap());
     }
 

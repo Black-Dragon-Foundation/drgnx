@@ -1226,10 +1226,8 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
     // a task's profile, which a plan an agent wrote may name, goes through the check `job/reassign` and Say make
     for t in &tasks {
         if let Some(p) = &t.profile
-            && let Some(why) = review::profile_refusal(
-                p,
-                crate::agents::session::find_profile(front, p).as_ref(),
-            )
+            && let Some(why) =
+                review::profile_refusal(p, crate::agents::session::find_profile(front, p).as_ref())
         {
             return Err(invalid(format!("task {}: {why}", t.n)));
         }
@@ -1946,7 +1944,11 @@ mod price_tests {
         let f = forecast(&[(Unit::Usd, 0.002, 0.02)], &[]);
         assert!(card_title(1, &f).contains("about <0.01–0.02 USD"));
         let free = forecast(&[(Unit::Usd, 0.0, 0.0)], &[]);
-        assert!(!card_title(1, &free).contains("0.00"), "{}", card_title(1, &free));
+        assert!(
+            !card_title(1, &free).contains("0.00"),
+            "{}",
+            card_title(1, &free)
+        );
         for title in [card_title(1, &f), card_title(2, &forecast(&[], &["x"]))] {
             assert!(!title.contains("0.00"), "{title}");
         }
@@ -2188,7 +2190,10 @@ pub(crate) mod graph_plan_tests {
         let dir = tempfile::tempdir().unwrap();
         let f = front(dir.path());
         set_profiles(&f, json!({"codex": {"command": ["codex-acp"]}})).await;
-        for (profile, why) in [("codex", "lock is not proven"), ("nope", "no agent profile")] {
+        for (profile, why) in [
+            ("codex", "lock is not proven"),
+            ("nope", "no agent profile"),
+        ] {
             let e = try_propose(
                 &f,
                 dir.path(),
@@ -2265,7 +2270,10 @@ pub(crate) mod graph_plan_tests {
         assert!(b.spend(&scope, Unit::UsdEst, 19.0).is_empty());
         let hits = b.spend(&scope, Unit::Usd, 19.0);
         assert_eq!(hits.len(), 1, "{hits:?}");
-        assert!(hits[0].estimate() && (hits[0].spent - 38.0).abs() < 1e-9, "{hits:?}");
+        assert!(
+            hits[0].estimate() && (hits[0].spent - 38.0).abs() < 1e-9,
+            "{hits:?}"
+        );
         assert_eq!(b.usd_left(&id), Some(0.0));
         // one card for the plan, not one per unit
         assert!(b.spend(&scope, Unit::UsdEst, 1.0).is_empty());

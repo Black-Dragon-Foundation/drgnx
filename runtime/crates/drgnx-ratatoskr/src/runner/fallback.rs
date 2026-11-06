@@ -9,8 +9,8 @@
 //!   USD budget) sets it running and lets the paused sessions go on.
 
 use super::{
-    Caller, Error, Loaded, changed, invalid, load, now, raise_card, route, service,
-    settle_cards, summary, tick,
+    Caller, Error, Loaded, changed, invalid, load, now, raise_card, route, service, settle_cards,
+    summary, tick,
 };
 use crate::front::Front;
 use norn::read::jobs::Job;

@@ -1113,7 +1113,9 @@ mod tests {
             .map(Result::unwrap)
             .collect();
         assert!(
-            !plan.iter().any(|d| d == "SCAN e" || d.starts_with("SCAN e USING")),
+            !plan
+                .iter()
+                .any(|d| d == "SCAN e" || d.starts_with("SCAN e USING")),
             "{plan:#?}"
         );
         assert!(
@@ -1230,7 +1232,15 @@ mod tests {
         job(&mut tx, "J", 2);
         session(&mut tx, "s1", "p1", "worker", "J");
         for t in ["J#1", "J#2"] {
-            step(&tx, "s1", Some(t), StepClass::Think, (0.0, 4.0), 10, Some("t1"));
+            step(
+                &tx,
+                "s1",
+                Some(t),
+                StepClass::Think,
+                (0.0, 4.0),
+                10,
+                Some("t1"),
+            );
             finish(&mut tx, t, "done");
         }
         let plan = Made {
@@ -1254,10 +1264,16 @@ mod tests {
         crate::write::jobs::job_set(&mut tx, "J", Some("done"), None, 5.0).unwrap();
         let one = gather(tx.sql(), "J#1", &facts).unwrap().unwrap();
         put(&mut tx, &one).unwrap();
-        assert!(plan_pairs(tx.sql(), 10).unwrap().is_empty(), "J#2 not sampled yet");
+        assert!(
+            plan_pairs(tx.sql(), 10).unwrap().is_empty(),
+            "J#2 not sampled yet"
+        );
         let two = gather(tx.sql(), "J#2", &facts).unwrap().unwrap();
         put(&mut tx, &two).unwrap();
-        let used = (one.tokens_in + one.tokens_out + one.cache_read + one.cache_write
+        let used = (one.tokens_in
+            + one.tokens_out
+            + one.cache_read
+            + one.cache_write
             + two.tokens_in
             + two.tokens_out
             + two.cache_read

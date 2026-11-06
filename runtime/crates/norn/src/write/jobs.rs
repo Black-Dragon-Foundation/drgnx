@@ -221,11 +221,12 @@ pub fn resume_job(
     budget: Option<f64>,
     now: f64,
 ) -> Result<Result<(), String>, CoordError> {
-    let row: Option<(Option<String>, Option<String>)> = opt(tx.sql().query_row(
-        "select status, data from job where id = ?1",
-        [id],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    ))?;
+    let row: Option<(Option<String>, Option<String>)> =
+        opt(tx
+            .sql()
+            .query_row("select status, data from job where id = ?1", [id], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            }))?;
     let Some((status, data)) = row else {
         return Ok(Err(format!("No job {id}")));
     };
@@ -424,14 +425,37 @@ mod tests {
         Stop,
         ApproveRead,
         ApproveWrite,
-        Pause,
     }
     skuld::events!(StopEv {
         Stop,
         ApproveRead,
-        ApproveWrite,
-        Pause
+        ApproveWrite
     });
+
+    /// The user's stop and the budget pause of a running job.
+    #[derive(Clone, Debug)]
+    enum PauseEv {
+        Stop,
+        Pause,
+    }
+    skuld::events!(PauseEv { Stop, Pause });
+
+    struct Pauses(Stops);
+
+    impl skuld::Core for Pauses {
+        type Event = PauseEv;
+        fn step(&mut self, ev: PauseEv) -> Vec<PauseEv> {
+            match ev {
+                PauseEv::Stop => {
+                    skuld::Core::step(&mut self.0, StopEv::Stop);
+                }
+                PauseEv::Pause => {
+                    self.0.r.write(|tx| pause_running(tx, "j", 4.0).unwrap());
+                }
+            }
+            Vec::new()
+        }
+    }
 
     struct Stops {
         r: Race,
@@ -473,9 +497,6 @@ mod tests {
                         .r
                         .write(|tx| approve_proposal(tx, "j", &json!({}), 3.0).unwrap());
                 }
-                StopEv::Pause => {
-                    self.r.write(|tx| pause_running(tx, "j", 4.0).unwrap());
-                }
                 _ => {}
             }
             Vec::new()
@@ -496,7 +517,9 @@ mod tests {
             || Stops::at("proposed"),
             |s, order| {
                 if s.r.approved && s.never_approved() {
-                    return Err(format!("an approved job marked never approved in {order:?}"));
+                    return Err(format!(
+                        "an approved job marked never approved in {order:?}"
+                    ));
                 }
                 if s.r.status() != "stopped" {
                     return Err(format!("a stopped job is {} in {order:?}", s.r.status()));
@@ -511,13 +534,13 @@ mod tests {
     #[test]
     fn every_order_a_pause_never_undoes_a_stop() {
         let mut p = skuld::Partial::new();
-        p.source("user", vec![StopEv::Stop]);
-        p.source("budget", vec![StopEv::Pause]);
+        p.source("user", vec![PauseEv::Stop]);
+        p.source("budget", vec![PauseEv::Pause]);
         let r = skuld::every_order(
             &p,
             skuld::Bound::default(),
-            || Stops::at("running"),
-            |s, order| match s.r.status().as_str() {
+            || Pauses(Stops::at("running")),
+            |s, order| match s.0.r.status().as_str() {
                 "stopped" => Ok(()),
                 other => Err(format!("a stopped job is {other} in {order:?}")),
             },
@@ -538,7 +561,14 @@ mod tests {
         };
         assert!(resumed(&mut s, None).unwrap_err().contains("is running"));
         s.r.write(|tx| {
-            job_set(tx, "j", Some("stopped"), Some(&json!({"note": "kept"})), 6.0).is_ok()
+            job_set(
+                tx,
+                "j",
+                Some("stopped"),
+                Some(&json!({"note": "kept"})),
+                6.0,
+            )
+            .is_ok()
         });
         assert_eq!(resumed(&mut s, Some(7.0)), Ok(()));
         let data: String =
@@ -551,6 +581,10 @@ mod tests {
         );
         let mut p = Stops::at("proposed");
         p.r.write(|tx| stop_job(tx, "j", "never_approved", 7.0).unwrap());
-        assert!(resumed(&mut p, None).unwrap_err().contains("never approved"));
+        assert!(
+            resumed(&mut p, None)
+                .unwrap_err()
+                .contains("never approved")
+        );
     }
 }
