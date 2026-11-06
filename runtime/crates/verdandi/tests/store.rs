@@ -41,6 +41,7 @@ fn open_creates_the_current_schema() {
         "preview",
         "provenance",
         "anchor",
+        "doc_cut",
     ] {
         assert_eq!(h.count(t).unwrap(), 0, "{t}");
     }

@@ -145,7 +145,7 @@ impl History {
         let d = self.live(doc, branch)?.clone();
         let then = |d: &LoroDoc| -> Result<(usize, String)> {
             let f = Frontiers::decode(&frontier).map_err(loro)?;
-            let old = d.fork_at(&f).map_err(loro)?;
+            let old = crate::docs::version_of(d, &f)?;
             let pos = old.get_cursor_pos(&c).map_err(loro)?.current.pos;
             Ok((pos, line_at(&old.get_text(TEXT).to_string(), pos)))
         };
@@ -219,7 +219,9 @@ impl History {
             {
                 let live = self.live(doc, branch)?;
                 let f = Frontiers::decode(&f.0).map_err(loro)?;
-                return Ok(live.fork_at(&f).map_err(loro)?.get_text(TEXT).to_string());
+                return Ok(crate::docs::version_of(live, &f)?
+                    .get_text(TEXT)
+                    .to_string());
             }
         }
         let seed: Vec<u8> = self.conn.query_row(

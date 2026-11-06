@@ -11,6 +11,7 @@
 
 pub mod anchor;
 pub mod apply;
+pub mod compact;
 pub mod docs;
 pub mod excise;
 pub mod log;
@@ -26,6 +27,7 @@ mod threeway;
 
 pub use anchor::{AnchorId, Blame, FileHunks, LineHunk, Resolved, Side, When};
 pub use apply::{FileDiff, Hunk, HunkRef};
+pub use compact::{Compacted, Pin, PinKind};
 pub use docs::{ActiveDoc, Change};
 pub use excise::Target;
 pub use log::{FlushReason, Settler};

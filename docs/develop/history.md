@@ -11,7 +11,7 @@ Git decides merged text; Loro holds element ids; the selective revert is drgnx's
 ## `history.db`
 
 One per project (`History::open(dir)` → `<dir>/history.db`), on urdr's store: WAL, `0600`, full sync, migrations as
-data (`schema.rs`; schema 2). The hub is its only writer. A record and the document updates it carries go in one
+data (`schema.rs`; schema 4). The hub is its only writer. A record and the document updates it carries go in one
 transaction (`History::put_op`), so a multi-file action is all there or not at all.
 
 | Table | Holds |
@@ -26,6 +26,8 @@ transaction (`History::put_op`), so a multi-file action is all there or not at a
 | `pending` | a revert in progress (the hub finishes it at start-up) |
 | `preview` | a revert preview until it is applied: its branch, the documents' versions then, its scope |
 | `provenance` | per record, the source element ids of text applied by diff (a redo of part, a take) |
+| `anchor` | a cursor on an element id, the version it was made at and its owner |
+| `doc_cut` | where compaction cut a document's history on a branch |
 
 Ids: `DocId`, `OpId`, `PeerId`, `BranchId`; `WorktreeId::of(path, common_dir)` is the hex of both. A `Span { peer,
 start, end }` names the element ids a record's operations made in one document (a peer's counters); a `Frontier` is
@@ -162,6 +164,19 @@ checkpoint leave the secret in no file. The `excise` record says how many charac
 
 `history.db` is the sixth door of the personal-notes canary (`runtime/crates/norn/tests/canary.rs`): a file the
 deny-list names is never registered, so the notes are in no document, snapshot or log.
+
+## Size, expiry, compaction
+
+`History::size()` is the database's size (pages in use, the log included); the cap is `DEFAULT_CAP`, 2 GiB per project.
+`History::expire(now)` removes the undone branches and frozen worktrees (`History::freeze(branch, at)`; a roll back
+freezes its `undone/<record>` at once) set aside 90 days or more before `now`, unless pinned (`History::pin`), with their
+documents and anchors. `History::compact(cap, author, now)`, when the history is over the cap, cuts every document
+shallow (Loro's shallow snapshot) at the newest record that is not among its newest 50 and not past an anchor's: a cut
+never passes a live reference, and the anchors still resolve, in the text then as well as now. `compact_keeping` takes the
+number of records to keep. The cut is the `doc_cut` table (schema 4), and one `compact` record says it happened. A revert
+of a record at or before a cut is refused with the reason (the file was compacted, its history up to that record is
+gone). `History::pins()` names what keeps the size up, the biggest first: pinned branches, set-aside branches, and each
+owner's anchors, for the doctor's `history` row (with the hub's watch budget and resync counter).
 
 ## The hub
 

@@ -319,7 +319,7 @@ impl History {
             }
             let src = self.live(*doc, from)?.clone();
             let f = Frontiers::decode(&frontier.0).map_err(loro)?;
-            let then = src.fork_at(&f).map_err(loro)?;
+            let then = crate::docs::version_of(&src, &f)?;
             docs.push((*doc, then.export(ExportMode::all_updates()).map_err(loro)?));
         }
         if docs.is_empty() {

@@ -384,6 +384,7 @@ impl History {
             "preview",
             "provenance",
             "anchor",
+            "doc_cut",
         ];
         if !TABLES.contains(&table) {
             return Err(Error::Refused(format!("no table {table}")));

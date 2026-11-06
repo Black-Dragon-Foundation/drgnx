@@ -41,5 +41,12 @@ create table anchor(
   cursor_blob blob not null, frontier_blob blob not null, op integer not null, owner text not null);
 ";
 
+/// Schema 4: where compaction cut a document's history on a branch: records up to and including `op` are past it.
+const V4: &str = "
+create table doc_cut(
+  doc integer not null references doc(id), branch integer not null references branch(id), op integer not null,
+  primary key (doc, branch)) without rowid;
+";
+
 /// Every migration, oldest first.
-pub(crate) const MIGRATIONS: &[(u32, &str)] = &[(1, V1), (2, V2), (3, V3)];
+pub(crate) const MIGRATIONS: &[(u32, &str)] = &[(1, V1), (2, V2), (3, V3), (4, V4)];

@@ -31,6 +31,19 @@ pub struct Change {
     pub inserted: String,
 }
 
+/// D as it was at version F, for reading.  Loro's `fork_at` is not implemented on a document cut shallow by compaction;
+/// there the version is a fork checked out at F (detached, read only).
+pub(crate) fn version_of(d: &LoroDoc, f: &::loro::Frontiers) -> Result<LoroDoc> {
+    match d.fork_at(f) {
+        Ok(v) => Ok(v),
+        Err(_) => {
+            let v = d.fork();
+            v.checkout(f).map_err(loro)?;
+            Ok(v)
+        }
+    }
+}
+
 /// A document of one branch in memory.
 pub(crate) struct Live {
     pub(crate) doc: LoroDoc,
