@@ -59,9 +59,9 @@ pixels: the gap times the frame's scale, and again when the scale changes).  The
 \(its foreground) and an opacity: no colour is named here."
   :type 'sexp :group 'drgnx-face)
 
-(defun drgnx-look--cards-p ()
-  "Non-nil when Glitnir draws the frames, so windows can be cards."
-  (and (featurep 'glitnir) (fboundp 'glitnir-active-p) (glitnir-active-p) t))
+(defun drgnx-look--cards-p (&optional frame)
+  "Non-nil when Glitnir draws FRAME (default: the selected one), so its windows can be cards."
+  (and (featurep 'glitnir) (fboundp 'glitnir-active-p) (glitnir-active-p frame) t))
 
 (defun drgnx-look--card-window-p (window)
   "Non-nil when WINDOW is a card: a docked pane (the Explorer, the panel, the right dock) or an editor group.
@@ -109,17 +109,27 @@ on the native shell)."
   "The store's `frame-resized': a scale change resizes the frame, so the gap is given again in its pixels."
   (drgnx-look--card-follow-scale (plist-get data :frame)))
 
+(defun drgnx-look--set-edge (frame px)
+  "Set FRAME's `internal-border-width' to PX inside the size the frame has: the frame never asks the window manager
+for a new size.  A shown frame that resized itself raced the window manager's answer to an earlier request, which
+could put the old size back a moment later and squeeze the windows laid out in between (a restored split came back
+8 px narrower)."
+  (let ((frame-inhibit-implied-resize t))
+    (set-frame-parameter frame 'internal-border-width px)))
+
 (defun drgnx-look--card-frame (frame)
-  "Make the docked panes of FRAME cards and widen the dividers to the gap; the frame's own widths are kept.  The
-frame's edge gets the same gap (`internal-border-width'), in the dividers' colour."
+  "Make the docked panes of FRAME cards and widen the dividers to the gap; the frame keeps its size.  The
+frame's edge gets the same gap (`internal-border-width', inside that size: `drgnx-look--set-edge'), in the
+dividers' colour."
   (let ((gap (drgnx-look--card-gap-px frame)) (recolour nil))
     (unless (frame-parameter frame 'drgnx-look-card-saved)
       (set-frame-parameter frame 'drgnx-look-card-saved
                            (list (frame-parameter frame 'right-divider-width)
                                  (frame-parameter frame 'bottom-divider-width)
                                  (frame-parameter frame 'internal-border-width))))
-    (dolist (p '(right-divider-width bottom-divider-width internal-border-width))
+    (dolist (p '(right-divider-width bottom-divider-width))
       (unless (eql (frame-parameter frame p) gap) (set-frame-parameter frame p gap)))
+    (unless (eql (frame-parameter frame 'internal-border-width) gap) (drgnx-look--set-edge frame gap))
     (let ((colour (face-foreground 'window-divider frame t)))
       (when (and colour (not (equal colour (face-background 'internal-border frame))))
         (set-face-background 'internal-border colour frame)
@@ -136,14 +146,16 @@ frame's edge gets the same gap (`internal-border-width'), in the dividers' colou
   (when-let* ((saved (frame-parameter frame 'drgnx-look-card-saved)))
     (set-frame-parameter frame 'right-divider-width (car saved))
     (set-frame-parameter frame 'bottom-divider-width (cadr saved))
-    (set-frame-parameter frame 'internal-border-width (or (nth 2 saved) 0))
+    (drgnx-look--set-edge frame (or (nth 2 saved) 0))
     (set-face-background 'internal-border nil frame)
     (set-frame-parameter frame 'drgnx-look-card-saved nil)))
 
 (defun drgnx-look-cards-apply ()
-  "Docked panes as cards on every graphical frame, while Glitnir draws them."
-  (when (drgnx-look--cards-p)
-    (dolist (f (drgnx-look--card-frames)) (drgnx-look--card-frame f))))
+  "Docked panes as cards on every graphical frame Glitnir draws.  Each frame is asked on its own, not through the
+selected one: a daemon's new window is made while its terminal frame is selected, and gets its gap then, before
+anything is laid out in it (a restored workbench), not at its first redisplay."
+  (dolist (f (drgnx-look--card-frames))
+    (when (drgnx-look--cards-p f) (drgnx-look--card-frame f))))
 
 (defun drgnx-look-cards-clear ()
   "Every card off, the dividers as they were."
