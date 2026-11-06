@@ -14,6 +14,7 @@ Using drgnx.
 - [Modules](guide/modules.md): stages, packages, flags, modules.eld, Preferences: Modules, writing a module.
 - [Packages](guide/packages.md): `drgnx sync`, the lock, the cache, generations, rollback, upgrade, safe mode, bisect.
 - [Agents](guide/agents.md): agents over ACP, input that queues and never cancels, the Agents tab, edit review, durable jobs, what a job's Claude ignores of your settings, agents outside drgnx that report to it, Say it (one prompt to a proposed plan), reading a forecast, plans ↔ board.
+- [The agent panel](guide/agent-panel.md): one agent session in the right dock — header, chips, steps with their thinking folded, live and paged; steering, cards and pinned cards.
 - [AI](guide/ai.md): one provider registry (OpenRouter and local runners), roles with fallback, keys read from the environment or auth-source, stored only in your Keychain or keyring when you ask, agent profiles.
 - [Runners](guide/runners.md): your other machines run jobs; how drgnx reaches them through your own ssh (the options it always sets, one connection per runner, a lost link never a result), logins it never answers, host keys it never accepts; adding, checking and removing a machine (`drgnx runner …`).
 - [Jobs](guide/jobs.md): agents through a plan — proposal, approval, worktrees, a policy, review and merge (with an optional accept gate: every file accepted), budget, fallback; `drgnx job`.

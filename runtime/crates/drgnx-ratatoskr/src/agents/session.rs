@@ -133,6 +133,15 @@ impl Pending {
     }
 }
 
+/// An agent message's Markdown blocks, and what the editors have not been told of them yet.
+struct MdMessage {
+    entry: usize,
+    stream: super::markdown::Stream,
+    /// The editors have the whole `blocks` of the message (else the next event carries them, not a patch).
+    sent: bool,
+    patch: std::collections::BTreeMap<usize, super::markdown::Block>,
+}
+
 struct State {
     /// The turn, the queue, the Stop and the permission requests' choices (`turn_core.rs`).
     core: TurnCore,
@@ -147,6 +156,8 @@ struct State {
     open: Option<(EntryType, usize)>,
     /// Entries changed since the last event.
     dirty: BTreeSet<usize>,
+    /// The agent message still streaming, as Markdown blocks.
+    md: Option<MdMessage>,
     permissions: Vec<Pending>,
     usage: Option<Usage>,
     commands: Vec<Value>,
@@ -323,6 +334,7 @@ impl State {
             tool_meta: HashMap::new(),
             open: None,
             dirty: BTreeSet::new(),
+            md: None,
             permissions: Vec::new(),
             usage: None,
             commands: Vec::new(),
@@ -599,6 +611,9 @@ impl State {
         self.entries.truncate(at);
         self.dirty.retain(|i| *i < at);
         self.tools.retain(|_, i| *i < at);
+        if self.md.as_ref().is_some_and(|m| m.entry >= at) {
+            self.md = None;
+        }
         self.open = None;
         self.cur = None;
         self.stash = None;
@@ -623,6 +638,7 @@ impl State {
                 .insert("length".into(), json!(joined.chars().count()));
             e.rest.insert("text".into(), json!(joined));
             self.dirty.insert(i);
+            self.md_follow(kind, i);
             return;
         }
         let mut rest = Map::new();
@@ -633,6 +649,33 @@ impl State {
         }
         let i = self.push(kind, rest);
         self.open = Some((kind, i));
+        self.md_follow(kind, i);
+    }
+
+    /// Entry I, an agent message, has more text: only its last block is parsed again, and the blocks that changed wait
+    /// for the next event.  The message before it is no longer followed.
+    fn md_follow(&mut self, kind: EntryType, i: usize) {
+        if kind != EntryType::Agent {
+            return;
+        }
+        if self.md.as_ref().is_none_or(|m| m.entry != i) {
+            self.md = Some(MdMessage {
+                entry: i,
+                stream: super::markdown::Stream::default(),
+                sent: false,
+                patch: Default::default(),
+            });
+        }
+        let text = self.entries[i]
+            .rest
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if let Some(m) = self.md.as_mut() {
+            for b in m.stream.update(text) {
+                m.patch.insert(b.block, b);
+            }
+        }
     }
 
     /// One `session/update` of the agent (its JSON), as entries, commands and usage.
@@ -703,7 +746,23 @@ impl State {
                     "rawInput",
                 ] {
                     if let Some(v) = u.get(k).filter(|v| !v.is_null()) {
-                        e.rest.insert(k.into(), v.clone());
+                        let mut v = v.clone();
+                        if k == "content" {
+                            // a huge output keeps its head and tail and the whole size
+                            match super::tool_output::fold(
+                                &mut v,
+                                super::tool_output::KEEP_HEAD,
+                                super::tool_output::KEEP_TAIL,
+                            ) {
+                                Some(total) => {
+                                    e.rest.insert("outputBytes".into(), json!(total));
+                                }
+                                None => {
+                                    e.rest.remove("outputBytes");
+                                }
+                            }
+                        }
+                        e.rest.insert(k.into(), v);
                     }
                 }
                 self.dirty.insert(idx);
@@ -2288,7 +2347,7 @@ impl Session {
                     .is_some_and(|m| mids.contains(m))
             })
             .take(cap)
-            .map(|(i, e)| (i as u64, e.clone()))
+            .map(|(i, e)| (i as u64, super::wire::with_blocks(e.clone())))
             .collect()
     }
 }
@@ -3142,10 +3201,24 @@ impl Session {
         let (seq, entries) = {
             let mut st = lock(&self.state);
             let idx: Vec<usize> = std::mem::take(&mut st.dirty).into_iter().collect();
-            let entries: Vec<(u64, Entry)> = idx
+            let mut entries: Vec<(u64, Entry)> = idx
                 .into_iter()
                 .filter_map(|i| st.entries.get(i).map(|e| (i as u64, e.clone())))
                 .collect();
+            // an agent message arrives as Markdown blocks: all of them the first time (and for a new subscriber), after
+            // that the patch of the ones that changed
+            if let Some(m) = st.md.as_mut()
+                && let Some((_, e)) = entries.iter_mut().find(|(i, _)| *i == m.entry as u64)
+            {
+                if !m.sent {
+                    e.rest.insert("blocks".into(), json!(m.stream.blocks()));
+                    m.sent = true;
+                } else if !m.patch.is_empty() {
+                    let patch: Vec<_> = m.patch.values().collect();
+                    e.rest.insert("patch".into(), json!(patch));
+                }
+                m.patch.clear();
+            }
             (st.seq, entries)
         };
         let snapshot = self.snapshot();
@@ -3176,9 +3249,35 @@ impl Session {
     /// Connection CONN gets this session's entries from now on; the change number they continue from.
     pub(crate) fn subscribe_entries(&self, conn: u64) -> u64 {
         // the number is read under the same lock the dirty set is drained under, so no entry falls between
-        let st = lock(&self.state);
+        let mut st = lock(&self.state);
         self.editors.subscribe_entries(&self.id, conn);
+        // the next event of the message streaming now carries all its blocks, whoever had the earlier ones
+        if let Some(m) = st.md.as_mut() {
+            m.sent = false;
+        }
         st.seq
+    }
+
+    /// Bytes FROM..TO of tool call TOOL_CALL's output, at most a page of them.
+    pub(crate) fn tool_output(
+        &self,
+        tool_call: &str,
+        from: u64,
+        to: u64,
+    ) -> Option<super::tool_output::Page> {
+        let st = lock(&self.state);
+        let idx = *st.tools.get(tool_call)?;
+        let rest = &st.entries.get(idx)?.rest;
+        let parts = rest
+            .get("content")
+            .map(super::tool_output::text_parts)
+            .unwrap_or_default();
+        let kept: u64 = parts.iter().map(|p| p.len() as u64).sum();
+        let total = rest
+            .get("outputBytes")
+            .and_then(Value::as_u64)
+            .unwrap_or(kept);
+        Some(super::tool_output::page(&parts, total, from, to))
     }
 
     /// The raw input of tool call TOOL_CALL, capped.
@@ -3247,7 +3346,12 @@ impl Session {
         let st = lock(&self.state);
         Transcript {
             session: snap,
-            entries: st.entries.clone(),
+            entries: st
+                .entries
+                .iter()
+                .cloned()
+                .map(super::wire::with_blocks)
+                .collect(),
             seq: st.seq,
         }
     }
@@ -4828,6 +4932,23 @@ pub async fn pair(
     }
     f.core.agents.find(p.id.as_str())?.pair_toggle(p.on).await?;
     Ok(true)
+}
+
+/// `agents/tool-output`: a range of a tool call's output, at most a page.
+pub fn tool_output(
+    f: &Front,
+    _: &Caller,
+    p: runstav::methods::agents::ToolOutputParams,
+) -> Result<runstav::methods::agents::ToolOutput, Error> {
+    let s = f.core.agents.find(p.id.as_str())?;
+    let page = s
+        .tool_output(&p.tool_call, p.from, p.to)
+        .ok_or_else(|| invalid("tool_call", "a tool call of this session"))?;
+    Ok(runstav::methods::agents::ToolOutput {
+        text: page.text,
+        total_bytes: page.total_bytes,
+        truncated: page.truncated,
+    })
 }
 
 /// `agents/pause`: the turn is cancelled once the tool call running now completes.

@@ -21,6 +21,7 @@
   "agents/start": ["user"],
   "agents/stop": ["user"],
   "agents/tool-input": ["user"],
+  "agents/tool-output": ["user"],
   "agents/unfollow": ["user"],
   "agents/wheel/give": ["user"],
   "agents/wheel/saved": ["user"],

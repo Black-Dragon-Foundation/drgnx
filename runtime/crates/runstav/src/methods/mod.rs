@@ -201,6 +201,7 @@ params! {
     AgentsEntriesSubscribe(agents::SessionRef),
     AgentsEntriesUnsubscribe(agents::SessionRef),
     AgentsToolInput(agents::ToolInputParams),
+    AgentsToolOutput(agents::ToolOutputParams),
     AgentsPause(agents::ById),
     AgentsWheelTake(agents::ById),
     AgentsWheelGive(agents::ById),

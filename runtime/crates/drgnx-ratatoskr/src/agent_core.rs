@@ -104,6 +104,7 @@ pub async fn serve(
             answer(agents::session::entries_unsubscribe(f, c, p))
         }
         Params::AgentsToolInput(p) => answer(agents::session::tool_input(f, c, p)),
+        Params::AgentsToolOutput(p) => answer(agents::session::tool_output(f, c, p)),
         Params::AgentsPause(p) => answer(agents::session::pause(f, c, p)),
         Params::AgentsWheelTake(p) => answer(agents::session::wheel_take(f, c, p)),
         Params::AgentsWheelGive(p) => answer(agents::session::wheel_give(f, c, p).await),

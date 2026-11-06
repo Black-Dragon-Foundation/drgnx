@@ -6079,6 +6079,81 @@
       "classes": [
         "user"
       ],
+      "doc": "bytes `from`..`to` of a tool call's output, at most 256 KiB an answer (beyond what the hub kept: its head and tail, `truncated`), with the whole size",
+      "name": "agents/tool-output",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "from": {
+            "description": "The first byte of the output wanted.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "$ref": "#/$defs/Id",
+            "description": "The session."
+          },
+          "to": {
+            "description": "The byte after the last one wanted.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tool_call": {
+            "description": "The tool call's id (the `id` of its `tool` entry).",
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "tool_call",
+          "from",
+          "to"
+        ],
+        "title": "ToolOutputParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A range of a tool call's output: bytes `from..to` of it (cut at character boundaries), the size of the whole, and\nwhether the answer holds less than was asked (the page cap, or output the hub did not keep).",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "total_bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "text",
+          "total_bytes",
+          "truncated"
+        ],
+        "title": "ToolOutput",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "this connection's view follows nothing any more (true when it followed a session)",
       "name": "agents/unfollow",
       "params": {

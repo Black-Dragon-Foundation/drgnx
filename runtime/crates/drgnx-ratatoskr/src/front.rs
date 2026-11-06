@@ -650,6 +650,7 @@ impl Front {
             | Params::AgentsEntriesSubscribe(_)
             | Params::AgentsEntriesUnsubscribe(_)
             | Params::AgentsToolInput(_)
+            | Params::AgentsToolOutput(_)
             | Params::AgentsPause(_)
             | Params::AgentsWheelTake(_)
             | Params::AgentsWheelGive(_)
