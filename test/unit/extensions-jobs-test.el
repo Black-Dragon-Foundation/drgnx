@@ -382,6 +382,21 @@ on the virtual clock.  The hub's job list has not answered yet: `drgnx-extension
     (drgnx-extensions-jobs-test--listed)
     (should (= (length drgnx-extensions-jobs-test--starts) 1))))
 
+(ert-deftest drgnx-extensions-jobs/a-busy-queue-file-says-try-again ()
+  (drgnx-extensions-jobs-test--with root
+    (drgnx-extensions-jobs-test--listed)
+    ;; another drgnx holds pending.eld: the click is refused for now, never failed
+    (cl-letf (((symbol-function 'drgnx-pkg-pending-add)
+               (lambda (_entry) (signal 'drgnx-file-busy (list (drgnx-pkg-pending-file) "4242")))))
+      (should-not (drgnx-extensions-jobs-queue '(:add magit))))
+    (let ((s (drgnx-extensions-jobs-state 'magit)))
+      (should (eq (plist-get s :status) 'busy))
+      (should (equal (plist-get s :error) "busy, try again")))
+    (should-not drgnx-extensions-jobs-test--starts)
+    ;; the next click goes through
+    (should (eql (drgnx-extensions-jobs-queue '(:add magit)) 1))
+    (should (eq (drgnx-extensions-jobs-test--status 'magit) 'queued))))
+
 (defun drgnx-extensions-jobs-test--count-wait (&rest _)
   "Count a wait made while a progress read runs."
   (when drgnx-extensions-jobs-test--in-read (setq drgnx-extensions-jobs-test--waits (1+ drgnx-extensions-jobs-test--waits))))

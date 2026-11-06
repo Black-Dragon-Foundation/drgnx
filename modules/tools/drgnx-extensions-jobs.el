@@ -263,7 +263,8 @@ has answered (a run an earlier session started may be waiting for the sync lock)
   "Queue the click ENTRY — (:add NAME [:version V] [:latest V]) or (:remove NAME) — and give it a job; its ticket.
 :latest is the version the page showed (the row says so when another one is installed); it stays in this session,
 not in the queue file.  The click joins the queue run that is waiting, else starts one.  When another drgnx holds the
-queue file the click is not queued: nil, and the package's row says \"busy, try again\".  Never waits."
+queue file the click is not queued: nil, and the package's row is `busy' with the :error \"busy, try again\" (a
+refusal for now, never `failed').  Never waits."
   (let* ((pkg (drgnx-extensions-jobs--entry-pkg entry))
          (add (plist-get entry :add))
          (queued (if add
@@ -271,7 +272,8 @@ queue file the click is not queued: nil, and the package's row says \"busy, try 
                    (list :remove pkg)))
          (ticket (condition-case nil (drgnx-pkg-pending-add queued)
                    (drgnx-file-busy
-                    (drgnx-extensions-jobs--put (list pkg) (list :status 'failed :error "busy, try again"
+                    ;; a refusal for now, not a failure: the row is busy with the hint
+                    (drgnx-extensions-jobs--put (list pkg) (list :status 'busy :error "busy, try again"
                                                                  :since (drgnx-timer-now)))
                     (drgnx-extensions-jobs--changed (list pkg))
                     nil))))

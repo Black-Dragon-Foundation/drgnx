@@ -65,7 +65,7 @@ module's setup calls `drgnx-extensions-jobs-setup` and its teardown `drgnx-exten
   sync lock and names the tickets in its `start` step. At the first step seen of each run and at each run's end the
   layer compares the queue with what the runs took, and a ticket still there (clicked after the run took the queue)
   gets one new run, so no click is stranded. When another drgnx holds `pending.eld` the click is not queued: the
-  row says "busy, try again". `drgnx-extensions-jobs-cancel` takes a ticket still queued out of the file, or stops a
+  row is `busy` with the hint "busy, try again" in `:error`, a refusal for now and never `failed`. `drgnx-extensions-jobs-cancel` takes a ticket still queued out of the file, or stops a
   job by its id.
 - **Other jobs.** `(drgnx-extensions-jobs-run KIND ARGS… :callback FN)`: `upgrade` NAMES (`:stage`, `:staged`),
   `upgrade-all`, `rollback` N, `refresh`, `fetch-readme` ARCHIVE NAME, `plugin-install` PATH (`:replace`),
