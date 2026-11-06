@@ -6,7 +6,8 @@
 ;; and the candidates show in a child frame of the editor frame, while the minibuffer window and keyboard focus
 ;; stay in the editor frame.  Needs vertico from $DRGNX_CHILDFRAME_ELPA.  Without Glitnir the float is switched on
 ;; by stubbing `glitnir-active-p' (the route is a plain child frame, so it is the same code); the screenshot row
-;; needs the real thing.
+;; needs the real thing.  The stub takes the primitive's optional FRAME: once the callers are native-compiled (the
+;; session compiles them while the tier runs) they reach the stub through a trampoline that passes every argument.
 
 (require 'ert)
 (require 'cl-lib)
@@ -49,7 +50,7 @@
        (add-hook 'minibuffer-exit-hook #'drgnx-palette-frame-hide)
        (vertico-mode 1) (vertico-multiform-mode 1)
        (unwind-protect
-           (cl-letf (((symbol-function 'glitnir-active-p) (lambda () t)))
+           (cl-letf (((symbol-function 'glitnir-active-p) (lambda (&optional _frame) t)))
              ,@body)
          (remove-hook 'minibuffer-exit-hook #'drgnx-palette-frame-hide)
          (unless was-multiform (vertico-multiform-mode -1))

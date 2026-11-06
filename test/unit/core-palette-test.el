@@ -149,7 +149,7 @@
       (should-not modes)
       ;; Glitnir on a graphical frame: `vertico-buffer-mode' on; off is always passed on
       (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t))
-                ((symbol-function 'glitnir-active-p) (lambda () t)))
+                ((symbol-function 'glitnir-active-p) (lambda (&optional _frame) t)))
         (should (drgnx-palette-frame-wanted-p))
         (drgnx-palette-frame-buffer 1))
       (should (equal modes '(1)))
