@@ -46,12 +46,30 @@ fn defaults_parse() {
     assert_eq!(d.roles[3].chain[0].model, None);
     assert_eq!(d.profiles.len(), 7);
     assert_eq!(d.profiles[0].name, "claude");
-    assert!(
-        d.profiles
-            .iter()
-            .all(|p| p.job_safe && p.command == ["claude-agent-acp"])
+    // Kimi and DeepSeek run their own agents; only the Claude Code profiles are job-safe
+    for p in &d.profiles {
+        assert_eq!(p.job_safe, p.command == ["claude-agent-acp"], "{}", p.name);
+    }
+    let (kimi, deepseek) = (&d.profiles[3], &d.profiles[4]);
+    assert_eq!(
+        (kimi.name.as_str(), kimi.command.as_slice()),
+        ("kimi", ["kimi", "acp"].map(String::from).as_slice())
     );
-    assert_eq!(d.profiles[3].model.as_deref(), Some("kimi-k3"));
+    assert_eq!(kimi.provider(), Some(profiles::Provider::Kimi));
+    assert_eq!(kimi.model.as_deref(), Some("kimi-k3"));
+    assert_eq!(
+        (deepseek.name.as_str(), deepseek.command.as_slice()),
+        (
+            "deepseek",
+            ["dsh", "--profile", "acp"].map(String::from).as_slice()
+        )
+    );
+    assert_eq!(deepseek.provider(), Some(profiles::Provider::DeepSeek));
+    assert_eq!(
+        d.profiles.iter().filter(|p| p.job_safe).count(),
+        5,
+        "claude, OpenRouter, Ollama, Kimi and DeepSeek via OpenRouter"
+    );
     // the strict defaults
     assert_eq!(d.values.agents_mcp, ["coordination"]);
     assert_eq!(d.values.agents_default, None);
