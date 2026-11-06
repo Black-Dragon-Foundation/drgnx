@@ -110,6 +110,11 @@ pub const RUNTIME: &[RuntimeSetting] = &[
     setting("drgnx-agents-no-progress-tokens", "u64", OnError::Strict),
     setting("drgnx-agents-manager-context", "f64", OnError::Strict),
     setting(
+        "drgnx-agents-model-prices",
+        "Vec<ModelPrice>",
+        OnError::Strict,
+    ),
+    setting(
         "drgnx-agents-browser-program",
         "Option<String>",
         OnError::Strict,
@@ -136,6 +141,13 @@ pub const RUNTIME: &[RuntimeSetting] = &[
     setting(
         "drgnx-runners-project-visibility",
         "String",
+        OnError::Strict,
+    ),
+    setting("drgnx-runners-shared-overlay", "bool", OnError::Strict),
+    setting("drgnx-runners-job-keys", "Vec<String>", OnError::Strict),
+    setting(
+        "drgnx-runners-origin-key",
+        "Option<String>",
         OnError::Strict,
     ),
     setting(
@@ -197,6 +209,8 @@ pub struct RuntimeValues {
     pub agents_repeat_limit: u32,
     pub agents_no_progress_tokens: u64,
     pub agents_manager_context: f64,
+    /// What a model costs, by model-id prefix or provider name (the forecast's rates).
+    pub agents_model_prices: Vec<ModelPrice>,
     /// The browser an agent session gets (an absolute path), or none to find one.
     pub agents_browser_program: Option<String>,
     /// The ports on the sandbox's own loopback that a session with the browser lets its agent and browser connect to
@@ -223,6 +237,12 @@ pub struct RuntimeValues {
     pub runners_weight: f64,
     /// `public` or `private` (per project): with the commit on the public origin, what makes a job `public`.
     pub runners_project_visibility: String,
+    /// A shared runner may get a project's uncommitted files, once each passes the secret scan (per project).
+    pub runners_shared_overlay: bool,
+    /// The keys a project's jobs may name, by name (per project): any other is refused at submit.
+    pub runners_job_keys: Vec<String>,
+    /// The name of a project's read-only deploy key or token for its private origin (per project).
+    pub runners_origin_key: Option<String>,
     pub sandbox_proxy_pins: ProxyPins,
     /// Where models come from instead of the Hugging Face host.
     pub search_model_mirror: Option<String>,
@@ -295,6 +315,52 @@ pub type SilentAfter = Vec<(String, u64)>;
 /// `drgnx-sandbox-proxy-pinned-addresses`: the names the proxies (a session's provider proxy, a container job's)
 /// resolve to a fixed address instead of asking DNS, in order.
 pub type ProxyPins = Vec<(String, std::net::IpAddr)>;
+
+/// One row of `drgnx-agents-model-prices`: US dollars per million tokens for a model-id prefix or a provider name.  A
+/// cache price left out is the input price (as OpenRouter documents for a missing cache price).
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ModelPrice {
+    /// The alist key.
+    #[serde(skip)]
+    pub key: String,
+    #[serde(rename = "in")]
+    pub input: f64,
+    #[serde(rename = "out")]
+    pub output: f64,
+    pub cache_read: Option<f64>,
+    pub write_5m: Option<f64>,
+    pub write_1h: Option<f64>,
+    /// The date the row was read off the provider's page (`2026-11-01`).
+    pub as_of: Option<String>,
+}
+
+/// The rows of the price table with their keys, each price a finite number of 0 or more.
+pub(crate) fn prices(pairs: Vec<(String, ModelPrice)>) -> Result<Vec<ModelPrice>, String> {
+    pairs
+        .into_iter()
+        .map(|(key, mut p)| {
+            p.key = key;
+            let all = [
+                Some(p.input),
+                Some(p.output),
+                p.cache_read,
+                p.write_5m,
+                p.write_1h,
+            ];
+            match all
+                .into_iter()
+                .flatten()
+                .find(|x| !(x.is_finite() && *x >= 0.0))
+            {
+                Some(_) => Err(format!(
+                    "{}: a price is dollars per million tokens, a number of 0 or more",
+                    p.key
+                )),
+                None => Ok(p),
+            }
+        })
+        .collect()
+}
 
 /// An `agents-matrix` value that is valid, as a message when it is not.
 pub(crate) fn check_matrix(v: &Value) -> Result<(), String> {
@@ -393,6 +459,10 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-agents-repeat-limit" => values.agents_repeat_limit = de(node)?,
         "drgnx-agents-no-progress-tokens" => values.agents_no_progress_tokens = de(node)?,
         "drgnx-agents-manager-context" => values.agents_manager_context = de(node)?,
+        "drgnx-agents-model-prices" => {
+            let profiles::Alist(pairs) = de::<profiles::Alist<ModelPrice>>(node)?;
+            values.agents_model_prices = prices(pairs).map_err(|m| Bad::at(node, None, m))?;
+        }
         "drgnx-runners-send" => {
             let v: String = de(node)?;
             if !["all", "heavy", "none"].contains(&v.as_str()) {
@@ -410,6 +480,9 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
             }
             values.runners_project_visibility = v;
         }
+        "drgnx-runners-shared-overlay" => values.runners_shared_overlay = de(node)?,
+        "drgnx-runners-job-keys" => values.runners_job_keys = de(node)?,
+        "drgnx-runners-origin-key" => values.runners_origin_key = de(node)?,
         "drgnx-sandbox-proxy-pinned-addresses" => {
             let profiles::Alist(pairs) = de::<profiles::Alist<std::net::IpAddr>>(node)?;
             values.sandbox_proxy_pins = pairs;

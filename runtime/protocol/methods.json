@@ -1817,6 +1817,108 @@
     {
       "data": {
         "$defs": {
+          "KeyName": {
+            "description": "a key name: ASCII letters, digits and _ (not a digit first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The names of the job keys the hub holds or needs, never a value: `runners/keys-held`'s answer, and the data of the\nevent `runners/need-keys`.",
+        "properties": {
+          "names": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/KeyName"
+            },
+            "type": "array"
+          }
+        },
+        "title": "KeyNames",
+        "type": "object"
+      },
+      "doc": "a job needs keys the hub does not hold (names only; to user connections): answered only by a command the user runs",
+      "name": "runners/need-keys"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`say-failed`: the planning gave up, and why.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "why": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "why"
+        ],
+        "title": "SayFailed",
+        "type": "object"
+      },
+      "doc": "a planning session gave up: its blocks did not hold, with the reasons",
+      "name": "say-failed"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`say-message`: the planning agent asks the user something (its words, agent-written).",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text"
+        ],
+        "title": "SayMessage",
+        "type": "object"
+      },
+      "doc": "a planning session asks the user something (agent-written text)",
+      "name": "say-message"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`say-proposal`: the planning session's proposal is job JOB, waiting for the user's OK unless it started.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "job": {
+            "type": "string"
+          },
+          "started": {
+            "description": "Started at once by the Autonomous preset within its cells: nothing waits for an OK.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "job",
+          "started"
+        ],
+        "title": "SayProposal",
+        "type": "object"
+      },
+      "doc": "a planning session's proposal is a job, waiting for the user's OK or started by the Autonomous preset",
+      "name": "say-proposal"
+    },
+    {
+      "data": {
+        "$defs": {
           "SettingScope": {
             "description": "Which file an agent's setting is in: `settings.el` (global), the private workspace file or the shared\n`.drgnx/settings.el` of the session's project.",
             "enum": [
@@ -8325,6 +8427,946 @@
       "classes": [
         "user"
       ],
+      "doc": "how past forecasts fared against the finished tasks: coverage of the p90 and the median actual over p50, per role and profile",
+      "name": "forecast/accuracy",
+      "params": {
+        "$defs": {
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "role": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "AccuracyParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "AccuracyRow": {
+            "additionalProperties": false,
+            "description": "How past forecasts of one class fared against what the tasks took (tokens).",
+            "properties": {
+              "coverage": {
+                "description": "The share of tasks that took no more than their p90.",
+                "format": "double",
+                "type": "number"
+              },
+              "median_ratio": {
+                "description": "The median of actual over p50.",
+                "format": "double",
+                "type": "number"
+              },
+              "n": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "profile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "role": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "role",
+              "n",
+              "coverage",
+              "median_ratio"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "rows": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/AccuracyRow"
+            },
+            "type": "array"
+          }
+        },
+        "title": "Accuracy",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a job's forecast: tokens, time and cost per task and for the plan, from the history of similar tasks, with the effect on the week's pace",
+      "name": "forecast/get",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "job": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "job"
+        ],
+        "title": "ForecastParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Basis": {
+            "additionalProperties": false,
+            "description": "What a task was forecast from, in numbers and in words.",
+            "properties": {
+              "calibrated": {
+                "description": "The p90 was scaled by past misses.",
+                "type": "boolean"
+              },
+              "label": {
+                "description": "\"12 implement tasks on sonnet, this project\", \"no history: prior\".",
+                "type": "string"
+              },
+              "level": {
+                "$ref": "#/$defs/BasisLevel"
+              },
+              "n": {
+                "description": "Finished tasks in the class; 0 for the prior.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "other_model": {
+                "description": "Some of them ran on another model: their tokens are carried and repriced.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "level",
+              "n",
+              "other_model",
+              "calibrated",
+              "label"
+            ],
+            "type": "object"
+          },
+          "BasisLevel": {
+            "description": "How close the history a forecast comes from is to the task, closest first.",
+            "oneOf": [
+              {
+                "const": "project",
+                "description": "The same role, profile and model on this project.",
+                "type": "string"
+              },
+              {
+                "const": "profile",
+                "description": "The same role, profile and model.",
+                "type": "string"
+              },
+              {
+                "const": "role",
+                "description": "The same role on any profile; tokens carried and repriced.",
+                "type": "string"
+              },
+              {
+                "const": "any",
+                "description": "Any role.",
+                "type": "string"
+              },
+              {
+                "const": "prior",
+                "description": "No history to speak of: a labelled prior with a wide range.",
+                "type": "string"
+              }
+            ]
+          },
+          "CostRange": {
+            "additionalProperties": false,
+            "description": "A cost range in one unit.  `estimate` is true for `usd-est`: tokens at API prices, not a measured bill.",
+            "properties": {
+              "estimate": {
+                "type": "boolean"
+              },
+              "p50": {
+                "format": "double",
+                "type": "number"
+              },
+              "p90": {
+                "format": "double",
+                "type": "number"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              }
+            },
+            "required": [
+              "unit",
+              "p50",
+              "p90",
+              "estimate"
+            ],
+            "type": "object"
+          },
+          "PaceEffect": {
+            "additionalProperties": false,
+            "description": "A plan's effect on one subscription's meter (an estimate: the share includes the user's outside use).",
+            "properties": {
+              "added_share": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Range"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The share the plan adds; none while there is no pace yet."
+              },
+              "estimate": {
+                "type": "boolean"
+              },
+              "exhausted_after": {
+                "description": "When it reaches 1 at the current rate once the plan's middle share is added.",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "exhausted_at": {
+                "description": "When the meter reaches 1 at the current rate.",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "provider": {
+                "type": "string"
+              },
+              "resets_at": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "runs_out_p90": {
+                "description": "The used share plus the plan's high share reaches 1 before the reset.",
+                "type": "boolean"
+              },
+              "used_share": {
+                "description": "The share of the window's limit used now, 0 to 1.",
+                "format": "double",
+                "type": "number"
+              },
+              "window": {
+                "$ref": "#/$defs/PaceWindow"
+              }
+            },
+            "required": [
+              "provider",
+              "used_share",
+              "window",
+              "estimate",
+              "runs_out_p90"
+            ],
+            "type": "object"
+          },
+          "PaceWindow": {
+            "description": "Which window a pace speaks of.",
+            "oneOf": [
+              {
+                "const": "week",
+                "description": "The meter resets more than a day away.",
+                "type": "string"
+              },
+              {
+                "const": "short",
+                "description": "The meter resets within a day.",
+                "type": "string"
+              }
+            ]
+          },
+          "Range": {
+            "additionalProperties": false,
+            "description": "A forecast's middle and its high end (the 90th percentile).",
+            "properties": {
+              "p50": {
+                "format": "double",
+                "type": "number"
+              },
+              "p90": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "p50",
+              "p90"
+            ],
+            "type": "object"
+          },
+          "TaskForecast": {
+            "additionalProperties": false,
+            "description": "One task's forecast.",
+            "properties": {
+              "active_secs": {
+                "$ref": "#/$defs/Range",
+                "description": "Seconds spent thinking or running tools."
+              },
+              "basis": {
+                "$ref": "#/$defs/Basis"
+              },
+              "cost": {
+                "default": [],
+                "description": "Empty for a profile with no price: unpriced, never zero.",
+                "items": {
+                  "$ref": "#/$defs/CostRange"
+                },
+                "type": "array"
+              },
+              "n": {
+                "description": "The task's number in its plan.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "profile": {
+                "type": "string"
+              },
+              "provider": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "role": {
+                "type": "string"
+              },
+              "tokens": {
+                "$ref": "#/$defs/Range",
+                "description": "Every token, cache reads included."
+              }
+            },
+            "required": [
+              "n",
+              "role",
+              "profile",
+              "basis",
+              "tokens",
+              "active_secs"
+            ],
+            "type": "object"
+          },
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
+          },
+          "WakeLine": {
+            "additionalProperties": false,
+            "description": "The cold wakes in a forecast: \"of which\", already inside the totals (the history holds its wakes).",
+            "properties": {
+              "cold_wakes": {
+                "$ref": "#/$defs/Range"
+              },
+              "cost": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/CostRange"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "cold_wakes"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A plan's forecast, or one session's.",
+        "properties": {
+          "active_secs": {
+            "$ref": "#/$defs/Range"
+          },
+          "cost": {
+            "default": [],
+            "description": "By unit, never summed across units.",
+            "items": {
+              "$ref": "#/$defs/CostRange"
+            },
+            "type": "array"
+          },
+          "made_at": {
+            "format": "double",
+            "type": "number"
+          },
+          "manager": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TaskForecast"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A manager's own spend per task, beside the total and not in it."
+          },
+          "pace": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/PaceEffect"
+            },
+            "type": "array"
+          },
+          "prices_as_of": {
+            "description": "The date of the oldest shipped price row in use.",
+            "type": "string"
+          },
+          "tasks": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/TaskForecast"
+            },
+            "type": "array"
+          },
+          "tokens": {
+            "$ref": "#/$defs/Range"
+          },
+          "unpriced": {
+            "default": [],
+            "description": "Profiles with no price.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "wake": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/WakeLine"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "wall_secs": {
+            "$ref": "#/$defs/Range",
+            "description": "Wall time over the plan's dependencies and the runner's slots."
+          },
+          "warnings": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "tokens",
+          "active_secs",
+          "wall_secs",
+          "prices_as_of",
+          "made_at"
+        ],
+        "title": "Forecast",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "what one more run like a session would take (one task of its role and profile); records nothing",
+      "name": "forecast/session",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "profile": {
+            "description": "Price it on another profile.",
+            "maxLength": 128,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "session"
+        ],
+        "title": "SessionForecastParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Basis": {
+            "additionalProperties": false,
+            "description": "What a task was forecast from, in numbers and in words.",
+            "properties": {
+              "calibrated": {
+                "description": "The p90 was scaled by past misses.",
+                "type": "boolean"
+              },
+              "label": {
+                "description": "\"12 implement tasks on sonnet, this project\", \"no history: prior\".",
+                "type": "string"
+              },
+              "level": {
+                "$ref": "#/$defs/BasisLevel"
+              },
+              "n": {
+                "description": "Finished tasks in the class; 0 for the prior.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "other_model": {
+                "description": "Some of them ran on another model: their tokens are carried and repriced.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "level",
+              "n",
+              "other_model",
+              "calibrated",
+              "label"
+            ],
+            "type": "object"
+          },
+          "BasisLevel": {
+            "description": "How close the history a forecast comes from is to the task, closest first.",
+            "oneOf": [
+              {
+                "const": "project",
+                "description": "The same role, profile and model on this project.",
+                "type": "string"
+              },
+              {
+                "const": "profile",
+                "description": "The same role, profile and model.",
+                "type": "string"
+              },
+              {
+                "const": "role",
+                "description": "The same role on any profile; tokens carried and repriced.",
+                "type": "string"
+              },
+              {
+                "const": "any",
+                "description": "Any role.",
+                "type": "string"
+              },
+              {
+                "const": "prior",
+                "description": "No history to speak of: a labelled prior with a wide range.",
+                "type": "string"
+              }
+            ]
+          },
+          "CostRange": {
+            "additionalProperties": false,
+            "description": "A cost range in one unit.  `estimate` is true for `usd-est`: tokens at API prices, not a measured bill.",
+            "properties": {
+              "estimate": {
+                "type": "boolean"
+              },
+              "p50": {
+                "format": "double",
+                "type": "number"
+              },
+              "p90": {
+                "format": "double",
+                "type": "number"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              }
+            },
+            "required": [
+              "unit",
+              "p50",
+              "p90",
+              "estimate"
+            ],
+            "type": "object"
+          },
+          "PaceEffect": {
+            "additionalProperties": false,
+            "description": "A plan's effect on one subscription's meter (an estimate: the share includes the user's outside use).",
+            "properties": {
+              "added_share": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Range"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The share the plan adds; none while there is no pace yet."
+              },
+              "estimate": {
+                "type": "boolean"
+              },
+              "exhausted_after": {
+                "description": "When it reaches 1 at the current rate once the plan's middle share is added.",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "exhausted_at": {
+                "description": "When the meter reaches 1 at the current rate.",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "provider": {
+                "type": "string"
+              },
+              "resets_at": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "runs_out_p90": {
+                "description": "The used share plus the plan's high share reaches 1 before the reset.",
+                "type": "boolean"
+              },
+              "used_share": {
+                "description": "The share of the window's limit used now, 0 to 1.",
+                "format": "double",
+                "type": "number"
+              },
+              "window": {
+                "$ref": "#/$defs/PaceWindow"
+              }
+            },
+            "required": [
+              "provider",
+              "used_share",
+              "window",
+              "estimate",
+              "runs_out_p90"
+            ],
+            "type": "object"
+          },
+          "PaceWindow": {
+            "description": "Which window a pace speaks of.",
+            "oneOf": [
+              {
+                "const": "week",
+                "description": "The meter resets more than a day away.",
+                "type": "string"
+              },
+              {
+                "const": "short",
+                "description": "The meter resets within a day.",
+                "type": "string"
+              }
+            ]
+          },
+          "Range": {
+            "additionalProperties": false,
+            "description": "A forecast's middle and its high end (the 90th percentile).",
+            "properties": {
+              "p50": {
+                "format": "double",
+                "type": "number"
+              },
+              "p90": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "p50",
+              "p90"
+            ],
+            "type": "object"
+          },
+          "TaskForecast": {
+            "additionalProperties": false,
+            "description": "One task's forecast.",
+            "properties": {
+              "active_secs": {
+                "$ref": "#/$defs/Range",
+                "description": "Seconds spent thinking or running tools."
+              },
+              "basis": {
+                "$ref": "#/$defs/Basis"
+              },
+              "cost": {
+                "default": [],
+                "description": "Empty for a profile with no price: unpriced, never zero.",
+                "items": {
+                  "$ref": "#/$defs/CostRange"
+                },
+                "type": "array"
+              },
+              "n": {
+                "description": "The task's number in its plan.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "profile": {
+                "type": "string"
+              },
+              "provider": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "role": {
+                "type": "string"
+              },
+              "tokens": {
+                "$ref": "#/$defs/Range",
+                "description": "Every token, cache reads included."
+              }
+            },
+            "required": [
+              "n",
+              "role",
+              "profile",
+              "basis",
+              "tokens",
+              "active_secs"
+            ],
+            "type": "object"
+          },
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
+          },
+          "WakeLine": {
+            "additionalProperties": false,
+            "description": "The cold wakes in a forecast: \"of which\", already inside the totals (the history holds its wakes).",
+            "properties": {
+              "cold_wakes": {
+                "$ref": "#/$defs/Range"
+              },
+              "cost": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/CostRange"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "cold_wakes"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A plan's forecast, or one session's.",
+        "properties": {
+          "active_secs": {
+            "$ref": "#/$defs/Range"
+          },
+          "cost": {
+            "default": [],
+            "description": "By unit, never summed across units.",
+            "items": {
+              "$ref": "#/$defs/CostRange"
+            },
+            "type": "array"
+          },
+          "made_at": {
+            "format": "double",
+            "type": "number"
+          },
+          "manager": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TaskForecast"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A manager's own spend per task, beside the total and not in it."
+          },
+          "pace": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/PaceEffect"
+            },
+            "type": "array"
+          },
+          "prices_as_of": {
+            "description": "The date of the oldest shipped price row in use.",
+            "type": "string"
+          },
+          "tasks": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/TaskForecast"
+            },
+            "type": "array"
+          },
+          "tokens": {
+            "$ref": "#/$defs/Range"
+          },
+          "unpriced": {
+            "default": [],
+            "description": "Profiles with no price.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "wake": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/WakeLine"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "wall_secs": {
+            "$ref": "#/$defs/Range",
+            "description": "Wall time over the plan's dependencies and the runner's slots."
+          },
+          "warnings": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "tokens",
+          "active_secs",
+          "wall_secs",
+          "prices_as_of",
+          "made_at"
+        ],
+        "title": "Forecast",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the caller's editor token (loopback only, the /p/PROVIDER/… paths; one per owner, kept across a restart)",
       "name": "gateway/editor-token",
       "params": {
@@ -13216,6 +14258,7 @@
               "code.ci-config",
               "machines",
               "job.container",
+              "job.keys",
               "network",
               "browser",
               "browser.web",
@@ -13444,6 +14487,7 @@
               "code.ci-config",
               "machines",
               "job.container",
+              "job.keys",
               "network",
               "browser",
               "browser.web",
@@ -14610,6 +15654,16 @@
                   "null"
                 ]
               },
+              "body": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Text"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "interfaces": {
                 "anyOf": [
                   {
@@ -14630,6 +15684,20 @@
               "number": {
                 "maxLength": 16,
                 "type": "string"
+              },
+              "profile": {
+                "maxLength": 128,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "role": {
+                "maxLength": 32,
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "status": {
                 "anyOf": [
@@ -15958,6 +17026,139 @@
       "classes": [
         "user"
       ],
+      "doc": "the keys sent to jobs (key_sent) and their reads as runners report them (key_use): names, jobs, attempts, runners, times",
+      "name": "runners/audit",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "KeyName": {
+            "description": "a key name: ASCII letters, digits and _ (not a digit first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/audit`'s params: the rows of one job, one key, or every row.",
+        "properties": {
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "key": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/KeyName"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "AuditParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "AuditKind": {
+            "description": "What an audit row records.",
+            "oneOf": [
+              {
+                "const": "sent",
+                "description": "The hub sent the key to the attempt (what the hub knows for sure).",
+                "type": "string"
+              },
+              {
+                "const": "use",
+                "description": "The job read the key, as its runner reports it.",
+                "type": "string"
+              }
+            ]
+          },
+          "AuditRow": {
+            "additionalProperties": false,
+            "description": "One `key_sent` or `key_use` record: the key's name, never its value.",
+            "properties": {
+              "at": {
+                "description": "Seconds since the epoch.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "attempt": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "job": {
+                "type": "string"
+              },
+              "key": {
+                "$ref": "#/$defs/KeyName"
+              },
+              "kind": {
+                "$ref": "#/$defs/AuditKind"
+              },
+              "runner": {
+                "type": "string"
+              },
+              "runner_reported": {
+                "default": false,
+                "description": "The runner said so; the hub can't check it (every `use` row).",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "kind",
+              "job",
+              "attempt",
+              "key",
+              "runner",
+              "at"
+            ],
+            "type": "object"
+          },
+          "KeyName": {
+            "description": "a key name: ASCII letters, digits and _ (not a digit first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/audit`'s answer, oldest first.",
+        "properties": {
+          "rows": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/AuditRow"
+            },
+            "type": "array"
+          }
+        },
+        "title": "Audit",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a runner benched again: the reference workload under the runner's caps",
       "name": "runners/bench",
       "params": {
@@ -16345,6 +17546,92 @@
         "type": "object"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "job keys to the hub's memory (never a file), sent to the runners' jobs that name them",
+      "name": "runners/keys",
+      "params": {
+        "$defs": {
+          "KeyName": {
+            "description": "a key name: ASCII letters, digits and _ (not a digit first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
+          },
+          "RunnerKeys": {
+            "additionalProperties": {
+              "maxLength": 65536,
+              "type": "string"
+            },
+            "description": "key name → value",
+            "maxProperties": 32,
+            "propertyNames": {
+              "$ref": "#/$defs/KeyName"
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/keys`' params: the job keys the editor read from the user's store. No `Debug`: it holds keys.",
+        "properties": {
+          "keys": {
+            "$ref": "#/$defs/RunnerKeys"
+          }
+        },
+        "required": [
+          "keys"
+        ],
+        "title": "KeysParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the job keys the hub holds (names only)",
+      "name": "runners/keys-held",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "KeyName": {
+            "description": "a key name: ASCII letters, digits and _ (not a digit first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The names of the job keys the hub holds or needs, never a value: `runners/keys-held`'s answer, and the data of the\nevent `runners/need-keys`.",
+        "properties": {
+          "names": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/KeyName"
+            },
+            "type": "array"
+          }
+        },
+        "title": "KeyNames",
+        "type": "object"
+      },
+      "writes": false
     },
     {
       "classes": [
@@ -17197,6 +18484,167 @@
           "jobs"
         ],
         "title": "Runner",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the planning session is stopped and forgotten (its proposal, a job, stays)",
+      "name": "say/end",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id",
+            "description": "The planning session."
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "SayById",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the user's change: the standing proposal is stopped and the planning session asked again",
+      "name": "say/revise",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "The user's change to a planning session's proposal.",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id",
+            "description": "The planning session."
+          },
+          "text": {
+            "$ref": "#/$defs/Text"
+          }
+        },
+        "required": [
+          "id",
+          "text"
+        ],
+        "title": "SayRevise",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "one prompt becomes a proposed plan: a planning chat with no repository answers with a drgnx-proposal block, which the hub checks and proposes (say-proposal, say-message, say-failed)",
+      "name": "say/start",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "What the user wants done, and where.",
+        "properties": {
+          "profile": {
+            "description": "The profile that plans (none: the `say` route, else the first `implement` route's).",
+            "maxLength": 128,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Id"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The project the plan is filed under."
+          },
+          "repo": {
+            "$ref": "#/$defs/AbsPath",
+            "description": "The repository the job runs in."
+          },
+          "text": {
+            "$ref": "#/$defs/Text",
+            "description": "The user's words."
+          }
+        },
+        "required": [
+          "text",
+          "repo"
+        ],
+        "title": "SayStart",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The planning session.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "SayStarted",
         "type": "object"
       },
       "writes": true

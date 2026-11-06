@@ -1,7 +1,8 @@
 //! `work.db` schema 10 → 11 (forecasts): `step.context` (the session's context size when the step closed) and the two
 //! forecast tables.  `forecast_sample` holds one row per finished task, derived from the `step` and `spend` tables;
 //! `forecast_made` holds what a forecast said when a job was proposed, to calibrate later ones.  Both hold numbers
-//! and ids only: no prompt, brief or transcript text.
+//! and ids only: no prompt, brief or transcript text.  `entity_manager_job` indexes the live manager sessions by
+//! their job, so the sweep finds a finished job's managers without reading the whole entity table.
 //!
 //! The move is one `BEGIN IMMEDIATE` transaction: the statements, then `schema = 11`.  A crash leaves schema 10 as
 //! it was.
@@ -25,7 +26,9 @@ create table forecast_made(
   job text not null, task text not null, made_at real not null, role text, profile text, model text,
   tokens_p50 real not null, tokens_p90 real not null, secs_p50 real not null, secs_p90 real not null,
   cost_p50 real, cost_p90 real, cost_unit text, basis text not null, n integer not null,
-  primary key (job, task));";
+  primary key (job, task));
+create index entity_manager_job on entity(json_extract(data, '$.job'))
+  where json_extract(data, '$.role') = 'manager' and retired_tx is null;";
 
 /// Move the schema-10 file on CONN to 11, in one transaction; `Ok(false)` when the file is not schema 10 when the
 /// transaction holds the lock (another process moved it, or it is another schema): nothing is done.

@@ -1,0 +1,19 @@
+{"scenario": "say/a-revision-after-the-start-makes-no-second-job", "requires": ["v1", "test-hooks"], "doc": "Under the Autonomous preset a Say proposal within the manager's cells starts with no job/approve; its planning is then done. A say/revise after that is refused with the job's id (a started job is not a proposal to replace, and a revision never cancels running work), the planning agent gets no second prompt, and the one say has one job. Pattern B: a virtual clock; each check reads after the answer that follows the fact it checks (the refusal is the method's own answer, so nothing is sent after it)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$ROOT/s.txt", "text": "say ```drgnx-proposal\\nsay {\"title\": \"Two fixes\", \"tasks\": [{\"n\": 1, \"title\": \"Fix one\", \"role\": \"implement\", \"profile\": \"mock-gw\", \"deps\": [], \"body\": \"Fix the first.\"}, {\"n\": 2, \"title\": \"Fix two\", \"role\": \"implement\", \"profile\": \"mock-gw\", \"deps\": [], \"body\": \"Fix the second.\"}]}\\nsay ```\nsay ```drgnx-proposal\\nsay {\"title\": \"Two fixes and the docs\", \"tasks\": [{\"n\": 1, \"title\": \"Fix both\", \"role\": \"implement\", \"profile\": \"mock-gw\", \"deps\": [], \"body\": \"Fix both.\"}]}\\nsay ```\n"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/s.txt\" \"--log\" \"$ROOT/s.log\")) (\"mock-gw\" :ai claude-openrouter :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/w.log\")))) (drgnx-agents-routes ((implement \"mock-claude\"))) (drgnx-agents-matrix (:preset autonomous)))\n"}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "say/start", "params": {"text": "fix the two bugs", "repo": "$ROOT/repo"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "say-proposal", "data": {"id": "$sid", "job": "$capture:job"}}, "within_ms": 30000}
+{"do": "sql_expect", "sql": "select count(*) from job where id = '$job' and status <> 'proposed'", "rows": [[1]]}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "say/revise", "params": {"id": "$sid", "text": "and the docs"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "error": {"code": "$any", "message": "$job has started: stop it, then say it again"}}, "within_ms": 10000}
+{"do": "sql_expect", "sql": "select count(*), sum(id = '$job') from job", "rows": [[1, 1]]}
+{"do": "file_grep", "paths": ["$ROOT/s.log"], "absent": "and the docs"}

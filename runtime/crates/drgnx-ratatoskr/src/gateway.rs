@@ -323,22 +323,23 @@ impl Gate {
         chain: &[crate::settings::ChainStep],
     ) -> Result<Vec<crate::embed::ProviderEmbedder>, Error> {
         let (_, port) = self.engine()?;
-        let found: Vec<(String, Kind)> = read(&self.providers)
+        let found: Vec<(String, Kind, String)> = read(&self.providers)
             .values()
             .filter(|p| matches!(p.kind, Kind::Tei | Kind::Ollama) && p.caps.embed)
-            .map(|p| (p.id.clone(), p.kind))
+            .map(|p| (p.id.clone(), p.kind, p.base.to_string()))
             .collect();
         if found.is_empty() {
             return Ok(Vec::new());
         }
         let token = self.hub_embed_token()?;
         let mut out = Vec::new();
-        for (id, kind) in found {
+        for (id, kind, base) in found {
             match kind {
                 Kind::Tei => out.push(crate::embed::ProviderEmbedder::tei(
                     *port,
                     token.clone(),
                     &id,
+                    &base,
                 )),
                 _ => {
                     if let Some(model) = chain
@@ -350,6 +351,7 @@ impl Gate {
                             *port,
                             token.clone(),
                             &id,
+                            &base,
                             model,
                         ));
                     }

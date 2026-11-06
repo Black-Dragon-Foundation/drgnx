@@ -109,6 +109,8 @@
     (should (equal (funcall enc 'drgnx-agents-away-after 600) "600"))
     (should (equal (funcall enc 'drgnx-agents-job-memory "4G") "\"4G\""))
     (should (equal (funcall enc 'drgnx-agents-manager-context 0.7) "0.7"))
+    (should (equal (funcall enc 'drgnx-agents-model-prices '(("m" :in 1 :out 2 :cache-read 0.5 :as-of "2026-11-01")))
+                   "{\"m\":{\"in\":1,\"out\":2,\"cache_read\":0.5,\"as_of\":\"2026-11-01\"}}"))
     ;; the runners' per-project settings and Hrafn's model mirror, as their runtime types
     (should (equal (funcall enc 'drgnx-runners-send "heavy") "\"heavy\""))
     (should (equal (funcall enc 'drgnx-runners-heavy '("cargo test" "fleet")) "[\"cargo test\",\"fleet\"]"))

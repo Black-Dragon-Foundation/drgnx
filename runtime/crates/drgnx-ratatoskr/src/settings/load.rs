@@ -373,12 +373,22 @@ fn decode_default(name: &str, default: &RuntimeValues, values: &mut RuntimeValue
         "drgnx-agents-manager-context" => {
             values.agents_manager_context = default.agents_manager_context;
         }
+        "drgnx-agents-model-prices" => {
+            values.agents_model_prices = default.agents_model_prices.clone();
+        }
         "drgnx-runners-send" => values.runners_send = default.runners_send.clone(),
         "drgnx-runners-heavy" => values.runners_heavy = default.runners_heavy.clone(),
         "drgnx-runners-image" => values.runners_image = default.runners_image.clone(),
         "drgnx-runners-weight" => values.runners_weight = default.runners_weight,
         "drgnx-runners-project-visibility" => {
             values.runners_project_visibility = default.runners_project_visibility.clone();
+        }
+        "drgnx-runners-shared-overlay" => {
+            values.runners_shared_overlay = default.runners_shared_overlay;
+        }
+        "drgnx-runners-job-keys" => values.runners_job_keys = default.runners_job_keys.clone(),
+        "drgnx-runners-origin-key" => {
+            values.runners_origin_key = default.runners_origin_key.clone();
         }
         "drgnx-sandbox-proxy-pinned-addresses" => {
             values.sandbox_proxy_pins = default.sandbox_proxy_pins.clone();

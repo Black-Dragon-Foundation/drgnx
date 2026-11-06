@@ -375,6 +375,22 @@ drgnx runtime install [--prefix DIR] # <data>/bin/ratatoskr (by rename), links D
 `runtime install` refuses a binary built with test hooks. The build's commit (`ratatoskr version --json`) is what the
 doctor compares with the checkout.
 
+## Fonts
+
+The look ([look guide](look.md#fonts)) uses Adwaita Sans for the interface and JetBrains Mono for code. Neither is
+installed by install.sh; a font that is missing falls back down its list (Adwaita Mono, then the generic monospace;
+Inter, then the generic sans-serif), and `drgnx doctor` names each role that fell back and how to install the font
+(the `fonts` row appears once a graphical frame has been checked):
+
+| System | Packages |
+| --- | --- |
+| Fedora | `adwaita-sans-fonts`, `jetbrains-mono-nl-fonts` (the `-nl` build has no ligatures; image-based Fedora: install them in the toolbox) |
+| Arch | `adwaita-fonts`, `ttf-jetbrains-mono` |
+| Ubuntu 26.04 | `fonts-adwaita-sans`, `fonts-jetbrains-mono` |
+| macOS (Homebrew) | `font-adwaita`, `font-jetbrains-mono` (casks) |
+
+Where Adwaita Sans is not packaged, Inter is the fallback (`inter-font` on Arch, `fonts-inter` on Ubuntu).
+
 ## A browser for agents
 
 Agent sessions on Linux can drive a headless Chromium. install.sh and `drgnx update` never download one. If your

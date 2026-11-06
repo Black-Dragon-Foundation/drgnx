@@ -26,6 +26,7 @@ const SHIPPED: &str = concat!(
     drop table worktree_base;
     drop table forecast_sample;
     drop table forecast_made;
+    drop index entity_manager_job;
     alter table step drop column context;
     alter table step drop column acp;
     alter table step drop column head;

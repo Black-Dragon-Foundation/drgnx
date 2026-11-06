@@ -1,6 +1,7 @@
-//! H1: every git command sleipnir's sync runs is hardened. A fake `git` first on `PATH` records each command's
-//! arguments and `GIT_*` environment, then runs the real git. The test process carries hostile `GIT_*` variables
-//! (a config that would start an fsmonitor program, another git dir) that must never reach git.
+//! Nothing a job planted runs when sync touches its slot: every git command sleipnir's sync runs is hardened. A fake
+//! `git` first on `PATH` records each command's arguments and `GIT_*` environment, then runs the real git. The test
+//! process carries hostile `GIT_*` variables (a config that would start an fsmonitor program, another git dir) that
+//! must never reach git.
 //!
 //! This file holds one test: it sets the process environment, so it runs alone in its own binary.
 

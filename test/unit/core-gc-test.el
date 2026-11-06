@@ -84,6 +84,33 @@ pause may collect again."
     (drgnx-test-idle 1.5)
     (should (= gcs 2))))
 
+(ert-deftest drgnx-gc/a-pause-after-a-collection-gives-the-freed-heap-back-once ()
+  "Pattern D (virtual clock).  A collection gives its memory back to malloc, not to the system: the first pause after
+a collection, whichever collected, trims the heap (`malloc-trim') once; a pause with no collection since trims nothing,
+and an idle collection trims in its own pause."
+  ;; the macro's counted `garbage-collect' leaves `gcs-done' alone: only the collection stated below counts
+  (drgnx-gc-test--pause 300000
+    (let ((trims 0) (gcs-done gcs-done))
+      (cl-letf (((symbol-function 'malloc-trim) (lambda (&rest _) (cl-incf trims) t)))
+        (setq drgnx-gc--trimmed gcs-done)
+        (drgnx-test-idle 1.5)
+        (should (= trims 0))
+        (setq gcs-done (1+ gcs-done))                     ; a collection, as one between two pauses
+        (drgnx-test-advance 1)
+        (drgnx-test-idle 1.5)
+        (should (= trims 1))
+        (drgnx-test-advance 1)
+        (drgnx-test-idle 1.5)
+        (should (= trims 1)))))
+  (drgnx-gc-test--pause 600000
+    (let ((trims 0) (gcs-done gcs-done))
+      (cl-letf (((symbol-function 'malloc-trim) (lambda (&rest _) (cl-incf trims) t))
+                ((symbol-function 'garbage-collect) (lambda () (cl-incf gcs) (setq gcs-done (1+ gcs-done)) nil)))
+        (setq drgnx-gc--trimmed gcs-done)
+        (drgnx-test-idle 1.5)
+        (should (= gcs 1))
+        (should (= trims 1))))))
+
 (ert-deftest drgnx-gc/batch-and-a-daemon-without-a-client-frame-never-collect-at-idle ()
   "Pattern D.  Nobody types in a batch Emacs or in a daemon no client is connected to: no idle collection there."
   (should noninteractive)

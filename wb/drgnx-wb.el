@@ -17,6 +17,12 @@
 (require 'drgnx-modules-helpers)
 (require 'drgnx-state-intent)
 (require 'drgnx-ui-kit)
+(require 'drgnx-faces)                  ; `drgnx-look-hover-control', the selection faces
+(require 'drgnx-pixels)                 ; `drgnx-look-pixel-width'
+(require 'drgnx-icons)                  ; `drgnx-look-icon'
+(require 'drgnx-type-faces)             ; `drgnx-ui-text', `drgnx-ui-heading'
+(declare-function drgnx-look-ui-line-spacing "drgnx-look-density" (&optional line-px density scale))
+(declare-function drgnx-look-density-value "drgnx-look-density" (key &optional density))
 
 (defcustom drgnx-wb-dock-columns 32
   "Width of the left dock, in columns, the first time it shows (later: the width it had)."
@@ -74,7 +80,166 @@ so the whole row is the bar's colour and not the header line's.  FILLED: STRING 
 The ✕ comes first: a title with buttons (Buffers) fills the dock's width, so one at the end would be clipped.  A
 space before it keeps it off the frame's edge."
   (drgnx-wb-bar (concat " " (drgnx-wb-close-button #'drgnx-wb--close-dock-click "Close sidebar")
-                        (if (string-prefix-p " " title) "" " ") title)))
+                        " " (let ((chevron (drgnx-look-icon 'chevron-down 'drgnx-ui-heading)))
+                              (if (string-empty-p chevron) "" (concat chevron " ")))
+                        (drgnx-wb--heading (string-trim-left title)))))
+
+(defun drgnx-wb--heading (title)
+  "TITLE in the heading face, keeping the faces and properties it has (the buttons of a title with some)."
+  (let ((s (copy-sequence title)))
+    (add-face-text-property 0 (length s) 'drgnx-ui-heading t s)
+    s))
+
+;;;; Rows: the UI font, git marks at the right edge, the selected row, the hover-revealed ⋯
+
+(defconst drgnx-wb--control "⋯" "A row's menu control; `drgnx-look-hover-control' hides it until the row is hovered.")
+
+(defvar drgnx-wb--mark-measures 0 "How many times the tail's geometry was measured (tests read it).")
+(defvar drgnx-wb--tail-memo (make-hash-table :test #'equal)
+  "(GENERATION CHAR-WIDTH CHAR-HEIGHT SCALE) → the tail's geometry (DOTS-PX MARK-PX GAP-PX PAD-PX).  Bounded: cleared
+beyond 16 entries (a zoom or a font change adds one).")
+
+(defun drgnx-wb-mark-memo-clear ()
+  "Forget the measured geometry of the rows' right edge (tests, and a theme change)."
+  (clrhash drgnx-wb--tail-memo)
+  (setq drgnx-wb--mark-measures 0))
+
+(defun drgnx-wb--tail-geometry ()
+  "(DOTS MARK GAP PAD): the widths in pixels of the ⋯, of a git mark in the small code face, of the gap between them
+and of the padding at the edge.  Measured when the fonts, the character cell or the scale change, not per row."
+  (let ((key (list drgnx-pixels-generation (frame-char-width) (frame-char-height) (drgnx-pixels-scale))))
+    (or (gethash key drgnx-wb--tail-memo)
+        (progn
+          (cl-incf drgnx-wb--mark-measures)
+          (when (> (hash-table-count drgnx-wb--tail-memo) 16) (clrhash drgnx-wb--tail-memo))
+          (let ((scale (drgnx-pixels-scale)))
+            (puthash key (list (drgnx-look-pixel-width drgnx-wb--control 'drgnx-ui-text)
+                               (drgnx-look-pixel-width "M" 'drgnx-code-small)
+                               (round (* 4 scale)) (round (* 8 scale)))
+                     drgnx-wb--tail-memo))))))
+
+(defun drgnx-wb-git-mark-face (status)
+  "The status face of a git STATUS mark: modified and renamed warn, added and untracked ok, deleted and conflicts fail."
+  (pcase status
+    ((or 'modified 'renamed) 'drgnx-status-warn)
+    ((or 'added 'untracked) 'drgnx-status-ok)
+    ((or 'deleted 'conflict) 'drgnx-status-fail)
+    (_ 'drgnx-status-info)))
+
+(defun drgnx-wb-row-tail (mark face shown)
+  "The string at a row's right edge: MARK (a string or nil) in FACE and the code face, then the ⋯ control, SHOWN in
+its real face or hidden until the row is hovered.  Both are placed in pixels from the window's right edge, so
+the marks of all rows line up; the whole string carries the row's mouse face."
+  (pcase-let ((`(,dots ,mark-px ,gap ,pad) (drgnx-wb--tail-geometry)))
+    (propertize (concat (propertize " " 'display `(space :align-to (- right (,(+ pad dots gap mark-px)))))
+                        (if mark (propertize mark 'face (list face 'drgnx-code-small)) "")
+                        (propertize " " 'display `(space :align-to (- right (,(+ pad dots)))))
+                        (drgnx-look-hover-control drgnx-wb--control shown)
+                        (propertize " " 'display `(space :width (,pad))))
+                'mouse-face 'drgnx-hover-row)))
+
+(defun drgnx-wb-row-tail-overlay (eol mark face shown)
+  "Put the tail (see `drgnx-wb-row-tail') of the row ending at EOL in an overlay that remembers MARK and FACE."
+  (let ((o (make-overlay eol eol)))
+    (overlay-put o 'drgnx-git t)
+    (overlay-put o 'drgnx-row-tail (cons mark face))
+    (overlay-put o 'after-string (drgnx-wb-row-tail mark face shown))
+    o))
+
+(defvar-local drgnx-wb--selected-overlay nil "The overlay on the selected row (point's).")
+(defvar-local drgnx-wb--tail-shown nil "The tail overlay whose ⋯ is drawn in its real face now.")
+
+(defun drgnx-wb--set-tail-shown (o shown)
+  "Redraw the tail overlay O with its ⋯ SHOWN or hidden."
+  (when (overlayp o)
+    (pcase-let ((`(,mark . ,face) (overlay-get o 'drgnx-row-tail)))
+      (overlay-put o 'after-string (drgnx-wb-row-tail mark face shown)))))
+
+(defun drgnx-wb-selection-sync ()
+  "Mark point's row as the selected one: `drgnx-selected' with the focus ring while this buffer's window is the
+selected window, `drgnx-selected-quiet' otherwise.  The row's ⋯ is shown in its real face, the previous row's hidden
+again.  Cheap: two overlays are touched."
+  (let* ((window (get-buffer-window (current-buffer))) (focused (and window (eq window (selected-window))))
+         (beg (pos-bol)) (end (min (point-max) (1+ (pos-eol)))))
+    (unless (overlayp drgnx-wb--selected-overlay)
+      (setq drgnx-wb--selected-overlay (make-overlay beg end nil t))
+      (overlay-put drgnx-wb--selected-overlay 'drgnx-row-selected t)
+      (overlay-put drgnx-wb--selected-overlay 'priority 5))
+    (move-overlay drgnx-wb--selected-overlay beg end)
+    (overlay-put drgnx-wb--selected-overlay 'face (if focused '(drgnx-selected drgnx-focus) 'drgnx-selected-quiet))
+    (let ((now nil))                    ; post-command: a primitive loop, no closure
+      (dolist (o (overlays-in beg end)) (when (and (not now) (overlay-get o 'drgnx-row-tail)) (setq now o)))
+      (unless (eq now drgnx-wb--tail-shown)
+        (drgnx-wb--set-tail-shown drgnx-wb--tail-shown nil)
+        (drgnx-wb--set-tail-shown now t)
+        (setq drgnx-wb--tail-shown now)))))
+
+(defun drgnx-wb--selected-changed (_data)
+  "The store's `selected-changed': the dock buffers' selected rows follow the focus (ring or quiet)."
+  (dolist (w (drgnx-wb--dock-windows))
+    (with-current-buffer (window-buffer w)
+      (when (local-variable-p 'drgnx-wb--selected-overlay) (drgnx-wb-selection-sync)))))
+
+(defvar drgnx-wb--rows-buffers nil
+  "The dock buffers whose rows are UI rows (`drgnx-wb-rows-setup'); killed ones are dropped as the list is walked.")
+
+(defvar-local drgnx-wb--rows-key nil
+  "What this dock buffer's row spacing was made for (`drgnx-wb--rows-fit'), an integer; nil: none made yet.")
+
+(defun drgnx-wb-rows-setup ()
+  "Make the current dock buffer's rows UI rows: `default' remapped to the UI text face and the row height of the
+density, on the graphical frame that shows it (or the selected one).  Call it from the buffer's major mode; a density
+change, a scale change and the buffer's first showing on a graphical frame fit the rows again
+\(`drgnx-wb-rows-follow')."
+  (face-remap-add-relative 'default 'drgnx-ui-text)
+  (setq-local drgnx-wb--selected-overlay nil drgnx-wb--tail-shown nil drgnx-wb--rows-key nil)
+  (add-hook 'post-command-hook #'drgnx-wb-selection-sync nil t)
+  (unless (memq (current-buffer) drgnx-wb--rows-buffers) (push (current-buffer) drgnx-wb--rows-buffers))
+  (drgnx-wb--rows-fit (let ((w (get-buffer-window nil t))) (if w (window-frame w) (selected-frame)))))
+
+(defun drgnx-wb--rows-fit (frame)
+  "Give the current dock buffer the density's tree row on FRAME (its `line-spacing'), when FRAME is graphical and
+what the spacing depends on moved since: the row at FRAME's scale, FRAME's line height, the fonts.  A terminal frame
+leaves the spacing as it is."
+  (when (and (fboundp 'drgnx-look-ui-line-spacing) (frame-live-p frame) (display-graphic-p frame))
+    (let* ((scale (drgnx-pixels-scale frame))
+           (key (+ (round (* scale (drgnx-look-density-value 'tree-row))) (* 1000 (frame-char-height frame))
+                   (* 1000000 (mod drgnx-pixels-generation 1000)))))
+      (unless (eql key drgnx-wb--rows-key)
+        (setq-local drgnx-wb--rows-key key)
+        (setq-local line-spacing (drgnx-look-ui-line-spacing (drgnx-wb--natural-row-height frame) nil scale))))))
+
+(defun drgnx-wb-rows-refresh (&optional frame)
+  "Fit the dock buffers' rows again (`drgnx-wb--rows-fit'): those shown on FRAME, or with no FRAME every one, on the
+frame that shows it (else the selected frame).  On `drgnx-look-density-changed-hook'."
+  (setq drgnx-wb--rows-buffers (seq-filter #'buffer-live-p drgnx-wb--rows-buffers))
+  (dolist (b drgnx-wb--rows-buffers)
+    (let ((w (get-buffer-window b (or frame t))))
+      (when (or w (null frame))
+        (with-current-buffer b (drgnx-wb--rows-fit (if w (window-frame w) (selected-frame))))))))
+
+(defun drgnx-wb--rows-frame-changed (data)
+  "The store's `windows-changed' and `frame-resized' (idle): the dock buffers FRAME shows fit its scale (a dock
+buffer made before any graphical frame, in a daemon, gets its rows when one first shows it)."
+  (when-let* ((frame (plist-get data :frame)) ((frame-live-p frame))) (drgnx-wb-rows-refresh frame)))
+
+(defun drgnx-wb-rows-follow ()
+  "The dock's rows follow the density, the scale and the frames that show them.  From a dock section's setup (the
+subscriptions and the hook are recorded there, and go with the module)."
+  (drgnx-state-subscribe 'windows-changed #'drgnx-wb--rows-frame-changed)
+  (drgnx-state-subscribe 'frame-resized #'drgnx-wb--rows-frame-changed)
+  (add-hook 'drgnx-look-density-changed-hook #'drgnx-wb-rows-refresh))
+
+(defun drgnx-wb--natural-row-height (&optional frame)
+  "The height in pixels of a dock row on FRAME (default: the selected one) before any line spacing: text in the UI
+face with an icon, a git mark in the small code face and the ⋯ on it, measured in a scratch buffer (the tallest of
+them sets the line)."
+  (with-temp-buffer
+    (face-remap-add-relative 'default 'drgnx-ui-text)
+    (setq-local line-spacing 0)         ; the frame's own spacing (the code line) is not part of the row
+    (insert "Xg " (drgnx-look-icon 'file) (propertize "M" 'face 'drgnx-code-small) (propertize drgnx-wb--control 'face 'drgnx-ui-text))
+    (cl-progv drgnx-pixels--quiet-hooks (make-list (length drgnx-pixels--quiet-hooks) nil)
+      (cdr (buffer-text-pixel-size (current-buffer) (and frame (frame-first-window frame)))))))
 
 (defun drgnx-wb-display-name (name)
   "NAME as it can be shown on one row: control characters (a newline in a file name) as ^X."

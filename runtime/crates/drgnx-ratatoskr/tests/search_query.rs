@@ -7,6 +7,7 @@
 
 mod support;
 
+use drgnx_ratatoskr::search::project::REQUEST_KEYS;
 use rmcp::model::{
     CallToolRequestParams, ClientCapabilities, ClientConfig, Implementation, ProtocolVersion,
 };
@@ -393,16 +394,17 @@ fn typing_method_holds_tier2() {
         id += 1;
         call(c, id, "search/status", json!({"root": proj}))["result"].clone()
     };
-    // a request is in flight or about to be: the keys are not all done yet
+    // a request is in flight or about to be, and it is not the last: more keys lack vectors than one request holds
     skuld::wait_until("tier 2 is running", FAILED_AFTER.as_secs() * 6, || {
         let s = status(&mut c);
-        (s["tier2"] == "running" && s["lag"]["chunks_behind"].as_u64().unwrap_or(0) > 0)
-            .then_some(())
+        (s["tier2"] == "running"
+            && s["lag"]["chunks_behind"].as_u64().unwrap_or(0) > u64::from(REQUEST_KEYS))
+        .then_some(())
     });
     let typed = call(&mut c, 900, "search/typing", json!({}));
     assert_eq!(typed["result"], json!({}), "{typed}");
-    // typing holds the next request: tier 2 reaches `typing` with chunks still lacking vectors (or, if the last
-    // request was already in flight, is already idle with none lacking)
+    // typing holds the next request: tier 2 reaches `typing` with chunks still lacking vectors (or, on a machine slow
+    // enough that the hold ended inside that request, is already idle with none lacking)
     let s = skuld::wait_until(
         "tier 2 holds or is done",
         FAILED_AFTER.as_secs() * 6,
@@ -414,6 +416,33 @@ fn typing_method_holds_tier2() {
     if s["tier2"] == "typing" {
         assert!(s["lag"]["chunks_behind"].as_u64().unwrap() > 0, "{s}");
     }
+}
+
+/// Pattern C. With the default settings, whose `embed` role names the TEI server at 127.0.0.1:8080 (nothing serves it
+/// in the test's container), tier 2 ends `idle` once the built-in model has every chunk's vector: a server that does
+/// not answer is not one of its embedders, so it neither gets a request nor marks tier 2 failed.
+#[test]
+fn tier2_is_idle_when_the_default_server_does_not_answer() {
+    let root = Root::new();
+    install_model(&root);
+    let proj = project(&root, "proj");
+    let (_hub, mut c) = ready(&root, 1);
+    let started = call(&mut c, 1, "search/index", json!({"root": proj}));
+    assert_eq!(started["result"]["started"], true, "{started}");
+    let mut id = 1;
+    let s = skuld::wait_until(
+        "every chunk has its vector and tier 2 has settled",
+        FAILED_AFTER.as_secs() * 10,
+        || {
+            id += 1;
+            let s = call(&mut c, id, "search/status", json!({"root": proj}))["result"].clone();
+            (s["lag"]["chunks_behind"] == 0
+                && s["lag"]["chunks_total"].as_u64() > Some(0)
+                && (s["tier2"] == "idle" || s["tier2"] == "failed"))
+                .then_some(s)
+        },
+    );
+    assert_eq!(s["tier2"], "idle", "{s}");
 }
 
 /// Pattern C. With the real built-in model, each of ten questions finds its file in the top five, and the answer says the

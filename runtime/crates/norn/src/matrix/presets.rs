@@ -67,6 +67,8 @@ fn row(a: Action, p: Preset) -> [Cell; 3] {
         (Machines, _) => [ALLOW, ALLOW, NEVER],
         (JobContainer, Cautious) => [ASK, ASK, NEVER],
         (JobContainer, _) => [ALLOW, ALLOW, NEVER],
+        (JobKeys, Autonomous) => [ALLOW, ALLOW, NEVER],
+        (JobKeys, _) => [ASK, ASK, NEVER],
         (Network, Cautious) => [ASK, ASK, ALLOW],
         (Network, _) => [ALLOW, ALLOW, ALLOW],
         (Browser, Cautious) => [ASK, ASK, ASK],

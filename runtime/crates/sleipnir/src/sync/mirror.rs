@@ -141,6 +141,22 @@ impl Mirror {
         Ok(ran.code == Some(0))
     }
 
+    /// The commits the mirror's refs point at, each once: what a bundle from the hub may leave out.
+    pub fn ref_tips(&self) -> Result<Vec<String>> {
+        let out = run(
+            "list the mirror's refs",
+            self.git().cmd(["for-each-ref", "--format=%(objectname)"]),
+            None,
+        )?;
+        let mut tips: Vec<String> = Vec::new();
+        for t in String::from_utf8_lossy(&out).lines() {
+            if !t.is_empty() && !tips.iter().any(|x| x == t) {
+                tips.push(t.to_string());
+            }
+        }
+        Ok(tips)
+    }
+
     /// Fetches the origin's branches and tags into `refs/origin/`. A token is served to git by `sleipnir
     /// credential-helper` from this process's memory; a deploy key goes into a per-fetch `ssh-agent`, killed after
     /// the fetch. Neither is ever written to a file, and no helper or key from any config is used.
