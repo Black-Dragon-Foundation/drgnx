@@ -171,9 +171,10 @@ deny-list names is never registered, so the notes are in no document, snapshot o
 `History::expire(now)` removes the undone branches and frozen worktrees (`History::freeze(branch, at)`; a roll back
 freezes its `undone/<record>` at once) set aside 90 days or more before `now`, unless pinned (`History::pin`), with their
 documents and anchors. `History::compact(cap, author, now)`, when the history is over the cap, cuts every document
-shallow (Loro's shallow snapshot) at the newest record that is not among its newest 50 and not past an anchor's: a cut
-never passes a live reference, and the anchors still resolve, in the text then as well as now. `compact_keeping` takes the
-number of records to keep. The cut is the `doc_cut` table (schema 4), and one `compact` record says it happened. A revert
+shallow (Loro's shallow snapshot) at the oldest live reference: an anchor's record, or another branch of the document,
+live, frozen or undone, from its first record on (an undone branch from its roll back's); with nothing pinning it, just
+before the newest record. A cut never passes a live reference, so the anchors still resolve, in the text then as well as
+now; an expired branch pins no more. Under the cap (default 2 GiB) nothing is cut. The cut is the `doc_cut` table (schema 4), and one `compact` record says it happened. A revert
 of a record at or before a cut is refused with the reason (the file was compacted, its history up to that record is
 gone). `History::pins()` names what keeps the size up, the biggest first: pinned branches, set-aside branches, and each
 owner's anchors, for the doctor's `history` row (with the hub's watch budget and resync counter).

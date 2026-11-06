@@ -131,29 +131,76 @@ fn cut_never_passes_a_live_reference() {
     // an anchor made after r2 needs the history from r2 on
     let a = f.h.anchor(f.doc, f.br, 1, Side::Right, "review").unwrap();
     let now_line = f.h.resolve(a, When::Now).unwrap();
-    let rs: Vec<OpId> = ["c\n", "d\n", "e\n"]
-        .iter()
-        .map(|t| f.step(Kind::Edits, f.user, t))
-        .collect();
-    let done = f.h.compact_keeping(0, 2, f.user, 9.0).unwrap();
+    let rs = pile(&mut f);
+    let shift: usize = (0..60).map(|i| format!("l{i}\n").len()).sum();
+    let done = f.h.compact(0, f.user, 9.0).unwrap();
     assert_eq!(done.cuts, 1);
     assert_eq!(
         f.h.cut(f.doc, f.br).unwrap(),
         Some(r2),
-        "not past the anchor"
+        "not past the anchor, though 60 records are newer"
     );
     let then = f.h.resolve(a, When::Then).unwrap();
     assert_eq!(then.text_then.as_deref(), Some("b"));
-    assert_eq!(
-        f.h.resolve(a, When::Now).unwrap().pos,
-        now_line.pos + "c\nd\ne\n".len()
-    );
+    assert_eq!(f.h.resolve(a, When::Now).unwrap().pos, now_line.pos + shift);
     // records after the cut still revert
-    f.h.preview_revert(f.br, &[rs[2]]).unwrap();
+    f.h.preview_revert(f.br, &[rs[59]]).unwrap();
     assert!(f.h.preview_revert(f.br, &[r1]).is_err());
-    // the compaction is a record
-    let last = (1..=20).map(OpId).filter_map(|i| f.h.op(i).ok()).last();
-    assert_eq!(last.unwrap().kind, Kind::Compact);
+    // the compaction is a record that stays
+    let n = f.h.count("op").unwrap();
+    assert_eq!(f.h.op(OpId(n)).unwrap().kind, Kind::Compact);
+    assert!(f.h.op(r1).is_ok(), "the records stay");
+
+    // a live branch pins the cut at its first record
+    let mut f = fx();
+    f.step(Kind::Edits, f.user, "a\n");
+    let b =
+        f.h.branch("wt/b", BranchKind::Worktree, Some("c1"))
+            .unwrap();
+    f.h.activate(f.doc, b, || unreachable!("b shares the seed"))
+        .unwrap();
+    let rb = f.step(Kind::Edits, f.user, "b\n");
+    pile(&mut f);
+    f.h.compact(0, f.user, 9.0).unwrap();
+    assert_eq!(f.h.cut(f.doc, f.br).unwrap(), Some(rb), "a live branch");
+
+    // a frozen worktree pins it too, until it expires
+    let mut f = fx();
+    f.step(Kind::Edits, f.user, "a\n");
+    let b =
+        f.h.branch("wt/b", BranchKind::Worktree, Some("c1"))
+            .unwrap();
+    f.h.activate(f.doc, b, || unreachable!("b shares the seed"))
+        .unwrap();
+    let rb = f.step(Kind::Edits, f.user, "b\n");
+    f.h.park(f.doc, b).unwrap();
+    f.h.freeze(b, 10.0).unwrap();
+    pile(&mut f);
+    f.h.compact(0, f.user, 9.0).unwrap();
+    assert_eq!(f.h.cut(f.doc, f.br).unwrap(), Some(rb), "a frozen worktree");
+    assert_eq!(f.h.expire(10.0 + 91.0 * DAY).unwrap(), vec![b]);
+    f.h.compact(0, f.user, 9.0).unwrap();
+    assert!(
+        f.h.cut(f.doc, f.br).unwrap().unwrap() > rb,
+        "expired, it pins no more"
+    );
+
+    // an undone branch that has not expired
+    let mut f = fx();
+    let (rev, _) = f.rolled_back(10.0);
+    pile(&mut f);
+    f.h.compact(0, f.user, 9.0).unwrap();
+    assert_eq!(f.h.cut(f.doc, f.br).unwrap(), Some(rev), "an undone branch");
+    f.h.expire(10.0 + 91.0 * DAY).unwrap();
+    f.h.compact(0, f.user, 9.0).unwrap();
+    assert!(f.h.cut(f.doc, f.br).unwrap().unwrap() > rev);
+}
+
+/// 60 more records on the live branch: more than the 50 newest, so no count of records protects what a reference pins.
+fn pile(f: &mut Fx) -> Vec<OpId> {
+    (0..60)
+        .map(|i| f.step(Kind::Edits, f.user, &format!("l{i}\n")))
+        .collect()
 }
 
 #[test]
@@ -164,11 +211,12 @@ fn revert_past_cut_is_refused_with_reason() {
         .map(|t| f.step(Kind::Edits, f.user, t))
         .collect();
     let before = f.h.size().unwrap();
-    f.h.compact_keeping(0, 2, f.user, 9.0).unwrap();
-    assert_eq!(f.h.cut(f.doc, f.br).unwrap(), Some(rs[2]));
+    f.h.compact(0, f.user, 9.0).unwrap();
+    // nothing pins it: the newest record stays revertable, the rest is cut
+    assert_eq!(f.h.cut(f.doc, f.br).unwrap(), Some(rs[3]));
     let e = f.h.preview_revert(f.br, &[rs[0]]).unwrap_err().to_string();
     assert!(e.contains("compacted"), "{e}");
-    assert!(f.h.preview_revert(f.br, &[rs[2]]).is_err());
+    assert!(f.h.preview_revert(f.br, &[rs[3]]).is_err());
     let p = f.h.preview_revert(f.br, &[rs[4]]).unwrap();
     f.h.apply_revert(p.id, &[], Mode::KeepMine, f.user, 10.0)
         .unwrap();

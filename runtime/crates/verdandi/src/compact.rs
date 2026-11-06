@@ -1,8 +1,8 @@
 //! Size, expiry and compaction.  The history is capped ([`DEFAULT_CAP`], 2 GiB per project).  Branches that are set
 //! aside (an undone set, a frozen worktree) expire after [`EXPIRY_SECS`] (90 days) unless pinned.  Over the cap,
-//! each document is cut shallow at the oldest history something still needs: never past an anchor, never within the
-//! newest [`KEEP_RECORDS`] records that touched it.  A record at or before the cut can no longer be reverted, and the
-//! revert says so.  Nothing here reads a clock: `now` is a parameter.
+//! each document is cut shallow at the oldest live reference: an anchor, or another branch of the document (live,
+//! frozen, or undone) that has not expired.  A record at or before the cut can no longer be reverted, and the revert
+//! says so.  Nothing here reads a clock: `now` is a parameter.
 
 use crate::store::{History, Kind, Record, put_op_tx, put_update};
 use crate::{BranchId, DocId, Error, Frontier, OpId, PeerId, Result, loro};
@@ -15,9 +15,6 @@ pub const DEFAULT_CAP: u64 = 2 << 30;
 
 /// How long a set-aside branch lives, in seconds.
 pub const EXPIRY_SECS: f64 = 90.0 * 86_400.0;
-
-/// The newest records of a document that a compaction leaves revertable.
-pub const KEEP_RECORDS: usize = 50;
 
 /// What keeps `history.db` big.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -209,20 +206,11 @@ impl History {
         Ok(out)
     }
 
-    /// [`History::compact_keeping`] with the newest [`KEEP_RECORDS`] kept.
+    /// When the history is over CAP ([`DEFAULT_CAP`]; under it nothing is done), cut every document shallow at the
+    /// oldest live reference (an anchor, or another branch of the document that has not expired: live, frozen or
+    /// undone), or just before its newest record when nothing pins it.  A `compact` record by AUTHOR at NOW; the
+    /// records stay.
     pub fn compact(&mut self, cap: u64, author: PeerId, now: f64) -> Result<Compacted> {
-        self.compact_keeping(cap, KEEP_RECORDS, author, now)
-    }
-
-    /// When the history is over CAP, cut every document shallow at the newest record that is not within its newest KEEP
-    /// records and not past an anchor's, as a `compact` record by AUTHOR at NOW.
-    pub fn compact_keeping(
-        &mut self,
-        cap: u64,
-        keep: usize,
-        author: PeerId,
-        now: f64,
-    ) -> Result<Compacted> {
         let before = self.size()?;
         let nothing = Compacted {
             cuts: 0,
@@ -263,6 +251,12 @@ impl History {
         // an anchor needs the history from its record on (0: from before any record, so no cut at all)
         let limits = pair_map("select doc, branch, min(op) from anchor group by doc, branch")?;
         let done = pair_map("select doc, branch, op from doc_cut")?;
+        let names: HashMap<i64, String> = {
+            let mut st = self.conn.prepare("select id, name from branch")?;
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<std::result::Result<_, _>>()?
+        };
+        let pair_list = pairs.clone();
         let mut cuts = Vec::new();
         for (doc, b) in pairs {
             let list: Vec<(OpId, &Frontier)> = ops
@@ -273,12 +267,26 @@ impl History {
                         .map(|(_, _, f)| (*id, f))
                 })
                 .collect();
-            if list.len() <= keep {
-                continue;
+            // the oldest live reference: an anchor's record, or another branch of the document (live, frozen or
+            // undone, none of them expired) from its first record on, or from its roll back's record
+            let mut limit = limits.get(&(doc.0, b.0)).copied().unwrap_or(i64::MAX);
+            for (d2, c) in &pair_list {
+                if *d2 != doc || *c == b {
+                    continue;
+                }
+                let first = ops
+                    .iter()
+                    .find(|(_, v)| v.iter().any(|(d, bb, _)| *d == doc && bb == c))
+                    .map(|(id, _)| id.0);
+                let rolled_back = names
+                    .get(&c.0)
+                    .and_then(|n| n.strip_prefix("undone/"))
+                    .and_then(|n| n.parse::<i64>().ok());
+                limit = limit.min(first.or(rolled_back).unwrap_or(0));
             }
-            let limit = limits.get(&(doc.0, b.0)).copied().unwrap_or(i64::MAX);
             let past = done.get(&(doc.0, b.0)).copied().unwrap_or(0);
-            let Some((op, f)) = list[..list.len() - keep]
+            // the newest record stays revertable
+            let Some((op, f)) = list[..list.len().saturating_sub(1)]
                 .iter()
                 .rev()
                 .find(|(id, _)| id.0 <= limit && id.0 > past)
