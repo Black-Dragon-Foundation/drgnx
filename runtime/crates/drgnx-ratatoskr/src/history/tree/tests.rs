@@ -376,6 +376,133 @@ async fn fork_tree_equals_the_checkpoint() {
     assert_eq!(std::fs::read_to_string(wt.join("a.txt")).unwrap(), "two");
 }
 
+/// The gate a fork never asks.
+struct NoGate;
+
+impl crate::runner::git::GatePolicy for NoGate {
+    fn accepted<'a>(
+        &'a self,
+        _: &'a TaskTree,
+    ) -> crate::runner::GitFuture<'a, std::collections::BTreeMap<String, String>> {
+        Box::pin(async { Ok(Default::default()) })
+    }
+    fn ci_config<'a>(
+        &'a self,
+        _: &'a TaskTree,
+        _: runstav::methods::matrix::Facts,
+    ) -> crate::runner::GitFuture<'a, crate::matrix_gate::Gate> {
+        Box::pin(async {
+            Err(crate::runner::GitError {
+                what: "gate".into(),
+                stderr: "no gate here".into(),
+            })
+        })
+    }
+}
+
+/// A snapshot task's step head is a commit only its own folder has: the fork brings the task's branch into the
+/// trusted repository through its bundle first (verified, fsck'd), so the fork starts at that commit, not at the
+/// task's base.
+#[tokio::test(flavor = "multi_thread")]
+async fn fork_of_a_snapshot_task_imports_through_the_bundle() {
+    let d = tempfile::tempdir().unwrap();
+    let (f, root) = front_with_dirs(d.path());
+    let repo = d.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    sh(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("a.txt"), "one").unwrap();
+    sh(&repo, &["add", "-A"]);
+    sh(&repo, &["commit", "-q", "-m", "base"]);
+    let base = sh(&repo, &["rev-parse", "HEAD"]);
+    let git = crate::runner::git::HubGit::new(
+        d.path().join("runs"),
+        crate::runner::TreeMode::Snapshot,
+        Box::new(NoGate),
+        None,
+    )
+    .with_env(vec![
+        ("GIT_CONFIG_GLOBAL".into(), "/dev/null".into()),
+        ("GIT_AUTHOR_NAME".into(), "t".into()),
+        ("GIT_AUTHOR_EMAIL".into(), "t@t".into()),
+        ("GIT_COMMITTER_NAME".into(), "t".into()),
+        ("GIT_COMMITTER_EMAIL".into(), "t@t".into()),
+    ]);
+    let src = crate::runner::RunGit::task_worktree(&git, &repo, "r1", "s1", &base)
+        .await
+        .unwrap();
+    f.core.runs.set_git(std::sync::Arc::new(git));
+    // the agent's commit in its snapshot folder: the trusted repository does not have it
+    std::fs::write(src.path.join("a.txt"), "two").unwrap();
+    sh(&src.path, &["add", "-A"]);
+    sh(&src.path, &["commit", "-q", "-m", "agent"]);
+    let head = sh(&src.path, &["rev-parse", "HEAD"]);
+    assert!(
+        std::process::Command::new("git")
+            .args(["cat-file", "-e", &format!("{head}^{{commit}}")])
+            .current_dir(&repo)
+            .status()
+            .is_ok_and(|s| !s.success())
+    );
+    let cp = snapshot::take(&root, &src.path, "s1", 2, &[]).unwrap();
+    let (cwd, h, c, r, b) = (
+        src.path.to_string_lossy().into_owned(),
+        head.clone(),
+        cp,
+        repo.to_string_lossy().into_owned(),
+        base.clone(),
+    );
+    f.writer
+        .db
+        .write(
+            urdr::graph::TxMeta::new("hub", urdr::graph::Class::System, "test"),
+            move |tx| {
+                let project = tx.meta().project;
+                urdr::graph::entity::create(
+                    tx,
+                    urdr::graph::entity::EntityNew {
+                        id: "session:s1".into(),
+                        kind: "session".into(),
+                        project,
+                        title: None,
+                        status: None,
+                        body: None,
+                        priority: None,
+                        assignee: None,
+                        data: serde_json::json!({"profile": "mock", "cwd": cwd, "role": "worker"}),
+                        origin: urdr::graph::entity::Origin::Recorded,
+                        source: None,
+                    },
+                )?;
+                tx.sql().execute(
+                    "insert into step (session, seq, class, start, snapshot, head) values \
+                     ('session:s1', 2, 'tool', 2.0, ?1, ?2)",
+                    (&c, &h),
+                )?;
+                norn::write::work::put_base(
+                    tx,
+                    norn::write::work::WorktreeBase {
+                        worktree: cwd.clone(),
+                        repo: r,
+                        base_branch: Some("main".into()),
+                        base_commit: Some(b),
+                        base_tree: None,
+                        at: 1.0,
+                    },
+                )?;
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+    let t = Target {
+        sid: "s1".into(),
+        seq: 2,
+    };
+    let tree = fork_tree(&f, &t, "s9abcdef12").await.unwrap();
+    assert_eq!(tree.base, head, "the fork starts at the task's own commit");
+    assert_eq!(listing(&tree.path), [("a.txt".into(), "two".into())]);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn fork_tree_falls_back_to_the_worktree_base() {
     let d = tempfile::tempdir().unwrap();

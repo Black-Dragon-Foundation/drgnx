@@ -12,7 +12,7 @@ use crate::agents::lock::{Enforced, LaunchPlan, NEVER_RESTORED, PROTECTED_RO};
 use crate::agents::rewind::Target;
 use crate::agents::session::{internal, invalid};
 use crate::front::Front;
-use crate::runner::TaskTree;
+use crate::runner::{TaskTree, TreeMode};
 use crate::timeline::snapshot;
 use runstav::methods::matrix::Role;
 use runstav::wire::Error;
@@ -142,8 +142,25 @@ fn plain(cwd: &Path, argv: &[OsString], env: &[(String, String)]) -> Result<Ran,
 
 /// ARGV with VARS in the sandbox SB as session SID's, in its worktree CWD: CWD the only writable folder, the lock's
 /// protected paths and the git folder's hooks and config read-only (`launch::worktree_launch`), no network but the
-/// provider's relay (which a commit never uses).  The status line is read before the exit is awaited.
+/// provider's relay (which a commit never uses).  The status line is read before the exit is awaited.  The
+/// placeholders the launch made to pin absent protected files (`.envrc`, `mise.toml`) go once it ends: a one-shot run
+/// ends no session, so nothing else would remove them; the session's own, from its launch, stay.
 pub(crate) async fn sandboxed_in(
+    sb: &gleipnir::Sandbox,
+    env: &runstav::paths::Env,
+    sid: &str,
+    cwd: &Path,
+    argv: Vec<OsString>,
+    vars: Vec<(String, String)>,
+) -> Result<Ran, String> {
+    let scratch = launch::scratch_path(env, sid);
+    let mark = crate::sandbox::stubs_mark(&scratch);
+    let r = sandboxed_run(sb, env, sid, cwd, argv, vars).await;
+    crate::sandbox::remove_stubs_since(&scratch, cwd, mark);
+    r
+}
+
+async fn sandboxed_run(
     sb: &gleipnir::Sandbox,
     env: &runstav::paths::Env,
     sid: &str,
@@ -271,13 +288,36 @@ pub(crate) async fn commit_with(
     r
 }
 
+/// The branch WORKTREE's HEAD names (`.git/HEAD` read through `eitri`: no link followed, no git run there); none for a
+/// detached head, a linked worktree or a name that is not a plain branch name.  An agent writes the file: a hint.
+fn branch_of(worktree: &Path) -> Option<String> {
+    use std::os::fd::AsFd;
+    let dir = std::fs::File::open(worktree).ok()?;
+    let head = eitri::read_regular(dir.as_fd(), Path::new(".git/HEAD"), 4096).ok()?;
+    let name = String::from_utf8(head)
+        .ok()?
+        .trim_end()
+        .strip_prefix("ref: refs/heads/")?
+        .to_owned();
+    let plain = !name.is_empty()
+        && !name.starts_with('-')
+        && name
+            .split('/')
+            .all(|p| !p.is_empty() && p != "." && p != ".." && !p.starts_with('.'))
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | '+'));
+    plain.then_some(name)
+}
+
 /// Whether COMMIT is a commit REPO has (`cat-file -e`, in the trusted repository).
 fn verifies(repo: &Path, commit: &str) -> bool {
     crate::runner::effects::git(repo, &["cat-file", "-e", &format!("{commit}^{{commit}}")]).is_ok()
 }
 
 /// A new tree for session NEW_SID at SOURCE's checkpoint: a task tree of the source's repository (`fork-<sid8>`,
-/// task NEW_SID) at the step's head when that commit verifies in the trusted repository, else at the worktree's
+/// task NEW_SID) at the step's head when that commit verifies in the trusted repository (a snapshot task's branch is
+/// imported there through its bundle first, `RunGit::import`), else at the worktree's
 /// recorded base (`worktree_base.base_commit`), with the checkpoint written over it (`snapshot::restore_into`: by
 /// mode, through `eitri`, never a protected path), then marked touched.  The repository is the worktree's recorded
 /// one, else the source's own folder when no sandboxed agent worked there.
@@ -326,6 +366,36 @@ pub(crate) async fn fork_tree(
             ));
         }
     };
+    // a snapshot task's commits are in its own folder only: its branch comes into the trusted repository through its
+    // bundle first (verified, fsck'd, written compare-and-swap), so the step's head can verify there
+    if git.mode() == TreeMode::Snapshot
+        && let (Some(h), Some(b)) = (
+            step.head.clone(),
+            base_row.as_ref().and_then(|b| b.base_commit.clone()),
+        )
+        && let Some(branch) = branch_of(&cwd)
+    {
+        let (r, h2) = (repo.clone(), h);
+        let known = crate::clock::blocking(move || verifies(&r, &h2))
+            .await
+            .unwrap_or(false);
+        if !known {
+            let src = TaskTree {
+                path: cwd.clone(),
+                branch,
+                base: b,
+                mode: TreeMode::Snapshot,
+            };
+            if let Err(e) = git.import(&repo, &src).await {
+                tracing::info!(
+                    sid = source.sid,
+                    "the task's branch is not imported: {}: {}",
+                    e.what,
+                    e.stderr
+                );
+            }
+        }
+    }
     let (r, head, recorded) = (
         repo.clone(),
         step.head.clone(),

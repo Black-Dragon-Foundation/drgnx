@@ -50,6 +50,9 @@ pub(crate) struct Plan {
     pub root: PathBuf,
     /// The session has a row: its conversation can be restored.
     pub live: bool,
+    /// The manager the session is a worker of: told once the revert is done.
+    #[serde(default)]
+    pub manager: Option<String>,
     pub level: RestoreLevel,
     pub needs_message: bool,
     pub blocked: bool,
@@ -79,11 +82,138 @@ pub(crate) struct Saved {
     pub acp_before: Option<String>,
 }
 
-/// The previews not applied yet, and the worktrees a revert runs in (one at a time each).
+/// The worktrees a revert runs in (one at a time each), and the sessions it runs for with the runners' patches kept
+/// meanwhile.  The previews are kept in the project's history (`verdandi`'s `preview` table), not here.
 #[derive(Default)]
 pub(crate) struct Reverts {
-    previews: Mutex<(i64, HashMap<i64, Plan>)>,
     running: Mutex<HashSet<PathBuf>>,
+    returned: Mutex<HashMap<String, Vec<String>>>,
+    /// The test hook: the next revert parks after a step.
+    #[cfg(test)]
+    pub(crate) park: Mutex<Option<Park>>,
+}
+
+/// Where the next revert parks (test-only): after step AFTER it says so on REACHED and waits for GO, true to go on,
+/// false (or the sender dropped) to end there as a hub that dies does.
+#[cfg(test)]
+pub(crate) struct Park {
+    pub after: RevertStep,
+    pub reached: tokio::sync::oneshot::Sender<()>,
+    pub go: tokio::sync::oneshot::Receiver<bool>,
+}
+
+/// Whether a revert goes on after step AT (test-only): the parked hook's answer, or true.
+#[cfg(test)]
+async fn goes_on(f: &Front, at: RevertStep) -> bool {
+    let park = {
+        let mut g = lock(&f.core.history.reverts.park);
+        match g.as_ref() {
+            Some(p) if p.after == at => g.take(),
+            _ => None,
+        }
+    };
+    let Some(p) = park else { return true };
+    let _ = p.reached.send(());
+    p.go.await.unwrap_or(false)
+}
+
+/// A new preview id: 52 random bits, exact as a JSON number in every reader, and unique across the projects' stores.
+fn preview_id() -> Result<i64, Error> {
+    let n = runstav::proof::nonce().map_err(|e| internal(format!("no preview id: {e}")))?;
+    i64::from_str_radix(&n[..13], 16)
+        .map(|v| v.max(1))
+        .map_err(|e| internal(e.to_string()))
+}
+
+/// PLAN kept as a preview in its project's history, under a new id.
+async fn keep(f: &Front, plan: &Plan) -> Result<i64, Error> {
+    let dirs = f
+        .dirs
+        .get()
+        .ok_or_else(|| internal("the hub has no state folder"))?;
+    let (hub, tree) = f.core.history.of_tree(&dirs.hub, &plan.cwd)?;
+    let json = serde_json::to_string(plan).map_err(|e| internal(e.to_string()))?;
+    let (id, now) = (preview_id()?, crate::clock::wall_secs());
+    crate::clock::blocking(move || {
+        let mut g = hub.lock();
+        let br = g.h.branch(
+            &tree.branch_name(),
+            verdandi::BranchKind::Worktree,
+            tree.base.as_deref(),
+        )?;
+        g.h.keep_preview(id, br, &json, now)
+    })
+    .await
+    .map_err(|e| internal(e.to_string()))?
+    .map_err(|e| internal(e.to_string()))?;
+    Ok(id)
+}
+
+/// The plan of preview ID, taken from whichever project's history holds it (a preview is applied once).
+pub(crate) async fn take(f: &Front, id: i64) -> Option<Plan> {
+    let dirs = f.dirs.get()?;
+    for hub in f.core.history.all(&dirs.hub) {
+        let json = crate::clock::blocking(move || hub.lock().h.take_preview(id))
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .flatten();
+        if let Some(j) = json {
+            return serde_json::from_str(&j)
+                .map_err(|e| tracing::warn!(id, "a stored preview cannot be read: {e}"))
+                .ok();
+        }
+    }
+    None
+}
+
+/// A runner returned job JOB's patch for session SID: true when a revert of the session runs, and then the patch is
+/// kept on its job and listed in the revert's `kept_patches`, never applied.  The returned-patch path asks this before
+/// it applies anything (a patch after the revert is refused anyway: its files are not at their submit hash).
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the hub applies no returned patch yet: the runners' returned-patch path calls it"
+    )
+)]
+pub(crate) fn patch_returned(f: &Front, sid: &str, job: &str) -> bool {
+    match lock(&f.core.history.reverts.returned).get_mut(sid) {
+        Some(kept) => {
+            kept.push(job.to_owned());
+            true
+        }
+        None => false,
+    }
+}
+
+/// SID's revert runs: the runners' patches for it are kept until it ends ([`Listening::end`]).
+struct Listening<'a>(&'a Reverts, String);
+
+impl<'a> Listening<'a> {
+    fn new(r: &'a Reverts, sid: &str) -> Listening<'a> {
+        lock(&r.returned).entry(sid.to_owned()).or_default();
+        Listening(r, sid.to_owned())
+    }
+
+    /// The patches kept since the last look.
+    fn kept(&self) -> Vec<String> {
+        lock(&self.0.returned)
+            .get_mut(&self.1)
+            .map(std::mem::take)
+            .unwrap_or_default()
+    }
+
+    /// The revert ends: the patches kept since the last look, and none kept after.
+    fn end(self) -> Vec<String> {
+        lock(&self.0.returned).remove(&self.1).unwrap_or_default()
+    }
+}
+
+impl Drop for Listening<'_> {
+    fn drop(&mut self) {
+        lock(&self.0.returned).remove(&self.1);
+    }
 }
 
 /// The worktree a revert holds, given back when it ends.
@@ -100,18 +230,6 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 impl Reverts {
-    fn keep(&self, plan: Plan) -> i64 {
-        let mut g = lock(&self.previews);
-        g.0 += 1;
-        let id = g.0;
-        g.1.insert(id, plan);
-        id
-    }
-
-    fn take(&self, id: i64) -> Option<Plan> {
-        lock(&self.previews).1.remove(&id)
-    }
-
     fn hold(&self, cwd: &Path) -> Option<Held<'_>> {
         lock(&self.running)
             .insert(cwd.to_path_buf())
@@ -177,9 +295,11 @@ async fn target_of(f: &Front, p: &w::RevertPreviewParams) -> Result<Target, Erro
 /// The plan for reverting to T, from the session's steps and checkpoints and the files now.
 async fn plan_for(f: &Front, t: &Target) -> Result<(Plan, Vec<w::RevertOverlap>), Error> {
     let (profile, cwd, _) = rewind::source_of(&f.core.agents, f, &t.sid).await?;
-    let live = !session::read_rows(&f.core.agents, Some(&t.sid))
+    let row = session::read_rows(&f.core.agents, Some(&t.sid))
         .await
-        .is_empty();
+        .into_iter()
+        .next();
+    let (live, manager) = (row.is_some(), row.and_then(|r| r.8));
     let key = format!("session:{}", t.sid);
     let steps = f
         .writer
@@ -208,11 +328,13 @@ async fn plan_for(f: &Front, t: &Target) -> Result<(Plan, Vec<w::RevertOverlap>)
     let provider = session::find_profile(f, &profile).and_then(|p| p.provider());
     let level = rewind::planned_level(provider, caps.as_ref());
     let (sid, seq) = (t.sid.clone(), t.seq);
-    crate::clock::blocking(move || {
+    let (mut plan, cards) = crate::clock::blocking(move || {
         classify(root, cwd, sid, seq, live, level, step, last_seq, newest)
     })
     .await
-    .map_err(|e| internal(e.to_string()))?
+    .map_err(|e| internal(e.to_string()))??;
+    plan.manager = manager;
+    Ok((plan, cards))
 }
 
 /// The plan's paths: every path the checkpoint and the files now differ in, each the agent's alone (restored), the
@@ -262,6 +384,7 @@ fn classify(
         cwd: cwd.clone(),
         root: root.clone(),
         live,
+        manager: None,
         level,
         needs_message: live && level == RestoreLevel::Summary,
         blocked: false,
@@ -379,7 +502,7 @@ pub async fn preview(
         skipped: skipped_of(&plan.skipped),
         conversation,
     };
-    let id = f.core.history.reverts.keep(plan);
+    let id = keep(f, &plan).await?;
     Ok(w::RevertCard {
         preview_id: id,
         ..card
@@ -399,7 +522,7 @@ fn skipped_of(v: &[(PathBuf, String)]) -> Vec<w::RevertSkipped> {
 pub async fn apply(f: &Front, c: &Caller, p: w::RevertApplyParams) -> Result<w::Applied, Error> {
     user_only(c)?;
     let reverts = &f.core.history.reverts;
-    let plan = reverts.take(p.preview_id).ok_or_else(|| {
+    let plan = take(f, p.preview_id).await.ok_or_else(|| {
         refused(
             STALE,
             format!("no preview {}: preview the revert again", p.preview_id),
@@ -574,21 +697,62 @@ async fn record(f: &Front, s: &Saved) -> Result<i64, String> {
     .map_err(|e| e.to_string())?
 }
 
-/// The paths the revert writes, told to the tree's origin core as the hub's own versions first (their checkpoint
-/// blob, or gone), so the watcher's event about them is no outside edit.  Merged and edited texts are not announced:
-/// their next scan records them.
+/// What the revert writes at a path.
+enum Goes {
+    /// The checkpoint's version (or nothing, where the checkpoint has none).
+    Checkpoint,
+    /// This text: a merge with the user's later edit, or the user's edited answer.
+    Text(String),
+    /// Nothing: the user's file stays.
+    Stays,
+}
+
+/// What S writes at PATH, by its mode and the user's answers.
+fn goes(s: &Saved, path: &Path) -> Goes {
+    let p = &s.plan;
+    if s.mode == RevertMode::RollBackMine || p.restore.iter().any(|r| r == path) {
+        return Goes::Checkpoint;
+    }
+    if let Some(m) = p.merges.iter().find(|m| m.path == path) {
+        return Goes::Text(m.text.clone());
+    }
+    match p.overlaps.iter().position(|(o, _)| o == path) {
+        Some(i) => match s.choices.get(i) {
+            Some(RevertChoice::TakeReverted) => Goes::Checkpoint,
+            Some(RevertChoice::Edited { text }) => Goes::Text(text.clone()),
+            Some(RevertChoice::KeepUsers) | None => Goes::Stays,
+        },
+        None => Goes::Stays,
+    }
+}
+
+/// The paths the revert writes, told to the tree's origin core as the hub's own versions first (the checkpoint's
+/// blob or gone, or the blob of the merged or edited text, hashed as the watcher hashes what it reads), so the
+/// watcher's event about them is no outside edit.
 async fn expect(f: &Front, s: &Saved, path: &Path) {
     let Some(dirs) = f.dirs.get() else { return };
-    let Ok((hub, _)) = f.core.history.of_tree(&dirs.hub, &s.plan.cwd) else {
+    let Ok((hub, tree)) = f.core.history.of_tree(&dirs.hub, &s.plan.cwd) else {
         return;
     };
-    if !s.plan.restore.contains(&path.to_path_buf()) && s.mode != RevertMode::RollBackMine {
+    let what = goes(s, path);
+    if matches!(what, Goes::Stays) {
         return;
     }
     let (p, rel) = (s.plan.clone(), path.to_string_lossy().into_owned());
     let _ = crate::clock::blocking(move || {
-        let hash = snapshot::blob_id(&p.root, &p.cwd, &p.checkpoint, &rel)
-            .unwrap_or_else(|| "gone".into());
+        let hash = match what {
+            Goes::Text(t) => {
+                match super::blob::hash_object(&tree.git_dir, &tree.root, &rel, t.as_bytes()) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        tracing::warn!(rel, "the revert's text is not announced: {e}");
+                        return;
+                    }
+                }
+            }
+            _ => snapshot::blob_id(&p.root, &p.cwd, &p.checkpoint, &rel)
+                .unwrap_or_else(|| "gone".into()),
+        };
         hub.lock()
             .origin
             .step(super::origin::OriginEv::HubWrite { path: rel, hash });
@@ -687,7 +851,13 @@ async fn run(f: &Front, s: Saved, op: Option<i64>) -> Result<w::Applied, Error> 
         sid: p.sid.clone(),
         seq: p.seq,
     };
-    while let Some(e) = q.pop_front() {
+    let listen = Listening::new(&f.core.history.reverts, &p.sid);
+    loop {
+        // a runner's patch that came back meanwhile: the core says what becomes of it
+        for id in listen.kept() {
+            q.extend(core.step(V::RunnerPatch(id)));
+        }
+        let Some(e) = q.pop_front() else { break };
         let ev = match e {
             E::Refuse(r) => return Err(refused(r, &why)),
             E::Detach => {
@@ -841,6 +1011,7 @@ async fn run(f: &Front, s: Saved, op: Option<i64>) -> Result<w::Applied, Error> 
                 continue;
             }
             E::TellManager => {
+                tell_manager(f, &p, &out);
                 continue;
             }
             E::KeepPatch(id) => {
@@ -848,10 +1019,52 @@ async fn run(f: &Front, s: Saved, op: Option<i64>) -> Result<w::Applied, Error> 
                 continue;
             }
         };
+        #[cfg(test)]
+        if let V::Done(at) = &ev
+            && !goes_on(f, *at).await
+        {
+            return Err(internal(format!("the hub stopped after {at:?}")));
+        }
         q.extend(core.step(ev));
     }
+    // came back as the revert ended: kept all the same
+    out.kept_patches.extend(listen.end());
     out.undone = format!("refs/drgnx/undone/{}", out.op);
     Ok(out)
+}
+
+/// The manager P's session is a worker of, told what the user's revert did (a message from the hub, queued behind
+/// its turn when it is busy).  A manager that is not running is not told: the revert is in its worker's record.
+fn tell_manager(f: &Front, p: &Plan, out: &w::Applied) {
+    let Some(m) = &p.manager else { return };
+    let conversation = match &out.conversation {
+        w::ConversationRestore::Restored => {
+            "its conversation went back to that step too".to_owned()
+        }
+        w::ConversationRestore::NotRestored { label } => label.clone(),
+    };
+    let text = format!(
+        "[drgnx] The user reverted your worker {} to its step {}: its files went back to that step and its \
+         decisions and findings after it were withdrawn; {conversation}.{}",
+        p.sid,
+        p.seq,
+        out.commit
+            .as_deref()
+            .map(|c| format!(" The revert is commit {c}."))
+            .unwrap_or_default()
+    );
+    if let Err(e) = f
+        .core
+        .agents
+        .prompt(m, text, crate::agents::queue::Origin::Hub)
+    {
+        tracing::info!(
+            manager = m,
+            sid = p.sid,
+            "the manager is not told of the revert: {}",
+            e.message
+        );
+    }
 }
 
 /// Record OP's pending record cleared.
@@ -896,5 +1109,7 @@ pub(crate) async fn finish_pending(f: &Front) {
     }
 }
 
+#[cfg(test)]
+mod live;
 #[cfg(test)]
 mod tests;

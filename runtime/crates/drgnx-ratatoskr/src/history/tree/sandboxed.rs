@@ -101,12 +101,10 @@ async fn commit_runs_inside_the_sandbox() {
     assert!(made.is_some() && made != before, "{made:?}");
     assert_eq!(made, snapshot::head_of(&wt));
     assert_eq!(git(&wt, &["log", "-1", "--format=%s"]), "revert to step 3");
-    // the worktree's own index matches the commit (the sandbox's placeholders for the absent protected files,
-    // `.envrc` and `mise.toml`, stay untracked, as after any launch), and the commit's index is gone
-    assert_eq!(
-        git(&wt, &["status", "--porcelain", "--untracked-files=no"]),
-        ""
-    );
+    // the worktree's own index matches the commit, the placeholders the sandbox made to pin the absent protected
+    // files (`.envrc`, `mise.toml`) went with it, and the commit's index is gone
+    assert_eq!(git(&wt, &["status", "--porcelain"]), "");
+    assert!(!wt.join(".envrc").exists() && !wt.join("mise.toml").exists());
     assert!(!wt.join(".git").join(COMMIT_INDEX).exists());
     let dir = runstav::paths::session_dir(&env, &runstav::paths::socket_path(&env), "S1").unwrap();
     assert!(dir.is_dir(), "{}", dir.display());
@@ -127,6 +125,7 @@ async fn commit_for_a_finished_worker_uses_its_entity() {
         .unwrap();
     assert!(made.is_some());
     assert_eq!(git(&wt, &["ls-files"]), "b.txt");
+    assert_eq!(git(&wt, &["status", "--porcelain"]), "");
     // again after a crash: the deletion is committed already, so neither side has a.txt; nothing to commit, quiet
     let again = commit_with(Some((&sb, &env)), "S2", &wt, &paths, "revert").await;
     assert_eq!(again, Ok(None));

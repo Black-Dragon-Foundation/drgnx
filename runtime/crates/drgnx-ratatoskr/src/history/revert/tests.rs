@@ -208,6 +208,76 @@ impl Fx {
         let (hub, _) = self.f.core.history.of_tree(&dirs.hub, &self.wt).unwrap();
         hub.lock().h.pending().unwrap()
     }
+
+    /// A second front on the same stores, as the next hub start has them.
+    fn again(&self) -> Front {
+        let d = self._d.path();
+        let f = crate::runner::graph_plan_tests::front(d);
+        let _ = f.dirs.set(crate::graph::StoreDirs {
+            home: d.join("home"),
+            config: d.join("config"),
+            hub: d.join("hub"),
+        });
+        f
+    }
+
+    /// Whether the watcher's event about REL holding TEXT now is no outside edit (the hub announced it).
+    fn announced(&self, rel: &str, text: &str) -> bool {
+        let dirs = self.f.dirs.get().unwrap();
+        let (hub, tree) = self.f.core.history.of_tree(&dirs.hub, &self.wt).unwrap();
+        let hash =
+            crate::history::blob::hash_object(&tree.git_dir, &tree.root, rel, text.as_bytes())
+                .unwrap();
+        hub.lock()
+            .origin
+            .step(crate::history::origin::OriginEv::Watch {
+                path: rel.into(),
+                hash,
+            })
+            .is_none()
+    }
+}
+
+/// A preview is kept in the project's history, not in the hub's memory: the next hub start applies it, once.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_preview_is_stored_and_applied_once_after_a_restart() {
+    let fx = Fx::new(false, true).await;
+    let card = fx.preview().await.unwrap();
+    let f2 = fx.again();
+    let p = |id| w::RevertApplyParams {
+        preview_id: id,
+        mode: None,
+        choices: vec![],
+        message: None,
+    };
+    apply(&f2, &user(), p(card.preview_id)).await.unwrap();
+    assert_eq!(fx.read("a.txt").as_deref(), Some(FIVE));
+    let e = apply(&f2, &user(), p(card.preview_id)).await.unwrap_err();
+    assert!(e.message.starts_with("stale:"), "{e:?}");
+    let e = apply(&fx.f, &user(), p(card.preview_id)).await.unwrap_err();
+    assert!(e.message.starts_with("stale:"), "{e:?}");
+}
+
+/// The texts a revert merges with the user's later edit, and an edited answer, are announced to the tree's origin
+/// core as the hub's own before they are written: the watcher's event about them is no outside edit.
+#[tokio::test(flavor = "multi_thread")]
+async fn merged_and_edited_texts_are_announced_as_the_hubs() {
+    let fx = Fx::new(false, true).await;
+    std::fs::write(fx.wt.join("a.txt"), "A1\nl2\nl3\nl4\nU5\n").unwrap();
+    let card = fx.preview().await.unwrap();
+    fx.apply(card.preview_id, None, vec![]).await.unwrap();
+    let merged = "l1\nl2\nl3\nl4\nU5\n";
+    assert_eq!(fx.read("a.txt").as_deref(), Some(merged));
+    assert!(fx.announced("a.txt", merged));
+
+    let fx = Fx::new(false, true).await;
+    std::fs::write(fx.wt.join("a.txt"), "U1\nl2\nl3\nl4\nl5\n").unwrap();
+    let card = fx.preview().await.unwrap();
+    let edited = RevertChoice::Edited {
+        text: "E1\n".into(),
+    };
+    fx.apply(card.preview_id, None, vec![edited]).await.unwrap();
+    assert!(fx.announced("a.txt", "E1\n"));
 }
 
 /// A finished worker's revert: the files back at the step, the decision after it withdrawn and the one at it kept,
@@ -420,7 +490,7 @@ async fn preview_by_decision_is_its_step() {
 async fn a_pending_revert_is_finished_at_start_once() {
     let fx = Fx::new(true, true).await;
     let card = fx.preview().await.unwrap();
-    let plan = fx.f.core.history.reverts.take(card.preview_id).unwrap();
+    let plan = take(&fx.f, card.preview_id).await.unwrap();
     let saved = Saved {
         plan,
         mode: RevertMode::KeepMine,

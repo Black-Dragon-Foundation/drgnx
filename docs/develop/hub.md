@@ -972,8 +972,10 @@ A revert takes an agent's work back to one of its steps: the files, the decision
   card: the files, the overlaps, the files merged with the user's later edits (`non_overlapping_files`), what the
   revert cannot undo, the level, `needs_message`, `blocked`, the paths left out, the conversation (`restored`, or
   `not-restored` with a label: a finished worker's is "conversation not restored: the agent has finished") and
-  `fork` (offered beside Apply for a finished worker or a blocked revert). The preview is kept in memory until it is
-  applied once. `history/revert/apply {preview_id, mode, choices, message}` answers `Applied {op, session, level,
+  `fork` (offered beside Apply for a finished worker or a blocked revert). The preview is kept in the project's
+  `history.db` (`History::keep_preview`, under a random 52-bit id unique across the projects), so it survives a hub
+  restart, and is taken once on apply (`take_preview`, from whichever project holds it).
+  `history/revert/apply {preview_id, mode, choices, message}` answers `Applied {op, session, level,
   commit, skipped, conversation, kept_patches, undone}` and broadcasts `history/applied {op, paths, worktree}`.
   Refusals start with their reason: `stale` (the files or the session moved since the preview, or no such
   preview), `blocked`, `needs-message`, `not-revertible` (no checkpoint: older than the history; an agent's call),
@@ -1023,23 +1025,33 @@ A revert takes an agent's work back to one of its steps: the files, the decision
   index; what the agent staged besides them stays staged. In a folder a sandboxed agent worked in
   (`RunGit::is_touched`) each run is a Gleipnir one-shot of the session's worktree shape
   (`launch::worktree_launch`: the folder writable, the protected paths and the git folder's hooks and config
-  read-only, the provider's relay only); elsewhere with plain git. The commit is read from the ref files after
+  read-only, the provider's relay only), and the placeholders that launch made to pin absent protected files
+  (`.envrc`, `mise.toml`) are removed when it ends (`sandbox::remove_stubs_since`: only the ones after the mark it
+  took, so the session's own stubs stay bound); elsewhere with plain git. The commit is read from the ref files after
   (`snapshot::head_of`), since the sandboxed run keeps no stdout; nothing to commit is `Ok(None)`, so a retry after a
   crash is quiet. A failure is reported and the files stand; in a linked worktree the sandboxed commit cannot reach
   the common folder and fails.
 - **The order** (`history::revert_core`, pure): after the shell's check, `Quiet` (the session detached from its
   turn core, its jobs stopped), `Rescan` (a record new since the preview is `stale`), `Record` (the history record and
   the pending record: durable from here), `Files` (each path announced to the origin core as the hub's write before
-  it is written, so the watcher's event about it is no outside edit), `Graph`, `Conversation` (a finished worker has
-  none: said once, and skipped), `Commit`, `Clear`, then `history/applied` and the manager told. A failure before
+  it is written: the checkpoint's blob, or the blob of the merged or edited text hashed as the watcher hashes what it
+  reads, so the watcher's event about it is no outside edit), `Graph`, `Conversation` (a finished worker has
+  none: said once, and skipped), `Commit`, `Clear`, then `history/applied` and the manager told: a worker's manager
+  (its row's `parent`) gets a message from the hub naming the worker, the step, the conversation and the commit. A
+  failure before
   `Record` reattaches the session and refuses; a conversation that cannot be restored is said and the commit follows;
   a failed commit is reported and the record cleared. A crash forgets the revert; the next start finishes it from the
   pending record (`Files` on, each step idempotent). A message or a Stop sent meanwhile is the turn core's (queued or
   held until the reattach); the cancelled turn's answer changes nothing; a runner's patch returned meanwhile is kept
-  on its job, never applied. Every order of these is tested with skuld, composed with the turn and origin cores.
+  on its job, never applied: the returned-patch path asks `history::revert::patch_returned(front, sid, job)` first,
+  which is true while the session's revert runs, and the job is listed in `Applied.kept_patches`. Every order of these
+  is tested with skuld, composed with the turn and origin cores; the steps on a live session of the mock agent, a
+  hub stopped after a step and a second one finishing, are tested with a park hook (test builds only).
 - **A fork's tree** (`tree::fork_tree(front, source, new_sid)`): `RunGit::task_worktree(repo, "fork-<sid8>", new_sid,
   base)`, where `repo` is the worktree's recorded repository (`worktree_base`) or the source's own untouched folder,
-  and `base` the step's head when that commit verifies there, else the worktree's recorded `base_commit`; the
+  and `base` the step's head when that commit verifies there (a snapshot task's branch, named by its `.git/HEAD`, is
+  brought into the repository through its bundle first, `RunGit::import`: verified, fsck'd, written
+  compare-and-swap), else the worktree's recorded `base_commit`; the
   checkpoint (`step.snapshot`, else `tree_at`) is then written over it with `restore_into` and the folder marked
   touched.
 
