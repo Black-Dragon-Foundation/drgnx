@@ -352,6 +352,30 @@ failed copy is logged, shows in `status.store.history_backup` and in `drgnx doct
 no-prompt lint) and `test/unit/history-hub-test.el` (pattern B: the real hub through the delivery gate; the answers to
 batches and resyncs are the evidence). Rows that need the hook skip on a Nidhogg built without the flag.
 
+`test/unit/history-worktrees-test.el` (pattern B: git worktrees, two worker agents on `ratatoskr-mock`, the user's
+checkout tracked through the editor methods, so it needs no hook).
+
+The conformance rows (`domr`, a real hub, `ratatoskr-mock acp --state`; `test/conformance/rewind/`, `fork/`,
+`edit-history/`) run the whole chain per provider: a worker's writes through its own `fs/write_text_file`, the
+`agent-step` events (a row reads a step's `seq` from one and sends it to `history/revert/preview` or `history/fork`),
+the preview and apply, and the restart of the hub on the same root. The mock's `call:record_decision` and
+`call:note_add` also show as a tool call, as the agents show them, which is how the hub finds the step a decision was
+recorded in (`history/revert/preview {decision}`). Things the rows fix as they are:
+
+- A revert's *files* come from the checkpoint a step holds, taken when the hub observes the step; a read-only step
+  that the agent follows at once with a write can hold a checkpoint that already has the write (a row that needs the
+  files goes back to a step that edits).
+- The user's edits are those made after the agent's last step. Edits between two steps count as the agent's, and
+  keep-mine puts the checkpoint's file back over them.
+- A file the agent created and the user then edited has no base to merge from: the card shows an overlap, and the
+  default answer keeps the user's file.
+- Two edits that touch neighbouring lines of one file are a conflict in the merge, so they too come back as an overlap.
+- A revert to a subagent's step cuts the conversation at the message before the Task call and carries what the cut
+  leaves out in a summary, so it needs the user's message although the card's `needs_message` is false.
+
+`cargo test -p verdandi --test timing -- --ignored --nocapture` prints the cost of the "undone by" scan (a file with 1,000
+later deletes); it is a measurement, not a gate.
+
 `cargo test -p verdandi`: `tests/store.rs`, `tests/docs.rs`, `tests/log.rs`, `tests/revert.rs` and the property in
 `src/revert_props.rs` (in the crate so it can use a store without a sync at each commit; its 10,000 cases make some
 hundred thousand records). Every test is pattern D: a temporary folder, `git merge-file` at most, every time a

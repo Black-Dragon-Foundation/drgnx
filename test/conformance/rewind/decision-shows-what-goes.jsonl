@@ -1,0 +1,19 @@
+{"scenario": "rewind/decision-shows-what-goes", "requires": ["v1", "test-hooks"], "doc": "A revert can start from a decision: once the hub has stamped the step the agent's call recorded it in (the call shows in the turn as a tool call), the card for the decision is the card for that step of that session, with the effects the revert cannot undo."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work $ROOT/state && cd $ROOT/work && git init -q && echo base > a.txt && git add -A && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--state\" \"$ROOT/state\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "say first\nfs:write b.txt one\\n"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"seq": "$capture:s1", "class": "think", "turn_id": "t1"}}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "say second\ncall:record_decision {\"kind\": \"build\", \"subject\": \"two lines\", \"reason\": \"it reads better\", \"seen_version\": 0}\nfs:write b.txt one\\ntwo\\n"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"seq": "$capture:s2", "class": "think", "turn_id": "t2"}}}, "within_ms": 15000}
+{"do": "poll", "conn": "c", "json": {"id": 5, "method": "history/revert/preview", "params": {"decision": 1}}, "expect": {"id": 5, "result": {"preview_id": "$number", "session": "$sid", "seq": "$number", "level": "message", "blocked": [], "effects": {"label": "computed"}}}, "within_ms": 30000, "every_ms": 200}

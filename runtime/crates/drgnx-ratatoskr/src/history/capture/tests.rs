@@ -125,6 +125,37 @@ fn a_key_in_an_agent_write_is_stored_as_stars_and_not_again() {
     assert!(again.is_empty(), "{again:?}");
 }
 
+/// What a consumer of the `history/file-version` event (the indexer, the Work space) reads: the frozen JSON shape of a
+/// version, as the subscription delivers it.
+#[test]
+fn a_consumer_of_file_version_reads_the_frozen_shape() {
+    let f = fixture(&[("a.txt", "one\n")]);
+    let mut rx = f.hub.subscribe();
+    let v = f
+        .hub
+        .on_agent_write(&f.tree, "a.txt", b"one\ntwo\n", "s1", cause("1"), 10.0)
+        .unwrap();
+    let got = serde_json::to_value(rx.try_recv().unwrap()).unwrap();
+    let blob = got["blob"].as_str().unwrap().to_owned();
+    assert_eq!(blob.len(), 40, "a git blob id: {got}");
+    assert!(blob.bytes().all(|b| b.is_ascii_hexdigit()), "{got}");
+    assert_eq!(
+        got,
+        serde_json::json!({
+            "worktree": f.tree.id.0,
+            "path": "a.txt",
+            "blob": blob,
+            "op": v[0].op,
+            "class": "text",
+        })
+    );
+    // a file that is gone says so: a null blob
+    std::fs::remove_file(f.repo.path().join("a.txt")).unwrap();
+    f.hub.on_disk_change(&f.tree, "a.txt", 11.0).unwrap();
+    let gone = serde_json::to_value(rx.try_recv().unwrap()).unwrap();
+    assert!(gone["blob"].is_null(), "{gone}");
+}
+
 #[test]
 fn external_change_is_diffed_onto_disk_peer() {
     let f = fixture(&[("a.txt", "one\ntwo\n")]);
