@@ -694,7 +694,9 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
   (`{"panel": …}`), and the words `panel:context JSON`, `panel:contexts N`, `panel:before-tool JSON`, `panel:big N`,
   `panel:raw METHOD JSON` and `panel:preview JSON` send the extension's messages (answers logged as
   `{"before_tool": …}`). `--refuse-mode MODE` refuses `session/set_mode` to MODE (a lock that does not hold; the
-  `agent-locks` rows); other modes are accepted. `--log` is JSONL; `--llm URL` POSTs
+  `agent-locks` rows); other modes are accepted. `--log` is JSONL, each object's keys in the order the mock writes
+  them however it was built (domr turns on serde_json's `preserve_order`), so a row may match a logged object as text;
+  `--llm URL` POSTs
   to a `ratatoskr-mock llm` once per turn, so its log counts requests. `--state DIR` keeps each session's history in
   `DIR/<sessionId>.json` (at its start and after every turn); `session/fork` and `session/resume` read a session this
   process does not hold from there, so a second process forks or resumes it (ids skip the ones the folder holds). A
