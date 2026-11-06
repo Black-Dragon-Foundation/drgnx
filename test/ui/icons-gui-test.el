@@ -23,6 +23,8 @@
   (drgnx-uitest-bare-frame)
   (with-current-buffer (get-buffer-create "*icons-ui*")
     (erase-buffer)
+    ;; no cursor: its box sits in the scanned row and is further from the background than any stroke pixel
+    (setq-local cursor-type nil)
     (insert (make-string 6 ?\s) (drgnx-look-icon 'folder 'shadow) (make-string 6 ?\s) "\n")
     (set-window-buffer (selected-window) (current-buffer))
     (goto-char (point-min))
