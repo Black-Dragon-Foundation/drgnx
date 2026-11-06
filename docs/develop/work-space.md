@@ -476,7 +476,10 @@ fixture's bands carry real curves, so the screenshot set shows them.
   replaces are flushed (`image-flush`), the unchanged tiles are not touched.
 - **Lanes.** An edge that skips a card row is a 2 px wide image at the lane's x in each text line of that row, as high as
   the text, with the row's ascent in percent (`drgnx-work-edges-row-metrics`: the font's ascent over ascent plus
-  descent), so the row keeps its height.
+  descent), so the row keeps its height. Edges that share a lane (a trunk) are one image at that x: the widest stroke
+  (the chain's, when one of them is on it), its alt naming every edge there. Images are text, so lanes drawn one per
+  edge would sit side by side, fill the gap and push the next card right. A row's line is its cards and lanes sorted
+  by column into a new list each time: the lanes are shared by every line of the row.
 - **Ports.** Edges bundled for want of lanes end in a chip "↑ N" on the bottom edge of the band above their target,
   drawn into the tile that holds its column.
 

@@ -649,7 +649,9 @@ row's cards with the lanes that pass through them."
                             (propertize (drgnx-work-map--fit label (- (drgnx-work-map--margin-px) 8)) 'face 'drgnx-work-label)
                           "")
                         (if lanes
-                            ;; the cards and the lanes in order of their columns
+                            ;; the cards and the lanes in order of their columns; a sort that copies: an in-place
+                            ;; one rewrites the conses `append' shares with LANES, and the next line gets this
+                            ;; line's cards with its lanes
                             (mapconcat #'cdr
                                        (sort (append (mapcar (lambda (id)
                                                                (cons (+ (drgnx-work-map--margin-px)
@@ -657,7 +659,7 @@ row's cards with the lanes that pass through them."
                                                                      (drgnx-work-map--segment state id line)))
                                                              ids)
                                                      lanes)
-                                             (lambda (a b) (< (car a) (car b))))
+                                             :key #'car)
                                        "")
                           (mapconcat (lambda (id) (drgnx-work-map--segment state id line)) ids ""))
                         (propertize "\n" 'line-height (list (max 0 (1- px)))))

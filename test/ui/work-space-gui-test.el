@@ -636,14 +636,13 @@ each with a label and fields far longer than its card, as a busy agent's are."
         (setq pos next)))
     (nreverse out)))
 
-(ert-deftest drgnx-work-gui/thirty-cards-stay-inside-their-rectangles ()
-  "The 30-agent golden layout at 1000 px (and every card's label far longer than its card), drawn by the map view in
-the drgnx dark theme: each card line starts at its rectangle's left and its text ends by its right, so the space
-that closes it starts no later than the right edge and no card is drawn over the next (the map once ran off the
-right edge, each card pushing the next)."
-  (drgnx-work-gui--with-frame-map (drgnx-work-gui--golden-frame "thirty-1000")
+(defun drgnx-work-gui--cards-inside (name width)
+  "The map of golden layout NAME drawn in the drgnx dark theme in a window WIDTH px wide (nil: the whole frame): each
+card on screen, checked against its rectangle; the shot of the frame is kept in the evidence folder."
+  (drgnx-work-gui--with-frame-map (drgnx-work-gui--golden-frame name)
     (unwind-protect
         (progn
+          (when width (split-window win width 'right t))
           (load-theme 'drgnx-dark t)
           (drgnx-view-touch drgnx-view)
           (drgnx-view-draw-now drgnx-view)
@@ -661,9 +660,21 @@ right edge, each card pushing the next)."
                     (cl-incf n)
                     (unless (and (<= (abs (- x0 left)) 2) (<= x1 right))
                       (push (list id :left left :drawn-at x0 :right right :closes-at x1) bad))))))
-            (drgnx-work-gui--log "cards checked %d, outside %d: %S" n (length bad) (seq-take bad 6))
+            (drgnx-test-wait-presented)
+            (drgnx-work-gui--scene-shoot (format "cards-%s-%dpx" name (window-pixel-width win)))
+            (drgnx-work-gui--log "%s in %d px: cards checked %d, outside %d: %S" name (window-pixel-width win) n
+                                 (length bad) (seq-take bad 6))
             (should (> n 30))
             (should-not bad)))
       (disable-theme 'drgnx-dark))))
+
+(ert-deftest drgnx-work-gui/thirty-cards-stay-inside-their-rectangles ()
+  "The 30-agent golden layouts at 1000 px (in a window that wide) and at 1600 px (the frame), every card's label far
+longer than its card, drawn by the map view in the drgnx dark theme: each card line starts at its rectangle's left
+and its text ends by its right, so the space that closes it starts no later than the right edge and no card is drawn
+over the next (the map once ran off the right edge, each line drawing the cards of the line before again, and lanes
+on one column side by side pushing the next card)."
+  (drgnx-work-gui--cards-inside "thirty-1000" 1000)
+  (drgnx-work-gui--cards-inside "thirty-1600" nil))
 
 ;;; work-space-gui-test.el ends here
