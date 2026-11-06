@@ -850,14 +850,15 @@ rows), written by `drgnx-perf-extensions-write-archives`; no network. To write t
 | `extensions-scroll` | scrolling the full list, per key | `:key_max_ms` 16 |
 | `extensions-details` | opening a details page | `:open_ms` 50 |
 | `extensions-progress` | a running job's progress-file reads per second, and typing's p95 against idle | `:reads_per_s` 4, `:typing_delta_ms` 1 |
-| `activate-live` | repointing a running session into the generation that holds the old copies | `:activate_ms` 20 |
+| `activate-live` | a job's plan step: repointing the 40 package directories of a running session into the generation that holds the old copies (one walk of `load-path`) | `:activate_ms` 20 |
+| `activate-live-new` | a job's end that added a package, as the job layer passes it (`drgnx-extensions-live-after` of `(:status done)`): the new package activated from its own descriptor, the session holding 40 others | `:activate_ms` 20 |
 | `install-overhead` | an install's cost beyond the package manager's own, both children run | `:overhead_ms` 3000 (reported on ext4; macOS has APFS clones) |
 | `refresh-job` | the catalog refresh from the archives | none (reported) |
 | `list-packages-compare` | `list-packages` on the same fixtures, offline: first render, a `package-menu-filter-by-name` keystroke, scrolling, memory | none; `:beats_*` flags say whether the view wins each |
 
 The rows are provisional: they report and never fail until `DRGNX_PERF_LANDED` names `ext-pass`, the combined gate pass
 that judges them. Run them pinned, alone on the perf island:
-`DRGNX_PERF_WORKLOADS='extensions-open extensions-search extensions-scroll extensions-details extensions-progress activate-live install-overhead refresh-job list-packages-compare' perf-exclusive.sh env DRGNX_PERF_CPUS=4 bin/drgnx test --container --perf`.
+`DRGNX_PERF_WORKLOADS='extensions-open extensions-search extensions-scroll extensions-details extensions-progress activate-live activate-live-new install-overhead refresh-job list-packages-compare' perf-exclusive.sh env DRGNX_PERF_CPUS=4 bin/drgnx test --container --perf`.
 
 The hub's side is a Rust bench, `runtime/crates/drgnx-ratatoskr/benches/extensions.rs`: `catalog-load` (parse and merge
 7,150 rows) at most 100 ms and 15 MB, and `extensions/search` at most 3 ms at the 95th percentile. It is `#[ignore]`d;

@@ -72,20 +72,27 @@ modes index): ((NAME . ENTRY)…), ENTRY as `drgnx-extensions-index-of' gives it
 
 (defun drgnx-extensions-live--gen-elpa (n) (format "%s%d/elpa/" (drgnx-extensions-live--gens) n))
 
-(defun drgnx-extensions-live--where (path)
+(defun drgnx-extensions-live--roots ()
+  "(ELPA . GENS): the packages directory and the generations directory as directory names, read once per walk."
+  (cons (drgnx-extensions-live--elpa) (drgnx-extensions-live--gens)))
+
+(defun drgnx-extensions-live--where (path &optional roots)
   "Where PATH is: (N DIR REL) when it is at or under the package directory DIR (\"fa-1.0\") of generation N's elpa/
-\(N nil: elpa/ itself); REL is the rest (\"\" or \"lisp\").  Nil for any other path."
-  (let* ((p (file-name-as-directory (expand-file-name path)))
-         (elpa (drgnx-extensions-live--elpa)) (gens (drgnx-extensions-live--gens))
-         (hit (cond ((string-prefix-p elpa p) (cons nil (substring p (length elpa))))
-                    ((string-prefix-p gens p)
-                     (let ((rest (substring p (length gens))))
-                       (when (string-match "\\`\\([0-9]+\\)/elpa/" rest)
-                         (cons (string-to-number (match-string 1 rest)) (substring rest (match-end 0)))))))))
-    (when-let* ((rest (cdr hit)) ((string-match "\\`\\([^/]+\\)/\\(.*?\\)/?\\'" rest))
-                (dir (match-string 1 rest)) (sub (match-string 2 rest))
-                ((drgnx-pkg--dir-package dir)))
-      (list (car hit) dir sub))))
+\(N nil: elpa/ itself); REL is the rest (\"\" or \"lisp\").  Nil for any other path.  ROOTS is
+`drgnx-extensions-live--roots' when the caller read it already; a path under neither root costs two prefix tests."
+  (let* ((roots (or roots (drgnx-extensions-live--roots))) (elpa (car roots)) (gens (cdr roots))
+         (raw (if (string-prefix-p "/" path) path (expand-file-name path))))
+    (when (or (string-prefix-p elpa raw) (string-prefix-p gens raw))
+      (let* ((p (file-name-as-directory (expand-file-name raw)))
+             (hit (cond ((string-prefix-p elpa p) (cons nil (substring p (length elpa))))
+                        ((string-prefix-p gens p)
+                         (let ((rest (substring p (length gens))))
+                           (when (string-match "\\`\\([0-9]+\\)/elpa/" rest)
+                             (cons (string-to-number (match-string 1 rest)) (substring rest (match-end 0)))))))))
+        (when-let* ((rest (cdr hit)) ((string-match "\\`\\([^/]+\\)/\\(.*?\\)/?\\'" rest))
+                    (dir (match-string 1 rest)) (sub (match-string 2 rest))
+                    ((drgnx-pkg--dir-package dir)))
+          (list (car hit) dir sub))))))
 
 (defun drgnx-extensions-live--path (n dir rel)
   "The entry REL of the package directory DIR in generation N's elpa/ (N nil: elpa/)."
@@ -98,29 +105,36 @@ modes index): ((NAME . ENTRY)…), ENTRY as `drgnx-extensions-index-of' gives it
 
 (defun drgnx-extensions-live--session ()
   "The packages this session activated, by its `load-path': ((NAME . DIR)…), DIR the package directory it uses."
-  (let (out)
+  (let ((roots (drgnx-extensions-live--roots)) (out nil))
     (dolist (e load-path)
-      (when-let* (((stringp e)) (w (drgnx-extensions-live--where e)) (name (drgnx-extensions-live--name (nth 1 w))))
+      (when-let* (((stringp e)) (w (drgnx-extensions-live--where e roots)) (name (drgnx-extensions-live--name (nth 1 w))))
         (unless (assq name out) (push (cons name (nth 1 w)) out))))
     (nreverse out)))
 
-(defun drgnx-extensions-live--cells (dir)
-  "The `load-path' cells at or under the package directory DIR, wherever they point: ((CELL . WHERE)…)."
-  (let (out (cell load-path))
+(defun drgnx-extensions-live--table ()
+  "One walk of `load-path': a hash table from each package directory (\"fa-1.0\") that has entries at or under it to
+those entries' cells, in `load-path' order: ((CELL . WHERE)…).  Valid until `load-path' gains or loses a cell."
+  (let ((roots (drgnx-extensions-live--roots)) (table (make-hash-table :test #'equal)) (cell load-path))
     (while cell
-      (when-let* (((stringp (car cell))) (w (drgnx-extensions-live--where (car cell))) ((equal (nth 1 w) dir)))
-        (push (cons cell w) out))
+      (when-let* (((stringp (car cell))) (w (drgnx-extensions-live--where (car cell) roots)))
+        (puthash (nth 1 w) (cons (cons cell w) (gethash (nth 1 w) table)) table))
       (setq cell (cdr cell)))
-    (nreverse out)))
+    (maphash (lambda (dir cells) (puthash dir (nreverse cells) table)) table)
+    table))
+
+(defun drgnx-extensions-live--cells (dir &optional table)
+  "The `load-path' cells at or under the package directory DIR, wherever they point: ((CELL . WHERE)…).  TABLE is
+a `drgnx-extensions-live--table' the caller made already."
+  (gethash dir (or table (drgnx-extensions-live--table))))
 
 (defun drgnx-extensions-live--loaded ()
   "The package directories (\"fa-1.0\") a file of which this session loaded, by `load-history' (autoloads and
 descriptor files do not count: activation loads them)."
-  (let (out)
+  (let ((roots (drgnx-extensions-live--roots)) (out nil))
     (dolist (h load-history)
       (let ((f (car h)))
         (when (and (stringp f) (not (string-match-p "-\\(autoloads\\|pkg\\)\\.elc?\\'" f)))
-          (when-let* ((w (drgnx-extensions-live--where (file-name-directory f))))
+          (when-let* ((w (drgnx-extensions-live--where (file-name-directory f) roots)))
             (cl-pushnew (nth 1 w) out :test #'equal)))))
     out))
 
@@ -131,9 +145,10 @@ descriptor files do not count: activation loads them)."
               (sort (mapcar #'string-to-number (and (file-directory-p gens) (directory-files gens nil "\\`[0-9]+\\'")))
                     #'>))))
 
-(defun drgnx-extensions-live--move (dir n)
-  "Point the entries of the package directory DIR at generation N's elpa/ (N nil: elpa/), where the target exists."
-  (pcase-dolist (`(,cell . ,w) (drgnx-extensions-live--cells dir))
+(defun drgnx-extensions-live--move (dir n &optional table)
+  "Point the entries of the package directory DIR at generation N's elpa/ (N nil: elpa/), where the target exists.
+TABLE: as `drgnx-extensions-live--cells'."
+  (pcase-dolist (`(,cell . ,w) (drgnx-extensions-live--cells dir table))
     (let ((new (drgnx-extensions-live--path n dir (nth 2 w))))
       (when (file-directory-p new) (setcar cell new)))))
 
@@ -143,9 +158,9 @@ descriptor files do not count: activation loads them)."
 
 (defun drgnx-extensions-live--claim ()
   "Name the generations the session's `load-path' points into in its in-use file; with none, remove the file."
-  (let ((gens nil) (file (drgnx-extensions-live--in-use-file)))
+  (let ((gens nil) (file (drgnx-extensions-live--in-use-file)) (roots (drgnx-extensions-live--roots)))
     (dolist (e load-path)
-      (when-let* (((stringp e)) (n (car (drgnx-extensions-live--where e)))) (cl-pushnew n gens)))
+      (when-let* (((stringp e)) (n (car (drgnx-extensions-live--where e roots)))) (cl-pushnew n gens)))
     (if gens
         (drgnx-file-write file (list :pid (emacs-pid)
                                      :start (float-time (or (alist-get 'start (process-attributes (emacs-pid))) 0))
@@ -165,24 +180,26 @@ descriptor files do not count: activation loads them)."
 
 (defun drgnx-extensions-live--repoint (dirs n)
   "Point each `load-path' entry at or under the package directories DIRS of elpa/ at its copy in generation N's
-elpa/ (one `setcar' each), where the copy exists; a package with no copy (or N nil) is marked at once."
-  (dolist (dir dirs)
-    (let ((seen nil) (moved nil))
-      (pcase-dolist (`(,cell . ,w) (drgnx-extensions-live--cells dir))
-        (unless (car w)                                 ; under elpa/, not already in a generation
-          (setq seen t)
-          (let ((new (and n (drgnx-extensions-live--path n dir (nth 2 w)))))
-            (when (and new (file-directory-p new))
-              (push (cons new (car cell)) drgnx-extensions-live--moved)
-              (setcar cell new)
-              (setq moved t)))))
-      (when (and seen (not moved))
-        (let ((name (drgnx-extensions-live--name dir)))
-          (setq drgnx-extensions-live--restart
-                (drgnx-extensions-live--put drgnx-extensions-live--restart name
-                                            (format "files of %s %s are not kept for this session: restart drgnx"
-                                                    name (drgnx-extensions-live--version dir))))
-          (cl-pushnew name drgnx-extensions-live--marked))))))
+elpa/ (one `setcar' each), where the copy exists; a package with no copy (or N nil) is marked at once.  One walk of
+`load-path' for all of DIRS."
+  (let ((table (drgnx-extensions-live--table)))
+    (dolist (dir dirs)
+      (let ((seen nil) (moved nil))
+        (pcase-dolist (`(,cell . ,w) (drgnx-extensions-live--cells dir table))
+          (unless (car w)                                 ; under elpa/, not already in a generation
+            (setq seen t)
+            (let ((new (and n (drgnx-extensions-live--path n dir (nth 2 w)))))
+              (when (and new (file-directory-p new))
+                (push (cons new (car cell)) drgnx-extensions-live--moved)
+                (setcar cell new)
+                (setq moved t)))))
+        (when (and seen (not moved))
+          (let ((name (drgnx-extensions-live--name dir)))
+            (setq drgnx-extensions-live--restart
+                  (drgnx-extensions-live--put drgnx-extensions-live--restart name
+                                              (format "files of %s %s are not kept for this session: restart drgnx"
+                                                      name (drgnx-extensions-live--version dir))))
+            (cl-pushnew name drgnx-extensions-live--marked)))))))
 
 (defun drgnx-extensions-live-before (names)
   "Before a job for the packages NAMES starts: the package directories of theirs this session uses from elpa/ point
@@ -258,12 +275,13 @@ the rest.  The marks are made again from what the session and elpa/ hold."
   (let* ((elpa (mapcar (lambda (d) (cons (drgnx-extensions-live--name d) d))
                        (drgnx-pkg--package-dirs (drgnx-extensions-live--elpa))))
          (session (drgnx-extensions-live--session))
+         (table (drgnx-extensions-live--table))
          (loaded (drgnx-extensions-live--loaded))
          (changed (seq-remove (lambda (p) (equal (cdr p) (alist-get (car p) elpa))) session))
          ;; each changed package with what its running and its new version need
          (links (mapcar (lambda (p)
                           (cons (car p)
-                                (append (drgnx-extensions-live--reqs (cdr p) (nth 1 (car (drgnx-extensions-live--cells (cdr p)))))
+                                (append (drgnx-extensions-live--reqs (cdr p) (nth 1 (car (drgnx-extensions-live--cells (cdr p) table))))
                                         (when-let* ((new (alist-get (car p) elpa))) (drgnx-extensions-live--reqs new nil)))))
                         changed))
          ;; a loaded one keeps its old version, and so does everything changed linked to it
@@ -272,14 +290,14 @@ the rest.  The marks are made again from what the session and elpa/ hold."
          (marks nil))
     (dolist (p session)
       (let ((new (alist-get (car p) elpa)))
-        (cond ((not (memq p changed)) (drgnx-extensions-live--move (cdr p) nil))   ; the version elpa/ has: back there
+        (cond ((not (memq p changed)) (drgnx-extensions-live--move (cdr p) nil table))   ; the version elpa/ has: back there
               ((memq (car p) kept)
                (push (cons (car p) (if new (format "Restart to use %s (%s is running)" (drgnx-extensions-live--version new)
                                                    (drgnx-extensions-live--version (cdr p)))
                                      "Restart to finish removing"))
                      marks))
               (new                               ; nothing of it is loaded: its new version takes its place
-               (pcase-dolist (`(,cell . ,_) (drgnx-extensions-live--cells (cdr p))) (setcar cell nil))
+               (pcase-dolist (`(,cell . ,_) (drgnx-extensions-live--cells (cdr p) table)) (setcar cell nil))
                (setq load-path (delq nil load-path)
                      package-activated-list (delq (car p) package-activated-list))))))
     ;; packages new to the session, unless one they need runs at another version
@@ -293,8 +311,14 @@ the rest.  The marks are made again from what the session and elpa/ hold."
           (when (and (not (memq name blocked)) (seq-some (lambda (r) (memq r blocked)) reqs))
             (push name blocked)
             (setq more t))))
-      (let ((package-alist nil) (package-user-dir (drgnx-extensions-live--elpa)) (package-directory-list nil))
-        (package-load-all-descriptors)
+      (let ((package-alist nil) (package-user-dir (drgnx-extensions-live--elpa)) (package-directory-list nil)
+            (todo (mapcar #'car fresh)))
+        ;; the descriptors of the new packages and of what they need, not of every installed package
+        (while todo
+          (let* ((name (pop todo)) (dir (alist-get name elpa)))
+            (when (and dir (not (assq name package-alist)))
+              (when-let* ((d (ignore-errors (package-load-descriptor (drgnx-extensions-live--path nil dir "")))))
+                (dolist (r (package-desc-reqs d)) (push (car r) todo))))))
         (pcase-dolist (`(,name . ,dir) fresh)
           (if (memq name blocked)
               (push (cons name (format "Restart to use %s %s (it needs %s, which runs at another version)" name
@@ -304,13 +328,14 @@ the rest.  The marks are made again from what the session and elpa/ hold."
             (condition-case err (package-activate name)
               (error (push (cons name (format "%s did not activate: %s" name (error-message-string err))) marks)))))))
     ;; every package directory the session uses is there, or comes from a generation that has it
-    (pcase-dolist (`(,name . ,dir) (drgnx-extensions-live--session))
-      (let ((n (nth 1 (car (drgnx-extensions-live--cells dir)))))
-        (unless (file-directory-p (drgnx-extensions-live--path n dir ""))
-          (if-let* ((copy (drgnx-extensions-live--copy dir)))
-              (drgnx-extensions-live--move dir copy)
-            (setq marks (drgnx-extensions-live--put
-                         marks name (format "files of %s %s are gone: restart drgnx" name (drgnx-extensions-live--version dir))))))))
+    (let ((table (drgnx-extensions-live--table)))       ; again: entries left and came
+      (pcase-dolist (`(,name . ,dir) (drgnx-extensions-live--session))
+        (let ((n (nth 1 (car (drgnx-extensions-live--cells dir table)))))
+          (unless (file-directory-p (drgnx-extensions-live--path n dir ""))
+            (if-let* ((copy (drgnx-extensions-live--copy dir)))
+                (drgnx-extensions-live--move dir copy table)
+              (setq marks (drgnx-extensions-live--put
+                           marks name (format "files of %s %s are gone: restart drgnx" name (drgnx-extensions-live--version dir)))))))))
     (setq drgnx-extensions-live--restart marks)))
 
 (defun drgnx-extensions-live--modes-off (removed)
@@ -343,11 +368,12 @@ on), and their buffer minor modes go off in every buffer.  Never prompts."
     (seq-remove (lambda (r) (memq (car r) there)) drgnx-extensions-live--removing)))
 
 (defun drgnx-extensions-live-after (result)
-  "When a job ends (RESULT: its done object; :ok t when it went well): settle the session on the packages directory
-and turn off the modes of the packages it took away, or point back into it after a failed or stopped job; claim
-the generations still used; then run the modules that waited for packages.  Never signals."
+  "When a job ends (RESULT: the job layer's result, `drgnx-extensions-jobs-done-functions'; :status `done' when it
+went well, `failed' or `stopped' otherwise): settle the session on the packages directory and turn off the modes of
+the packages it took away, or point back into it after a failed or stopped job; claim the generations still used;
+then run the modules that waited for packages.  Never signals."
   (condition-case err
-      (let ((ok (eq (plist-get result :ok) t)))
+      (let ((ok (eq (plist-get result :status) 'done)))
         (if ok
             (progn (drgnx-extensions-live--settle)
                    (drgnx-extensions-live--modes-off (drgnx-extensions-live--gone)))

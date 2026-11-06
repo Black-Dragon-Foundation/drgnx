@@ -65,7 +65,8 @@
 (defun drgnx-extensions-live-test--job (s root args &optional at-plan)
   "Run the package CLI with ARGS as an Extensions job does, with the session S taking part: the child parks at its
 plan step, S repoints (`drgnx-extensions-live-plan' of the plan file), AT-PLAN (a function, or nil) runs, the child
-goes on to its end and S settles (`drgnx-extensions-live-after' of the done object).  The child's exit status."
+goes on to its end and S settles (`drgnx-extensions-live-after' of the result the job layer gives for that exit: the
+hub's `done' with exit 0 is `done', any other exit `failed').  The child's exit status."
   (let ((progress (concat root "progress/p.json")))
     (dolist (f (list progress (concat progress ".plan.json"))) (when (file-exists-p f) (delete-file f)))
     (let ((p (drgnx-pkg-child-start root (append args (list "--progress" progress)) '("plan"))))
@@ -75,7 +76,8 @@ goes on to its end and S settles (`drgnx-extensions-live-after' of the done obje
       (when at-plan (funcall at-plan))
       (drgnx-test-child-go p)
       (drgnx-test-wait-ended (list p) :secs 600 :what "the job's sync to end")
-      (drgnx-extensions-live-test--eval s `(drgnx-extensions-live-after ',(drgnx-extensions-live-test--json progress)))
+      (drgnx-extensions-live-test--eval
+       s `(drgnx-extensions-live-after '(:status ,(if (eql (process-exit-status p) 0) 'done 'failed) :kind sync)))
       (process-exit-status p))))
 
 (defun drgnx-extensions-live-test--entries (s root)

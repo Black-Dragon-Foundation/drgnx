@@ -101,17 +101,22 @@ file's removal on `kill-emacs-hook`.
   `(drgnx-extensions-live-before NAMES)`, each directory of NAMES), every `load-path` entry equal to `elpa/D` or under
   it is replaced, one `setcar` on its cell, by its counterpart under `generations/N/elpa/D` — N the plan's generation
   (the current one for `-before`) — **only when that counterpart exists**. A package with no copy (a stock install, a
-  sync with a missing package) is marked "restart drgnx" at once and its entries stay.
+  sync with a missing package) is marked "restart drgnx" at once and its entries stay. One walk of `load-path` builds
+  a table from package directory to its cells (an entry under neither `elpa/` nor `generations/` costs two prefix
+  tests), whatever the number of packages the plan names.
 - **The claim.** Whenever the session points into a generation it writes `<state>/elpa-in-use/PID.eld`
   (`(:pid P :start S :generations (N…))`, `drgnx-file-write`); with none, and at `kill-emacs`, the file goes.
   Snapshot rotation keeps those generations (`drgnx-pkg-generations-in-use`).
-- **After the job** (`(drgnx-extensions-live-after RESULT)`, RESULT the done object). Not `:ok t`: the entries the
-  job moved go back under `elpa/` and its marks go. `:ok t`: the session settles on `elpa/`, recomputing every mark —
+- **After the job** (`(drgnx-extensions-live-after RESULT)`, RESULT the job layer's result as
+  `drgnx-extensions-jobs-done-functions` pass it, never the progress file's done object). `:status` `failed` or
+  `stopped`: the entries the job moved go back under `elpa/` and its marks go. `:status done`: the session settles on
+  `elpa/`, recomputing every mark —
   a package at elpa's version points back there; a changed package is loaded when `load-history` holds a file of its
   directory (autoloads and `-pkg` files do not count), and it keeps its old version together with every changed
   package linked to it by requirements, either way ("Restart to use 1.1 (1.0 is running)", or "Restart to finish
   removing" for a removed one); the others leave `load-path` and `package-activated-list`, and every package of
-  `elpa/` new to the session is activated with `package-activate` from fresh descriptors, unless it needs a kept one
+  `elpa/` new to the session is activated with `package-activate` from fresh descriptors (its own and those of what it
+  needs, never every installed package's), unless it needs a kept one
   (marked instead); a directory in use that is gone is repointed into the newest generation holding it, else marked
   "files of dash 2.19 are gone: restart drgnx". Then `drgnx-modules-retry-waiting`.
 - **A removed package's modes go off.** The plan step reads the modes index entry of each package `removes` names

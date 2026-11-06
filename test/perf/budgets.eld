@@ -160,5 +160,6 @@
  (extensions-scroll (:key_max_ms) 16 :report-only ext-pass)
  (extensions-details (:open_ms) 50 :report-only ext-pass)
  (extensions-progress (:reads_per_s) 4 :report-only ext-pass) (extensions-progress (:typing_delta_ms) 1 :report-only ext-pass)
- (activate-live (:activate_ms) 20 :report-only ext-pass)
+ (activate-live (:activate_ms) 20 :report-only ext-pass)   ; the plan step's repoint of 40 packages
+ (activate-live-new (:activate_ms) 20 :report-only ext-pass)   ; a job's end that added a package: it is activated
  (install-overhead (:overhead_ms) 3000 :report-only ext-pass))

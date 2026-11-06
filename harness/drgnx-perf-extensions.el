@@ -375,6 +375,37 @@ each: (TIMES . READS-PER-SECOND)."
        (drgnx-perf-extensions--leave)
        t)
 
+     ;; activate-live-new: what the budget names, a package installed while the session runs: the job layer's end of
+     ;; a sync that added one package, the session holding the fixture's packages (activated, nothing loaded)
+     (defvar drgnx-perf-extensions--activated nil "`package-activated-list' before the fixture.")
+     (defun drgnx-perf-extensions-activate-new-setup ()
+       (drgnx-perf-extensions-activate-setup)
+       (setq drgnx-perf-extensions--activated package-activated-list)
+       (dolist (d drgnx-perf-extensions--live-dirs)
+         (let ((name (car (drgnx-pkg--dir-package d))))
+           (drgnx-perf-extensions--write (expand-file-name (format "%s/%s-pkg.el" d name) (drgnx-elpa-dir))
+                                         (format "(define-package %S \"1.0\" \"fixture\" nil)\n" name))))
+       (let ((dir (expand-file-name "perfnew-1.0" (drgnx-elpa-dir))))
+         (drgnx-perf-extensions--write (expand-file-name "perfnew-pkg.el" dir) "(define-package \"perfnew\" \"1.0\" \"new\" nil)\n")
+         (drgnx-perf-extensions--write (expand-file-name "perfnew-autoloads.el" dir)
+                                       "(defun drgnx-perf-extensions-perfnew () 'perfnew)\n"))
+       t)
+     (defun drgnx-perf-extensions-activate-new-each ()
+       (drgnx-perf-extensions-activate-each)
+       (setq package-activated-list (append (mapcar (lambda (d) (intern (car (drgnx-pkg--dir-package d))))
+                                                    drgnx-perf-extensions--live-dirs)
+                                            drgnx-perf-extensions--activated))
+       (when (fboundp 'drgnx-perf-extensions-perfnew) (fmakunbound 'drgnx-perf-extensions-perfnew))
+       t)
+     (defun drgnx-perf-extensions-activate-new-measure ()
+       (let ((ms (drgnx-perf-extensions--ms (lambda () (drgnx-extensions-live-after '(:status done :kind sync))))))
+         (unless (memq 'perfnew package-activated-list) (error "perfnew was not activated: %S" drgnx-extensions-live--restart))
+         (list :activate_ms (drgnx-perf-extensions--r ms) :activated (if (fboundp 'drgnx-perf-extensions-perfnew) 1 0))))
+     (defun drgnx-perf-extensions-activate-new-teardown ()
+       (setq package-activated-list drgnx-perf-extensions--activated drgnx-perf-extensions--activated nil)
+       (when (fboundp 'drgnx-perf-extensions-perfnew) (fmakunbound 'drgnx-perf-extensions-perfnew))
+       (drgnx-perf-extensions-activate-teardown))
+
      ;; refresh-job: the catalog written from the four full archives by a batch Emacs, as the job runs it
      (defun drgnx-perf-extensions-refresh-setup ()
        (let ((dir (drgnx-perf-extensions--enter)))
@@ -509,8 +540,8 @@ each: (TIMES . READS-PER-SECOND)."
 
 (defconst drgnx-perf-extensions--names
   '((open . extensions-open) (search . extensions-search) (scroll . extensions-scroll) (details . extensions-details)
-    (progress . extensions-progress) (activate . activate-live) (install . install-overhead) (refresh . refresh-job)
-    (compare . list-packages-compare))
+    (progress . extensions-progress) (activate . activate-live) (activate-new . activate-live-new)
+    (install . install-overhead) (refresh . refresh-job) (compare . list-packages-compare))
   "Library prefix → workload name.")
 
 (defun drgnx-perf-extensions--form (&rest calls)
@@ -531,7 +562,7 @@ each: (TIMES . READS-PER-SECOND)."
                      :setup (drgnx-perf-extensions--form (funcall fn "setup"))
                      :measure (drgnx-perf-extensions--measure-form prefix)
                      :teardown (drgnx-perf-extensions--form (funcall fn "teardown")))
-               (when (memq prefix '(open search scroll details progress compare activate))
+               (when (memq prefix '(open search scroll details progress compare activate activate-new))
                  (list :each (drgnx-perf-extensions--form (funcall fn "each")))))))
    drgnx-perf-extensions--names))
 
