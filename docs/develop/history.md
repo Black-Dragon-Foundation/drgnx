@@ -369,7 +369,13 @@ recorded in (`history/revert/preview {decision}`). Things the rows fix as they a
   (its own tools, a shell), is not covered: no hub write marks the point, so such a write made at once after an edit
   can still be in the edit's checkpoint.
 - The user's edits are those made after the agent's last step. Edits between two steps count as the agent's, and
-  keep-mine puts the checkpoint's file back over them.
+  keep-mine puts the checkpoint's file back over them. The edit history does know such an edit is not the agent's (a
+  drgnx buffer's changes reach it through Nidhogg's hook as `history/batch`, by the user's peer, at once; another
+  program's through the watcher as `external:disk`), but the revert's files come from the checkpoints, which hold
+  whole trees and cannot tell. Keeping it means taking such a file's text from the history's own keep-mine
+  (`History::preview_revert` over the records the session caused after the step) instead of the checkpoint, and that
+  holds only where every change the agent made to the file is its record: a write outside ACP comes in as
+  `external:disk` and would pass for the user's.
 - A file the agent created and the user then edited has no base to merge from: the card shows an overlap, and the
   default answer keeps the user's file.
 - Two edits that touch neighbouring lines of one file are a conflict in the merge, so they too come back as an overlap.
