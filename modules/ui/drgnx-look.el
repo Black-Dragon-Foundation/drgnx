@@ -22,6 +22,11 @@
   (load (expand-file-name "drgnx-look-fonts" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-look-density)
   (load (expand-file-name "drgnx-look-density" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+;; and the colours it derives from other themes
+(unless (featurep 'drgnx-look-derive)
+  (load (expand-file-name "drgnx-look-derive" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(declare-function drgnx-look-derive-on "drgnx-look-derive" ())
+(declare-function drgnx-look-derive-off "drgnx-look-derive" ())
 (declare-function drgnx-look-density-on "drgnx-look-density" ())
 (declare-function drgnx-look-density-off "drgnx-look-density" ())
 (declare-function drgnx-look-fonts-on "drgnx-look-fonts" ())
@@ -185,6 +190,7 @@ else enabled since stays)."
   (when (frame-parameter nil 'drgnx-look-zen) (drgnx-look-zen))
   (drgnx-look-density-off)
   (drgnx-look-fonts-off)
+  (drgnx-look-derive-off)
   (when drgnx-look--taken
     (dolist (theme (plist-get drgnx-look--taken :ours))
       (when (memq theme custom-enabled-themes) (disable-theme theme)))
@@ -273,6 +279,7 @@ refuses (`drgnx-settings-refused') before the theme changes."
                        (drgnx-state-subscribe 'windows-changed #'drgnx-look--cards-windows-changed :lane 'now)
                        (drgnx-state-subscribe 'frame-resized #'drgnx-look--cards-frame-resized)
                        (drgnx-look-cards-apply)
+                       (drgnx-look-derive-on)
                        (drgnx-look-fonts-on)
                        (drgnx-look-density-on)
                        (drgnx-command-define 'preferences-theme :category "Preferences" :title "Color Theme"
