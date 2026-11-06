@@ -234,8 +234,9 @@
       (should (string-search "  a.txt " tabs))            ; 2-space padding
       (should (eq (funcall face-of "a.txt") 'drgnx-chrome-tab))
       (should (eq (funcall face-of "b.txt") 'drgnx-chrome-tab-active)))
+    ;; no height of their own: a relative 1.0 kept the tab line's height and cost a font spec copy per tab run
     (dolist (f '(drgnx-chrome-tab drgnx-chrome-tab-current drgnx-chrome-tab-active))
-      (should (eql (face-attribute f :height nil nil) 1.0))))
+      (should (eq (face-attribute f :height nil nil) 'unspecified))))
   (should (eq (face-attribute 'drgnx-chrome-tab-active :overline nil nil) t))
   (should (memq (face-attribute 'drgnx-chrome-tab-current :overline nil nil) '(nil unspecified))))
 

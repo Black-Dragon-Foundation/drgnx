@@ -27,11 +27,12 @@
 (declare-function drgnx-look-density-value "drgnx-look-density" (key &optional density))
 (declare-function drgnx-groups-split-right "drgnx-groups")
 
-(defface drgnx-chrome-tab '((t :inherit (shadow tab-line-tab-inactive) :height 1.0 :box nil))
-  "A tab in an editor's tab line: dimmed, at the text's height (the theme's `tab-line' is smaller)." :group 'drgnx)
-(defface drgnx-chrome-tab-current '((t :inherit tab-line-tab-current :height 1.0 :box nil :weight bold))
+;; No `:height' in the tab faces: a relative 1.0 scales by one, and costs a font spec copy at every run of the tab line.
+(defface drgnx-chrome-tab '((t :inherit (shadow tab-line-tab-inactive) :box nil))
+  "A tab in an editor's tab line: dimmed." :group 'drgnx)
+(defface drgnx-chrome-tab-current '((t :inherit tab-line-tab-current :box nil :weight bold))
   "The shown tab of an editor group that is not the active one." :group 'drgnx)
-(defface drgnx-chrome-tab-active '((t :inherit (link tab-line-tab-current) :height 1.0 :box nil :weight bold
+(defface drgnx-chrome-tab-active '((t :inherit (link tab-line-tab-current) :box nil :weight bold
                                       :underline nil :overline t))
   "The shown tab of the active editor group: the theme's link colour, overlined." :group 'drgnx)
 (defface drgnx-chrome-tab-hover '((t :inherit tab-line-highlight))

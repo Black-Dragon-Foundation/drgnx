@@ -31,7 +31,7 @@
 ;; The close button's face is the kit's; the old name stays, so a saved customization of it still applies.
 (put 'drgnx-wb-close 'face-alias 'drgnx-ui-close)
 
-(defface drgnx-wb-bar '((t :inherit tab-line :height 1.0 :box nil))
+(defface drgnx-wb-bar '((t :inherit tab-line :box nil))
   "The band of a header row (breadcrumb, a dock section's title, a panel's tab row): the theme's tab-line
 background, not the header line's, so every row of chrome is one colour and follows the theme." :group 'drgnx)
 

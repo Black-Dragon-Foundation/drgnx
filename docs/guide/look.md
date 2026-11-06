@@ -186,7 +186,8 @@ relative to `default`, except for the chrome's faces (`drgnx-ui-text`, `drgnx-ui
 `drgnx-ui-title`, `drgnx-code-small`): they get the absolute height their size gives on `default` (Emacs copies a font
 spec at every run of a face with a relative height, and the bars and the sidebar's rows are many runs). drgnx writes it
 again whenever the code size, the theme or a zoom (`View: Zoom In`) changes `default`, and in a buffer you scale with
-`C-x C-+` it remaps them by the same scale, so they look as a relative height would.
+`C-x C-+` it remaps them by the same scale, so they look as a relative height would. For the same reason the editor
+tabs' faces and the header rows' band (`drgnx-wb-bar`) name no `:height` at all.
 
 ## Density
 

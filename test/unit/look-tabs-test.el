@@ -151,5 +151,13 @@ frame: a terminal frame's tabs keep their × when a graphical frame refreshes ev
     (should (eq 'drgnx-ui-close (get-text-property 0 'face (drgnx-look-hover-control "×" nil 'a-terminal))))
     (should (eq 'drgnx-control-hidden (get-text-property 0 'face (drgnx-look-hover-control "×"))))))
 
+(ert-deftest drgnx-look-tabs/the-tab-and-bar-faces-have-no-relative-height ()
+  "Pattern D: the tabs' faces and the bars' (`drgnx-wb-bar': the header lines) name no float `:height'.  A relative
+height of 1.0 scales by one, so it changed nothing on screen, and Emacs copied a font spec at every run of the tab line
+and the header line for it."
+  (dolist (face '(drgnx-chrome-tab drgnx-chrome-tab-current drgnx-chrome-tab-active drgnx-wb-bar))
+    (should (equal (list face nil)
+                   (list face (floatp (plist-get (face-spec-choose (face-default-spec face)) :height)))))))
+
 (provide 'look-tabs-test)
 ;;; look-tabs-test.el ends here
