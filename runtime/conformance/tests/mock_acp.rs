@@ -205,7 +205,7 @@ fn claude_logs_its_options_and_sends_usage_and_a_rate_limit() {
 }
 
 #[test]
-fn codex_reads_overrides_from_argv_and_sends_usage_and_a_window() {
+fn codex_logs_its_lock_and_sends_usage_and_a_window() {
     let d = dir();
     let log = d.path().join("log");
     let mut a = Acp::start(&[
@@ -228,8 +228,13 @@ fn codex_reads_overrides_from_argv_and_sends_usage_and_a_window() {
             && m["params"]["primary"]["windowMinutes"] == 300)
     );
     let l = log_lines(&log);
-    let o = l.iter().find_map(|v| v.get("codex_overrides")).unwrap();
-    assert_eq!(o, &json!(["approval_policy=never", "model=x"]));
+    // what codex-acp 2.x reads is its environment (unset here); the argv overrides it ignores are logged beside it
+    let o = l.iter().find_map(|v| v.get("codex_config")).unwrap();
+    assert_eq!(
+        o["argv_overrides"],
+        json!(["approval_policy=never", "model=x"])
+    );
+    assert!(o["config"].is_null() && o["mode"].is_null(), "{o}");
 }
 
 fn fork_at(who: &str, msg: &str) -> Value {

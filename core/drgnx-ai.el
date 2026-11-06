@@ -554,23 +554,44 @@ reads it back, and a Keychain item that does not match is deleted (`drgnx-ai--ke
 
 ;;;; Agent environments (agent profiles; M9b adds more kinds)
 
-(defconst drgnx-ai-gateway-kinds '(claude-openrouter claude-ollama claude-anthropic claude-moonshot claude-deepseek)
-  "Agent profile kinds whose traffic the agent gateway may carry (the hub's gateway).")
+(defconst drgnx-ai-gateway-kinds
+  '(claude-openrouter claude-ollama claude-anthropic kimi-moonshot dsh-deepseek claude-moonshot claude-deepseek)
+  "Agent profile kinds whose traffic the agent gateway may carry (the hub's gateway).  `kimi-moonshot' and
+`dsh-deepseek' are the vendors' own agents (Kimi Code, DeepSeek Harness) on their own APIs; `claude-moonshot' and
+`claude-deepseek' (Claude Code on those APIs) are retired from the built-in profiles and still run
+\(`drgnx-ai-retired-kind-note').")
+
+(defconst drgnx-ai-retired-kinds
+  '((claude-moonshot . "kimi") (claude-deepseek . "deepseek"))
+  "Agent kinds no built-in profile uses any more, each with the built-in profile that replaces it.")
+
+(defvar drgnx-ai--retired-noted nil
+  "The retired kinds `drgnx-ai-retired-kind-note' has named in this Emacs session.")
+
+(defun drgnx-ai-retired-kind-note (kind)
+  "Once per Emacs session for each retired KIND (`drgnx-ai-retired-kinds'): the status line naming the profile that
+replaces it (the session still starts).  Nil for another kind, or one named already."
+  (when-let* ((new (alist-get kind drgnx-ai-retired-kinds))
+              ((not (memq kind drgnx-ai--retired-noted))))
+    (push kind drgnx-ai--retired-noted)
+    (format "drgnx: the agent kind %s (Claude Code on the vendor's own API) is retired; the built-in profile %S runs \
+the vendor's own agent" kind new)))
 
 (defun drgnx-ai-agent-gateway-chain (kind &optional model)
   "The providers ((PROVIDER . MODEL)…) an agent of KIND may use through the gateway, in order.  MODEL (the
-profile's) names the model of the one provider of `claude-moonshot', `claude-deepseek' and `claude-openrouter';
-`claude-openrouter' without it follows the `agent' role."
+profile's) names the model of the one provider of `kimi-moonshot', `dsh-deepseek' (and the retired
+`claude-moonshot', `claude-deepseek') and `claude-openrouter'; `claude-openrouter' without it follows the `agent'
+role."
   (pcase kind
     ('claude-openrouter (if model (list (cons 'openrouter model)) (drgnx-ai-role 'agent)))
     ('claude-ollama '((ollama)))
     ('claude-anthropic '((anthropic)))
-    ('claude-moonshot (list (cons 'moonshot model)))
-    ('claude-deepseek (list (cons 'deepseek model)))))
+    ((or 'kimi-moonshot 'claude-moonshot) (list (cons 'moonshot model)))
+    ((or 'dsh-deepseek 'claude-deepseek) (list (cons 'deepseek model)))))
 
 (defconst drgnx-ai--agent-providers
   '((claude-openrouter . openrouter) (claude-ollama . ollama) (claude-anthropic . anthropic)
-    (claude-moonshot . moonshot) (claude-deepseek . deepseek))
+    (kimi-moonshot . moonshot) (dsh-deepseek . deepseek) (claude-moonshot . moonshot) (claude-deepseek . deepseek))
   "Each gateway kind's own provider: the one whose key decides whether the kind is keyed (`drgnx-ai-agent-keyed-p').")
 
 (defun drgnx-ai-agent-keyed-p (kind)
@@ -582,8 +603,10 @@ keyless one (Ollama) may go direct."
 
 (defun drgnx-ai-check-agent-model (kind model)
   "Signal a `user-error' when an agent of KIND needs a MODEL and has none: the vendors' own APIs
-\(`claude-moonshot', `claude-deepseek') do not know Claude Code's default model names."
-  (when (and (memq kind '(claude-moonshot claude-deepseek)) (not (and (stringp model) (not (string-empty-p model)))))
+\(`kimi-moonshot', `dsh-deepseek', and the retired `claude-moonshot', `claude-deepseek') do not know an agent's
+default model names."
+  (when (and (memq kind '(kimi-moonshot dsh-deepseek claude-moonshot claude-deepseek))
+             (not (and (stringp model) (not (string-empty-p model)))))
     (user-error "The %s agent profile needs a :model (the vendor's model name)" kind)))
 
 (defun drgnx-ai-agent-env (profile &optional gateway)
@@ -596,6 +619,8 @@ Sonnet, Opus and subagent models, and :small-model (else the :model) for the sma
 `ANTHROPIC_DEFAULT_HAIKU_MODEL' (Claude Code's current variable; `ANTHROPIC_SMALL_FAST_MODEL' is deprecated).  A
 subscription CLI gets nothing: it uses its own login, which drgnx never reads."
   (drgnx-ai-check-agent-model (plist-get profile :kind) (plist-get profile :model))
+  (when-let* ((note (drgnx-ai-retired-kind-note (plist-get profile :kind))))
+    (message "%s" note))
   (let ((env (drgnx-ai--agent-route-env profile gateway))
         (model (plist-get profile :model)))
     (if (and env (stringp model))

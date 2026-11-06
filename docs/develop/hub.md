@@ -868,8 +868,13 @@ the status bar.
 ## Session start: lock, sandbox and matrix
 
 A session starts in this order (`agents/session.rs`): the matrix's cells for the session's columns, `lock::plan` (Claude's
-managed settings plus the deny/ask rules of the user's and the worktree's settings, Codex's `-c` overrides plus
-`projects."<cwd>".trust_level="untrusted"`, Gemini's `--approval-mode default`), a refusal of a worker or manager whose
+managed settings plus the deny/ask rules of the user's and the worktree's settings, Codex's `CODEX_CONFIG` and
+`INITIAL_AGENT_MODE`, Gemini's `--approval-mode default`, Kimi Code's and DeepSeek Harness's hub-owned homes), then
+the lock's parts that depend on the session's subscribed `before-tool` kinds and folder (`with_hook_asks`: Claude's
+managed ask rules; `with_locks`: Codex's untrusted worktree and managed hook, Gemini's `--admin-policy`, Kimi Code's
+ask rules, DeepSeek Harness's `--patch` overlay; `with_gateway_env`), a refusal of a session that would run a
+subscribed kind unhooked (`lock::hooked`, `lock::unhooked_refusal`: an agent with no lock, a Gemini whose system policy
+shadows the admin policy), a refusal of a worker or manager whose
 lock is not enforced unless the preset is autonomous, a refusal of a chat in a project whose `chat.project-read`
 cell is never (the message names the row; it is not started without the project instead), `launch::spawn` (`spawn_plain` for a chat in its own scratch
 directory, `spawn_chat` for a chat in a project: the project read-only, its scratch directory the only writable path;
@@ -879,6 +884,23 @@ handshake, `lock::verify` (a lock that does not hold kills the session). Every p
 refuses at once, an ask waits for the user; a session's `exec/start` is checked as `code.edit` the same way. For the
 browser rows an ask that the user's matrix grant for the session or its plan already covers is allowed with no card
 ([coordination.md](coordination.md), "Grant records").
+
+**The lock's files** (`LaunchPlan::ro_files`, `sandbox::lock_files`): one in the session dir (`lock/gemini-policy.toml`,
+`lock/dsh-overlay.yml`) is written there, and the agent reads that dir and never writes it on every target; one at a
+fixed path (`/etc/codex/requirements.toml`, `/etc/codex/config.toml`, Kimi Code's `config.toml` in its home) is
+written to the session's scratch and bound read-only at that path, which only the full tier can do: elsewhere the
+launch is refused (`Rule::Setup`). The user's own `/etc` is never touched. A gateway plan's `gateway_url_env` names the
+variables that get the relay's URL beside `ANTHROPIC_BASE_URL` (Kimi Code's, DeepSeek Harness's).
+
+**The `before_tool` tool** (`agents/before_tool_tool.rs`): a Codex session whose hooks subscribe to a kind other than
+`drgnx` is marked before its MCP session opens (`Sessions::mark_before_tool`), and its socket serves `before_tool
+{tool_name, tool_input, tool_use_id}` beside the coordination tools, outside the hook wrapper they share. Codex's
+managed PreToolUse hook (an `mcp_tool` handler in the lock's `/etc/codex/config.toml`) calls it before each tool: it
+runs `hook_points::before_tool` at `At::Adapter` (no `change`) with the kind of Codex's tool name (its shell `execute`,
+`apply_patch` `edit`, …) and answers `{}`, or a deny in the hook's shape (`hookSpecificOutput.permissionDecision`),
+never an `allow` (Codex's approvals still decide). A hub tool's name is answered `{}` without running anything (it is
+hooked at its server), and the seam records nothing for `mcp__drgnx__before_tool`, so it never hooks itself. Codex
+fails the hook open on a timeout, so the snapshot lists those kinds under `hooked.by_adapter` with that note.
 
 ## Sessions across a restart
 

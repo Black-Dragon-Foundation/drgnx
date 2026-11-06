@@ -1,5 +1,6 @@
-//! The Codex personality (codex-acp): `resume, list, close, fork`, `-c key=value` overrides in argv (logged), forks
-//! at a turn (a message id keeps its whole turn), `usage_update {used,size}` and a rate-limit window.
+//! The Codex personality (codex-acp 2.x): `resume, list, close, fork`; what it reads of its lock is its environment
+//! (`CODEX_CONFIG`, `INITIAL_AGENT_MODE`; logged, with the argv `-c` overrides it ignores), forks at a turn (a message
+//! id keeps its whole turn), `usage_update {used,size}` and a rate-limit window.
 
 use serde_json::{Value, json};
 
@@ -13,6 +14,16 @@ pub fn overrides(argv: &[String]) -> Vec<String> {
         .filter(|w| w[0] == "-c")
         .map(|w| w[1].clone())
         .collect()
+}
+
+/// What `session/new` logs for Codex (`codex_config`): `CODEX_CONFIG` as JSON (null when unset or not JSON),
+/// `INITIAL_AGENT_MODE`, and the argv overrides codex-acp 2.x ignores.
+pub fn config(argv: &[String]) -> Value {
+    let config = std::env::var("CODEX_CONFIG")
+        .ok()
+        .and_then(|c| serde_json::from_str::<Value>(&c).ok());
+    json!({"config": config, "mode": std::env::var("INITIAL_AGENT_MODE").ok(),
+        "argv_overrides": overrides(argv)})
 }
 
 pub fn after_turn(sid: &str, turn: u64, prompt_len: usize) -> Vec<(&'static str, Value)> {

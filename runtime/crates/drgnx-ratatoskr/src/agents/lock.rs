@@ -1,8 +1,20 @@
-//! Provider locks (Task 9; `docs/guide/security.md`, "What each provider obeys"): `lock::plan(profile, role,
-//! effective) -> LaunchPlan` — the argv, environment, session `_meta` and read-only protected paths that make a
-//! provider's CLI ask the hub for every permission (Claude ported from `drgnx-agents-job-claude-options`, Codex's
-//! `-c` overrides, Gemini's `--approval-mode default`), `Enforced::{Yes, No(why)}`, and `lock::verify` at session
+//! Provider locks (`docs/guide/security.md`, "What each provider obeys"): `lock::plan(profile, role, effective) ->
+//! LaunchPlan` — the argv, environment, session `_meta`, read-only protected paths and hub-written read-only files that
+//! make a provider's CLI ask the hub for every permission — `Enforced::{Yes, No(why)}`, and `lock::verify` at session
 //! start (a lock that does not hold kills the session).
+//!
+//! - **Claude:** `_meta.claudeCode.options` (ported from `drgnx-agents-job-claude-options`), with managed ask rules
+//!   for the kinds the session's hooks subscribe to ([`LaunchPlan::with_hook_asks`]).
+//! - **Codex** (codex-acp 2.x reads its environment only): `CODEX_CONFIG` (a `drgnx` permission profile) and
+//!   `INITIAL_AGENT_MODE`, `/etc/codex/requirements.toml` pinning the policy and `/etc/codex/config.toml` holding a
+//!   managed PreToolUse hook that calls the hub's `before_tool` tool, both bound read-only by the sandbox.
+//! - **Gemini:** `--approval-mode default`, and an admin-tier `--admin-policy` asking for the subscribed kinds' tools.
+//! - **Kimi Code:** a hub-owned `KIMI_CODE_HOME` whose `config.toml` (manual mode, ask rules) is bound read-only.
+//! - **DeepSeek Harness:** a hub-owned `DSH_HOME`, and `--patch` with an overlay keeping `approval.policy: ask`.
+//!
+//! The provider-specific files that depend on the session (its worktree, its subscribed kinds) are added by
+//! [`LaunchPlan::with_locks`]; [`hooked`] says which subscribed kinds reach the hooks, and [`unhooked_refusal`]
+//! refuses a session that would run a subscribed kind unhooked.
 
 use std::ffi::OsString;
 use std::fmt;
@@ -30,9 +42,37 @@ pub const PROTECTED_FILES: [&str; 2] = [".envrc", "mise.toml"];
 /// The largest Claude settings file read for deny/ask rules, in bytes.
 const SETTINGS_MAX: u64 = 1_048_576;
 
-/// Codex's lock is unproven until the sandboxed launch (Task 10) and the laundering rows pass (Calls made 8,
-/// plan "Entry criteria" 3): flip it then.
+/// Codex's lock is unproven until the sandboxed launch and the laundering rows pass on it: flip it then.
 const CODEX_LOCK_PROVEN: bool = false;
+
+/// DeepSeek Harness's lock is unproven until the drgnx ask plugin its overlay mounts ships with its fork and its rows
+/// pass: flip it then.
+const DSH_LOCK_PROVEN: bool = false;
+
+/// Codex's requirements layer and its managed (System) config, bound read-only inside the sandbox; the user's own
+/// `/etc` is never touched.
+pub const CODEX_REQUIREMENTS: &str = "/etc/codex/requirements.toml";
+pub const CODEX_MANAGED: &str = "/etc/codex/config.toml";
+
+/// The MCP servers a session can get, whose tools Codex asks about before it runs them.
+const CODEX_MCP_SERVERS: [&str; 3] = ["drgnx", "drgnx-search", "drgnx-plugins"];
+
+/// The `drgnx` server's tool Codex's managed PreToolUse hook calls.
+pub const BEFORE_TOOL: &str = "before_tool";
+
+/// Where Gemini CLI looks for system policies: one `.toml` there and it ignores `--admin-policy`.
+pub const GEMINI_SYSTEM_POLICIES: &str = "/etc/gemini-cli/policies";
+
+const GEMINI_SHADOWED: &str =
+    "/etc/gemini-cli/policies holds a policy; the admin policy is ignored";
+
+/// The hub-owned homes of Kimi Code (`KIMI_CODE_HOME`) and DeepSeek Harness (`DSH_HOME`), under the hub's state
+/// folder's `agents/`.
+const KIMI_HOME: &str = "kimi-code";
+const DSH_HOME: &str = "dsh";
+
+/// The flags that put Kimi Code in a mode that does not ask.
+const KIMI_NO_ASK: [&str; 5] = ["--yolo", "-y", "--yes", "--auto-approve", "--auto"];
 
 /// Whether a lock holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,6 +102,36 @@ pub struct LaunchPlan {
     /// The session's shell steps are traced (`work::trace`): per step through Gleipnir's wrapper, or over the whole
     /// tree; the spec gets the hand-off socket (`sandbox::session_spec`).  Set by the session's start, never by a lock.
     pub trace: Option<gleipnir::trace::Scope>,
+    /// Hub-written files the agent reads and never writes, `(path, content)`: one in the session's own folder is
+    /// written there (the agent reads that folder and never writes it, on every target); one elsewhere (Codex's
+    /// `/etc/codex` files, Kimi Code's `config.toml`) is bound read-only at its path, which only the full tier can do
+    /// (`sandbox::session_spec` refuses the launch elsewhere).
+    pub ro_files: Vec<(PathBuf, Vec<u8>)>,
+    /// Variables that get the gateway's base URL beside `ANTHROPIC_BASE_URL` on a gateway plan (Kimi Code's
+    /// `KIMI_MODEL_BASE_URL`, DeepSeek Harness's `DEEPSEEK_BASE_URL`).
+    pub gateway_url_env: Vec<String>,
+}
+
+/// Where a session's lock puts what it writes, and what it reads of the host.
+#[derive(Clone, Debug)]
+pub struct LockAt {
+    /// The session's working folder (Codex marks it untrusted).
+    pub cwd: PathBuf,
+    /// The session's own lock folder (`lock` in its session dir): Gemini's admin policy, DeepSeek's overlay.
+    pub dir: PathBuf,
+    /// [`GEMINI_SYSTEM_POLICIES`] (a test's stand-in).
+    pub gemini_policies: PathBuf,
+}
+
+impl LockAt {
+    /// The lock folder of the session whose dir is RUN, working in CWD.
+    pub fn new(cwd: &Path, run: &Path) -> LockAt {
+        LockAt {
+            cwd: cwd.to_path_buf(),
+            dir: run.join("lock"),
+            gemini_policies: PathBuf::from(GEMINI_SYSTEM_POLICIES),
+        }
+    }
 }
 
 /// A lock that does not hold: the session is killed.
@@ -119,6 +189,7 @@ pub fn plan(p: &AgentProfile, role: Role, _e: &Effective) -> LaunchPlan {
     let mut argv: Vec<OsString> = p.command.iter().map(OsString::from).collect();
     let mut env = Vec::new();
     let mut session_meta = None;
+    let mut ro_files = Vec::new();
     let enforced = match p.provider() {
         None => Enforced::No("drgnx has no lock for this agent's CLI"),
         Some(Provider::Claude) => {
@@ -139,16 +210,20 @@ pub fn plan(p: &AgentProfile, role: Role, _e: &Effective) -> LaunchPlan {
             Enforced::Yes
         }
         Some(Provider::Codex) => {
-            // codex-acp 0.16 takes Codex's `-c key=value` overrides (TOML values).  Gleipnir is the one sandbox.
-            for kv in [
-                "approval_policy={ granular = { sandbox_approval = true, rules = true, mcp_elicitations = true, \
-                 request_permissions = true, skill_approval = true } }",
-                "approvals_reviewer=\"user\"",
-                "sandbox_mode=\"danger-full-access\"",
-            ] {
-                argv.push("-c".into());
-                argv.push(kv.into());
-            }
+            // codex-acp 2.x reads its environment only (an argv `-c` is a no-op there, and a profile's own one is
+            // dropped): the policy is CODEX_CONFIG's `drgnx` profile, the mode that takes it, and the two read-only
+            // files of /etc/codex. Gleipnir is the one sandbox.
+            argv = strip(argv, &[], &["-c", "--config"]);
+            env.push((
+                "INITIAL_AGENT_MODE".to_string(),
+                "permission-profile:drgnx".to_string(),
+            ));
+            env.push(("CODEX_CONFIG".to_string(), codex_config(None)));
+            ro_files.push((
+                PathBuf::from(CODEX_REQUIREMENTS),
+                CODEX_REQUIREMENTS_TOML.as_bytes().to_vec(),
+            ));
+            ro_files.push((PathBuf::from(CODEX_MANAGED), codex_managed(false)));
             if CODEX_LOCK_PROVEN {
                 Enforced::Yes
             } else {
@@ -159,22 +234,34 @@ pub fn plan(p: &AgentProfile, role: Role, _e: &Effective) -> LaunchPlan {
         }
         Some(Provider::Gemini) => {
             // No YOLO, whatever the profile's command says.
-            let mut kept: Vec<OsString> = Vec::new();
-            let mut skip = false;
-            for a in std::mem::take(&mut argv) {
-                let s = a.to_string_lossy();
-                if skip {
-                    skip = false;
-                } else if s == "--approval-mode" {
-                    skip = true;
-                } else if !(s == "--yolo" || s == "-y" || s.starts_with("--approval-mode=")) {
-                    kept.push(a);
-                }
-            }
-            argv = kept;
+            argv = strip(argv, &["--yolo", "-y"], &["--approval-mode"]);
             argv.push("--approval-mode".into());
             argv.push("default".into());
             Enforced::Yes
+        }
+        Some(Provider::Kimi) => {
+            // no mode that does not ask; its one config file is the hub's (`with_locks` writes the ask rules)
+            argv = strip(argv, &KIMI_NO_ASK, &[]);
+            if let Some(home) = hub_home(KIMI_HOME) {
+                env.push((
+                    "KIMI_CODE_HOME".to_string(),
+                    home.to_string_lossy().into_owned(),
+                ));
+                ro_files.push((home.join("config.toml"), kimi_config(&[])));
+            }
+            Enforced::Yes
+        }
+        Some(Provider::DeepSeek) => {
+            if let Some(home) = hub_home(DSH_HOME) {
+                env.push(("DSH_HOME".to_string(), home.to_string_lossy().into_owned()));
+            }
+            if DSH_LOCK_PROVEN {
+                Enforced::Yes
+            } else {
+                Enforced::No(
+                    "DeepSeek Harness's lock is not proven yet (the drgnx ask plugin ships with its fork)",
+                )
+            }
         }
     };
     let login_dir = p.provider().and_then(|pv| {
@@ -182,6 +269,8 @@ pub fn plan(p: &AgentProfile, role: Role, _e: &Effective) -> LaunchPlan {
             Provider::Claude => ".claude",
             Provider::Codex => ".codex",
             Provider::Gemini => ".gemini",
+            Provider::Kimi => return hub_home(KIMI_HOME),
+            Provider::DeepSeek => return hub_home(DSH_HOME),
         };
         std::env::var_os("HOME")
             .filter(|h| !h.is_empty())
@@ -196,7 +285,333 @@ pub fn plan(p: &AgentProfile, role: Role, _e: &Effective) -> LaunchPlan {
         enforced,
         gateway: false,
         trace: None,
+        ro_files,
+        gateway_url_env: Vec::new(),
     }
+}
+
+/// ARGV without the flags in DROP and the flags in DROP_WITH_VALUE with the value after each (or joined by `=`).  The
+/// program itself is kept.
+fn strip(argv: Vec<OsString>, drop: &[&str], drop_with_value: &[&str]) -> Vec<OsString> {
+    let mut kept: Vec<OsString> = Vec::new();
+    let mut skip = false;
+    for (i, a) in argv.into_iter().enumerate() {
+        let s = a.to_string_lossy();
+        if i == 0 {
+            kept.push(a);
+        } else if skip {
+            skip = false;
+        } else if drop_with_value.contains(&s.as_ref()) {
+            skip = true;
+        } else if !(drop.contains(&s.as_ref())
+            || drop_with_value
+                .iter()
+                .any(|f| s.starts_with(&format!("{f}="))))
+        {
+            kept.push(a);
+        }
+    }
+    kept
+}
+
+/// The hub-owned home NAME of a CLI (`agents/NAME` in the hub's state folder).
+fn hub_home(name: &str) -> Option<PathBuf> {
+    let state = runstav::paths::state_dir(&runstav::paths::Env::process());
+    (!state.as_os_str().is_empty()).then(|| state.join("agents").join(name))
+}
+
+/// What a session's Codex runs under (`CODEX_CONFIG`): every command and patch asks the user's client, never a
+/// reviewer model; Gleipnir is the one sandbox; no hosted web search (it can neither ask nor be hooked); the MCP
+/// tools prompt; CWD (when known) is untrusted, so a `.codex/config.toml` in it is not loaded as the user's.  The
+/// policy is the `drgnx` permission profile and the top level both.
+fn codex_config(cwd: Option<&Path>) -> String {
+    let policy = json!({
+        "approval_policy": "untrusted",
+        "approvals_reviewer": "user",
+        "sandbox_mode": "danger-full-access",
+        "web_search": "disabled",
+    });
+    let mut c = policy.clone();
+    c["profiles"] = json!({ "drgnx": policy });
+    let servers: serde_json::Map<String, Value> = CODEX_MCP_SERVERS
+        .iter()
+        .map(|s| {
+            (
+                s.to_string(),
+                json!({"default_tools_approval_mode": "prompt"}),
+            )
+        })
+        .collect();
+    c["mcp_servers"] = Value::Object(servers);
+    if let Some(cwd) = cwd {
+        let mut projects = serde_json::Map::new();
+        projects.insert(
+            cwd.to_string_lossy().into_owned(),
+            json!({"trust_level": "untrusted"}),
+        );
+        c["projects"] = Value::Object(projects);
+    }
+    c.to_string()
+}
+
+/// Codex's requirements layer: only the policy the lock sets, and only managed hooks.
+const CODEX_REQUIREMENTS_TOML: &str = "\
+# drgnx: the hub's requirements for this session's Codex (read-only inside its sandbox).
+allowed_approval_policies = [\"untrusted\"]
+allowed_approvals_reviewers = [\"user\"]
+allowed_web_search_modes = [\"disabled\"]
+allow_managed_hooks_only = true
+";
+
+/// Codex's managed config: with HOOK, a PreToolUse hook on every tool that calls the `drgnx` server's
+/// [`BEFORE_TOOL`] (Codex fails it open on a timeout or an error; its approvals still fail closed).
+fn codex_managed(hook: bool) -> Vec<u8> {
+    let mut t = String::from(
+        "# drgnx: the hub's managed layer for this session's Codex (read-only inside its sandbox).\n",
+    );
+    if hook {
+        t.push_str(&format!(
+            "\n[[hooks.PreToolUse]]\nmatcher = \".*\"\n\n[[hooks.PreToolUse.hooks]]\ntype = \"mcp_tool\"\n\
+             server = \"drgnx\"\ntool = \"{BEFORE_TOOL}\"\ntimeout = 10\n"
+        ));
+    }
+    t.into_bytes()
+}
+
+/// Gemini CLI's main-agent tools of each kind, as its policy names them.
+fn gemini_tools(kind: &str) -> Option<&'static [&'static str]> {
+    Some(match kind {
+        "read" => &["read_file", "read_many_files"],
+        "search" => &["glob", "grep_search", "list_directory"],
+        "fetch" => &["web_fetch", "google_web_search"],
+        "execute" => &["run_shell_command"],
+        "edit" => &["write_file", "replace"],
+        _ => return None,
+    })
+}
+
+/// Gemini's admin-tier policy for KINDS (none of them `drgnx`): their tools and every MCP tool ask the user's client
+/// (a kind whose tools drgnx cannot name: every tool); a subagent's tools, which never reach the client, and the
+/// bundled docs, which never ask, are refused.
+fn gemini_policy(kinds: &[&str]) -> Vec<u8> {
+    let rule = |key: &str, value: &str, decision: &str| {
+        format!("\n[[rule]]\n{key} = \"{value}\"\ndecision = \"{decision}\"\npriority = 999\n")
+    };
+    let mut t = String::from(
+        "# drgnx: the hub's admin policy for this session's Gemini CLI: the hooked kinds ask, what cannot ask is \
+         refused.\n",
+    );
+    let named: Option<Vec<&str>> = kinds
+        .iter()
+        .map(|k| gemini_tools(k))
+        .collect::<Option<Vec<_>>>()
+        .map(|l| l.concat());
+    match &named {
+        Some(tools) => {
+            for tool in tools {
+                t.push_str(&rule("toolName", tool, "ask_user"));
+            }
+        }
+        None => t.push_str(&rule("toolName", "*", "ask_user")),
+    }
+    t.push_str(&rule("mcpName", "*", "ask_user"));
+    t.push_str(
+        "\n[[rule]]\ntoolName = \"*\"\nsubagent = \"*\"\ndecision = \"deny\"\npriority = 999\n",
+    );
+    if named.is_none() || kinds.contains(&"read") {
+        t.push_str(&rule("toolName", "get_internal_docs", "deny"));
+    }
+    t.into_bytes()
+}
+
+/// Whether DIR (Gemini's system policies) holds a `.toml`, which makes Gemini ignore `--admin-policy`.
+fn gemini_shadowed(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|entries| {
+        entries
+            .flatten()
+            .any(|e| e.path().extension().is_some_and(|x| x == "toml"))
+    })
+}
+
+/// Kimi Code's tools of each kind it approves or may approve itself; any other tool falls back to asking in manual
+/// mode.
+fn kimi_tools(kind: &str) -> &'static [&'static str] {
+    match kind {
+        "read" => &["Read", "ReadMediaFile"],
+        "search" => &["Glob", "Grep"],
+        "fetch" => &["FetchURL", "WebSearch"],
+        "execute" => &["Bash", "TaskStop"],
+        "edit" => &["Write", "Edit"],
+        "think" => &["Agent"],
+        _ => &[],
+    }
+}
+
+/// Kimi Code's config: manual mode, and a user ask rule (which beats its default approval of reads) for each tool of
+/// KINDS.
+fn kimi_config(kinds: &[&str]) -> Vec<u8> {
+    let mut t = String::from(
+        "# drgnx: the hub's config for this session's Kimi Code (read-only inside its sandbox).\n\
+         default_permission_mode = \"manual\"\n",
+    );
+    for tool in kinds.iter().flat_map(|k| kimi_tools(k)) {
+        t.push_str(&format!(
+            "\n[[permission.rules]]\ntool = \"{tool}\"\ndecision = \"ask\"\nscope = \"user\"\n"
+        ));
+    }
+    t.into_bytes()
+}
+
+/// DeepSeek Harness's overlay: the full-access sandbox mode (Gleipnir is the one sandbox) and, set apart from it,
+/// `approval.policy: ask` (the base bundle ties the mode to a policy that rejects every ask); the drgnx ask plugin
+/// asks for the tools of KINDS.
+fn dsh_overlay(kinds: &[&str]) -> Vec<u8> {
+    format!(
+        "# drgnx: the hub's overlay for this session's DeepSeek Harness (read-only inside its sandbox).\n\
+         sandbox:\n  mode: danger-full-access\napproval:\n  policy: ask\nplugins:\n  drgnx-ask:\n    kinds: [{}]\n",
+        kinds.join(", ")
+    )
+    .into_bytes()
+}
+
+impl LaunchPlan {
+    /// The lock's files for PROFILE's session at AT, given the KINDS its `before-tool` hooks and rules subscribe to
+    /// (`drgnx` is the hub's own servers', and needs nothing of a lock): Codex's config for its worktree and, with a
+    /// kind, its managed hook; Gemini's admin policy (none when no kind is subscribed, and none when a system policy
+    /// would shadow it: the lock is then not enforced); Kimi Code's ask rules; DeepSeek Harness's overlay.  Claude's
+    /// ask rules are [`LaunchPlan::with_hook_asks`]'s.
+    pub fn with_locks(mut self, p: &AgentProfile, kinds: &[String], at: &LockAt) -> Self {
+        let mut kinds: Vec<&str> = kinds
+            .iter()
+            .map(String::as_str)
+            .filter(|k| *k != "drgnx")
+            .collect();
+        kinds.sort_unstable();
+        kinds.dedup();
+        match p.provider() {
+            Some(Provider::Codex) => {
+                set_env(&mut self.env, "CODEX_CONFIG", codex_config(Some(&at.cwd)));
+                self.put_file(
+                    PathBuf::from(CODEX_MANAGED),
+                    codex_managed(!kinds.is_empty()),
+                );
+            }
+            Some(Provider::Gemini) if !kinds.is_empty() => {
+                if gemini_shadowed(&at.gemini_policies) {
+                    self.enforced = Enforced::No(GEMINI_SHADOWED);
+                } else {
+                    let file = at.dir.join("gemini-policy.toml");
+                    self.argv.push("--admin-policy".into());
+                    self.argv.push(file.clone().into());
+                    self.put_file(file, gemini_policy(&kinds));
+                }
+            }
+            Some(Provider::Kimi) => {
+                if let Some(home) = self.login_dir.clone() {
+                    self.put_file(home.join("config.toml"), kimi_config(&kinds));
+                }
+            }
+            Some(Provider::DeepSeek) => {
+                let file = at.dir.join("dsh-overlay.yml");
+                self.argv.push("--patch".into());
+                self.argv.push(file.clone().into());
+                self.put_file(file, dsh_overlay(&kinds));
+            }
+            _ => {}
+        }
+        self
+    }
+
+    /// PATH's content is BYTES (replacing what the plan had for it).
+    fn put_file(&mut self, path: PathBuf, bytes: Vec<u8>) {
+        self.ro_files.retain(|(p, _)| *p != path);
+        self.ro_files.push((path, bytes));
+    }
+
+    /// A gateway profile of Kimi Code or DeepSeek Harness: the gateway's URL and the session's own token (from P's
+    /// `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`, which the session's start put there) in the variables its CLI
+    /// reads, so no provider key ever reaches it; a sandboxed plan's URL is its relay's (`gateway_url_env`).  A no-op
+    /// for another provider or a profile with no gateway token.
+    pub fn with_gateway_env(mut self, p: &AgentProfile) -> Self {
+        let var = |name: &str| {
+            p.env.iter().rev().find_map(|e| {
+                e.split_once('=')
+                    .filter(|(k, v)| *k == name && !v.is_empty())
+                    .map(|(_, v)| v.to_string())
+            })
+        };
+        let Some(token) = var("ANTHROPIC_AUTH_TOKEN") else {
+            return self;
+        };
+        let url = var("ANTHROPIC_BASE_URL");
+        let (url_var, mut extra) = match p.provider() {
+            Some(Provider::Kimi) => (
+                "KIMI_MODEL_BASE_URL",
+                vec![
+                    ("KIMI_MODEL_PROVIDER_TYPE", "anthropic".to_string()),
+                    ("KIMI_MODEL_API_KEY", token),
+                ],
+            ),
+            Some(Provider::DeepSeek) => ("DEEPSEEK_BASE_URL", vec![("DEEPSEEK_API_KEY", token)]),
+            _ => return self,
+        };
+        if p.provider() == Some(Provider::Kimi)
+            && let Some(m) = &p.model
+        {
+            extra.push(("KIMI_MODEL_NAME", m.clone()));
+        }
+        if let Some(u) = url {
+            extra.push((url_var, u));
+        }
+        for (k, v) in extra {
+            set_env(&mut self.env, k, v);
+        }
+        self.gateway_url_env = vec![url_var.to_string()];
+        self
+    }
+
+    /// Makes the hub-owned home of the plan's CLI (Kimi Code's, DeepSeek Harness's: 0700), and an empty file at each
+    /// of its read-only files' paths in it, where the sandbox binds the session's copy.  A no-op for another CLI.
+    pub fn make_home(&self) -> std::io::Result<()> {
+        let Some(home) = self.login_dir.as_ref().filter(|d| {
+            d.file_name()
+                .is_some_and(|n| n == KIMI_HOME || n == DSH_HOME)
+        }) else {
+            return Ok(());
+        };
+        std::fs::create_dir_all(home)?;
+        runstav::paths::private_dir(home)?;
+        for (path, _) in self.ro_files.iter().filter(|(p, _)| p.starts_with(home)) {
+            if path.symlink_metadata().is_err() {
+                std::fs::write(path, b"")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Sets NAME to VALUE in ENV (the first entry of NAME, else a new one at the end).
+fn set_env(env: &mut Vec<(String, String)>, name: &str, value: String) {
+    match env.iter_mut().find(|(k, _)| k == name) {
+        Some((_, v)) => *v = value,
+        None => env.push((name.to_string(), value)),
+    }
+}
+
+/// The refusal of PROFILE's session when HOOKED has a subscribed kind its agent would run unhooked: the lock can make
+/// it neither ask nor withhold it.  `None` when every subscribed kind reaches the hooks or has no tool.
+pub fn unhooked_refusal(
+    p: &AgentProfile,
+    hooked: Option<&runstav::methods::agents::Hooked>,
+) -> Option<String> {
+    let h = hooked.filter(|h| !h.unhooked.is_empty())?;
+    let kinds = h.unhooked.join(", ");
+    Some(format!(
+        "{} would run {kinds} steps unhooked ({}), and a before-tool hook or rule subscribes to them: drgnx does not \
+         start it",
+        p.name,
+        h.why.as_deref().unwrap_or("its lock cannot make them ask")
+    ))
 }
 
 /// How a session's CLI uses one entry of its login dir.
@@ -252,6 +667,24 @@ pub fn login_entries(login_dir: &Path) -> &'static [(&'static str, LoginUse)] {
             ("commands", Read),
             ("extensions", Read),
             ("tmp", Own),
+        ],
+        // the hub-owned homes: drgnx's sessions of the CLI only, never the user's own
+        Some(KIMI_HOME) => &[
+            ("credentials", Dir),
+            ("sessions", Dir),
+            ("logs", Dir),
+            ("locks", Dir),
+            ("config.toml", Read),
+            ("mcp.json", Read),
+            ("plugins", Read),
+            ("skills", Read),
+            ("AGENTS.md", Read),
+        ],
+        Some(DSH_HOME) => &[
+            ("sessions", Dir),
+            ("logs", Dir),
+            ("profiles", Read),
+            ("cordis.patch.yml", Read),
         ],
         _ => &[],
     }
@@ -359,15 +792,20 @@ impl LaunchPlan {
 
 // ------------------------------------------------------------------------------------- hooks before a tool call
 
-/// Claude Code's built-in tools of the ACP kind KIND, the names an ask rule can give (design addendum §4.10). The
-/// pinned adapter has no `mcp__acp__*` replacements to add.
+/// Claude Code's built-in tools of the ACP kind KIND, the names an ask rule can give (design addendum §4.10), the
+/// ones Claude runs without asking included (its subagents and to-do list are `think`, leaving plan mode is
+/// `switch_mode`, its MCP resource tools are `other`; MCP tools ask by default, since only managed rules apply).
+/// Claude has no tool of kind `delete` or `move`. The pinned adapter has no `mcp__acp__*` replacements to add.
 pub fn claude_ask_tools(kind: &str) -> &'static [&'static str] {
     match kind {
-        "read" => &["Read"],
-        "search" => &["Grep", "Glob"],
+        "read" => &["Read", "NotebookRead"],
+        "search" => &["Grep", "Glob", "LS"],
         "fetch" => &["WebFetch", "WebSearch"],
-        "execute" => &["Bash"],
-        "edit" => &["Edit", "Write", "NotebookEdit"],
+        "execute" => &["Bash", "BashOutput", "KillShell"],
+        "edit" => &["Edit", "Write", "MultiEdit", "NotebookEdit"],
+        "think" => &["Task", "TodoWrite"],
+        "switch_mode" => &["ExitPlanMode"],
+        "other" => &["ListMcpResourcesTool", "ReadMcpResourceTool"],
         _ => &[],
     }
 }
@@ -405,77 +843,128 @@ impl LaunchPlan {
     }
 }
 
-/// Which of KINDS (the subscribed kinds; none: `None`) reach the session's `before-tool` hooks under PROFILE's lock,
-/// and which do not, and why. `drgnx` is hooked at the hub's servers whatever the agent. The adapter's
-/// `_drgnx/before_tool` (`by_adapter`) is added by the panel extension once the adapter advertises it.
-pub fn hooked(p: &AgentProfile, kinds: &[String]) -> Option<runstav::methods::agents::Hooked> {
+/// How one subscribed kind reaches a session's `before-tool` hooks.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Route {
+    /// The agent asks the client, so the step reaches the permission seam.
+    Seam,
+    /// The adapter's own hook calls the hub (Codex's managed PreToolUse hook).
+    Adapter,
+    /// The agent has no tool of the kind, or the lock withholds it: nothing of it runs.
+    Absent,
+    /// It would run without the hooks seeing it.
+    Unhooked,
+}
+
+/// Which of KINDS (the subscribed kinds; none: `None`) reach the session's `before-tool` hooks under PROFILE's lock
+/// PLAN (its files already added), and which do not, and why. `drgnx` is hooked at the hub's servers whatever the
+/// agent; a kind the agent has no tool of (Claude's `delete` and `move`, Codex's withheld `fetch`) is not listed.
+/// `by_adapter` is Codex's managed hook here (it fails open on a timeout); the panel extension adds a fork's
+/// `_drgnx/before_tool` once the adapter advertises it. A session with `unhooked` kinds is refused
+/// ([`unhooked_refusal`]).
+pub fn hooked(
+    p: &AgentProfile,
+    kinds: &[String],
+    plan: &LaunchPlan,
+) -> Option<runstav::methods::agents::Hooked> {
     if kinds.is_empty() {
         return None;
     }
-    let (asks, why): (&dyn Fn(&str) -> bool, &str) = match p.provider() {
-        // `other` at Claude's seam is its internal tools (TodoWrite …), which never ask: MCP tools are the hub's,
-        // hooked at their server, and a notebook edit counts as `edit`
+    let has_arg = |a: &str| plan.argv.iter().any(|x| x == a);
+    let managed_hook = plan.ro_files.iter().any(|(path, bytes)| {
+        path == Path::new(CODEX_MANAGED) && String::from_utf8_lossy(bytes).contains("mcp_tool")
+    });
+    let not_enforced = match plan.enforced {
+        Enforced::No(w) => Some(w),
+        Enforced::Yes => None,
+    };
+    let (route, why): (&dyn Fn(&str) -> Route, &str) = match p.provider() {
         Some(Provider::Claude) => (
-            &|k: &str| !claude_ask_tools(k).is_empty(),
+            &|k: &str| {
+                if claude_ask_tools(k).is_empty() {
+                    Route::Absent
+                } else {
+                    Route::Seam
+                }
+            },
             "Claude Code runs them without asking: no ask rule can name them",
         ),
-        Some(Provider::Gemini) => (
-            &|k: &str| !matches!(k, "read" | "search"),
-            "Gemini runs them without asking",
-        ),
+        // apply_patch and MCP tools always ask; shell steps (Codex reads and searches through them too) that its
+        // policy calls safe run unasked, so they are the managed hook's; hosted web search is off
         Some(Provider::Codex) => (
-            &|k: &str| !matches!(k, "read" | "search"),
-            "Codex runs them inside its own policy without asking",
+            &|k: &str| match k {
+                "edit" | "other" => Route::Seam,
+                "fetch" => Route::Absent,
+                _ if managed_hook => Route::Adapter,
+                _ => Route::Unhooked,
+            },
+            "Codex's managed hook is not installed",
         ),
-        None => (&|_: &str| false, "drgnx has no lock for this agent's CLI"),
+        Some(Provider::Gemini) => (
+            &|_: &str| {
+                if has_arg("--admin-policy") {
+                    Route::Seam
+                } else {
+                    Route::Unhooked
+                }
+            },
+            not_enforced
+                .unwrap_or("Gemini runs them without asking: its admin policy is not applied"),
+        ),
+        Some(Provider::Kimi) => (&|_: &str| Route::Seam, ""),
+        Some(Provider::DeepSeek) => (
+            &|_: &str| {
+                if has_arg("--patch") {
+                    Route::Seam
+                } else {
+                    Route::Unhooked
+                }
+            },
+            "DeepSeek Harness runs them without asking: its overlay is not applied",
+        ),
+        None => (
+            &|_: &str| Route::Unhooked,
+            "drgnx has no lock for this agent's CLI",
+        ),
     };
     let mut h = runstav::methods::agents::Hooked::default();
     for k in kinds {
-        if k == "drgnx" || asks(k) {
-            h.before_tool.push(k.clone());
-        } else {
-            h.unhooked.push(k.clone());
+        let r = if k == "drgnx" { Route::Seam } else { route(k) };
+        match r {
+            Route::Seam => h.before_tool.push(k.clone()),
+            Route::Adapter => h.by_adapter.push(k.clone()),
+            Route::Absent => {}
+            Route::Unhooked => h.unhooked.push(k.clone()),
         }
     }
-    for l in [&mut h.before_tool, &mut h.unhooked] {
+    for l in [&mut h.before_tool, &mut h.by_adapter, &mut h.unhooked] {
         l.sort();
         l.dedup();
     }
-    h.why = (!h.unhooked.is_empty()).then(|| why.to_owned());
+    h.why = if !h.unhooked.is_empty() {
+        Some(why.to_owned())
+    } else if !h.by_adapter.is_empty() {
+        Some("Codex's managed hook fails open on a timeout (Codex)".to_owned())
+    } else {
+        None
+    };
     Some(h)
 }
 
-impl LaunchPlan {
-    /// Codex only: the worktree CWD is marked `untrusted` (`projects."<cwd>".trust_level`), so a `.codex/config.toml`
-    /// in it is not loaded as the user's (ledger D9-3).  A no-op for another provider's plan.
-    pub fn with_codex_untrusted(mut self, p: &AgentProfile, cwd: &Path) -> Self {
-        if p.provider() == Some(Provider::Codex) {
-            let q = cwd
-                .to_string_lossy()
-                .replace('\\', "\\\\")
-                .replace('"', "\\\"");
-            self.argv.push("-c".into());
-            self.argv
-                .push(format!("projects.\"{q}\".trust_level=\"untrusted\"").into());
-        }
-        self
-    }
-}
-
-/// Checks the lock at session start: the mode the CLI is put in is the asking one.  Claude and Gemini are set to
-/// `default` (a refusal ends the session); Codex is left alone, as codex-acp's `auto`/`full-access` presets would
-/// replace the `-c` overrides.  A profile with no lock fails.  The probe permission is the session's (Task 8b).
+/// Checks the lock at session start: the mode the CLI is put in is the asking one.  Claude, Gemini and Kimi Code are
+/// set to `default` (a refusal ends the session); Codex is left alone (its mode is `INITIAL_AGENT_MODE`, and a
+/// `session/set_mode` would replace the profile), and DeepSeek Harness has no modes.  A profile with no lock fails.
 pub async fn verify(
     conn: &hermod::Conn,
     sid: &hermod::SessionId,
     p: &AgentProfile,
 ) -> Result<(), LockBroken> {
     match p.provider() {
-        Some(Provider::Claude | Provider::Gemini) => conn
+        Some(Provider::Claude | Provider::Gemini | Provider::Kimi) => conn
             .set_mode(sid, "default")
             .await
             .map_err(|e| LockBroken(format!("`default` mode refused: {e}"))),
-        Some(Provider::Codex) => Ok(()),
+        Some(Provider::Codex | Provider::DeepSeek) => Ok(()),
         None => Err(LockBroken("this agent has no lock".into())),
     }
 }

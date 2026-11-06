@@ -270,16 +270,27 @@ shuts it down and starts Ratatoskr in its place.
 
 ## Kimi and DeepSeek
 
-Claude Code also runs on Kimi and DeepSeek, with the same agent and the same tools; only the model behind it changes.
-Four built-in profiles (listed in New Agent Session… and on the Claude page of Agent Settings, with how each is
-billed):
+Kimi and DeepSeek each ship an agent of their own, and on their own APIs drgnx runs that agent: Kimi Code (`kimi
+acp`) and DeepSeek Harness (`dsh --profile acp`), never Claude Code on the vendor's endpoint. On OpenRouter it is
+Claude Code, with the same tools as ever and the model behind it changed (tool search is off there:
+`ENABLE_TOOL_SEARCH=false`, which models that are not Claude do not speak). Four built-in profiles (listed in New Agent
+Session…, the two Claude Code ones also on the Claude page of Agent Settings, with how each is billed):
 
-| Profile | Goes to | Key | Billed by |
-|---|---|---|---|
-| `claude (Kimi)` | Moonshot's own API | `MOONSHOT_API_KEY` | Moonshot, per token |
-| `claude (DeepSeek)` | DeepSeek's own API | `DEEPSEEK_API_KEY` | DeepSeek, per token |
-| `claude (Kimi via OpenRouter)` | OpenRouter | `OPENROUTER_API_KEY` | OpenRouter |
-| `claude (DeepSeek via OpenRouter)` | OpenRouter | `OPENROUTER_API_KEY` | OpenRouter |
+| Profile | Agent | Goes to | Key | Billed by |
+|---|---|---|---|---|
+| `kimi` | Kimi Code | Moonshot's own API (`:ai kimi-moonshot`) | `MOONSHOT_API_KEY` | Moonshot, per token |
+| `deepseek` | DeepSeek Harness | DeepSeek's own API (`:ai dsh-deepseek`) | `DEEPSEEK_API_KEY` | DeepSeek, per token |
+| `claude (Kimi via OpenRouter)` | Claude Code | OpenRouter | `OPENROUTER_API_KEY` | OpenRouter |
+| `claude (DeepSeek via OpenRouter)` | Claude Code | OpenRouter | `OPENROUTER_API_KEY` | OpenRouter |
+
+Onboarding installs Kimi Code (`@moonshot-ai/kimi-code`) and DeepSeek Harness (`@deepseek-ai/dsh`, on a pinned
+pre-release: it has no stable release yet) beside the Claude Code adapter. Each runs under its own lock ("What each
+provider obeys" in [the security guide](security.md)); DeepSeek Harness counts as "not enforced" until drgnx's ask
+plugin ships with its fork, so it runs as a chat, not a worker, under the Cautious and Balanced presets.
+
+The former `claude (Kimi)` and `claude (DeepSeek)` profiles are retired. A profile of yours that still names their
+kinds (`:ai claude-moonshot`, `claude-deepseek`) still starts, and the first start in an Emacs session says which
+built-in profile replaces it.
 
 Like the other provider profiles they go through the gateway when a hub is available: the agent holds a token, never
 the key. Without a key the session does not start and the message names the variable and the keyring host to put it

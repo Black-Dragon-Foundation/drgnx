@@ -1,4 +1,4 @@
-//! `ratatoskr-mock acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL]`: a scripted ACP agent
+//! `ratatoskr-mock acp --as claude|codex|gemini|kimi|dsh [--script FILE] [--log FILE] [--llm URL]`: a scripted ACP agent
 //! (JSON-RPC 2.0, one object per line on stdin/stdout) that stands in for the outside agents' CLIs.  Std only.
 //! The wire is `agent-client-protocol-schema =1.12.0`'s (camelCase fields, `session/*` methods).
 //!
@@ -25,7 +25,8 @@
 //!
 //! `--script FILE`: its non-empty lines are programs (a literal `\n` in a line is a line break: several words); the n-th prompt of the process runs line n (a prompt after
 //! the last line runs its own words).  `--log FILE`: JSONL of `{"initialize"|"session/new"|"session/fork"|
-//! "session/load"|"session/resume"|"session/close"|"prompt"|"permission"|"llm"|"claude_options"|"codex_overrides"|"gemini": ...}`.  `--llm URL`: each turn first
+//! "session/load"|"session/resume"|"session/close"|"prompt"|"permission"|"llm"|"claude_options"|"codex_config"|"gemini"|"kimi"|"dsh"|"ran": ...}`.
+//! Kimi Code's and DeepSeek Harness's `provider:WHAT ARG` tools ask or run as their locks say (`kimi.rs`, `dsh.rs`).  `--llm URL`: each turn first
 //! POSTs a small JSON body to URL (a `ratatoskr-mock llm`), so its log counts one request per turn.
 //! `--refuse-mode MODE`: `session/set_mode` to MODE is refused (a lock that does not hold); other modes are accepted.
 //! `--state DIR`: each session's history is kept in `DIR/<sessionId>.json` (written at its start and after every turn),
@@ -39,7 +40,9 @@
 
 mod claude;
 mod codex;
+mod dsh;
 mod gemini;
+mod kimi;
 
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -55,6 +58,17 @@ enum Kind {
     Claude,
     Codex,
     Gemini,
+    Kimi,
+    Dsh,
+}
+
+/// How a permission request carries its tool call: whole; without its `kind`, after a pending `tool_call` of its
+/// shape (Kimi Code); or as its id only, after that `tool_call` (DeepSeek Harness).
+#[derive(Clone, Copy, PartialEq)]
+enum Fold {
+    No,
+    NoKind,
+    IdOnly,
 }
 
 struct Session {
@@ -97,8 +111,10 @@ pub fn run(args: &[String]) -> ! {
         Some("claude") => Kind::Claude,
         Some("codex") => Kind::Codex,
         Some("gemini") => Kind::Gemini,
+        Some("kimi") => Kind::Kimi,
+        Some("dsh") => Kind::Dsh,
         _ => crate::die(
-            "usage: ratatoskr-mock acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] [--refuse-mode MODE] [--state DIR]",
+            "usage: ratatoskr-mock acp --as claude|codex|gemini|kimi|dsh [--script FILE] [--log FILE] [--llm URL] [--refuse-mode MODE] [--state DIR]",
         ),
     };
     let script = flag(args, "--script")
@@ -249,6 +265,8 @@ impl Agent {
             Kind::Claude => claude::session_caps(),
             Kind::Codex => codex::session_caps(),
             Kind::Gemini => gemini::session_caps(),
+            Kind::Kimi => kimi::session_caps(),
+            Kind::Dsh => dsh::session_caps(),
         }
     }
 
@@ -313,10 +331,18 @@ impl Agent {
         match self.kind {
             Kind::Claude => self.log("claude_options", claude::options(params)),
             Kind::Codex => {
-                let o = codex::overrides(&self.argv);
-                self.log("codex_overrides", json!(o));
+                let c = codex::config(&self.argv);
+                self.log("codex_config", c);
             }
             Kind::Gemini => self.log("gemini", gemini::note()),
+            Kind::Kimi => {
+                let n = kimi::note(&self.argv);
+                self.log("kimi", n);
+            }
+            Kind::Dsh => {
+                let n = dsh::note(&self.argv);
+                self.log("dsh", n);
+            }
         }
     }
 
@@ -338,7 +364,7 @@ impl Agent {
                 self.log("initialize", params);
                 reply(json!({"protocolVersion": 1, "authMethods": [],
                     "agentInfo": {"name": format!("ratatoskr-mock-{}", self.kind_name()), "version": "0.1.0"},
-                    "agentCapabilities": {"loadSession": self.kind == Kind::Gemini,
+                    "agentCapabilities": {"loadSession": matches!(self.kind, Kind::Gemini | Kind::Kimi),
                         "promptCapabilities": {"image": false, "audio": false, "embeddedContext": true},
                         "mcpCapabilities": {"http": false, "sse": false},
                         "sessionCapabilities": self.session_caps()}}));
@@ -349,7 +375,7 @@ impl Agent {
                 self.log("session/new", json!({"sessionId": sid, "mcpServers": params["mcpServers"], "cwd": params["cwd"]}));
                 reply(json!({"sessionId": sid}));
             }
-            "session/load" if self.kind == Kind::Gemini => {
+            "session/load" if matches!(self.kind, Kind::Gemini | Kind::Kimi) => {
                 let sid = params["sessionId"].as_str().unwrap_or("s0").to_string();
                 self.log(
                     "session/load",
@@ -403,7 +429,9 @@ impl Agent {
                     rpc_error(&id, -32602, "unknown session");
                 }
             }
-            "session/fork" if self.kind != Kind::Gemini => self.fork(&id, &params),
+            "session/fork" if !matches!(self.kind, Kind::Gemini | Kind::Dsh) => {
+                self.fork(&id, &params)
+            }
             "session/prompt" => self.prompt(&id, &params),
             "session/set_mode" => {
                 let mode = params["modeId"].as_str().unwrap_or_default();
@@ -427,6 +455,8 @@ impl Agent {
             Kind::Claude => "claude",
             Kind::Codex => "codex",
             Kind::Gemini => "gemini",
+            Kind::Kimi => "kimi",
+            Kind::Dsh => "dsh",
         }
     }
 
@@ -553,7 +583,7 @@ impl Agent {
         let extras = match self.kind {
             Kind::Claude => claude::after_turn(&sid, turn, text.len()),
             Kind::Codex => codex::after_turn(&sid, turn, text.len()),
-            Kind::Gemini => gemini::after_turn(&sid, turn, text.len()),
+            Kind::Gemini | Kind::Kimi | Kind::Dsh => gemini::after_turn(&sid, turn, text.len()),
         };
         for (method, p) in extras {
             send(&json!({"jsonrpc": "2.0", "method": method, "params": p}));
@@ -646,6 +676,10 @@ impl Agent {
                     "content": [{"type": "content", "content": {"type": "text", "text": out}}]}),
                 );
             }
+            // Kimi Code's and DeepSeek Harness's tools ask or run as their locks say
+            _ if head.starts_with("provider:") && matches!(self.kind, Kind::Kimi | Kind::Dsh) => {
+                self.gated_tool(sid, turn, &head[9..], rest);
+            }
             _ if head.starts_with("provider:") => {
                 self.provider_tool(sid, turn, &head[9..], rest);
             }
@@ -672,7 +706,12 @@ impl Agent {
             }
             "ask:tool" | "ask:folded" => {
                 let call = serde_json::from_str(rest).unwrap_or_else(|_| json!({}));
-                let answer = self.permission_for(sid, turn, call, head == "ask:folded");
+                let fold = if head == "ask:folded" {
+                    Fold::NoKind
+                } else {
+                    Fold::No
+                };
+                let answer = self.permission_for(sid, turn, call, fold);
                 self.say(sid, turn, &format!("permission: {answer}"));
             }
             "sleep-loop" => {
@@ -802,6 +841,7 @@ impl Agent {
             Kind::Claude => claude::tool_shape(what, arg),
             Kind::Codex => codex::tool_shape(what, arg),
             Kind::Gemini => gemini::tool_shape(what, arg),
+            Kind::Kimi | Kind::Dsh => None,
         };
         let Some(Value::Object(mut fields)) = shape else {
             self.say(sid, turn, &format!("no provider tool {what}\n"));
@@ -820,16 +860,47 @@ impl Agent {
         );
     }
 
+    /// A tool of Kimi Code or DeepSeek Harness (`provider:WHAT ARG`): it asks the client when its lock says so (and
+    /// runs when allowed), else it runs; a run is logged `{"ran": NAME}` and completes its `tool_call`.  An unknown
+    /// WHAT says so.
+    fn gated_tool(&mut self, sid: &str, turn: u64, what: &str, arg: &str) {
+        let (tool, fold) = match self.kind {
+            Kind::Kimi => (kimi::tool(what, arg), Fold::NoKind),
+            _ => (dsh::tool(&self.argv, what, arg), Fold::IdOnly),
+        };
+        let Some((name, fields, asks)) = tool else {
+            self.say(sid, turn, &format!("no provider tool {what}\n"));
+            return;
+        };
+        if asks {
+            let answer = self.permission_for(sid, turn, fields, fold);
+            if !answer.starts_with("allow") {
+                self.say(sid, turn, &format!("{name}: {answer}\n"));
+                return;
+            }
+        } else {
+            let tid = format!("tc-{turn}-{}", self.next_out_id);
+            self.next_out_id += 1;
+            let mut update = fields.as_object().cloned().unwrap_or_default();
+            update.insert("sessionUpdate".into(), json!("tool_call"));
+            update.insert("toolCallId".into(), json!(tid));
+            update.insert("status".into(), json!("completed"));
+            self.update(sid, Value::Object(update));
+        }
+        self.log("ran", json!(name));
+        self.say(sid, turn, &format!("{name}: ran\n"));
+    }
+
     /// Ask the client; the chosen option's id, or `cancelled`.
     fn permission(&mut self, sid: &str, turn: u64, kind: &str, title: &str) -> String {
         let call = json!({"title": title, "kind": kind, "status": "pending", "rawInput": {"command": title}});
-        self.permission_for(sid, turn, call, false)
+        self.permission_for(sid, turn, call, Fold::No)
     }
 
     /// Ask the client about the tool call CALL (a `toolCall` without its id); the chosen option's id, or `cancelled`.
-    /// FOLDED: a pending `tool_call` of CALL's shape goes first, and the request itself carries no `kind`, as Kimi Code
-    /// and DeepSeek Harness ask.
-    fn permission_for(&mut self, sid: &str, turn: u64, call: Value, folded: bool) -> String {
+    /// FOLD: with `NoKind` or `IdOnly`, a pending `tool_call` of CALL's shape goes first, and the request itself carries
+    /// no `kind` (Kimi Code), or nothing but the id (DeepSeek Harness).
+    fn permission_for(&mut self, sid: &str, turn: u64, call: Value, fold: Fold) -> String {
         let tid = format!("tc-{turn}-{}", self.next_out_id);
         self.next_out_id += 1;
         let kind = call.get("kind").cloned().unwrap_or(Value::Null);
@@ -838,12 +909,15 @@ impl Agent {
             _ => serde_json::Map::new(),
         };
         call.insert("toolCallId".into(), json!(tid));
-        if folded {
+        if fold != Fold::No {
             let mut update = call.clone();
             update.insert("sessionUpdate".into(), json!("tool_call"));
             update.insert("status".into(), json!("pending"));
             self.update(sid, Value::Object(update));
             call.remove("kind");
+        }
+        if fold == Fold::IdOnly {
+            call.retain(|k, _| k == "toolCallId");
         }
         let rid = self.request(
             "session/request_permission",

@@ -192,6 +192,8 @@ async fn session(
         enforced: Enforced::No("the browser check"),
         gateway: false,
         trace: None,
+        ro_files: Vec::new(),
+        gateway_url_env: Vec::new(),
     };
     let pinned = pins(&front.settings.current().loaded.values);
     let mut net = SessionNet::start(dir, sid, Vec::new(), pinned, None)

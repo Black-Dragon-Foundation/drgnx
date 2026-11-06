@@ -524,14 +524,31 @@ if it were locked.
 | Provider | The lock | Where it comes from |
 |---|---|---|
 | Claude Code | policy-tier settings (no bypass or auto mode, only drgnx's hooks and permission rules, plus the deny and ask rules of your Claude settings), strict MCP config, Claude's own sandbox off (drgnx's is the boundary), mode `default` | `_meta.claudeCode.options` of the adapter |
-| Codex | `-c approval_policy={ granular = {…} }` with every category (`sandbox_approval`, `rules`, `mcp_elicitations`, `request_permissions`, `skill_approval`) asked of drgnx, `approvals_reviewer = "user"`, `sandbox_mode = "danger-full-access"` (Gleipnir is the one sandbox) | [Codex configuration reference](https://developers.openai.com/codex/config-reference); codex-acp takes `-c` overrides ([source](https://github.com/zed-industries/codex-acp/blob/main/src/lib.rs)) |
-| Gemini CLI | `--approval-mode default`; any `--yolo`, `-y` or `--approval-mode` in the profile's command is dropped | [Gemini CLI reference](https://www.mintlify.com/google-gemini/gemini-cli/reference/cli-options) |
+| Codex (codex-acp 2.x) | its environment, never argv (codex-acp ignores `-c`, and a profile's own `-c` is dropped): `CODEX_CONFIG` with a `drgnx` permission profile (`approval_policy = "untrusted"`, `approvals_reviewer = "user"`, sandbox `danger-full-access` (Gleipnir is the one sandbox), `web_search = "disabled"`, every MCP server's tools `prompt`, the worktree `untrusted`) and `INITIAL_AGENT_MODE=permission-profile:drgnx`; inside the sandbox, read-only, `/etc/codex/requirements.toml` (only that policy, only managed hooks) and `/etc/codex/config.toml` (a managed PreToolUse hook calling drgnx's `before_tool`) | codex-acp `src/index.ts` (the environment it reads), `AgentMode.ts`; Codex `docs/permission-profiles.md`, `config/src/loader/mod.rs` (the requirements and System layers), `hooks/src/engine/mcp_runner.rs` (`mcp_tool` hooks) |
+| Gemini CLI | `--approval-mode default` (any `--yolo`, `-y` or `--approval-mode` in the profile's command is dropped); with a hook subscribed, `--admin-policy` with a file drgnx writes: the subscribed kinds' tools and every MCP tool `ask_user`, the tools of subagents and the bundled docs (which never ask) refused | [Gemini CLI reference](https://www.mintlify.com/google-gemini/gemini-cli/reference/cli-options); `core/src/policy/config.ts` (the admin tier, and that a `.toml` in `/etc/gemini-cli/policies` makes it ignore `--admin-policy`) |
+| Kimi Code | `KIMI_CODE_HOME` is a folder of drgnx's own (`agents/kimi-code` in its state folder): its `config.toml`, bound read-only, has `default_permission_mode = "manual"` and an ask rule for each subscribed kind's tools (which beats Kimi's own approval of reads); `--yolo`, `-y`, `--yes`, `--auto-approve` and `--auto` are dropped; mode `default` | Kimi Code `docs/en/configuration/config-files.md`, `env-vars.md`, `agent-core-v2` `permissionPolicyService.ts` |
+| DeepSeek Harness | `DSH_HOME` is a folder of drgnx's own (`agents/dsh`); `--patch` with an overlay that sets the sandbox mode `danger-full-access` and, apart from it, `approval.policy: ask` (the shipped bundle ties that mode to a policy that refuses every ask), and mounts drgnx's ask plugin for the subscribed kinds | DeepSeek Harness `apps/cli/src/args.ts`, `bundle/base/cordis.patch.yml`, `packages/core/tools/src/pipeline.ts` |
 
 Gateway profiles of Claude (a profile with `:ai`) in the worker and manager roles also get
-`CLAUDE_CODE_PROMPT_CACHE_TTL=1h`; chats keep five minutes.
+`CLAUDE_CODE_PROMPT_CACHE_TTL=1h`; chats keep five minutes. Gateway profiles of Kimi Code and DeepSeek Harness get
+the gateway's address and the session's own token in the variables they read (`KIMI_MODEL_BASE_URL`,
+`KIMI_MODEL_API_KEY`; `DEEPSEEK_BASE_URL`, `DEEPSEEK_API_KEY`), never a provider key.
 
 In every worktree `.claude`, `.codex`, `.gemini`, `.envrc`, `.git/hooks` and `mise.toml` are read-only for the agent.
+Of Kimi Code's and DeepSeek Harness's own folders the agent may write only its login (`credentials`), sessions, logs
+and locks.
 
-An agent drgnx has no lock for (set `:provider claude|codex|gemini` in its profile, or name the CLI in its command)
-is shown as "not enforced": it is not started as a worker under the Cautious and Balanced presets. Codex counts as
-enforced only once its lock has passed the sandboxed-launch and laundering checks; until then it is "not enforced".
+The files a lock binds at a fixed path (Codex's `/etc/codex` pair, Kimi Code's `config.toml`) need the sandbox's
+full tier: on another, such a session is not started. The files drgnx writes for one session (Gemini's admin policy,
+DeepSeek's overlay) live in that session's own folder, which its agent reads and never writes.
+
+**A hook never misses a step it subscribes to.** When a before-tool hook or rule subscribes to a kind, the lock makes
+the agent ask about it, or the agent's own hook calls drgnx (Codex's managed hook, which fails open on a timeout:
+its approvals still fail closed), or the tool is withheld (Codex's hosted web search, Gemini's subagents). An agent
+that would still run such a step unseen (one with no lock, a Gemini whose system policy shadows drgnx's) is not
+started, and the refusal names the kinds and why. The session's details list which kinds are hooked, and how.
+
+An agent drgnx has no lock for (set `:provider claude|codex|gemini|kimi|deepseek` in its profile, or name the CLI in
+its command) is shown as "not enforced": it is not started as a worker under the Cautious and Balanced presets. Codex
+counts as enforced only once its lock has passed the sandboxed-launch and laundering checks, and DeepSeek Harness
+once drgnx's ask plugin ships with its fork; until then they are "not enforced".

@@ -72,31 +72,356 @@ fn claude_rules_are_read_like_the_lisp_does() {
     );
 }
 
+fn kinds(k: &[&str]) -> Vec<String> {
+    k.iter().map(|s| s.to_string()).collect()
+}
+
+/// Where a test's lock writes: a worktree, the session's lock folder and a stand-in for Gemini's system policies.
+fn at(d: &Path) -> LockAt {
+    LockAt {
+        cwd: d.join("wt"),
+        dir: d.join("run/lock"),
+        gemini_policies: d.join("etc/gemini-cli/policies"),
+    }
+}
+
+/// PROFILE's whole lock for KINDS: the plan, then its files (`agents::session::prepare`'s order).
+fn locked(p: &AgentProfile, k: &[&str], d: &Path) -> LaunchPlan {
+    plan(p, Role::Worker, &Effective::default())
+        .with_hook_asks(&kinds(k))
+        .with_locks(p, &kinds(k), &at(d))
+}
+
+fn env_of<'a>(plan: &'a LaunchPlan, name: &str) -> Option<&'a str> {
+    plan.env
+        .iter()
+        .find(|(k, _)| k == name)
+        .map(|(_, v)| v.as_str())
+}
+
+fn file_of(plan: &LaunchPlan, path: &Path) -> Option<String> {
+    plan.ro_files
+        .iter()
+        .find(|(p, _)| p == path)
+        .map(|(_, b)| String::from_utf8(b.clone()).unwrap())
+}
+
+// [D] pure: codex-acp 2.x reads its environment only, so the lock is `CODEX_CONFIG` (a `drgnx` permission profile:
+// untrusted approvals by the user, Gleipnir's sandbox, no hosted web search, MCP tools that prompt, the worktree
+// untrusted) and `INITIAL_AGENT_MODE`, never argv; the managed PreToolUse hook calls the hub's `before_tool`.
 #[test]
-fn codex_overrides_route_every_approval() {
-    let p = profile(&["codex-acp"], None, &[], None);
-    let plan = plan(&p, Role::Worker, &Effective::default());
-    let a = args(&plan);
-    assert_eq!(a[0], "codex-acp");
-    let cs: Vec<&String> = a.iter().skip(1).step_by(2).collect();
-    assert!(a.iter().skip(1).step_by(2).all(|x| x == "-c"));
-    let kv: Vec<&String> = a.iter().skip(2).step_by(2).collect();
-    assert_eq!(cs.len(), 3);
-    for cat in [
-        "sandbox_approval",
-        "rules",
-        "mcp_elicitations",
-        "request_permissions",
-        "skill_approval",
-    ] {
-        assert!(
-            kv[0].contains(&format!("{cat} = true")),
-            "{cat} is asked of the client"
+fn codex_config_is_in_the_environment_not_argv() {
+    let d = tempfile::tempdir().unwrap();
+    let p = profile(
+        &["codex-acp", "-c", "approval_policy=never"],
+        None,
+        &[],
+        None,
+    );
+    let plan = locked(&p, &["execute"], d.path());
+    assert_eq!(args(&plan), ["codex-acp"], "argv overrides are dropped");
+    assert_eq!(
+        env_of(&plan, "INITIAL_AGENT_MODE"),
+        Some("permission-profile:drgnx")
+    );
+    let c: Value = serde_json::from_str(env_of(&plan, "CODEX_CONFIG").unwrap()).unwrap();
+    for policy in [&c, &c["profiles"]["drgnx"]] {
+        assert_eq!(policy["approval_policy"], "untrusted");
+        assert_eq!(policy["approvals_reviewer"], "user");
+        assert_eq!(policy["sandbox_mode"], "danger-full-access");
+        assert_eq!(policy["web_search"], "disabled");
+    }
+    for server in ["drgnx", "drgnx-search", "drgnx-plugins"] {
+        assert_eq!(
+            c["mcp_servers"][server]["default_tools_approval_mode"], "prompt",
+            "{server}"
         );
     }
-    assert_eq!(kv[1], "approvals_reviewer=\"user\"");
-    assert_eq!(kv[2], "sandbox_mode=\"danger-full-access\"");
+    let cwd = d.path().join("wt");
+    assert_eq!(
+        c["projects"][cwd.to_str().unwrap()]["trust_level"],
+        "untrusted"
+    );
+    let hook = file_of(&plan, Path::new("/etc/codex/config.toml")).unwrap();
+    for line in [
+        "[[hooks.PreToolUse]]",
+        "type = \"mcp_tool\"",
+        "server = \"drgnx\"",
+        "tool = \"before_tool\"",
+    ] {
+        assert!(hook.contains(line), "{line} in {hook}");
+    }
     assert!(plan.session_meta.is_none());
+    // nothing subscribed: no managed hook, the policy stays
+    let none = locked(&p, &[], d.path());
+    let hook = file_of(&none, Path::new("/etc/codex/config.toml")).unwrap();
+    assert!(!hook.contains("mcp_tool"), "{hook}");
+    assert!(env_of(&none, "CODEX_CONFIG").is_some());
+}
+
+// [D] pure: the requirements layer the agent cannot edit pins the policy, and Codex stays unenforced until proven.
+#[test]
+fn codex_requirements_pin_the_policy() {
+    let d = tempfile::tempdir().unwrap();
+    let p = profile(&["codex-acp"], None, &[], Some(Provider::Codex));
+    let plan = locked(&p, &["read"], d.path());
+    let req = file_of(&plan, Path::new("/etc/codex/requirements.toml")).unwrap();
+    for line in [
+        "allowed_approval_policies = [\"untrusted\"]",
+        "allowed_approvals_reviewers = [\"user\"]",
+        "allowed_web_search_modes = [\"disabled\"]",
+        "allow_managed_hooks_only = true",
+    ] {
+        assert!(req.lines().any(|l| l == line), "{line} in {req}");
+    }
+    assert!(matches!(plan.enforced, Enforced::No(_)));
+}
+
+// [D] pure: Gemini gets an admin-tier policy that asks for the subscribed kinds' tools and every MCP tool, and
+// withholds what can never ask (subagents' tools, the bundled docs); nothing subscribed: no policy.
+#[test]
+fn gemini_gets_an_admin_policy_for_subscribed_kinds() {
+    let d = tempfile::tempdir().unwrap();
+    let g = profile(&["gemini", "--acp", "--yolo"], None, &[], None);
+    let plan = locked(&g, &["read", "execute"], d.path());
+    let file = d.path().join("run/lock/gemini-policy.toml");
+    assert_eq!(
+        args(&plan),
+        [
+            "gemini",
+            "--acp",
+            "--approval-mode",
+            "default",
+            "--admin-policy",
+            file.to_str().unwrap()
+        ]
+    );
+    let policy = file_of(&plan, &file).unwrap();
+    for want in [
+        "toolName = \"read_file\"",
+        "toolName = \"run_shell_command\"",
+        "mcpName = \"*\"",
+        "decision = \"ask_user\"",
+        "priority = 999",
+        "subagent = \"*\"",
+        "toolName = \"get_internal_docs\"",
+        "decision = \"deny\"",
+    ] {
+        assert!(policy.contains(want), "{want} in {policy}");
+    }
+    assert!(!policy.contains("write_file"), "{policy}");
+    assert_eq!(plan.enforced, Enforced::Yes);
+    // a kind with no tool names drgnx knows asks for every tool
+    let wide = file_of(
+        &locked(&g, &["think"], d.path()),
+        &d.path().join("run/lock/gemini-policy.toml"),
+    )
+    .unwrap();
+    assert!(wide.contains("toolName = \"*\""), "{wide}");
+    let none = locked(&g, &[], d.path());
+    assert!(!args(&none).iter().any(|a| a == "--admin-policy"));
+    assert!(none.ro_files.is_empty());
+}
+
+// [D] pure: a policy in Gemini's system folder makes it ignore `--admin-policy`: the lock says so, the kinds are
+// unhooked, and a session they are subscribed for is refused.
+#[test]
+fn gemini_admin_policy_shadowed_is_not_enforced() {
+    let d = tempfile::tempdir().unwrap();
+    let policies = d.path().join("etc/gemini-cli/policies");
+    std::fs::create_dir_all(&policies).unwrap();
+    std::fs::write(policies.join("notes.txt"), "").unwrap();
+    let g = profile(&["gemini", "--acp"], None, &[], None);
+    assert_eq!(locked(&g, &["read"], d.path()).enforced, Enforced::Yes);
+    std::fs::write(policies.join("site.toml"), "").unwrap();
+    let plan = locked(&g, &["read"], d.path());
+    let Enforced::No(why) = plan.enforced else {
+        panic!("enforced")
+    };
+    assert!(why.contains("/etc/gemini-cli/policies"), "{why}");
+    assert!(!args(&plan).iter().any(|a| a == "--admin-policy"));
+    let h = hooked(&g, &kinds(&["read", "drgnx"]), &plan).unwrap();
+    assert_eq!(
+        (h.before_tool, h.unhooked.clone()),
+        (kinds(&["drgnx"]), kinds(&["read"]))
+    );
+    let refused = unhooked_refusal(&g, Some(&hooked(&g, &kinds(&["read"]), &plan).unwrap()));
+    assert!(refused.unwrap().contains("read"));
+}
+
+// [D] pure: Kimi Code's hub-owned home holds a manual-mode config asking for the subscribed kinds' tools; the yolo
+// flags go.
+#[test]
+fn kimi_strips_yolo_and_asks_for_subscribed_kinds() {
+    let d = tempfile::tempdir().unwrap();
+    let k = profile(
+        &[
+            "kimi",
+            "acp",
+            "--yolo",
+            "-y",
+            "--yes",
+            "--auto-approve",
+            "--auto",
+        ],
+        None,
+        &[],
+        None,
+    );
+    let plan = locked(&k, &["read"], d.path());
+    assert_eq!(args(&plan), ["kimi", "acp"]);
+    let home = plan.login_dir.clone().expect("a hub-owned home");
+    assert_eq!(env_of(&plan, "KIMI_CODE_HOME"), home.to_str());
+    let config = file_of(&plan, &home.join("config.toml")).unwrap();
+    for want in [
+        "default_permission_mode = \"manual\"",
+        "[[permission.rules]]",
+        "tool = \"Read\"",
+        "decision = \"ask\"",
+    ] {
+        assert!(config.contains(want), "{want} in {config}");
+    }
+    assert!(!config.contains("\"Bash\""), "{config}");
+    assert_eq!(plan.enforced, Enforced::Yes);
+    let entries = login_entries(&home);
+    for (name, used) in [
+        ("credentials", LoginUse::Dir),
+        ("sessions", LoginUse::Dir),
+        ("logs", LoginUse::Dir),
+        ("locks", LoginUse::Dir),
+        ("config.toml", LoginUse::Read),
+    ] {
+        assert!(entries.contains(&(name, used)), "{name}");
+    }
+}
+
+// [D] pure: DeepSeek Harness gets an overlay that keeps `approval.policy: ask` beside the full-access sandbox mode
+// (the base bundle ties `never` to that mode) and mounts the drgnx ask plugin for the subscribed kinds.
+#[test]
+fn dsh_overlay_keeps_policy_ask_under_full_access() {
+    let d = tempfile::tempdir().unwrap();
+    let p = profile(&["dsh", "--profile", "acp"], None, &[], None);
+    let plan = locked(&p, &["read", "search"], d.path());
+    let overlay = d.path().join("run/lock/dsh-overlay.yml");
+    assert_eq!(
+        args(&plan),
+        [
+            "dsh",
+            "--profile",
+            "acp",
+            "--patch",
+            overlay.to_str().unwrap()
+        ]
+    );
+    let text = file_of(&plan, &overlay).unwrap();
+    for want in [
+        "mode: danger-full-access",
+        "policy: ask",
+        "kinds: [read, search]",
+    ] {
+        assert!(text.contains(want), "{want} in {text}");
+    }
+    assert!(!text.contains("never"), "{text}");
+    let home = plan.login_dir.clone().expect("a hub-owned home");
+    assert_eq!(env_of(&plan, "DSH_HOME"), home.to_str());
+    // the ask plugin ships with the fork: until then the lock is not enforced, and says so
+    assert!(matches!(plan.enforced, Enforced::No(_)));
+}
+
+// [D] pure: the provider guess finds Kimi Code and DeepSeek Harness by their programs' names, after the others.
+#[test]
+fn kind_guess_finds_kimi_and_dsh() {
+    let guess = |c: &[&str]| profile(c, None, &[], None).provider();
+    assert_eq!(guess(&["/opt/bin/kimi", "acp"]), Some(Provider::Kimi));
+    assert_eq!(
+        guess(&["dsh", "--profile", "acp"]),
+        Some(Provider::DeepSeek)
+    );
+    assert_eq!(guess(&["claude-agent-acp"]), Some(Provider::Claude));
+    assert_eq!(guess(&["my-agent"]), None);
+    let de = |s: &str| serde_json::from_str::<Provider>(s).unwrap();
+    assert_eq!(
+        (de("\"kimi\""), de("\"deepseek\"")),
+        (Provider::Kimi, Provider::DeepSeek)
+    );
+}
+
+// [D] pure: every provider, for every kind a hook can subscribe to: the kind reaches the hooks (an ask the hub
+// answers, or the adapter's hook), or the provider has no tool of it, or the session is refused with the reason.
+// Never a kind that runs unhooked.
+#[test]
+fn every_provider_hooks_withholds_or_refuses_each_kind() {
+    let d = tempfile::tempdir().unwrap();
+    let all: Vec<&str> = brokkr::TOOL_KINDS.to_vec();
+    let cases: [(&[&str], &[&str], bool); 6] = [
+        // command, the kinds it has no tool of (withheld or absent), refused
+        (&["claude-agent-acp"], &["delete", "move"], false),
+        (&["codex-acp"], &["fetch"], false),
+        (&["gemini", "--acp"], &[], false),
+        (&["kimi", "acp"], &[], false),
+        (&["dsh", "--profile", "acp"], &[], false),
+        (&["my-agent"], &[], true),
+    ];
+    for (command, absent, refused) in cases {
+        let p = profile(command, None, &[], None);
+        let plan = locked(&p, &all, d.path());
+        let h = hooked(&p, &kinds(&all), &plan).unwrap();
+        assert_eq!(
+            unhooked_refusal(&p, Some(&h)).is_some(),
+            refused,
+            "{command:?}: {h:?}"
+        );
+        for k in &all {
+            let hooks = h.before_tool.iter().chain(&h.by_adapter).any(|x| x == k);
+            let unhooked = h.unhooked.iter().any(|x| x == k);
+            assert!(
+                hooks || absent.contains(k) || (unhooked && refused),
+                "{command:?} runs {k} unhooked: {h:?}"
+            );
+        }
+    }
+}
+
+// [D] pure: a gateway profile of Kimi Code or DeepSeek Harness gets the gateway's URL and the session's own token in
+// the variables its CLI reads, never a provider key.
+#[test]
+fn kimi_and_dsh_gateway_profiles_get_the_session_token() {
+    let env = &[
+        "ANTHROPIC_BASE_URL=http://127.0.0.1:9",
+        "ANTHROPIC_AUTH_TOKEN=tok",
+        "ANTHROPIC_API_KEY=",
+    ];
+    let mut k = profile(&["kimi", "acp"], Some("kimi-moonshot"), env, None);
+    k.model = Some("kimi-k3".into());
+    let kp = plan(&k, Role::Worker, &Effective::default()).with_gateway_env(&k);
+    for (name, value) in [
+        ("KIMI_MODEL_PROVIDER_TYPE", "anthropic"),
+        ("KIMI_MODEL_BASE_URL", "http://127.0.0.1:9"),
+        ("KIMI_MODEL_API_KEY", "tok"),
+        ("KIMI_MODEL_NAME", "kimi-k3"),
+    ] {
+        assert_eq!(env_of(&kp, name), Some(value), "{name}");
+    }
+    assert_eq!(kp.gateway_url_env, ["KIMI_MODEL_BASE_URL"]);
+    let dsh = profile(
+        &["dsh", "--profile", "acp"],
+        Some("dsh-deepseek"),
+        env,
+        None,
+    );
+    let dp = plan(&dsh, Role::Worker, &Effective::default()).with_gateway_env(&dsh);
+    assert_eq!(env_of(&dp, "DEEPSEEK_BASE_URL"), Some("http://127.0.0.1:9"));
+    assert_eq!(env_of(&dp, "DEEPSEEK_API_KEY"), Some("tok"));
+    assert_eq!(dp.gateway_url_env, ["DEEPSEEK_BASE_URL"]);
+    for p in [&kp, &dp] {
+        assert!(
+            p.env.iter().all(|(n, _)| !n.ends_with("_KEY")
+                || n == "KIMI_MODEL_API_KEY"
+                || n == "DEEPSEEK_API_KEY"),
+            "{:?}",
+            p.env
+        );
+    }
 }
 
 #[test]
@@ -188,7 +513,12 @@ fn claude_sends_no_nonessential_traffic() {
             Role::Worker,
             &Effective::default(),
         );
-        assert!(plan.env.is_empty(), "{cmd}");
+        assert!(
+            plan.env
+                .iter()
+                .all(|(k, _)| k != "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"),
+            "{cmd}"
+        );
     }
 }
 
@@ -225,31 +555,42 @@ fn protected_paths_are_listed() {
 }
 
 // [D] pure: hooks/lock-turns-subscribed-kinds-into-asks. The subscribed kinds' Claude Code tools become
-// managed ask rules beside the user's own, never an allow rule; a kind no rule can name is marked unhooked; another
-// provider's lock is left as it is, its unhooked kinds named.
+// managed ask rules beside the user's own, never an allow rule; a kind Claude has no tool of is not listed; Codex's
+// shell reads reach the managed hook, which fails open; an agent with no lock has its kinds unhooked and is refused.
 #[test]
 fn subscribed_kinds_become_asks() {
-    let kinds = |k: &[&str]| -> Vec<String> { k.iter().map(|s| s.to_string()).collect() };
+    let d = tempfile::tempdir().unwrap();
     let p = profile(&["claude-agent-acp"], None, &[], None);
     let with = plan(&p, Role::Worker, &Effective::default())
         .with_claude_rules(Vec::new(), vec!["Edit".into()])
         .with_hook_asks(&kinds(&["execute", "edit", "search", "think"]));
-    let perms =
-        &with.session_meta.unwrap()["claudeCode"]["options"]["managedSettings"]["permissions"];
+    let perms = &with.session_meta.clone().unwrap()["claudeCode"]["options"]["managedSettings"]["permissions"];
     assert_eq!(
         perms["ask"],
-        json!(["Edit", "Bash", "Write", "NotebookEdit", "Grep", "Glob"])
+        json!([
+            "Edit",
+            "Bash",
+            "BashOutput",
+            "KillShell",
+            "Write",
+            "MultiEdit",
+            "NotebookEdit",
+            "Grep",
+            "Glob",
+            "LS",
+            "Task",
+            "TodoWrite"
+        ])
     );
     assert!(perms.get("allow").is_none() && perms.get("deny").is_none());
-    assert_eq!(claude_ask_tools("read"), ["Read"]);
+    assert_eq!(claude_ask_tools("read"), ["Read", "NotebookRead"]);
     assert_eq!(claude_ask_tools("fetch"), ["WebFetch", "WebSearch"]);
-    assert!(claude_ask_tools("think").is_empty());
-    let h = hooked(&p, &kinds(&["execute", "think", "drgnx"])).unwrap();
-    assert_eq!(h.before_tool, ["drgnx", "execute"]);
-    assert_eq!(h.unhooked, ["think"]);
-    assert!(h.by_adapter.is_empty());
-    assert!(h.why.is_some());
-    assert_eq!(hooked(&p, &[]), None);
+    assert_eq!(claude_ask_tools("switch_mode"), ["ExitPlanMode"]);
+    assert!(claude_ask_tools("delete").is_empty());
+    let h = hooked(&p, &kinds(&["execute", "think", "drgnx", "move"]), &with).unwrap();
+    assert_eq!(h.before_tool, ["drgnx", "execute", "think"]);
+    assert!(h.unhooked.is_empty() && h.by_adapter.is_empty() && h.why.is_none());
+    assert_eq!(hooked(&p, &[], &with), None);
     // nothing subscribed: the lock is today's
     let none = plan(&p, Role::Worker, &Effective::default()).with_hook_asks(&[]);
     assert!(
@@ -257,22 +598,28 @@ fn subscribed_kinds_become_asks() {
             .get("ask")
             .is_none()
     );
-    // Gemini runs reads and searches without asking
-    let g = profile(&["gemini", "--acp"], None, &[], None);
-    let gp = plan(&g, Role::Worker, &Effective::default()).with_hook_asks(&kinds(&["read"]));
-    assert!(gp.session_meta.is_none());
-    let h = hooked(&g, &kinds(&["read", "execute"])).unwrap();
+    // Codex: apply_patch asks; its shell steps (reads and searches too) reach the managed hook
+    let c = profile(&["codex-acp"], None, &[], None);
+    let cp = locked(&c, &["read", "edit"], d.path());
+    let h = hooked(&c, &kinds(&["read", "edit"]), &cp).unwrap();
     assert_eq!(
-        (h.before_tool, h.unhooked),
-        (kinds(&["execute"]), kinds(&["read"]))
+        (h.before_tool, h.by_adapter, h.unhooked),
+        (kinds(&["edit"]), kinds(&["read"]), kinds(&[]))
     );
-    // an agent with no lock asks about nothing the hub can name
+    assert!(h.why.unwrap().contains("fails open on a timeout"));
+    // an agent with no lock asks about nothing the hub can name: refused while a hook subscribes
     let x = profile(&["my-agent"], None, &[], None);
-    let h = hooked(&x, &kinds(&["execute", "drgnx"])).unwrap();
+    let xp = locked(&x, &["execute", "drgnx"], d.path());
+    let h = hooked(&x, &kinds(&["execute", "drgnx"]), &xp).unwrap();
     assert_eq!(
-        (h.before_tool, h.unhooked),
+        (h.before_tool.clone(), h.unhooked.clone()),
         (kinds(&["drgnx"]), kinds(&["execute"]))
     );
+    let why = unhooked_refusal(&x, Some(&h)).unwrap();
+    assert!(why.contains("execute") && why.contains("no lock"), "{why}");
+    // only the hub's own tools subscribed: nothing to refuse
+    let only = hooked(&x, &kinds(&["drgnx"]), &xp);
+    assert_eq!(unhooked_refusal(&x, only.as_ref()), None);
 }
 
 #[test]

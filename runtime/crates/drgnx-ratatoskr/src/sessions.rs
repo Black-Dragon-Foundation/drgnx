@@ -227,6 +227,9 @@ pub struct Sessions {
     /// Sessions made managers (Task 25): their socket also serves the manager tools.
     managers: Mutex<BTreeSet<String>>,
     manager_list: OnceLock<ToolList>,
+    /// Codex sessions whose hooks subscribe to a kind: their socket also serves `before_tool`, which Codex's managed
+    /// hook calls ([`crate::agents::before_tool_tool`]).
+    before_tool: Mutex<BTreeSet<String>>,
     /// Outside bridges connected now.
     outside: Arc<AtomicUsize>,
     /// The hub ends: every outside bridge's connection closes ([`Sessions::end_outside`]).
@@ -512,6 +515,7 @@ impl Sessions {
             serial: tokio::sync::Mutex::new(()),
             managers: Mutex::new(BTreeSet::new()),
             manager_list: OnceLock::new(),
+            before_tool: Mutex::new(BTreeSet::new()),
             front: OnceLock::new(),
             search_tools: OnceLock::new(),
         }
@@ -553,6 +557,15 @@ impl Sessions {
     /// again by the caller).
     pub fn mark_manager(&self, sid: &str) {
         self.managers
+            .lock()
+            .expect("sessions")
+            .insert(sid.to_owned());
+    }
+
+    /// Session SID is a Codex session with hooks: its next socket serves `before_tool` too.  Never behind the hook
+    /// wrapper of the other tools: it runs the hooks itself, and never hooks itself.
+    pub fn mark_before_tool(&self, sid: &str) {
+        self.before_tool
             .lock()
             .expect("sessions")
             .insert(sid.to_owned());
@@ -673,7 +686,31 @@ impl Sessions {
             None => None,
         };
         let sets = crate::graph::tool_sets(task, row.tracker);
-        if self.managers.lock().expect("sessions").contains(&row.sid) {
+        let manager = self.managers.lock().expect("sessions").contains(&row.sid);
+        let hooked = self
+            .before_tool
+            .lock()
+            .expect("sessions")
+            .contains(&row.sid);
+        if hooked && let Some(front) = self.front.get().cloned() {
+            let mut all = if manager {
+                norn::tools::tools_for(norn::tools::ToolSets::default())
+            } else {
+                norn::tools::tools_for(sets)
+            };
+            if manager {
+                all.extend(norn::tools::manager_tools());
+            }
+            let mut list: Vec<Box<dyn Tool<Ctx>>> = all
+                .into_iter()
+                .map(|t| Box::new(AfterTool(t)) as Box<dyn Tool<Ctx>>)
+                .collect();
+            list.push(Box::new(crate::agents::before_tool_tool::BeforeTool {
+                front,
+            }));
+            return list.into();
+        }
+        if manager {
             return self
                 .manager_list
                 .get_or_init(|| {
@@ -816,6 +853,7 @@ impl Sessions {
     /// `serial`.
     async fn end(&self, store: &Store, sid: &str, why: &str) -> bool {
         let live = self.live.lock().expect("sessions").remove(sid);
+        self.before_tool.lock().expect("sessions").remove(sid);
         let Some(live) = live else {
             return false;
         };

@@ -1068,6 +1068,13 @@ async fn spawn_spec(
         .argv
         .split_first()
         .ok_or_else(|| invalid("profile", "the profile has no command"))?;
+    // the lock's files where the sandbox would show them; Codex's /etc ones have no place outside a sandbox
+    for (path, bytes) in plan.ro_files.iter().filter(|(p, _)| !p.starts_with("/etc")) {
+        if let Some(d) = path.parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        std::fs::write(path, bytes).map_err(|e| internal(format!("{}: {e}", path.display())))?;
+    }
     let mut pairs: Vec<(String, std::ffi::OsString)> = p
         .env
         .iter()
@@ -1347,13 +1354,24 @@ pub(super) async fn prepare(
         let (deny, ask) = plock::claude_deny_ask(&PathBuf::from(home).join(".claude"), cwd);
         plan = plan.with_claude_rules(deny, ask);
     }
-    plan = plan.with_codex_untrusted(profile, cwd);
     // the kinds the before-tool hooks and rules of its plugin set at launch subscribe to: the lock makes the agent
     // ask about them, so they reach the seam; a fork's lock `_meta` is its parent's
     let project = session_project(front, sid, cwd).await;
     let kinds = crate::hook_points::subscribed_kinds(&front.core.plugins, project.as_deref());
-    plan = plan.with_hook_asks(&kinds);
-    let hooked = plock::hooked(profile, &kinds);
+    let env = runstav::paths::Env::process();
+    let run = runstav::paths::make_session_dir(&env, &runstav::paths::socket_path(&env), sid)
+        .map_err(|e| internal(format!("session dir: {e}")))?;
+    plan = plan
+        .with_hook_asks(&kinds)
+        .with_locks(profile, &kinds, &plock::LockAt::new(cwd, &run))
+        .with_gateway_env(profile);
+    plan.make_home()
+        .map_err(|e| internal(format!("{}'s home: {e}", profile.name)))?;
+    let hooked = plock::hooked(profile, &kinds, &plan);
+    // a subscribed kind the agent would run unhooked: never started, whatever the role or preset
+    if let Some(why) = plock::unhooked_refusal(profile, hooked.as_ref()) {
+        return Err(refuse(&why));
+    }
     if gateway.is_some() {
         // the process gets the same variables the Claude options carry
         let extra: Vec<(String, String)> = profile
@@ -1420,7 +1438,8 @@ async fn session_project(front: &Front, sid: &str, cwd: &Path) -> Option<String>
 }
 
 /// The chain of a gateway profile kind (`drgnx-ai-agent-gateway-chain`): its provider, with the profile's model;
-/// `claude-openrouter` without a model follows the `agent` role.
+/// `claude-openrouter` without a model follows the `agent` role; `kimi-moonshot` and `dsh-deepseek` (Kimi Code's and
+/// DeepSeek Harness's own agents) go to Moonshot and DeepSeek.
 pub(crate) fn gateway_chain(front: &Front, p: &AgentProfile) -> Vec<(String, Option<String>)> {
     let kind = p.ai.as_deref().unwrap_or_default();
     let one = |id: &str, m: Option<String>| vec![(id.to_string(), m)];
@@ -1444,8 +1463,9 @@ pub(crate) fn gateway_chain(front: &Front, p: &AgentProfile) -> Vec<(String, Opt
         "claude-openrouter" => one("openrouter", p.model.clone()),
         "claude-ollama" => one("ollama", None),
         "claude-anthropic" => one("anthropic", None),
-        "claude-moonshot" => one("moonshot", p.model.clone()),
-        "claude-deepseek" => one("deepseek", p.model.clone()),
+        // Kimi Code and DeepSeek Harness on their vendors' Messages APIs; the retired Claude kinds still run
+        "kimi-moonshot" | "claude-moonshot" => one("moonshot", p.model.clone()),
+        "dsh-deepseek" | "claude-deepseek" => one("deepseek", p.model.clone()),
         _ => Vec::new(),
     }
 }
@@ -1738,6 +1758,17 @@ async fn launch(
     // the session's MCP session first: a sandboxed gateway profile's token is registered on its gateway.sock, which
     // needs it.  A launch refused before the spawn closes the one it opened (its socket and dir go with it)
     let opened = front.mcp.socket_of(sid).is_none();
+    // a Codex session whose hooks subscribe to a kind: its socket serves `before_tool`, which its lock's managed hook
+    // calls
+    if opened && profile.provider() == Some(crate::settings::profiles::Provider::Codex) {
+        let project = session_project(front, sid, cwd).await;
+        if crate::hook_points::subscribed_kinds(&front.core.plugins, project.as_deref())
+            .iter()
+            .any(|k| k != "drgnx")
+        {
+            front.mcp.mark_before_tool(sid);
+        }
+    }
     let mcp = bridge(front, profile, sid, cwd, task, job).await;
     let prep = match prepare(front, profile, role, sid, cwd, job, module_env).await {
         Ok(p) => p,
@@ -3812,22 +3843,28 @@ impl Session {
     }
 
     /// The tool call TOOL of a permission request as the hooks see it, with what this session folded of the same
-    /// `toolCallId` (its kind, when the request has none; the adapter's tool name) and its step.
+    /// `toolCallId` (its kind, when the request has none; the adapter's tool name, else, for a request with no title
+    /// of its own (DeepSeek Harness sends the id only), the folded call's one-word title) and its step.
     pub(crate) fn tool_call_info(&self, tool: Option<&Value>) -> crate::hook_points::ToolCallInfo {
         let id = tool
             .and_then(|t| t.get("toolCallId"))
             .and_then(Value::as_str)
             .unwrap_or("");
+        let untitled = tool.and_then(|t| t.get("title")).is_none();
         let (kind, name, step) = {
             let st = lock(&self.state);
-            let kind = st
-                .tools
-                .get(id)
-                .and_then(|i| st.entries.get(*i))
+            let folded = st.tools.get(id).and_then(|i| st.entries.get(*i));
+            let kind = folded
                 .and_then(|e| e.rest.get("kind"))
                 .and_then(Value::as_str)
                 .map(str::to_owned);
-            let name = st.tool_meta.get(id).and_then(|m| m.name.clone());
+            let title = folded
+                .filter(|_| untitled)
+                .and_then(|e| e.rest.get("title"))
+                .and_then(Value::as_str)
+                .filter(|t| !t.is_empty() && !t.contains(char::is_whitespace))
+                .map(str::to_owned);
+            let name = st.tool_meta.get(id).and_then(|m| m.name.clone()).or(title);
             let step = st
                 .cur
                 .as_ref()
