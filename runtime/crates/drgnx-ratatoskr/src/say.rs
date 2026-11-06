@@ -90,7 +90,9 @@ pub struct DrawnTask {
 }
 
 /// The `drgnx-proposal` block of MESSAGE: none when there is no block (a question); an error when the block is not a
-/// proposal, or there is more than one (which the agent meant is not guessed).
+/// proposal, or there is more than one (which the agent meant is not guessed).  The block ends at a line that is only
+/// "```" (trailing space aside): a JSON string holds no raw line break, so a fence inside a task's body (a brief that
+/// shows a command) is never that line.
 pub fn parse(message: &str) -> Option<Result<Drawn, String>> {
     let blocks = message.matches(FENCE).count();
     if blocks == 0 {
@@ -101,7 +103,16 @@ pub fn parse(message: &str) -> Option<Result<Drawn, String>> {
     }
     let start = message.find(FENCE)? + FENCE.len();
     let rest = &message[start..];
-    let body = rest.split("```").next().unwrap_or(rest);
+    let mut end = rest.len();
+    let mut at = 0;
+    for line in rest.split_inclusive('\n') {
+        if at > 0 && line.trim_end() == "```" {
+            end = at;
+            break;
+        }
+        at += line.len();
+    }
+    let body = &rest[..end];
     Some(
         serde_json::from_str::<Drawn>(body.trim())
             .map_err(|e| format!("the drgnx-proposal block is not a proposal: {e}")),

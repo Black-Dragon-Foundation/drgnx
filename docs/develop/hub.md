@@ -2607,8 +2607,9 @@ the user's words.
 
 The session's turn ends at the shell's `PromptDone` handling (`agents/session.rs`, where the last message is already
 read for `drgnx-report`): when its id is a planning session's (one set lookup), `(sid, message)` goes to `say::run`.
-A message with no `drgnx-proposal` block is a question: `say-message {id, text}` carries it to the editor. A block is
-parsed with every unknown key refused (`grants`, `approved`, `auto`, `repo` and the like: the format has `title`,
+A message with no `drgnx-proposal` block is a question: `say-message {id, text}` carries it to the editor. A block
+ends at the first line that is only "```" (a JSON string holds no raw line break, so a fenced command inside a task's
+body is never that line), and is parsed with every unknown key refused (`grants`, `approved`, `auto`, `repo` and the like: the format has `title`,
 `tasks` of `{n, title, role, profile?, deps, body}`, `budget` and `gate` only), and more than one block is refused.
 `say::check` then refuses, all at once: no title, no tasks or more than 32, a role other than `implement`, `test`,
 `docs`, `review` and `review-long`, a profile the settings do not have or a job may not run on
