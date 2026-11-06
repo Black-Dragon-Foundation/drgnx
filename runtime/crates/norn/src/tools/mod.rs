@@ -12,6 +12,7 @@ use urdr::graph::{ReadPool, WriterHandle};
 use crate::deny::{DenyList, SharedDeny};
 use crate::store::CoordDb;
 
+pub mod extensions;
 pub mod graph;
 pub mod guard;
 pub mod identity;
@@ -143,6 +144,16 @@ pub trait Hub: Send + Sync {
     fn known_settings(&self, _names: Option<&[String]>) -> Vec<serde_json::Value> {
         Vec::new()
     }
+
+    /// What the Extensions catalog says of ID (`pkg:NAME`, `plugin:NAME`): its name and source; `None` for an id it
+    /// does not hold.  The default (a hub with no catalog): none.
+    fn extension_fact(&self, _id: &str) -> BoxFuture<'_, Option<extensions::ExtensionFact>> {
+        Box::pin(async { None })
+    }
+
+    /// A card a tool made or changed, as the `card` event the editors get (`{id, kind, title, state, data}`).  The
+    /// default (no editors): nothing.
+    fn card_event(&self, _event: serde_json::Value) {}
 }
 
 /// The clock the tools read (`float-time`): seconds since the epoch.

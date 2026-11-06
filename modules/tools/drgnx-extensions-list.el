@@ -33,6 +33,7 @@
 (declare-function drgnx-extensions-trust-before-install "drgnx-extensions-trust")
 (declare-function drgnx-extensions-trust-update "drgnx-extensions-trust")
 (declare-function drgnx-extensions-trust-review-p "drgnx-extensions-trust")
+(declare-function drgnx-extensions-recommend-ids "drgnx-extensions-recommend")
 (defvar drgnx-extensions-review)
 (declare-function drgnx-extensions-details-open "drgnx-extensions-details")
 (declare-function drgnx-extensions-details-generation-keys "drgnx-extensions-details")
@@ -196,6 +197,13 @@ While a query is typed: the search results alone, or with @generations the gener
 
 ;;;; Asking the hub
 
+(defun drgnx-extensions-list--recommended-ids ()
+  "The ids Recommended lists: what the project you work in recommends (drgnx-extensions-recommend.el), else the
+global `drgnx-extensions-recommended'."
+  (if (fboundp 'drgnx-extensions-recommend-ids)
+      (drgnx-extensions-recommend-ids)
+    (mapcar (lambda (n) (format "pkg:%s" n)) (bound-and-true-p drgnx-extensions-recommended))))
+
 (defun drgnx-extensions-list--local-ids (local)
   "(PRESENT . IDS) for the LOCAL words: PRESENT when one asks for a set of ids, IDS their intersection, in order."
   (let (present ids)
@@ -205,10 +213,9 @@ While a query is typed: the search results alone, or with @generations the gener
                                                 drgnx-extensions-list--jobs)
                                  (sort out #'string<)))
                    ('restart (copy-sequence drgnx-extensions-list--restart))
-                   ('recommended (mapcar (lambda (n) (format "pkg:%s" n)) (bound-and-true-p drgnx-extensions-recommended)))
-                   ('this-project (mapcar (lambda (n) (format "pkg:%s" n))
-                                          (append (bound-and-true-p drgnx-extensions-recommended)
-                                                  (bound-and-true-p drgnx-packages-off))))
+                   ('recommended (drgnx-extensions-list--recommended-ids))
+                   ('this-project (append (drgnx-extensions-list--recommended-ids)
+                                          (mapcar (lambda (n) (format "pkg:%s" n)) (bound-and-true-p drgnx-packages-off))))
                    (_ 'none))))
         (unless (eq set 'none)
           (setq ids (if present (cl-remove-if-not (lambda (id) (member id set)) ids) set) present t))))
@@ -231,8 +238,7 @@ While a query is typed: the search results alone, or with @generations the gener
                (list :filters
                      (pcase section
                        ('installed '(:installed t)) ('updates '(:updates t)) ('plugins '(:plugins t)) ('builtin '(:builtin t))
-                       ('recommended (list :ids (vconcat (mapcar (lambda (n) (format "pkg:%s" n))
-                                                                 (bound-and-true-p drgnx-extensions-recommended)))))))
+                       ('recommended (list :ids (vconcat (drgnx-extensions-list--recommended-ids))))))
                (list :offset (or offset 0) :limit drgnx-extensions-list--page)))))
 
 (defun drgnx-extensions-list--fetch (section offset)

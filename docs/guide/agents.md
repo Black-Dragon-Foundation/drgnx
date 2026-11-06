@@ -577,6 +577,16 @@ To let agents change settings without asking each time, give them an `options` g
 own project), and optionally `names`, globs such as `python-*` (none: every name the deny-list leaves). A grant opens
 settings in the agent's own project only. Agents outside drgnx never change a setting, grant or not.
 
+## Suggesting an extension
+
+**`extensions_suggest {id, why}`** lets an agent suggest a package (`pkg:NAME`) or an installed plugin
+(`plugin:NAME`) from the Extensions catalog. It makes a card and you decide (docs/guide/extensions.md, "Suggested by an
+agent"); the agent never installs, approves or trusts one, and no tool lets it. An id the catalog does not hold is
+refused. The card's title is the hub's ("s1 suggests magit (MELPA)"); `why` is kept only as a quote, on one line, at
+most 280 characters. One open card per package, the sessions' quotes on it; at most three suggestions a session;
+a session's quotes leave the cards when it ends, and a card with none left is withdrawn. Only sessions drgnx runs may
+use it; an agent outside drgnx is refused.
+
 ## Agents outside drgnx
 
 Agents you run outside drgnx can report to it too: Claude Code in a terminal or in Zed, Codex, gry workers and their

@@ -43,7 +43,12 @@ fn tool_names_are_the_lisp_names() {
         .filter(|n| {
             !matches!(
                 n.as_str(),
-                "settings_get" | "settings_change" | "report_submit" | "plan_read" | "plan_write"
+                "settings_get"
+                    | "settings_change"
+                    | "report_submit"
+                    | "plan_read"
+                    | "plan_write"
+                    | "extensions_suggest"
             ) && !n.starts_with("job_")
         })
         .collect();
@@ -84,7 +89,9 @@ const BUDGET_JOBS: usize = 6_000;
 /// Their schemas come from the plan methods' types.  Measured after the schemas were trimmed (`guard::compact_schema`):
 /// 4,105 bytes together (report_submit 2,058, plan_write 1,756, plan_read 277, plus the list's own brackets).
 const BUDGET_PART1: usize = 4_105;
-const _: () = assert!(BUDGET_BYTES + BUDGET_JOBS <= 40_000);
+/// `extensions_suggest`, which every agent has (the Extensions view: an agent suggests, the user installs).
+const BUDGET_EXTENSIONS: usize = 800;
+const _: () = assert!(BUDGET_BYTES + BUDGET_JOBS + BUDGET_EXTENSIONS <= 40_000);
 
 const PART1_TOOLS: [&str; 3] = ["report_submit", "plan_read", "plan_write"];
 
@@ -106,6 +113,13 @@ fn the_tool_list_fits_the_budget() {
     )})
     .to_string()
     .len();
+    let ext = json!({"tools": listing(norn::tools::extensions::tools())})
+        .to_string()
+        .len();
+    assert!(
+        ext <= BUDGET_EXTENSIONS,
+        "extensions_suggest is {ext} bytes, over {BUDGET_EXTENSIONS}"
+    );
     assert!(
         jobs <= BUDGET_JOBS,
         "the job tools are {jobs} bytes, over {BUDGET_JOBS}"
@@ -116,14 +130,14 @@ fn the_tool_list_fits_the_budget() {
     );
     // the numbers go in the ledger
     eprintln!(
-        "tools/list for the 23 tools: {bytes} bytes (budget {BUDGET_BYTES}); the 18, the jobs and part 1's three: {bytes16} (the 18 alone: budget {BUDGET_BYTES_16}; the 4 job tools {jobs} of {BUDGET_JOBS} + the 3 part-1 tools {part1} of {BUDGET_PART1})"
+        "tools/list for the 23 tools: {bytes} bytes (budget {BUDGET_BYTES}); the 18, the jobs, part 1's three and extensions_suggest: {bytes16} (the 18 alone: budget {BUDGET_BYTES_16}; the 4 job tools {jobs} of {BUDGET_JOBS} + the 3 part-1 tools {part1} of {BUDGET_PART1} + extensions_suggest {ext} of {BUDGET_EXTENSIONS})"
     );
     assert!(
         bytes <= BUDGET_BYTES,
         "tools/list is {bytes} bytes, over the {BUDGET_BYTES} budget: trim the descriptions"
     );
-    // the 18 alone: what the list weighs without the job tools and part 1's three
-    let base = bytes16 - jobs - part1;
+    // the 18 alone: what the list weighs without the job tools, part 1's three and extensions_suggest
+    let base = bytes16 - jobs - part1 - ext;
     assert!(
         base <= BUDGET_BYTES_16,
         "tools/list without the tracker, job and part-1 tools is {base} bytes, over {BUDGET_BYTES_16}"

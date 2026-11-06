@@ -531,6 +531,11 @@ same guard: `norn::tools::tools_for(ToolSets { tracker })` lists 21 tools, or th
   project"). `access_request` makes (or
   finds) one open `access` card per session and target and answers `{requested: card}` for a known project and an
   unknown one alike.
+- `extensions_suggest` (`tools/extensions.rs`) makes or joins the one open `extension` card of a catalog id
+  (`Hub::extension_fact`); its title is built from the hub's facts, the agent's `why` only a quote in `data.why`
+  (`[{session, text}]`, cleaned and cut to 280 characters); at most 3 a session. Each change goes to the editors as a
+  `card` event (`Hub::card_event`); `Sessions::end` calls `session_ended`, which drops the session's quotes and
+  withdraws a card left with none.
 - `hello` keeps its first text item and adds a second one and `structuredContent.brief`; `record_decision` takes
   `about: [id]`.
 - `task_read find` ranks by words (FTS) and says `vectors: "behind N"` while entities in the caller's scope (its

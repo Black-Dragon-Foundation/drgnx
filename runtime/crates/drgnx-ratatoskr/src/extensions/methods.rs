@@ -205,6 +205,18 @@ impl Hub {
         })
     }
 
+    /// What an agent's suggestion may name: a package or a plugin the catalog holds (`extensions_suggest`).
+    pub async fn fact(&self, id: &str) -> Option<norn::tools::extensions::ExtensionFact> {
+        let index = self.index().await.ok()?;
+        let row = &index.entry(id)?.row;
+        matches!(row.kind, w::Kind::Package | w::Kind::Plugin).then(|| {
+            norn::tools::extensions::ExtensionFact {
+                name: row.name.clone(),
+                source: row.source.clone(),
+            }
+        })
+    }
+
     async fn rows(&self, ids: &[String]) -> Result<w::RowsResult, Error> {
         let index = self.index().await?;
         Ok(w::RowsResult {

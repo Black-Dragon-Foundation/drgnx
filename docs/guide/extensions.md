@@ -9,8 +9,7 @@ it. `C-g` never stops a job; **Cancel** (`k`, Vim `x`) does.
 
 ## The list
 
-Rows are grouped in sections: **Installed**, **Updates**, **Recommended** (what this project's
-`drgnx-extensions-recommended` names), **Plugins**, **Built-in** and **Generations**. Each row has the kind's mark
+Rows are grouped in sections: **Installed**, **Updates**, **Recommended** (below), **Plugins**, **Built-in** and **Generations**. Each row has the kind's mark
 (`⬡` package, `◆` plugin, `▣` module), the name, the version, a chip for its state, and on a second line the summary,
 the archive it comes from and how far you can trust that (signed, unsigned archive, local, Git commit, hash approved).
 `drgnx-extensions-list-density` set to `dense` keeps one line a row. The next 200 rows load as you near the end.
@@ -113,6 +112,37 @@ magit --stage`); the package's page then shows the version and hash it fetched a
 have, file by file. **Apply update** installs exactly that download (`drgnx upgrade --staged`, which checks its hash
 again); **Discard** forgets it. If another review downloaded something else in between, Apply refuses and asks you to
 Update again. **Update All** leaves these packages out and says which wait for your review.
+
+## Recommended
+
+**Recommended** lists, for the project you last opened a file in, in this order and each once:
+
+1. the packages the project's `drgnx-extensions-recommended` names (its shared `.drgnx/settings.el` or your private
+   workspace file);
+2. the packages Emacs suggests for files the Explorer has already listed in the project (Emacs's own
+   `package-autosuggest.eld`: a `.cs` file brings `csharp-mode`, a `.csv` file `csv-mode`). Only folders the Explorer
+   has shown count: nothing reads the project's folders for this;
+3. the packages a module that is on still waits for.
+
+The first file you open in a project that recommends something posts one notice, "This project recommends 3
+extensions"; its **Show** opens the list at `@recommended`. A recommendation is a row with your **Install** button and
+nothing else: a repository's settings can name packages, but they never install, queue or trust one. Install goes
+through the trust card like any other. **Show Recommended Extensions** in the palette does the same for the project you
+are in.
+
+## Suggested by an agent
+
+An agent may suggest a package or a plugin with its `extensions_suggest` tool (docs/guide/agents.md). You get a notice
+whose title the hub writes from what it knows, "s1 suggests magit (MELPA)": the session's id, the package's name and
+its archive, never the agent's words. The agent's reason is shown only quoted in the notice's details, on one line, at
+most 280 characters, with control and direction-changing characters taken out. The notice opens the package's page;
+nothing on it installs. Your **Install** on that page is the only way in, through the trust card. One package has one
+open suggestion, however many sessions suggest it; a session makes at most three; when the last session that
+suggested it ends, the notice goes.
+
+No agent installs, approves or trusts an extension: the tools agents have cannot start an install job or answer a card,
+and `drgnx-extensions-review`, `drgnx-extensions-recommended`, `drgnx-extensions-check-updates` and
+`drgnx-packages-off` are on the settings deny-list, so `settings_change` refuses them under any grant.
 
 ## Generations and rollback
 

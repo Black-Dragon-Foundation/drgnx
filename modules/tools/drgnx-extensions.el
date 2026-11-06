@@ -20,7 +20,8 @@
   (load (expand-file-name "drgnx-extensions-list" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-extensions-details)
   (load (expand-file-name "drgnx-extensions-details" (file-name-directory (or load-file-name buffer-file-name))) nil t))
-(dolist (part '(drgnx-extensions-jobs drgnx-extensions-live drgnx-extensions-project drgnx-extensions-trust))
+(dolist (part '(drgnx-extensions-jobs drgnx-extensions-live drgnx-extensions-project drgnx-extensions-trust
+                                      drgnx-extensions-recommend))
   (unless (featurep part)
     (load (expand-file-name (symbol-name part) (file-name-directory (or load-file-name buffer-file-name))) nil t)))
 (require 'drgnx-restart)
@@ -37,6 +38,10 @@
 (declare-function drgnx-extensions-trust-install "drgnx-extensions-trust")
 (declare-function drgnx-extensions-trust-cancel "drgnx-extensions-trust")
 (declare-function drgnx-extensions-trust-apply "drgnx-extensions-trust")
+(declare-function drgnx-extensions-recommend-setup "drgnx-extensions-recommend")
+(declare-function drgnx-extensions-recommend-teardown "drgnx-extensions-recommend")
+(declare-function drgnx-extensions-show-recommended "drgnx-extensions-recommend")
+(declare-function drgnx-extensions-show-suggestion "drgnx-extensions-recommend")
 (declare-function drgnx-extensions-details--define-view "drgnx-extensions-details")
 (declare-function drgnx-extensions-details-forget-generations "drgnx-extensions-details")
 (declare-function drgnx-extensions-list--define-view "drgnx-extensions-list")
@@ -141,7 +146,14 @@ when you ask (the Refresh command)."
                         :doc "Close this trust card; nothing is installed")
   (drgnx-command-define 'extensions-review-apply :category "Extensions" :title "Apply Reviewed Update"
                         :command #'drgnx-extensions-trust-apply
-                        :doc "Install exactly the update this page shows, as it was downloaded and checked"))
+                        :doc "Install exactly the update this page shows, as it was downloaded and checked")
+  ;; what a project recommends and what an agent suggests: each only shows rows and pages, never installs
+  (drgnx-command-define 'extensions-show-recommended :category "Extensions" :title "Show Recommended Extensions"
+                        :command #'drgnx-extensions-show-recommended
+                        :doc "The Extensions list's Recommended: what this project, Emacs and your modules recommend")
+  (drgnx-command-define 'extensions-show-suggestion :category "Extensions" :title "Show Suggested Extension"
+                        :command #'drgnx-extensions-show-suggestion
+                        :doc "The page of an extension an agent suggested; its Install button is yours"))
 
 (defun drgnx-extensions--setup ()
   (drgnx-extensions-list--define-view)
@@ -156,12 +168,14 @@ when you ask (the Refresh command)."
   (drgnx-extensions-live-setup)
   (drgnx-extensions-project-setup)
   (drgnx-extensions-trust-setup)
+  (drgnx-extensions-recommend-setup)
   (when (eq drgnx-extensions-check-updates 'daily) (drgnx-extensions--start-daily-check)))
 
 (defun drgnx-extensions--teardown ()
   "Close the list, stop the timers and let go of the job layer's hook."
   (remove-hook 'drgnx-extensions-jobs-changed-functions #'drgnx-extensions-list--jobs-changed)
   (drgnx-extensions--stop-daily-check)
+  (drgnx-extensions-recommend-teardown)
   (drgnx-extensions-trust-teardown)
   (drgnx-extensions-project-teardown)
   (drgnx-extensions-jobs-teardown)

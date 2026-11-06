@@ -726,6 +726,20 @@ impl Hub for ToolHub {
         )
     }
 
+    fn extension_fact(
+        &self,
+        id: &str,
+    ) -> BoxFuture<'_, Option<norn::tools::extensions::ExtensionFact>> {
+        let front = self.front.get().and_then(std::sync::Weak::upgrade);
+        let id = id.to_string();
+        Box::pin(async move { front?.extensions.fact(&id).await })
+    }
+
+    /// A tool's card goes to the editors as every card does (`card`).
+    fn card_event(&self, event: Value) {
+        self.editors.broadcast("card", event);
+    }
+
     /// The runtime settings in effect globally (the project overrides are the editor's, keyed by its names).
     fn known_settings(&self, names: Option<&[String]>) -> Vec<Value> {
         crate::settings::RUNTIME_NAMES

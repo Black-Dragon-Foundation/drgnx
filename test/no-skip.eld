@@ -99,4 +99,5 @@
   "drgnx-hub-client/the-update-notice-offers-restart-now"
   "drgnx-onboard/chat-needs-its-module"
   "drgnx-onboard/openrouter-key-goes-to-the-keychain"
+  "drgnx-extensions-hub/a-suggestion-card-opens-details-and-has-no-install"
 ))

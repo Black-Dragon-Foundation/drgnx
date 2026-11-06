@@ -1,0 +1,29 @@
+{"scenario": "extensions/a-fourth-suggestion-is-refused", "requires": ["v1"], "doc": "A session makes at most three extensions_suggest calls: the fourth is a tool error and makes no card; an id the catalog does not hold is refused; a second session's suggestion of a package already on an open card joins that card."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/cache/drgnx/extensions/catalog.json", "text": "{\"version\":1,\"archives\":[{\"name\":\"gnu\",\"url\":\"https://elpa.gnu.org/packages/\",\"signed\":true}],\"packages\":[{\"name\":\"a\",\"summary\":\"A\",\"versions\":[{\"archive\":\"gnu\",\"version\":\"1\",\"reqs\":[]}],\"candidate\":{\"archive\":\"gnu\",\"version\":\"1\"}},{\"name\":\"b\",\"summary\":\"B\",\"versions\":[{\"archive\":\"gnu\",\"version\":\"1\",\"reqs\":[]}],\"candidate\":{\"archive\":\"gnu\",\"version\":\"1\"}},{\"name\":\"c\",\"summary\":\"C\",\"versions\":[{\"archive\":\"gnu\",\"version\":\"1\",\"reqs\":[]}],\"candidate\":{\"archive\":\"gnu\",\"version\":\"1\"}},{\"name\":\"d\",\"summary\":\"D\",\"versions\":[{\"archive\":\"gnu\",\"version\":\"1\",\"reqs\":[]}],\"candidate\":{\"archive\":\"gnu\",\"version\":\"1\"}}]}"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "t1", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "mcp/session", "params": {"agent": "t2", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"sid": "$capture:sid2", "socket": "$capture:sock2"}}}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "extensions_suggest", "arguments": {"id": "pkg:nothing", "why": "x"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "id: pkg:nothing is not in the Extensions catalog (pkg:NAME for a package, plugin:NAME for an installed plugin)"}], "isError": true}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "extensions_suggest", "arguments": {"id": "pkg:a", "why": "one"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "result": {"structuredContent": {"card": "$capture:ca"}, "isError": "$absent"}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "extensions_suggest", "arguments": {"id": "pkg:b", "why": "two"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 4, "result": {"structuredContent": {"card": "$any"}, "isError": "$absent"}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "extensions_suggest", "arguments": {"id": "pkg:c", "why": "three"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 5, "result": {"structuredContent": {"card": "$any"}, "isError": "$absent"}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "extensions_suggest", "arguments": {"id": "pkg:d", "why": "four"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 6, "result": {"content": [{"type": "text", "text": "at most 3 suggestions a session: this session made 3, and the user sees them on their cards"}], "isError": true}}}
+{"do": "sql_expect", "sql": "select count(*) from card where kind = 'extension'", "rows": [[3]]}
+{"do": "connect", "conn": "m2", "hub": "h", "socket": "path:$sock2", "as": "raw"}
+{"do": "send", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "extensions_suggest", "arguments": {"id": "pkg:a", "why": "agreed"}}}}
+{"do": "expect", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 2, "result": {"structuredContent": {"card": "$ca"}, "isError": "$absent"}}}
+{"do": "sql_expect", "sql": "select count(*), json_array_length(max(data), '$.why') from card where kind = 'extension' and id = $ca", "rows": [[1, 2]]}

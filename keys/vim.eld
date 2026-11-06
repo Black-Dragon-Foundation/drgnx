@@ -391,6 +391,8 @@
         (extensions-trust-install "i" :map (drgnx-extensions-trust . drgnx-extensions-trust-mode-map))
         (extensions-trust-cancel "q" :map (drgnx-extensions-trust . drgnx-extensions-trust-mode-map))
         (extensions-review-apply :none "the Apply update button of a reviewed update; the palette")
+        (extensions-show-recommended :none "a project's recommendation notice; the palette")
+        (extensions-show-suggestion :none "an agent's suggestion notice; the palette")
         (agent-settings-openrouter "r" :map (drgnx-agent-settings . drgnx-agent-settings-mode-map))
         (agent-settings-report "R" :map (drgnx-agent-settings . drgnx-agent-settings-mode-map))
         (keyboard-shortcuts "SPC h s")

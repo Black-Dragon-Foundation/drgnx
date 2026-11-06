@@ -811,6 +811,8 @@ impl Sessions {
             agent = live.row.agent,
             "a session's mcp.sock is gone: {why}"
         );
+        // its extension suggestions lose its quote (a card no session stands behind is withdrawn)
+        norn::tools::extensions::session_ended(&self.tools, sid).await;
         // its connections last: a client that sees its connection close finds the socket, directory and row gone
         live.cancel.cancel();
         true
