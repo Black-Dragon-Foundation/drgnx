@@ -13,6 +13,7 @@
 (require 'drgnx-timer)
 (require 'drgnx-exec)
 (require 'drgnx-pkg-wants)
+(require 'drgnx-pkg)                    ; the layer loads it at a job's first MISSING line: here, not inside a test
 (load (expand-file-name "modules/tools/drgnx-extensions-jobs" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
