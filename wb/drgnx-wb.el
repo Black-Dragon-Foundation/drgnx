@@ -76,13 +76,14 @@ so the whole row is the bar's colour and not the header line's.  FILLED: STRING 
   (drgnx-wb-hide-sidebar))
 
 (defun drgnx-wb-section-header (title)
-  "A dock section's header: the ✕ that hides the sidebar, then TITLE.
+  "A dock section's header: the ✕ that hides the sidebar, then TITLE (nil: a section without one, such as a pane
+kind defined with no `:title').
 The ✕ comes first: a title with buttons (Buffers) fills the dock's width, so one at the end would be clipped.  A
 space before it keeps it off the frame's edge."
   (drgnx-wb-bar (concat " " (drgnx-wb-close-button #'drgnx-wb--close-dock-click "Close sidebar")
                         " " (let ((chevron (drgnx-look-icon 'chevron-down 'drgnx-ui-heading)))
                               (if (string-empty-p chevron) "" (concat chevron " ")))
-                        (drgnx-wb--heading (string-trim-left title)))))
+                        (drgnx-wb--heading (string-trim-left (or title ""))))))
 
 (defun drgnx-wb--heading (title)
   "TITLE in the heading face, keeping the faces and properties it has (the buttons of a title with some)."

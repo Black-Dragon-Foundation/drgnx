@@ -79,8 +79,10 @@ build/ ignored (with build/out.o)."
               (drgnx-git-refresh root t)
               (with-current-buffer drgnx-explorer-buffer-name
                 (drgnx-explorer--fontify (point-min) (point-max))
+                ;; every row's tail holds the ⋯ control; the letter is the mark the tail remembers
                 (cl-flet ((deco (name) (goto-char (point-min)) (search-forward name)
-                            (mapconcat (lambda (o) (or (overlay-get o 'after-string) ""))
+                            (mapconcat (lambda (o) (let ((tail (overlay-get o 'drgnx-row-tail)))
+                                                     (if tail (or (car tail) "") (or (overlay-get o 'after-string) ""))))
                                        (overlays-in (pos-bol) (1+ (pos-eol))) "")))
                   (should (string-search "U" (deco "c.txt")))
                   (should (string-search "●" (deco "src")))     ; a folder with changes inside

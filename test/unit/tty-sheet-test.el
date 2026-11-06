@@ -149,16 +149,21 @@ CAPS nil is a graphical frame."
       (drgnx-palette))
     note))
 
+(defun tty-sheet-test--caps (key)
+  "KEY as the palette's keycaps read as text (\"<f6> p\" → \"F6 P\")."
+  (string-join (drgnx-palette-keycap-names key) " "))
+
 (ert-deftest drgnx-surfaces/the-palette-shows-the-key-this-terminal-can-send ()
+  ;; the palette shows a key as keycaps (`drgnx-palette-keycaps')
   (tty-sheet-test--on tty-sheet-test--legacy
-    (should (string-match-p "<f6> p" (tty-sheet-test--palette-annotation "Commands: Command Palette")))
-    (should (string-match-p "M-F" (tty-sheet-test--palette-annotation "Search: Search in Project")))
+    (should (string-search (tty-sheet-test--caps "<f6> p") (tty-sheet-test--palette-annotation "Commands: Command Palette")))
+    (should (string-search (tty-sheet-test--caps "M-F") (tty-sheet-test--palette-annotation "Search: Search in Project")))
     ;; in a buffer whose mode binds Alt+Shift+F: the command is asked from there, so it is F6 then f
     (with-temp-buffer
       (use-local-map (let ((m (make-sparse-keymap))) (define-key m (key-parse "M-F") #'ignore) m))
-      (should (string-match-p "<f6> f" (tty-sheet-test--palette-annotation "Search: Search in Project")))))
+      (should (string-search (tty-sheet-test--caps "<f6> f") (tty-sheet-test--palette-annotation "Search: Search in Project")))))
   (tty-sheet-test--on nil
-    (should (string-match-p "C-S-p" (tty-sheet-test--palette-annotation "Commands: Command Palette")))))
+    (should (string-search (tty-sheet-test--caps "C-S-p") (tty-sheet-test--palette-annotation "Commands: Command Palette")))))
 
 (ert-deftest drgnx-surfaces/menus-follow-the-terminal-they-are-shown-on ()
   ;; the menu bar is global: its :keys texts are rebuilt when the selected frame's terminal is another one
