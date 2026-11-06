@@ -47,6 +47,9 @@
 (declare-function drgnx-git-cached-root "drgnx-git")
 (declare-function drgnx-git-branch "drgnx-git")
 (declare-function drgnx-git-roots-known "drgnx-git")
+(declare-function drgnx-statusbar--measure-fn "drgnx-statusbar")
+(declare-function drgnx-statusbar--layout-key "drgnx-statusbar")
+(defvar drgnx-look-bars-measure-function)
 (defvar vc-mode)
 (defvar drgnx-chrome--root)
 (defvar drgnx-face-glyphs)
@@ -192,12 +195,49 @@ left out), each one running its command.  nil when none has a key."
                              (drgnx-topline--text (concat (drgnx-topline--glyph 'close "x") " ") 'drgnx-topline-strong)
                              'delete-frame "Close the window")))
 
-(defun drgnx-topline--width (items)
-  "The columns the tab-bar ITEMS take (their strings)."
-  (let ((n 0)) (dolist (i items) (setq n (+ n (string-width (nth 2 i))))) n))
+(defun drgnx-topline--width (items &optional measure)
+  "The columns the tab-bar ITEMS take (their strings); with MEASURE, a function of a string, the units it gives."
+  (let ((n 0))
+    (dolist (i items) (setq n (+ n (if measure (funcall measure (nth 2 i)) (string-width (nth 2 i))))))
+    n))
 
-(defun drgnx-topline--build (buffer width drawn)
-  "The items for BUFFER on a frame WIDTH columns wide; DRAWN: drgnx draws the title, so the controls show."
+(defun drgnx-topline--pixel-gap (key pixels drag)
+  "An item of PIXELS width.  Its PIXELS are also in the item (`:drgnx-px'): the tab bar redraws only when its items
+are not `equal', and `equal' ignores the text properties the width is in."
+  (append (drgnx-topline--item key (propertize " " 'face 'drgnx-topline 'display `(space :width (,(max 0 pixels))))
+                               (and drag (fboundp 'mouse-drag-frame-move) 'mouse-drag-frame-move)
+                               (and drag "Drag to move the window"))
+          (list :drgnx-px (max 0 pixels))))
+
+(defun drgnx-topline--build-pixels (buffer pixels drawn)
+  "The items for BUFFER on a frame PIXELS wide: the same line as `drgnx-topline--build', laid out in pixels.
+The hint is centred on the frame, the controls sit at the right edge."
+  (let* ((measure (drgnx-statusbar--measure-fn nil 'tab-bar))
+         (space (max 1 (funcall measure " ")))
+         (controls (and drawn (drgnx-topline--controls)))
+         (controls-px (drgnx-topline--width controls measure))
+         (mark (drgnx-topline--mark buffer (/ (- pixels controls-px) space)))   ; never under the controls
+         (mark-px (funcall measure (nth 2 mark)))
+         (hint (with-current-buffer buffer (drgnx-topline--hint)))
+         (hint-px (drgnx-topline--width hint measure))
+         (hint (and hint (<= (+ mark-px hint-px controls-px (* 4 space)) pixels) hint))
+         (items (list mark)) (column mark-px))
+    (when hint                                           ; centred
+      (let ((gap (max (* 2 space) (- (/ (- pixels hint-px) 2) column))))
+        (setq items (append items (cons (drgnx-topline--pixel-gap 'drgnx-topline-gap-1 gap drawn) hint))
+              column (+ column gap hint-px))))
+    (append items
+            (cons (drgnx-topline--pixel-gap 'drgnx-topline-gap-2 (- pixels controls-px column) drawn) controls))))
+
+(defun drgnx-topline--build (buffer width drawn &optional pixels)
+  "The items for BUFFER on a frame WIDTH columns wide; DRAWN: drgnx draws the title, so the controls show.
+PIXELS, the frame's width in pixels: lay out in pixels instead (`drgnx-topline--build-pixels')."
+  (if pixels
+      (drgnx-topline--build-pixels buffer pixels drawn)
+    (drgnx-topline--build-columns buffer width drawn)))
+
+(defun drgnx-topline--build-columns (buffer width drawn)
+  "The items for BUFFER on a frame WIDTH columns wide (a terminal); DRAWN as in `drgnx-topline--build'."
   (let* ((controls (and drawn (drgnx-topline--controls)))
          (controls-w (drgnx-topline--width controls))
          (mark (drgnx-topline--mark buffer (- width controls-w)))   ; never under the controls
@@ -246,7 +286,7 @@ this file alone.")
                           (buffer-local-value 'default-directory buffer)
                           (and (boundp 'drgnx-chrome--root) (buffer-local-value 'drgnx-chrome--root buffer))
                           (buffer-local-value 'buffer-file-name buffer)
-                          width drawn drgnx-face-glyphs
+                          width drawn pixels drgnx-face-glyphs (and (framep object) (drgnx-statusbar--layout-key (frame-selected-window object)))
                           (drgnx-epoch drgnx-topline--git-epoch)
                           (and (fboundp 'drgnx-git-roots-known) (drgnx-git-roots-known))
                           ;; one pair per entry of `drgnx-topline--hint-commands'
@@ -298,8 +338,10 @@ alone for `drgnx-topline-retry-seconds'.  A memo hit allocates nothing."
                (window (drgnx-state-editor-window))
                (buffer (if (window-live-p window) (window-buffer window) (current-buffer)))
                (width (frame-text-cols frame))   ; `frame-width' conses ~140 cells and 14 strings per call
-               (drawn (and (drgnx-topline--drawn-title-p frame) t)))
-          (prog1 (drgnx-memo topline frame (drgnx-topline--build buffer width drawn))
+               (drawn (and (drgnx-topline--drawn-title-p frame) t))
+               (pixels (and (or drgnx-look-bars-measure-function (and (framep frame) (display-graphic-p frame)))
+                            (frame-inner-width frame))))
+          (prog1 (drgnx-memo topline frame (drgnx-topline--build buffer width drawn pixels))
             (setq drgnx-topline--error nil drgnx-topline--error-at nil)))
       ;; An error would leave the tab bar without items, which Emacs answers by taking the line away; and then
       ;; every redisplay would give it back and take it away again.

@@ -168,6 +168,14 @@ Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
 | `eol` | `LF`, `CRLF` or `CR` | change it |
 | `language` | the language as VS Code names it: `Rust`, `Go`, `YAML`, `Python`, `Emacs Lisp`, `Shell Script`, `Plain Text` (`drgnx-statusbar-language-names`, else the mode's own name) | **Change Language Mode**: pick another major mode for the buffer |
 
+**Pixels, not columns.** On a graphical frame the bar is laid out in pixels, in the caption type face: it is
+`panel-padding` wide at each end (12 logical pixels at the comfortable density), the right-hand segments end one
+padding from the window's edge whatever the font, and when the window is too narrow the segments of
+`drgnx-statusbar-drop-order` go by the pixels they take. A terminal frame still counts columns. The bar measures only
+when something it shows changes: zooming with `global-text-scale-adjust`, a scale change (the display's scale), another
+density and a change of a font role each lay it out again, so the right edge never goes stale. `drgnx-look-pixel-width`
+is the function that measures a string in a face.
+
 The most recently used editor window shows the whole bar; the other editor groups show `drgnx-statusbar-compact`
 (position and language). The bar is for the buffers you edit: a buffer that visits a file, an editor made with
 **New Untitled** (in whatever language you give it), or a buffer that is code, text or configuration
@@ -302,6 +310,9 @@ too narrow for the hint, the hint goes first and the place is cut with an ellips
 When drgnx draws the window's title itself (`drgnx-face-title-bar` set to `drgnx`: [the title bar](#the-title-bar))
 the right end has `– ▢ ×` (minimise, maximise, close) and the empty part of the line moves the window when you drag
 it. With the system's own title bar (the default) those buttons would be a second set, so they are not there.
+
+On a graphical frame the line is laid out in pixels too: the hint is centred on the frame to the pixel, and the window
+controls sit at the right edge, whatever the font and the zoom. A new width, a zoom or a font change lays it out again.
 
 The line is Emacs's tab bar with no tabs, since drgnx has no workspaces. It only reads what is already known: the
 branch from drgnx's git cache, as the status bar reads it (until the cache has read the repository, the file's

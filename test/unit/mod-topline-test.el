@@ -479,7 +479,8 @@ owned) and torn down after (the watchers go, the memo empties)."
                                                'drgnx-topline--drawn-title-p 'drgnx-face-drawn-title-p
                                                'drgnx-state-editor-window 'drgnx-state--record 'drgnx-commands-get
                                                'drgnx-cmd-command 'drgnx-cmd-bound 'drgnx-topline--hint-command
-                                               'drgnx-topline--hint-bound 'drgnx-git-roots-known)))
+                                               'drgnx-topline--hint-bound 'drgnx-git-roots-known
+                                               'drgnx-statusbar--layout-key)))
         (should (eq first (drgnx-topline--line)))))))
 
 (ert-deftest drgnx-topline/a-git-change-rebuilds-the-line ()

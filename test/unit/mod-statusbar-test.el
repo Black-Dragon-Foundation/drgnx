@@ -1617,7 +1617,8 @@ was built once; no other package's entry yet."
       (should (eq (drgnx-statusbar--bar w width nil) (drgnx-statusbar-mode-line)))
       (should (= 0 (drgnx-memo-fixture-alloc (lambda () (drgnx-statusbar--bar w width nil))
                                              'drgnx-statusbar--bar 'drgnx-statusbar--misc 'drgnx-statusbar--misc-entries
-                                             'drgnx-statusbar--selected-p 'drgnx-statusbar--which-func)))
+                                             'drgnx-statusbar--selected-p 'drgnx-statusbar--which-func
+                                             'drgnx-statusbar--layout-key)))
       (should (= drgnx-statusbar-test--builds 1)))))
 
 (ert-deftest drgnx-statusbar/the-key-is-epochs-and-plain-values ()
@@ -1632,9 +1633,10 @@ of other packages' entries; the rest are the six epochs and plain values."
                     (mapc #'walk (cdr f)))))
       (mapc #'walk keys))
     (should (equal (sort (delete-dups helpers) #'string<)
-                   '(drgnx-statusbar--misc drgnx-statusbar--selected-p drgnx-statusbar--which-func)))
+                   '(drgnx-statusbar--layout-key drgnx-statusbar--misc drgnx-statusbar--selected-p
+                                                 drgnx-statusbar--which-func)))
     (should (equal (sort epochs #'string<) '(buffer-look eglot flymake git misc-info statusbar)))
-    (should (= 22 (length keys)))))                     ; 6 epochs, 8 values of the window, 7 hot plain values, the notice tick
+    (should (= 23 (length keys)))))                     ; 6 epochs, 8 values of the window, 7 hot plain values, the notice tick, the layout key
 
 (ert-deftest drgnx-statusbar/memoised-on-the-notice-tick ()
   "A change of the notice model builds the bar again; nothing else of it does."

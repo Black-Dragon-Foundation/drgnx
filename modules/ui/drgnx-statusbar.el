@@ -32,6 +32,7 @@
 (require 'drgnx-timer)
 (require 'drgnx-large-file)
 (require 'drgnx-memo)
+(require 'drgnx-pixels)                 ; `drgnx-look-pixel-width'
 (require 'drgnx-notices)                ; the two counts the bar shows, and `drgnx-notice-tick'
 (declare-function drgnx-face-glyph "drgnx-face")
 (declare-function drgnx-file-write "drgnx-file")
@@ -281,39 +282,94 @@ Within `drgnx-statusbar-retry-seconds' of the last record nothing is formatted: 
       s)))
 
 ;;;; Layout
+;; Columns on a terminal, pixels on a graphical frame: the same functions count in UNITS, measured by
+;; `drgnx-statusbar--measure' (`string-width', or the pixel measure), with `drgnx-statusbar--space' units to a space
+;; and `drgnx-statusbar--pad' units of padding at each end.  The pixel measure runs only when a bar's memo changes
+;; (never in the `:eval'), and the memo's key holds what changes the sizes (`drgnx-statusbar--layout-key').
+
+(defvar drgnx-look-bars-measure-function nil
+  "A function (STRING &optional FACE) → width, which the bars use in place of the display's own pixel measure.
+nil: columns on a terminal frame, `drgnx-look-pixel-width' on a graphical one.  Tests bind it.")
+
+(defvar drgnx-look-fonts-applied-hook)
+(declare-function drgnx-look-density-value "drgnx-look-density" (key &optional density))
+(defvar text-scale-mode-amount)
+(defvar text-scale-mode)
+
+(defun drgnx-statusbar--fonts-applied ()
+  "On `drgnx-look-fonts-applied-hook': the fonts changed, so the bars are measured again."
+  (setq drgnx-pixels-generation (1+ drgnx-pixels-generation))
+  (drgnx-statusbar--bump)
+  (force-mode-line-update t))
+
+(defconst drgnx-statusbar--bar-face '(drgnx-ui-caption mode-line)
+  "The faces the bar's text is measured in: the caption type face on the mode line.")
+
+(defun drgnx-statusbar--scale (&optional frame)
+  "FRAME's scale (1.0 without a native shell)."
+  (if (fboundp 'frame-scale-factor) (float (frame-scale-factor frame)) 1.0))
+
+(defun drgnx-statusbar--measure-fn (&optional frame face)
+  "The function (STRING) → pixels the bars on FRAME use, measuring in FACE, or nil: the frame counts columns."
+  (cond (drgnx-look-bars-measure-function
+         (let ((f drgnx-look-bars-measure-function)) (lambda (s) (funcall f s face))))
+        ((display-graphic-p frame) (lambda (s) (drgnx-look-pixel-width s face)))))
+
+(defun drgnx-statusbar--layout-key (window)
+  "An integer that changes when the sizes the bar is measured at change: the frame's character size (a scale change
+and a change of the default face's height move it), the buffer's text scale, the font role generation.  Allocates
+nothing (a memo key)."
+  (let* ((frame (window-frame window))
+         (cell (+ (frame-char-width frame) (* 100 (frame-char-height frame))))
+         (text (if (bound-and-true-p text-scale-mode) (+ 50 (round (or text-scale-mode-amount 0))) 50)))
+    (+ (mod cell 100000) (* 100000 (mod text 100))
+       (* 10000000 (mod drgnx-pixels-generation 100000)))))
+
+(defvar drgnx-statusbar--measure #'string-width "The function the layout counts a string with.")
+(defvar drgnx-statusbar--space 1 "One space in the layout's units.")
+(defvar drgnx-statusbar--pad 1 "The padding at each end of the bar in the layout's units.")
+(defun drgnx-statusbar--w (s) (funcall drgnx-statusbar--measure s))
 
 (defvar drgnx-statusbar--left-sep " · "
   "The separator between left segments (bound while rendering to the glyph `sep': ASCII on a non-UTF-8 terminal).")
 (defconst drgnx-statusbar--right-sep "  ")
-(defconst drgnx-statusbar--branch-min 14 "Columns the branch is cut to before other segments are dropped for it.")
+(defconst drgnx-statusbar--branch-min 14 "Spaces' width the branch is cut to before other segments are dropped for it.")
 
 (defun drgnx-statusbar--run-width (segs sep)
-  "Columns of the texts in SEGS (an alist ID → text) joined by SEP."
+  "Units of the texts in SEGS (an alist ID → text) joined by SEP."
   (if segs
-      (+ (apply #'+ (mapcar (lambda (s) (string-width (cdr s))) segs)) (* (string-width sep) (1- (length segs))))
+      (+ (apply #'+ (mapcar (lambda (s) (drgnx-statusbar--w (cdr s))) segs))
+         (* (drgnx-statusbar--w sep) (1- (length segs))))
     0))
 
 (defun drgnx-statusbar--total (left right)
-  "Columns of the bar with these LEFT and RIGHT segments: a pad on each side and at least two between."
-  (+ 2 (drgnx-statusbar--run-width left drgnx-statusbar--left-sep)
+  "Units of the bar with these LEFT and RIGHT segments: a pad on each side and at least two spaces between."
+  (+ (* 2 drgnx-statusbar--pad) (drgnx-statusbar--run-width left drgnx-statusbar--left-sep)
      (drgnx-statusbar--run-width right drgnx-statusbar--right-sep)
-     (if right (if left 2 1) 0)))
+     (if right (* drgnx-statusbar--space (if left 2 1)) 0)))
 
 (defun drgnx-statusbar--cut-branch (left right width min)
-  "LEFT with the branch cut so that the bar fits WIDTH, but not below MIN columns; the new LEFT, or nil if it cannot."
+  "LEFT with the branch cut so that the bar fits WIDTH, but not below MIN units; the new LEFT, or nil if it cannot."
   (when-let* ((b (assq 'branch left))
               (excess (- (drgnx-statusbar--total left right) width))
               ((> excess 0))
-              (target (max min 1 (- (string-width (cdr b)) excess)))
-              ((< target (string-width (cdr b)))))
+              (target (max min drgnx-statusbar--space (- (drgnx-statusbar--w (cdr b)) excess)))
+              ((< target (drgnx-statusbar--w (cdr b)))))
     (mapcar (lambda (s) (if (eq (car s) 'branch) (cons 'branch (drgnx-statusbar--cut (cdr b) target)) s))
             left)))
 
 (defun drgnx-statusbar--cut (s width)
-  "S cut to WIDTH columns, ending in Emacs's ellipsis when that fits in WIDTH.
+  "S cut to WIDTH units, ending in Emacs's ellipsis when that fits in WIDTH.
 `truncate-string-to-width' gives back all of S, and the ellipsis, when the ellipsis is wider than WIDTH: \"...\" is,
-in 1 or 2 columns, on a terminal that cannot show \"…\"."
-  (truncate-string-to-width s width nil nil (>= width (string-width (truncate-string-ellipsis)))))
+in 1 or 2 columns, on a terminal that cannot show \"…\".  In pixels the characters go one by one until it fits."
+  (if (eq drgnx-statusbar--measure #'string-width)
+      (truncate-string-to-width s width nil nil (>= width (string-width (truncate-string-ellipsis))))
+    (let ((ellipsis (truncate-string-ellipsis)) (n (length s)))
+      (if (<= (drgnx-statusbar--w s) width)
+          s
+        (while (and (> n 0) (> (drgnx-statusbar--w (concat (substring s 0 n) ellipsis)) width))
+          (setq n (1- n)))
+        (if (> n 0) (concat (substring s 0 n) ellipsis) "")))))
 
 (defun drgnx-statusbar--fit (left right width)
   "LEFT and RIGHT (alists ID → text) reduced until the bar fits WIDTH: (LEFT . RIGHT).
@@ -324,7 +380,7 @@ First the segments of `drgnx-statusbar-drop-order' go, then the branch is cut to
       (let ((id (pop order)))
         (setq left (assq-delete-all id (copy-sequence left)) right (assq-delete-all id (copy-sequence right))))))
   (when (> (drgnx-statusbar--total left right) width)
-    (setq left (or (drgnx-statusbar--cut-branch left right width drgnx-statusbar--branch-min) left)))
+    (setq left (or (drgnx-statusbar--cut-branch left right width (* drgnx-statusbar--branch-min drgnx-statusbar--space)) left)))
   (while (and (> (drgnx-statusbar--total left right) width)
               (or right (seq-find (lambda (s) (not (eq (car s) 'branch))) left)))
     (if right
@@ -332,21 +388,37 @@ First the segments of `drgnx-statusbar-drop-order' go, then the branch is cut to
       (let ((last (car (last (seq-remove (lambda (s) (eq (car s) 'branch)) left)))))
         (setq left (delq last (copy-sequence left))))))
   (when (> (drgnx-statusbar--total left right) width)
-    (setq left (or (drgnx-statusbar--cut-branch left right width 1) left)))
+    (setq left (or (drgnx-statusbar--cut-branch left right width drgnx-statusbar--space) left)))
   (cons left right))
 
 (defun drgnx-statusbar--join (segs sep)
   (let ((sep (propertize sep 'face 'shadow)))
     (mapconcat #'cdr segs sep)))
 
+(defun drgnx-statusbar--right-fringe (w)
+  "The pixels of W's right fringe: `right' in a mode line is the text area's edge, and the bar's padding counts from
+the window's."
+  (if (window-live-p w) (or (nth 1 (window-fringes w)) 0) 0))
+
 (defun drgnx-statusbar-render (width &optional compact)
-  "The status bar as a propertized string of at most WIDTH columns for the window being drawn.
+  "The status bar as a propertized string of at most WIDTH columns (pixels on a graphical frame) for the window
+being drawn.
 COMPACT: only the segments of `drgnx-statusbar-compact' (on the right); `quiet': only those of
 `drgnx-statusbar-quiet' (on the left).  The segment functions run with the source window's buffer current."
   (let* ((w (drgnx-statusbar-source-window))
          (buf (and (window-live-p w) (window-buffer w))))
     (with-current-buffer (or buf (current-buffer))
       (let* ((drgnx-statusbar--window w)
+             (frame (and (window-live-p w) (window-frame w)))
+             (measure (drgnx-statusbar--measure-fn frame drgnx-statusbar--bar-face))
+             (drgnx-statusbar--measure (or measure #'string-width))
+             (drgnx-statusbar--space (if measure (max 1 (funcall measure " ")) 1))
+             (drgnx-statusbar--pad (if measure
+                                       (round (* (if (fboundp 'drgnx-look-density-value)
+                                                     (drgnx-look-density-value 'panel-padding)
+                                                   12)
+                                                 (drgnx-statusbar--scale frame)))
+                                     1))
              (drgnx-statusbar--left-sep (drgnx-statusbar--separator))
              (texts (lambda (ids)
                       (delq nil (mapcar (lambda (id) (when-let* ((s (drgnx-statusbar--text id))) (cons id s))) ids))))
@@ -358,12 +430,24 @@ COMPACT: only the segments of `drgnx-statusbar-compact' (on the right); `quiet':
         (setq left (car fitted) right (cdr fitted))
         (let* ((l (drgnx-statusbar--join left drgnx-statusbar--left-sep))
                (r (drgnx-statusbar--join right drgnx-statusbar--right-sep))
-               (rw (string-width r))
-               (bar (concat " " l
-                            (when right (propertize " " 'display `(space :align-to (- right ,(1+ rw)))))
-                            r " ")))
+               (rw (drgnx-statusbar--w r))
+               (bar (if measure
+                        ;; pixels: the padding and the gap before the right run are spaces of exact width
+                        (let ((pad (propertize " " 'display `(space :width (,drgnx-statusbar--pad)))))
+                          (concat pad l
+                                  (when right
+                                    (propertize " " 'display
+                                                `(space :align-to
+                                                        (- right (,(max 0 (- (+ rw drgnx-statusbar--pad)
+                                                                             (drgnx-statusbar--right-fringe w))))))))
+                                  r pad))
+                      (concat " " l
+                              (when right (propertize " " 'display `(space :align-to (- right ,(1+ rw)))))
+                              r " "))))
+          (when measure (add-face-text-property 0 (length bar) drgnx-statusbar--bar-face t bar))
           ;; a last guard: whatever the segments were, the bar is never wider than the window
-          (cond ((<= (string-width bar) width) bar)
+          (cond (measure (if (<= width 0) "" bar))
+                ((<= (string-width bar) width) bar)
                 ((<= width 0) "")
                 (t (drgnx-statusbar--cut bar width))))))))
 
@@ -629,6 +713,7 @@ dir (the doctor's `statusbar-misc' check reads it).  Never prompts and never rai
                           (drgnx-epoch 'eglot (current-buffer)) (drgnx-epoch 'git) (drgnx-epoch 'misc-info)
                           (drgnx-epoch 'statusbar) (drgnx-notice-tick)
                           (window-point object) (buffer-chars-modified-tick) (point-min) (point-max) width compact
+                          (drgnx-statusbar--layout-key object)
                           (drgnx-statusbar--selected-p object) (and mark-active (mark t))
                           (current-buffer) default-directory mode-line-process defining-kbd-macro
                           ;; keycast's keys: a new vector after every command (its text changes even when nothing else did)
@@ -647,6 +732,13 @@ something else is drawn again when point moves, the text changes or `(drgnx-stat
 only when one of its keys changed."
   (drgnx-memo statusbar-bar w (drgnx-statusbar--escape (drgnx-statusbar-render width compact))))
 
+(defun drgnx-statusbar--window-width (w)
+  "W's width in the bar's units: pixels on a graphical frame (or with `drgnx-look-bars-measure-function'), else
+columns.  Allocates nothing."
+  (if (or drgnx-look-bars-measure-function (display-graphic-p (window-frame w)))
+      (window-pixel-width w)
+    (window-total-width w)))
+
 (defun drgnx-statusbar-mode-line ()
   "The `:eval' of an editor window's mode line.
 In a buffer that visits a file, is an Untitled editor or is code, text or configuration (`drgnx-statusbar-modes'): the
@@ -658,10 +750,10 @@ other buffer: the stock mode line.  An error shows nothing and is recorded once,
             ((drgnx-statusbar--wanted-p)
              (let* ((w (selected-window))       ; the window being drawn (a mode line is drawn with it selected)
                     (drgnx-statusbar--window w))
-               (drgnx-statusbar--bar w (window-total-width w) (not (drgnx-statusbar--mru-editor-p w)))))
+               (drgnx-statusbar--bar w (drgnx-statusbar--window-width w) (not (drgnx-statusbar--mru-editor-p w)))))
             ((drgnx-statusbar--quiet-p)
              (let* ((w (selected-window)) (drgnx-statusbar--window w))
-               (drgnx-statusbar--bar w (window-total-width w) 'quiet)))
+               (drgnx-statusbar--bar w (drgnx-statusbar--window-width w) 'quiet)))
             (t (drgnx-memo-forget 'statusbar-bar (selected-window))   ; no bar here now: keep no buffer alive for it
                (or mode-line-format (default-value 'mode-line-format))))
     (error (drgnx-statusbar--note-error 'host err) nil)))
@@ -854,6 +946,7 @@ moves, so other packages' entries are formatted again, once per buffer the bars 
 
 (defconst drgnx-statusbar--hooks
   '((post-command-hook . drgnx-statusbar--post-command)
+    (drgnx-look-fonts-applied-hook . drgnx-statusbar--fonts-applied)
     (drgnx-hub-event-functions . drgnx-statusbar--hub-tests)
     (drgnx-git-changed-functions . drgnx-statusbar--git-changed)
     (compilation-finish-functions . drgnx-statusbar--compilation-finished)
