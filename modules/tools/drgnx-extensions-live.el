@@ -15,6 +15,9 @@
 ;;   a changed one whose changed set (it and the changed packages it needs or that need it) has nothing loaded swaps to
 ;;   its new version; one with something loaded keeps its old version and says "Restart to use 1.1 (1.0 is running)";
 ;;   a removed one that is kept says "Restart to finish removing"; a directory that is gone with no copy says so.
+;;   A removed package's modes go off: the plan step reads them from the modes index (the swap rewrites it without
+;;   the package), and after the job its file-mode entries leave the mode alists, a buffer in one of its major modes
+;;   takes the mode its file gets without it, and its buffer minor modes go off; other packages' modes stay on.
 ;;   Modules that waited for packages then run (`drgnx-modules-retry-waiting').
 ;; Nothing here prompts, waits or reaches the network, and nothing writes elpa/, the lock or the quickstart file.  See
 ;; docs/guide/extensions.md, "When a restart is needed".
@@ -25,6 +28,7 @@
 (require 'drgnx-paths)
 (require 'drgnx-file)
 (require 'drgnx-pkg-progress)
+(require 'drgnx-extensions-index)
 
 (defvar package-alist)
 (defvar package-user-dir)
@@ -45,6 +49,10 @@
   "The repoints of the job under way: ((NEW . OLD)…), a `load-path' entry moved from OLD (under elpa/) to NEW.")
 
 (defvar drgnx-extensions-live--marked nil "Packages the job under way marked for a restart (unmarked if it fails).")
+
+(defvar drgnx-extensions-live--removing nil
+  "The packages the job under way takes away, with the modes they add, read at its plan step (the swap rewrites the
+modes index): ((NAME . ENTRY)…), ENTRY as `drgnx-extensions-index-of' gives it.")
 
 (defun drgnx-extensions-live--warn (what err)
   "Say that WHAT failed with ERR, as one notice.  Never signals."
@@ -195,10 +203,24 @@ names); the directories this session uses from elpa/ that the swap takes away po
 Never signals."
   (condition-case err
       (let ((n (plist-get plan :generation)))
+        (setq drgnx-extensions-live--removing (drgnx-extensions-live--modes-of (append (plist-get plan :removes) nil)))
         (drgnx-extensions-live--repoint (append (plist-get plan :replaces) (plist-get plan :removes) nil)
                                         (and (natnump n) n))
         (drgnx-extensions-live--claim))
     (error (drgnx-extensions-live--warn "the running packages' files were not kept" err))))
+
+(defun drgnx-extensions-live--modes-of (dirs)
+  "The modes the packages of the package directories DIRS (of elpa/) add, from the modes index as it is now, or from
+a package's autoloads file when the index lacks it: ((NAME . ENTRY)…)."
+  (let ((index (drgnx-extensions-index-read)) (out nil))
+    (dolist (dir dirs)
+      (when (drgnx-pkg--dir-package dir)
+        (let ((name (drgnx-extensions-live--name dir)))
+          (push (cons name (or (alist-get name index)
+                               (drgnx-extensions-index-of
+                                (expand-file-name (format "%s/%s-autoloads.el" dir name) (drgnx-extensions-live--elpa)))))
+                out))))
+    (nreverse out)))
 
 ;;;; After the job
 
@@ -291,14 +313,46 @@ the rest.  The marks are made again from what the session and elpa/ hold."
                          marks name (format "files of %s %s are gone: restart drgnx" name (drgnx-extensions-live--version dir))))))))
     (setq drgnx-extensions-live--restart marks)))
 
+(defun drgnx-extensions-live--modes-off (removed)
+  "The packages REMOVED ((NAME . ENTRY)…) are gone: their file-mode entries leave the mode alists, a buffer in one of
+their major modes takes the mode its file gets without them (keeping the other packages' buffer minor modes it had
+on), and their buffer minor modes go off in every buffer.  Never prompts."
+  (let ((majors (seq-mapcat (lambda (r) (drgnx-extensions-index-modes (cdr r))) removed))
+        (minors (seq-mapcat (lambda (r) (plist-get (cdr r) :minor)) removed))
+        (others (seq-mapcat (lambda (e) (unless (assq (car e) removed) (plist-get (cdr e) :minor)))
+                            (drgnx-extensions-index-read))))
+    (pcase-dolist (`(,var . ,key) drgnx-extensions-index--alists)
+      (dolist (r removed)
+        (dolist (e (plist-get (cdr r) key)) (set var (delete e (symbol-value var))))))
+    (dolist (b (buffer-list))
+      (with-current-buffer b
+        (when (memq major-mode majors)
+          (let ((on (seq-filter (lambda (m) (and (boundp m) (symbol-value m))) others))
+                (enable-local-variables :safe) (inhibit-interaction t))
+            (condition-case nil (normal-mode) (error (fundamental-mode)))
+            (dolist (m on)
+              (unless (symbol-value m) (condition-case nil (funcall m 1) (error nil))))))
+        (dolist (m minors)
+          (when (and (fboundp m) (boundp m) (symbol-value m)) (condition-case nil (funcall m -1) (error nil))))))))
+
+(defun drgnx-extensions-live--gone ()
+  "The packages the job under way took away that elpa/ has no version of now: entries of
+`drgnx-extensions-live--removing'."
+  (let ((there (mapcar (lambda (d) (drgnx-extensions-live--name d))
+                       (drgnx-pkg--package-dirs (drgnx-extensions-live--elpa)))))
+    (seq-remove (lambda (r) (memq (car r) there)) drgnx-extensions-live--removing)))
+
 (defun drgnx-extensions-live-after (result)
-  "When a job ends (RESULT: its done object; :ok t when it went well): settle the session on the packages directory,
-or point back into it after a failed or stopped job; claim the generations still used; then run the modules that
-waited for packages.  Never signals."
+  "When a job ends (RESULT: its done object; :ok t when it went well): settle the session on the packages directory
+and turn off the modes of the packages it took away, or point back into it after a failed or stopped job; claim
+the generations still used; then run the modules that waited for packages.  Never signals."
   (condition-case err
       (let ((ok (eq (plist-get result :ok) t)))
-        (if ok (drgnx-extensions-live--settle) (drgnx-extensions-live--point-back))
-        (setq drgnx-extensions-live--moved nil drgnx-extensions-live--marked nil)
+        (if ok
+            (progn (drgnx-extensions-live--settle)
+                   (drgnx-extensions-live--modes-off (drgnx-extensions-live--gone)))
+          (drgnx-extensions-live--point-back))
+        (setq drgnx-extensions-live--moved nil drgnx-extensions-live--marked nil drgnx-extensions-live--removing nil)
         (drgnx-extensions-live--claim)
         (when (and ok (fboundp 'drgnx-modules-retry-waiting)) (drgnx-modules-retry-waiting)))
     (error (drgnx-extensions-live--warn "the session did not take the changed packages" err))))

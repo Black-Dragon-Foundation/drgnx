@@ -10,8 +10,9 @@ Most changes the Extensions view makes work at once, in the drgnx you are using:
 - **An update of a package already loaded** keeps the version that is running, with everything it needs, until you
   restart drgnx; its row says "Restart to use 4.2 (4.1 is running)". Files of it that load later still come from
   the running version (drgnx keeps a copy of them for this session), never half from the new one.
-- **Removing a package already loaded** leaves it running until you restart; its row says "Restart to finish
-  removing".
+- **Removing a package already loaded** turns its modes off at once: a buffer in one of its major modes takes the
+  mode its file gets without it, and its buffer minor modes go off (other packages' modes stay on). The rest of its
+  code stays loaded until you restart; its row says "Restart to finish removing".
 - **A failed or stopped change** leaves the session as it was.
 
 A row says "restart drgnx" at once when its files are gone with no copy kept, for instance a package you installed

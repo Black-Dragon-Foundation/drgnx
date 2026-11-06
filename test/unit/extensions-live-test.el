@@ -373,4 +373,26 @@ goes on to its end and S settles (`drgnx-extensions-live-after' of the done obje
       (should (equal (drgnx-extensions-live-test--eval s '(fb-hello)) "1.0"))
       (drgnx-extensions-live-test--end s))))
 
+(ert-deftest drgnx-extensions-live/uninstalling-a-loaded-package-turns-its-modes-off-in-open-buffers ()
+  ;; handshake: the session parks after each form, the job's child at its plan step
+  (drgnx-pkg-child-with root
+    (drgnx-extensions-live-test--archive
+     root '((fa "1.0" nil ";;;###autoload\n(define-minor-mode fa-lint-mode \"fa's lint.\")")
+            (fb "1.0" nil ";;;###autoload\n(define-minor-mode fb-lint-mode \"fb's lint.\")\n;;;###autoload\n(define-derived-mode fb-mode text-mode \"FB\")\n;;;###autoload\n(add-to-list 'auto-mode-alist '(\"\\\\.fbx\\\\'\" . fb-mode))")))
+    (drgnx-pkg-child-want root)
+    (drgnx-extensions-live-test--sync root "sync" "--add" "fa" "fb")
+    (dolist (f '("x.fbx" "y.txt")) (write-region "text\n" nil (concat root f) nil 'silent))
+    (let ((s (drgnx-extensions-live-test--session root))
+          (look '(mapcar (lambda (b) (with-current-buffer b (list major-mode fa-lint-mode fb-lint-mode))) drgnx-live-test-bufs)))
+      (drgnx-extensions-live-test--eval
+       s `(progn (defvar drgnx-live-test-bufs nil)
+                 (setq drgnx-live-test-bufs (list (find-file-noselect ,(concat root "x.fbx"))
+                                                  (find-file-noselect ,(concat root "y.txt"))))
+                 (dolist (b drgnx-live-test-bufs) (with-current-buffer b (fa-lint-mode 1) (fb-lint-mode 1)))))
+      (should (equal (drgnx-extensions-live-test--eval s look) '((fb-mode t t) (text-mode t t))))
+      (should (eql (drgnx-extensions-live-test--job s root '("sync" "--remove" "fb")) 0))
+      (should (equal (drgnx-extensions-live-test--eval s look) '((fundamental-mode t nil) (text-mode t nil))))
+      (should-not (drgnx-extensions-live-test--eval s '(rassq 'fb-mode auto-mode-alist)))
+      (drgnx-extensions-live-test--end s))))
+
 ;;; extensions-live-test.el ends here

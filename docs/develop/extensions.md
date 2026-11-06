@@ -74,6 +74,12 @@ file's removal on `kill-emacs-hook`.
   `elpa/` new to the session is activated with `package-activate` from fresh descriptors, unless it needs a kept one
   (marked instead); a directory in use that is gone is repointed into the newest generation holding it, else marked
   "files of dash 2.19 are gone: restart drgnx". Then `drgnx-modules-retry-waiting`.
+- **A removed package's modes go off.** The plan step reads the modes index entry of each package `removes` names
+  (`drgnx-extensions-index-read`, or its autoloads file when the index lacks it) **before** the swap, which rewrites
+  the index without it. After a job that went well, for each such package `elpa/` has no version of: its index
+  entries leave `auto-mode-alist`, `interpreter-mode-alist` and the magic alists; a buffer in one of its major modes
+  runs `normal-mode` (`enable-local-variables :safe`, `inhibit-interaction`) and turns back on the other packages'
+  buffer minor modes it had on; its buffer minor modes are called with -1 in every buffer.
 - `(drgnx-extensions-live-restart-pending)` → `((NAME . TEXT)…)`: a cache read, for the view's rows.
 - Nothing prompts, waits or signals (an error is one notice), and nothing writes `elpa/`, the lock or the quickstart
   file. Turning the module off removes the hooks; the in-use file then stays until the next snapshot sweeps it, once
