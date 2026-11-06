@@ -160,6 +160,8 @@ struct Snapshot {
     states: BTreeMap<String, PluginState>,
     /// The approved ones, in name order.
     approved: Vec<Arc<Plugin>>,
+    /// Every plugin's row, as of the look.
+    rows: Vec<PluginRow>,
 }
 
 struct Open {
@@ -253,6 +255,17 @@ impl Plugins {
     /// The plugins under ROOT (`<data>/plugins`), their approvals in DB (`runtime.db`) and the lists in SETTINGS.
     pub fn open(&self, root: PathBuf, db: urdr::Handle, settings: Arc<Settings>) {
         let _ = self.open.set(Open { root, db, settings });
+    }
+
+    /// Every plugin's row and the names the user's setting turns on, as of the last [`Plugins::sync`]: memory only,
+    /// for the Extensions list's rows.
+    pub fn last_rows(&self) -> (Vec<PluginRow>, Vec<String>) {
+        let on = self
+            .enabled_for(None)
+            .iter()
+            .map(|p| p.manifest.name.as_str().to_owned())
+            .collect();
+        (lock(&self.snap).rows.clone(), on)
     }
 
     /// The approved plugins that run for PROJECT and have an ability, as of the last [`Plugins::sync`].
@@ -454,6 +467,7 @@ impl Plugins {
             }
             snap.states = now;
             snap.approved = approved;
+            snap.rows = rows.clone();
         }
         Ok(Synced { rows, changes })
     }

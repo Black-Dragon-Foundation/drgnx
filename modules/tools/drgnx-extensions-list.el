@@ -388,9 +388,17 @@ ticket (an integer) has no row, nil."
        (propertize (format "%spartly compiled: %s" (if (plist-get st :status) " " "") (string-join (mapcar (lambda (w) (format "%s" w)) warnings) ", "))
                    'face 'drgnx-status-warn)))))
 
+(defun drgnx-extensions-list--attention ()
+  "The face of what needs you: the look's attention face when it exists, else the warning one."
+  (if (facep 'drgnx-status-attention) 'drgnx-status-attention 'drgnx-status-warn))
+
 (defun drgnx-extensions-list--state-chip (row)
   "The chip the hub's state of ROW gives it, or nil."
   (pcase (plist-get row :state)
+    ('unapproved (propertize "not approved: it does not run" 'face (drgnx-extensions-list--attention)))
+    ('changed (propertize "changed: approve it again" 'face (drgnx-extensions-list--attention)))
+    ('disabled (propertize "disabled" 'face 'shadow))
+    ('broken (propertize "broken" 'face 'drgnx-status-fail))
     ('update (propertize (if (plist-get row :latest) (format "update to %s" (plist-get row :latest)) "update")
                          'face 'drgnx-status-warn))
     ('held (propertize "held" 'face 'drgnx-status-warn))

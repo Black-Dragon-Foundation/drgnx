@@ -39,7 +39,10 @@
 (declare-function drgnx-extensions-trust-review-text "drgnx-extensions-trust")
 (declare-function drgnx-extensions-jobs-queue "drgnx-extensions-jobs")
 (declare-function drgnx-extensions-jobs-run "drgnx-extensions-jobs")
-(declare-function drgnx-plugins-page-insert "drgnx-plugins")
+(declare-function drgnx-plugins-page-insert "drgnx-plugins-ui")
+(declare-function drgnx-extensions-plugins-page-text "drgnx-extensions-plugins")
+(declare-function drgnx-extensions-plugins-actions "drgnx-extensions-plugins")
+(declare-function drgnx-extensions-plugins-opened "drgnx-extensions-plugins")
 (declare-function drgnx-settings-editors-commit "drgnx-settings-editors")
 (declare-function drgnx-settings-page-package-count "drgnx-settings-page")
 (declare-function drgnx-settings-page-show-package "drgnx-settings-page")
@@ -322,7 +325,7 @@ trust card for a source that does not sign."
      (if-let* ((m (plist-get info :maintainer))) (format "Maintainer: %s\n" m) "")
      (if-let* ((u (plist-get info :url))) (format "%s\n" u) "")
      (if-let* ((why (and row (drgnx-extensions-details-why-text (plist-get row :why) name)))) (concat why "\n") "")
-     (if (and row (memq (plist-get row :kind) '(package plugin)))
+     (if (and row (eq (plist-get row :kind) 'package))
          (propertize (concat drgnx-extensions-details--trust-line "\n") 'face 'drgnx-status-warn)
        "")
      (if drgnx-extensions-details--error (propertize (concat drgnx-extensions-details--error "\n") 'face 'drgnx-status-fail) "")
@@ -332,6 +335,7 @@ trust card for a source that does not sign."
   (let* ((row (drgnx-extensions-details--row)) (id drgnx-extensions-details--id) (buf (current-buffer)))
     (concat
      (pcase (plist-get row :kind)
+       ('plugin (if (fboundp 'drgnx-extensions-plugins-actions) (drgnx-extensions-plugins-actions row buf) ""))
        ('module (drgnx-extensions-details--button
                  (if (eq (plist-get row :state) 'off) "Turn on" "Turn off")
                  (lambda () (drgnx-extensions-details-toggle-module (drgnx-extensions-list--name id)))))
@@ -401,8 +405,8 @@ trust card for a source that does not sign."
     (pcase kind
       ('module (drgnx-extensions-details--plain (drgnx-extensions-details--module-text name)))
       ('plugin
-       (if (fboundp 'drgnx-plugins-page-insert)
-           (drgnx-extensions-details--plain (with-temp-buffer (drgnx-plugins-page-insert name) (buffer-string)))
+       (if (and (fboundp 'drgnx-plugins-page-insert) (fboundp 'drgnx-extensions-plugins-page-text))
+           (drgnx-extensions-plugins-page-text name)
          "The plugin page comes with the plugin host.\n"))
       (_
        (concat
@@ -563,7 +567,9 @@ page replaces; with PIN in a page of its own.  Returns the buffer (the caller sh
               drgnx-extensions-details--log nil drgnx-extensions-details--tab 'readme drgnx-extensions-details--readme nil
               drgnx-extensions-details--readme-text nil drgnx-extensions-details--files nil)
         (drgnx-extensions-details--refresh)
-        (when (string-prefix-p "pkg:" id) (drgnx-extensions-details--fetch buffer id))))
+        (when (string-prefix-p "pkg:" id) (drgnx-extensions-details--fetch buffer id))
+        (when (and (string-prefix-p "plugin:" id) (fboundp 'drgnx-extensions-plugins-opened))
+          (drgnx-extensions-plugins-opened))))
     buffer))
 
 ;;;; The ⋯ menu

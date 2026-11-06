@@ -156,3 +156,17 @@ User guide: [In one project](../guide/extensions.md#in-one-project).
   `drgnx-extensions-project-setup`, its teardown `drgnx-extensions-project-teardown` (both go).
 - `drgnx doctor`'s `package-modes-off` check lists the open file buffers where such a mode is still on
   (`drgnx-extensions-project-misses`).
+
+## Plugins
+
+- **The hub:** `extensions::plugins::rows` turns the rows of the hub's last `plugins/list` look (`Plugins::last_rows`,
+  memory only: no folder is read by a search) into rows `plugin:NAME`; `Cache::set_plugins` rebuilds the index only
+  when they differ. State: the hub's `unapproved`, `changed`, `disabled`, `broken`; an approved plugin is `on` when
+  `drgnx-agents-plugins` (the global value) names it, else `off`. `signed` is `hash-approved` for those two.
+- **The editor** (`modules/tools/drgnx-extensions-plugins.el`): the details body of a `plugin:` id is
+  `drgnx-plugins-page-insert`'s text with its buttons, and the hash it displayed is kept in the page buffer for
+  `extensions-plugin-approve`. On and Off write `drgnx-agents-plugins` through `drgnx-settings-editors-commit` (tab
+  `user`), appending at the end. The replace diff is a function on `drgnx-plugins-page-sections`
+  (`drgnx-extensions-plugins-diff` is pure over two reaches). A `plugin` hub event reads `plugins/list` again while the
+  view shows any plugin. The Extensions module's setup calls `drgnx-extensions-plugins-setup`, its teardown
+  `drgnx-extensions-plugins-teardown`.

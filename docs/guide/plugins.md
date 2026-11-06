@@ -43,7 +43,9 @@ its hosts; its key-value store, shared across those projects); and "In this proj
 the page was opened from, that project's rules and the rules switched off there. `a` approves the plugin at point (the
 hash that section displayed, never one fetched again), `d` disables it, `p` turns it on or off for the project (written
 to your private workspace file: only you can set it), `g` reads the list again. The notice "Plugin NAME waits for your
-approval" opens the same page. Replacing and removing a plugin stay in the CLI, as the page says.
+approval" opens the same page. With the Extensions view on, Settings → Plugins and the notice open the plugin in
+that view instead (see [Plugins in the Extensions view](extensions.md#plugins)); there, Replace and Remove are buttons.
+Without it, replacing and removing a plugin stay in the CLI, as the page says.
 
 **Only you approve.** Approving and switching a plugin off are the user's own calls: no agent, no manager and no tool an
 agent can reach can do either. The approval lives in drgnx's own store (not in a settings file), so a settings file

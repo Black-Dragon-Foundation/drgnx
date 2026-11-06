@@ -186,6 +186,28 @@ drgnx keeps the copies a running session uses (`~/.local/state/drgnx/elpa-in-use
 from the command line or from onboarding keeps its usual advice to restart drgnx. Developers: [live
 activation](../develop/extensions.md#live-activation).
 
+## Plugins
+
+Installed [plugins](plugins.md) are rows of the list like packages (Plugins section, `@plugins`, `@kind:plugin`), with
+the hub's own state on the row: *not approved*, *changed*, *disabled*, *broken*, and for an approved plugin *on* or *off*.
+`@enabled` and `@disabled` read the same on and off. "On" means the plugin is approved and listed in your plugins setting
+(`drgnx-agents-plugins`); a plugin row says "hash approved", never "signed". A plugin that waits for you (not approved,
+or changed) is marked with the attention colour. Settings → Plugins and the plugin notice open this view.
+
+A plugin's page is the plugins page: its state and hash, what it declares (abilities, hooks with their verdicts and
+reach, hosts), what it sees, and "In this project". Above those, for a plugin that **changed** since you approved it,
+the page leads with **what the new version adds**: new hosts, new abilities, new hooks, a new verdict (a `change` at a
+point where it only allowed or denied before), and a hook that now matches more tools, tool kinds or paths. Under the
+header the buttons are:
+
+- **Approve** (the page's button, or the command *Approve Plugin*): sends the hash the page showed you. If the files
+  changed since, the hub refuses and the page shows the new state.
+- **Turn on / Turn off:** adds the plugin to the end of your plugins setting or takes it out, so the order of the hooks
+  stays yours. **Move up / Move down** change that order (the plugin has to be on).
+- **In this project:** as on the plugins page: the project's own plugin list, written to your private workspace file.
+- **Replace…** (a newer copy from a folder: the plugin is *changed* until you approve it) and **Remove** are background
+  jobs. *Install a Plugin from a Folder* is in the palette. Nothing here approves for you.
+
 ## In one project
 
 A package's page can turn the package off **in the project you are in** (its row says "Off in this project"). Its

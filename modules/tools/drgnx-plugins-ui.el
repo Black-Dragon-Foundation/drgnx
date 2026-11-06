@@ -236,11 +236,14 @@ sections on `drgnx-plugins-page-sections'.  The hash shown is kept (`drgnx-plugi
     b))
 
 (defun drgnx-plugins-open ()
-  "Show every plugin: the Settings → Plugins page."
+  "Show every plugin: the Settings → Plugins page, which is the Extensions list's plugins when the module
+`tools/extensions' runs."
   (interactive)
-  (require 'drgnx-hub-client)
-  (drgnx-hub-ensure)
-  (prog1 (drgnx-plugins--buffer nil) (drgnx-plugins-refresh)))
+  (if (and (fboundp 'drgnx-extensions-plugins-open) (drgnx-module-running-p 'tools/extensions))
+      (funcall 'drgnx-extensions-plugins-open)
+    (require 'drgnx-hub-client)
+    (drgnx-hub-ensure)
+    (prog1 (drgnx-plugins--buffer nil) (drgnx-plugins-refresh))))
 
 (defun drgnx-plugins-page-open (name)
   "Show the page of plugin NAME: the Extensions view's details page when the module `tools/extensions' runs, else a

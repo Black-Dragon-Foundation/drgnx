@@ -2296,7 +2296,9 @@ and never reaches the network here: the refresh job (`drgnx extensions refresh`)
   so a refresh run from the command line is seen too. A file that does not read (truncated JSON, a catalog of another
   `version`, a lock with a mistake) keeps its last good copy; `extensions/details` carries a note saying so. A file that
   is gone is empty.
-- **Ids:** `pkg:NAME`, `module:NAME`, `emacs:NAME` (`plugin:NAME` arrives with the plugins).
+- **Ids:** `pkg:NAME`, `module:NAME`, `emacs:NAME`, `plugin:NAME`. A plugin's row comes from the plugins' last look
+  (`plugins/list`, memory only), with the hub's `unapproved`, `changed`, `disabled` or `broken`, and for an approved one
+  `on` or `off` by the global `drgnx-agents-plugins`; `signed` is `hash-approved`. A search never reads the folder.
 - **State:** `installed`, `update` (the catalog's update plan takes a newer version), `held` (a newer version exists the
   plan does not take), `incompat` (the newest version needs a newer Emacs), `dependency` (installed only because
   another installed package requires it), `missing` (a module, `packages.eld` or the wanted file names it and the lock

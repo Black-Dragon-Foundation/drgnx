@@ -349,6 +349,8 @@ pub struct Inputs<'a> {
     pub wanted: &'a [String],
     pub packages: &'a [String],
     pub modules: &'a [w::ModuleEntry],
+    /// The plugins' rows ([`super::plugins::rows`]).
+    pub plugins: &'a [w::Row],
     pub notes: Vec<String>,
 }
 
@@ -587,6 +589,10 @@ pub fn build(inputs: Inputs) -> Index {
         entries.push(Entry::new(row, m.flags.clone(), detail));
     }
 
+    for row in inputs.plugins {
+        entries.push(Entry::new(row.clone(), Vec::new(), Detail::default()));
+    }
+
     let by_id = entries
         .iter()
         .enumerate()
@@ -666,6 +672,7 @@ pub struct Cache {
     wanted: Vec<String>,
     packages: Vec<String>,
     modules: Vec<w::ModuleEntry>,
+    plugins: Vec<w::Row>,
     notes: HashMap<Src, String>,
     index: Arc<Index>,
     dirty: bool,
@@ -678,6 +685,14 @@ impl Cache {
     pub fn set_modules(&mut self, modules: Vec<w::ModuleEntry>) {
         self.modules = modules;
         self.dirty = true;
+    }
+
+    /// The hub's plugins as rows replace the last ones; the index is built again only when they differ.
+    pub fn set_plugins(&mut self, plugins: Vec<w::Row>) {
+        if self.plugins != plugins {
+            self.plugins = plugins;
+            self.dirty = true;
+        }
     }
 
     /// Looks at every source, reads the ones that changed and returns the index.  A source that is gone is empty; one
@@ -738,6 +753,7 @@ impl Cache {
                 wanted: &self.wanted,
                 packages: &self.packages,
                 modules: &self.modules,
+                plugins: &self.plugins,
                 notes,
             }));
         }

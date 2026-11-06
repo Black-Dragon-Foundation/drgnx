@@ -20,8 +20,8 @@
   (load (expand-file-name "drgnx-extensions-list" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-extensions-details)
   (load (expand-file-name "drgnx-extensions-details" (file-name-directory (or load-file-name buffer-file-name))) nil t))
-(dolist (part '(drgnx-extensions-jobs drgnx-extensions-live drgnx-extensions-project drgnx-extensions-trust
-                                      drgnx-extensions-recommend))
+(dolist (part '(drgnx-plugins-ui drgnx-extensions-jobs drgnx-extensions-live drgnx-extensions-project drgnx-extensions-trust
+                                 drgnx-extensions-recommend drgnx-extensions-plugins))
   (unless (featurep part)
     (load (expand-file-name (symbol-name part) (file-name-directory (or load-file-name buffer-file-name))) nil t)))
 (require 'drgnx-restart)
@@ -42,6 +42,8 @@
 (declare-function drgnx-extensions-recommend-teardown "drgnx-extensions-recommend")
 (declare-function drgnx-extensions-show-recommended "drgnx-extensions-recommend")
 (declare-function drgnx-extensions-show-suggestion "drgnx-extensions-recommend")
+(declare-function drgnx-extensions-plugins-setup "drgnx-extensions-plugins")
+(declare-function drgnx-extensions-plugins-teardown "drgnx-extensions-plugins")
 (declare-function drgnx-extensions-details--define-view "drgnx-extensions-details")
 (declare-function drgnx-extensions-details-forget-generations "drgnx-extensions-details")
 (declare-function drgnx-extensions-list--define-view "drgnx-extensions-list")
@@ -169,12 +171,14 @@ when you ask (the Refresh command)."
   (drgnx-extensions-project-setup)
   (drgnx-extensions-trust-setup)
   (drgnx-extensions-recommend-setup)
+  (drgnx-extensions-plugins-setup)
   (when (eq drgnx-extensions-check-updates 'daily) (drgnx-extensions--start-daily-check)))
 
 (defun drgnx-extensions--teardown ()
   "Close the list, stop the timers and let go of the job layer's hook."
   (remove-hook 'drgnx-extensions-jobs-changed-functions #'drgnx-extensions-list--jobs-changed)
   (drgnx-extensions--stop-daily-check)
+  (drgnx-extensions-plugins-teardown)
   (drgnx-extensions-recommend-teardown)
   (drgnx-extensions-trust-teardown)
   (drgnx-extensions-project-teardown)

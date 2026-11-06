@@ -132,12 +132,18 @@ impl Hub {
 
     /// The index as the files are now.
     async fn index(&self) -> Result<Arc<Index>, Error> {
+        self.index_with(None).await
+    }
+
+    /// The index as the files are now, with PLUGINS (the hub's plugins as rows) in place of the last ones.
+    async fn index_with(&self, plugins: Option<Vec<w::Row>>) -> Result<Arc<Index>, Error> {
         let (cache, files) = (self.cache.clone(), self.files()?);
         crate::clock::blocking(move || {
-            cache
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .refresh(&*files)
+            let mut cache = cache.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(rows) = plugins {
+                cache.set_plugins(rows);
+            }
+            cache.refresh(&*files)
         })
         .await
         .map_err(internal)
@@ -155,8 +161,12 @@ impl Hub {
         .map_err(internal)
     }
 
-    async fn search(&self, p: w::SearchParams) -> Result<w::SearchResult, Error> {
-        let index = self.index().await?;
+    async fn search(
+        &self,
+        p: w::SearchParams,
+        plugins: Vec<w::Row>,
+    ) -> Result<w::SearchResult, Error> {
+        let index = self.index_with(Some(plugins)).await?;
         let hits = rank::search(
             &index.entries,
             &p.query,
@@ -176,8 +186,8 @@ impl Hub {
         })
     }
 
-    async fn details(&self, id: &str) -> Result<w::DetailsResult, Error> {
-        let index = self.index().await?;
+    async fn details(&self, id: &str, plugins: Vec<w::Row>) -> Result<w::DetailsResult, Error> {
+        let index = self.index_with(Some(plugins)).await?;
         let files = self.files()?;
         let e = index.entry(id).ok_or_else(|| Error {
             code: ErrorCode::InvalidParams,
@@ -217,8 +227,8 @@ impl Hub {
         })
     }
 
-    async fn rows(&self, ids: &[String]) -> Result<w::RowsResult, Error> {
-        let index = self.index().await?;
+    async fn rows(&self, ids: &[String], plugins: Vec<w::Row>) -> Result<w::RowsResult, Error> {
+        let index = self.index_with(Some(plugins)).await?;
         Ok(w::RowsResult {
             rows: ids
                 .iter()
@@ -234,10 +244,13 @@ pub async fn serve(
     p: Params,
 ) -> Result<Result<Value, Error>, Box<Params>> {
     let hub = &front.extensions;
+    // the plugins as the hub last looked at them: memory only, no folder is read here
+    let (list, on) = front.core.plugins.last_rows();
+    let plugins = super::plugins::rows(&list, &on);
     Ok(match p {
-        Params::ExtensionsSearch(q) => hub.search(q).await.map(|r| json!(r)),
-        Params::ExtensionsDetails(d) => hub.details(&d.id).await.map(|r| json!(r)),
-        Params::ExtensionsRows(r) => hub.rows(&r.ids).await.map(|r| json!(r)),
+        Params::ExtensionsSearch(q) => hub.search(q, plugins).await.map(|r| json!(r)),
+        Params::ExtensionsDetails(d) => hub.details(&d.id, plugins).await.map(|r| json!(r)),
+        Params::ExtensionsRows(r) => hub.rows(&r.ids, plugins).await.map(|r| json!(r)),
         Params::ExtensionsModules(m) => hub.set_modules(m.modules).await.map(|()| json!({})),
         other => return Err(Box::new(other)),
     })

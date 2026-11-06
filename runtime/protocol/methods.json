@@ -9164,7 +9164,7 @@
                 ]
               },
               "id": {
-                "description": "`pkg:NAME`, `module:NAME`, `emacs:NAME` (`plugin:NAME` with the plugins).",
+                "description": "`pkg:NAME`, `module:NAME`, `emacs:NAME`, `plugin:NAME`.",
                 "type": "string"
               },
               "kind": {
@@ -9292,6 +9292,26 @@
               {
                 "const": "failed",
                 "description": "A module the editor reported failed.  A failed job is the editor's overlay, never a hub state.",
+                "type": "string"
+              },
+              {
+                "const": "unapproved",
+                "description": "A plugin installed and never approved.",
+                "type": "string"
+              },
+              {
+                "const": "changed",
+                "description": "A plugin whose files are not the ones the user approved.",
+                "type": "string"
+              },
+              {
+                "const": "disabled",
+                "description": "A plugin the user switched off in the hub.",
+                "type": "string"
+              },
+              {
+                "const": "broken",
+                "description": "A plugin whose manifest does not read.",
                 "type": "string"
               }
             ]
@@ -9551,7 +9571,7 @@
                 ]
               },
               "id": {
-                "description": "`pkg:NAME`, `module:NAME`, `emacs:NAME` (`plugin:NAME` with the plugins).",
+                "description": "`pkg:NAME`, `module:NAME`, `emacs:NAME`, `plugin:NAME`.",
                 "type": "string"
               },
               "kind": {
@@ -9679,6 +9699,26 @@
               {
                 "const": "failed",
                 "description": "A module the editor reported failed.  A failed job is the editor's overlay, never a hub state.",
+                "type": "string"
+              },
+              {
+                "const": "unapproved",
+                "description": "A plugin installed and never approved.",
+                "type": "string"
+              },
+              {
+                "const": "changed",
+                "description": "A plugin whose files are not the ones the user approved.",
+                "type": "string"
+              },
+              {
+                "const": "disabled",
+                "description": "A plugin the user switched off in the hub.",
+                "type": "string"
+              },
+              {
+                "const": "broken",
+                "description": "A plugin whose manifest does not read.",
                 "type": "string"
               }
             ]
@@ -9945,7 +9985,7 @@
                 ]
               },
               "id": {
-                "description": "`pkg:NAME`, `module:NAME`, `emacs:NAME` (`plugin:NAME` with the plugins).",
+                "description": "`pkg:NAME`, `module:NAME`, `emacs:NAME`, `plugin:NAME`.",
                 "type": "string"
               },
               "kind": {
@@ -10073,6 +10113,26 @@
               {
                 "const": "failed",
                 "description": "A module the editor reported failed.  A failed job is the editor's overlay, never a hub state.",
+                "type": "string"
+              },
+              {
+                "const": "unapproved",
+                "description": "A plugin installed and never approved.",
+                "type": "string"
+              },
+              {
+                "const": "changed",
+                "description": "A plugin whose files are not the ones the user approved.",
+                "type": "string"
+              },
+              {
+                "const": "disabled",
+                "description": "A plugin the user switched off in the hub.",
+                "type": "string"
+              },
+              {
+                "const": "broken",
+                "description": "A plugin whose manifest does not read.",
                 "type": "string"
               }
             ]

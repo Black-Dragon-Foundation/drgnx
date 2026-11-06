@@ -50,6 +50,14 @@ pub enum State {
     NeedsPackage,
     /// A module the editor reported failed.  A failed job is the editor's overlay, never a hub state.
     Failed,
+    /// A plugin installed and never approved.
+    Unapproved,
+    /// A plugin whose files are not the ones the user approved.
+    Changed,
+    /// A plugin the user switched off in the hub.
+    Disabled,
+    /// A plugin whose manifest does not read.
+    Broken,
     BuiltIn,
 }
 
@@ -88,7 +96,7 @@ pub enum Why {
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Row {
-    /// `pkg:NAME`, `module:NAME`, `emacs:NAME` (`plugin:NAME` with the plugins).
+    /// `pkg:NAME`, `module:NAME`, `emacs:NAME`, `plugin:NAME`.
     pub id: String,
     pub kind: Kind,
     pub name: String,
