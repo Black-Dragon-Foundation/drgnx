@@ -290,7 +290,8 @@ pub(crate) fn planning_of(conn: &Tx, sid: &str) -> Result<Value, CoordError> {
 /// 2. the manager's `agents.start` cell allows TASKS agents;
 /// 3. its `spend` cell allows the plan's p90 in `usd` plus its p90 in `usd-est`, an estimate counted as dollars;
 /// 4. nothing is unpriced;
-/// 5. no week's meter would run out at the plan's p90 before it resets, and each provider in SUBSCRIPTIONS (a task's
+/// 5. no meter would run out at the plan's p90 before it resets, whichever window its reset is in (the week, the
+///    week's last day, a short window, or no reset known), and each provider in SUBSCRIPTIONS (a task's
 ///    subscription) has a pace: without one the week cannot be checked.
 ///
 /// Nothing the user or the planning chat wrote is an input.
@@ -347,13 +348,14 @@ pub(crate) fn rule(
     if !f.unpriced.is_empty() {
         return Err(format!("no price for {}", f.unpriced.join(", ")));
     }
-    if let Some(p) = f
-        .pace
-        .iter()
-        .find(|p| p.window == PaceWindow::Week && p.runs_out_p90)
-    {
+    // every window: Claude's one meter blends the week and its 5 h window, and the week's last day reads as Short
+    if let Some(p) = f.pace.iter().find(|p| p.runs_out_p90) {
+        let window = match p.window {
+            PaceWindow::Week => "week",
+            PaceWindow::Short => "limit's current window",
+        };
         return Err(format!(
-            "the {} week: the plan's p90 would use it up before it resets",
+            "the {} {window}: the plan's p90 would use it up before it resets",
             p.provider
         ));
     }

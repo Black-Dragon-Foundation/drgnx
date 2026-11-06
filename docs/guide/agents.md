@@ -665,8 +665,8 @@ median of actual over middle.
 
 **Under the Autonomous preset** a Say proposal starts without the OK when the preset's own cells cover all of it:
 the manager may start that many agents (8), the plan's p90 cost in `usd` and `usd-est` together, counted as dollars,
-is within its spend cell ($150), every task has a price, and no subscription's week would run out at the plan's p90
-before it resets. A subscription with no meter reading yet means the week cannot be checked, so the proposal waits.
+is within its spend cell ($150), every task has a price, and no subscription's limit would run out at the plan's p90
+before it resets, whether that is the week, the week's last day or a shorter window. A subscription with no meter reading yet means the week cannot be checked, so the proposal waits.
 When it starts alone, the job's decisions say "started by the Autonomous preset within its cells"; when it waits,
 the job says why.
 

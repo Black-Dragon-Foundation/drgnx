@@ -63,6 +63,20 @@ fn a_block_parses() {
     assert!(parse(&two).unwrap().is_err());
 }
 
+/// Pure (D): a brief that shows a fenced command.  The block ends at its own closing line, never at a fence inside
+/// a JSON string (which holds no raw line break).
+#[test]
+fn a_fenced_command_in_a_body_is_part_of_the_body() {
+    let body = "Run:\n```sh\nbin/drgnx test\n```";
+    let mut v = good();
+    v["tasks"][0]["body"] = json!(body);
+    let d = parse(&block(&v.to_string())).unwrap().unwrap();
+    assert_eq!(d.tasks[0].body, body);
+    // a closing fence with trailing space is still the closing line
+    let spaced = format!("```drgnx-proposal\n{v}\n```  \nThanks.");
+    assert_eq!(parse(&spaced).unwrap().unwrap().tasks[0].body, body);
+}
+
 /// Pure (D): a question is not an error.
 #[test]
 fn no_block_is_none() {
@@ -671,6 +685,31 @@ async fn autonomous_waits_when_the_week_would_run_out() {
         vec![week("claude", 0.2, Some(range(0.05, 0.15)))],
     );
     assert_eq!(rule_in("autonomous", f, 2, &["claude"]).await, Ok(()));
+}
+
+/// Pure (D): the week's last day.  The meter reads 0.90 and resets in 20 h, so the pace speaks of this window, not
+/// the week; the plan's p90 adds 0.15: it waits all the same, naming the provider and the reset.  A meter with no
+/// reset known waits too.
+#[tokio::test(flavor = "multi_thread")]
+async fn autonomous_waits_when_any_window_would_run_out() {
+    for resets_at in [Some(NOW + 20.0 * 3600.0), None] {
+        let meter = runstav::methods::timeline::Pace {
+            provider: "claude".into(),
+            used_share: 0.9,
+            rate_per_hour: 0.0,
+            exhausted_at: None,
+            resets_at,
+            estimate: true,
+        };
+        let pace = crate::forecast::pace_effect(&meter, Some(range(0.05, 0.15)), NOW).0;
+        assert!(pace.runs_out_p90 && pace.window == PaceWindow::Short);
+        let f = forecast(&[(Unit::UsdEst, 10.0)], &[], vec![pace]);
+        let e = rule_in("autonomous", f, 2, &["claude"]).await.unwrap_err();
+        assert!(
+            e.contains("claude") && e.contains("before it resets"),
+            "{e}"
+        );
+    }
 }
 
 /// Pure (D): a subscription provider with no meter reading, or a meter with no share per dollar yet, waits: the

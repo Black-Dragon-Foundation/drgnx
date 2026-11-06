@@ -2632,7 +2632,9 @@ waits, kept in the job's `data.waits`:
 3. `spend` with the plan's p90 in `usd` plus its p90 in `usd-est`, the estimate counted as dollars, is Allow
    (Autonomous: up to $150);
 4. nothing is unpriced;
-5. no week's meter (`pace` with `window: week`) would run out at the plan's p90 before it resets, and every
+5. no meter would run out at the plan's p90 before it resets (`runs_out_p90`), whatever its `window`: Claude's one
+   meter blends the week with its 5 h window, the week's last day reads as `short`, and a meter with no reset known
+   is `short` too, so every window is checked and the reason names the one that would run out; and every
    subscription a task runs on (a profile with no API key) has a pace with the plan's share known: a subscription
    with no meter reading yet never starts alone.
 
