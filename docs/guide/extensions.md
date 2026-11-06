@@ -140,9 +140,10 @@ nothing on it installs. Your **Install** on that page is the only way in, throug
 open suggestion, however many sessions suggest it; a session makes at most three; when the last session that
 suggested it ends, the notice goes.
 
-No agent installs, approves or trusts an extension: the tools agents have cannot start an install job or answer a card,
-and `drgnx-extensions-review`, `drgnx-extensions-recommended`, `drgnx-extensions-check-updates` and
-`drgnx-packages-off` are on the settings deny-list, so `settings_change` refuses them under any grant.
+No agent installs, approves or trusts an extension: the tools agents have cannot answer a card; the hub refuses an
+agent's job that would change your packages (`drgnx upgrade`, `bin/drgnx pkg`, `drgnx-pkg`, or an Emacs whose Lisp
+calls `package-install` and its kin, also inside `sh -c`) before it starts, whatever the sandbox would allow; and `drgnx-extensions-review`, `drgnx-extensions-recommended`,
+`drgnx-extensions-check-updates` and `drgnx-packages-off` are on the settings deny-list, so `settings_change` refuses them under any grant.
 
 ## Generations and rollback
 

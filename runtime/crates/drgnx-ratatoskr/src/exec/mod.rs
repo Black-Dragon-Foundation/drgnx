@@ -11,6 +11,7 @@
 //! running; the hub's monitor (or, after a restart, the re-attached one) writes the result once.
 
 pub mod container;
+pub mod packages;
 pub mod summary;
 pub mod unit;
 
@@ -1774,6 +1775,18 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
             "priority",
             "only the user's connections set a job's priority (background lowers it)",
         ));
+    }
+    // an agent's job never changes the user's packages: the hub's rule, whatever the sandbox would let through
+    if c.sid.is_some() {
+        let argv: Vec<String> = p.argv.iter().map(|a| a.to_string()).collect();
+        if let Some(why) = packages::changes_packages(&argv) {
+            return Err(error(
+                ErrorCode::NotAllowed,
+                format!(
+                    "argv: {why} changes your packages: an agent's job never installs, updates or removes your packages (suggest one with extensions_suggest)"
+                ),
+            ));
+        }
     }
     let r = runner(f)?;
     let q = r
