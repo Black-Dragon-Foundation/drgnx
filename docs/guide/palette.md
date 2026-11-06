@@ -46,4 +46,4 @@ Commands, Files and Agents, and is kept in `palette-history.eld` in drgnx's stat
 ## The echo area
 
 With `ui/look` on, the echo area and the minibuffer are drawn on the same surface as the gap between the cards, and the
-prompt is in the accent colour.
+prompt is in the accent colour. The empty echo area keeps that surface after a prompt ends too.
