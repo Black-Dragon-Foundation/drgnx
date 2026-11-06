@@ -13,9 +13,9 @@ use runstav::methods::exec::ExecStatus;
 use std::time::Duration;
 use tokio::sync::oneshot;
 
-const FIVE: &str = "l1\nl2\nl3\nl4\nl5\n";
+pub(crate) const FIVE: &str = "l1\nl2\nl3\nl4\nl5\n";
 
-fn git(dir: &Path, args: &[&str]) -> String {
+pub(crate) fn git(dir: &Path, args: &[&str]) -> String {
     let out = std::process::Command::new("git")
         .args(["-c", "user.name=t", "-c", "user.email=t@t"])
         .args(args)
@@ -27,7 +27,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_owned()
 }
 
-fn user() -> Caller {
+pub(crate) fn user() -> Caller {
     crate::runner::user()
 }
 
@@ -48,7 +48,7 @@ async fn turn_end(
 }
 
 /// One turn of TEXT in SID of FRONT, to its end: the `seq` of its last step.
-async fn turn(f: &Front, sid: &str, text: &str) -> i64 {
+pub(crate) async fn turn(f: &Front, sid: &str, text: &str) -> i64 {
     let mut steps = f.core.agents.subscribe_steps();
     f.core.agents.send(sid, text.into()).unwrap();
     turn_end(&mut steps, sid).await
@@ -60,7 +60,7 @@ fn logged(fx: &Fx, key: &str) -> Vec<serde_json::Value> {
 }
 
 /// The mock's prompts once one says TEXT.
-async fn prompted(fx: &Fx, text: &'static str) -> Vec<serde_json::Value> {
+pub(crate) async fn prompted(fx: &Fx, text: &'static str) -> Vec<serde_json::Value> {
     let path = fx.dir.path().join("a.log");
     crate::clock::blocking(move || {
         skuld::wait_until(&format!("the mock is prompted {text:?}"), 60, || {
@@ -79,7 +79,7 @@ async fn prompted(fx: &Fx, text: &'static str) -> Vec<serde_json::Value> {
     .unwrap()
 }
 
-async fn row_acp(fx: &Fx, sid: &str) -> Option<String> {
+pub(crate) async fn row_acp(fx: &Fx, sid: &str) -> Option<String> {
     let s = sid.to_owned();
     fx.runtime
         .read(move |c| {
@@ -95,14 +95,14 @@ async fn row_acp(fx: &Fx, sid: &str) -> Option<String> {
 }
 
 /// A live session in a repository: its sid and the step turn one ended at.
-struct Live {
-    fx: Fx,
-    sid: String,
-    target: i64,
+pub(crate) struct Live {
+    pub(crate) fx: Fx,
+    pub(crate) sid: String,
+    pub(crate) target: i64,
 }
 
 impl Live {
-    async fn new() -> Live {
+    pub(crate) async fn new() -> Live {
         let fx = Fx::new();
         let wt = fx.work();
         git(&wt, &["init", "-q", "-b", "main"]);
@@ -118,11 +118,11 @@ impl Live {
         Live { fx, sid, target }
     }
 
-    fn wt(&self) -> PathBuf {
+    pub(crate) fn wt(&self) -> PathBuf {
         self.fx.work()
     }
 
-    async fn preview(&self) -> w::RevertCard {
+    pub(crate) async fn preview(&self) -> w::RevertCard {
         let r = preview(
             &self.fx.front,
             &user(),
@@ -249,12 +249,12 @@ impl Live {
 }
 
 impl Fx {
-    fn read(&self, rel: &str) -> String {
+    pub(crate) fn read(&self, rel: &str) -> String {
         std::fs::read_to_string(self.work().join(rel)).unwrap_or_default()
     }
 }
 
-async fn start(fx: &Fx, parent: Option<&str>) -> String {
+pub(crate) async fn start(fx: &Fx, parent: Option<&str>) -> String {
     let p: StartParams =
         serde_json::from_value(json!({"profile": "mock-claude", "cwd": fx.work()})).unwrap();
     let hub = &fx.front.core.agents;

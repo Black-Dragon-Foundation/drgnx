@@ -1055,6 +1055,43 @@ A revert takes an agent's work back to one of its steps: the files, the decision
   checkpoint (`step.snapshot`, else `tree_at`) is then written over it with `restore_into` and the folder marked
   touched.
 
+## Fork from here
+
+A fork starts a second agent from one of a session's steps, in its own tree, while the source runs on
+(`history::branches`, user only, a direct act of the user's: no task, no job, no `job/propose`, no approval card, no
+budget chain; the forecast line the user saw is the editor's).
+
+- **`history/fork {session, seq, message, profile?}`** answers `Forked {id, branch, source_branch, path, level}`. In
+  order: the tree (`tree::fork_tree`, above), then the fork's history branch, then the conversation
+  (`rewind::fork_conversation` with the new session id the tree was named for, told the user's `message`, which is
+  required). The branch is named for the fork's tree (`wt/<id>`), so the tree's later changes land on it; it holds
+  the source tree's documents as they were at the step: `History::fork` at the record the step anchors
+  (`step.history_op`), else the newest record the session caused by the step's end. A step whose record holds none of
+  the source's documents (the history has none of its files yet) starts the branch from its base. Either way there
+  is one `fork` record. A conversation that cannot start removes the tree again and freezes the branch. A Codex fork
+  marks its new tree untrusted, as every Codex launch marks its folder (`projects."<cwd>".trust_level`).
+- **`history/fork/drop {id}`** (a session linked `forked_from` another): its agent stopped, its tree removed (only a
+  tree the hub made for this fork, `fork-<sid8>`: `git worktree remove --force` and `worktree prune` in the trusted
+  repository the fork was made from, never git in the tree, then what is left with `remove_dir_all`, which follows no
+  link), its history branch frozen. The branch is kept for compare and expires 90 days later as a frozen worktree does
+  (`History::expire`); its git branch stays.
+- **`history/compare {a, b}`** (two branch names, from `Forked`): the hunks B has that A does not, per file, each
+  with who wrote B's text (the peer's author), the record and the session and step that record names
+  (`History::compare`), from whichever project's history holds both.
+- **`history/take {from, worktree, hunks}`**: whole hunks of branch FROM (a hunk's `theirs_start`/`theirs_end` from
+  compare) into the worktree's branch as the user's new text, one `merge` record whose provenance is the source
+  element ids (`History::take`; part of a hunk is refused and nothing changes), then the files written through
+  `eitri`, each announced to the origin core first. A file whose disk differs from what its history holds is refused
+  (`stale`), so the user's unsaved or unrecorded work is never overwritten; a protected path is refused.
+- **`history/redo {session, op}`**: the revert OP put back. Each path the revert changed (the step's checkpoint
+  against `refs/drgnx/undone/<op>`) goes back to the files as the revert found them when the user has not touched it
+  since, is merged with the user's later edit where they do not meet (`merge3`: base the checkpoint's, ours the
+  user's, theirs the undone), and is left, listed `edited-later`, where they meet. One `redo` record naming the
+  revert, one forward commit (`tree::commit_in_sandbox`), `history/applied`, and the agent told by a message from the
+  hub: its conversation is not restored.
+- The methods are tested on live sessions of the mock agent in a real repository: an agent's writes recorded as the
+  session handler records them (`Hub::on_agent_write`), stamped at the steps' own times.
+
 ## The store
 
 The front serves the store (`work.db`, schema 12) itself: `graph/*` (reads and walks, history, revert, excise, grants,
@@ -1243,10 +1280,15 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `graph/sql` | user | `{deadline_ms?: natnum, params?: [SqlParam], rows?: natnum, sql: string}` | `{columns?: [string], rows?: [[any]], truncated: boolean}` | no |
 | `hello` | user, agent, service | `{client?: string, cwd?: AbsPath, drgnx_version?: string, nonce: Nonce, proof?: Hex64, proto: natnum, records?: natnum, schema?: natnum}` | `HelloReply` | no |
 | `history/batch` | user | `{buffer_id: string, changes: [{inserted: string, old_len: natnum, origin?: string, start: natnum}], region_hash: string}` | `{ok?: boolean, resync?: boolean}` | yes |
+| `history/compare` | user | `{a: string, b: string}` | `{files: [ComparedFile]}` | no |
+| `history/fork` | user | `{message: string, profile?: string, seq: integer, session: string}` | `{branch: string, id: string, level: "message" \| "turn" \| "summary", path: string, source_branch: string}` | yes |
+| `history/fork/drop` | user | `{id: string}` | `{ok: boolean}` | yes |
+| `history/redo` | user | `{op: integer, session: string}` | `{commit?: string, op: integer, skipped: [RevertSkipped], written: [string]}` | yes |
 | `history/register` | user | `{buffer_id: string, path: string, worktree_root: string}` | `{doc: integer, reason?: string, tracked: boolean}` | yes |
 | `history/resync` | user | `{buffer_id: string, text: string}` | `{ok: boolean}` | yes |
 | `history/revert/apply` | user | `{choices?: [{choice: "keep-users"} \| {choice: "take-reverted"} \| {choice: "edited", text: string}], message?: string, mode?: "keep-mine" \| "roll-back-mine", preview_id: integer}` | `Applied` | yes |
 | `history/revert/preview` | user | `{decision?: integer, seq?: integer, session?: string}` | `RevertCard` | no |
+| `history/take` | user | `{from: string, hunks: [{path: string, theirs_end: integer, theirs_start: integer}], worktree: string}` | `{op: integer, skipped: [RevertSkipped], written: [string]}` | yes |
 | `history/unregister` | user | `{buffer_id: string}` | `{ok: boolean}` | yes |
 | `job/approve` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes |
 | `job/block` | user | `{reason?: Text, task: TaskRef}` | `JobSummary` | yes |

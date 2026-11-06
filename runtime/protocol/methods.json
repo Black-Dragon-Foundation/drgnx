@@ -12192,6 +12192,326 @@
       "classes": [
         "user"
       ],
+      "doc": "the hunks branch B has that branch A does not, per file, each with who wrote it and in which record and step",
+      "name": "history/compare",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "Two history branches of one project (`Forked.branch`, `Forked.source_branch`).",
+        "properties": {
+          "a": {
+            "type": "string"
+          },
+          "b": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a",
+          "b"
+        ],
+        "title": "CompareParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ComparedFile": {
+            "additionalProperties": false,
+            "properties": {
+              "hunks": {
+                "items": {
+                  "$ref": "#/$defs/ComparedHunk"
+                },
+                "type": "array"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "hunks"
+            ],
+            "type": "object"
+          },
+          "ComparedHunk": {
+            "additionalProperties": false,
+            "description": "One place B differs from A: character offsets in each branch's text, the texts, and who wrote B's text in which\nrecord (and the step that record names); none for a deletion.",
+            "properties": {
+              "author": true,
+              "ours_end": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "ours_start": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "ours_text": {
+                "type": "string"
+              },
+              "record": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "session": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "step": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "theirs_end": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "theirs_start": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "theirs_text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "ours_start",
+              "ours_end",
+              "theirs_start",
+              "theirs_end",
+              "ours_text",
+              "theirs_text"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "files": {
+            "items": {
+              "$ref": "#/$defs/ComparedFile"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "files"
+        ],
+        "title": "Compared",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "fork from a step: a second agent in its own tree at the step's checkpoint, its conversation forked there (or told a labelled summary), started with the user's message; no task, no job, no approval",
+      "name": "history/fork",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`history/fork`: SESSION's step SEQ, the user's MESSAGE, and the profile of the second agent (none: the source's).",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "seq": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "seq",
+          "message"
+        ],
+        "title": "ForkParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "RestoreLevel": {
+            "description": "How much of an agent's conversation a rewind or a fork restores: up to the step's message (Claude), up to the\nlast turn that completed at or before it (Codex), or a new conversation told a labelled summary (any other agent,\na fork across providers, a fork that failed).",
+            "enum": [
+              "message",
+              "turn",
+              "summary"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A fork: the new session, its history branch (what `history/compare` and `history/take` name), the source's, its\ntree and the level its conversation landed at.",
+        "properties": {
+          "branch": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "level": {
+            "$ref": "#/$defs/RestoreLevel"
+          },
+          "path": {
+            "type": "string"
+          },
+          "source_branch": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "branch",
+          "source_branch",
+          "path",
+          "level"
+        ],
+        "title": "Forked",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "end a fork: its agent stopped, its tree removed, its history branch frozen (kept for compare until it expires)",
+      "name": "history/fork/drop",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ForkDropParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "Done",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "redo a revert: the files it changed go back to what they were before it (the user's later edits stay), one record and one forward commit; the agent is told by a message, its conversation is not restored",
+      "name": "history/redo",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`history/redo`: SESSION's revert record OP.",
+        "properties": {
+          "op": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "op"
+        ],
+        "title": "RedoParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "RevertSkipped": {
+            "additionalProperties": false,
+            "description": "A path a revert leaves as it is, and why (`protected`, `gitlink`, `edited-later`, or what the write said).",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "reason"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "op": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/$defs/RevertSkipped"
+            },
+            "type": "array"
+          },
+          "written": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "op",
+          "written",
+          "skipped"
+        ],
+        "title": "Redone",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the editor tracks a buffer's file: its document, or why it is not tracked (ignored, secret, personal)",
       "name": "history/register",
       "params": {
@@ -12882,6 +13202,113 @@
         "type": "object"
       },
       "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "whole hunks of a branch taken into a worktree's branch as the user's new text, with where it came from; the files are written",
+      "name": "history/take",
+      "params": {
+        "$defs": {
+          "TakeHunk": {
+            "additionalProperties": false,
+            "description": "A hunk to take: the file and its exact range in the source branch's text (a `ComparedHunk`'s `theirs_*`).",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "theirs_end": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "theirs_start": {
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "path",
+              "theirs_start",
+              "theirs_end"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`history/take`: HUNKS of branch FROM into the branch of the worktree WORKTREE (whose files are written).",
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "hunks": {
+            "items": {
+              "$ref": "#/$defs/TakeHunk"
+            },
+            "type": "array"
+          },
+          "worktree": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "worktree",
+          "hunks"
+        ],
+        "title": "TakeParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "RevertSkipped": {
+            "additionalProperties": false,
+            "description": "A path a revert leaves as it is, and why (`protected`, `gitlink`, `edited-later`, or what the write said).",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "reason"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "op": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/$defs/RevertSkipped"
+            },
+            "type": "array"
+          },
+          "written": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "op",
+          "written",
+          "skipped"
+        ],
+        "title": "Taken",
+        "type": "object"
+      },
+      "writes": true
     },
     {
       "classes": [

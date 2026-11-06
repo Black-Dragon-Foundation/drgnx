@@ -27,9 +27,26 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// P with its `.` and `..` components taken away by name (no link is read): a linked worktree's `commondir` (`../..`)
+/// names its project's common folder as the main worktree's `.git` is named, so both share one history.
+fn tidy(p: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// ROOT's git directory and its common folder, read as an agent-writable pointer is: no link followed.  A `.git` file
 /// (a linked worktree) is followed to its `gitdir:` and `commondir`.
-fn git_dirs(root: &Path) -> Option<(PathBuf, PathBuf)> {
+pub(crate) fn git_dirs(root: &Path) -> Option<(PathBuf, PathBuf)> {
     use rustix::fs::{Mode, OFlags};
     let dir = rustix::fs::open(
         root,
@@ -59,7 +76,7 @@ fn git_dirs(root: &Path) -> Option<(PathBuf, PathBuf)> {
         .ok()
         .and_then(|b| String::from_utf8(b).ok())
         .map_or_else(|| gitdir.clone(), |c| gitdir.join(c.trim()));
-    Some((gitdir, common))
+    Some((gitdir, tidy(&common)))
 }
 
 fn key_of(common: &Path) -> String {
@@ -256,4 +273,43 @@ pub async fn unregister(f: &Front, _: &Caller, p: w::UnregisterParams) -> Result
         hub.unregister(&p.buffer_id);
     }
     Ok(w::Done { ok: true })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pure (D, a temporary repository): a linked worktree names its project's common folder as the main worktree
+    /// does, so both are one project's history.
+    #[test]
+    fn a_linked_worktree_is_its_projects_history() {
+        let d = tempfile::tempdir().unwrap();
+        let (main, linked) = (d.path().join("main"), d.path().join("main/.claude/wt"));
+        std::fs::create_dir_all(&main).unwrap();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(&main)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "base"]);
+        git(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "wt",
+            linked.to_str().unwrap(),
+        ]);
+        let (_, a) = git_dirs(&main).unwrap();
+        let (gd, b) = git_dirs(&linked).unwrap();
+        assert_ne!(gd, b, "a linked worktree's own folder");
+        assert_eq!(key_of(&a), key_of(&b), "{a:?} {b:?}");
+    }
 }

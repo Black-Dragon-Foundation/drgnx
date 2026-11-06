@@ -116,7 +116,147 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: true,
             doc: "apply a revert preview: the files, the steps and conclusions after it, the conversation and one forward commit, as one record; the user's later edits are kept or merged",
         ),
+        method!(
+            "history/fork", HistoryFork(ForkParams) -> Forked,
+            classes: [User], writes: true,
+            doc: "fork from a step: a second agent in its own tree at the step's checkpoint, its conversation forked there (or told a labelled summary), started with the user's message; no task, no job, no approval",
+        ),
+        method!(
+            "history/fork/drop", HistoryForkDrop(ForkDropParams) -> Done,
+            classes: [User], writes: true,
+            doc: "end a fork: its agent stopped, its tree removed, its history branch frozen (kept for compare until it expires)",
+        ),
+        method!(
+            "history/compare", HistoryCompare(CompareParams) -> Compared,
+            classes: [User], writes: false,
+            doc: "the hunks branch B has that branch A does not, per file, each with who wrote it and in which record and step",
+        ),
+        method!(
+            "history/take", HistoryTake(TakeParams) -> Taken,
+            classes: [User], writes: true,
+            doc: "whole hunks of a branch taken into a worktree's branch as the user's new text, with where it came from; the files are written",
+        ),
+        method!(
+            "history/redo", HistoryRedo(RedoParams) -> Redone,
+            classes: [User], writes: true,
+            doc: "redo a revert: the files it changed go back to what they were before it (the user's later edits stay), one record and one forward commit; the agent is told by a message, its conversation is not restored",
+        ),
     ]
+}
+
+/// `history/fork`: SESSION's step SEQ, the user's MESSAGE, and the profile of the second agent (none: the source's).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ForkParams {
+    pub session: String,
+    pub seq: i64,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+}
+
+/// A fork: the new session, its history branch (what `history/compare` and `history/take` name), the source's, its
+/// tree and the level its conversation landed at.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Forked {
+    pub id: String,
+    pub branch: String,
+    pub source_branch: String,
+    pub path: String,
+    pub level: RestoreLevel,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ForkDropParams {
+    pub id: String,
+}
+
+/// Two history branches of one project (`Forked.branch`, `Forked.source_branch`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CompareParams {
+    pub a: String,
+    pub b: String,
+}
+
+/// One place B differs from A: character offsets in each branch's text, the texts, and who wrote B's text in which
+/// record (and the step that record names); none for a deletion.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ComparedHunk {
+    pub ours_start: i64,
+    pub ours_end: i64,
+    pub theirs_start: i64,
+    pub theirs_end: i64,
+    pub ours_text: String,
+    pub theirs_text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ComparedFile {
+    pub path: String,
+    pub hunks: Vec<ComparedHunk>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Compared {
+    pub files: Vec<ComparedFile>,
+}
+
+/// A hunk to take: the file and its exact range in the source branch's text (a `ComparedHunk`'s `theirs_*`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TakeHunk {
+    pub path: String,
+    pub theirs_start: i64,
+    pub theirs_end: i64,
+}
+
+/// `history/take`: HUNKS of branch FROM into the branch of the worktree WORKTREE (whose files are written).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TakeParams {
+    pub from: String,
+    pub worktree: String,
+    pub hunks: Vec<TakeHunk>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Taken {
+    pub op: i64,
+    pub written: Vec<String>,
+    pub skipped: Vec<RevertSkipped>,
+}
+
+/// `history/redo`: SESSION's revert record OP.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RedoParams {
+    pub session: String,
+    pub op: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Redone {
+    pub op: i64,
+    pub written: Vec<String>,
+    pub skipped: Vec<RevertSkipped>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
 }
 
 /// The step a revert goes back to: SESSION's step SEQ, or the step DECISION was recorded in.

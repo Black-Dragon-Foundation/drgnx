@@ -168,8 +168,8 @@ deny-list names is never registered, so the notes are in no document, snapshot o
 ## Size, expiry, compaction
 
 `History::size()` is the database's size (pages in use, the log included); the cap is `DEFAULT_CAP`, 2 GiB per project.
-`History::expire(now)` removes the undone branches and frozen worktrees (`History::freeze(branch, at)`; a roll back
-freezes its `undone/<record>` at once) set aside 90 days or more before `now`, unless pinned (`History::pin`), with their
+`History::expire(now)` removes the undone branches, frozen worktrees and dropped forks (`History::freeze(branch, at)`;
+a roll back freezes its `undone/<record>` at once, `history/fork/drop` its fork's branch) set aside 90 days or more before `now`, unless pinned (`History::pin`), with their
 documents and anchors. `History::compact(cap, author, now)`, when the history is over the cap, cuts every document
 shallow (Loro's shallow snapshot) at the oldest live reference: an anchor's record, or another branch of the document,
 live, frozen or undone, from its first record on (an undone branch from its roll back's); with nothing pinning it, just

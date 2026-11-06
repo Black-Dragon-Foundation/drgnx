@@ -217,7 +217,7 @@ impl Drop for Listening<'_> {
 }
 
 /// The worktree a revert holds, given back when it ends.
-struct Held<'a>(&'a Reverts, PathBuf);
+pub(crate) struct Held<'a>(&'a Reverts, PathBuf);
 
 impl Drop for Held<'_> {
     fn drop(&mut self) {
@@ -230,20 +230,21 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 impl Reverts {
-    fn hold(&self, cwd: &Path) -> Option<Held<'_>> {
+    /// CWD held for one revert, redo or take at a time; none while another holds it.
+    pub(crate) fn hold(&self, cwd: &Path) -> Option<Held<'_>> {
         lock(&self.running)
             .insert(cwd.to_path_buf())
             .then(|| Held(self, cwd.to_path_buf()))
     }
 }
 
-fn refused(reason: &str, why: impl std::fmt::Display) -> Error {
+pub(crate) fn refused(reason: &str, why: impl std::fmt::Display) -> Error {
     invalid("preview_id", format!("{reason}: {why}"))
 }
 
-/// Only the user reverts an agent's work (the registry refuses other connections; this keeps an agent's own call out
-/// too).
-fn user_only(c: &Caller) -> Result<(), Error> {
+/// Only the user reverts or forks an agent's work (the registry refuses other connections; this keeps an agent's own
+/// call out too).
+pub(crate) fn user_only(c: &Caller) -> Result<(), Error> {
     if c.class == Class::Agent {
         return Err(refused(NOT_REVERTIBLE, "an agent cannot revert"));
     }
@@ -1110,6 +1111,6 @@ pub(crate) async fn finish_pending(f: &Front) {
 }
 
 #[cfg(test)]
-mod live;
+pub(crate) mod live;
 #[cfg(test)]
 mod tests;

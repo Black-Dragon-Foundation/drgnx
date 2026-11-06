@@ -2,10 +2,6 @@
 //! ([`restorable`]), a commit there inside the session's own sandbox ([`commit_in_sandbox`]), and a fork's new tree at
 //! a checkpoint ([`fork_tree`]).  Every write into a tree goes through `eitri` (`timeline::snapshot::restore_into`),
 //! so no link is followed and a checkpoint never widens a sandbox.
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the revert and the fork methods call them")
-)]
 
 use crate::agents::launch::{self, NetCell, SandboxReq};
 use crate::agents::lock::{Enforced, LaunchPlan, NEVER_RESTORED, PROTECTED_RO};

@@ -1,5 +1,6 @@
 //! Size, expiry and compaction: a cut never passes a live reference, expired branches stop pinning, a pinned branch
-//! never expires, a revert past the cut is refused with its reason, and what pins the size can be named.
+//! never expires, a dropped fork expires as a frozen worktree does, a revert past the cut is refused with its reason,
+//! and what pins the size can be named.
 //! Pattern D (pure: a temporary folder, no clock; `now` is a parameter).
 
 use verdandi::{
@@ -234,6 +235,23 @@ fn revert_past_cut_is_refused_with_reason() {
     // under the cap nothing is cut
     let again = f.h.compact(u64::MAX, f.user, 11.0).unwrap();
     assert_eq!(again.cuts, 0);
+}
+
+/// A fork that was dropped (its branch frozen) is kept for compare until its 90 days are over, then goes like a
+/// frozen worktree.
+#[test]
+fn a_dropped_fork_expires_like_a_frozen_worktree() {
+    let mut f = fx();
+    let at = f.step(Kind::Edits, f.user, "x\n");
+    let fb = f.h.fork(at, f.br, "wt/fork", f.user, 11.0).unwrap();
+    assert_eq!(f.h.find_branch("wt/fork").unwrap(), Some(fb));
+    assert_eq!(f.h.find_branch("wt/none").unwrap(), None);
+    f.h.freeze(fb, 20.0).unwrap();
+    assert!(f.h.expire(20.0 + 89.0 * DAY).unwrap().is_empty());
+    assert!(f.h.compare(f.br, fb).is_ok(), "kept for compare meanwhile");
+    assert_eq!(f.h.expire(20.0 + 91.0 * DAY).unwrap(), vec![fb]);
+    assert_eq!(f.h.find_branch("wt/fork").unwrap(), None);
+    assert!(f.h.text(f.doc, f.br).unwrap().starts_with("x\none"));
 }
 
 #[test]
