@@ -73,6 +73,7 @@ layout, and the lab's p95 needs 100 samples; each command waits up to a second f
    '(progn
       (defvar drgnx-perf--rl-t0 nil "When the layout the user asked for was asked, until its frame is drawn.")
       (defvar drgnx-perf--rl-ms nil "Per layout: ms from the command to the frame drawn.")
+      (defvar drgnx-perf--rl-frame-ms nil "Per layout: ms from the command to its frame's arrival.")
       (defvar drgnx-perf--rl-timer nil "Polls for the draw's end.")
       (defvar drgnx-perf--rl-bt nil "The backtrace of the first nil-argument arithmetic error (diagnosis).")
       (defun drgnx-perf--rl-debugger (&rest args)
@@ -105,6 +106,7 @@ layout, and the lab's p95 needs 100 samples; each command waits up to a second f
         "A frame with a layout came: the view draws it; poll until it has."
         (push (list (and drgnx-perf--rl-t0 t) (and (plist-get marks :layout) t) (and drgnx-perf--rl-timer t)) drgnx-perf--rl-frames)
         (when (and drgnx-perf--rl-t0 (plist-get marks :layout) (not drgnx-perf--rl-timer))
+          (push (* 1000 (- (float-time) drgnx-perf--rl-t0)) drgnx-perf--rl-frame-ms)
           (setq drgnx-perf--rl-timer (run-with-timer 0 0.001 #'drgnx-perf--rl-poll))))
       (defun drgnx-perf--rl-idle (&optional secs)
         "Wait (SECS, default 10 s, at most) until the last layout asked for is drawn."
@@ -115,13 +117,14 @@ layout, and the lab's p95 needs 100 samples; each command waits up to a second f
           (setq drgnx-work-map--filters nil drgnx-work-map--collapsed nil)
           (drgnx-work-map--send-filters))
         (drgnx-perf--rl-idle)
-        (setq drgnx-perf--rl-ms nil))
+        (setq drgnx-perf--rl-ms nil drgnx-perf--rl-frame-ms nil))
       (advice-add 'drgnx-work-map--send-filters :before #'drgnx-perf--rl-begin)
       (add-hook 'drgnx-work-client-change-functions #'drgnx-perf--rl-changed)
       (defun drgnx-perf--rl-measure ()
         (drgnx-perf--rl-idle)
         (unless drgnx-perf--rl-ms (error "Premise: no layout was drawn (t0 %S, timer %S)" drgnx-perf--rl-t0 drgnx-perf--rl-timer))
-        (list :relayout (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--rl-ms))))
+        (list :relayout (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--rl-ms))
+              :to_frame (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--rl-frame-ms))))
       (defun drgnx-perf--rl-teardown ()
         (advice-remove 'drgnx-work-map--send-filters #'drgnx-perf--rl-begin)
         (remove-hook 'drgnx-work-client-change-functions #'drgnx-perf--rl-changed)
@@ -177,12 +180,21 @@ agents in turn, the tiles of the bands that carry that agent's chain, summed."
    '(progn
       (defvar drgnx-perf--wl-slices nil "Wall ms of each draw of the map's view since the arm.")
       (defvar drgnx-perf--wl-start nil "(DRAW-MS DELTAS) when the arm was done.")
+      (defvar drgnx-perf--wl-long nil "The draws over 4 ms: (MS TOUCHED ROWS GC-MS), newest first.")
       (defun drgnx-perf--wl-slice (orig buffer)
-        (let ((t0 (float-time)))
+        (let* ((t0 (float-time)) (v (and (eq buffer drgnx-perf--work-buf) (buffer-local-value 'drgnx-view buffer)))
+               (gc0 gc-elapsed)
+               (touched (and v (drgnx-view--touched v))) (rows (and v (plist-get (drgnx-view-stats v) :rows-drawn))))
           (prog1 (funcall orig buffer)
-            (when (eq buffer drgnx-perf--work-buf) (push (* 1000 (- (float-time) t0)) drgnx-perf--wl-slices)))))
+            (when v
+              (let ((ms (* 1000 (- (float-time) t0))))
+                (push ms drgnx-perf--wl-slices)
+                (when (> ms 4)
+                  (push (list (drgnx-perf--round ms) (and touched t) (- (plist-get (drgnx-view-stats v) :rows-drawn) rows)
+                              (drgnx-perf--round (* 1000 (- gc-elapsed gc0))))
+                        drgnx-perf--wl-long)))))))
       (defun drgnx-perf--wl-arm ()
-        (setq drgnx-perf--wl-slices nil
+        (setq drgnx-perf--wl-slices nil drgnx-perf--wl-long nil
               drgnx-perf--wl-start (list (plist-get (drgnx-view-stats (drgnx-perf--work-view)) :draw-ms)
                                          (drgnx-work-client-counter (buffer-local-value 'drgnx-work-space--view drgnx-perf--work-buf)
                                                                     :deltas)))
@@ -198,6 +210,7 @@ agents in turn, the tiles of the bands that carry that agent's chain, summed."
             (advice-remove 'drgnx-view--draw-buffer #'drgnx-perf--wl-slice)
             (when (< deltas 30) (error "Premise: the map got %d deltas in %.0f s" deltas secs))
             (append (list :draw_ms_s (drgnx-perf--round2 (/ draw secs)) :deltas deltas
+                          :long (vconcat (mapcar (lambda (l) (format "%S" l)) (seq-take drgnx-perf--wl-long 12)))
                           :slice_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats drgnx-perf--wl-slices)))
                     (list :stalls (plist-get end :stalls))))))
       t))
@@ -210,7 +223,8 @@ agents in turn, the tiles of the bands that carry that agent's chain, summed."
       (defvar drgnx-perf--trail-n 10000 "The steps of the turn.")
       (defun drgnx-perf--trail-steps ()
         "The program of a turn of 10,000 read steps."
-        ;; the offset differs each time: the hub counts a repeated call, and the turn must not be cut short
+        ;; the offset differs each time: the supervisor's `repeat' rule pauses an agent that makes the same call
+        ;; three times in a turn, and the turn must not be cut short
         (concat "say start\\n" (mapconcat (lambda (i) (format "provider:read README.md %d 1" i)) (number-sequence 1 drgnx-perf--trail-n) "\\n")))
       (defun drgnx-perf--trail-newest ()
         (plist-get (car (plist-get (drgnx-hub-call-sync "timeline/get" (list :scope "session"
@@ -224,23 +238,35 @@ agents in turn, the tiles of the bands that carry that agent's chain, summed."
         (drgnx-perf--hub-start (list (drgnx-perf--trail-steps)))
         (setq drgnx-perf--trail-session (drgnx-agents-mirror-start "mock" temporary-file-directory))
         (drgnx-perf--wait 10 (lambda () (eq (drgnx-agent-session-status drgnx-perf--trail-session) 'idle)))
+        (setq drgnx-perf--trail-t0 (float-time) drgnx-perf--trail-trace nil)
         (drgnx-perf--send drgnx-perf--trail-session "go")
         (drgnx-perf--trail-settle 100)
         t)
       (defvar drgnx-perf--trail-err nil "What the last newest-step question to the hub said.")
+      (defvar drgnx-perf--trail-t0 nil "When the turn was sent.")
+      (defvar drgnx-perf--trail-trace nil "Per question, newest first: (S STEP HUB-CPU-S EMACS-CPU-S ENTRIES).")
+      (defun drgnx-perf--trail-cpu (pid)
+        (let ((a (and pid (process-attributes pid))))
+          (if a (drgnx-perf--round (float-time (time-add (alist-get 'utime a 0) (alist-get 'stime a 0)))) -1)))
       (defun drgnx-perf--trail-settle (secs)
         "Wait up to SECS s for the hub to hold the 10,000 steps (its newest step 10,000 or more); whether it does.  The hub
 takes a 10,000-step turn in for minutes, and answers a question meanwhile only now and then: ask every 2 s, 15 s a call."
         (let ((end (+ (float-time) secs)) (n nil))
           (while (and (not (and (numberp n) (>= n drgnx-perf--trail-n))) (< (float-time) end))
             (setq n (condition-case e (drgnx-perf--trail-newest) (error (setq drgnx-perf--trail-err e) nil)))
+            (push (list (round (- (float-time) (or drgnx-perf--trail-t0 (float-time)))) n
+                        (drgnx-perf--trail-cpu (and (process-live-p drgnx-perf--hub) (process-id drgnx-perf--hub)))
+                        (drgnx-perf--trail-cpu (emacs-pid))
+                        (length (drgnx-agent-session-entries drgnx-perf--trail-session)))
+                  drgnx-perf--trail-trace)
             (unless (and (numberp n) (>= n drgnx-perf--trail-n)) (drgnx-perf--wait 2 #'ignore)))
           (and (numberp n) (>= n drgnx-perf--trail-n))))
       (defun drgnx-perf--trail-premise ()
         "The turn took 10,000 steps (each call waits up to 100 s, the lab's calls allow 120, and the setup waited before)."
         (unless (drgnx-perf--trail-settle 100)
-          (error "Premise: the hub does not hold the 10,000 steps (status %S, last answer %S)"
-                 (drgnx-agent-session-status drgnx-perf--trail-session) drgnx-perf--trail-err))
+          (error "Premise: the hub does not hold the 10,000 steps (status %S, last answer %S; (s step hub-cpu emacs-cpu entries) %S)"
+                 (drgnx-agent-session-status drgnx-perf--trail-session) drgnx-perf--trail-err
+                 (seq-take drgnx-perf--trail-trace 40)))
         t)
       (defun drgnx-perf--trail-measure ()
         "(:draw_ms MS :append_ms STATS): the trail opened on the session until its first rows are drawn; then 20 steps
@@ -266,7 +292,8 @@ appended (each with its draw)."
                   (drgnx-work-trail--merge (list step))
                   (while (drgnx-view-pending-p drgnx-view) (accept-process-output nil 0.0005))
                   (push (* 1000 (- (float-time) a)) appends))))
-            (list :draw_ms (drgnx-perf--round draw)
+            (list :settled_s (car (car drgnx-perf--trail-trace))
+                  :draw_ms (drgnx-perf--round draw)
                   :append_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats appends))))))
       (defun drgnx-perf--trail-teardown ()
         (dolist (b (buffer-list)) (when (string-prefix-p "*drgnx work trail: " (buffer-name b)) (kill-buffer b)))
