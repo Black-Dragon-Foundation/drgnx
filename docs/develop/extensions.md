@@ -181,7 +181,9 @@ User guide: [In one project](../guide/extensions.md#in-one-project).
   chosen): it answers for the mode `set-auto-mode` would choose with those packages' modes taken out of
   `interpreter-mode-alist`, `magic-mode-alist`, `auto-mode-alist` and `magic-fallback-mode-alist`, in that order,
   else `fundamental-mode`. A named function on `after-change-major-mode-hook` (depth 100) turns their buffer minor
-  modes off in such a buffer. With nothing off, neither is installed. The Extensions module's setup calls
+  modes off in such a buffer. With nothing off, neither is installed. Neither walks the file system per call: the
+  root is remembered by directory (forgotten when settings change), the packages off by root and the modes index as
+  the refresh read it (forgotten by the next refresh, which also runs at each job's end). The Extensions module's setup calls
   `drgnx-extensions-project-setup`, its teardown `drgnx-extensions-project-teardown` (both go).
 - `drgnx doctor`'s `package-modes-off` check lists the open file buffers where such a mode is still on
   (`drgnx-extensions-project-misses`).

@@ -35,26 +35,51 @@ that changes Emacs as a whole cannot be off in one project."
 
 (defvar drgnx-extensions-project--minors nil "Buffer minor modes of the packages off in some project: ((MODE . PKG)…).")
 
+(defvar drgnx-extensions-project--index nil
+  "The modes index as the last refresh read it, or nil before one: the mode paths read it, never the file.")
+
+(defvar drgnx-extensions-project--roots (make-hash-table :test #'equal)
+  "Directory → its project root, or `none': the mode paths never walk the file system twice for one directory.
+Emptied when settings change (`drgnx-settings-changed-functions') and by each refresh; bounded by the directories of
+the files visited in between.")
+
+(defvar drgnx-extensions-project--off (make-hash-table :test #'equal)
+  "Project root → the packages off there (those that can be).  Emptied by each refresh.")
+
 ;;;; Reading
+
+(defun drgnx-extensions-project--index ()
+  (or drgnx-extensions-project--index (drgnx-extensions-index-read)))
 
 (defun drgnx-extensions-project-scope (pkg)
   "PKG's scope by the modes index: `narrow', `global' or `none'; nil when the index does not know it."
   (plist-get (alist-get pkg (drgnx-extensions-index-read)) :scope))
 
 (defun drgnx-extensions-project--narrow (pkgs)
-  "Those of PKGS (a value of the setting) that can be off in a project."
-  (seq-filter (lambda (p) (and (symbolp p) (eq (drgnx-extensions-project-scope p) 'narrow))) (ensure-list pkgs)))
+  "Those of PKGS (a value of the setting) that can be off in a project, by the index the last refresh read."
+  (let ((index (drgnx-extensions-project--index)))
+    (seq-filter (lambda (p) (and (symbolp p) (eq (plist-get (alist-get p index) :scope) 'narrow))) (ensure-list pkgs))))
 
 (defun drgnx-extensions-project--root (file)
   "The project root FILE is in, as workspace settings know roots: its private file's root, else the folder of the
-nearest .drgnx/settings.el; nil outside a project."
+nearest .drgnx/settings.el; nil outside a project.  Remembered by directory."
   (unless (file-remote-p file)
-    (let ((dir (drgnx-settings-workspace--norm (file-name-directory file))))
-      (or (cdr (drgnx-settings-workspace--private-for dir)) (cdr (drgnx-settings-workspace--shared-for dir))))))
+    (let* ((dir (drgnx-settings-workspace--norm (file-name-directory file)))
+           (root (or (gethash dir drgnx-extensions-project--roots)
+                     (puthash dir (or (cdr (drgnx-settings-workspace--private-for dir))
+                                      (cdr (drgnx-settings-workspace--shared-for dir))
+                                      'none)
+                              drgnx-extensions-project--roots))))
+      (and (not (eq root 'none)) root))))
 
 (defun drgnx-extensions-project--off-at (root)
-  "The packages off in the project at ROOT (those that can be)."
-  (and root (drgnx-extensions-project--narrow (drgnx-setting-for-root 'drgnx-packages-off root))))
+  "The packages off in the project at ROOT (those that can be).  Remembered by root until the next refresh."
+  (when root
+    (let ((off (gethash root drgnx-extensions-project--off 'unknown)))
+      (if (eq off 'unknown)
+          (puthash root (drgnx-extensions-project--narrow (drgnx-setting-for-root 'drgnx-packages-off root))
+                   drgnx-extensions-project--off)
+        off))))
 
 (defun drgnx-extensions-project-off-p (pkg root)
   "Non-nil when PKG's file modes and buffer modes are off in the project at ROOT."
@@ -106,7 +131,7 @@ nearest .drgnx/settings.el; nil outside a project."
 (defun drgnx-extensions-project--fallback (pkgs)
   "The mode the current buffer's file gets with the modes of PKGS taken out of the mode alists, chosen as
 `set-auto-mode' chooses: interpreter, magic, file name, magic fallback; else `fundamental-mode'."
-  (let* ((index (drgnx-extensions-index-read))
+  (let* ((index (drgnx-extensions-project--index))
          (gone (seq-mapcat (lambda (p) (drgnx-extensions-index-modes (alist-get p index))) pkgs))
          (keep (lambda (alist)
                  (seq-remove (lambda (e) (memq (drgnx-extensions-project--mode-of (cdr-safe e)) gone)) alist)))
@@ -159,9 +184,12 @@ off in its project."
     (remove-hook 'after-change-major-mode-hook #'drgnx-extensions-project--minor-off)))
 
 (defun drgnx-extensions-project-refresh ()
-  "Read again which packages are off in some project; install the advice and the hook while one is, else remove
-them.  Never prompts."
-  (let ((index (drgnx-extensions-index-read)) (off (drgnx-extensions-project--off-anywhere)) (modes nil) (minors nil))
+  "Read again which packages are off in some project, the modes index and the projects' values; install the advice
+and the hook while one is, else remove them.  Never prompts."
+  (clrhash drgnx-extensions-project--roots)
+  (clrhash drgnx-extensions-project--off)
+  (setq drgnx-extensions-project--index (drgnx-extensions-index-read))
+  (let ((index drgnx-extensions-project--index) (off (drgnx-extensions-project--off-anywhere)) (modes nil) (minors nil))
     (dolist (p off)
       (let ((e (alist-get p index)))
         (dolist (m (drgnx-extensions-index-modes e)) (push (cons m p) modes))
@@ -170,9 +198,16 @@ them.  Never prompts."
     (drgnx-extensions-project--install off)))
 
 (defun drgnx-extensions-project--changed (_file changes)
-  "On `drgnx-settings-changed-functions': refresh when CHANGES touch `drgnx-packages-off'."
+  "On `drgnx-settings-changed-functions': forget the roots (a workspace file may have come or gone), and refresh when
+CHANGES touch `drgnx-packages-off'."
+  (clrhash drgnx-extensions-project--roots)
+  (clrhash drgnx-extensions-project--off)
   (when (seq-some (lambda (c) (eq (nth 1 c) 'drgnx-packages-off)) changes)
     (drgnx-extensions-project-refresh)))
+
+(defun drgnx-extensions-project--job-done (_job _result)
+  "On `drgnx-extensions-jobs-done-functions': a job may have changed the packages and so the modes index."
+  (drgnx-extensions-project-refresh))
 
 (defun drgnx-extensions-project-misses ()
   "The file buffers where a package's mode is on though the package is off in their project:
@@ -223,15 +258,20 @@ saying so."
 ;;;; Setup
 
 (defun drgnx-extensions-project-setup ()
-  "For the Extensions module's setup: follow changes of the setting, and install what is needed now."
+  "For the Extensions module's setup: follow changes of the setting and the ends of jobs, and install what is needed
+now."
   (add-hook 'drgnx-settings-changed-functions #'drgnx-extensions-project--changed)
+  (add-hook 'drgnx-extensions-jobs-done-functions #'drgnx-extensions-project--job-done)
   (drgnx-extensions-project-refresh))
 
 (defun drgnx-extensions-project-teardown ()
-  "For the Extensions module's teardown: the advice, the hook and the setting's follower go."
+  "For the Extensions module's teardown: the advice, the hooks and what it remembered go."
   (drgnx-extensions-project--install nil)
   (remove-hook 'drgnx-settings-changed-functions #'drgnx-extensions-project--changed)
-  (setq drgnx-extensions-project--modes nil drgnx-extensions-project--minors nil))
+  (remove-hook 'drgnx-extensions-jobs-done-functions #'drgnx-extensions-project--job-done)
+  (clrhash drgnx-extensions-project--roots)
+  (clrhash drgnx-extensions-project--off)
+  (setq drgnx-extensions-project--modes nil drgnx-extensions-project--minors nil drgnx-extensions-project--index nil))
 
 (provide 'drgnx-extensions-project)
 ;;; drgnx-extensions-project.el ends here
