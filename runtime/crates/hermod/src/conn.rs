@@ -32,6 +32,8 @@ pub(crate) struct Shared {
     pub(crate) closed: watch::Sender<bool>,
     next: AtomicI64,
     cwds: Mutex<HashMap<String, PathBuf>>,
+    /// The mode each session is in, as the answer that opened it reported it (`modes.currentModeId`).
+    modes: Mutex<HashMap<String, String>>,
 }
 
 impl Shared {
@@ -80,6 +82,7 @@ impl Conn {
             closed: watch::channel(false).0,
             next: AtomicI64::new(1),
             cwds: Mutex::new(HashMap::new()),
+            modes: Mutex::new(HashMap::new()),
         });
         let (tx, mut wrx) = mpsc::unbounded_channel::<String>();
         let (etx, erx) = mpsc::channel(EVENT_QUEUE);
@@ -210,6 +213,10 @@ impl Conn {
         set_meta(&mut params, meta);
         let r: acp::NewSessionResponse = self.typed("session/new", params).await?;
         self.remember(&r.session_id, cwd);
+        self.note_mode(
+            &r.session_id,
+            r.modes.map(|m| m.current_mode_id.to_string()),
+        );
         Ok(r.session_id)
     }
 
@@ -223,8 +230,9 @@ impl Conn {
     ) -> Result<(), Error> {
         let mut params = json!({"sessionId": sid, "cwd": cwd, "mcpServers": mcp});
         set_meta(&mut params, meta);
-        self.typed::<Value>("session/load", params).await?;
+        let r = self.typed::<Value>("session/load", params).await?;
         self.remember(sid, cwd);
+        self.note_mode(sid, reported_mode(&r));
         Ok(())
     }
 
@@ -238,9 +246,21 @@ impl Conn {
     ) -> Result<(), Error> {
         let mut params = json!({"sessionId": sid, "cwd": cwd, "mcpServers": mcp});
         set_meta(&mut params, meta);
-        self.typed::<Value>("session/resume", params).await?;
+        let r = self.typed::<Value>("session/resume", params).await?;
         self.remember(sid, cwd);
+        self.note_mode(sid, reported_mode(&r));
         Ok(())
+    }
+
+    /// The mode session SID is in, as the agent's answer that opened it on this connection (`session/new`,
+    /// `session/load`, `session/resume` or `session/fork`) reported it; `None` when it reported none.
+    pub fn reported_mode(&self, sid: &SessionId) -> Option<String> {
+        self.shared
+            .modes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&*sid.0)
+            .cloned()
     }
 
     pub async fn close_session(&self, sid: &SessionId) -> Result<(), Error> {
@@ -251,6 +271,7 @@ impl Conn {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&*sid.0);
+        self.note_mode(sid, None);
         Ok(())
     }
 
@@ -307,6 +328,10 @@ impl Conn {
         set_meta(&mut params, meta);
         let r: acp::ForkSessionResponse = self.typed("session/fork", params).await?;
         self.remember(&r.session_id, &f.cwd);
+        self.note_mode(
+            &r.session_id,
+            r.modes.map(|m| m.current_mode_id.to_string()),
+        );
         Ok(r.session_id)
     }
 
@@ -317,6 +342,23 @@ impl Conn {
             .unwrap_or_else(|e| e.into_inner())
             .insert(sid.0.to_string(), cwd.to_path_buf());
     }
+
+    /// SID's reported MODE (none: forgotten, so an earlier answer's mode is never taken for this one's).
+    fn note_mode(&self, sid: &SessionId, mode: Option<String>) {
+        let mut modes = self.shared.modes.lock().unwrap_or_else(|e| e.into_inner());
+        match mode {
+            Some(m) => modes.insert(sid.0.to_string(), m),
+            None => modes.remove(&*sid.0),
+        };
+    }
+}
+
+/// `modes.currentModeId` of an answer that opened a session.
+fn reported_mode(answer: &Value) -> Option<String> {
+    answer
+        .pointer("/modes/currentModeId")
+        .and_then(Value::as_str)
+        .map(String::from)
 }
 
 /// FROM's keys into INTO, objects merged key by key; anything else in FROM replaces what INTO has.

@@ -21,7 +21,17 @@ struct Acp {
 
 impl Acp {
     fn start(extra: &[&str]) -> Acp {
-        let mut child = Command::new(MOCK)
+        Acp::start_env(extra, &[])
+    }
+
+    /// As `start`, with ENV set and the lock variables it does not set unset.
+    fn start_env(extra: &[&str], env: &[(&str, &str)]) -> Acp {
+        let mut cmd = Command::new(MOCK);
+        for v in ["CODEX_CONFIG", "INITIAL_AGENT_MODE"] {
+            cmd.env_remove(v);
+        }
+        let mut child = cmd
+            .envs(env.iter().copied())
             .arg("acp")
             .args(extra)
             .stdin(Stdio::piped())
@@ -235,6 +245,71 @@ fn codex_logs_its_lock_and_sends_usage_and_a_window() {
         json!(["approval_policy=never", "model=x"])
     );
     assert!(o["config"].is_null() && o["mode"].is_null(), "{o}");
+}
+
+// [C] handshake: codex-acp 2.5.0 answers `session/new` with the session's mode and knows four ids
+// (`src/AgentMode.ts:135-142`); an unset or unknown `INITIAL_AGENT_MODE` is its default, `agent` (`:95`,
+// `:144-151`), and `session/set_mode` to an unknown id is invalid params (`src/CodexAcpServer.ts:2752-2756`).
+#[test]
+fn codex_reports_its_mode_as_codex_acp_picks_it() {
+    let d = dir();
+    for (asked, got) in [
+        (None, "agent"),
+        (Some(""), "agent"),
+        (Some("permission-profile:drgnx"), "agent"),
+        (Some("read-only"), "read-only"),
+        (Some("agent-full-access"), "agent-full-access"),
+    ] {
+        let env: Vec<(&str, &str)> = asked
+            .map(|m| ("INITIAL_AGENT_MODE", m))
+            .into_iter()
+            .collect();
+        let mut a = Acp::start_env(&["--as", "codex"], &env);
+        a.init();
+        let r = a.call("session/new", json!({"cwd": d.path(), "mcpServers": []}));
+        let modes = &r["result"]["modes"];
+        assert_eq!(modes["currentModeId"], got, "{asked:?}: {r}");
+        let ids: Vec<&str> = modes["availableModes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            ids,
+            ["read-only", "workspace-write", "agent", "agent-full-access"]
+        );
+        let sid = r["result"]["sessionId"].clone();
+        let bad = a.call(
+            "session/set_mode",
+            json!({"sessionId": sid, "modeId": "permission-profile:drgnx"}),
+        );
+        assert_eq!(bad["error"]["code"], -32602, "{bad}");
+        let ok = a.call(
+            "session/set_mode",
+            json!({"sessionId": sid, "modeId": "read-only"}),
+        );
+        assert!(ok["result"].is_object(), "{ok}");
+    }
+}
+
+// [C] handshake: Codex 0.165 refuses a config whose `approval_policy` is `untrusted`
+// (`core/src/config/mod.rs:3898-3903`), so no session starts on it.
+#[test]
+fn codex_refuses_the_retired_untrusted_policy() {
+    let d = dir();
+    let mut a = Acp::start_env(
+        &["--as", "codex"],
+        &[("CODEX_CONFIG", r#"{"approval_policy":"untrusted"}"#)],
+    );
+    a.init();
+    let r = a.call("session/new", json!({"cwd": d.path(), "mcpServers": []}));
+    assert!(
+        r["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("no longer supported")),
+        "{r}"
+    );
 }
 
 fn fork_at(who: &str, msg: &str) -> Value {

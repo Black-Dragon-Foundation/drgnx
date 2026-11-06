@@ -28,7 +28,8 @@
 //! "session/load"|"session/resume"|"session/close"|"prompt"|"permission"|"llm"|"claude_options"|"codex_config"|"gemini"|"kimi"|"dsh"|"ran": ...}`.
 //! Kimi Code's and DeepSeek Harness's `provider:WHAT ARG` tools ask or run as their locks say (`kimi.rs`, `dsh.rs`).  `--llm URL`: each turn first
 //! POSTs a small JSON body to URL (a `ratatoskr-mock llm`), so its log counts one request per turn.
-//! `--refuse-mode MODE`: `session/set_mode` to MODE is refused (a lock that does not hold); other modes are accepted.
+//! `--refuse-mode MODE`: `session/set_mode` to MODE is refused (a lock that does not hold); other modes are accepted
+//! (Codex: only the four codex-acp knows, `codex.rs`).
 //! `--state DIR`: each session's history is kept in `DIR/<sessionId>.json` (written at its start and after every turn),
 //! and `session/fork` and `session/resume` read it there for a session this process does not hold, so a second process
 //! forks or resumes what the first left; session ids then skip the ones the folder holds.  Without it, history lives
@@ -370,10 +371,15 @@ impl Agent {
                         "sessionCapabilities": self.session_caps()}}));
             }
             "session/new" => {
+                if self.kind == Kind::Codex
+                    && let Some(why) = codex::refused_config()
+                {
+                    return rpc_error(&id, -32603, &why);
+                }
                 let sid = self.open(&params);
                 self.save(&sid);
                 self.log("session/new", json!({"sessionId": sid, "mcpServers": params["mcpServers"], "cwd": params["cwd"]}));
-                reply(json!({"sessionId": sid}));
+                reply(self.with_modes(json!({"sessionId": sid})));
             }
             "session/load" if matches!(self.kind, Kind::Gemini | Kind::Kimi) => {
                 let sid = params["sessionId"].as_str().unwrap_or("s0").to_string();
@@ -416,7 +422,7 @@ impl Agent {
                     self.sessions.insert(sid.clone(), v);
                     self.save(&sid);
                 }
-                reply(json!({}));
+                reply(self.with_modes(json!({})));
             }
             "session/close" if self.kind != Kind::Gemini => {
                 self.log("session/close", json!({"sessionId": params["sessionId"]}));
@@ -440,7 +446,9 @@ impl Agent {
                     .iter()
                     .position(|a| a == "--refuse-mode")
                     .and_then(|i| self.argv.get(i + 1));
-                if refused.is_some_and(|r| r == mode) {
+                if refused.is_some_and(|r| r == mode)
+                    || (self.kind == Kind::Codex && !codex::known_mode(mode))
+                {
                     rpc_error(&id, -32602, &format!("mode {mode:?} refused"));
                 } else {
                     reply(json!({}));
@@ -514,10 +522,18 @@ impl Agent {
             json!({"from": params["sessionId"], "sessionId": sid, "level": level, "messageId": at, "kept": kept,
                 "turns": turns, "cwd": cwd["cwd"], "mcpServers": params["mcpServers"], "claude_options": options}),
         );
-        send(
-            &json!({"jsonrpc": "2.0", "id": id, "result": {"sessionId": sid,
-            "_meta": {"forkLevel": level, "kept": kept, "turns": turns}}}),
+        let result = self.with_modes(
+            json!({"sessionId": sid, "_meta": {"forkLevel": level, "kept": kept, "turns": turns}}),
         );
+        send(&json!({"jsonrpc": "2.0", "id": id, "result": result}));
+    }
+
+    /// RESULT, an answer that opens a session, with the session's `modes` where the personality reports them (Codex).
+    fn with_modes(&self, mut result: Value) -> Value {
+        if self.kind == Kind::Codex {
+            result["modes"] = codex::modes();
+        }
+        result
     }
 
     fn say(&mut self, sid: &str, turn: u64, text: &str) {

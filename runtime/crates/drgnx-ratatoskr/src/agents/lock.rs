@@ -5,9 +5,10 @@
 //!
 //! - **Claude:** `_meta.claudeCode.options` (ported from `drgnx-agents-job-claude-options`), with managed ask rules
 //!   for the kinds the session's hooks subscribe to ([`LaunchPlan::with_hook_asks`]).
-//! - **Codex** (codex-acp 2.x reads its environment only): `CODEX_CONFIG` (a `drgnx` permission profile) and
-//!   `INITIAL_AGENT_MODE`, `/etc/codex/requirements.toml` pinning the policy and `/etc/codex/config.toml` holding a
-//!   managed PreToolUse hook that calls the hub's `before_tool` tool, both bound read-only by the sandbox.
+//! - **Codex** (codex-acp 2.x reads its environment only): `INITIAL_AGENT_MODE` (its `read-only` mode, which
+//!   [`verify`] checks the adapter reports) and `CODEX_CONFIG`, `/etc/codex/requirements.toml` pinning that mode's
+//!   policy and `/etc/codex/config.toml` holding a managed PreToolUse hook that calls the hub's `before_tool` tool,
+//!   both bound read-only by the sandbox.
 //! - **Gemini:** `--approval-mode default`, and an admin-tier `--admin-policy` asking for the subscribed kinds' tools.
 //! - **Kimi Code:** a hub-owned `KIMI_CODE_HOME` whose `config.toml` (manual mode, ask rules) is bound read-only.
 //! - **DeepSeek Harness:** a hub-owned `DSH_HOME`, and `--patch` with an overlay keeping `approval.policy: ask`.
@@ -53,6 +54,12 @@ const DSH_LOCK_PROVEN: bool = false;
 /// `/etc` is never touched.
 pub const CODEX_REQUIREMENTS: &str = "/etc/codex/requirements.toml";
 pub const CODEX_MANAGED: &str = "/etc/codex/config.toml";
+
+/// The codex-acp mode Codex's lock asks for (`INITIAL_AGENT_MODE`): codex-acp 2.5.0's `read-only`
+/// (`src/AgentMode.ts:39-51`), whose every turn is `on-request` approvals by the user in Codex's read-only sandbox.
+/// codex-acp takes an id it does not know for its default, `agent` (auto review by a model; `:95`, `:144-151`),
+/// silently, so the lock holds only when the adapter reports this mode ([`codex_mode_confirmed`]).
+pub const CODEX_MODE: &str = "read-only";
 
 /// The MCP servers a session can get, whose tools Codex asks about before it runs them.
 const CODEX_MCP_SERVERS: [&str; 3] = ["drgnx", "drgnx-search", "drgnx-plugins"];
@@ -211,13 +218,10 @@ pub fn plan(p: &AgentProfile, role: Role, _e: &Effective) -> LaunchPlan {
         }
         Some(Provider::Codex) => {
             // codex-acp 2.x reads its environment only (an argv `-c` is a no-op there, and a profile's own one is
-            // dropped): the policy is CODEX_CONFIG's `drgnx` profile, the mode that takes it, and the two read-only
-            // files of /etc/codex. Gleipnir is the one sandbox.
+            // dropped): every turn carries its mode's approval policy and sandbox (`CodexAcpClient.ts`, `sendPrompt`),
+            // so the policy is the mode, CODEX_CONFIG says the same, and the two read-only files of /etc/codex pin it.
             argv = strip(argv, &[], &["-c", "--config"]);
-            env.push((
-                "INITIAL_AGENT_MODE".to_string(),
-                "permission-profile:drgnx".to_string(),
-            ));
+            env.push(("INITIAL_AGENT_MODE".to_string(), CODEX_MODE.to_string()));
             env.push(("CODEX_CONFIG".to_string(), codex_config(None)));
             ro_files.push((
                 PathBuf::from(CODEX_REQUIREMENTS),
@@ -320,19 +324,18 @@ fn hub_home(name: &str) -> Option<PathBuf> {
     (!state.as_os_str().is_empty()).then(|| state.join("agents").join(name))
 }
 
-/// What a session's Codex runs under (`CODEX_CONFIG`): every command and patch asks the user's client, never a
-/// reviewer model; Gleipnir is the one sandbox; no hosted web search (it can neither ask nor be hooked); the MCP
-/// tools prompt; CWD (when known) is untrusted, so a `.codex/config.toml` in it is not loaded as the user's.  The
-/// policy is the `drgnx` permission profile and the top level both.
+/// What a session's Codex runs under (`CODEX_CONFIG`): [`CODEX_MODE`]'s policy (approvals the user's client gives,
+/// never a reviewer model; Codex's read-only sandbox inside Gleipnir, so a write or a network call asks); no hosted web
+/// search (it can neither ask nor be hooked); the MCP tools prompt; CWD (when known) is untrusted, so a
+/// `.codex/config.toml` in it is not loaded as the user's.  Never `approval_policy = "untrusted"`: Codex 0.165 refuses
+/// a config that has it (`core/src/config/mod.rs:3898-3903`).
 fn codex_config(cwd: Option<&Path>) -> String {
-    let policy = json!({
-        "approval_policy": "untrusted",
+    let mut c = json!({
+        "approval_policy": "on-request",
         "approvals_reviewer": "user",
-        "sandbox_mode": "danger-full-access",
+        "sandbox_mode": "read-only",
         "web_search": "disabled",
     });
-    let mut c = policy.clone();
-    c["profiles"] = json!({ "drgnx": policy });
     let servers: serde_json::Map<String, Value> = CODEX_MCP_SERVERS
         .iter()
         .map(|s| {
@@ -354,11 +357,15 @@ fn codex_config(cwd: Option<&Path>) -> String {
     c.to_string()
 }
 
-/// Codex's requirements layer: only the policy the lock sets, and only managed hooks.
+/// Codex's requirements layer (`config/src/config_requirements.rs:1044-1094`): only [`CODEX_MODE`]'s policy, and only
+/// managed hooks.  A turn in another codex-acp mode (`agent`: the `auto_review` reviewer; `workspace-write`: its
+/// sandbox; `agent-full-access`: `never`) breaks one of them, and Codex refuses it (`core/src/session/
+/// step_settings.rs:283-291`; the sandbox, `config/src/config_requirements.rs:1929-1958`).
 const CODEX_REQUIREMENTS_TOML: &str = "\
 # drgnx: the hub's requirements for this session's Codex (read-only inside its sandbox).
-allowed_approval_policies = [\"untrusted\"]
+allowed_approval_policies = [\"on-request\"]
 allowed_approvals_reviewers = [\"user\"]
+allowed_sandbox_modes = [\"read-only\"]
 allowed_web_search_modes = [\"disabled\"]
 allow_managed_hooks_only = true
 ";
@@ -951,20 +958,38 @@ pub fn hooked(
     Some(h)
 }
 
-/// Checks the lock at session start: the mode the CLI is put in is the asking one.  Claude, Gemini and Kimi Code are
-/// set to `default` (a refusal ends the session); Codex is left alone (its mode is `INITIAL_AGENT_MODE`, and a
-/// `session/set_mode` would replace the profile), and DeepSeek Harness has no modes.  A profile with no lock fails.
+/// Whether Codex runs in the mode its lock asked for, by what the adapter REPORTED (`modes.currentModeId` of the
+/// answer that opened the session), never by what was asked.
+pub fn codex_mode_confirmed(reported: Option<&str>) -> Result<(), LockBroken> {
+    match reported {
+        Some(m) if m == CODEX_MODE => Ok(()),
+        Some(m) => Err(LockBroken(format!(
+            "Codex runs in mode `{m}`, not `{CODEX_MODE}`"
+        ))),
+        None => Err(LockBroken(format!(
+            "Codex did not report its mode (`{CODEX_MODE}` was asked for)"
+        ))),
+    }
+}
+
+/// Checks the lock at session start (ENFORCED is the plan's): the mode the CLI is put in is the asking one.  Codex's
+/// mode is checked whether or not its lock is proven: the one it reports must be [`CODEX_MODE`].  With an enforced
+/// lock, Claude, Gemini and Kimi Code are set to `default` (a refusal ends the session), and DeepSeek Harness has no
+/// modes; a profile with no lock fails.
 pub async fn verify(
     conn: &hermod::Conn,
     sid: &hermod::SessionId,
     p: &AgentProfile,
+    enforced: Enforced,
 ) -> Result<(), LockBroken> {
     match p.provider() {
+        Some(Provider::Codex) => codex_mode_confirmed(conn.reported_mode(sid).as_deref()),
+        _ if enforced != Enforced::Yes => Ok(()),
         Some(Provider::Claude | Provider::Gemini | Provider::Kimi) => conn
             .set_mode(sid, "default")
             .await
             .map_err(|e| LockBroken(format!("`default` mode refused: {e}"))),
-        Some(Provider::Codex | Provider::DeepSeek) => Ok(()),
+        Some(Provider::DeepSeek) => Ok(()),
         None => Err(LockBroken("this agent has no lock".into())),
     }
 }

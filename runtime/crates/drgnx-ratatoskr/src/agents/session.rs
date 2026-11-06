@@ -1905,9 +1905,7 @@ async fn launch(
             return Err(internal(format!("{}: {e}{why}", profile.name)));
         }
     };
-    if prep.plan.enforced == plock::Enforced::Yes
-        && let Err(e) = plock::verify(&conn, &acp, profile).await
-    {
+    if let Err(e) = plock::verify(&conn, &acp, profile, prep.plan.enforced).await {
         kill().await;
         return Err(refuse(&format!("{}: {e}", profile.name)));
     }

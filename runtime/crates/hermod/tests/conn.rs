@@ -88,6 +88,25 @@ async fn initialize_then_session() {
     ));
 }
 
+// [C] handshake: the mode an answer that opens a session reports is the session's; a later one that reports none
+// forgets it, so an earlier answer's mode is never taken for the last one's.
+#[tokio::test]
+async fn the_reported_mode_is_the_opening_answers() {
+    let new = r#"{"jsonrpc":"2.0","id":2,"result":{"sessionId":"s1","modes":{"currentModeId":"read-only","availableModes":[]}}}"#;
+    let resume = r#"{"jsonrpc":"2.0","id":3,"result":{}}"#;
+    let script = format!(
+        "read a; printf '%s\\n' '{INIT}'; read b; printf '%s\\n' '{new}'; read c; printf '%s\\n' '{resume}'; \
+         cat >/dev/null"
+    );
+    let (conn, _rx) = start(&script, opts()).await;
+    let sid = open(&conn).await;
+    assert_eq!(conn.reported_mode(&sid).as_deref(), Some("read-only"));
+    conn.resume_session(&sid, Path::new("/work"), vec![], None)
+        .await
+        .unwrap();
+    assert_eq!(conn.reported_mode(&sid), None);
+}
+
 #[tokio::test]
 async fn every_update_is_stamped_on_receipt() {
     let rest = format!(

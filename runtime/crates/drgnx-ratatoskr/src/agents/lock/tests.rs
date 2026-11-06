@@ -106,9 +106,11 @@ fn file_of(plan: &LaunchPlan, path: &Path) -> Option<String> {
         .map(|(_, b)| String::from_utf8(b.clone()).unwrap())
 }
 
-// [D] pure: codex-acp 2.x reads its environment only, so the lock is `CODEX_CONFIG` (a `drgnx` permission profile:
-// untrusted approvals by the user, Gleipnir's sandbox, no hosted web search, MCP tools that prompt, the worktree
-// untrusted) and `INITIAL_AGENT_MODE`, never argv; the managed PreToolUse hook calls the hub's `before_tool`.
+// [D] pure: codex-acp 2.x reads its environment only, so the lock is `INITIAL_AGENT_MODE` (a mode codex-acp 2.5.0
+// knows: `read-only`, whose every turn asks the user, in Codex's read-only sandbox) and `CODEX_CONFIG` (the same
+// policy, no hosted web search, MCP tools that prompt, the worktree untrusted), never argv; Codex 0.165 refuses a
+// config with `approval_policy = "untrusted"`, so the lock never writes it; the managed PreToolUse hook calls the
+// hub's `before_tool`.
 #[test]
 fn codex_config_is_in_the_environment_not_argv() {
     let d = tempfile::tempdir().unwrap();
@@ -120,17 +122,13 @@ fn codex_config_is_in_the_environment_not_argv() {
     );
     let plan = locked(&p, &["execute"], d.path());
     assert_eq!(args(&plan), ["codex-acp"], "argv overrides are dropped");
-    assert_eq!(
-        env_of(&plan, "INITIAL_AGENT_MODE"),
-        Some("permission-profile:drgnx")
-    );
+    assert_eq!(env_of(&plan, "INITIAL_AGENT_MODE"), Some("read-only"));
     let c: Value = serde_json::from_str(env_of(&plan, "CODEX_CONFIG").unwrap()).unwrap();
-    for policy in [&c, &c["profiles"]["drgnx"]] {
-        assert_eq!(policy["approval_policy"], "untrusted");
-        assert_eq!(policy["approvals_reviewer"], "user");
-        assert_eq!(policy["sandbox_mode"], "danger-full-access");
-        assert_eq!(policy["web_search"], "disabled");
-    }
+    assert_eq!(c["approval_policy"], "on-request");
+    assert_eq!(c["approvals_reviewer"], "user");
+    assert_eq!(c["sandbox_mode"], "read-only");
+    assert_eq!(c["web_search"], "disabled");
+    assert!(c.get("profiles").is_none(), "{c}");
     for server in ["drgnx", "drgnx-search", "drgnx-plugins"] {
         assert_eq!(
             c["mcp_servers"][server]["default_tools_approval_mode"], "prompt",
@@ -159,7 +157,8 @@ fn codex_config_is_in_the_environment_not_argv() {
     assert!(env_of(&none, "CODEX_CONFIG").is_some());
 }
 
-// [D] pure: the requirements layer the agent cannot edit pins the policy, and Codex stays unenforced until proven.
+// [D] pure: the requirements layer the agent cannot edit pins the policy of the lock's mode (a turn in any other
+// codex-acp mode breaks one of them, and Codex refuses it), and Codex stays unenforced until proven.
 #[test]
 fn codex_requirements_pin_the_policy() {
     let d = tempfile::tempdir().unwrap();
@@ -167,14 +166,31 @@ fn codex_requirements_pin_the_policy() {
     let plan = locked(&p, &["read"], d.path());
     let req = file_of(&plan, Path::new("/etc/codex/requirements.toml")).unwrap();
     for line in [
-        "allowed_approval_policies = [\"untrusted\"]",
+        "allowed_approval_policies = [\"on-request\"]",
         "allowed_approvals_reviewers = [\"user\"]",
+        "allowed_sandbox_modes = [\"read-only\"]",
         "allowed_web_search_modes = [\"disabled\"]",
         "allow_managed_hooks_only = true",
     ] {
         assert!(req.lines().any(|l| l == line), "{line} in {req}");
     }
+    assert!(!req.contains("untrusted"), "{req}");
     assert!(matches!(plan.enforced, Enforced::No(_)));
+}
+
+// [D] pure: Codex's lock holds only in the mode the adapter says the session is in, and that is the mode the lock
+// asked for: another mode (codex-acp falls back to `agent`, its auto-review mode, for an id it does not know) or none
+// reported refuses the session, with the reason.
+#[test]
+fn codex_mode_must_be_the_one_reported() {
+    assert_eq!(codex_mode_confirmed(Some("read-only")), Ok(()));
+    let LockBroken(why) = codex_mode_confirmed(Some("agent")).unwrap_err();
+    assert!(
+        why.contains("`agent`") && why.contains("`read-only`"),
+        "{why}"
+    );
+    let LockBroken(why) = codex_mode_confirmed(None).unwrap_err();
+    assert!(why.contains("did not report"), "{why}");
 }
 
 // [D] pure: Gemini gets an admin-tier policy that asks for the subscribed kinds' tools and every MCP tool, and

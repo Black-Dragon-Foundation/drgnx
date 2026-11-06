@@ -174,6 +174,9 @@ tail). There is no SDK role framework.
   call except `prompt` has the connection's `deadline`: a missed one fails that call with `Error::Deadline`, and the
   connection keeps working. A `prompt` ends by the agent's answer, `cancel`, or the child's exit (`Error::Closed`).
   `PromptOutcome` carries the stop reason, the turn's token usage and `_meta.turnId` when the agent sends one.
+  `reported_mode(sid)` is the mode (`modes.currentModeId`) the answer that opened the session on this connection
+  reported (`session/new`, `load`, `resume` or `fork`), or `None` when it reported none: the mode a lock checks,
+  never the one it asked for.
 - **Fork.** `fork_into(ForkInto { source, cwd, mcp, at, meta })` sends `session/fork` with `{sessionId, cwd,
   mcpServers, _meta}`: the new session gets its tools (without `mcpServers` a forked agent has no drgnx tools) and the
   caller's `_meta` (a lock's options; without them the fork has no lock). With `at: Some(ForkPoint { message_id })`
@@ -670,7 +673,9 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
   `_meta.turnId` (`t1`, …); chunks carry `messageId`; the terminal capability is never used. Personalities: claude
   (`close fork list resume`; logs `_meta.claudeCode.options`; forks after a message; `usage_update` with cost and
   `_claude/rateLimit`), codex (same set; logs `-c` overrides of argv; forks at a turn; `usage_update` and
-  `_codex/rateLimits`), gemini (`loadSession` only; the rest answers -32601). `--refuse-mode MODE` refuses `session/set_mode` to MODE (a lock that does not hold; the `agent-locks` rows); other modes are accepted. `--log` is JSONL; `--llm URL` POSTs
+  `_codex/rateLimits`; its answers that open a session report `modes` as codex-acp 2.5.0 picks them: one of its four
+  mode ids from `INITIAL_AGENT_MODE`, `agent` for an unset or unknown one, and `session/set_mode` to an unknown id is
+  -32602; a `CODEX_CONFIG` with `approval_policy = "untrusted"` fails `session/new`, as Codex 0.165 refuses it), gemini (`loadSession` only; the rest answers -32601). `--refuse-mode MODE` refuses `session/set_mode` to MODE (a lock that does not hold; the `agent-locks` rows); other modes are accepted. `--log` is JSONL; `--llm URL` POSTs
   to a `ratatoskr-mock llm` once per turn, so its log counts requests. `--state DIR` keeps each session's history in
   `DIR/<sessionId>.json` (at its start and after every turn); `session/fork` and `session/resume` read a session this
   process does not hold from there, so a second process forks or resumes it (ids skip the ones the folder holds). A

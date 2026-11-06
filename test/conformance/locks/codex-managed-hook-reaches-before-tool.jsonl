@@ -1,4 +1,4 @@
-{"scenario": "locks/codex-managed-hook-reaches-before-tool", "requires": ["v1", "test-hooks"], "doc": "[C] Codex's lock is its environment (`CODEX_CONFIG`, `INITIAL_AGENT_MODE`), never argv. With a before-tool rule subscribed, the session's `drgnx` server offers `before_tool`, which Codex's managed PreToolUse hook calls: the Codex personality calls it for `rm -rf x`, the rule refuses it in the hook's `permissionDecision` shape, the refusal is recorded at the adapter's site, and the snapshot lists the shell's kinds as hooked by the adapter."}
+{"scenario": "locks/codex-managed-hook-reaches-before-tool", "requires": ["v1", "test-hooks"], "doc": "[C] Codex's lock is its environment (`CODEX_CONFIG`, `INITIAL_AGENT_MODE=read-only`), never argv. With a before-tool rule subscribed, the session's `drgnx` server offers `before_tool`, which Codex's managed PreToolUse hook calls: the Codex personality calls it for `rm -rf x`, the rule refuses it in the hook's `permissionDecision` shape, the refusal is recorded at the adapter's site, and the snapshot lists the shell's kinds as hooked by the adapter."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
@@ -12,7 +12,7 @@
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}, "within_ms": 10000}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-codex", "cwd": "$ROOT/work", "role": "chat"}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
-{"do": "file", "path": "$ROOT/acp.log", "contains": "\"mode\":\"permission-profile:drgnx\"", "within_ms": 15000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "\"mode\":\"read-only\"", "within_ms": 15000}
 {"do": "file", "path": "$ROOT/acp.log", "contains": "\"argv_overrides\":[]"}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/get", "params": {"id": "$sid"}}}
 {"do": "expect", "conn": "c", "json": {"id": 3, "result": {"session": {"id": "$sid", "hooked": {"before_tool": [], "by_adapter": ["execute"], "unhooked": []}}}}, "within_ms": 10000}
