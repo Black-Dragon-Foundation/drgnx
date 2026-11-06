@@ -16,7 +16,10 @@ The page opens in the editor area as `*agent settings: Claude Code*` (or Codex, 
 at the top switch to another agent's page for the same project (also `TAB`, Other Agent…). The rules files
 (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`) come next, as links.
 
-Opening the page and Refresh (`g`) only read files. They never start a server, run a hook or ask for a login. The
+Opening the page and Refresh (`g`) only read files. With Nidhogg's workers on (`nidhogg-workers-framing`), Claude Code's
+`~/.claude.json`, which can be big and which Claude Code rewrites every few seconds, is read off the main thread: the page
+says "Reading the settings…" and draws when the text arrives. Adding, editing, removing and turning on or off read the
+file again at once, just before they write, as they always did. They never start a server, run a hook or ask for a login. The
 status is what the files tell: the file parses, the command is on `PATH`, the URL is set. Test does the rest, only
 when you ask.
 
@@ -95,7 +98,7 @@ Servers: **[Test All]** too).
 Under the rules and project, the page says **Reports to drgnx: yes** or **no**, with a button, **[Add drgnx]** or
 **[Remove drgnx]** (also `R`, or Agent Settings: Report to drgnx in the palette, which is offered on the page). A
 `drgnx` server that is switched off shows **no (disabled)**. An agent that runs outside drgnx, in a terminal or
-another editor, shows in the Work cockpit ([cockpit.md](cockpit.md)) only when it has drgnx's coordination server.
+another editor, shows in the Work space ([work-space.md](work-space.md)) only when it has drgnx's coordination server.
 The button adds an MCP server called `drgnx` to the agent's **user** settings: `<data>/bin/ratatoskr mcp-bridge --outside --kind KIND`, the
 same tools drgnx's own agents are given (an existing entry that runs `bin/drgnx coord mcp` is left as it is). It asks first and names the file. Nothing is written without it, and
 opening the page never writes.

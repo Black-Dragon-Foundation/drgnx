@@ -1,0 +1,28 @@
+{"scenario": "work/map-survives-a-hub-restart", "requires": ["v1", "test-hooks"], "doc": "The hub restarts while a map is open: its views end with their connections, and the editor's re-subscription on the new hub answers a full frame (version 1) that holds the session the new hub resumed. Pattern B: each answer and event is the gate; the resumed session is read back with poll, not waited for as an event that may have gone before the row subscribed."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "work/map/subscribe", "params": {"view": "a", "workspace": {"id": "workspace:000000000000", "roots": ["$ROOT/work"]}, "width_units": 250}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"version": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "say hello"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "work-map", "data": {"view": "a", "changed": {"$contains": [{"kind": "agent"}]}}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"turn_id": "t1"}}}, "within_ms": 30000}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0, "within_ms": 15000}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "connect", "conn": "e2", "hub": "h2"}
+{"do": "send", "conn": "e2", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e2", "json": {"id": 1, "result": true}}
+{"do": "poll", "conn": "e2", "json": {"id": 2, "method": "work/map/subscribe", "params": {"view": "a", "workspace": {"id": "workspace:000000000000", "roots": ["$ROOT/work"]}, "width_units": 250}}, "expect": {"id": 2, "result": {"version": 1, "items": {"$contains": [{"kind": "agent"}]}, "layout": {"width_units": 250}}}, "within_ms": 20000}
+{"do": "send", "conn": "e2", "json": {"id": 3, "method": "work/map/set", "params": {"view": "a", "filters": {"finished": true}}}}
+{"do": "expect", "conn": "e2", "json": {"id": 3, "result": {"version": "$capture:v"}}}
+{"do": "expect", "conn": "e2", "json": {"event": "work-map", "data": {"view": "a", "version": "$v", "full": true, "changed": {"$contains": [{"kind": "agent"}]}}}, "within_ms": 10000}

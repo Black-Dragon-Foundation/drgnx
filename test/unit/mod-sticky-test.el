@@ -124,6 +124,31 @@
     (drgnx-sticky-test--start-at-line 20)
     (should (equal (substring-no-properties (drgnx-sticky--segment (selected-window))) " › class Shape: › def area(self):"))))
 
+(ert-deftest drgnx-sticky/a-parse-not-ready-is-never-waited-for ()
+  ;; On Nidhogg a parse job (a large file's first parse) may still run when the header is drawn: the scopes come from
+  ;; indentation then, a poll redraws once the tree is ready, and the next build reads tree-sitter
+  (drgnx-sticky-test--in (drgnx-sticky-test--elisp 40) #'emacs-lisp-mode
+    (let ((ready nil) (polls nil) (b (current-buffer)) (epoch (drgnx-epoch 'sticky (current-buffer))))
+      (cl-letf (((symbol-function 'treesit-parser-list) (lambda (&rest _) '(parser)))
+                ((symbol-function 'treesit-parser-p) (lambda (p) (eq p 'parser)))
+                ((symbol-function 'nidhogg-treesit-parser-ready-p) (lambda (_p) ready))
+                ((symbol-function 'drgnx-sticky--treesit-scopes) (lambda (_pos) '(treesit)))
+                ((symbol-function 'drgnx-sticky--indent-scopes) (lambda (_pos) '(indent)))
+                ((symbol-function 'drgnx-timer-poll) (lambda (&rest args) (push args polls))))
+        (should (equal (drgnx-sticky-scopes 100) '(indent)))
+        (should (equal (car (car polls)) (cons 'sticky-parse b)))
+        (should (eq (nth 2 (car polls)) 'drgnx-sticky--parse-landed))
+        (should-not (drgnx-sticky--parse-landed b))          ; still parsing: the poll goes on, the header stays
+        (should (equal (drgnx-epoch 'sticky b) epoch))
+        (setq ready t)
+        (should (drgnx-sticky--parse-landed b))              ; ready: one redraw, the poll ends
+        (should-not (equal (drgnx-epoch 'sticky b) epoch))
+        (should (equal (drgnx-sticky-scopes 100) '(treesit)))
+        (should (= (length polls) 1))
+        (let ((dead (generate-new-buffer " sticky-dead")))   ; a buffer killed meanwhile ends the poll
+          (kill-buffer dead)
+          (should (drgnx-sticky--parse-landed dead)))))))
+
 (ert-deftest drgnx-sticky/comments-and-preprocessor-lines-are-no-scopes ()
   (drgnx-sticky-test--in (concat "def f():\n    x = 1\n# TODO remove\n"
                                  (mapconcat (lambda (i) (format "    y%d = %d" i i)) (number-sequence 1 30) "\n") "\n")
@@ -176,6 +201,51 @@
           (should (string-search "class Big:" (drgnx-sticky--segment w)))
           (should (<= far (* 1.25 near)))
           (should (<= far 319)))))))                         ; ceil(1.25 × 255): 255 measured
+
+(defun drgnx-sticky-test--parses (text start)
+  "In a C buffer of TEXT with the window at line START: the segment, and how many `syntax-ppss' calls building it took."
+  (let ((n 0))
+    (drgnx-sticky-test--in text #'c-mode
+      (drgnx-sticky-test--start-at-line start)
+      (let ((orig (symbol-function 'syntax-ppss)))
+        (cl-letf (((symbol-function 'syntax-ppss) (lambda (&rest a) (cl-incf n) (apply orig a))))
+          (cons (substring-no-properties (drgnx-sticky--segment (selected-window))) n))))))
+
+(ert-deftest drgnx-sticky/a-comment-block-above-the-start-costs-one-parse ()
+  "Pattern D.  200 comment lines at column 0 or 1 inside a function, above the window's start: the search for the scope
+passes the whole block with one parse (each of its lines used to be parsed), a block comment and a run of line comments
+alike, and still finds the function."
+  (dolist (comment '(("/*" " * note %d" " */") (nil "// note %d" nil)))
+    (let ((r (drgnx-sticky-test--parses
+              (concat "int f(void) {\n    int a;\n" (if (car comment) (concat (car comment) "\n") "")
+                      (mapconcat (lambda (i) (format (nth 1 comment) i)) (number-sequence 1 200) "\n") "\n"
+                      (if (nth 2 comment) (concat (nth 2 comment) "\n") "")
+                      (mapconcat (lambda (i) (format "    int x%d;" i)) (number-sequence 1 40) "\n") "\n}\n")
+              225)))
+      (should (equal (car r) " › int f(void) {"))
+      (should (<= (cdr r) 3)))))
+
+(ert-deftest drgnx-sticky/a-scroll-step-under-the-same-scopes-reads-no-text ()
+  "Pattern D.  A new window start under the same scopes takes the segment the last one made (the scope lines are not
+read and fontified again); a start under other scopes, or an edit, makes it again."
+  (drgnx-sticky-test--in (concat (drgnx-sticky-test--elisp 60) (drgnx-sticky-test--elisp 60)) #'emacs-lisp-mode
+    (let ((n 0) (w (selected-window)))
+      (cl-letf* ((orig (symbol-function 'drgnx-sticky--text))
+                 ((symbol-function 'drgnx-sticky--text) (lambda (p) (cl-incf n) (funcall orig p))))
+        (drgnx-sticky-test--start-at-line 20)
+        (let ((s (drgnx-sticky--segment w)))
+          (should (string-search "(defun drgnx-sticky-test-fn" s))
+          (should (= n 1))
+          (drgnx-sticky-test--start-at-line 21)
+          (should (eq s (drgnx-sticky--segment w)))
+          (should (= n 1))
+          (drgnx-sticky-test--start-at-line 90)                  ; the second defun: another scope
+          (drgnx-sticky--segment w)
+          (should (= n 2))
+          (goto-char (point-max)) (insert ";; tail\n")           ; an edit: the text may differ
+          (drgnx-sticky-test--start-at-line 91)
+          (drgnx-sticky--segment w)
+          (should (= n 3)))))))
 
 (ert-deftest drgnx-sticky/turning-the-module-off-turns-sticky-scroll-off-in-live-buffers ()
   (let ((b (generate-new-buffer "sticky-off")))

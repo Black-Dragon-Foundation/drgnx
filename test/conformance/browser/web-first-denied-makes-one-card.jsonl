@@ -1,0 +1,22 @@
+{"scenario": "browser/web-first-denied-makes-one-card", "requires": ["v1", "test-hooks"], "doc": "A browser session's web proxy on SDIR/web.sock (0600; a chat's browser cell is Ask under Balanced, so it gets the browser: the test hook starts the hub's side of it with no browser host), and its CDP broker's SDIR/cdp.sock (0600): while browser.web is not granted (Balanced asks), public targets are refused (403) over CONNECT and plain HTTP alike, and the first refusal raises one matrix card for the session, announced with a card event, whose facts name the first host:port; the hosts after it make no second card while that one is open."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "env": {"DRGNX_TEST_BROWSER": "1"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:agent", "name": "$string"}}, "within_ms": 30000}
+{"do": "file", "path": "$SOCKET_DIR/s/$agent/web.sock", "mode": "600"}
+{"do": "file", "path": "$SOCKET_DIR/s/$agent/cdp.sock", "mode": "600"}
+{"do": "http", "conn": "p1", "to": "unix:$SOCKET_DIR/s/$agent/web.sock", "method": "CONNECT", "path": "93.184.215.14:443", "headers": {"Host": "93.184.215.14:443"}, "read": "head"}
+{"do": "expect_http", "conn": "p1", "status": 403}
+{"do": "expect", "conn": "e", "json": {"event": "card", "data": {"id": "$capture:card", "kind": "matrix"}}, "within_ms": 10000}
+{"do": "http", "conn": "p2", "to": "unix:$SOCKET_DIR/s/$agent/web.sock", "method": "CONNECT", "path": "93.184.215.15:443", "headers": {"Host": "93.184.215.15:443"}, "read": "head"}
+{"do": "expect_http", "conn": "p2", "status": 403}
+{"do": "http", "conn": "p3", "to": "unix:$SOCKET_DIR/s/$agent/web.sock", "method": "GET", "path": "http://93.184.215.16/", "headers": {"Host": "93.184.215.16"}, "read": "head"}
+{"do": "expect_http", "conn": "p3", "status": 403}
+{"do": "sql_expect", "sql": "select id, state, json_extract(data, '$.session'), json_extract(data, '$.facts.host') from card where kind = 'matrix' and json_extract(data, '$.action') = 'browser.web'", "rows": [["$card", "open", "$agent", "93.184.215.14:443"]]}

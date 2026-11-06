@@ -63,6 +63,7 @@ fn label_of(p: BriefPart) -> &'static str {
         BriefPart::BaseBranch => "Base branch",
         BriefPart::Interfaces => "Interfaces from earlier tasks",
         BriefPart::Check => "Check to run",
+        BriefPart::Findings => "Recording what you learn",
         BriefPart::ViewPath => "Without drgnx's tools",
     }
 }
@@ -100,6 +101,9 @@ fn cut_at_heading(s: &str, max: usize) -> &str {
     let at = at.or_else(|| head.rfind("\n\n").filter(|&i| i > 0).map(|i| i + 1));
     &head[..at.unwrap_or(end)]
 }
+
+/// The brief's paragraph on conclusions (work-space design §7.2).
+pub const FINDINGS: &str = "When you establish a fact that changes what you do next, record it with `note_add` kind `finding`, naming its sources. When you choose between ways, use `record_decision`, as before.";
 
 /// The most of S that fits MAX bytes, with a note where it was cut.
 fn cut_with_pointer(s: &str, max: usize, pointer: &str) -> String {
@@ -309,6 +313,7 @@ fn gather(
         (BriefPart::BaseBranch, base),
         (BriefPart::Interfaces, interfaces(conn, ent.n)?),
         (BriefPart::Check, check),
+        (BriefPart::Findings, FINDINGS.to_owned()),
         (BriefPart::ViewPath, view),
     ];
     Ok((parts, pointer))
@@ -342,7 +347,7 @@ pub async fn task_scope(front: &Front, task: &str) -> Option<(String, Option<Str
     // the project is found by git, off the db's thread
     let project = match repo {
         Some(r) => {
-            tokio::task::spawn_blocking(move || norn::project::resolve(Path::new(&r)).map(|p| p.id))
+            crate::clock::blocking(move || norn::project::resolve(Path::new(&r)).map(|p| p.id))
                 .await
                 .ok()
                 .flatten()

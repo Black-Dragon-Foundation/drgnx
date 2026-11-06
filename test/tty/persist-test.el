@@ -26,7 +26,7 @@
                                           (find-file (expand-file-name "b.txt" temporary-file-directory))
                                           t))
         (drgnx-tty-session-eval s '(progn (drgnx-wb-show-sidebar) t))
-        (drgnx-tty-session-wait-screen s "EXPLORER")
+        (drgnx-tty-session-wait-screen s drgnx-tty-session-explorer-heading)
         ;; the commands answer, and write nothing
         (drgnx-tty-session-eval s '(progn (drgnx-persist-save) t))
         (should (equal (drgnx-tty-session-eval s '(current-message))

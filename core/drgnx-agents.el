@@ -125,12 +125,20 @@ OpenRouter agents do not start until it is fixed."
   :type 'boolean :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
   :runtime "bool" :schema 'boolean)
 
-(drgnx-defsetting drgnx-agents-start-env-names '("PLAYWRIGHT_MCP_CDP_ENDPOINT")
+(drgnx-defsetting drgnx-agents-start-env-names nil
   "The environment variables an editor module may add to an agent the hub starts (`drgnx-agents-env-functions'), by
 name.  The hub drops any other name, and any name that looks like a credential (it contains KEY, TOKEN, SECRET,
 PASSWORD, PASSPHRASE or CREDENTIAL), whatever this lists.  Only you can set it, never a repository or an agent."
   :type '(repeat string) :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
   :runtime "Vec<String>" :schema '(list-of string))
+
+(drgnx-defsetting drgnx-agents-trace-opens '("claude")
+  "The agents whose shell commands' opens the hub sees on Linux (\"seen open\" in the Work space), by provider:
+\"claude\", \"codex\", \"gemini\".  Claude Code is traced per shell step; Codex and Gemini over their whole process
+tree, which costs every command they run (a test suite run as one command: about a third longer), so they are off
+unless listed.  An agent not listed shows only the files its commands name.  Read when a session starts."
+  :type '(repeat (choice (const "claude") (const "codex") (const "gemini"))) :group 'drgnx :scope 'global
+  :workspace 'never :on-error 'strict :agents 'never :runtime "Vec<String>" :schema '(list-of string))
 
 (cl-defstruct (drgnx-agent-session (:constructor drgnx-agents--make) (:copier nil))
   name profile cwd conn acp-id (status 'starting) entries queue (mode 'queue) capabilities usage commands

@@ -36,6 +36,132 @@ Seconds without input after which the editor tells the hub you are away (the tim
 | `:agents` | `never` |
 | `:schema` | `natnum` |
 
+## drgnx-agents-browser-deny-hosts
+
+Host names (like "example.com") a session's browser never reaches, whatever you grant: a list of strings.
+Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat string)` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Vec<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(list-of string)` |
+
+## drgnx-agents-browser-idle
+
+Seconds without a command after which a session's browser is stopped; the next command starts it again.
+Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `600` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"u64"` |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
+
+## drgnx-agents-browser-local-ports
+
+The TCP ports on the sandbox's own loopback that a session with the browser lets its agent and browser
+connect to, for the servers the agent starts there (a list of port numbers, 1 to 65535).  Servers on this machine are
+reached only as host.drgnx.internal:PORT, through a grant.  Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `(3000 3001 4173 4200 5000 5173 8000 8080 8888)` |
+| Type | `(repeat integer)` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Vec<u16>"` |
+| `:agents` | `never` |
+| `:schema` | `(list-of (integer :min 1 :max 65535))` |
+
+## drgnx-agents-browser-max-message
+
+The largest message, in bytes, that passes between an agent and its session's browser (64 MiB).
+Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `67108864` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"u64"` |
+| `:agents` | `never` |
+| `:schema` | `(integer :min 1)` |
+
+## drgnx-agents-browser-memory-high
+
+The share of the session's memory cap (1 to 99, a percent) at which its browser is stopped.
+Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `75` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"u32"` |
+| `:agents` | `never` |
+| `:schema` | `(integer :min 1 :max 99)` |
+
+## drgnx-agents-browser-once-window
+
+Seconds a one-time browser grant lasts after you give it.  Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `600` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"u64"` |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
+
+## drgnx-agents-browser-program
+
+The browser an agent session gets: the absolute path of a Chromium, Chrome or headless shell, or nil to find one
+(a distro package first, then the one `drgnx browser install' downloaded).  Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(choice (const :tag "find one" nil) file)` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Option<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(or null (string :match "\\`/"))` |
+
 ## drgnx-agents-checkpoint-cap
 
 Bytes of checkpoints kept per project (the shadow repos of all its sessions together); the oldest of finished
@@ -175,7 +301,7 @@ column that matches wins.  Set it in Settings → User; no workspace and no agen
 | `:apply` | - |
 | `:runtime` | `"AgentsMatrix"` |
 | `:agents` | `never` |
-| `:schema` | `(plist (:preset (enum cautious balanced autonomous) "The base preset; absent: balanced") (:time (list-of (plist (:when (or (enum away) (pred drgnx-agents-matrix--between-p "(between FROM TO), minutes of the day")) "While you are away, or between two minutes of the day (local time)" :required t) (:preset (enum cautious balanced autonomous) "The preset that applies then" :required t))) "Presets that replace the base one at some times") (:cells (list-of (plist (:action (enum agents.start agents.model agents.control graph.change task.done spend spend.over code.read code.edit commit merge.integration push.ci push.main code.ci-config machines job.container network unsandboxed settings.change user.private user.emacs chat.project-read) "What the agent does" :required t) (:column (pred drgnx-agents-matrix--column-p "(:role manager\|worker\|chat), (:agent NAME) or (:provider NAME)") "Whose cell" :required t) (:verdict (enum allow ask never) "What happens" :required t) (:limit (plist (:amount number "How much" :required t) (:unit (enum count usd usd-est tokens limit-share) "Of what" :required t)) "An amount over which the cell is decided by spend.over"))) "Cell overrides"))` |
+| `:schema` | `(plist (:preset (enum cautious balanced autonomous) "The base preset; absent: balanced") (:time (list-of (plist (:when (or (enum away) (pred drgnx-agents-matrix--between-p "(between FROM TO), minutes of the day")) "While you are away, or between two minutes of the day (local time)" :required t) (:preset (enum cautious balanced autonomous) "The preset that applies then" :required t))) "Presets that replace the base one at some times") (:cells (list-of (plist (:action (enum agents.start agents.model agents.control graph.change task.done spend spend.over code.read code.edit commit merge.integration push.ci push.main code.ci-config machines job.container network browser browser.web browser.private unsandboxed settings.change user.private user.emacs chat.project-read) "What the agent does" :required t) (:column (pred drgnx-agents-matrix--column-p "(:role manager\|worker\|chat), (:agent NAME) or (:provider NAME)") "Whose cell" :required t) (:verdict (enum allow ask never) "What happens" :required t) (:limit (plist (:amount number "How much" :required t) (:unit (enum count usd usd-est tokens limit-share) "Of what" :required t)) "An amount over which the cell is decided by spend.over"))) "Cell overrides"))` |
 
 ## drgnx-agents-mcp
 
@@ -193,6 +319,30 @@ The MCP servers agents get: `coordination' and `search'.
 | `:runtime` | `"Vec<String>"` |
 | `:agents` | `never` |
 | `:schema` | `(list-of (enum coordination search))` |
+
+## drgnx-agents-model-prices
+
+What a model costs, for the forecasts: an alist KEY → (:in :out :cache-read :write-5m :write-1h :as-of), US dollars per
+million tokens.  KEY is a model id prefix (the longest match wins) or a provider name; `claude' is a Claude profile with
+no model set.  A cache price left out is the input price.  :as-of is the date the row was read off the provider's page;
+the forecast shows the oldest.  The shipped rows are Anthropic's pricing page of 2026-11-01; Haiku's is the tier above
+100,000 tokens (a request below it costs a fifth), because agent work runs past it.  A subscription's model is the CLI's
+choice, so a subscription's cost is an estimate.  A model with no row (every Codex and Gemini model until you add one)
+is unpriced; a gateway provider's `:price' in `drgnx-ai-providers' serves when no row matches.  Add a row for your
+own model, or change one when prices move.  Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `(("claude-fable-5-1" :in 10 :out 50 :cache-read 0.25 :write-5m 12.5 :write-1h 20 :as-of "2026-11-01") ("claude-opus-5-5" :in 4 :out 20 :cache-read 0.2 :write-5m 5 :write-1h 8 :as-of "2026-11-01") ("claude-sonnet-5-5" :in 2 :out 10 :cache-read 0.1 :write-5m 2.5 :write-1h 4 :as-of "2026-11-01") ("claude-haiku-5-5" :in 0.5 :out 2.5 :cache-read 0.05 :write-5m 0.625 :write-1h 1 :as-of "2026-11-01") ("claude" :in 4 :out 20 :cache-read 0.2 :write-5m 5 :write-1h 8 :as-of "2026-11-01"))` |
+| Type | `sexp` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Vec<ModelPrice>"` |
+| `:agents` | `never` |
+| `:schema` | `(alist string (plist (:in number) (:out number) (:cache-read number) (:write-5m number) (:write-1h number) (:as-of string)))` |
 
 ## drgnx-agents-net-hosts
 
@@ -346,6 +496,24 @@ another one on, remove it from this list (or set it in the profile's `:env').
 | `:agents` | `never` |
 | `:schema` | - |
 
+## drgnx-agents-session-memory
+
+The memory cap of one agent session with its browser, like "4G" or "512M".
+Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `"4G"` |
+| Type | `string` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"String"` |
+| `:agents` | `never` |
+| `:schema` | `(string :match "\\`[1-9][0-9]*[KMGT]?\\'")` |
+
 ## drgnx-agents-silent-after
 
 Seconds without an update after which the supervisor pauses a session, per kind of work.
@@ -371,8 +539,28 @@ PASSWORD, PASSPHRASE or CREDENTIAL), whatever this lists.  Only you can set it, 
 
 | Key | Value |
 | --- | --- |
-| Default | `("PLAYWRIGHT_MCP_CDP_ENDPOINT")` |
+| Default | `nil` |
 | Type | `(repeat string)` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Vec<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(list-of string)` |
+
+## drgnx-agents-trace-opens
+
+The agents whose shell commands' opens the hub sees on Linux ("seen open" in the Work space), by provider:
+"claude", "codex", "gemini".  Claude Code is traced per shell step; Codex and Gemini over their whole process
+tree, which costs every command they run (a test suite run as one command: about a third longer), so they are off
+unless listed.  An agent not listed shows only the files its commands name.  Read when a session starts.
+
+| Key | Value |
+| --- | --- |
+| Default | `("claude")` |
+| Type | `(repeat (choice (const "claude") (const "codex") (const "gemini")))` |
 | `:scope` | `global` |
 | `:workspace` | `never` |
 | `:merge` | `replace` |
@@ -588,15 +776,228 @@ Above this size (MiB) the question's default is chunks, else lean.  Read when a 
 | `:agents` | `grantable` |
 | `:schema` | `(pred drgnx-large-files--mib-p "a size in MiB above 0")` |
 
-## drgnx-look-theme
+## drgnx-look-accent
 
-The colour theme ui/look loads at start (Color Theme picks it); nil: the theme Emacs starts with.  A change
-switches the theme at once while the module runs.
+Where the accent colour comes from: `system' (the desktop's accent colour, as text for the theme's variant) or
+`theme' (the theme's own).  A change applies at once.
 
 | Key | Value |
 | --- | --- |
-| Default | `nil` |
-| Type | `(choice (const :tag "Emacs's own" nil) symbol)` |
+| Default | `system` |
+| Type | `(choice (const :tag "The desktop's" system) (const :tag "The theme's" theme))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look-follow-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum system theme)` |
+
+## drgnx-look-density
+
+How much room the look gives: `compact', `comfortable' or `roomy' (the line, row, tab, bar and gap sizes).  A
+change applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `comfortable` |
+| Type | `(choice (const compact) (const comfortable) (const roomy))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look-density--settings-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum compact comfortable roomy)` |
+
+## drgnx-look-font-agent
+
+The font of the agent panel's prose.  `:family ui' is the UI font.  A change applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `(:family ui)` |
+| Type | `(choice (const :tag "Follow the desktop's font" follow-desktop) (plist :tag "Font" :key-type symbol :value-type sexp))` |
+| `:scope` | `buffer` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look-fonts--settings-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(or (enum follow-desktop) (plist (:family (or string (enum ui code)) "A family name, or ui / code for the same as that role") (:fallback (list-of string) "Families to try when the family is not installed") (:size number "A ratio to the code size (1.0 is the code size)") (:weight symbol "regular, semibold, bold, ...") (:line-height integer "Pixels per line (logical)") (:ligatures boolean "Ligatures on")))` |
+
+## drgnx-look-font-code
+
+The code font: family, fallback list, size (a ratio to the code size, 13.5 px), weight, line height in pixels and
+ligatures.  A change applies at once.  `(:mode MODE ...)' sections give one mode another font.
+
+| Key | Value |
+| --- | --- |
+| Default | `(:family "JetBrains Mono" :fallback ("Adwaita Mono" "monospace") :size 1.0 :weight regular :line-height 21 :ligatures nil)` |
+| Type | `(choice (const :tag "Follow the desktop's font" follow-desktop) (plist :tag "Font" :key-type symbol :value-type sexp))` |
+| `:scope` | `buffer` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look-fonts--settings-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(or (enum follow-desktop) (plist (:family (or string (enum ui code)) "A family name, or ui / code for the same as that role") (:fallback (list-of string) "Families to try when the family is not installed") (:size number "A ratio to the code size (1.0 is the code size)") (:weight symbol "regular, semibold, bold, ...") (:line-height integer "Pixels per line (logical)") (:ligatures boolean "Ligatures on")))` |
+
+## drgnx-look-font-code-small
+
+The font of diffs and output inside cards.  `:family code' is the code font.  A change applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `(:family code :size 0.889 :line-height 19)` |
+| Type | `(choice (const :tag "Follow the desktop's font" follow-desktop) (plist :tag "Font" :key-type symbol :value-type sexp))` |
+| `:scope` | `buffer` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look-fonts--settings-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(or (enum follow-desktop) (plist (:family (or string (enum ui code)) "A family name, or ui / code for the same as that role") (:fallback (list-of string) "Families to try when the family is not installed") (:size number "A ratio to the code size (1.0 is the code size)") (:weight symbol "regular, semibold, bold, ...") (:line-height integer "Pixels per line (logical)") (:ligatures boolean "Ligatures on")))` |
+
+## drgnx-look-font-terminal
+
+The font of the terminal's text.  `:family code' is the code font.  A change applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `(:family code)` |
+| Type | `(choice (const :tag "Follow the desktop's font" follow-desktop) (plist :tag "Font" :key-type symbol :value-type sexp))` |
+| `:scope` | `buffer` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look-fonts--settings-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(or (enum follow-desktop) (plist (:family (or string (enum ui code)) "A family name, or ui / code for the same as that role") (:fallback (list-of string) "Families to try when the family is not installed") (:size number "A ratio to the code size (1.0 is the code size)") (:weight symbol "regular, semibold, bold, ...") (:line-height integer "Pixels per line (logical)") (:ligatures boolean "Ligatures on")))` |
+
+## drgnx-look-font-title
+
+The font of the start page's and the reviews' headings.  A change applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `(:family ui :size 1.259 :weight semibold)` |
+| Type | `(choice (const :tag "Follow the desktop's font" follow-desktop) (plist :tag "Font" :key-type symbol :value-type sexp))` |
+| `:scope` | `buffer` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look-fonts--settings-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(or (enum follow-desktop) (plist (:family (or string (enum ui code)) "A family name, or ui / code for the same as that role") (:fallback (list-of string) "Families to try when the family is not installed") (:size number "A ratio to the code size (1.0 is the code size)") (:weight symbol "regular, semibold, bold, ...") (:line-height integer "Pixels per line (logical)") (:ligatures boolean "Ligatures on")))` |
+
+## drgnx-look-font-ui
+
+The user interface font (tabs, status bar, lists, palette, notices): family, fallback list, size (a ratio to the
+code size) and weight.  A change applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `(:family "Adwaita Sans" :fallback ("Inter" "sans-serif") :size 0.963 :weight regular)` |
+| Type | `(choice (const :tag "Follow the desktop's font" follow-desktop) (plist :tag "Font" :key-type symbol :value-type sexp))` |
+| `:scope` | `buffer` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look-fonts--settings-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(or (enum follow-desktop) (plist (:family (or string (enum ui code)) "A family name, or ui / code for the same as that role") (:fallback (list-of string) "Families to try when the family is not installed") (:size number "A ratio to the code size (1.0 is the code size)") (:weight symbol "regular, semibold, bold, ...") (:line-height integer "Pixels per line (logical)") (:ligatures boolean "Ligatures on")))` |
+
+## drgnx-look-font-ui-caption
+
+The font of the status bar, meta text and the tree's end column.  A change applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `(:family ui :size 0.889)` |
+| Type | `(choice (const :tag "Follow the desktop's font" follow-desktop) (plist :tag "Font" :key-type symbol :value-type sexp))` |
+| `:scope` | `buffer` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look-fonts--settings-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(or (enum follow-desktop) (plist (:family (or string (enum ui code)) "A family name, or ui / code for the same as that role") (:fallback (list-of string) "Families to try when the family is not installed") (:size number "A ratio to the code size (1.0 is the code size)") (:weight symbol "regular, semibold, bold, ...") (:line-height integer "Pixels per line (logical)") (:ligatures boolean "Ligatures on")))` |
+
+## drgnx-look-font-ui-heading
+
+The font of panel titles and section heads.  `:family ui' is the UI font.  A change applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `(:family ui :size 0.963 :weight semibold)` |
+| Type | `(choice (const :tag "Follow the desktop's font" follow-desktop) (plist :tag "Font" :key-type symbol :value-type sexp))` |
+| `:scope` | `buffer` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look-fonts--settings-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(or (enum follow-desktop) (plist (:family (or string (enum ui code)) "A family name, or ui / code for the same as that role") (:fallback (list-of string) "Families to try when the family is not installed") (:size number "A ratio to the code size (1.0 is the code size)") (:weight symbol "regular, semibold, bold, ...") (:line-height integer "Pixels per line (logical)") (:ligatures boolean "Ligatures on")))` |
+
+## drgnx-look-icons
+
+How the look draws its icons: `svg' (Lucide line icons in the text colour, on graphical frames) or `glyphs' (the
+characters of `drgnx-face-glyphs').  Terminal frames always show glyphs.  A change applies to the icons drawn from
+then on.
+
+| Key | Value |
+| --- | --- |
+| Default | `svg` |
+| Type | `(choice (const :tag "Line icons" svg) (const :tag "Glyphs" glyphs))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-icons-clear` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum svg glyphs)` |
+
+## drgnx-look-motion
+
+Motion of popups, the palette and notices under Glitnir: `auto' follows the desktop's reduced-motion
+preference, `full' always moves, `reduced' never does (no transitions; blur and shadows stay).
+A change applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `auto` |
+| Type | `(choice (const auto) (const full) (const reduced))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look--motion-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum auto full reduced)` |
+
+## drgnx-look-theme
+
+The colour theme ui/look loads at start (Color Theme picks it); `auto': drgnx Dark, Light or High Contrast as
+the desktop says, until a theme of yours is loaded; nil: the theme Emacs starts with.  A change switches the theme
+at once while the module runs.
+
+| Key | Value |
+| --- | --- |
+| Default | `auto` |
+| Type | `(choice (const :tag "Follow the desktop" auto) (const :tag "Emacs's own" nil) symbol)` |
 | `:scope` | `global` |
 | `:workspace` | `never` |
 | `:merge` | `replace` |
@@ -605,6 +1006,23 @@ switches the theme at once while the module runs.
 | `:runtime` | - |
 | `:agents` | `never` |
 | `:schema` | `(or null symbol)` |
+
+## drgnx-look-themes-notice
+
+Whether the one-time notice that drgnx now has its own themes was shown.  drgnx sets it; there is no reason to.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
 
 ## drgnx-modules-disabled
 
@@ -675,6 +1093,129 @@ Module flags: ((MODULE FLAG…)…).
 | `:agents` | `never` |
 | `:schema` | `(alist symbol (list-of symbol))` |
 
+## drgnx-notice-style
+
+Where a notice that interrupts shows: `float' (a toast over the editor on any graphical frame, without Glitnir's
+corners and shadow where it does not draw), `echo' (a line in the echo area) or `auto' (`float' while Glitnir draws,
+else `echo').  A terminal frame always echoes.  A change applies to the next notice.
+
+| Key | Value |
+| --- | --- |
+| Default | `auto` |
+| Type | `(choice (const auto) (const echo) (const float))` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum auto echo float)` |
+
+## drgnx-popup-style
+
+How the popup lane shows: `window' (the panel's window, or one under the editors), `float' (one child frame
+over the editor, bottom-centre) or `auto': `float' under Glitnir, `window' without it.
+
+| Key | Value |
+| --- | --- |
+| Default | `auto` |
+| Type | `(choice (const auto) (const window) (const float))` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(or (const auto) (const window) (const float))` |
+
+## drgnx-runners-heavy
+
+Suite or command patterns whose jobs are heavy in this project (a job is heavy only when marked so).
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat string)` |
+| `:scope` | `project` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Vec<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(list-of string)` |
+
+## drgnx-runners-image
+
+The image a runner runs the project's command jobs in, pinned by digest ("registry/name@sha256:…"), or nil.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(choice (const nil) string)` |
+| `:scope` | `project` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Option<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(or null string)` |
+
+## drgnx-runners-project-visibility
+
+"public" or "private": a public project's job whose commit the public origin has may run on a shared runner.
+
+| Key | Value |
+| --- | --- |
+| Default | `"private"` |
+| Type | `(choice (const "public") (const "private"))` |
+| `:scope` | `project` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"String"` |
+| `:agents` | `never` |
+| `:schema` | `(string :match "\\`\\(?:public\\\|private\\)\\'")` |
+
+## drgnx-runners-send
+
+Which of the project's jobs may leave this machine for a runner: "all", "heavy" (only jobs marked heavy) or
+"none".
+
+| Key | Value |
+| --- | --- |
+| Default | `"heavy"` |
+| Type | `(choice (const "all") (const "heavy") (const "none"))` |
+| `:scope` | `project` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"String"` |
+| `:agents` | `never` |
+| `:schema` | `(string :match "\\`\\(?:all\\\|heavy\\\|none\\)\\'")` |
+
+## drgnx-runners-weight
+
+The project's weight when projects share the machines within a priority (2: twice the share of a project at 1).
+
+| Key | Value |
+| --- | --- |
+| Default | `1.0` |
+| Type | `number` |
+| `:scope` | `project` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"f64"` |
+| `:agents` | `never` |
+| `:schema` | `number` |
+
 ## drgnx-sandbox-memory-max
 
 The memory cap of each sandboxed agent, the `:memory-max' of a spec that does not give one: a systemd size (4G,
@@ -696,10 +1237,10 @@ operational guard, so that one agent's build cannot run the session out of memor
 
 ## drgnx-sandbox-proxy-pinned-addresses
 
-Names the job proxies resolve to a fixed address instead of asking DNS: ((NAME . ADDRESS)…), ADDRESS an IPv4 or
-IPv6 literal.  A pinned name may lead to a private or loopback address (a registry on the company's network, a
+Names the agents' proxies resolve to a fixed address instead of asking DNS: ((NAME . ADDRESS)…), ADDRESS an IPv4
+or IPv6 literal.  A pinned name may lead to a private or loopback address (a registry on the company's network, a
 test's local upstream); a name resolved through DNS never does.  Pinning only resolves: the name must still be on the
-job's allowlist.
+allowlist.  The hub pins them in each session's provider proxy and each container job's proxy.
 
 | Key | Value |
 | --- | --- |
@@ -710,7 +1251,7 @@ job's allowlist.
 | `:merge` | `replace` |
 | `:on-error` | `last-good` |
 | `:apply` | - |
-| `:runtime` | - |
+| `:runtime` | `"ProxyPins"` |
 | `:agents` | `never` |
 | `:schema` | - |
 
@@ -732,9 +1273,27 @@ hidden in the sandbox.  npm's global config is PREFIX/etc/npmrc.
 | `:agents` | `never` |
 | `:schema` | - |
 
+## drgnx-search-builtin
+
+Non-nil: the built-in embedding model indexes every project's code and your tasks and notes, whatever servers are
+running.  Nil: only a running server (TEI, Ollama) makes vectors, and with none, search is keyword and symbol only.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"bool"` |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
+
 ## drgnx-search-exclude
 
-Files matching one of these globs are not indexed; a workspace's are added to yours (see `drgnx-search-config').
+Files matching one of these globs are not indexed; a workspace's are added to yours.
 
 | Key | Value |
 | --- | --- |
@@ -743,15 +1302,15 @@ Files matching one of these globs are not indexed; a workspace's are added to yo
 | `:scope` | `project` |
 | `:workspace` | `data` |
 | `:merge` | `append` |
-| `:on-error` | `last-good` |
+| `:on-error` | `strict` |
 | `:apply` | - |
-| `:runtime` | - |
-| `:agents` | `grantable` |
-| `:schema` | - |
+| `:runtime` | `"Vec<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(list-of string)` |
 
 ## drgnx-search-include
 
-Only files matching one of these globs are indexed (nil: all); see `drgnx-search-config'.
+Only files matching one of these globs are indexed (nil: all).
 
 | Key | Value |
 | --- | --- |
@@ -760,15 +1319,32 @@ Only files matching one of these globs are indexed (nil: all); see `drgnx-search
 | `:scope` | `project` |
 | `:workspace` | `data` |
 | `:merge` | `replace` |
-| `:on-error` | `last-good` |
+| `:on-error` | `strict` |
 | `:apply` | - |
-| `:runtime` | - |
-| `:agents` | `grantable` |
-| `:schema` | - |
+| `:runtime` | `"Vec<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(list-of string)` |
+
+## drgnx-search-model-mirror
+
+Where embedding models are downloaded from: a URL laid out as the Hugging Face host, or nil for that host.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(choice (const :tag "Hugging Face" nil) string)` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Option<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(or null string)` |
 
 ## drgnx-search-off
 
-Non-nil turns a project's semantic search off; see `drgnx-search-config'.
+Non-nil turns a project's semantic search off.
 
 | Key | Value |
 | --- | --- |
@@ -777,11 +1353,11 @@ Non-nil turns a project's semantic search off; see `drgnx-search-config'.
 | `:scope` | `project` |
 | `:workspace` | `data` |
 | `:merge` | `replace` |
-| `:on-error` | `last-good` |
+| `:on-error` | `strict` |
 | `:apply` | - |
-| `:runtime` | - |
-| `:agents` | `grantable` |
-| `:schema` | - |
+| `:runtime` | `"bool"` |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
 
 ## drgnx-session-keep-running
 
@@ -798,6 +1374,24 @@ Preferences: Keep drgnx Running in the Background, which remembers it in setting
 | `:merge` | `replace` |
 | `:on-error` | `last-good` |
 | `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | - |
+
+## drgnx-speed-gc-census
+
+Non-nil: record every garbage collection's pause, origin and live heap (Help → GC Census shows them).
+Read at every start; a change turns the census on or off at once.  `drgnx-gc-census-mode' does it for this session.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-gc-census--settings-apply` |
 | `:runtime` | - |
 | `:agents` | `never` |
 | `:schema` | - |

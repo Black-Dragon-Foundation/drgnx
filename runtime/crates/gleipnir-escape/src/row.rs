@@ -7,7 +7,7 @@
 use crate::errno_from_name;
 use serde::Deserialize;
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// The closed list of placeholders a row may use. An undefined one fails the parse (review B2).
@@ -40,6 +40,13 @@ pub const PLACEHOLDERS: &[&str] = &[
     "MARKER",
     // Added by Task 16: the git draugr runs (`draugr::git::git_program()`; on macOS the developer dir's, not the shim).
     "GIT",
+    // The browser layer's rows: the stand-in agent's pid, as the processes inside see it (`layer` rows only).
+    "PARENT",
+    // The web proxy's rows: an address the fixture's web policy counts as the host's own, a hub TCP port on the
+    // loopback (a hard never), and `${TCP_LO}`'s port alone (for `host.drgnx.internal:PORT`).
+    "HOST_LAN",
+    "GATEWAY_PORT",
+    "TCP_LO_PORT",
 ];
 
 /// The listeners a row may name in `listeners_silent`.
@@ -57,6 +64,8 @@ pub const LISTENERS: &[&str] = &[
     "udp-nl",
     "upstream",
     "gateway",
+    "gateway-tcp",
+    "web-upstream",
 ];
 
 /// Where a row's file lives: `rows/<platform>/`.
@@ -81,6 +90,18 @@ pub enum Need {
     #[serde(rename = "x86_64")]
     X86_64,
     X32,
+    /// The browser layer runs: Landlock ABI [`gleipnir::LANDLOCK_FLOOR_BROWSER`].
+    Browser,
+}
+
+/// The layer a row's probes run under, besides the agent's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Layer {
+    /// The browser host's: the spec gets a `browser`, the probes run as the browser host (`--browser-probe`), and
+    /// the agent is the probe's stand-in, which holds `/tmp/agent-file`, `${ABSTRACT}` and the local port. The
+    /// control run is the same sandbox with the probes run by the stand-in agent.
+    Browser,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
@@ -203,6 +224,8 @@ pub struct Row {
     pub needs: Vec<Need>,
     #[serde(default)]
     pub tier: TierName,
+    /// The layer the probes run under besides the agent's ([`Layer`]); none: the agent's own.
+    pub layer: Option<Layer>,
     /// The spec with placeholders. The harness fills what a row leaves out: `chdir` (`${W}`); `net` (isolated, with
     /// a relay from a free port to `${RUN}/proxy.sock`, and then `run` and `sockets` to match, and `HTTPS_PROXY` in
     /// the default `env`); `env` (a `PATH`); `layers` (the tier's floor); `tmp` (reduced: `${TMP}`). It adds the
@@ -244,6 +267,15 @@ pub struct Row {
     pub proxy_events: Option<Vec<String>>,
     pub after: Option<After>,
     pub raw: Option<Raw>,
+    /// The probes' proxy is the fixture's web proxy (`${RUN}/web.sock`, `Policy::Web`) instead of the provider proxy,
+    /// and `browser.web` is granted when this is true.
+    pub web: Option<bool>,
+    /// The web proxy's `browser.private` grants (`gleipnir::net::policy::PrivateGrant`, placeholders filled).
+    #[serde(default)]
+    pub grants: Vec<Value>,
+    /// The web proxy's resolver: these names and their addresses, and no other name resolves.
+    #[serde(default)]
+    pub dns: BTreeMap<String, Vec<String>>,
     #[serde(skip)]
     pub platform: Option<Platform>,
     #[serde(skip)]
@@ -298,6 +330,13 @@ impl Row {
         t.extend(self.landlock_omit.iter().cloned());
         t.extend(self.files_absent.iter().cloned());
         t.extend(self.proxy_events.iter().flatten().cloned());
+        let mut grants = Vec::new();
+        self.grants.iter().for_each(|g| strings(g, &mut grants));
+        t.extend(grants.into_iter().map(String::from));
+        for (name, addrs) in &self.dns {
+            t.push(name.clone());
+            t.extend(addrs.iter().cloned());
+        }
         for s in &self.setup {
             match s {
                 Setup::SwapToLink { path, target } | Setup::PlantLink { path, target } => {
@@ -395,6 +434,52 @@ impl Row {
         }
         if self.after.is_some() && self.raw.is_some() {
             return Err(format!("{name}: after needs probes"));
+        }
+        if self.web.is_none() && (!self.grants.is_empty() || !self.dns.is_empty()) {
+            return Err(format!(
+                "{name}: grants and dns are the web proxy's, so the row needs web"
+            ));
+        }
+        self.check_layer()
+    }
+
+    /// A `layer` row runs on the full tier (the only one with the browser) with probes, in the harness's own two runs:
+    /// no `unsandboxed`, `after`, `bwrap` or setup that only fits a plain run. `${PARENT}` exists only there.
+    fn check_layer(&self) -> Result<(), String> {
+        let name = &self.row;
+        let parent = self
+            .texts()
+            .iter()
+            .any(|t| placeholders_in(t).contains(&"PARENT"));
+        let Some(Layer::Browser) = self.layer else {
+            if parent {
+                return Err(format!("{name}: ${{PARENT}} is a layer row's"));
+            }
+            return Ok(());
+        };
+        if !self.needs.contains(&Need::Bwrap) || self.tier != TierName::Full {
+            return Err(format!(
+                "{name}: a browser layer row needs bwrap (the full tier)"
+            ));
+        }
+        if self.raw.is_some() || self.unsandboxed || self.after.is_some() || self.bwrap.is_some() {
+            return Err(format!(
+                "{name}: a layer row runs its probes in the harness's sandbox, without raw, unsandboxed, after or bwrap"
+            ));
+        }
+        let plain_only = self.setup.iter().any(|s| {
+            matches!(
+                s,
+                Setup::FakeBwrap { .. }
+                    | Setup::PathBwrap { .. }
+                    | Setup::SwapToLink { .. }
+                    | Setup::ControllingTty {}
+            )
+        });
+        if plain_only {
+            return Err(format!(
+                "{name}: a layer row takes only make-dir, make-file, plant-link, canary-fd and start-sleep"
+            ));
         }
         Ok(())
     }
@@ -516,5 +601,62 @@ mod tests {
         let e = parse(r#"{"row":"x","control":true,"probes":[["fds"]],"expect":[{"result":"blocked","errno":["EBOGUS"]}]}"#)
             .unwrap_err();
         assert!(e.contains("unknown errno"), "{e}");
+    }
+
+    #[test]
+    fn a_layer_row_is_a_full_tier_row_and_parent_is_its_own() {
+        let probes = r#""probes":[["kill","${PARENT}","0"]],"expect":[{"result":"reached"}]"#;
+        let r = parse(&format!(
+            r#"{{"row":"x","needs":["bwrap","browser"],"layer":"browser",{probes}}}"#
+        ))
+        .unwrap();
+        assert_eq!(r[0].layer, Some(Layer::Browser));
+        let e = parse(&format!(r#"{{"row":"x",{probes}}}"#)).unwrap_err();
+        assert!(e.contains("${PARENT} is a layer row's"), "{e}");
+        let e = parse(&format!(r#"{{"row":"x","layer":"browser",{probes}}}"#)).unwrap_err();
+        assert!(e.contains("needs bwrap"), "{e}");
+        let e = parse(&format!(
+            r#"{{"row":"x","needs":["bwrap"],"tier":"reduced","layer":"browser",{probes}}}"#
+        ))
+        .unwrap_err();
+        assert!(e.contains("needs bwrap"), "{e}");
+        let e = parse(&format!(
+            r#"{{"row":"x","needs":["bwrap"],"layer":"browser","setup":[{{"step":"controlling-tty"}}],{probes}}}"#
+        ))
+        .unwrap_err();
+        assert!(e.contains("takes only"), "{e}");
+        let e = parse(
+            r#"{"row":"x","layer":"agent","probes":[["fds"]],"expect":[{"result":"reached"}]}"#,
+        )
+        .unwrap_err();
+        assert!(e.contains("unknown variant"), "{e}");
+    }
+
+    #[test]
+    fn web_rows_grants_and_dns() {
+        let probe = r#""probes":[["http-connect","a.test:80"]],"expect":[{"result":"reached"}]"#;
+        let e = parse(&format!(
+            r#"{{"row":"x","grants":[{{"target":"all_private"}}],{probe}}}"#
+        ))
+        .unwrap_err();
+        assert!(e.contains("needs web"), "{e}");
+        let e = parse(&format!(
+            r#"{{"row":"x","web":true,"dns":{{"a.test":["${{NOPE}}"]}},{probe}}}"#
+        ))
+        .unwrap_err();
+        assert!(e.contains("undefined placeholder ${NOPE}"), "{e}");
+        let e = parse(&format!(
+            r#"{{"row":"x","web":true,"grants":[{{"target":{{"host_port":"${{NOPE}}:1"}}}}],{probe}}}"#
+        ))
+        .unwrap_err();
+        assert!(e.contains("undefined placeholder ${NOPE}"), "{e}");
+        let r = parse(&format!(
+            r#"{{"row":"x","web":false,"grants":[{{"target":{{"host_port":"${{HOST_LAN}}:80"}}}}],"dns":{{"a.test":["${{HOST_LAN}}"]}},{probe}}}"#
+        ))
+        .unwrap();
+        assert_eq!(
+            (r[0].web, r[0].grants.len(), r[0].dns.len()),
+            (Some(false), 1, 1)
+        );
     }
 }

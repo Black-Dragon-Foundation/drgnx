@@ -86,10 +86,22 @@ jobs:
             *) echo "::error::$HEAD_SHA does not descend from $DEFAULT_BRANCH's tip $tip ($status): merge or rebase onto it, so $DEFAULT_BRANCH can fast-forward"; exit 1 ;;
           esac
 
-  # Ratatoskr's CI (a `needs:` cannot reach a job of another workflow file, so the call is the job)
+  # The prebuilt images of this checkout's inputs (images.yml), each missing tag built and pushed once, before the jobs
+  # that pull them (docs/develop/ci.md, "Prebuilt images"). This repository's own pushes and pull requests only: a
+  # fork's token cannot push, so its jobs build their own (the gate lets this one be skipped there).
+  images:
+    name: Test images
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/images.yml
+
+  # Ratatoskr's CI (a `needs:` cannot reach a job of another workflow file, so the call is the job). It waits for the
+  # images (its Fedora 45 job's and the escape legs' bubblewrap), and runs whatever they did.
   runtime:
     name: Runtime
-    needs: changes
+    needs: [changes, images]
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.runtime != '') }}
     permissions:
       contents: read
@@ -99,12 +111,13 @@ jobs:
       fuzz_minutes: ${{ inputs.fuzz_minutes }}
       only: ${{ needs.changes.outputs.runtime }}
 
-  # No `needs:` but the changes job: the tiers build the Ratatoskr their tests use, so a red runtime job never skips or
-  # starves them (a `needs:` on the runtime job skipped this suite on three pushes in a row and failed it for a missing
-  # artifact on a fourth).
+  # No `needs:` but the changes job and the images: the tiers build the Ratatoskr their tests use, so a red runtime job
+  # never skips or starves them (a `needs:` on the runtime job skipped this suite on three pushes in a row and failed
+  # it for a missing artifact on a fourth). A failed or skipped images job never skips them either (`!cancelled()`):
+  # a job without its image builds it.
   tiers:
     name: Tiers
-    needs: changes
+    needs: [changes, images]
     if: ${{ !cancelled() && !startsWith(github.ref, 'refs/heads/ci/joint/') && (needs.changes.result != 'success' || needs.changes.outputs.tiers != '') }}
     permissions:
       contents: read
@@ -125,7 +138,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
       - name: shellcheck
-        run: shellcheck --severity=warning install.sh bin/drgnx .githooks/pre-commit test/container/nidhogg.sh .github/ci/changes.sh .github/ci/cargo-prune.sh .github/ci/commit-times.sh .github/ci/ghcr.sh .github/ci/bwrap/build.sh test/container/image-tag.sh test/container/rust-packages.sh
+        run: shellcheck --severity=warning install.sh bin/drgnx .githooks/pre-commit test/container/nidhogg.sh .github/ci/changes.sh .github/ci/cargo-prune.sh .github/ci/commit-times.sh .github/ci/ghcr.sh .github/ci/bwrap/build.sh .github/ci/browser-vm.sh test/container/image-tag.sh test/container/image.sh test/container/rust-packages.sh
       - name: The path filter's rules and table (changes.sh --self-test)
         if: ${{ !cancelled() }}
         run: bash .github/ci/changes.sh .github/ci/paths.txt --self-test
@@ -134,13 +147,14 @@ jobs:
         run: .githooks/pre-commit --all
 
   # The one check branch protection requires of this workflow: every job above succeeded, or was skipped because the
-  # change cannot affect it (the changes job's outputs), or is the tiers job on a joint round's branch. It always runs,
+  # change cannot affect it (the changes job's outputs), or is the tiers job on a joint round's branch, or the images job
+# on a fork's pull request. It always runs,
   # and a failed, cancelled or other skipped job fails it. A narrowed run's is "CI gate (partial)", which no rule
   # requires (docs/develop/ci.md, "Gates").
   gate:
     name: ${{ needs.changes.outputs.partial == 'true' && 'CI gate (partial)' || 'CI gate' }}
     if: always()
-    needs: [changes, runtime, tiers, scripts]
+    needs: [changes, images, runtime, tiers, scripts]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -154,5 +168,6 @@ jobs:
           needs: ${{ toJSON(needs) }}
           allow-skipped: >-
             ${{ startsWith(github.ref, 'refs/heads/ci/joint/') && 'tiers' || '' }}
+            ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'images' || '' }}
             ${{ needs.changes.result == 'success' && needs.changes.outputs.runtime == '' && 'runtime' || '' }}
             ${{ needs.changes.result == 'success' && needs.changes.outputs.tiers == '' && 'tiers' || '' }}

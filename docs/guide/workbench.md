@@ -7,6 +7,17 @@ click lands where you clicked, a row you selected stays selected, docks and pane
 trace. Editor groups split the editor, several windows each keep their own workbench, and the layout survives a
 restart.
 
+**How the dock looks.** The three sections are headed **Open** (the Buffers panel), **Files** (the Explorer) and
+**Outline**, in the heading face with a chevron, in sentence case. Their rows are drawn in the UI font at the density's
+row height (26 px comfortable; `drgnx-look-density`), with a line icon for each folder and file kind and the density's
+indent for each level; on a terminal the plain `▾ ▸` stay. A git mark sits at the right edge, in a position that
+is the same on every row (worked out in pixels, kept in columns, so a terminal showing the same Explorer keeps it and the
+`⋯` off its last two columns, whichever frame drew the rows): `M` and `R` in the warning colour, `U` and `A` in the success colour, `D` and conflicts in the
+failure colour, and `●` on a folder with changes. A `⋯` follows it in the Explorer. The `⋯` (and the Buffers panel's `×`)
+is drawn in the row's own colour, so it is invisible, until the pointer is on the row; the row at point always shows it,
+and so does every row on a terminal. The row at point is the selection: with the focus ring while the panel has the
+focus, quiet while another window has it.
+
 Everything here is built on plain Emacs — no treemacs, no ibuffer — does what people use those for (and VS
 Code's Explorer and Open Editors; see [Compared](#compared-with-treemacs-ibuffer-and-vs-code)), and does every
 heavy operation 2–150× faster than they do; key presses are under a millisecond (as fast as ibuffer, faster than
@@ -106,12 +117,19 @@ but never watched for changes (a remote watch starts a process that blocks); ref
 
 **Typing** in the Explorer jumps to the next row starting with what you typed (letters a profile does not use).
 **Find** filters the tree live to the files whose names contain the text — also inside collapsed folders — and the
-title shows it; an empty text (or `C-g`) brings back the tree, its open folders, the view and the selection.
+title shows it; an empty text (or `C-g`) brings back the tree, its open folders, the view and the selection. In a big
+project the files are listed in the background and the tree fills in while they arrive (with Nidhogg's framing on,
+`nidhogg-workers-framing`; a remote folder, or no framing, lists them first as before). **Quick Open** (`C-p` in the VS
+Code profile) does the same: the list grows while the project is still being listed, and the file you have highlighted
+stays highlighted wherever the new ones sort; it moves when you type or move it.
 
 **Live**: files created, deleted or renamed outside Emacs appear within ~150 ms (only the changed folder is read
 again; the view and selection stay; nothing changes while a mouse button is held — a press whose release never
 reaches the Explorer, because Emacs lost focus or the release came with a modifier or in another window, ends
-there).
+there). With Nidhogg's workers on (`nidhogg-workers-framing`), a local folder you open, or one that changed, is read off the
+main thread: it keeps showing the rows it had (a folder never listed shows one row, "…") and its rows change when the
+last part of the listing is in. A folder you close before that shows nothing, and a listing that a newer change or a
+Refresh overtook is not shown. A remote folder is listed as before.
 
 **Git**: `M` modified, `A` added, `U` untracked, `R` renamed, `D` deleted, `C` conflict, in the colours of your
 theme's version-control faces; a folder with changes inside shows `●` (also one whose only change is a new file;
@@ -119,7 +137,10 @@ a new folder itself shows `U`), and so does a root; ignored files are dimmed. On
 repository on screen (never holding your git lock), repositories nested inside the tree included; a repository made
 after the tree was shown (`git init`) is picked up at the next refresh (a save, or Emacs getting the focus back).
 The status of at most 16 repositories is kept, so the Explorer reads at most the top 16 it shows; a repository
-scrolled into view, or one that was pushed out, is read when its rows are drawn. `drgnx-explorer-git` turns it off. What git complains
+scrolled into view, or one that was pushed out, is read when its rows are drawn. A repository whose index holds more
+than 50,000 entries gets one notice per session offering `core.untrackedCache` and, where your git has its built-in
+file system monitor (`git fsmonitor--daemon status` answers), `core.fsmonitor`; the button sets them in that
+repository, and drgnx never remembers that you declined. `drgnx-explorer-git` turns it off. What git complains
 about is kept in the hidden buffer ` *drgnx git errors*` (its last `drgnx-git-errors-max` characters).
 
 ### Buffers panel
@@ -206,17 +227,29 @@ is not a frame line); with fewer, the frame parameter `drgnx-chrome-breadcrumb` 
 and the row is gone, sticky scroll's scopes with it. It comes back with room, and a buffer's own header line (column
 headings) stays.
 
-Hovering a file tab (or its ×) lights that one only. Tabs are dimmed, the shown tab of the active editor group is bold
-in the theme's link colour with an overline, and every row of chrome (tab line, breadcrumb, dock titles, panel tabs,
-the top line) is the theme's tab-line background; customize `drgnx-chrome-tab*` and `drgnx-wb-bar` to change them.
+Hovering a file tab lights that one only, the whole tab. Tabs are dimmed, the shown tab of the active editor group is
+bold in the theme's link colour with an overline, and every row of chrome (tab line, breadcrumb, dock titles, panel
+tabs, the top line) is the theme's tab-line background; customize `drgnx-chrome-tab*` and `drgnx-wb-bar` to change
+them.
+
+**On a graphical frame** the tab row is `tab-row` high (34 logical pixels at the comfortable density) on the `panel`
+surface; each tab is four pixels shorter than the row and two pixels from the next (a terminal separates them with a
+space). The shown tab is on the `editor` colour, so it joins the text below, and has its file's icon before the name.
+A tab that is not shown has no close mark you can see until the pointer is on the tab: the × is drawn in the row's own
+colour and the tab's hover colour brings it out (no Lisp runs while the pointer moves). The × of the shown tab is
+always there, and so is every × on a terminal. A modified file has a dimmed dot after its name, and a tab that is only
+there while it is shown (the scratch buffer, the start page) is in italics. At the right end of the row, an overflow
+button (**Go to Tab…**, in the palette: choose one of the group's tabs by name) and a split button (**Split Editor
+Right**). Under Glitnir the tabs' top corners are rounded (7 pixels).
 
 - **Tabs**: the buffers an editor window has shown, in the order they were opened; switching never reorders them.
   Click a tab to show it, `×` or middle-click closes it (the buffer stays open — close it in the Buffers panel).
   Close Tab `C-<f4>` · palette · `SPC b d`; Next / Previous Tab `C-<next>` / `C-<prior>` · Emacs' `C-x <right>` /
   `C-x <left>` · `SPC b n` / `SPC b p`. `*scratch*` is a tab only while it is shown. Killing a buffer takes its tab
   out of every window at once; closing the shown tab (or killing its buffer) shows the tab you used before it, as in VS Code; with no such tab, the one to its right, else its left. Each window keeps its own history.
-- **Breadcrumb**: project › folders › file, `●` while unsaved. A buffer with a header line of its own (the column
-  headings of a list, clicked to sort) keeps it.
+- **Breadcrumb**: project › folders › file, `●` while unsaved, in the caption type face: a row 26 logical pixels
+  high on a graphical frame, the folders subtle and the file's name muted. A buffer with a header line of its own (the
+  column headings of a list, clicked to sort) keeps it.
 - **At once**: chrome follows the workbench state store, so it is in place before a frame is drawn. A window made by
   anything — a split, a popup, a timer — has its tab line and header at the first redraw; `C-x o` between two windows
   showing one buffer moves the tabs and the breadcrumb on the spot. Saving or reverting a buffer updates its `●` a
@@ -246,8 +279,8 @@ into the frame you start in, the others follow in order): the left dock (and the
 Search), the panel and its tab, the right dock — each with its pixel size — the layout you were in
 ([layouts.md](layouts.md#after-a-restart)), the editor groups with their sizes, tabs and shown files, and the
 Explorer's folders. A window that rebuilds itself comes back where and how big it was (only where a monitor still is; never bigger than its screen).
-A job window saved before M12f comes back as the Work cockpit's filter on that job: no frame of its own, and the
-restored panes, sizes and focus stay as they were ([jobs.md](jobs.md#a-job-in-the-work-cockpit)).
+A job window saved before M12f comes back as the Work space: no frame of its own, and the
+restored panes, sizes and focus stay as they were ([jobs.md](jobs.md#a-job-in-the-work-space)).
 
 At the first graphical frame it comes back as it was (`drgnx-persist-restore-on-start`) — with a daemon, in the first
 `emacsclient -c` frame, once the server has shown its `*scratch*` there (the restored files replace it); closing the
@@ -387,9 +420,39 @@ The lane always has a one-line header: the popup's name (`Calendar`, `which-key`
 click it, or press `Esc` or `q` while the lane has focus (**Close Pane**), to end the popup. Because the header is
 there whether the popup borrows the panel or has a window of its own, borrowing never changes the header's height.
 
+**Floating lane.** `drgnx-popup-style` is `auto` (the default), `window` or `float`. Under Glitnir (Nidhogg's
+compositor) `auto` is `float`: the popup shows in one child frame of the window, bottom-centre above the echo area,
+as wide as its text (at most 0.9 of the frame) and at most a third of the frame high. The frame is made once per
+window and reused; ending the popup (`delete-window`, `quit-window`, `bury-buffer`, killing the buffer) hides it, and
+it is never deleted while the window lives. A popup that came up while you were in the minibuffer (`*Completions*`)
+ends when you leave it, with `RET` or `C-g`, as the window lane's does. It never takes focus: transient and which-key keep their keys in the
+editor, and a click on a candidate in `*Completions*` chooses it. Without Glitnir, or with `window`, the lane is the
+window described above.
+
 In a terminal window the lane works the same, and the line you are on stays visible. Completion as you type
 (corfu) shows as a child frame there. See
 [terminal.md](terminal.md#popups).
+
+### Docked panes as cards
+
+While `ui/look` runs under Glitnir, the Explorer, the panel, the right dock and every editor group are **cards**: corner radius 10, a
+1 px ring just outside in the `drgnx-border` colour and a soft shadow, on a gap that comes from the density
+([The look](look.md#density): 4, 6 or 8 logical pixels). The ring is 60 % opaque in the dark theme, 80 % in the light one
+and solid in High Contrast; the shadow is 45 % in the dark theme, 8 % in the light one and absent in High Contrast.
+`drgnx-look-card` holds the radius and the shape (logical pixels; the ring is a face and an opacity, never a colour).The gap is the frame's `right-divider-width` and `bottom-divider-width` (set in device pixels, so the gap is the same
+number of logical pixels at any display scale, and set again when the scale or the density changes, at once); the
+frame's edge gets the same gap (`internal-border-width`), so the outer cards have their corners, ring and shadow
+against a margin and not the frame's edge or the top line. So the ring and shadow have room and never cover text.
+A window made while the module runs is born with the edge (`default-frame-alist`), so it never grows by it once it is
+shown: a shown window that asked the window manager for a bigger size could get the size it was made with back a
+moment later, after a restored workbench was laid out in it, and lose the difference from its split. A density change
+gives the windows made after it the new edge too. (On a display scaled above 1 the edge is set again in device
+pixels, so the window grows there once, as the windows shown at a density change do.)
+The gap and the frame's edge are painted in the gap colour (`drgnx-surface-gap`) on the frame, whatever the theme
+says: a theme with a grey divider (modus's) does not stripe the gap. The **focused tile**, the selected window, has
+its ring in the accent colour, solid; it moves with the selection. Turning the module off takes the cards away and
+gives the frame its divider widths and the theme's divider faces back. An editor card keeps its corners while it
+scrolls. Without Glitnir nothing changes.
 
 ### The panel and the right dock
 

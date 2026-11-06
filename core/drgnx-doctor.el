@@ -40,12 +40,14 @@
   "How to get Nidhogg, drgnx's own Emacs build.")
 
 (defconst drgnx-doctor-security-issues
-  '(("CVE-2026-108976" "TRAMP: the first fix left user names with ! # & , and control characters" "31.2")
-    ("CVE-2026-96442" "Flymake backends run code from the file being edited" "31.2")
+  '(("CVE-2026-108976" "TRAMP: the first fix left user names with ! # & , and control characters" "31.2" nil "31.1-nidhogg.4")
+    ("CVE-2026-96442" "Flymake backends run code from the file being edited" "31.2" nil "31.1-nidhogg.4")
     ("CVE-2026-96269" "read-symbol-shorthands in a file's local variables redirect symbol lookup" "31.2" "31.1"))
-  "The Emacs issues the `security' check names: (ID WHAT FIXED-IN [PARTLY-FROM]).
-An issue applies below FIXED-IN; from PARTLY-FROM on, only some of its ways in are closed.  The elisp Flymake
-backend (CVE-2024-53920) is not here: every supported Emacs (31.1 and later) closes it with `trusted-content'.")
+  "The Emacs issues the `security' check names: (ID WHAT FIXED-IN [PARTLY-FROM [NIDHOGG-FIXED]]).
+An issue applies below FIXED-IN; from PARTLY-FROM on, only some of its ways in are closed.
+NIDHOGG-FIXED is the first Nidhogg release (\"31.1-nidhogg.4\") that backports the fix:
+from it on, Nidhogg is free of the issue.  The elisp Flymake backend (CVE-2024-53920) is not here: every supported
+Emacs (31.1 and later) closes it with `trusted-content'.")
 
 (defvar drgnx-doctor--checks nil "Alist NAME → plist (:group :doc :check :dev :platform), in definition order.")
 
@@ -132,15 +134,31 @@ only, never a value."
                           when (and (stringp env) (let ((v (getenv env))) (and v (not (string-empty-p v)))))
                           collect env))))
 
-;; Semantic search: SQLite with FTS5, the embedding provider the last probe found, the known projects' indexes.
-;; A failure becomes a fact (:error), never a crash; nothing here prompts, and the network is asked at most once, for a second.
-(declare-function drgnx-search-doctor-facts "drgnx-search-setup")
-(declare-function drgnx-search-setup--roots "drgnx-search-setup")
+;; Semantic search (Hrafn, in the hub): what `search/embedders' says about the built-in model and the servers, and what
+;; `search/status' says about the current project's index.  A failure becomes a fact (:error), never a crash; nothing
+;; here prompts, starts the hub or waits more than a few seconds.
+(declare-function project-root "project")
+(declare-function drgnx-hub-running-p "drgnx-hub-client")
+(declare-function drgnx-hub-call-sync "drgnx-hub-client")
+
+(defun drgnx-doctor--search-root ()
+  "The current project's root without a trailing slash, or nil.  Never asks."
+  (require 'project)
+  (when-let* ((project (ignore-errors (project-current nil))))
+    (directory-file-name (expand-file-name (project-root project)))))
 
 (defun drgnx-doctor--search ()
-  "The facts of the `search' check (see `drgnx-search-doctor-facts'), or (:error MESSAGE)."
+  "The facts of the `search' check: (:hub nil) when no hub runs, else (:hub t :embedders ANSWER :root ROOT :status
+ANSWER) with `search/embedders' and, inside a project, `search/status' of it; or (:error MESSAGE)."
   (condition-case err
-      (progn (require 'drgnx-search-setup) (drgnx-search-doctor-facts (drgnx-search-setup--roots)))
+      (progn
+        (require 'drgnx-hub-client)
+        (if (not (drgnx-hub-running-p))
+            (list :hub nil)
+          (let ((root (drgnx-doctor--search-root)))
+            (list :hub t :embedders (drgnx-hub-call-sync "search/embedders" nil 3)
+                  :root root
+                  :status (and root (drgnx-hub-call-sync "search/status" (list :root root) 3))))))
     (error (list :error (error-message-string err)))))
 
 ;; The terminal the doctor runs in (see `drgnx-tty-facts'): from the environment of this process, never from a
@@ -283,7 +301,7 @@ off), or inside a session, the mode is read as it is and never switched: an off 
     drgnx-ai
     drgnx-pkg
     drgnx-session
-    drgnx-search-chunk
+    drgnx-settings-runtime
     drgnx-onboard
     drgnx-face-state
     drgnx-gc-census
@@ -466,6 +484,7 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
                        (error (list :error (error-message-string err))))
            :sqlite (and (fboundp 'sqlite-available-p) (sqlite-available-p))
            :svg (image-type-available-p 'svg)
+           :font-fallbacks (and (fboundp 'drgnx-look-fonts-fallback-report) (drgnx-look-fonts-fallback-report))
            :work-plans (drgnx-doctor--work-plans)
            :ai-up (drgnx-doctor--ai-up)
            :search (drgnx-doctor--search)
@@ -492,6 +511,7 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :timers-report (drgnx-doctor--timers-report)
            :notices (drgnx-doctor--notices)
            :watchdog (progn (require 'drgnx-watchdog-doctor) (drgnx-watchdog-doctor-facts))
+           :workers (progn (require (quote drgnx-workers-doctor)) (drgnx-workers-doctor-facts))
            :statusbar-slow (drgnx-doctor--state-file "statusbar-slow.eld")   ; the status bar's slow entries
            :statusbar-slow-time (drgnx-doctor--state-file-time "statusbar-slow.eld")
            ;; file names only: a key found in the config dir is never part of the facts
@@ -663,10 +683,25 @@ severity, the fix the first `:fix'."
                               (if-let* ((g (plist-get f :gui))) (list 'ok (format "graphical build (%s)" g) nil)
                                 (list 'ok "terminal-only Emacs: drgnx runs in terminals (no images, one font size)" nil))))
 
-(defun drgnx-doctor--security-issues (version)
-  "The `drgnx-doctor-security-issues' that apply to Emacs VERSION, as \"ID\" or \"ID (partly fixed here)\" strings."
-  (cl-loop for (id _what fixed partly) in drgnx-doctor-security-issues
-           when (drgnx-doctor--version< version fixed)
+(drgnx-doctor-define 'fonts :group "Emacs" :doc "The look's font families are installed (a missing one falls back down its list)"
+                     :check (lambda (f)
+                              (when-let* ((r (plist-get f :font-fallbacks)))
+                                (if-let* ((entries (plist-get r :fallbacks)))
+                                    (list 'warn
+                                          (mapconcat (lambda (e)
+                                                       (format "%s: %s is not installed, %s" (nth 0 e) (nth 1 e)
+                                                               (if (nth 2 e) (format "using %s" (nth 2 e)) "no fallback found")))
+                                                     entries "; ")
+                                          (or (plist-get r :fix) "install the font families the look names (docs/guide/install.md, \"Fonts\")"))
+                                  (list 'ok "every font role has its family" nil)))))
+
+(defun drgnx-doctor--security-issues (version &optional nidhogg)
+  "The `drgnx-doctor-security-issues' that apply to Emacs VERSION, as \"ID\" or \"ID (partly fixed here)\" strings.
+NIDHOGG is the Nidhogg version (\"31.1-nidhogg.4\") when this Emacs is one:
+the issues it backports a fix for are left out."
+  (cl-loop for (id _what fixed partly backport) in drgnx-doctor-security-issues
+           when (and (drgnx-doctor--version< version fixed)
+                     (not (and nidhogg backport (not (drgnx-doctor--nidhogg< nidhogg backport)))))
            collect (if (and partly (not (drgnx-doctor--version< version partly))) (format "%s (partly fixed here)" id) id)))
 
 (defun drgnx-doctor--guards-off (g)
@@ -686,7 +721,7 @@ severity, the fix the first `:fix'."
 (drgnx-doctor-define 'security :group "Emacs" :doc "Known security issues of this Emacs version, and whether drgnx's guards are on"
                      :check (lambda (f)
                               (let* ((v (plist-get f :version))
-                                     (issues (drgnx-doctor--security-issues v))
+                                     (issues (drgnx-doctor--security-issues v (plist-get f :nidhogg)))
                                      (known (if issues (format "Emacs %s has %d known issue%s, fixed in 31.2: %s (docs/guide/security.md)"
                                                                v (length issues) (if (cdr issues) "s" "") (string-join issues ", "))
                                               "no known issues for this version"))
@@ -1000,6 +1035,51 @@ server, as abbreviated names (the readers of `drgnx-agent-config-read'; a kind t
                      :doc "The work store (work.db): its schema, WAL size, nightly backups, opt-in file and old copies"
                      :check (lambda (f) (drgnx-doctor--store-check f)))
 
+;; The agent browser: the `browser' section of `ratatoskr doctor --json' (what a session would get, the tier and Landlock
+;; ABI, the web proxy's refusals judged in-process, the memory cap, the last cached smoke check).
+(defun drgnx-doctor--agent-browser-check (f)
+  "The `agent-browser' check of the fact F (`drgnx-doctor--ratatoskr').
+Fails when a refusal of the web proxy did not hold; is `info' where no session can have a browser (the kernel's
+Landlock ABI below 9, the reduced tier, macOS); warns on no browser, no memory cap, a download more than 28 days old or
+a last check that failed; otherwise `ok', with the last check's start time and peak memory."
+  (let* ((b (plist-get (plist-get (plist-get f :ratatoskr) :report) :browser))
+         (broken (seq-filter (lambda (r) (not (plist-get r :refused))) (append (plist-get b :proxy_refusals) nil)))
+         (found (plist-get b :found))
+         (last (plist-get b :last_check))
+         (check "Agents: Check the Agent Browser"))
+    (cond
+     ((null b) (list 'info "not checked: no answer from Ratatoskr" nil))
+     (broken
+      (list 'fail (format "the agent browser's web proxy would let through: %s"
+                          (mapconcat (lambda (r) (plist-get r :target)) broken ", "))
+            "do not give agents a browser; report it (docs/guide/agent-browser.md)"))
+     ((not (member "A" (append (plist-get b :modes) nil)))
+      (list 'info (format "no agent browser here: %s" (plist-get b :verdict)) nil))
+     ((null found)
+      (list 'warn "sessions start without a browser: none was found"
+            (or (plist-get b :fix) "install chromium-headless or run `drgnx browser install'")))
+     ((not (equal (plist-get b :cap) "systemd"))
+      (list 'warn "the browser's session has no memory cap: no user systemd answers"
+            "start drgnx from a systemd user session (systemd-run --user must work)"))
+     ((plist-get b :age_warning)
+      (list 'warn (format "the downloaded browser %s is more than 28 days old" (or (plist-get found :version) ""))
+            "`drgnx browser install' fetches the pinned one (update drgnx first for a newer pin)"))
+     ((and last (not (plist-get last :ok)))
+      (list 'warn (format "the last browser check failed: %s" (or (plist-get last :why) "unknown")) check))
+     (t (list 'ok (format "%s; %s; %s"
+                          (plist-get b :verdict)
+                          (or (plist-get found :version) (abbreviate-file-name (plist-get found :path)))
+                          (if last
+                              (format "last check: started in %d ms%s" (or (plist-get last :start_ms) 0)
+                                      (if-let* ((peak (plist-get last :peak_bytes)))
+                                          (format ", peak memory %d MiB" (/ peak 1048576)) ""))
+                            (format "no check run yet (%s)" check)))
+              nil)))))
+
+(drgnx-doctor-define 'agent-browser :group "Agents"
+                     :doc "The agent browser: what sessions would get, the tier and Landlock ABI, the web proxy's refusals, the memory cap, a cached smoke check"
+                     :check #'drgnx-doctor--agent-browser-check)
+
 (drgnx-doctor-define 'packages :group "drgnx" :doc "The packages drgnx needs are installed (drgnx sync), with a lock"
                      :check (lambda (f)
                               (let* ((p (plist-get f :packages))
@@ -1055,49 +1135,49 @@ stays in this Emacs's environment, its children inherit it, agents use the hub's
 (drgnx-doctor-define 'ai-env-keys :group "drgnx" :doc "Provider keys in this Emacs's environment (they stay there; the hub holds its own copy)"
                      :check (lambda (f) (drgnx-doctor--ai-env-keys-check (plist-get f :ai-env-keys))))
 
-(declare-function drgnx-search-setup-mismatch "drgnx-search-setup")
+(defun drgnx-doctor--search-embedder (embedders)
+  "The embedder queries use, from EMBEDDERS (the answer of `search/embedders'): (MODEL DEVICE FAMILY), each a string
+or nil, or nil when no model would answer a query now: a server that answers (its address family), else the
+built-in model once it is ready (its device)."
+  (let* ((prefer (plist-get embedders :prefer))
+         (builtin (plist-get embedders :builtin))
+         (server (seq-find (lambda (s) (and (plist-get s :answering) (equal (plist-get s :model) prefer)))
+                           (plist-get embedders :servers)))
+         (device (plist-get builtin :device)))
+    (cond (server (list prefer nil (plist-get server :family)))
+          ((and prefer (equal (plist-get builtin :state) "ready"))
+           (list prefer (and device (format "%s %s" (upcase (or (plist-get device :kind) "")) (plist-get device :name))) nil)))))
 
-(defun drgnx-doctor--search-problem (indexes dims provider model)
-  "The first index of INDEXES ((ROOT . INFO)…) that does not fit the vectors the provider gives (DIMS, PROVIDER,
-MODEL), as a sentence, or nil."
-  (when indexes
-    (require 'drgnx-search-setup)
-    (cl-loop for (root . info) in indexes
-             for why = (drgnx-search-setup-mismatch info dims provider model)
-             when why return (format "the index of %s was %s — Search: Index Project with rebuild" (file-name-nondirectory (directory-file-name root)) why))))
-
-(drgnx-doctor-define 'search :group "drgnx" :doc "Semantic search: SQLite with FTS5, an embedding provider, the project indexes"
+(drgnx-doctor-define 'search :group "drgnx" :doc "Semantic search (Hrafn, in the hub): the model in use, its device and address family, the project's coverage"
                      :check (lambda (f)
                               (if (not (plist-member f :search)) (list 'info "not checked" nil)
-                                (let* ((s (plist-get f :search)) (indexes (plist-get s :indexes))
-                                       (stale (seq-filter (lambda (e) (> (or (plist-get (cdr e) :stale) 0) 20)) indexes))
-                                       (broken (seq-filter (lambda (e) (plist-get (cdr e) :error)) indexes))
-                                       (config (car (plist-get s :config-errors)))
-                                       (problem (drgnx-doctor--search-problem indexes (plist-get s :embed-dims) (plist-get s :embed-provider) (plist-get s :embed-model)))
-                                       (unindexed (or (plist-get s :unindexed) 0))
-                                       (chunks (apply #'+ (mapcar (lambda (e) (or (plist-get (cdr e) :chunks) 0)) indexes))))
+                                (let* ((s (plist-get f :search)) (status (plist-get s :status))
+                                       (embedders (plist-get s :embedders))
+                                       (in-use (drgnx-doctor--search-embedder embedders))
+                                       (worker (plist-get status :worker))
+                                       (fallback (plist-get worker :fallback))
+                                       (coverage (plist-get status :coverage_errors))
+                                       (builtin (plist-get embedders :builtin)))
                                   (cond ((plist-get s :error) (list 'warn (format "could not check: %s" (plist-get s :error)) "run drgnx doctor again; Set Up Semantic Search"))
-                                        ((not (plist-get s :sqlite)) (list 'fail "this Emacs has no SQLite: semantic search is off" "use an Emacs built with SQLite (the installer's does)"))
-                                        ((not (plist-get s :fts5)) (list 'fail "this Emacs' SQLite has no FTS5: semantic search is off" "use an Emacs built with SQLite and FTS5 (the installer's does)"))
-                                        (problem (list 'warn problem "Search: Index Project with C-u (rebuild), or choose the model the index was built with (AI: Choose Provider/Model)"))
-                                        (broken (list 'warn (format "the index of %s cannot be read: %s"
-                                                                    (file-name-nondirectory (directory-file-name (car (car broken))))
-                                                                    (plist-get (cdr (car broken)) :error))
-                                                      "Search: Index Project with C-u rebuilds it"))
-                                        (config (list 'warn (format "%s: %s (nothing is indexed there)"
-                                                                    (file-name-nondirectory (directory-file-name (car config))) (cdr config))
-                                                      "fix or delete that project's .drgnx/search.eld (docs/guide/search.md)"))
-                                        (stale (list 'warn (format "stale index (more than 20 files changed since): %s"
-                                                                   (mapconcat (lambda (e) (format "%s %d files" (file-name-nondirectory (directory-file-name (car e)))
-                                                                                                  (plist-get (cdr e) :stale)))
-                                                                              stale ", "))
-                                                     "Search: Index Project in that project"))
-                                        ((not (plist-get s :embed-up))
-                                         (list 'info (format "no embedding provider is reachable: searches use keywords only (%d indexes, %d chunks)" (length indexes) chunks)
-                                               "Set Up Semantic Search (it says how to start TEI or Ollama)"))
-                                        (t (list 'ok (format "%d index%s, %d chunks%s" (length indexes) (if (= (length indexes) 1) "" "es") chunks
-                                                             (if (> unindexed 0) (format "; %d project%s not indexed" unindexed (if (= unindexed 1) "" "s")) ""))
-                                                 (when (zerop (length indexes)) "Set Up Semantic Search in a project"))))))))
+                                        ((not (plist-get s :hub)) (list 'info "the hub is not running: semantic search lives in it" "start drgnx, or run `drgnx hub status'"))
+                                        (coverage (list 'warn (format "the index of %s has coverage errors: %s"
+                                                                      (file-name-nondirectory (or (plist-get s :root) "this project")) (string-join coverage ", "))
+                                                        "Search: Index Project with C-u rebuilds it; if it stays, the chunker misses those files"))
+                                        ((null in-use)
+                                         (list 'warn (format "keyword only: no embedding model answers (built-in model %s%s)"
+                                                             (or (plist-get builtin :state) "unknown")
+                                                             (if (plist-get builtin :error) (format ", %s" (plist-get builtin :error)) ""))
+                                               "Set Up Semantic Search downloads the built-in model (it asks first)"))
+                                        (fallback (list 'warn (format "%s embeds on the CPU: the GPU was left (%s)" (car in-use) fallback)
+                                                        "indexing is slower; it moves back to the GPU when the hub restarts and the device works"))
+                                        (t (list 'ok (format "%s%s%s%s" (car in-use)
+                                                             (if (nth 1 in-use) (format " on %s" (nth 1 in-use)) "")
+                                                             (if (nth 2 in-use) (format " (%s)" (nth 2 in-use)) "")
+                                                             (if status (format "; %d chunk%s in %d file%s" (plist-get status :chunks)
+                                                                                (if (eql (plist-get status :chunks) 1) "" "s")
+                                                                                (plist-get status :files) (if (eql (plist-get status :files) 1) "" "s"))
+                                                               ""))
+                                                 nil)))))))
 
 (drgnx-doctor-define 'work :group "drgnx" :doc "The work tracker (SQLite in Emacs; SVG for its graph)"
                      :check (lambda (f)
@@ -1543,4 +1623,5 @@ table) continues indented by the same six spaces."
 
 (provide 'drgnx-doctor)
 (require 'drgnx-watchdog-doctor)   ; its checks (freezes, gc) join the list once this file is provided
+(require 'drgnx-workers-doctor)    ; its check (workers) joins the list too
 ;;; drgnx-doctor.el ends here

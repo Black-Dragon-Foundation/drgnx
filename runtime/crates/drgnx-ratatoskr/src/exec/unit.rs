@@ -36,9 +36,15 @@ pub struct Meta {
     /// A user's job's name.
     #[serde(default)]
     pub name: Option<String>,
-    /// The job waits for a machine slot (`pending.json` holds what to start); it has no process yet.
+    /// The job is in the queue (`runtime.db`'s `rq_job` holds what to start); it has no process here yet.
     #[serde(default)]
     pub queued: bool,
+    /// Where it runs: `local`, or a runner's name; none while it waits.
+    #[serde(default)]
+    pub machine: Option<String>,
+    /// Its priority, 1 to 5, as the hub set it.
+    #[serde(default)]
+    pub priority: Option<u8>,
 }
 
 /// The shell that wraps the command: `sh -c SCRIPT sh DIR PROGRAM ARGS…`.
@@ -135,6 +141,59 @@ pub fn wrap(
     }
 }
 
+/// The most tasks a browser session's scope may hold: Chromium and a Node agent together pass 512 easily.
+pub const SESSION_TASKS_MAX: u32 = 4096;
+
+/// The scope's name for session SID.
+pub fn session_unit_name(sid: &str) -> String {
+    format!("drgnx-session-{sid}")
+}
+
+/// A browser session's launch SPEC (the sandbox's) in a transient scope of its own: `systemd-run --user --scope
+/// --quiet --collect --unit drgnx-session-SID -p MemoryMax=MEMORY -p TasksMax=4096 -- PROGRAM ARGS…`, so the session
+/// and its browser share one memory cap.  The scope runs the command in place: it stays the hub's child with the same
+/// fds.  Its environment is the spec's with `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` (`systemd-run` reaches
+/// the user manager through them; bwrap's `--clearenv` keeps them from the sandbox).  Use it only where
+/// [`systemd_user`] holds.
+pub fn session_scope(spec: Spec, sid: &str, memory: &str) -> Spec {
+    let unit = session_unit_name(sid);
+    let mut args: Vec<OsString> = [
+        "--user",
+        "--scope",
+        "--quiet",
+        "--collect",
+        "--unit",
+        unit.as_str(),
+        "-p",
+        &format!("MemoryMax={memory}"),
+        "-p",
+        &format!("TasksMax={SESSION_TASKS_MAX}"),
+        "--",
+    ]
+    .iter()
+    .map(OsString::from)
+    .collect();
+    args.push(spec.program.into());
+    args.extend(spec.args);
+    let mut env = spec.env;
+    for k in ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"] {
+        if !env.iter().any(|(n, _)| n == k)
+            && let Some(v) = std::env::var_os(k)
+        {
+            env.push((k.into(), v));
+        }
+    }
+    Spec {
+        program: find_on_path("systemd-run").unwrap_or_else(|| PathBuf::from("systemd-run")),
+        args,
+        env,
+        cwd: spec.cwd,
+        stdin_null: spec.stdin_null,
+        pass_fds: spec.pass_fds,
+        new_session: spec.new_session,
+    }
+}
+
 /// Whether PID is still the process that started at START_TIME (a reused pid is not).
 pub fn same_process(pid: i32, start_time: u64) -> bool {
     draugr::alive(pid) && draugr::start_time(pid).is_ok_and(|t| t == start_time)
@@ -184,6 +243,56 @@ mod tests {
         assert!(args.contains(&"MemoryMax=4G".into()));
         assert!(args.contains(&"drgnx-exec-x".into()));
         assert_eq!(unit_name("x"), "drgnx-exec-x");
+    }
+
+    #[test]
+    fn session_scope_argv() {
+        let mut inner = bare(&["--die-with-parent", "x"]);
+        inner.program = "/usr/bin/bwrap".into();
+        inner.env = vec![("A".into(), "1".into())];
+        inner.stdin_null = false;
+        inner.pass_fds = vec![draugr::PassFd {
+            fd: std::sync::Arc::new(std::os::fd::OwnedFd::from(
+                std::fs::File::open("/dev/null").unwrap(),
+            )),
+            target: 5,
+        }];
+        let s = session_scope(inner, "S1", "4G");
+        assert!(s.program.ends_with("systemd-run"), "{:?}", s.program);
+        let args: Vec<String> = s
+            .args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "--user",
+                "--scope",
+                "--quiet",
+                "--collect",
+                "--unit",
+                "drgnx-session-S1",
+                "-p",
+                "MemoryMax=4G",
+                "-p",
+                "TasksMax=4096",
+                "--",
+                "/usr/bin/bwrap",
+                "--die-with-parent",
+                "x"
+            ]
+        );
+        // the sandbox's own environment and fds, stdin as the session has it
+        assert_eq!(s.env[0], ("A".into(), "1".into()));
+        assert!(
+            s.env.iter().all(|(k, _)| k == "A"
+                || k == "XDG_RUNTIME_DIR"
+                || k == "DBUS_SESSION_BUS_ADDRESS")
+        );
+        assert!(!s.stdin_null);
+        assert_eq!(s.pass_fds.len(), 1);
+        assert_eq!(s.pass_fds[0].target, 5);
     }
 
     #[test]

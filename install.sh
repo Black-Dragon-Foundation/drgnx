@@ -32,8 +32,8 @@ HOMEBREW_INSTALLER_URL=https://raw.githubusercontent.com/Homebrew/install/HEAD/i
 # Ratatoskr (the agent runtime, Rust) is built from source: the oldest Rust that builds it, the toolchain a private
 # rustup installs when the distro has none new enough, and the rustup release that installs it.  rustup-init comes from
 # the versioned archive (the unversioned file changes under a pinned hash); one sha256 per target, from static.rust-lang.org.
-RUST_MIN=1.88
-RUST_PRIVATE=1.93.1
+RUST_MIN=1.95
+RUST_PRIVATE=1.99.1
 RUSTUP_VERSION=1.28.2
 RUSTUP_URL=https://static.rust-lang.org/rustup/archive
 
@@ -645,7 +645,7 @@ link_drgnx() {
 # --- Ratatoskr: the Rust toolchain and the build -----------------------------------------------------------
 # Ratatoskr (runtime/, Rust) is built from source here and by `drgnx update'.  Which cargo builds it, first match wins:
 # cargo and rustc >= $RUST_MIN on PATH; the distro's default package when its candidate is new enough; a versioned
-# distro package (Ubuntu 24.04: rustc-1.91); else a private rustup under the data dir.  No rust-toolchain.toml:
+# distro package (Debian family: rustc-X.Y and cargo-X.Y); else a private rustup under the data dir.  No rust-toolchain.toml:
 # a distro cargo ignores it.  The choice is recorded in <data>/cargo for the update timer, whose PATH lacks it.
 
 rustup_target() { # the rustup-init target of this machine, nothing for an unknown one
@@ -844,6 +844,13 @@ build_ratatoskr() { # the toolchain, then `drgnx runtime build' and `runtime ins
     return 0
   fi
   "$DIR/bin/drgnx" runtime install --prefix "$PREFIX" || warn "could not install Ratatoskr: run drgnx runtime install --prefix $PREFIX"
+  # the runner bundle for this machine's architecture (docs/guide/runners.md): what `drgnx runner add` copies to a
+  # runner; a failure only means no runners yet
+  if [[ "$FAMILY" != macos ]]; then
+    say "Building the runner bundle (static, for your other machines; log: $log)…"
+    "$DIR/bin/drgnx" build runner-bundle >>"$log" 2>&1 ||
+      warn "the runner bundle failed to build (log: $log): drgnx runs, but can't add runners until it does. Fix the cause, then run: drgnx build runner-bundle"
+  fi
 }
 
 remember_emacs() { # drgnx commands run in the Emacs just installed, even when it is not `emacs' on PATH (macOS)

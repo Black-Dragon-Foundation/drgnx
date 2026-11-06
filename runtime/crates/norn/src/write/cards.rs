@@ -149,6 +149,45 @@ pub fn card_settle(tx: &mut WTx<'_>, id: i64, choice: &str, now: f64) -> Result<
     Ok(true)
 }
 
+/// Open card `id` is withdrawn: the question it asked has nobody waiting on the answer any more (a permission request
+/// answered cancelled).  It leaves the open cards, with a `card` event; false when it was not open (a card the user
+/// settled first stays settled).
+pub fn card_withdraw(tx: &mut WTx<'_>, id: i64, now: f64) -> Result<bool, CoordError> {
+    let by = tx.id();
+    let n = tx.sql().execute(
+        "update card set state = 'withdrawn', tx = ?2 where id = ?1 and state = 'open'",
+        (id, by),
+    )?;
+    if n == 0 {
+        return Ok(false);
+    }
+    // job, task, kind, title
+    type Withdrawn = (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
+    let (job, task, kind, title): Withdrawn = tx.sql().query_row(
+        "select job, task, kind, title from card where id = ?1",
+        [id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    )?;
+    event(
+        tx,
+        ev(
+            now,
+            None,
+            job,
+            task,
+            EventKind::Card,
+            format!("{}: {} -> withdrawn", lisp(&kind), lisp(&title)),
+            json!({"card": id, "state": "withdrawn"}),
+        ),
+    )?;
+    Ok(true)
+}
+
 /// `drgnx-coord-card-set`: change card `id`'s title, data and/or state.  A change of state (a reopened card) leaves a
 /// `card` event.
 pub fn card_set(tx: &mut WTx<'_>, id: i64, set: CardSet, now: f64) -> Result<(), CoordError> {
@@ -348,6 +387,27 @@ mod tests {
         assert!(card_settle(&mut tx, id, "yes", 2.0).unwrap());
         assert!(!card_settle(&mut tx, id, "no", 3.0).unwrap());
         assert_eq!(kinds(tx.sql()), ["question", "answer"]);
+    }
+
+    /// Pure (D): withdrawing takes an open card out of the open ones once, with its event; a settled card stays.
+    #[test]
+    fn a_withdrawn_card_leaves_the_open_ones_and_a_settled_one_stays() {
+        let mut c = db7();
+        let mut tx = tx_of(&mut c);
+        let state = |tx: &mut WTx<'_>, id: i64| -> String {
+            tx.sql()
+                .query_row("select state from card where id = ?1", [id], |r| r.get(0))
+                .unwrap()
+        };
+        let open = card_create(&mut tx, card("matrix"), 1.0).unwrap();
+        assert!(card_withdraw(&mut tx, open, 2.0).unwrap());
+        assert_eq!(state(&mut tx, open), "withdrawn");
+        assert!(!card_withdraw(&mut tx, open, 3.0).unwrap(), "once");
+        let settled = card_create(&mut tx, card("matrix"), 4.0).unwrap();
+        assert!(card_settle(&mut tx, settled, "allow", 5.0).unwrap());
+        assert!(!card_withdraw(&mut tx, settled, 6.0).unwrap());
+        assert_eq!(state(&mut tx, settled), "settled");
+        assert_eq!(kinds(tx.sql()), ["card", "card", "card", "card"]);
     }
 
     #[test]

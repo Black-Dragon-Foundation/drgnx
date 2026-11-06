@@ -19,8 +19,8 @@ pub const PROTO: u32 = 1;
 pub const PROTO_MIN: u32 = 1;
 /// The records layout: 2 is JSON (design 4.5).
 pub const RECORDS: u32 = 2;
-/// The work.db schema this code knows (7: the hub makes it, or migrates a schema-6 file to it at start).
-pub const SCHEMA: u32 = 8;
+/// The work.db schema this code knows (the hub makes it, or migrates an older file to it at start).
+pub const SCHEMA: u32 = 11;
 
 /// What a connection proved (design 4.2): `user` a valid `hello` proof, `agent` the agent socket it came in on,
 /// `service` nothing.
@@ -369,7 +369,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 108, "{names:?}");
+        assert_eq!(names.len(), 148, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -381,6 +381,7 @@ mod tests {
         let mut want = vec![
             "agents/do",
             "agents/kill",
+            "agents/pause",
             "agents/permission",
             "agents/send",
             "agents/start",
@@ -388,6 +389,19 @@ mod tests {
         ];
         want.extend(FRONT_WRITES);
         want.extend(CORE_WRITES);
+        // Hrafn's: the index and the consented download change what the hub holds
+        want.extend(["search/index", "search/model-download"]);
+        // the runners': the registry's changes
+        want.extend([
+            "runners/add",
+            "runners/bench",
+            "runners/check",
+            "runners/remove",
+            "runners/set",
+            "runners/unbench",
+        ]);
+        // say's: a planning session, the proposal it writes, its end
+        want.extend(["say/end", "say/revise", "say/start"]);
         want.extend(
             registry()
                 .iter()
@@ -436,9 +450,10 @@ mod tests {
     ];
 
     /// The agent core's methods that write (agent system part 1, Task 0), besides `agents/*` and `job/*`.
-    const CORE_WRITES: [&str; 10] = [
+    const CORE_WRITES: [&str; 11] = [
         "agents/move",
         "agents/role",
+        "exec/bump",
         "exec/start",
         "exec/stop",
         "messages/retract",
@@ -608,6 +623,7 @@ mod tests {
             let schema = (m.params)().to_value();
             let req = required(&schema);
             if [
+                "agents/presence/subscribe",
                 "coord/agent",
                 "graph/revert",
                 "graph/grants",
@@ -637,7 +653,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 73);
+        assert_eq!(with, 106);
     }
 
     #[test]

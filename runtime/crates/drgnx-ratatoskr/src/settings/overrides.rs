@@ -99,6 +99,7 @@ pub fn from_json(name: &str, v: &Value, values: &mut RuntimeValues) -> Result<()
         }
         "drgnx-agents-allow-unsandboxed" => values.agents_allow_unsandboxed = de(v)?,
         "drgnx-agents-start-env-names" => values.agents_start_env_names = de(v)?,
+        "drgnx-agents-trace-opens" => values.agents_trace_opens = de(v)?,
         "drgnx-ai-providers" => {
             let Alist(pairs) = de::<Alist<ProviderEntry>>(v)?;
             let mut out = Vec::with_capacity(pairs.len());
@@ -142,6 +143,64 @@ pub fn from_json(name: &str, v: &Value, values: &mut RuntimeValues) -> Result<()
         "drgnx-agents-repeat-limit" => values.agents_repeat_limit = de(v)?,
         "drgnx-agents-no-progress-tokens" => values.agents_no_progress_tokens = de(v)?,
         "drgnx-agents-manager-context" => values.agents_manager_context = de(v)?,
+        "drgnx-agents-model-prices" => {
+            let Alist(pairs) = de::<Alist<super::ModelPrice>>(v)?;
+            values.agents_model_prices = super::prices(pairs).map_err(|m| refused("", m))?;
+        }
+        "drgnx-runners-send" => {
+            let s: String = de(v)?;
+            if !["all", "heavy", "none"].contains(&s.as_str()) {
+                return Err(refused("", "\"all\", \"heavy\" or \"none\""));
+            }
+            values.runners_send = s;
+        }
+        "drgnx-runners-heavy" => values.runners_heavy = de(v)?,
+        "drgnx-runners-image" => values.runners_image = de(v)?,
+        "drgnx-runners-weight" => values.runners_weight = de(v)?,
+        "drgnx-runners-project-visibility" => {
+            let s: String = de(v)?;
+            if !["public", "private"].contains(&s.as_str()) {
+                return Err(refused("", "\"public\" or \"private\""));
+            }
+            values.runners_project_visibility = s;
+        }
+        "drgnx-sandbox-proxy-pinned-addresses" => {
+            let Alist(pairs) = de::<Alist<std::net::IpAddr>>(v)?;
+            values.sandbox_proxy_pins = pairs;
+        }
+        "drgnx-search-model-mirror" => values.search_model_mirror = de(v)?,
+        "drgnx-search-builtin" => values.search_builtin = de(v)?,
+        "drgnx-search-include" => values.search_include = de(v)?,
+        "drgnx-search-exclude" => values.search_exclude = de(v)?,
+        "drgnx-search-off" => values.search_off = de(v)?,
+        "drgnx-agents-browser-program" => {
+            let p = de(v)?;
+            super::check_browser_program(&p).map_err(|m| refused("", m))?;
+            values.agents_browser_program = p;
+        }
+        "drgnx-agents-browser-local-ports" => {
+            let p: Vec<u16> = de(v)?;
+            super::check_browser_ports(&p).map_err(|m| refused("", m))?;
+            values.agents_browser_local_ports = p;
+        }
+        "drgnx-agents-browser-deny-hosts" => values.agents_browser_deny_hosts = de(v)?,
+        "drgnx-agents-browser-max-message" => {
+            let n = de(v)?;
+            super::check_max_message(n).map_err(|m| refused("", m))?;
+            values.agents_browser_max_message = n;
+        }
+        "drgnx-agents-browser-idle" => values.agents_browser_idle = de(v)?,
+        "drgnx-agents-browser-once-window" => values.agents_browser_once_window = de(v)?,
+        "drgnx-agents-session-memory" => {
+            let m: String = de(v)?;
+            super::check_memory(&m).map_err(|m| refused("", m))?;
+            values.agents_session_memory = m;
+        }
+        "drgnx-agents-browser-memory-high" => {
+            let n = de(v)?;
+            super::check_memory_high(n).map_err(|m| refused("", m))?;
+            values.agents_browser_memory_high = n;
+        }
         other => return Err(refused("", format!("{other} is not a runtime setting"))),
     }
     Ok(())
@@ -183,6 +242,7 @@ pub fn to_json(name: &str, values: &RuntimeValues) -> Option<Value> {
         "drgnx-agents-openrouter" => json!(values.agents_openrouter),
         "drgnx-agents-allow-unsandboxed" => json!(values.agents_allow_unsandboxed),
         "drgnx-agents-start-env-names" => json!(values.agents_start_env_names),
+        "drgnx-agents-trace-opens" => json!(values.agents_trace_opens),
         "drgnx-ai-providers" => object(
             values
                 .ai_providers
@@ -222,6 +282,38 @@ pub fn to_json(name: &str, values: &RuntimeValues) -> Option<Value> {
         "drgnx-agents-repeat-limit" => json!(values.agents_repeat_limit),
         "drgnx-agents-no-progress-tokens" => json!(values.agents_no_progress_tokens),
         "drgnx-agents-manager-context" => json!(values.agents_manager_context),
+        "drgnx-agents-model-prices" => object(
+            values
+                .agents_model_prices
+                .iter()
+                .map(|p| (p.key.as_str(), enc(p)))
+                .collect(),
+        ),
+        "drgnx-runners-send" => json!(values.runners_send),
+        "drgnx-runners-heavy" => json!(values.runners_heavy),
+        "drgnx-runners-image" => json!(values.runners_image),
+        "drgnx-runners-weight" => json!(values.runners_weight),
+        "drgnx-runners-project-visibility" => json!(values.runners_project_visibility),
+        "drgnx-sandbox-proxy-pinned-addresses" => object(
+            values
+                .sandbox_proxy_pins
+                .iter()
+                .map(|(k, a)| (k.as_str(), json!(a)))
+                .collect(),
+        ),
+        "drgnx-search-model-mirror" => json!(values.search_model_mirror),
+        "drgnx-search-builtin" => json!(values.search_builtin),
+        "drgnx-search-include" => json!(values.search_include),
+        "drgnx-search-exclude" => json!(values.search_exclude),
+        "drgnx-search-off" => json!(values.search_off),
+        "drgnx-agents-browser-program" => json!(values.agents_browser_program),
+        "drgnx-agents-browser-local-ports" => json!(values.agents_browser_local_ports),
+        "drgnx-agents-browser-deny-hosts" => json!(values.agents_browser_deny_hosts),
+        "drgnx-agents-browser-max-message" => json!(values.agents_browser_max_message),
+        "drgnx-agents-browser-idle" => json!(values.agents_browser_idle),
+        "drgnx-agents-browser-once-window" => json!(values.agents_browser_once_window),
+        "drgnx-agents-session-memory" => json!(values.agents_session_memory),
+        "drgnx-agents-browser-memory-high" => json!(values.agents_browser_memory_high),
         _ => return None,
     })
 }
@@ -242,7 +334,17 @@ pub fn apply(values: &mut RuntimeValues, list: &[Override]) {
 /// The runtime settings a project's set may hold: those the Lisp declares `:scope project` (a workspace sets them as
 /// data). Every other one is `:scope global :workspace never :agents never` (profiles and their commands, providers
 /// and their URLs, `drgnx-agents-allow-unsandboxed`, …): a project never changes it.
-pub const PER_PROJECT: &[&str] = &["drgnx-ai-roles"];
+pub const PER_PROJECT: &[&str] = &[
+    "drgnx-ai-roles",
+    "drgnx-runners-send",
+    "drgnx-runners-heavy",
+    "drgnx-runners-image",
+    "drgnx-runners-weight",
+    "drgnx-runners-project-visibility",
+    "drgnx-search-include",
+    "drgnx-search-exclude",
+    "drgnx-search-off",
+];
 
 /// The first override of LIST that cannot be one: its index and why (a name not in [`RUNTIME_NAMES`], one not in
 /// [`PER_PROJECT`] in a project's set (PROJECT true), a value that does not fit the type).
@@ -524,7 +626,14 @@ mod tests {
             let one = [o(name, to_json(name, d).unwrap())];
             assert_eq!(
                 validate(&one, true).is_ok(),
-                name == "drgnx-ai-roles",
+                name == "drgnx-ai-roles"
+                    || name.starts_with("drgnx-runners-")
+                    || [
+                        "drgnx-search-include",
+                        "drgnx-search-exclude",
+                        "drgnx-search-off"
+                    ]
+                    .contains(&name),
                 "{name}"
             );
             assert!(validate(&one, false).is_ok(), "{name}");

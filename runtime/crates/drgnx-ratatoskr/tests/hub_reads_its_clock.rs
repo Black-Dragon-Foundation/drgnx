@@ -4,7 +4,8 @@
 //! the crate's non-test sources and names every raw call by file and line.  `clock.rs` itself is exempt, and a blocking
 //! thread's limit on something outside the hub uses `clock::real_now()`, which does not match.  A raw spawn names no
 //! origin: what its task writes to a client is unnamed under the sequencer, so each file's raw spawns are counted
-//! against [`RAW_SPAWNS`].
+//! against [`RAW_SPAWNS`].  A raw `spawn_blocking` is a real wait the clock does not see: each file's are counted
+//! against [`RAW_BLOCKINGS`].
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -151,10 +152,14 @@ const RAW_SPAWNS: &[(&str, usize, &str)] = &[
         "the accept loops and the connections: a connection's writes are serving steps",
     ),
     ("agents/mod.rs", 1, "the hub's shutdown"),
+    (
+        "work/trace/shell.rs",
+        1,
+        "a session's trace socket: the accept loop; what a step opened goes out from its blocking thread",
+    ),
     // write to clients: not on the clock yet; the gated tests do not reach them
     ("server.rs", 3, "the resume, the embedder and the backup"),
     ("sessions.rs", 2, "a session's MCP sockets"),
-    ("exec/mod.rs", 1, "a queued job's start"),
     ("agents/wake.rs", 1, "a job end's wake"),
     (
         "agents/session.rs",
@@ -194,6 +199,50 @@ fn no_raw_spawn_outside_the_clock() {
         bad.is_empty(),
         "raw spawns outside src/clock.rs differ from RAW_SPAWNS; a task that writes to a client starts with \
          crate::clock::spawn(\"module:what\", …) (and a list entry goes when its site does):\n{}",
+        bad.join("\n")
+    );
+}
+
+/// A raw blocking call: the task that awaits it is not seen inside a real wait.
+const RAW_BLOCKING: &[&str] = &["spawn_blocking("];
+
+/// The raw blocking calls each file may hold, and why.  Every other one is `clock::blocking`, so a test's barrier
+/// waits for its result and what the task that awaits it does next.
+const RAW_BLOCKINGS: &[(&str, usize, &str)] = &[
+    (
+        "server.rs",
+        1,
+        "the stores' stop at the hub's end, bounded by real time",
+    ),
+    (
+        "work/trace/shell.rs",
+        1,
+        "a trace socket's offer, answered on its own thread: no task awaits it",
+    ),
+];
+
+#[test]
+fn no_raw_blocking_outside_the_clock() {
+    let mut bad = Vec::new();
+    for (rel, text) in hub_sources() {
+        let sites = sites_of(&text, RAW_BLOCKING);
+        let allowed: usize = RAW_BLOCKINGS
+            .iter()
+            .filter(|(f, ..)| *f == rel)
+            .map(|(_, n, _)| n)
+            .sum();
+        if sites.len() != allowed {
+            bad.push(format!(
+                "src/{rel}: {} raw blocking call(s), {allowed} listed:",
+                sites.len()
+            ));
+            bad.extend(sites.iter().map(|(n, l)| format!("  src/{rel}:{n}: {l}")));
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "raw spawn_blocking outside src/clock.rs differs from RAW_BLOCKINGS; a hub task's blocking call is \
+         crate::clock::blocking(…), a real wait a test's barrier waits for:\n{}",
         bad.join("\n")
     );
 }

@@ -28,6 +28,13 @@
 		   :summary "Store EIEIO objects using EmacSQL"
 		   :commit "48955ae02cfc7dad93b6bdc9ffd8d4b760dfb62b"
 		   :url "https://github.com/emacscollective/closql")
+	   (compat :version "31.1.0.0" :archive "gnu" :kind tar :file
+		   "compat-31.1.0.0.tar" :sha256
+		   "d0b21a401990575b0fed84f5e692440c3e16aaa8e679172e38ee131b88ecff9c"
+		   :size 409600 :requires nil :summary
+		   "Emacs Lisp Compatibility Library" :commit
+		   "90880f81419577e1d3f68424d2a3adf31e6d663e" :url
+		   "https://github.com/emacs-compat/compat")
 	   (cond-let :version "1.1.5" :archive "nongnu" :kind tar
 		     :file "cond-let-1.1.5.tar" :sha256
 		     "cb12ebffaab37fc12d60a3d749d304f67012a6580750f260b013b124bfb592e6"
@@ -86,15 +93,15 @@
 		 :summary "Extensible vi layer" :commit
 		 "6a3e1ddd04ac504a016590940d0af2a3361b9efd" :url
 		 "https://github.com/emacs-evil/evil")
-	   (evil-collection :version "20261014.225" :archive "melpa"
+	   (evil-collection :version "20261106.647" :archive "melpa"
 			    :kind tar :file
-			    "evil-collection-20261014.225.tar" :sha256
-			    "fab3c297864dfdefc83d804753366550bfd34e65f987271d9aa707acd84e1bca"
+			    "evil-collection-20261106.647.tar" :sha256
+			    "55f751dcca7dd3be571bd6f0f493a8ee276d4cd5841c09a747589f1087aa5a8b"
 			    :size 1638400 :requires ((evil "1.2.13"))
 			    :summary
 			    "A set of keybindings for Evil mode"
 			    :commit
-			    "3948a7890960d389dffa637203a6760df68b1c1c"
+			    "2c85a07409957627a6660c88407a21f3e4272db9"
 			    :url
 			    "https://github.com/emacs-evil/evil-collection")
 	   (forge :version "20261020.1944" :archive "melpa" :kind tar
@@ -148,12 +155,12 @@
 		    "Show current command and its binding" :commit
 		    "a6518e1b48b08ba883e9b1a2db0872d5bf3d85f4" :url
 		    "https://github.com/tarsius/keycast")
-	   (kkp :version "20260706.858" :archive "melpa" :kind tar
-		:file "kkp-20260706.858.tar" :sha256
-		"1ef566f8cc68cc0bf8cb3ee4aaffa63b258be8621a89229d2d3b2df4b945c8e5"
+	   (kkp :version "20261105.1240" :archive "melpa" :kind tar
+		:file "kkp-20261105.1240.tar" :sha256
+		"8dd61adbaf03f0702bb27025f26873d468a3c6f21a3e577fd0c5d1227ee1aaa2"
 		:size 71680 :requires ((compat "29.1.3.4")) :summary
 		"Enable support for the Kitty Keyboard Protocol"
-		:commit "82b7443e10a2ba287467b62e90b6adb6dd93dc99"
+		:commit "f6e9f8166995591a3ac1f62c79deebe93865ac49"
 		:url "https://github.com/benotn/kkp")
 	   (llama :version "1.0.6" :archive "nongnu" :kind tar :file
 		  "llama-1.0.6.tar" :sha256

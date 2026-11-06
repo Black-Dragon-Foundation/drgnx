@@ -244,7 +244,7 @@ records whatever Emacs you point it at). On a system with a Nidhogg recipe the i
 - Emacs 31.1 has known issues that are fixed in 31.2 (not yet released): command injection through crafted TRAMP
   user names (CVE-2026-108976), Flymake running code from files being edited (CVE-2026-96442) and code execution
   through `read-symbol-shorthands` when opening a file (CVE-2026-96269; only partly fixed in 31.1). `drgnx doctor`'s `security` line names
-  the ones that apply to your Emacs. It says OK while drgnx's own guards for them are on (see
+  the ones that apply to your Emacs (Nidhogg 31.1-nidhogg.4 and later already carry the fixes for the first two). It says OK while drgnx's own guards for them are on (see
   [Trusted folders](security.md)) and WARN when one is off, so a warning that stays means a guard is missing, not
   that you must upgrade. Until you run 31.2, avoid opening files you do not trust.
 - The installer checks that the Nidhogg tag is the exact commit it pins before building anything, prints every root
@@ -286,7 +286,10 @@ information: "OPENROUTER_API_KEY is set in this Emacs's environment; children in
 holds". drgnx leaves them there ([security.md](security.md#where-your-keys-live)).
 The `job-sandbox` check shows the job sandbox's state as Ratatoskr reports it (`sandbox` in `ratatoskr doctor --json`):
 the back end and its version, or a warning with the reason and the fix; with no answer from Ratatoskr it is only a
-notice. The `lisp-runtime` check (Agents group) says the old Lisp agent runtime is gone. It fails when a Lisp hub of
+notice. The `agent-browser` check (Agents group) says what an agent's browser would get on this machine: the tier and
+Landlock ABI, the browser found, whether the memory cap can be set, the web proxy's refusals, and the last smoke check
+(palette: Agents: Check the Agent Browser); see [agent-browser.md](agent-browser.md#the-doctors-lines). The
+`lisp-runtime` check (Agents group) says the old Lisp agent runtime is gone. It fails when a Lisp hub of
 yours still runs (`ratatoskr stop`, then `kill` the pid; drgnx starts Ratatoskr again). It warns when an outside
 agent's MCP config (Claude Code, Codex, Gemini, Kimi Code) still starts the Lisp coordination server (Agent settings →
 Register drgnx again), and when command jobs from before the move still run (they finish on their own, then drgnx
@@ -333,8 +336,8 @@ installs anything and never asks.
 
 ## Ratatoskr's Rust toolchain
 
-Ratatoskr is built from source (no prebuilt binaries yet) with `cargo build --release --locked`; it needs Rust 1.88
-or newer and a C compiler (`cc`; its bundled SQLite is C). The build takes a few minutes and about 1.5 GiB of memory per
+Ratatoskr is built from source (no prebuilt binaries yet) with `cargo build --release --locked`; it needs Rust 1.95
+or newer (an older distro Rust can't build it) and a C compiler (`cc`; its bundled SQLite is C). The build takes a few minutes and about 1.5 GiB of memory per
 parallel job. The same build (`drgnx runtime build`, which install.sh and `drgnx update` run) also makes `drgnx-fwd`,
 the small forwarder that gives a container job its network (Container jobs in the jobs guide). On Linux it is built for
 `<arch>-unknown-linux-musl` (Rust's self-contained musl, so no static glibc package is needed; Fedora has none) into
@@ -345,19 +348,19 @@ on; without it, a container job that is allowed a network is refused. (macOS bui
 `-C target-feature=+crt-static` and no target.)
 install.sh takes the first of these that applies (`--dry-run` says which):
 
-1. `cargo` and `rustc` 1.88 or newer already on `PATH`.
-2. The distro's default Rust package, only if its version is 1.88 or newer (asked first): Fedora `cargo rust gcc`,
-   Ubuntu and Debian `cargo rustc gcc`, Arch `rust gcc`, macOS `brew install rust`. Fedora 45, Ubuntu 26.04, Debian 13, Arch and
-   Homebrew qualify.
-3. A versioned Debian-family package when the default is too old (Ubuntu 24.04: `rustc-1.91 cargo-1.91`, binaries in
-   `/usr/lib/rust-1.91/bin`).
-4. Otherwise (Debian 13, other distros) a private rustup in `~/.local/share/drgnx/rustup` with Rust 1.93.1. rustup-init
+1. `cargo` and `rustc` 1.95 or newer already on `PATH`.
+2. The distro's default Rust package, only if its version is 1.95 or newer (asked first): Fedora `cargo rust gcc`,
+   Ubuntu and Debian `cargo rustc gcc`, Arch `rust gcc`, macOS `brew install rust`. Fedora 45, Arch and Homebrew
+   qualify; Ubuntu 26.04 (1.93) and Debian 13 (1.85) don't.
+3. A versioned Debian-family package when the default is too old: the newest `rustc-X.Y cargo-X.Y` pair of 1.95 or
+   newer, binaries in `/usr/lib/rust-X.Y/bin`.
+4. Otherwise (Debian 13, other distros) a private rustup in `~/.local/share/drgnx/rustup` with Rust 1.99.1. rustup-init
    is downloaded from the versioned archive on static.rust-lang.org and checked against a sha256 recorded in
    install.sh before it runs; nothing touches `~/.rustup` or `~/.cargo`.
 
 A missing `cc` is named in the plan (`gcc`; on macOS `xcode-select --install`). The choice is recorded in
 `~/.local/share/drgnx/cargo` (the cargo's path, and `RUSTUP_HOME`/`CARGO_HOME` lines for a private rustup) because the
-update timer's `PATH` lacks `~/.cargo/bin` and `/usr/lib/rust-1.91/bin`; `drgnx runtime build` and `drgnx update` use it.
+update timer's `PATH` lacks `~/.cargo/bin` and `/usr/lib/rust-X.Y/bin`; `drgnx runtime build` and `drgnx update` use it.
 
 The build uses `-j` by CPUs and memory (one job per 1.5 GiB available). On Linux with a user systemd it runs inside
 `systemd-run --user --scope` with `MemoryMax` of jobs x 1.5 GiB + 1 GiB (never more than available minus 1 GiB) and no
@@ -371,6 +374,29 @@ drgnx runtime install [--prefix DIR] # <data>/bin/ratatoskr (by rename), links D
 
 `runtime install` refuses a binary built with test hooks. The build's commit (`ratatoskr version --json`) is what the
 doctor compares with the checkout.
+
+## Fonts
+
+The look ([look guide](look.md#fonts)) uses Adwaita Sans for the interface and JetBrains Mono for code. Neither is
+installed by install.sh; a font that is missing falls back down its list (Adwaita Mono, then the generic monospace;
+Inter, then the generic sans-serif), and `drgnx doctor` names each role that fell back and how to install the font
+(the `fonts` row appears once a graphical frame has been checked):
+
+| System | Packages |
+| --- | --- |
+| Fedora | `adwaita-sans-fonts`, `jetbrains-mono-nl-fonts` (the `-nl` build has no ligatures; image-based Fedora: install them in the toolbox) |
+| Arch | `adwaita-fonts`, `ttf-jetbrains-mono` |
+| Ubuntu 26.04 | `fonts-adwaita-sans`, `fonts-jetbrains-mono` |
+| macOS (Homebrew) | `font-adwaita`, `font-jetbrains-mono` (casks) |
+
+Where Adwaita Sans is not packaged, Inter is the fallback (`inter-font` on Arch, `fonts-inter` on Ubuntu).
+
+## A browser for agents
+
+Agent sessions on Linux can drive a headless Chromium. install.sh and `drgnx update` never download one. If your
+distro has a package (Fedora: `dnf install chromium-headless`), use that; otherwise run `drgnx browser install`, which
+fetches a checksum-pinned headless shell into drgnx's data folder when you ask. See the
+[agent browser guide](agent-browser.md).
 
 ## Staying up to date
 

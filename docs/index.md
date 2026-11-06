@@ -10,25 +10,29 @@ Using drgnx.
 - [Workbench](guide/workbench.md): the sidebar — Explorer and Buffers panel — the change bus, performance vs treemacs/ibuffer;
   several monitors: what each window manager allows (sway, i3, Hyprland, niri, KDE, X11, macOS; GNOME's key), floating rules.
 - [Keys](guide/keys.md): VS Code, Emacs and Vim key profiles — Vim on evil with states, the `SPC` leader, ex commands and mixed stacks (M12d) — the Mac keys (⌘P, ⌘⇧P, …), layers, keys.eld, conflicts.
+- [Command palette](guide/palette.md): `#` for a code question, and the floating, rounded, blurred palette under Glitnir (`drgnx-look-palette`).
 - [Modules](guide/modules.md): stages, packages, flags, modules.eld, Preferences: Modules, writing a module.
 - [Packages](guide/packages.md): `drgnx sync`, the lock, the cache, generations, rollback, upgrade, safe mode, bisect.
-- [Agents](guide/agents.md): agents over ACP, input that queues and never cancels, the Agents tab, edit review, durable jobs, what a job's Claude ignores of your settings, agents outside drgnx that report to it, plans ↔ board.
+- [Agents](guide/agents.md): agents over ACP, input that queues and never cancels, the Agents tab, edit review, durable jobs, what a job's Claude ignores of your settings, agents outside drgnx that report to it, Say it (one prompt to a proposed plan), reading a forecast, plans ↔ board.
 - [AI](guide/ai.md): one provider registry (OpenRouter and local runners), roles with fallback, keys read from the environment or auth-source, stored only in your Keychain or keyring when you ask, agent profiles.
+- [Runners](guide/runners.md): your other machines run jobs; how drgnx reaches them through your own ssh (the options it always sets, one connection per runner, a lost link never a result), logins it never answers, host keys it never accepts; adding, checking and removing a machine (`drgnx runner …`).
 - [Jobs](guide/jobs.md): agents through a plan — proposal, approval, worktrees, a policy, review and merge (with an optional accept gate: every file accepted), budget, fallback; `drgnx job`.
+- [Agent browser](guide/agent-browser.md): the browser a sandboxed agent session drives — which one drgnx finds, what it can reach and how to answer its cards, `drgnx browser install` (a pinned, checksum-verified download you run yourself), `drgnx browser list`, the doctor's line.
 - [Semantic Search](guide/search.md): find code by meaning — `#` in the palette, the index, what is never indexed, `.drgnx/search.eld`, privacy.
 - [Editing](guide/editing.md): language support (tree-sitter grammars), and the editor's amenities.
 - [Large files](guide/large-files.md): above 50 MiB a file opens in chunks, lean or raw — a file you open asks once, `drgnx open` and everything automatic never ask; the header line and the status bar say which, and switch; long lines turn on so-long.
 - [Git and review](guide/git.md): the diff view, inline blame, AI commit messages, Review Branch, Pull Requests.
+- [The Work space](guide/work-space.md): opening the map (`work-view`), its faces, the machines the hub lists, `ratatoskr machines report`; the Board, the Timeline and the research trail, the review view, the second reviewer and the steering keys. It replaces the Work cockpit and the job window.
 - [Work tracker](guide/work.md): specs › plans › tasks › TODOs › commits, branches and worktrees; `drgnx work`.
-- [Work cockpit](guide/cockpit.md): the Work graph — specs, plans, tasks, agents, jobs and reviews, who is on what, needs and blocks, what waits on you; drawn in a wide window, an outline in terminals; worktrees that do not report; filters; TAB selects, RET or a click opens. Each agent's edits as a live diff: accept a file (a review mark, never a merge), ask the agent to undo it, comment on a line. What happened, one line per event; the timeline, chips per agent; questions in the graph and the timeline (the status bar's count: pending), answered with A (queued, never interrupting). What needs you and Decisions: every job's cards and messages, a job's log; Show Job in Work filters the cockpit to a job. From the graph: reassign a job's task, mark it blocked, run it earlier or later, Start as Job (a plan task and what it needs, proposed).
 - [Search and replace](guide/replace.md): the Search view in the sidebar and the find bar — symbols and text in one interface, tick boxes, one Undo.
 - [Layouts](guide/layouts.md): Agent, Editor, Zen and Browser, and your own; one key cycles them, and switching back restores what you left.
 - [Browser pane](guide/browser.md): a web page beside the editor (WebKit), Test Report for Playwright, and an agent's page with its screenshot.
-- [Live view](guide/live.md): watch the browser your agents drive, live, and take it over.
+- [Live view](guide/live.md): the view of an agent's browser, waiting for a later update; the host-launched browser for agents is gone.
 - [Remote editing](guide/remote.md): Open Remote… (ssh hosts, podman containers), the status-line segment, Reconnect, language servers on the host.
 - [Keyboard Shortcuts editor](guide/shortcuts.md): every command with its keys; record new ones, see conflicts, filter, undo.
 - [Agent settings](guide/agent-settings.md): one page per agent (Claude Code, Codex, Gemini, Kimi Code) — routes and billing, MCP servers, hooks and skills; add, edit, remove, Test.
 - [The face](guide/face.md): no light menu bar or scroll bar, thin themed dividers, line numbers in code that never shift sideways, problems at the end of their line, a top line (project, branch, the three keys that open everything), a status bar built from segments you can reorder, drop or add to, a dark title bar that follows the theme, glyphs with an ASCII form, quick help in a card beside the symbol (a strip in terminals), a × and Esc/q that close every help pane, popup and side pane, a start page in an empty editor; every choice a setting.
+- [The look](guide/look.md): drgnx Dark, Light and High Contrast, generated from one table of colours; what a theme paints, the terminal tier, the faces a theme author sets.
 - [Editor features vs VS Code, Zed and Cursor](guide/editor-matrix.md): what drgnx has, where it is described, its GUI test and perf workload.
 - [Trusted folders](guide/security.md): Trust This Folder, the "Restricted Mode" mark, what files from untrusted folders cannot make Emacs do.
 - [In a terminal](guide/terminal.md): the graphical window, a capable terminal and a legacy one (Alt+Shift and F6); what each terminal can do (kitty, WezTerm, foot, Ghostty, Ptyxis, tmux …) and which rows a test ran, the lines that fix what is missing, SSH, tmux, `EDITOR`, the clipboard, the mouse, colours.
@@ -57,14 +61,17 @@ How drgnx is built, tested and measured.
 - [Scenarios](develop/scenarios.md): behaviour scenarios and the evidence behind the workbench design.
 - [Formatting](develop/formatting.md): `bin/drgnx fmt` — the Emacs Lisp formatter, and where it is enforced.
 - [bin/drgnx check](develop/check.md): build and every test tier in one parallel run; shards, GUI slots, phases, the leak census, the shuffled test order and the polluter bisect.
+- [Testing a change](develop/testing.md): `bin/drgnx test --affected A..B` picks the test groups a git range can affect (the map `test/affected.eld`) and `--run` skips groups green on unchanged inputs (the result cache).
 - [CI](develop/ci.md): the GitHub Actions workflows — Emacs 31.1 suite, shellcheck, leak scan, nightly GUI tier.
 - [The runtime workspace](develop/runtime.md): `runtime/`, the Cargo workspace (MSRV, deny policy, locked builds), the crate names, and the conformance harness: scenario files run against a hub binary, one socket-path fixture for Lisp and Rust.
+- [forseti](develop/forseti.md): the scheduler core the hub, its runners and jobq share — the job model, priority and the queue order, admission and grants, eviction and drains, two schedulers on one machine, the memory cap and ladder, kill classes, expected times, placement by finish time, the trust filter, fairness; pure.
+- [sleipnir](develop/sleipnir.md): the runner — the machine probe and the runner contract, the reservation files two schedulers share, the one podman argv, the slice tree, job units, job-exec and `result.json`, the row parsers, jobq's shim; a job's inputs frozen at submit, the hardened git (no hook, fsmonitor or outside config ever runs), and checkout slots whose git dirs no job can reach.
 - [Settings](develop/settings.md): the settings files' data subset and its two readers (Lisp and `huginn`), the start-up order, testing in a child Emacs.
 - [The hub and the gateway](develop/hub.md): Ratatoskr, the one durable process behind agents (Ratatoskr phase 7 is done: no Lisp runtime, no backend, one writer), its socket protocol, the traffic gateway.
-- [The store (Urdr)](develop/store.md): `work.db` schema 8 — one knowledge graph with history, written by Ratatoskr only.
+- [The store (Urdr)](develop/store.md): `work.db` schema 11 — one knowledge graph with history, written by Ratatoskr only.
+- [The Work space](develop/work-space.md): how the map is built — the map core `vegvisir` (its events, model, chains, overlaps, effects and tests), its layout (plan blocks, lanes with a capacity, ports) and the 30-agent fixture; the hub's facts (worktree bases, live specs, machines, shell reads).
 - [Records (saga)](develop/records.md): reading and writing a project's plan, ledger, deferred-list and board files without changing a byte.
 - [Agent coordination](develop/coordination.md): jobs, tasks and leases, the decision log, messages, the MCP tools (and the identity and limits of agents outside drgnx), delivery.
-- [The Work cockpit's model](develop/cockpit.md): one model of specs, plans, tasks, agents, jobs and reviews from the live store; what happened, the timeline; each agent's edits (async git, regular files only); the Work graph's redraws, cost and tests; an agent's edits pane: live patches, accept, revert, comment; what happened, the timeline and answers: appends, routes, cost and tests; what needs you and the decisions: the job window's parts, the job filter, its saved state.
 - [The job sandbox](develop/sandbox.md): where the job sandbox's documentation is, and the VC guard (no git of yours runs in a task's folder).
 - [Gleipnir](develop/gleipnir.md): the Rust sandbox in `runtime/` that every agent session runs in — its spec and what it refuses, bwrap, the inner helper, Landlock, seccomp, Seatbelt, the relay and the proxy, the check, and the escape rows that prove it.
 

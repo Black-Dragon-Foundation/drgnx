@@ -2,7 +2,8 @@
 
 use serde_json::{Map, Value};
 
-pub const VERBS: [&str; 34] = [
+pub const VERBS: [&str; 35] = [
+    "count_events",
     "start",
     "root",
     "rename",
@@ -65,7 +66,7 @@ pub struct ParseError {
     pub msg: String,
 }
 
-pub const TAGS: [&str; 9] = [
+pub const TAGS: [&str; 12] = [
     "v1",
     "sudo",
     "test-hooks",
@@ -75,6 +76,9 @@ pub const TAGS: [&str; 9] = [
     "agent-locks",
     "podman",
     "real-sandbox",
+    "chromium",
+    "playwright-mcp",
+    "internet",
 ];
 
 fn err(line: usize, msg: impl Into<String>) -> ParseError {
@@ -214,6 +218,16 @@ pub struct Host {
     /// Why a `real-sandbox` row cannot run here (the hub has test hooks, so its sessions start unsandboxed, or its
     /// `sandbox check` fails); `None`: a release hub whose sandbox starts.
     pub no_real_sandbox: Option<String>,
+    /// Why the hub gives sessions no browser here (a Landlock ABI below 9, or no Chromium it resolves), for the
+    /// `chromium` rows; `None`: it does.
+    pub no_browser: Option<String>,
+    /// Why Playwright MCP cannot run here (no `node`, or nothing in `/opt/pw-mcp`), for the `playwright-mcp` rows.
+    pub no_playwright: Option<String>,
+    /// `DRGNX_TEST_REAL_BROWSER=1`: real browsers were asked for, so a `chromium` or `playwright-mcp` row that cannot
+    /// run is a red under `--require-all`, not an excused skip.
+    pub browsers_required: bool,
+    /// `DRGNX_TEST_INTERNET=1`: the `internet` rows may reach the outside network.
+    pub internet: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -255,6 +269,23 @@ pub fn gate(s: &Scenario, h: &Host) -> Gate {
     {
         // the test-hooks hub of the main run, or a host without a sandbox: neither is a red of this row
         return skip(why, true);
+    }
+    // a host without them (CI's runners) skips; one that was to have them fails
+    if has("chromium")
+        && let Some(why) = &h.no_browser
+    {
+        return skip(why, !h.browsers_required);
+    }
+    if has("playwright-mcp")
+        && let Some(why) = &h.no_playwright
+    {
+        return skip(why, !h.browsers_required);
+    }
+    if has("internet") && !h.internet {
+        return skip(
+            "needs DRGNX_TEST_INTERNET=1 (it reaches the outside network)",
+            true,
+        );
     }
     if h.ptrace_stays
         && s.steps
@@ -336,6 +367,7 @@ mod tests {
 {"do": "poll", "conn": "c", "json": {"id": 3, "method": "ping"}, "expect": {"id": 3, "result": "$any"}, "within_ms": 100, "every_ms": 10}
 {"do": "expect_closed", "conn": "c"}
 {"do": "expect_silent", "conn": "c", "for_ms": 50}
+{"do": "count_events", "conn": "c", "for_ms": 50, "at_most": {"agent": 30}, "none": ["agent-entries"], "lacks": "rawInput"}
 {"do": "kill", "hub": "h", "signal": "TERM"}
 {"do": "expect_exit", "hub": "h", "code": 0}
 {"do": "file", "path": "$CAP", "exists": true, "mode": "0600"}
@@ -530,6 +562,73 @@ mod tests {
             ..Host::default()
         };
         assert_eq!(gate(&s, &with), Gate::Run);
+    }
+
+    #[test]
+    fn a_browser_row_is_excused_unless_real_browsers_were_asked_for() {
+        let s = row("\"real-sandbox\", \"chromium\", \"playwright-mcp\"");
+        let bare = Host {
+            linux: true,
+            no_browser: Some("Landlock ABI 8 is below 9".into()),
+            no_playwright: Some("no Playwright MCP".into()),
+            ..Host::default()
+        };
+        assert_eq!(
+            gate(&s, &bare),
+            Gate::Skip {
+                reason: "Landlock ABI 8 is below 9".into(),
+                excused: true
+            }
+        );
+        // DRGNX_TEST_REAL_BROWSER=1: a missing browser is a red under --require-all
+        let asked = Host {
+            browsers_required: true,
+            ..bare.clone()
+        };
+        assert!(matches!(
+            gate(&s, &asked),
+            Gate::Skip { excused: false, .. }
+        ));
+        let no_mcp = Host {
+            no_browser: None,
+            ..asked.clone()
+        };
+        assert_eq!(
+            gate(&s, &no_mcp),
+            Gate::Skip {
+                reason: "no Playwright MCP".into(),
+                excused: false
+            }
+        );
+        let all = Host {
+            no_playwright: None,
+            ..no_mcp
+        };
+        assert_eq!(gate(&s, &all), Gate::Run);
+        // a sandbox missing comes first, excused whatever was asked for
+        let no_sandbox = Host {
+            no_real_sandbox: Some("the hub binary has test-hooks".into()),
+            ..asked
+        };
+        assert!(matches!(
+            gate(&s, &no_sandbox),
+            Gate::Skip { excused: true, .. }
+        ));
+    }
+
+    #[test]
+    fn an_internet_row_runs_only_when_asked_for() {
+        let s = row("\"internet\"");
+        let host = Host {
+            linux: true,
+            ..Host::default()
+        };
+        assert!(matches!(gate(&s, &host), Gate::Skip { excused: true, .. }));
+        let asked = Host {
+            internet: true,
+            ..host
+        };
+        assert_eq!(gate(&s, &asked), Gate::Run);
     }
 
     #[test]

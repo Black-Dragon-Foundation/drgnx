@@ -160,10 +160,32 @@ The first read of a file records it for live changes and says its problems; a la
                      ((eq (plist-get meta :scope) 'global)
                       (format "%s has one value for all of Emacs; set it in Settings → User" var))))))))
 
+(defvar drgnx-setting--names)
+(defvar drgnx-setting-meta-functions)
+
+(defvar drgnx-settings-workspace--usable-memo (make-hash-table :test 'equal)
+  "File -> (DOC EXTRA RESULT): `drgnx-settings-workspace--usable' of a doc read once, kept while the settings declared
+\(which decide what is refused) are the same.  Emptied past `drgnx-settings-workspace-cache-max'.")
+
 (defun drgnx-settings-workspace--usable (file)
   "Workspace FILE's entries and problems: (ENTRIES . PROBLEMS).  ENTRIES are those not refused, in file order;
-PROBLEMS the file's own and one per refused entry, plists (:file :line :text :var)."
-  (let ((doc (drgnx-settings-workspace--doc file)) (entries nil) (problems nil))
+PROBLEMS the file's own and one per refused entry, plists (:file :line :text :var).  Worked out once per read of
+the file, so the same ENTRIES come back at every open."
+  (let* ((doc (drgnx-settings-workspace--doc file)) (key (expand-file-name file))
+         (extra (list (length drgnx-setting--names) drgnx-setting-meta-functions))
+         (hit (gethash key drgnx-settings-workspace--usable-memo)))
+    (if (and doc hit (eq (nth 0 hit) doc) (equal (nth 1 hit) extra))
+        (nth 2 hit)
+      (let ((result (drgnx-settings-workspace--usable-1 file doc)))
+        (when doc
+          (when (>= (hash-table-count drgnx-settings-workspace--usable-memo) drgnx-settings-workspace-cache-max)
+            (clrhash drgnx-settings-workspace--usable-memo))
+          (puthash key (list doc extra result) drgnx-settings-workspace--usable-memo))
+        result))))
+
+(defun drgnx-settings-workspace--usable-1 (_file doc)
+  "`drgnx-settings-workspace--usable' of DOC (the file read), worked out now."
+  (let ((entries nil) (problems nil))
     (when doc
       (setq problems (copy-sequence (drgnx-settings-doc-problems doc)))
       (dolist (e (drgnx-settings-doc-entries doc))

@@ -1,6 +1,7 @@
 //! `ratatoskr`: drgnx's agent runtime (docs/develop/hub.md).  The tokio runtime is built by hand, after the command
 //! line is read (the commands that only talk to a hub never build one): multi-thread, two workers.  The same binary
-//! answers to any name (`rtsk`): argv[0] is never consulted.
+//! answers to any name (`rtsk`), with one exception: started as `gleipnir-trace` (the link Gleipnir puts beside the
+//! inner helper for per-step tracing, `gleipnir::TRACE_INSIDE`) it is that wrapper and nothing else.
 
 use drgnx_ratatoskr::cli::{self, Command, Supervisor};
 use drgnx_ratatoskr::{Exit, doctor, idle, server, supervise, version};
@@ -14,6 +15,13 @@ fn code(c: i32) -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    // the per-step wrapper of a traced shell step: before anything else, with no runtime and no thread
+    let argv0 = std::env::args_os().next().unwrap_or_default();
+    if std::path::Path::new(&argv0).file_name()
+        == Some(std::ffi::OsStr::new(gleipnir::trace::WRAPPER_NAME))
+    {
+        return code(gleipnir::trace::wrapper_main(std::env::args_os().collect()));
+    }
     let command = match cli::parse(std::env::args_os().skip(1)) {
         Ok(c) => c,
         Err(e) => {
@@ -44,6 +52,8 @@ fn main() -> ExitCode {
         // The relay builds its own single-threaded runtime; it refuses to start under another parent than its
         // `--parent-pid`.
         Command::Relay { args } => return code(gleipnir::net::relay::main(args.into_iter())),
+        // No runtime: threads per started Chromium. It refuses to run outside the browser layer.
+        Command::BrowserHost { args } => return code(drgnx_ratatoskr::browser::host_main(args)),
         // Its own single-threaded runtime; it reads no environment variable but, outside, the data dir's.
         Command::McpBridge(args) => return ExitCode::from(drgnx_ratatoskr::bridge::main(args)),
         // No runtime: the migration and the copy run on this thread, and refuse while a hub holds the store.
@@ -63,18 +73,31 @@ fn main() -> ExitCode {
         }
         // No runtime: a blocking client of the running hub (started first when none runs).
         Command::Graph(g) => return code(drgnx_ratatoskr::graph_cli::run(&Env::process(), g)),
+        // Its own current-thread runtime for the download; never started but by this command.
+        Command::Browser(b) => return code(drgnx_ratatoskr::browser::run(&Env::process(), b)),
         // No runtime either: the job commands are one call each to the running hub.
         Command::Job(j) => return code(drgnx_ratatoskr::job_cli::run(&Env::process(), j)),
+        Command::Machines(m) => {
+            return code(drgnx_ratatoskr::machines_cli::run(&Env::process(), &m));
+        }
+        Command::Runner(r) => return code(drgnx_ratatoskr::runner_cli::run(&Env::process(), r)),
+        // Hrafn from a terminal (and `search mcp`, which builds a runtime of its own).
+        Command::Search(s) => return code(drgnx_ratatoskr::search_cli::run(&Env::process(), s)),
+        // Hrafn's embed worker: threads of its own (stdin, the CPU path's pool), never a tokio runtime.
+        Command::EmbedWorker(args) => return code(drgnx_ratatoskr::search::worker::run(args)),
         // Test builds only: one command under the sandbox, judged by its --result file.
         #[cfg(feature = "test-hooks")]
         Command::SandboxRun(args) => return code(drgnx_ratatoskr::sandbox::run(args)),
         Command::Serve(args) => {
             let supervisor = args.supervisor;
-            let runtime = match tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(2)
-                .enable_all()
-                .build()
-            {
+            let mut builder = tokio::runtime::Builder::new_multi_thread();
+            builder.worker_threads(2).enable_all();
+            // the virtual clock's look at the workers: a parked worker holds no deferred wake
+            #[cfg(feature = "test-hooks")]
+            builder
+                .on_thread_park(drgnx_ratatoskr::clock::worker_parks)
+                .on_thread_unpark(drgnx_ratatoskr::clock::worker_unparks);
+            let runtime = match builder.build() {
                 Ok(r) => r,
                 Err(e) => {
                     eprintln!("ratatoskr: cannot start: no async runtime: {e}");

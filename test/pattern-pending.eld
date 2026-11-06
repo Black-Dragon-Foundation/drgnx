@@ -112,7 +112,6 @@
  "test/unit/run-ert-test.el"
  "test/unit/sandbox-vc-test.el"
  "test/unit/scripted-process-test.el"
- "test/unit/search-setup-test.el"
  "test/unit/secrets-test.el"
  "test/unit/settings-agents-test.el"
  "test/unit/settings-apply-test.el"

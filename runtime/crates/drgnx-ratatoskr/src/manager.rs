@@ -145,7 +145,7 @@ async fn link_budget(f: &Front, sid: &str, job: Option<&str>, cwd: &Path) {
     let b = &f.core.budgets;
     let mine = session::scope_of(Role::Manager, sid);
     let dir = cwd.to_path_buf();
-    let project = tokio::task::spawn_blocking(move || norn::project::resolve(&dir).map(|p| p.id))
+    let project = crate::clock::blocking(move || norn::project::resolve(&dir).map(|p| p.id))
         .await
         .ok()
         .flatten();

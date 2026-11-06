@@ -9,7 +9,7 @@
 {"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
 {"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
-{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:job", "title": "Seam", "status": "proposed", "tasks": [{"n": 1, "status": "ready", "role": "implement"}, {"n": 2, "status": "pending", "role": "review", "deps": ["$string"]}], "order": [1, 2], "estimate": {"tokens": 330000}, "cards": [{"kind": "proposal", "actions": [["approve", "Approve"], ["reject", "Reject"]]}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:job", "title": "Seam", "status": "proposed", "tasks": [{"n": 1, "status": "ready", "role": "implement"}, {"n": 2, "status": "pending", "role": "review", "deps": ["$string"]}], "order": [1, 2], "estimate": {"tokens": "$number", "unit": "usd-est"}, "cards": [{"kind": "proposal", "actions": [["approve", "Approve"], ["reject", "Reject"]]}]}}, "within_ms": 10000}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "job/status", "params": {"id": "$job", "decisions": true}}}
 {"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$job", "decisions": [{"kind": "wont-build", "subject": "a thing", "author": "user"}]}}}
 {"do": "send", "conn": "c", "json": {"id": 4, "method": "job/propose", "params": {"plan": "$ROOT/cycle.md"}}}

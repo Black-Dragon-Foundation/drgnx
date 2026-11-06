@@ -109,8 +109,8 @@ applied to the node as the scan sees it, and remembered to be sent with the requ
   "Why a scan root inside ~/org is refused (it is listed in `drgnx-work-scan''s :refused).")
 
 (defun drgnx-work--org-p (dir)
-  "Non-nil when DIR is inside ~/org with the user's opt-ins ignored (the hard tier, as the search indexer reads it:
-`drgnx-search-denied-p'): no scan root there is read, and no git runs there."
+  "Non-nil when DIR is inside ~/org with the user's opt-ins ignored (the hard tier, as the code indexer reads it):
+no scan root there is read, and no git runs there."
   (drgnx-deny-path-p (directory-file-name (expand-file-name dir)) t))
 
 (defun drgnx-work--git (dir &rest args)

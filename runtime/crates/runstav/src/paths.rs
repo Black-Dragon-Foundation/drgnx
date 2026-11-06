@@ -194,6 +194,11 @@ pub fn state_dir(env: &Env) -> PathBuf {
     PathBuf::from(state(env))
 }
 
+/// `(drgnx-cache-dir)`: a name ending in "/" (Hrafn's models are under its `models/`).
+pub fn cache_dir(env: &Env) -> PathBuf {
+    PathBuf::from(dir(env, None, "XDG_CACHE_HOME", ".cache"))
+}
+
 /// `<tmp>`, Emacs's `temporary-file-directory` on Linux and macOS: the first of TMPDIR, TMP, TEMP that is set, else
 /// /tmp (a relative one is out of scope).
 fn temporary_file_directory(env: &Env) -> String {
@@ -259,11 +264,19 @@ pub const SESSION_HUB_SOCKET: &str = "hub.sock";
 /// The coordination tools' socket in a session dir (`mcp/session`): whoever connects to it is that session's agent.
 pub const SESSION_MCP_SOCKET: &str = "mcp.sock";
 
+/// The search tool's socket in a session dir (when `drgnx-agents-mcp` holds `search`): the `search` MCP tool, pinned to
+/// the session's working folder.
+pub const SESSION_SEARCH_SOCKET: &str = "search.sock";
+
 /// The gateway's socket in a session dir (`gateway/register` with `sid`): a token issued for it is good only there.
 pub const SESSION_GATEWAY_SOCKET: &str = "gateway.sock";
 
 /// The session's provider proxy in a session dir: the sandbox's relay port reaches it (`agents::net` in Ratatoskr).
 pub const SESSION_PROXY_SOCKET: &str = "proxy.sock";
+
+/// The trace supervisor's hand-off socket in a session dir: Gleipnir's open tracer offers its listener there
+/// (`work::trace` in Ratatoskr).
+pub const SESSION_TRACE_SOCKET: &str = "trace.sock";
 
 /// A browser session's web proxy in a session dir.
 pub const SESSION_WEB_SOCKET: &str = "web.sock";
@@ -272,7 +285,7 @@ pub const SESSION_WEB_SOCKET: &str = "web.sock";
 pub const SESSION_CDP_SOCKET: &str = "cdp.sock";
 
 /// The longest socket name a session dir holds (`hub.sock`, `mcp.sock`, `search.sock`, `gateway.sock`, `proxy.sock`,
-/// `web.sock`, `cdp.sock`): it sizes the fallback.
+/// `trace.sock`, `web.sock`, `cdp.sock`): it sizes the fallback.
 const SESSION_LONGEST_SOCKET: &str = SESSION_GATEWAY_SOCKET;
 
 /// Where session dirs are made, for the hub SOCKET names: `<socket dir>/s` and `<tmp>/drgnx-hub-UID/s` (the
@@ -514,6 +527,16 @@ mod tests {
     }
 
     #[test]
+    fn cache_dir_follows_drgnx_paths_dir() {
+        let e = |vars: &[(&str, &str)]| cache_dir(&Env::new(vars, 1));
+        assert_eq!(e(&[("HOME", "/hm")]), Path::new("/hm/.cache/drgnx/"));
+        assert_eq!(
+            e(&[("HOME", "/hm"), ("XDG_CACHE_HOME", "/xc")]),
+            Path::new("/xc/drgnx/")
+        );
+    }
+
+    #[test]
     fn the_cap_and_the_lock_are_beside_the_socket() {
         let s = Path::new("/r/drgnx/hub-546b5fa5.sock");
         assert_eq!(cap_path(s), Path::new("/r/drgnx/hub-546b5fa5.cap"));
@@ -570,8 +593,10 @@ mod tests {
         for name in [
             SESSION_HUB_SOCKET,
             SESSION_MCP_SOCKET,
+            SESSION_SEARCH_SOCKET,
             SESSION_GATEWAY_SOCKET,
             SESSION_PROXY_SOCKET,
+            SESSION_TRACE_SOCKET,
             SESSION_WEB_SOCKET,
             SESSION_CDP_SOCKET,
         ] {

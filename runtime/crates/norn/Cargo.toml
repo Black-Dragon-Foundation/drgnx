@@ -32,3 +32,4 @@ drgnx-ratatoskr = { path = "../drgnx-ratatoskr", version = "0.1.0" }
 tempfile.workspace = true
 proptest.workspace = true
 insta.workspace = true
+skuld = { path = "../skuld", version = "0.1.0" }  # every order of a proposal's approval and its withdrawal

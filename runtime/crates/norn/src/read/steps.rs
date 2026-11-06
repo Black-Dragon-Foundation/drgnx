@@ -46,16 +46,42 @@ pub fn for_scope(
     since: i64,
     limit: i64,
 ) -> Result<Vec<Step>, CoordError> {
+    query(conn, scope, id, ">", "", since, limit)
+}
+
+/// The LIMIT steps of SCOPE ID just before BEFORE (a session's `seq`, else a step id), in order: the newest last.
+pub fn before_scope(
+    conn: &Tx,
+    scope: Scope,
+    id: &str,
+    before: i64,
+    limit: i64,
+) -> Result<Vec<Step>, CoordError> {
+    let mut rows = query(conn, scope, id, "<", " desc", before, limit)?;
+    rows.reverse();
+    Ok(rows)
+}
+
+fn query(
+    conn: &Tx,
+    scope: Scope,
+    id: &str,
+    cmp: &str,
+    dir: &str,
+    bound: i64,
+    limit: i64,
+) -> Result<Vec<Step>, CoordError> {
     let (col, key) = match scope {
         Scope::Session => ("session", "seq"),
         Scope::Task => ("task", "id"),
         Scope::Plan => ("plan", "id"),
         Scope::Project => ("project", "id"),
     };
+    let since = bound;
     let mut st = conn.prepare(&format!(
         "select id, session, task, plan, project, agent, provider, seq, class, start, end, tool, tool_kind, \
          message_id, turn_id, snapshot, log_version, tokens_in, tokens_out, cache_read, cache_write, cost, \
-         cost_unit from step where {col} = ?1 and {key} > ?2 order by {key} limit ?3",
+         cost_unit from step where {col} = ?1 and {key} {cmp} ?2 order by {key}{dir} limit ?3",
     ))?;
     let rows = st.query_map((id, since, limit), |r| {
         let class: String = r.get(8)?;
@@ -152,5 +178,52 @@ pub fn rollup(conn: &Tx, scope: Scope, id: &str) -> Result<Rollup, CoordError> {
         let (unit, cost) = row?;
         out.cost_by_unit.insert(unit, cost);
     }
+    // the gateway's own charge is exact dollars, kept beside the agents' estimates
+    let usd = match scope {
+        Scope::Task => super::spend::spend_sum(conn, None, Some(id), None)?.cost,
+        Scope::Plan => super::spend::plan_usd(conn, id)?,
+        _ => 0.0,
+    };
+    if usd > 0.0 {
+        out.cost_by_unit.insert("usd".into(), usd);
+    }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::tests::db7;
+
+    /// Pattern D: ten thousand steps, a page back from `before`.
+    #[test]
+    fn before_and_limit_page_backwards() {
+        let c = db7();
+        c.execute_batch(
+            "with recursive n(i) as (select 1 union all select i + 1 from n where i < 10000) \
+             insert into step (session, seq, class, start) select 'session:s', i, 'tool', i from n",
+        )
+        .unwrap();
+        let seqs = |before: i64, limit: i64| -> Vec<i64> {
+            before_scope(&c, Scope::Session, "session:s", before, limit)
+                .unwrap()
+                .iter()
+                .map(|s| s.seq)
+                .collect()
+        };
+        let page = seqs(9941, 200);
+        assert_eq!(
+            (page.first(), page.last(), page.len()),
+            (Some(&9741), Some(&9940), 200)
+        );
+        // the first page reaches seq 1 and no further
+        assert_eq!(seqs(4, 200), [1, 2, 3]);
+        assert!(seqs(1, 200).is_empty());
+        // another session's steps never appear
+        assert!(
+            before_scope(&c, Scope::Session, "session:other", 9941, 200)
+                .unwrap()
+                .is_empty()
+        );
+    }
 }

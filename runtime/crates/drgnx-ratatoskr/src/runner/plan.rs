@@ -10,6 +10,10 @@ pub struct PlanTask {
     pub role: String,
     pub deps: Vec<i64>,
     pub body: String,
+    /// The profile the task runs on (a graph plan's task may name one); none: its role's route.
+    pub profile: Option<String>,
+    /// The model the plan asked for: a hint for the forecast when no profile is named, never what runs.
+    pub model: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -113,6 +117,8 @@ pub fn read(text: &str, file: &Path) -> Plan {
                     .map(task_numbers)
                     .unwrap_or_default(),
                 body: b.trim().to_owned(),
+                profile: None,
+                model: None,
             });
         }
         body.clear();
@@ -267,6 +273,8 @@ mod tests {
             role: "implement".into(),
             deps: deps.to_vec(),
             body: String::new(),
+            profile: None,
+            model: None,
         };
         assert!(
             check(&[t(1, &[]), t(1, &[])])

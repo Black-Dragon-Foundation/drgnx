@@ -1,0 +1,21 @@
+{"scenario": "real-start/no-browser-below-abi9", "requires": ["v1", "linux", "real-sandbox"], "doc": "A host that cannot give a session its browser starts the session anyway, without it (OD1 (b)): agents/start works, the hub shows a notice with the fix, agents/get says why (browser_why), and the agent's environment has no endpoint variable. Below Landlock ABI 9 (CI's runners, the desktop) the kernel is the reason (notice browser-landlock); with ABI 9 the setting names a program that does not exist, so the row asserts the same behaviour on every kernel (notice browser-program). Autonomous, so the session's browser cell is Allow whatever its role."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "set -e; mkdir -p $ROOT/project $HOME/.local/bin $HOME/.local/share/claude/versions/9.9.9; cp $MOCK $HOME/.local/share/claude/versions/9.9.9/ratatoskr-mock; ln -s $HOME/.local/share/claude/versions/9.9.9/ratatoskr-mock $HOME/.local/bin/ratatoskr-mock; echo readme > $ROOT/project/README"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-matrix (:preset autonomous)) (drgnx-agents-browser-program \"$ROOT/no-such-browser\") (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"ratatoskr-mock\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "env": {"PATH": "$HOME/.local/bin:/usr/bin:/bin"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/project"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "notice", "data": {"source": "hub", "severity": "warn", "id": "$string", "text": "$string"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/get", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"session": {"id": "$sid", "enforced": true, "browser_why": "$string"}}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "tool:exec env | grep -c -e PLAYWRIGHT_MCP_CDP_ENDPOINT -e DRGNX_BROWSER_CDP > $ROOT/tmp/drgnx-scratch-$(id -u)/$sid/endpoint.out; echo done >> $ROOT/tmp/drgnx-scratch-$(id -u)/$sid/endpoint.out"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "cat $ROOT/tmp/drgnx-scratch-*/$sid/endpoint.out"], "expect_stdout": "0\ndone", "retry_ms": 20000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/stop", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": "$any"}, "within_ms": 10000}
+{"do": "file", "path": "$SOCKET_DIR/s/$sid", "exists": false}

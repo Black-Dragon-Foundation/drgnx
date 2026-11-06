@@ -18,9 +18,27 @@ path = "src/main.rs"
 [features]
 # Every test-only surface (the `__test_flood` method, `--agent-socket`, `sandbox run`): off in the binary install.sh
 # builds. The migration's seams too (`DRGNX_TEST_MIGRATE7_FAIL`, `_PAUSE`).
-test-hooks = ["gleipnir/test-hooks", "norn/test-hooks"]
+test-hooks = ["gleipnir/test-hooks", "norn/test-hooks", "urdr/test-hooks", "bifrost/test-hooks"]
 # The fuzz crate's entry into the session reducer (`agents::session::fuzz_apply`); off everywhere else.
 fuzzing = []
+# Builds the fleet rows (tests/fleet_link.rs, tests/fleet_runners.rs), which run only inside a fake-runner fleet's
+# harness container (test/runners/); a plain `cargo test --ignored` leaves them out.
+fleet = []
+
+# the transport's rows run in the fake fleet's harness against real sshd
+[[test]]
+name = "fleet_link"
+required-features = ["fleet"]
+
+# the link session's, the queue's and the health check's rows, against a real `sleipnir serve` in a fake runner
+[[test]]
+name = "fleet_runners"
+required-features = ["fleet"]
+
+# the registry's rows: a host becomes a runner, its refusals, its removal
+[[test]]
+name = "fleet_registry"
+required-features = ["fleet"]
 
 [dependencies]
 runstav = { path = "../runstav", version = "0.1.0" }
@@ -33,6 +51,16 @@ mimir = { path = "../mimir", version = "0.1.0" }
 norn = { path = "../norn", version = "0.1.0" }
 hermod = { path = "../hermod", version = "0.1.0" }  # the ACP client of every session (agents::session)
 bifrost = { path = "../bifrost", version = "0.1.0" }
+sleipnir = { path = "../sleipnir", version = "0.1.0", default-features = false, features = ["linux"] }  # the shared podman argv
+vegvisir = { path = "../vegvisir", version = "0.1.0" }  # the Work map's model and layout (work::map)
+forseti = { path = "../forseti", version = "0.1.0" }  # the scheduler core: the queue's order, placement and admission
+hrafn-embed = { path = "../hrafn-embed", version = "0.1.0" }  # the model table, the cache's checks, the embed worker's engine
+hrafn = { path = "../hrafn", version = "0.1.0" }  # each project's code store, tier 1 and the store side of tier 2
+heimdall = { path = "../heimdall", version = "0.1.0" }  # the CDP broker's routing and codecs (browser::{host,broker})
+fastwebsockets.workspace = true  # the CDP broker's websocket (browser::broker)
+hyper.workspace = true           # the CDP broker's HTTP/1.1 upgrade (already in the tree through bifrost)
+hyper-util.workspace = true
+subtle.workspace = true          # the CDP secret, compared in constant time
 huginn = { path = "../huginn", version = "0.1.0", features = ["serde"] }  # settings.el and runtime-defaults.el, as data
 serde_path_to_error.workspace = true  # where in a setting's value a mistake is
 tokio = { workspace = true, features = ["io-std"] }  # mcp-bridge's stdio (a feature, no new crate)
@@ -47,11 +75,21 @@ tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 lexopt.workspace = true
 sha2.workspace = true  # the merge gate's diff hashes
+zip.workspace = true  # `browser install` unpacks the pinned archive
+http-body-util.workspace = true  # the download's body
+http = "1"                # the download's request (already in the tree through hyper)
 zeroize.workspace = true  # the line that carries provider keys to the backend is wiped once written
+
+# runners: the user's OpenSSH through the crate's native mux (no Android: the transport is Unix desktops only)
+[target.'cfg(all(unix, not(target_os = "android")))'.dependencies]
+openssh.workspace = true
 
 [dev-dependencies]
 # `test-hooks`: `urdr::graph::Tx::for_test` for the manager's unit tests (a `-p drgnx-ratatoskr` test build alone has no
 # other crate turning it on)
 urdr = { path = "../urdr", version = "0.1.0", features = ["test-hooks"] }
+tokio = { workspace = true, features = ["test-util"] }  # paused time: the pacer's tests take their instants from it
 skuld = { path = "../skuld", version = "0.1.0" }  # waits in tests; every order of a pure core (the connection's, a session's turn)
+rmcp = { workspace = true, features = ["client", "transport-async-rw"] }  # the MCP client of tests/search_query.rs (as mimir's interop test)
 tempfile.workspace = true
+proptest.workspace = true  # the shell-command parser never panics and is deterministic (work::shell_read)

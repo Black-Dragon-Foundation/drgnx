@@ -5,10 +5,8 @@
 ;;; Commentary:
 ;; The Plan Job commands, and what tells you a job needs you when you are not looking: the open cards and the messages
 ;; to you of the jobs are the `jobs' source of the notice model (`drgnx-notice-set'), so they count in the one "needs
-;; you" number and a new one reaches the desktop through the notice routes.  A job shows in the Work cockpit: Show Job in Work
-;; filters it to the job — what needs you (cards with their actions, messages agents sent you, the job's tasks, agents
-;; and spend) and the decision log are the cockpit's parts (drgnx-cockpit-cards.el; until M12f they were a frame of
-;; their own, the job window).  See docs/guide/jobs.md.
+;; you" number and a new one reaches the desktop through the notice routes.  A job's agents show in the Work space (the
+;; map, the Board's tasks and the review view; the cockpit and the job window before it are gone).  See docs/guide/jobs.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -29,8 +27,7 @@
 (declare-function drgnx-hub-call "drgnx-hub-client")
 (declare-function drgnx-hub-call-sync "drgnx-hub-client")
 (declare-function drgnx-hub-ensure "drgnx-hub-client")
-(declare-function drgnx-cockpit-show-job "drgnx-cockpit-cards")
-(declare-function drgnx-cockpit-show-jobs "drgnx-cockpit-cards")
+(declare-function drgnx-work-space-open "drgnx-work-space")
 
 (defun drgnx-job-ui--hub ()
   "The hub's client, loaded when it is not yet."
@@ -41,11 +38,11 @@
 (defcustom drgnx-job-merge-gate 'review
   "What a finished task of a job needs before it is merged into the job's branch.
 `review': its reviewer's pass (as before).  `review+accept': the pass, then every file its agent changed accepted in
-its edits (the Work cockpit's Accept: a review mark with the hash of the file's diff); until then a `review' card
-says how many are, with Open its edits.  Accepting never merges by itself, and the card's Merge as it is stays
+its edits (the review view's `a': a review mark with the hash of the file's diff); until then a `review' card
+says how many are.  Accepting never merges by itself, and the card's Merge as it is stays
 yours.  A job keeps the gate it was proposed with (the hub runs it): this option counts in the Emacs that proposes."
   :type '(choice (const :tag "The reviewer's pass" review) (const :tag "The pass, then every file accepted" review+accept))
-  :group 'drgnx-cockpit)
+  :group 'drgnx)
 
 (defvar drgnx-notice--sources)
 (defvar drgnx-job-ui-attention-mode)
@@ -85,7 +82,7 @@ yours.  A job keeps the gate it was proposed with (the hub runs it): this option
   (apply #'insert-text-button (format "[%s]" label) 'action (lambda (_) (funcall action)) 'follow-link t 'drgnx-label label props)
   (insert " "))
 
-;;;; Showing a job: the Work cockpit
+;;;; Showing a job: the Work space
 
 (defun drgnx-job-ui--read (prompt statuses)
   "A job of the hub's (in STATUSES, or any)."
@@ -97,14 +94,16 @@ yours.  A job keeps the gate it was proposed with (the hub runs it): this option
                    nil t))
 
 (defun drgnx-job-ui-show (id)
-  "Show job ID in the Work cockpit: the graph filtered to it, what needs you (its cards and messages, its tasks,
-agents and spend) and its decision log.  Returns nil: no frame is made — a workbench saved with a job window of its
-own (`(drgnx-job-ui-show ID)') restores as the cockpit filtered to that job."
+  "Show the Work space, where job ID's agents are on the map (the job's own parts, its cards, tasks and decisions, are
+the map's agents, the Board's tasks and the review view).  Returns nil.  A workbench saved with a job window of its own
+\(`(drgnx-job-ui-show ID)') restores as the Work space."
   (interactive (list (drgnx-job-ui--read "Show job in Work: " nil)))
-  (unless (fboundp 'drgnx-cockpit-show-job) (user-error "The Work cockpit is off (module tools/cockpit)"))
-  (drgnx-cockpit-show-job id))
+  (unless (fboundp 'drgnx-work-space-open) (user-error "The Work space is off (module tools/work-space)"))
+  (drgnx-work-space-open)
+  (message "Job %s: its agents are on the map, its tasks on the Board (b)" id)
+  nil)
 
-;;;; What needs you, counted once: the notice model's `jobs' source and the Work cockpit's What needs you
+;;;; What needs you, counted once: the notice model's `jobs' source and the Work space's needs-you strip
 
 (define-obsolete-variable-alias 'drgnx-job-ui-notify 'drgnx-notice-desktop "drgnx M12f")
 
@@ -166,8 +165,8 @@ The `jobs' segment of the status bar shows it.")
 
 (defun drgnx-job-ui-note-jobs (jobs)
   "Every job's summary (JOBS, as `job/status' lists them) was read: they are the `jobs' set of the notice model, the
-one \"needs you\" count's, and the running ones the `jobs' segment's.  The recount and the cockpit's every-job pane
-call it; nothing happens while `tools/jobs' is off (no source)."
+one \"needs you\" count's, and the running ones the `jobs' segment's.  The recount calls it; nothing happens while
+`tools/jobs' is off (no source)."
   (when (drgnx-job-ui--source-p)
     (drgnx-notice-set 'jobs (drgnx-job-ui--items jobs))
     (drgnx-job-ui--set-running
@@ -223,7 +222,7 @@ the count not known."
 ;;;; The Plan Job commands (they may wait for the hub: the user asked)
 
 (defun drgnx-job-ui-start (file)
-  "Propose a job from the plan FILE: the Work cockpit shows the proposal, to approve or reject."
+  "Propose a job from the plan FILE: approve it with `job-approve', or reject it."
   (interactive (list (read-file-name "Plan: " nil nil t)))
   (drgnx-job-ui--hub)
   (drgnx-hub-ensure)
@@ -240,7 +239,7 @@ the count not known."
   (drgnx-job-ui-show id))
 
 (defun drgnx-job-ui-status ()
-  "Every job: its tasks, agents, spend and what waits for you; a button shows it in the Work cockpit."
+  "Every job: its tasks, agents, spend and what waits for you; a button shows the Work space."
   (interactive)
   (drgnx-job-ui--hub)
   (drgnx-hub-ensure)
@@ -267,21 +266,21 @@ the count not known."
   (when (featurep 'drgnx-hub-client) (drgnx-job-ui--recount)))
 
 (drgnx-module-define 'tools/jobs
-                     :doc "Jobs: agents through a plan you approve — cards, clashes, what needs you; shown in the Work cockpit."
+                     :doc "Jobs: agents through a plan you approve — cards, clashes, what needs you; shown in the Work space."
                      :stage 'startup :requires '(tools/agents)
                      :setup
                      (lambda ()
                        ;; the source, its set and the mode's hub hooks go with the module's cleanup stack
-                       (drgnx-notice-define-source 'jobs :title "Jobs" :command 'cockpit-needs-you)
+                       (drgnx-notice-define-source 'jobs :title "Jobs" :command 'work-needs-you-next)
                        (when (fboundp 'drgnx-statusbar-define-segment)
-                         (drgnx-statusbar-define-segment 'jobs :fn #'drgnx-job-ui--segment :click 'drgnx-cockpit-show-jobs
+                         (drgnx-statusbar-define-segment 'jobs :fn #'drgnx-job-ui--segment :click 'drgnx-work-space-open
                                                          :help "Jobs; click for what they need of you"))
                        (drgnx-job-ui-attention-mode 1)
                        ;; counted again now and then once the hub's client is here (the Agents mirror loads it)
                        (drgnx-timer-start 'job-ui-recount-idle 60 #'drgnx-job-ui--idle-recount :repeat t :idle t)
                        (when (fboundp 'drgnx-wb-place) (drgnx-wb-place "\\`\\*plan jobs\\*\\'" 'editor))
                        (pcase-dolist (`(,id ,title ,fn ,doc)
-                                      '((job-show "Show Job in Work…" drgnx-job-ui-show "The Work cockpit filtered to a job: what needs you, its tasks, its decisions")
+                                      '((job-show "Show Job in Work…" drgnx-job-ui-show "The Work space, where the job's agents, tasks and decisions are")
                                         (job-start "Start Job from Plan…" drgnx-job-ui-start
                                                    "Agents work through a plan: its proposal first, to approve")
                                         (job-approve "Approve Plan Job…" drgnx-job-ui-approve "Start a proposed job")

@@ -60,6 +60,7 @@ active (`drgnx-statusbar-test--epochs')."
      (drgnx-test-use-editor (selected-window))
      (drgnx-statusbar-test--epochs
        (let ((drgnx-statusbar--segments (make-hash-table :test #'eq))
+             (drgnx-statusbar--texts (make-hash-table :test #'eq))
              (drgnx-statusbar--errors nil)
              (drgnx-statusbar-left '(a b)) (drgnx-statusbar-right '(c))
              (drgnx-statusbar-drop-order drgnx-statusbar-drop-order)
@@ -246,6 +247,57 @@ active (`drgnx-statusbar-test--epochs')."
         (setq-local mode-line-format nil)
         (should-not (drgnx-statusbar-mode-line))))))
 
+(ert-deftest drgnx-statusbar/the-mode-line-is-in-the-caption-face-while-the-bar-is-on ()
+  "Pattern D: while the bar is on, the mode line's own faces (`mode-line-active', `mode-line-inactive') inherit the
+caption type face the bar's text is in, then `mode-line' as before, so a run of the bar merges no other font onto them
+\(a font merged at every run copied a font spec); off, their override specs are what they were.  The caption's height
+is absolute here, as ui/look writes it."
+  (drgnx-test-with-state
+    (drgnx-statusbar-test--with
+      (let ((drgnx-chrome-editor-mode-line drgnx-chrome-editor-mode-line)
+            (faces '(mode-line-active mode-line-inactive))
+            (caption (get 'drgnx-ui-caption 'face-override-spec)))
+        (let ((before (mapcar (lambda (f) (get f 'face-override-spec)) faces)))
+          (cl-letf (((symbol-function 'drgnx-chrome-apply) #'ignore))
+            (unwind-protect
+                (progn
+                  (face-spec-set 'drgnx-ui-caption '((t :height 89)))
+                  (drgnx-statusbar-mode 1)
+                  (dolist (f faces)
+                    (let ((inherit (ensure-list (face-attribute f :inherit))))
+                      (should (equal (list f 'drgnx-ui-caption) (list f (car inherit))))
+                      (should (memq 'mode-line inherit))))
+                  (should (memq 'drgnx-ui-caption (ensure-list (face-attribute 'drgnx-statusbar :inherit))))
+                  (drgnx-statusbar-mode -1)
+                  (should (equal before (mapcar (lambda (f) (get f 'face-override-spec)) faces))))
+              (drgnx-statusbar-mode -1)
+              (face-spec-set 'drgnx-ui-caption caption))))))))
+
+(ert-deftest drgnx-statusbar/a-relative-caption-height-is-not-applied-twice ()
+  "Pattern D: a run of the bar is in the caption face, merged onto the mode line's own faces.  A relative caption
+height (ui/look off, or a size given as a ratio) that those faces inherit too would be applied twice, and the bar's
+text drawn smaller than it was measured.  So they inherit the caption face only while its height is absolute, and
+follow it when the fonts change."
+  (drgnx-test-with-state
+    (drgnx-statusbar-test--with
+      (let ((drgnx-chrome-editor-mode-line drgnx-chrome-editor-mode-line)
+            (caption (get 'drgnx-ui-caption 'face-override-spec))
+            (inherits (lambda () (memq 'drgnx-ui-caption (ensure-list (face-attribute 'mode-line-active :inherit))))))
+        (cl-letf (((symbol-function 'drgnx-chrome-apply) #'ignore))
+          (unwind-protect
+              (progn
+                (face-spec-set 'drgnx-ui-caption '((t :height 0.889)))
+                (drgnx-statusbar-mode 1)
+                (should-not (funcall inherits))
+                (face-spec-set 'drgnx-ui-caption '((t :height 89)))
+                (run-hooks 'drgnx-look-fonts-applied-hook)
+                (should (funcall inherits))
+                (face-spec-set 'drgnx-ui-caption '((t :height 0.889)))
+                (run-hooks 'drgnx-look-fonts-applied-hook)
+                (should-not (funcall inherits)))
+            (drgnx-statusbar-mode -1)
+            (face-spec-set 'drgnx-ui-caption caption)))))))
+
 (ert-deftest drgnx-statusbar/segments-read-no-files-and-start-no-process ()
   (drgnx-statusbar-test--with
     (drgnx-statusbar--define-defaults)
@@ -333,9 +385,10 @@ active (`drgnx-statusbar-test--epochs')."
 (ert-deftest drgnx-statusbar/only-files-code-and-text-get-the-bar ()
   (drgnx-statusbar-test--with
     (let ((stock (default-value 'mode-line-format)))
-      ;; a special buffer (Magit, Dired, help, Info, the agent pane...) keeps the stock mode line
+      ;; a special buffer (Magit, help...) gets the bar of `drgnx-statusbar-other', not the stock mode line; any other
+      ;; buffer that is not a file (Dired, Info, the agent pane...) keeps it
       (drgnx-statusbar-test--in-buffer #'special-mode
-        (should (equal (drgnx-statusbar-mode-line) stock)))
+        (should-not (equal (drgnx-statusbar-mode-line) stock)))
       ;; code and text get the bar; so does any buffer that visits a file
       (dolist (mode '(emacs-lisp-mode text-mode conf-mode))
         (drgnx-statusbar-test--in-buffer mode
@@ -796,6 +849,68 @@ active (`drgnx-statusbar-test--epochs')."
       (drgnx-statusbar--seg-indent)
       (should-not (eq cache drgnx-statusbar--indent-cache)))))
 
+(defmacro drgnx-statusbar-test--long-buffer (&rest body)
+  "BODY in a buffer of 30,000 lines shown in the selected window, point on line 20,000, the status bar's window."
+  (declare (indent 0))
+  `(with-temp-buffer
+     (dotimes (i 30000) (insert (format "  line %d\n" (1+ i))))
+     (goto-char (point-min)) (forward-line 19999)
+     (let ((w (selected-window)) (old (window-buffer (selected-window))))
+       (set-window-buffer w (current-buffer))
+       (set-window-point w (point))
+       (unwind-protect (let ((drgnx-statusbar--window w)) ,@body)
+         (set-window-buffer w old)))))
+
+(ert-deftest drgnx-statusbar/a-keystroke-counts-no-lines-from-the-top ()
+  "Pattern D.  Typing on line 20,000 of 30,000: the line number comes from the cache (the text above the line did not
+change), with no count from the top; an edit above it, or one no after-change hook saw, counts again."
+  (drgnx-statusbar-test--long-buffer
+    (should (equal (drgnx-statusbar--seg-position) "Ln 20000, Col 1"))
+    (let ((counted 0) (orig (symbol-function 'line-number-at-pos)))
+      (cl-letf (((symbol-function 'line-number-at-pos) (lambda (&rest a) (cl-incf counted) (apply orig a))))
+        (dotimes (_ 5) (insert "x") (set-window-point (selected-window) (point)))
+        (should (equal (drgnx-statusbar--seg-position) "Ln 20000, Col 6"))
+        (should (= counted 0))
+        (save-excursion (goto-char (point-min)) (insert "new\n"))   ; above: the line moved down
+        (should (equal (drgnx-statusbar--seg-position) "Ln 20001, Col 6"))
+        (should (= counted 1))
+        (let ((inhibit-modification-hooks t)) (save-excursion (goto-char (point-min)) (insert "unseen\n")))
+        (should (equal (drgnx-statusbar--seg-position) "Ln 20002, Col 6"))
+        (should (= counted 2))))))
+
+(ert-deftest drgnx-statusbar/an-edit-below-the-first-lines-scans-nothing ()
+  "Pattern D.  The indentation scan reads the first 300 lines: an edit below them keeps its answer (the same cache, no
+scan); an edit among them scans again."
+  (drgnx-statusbar-test--long-buffer
+    (should (equal (drgnx-statusbar--seg-indent) "Spaces: 2"))
+    (let ((cache drgnx-statusbar--indent-cache))
+      (insert "x")
+      (should (equal (drgnx-statusbar--seg-indent) "Spaces: 2"))
+      (should (eq cache drgnx-statusbar--indent-cache))
+      (save-excursion (goto-char (point-min)) (insert "\t\t\tdeep\n"))
+      (drgnx-statusbar--seg-indent)
+      (should-not (eq cache drgnx-statusbar--indent-cache)))))
+
+(ert-deftest drgnx-statusbar/the-branch-segment-finds-its-root-once-per-buffer ()
+  "Pattern D.  The branch segment looks its repository up in the git cache once per buffer (the lookup builds file
+names), again only when the cache learns of a root or the buffer's file changes."
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar-test--git-cache root
+      (drgnx-cache-put 'git-status root (list :branch '(:head "main")))
+      (with-temp-buffer
+        (setq buffer-file-name "/tmp/drgnx-sb-repo/src/a.el")
+        (let ((looked 0) (orig (symbol-function 'drgnx-git-cached-root)))
+          (cl-letf (((symbol-function 'drgnx-git-cached-root) (lambda (p) (cl-incf looked) (funcall orig p))))
+            (dotimes (_ 3) (should (equal (substring-no-properties (drgnx-statusbar--seg-branch)) "⑂ main")))
+            (should (= looked 1))
+            (puthash "/tmp/drgnx-sb-other/" "/tmp/drgnx-sb-other/" drgnx-git--roots)   ; a root found: asked again
+            (drgnx-statusbar--seg-branch)
+            (should (= looked 2))
+            (setq buffer-file-name "/tmp/drgnx-sb-other/b.el")
+            (drgnx-cache-put 'git-status "/tmp/drgnx-sb-other/" (list :branch '(:head "dev")))
+            (should (equal (substring-no-properties (drgnx-statusbar--seg-branch)) "⑂ dev"))
+            (should (= looked 3))))))))
+
 (ert-deftest drgnx-statusbar/restricted-mode-is-a-labelled-segment-with-a-click ()
   (drgnx-statusbar-test--with
     (drgnx-statusbar--define-defaults)
@@ -1079,7 +1194,7 @@ active (`drgnx-statusbar-test--epochs')."
               (progn (drgnx-statusbar--compilation-finished b "exited abnormally with code 1\n")
                      (should (equal (drgnx-statusbar-test--seg 'tests) "× tests 2 failed"))
                      (let ((s (funcall (plist-get (gethash 'tests drgnx-statusbar--segments) :fn))))
-                       (should (eq (get-text-property 0 'face s) 'error))))
+                       (should (eq (get-text-property 0 'face s) 'drgnx-status-fail))))
             (kill-buffer b)))
         ;; bin/drgnx test --ui's line
         (let ((b (drgnx-statusbar-test--compilation "bin/drgnx test --ui" "ui ERT: 25/27 passed")))
@@ -1440,6 +1555,7 @@ own cache), evil's state tag, other entries of `mode-line-misc-info'; each chang
 
 (ert-deftest drgnx-statusbar/hooks-and-timers-are-owned-by-the-mode ()
   (let ((drgnx-chrome-editor-mode-line drgnx-chrome-editor-mode-line)
+        (edited (generate-new-buffer " *drgnx-statusbar-test*"))
         (was drgnx-statusbar-mode)                     ; the process's other tests keep what they had
         (hooks '((post-command-hook . drgnx-statusbar--post-command)
                  (drgnx-hub-event-functions . drgnx-statusbar--hub-tests)
@@ -1467,7 +1583,13 @@ own cache), evil's state tag, other entries of `mode-line-misc-info'; each chang
               (puthash (selected-window) [x] (drgnx-memo--def-table (get 'statusbar-bar 'drgnx-memo--def)))
               (should (> (nth 2 (assq 'statusbar-bar (drgnx-memo-census))) 0))
               (setq drgnx-statusbar--misc-made -1)
+              (with-current-buffer edited                  ; a line number cached: its buffer's edits are watched
+                (drgnx-statusbar--line-at (point-min))
+                (should (memq #'drgnx-statusbar--note-edit after-change-functions)))
               (drgnx-statusbar-mode -1)
+              (with-current-buffer edited                  ; mode off: the watch and the cache are gone
+                (should-not (memq #'drgnx-statusbar--note-edit after-change-functions))
+                (should-not drgnx-statusbar--line-cache))
               (should-not (drgnx-timer-active-p 'statusbar-refresh))
               (dolist (h hooks) (should-not (memq (cdr h) (default-value (car h)))))
               (should-not (memq #'drgnx-statusbar--ask-git (alist-get 'editor-changed drgnx-signal--subscribers)))
@@ -1476,6 +1598,7 @@ own cache), evil's state tag, other entries of `mode-line-misc-info'; each chang
               (should-not (drgnx-timer-active-p 'statusbar-refresh))
               (should (= 0 (nth 2 (assq 'statusbar-bar (drgnx-memo-census)))))   ; the memo is empty
               (should-not drgnx-statusbar--misc-made))                         ; the entries are read afresh
+          (kill-buffer edited)
           (drgnx-statusbar-mode (if was 1 -1)))))))
 
 (ert-deftest drgnx-statusbar/the-modal-indicator-moves-into-the-bar ()
@@ -1547,12 +1670,16 @@ was built once; no other package's entry yet."
       (should (eq (drgnx-statusbar--bar w width nil) (drgnx-statusbar-mode-line)))
       (should (= 0 (drgnx-memo-fixture-alloc (lambda () (drgnx-statusbar--bar w width nil))
                                              'drgnx-statusbar--bar 'drgnx-statusbar--misc 'drgnx-statusbar--misc-entries
-                                             'drgnx-statusbar--selected-p 'drgnx-statusbar--which-func)))
+                                             'drgnx-statusbar--selected-p 'drgnx-statusbar--which-func
+                                             'drgnx-statusbar--layout-key 'drgnx-look-density-value
+                                             'drgnx-statusbar--position-key 'drgnx-statusbar--position-text
+                                             'drgnx-statusbar--toasts-waiting 'drgnx-notice-toast-more-count)))
       (should (= drgnx-statusbar-test--builds 1)))))
 
 (ert-deftest drgnx-statusbar/the-key-is-epochs-and-plain-values ()
-  "The memo's keys call no helper of the bar but the window's selection, which-function's cached name and the text
-of other packages' entries; the rest are the six epochs and plain values."
+  "The memo's keys call no helper of the bar but the window's selection, which-function's cached name, the text
+of other packages' entries, the shown position (its own memo), the waiting toasts' count and the layout; the rest are
+the six epochs and plain values."
   (let ((keys (drgnx-memo--def-keys (get 'statusbar-bar 'drgnx-memo--def))) (helpers nil) (epochs nil))
     (cl-labels ((walk (f)
                   (when (consp f)
@@ -1562,9 +1689,13 @@ of other packages' entries; the rest are the six epochs and plain values."
                     (mapc #'walk (cdr f)))))
       (mapc #'walk keys))
     (should (equal (sort (delete-dups helpers) #'string<)
-                   '(drgnx-statusbar--misc drgnx-statusbar--selected-p drgnx-statusbar--which-func)))
+                   '(drgnx-statusbar--layout-key drgnx-statusbar--misc drgnx-statusbar--position-key
+                                                 drgnx-statusbar--selected-p drgnx-statusbar--toasts-waiting
+                                                 drgnx-statusbar--which-func)))
     (should (equal (sort epochs #'string<) '(buffer-look eglot flymake git misc-info statusbar)))
-    (should (= 22 (length keys)))))                     ; 6 epochs, 8 values of the window, 7 hot plain values, the notice tick
+    ;; 6 epochs, 8 values of the window (the shown position, not the point), 7 hot plain values, the notice tick,
+    ;; the waiting toasts, the layout key
+    (should (= 24 (length keys)))))
 
 (ert-deftest drgnx-statusbar/memoised-on-the-notice-tick ()
   "A change of the notice model builds the bar again; nothing else of it does."

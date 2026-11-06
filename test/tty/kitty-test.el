@@ -182,7 +182,7 @@ screen.  Returns its directory."
                                         (drgnx-wb-show-sidebar)
                                         (drgnx-wb-show-in-editor (find-file-noselect ,(expand-file-name "a.txt" dir)) t)
                                         t))
-    (drgnx-tty-session-wait-screen s "EXPLORER")
+    (drgnx-tty-session-wait-screen s drgnx-tty-session-explorer-heading)
     (drgnx-tty-session-wait-screen s "alpha beta gamma")
     (drgnx-tty-session-wait-screen s "b\\.txt")
     dir))

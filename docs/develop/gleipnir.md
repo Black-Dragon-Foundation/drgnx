@@ -23,16 +23,18 @@ One API runs a command in every backend (`gleipnir::backend`, re-exported at the
      gives it the developer dir; gleipnir reads none itself.
    - Anything else (Android among them): refused (`BackendKind::None`).
 
-   `helper` is an `InnerCommand`: the helper binary's path outside, its `inner_args` (`sandbox-inner`) and its
-   `relay_args` (`relay`).
+   `helper` is an `InnerCommand`: the helper binary's path outside, its `inner_args` (`sandbox-inner`), its
+   `relay_args` (`relay`) and its `browser_host_args` (`browser-host`).
 2. `gleipnir::validate(spec, &ctx, sandbox.target()?)` checks the spec for that backend's `Target`.
-3. `sandbox.prepare(valid, command)` returns a `Prepared { invocation, status, layers }`. Nothing is spawned; the
+3. `sandbox.prepare(valid, command, browser_hub)` returns a `Prepared { invocation, status, layers, browser }`.
+   `browser_hub` is the browser host's end of a socketpair the caller made (it keeps the other end), given exactly
+   when the spec has a `browser`, else `None`; a mismatch either way is `Malformed`. Nothing is spawned; the
    full tier's sources are opened here, so what was checked is what gets mounted. `Invocation` is the program, its
    args, its exact environment, its cwd, the fds to pass at fixed numbers, and `new_session`:
 
    | Backend | Program and args | Env | fds | `new_session` |
    |---|---|---|---|---|
-   | bwrap | bwrap's argv, ending `-- /run/gleipnir/helper sandbox-inner --spec-fd 3 -- CMD…` | none | 3 the inner spec (sealed memfd), 4 the status pipe's write end, 5… the binds | no (bwrap's `--new-session`) |
+   | bwrap | bwrap's argv, ending `-- /run/gleipnir/helper sandbox-inner --spec-fd 3 -- CMD…` | none | 3 the inner spec (sealed memfd), 4 the status pipe's write end, 5 the browser's socketpair end (only with a browser), 6… the binds | no (bwrap's `--new-session`) |
    | reduced | `HELPER sandbox-inner --spec-fd 3 -- CMD…` | none | 3, 4 | **yes**: the helper calls `setsid()` itself, which a process-group leader cannot |
    | Seatbelt | `sandbox-exec -f PROFILE CMD…` or `-p TEXT CMD…` | the spec's | none | no |
 
@@ -43,9 +45,11 @@ One API runs a command in every backend (`gleipnir::backend`, re-exported at the
    `LayersReport::seatbelt()` at once.
 4. The caller spawns the invocation from one long-lived thread (Ratatoskr: `draugr::spawn_pinned`, with `pass_fds`
    and, for `new_session`, `setsid` before exec instead of a process group of its own) and reads
-   `gleipnir::read_status(status, stderr_tail, deadline)`. On a refusal or a timeout it kills the process group.
+   `gleipnir::read_status(status, stderr_tail, deadline)`, or with `Prepared::browser` set
+   `gleipnir::inner::read_status_for(status, stderr_tail, deadline, true)`, which also refuses a status that does not
+   report the browser host. On a refusal or a timeout it kills the process group.
 
-With the `test-hooks` feature, `prepare` takes a third argument, `TestHooks { landlock_omit, abi_cap }`, which goes
+With the `test-hooks` feature, `prepare` takes a fourth argument, `TestHooks { landlock_omit, abi_cap }`, which goes
 into the inner spec (Task 15's rows `landlock-layer-2` and `landlock-below-required-refused`). A release build has
 neither the type nor the parameter.
 
@@ -79,6 +83,17 @@ this returns.
 - `to_draugr(invocation)` is the `draugr::Spec` (stdin `/dev/null`, the fds as `PassFd`s, `new_session`). An agent
   session's launch (`launch::spawn`, `spawn_plain`, `spawn_chat`) gives the program a stdin pipe instead
   (`launch::with_stdin`): the hub speaks ACP on its stdin and stdout. A job's stdin stays `/dev/null`.
+- A session with the agent browser (`SessionShape.browser: Option<BrowserShape>`, decided by
+  `sandbox::browser_for`: the `browser` cell not Never, the `Bwrap` backend, Landlock ABI ≥ 9, a program found;
+  [hub.md](hub.md#a-session-with-the-browser)). `session_spec` adds the relays `CDP_PORT` 9222 → `cdp.sock` and
+  `WEB_PORT` 3130 → `web.sock` after the proxy's (and the gateway's), the local ports to `extra_tcp_ports`, the
+  program's folder (outside `/usr` and `/opt`) and `/var/cache/fontconfig` to `read` and to the browser's
+  `extra_read`, the two endpoint variables (the hub's alone: the lock's and an editor's are dropped), and
+  `Spec.browser` (`own_dir` `/tmp/drgnx-browser`, `host_args` `--headless-shell` or `--full` and `--max-message N`).
+  It never carries `WAYLAND_DISPLAY`, `DISPLAY`, `XDG_RUNTIME_DIR` or a `/run/user` path. `launch_on` makes the
+  socketpair: the host's end to `Sandbox::prepare`, the hub's end in `Launch.browser`; the caller reads the status
+  with `inner::read_status_for(…, browser)`. `context` opens `<data>/browsers` inside the closed data dir, where
+  `drgnx browser install` puts its downloads.
 - Agent sessions (`agents/launch.rs`, `sandbox::session_spec`; Task 10): `launch::spawn(plan, req)` for a worker or
   manager, `launch::spawn_plain(plan, sid)` for a chat with no project and `launch::spawn_chat(plan, sid, project)`
   for a chat in a project (`launch::kind(role, cwd, scratch)` picks: the cwd is the scratch dir → plain; else a chat →
@@ -87,8 +102,24 @@ this returns.
   `gleipnir::read_status` after spawning (an unread status means the start is unknown: kill the session). No path
   starts a session unsandboxed. The spec:
   - writable: the worktree (a chat: its scratch dir `<tmp>/drgnx-scratch-UID/SID`, not in the session dir, which is
-    read-only and takes nothing else) and the CLI's own login dir (`LaunchPlan.login_dir`, for that CLI alone); no
-    home, no other login dir; `HOME` is told but unreadable beyond it;
+    read-only and takes nothing else); no home, no other login dir; `HOME` is told but unreadable beyond it;
+  - the CLI's own login dir (`LaunchPlan.login_dir`, for that CLI alone) is never shown itself: your own CLI runs and
+    loads what is in it (settings and hooks, commands, skills, plugins, shell snapshots), and it holds the keys of
+    your CLI's daemon and live sessions and every project's transcripts. Only the entries `lock::login_entries` names
+    are, each that exists, as the CLI uses it: what it loads in `read` (Claude's `settings.json`, `CLAUDE.md`,
+    `agents`, `commands`, `skills`, `plugins`, `output-styles`, `keybindings.json`; Codex's `config.toml`,
+    `AGENTS.md`, `prompts`, `skills`, `rules`; Gemini's `google_accounts.json`, `settings.json`, `GEMINI.md`,
+    `commands`, `extensions`), an entry that is a link read at its true name and, on the full tier, bound read-only
+    at the link's path (`sandbox::read_login_entry`); the token file and the CLI's state in `write` (a missing folder
+    made 0700 first, never through a link, and a link there left out): Claude's `.credentials.json` and `todos`,
+    Codex's `auth.json` and `log`, Gemini's `oauth_creds.json` (a file bind or Landlock file rule; a token file is
+    rewritten in place, not renamed over). Codex's `sessions` and Gemini's `tmp` hold all of that CLI's sessions,
+    yours too (`LoginUse::Own`): on the full tier an rw bind of `<scratch>/login/NAME` takes their place, elsewhere
+    neither is shown. Claude's folder for the cwd,
+    `projects/<the cwd, each non-alphanumeric UTF-16 unit as ->` (`lock::claude_project`; none past 200 characters, where Claude Code adds a hash), is writable when the cwd is the
+    session's own (a worktree, a plain chat's scratch). A project chat's cwd is your project, whose folder holds your
+    transcripts and auto memory: on the full tier (`sandbox::login_grants`) an rw bind of `<scratch>/claude-project`
+    covers it, elsewhere nothing is granted;
   - a chat in a project: the project (its true name: no trailing slash, links resolved) is its cwd and is
     read-only (`read`), never in the write set; nothing in it can be written, so its git folder's hooks and config are
     out of reach too, and the lock's protected paths are not pinned (nothing is made in your project). A linked
@@ -155,8 +186,11 @@ this returns.
     missing file, stays replaceable. The reduced tier has no mount namespace and Landlock only adds rights, so a pin
     there does nothing: the review gate (workspace trust) guards those files, and the check says so.
 - `ratatoskr sandbox run --spec FILE --result FILE [--tier full|reduced] [--bwrap PATH] [--pause-before-spawn FIFO]
-  [--landlock-omit PATH]… [--landlock-abi-cap N] [--settings-guards] -- CMD…` exists only with `test-hooks`, for the
-  escape rows. `--settings-guards` applies both settings guards above, as a job will. It
+  [--landlock-omit PATH]… [--landlock-abi-cap N] [--settings-guards] [--browser-probe ARG]… -- CMD…` exists only with
+  `test-hooks`, for the escape rows. `--settings-guards` applies both settings guards above, as a job will.
+  `--browser-probe`, one per argument, puts the probe in the browser host's place (the `TestHooks::browser_argv` hook:
+  the rest of the browser plan, its layer and filter, stays): the spec must have a `browser`, and the run makes the
+  socketpair, passes the host's end and holds the hub's end until it is over. It
   detects, validates the spec against `context`, prepares, and with `--pause-before-spawn` writes `opened` to the
   FIFO once the sources are open and waits for a line back. It spawns through `draugr::spawn_pinned` (stdin
   `/dev/null`, the child's stdout passed through, its stderr's tail written once it has exited), reads the status
@@ -186,6 +220,8 @@ seen inside.
 | `tmp` | path or absent | the temporary directory; required by the reduced tier, which has no private `/tmp` |
 | `layers` | `{landlock_min_abi}` | the lowest Landlock ABI the run accepts; seccomp is not a field (always on) |
 | `extra_tcp_ports` | ports | TCP ports besides the relay's (Landlock's port rule, never counted as isolation); the full tier only, the reduced tier grants none |
+| `trace` | `"off"` (the default, left out of the JSON), `{"per_step": {"socket"}}` or `{"tree": {"socket"}}` | seeing the files the program's shell steps open ([sandbox.md](sandbox.md#seeing-the-files-a-shell-step-opens)); the socket must be one of `sockets`; `per_step` needs the full tier, and macOS refuses both (`Malformed`) |
+| `browser` | `{program, own_dir, web_port, local_ports, extra_read, host_args}` or absent | the agent browser's host, forked by the inner helper under a layer of its own ([The inner helper](#the-inner-helper), step 6b). `program` is the Chromium binary, `own_dir` its dir (`/tmp/drgnx-browser`), `web_port` the web relay's port, `local_ports` the agent's servers it may reach, `extra_read` more read roots of its layer, `host_args` the browser host's own flags (never a secret). The full tier only in phase 1 (rule 12) |
 
 `gleipnir::validate::validate(spec, &ctx, target)` checks a spec for one `Target` (`LinuxBwrap`, `LinuxReduced`,
 `Macos`) against a `Context` and returns a `ValidSpec` or a `Refusal { rule, path, message }`. Only a `ValidSpec`
@@ -244,6 +280,15 @@ the parts that do not exist yet. macOS's own links count like any other: `/tmp` 
     (`/run/gleipnir`) or `run`'s dest: not a bind's or the home's dest, not a `read`, `write`, `hide` or `tmp` path
     (those are mounted at their own path), and `run`'s dest not over the helper either. A bind over the helper would
     make bwrap exec a program that applies neither Landlock nor seccomp.
+
+12. **`Browser`.** A spec with a `browser` runs on `LinuxBwrap` only ("the agent browser on this tier comes in a
+    later phase" for the reduced tier and macOS); its `net` is isolated and `web_port` is one of the relay ports;
+    no local port is a relay port, and each one is in `extra_tcp_ports`; `program` is a file under `/usr`, `/opt`
+    or an `extra_read` entry; `own_dir` is `/tmp/drgnx-browser`; `host_args` hold at most 4 KiB in all, and no
+    `=` value of one equals an env value of the spec (a secret never goes in an argv). `program` and `extra_read`
+    are host paths for rule 1 (true names, no link), `own_dir` an inside path. A spec that passes has its
+    `layers.landlock_min_abi` raised to 9: the browser layer is no boundary below ABI 9, and the agent's own layer
+    is applied first, so the whole run is refused on such a kernel.
 
 Apart from rule 11, a dest may be any canonical absolute path: only sources expose anything.
 
@@ -336,7 +381,8 @@ steps (Task 7):
   the host's layout: which of `/bin /lib /lib64 /sbin` are links, and where `/etc/resolv.conf` leads.
 - `bwrap::argv(spec, opened, command)` is pure (built and tested on every target). It returns bwrap's arguments and
   the fds to pass, each with its number inside: 3 is the inner spec (a sealed memfd), 4 the status pipe (both the
-  caller's, Task 8), and the binds from 5 upward in argv order, the helper's last.
+  caller's, Task 8), 5 the browser's socketpair end (`BROWSER_FD`, the caller's, only with a browser; bwrap hands it
+  to the helper untouched), and the binds from 6 (`FIRST_BIND_FD`) upward in argv order, the helper's last.
 
 The argv, in this order (`argv_golden_shared` and `argv_golden_isolated` pin it):
 
@@ -347,7 +393,7 @@ The argv, in this order (`argv_golden_shared` and `argv_golden_isolated` pin it)
 --symlink usr/bin /bin   (where the host's /bin is a link; else --ro-bind-try /bin /bin; also lib lib64 sbin)
 --dev /dev --proc /proc --tmpfs /tmp --tmpfs /run --tmpfs /var/tmp
 --ro-bind-try RESOLVER RESOLVER                  where /etc/resolv.conf leads under /run
---bind-fd 5 HOME-DEST                            the home (--ro-bind-fd when its mode is ro)
+--bind-fd 6 HOME-DEST                            the home (--ro-bind-fd when its mode is ro)
 --ro-bind-fd N READ   --bind-fd N WRITE          at their own paths
 --ro-bind-fd N RUN-DEST                          the session dir, always read-only
 --ro-bind-fd N DEST  /  --bind-fd N DEST         binds, in order, each with its mode
@@ -419,12 +465,13 @@ an fd that is not sealed so. The program's environment travels here, never in ar
 
 | Field | What |
 |---|---|
-| `version` | 1 |
+| `version` | 2; a version-1 spec (which never has a `browser`) is still read and run, and one with a `browser` is refused |
 | `env` | the program's whole environment, exactly |
 | `chdir` | where the program starts |
 | `landlock` | the `LandlockPlan`; never optional (the floors are ABI ≥ 1 and ≥ 9). seccomp has no field: it is always on |
 | `new_session` | `setsid()` before Landlock; true for the reduced tier (no bwrap `--new-session` there), whose spec is refused without it |
 | `relay` | `{argv, ready_timeout_ms}` (5000), or absent |
+| `browser` | `{hub_fd, argv, env, own_dir, landlock, ready_timeout_ms}` (version 2), or absent: the browser host (step 6b). `hub_fd` is 5, `argv` is `/run/gleipnir/helper browser-host --hub-fd 3 --ready-fd 4 --program P --dir D --web-port N HOST_ARGS…`, `env` is `HOME`, `XDG_CACHE_HOME` and `TMPDIR` = D and `PATH=/usr/bin:/bin`, `landlock` is the browser layer ([Landlock](#landlock)), the timeout 5000 |
 | `landlock_omit`, `abi_cap` | only with gleipnir's `test-hooks` feature (the escape rows); a release build refuses them as unknown fields |
 
 **The order** (pinned):
@@ -446,6 +493,29 @@ an fd that is not sealed so. The program's environment travels here, never in ar
   any other parent ([The relay](#the-relay-task-11)).
   Then, when the plan has `tcp_bind_ports` (the reduced tier), one more Landlock layer refuses every TCP bind: the
   relay bound its ports under the first layer, and the program gets none.
+- **6b.** The browser host, if any. The helper first checks the browser layer's floor (ABI 9, against the kernel and
+  the test hook's cap), that fd 5 is open, and makes the browser's own dir (0700; one already there must be a
+  directory of this user's, not a link: a write root that does not exist would be skipped). Its argv and environment,
+  the browser's BPF program (`compile_browser`) and copies of the fds above 9 are made before the fork, so the child
+  only makes syscalls, applies the layer (the helper is single-threaded, step 2) and execs. Then it forks; in the
+  child:
+  1. `PR_SET_PDEATHSIG` SIGKILL, and an exit if the helper is no longer its parent;
+  2. stdin and stdout on `/dev/null` (never the agent's pipes), the hub's end at fd 3, a ready pipe's write end at
+     fd 4;
+  3. `close_range(5, ∞)`;
+  4. Landlock `restrict(browser.landlock, abi_cap)`, then `install(compile_browser(native()))`, each stacked on the
+     agent's layers;
+  5. `execve` of `argv` with exactly `env`.
+
+  The helper closes its copy of the hub's end, so only the host holds it (no listening socket exists for the agent to
+  race for), and waits for exactly `ready\n` within the timeout; a host that exits first, says something else or is
+  late fails the run (and is killed). The browser host is the agent's child after the exec: the agent, its ancestor
+  domain, can signal and trace it, and when the agent exits the death signal ends it. The layer is applied in the
+  child before the exec, so no instruction of the browser host runs unlayered, and its `ready` means "layered and
+  listening".
+- **6c.** Whole-tree tracing, if the spec asks for it (`trace` `tree`): the helper installs the open listener on itself
+  and offers it to the supervisor ([sandbox.md](sandbox.md#seeing-the-files-a-shell-step-opens)). It comes after the
+  relay and the browser host, so neither is traced: a forked child keeps its parent's filters.
 - **7.** One status line on fd 4, then fd 4 is closed.
 - **8.** Close every fd ≥ 3 (`close_range`).
 - **9.** `chdir`; `execve` of `CMD[0]` with exactly the spec's environment. A program with a `/` runs as given; a bare
@@ -454,8 +524,9 @@ an fd that is not sealed so. The program's environment travels here, never in ar
 A failure in steps 1–7 writes `{"ok":false,"error":"…"}` to fd 4 and exits 125, and nothing is exec'd. Not found
 exits 127, found but not runnable 126; a `chdir` that fails after the status line exits 125 with a stderr line
 only. The status line of a run is
-`{"ok":true,"landlock_abi":N,"landlock":"enforced","seccomp":true,"no_new_privs":true,"new_session":B,"relay":B,"seatbelt":false}`
-(`seatbelt` is true only in `LayersReport::seatbelt()`, the macOS report, which no helper sends).
+`{"ok":true,"landlock_abi":N,"landlock":"enforced","seccomp":true,"no_new_privs":true,"new_session":B,"relay":B,"seatbelt":false,"browser":B}`
+(`seatbelt` is true only in `LayersReport::seatbelt()`, the macOS report, which no helper sends; a line without
+`browser` reads as false).
 On other systems `sandbox-inner` exits 125 with "the inner helper is Linux only".
 
 **Reading the status.** `status_pipe()` gives the parent's read end and the write end the spawn moves to fd 4.
@@ -463,8 +534,10 @@ On other systems `sandbox-inner` exits 125 with "the inner helper is Linux only"
 - `ok: false` → "sandbox setup failed: " and the helper's error;
 - EOF with no line (the helper, or bwrap before it, failed) → "sandbox setup failed: " and the first stderr line;
 - a line that claims less than Landlock enforced, seccomp and `no_new_privs` → refused;
-- past the deadline (`status_deadline`: 5 s plus the relay's ready timeout) → "sandbox setup timed out", and the
-  caller kills the process group.
+- with `read_status_for(…, browser: true)` (the spec asked for the browser: `Prepared::browser`), a line without
+  `"browser": true` → refused;
+- past the deadline (`status_deadline`: 5 s plus the relay's and the browser host's ready timeouts) → "sandbox setup
+  timed out", and the caller kills the process group.
 
 EOF needs every write end closed: bwrap's monitor closes its copy, and draugr's `spawn` drops the hub's.
 
@@ -480,7 +553,15 @@ Tests: `inner::tests` (the arguments, the thread check in a threaded process, th
 `runtime/crates/drgnx-ratatoskr/tests/sandbox_inner.rs`, which runs the built `ratatoskr` as the helper without
 bwrap: the layers reported, exactly the spec's environment, no fd above 2, `NoNewPrivs` and one more seccomp filter,
 a floor refusal, the relay ready before the program (and three relay failures), an unsealed spec, the new session,
-a seccomp or Landlock install that an outer filter makes fail, and the reduced run end to end (ABI 9).
+a seccomp or Landlock install that an outer filter makes fail, and the reduced run end to end (ABI 9). With ABI 9,
+`a_browser_host_is_ready_before_exec`: the host holds the hub's end at fd 3 (what it writes reaches the test's end),
+writes its own dir, and is ready before the program; three host failures, a version-1 spec with a browser and a
+missing fd 5 each refuse the run. The `#[ignore]` `a_browser_child_is_layered_before_it_runs` (the VM; it needs
+`gleipnir-probe` beside `ratatoskr`) runs the escape probe as the host: `connect-unix` to `hub.sock` blocked (the
+agent reaches it), `create` in the agent's write root blocked, `create` in its own dir reached. `inner::tests` and
+`backend::tests` cover the wire form (`v1_spec_still_parses`, `v2_browser_roundtrip`,
+`status_without_browser_is_refused_when_asked`, `browser_plan_for_a_full_spec`) and the fds
+(`browser_fd_is_5_and_binds_start_at_6`, `browser_without_fd_is_malformed`); `validate::tests::browser_table` rule 12.
 
 ## Landlock
 
@@ -574,6 +655,28 @@ ptrace scoping denies other processes' `environ`, `mem` and `fd` (EACCES). It do
 (2026-10-21). It is recorded by the test `reduced_proc_other_cmdline_is_the_gap` and the escape row
 `reduced-proc-cmdline-the-gap`, and phase 6 names it in the reduced badge's text.
 
+**The browser layer** (`landlock::browser_plan`). The agent browser's host and every Chromium process under it run
+in a second Landlock domain on top of the agent's. Landlock layers only narrow, so this layer can only take away.
+`browser_plan(&BrowserInputs { tier, program_dir, own_dir, helper, extra_read, web_port, local_ports })` is pure:
+
+| | The browser layer | Why |
+|---|---|---|
+| Floor | ABI ≥ 9 on both tiers (`LANDLOCK_FLOOR_BROWSER`) | TCP rules need 4, the scopes 6, and refusing every Unix connect 9. Without all three the layer is no boundary |
+| Read and execute | `/usr /etc /opt /bin /lib /lib64 /sbin /proc`, `/dev/{null,zero,urandom,random}`, `extra_read` (the hub passes `/var/cache/fontconfig`), the browser's dir, its own dir, the helper's dir | Chromium's libraries, fonts and its own files. Not `/`: the worktree, the CLI's login dir and the agent's `/tmp` are out of reach. The helper's dir (`/run/gleipnir` under bwrap) is there because the browser host is the helper binary, exec'd under the layer |
+| Write | its own dir (`/tmp/drgnx-browser` under bwrap), and on the full tier `/dev/shm` (bwrap's private one); `/dev/null` | the profile, downloads, cache and temporary files stay in one dir the hub can remove. The reduced tier never writes the host's `/dev/shm` |
+| Unix connect | none: `unix_connect_roots` is empty and no rule carries `resolve_unix` | not `hub.sock`, not `mcp.sock`, not anything the agent made |
+| TCP connect | the web relay port and the local ports only | never the provider relay (3128) or the CDP relay (9222) |
+| TCP bind | handled, nothing allowed (`tcp_bind_ports: Some([])`) | a renderer cannot squat one of the agent's dev ports |
+| Scopes | signals and abstract sockets, as every plan at ABI ≥ 6 | it cannot signal the agent or reach the agent's abstract sockets |
+
+`/proc` is readable, but Landlock's ptrace scoping refuses a sub-domain's access to its ancestor's `environ` and
+`mem`, so a renderer cannot read the agent's environment (where the CDP secret and the gateway token are). The agent,
+as the ancestor domain, can still trace, signal and kill its browser: it drives that browser anyway.
+
+Tests: `browser_plan_table` (an insta golden of the ABI-9 rule set on both tiers, plus the assertions above),
+`browser_plan_refuses_below_9`, and the real `browser_layer_narrows` (ABI 9: a Unix socket made outside refused, TCP
+only to the web port, no bind, writes only in its own dir).
+
 Tests: `landlock::tests`. The pure ones include the goldens `rules_per_abi_golden` (ABI 1–9 × full shared, full
 isolated, reduced), the floor table, and the check that the handled set equals the crate's own set for each ABI. The
 real ones each run in a re-exec'd child of the test binary, because a restriction cannot be undone. They skip with
@@ -591,6 +694,7 @@ The filter allows every call by default and refuses this list (`seccomp::rules()
 | `perf_event_open` | EPERM | Watches other processes, and is a large kernel attack surface. |
 | `bpf` | EPERM | Kernel attack surface. |
 | `userfaultfd` | EPERM | A common primitive for exploiting kernel races. |
+| `pidfd_getfd`, `process_vm_readv`, `process_vm_writev` | EPERM | They take another process's fds or read and write its memory with a ptrace-mode check but without `ptrace(2)`, which is refused already, so nothing that works today uses them. They also close the cheap ways for an agent to take its browser host's CDP socketpair end. Both tiers, and the browser host. |
 | `io_uring_setup`, `io_uring_enter`, `io_uring_register` | EPERM | io_uring operations are not system calls, so seccomp never sees them. It is also a frequent source of CVEs. |
 | `unshare`, `setns` | EPERM | A new namespace gives a namespaced root, kernel attack surface, and a way around the mount layout. |
 | `clone` with any `CLONE_NEW*` bit in its flags | EPERM | The same, through `clone`. These are seven rules, one per bit of `0x7E020000`, because seccompiler cannot express "masked value is not zero". |
@@ -612,6 +716,14 @@ cgroup either, so the process group the helper leads is what ends the run:
 | `socket(AF_INET or AF_INET6, SOCK_STREAM, protocol)` unless the protocol is 0 or `IPPROTO_TCP` | EPERM | SCTP and MPTCP stream sockets are not TCP to Landlock, which then leaves their connects alone. |
 | `sendto` (flags: argument 3), `sendmsg` (argument 2) and `sendmmsg` (argument 3) with `MSG_FASTOPEN` (`0x20000000`) in the flags | EPERM | A TCP Fast Open send connects without `connect(2)`. Kernels with ABI 9 but without the fix "landlock: fix TCP Fast Open connection bypass" (7.2-rc4, no ABI bump) never ask Landlock, so the program would reach any host on any port (gate review S2). A masked compare (`MaskedEq`), so other flags change nothing. `TCP_FASTOPEN_CONNECT` goes through `connect(2)`, which Landlock sees. |
 | `setsid`, `setpgid` | EPERM | Leaving the helper's process group (and session) would outlive the run: the group kill would miss the process, which keeps its Landlock grants (gate review S1). The helper's own `setsid` runs before the filter. Shells lose job control (`set -m`), and a `daemon(3)` fails. |
+
+**The browser host stacks a filter of its own** (`seccomp::browser_rules()`, compiled by `compile_browser(arch)`), on
+both tiers, on top of the agent's. It is `rules()` plus TCP Fast Open both ways:
+
+| Refused (browser host) | Result | Why |
+|---|---|---|
+| `sendto`, `sendmsg`, `sendmmsg` with `MSG_FASTOPEN` | EPERM | As in the reduced tier: unfixed kernels never show a Fast Open send to Landlock's `connect_tcp`. The full tier's agent filter allows it (the network namespace holds TCP to the relay ports), but the browser layer narrows those further, so a bypass there would reach the provider or the CDP relay. |
+| `setsockopt(fd, IPPROTO_TCP, TCP_FASTOPEN_CONNECT = 30, …)` | EPERM | Landlock does see that connect, but refusing it costs Chromium nothing and leaves no Fast Open path at all below the browser. Two `Eq` conditions on the low 32 bits of the level and the name. |
 
 Argument checks compare only the **low 32 bits** of the argument. The kernel reads an `ioctl` request and a `socket`
 domain, type and protocol as 32-bit ints, so `TIOCSTI | 1 << 32` is TIOCSTI to the kernel, and the filter must see it
@@ -640,7 +752,7 @@ Tests (`seccomp::tests`):
 - `bpf_golden_x86_64` and `bpf_golden_aarch64`: insta snapshots of each whole program in `src/snapshots/`, one line
   per instruction. A new seccompiler is checked against these.
 - `bpf_interpreter_table`: a classic-BPF interpreter in the test runs both programs over synthetic `seccomp_data`
-  (3232 cases):
+  (over 3200 cases):
   - every call number 0–1023;
   - each `CLONE_NEW*` bit alone, all seven together, and with thread flags, plus 0, fork and thread flags alone;
   - TIOCSTI and TIOCLINUX with and without high bits;
@@ -669,6 +781,12 @@ Tests (`seccomp::tests`):
   `reduced_group_and_fastopen_table` (the flags with and without Fast Open, other flags and high bits, Fast Open in
   another argument) and `reduced_differs_from_full_only_on_its_rules` (every other number, both argument extremes, the
   foreign-arch kill).
+- `bpf_golden_{x86_64,aarch64}_browser` and `browser_rules_refuse_fastopen_both_ways` (the list written out; the
+  sends with and without Fast Open; `setsockopt` with TCP Fast Open Connect, with high bits, and with other levels and
+  names; every other number answered as the full filter does). `every_session_refuses_fd_and_memory_theft`: the three
+  calls in every list, every filter of both arches under 4096 instructions. The real install adds
+  `process_vm_readv` on its own memory and `pidfd_getfd` of its own fd 0 (EPERM), and under the browser filter
+  `TCP_FASTOPEN_CONNECT` and a Fast Open `sendto` (EPERM) and `TCP_NODELAY` (set).
 
   A case is skipped, with the reason printed, when its control does not give the unfiltered result. Inside a podman
   container, the container's own filter already refuses `io_uring_setup`, `add_key` and vsock, so those three skip
@@ -872,12 +990,23 @@ The relay (`gleipnir::net::relay`) is the process that makes those ports: for ea
 An isolated sandbox has no network, only its own loopback. Its programs reach the outside through `HTTPS_PROXY`,
 which the relay forwards to a CONNECT proxy outside the sandbox (`net::proxy`). One proxy serves one job: the caller
 starts it with `proxy::start(config, resolver, events)` and hands it each session's listener with
-`listen(listener, tag)` (a Unix socket on Linux, a `127.0.0.1:0` TCP listener on macOS). Every listener shares the
-one allowlist, changed at run time with `allow(target)` and `deny(&target)`. `close(tag)` drops a session's listener
-and every connection it accepted; `shutdown()` (or dropping the handle) ends them all.
+`listen(listener, tag)` (a Unix socket on Linux, a `127.0.0.1:0` TCP listener on macOS). Every listener shares one
+policy, `ProxyConfig::policy`:
+- `Policy::Allowlist`, the default and the provider proxy's: exact targets, changed at run time with `allow(target)`
+  and `deny(&target)`, CONNECT only. A caller that builds `ProxyConfig { allow, pinned, ..Default::default() }` gets
+  it as before.
+- `Policy::Web(Arc<WebState>)`, a browser session's web proxy: the web policy (below), CONNECT and plain-HTTP
+  absolute-form. `allow` and `pinned` are not read. The caller keeps the `WebState` and changes it at run time with
+  `set_web(bool)`, `set_grants(Vec<PrivateGrant>)` and `set_deny_hosts(Vec<String>)`; `WebState::new(host_addrs,
+  never)` takes the host's addresses and the hub's endpoints as `Arc<RwLock<…>>`s the hub shares and keeps live. Each
+  request reads the state as it is then.
 
-**The answers.** The proxy reads the request head (the line and headers up to the blank line) and looks only at the
-request line, never at `Host:`:
+`close(tag)` drops a session's listener and every connection it accepted; `shutdown()` (or dropping the handle) ends
+them all. `start_for_tests` (feature `test-hooks`, or `escape-fixture`, which exposes nothing else and changes no
+spec or sandbox) takes the upstream connector too, so the escape fixture can send "public" addresses to a local server.
+
+**The answers.** The proxy reads the request head (the line and headers up to the blank line). Under the allowlist
+it looks only at the request line, never at `Host:`:
 
 | Request | Answer | Event |
 |---|---|---|
@@ -895,6 +1024,33 @@ request line, never at `Host:`:
 Each event is sent once per target per tag, before the client is answered; the tag tells the caller which session
 asked. Only `Denied` may become a question to the user: a private address, a wildcard or a malformed request is never
 offered. A refused request's `target` is shown with every byte outside printable ASCII escaped.
+
+Under the web policy the same parsing and the same 400s, 502s, SOCKS and connection rules apply, and the policy
+decides the rest:
+
+| Request | Answer | Event |
+|---|---|---|
+| CONNECT, or absolute-form, to a target `judge` connects | `200 Connection established` (CONNECT) or the rewritten head upstream (absolute-form), then the splice | `Reached { host }`, once per host |
+| a public target while `browser.web` is not granted | 403 | `WebOff { target }` |
+| a private target no grant opens | 403 | `Private { asked, addr, class }` |
+| a refusal of the web policy | 403 | `Refused { Never \| Port \| Embedded \| Loopback \| DenyListed \| Rebound }` |
+| `METHOD http://host[:port][/path] HTTP/1.x` that is malformed: another scheme (`https://` too), userinfo, a fragment, a byte outside printable ASCII in the URI, an obsolete line folding, a bare CR or LF, a NUL, a header line that is not `name: value` | 400 | `Refused { BadRequest }` |
+| an origin-form request (`GET /path`) | 400 | `Refused { BadRequest }` |
+
+`WebOff` and `Private` are the cards' questions; `Reached` is logged, not asked.
+
+**Plain HTTP (absolute-form, the web policy only).** Chromium sends an `http://` URL to its proxy as
+`GET http://host/path HTTP/1.1`. The URI's `host[:port]` (port 80 when none is named) is the target, parsed by
+`parse_target` and judged before anything is sent. The proxy connects, then sends:
+- the request line in origin-form, `METHOD /path?query HTTP/1.x` (`/` when the URI has no path), the client's version;
+- `Host:` from the target in its normal form, without the port when it is 80, in place of the received one;
+- the other headers in their order, minus the hop-by-hop ones: `Proxy-*`, `Keep-Alive`, `TE`, `Upgrade`,
+  `Connection` and every name it lists;
+- `Connection: close`, the blank line, then the bytes that came with the head (a body's start), once and in order.
+
+After that the bytes are spliced both ways as they are, and the response head is not rewritten. One request goes per
+connection: the upstream is fixed for the whole client connection (one checked target), so a second request hidden in
+a body reaches nothing a CONNECT to that target would not. WebSockets (`ws://`) go through CONNECT on port 80.
 
 **The matching.** A target is parsed strictly (`net::host::parse_target`), with no `idna` stack:
 - a name is ASCII letters, digits and inner hyphens, labels of 1–63 characters, at most 253 in all, lower-cased, one
@@ -929,7 +1085,73 @@ that changes after the check (rebinding) cannot lead it anywhere else.
 - `deny` stops new connections only; a tunnel already spliced stays until either side closes.
 - There is no idle timeout on a spliced connection, and connecting upstream waits as long as the system's TCP
   connect does. Both hold one of the `max_conns` places meanwhile.
-- The proxy speaks HTTP CONNECT only: no plain HTTP forwarding and no SOCKS.
+- The proxy speaks HTTP CONNECT, and plain-HTTP absolute-form under the web policy only; never SOCKS.
+
+### The web policy
+
+A browser session's web proxy judges its requests by `net::policy`, not by an allowlist: public-any on ports 80 and
+443 once the session holds `browser.web`, private targets only through `browser.private` grants, and hard nevers that
+no grant opens. The module is pure (no I/O) and builds on every target, so the doctor can ask it the same questions.
+
+`pre_resolve(target, ctx)` runs first: it refuses what needs no DNS, says `Resolve` for a name, and gives the fixed
+addresses of a literal or of `host.drgnx.internal` (`127.0.0.1` and `::1`). `judge(target, answer, ctx)` then gives the
+verdict: `Connect(addrs)`, `WebOff` (a public target without `browser.web`: the card's question), `Private { addr,
+class }` (a private target no grant opens: the card's question, with the address it leads to) or `Refuse(why)`. The
+context (`WebCtx`) holds whether `browser.web` is granted, the user's deny list (`agents-browser-deny-hosts`), the
+`browser.private` grants with their expiry, the host's own addresses (`HostAddrs`, kept live by the hub) and the hub's
+own TCP ports on the host's loopback (`NeverSet`).
+
+**The classes.** Every address is judged by the IPv4 address it carries, unwrapped first (`net::host::unwrap_embedded`:
+IPv4-mapped, IPv4-compatible, NAT64 `64:ff9b::/96` and `64:ff9b:1::/48`, 6to4 `2002::/16`, Teredo `2001::/32`'s client).
+`classify` then names one of: `Public`; `Lan` (RFC 1918); `Ula` (`fc00::/7`); `LinkLocal` (`169.254/16`, `fe80::/10`);
+`Cgnat` (`100.64/10`); `Loopback` (`127/8`, `::1`); `HostOwn` (one of `HostAddrs`); and `Never`, which holds the hard
+nevers and every other range that is not public (documentation, benchmarking, `192.0.0/24`, `fec0::/10`, `100::/64`,
+and a public IPv4 address inside Teredo or local-use NAT64, which no public route carries).
+
+**The hard nevers**, under any grant: the metadata addresses `169.254.169.254`, `fd00:ec2::254`, `100.100.100.200`,
+`168.63.129.16` (Azure's WireServer, which `is_public` counts as public), `169.254.170.2`, `169.254.170.23` and
+`fd00:ec2::23`; the names `metadata.google.internal` and `metadata.azure.com` and every name under them; `0/8`, `::`,
+multicast, broadcast and `240/4`; and the hub's own TCP ports on the host's loopback (`NeverSet::loopback_ports`).
+
+**The grants** (`PrivateGrant { target, expires }`, `expires` in Unix seconds or none for as long as the scope lasts)
+name one of: a host:port (`{"host_port":"printer.local:631"}`), a CIDR with a port or a range
+(`{"cidr":"192.168.1.0/24","ports":"80-443"}`), or `"all_private"`. A grant's address is plain IPv4 or native IPv6,
+and a CIDR has no host bits. A host:port covers that literal, that very name, or `host.drgnx.internal:PORT`; a CIDR covers
+the literals in it except link-local; all-private covers LAN and ULA literals only.
+
+**The order of the checks:**
+1. A hard-never name, or a target on the deny list (a name denies itself and every name under it, an address that
+   address) → `Refuse(Never)` or `Refuse(DenyListed)`.
+2. A literal: wrapped and not public → `Refuse(Embedded)` (a grant names plain IPv4 or native IPv6); a never →
+   `Refuse(Never)`; loopback or the host's own → `Refuse(Loopback)`.
+3. `host.drgnx.internal:PORT`: a hub port → `Refuse(Never)`; a live host:port grant naming it exactly → `Connect` to
+   `127.0.0.1` and `::1`; else `Private { 127.0.0.1:PORT, Loopback }`, offered as that one host:port.
+4. A name's answer: its nevers are dropped, and an answer of nevers only → `Refuse(Never)`. (An empty answer connects
+   to nothing; the proxy answers 502 before asking.)
+5. Any public address left: those only (a mixed answer drops the private ones), on 80 and 443 only (else
+   `Refuse(Port)`), and only with `browser.web` (else `WebOff`).
+6. An all-private answer: a wrapped address → `Refuse(Embedded)`; loopback or the host's own (an mDNS answer is not
+   authenticated) → `Refuse(Loopback)`; a live host:port grant naming that very name and port → `Connect`; a grant
+   that covers the address but not the name → `Refuse(Rebound)` (DNS rebinding onto a granted target); else `Private`,
+   offered as the name and port.
+7. A private literal: a live grant that covers it → `Connect`, else `Private`.
+
+DNS is resolved once per connection and pinned, so the answer judged is the address connected. That closes the gap
+inside one connection; step 6's name rule closes rebinding across connections.
+
+**The hub's side** ([hub.md](hub.md), "The web proxy"). The proxy's `WebState` is the hub's to change, and each
+setter takes effect on the next request:
+- `set_web(bool)`: `browser.web` granted (its cell allows it, or a grant with no host covers the session);
+- `set_web_hosts(Vec<(Target, Option<f64>)>)`: public targets judged as if `browser.web` were granted while it is not,
+  each exactly and until its expiry: what a `browser.web` once grant names. Everything else (80 and 443 only, the
+  nevers, the deny list) still holds for them;
+- `set_grants(Vec<PrivateGrant>)`: the live `browser.private` grants of the session and its plan;
+- `set_deny_hosts(Vec<String>)`: the `agents-browser-deny-hosts` setting.
+
+`HostAddrs` and `NeverSet` are one pair the hub shares with every session's state and keeps live
+(`browser::nevers`). The proxy says each `WebOff` and `Private` once per target; `ProxyHandle::forget_questions(tag)`
+lets them be said again once the hub's answer changed (a card settled, a grant ended), so a retry asks anew. `Reached`
+and `Refused` stay said once.
 
 ## The check
 
@@ -972,7 +1194,8 @@ is not blamed on AppArmor.
 ## Proving it (Tasks 14, 15 and 16)
 
 The escape suite is the crate `gleipnir-escape` (test tooling: never shipped, never installed, and it never turns on
-gleipnir's `test-hooks`). It has two binaries and a directory of rows:
+gleipnir's `test-hooks`; it turns on `escape-fixture`, which only exposes the proxy's upstream connector, so a
+workspace build that unifies it into `ratatoskr` changes nothing there). It has two binaries and a directory of rows:
 
 - `gleipnir-probe` tries one channel per probe from inside the sandbox;
 - `gleipnir-escape` runs each row: it builds a fixture, runs `ratatoskr sandbox run` with the probe as the program,
@@ -985,13 +1208,16 @@ and `libc` only and needs glibc 2.39 at most, so a binary built in the Fedora 45
 glibc; there is no toolchain on the VM.
 
 ```
-gleipnir-escape --ratatoskr BIN --probe BIN --rows DIR… [--only GLOB] [--require-all] --report FILE
+gleipnir-escape --ratatoskr BIN --probe BIN --rows DIR… [--only GLOB]… [--require-all] [--bwrap-in-container]
+                --report FILE
 ```
 
 `--rows` takes a directory of `.jsonl` files, or a directory holding `any/`, `linux/` and `macos/`. `--only` is a
-glob on row names (`*` and `?`). The report is `[{row, status: pass|fail|skip, reason}]`; the exit is 1 on a fail,
-and with `--require-all` on a skip too. The VM script copies the three binaries and the rows over and runs this
-there (`gleipnir-vm.sh run`).
+glob on row names (`*` and `?`); given more than once, a row matching any of them runs. The report is `[{row, status:
+pass|fail|skip, reason}]`; the exit is 1 on a fail, and with `--require-all` on a skip too. The VM script copies the
+three binaries and the rows over and runs this there (`gleipnir-vm.sh run`). `--bwrap-in-container` says the container
+lets bwrap run (`ctr.sh --sandbox`, which unmasks `/proc`), so rows that need `bwrap` or `netns` run instead of
+skipping "inside a container".
 
 ### The probe
 
@@ -1004,14 +1230,17 @@ size.
 | files | `read PATH` (size), `write PATH` (opens for writing, writes nothing), `create PATH`, `list DIR` (names, sorted), `stat PATH`, `rename A B`, `link A B` (hard link), `clone A B` (macOS `clonefile`, a directory too; elsewhere blocked `EOPNOTSUPP`), `mkdir PATH`, `unlink PATH`, `swap A B` (exchange two paths in one step: macOS `renamex_np(RENAME_SWAP)`, Linux `renameat2(RENAME_EXCHANGE)`) |
 | sockets | `connect-unix PATH`, `connect-abstract NAME` (Linux), `connect-tcp HOST:PORT`, `tfo HOST:PORT` (`sendto(MSG_FASTOPEN)`, Linux), `udp HOST:PORT` (sends, waits 500 ms for the echo; no echo is blocked with no errno), `unix-self PATH` (listens there, then connects; the detail says which step failed), `bind-tcp HOST:PORT` (bind only), `socket DOMAIN TYPE [PROTO]` (Linux: `socket(2)` alone; DOMAIN `unix inet inet6 netlink packet vsock`, TYPE `stream dgram raw seqpacket`, PROTO a number or `tcp udp icmp icmpv6 sctp mptcp`) |
 | environment | `env-has NAME…`: reached when any is set, the detail names which (never a value) |
-| syscalls | `syscall NAME` for `unshare-user io-uring keyctl add-key vsock clone3 clone-newuser mount-missing tiocsti-own-pty tiocsti-high-own-pty ptrace-own-child x32-getpid i386-int80`. Each runs in a forked child, so a kill by the filter is a result: blocked, no errno, detail `killed by SIGSYS`. `x32-getpid` and `i386-int80` are x86_64 only (elsewhere ENOSYS) |
+| syscalls | `syscall NAME` for `unshare-user io-uring keyctl add-key vsock clone3 clone-newuser mount-missing tiocsti-own-pty tiocsti-high-own-pty ptrace-own-child x32-getpid i386-int80 pidfd-getfd process-vm-readv` (the last two on the probe's own process: its stdin through a pidfd of itself, four bytes of its own memory). Each runs in a forked child, so a kill by the filter is a result: blocked, no errno, detail `killed by SIGSYS`. `x32-getpid` and `i386-int80` are x86_64 only (elsewhere ENOSYS) |
 | process | `status-field NAME` (from `/proc/self/status`), `fds` (the open descriptors below 1024, `0,1,2`), `proc-read PID FILE` (size), `spawn-sleep N` (a child that sleeps N seconds without exec and without the probe's pipes; the detail is its pid), `kill PID SIG` |
-| other | `run CMD…` (a child; reached when it exits 0, the detail is the exit code, `out_bytes` counts what it wrote and nothing is printed), `http-connect TARGET` (CONNECT through `$HTTPS_PROXY`; the detail is the status code, reached only for 200), `landlock-abi` (the detail is the version) |
+| other | `run CMD…` (a child; reached when it exits 0, the detail is the exit code, `out_bytes` counts what it wrote and nothing is printed), `http-connect TARGET` (CONNECT through `$HTTPS_PROXY`; the detail is the status code, reached only for 200), `http-get URL` (a plain-HTTP `GET URL` in absolute-form through `$HTTPS_PROXY`, as a browser sends one, with hop-by-hop headers a proxy must drop: `Proxy-Connection`, `Proxy-Authorization`, `Keep-Alive`, `TE`, `Upgrade`, and `X-Glp-Hop`, which its `Connection` lists; and `X-Glp-End`, which it must keep. Reached only for 200; the detail is the status code, then each `X-Glp-NAME` header of the answer as ` name=VALUE`), `landlock-abi` (the detail is the version), `serve-http PORT N TEXT` (a dev server stand-in on `127.0.0.1:PORT`: N requests answered `200` with TEXT, then reached with `served N`) |
 
 Each `syscall` is chosen so that its unfiltered result differs from the filter's: `mount-missing` mounts on a path
 that does not exist (ENOENT unfiltered, EPERM filtered), `clone3` gets a null argument block (EINVAL, ENOSYS),
 `tiocsti-*` use a pty the probe opens itself (the unfiltered kernel says EIO or works; the filter says EPERM), and
 `tiocsti-high-own-pty` sets bit 32 of the request register, which the kernel ignores and a 64-bit compare would not.
+
+Two modes serve the browser layer's rows (below): `--as-browser DIR [PROBES]` is the browser host, and `--stand-in DIR
+ABSTRACT PORT [PROBES]` its agent. In both, `{agent-pid}` in a probe's argument is the stand-in agent's pid.
 
 ### Rows
 
@@ -1020,35 +1249,44 @@ One JSON object per line; unknown keys are a parse error.
 | Key | Meaning |
 |---|---|
 | `row` | the name (unique across all files) |
-| `needs` | `bwrap reduced landlock seccomp netns root macos linux x86_64 x32` |
+| `needs` | `bwrap reduced landlock seccomp netns root macos linux x86_64 x32 browser` (`browser`: Landlock ABI 9, the browser layer's floor) |
 | `tier` | `full` (default) or `reduced` |
+| `layer` | `browser`: the probes run as the browser host, under the browser layer (see "The browser layer's rows") |
 | `spec` | the spec, with placeholders. The harness fills what is left out: `chdir` (`${W}`); `net` (Linux: isolated, with a relay from a free port to `${RUN}/proxy.sock`, and then `run`, `sockets` and an `HTTPS_PROXY` in the default `env` to match; macOS: isolated with `mac_tcp_ports` the proxy's TCP port, and the same `HTTPS_PROXY`); `env` (a `PATH`); `layers` (the tier's floor; on macOS 0, since a macOS spec may not ask for Landlock); `tmp` (reduced: `${TMP}`). The probe's directory is added to `read` |
 | `setup` | steps: `fake-bwrap {version}`, `path-bwrap {name?}`, `swap-to-link {path, target}` (done while `ratatoskr` waits at `--pause-before-spawn`), `plant-link {path, target}`, `canary-fd {n}`, `start-sleep`, `make-dir {path}`, `make-file {path, text?}` (the last two, like `plant-link`, run in the control run's fixture too) |
 | `probes`, `expect` | one argument list per probe; one `{result, errno?: [names], detail?}` per probe. `errno` is a list so the layer that blocked is visible |
 | `control`, `control_expect` | see below |
-| `listeners_silent` | listeners that must have seen no connection: `hub backend session2 emacs bus ssh-agent abstract tcp-lo tcp-nl udp-lo udp-nl upstream gateway` |
+| `listeners_silent` | listeners that must have seen no connection: `hub backend session2 emacs bus ssh-agent abstract tcp-lo tcp-nl udp-lo udp-nl upstream gateway gateway-tcp web-upstream` |
 | `result` | a subset of the result file `{refused, layers, exit}` (`NAME_contains` asks for a part of a string). Without it the run itself is asserted: not refused, exit 0, one line per probe |
-| `unsandboxed` | run the probes with no sandbox and judge `expect` on them: the probes are real |
+| `unsandboxed` | run the probes with no sandbox and judge `expect`, `listeners_silent` and `proxy_events` on them: the probes are real |
 | `bwrap`, `landlock_omit`, `landlock_abi_cap` | `--bwrap`, `--landlock-omit`, `--landlock-abi-cap` |
 | `settings_guards` | `--settings-guards`: your config files closed, the write roots' settings files pinned (`settings-*` rows) |
 | `files_absent` | paths that must not exist after the run (a marker a refused run must not write) |
-| `proxy_events` | the proxy's events, exactly (placeholders filled): `Denied host:port`, `Refused <Why> target` |
+| `proxy_events` | the proxies' events, exactly (placeholders filled): `Denied host:port`, `Refused <Why> target` (`Refused <Why>` when the request had none), and the web proxy's `WebOff host:port`, `Private <asked> <addr> <Class>`, `Reached host` |
+| `web` | the probes' proxy is the fixture's web proxy (`Policy::Web` on `${RUN}/web.sock`), with `browser.web` granted when `true`: the default `net` relays the web relay's port (3130 in the full tier) to `web.sock`, and a control run's `HTTPS_PROXY` is the web proxy's TCP listener |
+| `grants` | the web proxy's `browser.private` grants, as `PrivateGrant`s (`{"target": {"host_port": …} \| {"cidr": …, "ports": …} \| "all_private", "expires"?}`, placeholders filled). A grant the policy refuses fails the row |
+| `dns` | the web proxy's resolver: `{"name": ["addr", …]}`. No other name resolves (a 502), and nothing asks real DNS |
 | `after` | `{after_lines, kill: run\|group, signal?, gone?: {match, within_ms}}`: once N lines are read, kill the `sandbox run` process or the sandbox's process group, and require that no process whose command line contains `match` is left within the time. A killed `sandbox run` writes no result file, so `kill: run` judges the lines and `gone` alone |
 | `raw` | `{args, exit?, json?, stdout_contains?}`: run `ratatoskr` with these arguments and no probe (`sandbox check`) |
 
 **Placeholders** are a closed list; an undefined one fails the parse. Paths: `${HOME} ${RUNTIME} ${RUN} ${TASK}
 ${TASK2} ${W} ${DATA} ${CANARY_DIR} ${FIXTURE} ${TMP} ${MARKER}`, and on macOS `${USERS_SHARED}`. Addresses:
 `${ABSTRACT}` (`@glp-…`), `${TCP_LO} ${TCP_NL} ${UDP_LO} ${UDP_NL}` (`host:port`; the `_NL` ones are the first
-non-loopback address), `${UPSTREAM}` (`upstream.test:PORT`, pinned in the proxy), `${PROXY_TCP}`. Others:
+non-loopback address), `${UPSTREAM}` (`upstream.test:PORT`, pinned in the proxy), `${PROXY_TCP}`; for the web proxy
+`${HOST_LAN}` (an address alone, `192.168.77.7`, which its policy counts as the host's own), `${GATEWAY_PORT}` (a hub
+TCP port on the loopback, in its `NeverSet`) and `${TCP_LO_PORT}` (`${TCP_LO}`'s port alone). Others:
 `${HARNESS_PID}`, `${SLEEP_PID}` (the `start-sleep` step), `${FAKE_BWRAP}` (the `fake-bwrap` step), `${GIT}` (the
-git draugr runs: `draugr::git::git_program()`, so on macOS the developer dir's, not the `/usr/bin/git` shim).
+git draugr runs: `draugr::git::git_program()`, so on macOS the developer dir's, not the `/usr/bin/git` shim), and in
+`layer` rows only `${PARENT}` (the stand-in agent's pid, which only the processes inside know: the fixture writes
+`{agent-pid}` and the probe fills it in).
 
 **`control: true` is mandatory for every expectation that says `blocked`** (the parse fails otherwise). The control
 run executes the same probes with no sandbox, in a fixture of its own, and each must give its unfiltered result:
 `reached`, or what `control_expect` says (`mount-missing` gives ENOENT). So a typo or a wrong path can never pass as
 ENOENT. Steps that belong to the sandboxed run (`swap-to-link`, `canary-fd`, the bwrap fakes) are not run in it.
 
-**Skips.** Only these reasons skip a row: "inside a container" (`/run/.containerenv`; for `bwrap` and `netns`),
+**Skips.** Only these reasons skip a row: "inside a container" (`/run/.containerenv`; for `bwrap` and `netns`; not
+with `--bwrap-in-container`),
 "needs macos", "needs linux", "needs x86_64", "x32 is off", "needs root" (uid 0 or `sudo -n true`), and "Landlock ABI
 N below M" (from the probe's `landlock-abi`). Any other cause is a **fail**, a sandbox refusal among them, so a
 regression that refuses every spec cannot look green.
@@ -1071,7 +1309,7 @@ sandbox like the `canary-fd` ones.
 | Path | Holds |
 |---|---|
 | `home/` | `.ssh/id_canary`, `other-repo/secret`, `canary-dir/canary.txt`, each random text |
-| `run/` | listeners that count connections: `drgnx/hub-0000.sock`, the backend's `drgnx/hub-0000.d/backend.sock`, `emacs/server`, `bus`, `ssh-agent.sock`; `drgnx/s/S1` (`${RUN}`) with `proxy.sock` (served by `gleipnir::net::proxy`, allowing `upstream.test:PORT`) and `gateway.sock` (an echo); another session's `drgnx/s/S2/hub.sock` (the layout of [hub.md](hub.md)) |
+| `run/` | listeners that count connections: `drgnx/hub-0000.sock`, the backend's `drgnx/hub-0000.d/backend.sock`, `emacs/server`, `bus`, `ssh-agent.sock`; `drgnx/s/S1` (`${RUN}`) with `proxy.sock` (served by `gleipnir::net::proxy`, allowing `upstream.test:PORT`), `web.sock` (the web proxy, below) and `gateway.sock` (an echo); another session's `drgnx/s/S2/hub.sock` (the layout of [hub.md](hub.md)) |
 | `data/` | `work.db` (a canary) |
 | `tasks/t1`, `tasks/t2`, `w/`, `t/` | `${TASK}`, `${TASK2}` (holds a canary), `${W}`, `${TMP}` |
 | `bin/` | a copy of the probe, bound read-only into the sandbox (the helper's own directory is closed, so the probe cannot run from beside `ratatoskr`) |
@@ -1079,6 +1317,16 @@ sandbox like the `canary-fd` ones.
 Besides the files: an abstract listener, TCP and UDP listeners on `127.0.0.1` and on the first non-loopback address,
 and an upstream, all of which echo. Setup that needs root (`fake-bwrap`: a script in a root-owned `/var/lib/glp-…/`
 that prints `bubblewrap VERSION` for `--version` and writes `${MARKER}` for any other argv) runs through `sudo -n`.
+
+**The web proxy.** `web.sock` and a TCP listener on `127.0.0.1` serve a second proxy under `Policy::Web`, started with
+`start_for_tests`. Its state is the row's (`web`, `grants`, `dns`); its `HostAddrs` hold `${HOST_LAN}`, and its
+`NeverSet` the ports of `gateway-tcp` (`${GATEWAY_PORT}`, an echo) and of both proxies' TCP listeners. Its resolver
+answers only the row's `dns`. Its upstream connector opens loopback addresses as they are (only `host.drgnx.internal`
+leads there) and sends every other address to `web-upstream`, so a "public" or LAN target has a server and no row
+reaches a real network. `web-upstream` checks a forwarded plain-HTTP head as the proxy must rewrite it (origin-form,
+one `Host`, no hop-by-hop header, exactly `Connection: close`, `X-Glp-End` kept) and answers 200 with `X-Glp-Host: <the
+Host it got>`, or 412 with `X-Glp-Why`; other bytes it echoes. Both proxies send their events down one channel, so the
+provider proxy's sentinel request (`proxy_events`) still comes after every web event.
 
 ### The rows shipped with the harness
 
@@ -1183,6 +1431,66 @@ signal scope over the relay, which no placeholder names (the unit test `reduced_
 holds both, against controls), and raw sockets, which an unprivileged control cannot open either (the BPF
 interpreter's table holds them).
 
+### The browser layer's rows
+
+`rows/linux/browser.jsonl` proves the browser layer: what the browser host cannot do that its agent can. A row with
+`"layer": "browser"` needs `bwrap` (the full tier, the only one with a browser) and, unless it is the refusal row,
+`browser` (Landlock ABI 9; a lower kernel skips them, as the desktop's ABI 8 does). The harness gives it a browser
+session's sandbox: relays from 3128 to `${RUN}/proxy.sock`, 3130 to `web.sock` and 9222 to `cdp.sock`; the sockets
+`proxy.sock`, `hub.sock`, `mcp.sock`, `web.sock` and `cdp.sock` in `${RUN}` (the fixture serves the last four for these
+rows, keeping one already there); the local port 5173 as `extra_tcp_ports`; and a `browser` whose program is the probe
+copy (its directory an `extra_read`), with its own dir `/tmp/drgnx-browser`. What the row's spec says itself is kept.
+
+The run is `ratatoskr sandbox run --browser-probe …`, so the inner helper forks the probe under the browser layer and
+filter in the browser host's place, and then becomes the agent, which is the probe's stand-in:
+
+1. the browser probe (`--as-browser`) writes its pid to `/tmp/drgnx-browser/browser.pid` and says `ready` on fd 4;
+2. the stand-in (`--stand-in`, the agent's command) writes `/tmp/agent-file`, listens on the abstract `${ABSTRACT}`
+   (in the session's network namespace) and on `127.0.0.1:5173`, then writes `/tmp/drgnx-browser/go`;
+3. the browser probe runs the probes, with `${PARENT}` its parent's pid (the helper forked it and became the agent),
+   and writes its lines to `/tmp/drgnx-browser/lines` (its stdout is `/dev/null`);
+4. the stand-in waits for it to exit (at most 40 s) and prints the lines, which the harness judges as any row's.
+
+**The control run** is the same sandbox with the probes run by the stand-in agent itself (`${PARENT}` its own pid),
+the browser probe only saying `ready` and waiting: the control proves the agent reaches each target, so a blocked line
+is the browser layer's alone.
+
+| Row | What it proves |
+|---|---|
+| `browser-cannot-read-worktree`, `-login-dir`, `-agent-tmp` | the browser reads none of the agent's write root, the login dir it was given (`${HOME}/.claude`) or its `/tmp` (EACCES) |
+| `browser-cannot-read-agent-environ` | `/proc/<agent>/environ` and `mem` are refused (Landlock refuses a ptrace-mode access from a sub-domain to its parent's): the CDP secret and the gateway token in the agent's environment stay there |
+| `browser-cannot-connect-hub-sock`, `-mcp-sock` | no Unix connect at all (ABI 9: EACCES), so not the session's hub or MCP socket |
+| `browser-cannot-connect-provider-port`, `-cdp-port` | neither the provider relay (3128) nor the CDP relay (9222), by `connect` (Landlock's TCP rule, EACCES) or a Fast Open send (the browser filter, EPERM) |
+| `browser-reaches-web-port-and-a-local-port` | the web relay (3130) and the agent's local server (5173) are reached |
+| `browser-cannot-bind-tcp` | no TCP bind (Landlock, EACCES) |
+| `browser-cannot-signal-agent`, `browser-cannot-reach-agent-abstract` | Landlock's scopes: no signal to the agent and no connect to its abstract socket (EPERM) |
+| `browser-writes-own-dir-only` | the browser writes `/tmp/drgnx-browser` and nothing else of `/tmp` |
+| `browser-below-abi9-refused` | at Landlock ABI 8 (`landlock_abi_cap`) a spec with a browser is refused before anything runs: validation raised its floor to 9 |
+| `agent-pidfd-getfd-refused`, `agent-process-vm-readv-refused` | every session refuses `pidfd_getfd` and `process_vm_readv` (seccomp, EPERM), the cheap ways to take another process's descriptor or memory (the browser host's socketpair end among them) |
+
+### The web proxy's rows
+
+`rows/linux/web-proxy.jsonl` holds the browser session's web proxy (`Policy::Web`, "The web policy") to its
+hardening: every probe goes through the full tier's relay on 3130 to `${RUN}/web.sock` (`web`), and
+each row names its grants and its DNS answers. Each row needs `bwrap`; its control run reaches the same proxy over TCP,
+so the control gives the same lines, and the test `web_proxy_rows_hold_without_the_sandbox` runs every row unsandboxed
+(lines, events and silent listeners) in any container. Every refusal is a 403 and its event, so nothing was connected.
+
+| Row | What it proves |
+|---|---|
+| `private-without-grant-refused` | LAN, ULA, link-local and CGNAT literals, names that resolve to LAN (`printer.local` too) and a plain-HTTP request to a LAN literal are `Private` (the card's question), never reached, with `browser.web` granted |
+| `granted-target-only` | a host:port grant opens that literal, and a name grant that name, and nothing beside them: the neighbour port, the neighbour address, the name's address as a literal, the name on another port; an expired grant opens nothing |
+| `rebinding-name-onto-grant-refused`, `rebinding-name-onto-all-private-refused` | a name whose answer is a granted host:port, a granted CIDR or (under `all_private`) any LAN or ULA address is `Refused Rebound`, while the literals themselves connect; `all_private` leaves link-local and CGNAT `Private` |
+| `loopback-every-spelling-refused` | `127.0.0.2`, `127.0.0.1`, `[::1]`, `[::ffff:127.0.0.1]` (`Embedded`), `localhost`, a name pinned to `127.0.1.1`, `${HOST_LAN}` and a name resolving to it are refused, under grants that name each of them and `all_private`; `host.drgnx.internal:PORT` reaches the host's loopback under its grant |
+| `nevers-under-any-grant` | the seven metadata addresses, `0.0.0.0` and `[::]` (`Never`), each IPv4 one IPv4-mapped, NAT64 and 6to4 (`Embedded`), a name resolving to a metadata address, the two metadata names, and the gateway's port as `host.drgnx.internal` (`Never`) and as `127.0.0.1` (`Loopback`), under `all_private`, `0.0.0.0/0`, `::/0` and a host:port grant for each; nothing reaches `web-upstream` or the gateway |
+| `plain-http-forwarded` | an absolute-form `GET` reaches its target in origin-form with `Host` from the target (`web.test`, `web.test:443` from `WEB.Test:443`, a granted LAN `host:port`), no hop-by-hop header and `Connection: close` (the upstream checks the head); a CONNECT to port 80 (WebSockets) connects |
+| `https-absolute-and-userinfo-refused` | `https://` absolute-form, userinfo and a fragment are 400 (`Refused BadRequest`) |
+| `public-80-443-only` | a public name and literal connect on 80 and 443 only (`Refused Port` on 8443, 22, 8080, plain HTTP on 8080 too); a mixed answer connects to its public part |
+| `public-without-browser-web-asks` | without `browser.web` a public target is `WebOff` (CONNECT and plain HTTP), while a never is still `Refused` and a LAN literal still `Private` |
+
+The policy decides before the relay matters, so these rows hold on any kernel the full tier runs on. One point they
+lean on: a `.local` name is resolved like any other (`printer.local` above); only its answer is judged.
+
 ### The macOS rows (Task 16)
 
 `rows/macos/*.jsonl` are the Mac checklist's MAC-SB-10 (a)-(j) and the K table as data. There is no Mac in the dev
@@ -1253,9 +1561,13 @@ and each has a DEFERRED row:
 A container job is not run by Gleipnir: the container is its sandbox (`exec/container.rs`, `docs/guide/jobs.md`). The
 hub builds the one `podman run` line from a fixed spec: `--rm`, `--name drgnx-job-<job id>`, `--pull=never`,
 `--userns=keep-id`, `--cap-drop=all`, `--security-opt=no-new-privileges`, `--read-only`, `--tmpfs /tmp`, the process,
-memory and CPU limits, `--network=none`, the worktree as the only `-v`, `-w /work`, the digest-pinned image, then the
-agent's command, which podman never reads as options. The request has no field that adds anything; extra fields are
-ignored.
+memory and CPU limits with `--memory-swap` equal to `--memory` (a job never swaps), `--oom-score-adj=1000` and
+`--cgroup-conf=memory.oom.group=1` (the kernel's first OOM victim, killed whole), `--network=none`, the worktree as the
+only `-v`, `-w /work`, the digest-pinned image, then the agent's command, which podman never reads as options. The
+request has no field that adds anything; extra fields are ignored.
+
+The builder is `sleipnir::linux::podman::argv`, shared with the runners ([sleipnir.md](sleipnir.md#the-podman-argv));
+`exec/container.rs` calls it with the hub's own placement and re-exports its types.
 
 - **Name and leftovers.** The name lets the hub find what a killed podman client left: at hub start it removes every
   `drgnx-job-*` container whose job is not running (through the same podman path; other names are never touched).
@@ -1273,11 +1585,14 @@ ignored.
   the user's systemd through `DBUS_SESSION_BUS_ADDRESS`, else `$XDG_RUNTIME_DIR/bus`, so a hub whose
   `XDG_RUNTIME_DIR` is not the session's (the conformance runner's) needs the former. Fix for a refused host: log
   in to a user session, or `loginctl enable-linger`.
-- **No network yet.** A granted network needs a podman network whose only route is the Gleipnir proxy. Gleipnir's proxy
-  can listen on TCP (`net::proxy::Listener::Tcp`), but nothing routes a podman network to a host listener: a rootless
-  internal network lives in podman's own network namespace, where the hub's loopback and the per-session proxy sockets
-  are not reachable. Until that is designed (a proxy listener on an address the network can reach, owned by the hub),
-  a job is never given a network and a grant is refused.
+- **Network through the proxy.** A job the matrix granted a network keeps `--network=none`; there is no podman
+  network. The argv gains the job's own Gleipnir proxy socket (`-v <socket>:/run/drgnx/proxy.sock:ro,Z`), a private
+  copy of the forwarder `drgnx-fwd` (`-v <copy>:/run/drgnx/fwd:ro,Z`), `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy` and
+  `https_proxy` set to `http://127.0.0.1:3128`, and `--entrypoint /run/drgnx/fwd`. The image name is followed by
+  `3128 /run/drgnx/proxy.sock --` and then the command: the forwarder gives the container's own loopback port 3128 in
+  front of the socket, then runs the command in its place. The only route out is the proxy, whose allow-list is the
+  setting `agents-net-hosts` (by default the package hosts of crates.io, npm and PyPI, port 443). A job granted a
+  network with no proxy or no forwarder is refused.
 - **Escape rows.** `test/conformance/container-escape/*.jsonl` (15 rows, `requires: podman`) each run a probe inside the
   container: extra mounts, `-v` in argv, a privileged or cap-add field, devices, host network, no network (only `lo`),
   no podman socket, no home, a symlink out of the worktree, the memory cap, the process cap, the git common dir. The

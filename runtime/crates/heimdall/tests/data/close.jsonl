@@ -1,0 +1,42 @@
+{"note":"the agent's sessions: its browser session, a page it resumed, and a service worker still paused under the page"}
+{"to_browser":{"id":1073741824,"method":"Target.attachToBrowserTarget"}}
+{"browser":{"method":"Target.attachedToTarget","params":{"sessionId":"S-browser","targetInfo":{"targetId":"T-browser","type":"browser","title":"","url":"","attached":true,"canAccessOpener":false},"waitingForDebugger":false}}}
+{"drop":true}
+{"browser":{"id":1073741824,"result":{"sessionId":"S-browser"}}}
+{"drop":true}
+{"agent":{"id":1,"method":"Target.setAutoAttach","params":{"autoAttach":true,"waitForDebuggerOnStart":true,"flatten":true}}}
+{"to_browser":{"id":1,"method":"Target.setAutoAttach","params":{"autoAttach":true,"waitForDebuggerOnStart":true,"flatten":true},"sessionId":"S-browser"}}
+{"browser":{"method":"Target.attachedToTarget","params":{"sessionId":"S-page","targetInfo":{"targetId":"T-page","type":"page","title":"","url":"about:blank","attached":true,"canAccessOpener":false},"waitingForDebugger":true},"sessionId":"S-browser"}}
+{"to_agent":{"method":"Target.attachedToTarget","params":{"sessionId":"S-page","targetInfo":{"targetId":"T-page","type":"page","title":"","url":"about:blank","attached":true,"canAccessOpener":false},"waitingForDebugger":true}}}
+{"agent":{"id":2,"method":"Runtime.runIfWaitingForDebugger","sessionId":"S-page"}}
+{"to_browser":"same"}
+{"browser":{"method":"Target.attachedToTarget","params":{"sessionId":"S-worker","targetInfo":{"targetId":"T-worker","type":"service_worker","title":"","url":"http://127.0.0.1:5173/sw.js","attached":true,"canAccessOpener":false},"waitingForDebugger":true},"sessionId":"S-page"}}
+{"to_agent":"same"}
+{"note":"the agent goes: the paused worker is resumed, every agent session is detached on its parent (children first), and the hub attaches again for the next agent"}
+{"close":true}
+{"to_browser":{"id":1073741825,"method":"Runtime.runIfWaitingForDebugger","params":{},"sessionId":"S-worker"}}
+{"to_browser":{"id":1073741826,"method":"Target.detachFromTarget","params":{"sessionId":"S-worker"},"sessionId":"S-page"}}
+{"to_browser":{"id":1073741827,"method":"Target.detachFromTarget","params":{"sessionId":"S-page"},"sessionId":"S-browser"}}
+{"to_browser":{"id":1073741828,"method":"Target.detachFromTarget","params":{"sessionId":"S-browser"}}}
+{"to_browser":{"id":1073741829,"method":"Target.attachToBrowserTarget"}}
+{"note":"what the old sessions still send is dropped"}
+{"browser":{"id":1073741825,"result":{},"sessionId":"S-worker"}}
+{"drop":true}
+{"browser":{"method":"Runtime.executionContextCreated","params":{"context":{"id":1,"origin":"","name":""}},"sessionId":"S-worker"}}
+{"drop":true}
+{"browser":{"method":"Target.detachedFromTarget","params":{"sessionId":"S-worker","targetId":"T-worker"},"sessionId":"S-page"}}
+{"drop":true}
+{"note":"a new agent that comes before the attach is answered is held off"}
+{"agent":{"id":1,"method":"Browser.getVersion"}}
+{"to_agent":{"id":1,"error":{"code":-32000,"message":"the browser is starting"}}}
+{"browser":{"method":"Target.detachedFromTarget","params":{"sessionId":"S-browser","targetId":"T-browser"}}}
+{"drop":true}
+{"browser":{"method":"Target.attachedToTarget","params":{"sessionId":"S-browser-2","targetInfo":{"targetId":"T-browser","type":"browser","title":"","url":"","attached":true,"canAccessOpener":false},"waitingForDebugger":false}}}
+{"drop":true}
+{"browser":{"id":1073741829,"result":{"sessionId":"S-browser-2"}}}
+{"drop":true}
+{"agent":{"id":1,"method":"Browser.getVersion"}}
+{"to_browser":{"id":1,"method":"Browser.getVersion","sessionId":"S-browser-2"}}
+{"note":"the old agent's sessions are nobody's"}
+{"agent":{"id":2,"method":"Page.enable","sessionId":"S-page"}}
+{"to_agent":{"id":2,"error":{"code":-32000,"message":"not yours"},"sessionId":"S-page"}}

@@ -5,7 +5,9 @@
 //!
 //! - **Units never mix.**  A limit in one unit is only ever reduced by spend in that unit (`usd` is what the gateway
 //!   measured, `usd-est` what an agent reported at API prices, `limit-share` a subscription window's share, `tokens`,
-//!   `count`); nothing is converted.  `usd-est` and `limit-share` are estimates and are labelled so.
+//!   `count`); nothing is converted.  `usd-est` and `limit-share` are estimates and are labelled so.  The one join:
+//!   a plan's dollar budget on a plan with a subscription profile ([`Budgets::set_joint`]) binds `usd` and `usd-est`
+//!   summed, one limit, reported as an estimate.
 //! - **Nesting.**  A spend counts against the spending scope and every ancestor (`link`: worker under manager, manager
 //!   or worker under plan, plan under project); what remains is the least over the chain.  A session is a scope from
 //!   its start; the plan runner (Task 16a) and the manager role (Task 25) link the upper levels.
@@ -38,6 +40,13 @@ pub struct Hit {
     pub unit: Unit,
     pub limit: f64,
     pub spent: f64,
+}
+
+/// What a cumulative reading booked: the rise it added (never negative) and the limits that rise reached.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Booked {
+    pub delta: f64,
+    pub hits: Vec<Hit>,
 }
 
 impl Hit {
@@ -80,16 +89,57 @@ pub fn session_of(s: &BudgetScope) -> Option<&str> {
     }
 }
 
-/// A subscription meter: its readings of the last [`PACE_WINDOW`].
+/// How long a meter's thinned history is kept, in seconds (8 days).
+const HISTORY_SPAN: f64 = 8.0 * 24.0 * 3600.0;
+
+/// The thinned history keeps one reading in each slot of this many seconds (a quarter hour): at most 768 a provider.
+const HISTORY_SLOT: f64 = 900.0;
+
+/// The rise a meter made over READINGS, in time order: every rise added, a fall (the window reset) adds nothing and
+/// starts a new segment.
+pub fn rise_total(readings: &[(f64, f64)]) -> f64 {
+    readings
+        .windows(2)
+        .map(|w| (w[1].1 - w[0].1).max(0.0))
+        .sum()
+}
+
+/// A subscription meter: its readings of the last [`PACE_WINDOW`], and a thinned history of eight days.
 #[derive(Clone, Debug, Default)]
 struct Meter {
     /// `(at, share)` in time order.
     samples: VecDeque<(f64, f64)>,
     resets_at: Option<f64>,
+    /// `(at, share)`: one reading for each [`HISTORY_SLOT`], the slot's first time and its latest share; a fall is
+    /// kept (it is a reset, [`rise_total`] reads it so).
+    history: VecDeque<(f64, f64)>,
 }
 
 impl Meter {
-    fn read(&mut self, at: f64, share: f64, resets_at: Option<f64>) {
+    /// Whether the reading started a new slot of the history (what is worth saving).
+    fn read(&mut self, at: f64, share: f64, resets_at: Option<f64>) -> bool {
+        let fresh = match self.history.back_mut() {
+            Some((slot, latest)) if at - *slot < HISTORY_SLOT => {
+                *latest = share;
+                false
+            }
+            _ => {
+                self.history.push_back((at, share));
+                true
+            }
+        };
+        while self
+            .history
+            .front()
+            .is_some_and(|(t, _)| at - *t >= HISTORY_SPAN)
+        {
+            self.history.pop_front();
+        }
+        self.read_window(at, share, resets_at);
+        fresh
+    }
+
+    fn read_window(&mut self, at: f64, share: f64, resets_at: Option<f64>) {
         // a share that fell is a new window: the earlier readings say nothing about it
         if self.samples.back().is_some_and(|(_, s)| share + 1e-9 < *s) {
             self.samples.clear();
@@ -150,6 +200,8 @@ struct St {
     /// The last cumulative reading per `(session, what)`: a spend is the rise since.
     seen: BTreeMap<(Key, String), f64>,
     meters: BTreeMap<String, Meter>,
+    /// The scopes whose `usd` and `usd-est` limits bind together ([`Budgets::set_joint`]).
+    joint: BTreeSet<Key>,
 }
 
 /// What `runtime.db` keeps.
@@ -158,6 +210,19 @@ struct Saved {
     limits: Vec<(BudgetScope, Vec<Limit>)>,
     spent: Vec<(BudgetScope, Vec<Limit>)>,
     parents: Vec<(BudgetScope, BudgetScope)>,
+    /// The meters' thinned histories; a row saved before they were kept has none.
+    #[serde(default)]
+    meters: Vec<SavedMeter>,
+    /// The scopes whose dollar limits bind together; a row saved before has none.
+    #[serde(default)]
+    joint: Vec<BudgetScope>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SavedMeter {
+    provider: String,
+    history: Vec<(f64, f64)>,
+    resets_at: Option<f64>,
 }
 
 struct Inner {
@@ -201,16 +266,32 @@ fn chain(st: &St, key: &str) -> Vec<Key> {
     out
 }
 
+fn is_dollars(unit: Unit) -> bool {
+    matches!(unit, Unit::Usd | Unit::UsdEst)
+}
+
+/// What KEY spent against a limit in UNIT: that unit's spend, or for a joint scope's dollar limit the measured and
+/// the estimated dollars together.
+fn spent_against(st: &St, key: &str, unit: Unit) -> f64 {
+    let spent = |u: Unit| {
+        st.spent
+            .get(key)
+            .and_then(|m| m.get(&u))
+            .copied()
+            .unwrap_or(0.0)
+    };
+    if is_dollars(unit) && st.joint.contains(key) {
+        spent(Unit::Usd) + spent(Unit::UsdEst)
+    } else {
+        spent(unit)
+    }
+}
+
 fn remaining_of(st: &St, key: &str) -> Vec<(Unit, f64)> {
     let mut least: BTreeMap<Unit, f64> = BTreeMap::new();
     for k in chain(st, key) {
         for l in st.limits.get(&k).into_iter().flatten() {
-            let spent = st
-                .spent
-                .get(&k)
-                .and_then(|m| m.get(&l.unit))
-                .copied()
-                .unwrap_or(0.0);
+            let spent = spent_against(st, &k, l.unit);
             let left = (l.amount - spent).max(0.0);
             least
                 .entry(l.unit)
@@ -221,26 +302,38 @@ fn remaining_of(st: &St, key: &str) -> Vec<(Unit, f64)> {
     least.into_iter().collect()
 }
 
-/// The limits KEY has that its spend has reached and that were not reported yet.
+/// The limits KEY has that its spend has reached and that were not reported yet.  A joint scope's two dollar limits
+/// are one: reported once, in `usd-est` (an estimate) when any of the spend was estimated.
 fn reached(st: &mut St, key: &str, only: Option<Unit>) -> Vec<Hit> {
+    let joint = st.joint.contains(key);
     let mut hits = Vec::new();
     for l in st.limits.get(key).cloned().into_iter().flatten() {
-        if only.is_some_and(|u| u != l.unit) {
+        if only.is_some_and(|u| u != l.unit && !(joint && is_dollars(u) && is_dollars(l.unit))) {
             continue;
         }
-        let spent = st
-            .spent
-            .get(key)
-            .and_then(|m| m.get(&l.unit))
-            .copied()
-            .unwrap_or(0.0);
+        let spent = spent_against(st, key, l.unit);
+        let unit = if joint && is_dollars(l.unit) {
+            let estimated = st
+                .spent
+                .get(key)
+                .and_then(|m| m.get(&Unit::UsdEst))
+                .is_some_and(|a| *a > 0.0);
+            if estimated { Unit::UsdEst } else { Unit::Usd }
+        } else {
+            l.unit
+        };
         if spent >= l.amount
             && let Some(scope) = st.scopes.get(key).cloned()
-            && st.hit.insert((key.to_string(), l.unit))
+            && !st.hit.contains(&(key.to_string(), l.unit))
         {
+            st.hit.insert((key.to_string(), l.unit));
+            if joint && is_dollars(l.unit) {
+                st.hit.insert((key.to_string(), Unit::Usd));
+                st.hit.insert((key.to_string(), Unit::UsdEst));
+            }
             hits.push(Hit {
                 scope,
-                unit: l.unit,
+                unit,
                 limit: l.amount,
                 spent,
             });
@@ -296,6 +389,20 @@ impl Budgets {
             st.scopes.insert(pk.clone(), p);
             st.parent.insert(ck, pk);
         }
+        for scope in s.joint {
+            let k = key(&scope);
+            st.scopes.insert(k.clone(), scope);
+            st.joint.insert(k);
+        }
+        // the readings are replayed, so the 24 h window of the pace is rebuilt from the history
+        for m in s.meters {
+            let mut meter = Meter::default();
+            for (at, share) in m.history {
+                meter.read(at, share, None);
+            }
+            meter.resets_at = m.resets_at;
+            st.meters.insert(m.provider, meter);
+        }
     }
 
     fn saved(&self) -> Saved {
@@ -326,6 +433,16 @@ impl Budgets {
                 .iter()
                 .filter_map(|(c, p)| Some((scope(c)?, scope(p)?)))
                 .collect(),
+            meters: st
+                .meters
+                .iter()
+                .map(|(p, m)| SavedMeter {
+                    provider: p.clone(),
+                    history: m.history.iter().copied().collect(),
+                    resets_at: m.resets_at,
+                })
+                .collect(),
+            joint: st.joint.iter().filter_map(scope).collect(),
         }
     }
 
@@ -342,9 +459,25 @@ impl Budgets {
 
     /// SCOPE's limits are LIMITS (empty clears); the limits already reached are reported again.
     pub fn set(&self, scope: &BudgetScope, limits: Vec<Limit>) -> Vec<Hit> {
+        self.set_limits(scope, limits, false)
+    }
+
+    /// [`Budgets::set`], with SCOPE's `usd` and `usd-est` limits binding together: each counts what the gateway
+    /// measured and what agents estimated, summed, so a plan whose tasks run on a subscription and on a gateway is
+    /// capped once, and what the gateway may still spend is what that sum leaves.  Reached, the two are one limit.
+    pub fn set_joint(&self, scope: &BudgetScope, limits: Vec<Limit>) -> Vec<Hit> {
+        self.set_limits(scope, limits, true)
+    }
+
+    fn set_limits(&self, scope: &BudgetScope, limits: Vec<Limit>, joint: bool) -> Vec<Hit> {
         let k = key(scope);
         let mut st = self.st();
         st.scopes.insert(k.clone(), scope.clone());
+        if joint {
+            st.joint.insert(k.clone());
+        } else {
+            st.joint.remove(&k);
+        }
         st.hit.retain(|(hk, _)| *hk != k);
         if limits.is_empty() {
             st.limits.remove(&k);
@@ -426,16 +559,29 @@ impl Budgets {
         hits
     }
 
-    /// A cumulative reading TOTAL of WHAT for SCOPE (a session's cost so far): the rise since the last is spent.
-    pub fn spend_total(&self, scope: &BudgetScope, what: &str, unit: Unit, total: f64) -> Vec<Hit> {
+    /// A cumulative reading TOTAL of WHAT for SCOPE (a session's cost so far) in its agent's CONVERSATION: the rise
+    /// since the last reading of that conversation is spent.  A new conversation under the same session (a manager's
+    /// rotation, a fresh start after a restart) counts from zero.
+    pub fn spend_total_in(
+        &self,
+        scope: &BudgetScope,
+        what: &str,
+        conversation: &str,
+        unit: Unit,
+        total: f64,
+    ) -> Booked {
         let delta = {
             let mut st = self.st();
-            let seen = st.seen.entry((key(scope), what.to_string())).or_insert(0.0);
+            let reading = format!("{what} {conversation}");
+            let seen = st.seen.entry((key(scope), reading)).or_insert(0.0);
             let d = total - *seen;
             *seen = total.max(*seen);
-            d
+            d.max(0.0)
         };
-        self.spend(scope, unit, delta)
+        Booked {
+            delta,
+            hits: self.spend(scope, unit, delta),
+        }
     }
 
     /// The session SCOPE's requests are booked under job JOB at the gateway.
@@ -533,11 +679,15 @@ impl Budgets {
         if !(0.0..=1.0 + 1e-9).contains(&share) {
             return Vec::new();
         }
-        self.st()
+        let fresh = self
+            .st()
             .meters
             .entry(provider.to_string())
             .or_default()
             .read(now, share, resets_at);
+        if fresh {
+            self.save();
+        }
         let what = format!("limit-share:{provider}");
         let delta = {
             let mut st = self.st();
@@ -548,6 +698,21 @@ impl Budgets {
             d
         };
         self.spend(scope, Unit::LimitShare, delta)
+    }
+
+    /// PROVIDER's meter readings of the last eight days as of NOW, one for each quarter hour at most, in time order.
+    pub fn history(&self, provider: &str, now: f64) -> Vec<(f64, f64)> {
+        self.st()
+            .meters
+            .get(provider)
+            .map(|m| {
+                m.history
+                    .iter()
+                    .copied()
+                    .filter(|(t, _)| now - *t < HISTORY_SPAN)
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// The pace of PROVIDER's meter, or of every meter, as of NOW.

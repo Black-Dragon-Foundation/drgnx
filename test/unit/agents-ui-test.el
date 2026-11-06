@@ -109,10 +109,12 @@
 
 (ert-deftest drgnx-agents-ui/defines-the-agents-segment ()
   :tags '(:frozen)
-  (let ((drgnx-agents--sessions (list (drgnx-agents--make :name "a" :status 'busy)
-                                      (drgnx-agents--make :name "b" :status 'idle)))
-        (drgnx-agents-ui--busy 0))
-    (drgnx-test-with-modules '(tools/agents) :strict t
+  ;; the sessions and the count are set inside the body: the modules' load runs the libraries' `defvar's first
+  (drgnx-test-with-modules '(tools/agents) :strict t
+                           (let ((drgnx-agents--sessions (list (drgnx-agents--make :name "a" :status 'busy)
+                                                               (drgnx-agents--make :name "b" :status 'idle)))
+                                 (drgnx-agents-ui--busy 0))
+                             (drgnx-agents-ui--count-busy)   ; as the setup counted them
                              (let ((spec (gethash 'agents drgnx-statusbar--segments)) (before (drgnx-epoch 'statusbar)))
                                (should spec)
                                (should (eq (plist-get spec :click) 'drgnx-agents-ui-view))
@@ -136,20 +138,22 @@
   :tags '(:frozen)
   ;; what no door records: the mirror's hooks (added at idle, outside the setup) and the event connection
   (require 'drgnx-agents-mirror)
-  (let ((drgnx-hub--events nil) (drgnx-hub--client nil) (drgnx-hub--subscribing nil) (p nil))
+  (let ((p nil))
     (unwind-protect
         (drgnx-test-with-modules '(tools/agents) :strict t
-                                 (setq p (make-pipe-process :name "drgnx-test-hub-events" :noquery t)
-                                       drgnx-hub--events p)
-                                 (add-hook 'drgnx-hub-event-functions #'drgnx-agents-mirror--event)       ; as `drgnx-agents-mirror-sync'
-                                 (add-hook 'drgnx-hub-disconnect-functions #'drgnx-agents-mirror--hub-gone)
-                                 (drgnx-module-teardown 'tools/agents)
-                                 (drgnx-timer-cancel 'statusbar-refresh)   ; the agents set emptied: the bar redraws
-                                 (should-not (memq #'drgnx-agents-mirror--event drgnx-hub-event-functions))
-                                 (should-not (memq #'drgnx-agents-mirror--hub-gone drgnx-hub-disconnect-functions))
-                                 (should-not (process-live-p p))
-                                 (should-not drgnx-hub--events)
-                                 (when (buffer-live-p (process-buffer p)) (kill-buffer (process-buffer p))))
+                                 ;; the hub client's state is bound inside the body, where the modules are loaded
+                                 (let ((drgnx-hub--events nil) (drgnx-hub--client nil) (drgnx-hub--subscribing nil))
+                                   (setq p (make-pipe-process :name "drgnx-test-hub-events" :noquery t)
+                                         drgnx-hub--events p)
+                                   (add-hook 'drgnx-hub-event-functions #'drgnx-agents-mirror--event)       ; as `drgnx-agents-mirror-sync'
+                                   (add-hook 'drgnx-hub-disconnect-functions #'drgnx-agents-mirror--hub-gone)
+                                   (drgnx-module-teardown 'tools/agents)
+                                   (drgnx-timer-cancel 'statusbar-refresh)   ; the agents set emptied: the bar redraws
+                                   (should-not (memq #'drgnx-agents-mirror--event drgnx-hub-event-functions))
+                                   (should-not (memq #'drgnx-agents-mirror--hub-gone drgnx-hub-disconnect-functions))
+                                   (should-not (process-live-p p))
+                                   (should-not drgnx-hub--events)
+                                   (when (buffer-live-p (process-buffer p)) (kill-buffer (process-buffer p)))))
       (when (process-live-p p) (delete-process p))
       (when (and p (buffer-live-p (process-buffer p))) (kill-buffer (process-buffer p))))))
 
@@ -160,18 +164,19 @@
   ;; `agents' is a core source: what waits when the module goes must not stay counted, and a click on an item whose
   ;; command went with the module says so instead of signalling
   (drgnx-notice-test-with-model
-    (let ((drgnx-agents--sessions (list (drgnx-agents--make :name "m1" :status 'busy :remote "r1"
-                                                            :permissions (list '(:id 7 :title "Run make")))))
-          (drgnx-agents--attention-seen nil))
-      (drgnx-test-with-modules '(tools/agents) :strict t
+    (drgnx-test-with-modules '(tools/agents) :strict t
+                             ;; the sessions are bound inside the body, where the modules are loaded
+                             (let ((drgnx-agents--sessions (list (drgnx-agents--make :name "m1" :status 'busy :remote "r1"
+                                                                                     :permissions (list '(:id 7 :title "Run make")))))
+                                   (drgnx-agents--attention-seen nil))
                                (drgnx-agents--note-attention)
                                (should (= 1 (drgnx-needs-you-count)))
                                (drgnx-module-teardown 'tools/agents)
                                (should (= 0 (drgnx-needs-you-count)))
-                               (drgnx-timer-cancel 'statusbar-refresh))   ; the bar redraws on the count (as above)
-      ;; a command that went with its module, clicked: it says so
-      (should-error (drgnx-ui--run 'drgnx-agents-ui-test--gone) :type 'user-error)
-      (should-error (funcall (drgnx-notices--action '(drgnx-agents-ui-test--gone 1))) :type 'user-error))))
+                               (drgnx-timer-cancel 'statusbar-refresh)))   ; the bar redraws on the count (as above)
+    ;; a command that went with its module, clicked: it says so
+    (should-error (drgnx-ui--run 'drgnx-agents-ui-test--gone) :type 'user-error)
+    (should-error (funcall (drgnx-notices--action '(drgnx-agents-ui-test--gone 1))) :type 'user-error)))
 
 (ert-deftest drgnx-agents-ui/hub-sessions-are-mirrored-only-when-a-hub-runs ()
   :tags '(:frozen)

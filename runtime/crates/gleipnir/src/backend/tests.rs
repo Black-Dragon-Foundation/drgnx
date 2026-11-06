@@ -45,6 +45,7 @@ impl Fx {
             source: self.p("bin/ratatoskr"),
             inner_args: vec!["sandbox-inner".into()],
             relay_args: vec!["relay".into()],
+            browser_host_args: vec!["browser-host".into()],
         }
     }
 
@@ -80,8 +81,28 @@ impl Fx {
             tmp: (!full).then(|| self.p("t")),
             layers: Layers::for_target(target),
             extra_tcp_ports: vec![],
+            trace: Default::default(),
+            browser: None,
         };
         ValidSpec::assume_valid(spec, target)
+    }
+
+    /// [`Fx::spec`] with the browser: a web relay port (3130) and a program under `/usr`.
+    fn browser_spec(&self, target: Target) -> ValidSpec {
+        let mut s = self.spec(target).spec().clone();
+        if let Net::Isolated { relay, .. } = &mut s.net {
+            let socket = relay[0].socket.with_file_name("web.sock");
+            relay.push(RelayPort { port: 3130, socket });
+        }
+        s.browser = Some(crate::spec::SpecBrowser {
+            program: "/usr/bin/true".into(),
+            own_dir: crate::spec::BROWSER_DIR_FULL.into(),
+            web_port: 3130,
+            local_ports: vec![],
+            extra_read: vec![],
+            host_args: vec![],
+        });
+        ValidSpec::assume_valid(s, target)
     }
 
     fn sandbox(&self, kind: BackendKind) -> Sandbox {
@@ -108,11 +129,26 @@ fn system_program() -> PathBuf {
 }
 
 fn prep(sb: &Sandbox, spec: ValidSpec, cmd: &[&str]) -> Result<Prepared, Refusal> {
+    prep_with(sb, spec, cmd, None)
+}
+
+fn prep_with(
+    sb: &Sandbox,
+    spec: ValidSpec,
+    cmd: &[&str],
+    hub: Option<OwnedFd>,
+) -> Result<Prepared, Refusal> {
     let cmd = cmd.iter().map(|s| s.to_string()).collect();
     #[cfg(feature = "test-hooks")]
-    return sb.prepare(spec, cmd, TestHooks::default());
+    return sb.prepare(spec, cmd, hub, TestHooks::default());
     #[cfg(not(feature = "test-hooks"))]
-    sb.prepare(spec, cmd)
+    sb.prepare(spec, cmd, hub)
+}
+
+/// One end of a fresh socketpair (the hub would keep the other).
+fn hub_end() -> (OwnedFd, OwnedFd) {
+    let (a, b) = std::os::unix::net::UnixStream::pair().unwrap();
+    (a.into(), b.into())
 }
 
 fn targets(inv: &Invocation) -> Vec<i32> {
@@ -160,7 +196,7 @@ fn none_refuses() {
 }
 
 #[test]
-fn bwrap_invocation_has_spec_status_and_binds_at_3_4_5() {
+fn bwrap_invocation_has_spec_status_and_binds_at_3_4_6() {
     let fx = Fx::new();
     let sb = fx.sandbox(BackendKind::Bwrap);
     let p = prep(
@@ -172,14 +208,15 @@ fn bwrap_invocation_has_spec_status_and_binds_at_3_4_5() {
     let inv = &p.invocation;
     assert_eq!(inv.program, system_program(), "bwrap's path");
     assert!(inv.env.is_empty() && inv.cwd.is_none() && !inv.new_session);
-    // 3 = the spec, 4 = the status pipe, then the binds from 5 in argv order: read, write, run, the helper.
-    assert_eq!(targets(inv), [3, 4, 5, 6, 7, 8]);
+    // 3 = the spec, 4 = the status pipe, (5 = the browser's, unused here,) then the binds from 6 in argv order:
+    // read, write, run, the helper.
+    assert_eq!(targets(inv), [3, 4, 6, 7, 8, 9]);
     let args = strings(&inv.args);
     let helper_at = args
         .windows(3)
         .position(|w| w[0] == "--ro-bind-fd" && w[2] == HELPER_INSIDE)
         .expect("the helper is bound");
-    assert_eq!(args[helper_at + 1], "8", "the helper's fd is the last");
+    assert_eq!(args[helper_at + 1], "9", "the helper's fd is the last");
     let tail: Vec<&str> = args[args.len() - 9..args.len() - 1]
         .iter()
         .map(String::as_str)
@@ -216,6 +253,71 @@ fn bwrap_invocation_has_spec_status_and_binds_at_3_4_5() {
     );
     status_connected(&p);
     assert!(p.layers.is_none());
+    assert!(!p.browser && inner.browser.is_none());
+}
+
+/// With the browser: the hub's end at 5 (the very socket passed), the binds from 6, the inner spec's browser plan
+/// naming fd 5, and `Prepared::browser` set so the status is read with the browser required.
+#[test]
+fn browser_fd_is_5_and_binds_start_at_6() {
+    use std::os::fd::AsFd;
+    let fx = Fx::new();
+    let sb = fx.sandbox(BackendKind::Bwrap);
+    let (ours, theirs) = hub_end();
+    let id = rustix::fs::fstat(theirs.as_fd()).unwrap().st_ino;
+    let p = prep_with(
+        &sb,
+        fx.browser_spec(Target::LinuxBwrap),
+        &["/bin/true"],
+        Some(theirs),
+    )
+    .unwrap();
+    let inv = &p.invocation;
+    assert_eq!(targets(inv), [3, 4, 5, 6, 7, 8, 9]);
+    assert_eq!(rustix::fs::fstat(fd_at(inv, 5)).unwrap().st_ino, id);
+    let args = strings(&inv.args);
+    assert!(
+        args.windows(2)
+            .all(|w| !(w[0].ends_with("bind-fd") && w[1] == "5"))
+    );
+    assert!(p.browser);
+    let inner = inner_spec(inv);
+    let b = inner.browser.expect("the browser plan");
+    assert_eq!(inner.version, crate::inner::VERSION);
+    assert_eq!(b.hub_fd, 5);
+    assert_eq!(&b.argv[..2], [HELPER_INSIDE, "browser-host"]);
+    assert_eq!(b.landlock.min_abi, 9);
+    // The other end is still ours: what the host would write reaches it.
+    rustix::io::write(fd_at(inv, 5), b"x").unwrap();
+    let mut buf = [0u8; 1];
+    assert_eq!(rustix::io::read(&ours, &mut buf).unwrap(), 1);
+}
+
+/// A spec with the browser and no socketpair end, or an end and no browser, is `Malformed`; the reduced tier has no
+/// browser host yet.
+#[test]
+fn browser_without_fd_is_malformed() {
+    let fx = Fx::new();
+    let sb = fx.sandbox(BackendKind::Bwrap);
+    let r = prep(&sb, fx.browser_spec(Target::LinuxBwrap), &["/bin/true"]).unwrap_err();
+    assert_eq!(r.rule, Rule::Malformed, "{}", r.message);
+    let r = prep_with(
+        &sb,
+        fx.spec(Target::LinuxBwrap),
+        &["/bin/true"],
+        Some(hub_end().1),
+    )
+    .unwrap_err();
+    assert_eq!(r.rule, Rule::Malformed, "{}", r.message);
+    let red = fx.sandbox(BackendKind::Reduced);
+    let r = prep_with(
+        &red,
+        fx.browser_spec(Target::LinuxReduced),
+        &["/bin/true"],
+        Some(hub_end().1),
+    )
+    .unwrap_err();
+    assert_eq!(r.rule, Rule::Browser, "{}", r.message);
 }
 
 #[test]
@@ -449,6 +551,7 @@ fn test_hooks_reach_the_inner_spec() {
     let hooks = TestHooks {
         landlock_omit: vec![fx.p("w")],
         abi_cap: Some(8),
+        browser_argv: vec![],
     };
     for (kind, target) in [
         (BackendKind::Bwrap, Target::LinuxBwrap),
@@ -456,10 +559,31 @@ fn test_hooks_reach_the_inner_spec() {
     ] {
         let p = fx
             .sandbox(kind)
-            .prepare(fx.spec(target), vec!["/bin/true".into()], hooks.clone())
+            .prepare(
+                fx.spec(target),
+                vec!["/bin/true".into()],
+                None,
+                hooks.clone(),
+            )
             .unwrap();
         let inner = inner_spec(&p.invocation);
         assert_eq!(inner.landlock_omit, hooks.landlock_omit, "{kind:?}");
         assert_eq!(inner.abi_cap, Some(8), "{kind:?}");
     }
+    // The browser host's argv in place of the plan's (the escape probe); the rest of the plan stays.
+    let probe = vec!["/opt/probe".to_string(), "--as-browser".into()];
+    let p = fx
+        .sandbox(BackendKind::Bwrap)
+        .prepare(
+            fx.browser_spec(Target::LinuxBwrap),
+            vec!["/bin/true".into()],
+            Some(hub_end().1),
+            TestHooks {
+                browser_argv: probe.clone(),
+                ..hooks
+            },
+        )
+        .unwrap();
+    let b = inner_spec(&p.invocation).browser.expect("the browser plan");
+    assert_eq!((b.argv, b.hub_fd, b.landlock.min_abi), (probe, 5, 9));
 }

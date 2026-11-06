@@ -1,9 +1,13 @@
 //! Entity vectors through the gateway (Urdr Task 12b; storage §5.2, §5.6 door 4; call 13).
 //!
-//! - **The provider** is the one of kind `tei` in the settings' provider table ([`crate::gateway::Gate::embedder`]).  Texts go
-//!   to the hub's own loopback listener as the editor's `POST /p/PROVIDER/embed` (an in-memory editor token, no key),
-//!   so the gateway counts the request in `spend` like any other.  The hub **never starts** the provider: one that
-//!   does not answer stops the round.
+//! - **The providers** are those of kind `tei` and `ollama` with the `embed` capability in the settings' provider table
+//!   ([`crate::gateway::Gate::embedders`]), and the built-in model's worker ([`crate::search::worker::WorkerEmbedder`]).
+//!   Texts go to the hub's own loopback listener as the editor's `POST /p/PROVIDER/embed` (TEI) or `/api/embed`
+//!   (Ollama), with an in-memory editor token and no key, so the gateway counts the request in `spend` like any
+//!   other.  The hub **never starts** a provider: one that does not answer is passed over.
+//! - **One embedder per round.**  A round ([`run`]) fills with the first embedder in line that answers, a server before
+//!   the built-in model; `entity_vec` is keyed `(n, model)`, so each model keeps its own vectors and a server that comes
+//!   back finds them still there.
 //! - **A round** ([`fill`]) takes at most [`BATCH`] stale entities (no vector of the model, [`urdr::graph::search::vec_stale`])
 //!   at a time.  An entity whose source, id or `data.path` the personal-notes deny-list denies (an unknown source form
 //!   too) is never sent, even when the scan's door let it in (door 4).  A batch that fails is tried once more; failing
@@ -39,28 +43,94 @@ const DEADLINE: Duration = Duration::from_secs(60);
 /// The most characters of one entity that are sent.
 const MAX_TEXT: usize = 8000;
 
-/// The `tei` provider PROVIDER, reached through the gateway's loopback listener on PORT with TOKEN.
-pub struct Tei {
+/// Which API a provider speaks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Api {
+    /// `POST /embed {"inputs"}` answers a list of vectors.
+    Tei,
+    /// `POST /api/embed {"model", "input"}` answers `{"embeddings"}`; the model is the embed role's step.
+    Ollama(String),
+}
+
+/// The `tei` or `ollama` provider PROVIDER at BASE (its URL in the table), reached through the gateway's loopback
+/// listener on PORT with TOKEN.
+pub struct ProviderEmbedder {
     port: u16,
     token: String,
     provider: String,
+    base: String,
+    api: Api,
     model: String,
 }
 
-impl Tei {
-    pub(crate) fn new(port: u16, token: String, provider: &str) -> Tei {
-        Tei {
+impl ProviderEmbedder {
+    /// A TEI provider; its model name is `tei:<provider>`.
+    pub(crate) fn tei(port: u16, token: String, provider: &str, base: &str) -> ProviderEmbedder {
+        ProviderEmbedder {
             port,
             token,
             provider: provider.to_owned(),
+            base: base.to_owned(),
+            api: Api::Tei,
             model: format!("tei:{provider}"),
         }
     }
 
+    /// An Ollama provider embedding with MODEL; its model name is `ollama:<provider>:<model>`.
+    pub(crate) fn ollama(
+        port: u16,
+        token: String,
+        provider: &str,
+        base: &str,
+        model: &str,
+    ) -> ProviderEmbedder {
+        ProviderEmbedder {
+            port,
+            token,
+            provider: provider.to_owned(),
+            base: base.to_owned(),
+            api: Api::Ollama(model.to_owned()),
+            model: format!("ollama:{provider}:{model}"),
+        }
+    }
+
+    /// The provider's id in the table.
+    pub fn provider(&self) -> &str {
+        &self.provider
+    }
+
+    /// `tei` or `ollama`.
+    pub fn kind(&self) -> &'static str {
+        match self.api {
+            Api::Tei => "tei",
+            Api::Ollama(_) => "ollama",
+        }
+    }
+
+    /// The vector of query Q. With an INSTRUCTION (the query wording of the query's scope) the text is
+    /// `Instruct: <instruction>\nQuery:<q>`, as the Qwen3 embedding models are trained on; documents go plain.
+    pub async fn embed_query(
+        &self,
+        q: &str,
+        instruction: Option<&str>,
+    ) -> Result<Vec<f32>, EmbedError> {
+        let text = match instruction {
+            Some(i) => format!("Instruct: {i}\nQuery:{q}"),
+            None => q.to_owned(),
+        };
+        let mut v = self.embed(&[text]).await?;
+        v.pop()
+            .ok_or_else(|| EmbedError(format!("{} answered no vector", self.provider)))
+    }
+
     async fn post(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
-        let body = json!({"inputs": texts}).to_string();
+        let (path, body) = match &self.api {
+            Api::Tei => ("embed", json!({"inputs": texts})),
+            Api::Ollama(model) => ("api/embed", json!({"model": model, "input": texts})),
+        };
+        let body = body.to_string();
         let head = format!(
-            "POST /p/{}/embed HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAuthorization: Bearer {}\r\n\
+            "POST /p/{}/{path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAuthorization: Bearer {}\r\n\
              Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             self.provider,
             self.port,
@@ -89,8 +159,20 @@ impl Tei {
                     .collect::<String>()
             ));
         }
-        let rows: Vec<Vec<f32>> = serde_json::from_slice(&payload)
-            .map_err(|e| format!("{} answered what is not vectors: {e}", self.provider))?;
+        let vectors =
+            |e: serde_json::Error| format!("{} answered what is not vectors: {e}", self.provider);
+        let rows: Vec<Vec<f32>> = match &self.api {
+            Api::Tei => serde_json::from_slice(&payload).map_err(vectors)?,
+            Api::Ollama(_) => {
+                #[derive(serde::Deserialize)]
+                struct Answer {
+                    embeddings: Vec<Vec<f32>>,
+                }
+                serde_json::from_slice::<Answer>(&payload)
+                    .map_err(vectors)?
+                    .embeddings
+            }
+        };
         if rows.len() != texts.len() {
             return Err(format!(
                 "{} answered {} vectors for {} texts",
@@ -103,7 +185,7 @@ impl Tei {
     }
 }
 
-impl Embedder for Tei {
+impl Embedder for ProviderEmbedder {
     fn embed<'a>(
         &'a self,
         texts: &'a [String],
@@ -122,6 +204,58 @@ impl Embedder for Tei {
     fn model(&self) -> &str {
         &self.model
     }
+}
+
+impl crate::search::DocEmbedder for ProviderEmbedder {
+    fn model(&self) -> &str {
+        &self.model
+    }
+
+    /// Not known before the server has answered.
+    fn dims(&self) -> usize {
+        0
+    }
+
+    fn embed_docs<'a>(
+        &'a self,
+        texts: &'a [String],
+        _overriding: bool,
+    ) -> BoxFuture<'a, Result<Vec<Vec<f32>>, EmbedError>> {
+        self.embed(texts)
+    }
+
+    /// The server's own address accepts a connection (the doctor's probe, [`answered_family`]).
+    fn answers(&self) -> BoxFuture<'_, bool> {
+        Box::pin(async move { answered_family(&self.base).await.is_some() })
+    }
+}
+
+/// How long the doctor's probe waits for one address to accept.
+const PROBE: Duration = Duration::from_secs(3);
+
+/// Which address family answers at BASE (a URL): `ipv4` or `ipv6`, the first address of the host's that accepts a
+/// connection; none when none does.  `localhost` can resolve to `::1` first and the server listen on `127.0.0.1` only
+/// (storage design §12A.3 item 11), so the doctor says what answered.
+pub async fn answered_family(base: &str) -> Option<&'static str> {
+    let uri: bifrost::Uri = base.parse().ok()?;
+    let host = uri.host()?.trim_start_matches('[').trim_end_matches(']');
+    let port = uri
+        .port_u16()
+        .unwrap_or(if uri.scheme_str() == Some("https") {
+            443
+        } else {
+            80
+        });
+    let addrs = crate::clock::real(tokio::net::lookup_host((host, port)))
+        .await
+        .ok()?;
+    for a in addrs {
+        let connect = crate::clock::real(TcpStream::connect(a));
+        if let Ok(Ok(_)) = crate::clock::timeout(PROBE, connect).await {
+            return Some(if a.is_ipv4() { "ipv4" } else { "ipv6" });
+        }
+    }
+    None
 }
 
 /// An HTTP/1.1 response read to its end: the status and the (de-chunked) body.
@@ -420,7 +554,7 @@ impl Timer {
 }
 
 /// A round with its probe: after a stop, one text must be answered first.
-pub async fn run(db: &CoordDb, e: &dyn Embedder, deny: &DenyList, probe: bool) -> Outcome {
+pub async fn run_one(db: &CoordDb, e: &dyn Embedder, deny: &DenyList, probe: bool) -> Outcome {
     if probe && let Err(err) = e.embed(&["ping".to_owned()]).await {
         return Outcome::Stopped {
             embedded: 0,
@@ -428,6 +562,32 @@ pub async fn run(db: &CoordDb, e: &dyn Embedder, deny: &DenyList, probe: bool) -
         };
     }
     fill(db, e, deny).await
+}
+
+/// A round over the embedders in order of preference (a server before the built-in model): the first that answers
+/// fills, and a round that ends `Filled` or `Nothing` is the round (one model's vectors per round keeps the work to
+/// one embedder; the others' vectors stay).  An embedder that stops is passed over; when all stop, the round
+/// stopped, with every reason.
+pub async fn run(
+    db: &CoordDb,
+    embedders: &[&dyn Embedder],
+    deny: &DenyList,
+    probe: bool,
+) -> Outcome {
+    let mut stops = Vec::new();
+    for e in embedders {
+        match run_one(db, *e, deny, probe).await {
+            Outcome::Stopped { why, .. } => stops.push(format!("{}: {why}", e.model())),
+            done => return done,
+        }
+    }
+    if stops.is_empty() {
+        return Outcome::Nothing;
+    }
+    Outcome::Stopped {
+        embedded: 0,
+        why: stops.join("; "),
+    }
 }
 
 #[cfg(test)]
@@ -533,7 +693,7 @@ pub(crate) mod tests {
     }
 
     /// A gateway listening, with the `tei` provider at PORT; and its embedder.
-    async fn tei(dir: &Path, port: u16) -> (Gate, Tei) {
+    async fn tei(dir: &Path, port: u16) -> (Gate, ProviderEmbedder) {
         let gate = Gate::new(CoordDb::spawn(dir.join("gw.db")));
         let table: Vec<ProviderConfig> = serde_json::from_value(json!([
             {"id": "tei", "kind": "tei", "base": format!("http://127.0.0.1:{port}"), "auth": "none",
@@ -541,7 +701,7 @@ pub(crate) mod tests {
         .unwrap();
         gate.apply(&table).unwrap();
         gate.listen(None).await.unwrap();
-        let e = gate.embedder().unwrap().expect("a tei provider");
+        let e = gate.embedders(&[]).unwrap().remove(0);
         (gate, e)
     }
 

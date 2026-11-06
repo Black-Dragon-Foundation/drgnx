@@ -136,6 +136,9 @@ struct State {
     entries: Vec<Entry>,
     /// Tool call id → index in `entries`.
     tools: HashMap<String, usize>,
+    /// Tool call id → the provider's tool name and its parent tool call (`_meta.claudeCode`), kept beside the
+    /// entries, whose wire shape stays as it was.
+    tool_meta: HashMap<String, ToolMeta>,
     /// The entry the next text chunk of that kind extends.
     open: Option<(EntryType, usize)>,
     /// Entries changed since the last event.
@@ -165,6 +168,14 @@ struct State {
     max_repeat: u32,
     /// Tokens the finished turns used.
     tokens: u64,
+    /// What the budget booked from the agent's cost readings since the last turn ended.
+    turn_cost: f64,
+    /// Turns started by this hub process (the snapshot's `turns`).
+    turns: u64,
+    /// The steps begun so far (each step's key).
+    steps_begun: i64,
+    /// Tool steps of a conclusion's drgnx tool begun since the reader last looked: (key, tool name).
+    mcp_begun: Vec<(i64, String)>,
 }
 
 /// What a turn core step decided, with the permission requests it took out of the snapshot.
@@ -186,6 +197,12 @@ struct OpenStep {
     tool_kind: Option<String>,
     tool_id: Option<String>,
     message_id: Option<String>,
+    /// Its place among the steps the session began (a step a wait cut in two keeps it).
+    key: i64,
+    /// A call of a drgnx tool that records a conclusion ([`crate::work::conclusions`]).
+    mcp: bool,
+    /// The `Task` tool call of the subagent that made it ([`crate::work::subagents`]).
+    parent_tool: Option<String>,
 }
 
 /// A step that ended, waiting to be written to the `step` table and announced.
@@ -200,6 +217,19 @@ struct ClosedStep {
     cache_read: i64,
     cache_write: i64,
     cost: Option<f64>,
+    /// What a tool step read, searched or fetched, taken as the step closed (its `rawInput` is final then).
+    detail: Option<norn::write::work::StepDetail>,
+    /// A shell step's command, taken then too: the files it names are its presence ([`crate::work::presence`]).
+    command: Option<String>,
+    /// The session's context size in tokens when the step closed: kept on a turn's last step and on a job wait.
+    context: Option<i64>,
+}
+
+/// What a provider says of a tool call beyond ACP's fields: Claude's `_meta.claudeCode`.
+#[derive(Clone, Debug, Default)]
+struct ToolMeta {
+    name: Option<String>,
+    parent: Option<String>,
 }
 
 /// What a turn used (the last step carries it).
@@ -227,10 +257,15 @@ impl State {
             cmd_counts: HashMap::new(),
             max_repeat: 0,
             tokens: 0,
+            turn_cost: 0.0,
+            turns: 0,
+            steps_begun: 0,
+            mcp_begun: Vec::new(),
             closed: Vec::new(),
             seq: 0,
             entries: Vec::new(),
             tools: HashMap::new(),
+            tool_meta: HashMap::new(),
             open: None,
             dirty: BTreeSet::new(),
             permissions: Vec::new(),
@@ -241,11 +276,46 @@ impl State {
         }
     }
 
+    /// The budget booked DELTA of cost; the turn running owns it.
+    fn add_turn_cost(&mut self, delta: f64) {
+        self.turn_cost += delta;
+    }
+
+    /// What the turn that just ended cost: what the budget booked during it.  None when nothing was booked (an agent
+    /// that reports no cost, or a total that did not move), never 0.0.
+    fn take_turn_cost(&mut self) -> Option<f64> {
+        let cost = std::mem::take(&mut self.turn_cost);
+        (cost > 0.0).then_some(cost)
+    }
+
     /// Close the step running (if any) at END, carrying USE.
     fn step_close(&mut self, end: f64, turn_use: Option<TurnUse>) {
         if let Some(open) = self.cur.take() {
+            let context = (turn_use.is_some() || open.class == StepClass::JobWait)
+                .then(|| self.usage.as_ref().and_then(|u| u.used))
+                .flatten()
+                .map(|used| used as i64);
             let u = turn_use.unwrap_or_default();
+            let mut detail = open.tool_id.as_deref().and_then(|id| self.tool_detail(id));
+            // a subagent's step keeps its parent, with a detail of its own if it has none
+            if let Some(p) = &open.parent_tool {
+                let name = open
+                    .tool_id
+                    .as_deref()
+                    .and_then(|id| self.tool_meta.get(id))
+                    .and_then(|m| m.name.clone());
+                detail
+                    .get_or_insert_with(|| norn::write::work::StepDetail {
+                        tool: name,
+                        origin: "acp".into(),
+                        ..Default::default()
+                    })
+                    .parent_tool = Some(p.clone());
+            }
+            let command = open.tool_id.as_deref().and_then(|id| self.tool_command(id));
             self.closed.push(ClosedStep {
+                detail,
+                command,
                 open,
                 end,
                 turn_id: u.turn_id,
@@ -254,7 +324,47 @@ impl State {
                 cache_read: u.cache_read,
                 cache_write: u.cache_write,
                 cost: u.cost,
+                context,
             });
+        }
+    }
+
+    /// The detail of tool call ID from what the entry holds now.
+    fn tool_detail(&self, id: &str) -> Option<norn::write::work::StepDetail> {
+        let rest = &self.entries.get(*self.tools.get(id)?)?.rest;
+        let s = |k: &str| rest.get(k).and_then(Value::as_str);
+        let locations = rest
+            .get("locations")
+            .and_then(Value::as_array)
+            .map_or(&[][..], Vec::as_slice);
+        crate::work::detail::of(
+            self.tool_meta.get(id).and_then(|m| m.name.as_deref()),
+            s("kind"),
+            s("title"),
+            locations,
+            rest.get("rawInput"),
+        )
+    }
+
+    /// The command of tool call ID when it is a shell step (kind `execute`, or Claude's `Bash`): `rawInput.command`, a
+    /// string or a list of words.
+    fn tool_command(&self, id: &str) -> Option<String> {
+        let rest = &self.entries.get(*self.tools.get(id)?)?.rest;
+        let shell = rest.get("kind").and_then(Value::as_str) == Some("execute")
+            || self.tool_meta.get(id).and_then(|m| m.name.as_deref()) == Some("Bash");
+        if !shell {
+            return None;
+        }
+        match rest.get("rawInput")?.get("command")? {
+            Value::String(s) => Some(s.clone()),
+            Value::Array(words) => Some(
+                words
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ),
+            _ => None,
         }
     }
 
@@ -262,6 +372,7 @@ impl State {
     fn step_begin(&mut self, class: StepClass, tool: Option<(&str, Option<&str>, Option<&str>)>) {
         let at = now();
         self.step_close(at, None);
+        self.steps_begun += 1;
         self.cur = Some(OpenStep {
             class,
             start: at,
@@ -269,6 +380,12 @@ impl State {
             tool_kind: tool.and_then(|t| t.1).map(str::to_string),
             tool_id: tool.and_then(|t| t.2).map(str::to_string),
             message_id: self.last_mid.clone(),
+            key: self.steps_begun,
+            mcp: false,
+            parent_tool: tool
+                .and_then(|t| t.2)
+                .and_then(|id| self.tool_meta.get(id))
+                .and_then(|m| m.parent.clone()),
         });
     }
 
@@ -341,6 +458,7 @@ impl State {
                 }
                 TurnEffect::StartTurn { item, .. } => {
                     self.unsent_at = Some(self.entries.len());
+                    self.turns += 1;
                     self.begin_turn(item);
                     continue;
                 }
@@ -349,6 +467,7 @@ impl State {
                     continue;
                 }
                 TurnEffect::PutBack { .. } => {
+                    self.turns = self.turns.saturating_sub(1);
                     self.undo_turn();
                     continue;
                 }
@@ -478,6 +597,20 @@ impl State {
                         i
                     }
                 };
+                if let Some(cc) = u.pointer("/_meta/claudeCode") {
+                    let m = self
+                        .tool_meta
+                        .entry(
+                            u.get("toolCallId")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string(),
+                        )
+                        .or_default();
+                    let s = |k: &str| cc.get(k).and_then(Value::as_str).map(str::to_string);
+                    m.name = s("toolName").or(m.name.take());
+                    m.parent = s("parentToolUseId").or(m.parent.take());
+                }
                 let e = &mut self.entries[idx];
                 for k in [
                     "title",
@@ -509,6 +642,21 @@ impl State {
                             Some(id),
                         )),
                     );
+                    // a call of a tool that records a conclusion: its step is that conclusion's
+                    let name = self
+                        .tool_meta
+                        .get(id)
+                        .and_then(|m| m.name.clone())
+                        .filter(|n| crate::work::conclusions::mcp_tool_of(n).is_some())
+                        .or_else(|| {
+                            title
+                                .clone()
+                                .filter(|t| crate::work::conclusions::mcp_tool_of(t).is_some())
+                        });
+                    if let (Some(n), Some(c)) = (name, self.cur.as_mut()) {
+                        c.mcp = true;
+                        self.mcp_begun.push((c.key, n));
+                    }
                     let command = self.entries[idx].rest.get("rawInput").map(Value::to_string);
                     let key = format!(
                         "{}\n{}",
@@ -587,10 +735,14 @@ pub struct Session {
     provider: Option<String>,
     enforced: bool,
     enforced_why: Option<String>,
+    /// Why its `browser` cell allows the browser but it has none (OD1 (b)).
+    browser_why: Option<String>,
     capabilities: Option<Value>,
     conn: Conn,
     acp: SessionId,
     editors: Arc<crate::settings::agents::Editors>,
+    /// The Work map: each snapshot reaches it too ([`crate::work::map`]).
+    map: Arc<crate::work::map::Map>,
     /// What the matrix decides at the permission seam: the gate, the settings it reads, the store its cards go to.
     gate: MatrixGate,
     settings: Arc<crate::settings::Settings>,
@@ -616,8 +768,16 @@ pub struct Session {
     store: Option<transcript::Store>,
     /// Closed steps, in order, to the task that writes them to the `step` table.
     steps: tokio::sync::mpsc::UnboundedSender<ClosedStep>,
+    /// The count of those steps sent and written.
+    flow: Arc<StepFlow>,
     /// How a turn ended, to the reader task.
     done: tokio::sync::mpsc::UnboundedSender<TurnEnd>,
+    /// The user's messages as they reach the agent: its current ask ([`crate::work::asks`]).
+    asks: crate::work::asks::AskTx,
+    /// Where its conclusions' tool steps go ([`crate::work::conclusions`]).
+    stamps: Arc<crate::work::conclusions::Stamps>,
+    /// A planning session's turn ends go to Say it ([`crate::say`]).
+    say: crate::say::SayTx,
 }
 
 /// What `Conn::prompt` answered.
@@ -633,6 +793,18 @@ pub(crate) struct StepSink {
     pub snap: Option<crate::timeline::Snap>,
     /// The plan and project a plan run's session works under (none: not a plan run, or a test).
     pub scopes: Option<crate::runner::Scopes>,
+    /// The graph store a spec an edit step wrote is stored in (none: a test).
+    pub tools: Option<Arc<norn::tools::Coord>>,
+    /// Where a spec it wrote is linked to the session's current ask (none: a test).
+    pub asks: Option<crate::work::asks::AskTx>,
+    /// The conclusions' stamps: a conclusion's tool step written, a turn ended (none: a test).
+    pub stamps: Option<Arc<crate::work::conclusions::Stamps>>,
+    /// The presence model: the files each step was in (none: a test).
+    pub presence: Option<Arc<crate::work::presence::Live>>,
+    /// The Work map: each closed step, and the presence it changed (none: a test).
+    pub map: Option<Arc<crate::work::map::Map>>,
+    /// The trace supervisor: a shell step's close takes what its command opened (none: a test).
+    pub traces: Option<Arc<crate::work::trace::Traces>>,
 }
 
 /// What `open` and `resume` know of a session before its agent is running.
@@ -658,8 +830,9 @@ struct Launched {
     enforced_why: Option<String>,
     /// The token of the gateway registration this launch made (a gateway profile).
     gateway: Option<String>,
-    /// Its provider proxy, bound before the spawn.
+    /// Its provider proxy, bound before the spawn (and its browser's web proxy and CDP broker).
     net: Option<super::net::SessionNet>,
+    browser_why: Option<String>,
 }
 
 /// Where a path may be read or written: inside the session's directory; a brainstorm writes its document only, and a
@@ -755,6 +928,40 @@ pub(super) struct Prepared {
     enforced: bool,
     enforced_why: Option<String>,
     gateway: Option<String>,
+    /// How its shell steps' opens are seen (`work::trace`).
+    trace: crate::work::trace::TraceMode,
+    browser: BrowserLaunch,
+}
+
+/// What a session's browser came to at its launch: the hub's side of it (the session has one), or why it has none
+/// though its `browser` cell allows it (OD1 (b)).
+#[derive(Default)]
+pub(super) struct BrowserLaunch {
+    hub: Option<super::net::BrowserHub>,
+    why: Option<String>,
+}
+
+/// How PROFILE's sessions are traced: by its CLI's kind and `agents-trace-opens`; never on macOS (a test hub takes
+/// `DRGNX_TEST_TRACE_PLATFORM=macos` as macOS).
+fn trace_mode(front: &Front, profile: &AgentProfile) -> crate::work::trace::TraceMode {
+    let provider = profile.provider().and_then(|p| {
+        serde_json::to_value(p)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_owned))
+    });
+    let traced = front
+        .settings
+        .current()
+        .loaded
+        .values
+        .agents_trace_opens
+        .clone();
+    #[cfg(feature = "test-hooks")]
+    let macos = cfg!(target_os = "macos")
+        || std::env::var("DRGNX_TEST_TRACE_PLATFORM").is_ok_and(|v| v == "macos");
+    #[cfg(not(feature = "test-hooks"))]
+    let macos = cfg!(target_os = "macos");
+    crate::work::trace::TraceMode::of(provider.as_deref(), &traced, macos)
 }
 
 /// WHO a session is, for the matrix's columns.
@@ -800,26 +1007,33 @@ fn project_read_allowed(kind: launch::Kind, eff: &norn::matrix::Effective) -> Re
     Ok(())
 }
 
+/// What a launch is ready to spawn: the process, the helper's status pipe, why it is unsandboxed (a test launch),
+/// and its browser.
+type Spawn = (
+    draugr::Spec,
+    Option<std::os::fd::OwnedFd>,
+    Option<&'static str>,
+    BrowserLaunch,
+);
+
 /// The launch of a test session: the plan's command, unsandboxed, with a short allowlisted environment.  Only tests
 /// and `test-hooks` builds have it (the mock agent lives outside any sandbox's reach); a shipped build always goes
-/// through `launch::spawn` and Gleipnir.
+/// through `launch::spawn` and Gleipnir.  It has no browser host: with `DRGNX_TEST_BROWSER` set and a `browser` cell
+/// that is not Never, the hub's side of the browser starts anyway (the web proxy, the broker with the far end of its
+/// socketpair held), so the rows reach it.
 #[cfg(any(test, feature = "test-hooks"))]
+#[allow(clippy::too_many_arguments)]
 async fn spawn_spec(
-    shell: &crate::shell_env::ShellEnv,
+    front: &Front,
     p: &AgentProfile,
     plan: &plock::LaunchPlan,
     _: &Path,
     cwd: &Path,
-    _: &str,
+    sid: &str,
     _: Role,
-) -> Result<
-    (
-        draugr::Spec,
-        Option<std::os::fd::OwnedFd>,
-        Option<&'static str>,
-    ),
-    Error,
-> {
+    cell: norn::matrix::Verdict,
+) -> Result<Spawn, Error> {
+    let shell = &front.shell_env;
     let (prog, args) = plan
         .argv
         .split_first()
@@ -831,6 +1045,22 @@ async fn spawn_spec(
         .map(|(k, v)| (k.to_string(), v.into()))
         .collect();
     pairs.extend(plan.env.iter().map(|(k, v)| (k.clone(), v.into())));
+    // per-step tracing without the sandbox: the wrapper is this binary by its name, linked in the session dir
+    if plan.trace == Some(gleipnir::trace::Scope::Step) {
+        let env = runstav::paths::Env::process();
+        let run = runstav::paths::make_session_dir(&env, &runstav::paths::socket_path(&env), sid)
+            .map_err(|e| internal(format!("session dir: {e}")))?;
+        let link = run.join(gleipnir::trace::WRAPPER_NAME);
+        let exe = std::env::current_exe().map_err(|e| internal(e.to_string()))?;
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&exe, &link)
+            .map_err(|e| internal(format!("{}: {e}", link.display())))?;
+        pairs.push(("CLAUDE_CODE_SHELL_PREFIX".into(), link.into()));
+        pairs.push((
+            gleipnir::trace::SOCK_ENV.into(),
+            run.join(runstav::paths::SESSION_TRACE_SOCKET).into(),
+        ));
+    }
     let set: Vec<(&str, &std::ffi::OsStr)> = pairs
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_os_str()))
@@ -845,33 +1075,45 @@ async fn spawn_spec(
         pass_fds: Vec::new(),
         new_session: false,
     };
-    Ok((spec, None, Some("a test launch: unsandboxed")))
+    let mut browser = BrowserLaunch::default();
+    if cell != norn::matrix::Verdict::Never && std::env::var_os("DRGNX_TEST_BROWSER").is_some() {
+        let (hub, far) = std::os::unix::net::UnixStream::pair()
+            .map_err(|e| internal(format!("the browser's socketpair: {e}")))?;
+        let secret = crate::browser::Secret::new()
+            .map_err(|e| internal(format!("the browser's secret: {e}")))?;
+        browser.hub = Some(super::net::BrowserHub {
+            hub,
+            secret,
+            unit: None,
+            held: Some(far),
+        });
+    }
+    Ok((spec, None, Some("a test launch: unsandboxed"), browser))
 }
 
 /// The sandboxed launch (`launch::kind`): a worktree session writes its worktree only; a chat in its own scratch
 /// directory (`launch::scratch_dir`) is the plain one; a chat in a project reads the project and writes its scratch
-/// directory only.  The network is the provider's alone: `Open` is never granted here.
+/// directory only.  The network is the provider's alone: `Open` is never granted here.  With the browser
+/// ([`browser_shape`]) the launch holds the hub's end of its socketpair, and where a user systemd answers, the
+/// sandbox runs in a scope of its own with the session's memory cap (`exec::unit::session_scope`).
 #[cfg(not(any(test, feature = "test-hooks")))]
+#[allow(clippy::too_many_arguments)]
 async fn spawn_spec(
-    shell: &crate::shell_env::ShellEnv,
+    front: &Front,
     _: &AgentProfile,
     plan: &plock::LaunchPlan,
     scratch: &Path,
     cwd: &Path,
     sid: &str,
     role: Role,
-) -> Result<
-    (
-        draugr::Spec,
-        Option<std::os::fd::OwnedFd>,
-        Option<&'static str>,
-    ),
-    Error,
-> {
-    let env = shell.paths_env();
+    cell: norn::matrix::Verdict,
+) -> Result<Spawn, Error> {
+    let env = front.shell_env.paths_env();
+    let (shape, why) = browser_shape(front, cell).await;
+    let secret = shape.as_ref().map(|s| s.secret.clone());
     let launched = match launch::kind(role, cwd, scratch) {
-        launch::Kind::Plain => launch::spawn_plain(&env, plan, sid).await,
-        launch::Kind::Chat => launch::spawn_chat(&env, plan, sid, cwd).await,
+        launch::Kind::Plain => launch::spawn_plain(&env, plan, sid, shape).await,
+        launch::Kind::Chat => launch::spawn_chat(&env, plan, sid, cwd, shape).await,
         launch::Kind::Worktree => {
             launch::spawn(
                 &env,
@@ -883,17 +1125,93 @@ async fn spawn_spec(
                     net: SESSION_NET,
                     role,
                 },
+                shape,
             )
             .await
         }
     }
     .map_err(|r| refuse(&format!("the sandbox refused the launch: {}", r.message)))?;
-    Ok((launched.spec, launched.status, None))
+    let mut spec = launched.spec;
+    let mut browser = BrowserLaunch { hub: None, why };
+    if let (Some(hub), Some(secret)) = (launched.browser, secret) {
+        let unit =
+            crate::exec::unit::systemd_user().then(|| crate::exec::unit::session_unit_name(sid));
+        if unit.is_some() {
+            let memory = front
+                .settings
+                .current()
+                .loaded
+                .values
+                .agents_session_memory
+                .clone();
+            spec = crate::exec::unit::session_scope(spec, sid, &memory);
+        }
+        browser.hub = Some(super::net::BrowserHub {
+            hub,
+            secret,
+            unit,
+            held: None,
+        });
+    }
+    Ok((spec, launched.status, None, browser))
+}
+
+/// The browser a sandboxed session gets under its `browser` cell CELL (`sandbox::browser_for`): the sandbox the
+/// launch takes, the kernel's Landlock ABI, the program `browser::resolve` finds (read on a blocking thread: the
+/// setting's program is asked its version), the local ports, the message cap and a fresh secret.  Otherwise none, and
+/// for a cell that allows it, why (with the hub's notice, once per reason per hub run).
+#[cfg(not(any(test, feature = "test-hooks")))]
+async fn browser_shape(
+    front: &Front,
+    cell: norn::matrix::Verdict,
+) -> (Option<crate::sandbox::BrowserShape>, Option<String>) {
+    if cell == norn::matrix::Verdict::Never {
+        return (None, None);
+    }
+    let backend = launch::detect().await.ok().map(|s| s.kind());
+    let cur = front.settings.current();
+    let data = runstav::paths::data_dir(&runstav::paths::Env::process());
+    let looked = cur.clone();
+    let found = crate::clock::blocking(move || {
+        crate::browser::resolve::resolve(&looked.loaded.values, &data)
+    })
+    .await
+    .unwrap_or_else(|e| {
+        Err(crate::browser::resolve::NotFound {
+            fix: format!("the browser lookup failed: {e}"),
+        })
+    });
+    let secret = match crate::browser::Secret::new() {
+        Ok(s) => s,
+        Err(e) => {
+            return (
+                None,
+                Some(format!("no random bytes for the CDP secret: {e}")),
+            );
+        }
+    };
+    let v = &cur.loaded.values;
+    match crate::sandbox::browser_for(
+        cell,
+        backend,
+        gleipnir::landlock::kernel_abi(),
+        found,
+        v.agents_browser_local_ports.clone(),
+        v.agents_browser_max_message,
+        secret,
+    ) {
+        Ok(shape) => (shape, None),
+        Err(n) => {
+            super::net::no_browser_notice(front, &n);
+            (None, Some(format!("{}; fix: {}", n.why, n.fix)))
+        }
+    }
 }
 
 /// The variables an editor module asked to add to a new session's environment (`agents/start`'s `env`).  A name must be
 /// on `drgnx-agents-start-env-names` and must not look like a credential or be a provider's key variable, whatever
-/// that setting lists.
+/// that setting lists.  The browser's endpoint names (`browser::ENDPOINT_ENV`) are the hub's alone: an editor's value
+/// is dropped for every session (the log names the name, never the value).
 fn module_env(front: &Front, env: Option<&[EnvVar]>) -> Result<Vec<(String, String)>, Error> {
     let Some(env) = env.filter(|e| !e.is_empty()) else {
         return Ok(Vec::new());
@@ -904,6 +1222,13 @@ fn module_env(front: &Front, env: Option<&[EnvVar]>) -> Result<Vec<(String, Stri
     let mut out = Vec::with_capacity(env.len());
     for (i, var) in env.iter().enumerate() {
         let name = var.name.as_str();
+        if crate::browser::ENDPOINT_ENV.contains(&name) {
+            tracing::info!(
+                name,
+                "an editor's value for {name} is dropped: the hub sets it"
+            );
+            continue;
+        }
         if refused_env_name(name) || key_envs.iter().any(|k| k == name) {
             return Err(invalid(
                 &format!("env[{i}].name"),
@@ -925,6 +1250,31 @@ fn module_env(front: &Front, env: Option<&[EnvVar]>) -> Result<Vec<(String, Stri
         out.push((name.to_string(), var.value.as_str().to_string()));
     }
     Ok(out)
+}
+
+/// The module env session SID was started with, from its notes META, as the settings allow it now: a name taken off
+/// `drgnx-agents-start-env-names` since, or one that is now a provider's key variable, is left out (and logged).
+fn kept_env(front: &Front, sid: &str, meta: &Value) -> Vec<(String, String)> {
+    let vars: Vec<EnvVar> = meta
+        .get("env")
+        .cloned()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+    vars.iter()
+        .filter_map(
+            |var| match module_env(front, Some(std::slice::from_ref(var))) {
+                Ok(mut one) => one.pop(),
+                Err(e) => {
+                    tracing::warn!(
+                        sid,
+                        "a kept module variable is not passed on: {}",
+                        e.message
+                    );
+                    None
+                }
+            },
+        )
+        .collect()
 }
 
 /// Everything before the process: the matrix's cells, the provider's lock plan, the refusal of a lock that is not
@@ -983,6 +1333,9 @@ pub(super) async fn prepare(
     }
     // the spec relays a port to the session's gateway.sock and points ANTHROPIC_BASE_URL at it
     plan.gateway = relayed;
+    // and gives it the trace supervisor's socket when its shell steps' opens are seen
+    let trace = trace_mode(front, profile);
+    plan.trace = trace.scope();
     // what an editor module added comes last, so it wins over the profile's and the lock's
     plan.env.extend(module_env.iter().cloned());
     let why = match plan.enforced {
@@ -1000,8 +1353,10 @@ pub(super) async fn prepare(
     }
     let scratch = launch::scratch_dir(&runstav::paths::Env::process(), sid).unwrap_or_default();
     project_read_allowed(launch::kind(role, cwd, &scratch), &eff)?;
-    let (spec, status, unsandboxed) =
-        spawn_spec(&front.shell_env, profile, &plan, &scratch, cwd, sid, role).await?;
+    // the `browser` cell decides whether the session gets the browser (Allow or Ask: at first use, the broker asks)
+    let cell = eff.cell(Action::Browser).verdict;
+    let (spec, status, unsandboxed, browser) =
+        spawn_spec(front, profile, &plan, &scratch, cwd, sid, role, cell).await?;
     Ok(Prepared {
         spec,
         status,
@@ -1009,6 +1364,8 @@ pub(super) async fn prepare(
         enforced_why: unsandboxed.or(why).map(str::to_string),
         plan,
         gateway,
+        trace,
+        browser,
     })
 }
 
@@ -1214,7 +1571,15 @@ pub(crate) async fn open_as(
     };
     let (s, done) = assemble(ident, &profile, l, front, hub.step_bus());
     if let Some(store) = &s.store {
-        store.save_meta(&s.id, &json!({"about": s.about, "document": s.document}));
+        // the module env too: a restart or resume of the session passes it again (`kept_env`)
+        let env: Vec<Value> = module_env
+            .iter()
+            .map(|(name, value)| json!({"name": name, "value": value}))
+            .collect();
+        store.save_meta(
+            &s.id,
+            &json!({"about": s.about, "document": s.document, "env": env}),
+        );
     }
     lock(&s.state).core.ready(false);
     hub.insert(s.clone());
@@ -1223,6 +1588,8 @@ pub(crate) async fn open_as(
         insert_row(db, &s).await;
     }
     record_entities(front, caller, &s).await;
+    // its starter's ask is its own: the manager that started it, or the session that made its plan run
+    s.asks.started(&s.id, s.parent.as_deref(), s.job.as_deref());
     s.changed();
     Ok(Started { id: sid, name })
 }
@@ -1270,14 +1637,23 @@ async fn bridge(
     } else {
         std::env::current_exe().unwrap_or(installed)
     };
-    serde_json::from_value(json!({
-        "name": "drgnx",
-        "command": command,
-        "args": ["mcp-bridge", "--socket", socket],
-        "env": [],
-    }))
-    .map(|m| vec![m])
-    .unwrap_or_default()
+    // the search tool too, when `drgnx-agents-mcp` holds `search` (the session's `search.sock`, pinned to its folder)
+    let mut servers = vec![("drgnx", socket)];
+    if let Some(search) = front.mcp.search_socket_of(sid) {
+        servers.push(("drgnx-search", search));
+    }
+    servers
+        .into_iter()
+        .filter_map(|(name, socket)| {
+            serde_json::from_value(json!({
+                "name": name,
+                "command": command,
+                "args": ["mcp-bridge", "--socket", socket],
+                "env": [],
+            }))
+            .ok()
+        })
+        .collect()
 }
 
 /// PROFILE's agent in CWD: started in its sandbox, initialized, on a session (a new one, or EXISTING by
@@ -1306,19 +1682,43 @@ async fn launch(
         }
     };
     // the provider proxy the spec's relay reaches, bound before the spawn; a start that fails below drops it, and its
-    // socket with it
-    let net = super::net::start_session(front, profile, sid, SESSION_NET)
+    // socket with it.  So are the browser's web proxy and CDP broker, for a session with the browser
+    let mut net = super::net::start_session(front, profile, sid, SESSION_NET)
         .map_err(|e| internal(format!("the session's provider proxy: {e}")))?;
+    let with_browser = prep.browser.hub.is_some();
+    if let Some(hub) = prep.browser.hub {
+        let n = net
+            .as_mut()
+            .ok_or_else(|| internal("a session with the browser needs its network"))?;
+        super::net::start_browser(front, n, sid, who_of(role, profile), hub)
+            .await
+            .map_err(|e| internal(format!("the session's browser: {e}")))?;
+    }
+    // the trace supervisor's socket, served before the spawn too (a traced session); an untraced one labels its steps
+    let env = runstav::paths::Env::process();
+    let run = runstav::paths::make_session_dir(&env, &runstav::paths::socket_path(&env), sid)
+        .map_err(|e| internal(format!("session dir: {e}")))?;
+    front
+        .core
+        .traces
+        .open(front, sid, cwd, &run, prep.trace.clone())
+        .map_err(|e| internal(format!("the session's trace socket: {e}")))?;
     let (conn, rx) = Conn::spawn(prep.spec, ConnOpts::default())
         .await
         .map_err(|e| internal(e.to_string()))?;
     let kill = || draugr::kill_group(conn.pid(), Duration::ZERO, &draugr::RealSignaller);
     // The sandbox helper reports on a pipe; a launch whose status is not read hangs (Task 10).  A start that fails
-    // before the helper speaks says why on stderr (bwrap's own message).
+    // before the helper speaks says why on stderr (bwrap's own message).  With the browser, the line must say its
+    // host is layered and ready.
     if let Some(fd) = prep.status {
         let stderr = conn.stderr();
-        let read = tokio::task::spawn_blocking(move || {
-            gleipnir::read_status(fd, &|| stderr.get(), Duration::from_secs(20))
+        let read = crate::clock::blocking(move || {
+            gleipnir::inner::read_status_for(
+                fd,
+                &|| stderr.get(),
+                Duration::from_secs(20),
+                with_browser,
+            )
         })
         .await;
         match read {
@@ -1395,6 +1795,7 @@ async fn launch(
             enforced_why: prep.enforced_why,
             gateway: prep.gateway,
             net,
+            browser_why: prep.browser.why,
         },
         rx,
     ))
@@ -1410,7 +1811,9 @@ fn assemble(
 ) -> (Arc<Session>, tokio::sync::mpsc::UnboundedReceiver<TurnEnd>) {
     let (done, done_rx) = tokio::sync::mpsc::unbounded_channel();
     let (steps, rx) = tokio::sync::mpsc::unbounded_channel();
+    let flow = Arc::new(StepFlow::default());
     let ctx = StepCtx {
+        flow: flow.clone(),
         session: i.id.clone(),
         task: i.task.clone(),
         agent: profile.name.clone(),
@@ -1425,9 +1828,27 @@ fn assemble(
             bus,
             snap: crate::timeline::Snap::of(front),
             scopes: Some(front.core.runs.scopes()),
+            tools: Some(front.tools.clone()),
+            asks: Some(front.core.asks.handle()),
+            stamps: Some(front.core.stamps.clone()),
+            presence: Some(front.core.presence.clone()),
+            map: Some(front.core.map.clone()),
+            traces: Some(front.core.traces.clone()),
         },
         ctx,
     ));
+    // a folder the hub made no tree for is measured from its head now (a docs agent in the org folder)
+    if let Some(d) = front.dirs.get() {
+        crate::clock::spawn(
+            "session:bases",
+            crate::work::bases::session_started(
+                front.writer.clone(),
+                d.hub.clone(),
+                i.id.clone(),
+                i.cwd.clone(),
+            ),
+        );
+    }
     let scope = scope_of(i.role, &i.id);
     front.core.budgets.enroll(&scope);
     if let Some(m) = &i.parent {
@@ -1458,10 +1879,12 @@ fn assemble(
         provider: profile.ai.clone(),
         enforced: l.enforced,
         enforced_why: l.enforced_why,
+        browser_why: l.browser_why,
         capabilities: l.caps,
         conn: l.conn,
         acp: l.acp,
         editors: front.editors.clone(),
+        map: front.core.map.clone(),
         gate: front.core.matrix.clone(),
         settings: front.settings.clone(),
         writer: front.writer.clone(),
@@ -1477,7 +1900,11 @@ fn assemble(
         state: Mutex::new(State::new()),
         store: front.dirs.get().map(|d| transcript::Store::new(&d.hub)),
         steps,
+        flow,
         done,
+        asks: front.core.asks.handle(),
+        stamps: front.core.stamps.clone(),
+        say: front.core.say.handle(),
     });
     (s, done_rx)
 }
@@ -1595,6 +2022,46 @@ impl Session {
         &self.cwd
     }
 
+    /// The subagents this session ran (Claude Code's `Task` tool), from its tool calls so far.
+    pub fn subagents(&self) -> Vec<crate::work::subagents::Child> {
+        let st = lock(&self.state);
+        let calls: Vec<crate::work::subagents::ToolCall> = st
+            .entries
+            .iter()
+            .filter(|e| e.kind == EntryType::Tool)
+            .filter_map(|e| {
+                let id = e.rest.get("id").and_then(Value::as_str)?.to_string();
+                let meta = st.tool_meta.get(&id);
+                Some(crate::work::subagents::ToolCall {
+                    name: meta.and_then(|m| m.name.clone()),
+                    parent: meta.and_then(|m| m.parent.clone()),
+                    raw_input: e.rest.get("rawInput").cloned(),
+                    id,
+                })
+            })
+            .collect();
+        crate::work::subagents::group(&self.id, &calls)
+    }
+
+    /// The command of the shell step running now (one a permission wait cut into counts), if one is: the trace
+    /// supervisor traces a wrapper's offer only when it is this command ([`crate::work::trace`]).
+    pub(crate) fn open_shell_command(&self) -> Option<String> {
+        let st = lock(&self.state);
+        [st.cur.as_ref(), st.stash.as_ref()]
+            .into_iter()
+            .flatten()
+            .find_map(|s| s.tool_id.as_deref().and_then(|id| st.tool_command(id)))
+    }
+
+    /// Where the user's messages to this session come from, as an ask records it.
+    fn ask_channel(&self) -> &'static str {
+        match (self.role, &self.document) {
+            (Role::Manager, _) => "manager",
+            (_, Some(_)) => "brainstorm",
+            _ => "chat",
+        }
+    }
+
     /// The transcript entries that carry one of MIDS as their `messageId`, at most CAP.
     pub(crate) fn entries_for(
         &self,
@@ -1662,14 +2129,17 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
             .map(PathBuf::from),
     };
     let role_of = serde_json::from_value(json!(role)).unwrap_or(Role::Chat);
+    // what the editor's modules added at its start goes again
+    let env = kept_env(front, &sid, &meta);
     let again = |existing: Option<String>| {
-        let (front, profile, sid, cwd, task, job) = (
+        let (front, profile, sid, cwd, task, job, env) = (
             front,
             profile.clone(),
             sid.clone(),
             cwd.clone(),
             task.clone(),
             job.clone(),
+            env.clone(),
         );
         async move {
             launch(
@@ -1679,7 +2149,7 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
                 &sid,
                 Path::new(&cwd),
                 existing.as_deref(),
-                (task.as_deref(), job.as_deref(), &[]),
+                (task.as_deref(), job.as_deref(), &env),
             )
             .await
         }
@@ -1723,29 +2193,28 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
         }
     };
     let (s, done) = assemble(ident, &profile, l, front, hub.step_bus());
-    if fresh {
-        // a manager's restart or rotation is told FIRST; any other fresh start the notice and the summary handoff
-        let told = match (first, handoff) {
-            (Some(f), _) => f,
-            (None, Some(h)) => format!("{RESTART_NOTICE}\n\n{h}"),
-            (None, None) => RESTART_NOTICE.to_string(),
-        };
-        lock(&s.state)
-            .core
-            .queue_mut()
-            .push(told, Origin::Hub, false);
-        if let Some(db) = hub.db() {
-            insert_row(db, &s).await;
+    // a manager's restart or rotation is told FIRST; any other fresh start the notice and the summary handoff
+    let told = fresh.then(|| match (first, handoff) {
+        (Some(f), _) => f,
+        (None, Some(h)) => format!("{RESTART_NOTICE}\n\n{h}"),
+        (None, None) => RESTART_NOTICE.to_string(),
+    });
+    if fresh && let Some(db) = hub.db() {
+        insert_row(db, &s).await;
+    }
+    // the queue on disk as it was, with what the agent is told at its front
+    let (queue, paused) = match &s.store {
+        Some(store) => {
+            let entries = store.load(&sid);
+            let mut st = lock(&s.state);
+            st.flushed = entries.len();
+            st.entries = entries;
+            drop(st);
+            store.load_queue(&sid)
         }
-    }
-    if let Some(store) = &s.store {
-        let entries = store.load(&sid);
-        let (queue, paused) = store.load_queue(&sid);
-        let mut st = lock(&s.state);
-        st.flushed = entries.len();
-        st.entries = entries;
-        st.core.restore(queue, paused);
-    }
+        None => Default::default(),
+    };
+    lock(&s.state).core.resume(queue, paused, told);
     // a job it started still runs (re-attached before the sessions): it waits for it as before the restart
     let waiting = s.has_jobs();
     {
@@ -1788,8 +2257,27 @@ pub(crate) async fn resume_closed(
     hub.find(sid)
 }
 
+/// How many of a session's closed steps went to its writer task and how many rows that task has written.  A reader
+/// of the `step` table that must see every step the session closed so far waits on it ([`Session::steps_written`]):
+/// the row is written after the session already says it is idle.
+pub(crate) struct StepFlow {
+    sent: AtomicU64,
+    written: tokio::sync::watch::Sender<u64>,
+}
+
+impl Default for StepFlow {
+    fn default() -> Self {
+        StepFlow {
+            sent: AtomicU64::new(0),
+            written: tokio::sync::watch::channel(0).0,
+        }
+    }
+}
+
 /// What a session's step rows say of it.
 struct StepCtx {
+    /// Counts the rows written, for [`StepFlow`].
+    flow: Arc<StepFlow>,
     session: String,
     task: Option<String>,
     agent: String,
@@ -1848,10 +2336,12 @@ async fn write_steps(
             cache_read: c.cache_read,
             cache_write: c.cache_write,
             cost: c.cost,
-            cost_unit: c.cost.map(|_| "usd".to_string()),
+            cost_unit: c.cost.map(|_| "usd-est".to_string()),
             snapshot: None,
             log_version: None,
+            context: c.context,
         };
+        let detail = c.detail.clone();
         let (id, seq, log_version) = match sink
             .writer
             .write(&caller, "agents/step", move |tx| {
@@ -1859,6 +2349,10 @@ async fn write_steps(
                 end.log_version = Some(norn::write::meta::version(tx.sql())? as i64);
                 let log_version = end.log_version;
                 table::close(tx, id, end)?;
+                if let Some(mut d) = detail {
+                    d.step = id;
+                    norn::write::work::put_step_detail(tx, d)?;
+                }
                 let seq: i64 =
                     tx.sql()
                         .query_row("select seq from step where id = ?1", [id], |r| r.get(0))?;
@@ -1872,6 +2366,7 @@ async fn write_steps(
                 (0, local as i64, None)
             }
         };
+        ctx.flow.written.send_modify(|w| *w += 1);
         let snapshot = anchor(
             &sink,
             &ctx,
@@ -1907,8 +2402,85 @@ async fn write_steps(
             cache_read: Some(c.cache_read as u64),
             cache_write: Some(c.cache_write as u64),
             cost: c.cost,
-            cost_unit: None,
+            cost_unit: c.cost.map(|_| Unit::UsdEst),
+            detail: c.detail.as_ref().map(crate::work::detail::wire),
         };
+        // the files the step was in: the presence model (a shell step's command looked up off the async threads)
+        if let Some(live) = &sink.presence
+            && id != 0
+            && (c.detail.is_some() || c.command.is_some())
+        {
+            let (d, cmd, dir) = (c.detail.clone(), c.command.clone(), ctx.cwd.clone());
+            let files = crate::clock::blocking(move || {
+                crate::work::presence::touches_of_step(d.as_ref(), cmd.as_deref(), &dir)
+            })
+            .await
+            .unwrap_or_default();
+            if !files.is_empty() {
+                let changed = live.apply(crate::work::presence::PresenceEv::Step {
+                    session: ctx.session.clone(),
+                    step: id,
+                    at: step.start,
+                    files,
+                });
+                if let Some(map) = &sink.map {
+                    map.presence(&live.now_in(&changed));
+                }
+            }
+        }
+        // the step's class is the agent card's activity
+        if let Some(map) = &sink.map
+            && id != 0
+        {
+            map.step(&ctx.session, id, &step.class, step.start);
+        }
+        // a snapshot was taken (an edit, or the turn's first step): the worktree's changed files reach the map's
+        // overlaps, also once the edit is no longer in flight
+        if let Some(map) = &sink.map
+            && step.snapshot.is_some()
+        {
+            map.edited(&ctx.session).await;
+        }
+        // a shell step closed: what its traced command opened goes out once its listener ended too
+        if let (Some(traces), Some(cmd)) = (&sink.traces, &c.command)
+            && id != 0
+        {
+            traces
+                .step_closed(&ctx.session, id, cmd.clone(), step.start)
+                .await;
+        }
+        // a conclusion's tool step is written, or the turn ended: the stamps that are due
+        if let Some(stamps) = &sink.stamps {
+            use crate::work::conclusions::StampEv;
+            let mut due = Vec::new();
+            if c.open.mcp && id != 0 {
+                due.extend(stamps.step(StampEv::StepClosed {
+                    session: ctx.session.clone(),
+                    step: c.open.key,
+                    id,
+                }));
+            }
+            if step.turn_id.is_some() {
+                due.extend(stamps.step(StampEv::TurnEnd {
+                    session: ctx.session.clone(),
+                }));
+            }
+            crate::work::conclusions::put(&sink.writer, due).await;
+        }
+        // a spec an agent just wrote is stored at once, not at the next scan
+        if let (Some(tools), Some(d)) = (&sink.tools, &c.detail)
+            && d.kind.as_deref() == Some("edit")
+            && let Some(p) = &d.path
+        {
+            crate::work::specs::on_written(
+                &sink.writer,
+                tools,
+                sink.asks.as_ref(),
+                &ctx.session,
+                &ctx.cwd.join(p),
+            )
+            .await;
+        }
         // a shell step may have committed: link the new commits to the decisions this session recorded
         if let Some(task) = &ctx.task
             && step.class == StepClass::Tool
@@ -1924,6 +2496,8 @@ async fn write_steps(
         sink.editors.broadcast("agent-step", json!(ev));
         let _ = sink.bus.send(ev);
     }
+    // no more rows will come: whoever waits for one stops waiting
+    ctx.flow.written.send_replace(u64::MAX);
 }
 
 /// The anchors a step gets once it is written: the turn id on the turn's earlier steps (it arrives with the turn's
@@ -2150,8 +2724,21 @@ impl Session {
     fn drain_steps(&self) {
         let closed = std::mem::take(&mut lock(&self.state).closed);
         for c in closed {
+            self.flow.sent.fetch_add(1, Ordering::SeqCst);
             let _ = self.steps.send(c);
         }
+    }
+
+    /// Returns once every step this session has closed so far is a row of the `step` table.
+    pub(crate) async fn steps_written(&self) {
+        self.drain_steps();
+        let target = self.flow.sent.load(Ordering::SeqCst);
+        let _ = self
+            .flow
+            .written
+            .subscribe()
+            .wait_for(|w| *w >= target)
+            .await;
     }
 
     /// The entries not yet in the transcript file, written (redacted) now; a turn not yet sent to the agent waits.
@@ -2176,12 +2763,13 @@ impl Session {
         }
     }
 
-    /// The held queue and the pause, kept for a restart.  Written under the state's lock: two writes from different
-    /// tasks (a turn's end, the hub's end) land in the order of the states they read, so the file ends as the last.
+    /// The held queue and the pause, kept for a restart, with a turn's prompt that has not reached the agent at its
+    /// front ([`TurnCore::kept`]).  Written under the state's lock: two writes from different tasks (a turn's end, the
+    /// hub's end) land in the order of the states they read, so the file ends as the last.
     fn persist_queue(&self) {
         let Some(store) = &self.store else { return };
         let st = lock(&self.state);
-        if let Err(e) = store.save_queue(&self.id, st.core.queue(), st.core.paused()) {
+        if let Err(e) = store.save_queue(&self.id, &st.core.kept(), st.core.paused()) {
             tracing::warn!(sid = self.id, "queue not kept: {e}");
         }
     }
@@ -2218,9 +2806,58 @@ impl Session {
                 TurnEffect::EndTurn { waiting: true, .. } => self.close_when_idle(),
                 TurnEffect::Persist => self.persist_queue(),
                 TurnEffect::Announce => self.changed(),
+                TurnEffect::Withdraw { card } => self.withdraw_later(vec![card]),
                 _ => {}
             }
         }
+    }
+
+    /// The matrix cards a step withdraws.
+    fn withdrawn(fx: &[TurnEffect]) -> Vec<i64> {
+        fx.iter()
+            .filter_map(|e| match e {
+                TurnEffect::Withdraw { card } => Some(*card),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// CARDS leave the open cards (and so the needs-you lists): every request that waited on them was answered
+    /// cancelled.  A card the user settled first stays settled.
+    async fn withdraw_cards(&self, cards: Vec<i64>) {
+        if cards.is_empty() {
+            return;
+        }
+        let hub = Caller {
+            class: Class::Service,
+            sid: None,
+            job: None,
+            conn_id: 0,
+        };
+        let at = now();
+        let r = self
+            .writer
+            .write(&hub, "cards/withdraw", move |tx| {
+                for card in &cards {
+                    norn::write::cards::card_withdraw(tx, *card, at)?;
+                }
+                Ok(())
+            })
+            .await;
+        if let Err(e) = r {
+            tracing::warn!(session = %self.id, "matrix cards not withdrawn: {e:?}");
+        }
+    }
+
+    /// [`Session::withdraw_cards`] in a task of its own, for a step taken where nothing waits.
+    fn withdraw_later(self: &Arc<Self>, cards: Vec<i64>) {
+        if cards.is_empty() {
+            return;
+        }
+        let me = self.clone();
+        crate::clock::spawn("session:card-withdraw", async move {
+            me.withdraw_cards(cards).await;
+        });
     }
 
     fn emit(&self) {
@@ -2233,16 +2870,45 @@ impl Session {
                 .collect();
             (st.seq, entries)
         };
-        self.editors.broadcast(
-            "agent",
-            json!({"id": self.id, "seq": seq, "session": self.snapshot()}),
-        );
-        if !entries.is_empty() {
-            self.editors.broadcast(
-                "agent-entries",
-                json!({"id": self.id, "seq": seq, "entries": entries}),
-            );
+        let snapshot = self.snapshot();
+        if self.map.open() {
+            self.map.session(&snapshot, &self.subagents());
         }
+        self.editors.broadcast_agent(
+            &self.id,
+            json!({"id": self.id, "seq": seq, "session": snapshot}),
+        );
+        if entries.is_empty() {
+            return;
+        }
+        let subscribers = self.editors.entry_subscribers(&self.id);
+        if subscribers.is_empty() {
+            return;
+        }
+        let entries: Vec<(u64, Entry)> = entries
+            .iter()
+            .map(|(i, e)| (*i, super::wire::public_entry(e)))
+            .collect();
+        let data = json!({"id": self.id, "seq": seq, "entries": entries});
+        for conn in subscribers {
+            self.editors.send_to(conn, "agent-entries", data.clone());
+        }
+    }
+
+    /// Connection CONN gets this session's entries from now on; the change number they continue from.
+    pub(crate) fn subscribe_entries(&self, conn: u64) -> u64 {
+        // the number is read under the same lock the dirty set is drained under, so no entry falls between
+        let st = lock(&self.state);
+        self.editors.subscribe_entries(&self.id, conn);
+        st.seq
+    }
+
+    /// The raw input of tool call TOOL_CALL, capped.
+    pub(crate) fn tool_input(&self, tool_call: &str) -> Option<(Value, bool)> {
+        let st = lock(&self.state);
+        let idx = *st.tools.get(tool_call)?;
+        let raw = st.entries.get(idx)?.rest.get("rawInput")?;
+        Some(super::wire::capped_tool_input(raw))
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -2267,8 +2933,10 @@ impl Session {
             exit: st.exit,
             stderr: st.stderr.clone(),
             entries_count: Some(st.entries.len() as u64),
+            turns: Some(st.turns),
             enforced: Some(self.enforced),
             enforced_why: self.enforced_why.clone(),
+            browser_why: self.browser_why.clone(),
             role: Some(self.role),
             provider: self.provider.clone(),
             parent: self.parent.clone(),
@@ -2345,20 +3013,43 @@ impl Session {
                             .and_then(Value::as_f64)
                             .filter(|_| v.get("sessionUpdate") == Some(&json!("usage_update")))
                         {
-                            let hits = self.budgets.spend_total(
+                            let booked = self.budgets.spend_total_in(
                                 &self.scope(),
                                 "usd-est",
+                                &self.acp.0,
                                 Unit::UsdEst,
                                 total,
                             );
-                            self.budgets.notify(hits);
+                            lock(&self.state).add_turn_cost(booked.delta);
+                            self.budgets.notify(booked.hits);
                         }
-                        let stepped = {
+                        let (stepped, begun) = {
                             let mut st = lock(&self.state);
                             st.apply(&v);
-                            std::mem::take(&mut st.tool_ended)
-                                .then(|| st.turn_step(TurnEvent::ToolCompleted))
+                            let begun = std::mem::take(&mut st.mcp_begun);
+                            (
+                                std::mem::take(&mut st.tool_ended)
+                                    .then(|| st.turn_step(TurnEvent::ToolCompleted)),
+                                begun,
+                            )
                         };
+                        // a conclusion's tool step began: the stamp core pairs it with its MCP call
+                        for (key, tool_name) in begun {
+                            let s = self
+                                .stamps
+                                .step(crate::work::conclusions::StampEv::ToolStep {
+                                    session: self.id.clone(),
+                                    step: key,
+                                    tool_name,
+                                    at: now(),
+                                });
+                            if !s.is_empty() {
+                                let w = self.writer.clone();
+                                crate::clock::spawn("session:conclusions", async move {
+                                    crate::work::conclusions::put(&w, s).await
+                                });
+                            }
+                        }
                         self.drain_steps();
                         if let Some(s) = stepped {
                             // the pause after a tool call: the turn ends here, the queue waits
@@ -2523,7 +3214,13 @@ impl Session {
         card: Option<i64>,
         turn: u64,
     ) {
-        let tool = req.get("toolCall").cloned();
+        // an editor never gets a tool call's raw input (a Write carries the file)
+        let tool = req.get("toolCall").cloned().map(|mut t| {
+            if let Some(o) = t.as_object_mut() {
+                o.remove("rawInput");
+            }
+            t
+        });
         let request = self.next_request.fetch_add(1, Ordering::Relaxed);
         let public = Permission {
             id: Some(match card {
@@ -2551,10 +3248,16 @@ impl Session {
         };
         {
             let mut st = lock(&self.state);
-            let fx = st.core.step(TurnEvent::PermissionAsked { request, turn });
+            let fx = st.core.step(TurnEvent::PermissionAsked {
+                request,
+                turn,
+                card,
+            });
             if !fx.contains(&TurnEffect::Hold { request }) {
                 drop(st);
                 reply(pending.resp, None);
+                // nobody answers its card either
+                self.withdraw_later(Self::withdrawn(&fx));
                 return;
             }
             st.permissions.push(pending);
@@ -2710,7 +3413,8 @@ impl Session {
 
     /// The running turn, if any, is the only thing Stop cancels: the permission requests it waits on are answered
     /// cancelled, the queue is held, and an agent that has not ended the turn after STOP_ANSWER loses its process.  A
-    /// second Stop of the same turn changes nothing.
+    /// second Stop of the same turn changes nothing.  A turn whose prompt has not reached the agent yet is put back
+    /// instead: the prompt waits at the front of the held queue, and nothing is sent.
     pub(crate) fn stop_turn(self: &Arc<Self>) -> bool {
         !self
             .turn_event(TurnEvent::Stop { after_tool: false })
@@ -2938,7 +3642,9 @@ impl Session {
             })
             .flatten()
             .collect();
+        let cards = Self::withdrawn(&stepped.fx);
         self.reply_cancelled(stepped);
+        self.withdraw_cards(cards).await;
         // a message the store gave this session and that never ran waits in the store again, for its next session
         super::deliver::put_back(&self.writer, &dropped).await;
         let _ = self.conn.cancel(&self.acp);
@@ -3025,8 +3731,25 @@ impl Session {
         if !send {
             return;
         }
-        // its entry is the agent's now: in the transcript file too
+        // its entry is the agent's now: in the transcript file first, then off the queue on disk (a hub that dies
+        // between the two runs the prompt again at the next start; it never loses it)
         self.flush_transcript();
+        self.persist_queue();
+        // the user's words reach the agent: its current ask from here on (told before the agent can write)
+        if item.origin == Origin::User {
+            let (session, text, at) = (self.id.clone(), item.text.clone(), now());
+            self.asks.send(if item.steer {
+                crate::work::asks::AskEv::SteerDelivered { session, text, at }
+            } else {
+                crate::work::asks::AskEv::UserMessage {
+                    session,
+                    text,
+                    channel: self.ask_channel().into(),
+                    message_id: item.key.clone(),
+                    at,
+                }
+            });
+        }
         let block = json!({"type": "text", "text": item.origin.frame(&item.text)});
         let blocks = serde_json::from_value(json!([block])).unwrap_or_default();
         let out = self.conn.prompt(&self.acp, blocks, None).await;
@@ -3064,6 +3787,7 @@ impl Session {
                     rest.insert("stop".into(), json!(format!("{:?}", o.stop)));
                     st.push(EntryType::Stop, rest);
                     used = turn_use(o);
+                    used.cost = st.take_turn_cost();
                     let tokens = (used.tokens_in + used.tokens_out) as f64;
                     st.tokens += tokens as u64;
                     self.spend(vec![(Unit::Tokens, tokens)]);
@@ -3089,7 +3813,12 @@ impl Session {
             let stepped = st.turn_step(ev);
             (stepped, st.core.ending())
         };
-        if let Some(m) = message.filter(|m| m.contains("drgnx-report") && self.task.is_some()) {
+        // a planning session's answer (empty when the turn failed) goes to Say it; any other chat pays one lookup
+        self.say
+            .turn_ended(&self.id, message.as_deref().unwrap_or(""));
+        if let Some(m) = message.filter(|m| {
+            (m.contains("drgnx-report") || m.contains("drgnx-conclusion")) && self.task.is_some()
+        }) {
             let (w, sid, task, job) = (
                 self.writer.clone(),
                 self.id.clone(),
@@ -3107,6 +3836,17 @@ impl Session {
                 .await
                 {
                     tracing::warn!(sid, "fallback report not submitted: {e}");
+                }
+                if let Some(Err(e)) = crate::runner::effects::record_conclusion_fallback(
+                    &w,
+                    &sid,
+                    task.as_deref(),
+                    job.as_deref(),
+                    &m,
+                )
+                .await
+                {
+                    tracing::warn!(sid, "fallback conclusion not recorded: {e}");
                 }
             });
         }
@@ -3140,7 +3880,10 @@ impl Session {
             why: KillWhy::HubEnding,
         });
         let put_back = stepped.fx.contains(&TurnEffect::Persist);
+        let cards = Self::withdrawn(&stepped.fx);
         self.reply_cancelled(stepped);
+        // before the store ends: the agent that asked is going, and its requests with it
+        self.withdraw_cards(cards).await;
         if put_back {
             self.persist_queue();
         }
@@ -3301,6 +4044,8 @@ pub async fn send(f: &Front, c: &Caller, p: SendParams) -> Result<bool, Error> {
 }
 
 pub async fn stop(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
+    // a planning session's planning stops with it (Say it)
+    f.core.say.stopped(p.id.as_str());
     // a turn running is cancelled (the session stays); an idle or starting session is ended: its token and socket go
     let ends = f
         .core
@@ -3311,17 +4056,91 @@ pub async fn stop(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
     if r.is_ok() && ends {
         gateway_gone(f, p.id.as_str()).await;
         let _ = f.mcp.close(p.id.as_str()).await;
+        asks_gone(f, p.id.as_str());
     }
     r
 }
 
+/// `agents/entries/subscribe`: the caller's connection gets the session's entries from now on.
+pub fn entries_subscribe(
+    f: &Front,
+    c: &Caller,
+    p: runstav::methods::agents::SessionRef,
+) -> Result<runstav::methods::agents::EntriesSubscribed, Error> {
+    let s = f.core.agents.find(p.session.as_str())?;
+    Ok(runstav::methods::agents::EntriesSubscribed {
+        seq: s.subscribe_entries(c.conn_id),
+    })
+}
+
+/// `agents/entries/unsubscribe`.
+pub fn entries_unsubscribe(
+    f: &Front,
+    c: &Caller,
+    p: runstav::methods::agents::SessionRef,
+) -> Result<bool, Error> {
+    f.editors.unsubscribe_entries(p.session.as_str(), c.conn_id);
+    Ok(true)
+}
+
+/// `agents/tool-input`: a tool call's raw input, capped.
+pub fn tool_input(
+    f: &Front,
+    _: &Caller,
+    p: runstav::methods::agents::ToolInputParams,
+) -> Result<runstav::methods::agents::ToolInput, Error> {
+    let s = f.core.agents.find(p.session.as_str())?;
+    let (raw_input, truncated) = s
+        .tool_input(&p.tool_call)
+        .ok_or_else(|| invalid("tool_call", "a tool call of this session with a raw input"))?;
+    Ok(runstav::methods::agents::ToolInput {
+        raw_input,
+        truncated,
+    })
+}
+
+/// `agents/pause`: the turn is cancelled once the tool call running now completes.
+pub fn pause(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
+    f.core.agents.cancel_after_tool(p.id.as_str())?;
+    Ok(true)
+}
+
 pub async fn kill(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
+    f.core.say.stopped(p.id.as_str());
     let r = f.core.agents.kill(p.id.as_str()).await;
     if r.is_ok() {
         gateway_gone(f, p.id.as_str()).await;
+        asks_gone(f, p.id.as_str());
     }
     let _ = f.mcp.close(p.id.as_str()).await;
     r
+}
+
+/// Session SID ended: it has no current ask any more (the workers it started keep theirs), and it is in no file now.
+fn asks_gone(f: &Front, sid: &str) {
+    f.core
+        .asks
+        .handle()
+        .send(crate::work::asks::AskEv::SessionGone {
+            session: sid.to_string(),
+        });
+    let changed = f
+        .core
+        .presence
+        .apply(crate::work::presence::PresenceEv::SessionEnd {
+            session: sid.to_string(),
+        });
+    f.core.map.presence(&f.core.presence.now_in(&changed));
+    f.core.traces.end(sid);
+}
+
+/// The sessions the hub recorded, with their folders (the presence model's rebuild at start).
+pub(crate) async fn recorded(hub: &super::Hub) -> Vec<(String, PathBuf)> {
+    read_rows(hub, None)
+        .await
+        .into_iter()
+        .map(|r| (r.0, PathBuf::from(r.4)))
+        .collect()
 }
 
 /// Session SID is gone: its gateway token no longer forwards and its jobs are no longer booked.
@@ -3533,7 +4352,9 @@ pub fn fuzz_apply(updates: &[Value]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::budget::Budgets;
     use runstav::methods::agents::SessionStatus;
+    use runstav::methods::timeline::BudgetScope;
 
     #[tokio::test]
     async fn rekey_runs_before_the_first_prompt() {
@@ -3547,6 +4368,51 @@ mod tests {
         )
         .await;
         assert_eq!(*log.lock().unwrap(), ["rekey", "prompt"]);
+    }
+
+    #[tokio::test]
+    async fn editor_endpoint_is_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = Front::new(
+            runstav::proof::Cap::generate().unwrap(),
+            dir.path().join("hub-x.sock"),
+            crate::store::WorkDb::spawn(dir.path().join("work.db")).unwrap(),
+            norn::store::CoordDb::spawn(dir.path().join("work.db")),
+        );
+        let fr = &f;
+        let names = move |list: Value| async move {
+            fr.settings
+                .set_overrides(
+                    None,
+                    vec![crate::settings::overrides::Override {
+                        name: "drgnx-agents-start-env-names".into(),
+                        value: list,
+                        source: "test".into(),
+                    }],
+                )
+                .await
+                .unwrap();
+        };
+        let vars = |v: Value| -> Vec<EnvVar> { serde_json::from_value(v).unwrap() };
+        // listed or not, the endpoint's two names are the hub's: an editor's values are dropped, the rest goes on
+        names(json!([
+            "PLAYWRIGHT_MCP_CDP_ENDPOINT",
+            "DRGNX_BROWSER_CDP",
+            "FOO"
+        ]))
+        .await;
+        let env = vars(json!([
+            {"name": "PLAYWRIGHT_MCP_CDP_ENDPOINT", "value": "ws://127.0.0.1:1/devtools/browser/x"},
+            {"name": "DRGNX_BROWSER_CDP", "value": "ws://elsewhere"},
+            {"name": "FOO", "value": "1"}
+        ]));
+        assert_eq!(
+            module_env(&f, Some(env.as_slice())).unwrap(),
+            [("FOO".to_string(), "1".to_string())]
+        );
+        names(json!([])).await;
+        let env = vars(json!([{"name": "DRGNX_BROWSER_CDP", "value": "ws://elsewhere"}]));
+        assert!(module_env(&f, Some(env.as_slice())).unwrap().is_empty());
     }
 
     #[test]
@@ -3583,6 +4449,94 @@ mod tests {
 
     fn upd(v: Value) -> Value {
         v
+    }
+
+    /// A cost reading TOTAL of conversation CONV, as `Session::handle` books it: the budget's delta is also the turn's.
+    fn read_cost(b: &Budgets, st: &mut State, conv: &str, total: f64) {
+        let scope: BudgetScope = serde_json::from_value(json!({"worker": "w1"})).unwrap();
+        let booked = b.spend_total_in(&scope, "usd-est", conv, Unit::UsdEst, total);
+        st.add_turn_cost(booked.delta);
+    }
+
+    fn spent_est(b: &Budgets) -> f64 {
+        let scope: BudgetScope = serde_json::from_value(json!({"worker": "w1"})).unwrap();
+        b.view(&scope)
+            .spent
+            .into_iter()
+            .find(|l| l.unit == Unit::UsdEst)
+            .map_or(0.0, |l| l.amount)
+    }
+
+    // test-pattern: D
+    #[test]
+    fn a_turns_cost_is_what_the_budget_booked_in_it() {
+        let (b, mut st) = (Budgets::default(), State::new());
+        read_cost(&b, &mut st, "c1", 0.10);
+        let first = st.take_turn_cost().unwrap();
+        assert!((first - 0.10).abs() < 1e-9, "{first}");
+        read_cost(&b, &mut st, "c1", 0.25);
+        let second = st.take_turn_cost().unwrap();
+        assert!((second - 0.15).abs() < 1e-9, "{second}");
+    }
+
+    // test-pattern: D
+    #[test]
+    fn a_step_keeps_the_context_at_its_close() {
+        let mut st = State::new();
+        st.step_begin(StepClass::Think, None);
+        st.step_close(now(), None);
+        st.apply(&upd(
+            json!({"sessionUpdate": "usage_update", "used": 300000, "size": 1000000}),
+        ));
+        st.step_begin(StepClass::Think, None);
+        st.step_close(now(), Some(TurnUse::default()));
+        st.step_begin(StepClass::JobWait, None);
+        st.step_close(now(), None);
+        st.step_begin(StepClass::Tool, None);
+        st.step_close(now(), None);
+        let got: Vec<Option<i64>> = st.closed.iter().map(|c| c.context).collect();
+        assert_eq!(got, [None, Some(300000), Some(300000), None]);
+    }
+
+    // test-pattern: D
+    #[test]
+    fn no_cost_reported_leaves_the_step_unpriced() {
+        let mut st = State::new();
+        st.apply(&upd(
+            json!({"sessionUpdate": "usage_update", "used": 10, "size": 100}),
+        ));
+        assert_eq!(st.take_turn_cost(), None);
+        let b = Budgets::default();
+        read_cost(&b, &mut st, "c1", 0.10);
+        st.take_turn_cost();
+        // a turn in which the total did not move has no cost, not 0.0
+        read_cost(&b, &mut st, "c1", 0.10);
+        assert_eq!(st.take_turn_cost(), None);
+    }
+
+    // test-pattern: D
+    #[test]
+    fn the_step_and_the_budget_book_the_same_delta() {
+        let (b, mut st) = (Budgets::default(), State::new());
+        read_cost(&b, &mut st, "a", 0.10);
+        let one = st.take_turn_cost().unwrap();
+        // a new conversation starts at its own first reading, even above the old total
+        read_cost(&b, &mut st, "b", 0.30);
+        let two = st.take_turn_cost().unwrap();
+        assert!((two - 0.30).abs() < 1e-9, "{two}");
+        assert!((spent_est(&b) - (one + two)).abs() < 1e-9);
+    }
+
+    // test-pattern: D
+    #[test]
+    fn a_fork_that_reports_its_parents_total_is_booked_alike() {
+        let (b, mut st) = (Budgets::default(), State::new());
+        read_cost(&b, &mut st, "a", 0.10);
+        let one = st.take_turn_cost().unwrap();
+        read_cost(&b, &mut st, "b", 0.15);
+        let two = st.take_turn_cost().unwrap();
+        assert!((two - 0.15).abs() < 1e-9, "{two}");
+        assert!((spent_est(&b) - (one + two)).abs() < 1e-9);
     }
 
     #[test]
@@ -3671,6 +4625,7 @@ mod tests {
         let (bus, mut seen) = tokio::sync::broadcast::channel(16);
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let ctx = StepCtx {
+            flow: Arc::default(),
             session: "a1".into(),
             task: Some("task:7".into()),
             agent: "mock".into(),
@@ -3683,6 +4638,12 @@ mod tests {
             bus,
             snap: None,
             scopes: None,
+            tools: None,
+            asks: None,
+            stamps: None,
+            presence: None,
+            map: None,
+            traces: None,
         };
         tokio::spawn(write_steps(rx, sink, ctx));
         let open = |class, tool: Option<&str>| OpenStep {
@@ -3692,6 +4653,9 @@ mod tests {
             tool_kind: None,
             tool_id: None,
             message_id: None,
+            key: 0,
+            mcp: false,
+            parent_tool: None,
         };
         for (class, tool, turn) in [
             (StepClass::Think, None, None),
@@ -3706,6 +4670,9 @@ mod tests {
                 cache_read: 0,
                 cache_write: 0,
                 cost: None,
+                detail: None,
+                command: None,
+                context: None,
             })
             .unwrap();
         }
@@ -3745,6 +4712,70 @@ mod tests {
         );
     }
 
+    // test-pattern: D
+    #[tokio::test]
+    async fn the_step_event_carries_the_unit() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = crate::coord::Writer {
+            db: norn::store::CoordDb::spawn(dir.path().join("work.db")),
+            signals: Arc::new(crate::coord::Signals::default()),
+        };
+        let (bus, mut seen) = tokio::sync::broadcast::channel(16);
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let ctx = StepCtx {
+            flow: Arc::default(),
+            session: "a1".into(),
+            task: Some("task:7".into()),
+            agent: "mock".into(),
+            provider: None,
+            cwd: PathBuf::new(),
+        };
+        let sink = StepSink {
+            writer: writer.clone(),
+            editors: Arc::new(crate::settings::agents::Editors::default()),
+            bus,
+            snap: None,
+            scopes: None,
+            tools: None,
+            asks: None,
+            stamps: None,
+            presence: None,
+            map: None,
+            traces: None,
+        };
+        tokio::spawn(write_steps(rx, sink, ctx));
+        for cost in [Some(0.15), None] {
+            tx.send(ClosedStep {
+                open: OpenStep {
+                    class: StepClass::Think,
+                    start: 10.0,
+                    tool: None,
+                    tool_kind: None,
+                    tool_id: None,
+                    message_id: None,
+                    key: 0,
+                    mcp: false,
+                    parent_tool: None,
+                },
+                end: 11.0,
+                turn_id: None,
+                tokens_in: 1,
+                tokens_out: 1,
+                cache_read: 0,
+                cache_write: 0,
+                cost,
+                detail: None,
+                command: None,
+                context: None,
+            })
+            .unwrap();
+        }
+        let priced = seen.recv().await.unwrap().step;
+        let unpriced = seen.recv().await.unwrap().step;
+        assert_eq!(priced.cost_unit, Some(Unit::UsdEst));
+        assert_eq!(unpriced.cost_unit, None);
+    }
+
     /// Three steps of a turn through the writer: a think, an edit tool call, the turn's last think (with the turn id).
     async fn written_turn(
         dir: &Path,
@@ -3764,8 +4795,15 @@ mod tests {
             bus: tokio::sync::broadcast::channel(16).0,
             snap: Some(crate::timeline::Snap::for_test(dir.join("cp"), settings)),
             scopes: None,
+            tools: None,
+            asks: None,
+            stamps: None,
+            presence: None,
+            map: None,
+            traces: None,
         };
         let ctx = StepCtx {
+            flow: Arc::default(),
             session: "a1".into(),
             task: Some("task:7".into()),
             agent: "mock".into(),
@@ -3781,6 +4819,9 @@ mod tests {
             tool_kind: kind.map(str::to_string),
             tool_id: None,
             message_id: Some("m1".into()),
+            key: 0,
+            mcp: false,
+            parent_tool: None,
         };
         for (o, end, turn) in [
             (open(StepClass::Think, None, 1.0), 2.0, None),
@@ -3796,6 +4837,9 @@ mod tests {
                 cache_read: 0,
                 cache_write: 0,
                 cost: None,
+                detail: None,
+                command: None,
+                context: None,
             })
             .unwrap();
         }

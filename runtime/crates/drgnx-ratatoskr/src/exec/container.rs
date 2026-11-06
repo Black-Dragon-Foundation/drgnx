@@ -1,75 +1,26 @@
 //! Container jobs (Task 11b): the hub runs `podman run` from a fixed spec.
 //!
-//! [`argv`] is the **only** builder of a `podman run` line.  An agent's request carries an image *name* and a command;
-//! everything else is fixed here or comes from settings ([`Caps`]): no capabilities, no new privileges, a read-only
-//! root with a tmpfs `/tmp`, the worktree as the only mount, no network unless the matrix granted one.  The command goes
-//! after the image, where podman stops reading options.  The image is the allow-list's reference pinned by digest; the
-//! hub pulls it ([`ensure_image`]), the job never does (`--pull=never`).
+//! The `podman run` line comes from the one builder shared with the runners, `sleipnir::linux::podman::argv`
+//! ([`argv`] here, with the hub's own placement): an agent's request carries an image *name* and a command; everything
+//! else is fixed there or comes from settings ([`Caps`]): no capabilities, no new privileges, a read-only root with a
+//! tmpfs `/tmp`, the worktree as the only mount, no network unless the matrix granted one, swap equal to memory, OOM
+//! score 1000 and the container killed whole.  The command goes after the image, where podman stops reading options.
+//! The image is the allow-list's reference pinned by digest; the hub pulls it ([`ensure_image`]), the job never does
+//! (`--pull=never`).
 
 use crate::agents::launch::NetCell;
-use crate::settings::ContainerImage;
 use crate::shell_env::ShellEnv;
 use gleipnir::{Refusal, Rule};
+use sleipnir::linux::podman;
 use std::ffi::OsString;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// Where the worktree appears inside the container.
-pub const WORK: &str = "/work";
-
-/// What the settings and the hub fix for every container job.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct Caps {
-    /// `agents-container-images`: the only images a job may name.
-    pub images: Vec<ContainerImage>,
-    /// `agents-job-memory`, like `4G`.
-    pub memory: String,
-    /// `agents-job-cpus`.
-    pub cpus: u32,
-    pub pids: u32,
-    /// What a job that was granted network reaches the proxy through ([`Proxy`]); none: a grant is refused.
-    pub proxy: Option<Proxy>,
-    /// `agents-net-hosts`: the hosts (`host:port`) a granted network reaches, by tier name.
-    pub net_hosts: Vec<(String, Vec<String>)>,
-}
-
-/// A granted network is not a network: the job keeps `--network=none`, and two files are bind-mounted read-only into
-/// it, the job's Gleipnir proxy socket and the forwarder ([`FORWARDER`]) that gives the job's own loopback a port in
-/// front of that socket.  The only route out is the proxy, by construction.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct Proxy {
-    /// The job's proxy socket on the host.
-    pub socket: PathBuf,
-    /// The `drgnx-fwd` binary on the host.
-    pub forwarder: PathBuf,
-}
-
-/// Where the proxy socket and the forwarder appear inside the container.
-pub const PROXY_SOCKET: &str = "/run/drgnx/proxy.sock";
-pub const FORWARDER: &str = "/run/drgnx/fwd";
-
-/// The extra flags a granted network adds: the two mounts, the proxy variables and the forwarder as entrypoint.
-#[cfg(test)]
-const NET_FLAGS: usize = 2 + 2 + 8 + 2;
-/// The arguments the entrypoint takes before the job's command: the port, the socket, `--`.
-pub const FORWARDER_ARGS: usize = 3;
-
-/// The process limit of a container job.
-pub const PIDS: u32 = 512;
-
-/// What a job asks: an image name from the allow-list, a command, the folder it works in, the network granted.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ContainerReq {
-    pub image: String,
-    pub argv: Vec<String>,
-    pub worktree: PathBuf,
-    /// The folder inside the worktree the command runs in (relative; empty: the worktree itself).
-    pub subdir: PathBuf,
-    /// The job's id; the container is named [`name_of`] it, so the hub can find (and remove) what a dead client left.
-    pub job: String,
-    /// The matrix's Network cell, when it grants one; none: no network at all.
-    pub net: Option<NetCell>,
-}
+pub use sleipnir::linux::podman::{
+    CONTROLLERS, Caps, ContainerReq, FORWARDER, FORWARDER_ARGS, PIDS, PROXY_SOCKET, Proxy, WORK,
+    limits_enforced,
+};
 
 fn refuse(message: impl Into<String>) -> Refusal {
     Refusal {
@@ -79,8 +30,16 @@ fn refuse(message: impl Into<String>) -> Refusal {
     }
 }
 
+fn setup(message: impl Into<String>) -> Refusal {
+    Refusal {
+        rule: Rule::Setup,
+        path: None,
+        message: message.into(),
+    }
+}
+
 /// What every hub-owned container is named before its job id.
-pub const NAME_PREFIX: &str = "drgnx-job-";
+pub const NAME_PREFIX: &str = podman::LOCAL_PREFIX;
 
 /// How long the hub waits for an image pull before refusing the job.
 pub const PULL_TIMEOUT: Duration = Duration::from_secs(600);
@@ -114,125 +73,18 @@ pub fn podman_env(shell: &ShellEnv) -> Vec<(OsString, OsString)> {
 
 /// The container name of job ID (an id of `[a-z0-9]`, as the runner makes them).
 pub fn name_of(id: &str) -> Result<String, Refusal> {
-    if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric()) {
-        return Err(refuse("a container job's id is letters and digits"));
-    }
-    Ok(format!("{NAME_PREFIX}{id}"))
+    podman::name_of(NAME_PREFIX, id).map_err(|r| refuse(r.message))
 }
 
 /// The reference pinned by digest that the allow-list holds for NAME.
 pub fn resolve<'a>(caps: &'a Caps, name: &str) -> Result<&'a str, Refusal> {
-    let found = caps.images.iter().find(|i| i.name == name).ok_or_else(|| {
-        let known: Vec<&str> = caps.images.iter().map(|i| i.name.as_str()).collect();
-        refuse(format!(
-            "image {name:?} is not on agents-container-images (allowed: {})",
-            if known.is_empty() {
-                "none".to_string()
-            } else {
-                known.join(", ")
-            }
-        ))
-    })?;
-    if !found.image.contains("@sha256:") || found.image.starts_with('-') {
-        return Err(refuse(format!(
-            "image {name:?} on agents-container-images is not pinned by digest"
-        )));
-    }
-    Ok(&found.image)
+    podman::resolve(caps, name).map_err(|r| refuse(r.message))
 }
 
-/// A mount source podman reads as one path (a `:` or `,` would add mount options).
-fn mount_source(worktree: &Path) -> Result<String, Refusal> {
-    let s = worktree
-        .to_str()
-        .filter(|s| worktree.is_absolute() && !s.contains([':', ',', '\n', '\0']))
-        .ok_or_else(|| refuse("the worktree must be an absolute path without ':' or ','"))?;
-    Ok(s.to_string())
-}
-
-/// The `podman run` arguments (without the program) for REQ under CAPS.
+/// The `podman run` arguments (without the program) for REQ under CAPS: the shared builder with the hub's own
+/// placement (`drgnx-job-<id>`, no parent slice, no runner label).
 pub fn argv(req: &ContainerReq, caps: &Caps) -> Result<Vec<OsString>, Refusal> {
-    if req.argv.is_empty() || req.argv[0].is_empty() {
-        return Err(refuse("a container job needs a command"));
-    }
-    let image = resolve(caps, &req.image)?;
-    let source = mount_source(&req.worktree)?;
-    let ok_memory = !caps.memory.is_empty()
-        && caps.memory.trim_end_matches(['K', 'M', 'G', 'T']).len() + 1 >= caps.memory.len()
-        && caps
-            .memory
-            .trim_end_matches(['K', 'M', 'G', 'T'])
-            .bytes()
-            .all(|b| b.is_ascii_digit())
-        && !caps.memory.starts_with('0');
-    if !ok_memory || caps.cpus == 0 || caps.pids == 0 {
-        return Err(refuse(
-            "agents-job-memory, agents-job-cpus: a limit that fits podman",
-        ));
-    }
-    let proxy = match req.net {
-        None => None,
-        Some(_) => {
-            let p = caps.proxy.as_ref().ok_or_else(|| {
-                refuse("this job was granted network access, but it has no proxy to go through")
-            })?;
-            Some((mount_source(&p.socket)?, mount_source(&p.forwarder)?))
-        }
-    };
-    let mut a: Vec<OsString> = [
-        "run",
-        "--rm",
-        "--name",
-        &name_of(&req.job)?,
-        "--pull=never",
-        "--userns=keep-id",
-        "--cap-drop=all",
-        "--security-opt=no-new-privileges",
-        "--read-only",
-        "--tmpfs",
-        "/tmp",
-        "--pids-limit",
-    ]
-    .iter()
-    .map(OsString::from)
-    .collect();
-    a.push(caps.pids.to_string().into());
-    a.push("--memory".into());
-    a.push(caps.memory.clone().into());
-    a.push("--cpus".into());
-    a.push(caps.cpus.to_string().into());
-    a.push("--network=none".into());
-    a.push("-v".into());
-    a.push(format!("{source}:{WORK}:Z").into());
-    a.push("-w".into());
-    a.push(if req.subdir.as_os_str().is_empty() {
-        OsString::from(WORK)
-    } else {
-        Path::new(WORK).join(&req.subdir).into_os_string()
-    });
-    if let Some((socket, forwarder)) = &proxy {
-        // The socket is this job's alone (`Z`: private label); so is the forwarder, the job's own copy.
-        a.push("-v".into());
-        a.push(format!("{socket}:{PROXY_SOCKET}:ro,Z").into());
-        a.push("-v".into());
-        a.push(format!("{forwarder}:{FORWARDER}:ro,Z").into());
-        let url = format!("http://127.0.0.1:{}", crate::sandbox::PROXY_PORT);
-        for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
-            a.push("-e".into());
-            a.push(format!("{k}={url}").into());
-        }
-        a.push("--entrypoint".into());
-        a.push(FORWARDER.into());
-    }
-    a.push(image.into());
-    if proxy.is_some() {
-        // the entrypoint binds the port, then runs the command in its place
-        a.push(crate::sandbox::PROXY_PORT.to_string().into());
-        a.push(PROXY_SOCKET.into());
-        a.push("--".into());
-    }
-    a.extend(req.argv.iter().map(OsString::from));
-    Ok(a)
+    podman::argv(req, caps, &podman::RunnerArgs::local()).map_err(|r| refuse(r.message))
 }
 
 /// The refusal for a hub that found no `podman` on its PATH at start.
@@ -263,8 +115,8 @@ pub fn socket_for(job: &str, run_dir: &Path) -> PathBuf {
 }
 
 /// Makes job JOB's proxy: its own copy of FORWARDER in DIR (the job's folder; the copy is what gets relabelled, never
-/// the installed binary) and its proxy on a socket under RUN_DIR with the allow-list of NET under HOSTS.  An error means the job
-/// was granted a network it cannot be given.
+/// the installed binary) and its proxy on a socket under RUN_DIR with the allow-list of NET under HOSTS and the names
+/// PINS pins.  An error means the job was granted a network it cannot be given.
 pub fn prepare_proxy(
     job: &str,
     dir: &Path,
@@ -272,6 +124,7 @@ pub fn prepare_proxy(
     forwarder: &Path,
     net: NetCell,
     hosts: &[(String, Vec<String>)],
+    pins: &[(String, IpAddr)],
 ) -> Result<JobProxy, Refusal> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     let copy = dir.join("fwd");
@@ -291,7 +144,7 @@ pub fn prepare_proxy(
             .create(parent)
             .map_err(|e| refuse(format!("{}: {e}", parent.display())))?;
     }
-    let handle = start_proxy(&socket, net, hosts)?;
+    let handle = start_proxy(&socket, net, hosts, pins)?;
     Ok(JobProxy {
         _handle: handle,
         mounts: Proxy {
@@ -301,12 +154,14 @@ pub fn prepare_proxy(
     })
 }
 
-/// Starts a proxy listening on the Unix socket SOCKET with the allow-list of NET under HOSTS (`agents-net-hosts`).  Dropping the handle closes the
-/// listener and every connection.
+/// Starts a proxy listening on the Unix socket SOCKET with the allow-list of NET under HOSTS (`agents-net-hosts`) and
+/// the names PINS pins (`sandbox-proxy-pinned-addresses`).  Dropping the handle closes the listener and every
+/// connection.
 pub fn start_proxy(
     socket: &Path,
     net: NetCell,
     hosts: &[(String, Vec<String>)],
+    pins: &[(String, IpAddr)],
 ) -> Result<gleipnir::net::proxy::ProxyHandle, Refusal> {
     use gleipnir::net::{host, proxy};
     let allow = crate::sandbox::allowed_hosts(net, hosts)
@@ -323,6 +178,7 @@ pub fn start_proxy(
     let handle = proxy::start(
         proxy::ProxyConfig {
             allow,
+            pinned: pins.to_vec(),
             ..Default::default()
         },
         std::sync::Arc::new(proxy::SystemResolver),
@@ -339,42 +195,7 @@ fn run_limited(
     args: &[&str],
     limit: Duration,
 ) -> Result<std::process::Output, Refusal> {
-    let setup = |m: String| Refusal {
-        rule: Rule::Setup,
-        path: None,
-        message: m,
-    };
-    let mut child = std::process::Command::new(podman)
-        .args(args)
-        .env_clear()
-        .envs(podman_env(shell))
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| setup(format!("podman: {e}")))?;
-    // real time: podman runs outside the hub's clock, and this thread blocks
-    let start = crate::clock::real_now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => {
-                return child
-                    .wait_with_output()
-                    .map_err(|e| setup(format!("podman: {e}")));
-            }
-            Ok(None) if start.elapsed() < limit => std::thread::sleep(Duration::from_millis(25)),
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(setup(format!(
-                    "podman {} took longer than {}s; the job is refused",
-                    args.first().copied().unwrap_or(""),
-                    limit.as_secs()
-                )));
-            }
-            Err(e) => return Err(setup(format!("podman: {e}"))),
-        }
-    }
+    podman::run_limited(podman, args, &podman_env(shell), limit).map_err(setup)
 }
 
 /// Make sure REF (an image pinned by digest) is in the local store: the hub pulls it, a job never does.  A pull that
@@ -405,65 +226,9 @@ pub fn ensure_image(
     })
 }
 
-/// The cgroup controllers a job's caps use: `--memory`, `--pids-limit`, `--cpus`.
-pub const CONTROLLERS: [&str; 3] = ["memory", "pids", "cpu"];
-
-/// Whether the podman that `podman info --format json` described (INFO) enforces a job's caps; the reason when it
-/// does not.  Rootless podman applies limits only on cgroup v2 through the systemd cgroup manager, with the
-/// controllers delegated to the user.  Without a systemd user session it falls back to `cgroupfs`, where a rootless
-/// container may get no cgroup of its own and its limits are dropped with no more than a warning.  Rootful podman
-/// (the hub never runs it: `--userns=keep-id` is rootless-only) is held to the same rule.
-pub fn limits_enforced(info: &serde_json::Value) -> Result<(), String> {
-    let host = &info["host"];
-    let version = host["cgroupVersion"].as_str().unwrap_or("unknown");
-    let manager = host["cgroupManager"].as_str().unwrap_or("unknown");
-    if version != "v2" {
-        return Err(format!(
-            "podman runs on cgroup {version}, and the caps need cgroup v2"
-        ));
-    }
-    if manager != "systemd" {
-        return Err(format!(
-            "podman's cgroup manager is {manager}, which cannot enforce a rootless container's caps: \
-             it needs a systemd user session (log in, or `loginctl enable-linger`) and the hub its \
-             XDG_RUNTIME_DIR or DBUS_SESSION_BUS_ADDRESS"
-        ));
-    }
-    let have: Vec<&str> = host["cgroupControllers"]
-        .as_array()
-        .map(|a| a.iter().filter_map(|c| c.as_str()).collect())
-        .unwrap_or_default();
-    let missing: Vec<&str> = CONTROLLERS
-        .iter()
-        .copied()
-        .filter(|c| !have.contains(c))
-        .collect();
-    if !missing.is_empty() {
-        return Err(format!(
-            "the cgroup controllers {} are not delegated to this user, so podman cannot enforce the caps",
-            missing.join(", ")
-        ));
-    }
-    Ok(())
-}
-
 /// Refuse the job unless PODMAN enforces its caps ([`limits_enforced`]), asked within LIMIT.
 pub fn check_limits(shell: &ShellEnv, podman: &Path, limit: Duration) -> Result<(), Refusal> {
-    let setup = |m: String| Refusal {
-        rule: Rule::Setup,
-        path: None,
-        message: format!("container jobs are refused here: {m}"),
-    };
-    let out = run_limited(shell, podman, &["info", "--format", "json"], limit)?;
-    if !out.status.success() {
-        return Err(setup(format!(
-            "podman info failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        )));
-    }
-    let info: serde_json::Value = serde_json::from_slice(&out.stdout)
-        .map_err(|e| setup(format!("podman info is not JSON: {e}")))?;
-    limits_enforced(&info).map_err(setup)
+    podman::check_limits(podman, &podman_env(shell), limit).map_err(setup)
 }
 
 /// At hub start: remove the `drgnx-job-*` containers whose job is not in RUNNING (a podman client killed with the
@@ -509,6 +274,7 @@ pub fn remove_leftovers(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::ContainerImage;
 
     const REF: &str = "registry.example/tools@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -530,6 +296,7 @@ mod tests {
                 socket: "/run/h/job.sock".into(),
                 forwarder: "/opt/drgnx-fwd".into(),
             }),
+            pins: vec![],
         }
     }
 
@@ -540,7 +307,8 @@ mod tests {
             worktree: "/work/tree".into(),
             subdir: PathBuf::new(),
             job: "x1a".into(),
-            net: None,
+            net: false,
+            runner: None,
         }
     }
 
@@ -550,177 +318,23 @@ mod tests {
             .collect()
     }
 
+    /// The hub's jobs go through the shared builder with the hub's own placement: its name prefix, no parent slice,
+    /// no runner label; refusals keep their rule.  The builder's own rows are `sleipnir::linux::podman`'s tests.
     #[test]
-    fn argv_has_exactly_the_fixed_flags() {
+    fn the_hub_builds_its_jobs_with_the_shared_argv() {
         let a = strs(argv(&req(&["make", "test"]), &caps()).unwrap());
-        let want: Vec<String> = [
-            "run",
-            "--rm",
-            "--name",
-            "drgnx-job-x1a",
-            "--pull=never",
-            "--userns=keep-id",
-            "--cap-drop=all",
-            "--security-opt=no-new-privileges",
-            "--read-only",
-            "--tmpfs",
-            "/tmp",
-            "--pids-limit",
-            "512",
-            "--memory",
-            "4G",
-            "--cpus",
-            "2",
-            "--network=none",
-            "-v",
-            "/work/tree:/work:Z",
-            "-w",
-            "/work",
-            REF,
-            "make",
-            "test",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-        assert_eq!(a, want);
-    }
-
-    #[test]
-    fn only_the_worktree_is_mounted() {
-        let a = strs(argv(&req(&["ls"]), &caps()).unwrap());
-        assert_eq!(a.iter().filter(|s| *s == "-v").count(), 1);
+        assert_eq!(a[2..4], ["--name", "drgnx-job-x1a"]);
+        assert!(a.windows(2).any(|w| w == ["--memory-swap", "4G"]));
+        assert!(a.contains(&"--oom-score-adj=1000".to_string()));
         assert!(
             !a.iter()
-                .any(|s| s.starts_with("--mount") || s.starts_with("--volume"))
+                .any(|s| s.starts_with("--cgroup-parent") || s.starts_with("drgnx.runner="))
         );
-        assert!(
-            !a.iter()
-                .any(|s| s == "--privileged" || s.starts_with("--device"))
-        );
-        // a path that would add mount options, or a relative one, is refused
-        for bad in ["/a:/etc:rw", "/a,b", "rel/path"] {
-            let mut r = req(&["ls"]);
-            r.worktree = bad.into();
-            assert!(argv(&r, &caps()).is_err(), "{bad}");
-        }
-    }
-
-    #[test]
-    fn image_off_the_list_refused() {
+        assert_eq!(a[a.len() - 3..], [REF, "make", "test"]);
         let mut r = req(&["ls"]);
         r.image = "evil".into();
-        let e = argv(&r, &caps()).unwrap_err();
-        assert!(
-            e.message.contains("agents-container-images"),
-            "{}",
-            e.message
-        );
-        // a raw reference is not a name on the list
-        r.image = REF.into();
-        assert!(argv(&r, &caps()).is_err());
-        // an entry that is not pinned by digest is not run
-        let mut c = caps();
-        c.images[0].image = "registry.example/tools:latest".into();
-        assert!(argv(&req(&["ls"]), &c).is_err());
-        assert!(
-            argv(
-                &req(&["ls"]),
-                &Caps {
-                    images: vec![],
-                    ..caps()
-                }
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn argv_after_the_image_never_reaches_podman_options() {
-        let nasty = ["--privileged", "-v", "/:/host", "--network=host", "--rm"];
-        let a = strs(argv(&req(&nasty), &caps()).unwrap());
-        let at = a.iter().position(|s| s == REF).unwrap();
-        assert_eq!(a[at + 1..], nasty.map(String::from));
-        // every flag podman sees comes before the image, and none is the agent's
-        assert!(
-            a[..at]
-                .iter()
-                .all(|s| !s.contains("host") && s != "--privileged")
-        );
-        assert_eq!(a[..at].iter().filter(|s| *s == "-v").count(), 1);
-        assert!(argv(&req(&[]), &caps()).is_err());
-    }
-
-    #[test]
-    fn network_none_unless_granted() {
-        let a = strs(argv(&req(&["ls"]), &caps()).unwrap());
-        assert!(a.contains(&"--network=none".to_string()));
-        let mut r = req(&["ls"]);
-        r.net = Some(NetCell::ProviderAndPackages);
-        let a = strs(argv(&r, &caps()).unwrap());
-        // still no podman network: the proxy comes in as files
-        assert!(a.contains(&"--network=none".to_string()));
-        assert!(
-            !a.iter()
-                .any(|s| s.starts_with("--network=") && s != "--network=none")
-        );
-        // a grant with no proxy is refused, never turned into the host's network
-        let c = Caps {
-            proxy: None,
-            ..caps()
-        };
-        assert!(argv(&r, &c).is_err());
-        r.net = Some(NetCell::Open);
-        assert!(
-            !strs(argv(&r, &caps()).unwrap())
-                .iter()
-                .any(|s| s.contains("host"))
-        );
-    }
-
-    #[test]
-    fn a_grant_adds_exactly_two_ro_mounts_the_proxy_env_and_the_entrypoint() {
-        let plain = strs(argv(&req(&["ls", "-l"]), &caps()).unwrap());
-        let mut r = req(&["ls", "-l"]);
-        r.net = Some(NetCell::ProviderAndPackages);
-        let a = strs(argv(&r, &caps()).unwrap());
-        // the fixed flags before the extras are untouched
-        let at = plain.iter().position(|s| s == REF).unwrap();
-        assert_eq!(a[..at], plain[..at]);
-        let image = a.iter().position(|s| s == REF).unwrap();
-        assert_eq!(image - at, NET_FLAGS);
-        let extra = &a[at..image];
-        assert_eq!(
-            extra[..4],
-            [
-                "-v",
-                "/run/h/job.sock:/run/drgnx/proxy.sock:ro,Z",
-                "-v",
-                "/opt/drgnx-fwd:/run/drgnx/fwd:ro,Z"
-            ]
-        );
-        for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
-            let want = format!("{k}=http://127.0.0.1:3128");
-            assert!(
-                extra.windows(2).any(|w| w[0] == "-e" && w[1] == want),
-                "{k}"
-            );
-        }
-        assert_eq!(extra[12..], ["--entrypoint", "/run/drgnx/fwd"]);
-        // the command stays last, after the forwarder's own arguments
-        assert_eq!(
-            a[image + 1..],
-            ["3128", "/run/drgnx/proxy.sock", "--", "ls", "-l"]
-        );
-        // a mount source that podman would read as options is refused
-        let c = Caps {
-            proxy: Some(Proxy {
-                socket: "/a:b/s".into(),
-                forwarder: "/f".into(),
-            }),
-            ..caps()
-        };
-        assert!(argv(&r, &c).is_err());
+        assert_eq!(argv(&r, &caps()).unwrap_err().rule, Rule::Malformed);
+        assert_eq!(resolve(&caps(), "tools").unwrap(), REF);
     }
 
     #[tokio::test]
@@ -740,6 +354,7 @@ mod tests {
             &installed,
             NetCell::ProviderAndPackages,
             &test_hosts(),
+            &[],
         )
         .unwrap();
         // the socket path stays short; the copy is the job's own; the installed file is never a mount source
@@ -753,7 +368,7 @@ mod tests {
         };
         let mut r = req(&["ls"]);
         r.worktree = d.path().join("tree");
-        r.net = Some(NetCell::ProviderAndPackages);
+        r.net = true;
         let a = strs(argv(&r, &c).unwrap());
         let sources: Vec<&str> = a
             .windows(2)
@@ -783,24 +398,18 @@ mod tests {
                 &run_dir,
                 &d.path().join("none"),
                 NetCell::Open,
-                &test_hosts()
+                &test_hosts(),
+                &[]
             )
             .is_err()
         );
-    }
-
-    #[test]
-    fn no_grant_adds_no_proxy_flag() {
-        let a = strs(argv(&req(&["ls"]), &caps()).unwrap());
-        assert!(!a.iter().any(|s| s.contains("proxy") || s == "--entrypoint"));
-        assert_eq!(a.len(), 22 + 1 + 1);
     }
 
     #[tokio::test]
     async fn the_job_proxy_listens_on_its_socket() {
         let d = tempfile::tempdir().unwrap();
         let sock = d.path().join("proxy.sock");
-        let handle = start_proxy(&sock, NetCell::ProviderAndPackages, &test_hosts()).unwrap();
+        let handle = start_proxy(&sock, NetCell::ProviderAndPackages, &test_hosts(), &[]).unwrap();
         // not on the allow-list: refused by the proxy itself
         let mut c = tokio::net::UnixStream::connect(&sock).await.unwrap();
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -810,6 +419,29 @@ mod tests {
         let mut buf = [0u8; 12];
         let n = c.read(&mut buf).await.unwrap_or(0);
         assert!(!buf[..n].starts_with(b"HTTP/1.1 200"), "{:?}", &buf[..n]);
+        drop(handle);
+    }
+
+    /// Pattern D (the proxy's answer is the only wait).  A name the setting pins, on the job's allow-list, reaches
+    /// its address: here a listener on loopback, which DNS would never give.
+    #[tokio::test]
+    async fn the_job_proxy_resolves_a_pinned_name() {
+        use std::net::{IpAddr, Ipv4Addr};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let d = tempfile::tempdir().unwrap();
+        let sock = d.path().join("proxy.sock");
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let host = format!("pinned.test:{}", upstream.local_addr().unwrap().port());
+        let hosts = vec![("packages".to_string(), vec![host.clone()])];
+        let pins = vec![("pinned.test".to_string(), IpAddr::V4(Ipv4Addr::LOCALHOST))];
+        let handle = start_proxy(&sock, NetCell::ProviderAndPackages, &hosts, &pins).unwrap();
+        let mut c = tokio::net::UnixStream::connect(&sock).await.unwrap();
+        c.write_all(format!("CONNECT {host} HTTP/1.1\r\nHost: {host}\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
+        let mut head = [0u8; 12];
+        c.read_exact(&mut head).await.unwrap();
+        assert_eq!(&head, b"HTTP/1.1 200", "{:?}", head.escape_ascii());
         drop(handle);
     }
 
@@ -830,6 +462,12 @@ mod tests {
         v.agents_job_memory = "4G --privileged".into();
         let c = crate::settings::containers::caps(&v);
         assert!(argv(&req(&["ls"]), &c).is_err());
+        // the job's proxy pins what the setting pins
+        v.sandbox_proxy_pins = vec![("registry.corp".into(), "10.0.0.5".parse().unwrap())];
+        assert_eq!(
+            crate::settings::containers::caps(&v).pins,
+            v.sandbox_proxy_pins
+        );
     }
 
     /// AS1-NET-HOSTS-1: the hosts a granted network reaches are the setting's, per tier; the shipped default is the
@@ -870,6 +508,15 @@ mod tests {
     fn podman_absent_is_refused_with_a_doctor_hint() {
         assert!(podman_missing().message.contains("drgnx doctor"));
     }
+
+    /// The forwarder's port inside the job is the sandbox's proxy port.
+    #[test]
+    fn the_proxy_port_is_the_sandboxs() {
+        assert_eq!(
+            sleipnir::linux::podman::PROXY_PORT,
+            crate::sandbox::PROXY_PORT
+        );
+    }
 }
 
 #[cfg(test)]
@@ -882,22 +529,6 @@ mod name_and_pull_tests {
         std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
         p
-    }
-
-    /// The caps hold only where podman reports cgroup v2, the systemd manager and the memory, pids and cpu
-    /// controllers; anything else (the cgroupfs fallback with no user session above all) is refused with the reason.
-    #[test]
-    fn caps_hold_only_on_v2_with_systemd_and_the_controllers() {
-        let info = |v: &str, m: &str, c: &[&str]| serde_json::json!({"host": {"cgroupVersion": v, "cgroupManager": m, "cgroupControllers": c}});
-        let all = ["cpuset", "cpu", "io", "memory", "pids"];
-        assert_eq!(limits_enforced(&info("v2", "systemd", &all)), Ok(()));
-        let e = limits_enforced(&info("v2", "cgroupfs", &all)).unwrap_err();
-        assert!(e.contains("cgroupfs") && e.contains("enable-linger"), "{e}");
-        let e = limits_enforced(&info("v1", "systemd", &all)).unwrap_err();
-        assert!(e.contains("cgroup v1"), "{e}");
-        let e = limits_enforced(&info("v2", "systemd", &["cpu", "memory"])).unwrap_err();
-        assert!(e.contains("pids"), "{e}");
-        assert!(limits_enforced(&serde_json::json!({})).is_err());
     }
 
     #[test]

@@ -185,7 +185,7 @@ pub async fn run(args: ServeArgs) -> Exit {
     }
     // what the Lisp hub left in the state dir, moved aside (never deleted), before anything is served
     let moving = env.clone();
-    match tokio::task::spawn_blocking(move || crate::legacy::migrate(&moving)).await {
+    match crate::clock::blocking(move || crate::legacy::migrate(&moving)).await {
         Ok(Ok(m)) => {
             if !m.moved.is_empty() || !m.left.is_empty() {
                 tracing::info!(moved = ?m.moved, left = ?m.left, "what the Lisp hub left");
@@ -204,11 +204,28 @@ pub async fn run(args: ServeArgs) -> Exit {
         Some(graph),
     ));
     front.tool_hub.bind(&front);
+    // what the browser sessions' web proxies never reach: the host's addresses and the hub's loopback ports, kept
+    // live from now on (the gateway's port is added once it listens)
+    front
+        .browser_nevers
+        .start(crate::browser::nevers::emacs_server_dirs(
+            &home,
+            env.vars
+                .get("XDG_CONFIG_HOME")
+                .map(Path::new)
+                .filter(|p| p.is_absolute()),
+        ));
     let _ = front.dirs.set(crate::graph::StoreDirs {
         home,
         config: paths::config_dir(&env),
         hub: hub_dir.clone(),
     });
+    front.search.bind(&front);
+    if let Some(d) = front.dirs.get() {
+        front
+            .search
+            .configure(&env, d.home.clone(), d.config.clone(), runtime.clone());
+    }
     // before anything is served: a hub that could not be hardened takes no key
     front.gate.set_hardened(hardened);
     #[cfg(feature = "test-hooks")]
@@ -223,6 +240,7 @@ pub async fn run(args: ServeArgs) -> Exit {
     front
         .mcp
         .open_store(env.clone(), socket.clone(), runtime.clone());
+    front.mcp.bind_search(&front);
     front.mcp.restore().await;
     front.core.agents.open_store(runtime.clone());
     crate::clock::spawn("sessions:watch", sessions::watch(front.clone()));
@@ -233,6 +251,21 @@ pub async fn run(args: ServeArgs) -> Exit {
     );
     // a queued message reaches its session once that is free
     crate::clock::spawn("deliver:run", crate::agents::deliver::run(front.clone()));
+    // reported machines expire; the local slots follow the job pool
+    crate::clock::spawn("machines:run", crate::work::machines::run(front.clone()));
+    // the sessions' writes and starts link to the asks behind them
+    crate::clock::spawn("asks:run", crate::work::asks::run(front.clone()));
+    // a planning session's turn ends, the user's revisions and ends, through each session's order
+    crate::clock::spawn("say:run", crate::say::run(front.clone()));
+    // finished tasks, including part 1's history, become forecast samples
+    {
+        let f = front.clone();
+        crate::clock::spawn("forecast:backfill", async move {
+            crate::forecast::sweep(&f).await;
+        });
+    }
+    // the Work map follows the store's records and the clock's minutes while a map is open
+    crate::clock::spawn("map:run", crate::work::map::run(front.clone()));
     // settings.el and the shipped defaults, as data, before anything is served (its last good values in runtime.db)
     front
         .settings
@@ -243,10 +276,15 @@ pub async fn run(args: ServeArgs) -> Exit {
     // The jobs a hub before this one left running are watched again first (a session resumed then knows it waits),
     // and a job end that reached no session is delivered once they are back.
     crate::exec::ensure_open(&front);
+    crate::work::machines::seed(&front);
+    // the runners recorded before this start are linked (in the background: an unreachable one delays nothing)
+    crate::runners::methods::start(&front);
     front.core.runs.set_recovering(true);
     {
         let f = front.clone();
         tokio::spawn(async move {
+            // who was in which file, from the recorded sessions' steps, before they run again
+            f.core.presence.rebuild_from_store(&f).await;
             f.core.agents.resume_all(&f).await;
             f.core.runs.set_recovering(false);
             crate::agents::wake::recover(&f).await;
@@ -261,6 +299,9 @@ pub async fn run(args: ServeArgs) -> Exit {
     front.gate.open_store(runtime.clone());
     match front.gate.listen(gateway_port).await {
         Ok(events) => {
+            if let Some(port) = front.gate.port() {
+                front.browser_nevers.never.hold(port);
+            }
             front.gate.restore(&front.mcp).await;
             crate::clock::spawn("gateway:events", gateway::run_events(events, front.clone()));
             crate::clock::spawn("gateway:watch", gateway::watch(front.clone()));
@@ -285,15 +326,27 @@ pub async fn run(args: ServeArgs) -> Exit {
     );
     crate::records::install_tool(&front);
     crate::clock::spawn("records:follow", crate::records::follow(front.clone()));
-    front.core.runs.set_git(Arc::new(
-        crate::runner::git::HubGit::new(
-            crate::sandbox::runs_root(&env),
-            crate::runner::TreeMode::Snapshot,
-            Box::new(crate::runner::git::HubPolicy(Arc::downgrade(&front))),
-            Some(runtime.clone()),
-        )
-        .with_shell_env(front.shell_env.clone()),
-    ));
+    let mut git = crate::runner::git::HubGit::new(
+        crate::sandbox::runs_root(&env),
+        crate::runner::TreeMode::Snapshot,
+        Box::new(crate::runner::git::HubPolicy(Arc::downgrade(&front))),
+        Some(runtime.clone()),
+    )
+    .with_shell_env(front.shell_env.clone());
+    // each tree the hub makes records where it branched from (work.db's worktree_base)
+    if let Some(dirs) = front.dirs.get() {
+        let writer = front.writer.clone();
+        git = git.with_bases(
+            dirs.hub.join("checkpoints"),
+            Arc::new(move |row| {
+                let w = writer.clone();
+                crate::clock::spawn("bases:put", async move {
+                    crate::work::bases::put(&w, row).await;
+                });
+            }),
+        );
+    }
+    front.core.runs.set_git(Arc::new(git));
     front
         .core
         .runs
@@ -695,7 +748,7 @@ async fn open_store(
         pool: urdr::graph::ReadPool::open(&path, 4),
         deny,
     };
-    let db = tokio::task::spawn_blocking(move || norn::store::CoordDb::with_graph(handle))
+    let db = crate::clock::blocking(move || norn::store::CoordDb::with_graph(handle))
         .await
         .map_err(|e| e.to_string())?;
     Ok((writer, graph, db, home))
@@ -725,7 +778,7 @@ async fn watch_schema(front: Arc<Front>) {
             front.note_migration(report.as_deref());
         }
         let db = front.writer.db.clone();
-        let _ = tokio::task::spawn_blocking(move || db.tick()).await;
+        let _ = crate::clock::blocking(move || db.tick()).await;
         // the personal-notes opt-ins: applied when their file changed (norn::privacy, Task 9b)
         if let (Some(g), Some(d)) = (front.tools.graph(), front.dirs.get())
             && let Some(r) =
@@ -773,13 +826,32 @@ fn embed_idle(front: &Arc<Front>, timer: &Arc<std::sync::Mutex<crate::embed::Tim
     if !due {
         return;
     }
-    let Ok(Some(e)) = front.gate.embedder() else {
+    let current = front.settings.current();
+    let chain = crate::settings::providers::role_chain(
+        &current.loaded.values.ai_roles,
+        &crate::settings::defaults().roles,
+        "embed",
+    );
+    // servers first (when one answers it is preferred), then the built-in model, unless the setting turned it off
+    let mut embedders: Vec<Arc<dyn urdr::graph::search::Embedder>> = front
+        .gate
+        .embedders(&chain)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|e| Arc::new(e) as Arc<dyn urdr::graph::search::Embedder>)
+        .collect();
+    if current.loaded.values.search_builtin
+        && let Some(b) = front.search.builtin()
+    {
+        embedders.push(b);
+    }
+    if embedders.is_empty() {
         timer
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .finish(false, now);
         return;
-    };
+    }
     let (front, timer, deny) = (
         front.clone(),
         timer.clone(),
@@ -789,7 +861,9 @@ fn embed_idle(front: &Arc<Front>, timer: &Arc<std::sync::Mutex<crate::embed::Tim
             .clone(),
     );
     tokio::spawn(async move {
-        let out = crate::embed::run(&front.writer.db, &e, &deny, probe).await;
+        let each: Vec<&dyn urdr::graph::search::Embedder> =
+            embedders.iter().map(|e| e.as_ref()).collect();
+        let out = crate::embed::run(&front.writer.db, &each, &deny, probe).await;
         let stopped = matches!(out, crate::embed::Outcome::Stopped { .. });
         match &out {
             crate::embed::Outcome::Stopped { embedded, why } => {
@@ -822,10 +896,9 @@ fn nightly_backup(front: &Front) {
         return;
     }
     let g = g.clone();
-    tokio::spawn(async move {
+    tokio::spawn(crate::backup_timer::guarded(async move {
         crate::graph::run_backup(&g).await;
-        crate::backup_timer::finish();
-    });
+    }));
 }
 
 /// Under the lock: agent socket A at `hub.sock` in its session dir, `<socket dir>/s/SID/` (`paths::make_session_dir`:

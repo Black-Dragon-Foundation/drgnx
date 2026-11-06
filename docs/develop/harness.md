@@ -192,14 +192,20 @@ let-binds the registries the module touches:
 ```
 
 The first argument is a list of module names (evaluated): their files are loaded, and so are the modules they
-`:requires`, all the way down — also a required module whose file another file already loaded (`tools/cockpit`
-loads `tools/work`'s). A module's file is loaded only when the module is not in the table yet (a string element is loaded each time): then
+`:requires`, all the way down — also a required module whose file another file already loaded. A module's file is loaded only when the module is not in the table yet (a string element is loaded each time): then
 a `defcustom` with a `:set` function sets the global value again, over a `let` binding around the helper, and a
 function the file defines replaces a `cl-letf` stub made outside it. Set a module's own setting, and stub its functions, inside BODY. An element that is a string is a file to load instead, for a fake module a test writes to a temporary
 directory. `:stages '(startup idle)` sets up every shipped module of those stages as well. The module table, report
 and state are fresh, and `DRGNX_CONFIG_DIR` is a temporary directory, so the user's `modules.eld` is never read.
 Inside BODY, `drgnx-modules--table` holds only the selected modules and the modules they require, not every module file that was loaded.
 
+- **Under `--leaks`, load the libraries first.** The census reads the state around each test, so a library that the
+  first test's helper loads shows its top-level registrations (rules, places, view types, config definitions) as that
+  test's leaks. A file calls `(drgnx-test-modules-preload '(tools/browser))` once at its top, after loading the
+  fixture. Two more causes of a leak on a test's behalf: a `with-temp-buffer` buffer runs no kill hooks
+  (`inhibit-buffer-hooks`), so the timers a buffer owns outlive it (make the buffer with `generate-new-buffer` and
+  kill it); and a gated hub run (`drgnx-test-gated`) enters the test clock after the helper's setups, so a timer
+  they armed stays in the real list: wrap the helper in `(drgnx-test-with-clock (:allow-pending t) …)`.
 - **Teardown is part of the test.** After BODY (also when BODY signals) the modules are turned off last first through
   `drgnx-module-teardown`, then `drgnx-modules-after-teardown-functions` run: every use of the helper tests the
   module's teardown too. The product's after-teardown function re-applies the keys and menus from the registry; the
@@ -335,8 +341,9 @@ skip redisplay and hide the very jank we want to see.
 - **Pixels:** clicks take root-frame pixel coordinates — the same pixels as a screenshot (top-left = 0,0).
   `(posn-at-x-y x y root-frame)` turns them into the click position.
 - **Targets:** instead of pixels, name a window by its buffer name or major mode (e.g. `treemacs-mode`) and
-  some visible text; the click lands in the middle of the first character of the first visible occurrence.
-  An occurrence counts only if it is not invisible (folded) and a click at the computed pixel lands on it
+  some visible text; the click lands in the middle of the first character of the first visible occurrence —
+  the middle of that glyph as drawn, so a narrow glyph in a proportional font (a `t` in the Explorer's UI
+  font is half a column) is hit too. An occurrence counts only if it is not invisible (folded) and a click at the computed pixel lands on it
   (same window, same position) — text cut off at the right edge of a truncated line is skipped. A buffer that
   is not shown, or text with no such occurrence, is an error — never a click somewhere else.
 - **Clicks** are `down-mouse-N` + a release; `count 2` adds `double-down-mouse-N` + `double-mouse-N`;
@@ -490,6 +497,7 @@ sizes in logical pixels, such as a margin or a radius, still go by `frame-scale-
 | `(drgnx-uitest-region-equal-p A B RECT &key tolerance ignore-alpha)` | non-nil when every channel differs by at most `tolerance` (default 0) on RECT; nil for different sizes |
 | `(drgnx-uitest-darker-p A B X Y)` | A's pixel has the lower luma (0.2126 R + 0.7152 G + 0.0722 B) |
 | `(drgnx-uitest-bare-frame)` | scroll bars, tool bar, menu bar and `blink-cursor-mode` off, so a snapshot and an export can be equal |
+| `(drgnx-uitest-pointer-set X Y)` | moves the compositor's pointer to the layout position X, Y (logical pixels): `t` when it moved, `failed` when sway refused, `unsupported` anywhere but sway (`swaymsg "seat - cursor set X Y"`), so a row that needs a real pointer (hover) skips there; a hover row runs in the `--compositor sway` pass. Headless sway has no input devices, so its seat has no pointer and `cursor set` reaches no client: the first call makes a virtual pointer (`zwlr_virtual_pointer_manager_v1`, the Wayland wire protocol spoken from Lisp over the session's socket, kept open for the session), which gives the seat a pointer; `failed` when the compositor offers none |
 
 The export is decoded in Lisp (zlib and a PNG unfilter), so it needs an Emacs with zlib.
 
@@ -623,7 +631,8 @@ session launcher         systemd         # or detached (process group, no system
   containerd mode). `--podman` is short for `DRGNX_CONTAINER=podman … --container`.
 - **GUI tier in a container:** `test/container/Containerfile.gui` (fedora:45 + `emacs-pgtk mutter sway i3
   xorg-x11-server-Xvfb xrandr xprop emacs-lucid dbus-daemon mesa-dri-drivers ImageMagick procps-ng util-linux`, ~2.15 GB),
-  run with `--memory 3g --memory-swap 3g` (`DRGNX_TEST_GUI_MEMORY` overrides). mutter falls back to a surfaceless software renderer, so no GPU is
+  run with `--memory 3g --memory-swap 3g` (6g for `--perf --ab-env`, which runs two sessions; `DRGNX_TEST_GUI_MEMORY`
+  overrides). mutter falls back to a surfaceless software renderer, so no GPU is
   needed. The container needs `--security-opt seccomp=unconfined --security-opt label=disable`: GTK loads icons
   through glycin, whose `bwrap` sandbox cannot create namespaces under the default policy, and Emacs aborts.
 - **Window managers' image:** `--compositor kwin` and `--compositor niri` run in `drgnx-test-wm:TAG` (TAG: `test/container/image-tag.sh`, a hash of the Containerfile and every file it
@@ -632,6 +641,16 @@ session launcher         systemd         # or detached (process group, no system
   util-linux`, ~2.3 GB; `kwin_wayland` and `sway` lose their `cap_sys_nice` file capability, which the container does
   not grant), with the same cap and security options. `DRGNX_UI_COMPOSITOR=kwin|niri` without `--compositor` picks it
   too. `DRGNX_TEST_WM_IMAGE` uses a prebuilt one (`DRGNX_TEST_GUI_IMAGE` does not apply: that image has neither).
+- **A local run builds an image only when it must.** `bin/drgnx test --container` takes the image `NAME:TAG` (TAG as
+  above) from the local store when it is there; else pulls `ghcr.io/black-dragon-foundation/NAME:TAG` (CI's copy of the
+  same tag; anonymous, `DRGNX_TEST_IMAGE_PULL_TIMEOUT` seconds, default 180) and tags it as `NAME:TAG`; else builds it.
+  Stderr says which: `image: NAME:TAG (local|pulled|built)` (`test/container/image.sh`). `DRGNX_TEST_IMAGE_PULL=0`
+  never pulls (offline). A prebuilt override (below) skips all of it and prints `(prebuilt)`.
+- **A branch's Nidhogg is mounted, never baked.** `DRGNX_CONTAINER_NIDHOGG=PREFIX` (an unpacked Nidhogg build) mounts
+  it read-only at the prefix its `share/nidhogg/BUILDINFO` names and runs it as the Emacs, in every tier (batch,
+  `--ui`, `--scenario`, `--perf`, `--soak`, `--day`, `--tty`) and in the image the tier uses without it. To test a
+  branch's Nidhogg, build it (or take CI's tarball), unpack it and set the variable; no image
+  is built per prefix, so a run costs no image build and leaves none behind.
 - **Image builds are capped** like the runs: with podman, `podman build --memory 3g --memory-swap 3g`
   (`DRGNX_TEST_BUILD_MEMORY` sets another size; docker's buildx ignores `--memory`, so it gets none). A prebuilt image
   override (`DRGNX_TEST_IMAGE`, `DRGNX_TEST_GUI_IMAGE`, `DRGNX_TEST_WM_IMAGE`) must be an image reference (letters, digits,
@@ -1184,7 +1203,7 @@ peer and stay; the others say "not converted". The audit holds every other test 
 file, and `drgnx-lint/gate-exempt-only-shrinks` holds the rows to a constant in `lint-test-patterns-test.el` that
 only loses entries; `drgnx-lint/the-registers-equal-their-constants` holds the two equal, as for the pattern register.
 `drgnx-test-gate-unnamed-ok` is a stopgap until the hub's agent-session tasks run on its clock:
-`drgnx-lint/gate-unnamed-ok-only-where-listed` lets only the two agents-mirror test files bind or set it.
+`drgnx-lint/gate-unnamed-ok-only-where-listed` lets only the two agents-mirror test files and the Say it test file bind or set it.
 `drgnx-test-gate-waiting-ok` (origins a barrier may find inside a real wait) is fenced the same way by
 `drgnx-lint/gate-waiting-ok-only-where-listed`: only the gate's own test binds it; a file that keeps a job running
 through a barrier on purpose is added by the owner's decision. A process
@@ -1285,6 +1304,13 @@ the client half of the `gated` pattern; the hub half is Ratatoskr's test clock a
   held the connection reads as open (`process-status`), so no close is seen before the data. The client's own
   `delete-process` runs the client's sentinel at once and drops what was held; `set-process-sentinel` and
   `process-sentinel` on a gated connection reach the client's sentinel behind the gate's.
+- **Gated connections are unframed.** The gate replaces the connection's filter (`set-process-filter`), which turns
+  Nidhogg's framing off ([hub.md](hub.md#the-clients-core)): a gated test always runs the client's filter path, whatever
+  `nidhogg-workers-framing` says. The framed path has its own rows (`hub-client-frame-test.el`, and the framed rows of
+  `hub-client-shell-test.el`, whose peers use `drgnx-test-peer-send`), and `hub-client-framed-test.el` runs the framed
+client against the real Ratatoskr (a subscription and a burst of calls; `handshake`, waiting on the hub's answers).
+`NIDHOGG_WORKERS` (for example `+nidhogg-workers-framing`) is passed into the test container, so a run can set the
+switches for the whole suite.
 - **The schedule** is given up front: `(CONN :answer METHOD)`, `(CONN :event NAME)`, `(CONN :line)`, `(CONN :eof)`
   and `(:pause LABEL)`. A step releases its connection's lines up to its own, in order: the gate reorders lines across
   connections, never within one. A connection's challenge and the answers to its first `ping` and its `hello` are
@@ -1408,7 +1434,7 @@ for a timer. Load it with `(load (expand-file-name "test/fixtures/clock-fixture"
   `bin/drgnx test`'s unit tier sets the variable. On a system without `/proc` (macOS), where that clock cannot run, the
   clock reads and the timers' stamps are advice, as described below (`drgnx-test--advice-clock-p`). Anywhere else (a
   Linux Emacs with `NIDHOGG_TEST_CLOCK=0`, an interactive one) `drgnx-test-with-clock` refuses to start: there is no
-  advice of `float-time`, `current-time` or `timer--activate` beside the core clock.
+  advice of `float-time`, `current-time`, `timer-relative-time` or `timer--activate` beside the core clock.
   What differs on Nidhogg's clock:
   - every read of the time is virtual: `time-since`, `(time-subtract nil ...)` and `format-time-string` too, and
     `(float-time nil)`. `drgnx-test-real-time` reads `/proc/uptime` then, because nothing else in Emacs stays real
@@ -1434,11 +1460,13 @@ for a timer. Load it with `(load (expand-file-name "test/fixtures/clock-fixture"
   starts it, lands in lists of its own and the real ones are untouched. `float-time` and `current-time` without an
   argument return virtual time (with an argument they are Emacs's own); `current-idle-time` is nil outside a pause and
   the pause's length inside one; `input-pending-p` is nil, or t from `:input-at` on. Virtual time starts at the real
-  time (`drgnx-test-clock-now` is the virtual seconds since entry). On the advice, timers made by `run-at-time` are
-  stamped by Emacs from the real clock; a `:before` advice on `timer--activate` moves them to the virtual due time plus
-  10^6 s (`drgnx-test-clock-horizon`), so a real wait never finds a virtual timer ripe, and a timer made at virtual *v*
-  with delay *d* is due at *v* + *d*, also after an advance (a delay of 2 ms or more is rounded to the millisecond: Emacs
-  stamps the timer a few microseconds before the advice runs).
+  time (`drgnx-test-clock-now` is the virtual seconds since entry). On the advice, a timer made at virtual *v* with
+  delay *d* is due at *v* + *d* plus 10^6 s (`drgnx-test-clock-horizon`), so a real wait never finds a virtual timer
+  ripe, also after an advance. `run-at-time` and `run-with-timer` stamp a delay with `timer-relative-time` from now,
+  which the advice counts from the virtual clock, never a real read: however long a slow machine takes between that
+  stamp and the timer's activation, the delay holds exactly. A timer stamped from the real clock some other way (an
+  absolute time, `(time-add nil D)`) is moved by a `:before` advice on `timer--activate`, which takes stamp minus real
+  now as the delay and rounds one of 2 ms or more to the millisecond (right while under 0.5 ms passed since the stamp).
   Before the lists are swapped, the macro advises and unadvises each primitive the advice layer advises once, on scratch lists: Emacs 31
   compiles a native advice trampoline on the first `advice-add` of a primitive, and logging that compile arms
   `undo-auto--boundary-timer`. That timer, and any like it armed during the body, is cancelled by the macro (it is
@@ -1509,7 +1537,7 @@ skips unless Glitnir (the compositor) is active and the packages are present, so
 as skipped. Active, they set `child-frame-chrome` to drgnx's defaults and `glitnir-debug` to `verify`, and compare
 snapshots in device pixels: inside a popup away from its corners equals the Glitnir-off picture, a corner pixel equals
 the no-popup picture, 4 px outside the right edge is darker than the no-popup picture, and after the hide the popup
-plus its shadow margin equals the no-popup picture; the verifier must report no violations.
+plus its shadow margin equals the no-popup picture.
 
 The same file holds the rest of the design's §3.4 package matrix, as `drgnx-ui-chrome/<package>-<check>`, each at
 scale 1 and 2 with the verifier on:
@@ -1547,7 +1575,6 @@ of their own kind and skip in any other, so the file runs once per kind (`DRGNX_
 | `fractional-1-5`: the core rows (the four scenarios above) at 1.5, with the root's scale checked as GTK 3 shows it | `DRGNX_UI_SCALE=1.5` (e.g. `DRGNX_UI_SIZE=2880x1800`) |
 | `fractional-1-25-u1` … `-u5`: the core rows at the 125 % setups | `DRGNX_UI_SCALE=1.25` and `DRGNX_UI_SIZE` 2560x1440, 1920x1080, 2560x1600, 2880x1800, 3840x2160 |
 | `kwin-core-rows`: the core rows under KWin | `--compositor kwin` (the window managers' image), scales 1 and 2 |
-| `mixed-dpi-move`: the root moved to a monitor of another scale with a popup shown: gdctl takes the first monitor out of mutter's layout, so mutter moves the root; after 1.5 s the picture outside the popup is the stock one (full damage), the popup equals one shown afresh at the new scale, and `:scale-mismatch` counts no paint after the wait | `DRGNX_UI_MONITORS=2 DRGNX_UI_SCALES="1 2"` (mutter) |
 | `nested-make-frame-visible`, `focus-taking-child` (vertico-posframe, mini-frame), `ime-preedit-in-child`, `shadow-beside-scroll-bars-and-tool-bar`, `xwidget-under-popup` (skipped: Nidhogg builds no xwidgets yet) | any mutter session; run at scales 1 and 2 |
 
 The IME test types through mutter's RemoteDesktop service (`NotifyKeyboardKeysym` on the session bus), so the keys go
@@ -1573,7 +1600,7 @@ directory lacking one of them) the test is skipped with the message "evil is not
 package directory with evil, goto-chg and evil-collection", so a checkout without evil still passes.
 
 To get exactly the pinned packages without `drgnx sync`, run `test/container/modal-elpa.sh DIR` in a container: it
-downloads evil, goto-chg, evil-collection and kkp from MELPA, checks each tarball's sha256 against `etc/drgnx.lock.eld`
+downloads evil, goto-chg, evil-collection and kkp from MELPA and vertico, compat and orderless from GNU ELPA, checks each tarball's sha256 against `etc/drgnx.lock.eld`
 and unpacks them into DIR. Pass DIR as both `DRGNX_MODAL_ELPA` and `DRGNX_USER_ELPA` (the real-kkp tests read the
 latter). Or build the directory yourself, once, in temporary directories (never your own configuration):
 

@@ -1,0 +1,18 @@
+{"scenario": "trace/macos-says-not-traced", "requires": ["v1", "test-hooks"], "doc": "Where opens cannot be traced (macOS; a test hub takes DRGNX_TEST_TRACE_PLATFORM=macos as macOS), a Claude Code session gets no wrapper and its Bash step's detail says why: origin `opened`, \"opens are not traced on macOS\". The files the command names still show (layer 1, `command`). Pattern B: the turn's last step is the gate, then timeline/get is read back until the label's write has landed."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && printf 'one\\n' > $ROOT/work/a.txt"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "env": {"DRGNX_TEST_TRACE_PLATFORM": "macos"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "provider:bash cat a.txt\nsay done"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"turn_id": "t1"}}}, "within_ms": 30000}
+{"do": "poll", "conn": "c", "json": {"id": 3, "method": "timeline/get", "params": {"scope": "session", "id": "$sid"}}, "expect": {"id": 3, "result": {"steps": {"$contains": [{"class": "tool", "tool_kind": "execute", "detail": {"kind": "execute", "title": "opens are not traced on macOS", "origin": "opened"}}]}}}, "within_ms": 20000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/presence/get", "params": {"file": "$ROOT/work/a.txt"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"file": "$ROOT/work/a.txt", "entries": [{"session": "$sid", "mode": "read", "source": "command"}]}}}

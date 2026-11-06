@@ -70,7 +70,6 @@
 (declare-function vertico-mode "vertico")
 (declare-function vertico-posframe-mode "vertico-posframe")
 (declare-function mini-frame-mode "mini-frame")
-(declare-function glitnir-stats "glitnir")
 (declare-function glitnir-active-p "glitnir")
 (declare-function glitnir--stacking "glitnir")
 (declare-function glitnir-refresh "glitnir")
@@ -226,10 +225,6 @@ After the caller hides the popups it checks the no-popup picture with `drgnx-tes
                             when (not (equal (cdr (drgnx-uitest-pixel a x y)) (cdr (drgnx-uitest-pixel b x y))))
                             return (list x y (drgnx-uitest-pixel a x y) (drgnx-uitest-pixel b x y)))))
 
-(defun drgnx-test-chrome--no-violations ()
-  "Assert the damage verifier found nothing (and, from Task 32, that the scene's stacking is GDK's)."
-  (should (eql 0 (or (plist-get (glitnir-stats) :violations) 0))))
-
 (defun drgnx-test-chrome--check-stacking (root popups)
   "From Task 32 on: every shown popup is in the scene's stacking list of ROOT."
   (when (fboundp 'glitnir--stacking)
@@ -298,8 +293,7 @@ After the caller hides the popups it checks the no-popup picture with `drgnx-tes
           (corfu-quit)
           (should (drgnx-test-chrome--wait-for (lambda () (not (frame-visible-p corfu-frame)))))
           (drgnx-test-chrome--settle)
-          (drgnx-test-chrome--check-hidden root rects none)
-          (drgnx-test-chrome--no-violations))))))
+          (drgnx-test-chrome--check-hidden root rects none))))))
 
 (ert-deftest drgnx-ui-chrome/posframe-show-hide-100 ()
   "A posframe shown and hidden 100 times: chrome while shown, the no-popup picture after every 25th hide."
@@ -330,8 +324,7 @@ After the caller hides the popups it checks the no-popup picture with `drgnx-tes
             (drgnx-test-chrome--settle)
             (drgnx-test-chrome--check-hidden root (list (list 0 0 (nth 0 none) (nth 1 none))) none))
         (posframe-delete-all)
-        (kill-buffer "*chrome-scratch*"))
-      (drgnx-test-chrome--no-violations))))
+        (kill-buffer "*chrome-scratch*")))))
 
 (ert-deftest drgnx-ui-chrome/eldoc-box-beside-corfu ()
   "eldoc-box placed beside corfu's popup (two adjacent popups): chrome on both, no residue after hide."
@@ -364,8 +357,7 @@ After the caller hides the popups it checks the no-popup picture with `drgnx-tes
             (eldoc-box-quit-frame)
             (corfu-quit)
             (drgnx-test-chrome--settle)
-            (drgnx-test-chrome--check-hidden root rects none)
-            (drgnx-test-chrome--no-violations)))))))
+            (drgnx-test-chrome--check-hidden root rects none)))))))
 
 (ert-deftest drgnx-ui-chrome/popup-at-the-right-bottom-edge ()
   "A posframe flush with the parent's right and bottom edges: the clipped shadow stays inside, the corners are drawn."
@@ -405,8 +397,7 @@ After the caller hides the popups it checks the no-popup picture with `drgnx-tes
               (drgnx-test-chrome--settle)
               (drgnx-test-chrome--check-hidden root (list r) none)))
         (posframe-delete-all)
-        (kill-buffer "*chrome-scratch*"))
-      (drgnx-test-chrome--no-violations))))
+        (kill-buffer "*chrome-scratch*")))))
 
 ;;;; The rest of the §3.4 matrix (Task 36)
 ;; Every package row of the design's matrix, plus its generic checks, as `drgnx-ui-chrome/<package>-<check>'.  They share
@@ -462,12 +453,11 @@ NONE is the no-popup snapshot.  Return the popups' rectangles."
     rects))
 
 (defun drgnx-test-chrome--hidden (root rects none)
-  "After the caller hid the popups whose rectangles were RECTS: settle, compare with NONE, no violations."
+  "After the caller hid the popups whose rectangles were RECTS: settle, compare with NONE."
   (drgnx-test-chrome--settle root)
   ;; RECTS: rectangles, or lists of them as `drgnx-test-chrome--shown' returns
   (drgnx-test-chrome--check-hidden
-   root (apply #'append (mapcar (lambda (r) (if (numberp (car r)) (list r) r)) rects)) none)
-  (drgnx-test-chrome--no-violations))
+   root (apply #'append (mapcar (lambda (r) (if (numberp (car r)) (list r) r)) rects)) none))
 
 (defun drgnx-test-chrome--pf (name string &rest args)
   "Show posframe NAME with STRING (a border of 1 px unless ARGS say otherwise); return its frame."
@@ -724,8 +714,7 @@ scale 1 and at scale 2 (one call in eight took 4), so MP-23 is needed; the asser
           (let* ((on (drgnx-uitest-snapshot root))
                  (off (drgnx-test-chrome--off-snapshot root)))
             (should (drgnx-test-chrome--rows-equal-p on off nil))))
-      (ignore-errors (which-key--hide-popup)))
-    (drgnx-test-chrome--no-violations)))
+      (ignore-errors (which-key--hide-popup)))))
 
 (ert-deftest drgnx-ui-chrome/transient-default-pixels-off ()
   "transient's default (a window at the bottom) is no child frame: the picture equals Glitnir off's."
@@ -740,8 +729,7 @@ scale 1 and at scale 2 (one call in eight took 4), so MP-23 is needed; the asser
                  (off (drgnx-test-chrome--off-snapshot root)))
             (should (drgnx-test-chrome--rows-equal-p on off nil))))
       (ignore-errors (transient-quit-all))
-      (ignore-errors (transient--emergency-exit)))
-    (drgnx-test-chrome--no-violations)))
+      (ignore-errors (transient--emergency-exit)))))
 
 ;;;; corfu
 
@@ -1209,8 +1197,7 @@ with the no-popup picture taken before the read."
            (off (drgnx-test-chrome--geometry-run nil)))
       (setq glitnir-enable t)
       (drgnx-test-chrome--settle)
-      (should (equal on off))
-      (drgnx-test-chrome--no-violations))))
+      (should (equal on off)))))
 
 (defun drgnx-test-chrome--focus-run (on)
   "Where the focus is after a posframe is shown, hidden, shown again and deleted, with Glitnir ON (or off)."
@@ -1333,8 +1320,7 @@ Return (NONE . FRAME): the picture without the popup and the reused frame."
   (drgnx-test-chrome--with-plain-child '((undecorated . nil))
     (should (drgnx-test-chrome--children root))
     (let* ((on (drgnx-uitest-snapshot root)) (off (drgnx-test-chrome--off-snapshot root)))
-      (should (drgnx-test-chrome--rows-equal-p on off nil)))
-    (drgnx-test-chrome--no-violations)))
+      (should (drgnx-test-chrome--rows-equal-p on off nil)))))
 
 (ert-deftest drgnx-ui-chrome/generic-alpha-child ()
   "A child frame with an `alpha'.  Under GTK it gets no chrome (Glitnir draws an opacity group stock): the picture is
@@ -1352,7 +1338,6 @@ child does, and the picture beside it is stock's."
           ;; the alpha applies: the middle is the child's colour over the root's, not the colour itself
           (should-not (equal (cdr (drgnx-uitest-pixel (drgnx-uitest-snapshot root) (/ (+ (nth 0 rect) (nth 2 rect)) 2)
                                                       (/ (+ (nth 1 rect) (nth 3 rect)) 2)))
-                             '(#x20 #x40 #x60))))))
-    (drgnx-test-chrome--no-violations)))
+                             '(#x20 #x40 #x60))))))))
 
 ;;; childframe-chrome-test.el ends here

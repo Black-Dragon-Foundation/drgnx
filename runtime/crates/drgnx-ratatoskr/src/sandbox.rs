@@ -100,7 +100,8 @@ pub fn context_for(env: &Env, helper: Option<&Path>) -> Context {
     Context {
         home: true_name(&home).unwrap_or_else(|| PathBuf::from("/")),
         closed: true_names(closed),
-        open_inside_closed: true_names([runs_root(env)]),
+        // the runs' worktrees, and the browsers `drgnx browser install` put in the data dir (a session reads its own)
+        open_inside_closed: true_names([runs_root(env), paths::data_dir(env).join("browsers")]),
         user_sockets: true_names(user_sockets),
         run_parents: true_names(paths::session_parents(env, &socket)),
         program_dirs: true_names(program_dirs),
@@ -216,6 +217,7 @@ pub fn helper_at(exe: &Path) -> InnerCommand {
         source: exe.to_path_buf(),
         inner_args: vec![OsString::from("sandbox-inner")],
         relay_args: vec![OsString::from("relay")],
+        browser_host_args: vec![OsString::from("browser-host")],
     }
 }
 
@@ -272,6 +274,7 @@ pub async fn run_probe(prepared: Prepared, timeout: Duration) -> Ran {
         invocation,
         status,
         layers,
+        browser,
     } = prepared;
     let mut child = match draugr::spawn_pinned(to_draugr(invocation)).await {
         Ok(c) => c,
@@ -285,7 +288,7 @@ pub async fn run_probe(prepared: Prepared, timeout: Duration) -> Ran {
     };
     let report = match status {
         // Blocking, on the thread that drives this future; the runtime's worker keeps reading the stderr tail.
-        Some(fd) => gleipnir::read_status(fd, &|| child.stderr_tail(), left()),
+        Some(fd) => gleipnir::inner::read_status_for(fd, &|| child.stderr_tail(), left(), browser),
         None => layers.ok_or_else(|| setup("no status line and no layers".into())),
     };
     let mut exit = None;
@@ -423,7 +426,8 @@ mod run {
     }
 
     async fn run_in(a: &SandboxRunArgs) -> Outcome {
-        let prepared = match prepare(a) {
+        // `_hub`: the hub's end of a `--browser-probe` run's socketpair, held until the run is over.
+        let (prepared, _hub) = match prepare(a) {
             Ok(p) => p,
             Err(r) => {
                 return Outcome {
@@ -447,6 +451,7 @@ mod run {
             invocation,
             status,
             layers,
+            browser,
         } = prepared;
         let mut child = match draugr::spawn_pinned(to_draugr(invocation)).await {
             Ok(c) => c,
@@ -475,7 +480,9 @@ mod run {
             + Duration::from_millis(gleipnir::inner::RELAY_READY_TIMEOUT_MS.into());
         let report = match status {
             // Blocking, on the thread that drives this future; the runtime's worker keeps reading the stderr tail.
-            Some(fd) => gleipnir::read_status(fd, &|| child.stderr_tail(), deadline),
+            Some(fd) => {
+                gleipnir::inner::read_status_for(fd, &|| child.stderr_tail(), deadline, browser)
+            }
             None => layers.ok_or_else(|| setup("no status line and no layers".into())),
         };
         let mut out = Outcome::default();
@@ -507,8 +514,12 @@ mod run {
         out
     }
 
-    /// Detect the backend, read and validate the spec for it, and prepare the run (every source opened).
-    fn prepare(a: &SandboxRunArgs) -> Result<Prepared, Refusal> {
+    /// Detect the backend, read and validate the spec for it, and prepare the run (every source opened). With
+    /// `--browser-probe`, the browser host's argv is the probe's and the run makes the socketpair: the host's end goes
+    /// to the sandbox, the hub's end is returned.
+    fn prepare(
+        a: &SandboxRunArgs,
+    ) -> Result<(Prepared, Option<std::os::unix::net::UnixStream>), Refusal> {
         let helper = helper().map_err(|e| setup(format!("the helper's own path: {e}")))?;
         let sandbox = Sandbox::detect(a.tier, helper, a.bwrap.clone())?;
         #[cfg(target_os = "macos")]
@@ -543,8 +554,17 @@ mod run {
         let hooks = TestHooks {
             landlock_omit: a.landlock_omit.clone(),
             abi_cap: a.landlock_abi_cap,
+            browser_argv: a.browser_probe.clone(),
         };
-        sandbox.prepare(valid, a.command.clone(), hooks)
+        let (hub, host) = if a.browser_probe.is_empty() {
+            (None, None)
+        } else {
+            let (hub, host) = std::os::unix::net::UnixStream::pair()
+                .map_err(|e| setup(format!("the browser's socketpair: {e}")))?;
+            (Some(hub), Some(std::os::fd::OwnedFd::from(host)))
+        };
+        let prepared = sandbox.prepare(valid, a.command.clone(), host, hooks)?;
+        Ok((prepared, hub))
     }
 
     /// Say `opened` on `fifo`, then wait for one line back.
@@ -758,7 +778,8 @@ pub fn runs_root(env: &Env) -> PathBuf {
     paths::state_dir(env).join("hub").join("runs")
 }
 
-/// What a session's spec is built from (Task 10): its id, where it works, what else it reads and the network cell.
+/// What a session's spec is built from (Task 10): its id, where it works, what else it reads, the network cell, and
+/// its browser, when it has one.
 #[derive(Debug, Clone)]
 pub struct SessionShape {
     pub sid: String,
@@ -766,6 +787,89 @@ pub struct SessionShape {
     pub write: Vec<PathBuf>,
     pub read: Vec<PathBuf>,
     pub net: crate::agents::launch::NetCell,
+    pub browser: Option<BrowserShape>,
+}
+
+/// The web relay's port inside a browser session: the browser's proxy, to `web.sock`.
+pub const WEB_PORT: u16 = 3130;
+/// The CDP relay's port inside a browser session: the agent's endpoint, to `cdp.sock`.
+pub const CDP_PORT: u16 = 9222;
+/// Fontconfig's cache, read by the browser when the host has one.
+pub const FONTCONFIG_CACHE: &str = "/var/cache/fontconfig";
+/// What a browser session's environment never carries: a display, the user's runtime dir.
+pub const NO_DISPLAY_ENV: [&str; 3] = ["WAYLAND_DISPLAY", "DISPLAY", "XDG_RUNTIME_DIR"];
+
+/// The browser a session gets (design §6.1): the program found (`browser::resolve`), the relay ports, the agent's
+/// local servers it may reach, the largest CDP message and the session's CDP secret (never shown by `Debug`).
+#[derive(Debug, Clone)]
+pub struct BrowserShape {
+    pub program: PathBuf,
+    pub kind: crate::browser::resolve::Kind,
+    pub web_port: u16,
+    pub cdp_port: u16,
+    pub local_ports: Vec<u16>,
+    pub max_message: u64,
+    pub secret: crate::browser::Secret,
+}
+
+/// Why a session whose `browser` cell allows one starts without it (OD1 (b)): the reason (`kind` names it for the
+/// one notice per hub run, `why` says it) and what fixes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoBrowser {
+    pub kind: &'static str,
+    pub why: String,
+    pub fix: String,
+}
+
+/// The browser a session gets under its `browser` cell CELL: none for Never; else the program FOUND, when the
+/// sandbox is bubblewrap's full tier (BACKEND) and the kernel's Landlock ABI is at least 9 (ABI).  Otherwise the
+/// reason it has none.  LOCAL_PORTS, MAX_MESSAGE and SECRET go into the shape as they are.
+#[allow(clippy::too_many_arguments)]
+pub fn browser_for(
+    cell: norn::matrix::Verdict,
+    backend: Option<gleipnir::BackendKind>,
+    abi: u8,
+    found: Result<crate::browser::resolve::Found, crate::browser::resolve::NotFound>,
+    local_ports: Vec<u16>,
+    max_message: u64,
+    secret: crate::browser::Secret,
+) -> Result<Option<BrowserShape>, NoBrowser> {
+    if cell == norn::matrix::Verdict::Never {
+        return Ok(None);
+    }
+    if backend != Some(gleipnir::BackendKind::Bwrap) {
+        return Err(NoBrowser {
+            kind: "tier",
+            why: "the agent browser needs bubblewrap's full sandbox tier, which this host does not run".into(),
+            fix: "install bubblewrap 0.12 or later and allow user namespaces (`ratatoskr sandbox check` says what \
+                  is missing)"
+                .into(),
+        });
+    }
+    if abi < gleipnir::LANDLOCK_FLOOR_BROWSER {
+        return Err(NoBrowser {
+            kind: "landlock",
+            why: format!(
+                "the kernel's Landlock ABI is {abi}; the agent browser needs {}",
+                gleipnir::LANDLOCK_FLOOR_BROWSER
+            ),
+            fix: "run a newer kernel, one with Landlock ABI 9 or later".into(),
+        });
+    }
+    let found = found.map_err(|n| NoBrowser {
+        kind: "program",
+        why: "no browser was found for the agent browser".into(),
+        fix: n.fix,
+    })?;
+    Ok(Some(BrowserShape {
+        program: found.path,
+        kind: found.kind,
+        web_port: WEB_PORT,
+        cdp_port: CDP_PORT,
+        local_ports,
+        max_message,
+        secret,
+    }))
 }
 
 /// The temporary directory `env` names (`TMPDIR`, `TMP`, `TEMP`, else `/tmp`).
@@ -935,6 +1039,142 @@ fn system_hidden(target: gleipnir::Target) -> &'static [&'static str] {
     }
 }
 
+/// What a session's CLI gets of its login dir ([`login_grants`]).
+#[derive(Default)]
+struct LoginGrants {
+    read: Vec<PathBuf>,
+    write: Vec<PathBuf>,
+    binds: Vec<gleipnir::Bind>,
+}
+
+/// What a session's CLI gets of its login dir DIR, which is never shown itself: the entries
+/// [`crate::agents::lock::login_entries`] names that exist, each as the CLI uses it (a missing folder of its own state
+/// is made first; a token file or a folder that is a link is left out; a folder that holds every session of the CLI,
+/// yours too, is on the full tier an empty one of the session's own, `login/NAME` in its scratch, bound in its place,
+/// and elsewhere not shown), and Claude's folder for the session's cwd
+/// ([`crate::agents::lock::claude_project`]).  That folder is the session's own when its cwd is (a worktree, a chat's
+/// scratch).  A chat in your project shares its cwd with your own Claude Code, whose transcripts and auto memory live
+/// there, so it never gets that folder: on the full tier an empty one of its own (`claude-project` in its scratch) is
+/// bound over it, and the other targets, which cannot bind, give it none (Claude Code then keeps no transcript of that
+/// chat).
+fn login_grants(
+    dir: &Path,
+    shape: &SessionShape,
+    scratch: &Path,
+    target: gleipnir::Target,
+) -> Result<LoginGrants, Refusal> {
+    use crate::agents::lock::LoginUse;
+    let real = |p: &Path| {
+        p.symlink_metadata()
+            .is_ok_and(|m| !m.file_type().is_symlink())
+    };
+    let mut g = LoginGrants::default();
+    for &(name, used) in crate::agents::lock::login_entries(dir) {
+        let p = dir.join(name);
+        match used {
+            LoginUse::Read => read_login_entry(&p, target, &mut g),
+            LoginUse::File => {
+                if real(&p) {
+                    g.write.push(p);
+                }
+            }
+            LoginUse::Dir => {
+                make_login_dir(&p)?;
+                if real(&p) {
+                    g.write.push(p);
+                }
+            }
+            LoginUse::Own if target == gleipnir::Target::LinuxBwrap => {
+                let own = scratch.join("login").join(name);
+                paths::private_dir(&own).map_err(|e| Refusal {
+                    rule: Rule::Setup,
+                    path: Some(own.clone()),
+                    message: format!("{}: {e}", own.display()),
+                })?;
+                g.binds.push(gleipnir::Bind {
+                    mode: gleipnir::Mode::Rw,
+                    source: own,
+                    dest: p,
+                });
+            }
+            LoginUse::Own => {}
+        }
+    }
+    let Some(project) = crate::agents::lock::claude_project(dir, &shape.cwd) else {
+        return Ok(g);
+    };
+    let own_cwd = shape.write.iter().any(|w| shape.cwd.starts_with(w));
+    if !own_cwd && target != gleipnir::Target::LinuxBwrap {
+        return Ok(g);
+    }
+    if let Some(projects) = project.parent() {
+        make_login_dir(projects)?;
+    }
+    make_login_dir(&project)?;
+    if !project.symlink_metadata().is_ok_and(|m| m.is_dir()) {
+        return Ok(g);
+    }
+    if own_cwd {
+        g.write.push(project);
+        return Ok(g);
+    }
+    let own = scratch.join("claude-project");
+    paths::private_dir(&own).map_err(|e| Refusal {
+        rule: Rule::Setup,
+        path: Some(own.clone()),
+        message: format!("{}: {e}", own.display()),
+    })?;
+    g.binds.push(gleipnir::Bind {
+        mode: gleipnir::Mode::Rw,
+        source: own,
+        dest: project,
+    });
+    Ok(g)
+}
+
+/// The login dir's entry P that the CLI loads, when it exists, made readable.  One that is a link (into your dotfiles)
+/// is read at its true name, and on the full tier that file is bound read-only at P, where the CLI looks for it
+/// (without a mount namespace P leads there itself); a link that leads nowhere gives nothing.
+fn read_login_entry(p: &Path, target: gleipnir::Target, g: &mut LoginGrants) {
+    let Ok(meta) = p.symlink_metadata() else {
+        return;
+    };
+    if !meta.file_type().is_symlink() {
+        g.read.push(p.to_path_buf());
+        return;
+    }
+    let Ok(real) = std::fs::canonicalize(p) else {
+        return;
+    };
+    g.read.push(real.clone());
+    if target == gleipnir::Target::LinuxBwrap {
+        g.binds.push(gleipnir::Bind {
+            mode: gleipnir::Mode::Ro,
+            source: real,
+            dest: p.to_path_buf(),
+        });
+    }
+}
+
+/// Make the folder P in a login dir (0700) when it is missing and its parent is a folder, not a link; a link anywhere
+/// is never followed here and is refused by the spec's true-name rule.
+fn make_login_dir(p: &Path) -> Result<(), Refusal> {
+    use std::os::unix::fs::DirBuilderExt;
+    let real_dir = |d: &Path| d.symlink_metadata().is_ok_and(|m| m.is_dir());
+    if p.symlink_metadata().is_ok() || !p.parent().is_some_and(real_dir) {
+        return Ok(());
+    }
+    match std::fs::DirBuilder::new().mode(0o700).create(p) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(Refusal {
+            rule: Rule::Setup,
+            path: Some(p.to_path_buf()),
+            message: format!("{}: {e}", p.display()),
+        }),
+    }
+}
+
 /// A session's spec ([`session_spec`]) and the program it runs ([`Toolchain::program`]).
 #[derive(Debug, Clone)]
 pub struct SessionSpec {
@@ -942,7 +1182,8 @@ pub struct SessionSpec {
     pub program: PathBuf,
 }
 
-/// The Gleipnir spec of one agent session: only `shape.write` (and the CLI's login dir) writable, `shape.read`, the
+/// The Gleipnir spec of one agent session: only `shape.write` (and in the CLI's login dir its token file and its
+/// session's state, [`login_grants`]) writable, `shape.read`, what the CLI loads from its login dir, the
 /// [`toolchain`] roots and the system readable (the toolchains' credential files hidden), the lock's `protected_ro`
 /// pinned read-only, its session dir (`hub.sock`, and `proxy.sock` unless the network is open) read-only, the network
 /// the cell's: the proxy through the relay, or the host's.  A plan on the gateway's socket (`LaunchPlan::gateway`) gets
@@ -951,6 +1192,12 @@ pub struct SessionSpec {
 /// lock's `env` last (but its `ANTHROPIC_BASE_URL` on a gateway plan).  `scratch` is the session's private temp
 /// parent.  The session dir is made here (`paths::make_session_dir`, which does nothing to one that is there); the
 /// sockets in it need not exist yet.  There is no unsandboxed spec: nothing here builds one.
+///
+/// A shape with a browser ([`BrowserShape`]) also gets: the CDP relay ([`CDP_PORT`] → `cdp.sock`) and the web relay
+/// ([`WEB_PORT`] → `web.sock`); its local ports in `extra_tcp_ports`; the program's folder (outside `/usr` and
+/// `/opt`) and fontconfig's cache read-only; `PLAYWRIGHT_MCP_CDP_ENDPOINT` and `DRGNX_BROWSER_CDP`, the endpoint with
+/// its secret, set by the hub alone (the lock's and an editor's are dropped); no `WAYLAND_DISPLAY`, `DISPLAY`,
+/// `XDG_RUNTIME_DIR` nor `/run/user` path; and `Spec.browser` (`--headless-shell` or `--full`, `--max-message N`).
 pub fn session_spec(
     env: &Env,
     ctx: &Context,
@@ -977,9 +1224,15 @@ pub fn session_spec(
     let tmp = scratch.join("tmp");
     paths::private_dir(&tmp).map_err(|e| malformed(format!("{}: {e}", tmp.display())))?;
     let mut write = shape.write.clone();
-    // The CLI's own login dir, for it alone (its token refreshes in place); never the home.
-    write.extend(plan.login_dir.iter().filter(|d| d.exists()).cloned());
     let mut read = shape.read.clone();
+    // What the CLI uses of its own login dir, for it alone (`login_grants`); never the dir itself, never the home.
+    let mut login_binds = Vec::new();
+    if let Some(dir) = plan.login_dir.as_ref().filter(|d| d.exists()) {
+        let g = login_grants(dir, shape, scratch, target)?;
+        read.extend(g.read);
+        write.extend(g.write);
+        login_binds = g.binds;
+    }
     let path = env
         .vars
         .get("PATH")
@@ -1003,7 +1256,7 @@ pub fn session_spec(
     }
     read.extend(pinned.iter().cloned());
     read.extend(tools.read);
-    let binds = pinned
+    let mut binds: Vec<Bind> = pinned
         .iter()
         .map(|p| Bind {
             mode: Mode::Ro,
@@ -1011,6 +1264,7 @@ pub fn session_spec(
             dest: p.clone(),
         })
         .collect();
+    binds.extend(login_binds);
     let hub = run.join("hub.sock");
     // served by the session's provider proxy (`agents::net`), bound before the spawn
     let proxy = run.join(paths::SESSION_PROXY_SOCKET);
@@ -1020,20 +1274,29 @@ pub fn session_spec(
         ("HOME".into(), ctx.home.to_string_lossy().into_owned()),
         ("TMPDIR".into(), tmp.to_string_lossy().into_owned()),
     ];
+    // the browser's web relay port, once its relays are made
+    let mut browser: Option<(u16, &BrowserShape)> = None;
     let net = match shape.net {
         NetCell::Open if plan.gateway => {
             return Err(malformed(
                 "a session on the gateway's socket needs an isolated network with its relay".into(),
             ));
         }
+        NetCell::Open if shape.browser.is_some() => {
+            return Err(malformed(
+                "a session with the browser needs an isolated network with its relays".into(),
+            ));
+        }
         NetCell::Open => Net::Shared,
         NetCell::ProviderOnly | NetCell::ProviderAndPackages => {
-            let wanted: &[u16] = if plan.gateway {
-                &[PROXY_PORT, GATEWAY_PORT]
-            } else {
-                &[PROXY_PORT]
-            };
-            let ports = gleipnir::backend::relay_ports(tier, wanted)
+            let mut wanted = vec![PROXY_PORT];
+            if plan.gateway {
+                wanted.push(GATEWAY_PORT);
+            }
+            if let Some(b) = &shape.browser {
+                wanted.extend([b.cdp_port, b.web_port]);
+            }
+            let ports = gleipnir::backend::relay_ports(tier, &wanted)
                 .map_err(|e| malformed(format!("no relay port: {e}")))?;
             sockets.push(proxy.clone());
             let url = format!("http://127.0.0.1:{}", ports[0]);
@@ -1044,7 +1307,9 @@ pub fn session_spec(
                 port: ports[0],
                 socket: proxy,
             }];
-            if let Some(&port) = ports.get(1) {
+            if plan.gateway
+                && let Some(&port) = ports.get(1)
+            {
                 // the gateway, straight to the session's gateway.sock (never through the proxy)
                 let gateway = run.join(paths::SESSION_GATEWAY_SOCKET);
                 sockets.push(gateway.clone());
@@ -1060,6 +1325,24 @@ pub fn session_spec(
                     vars.push((k.into(), "127.0.0.1,localhost".into()));
                 }
             }
+            if let Some(b) = &shape.browser {
+                // the CDP relay to the broker on cdp.sock, the web relay to the web proxy on web.sock
+                let at = if plan.gateway { 2 } else { 1 };
+                let (cdp, web) = (ports[at], ports[at + 1]);
+                for (port, name) in [
+                    (cdp, paths::SESSION_CDP_SOCKET),
+                    (web, paths::SESSION_WEB_SOCKET),
+                ] {
+                    let socket = run.join(name);
+                    sockets.push(socket.clone());
+                    relay.push(RelayPort { port, socket });
+                }
+                let url = b.secret.endpoint(cdp);
+                for k in crate::browser::ENDPOINT_ENV {
+                    vars.push((k.into(), url.clone()));
+                }
+                browser = Some((web, b));
+            }
             Net::Isolated {
                 mac_tcp_ports: if target == gleipnir::Target::Macos {
                     relay.iter().map(|r| r.port).collect()
@@ -1070,13 +1353,88 @@ pub fn session_spec(
             }
         }
     };
-    // a gateway session's base URL is its relay's, whatever else set one
+    // a gateway session's base URL is its relay's, whatever else set one; a browser session's endpoint is the hub's
+    // alone, and it gets no display and no runtime dir of the user's
+    let hubs_own = |k: &str| {
+        (plan.gateway && k == "ANTHROPIC_BASE_URL")
+            || (browser.is_some()
+                && (crate::browser::ENDPOINT_ENV.contains(&k) || NO_DISPLAY_ENV.contains(&k)))
+    };
     vars.extend(
         plan.env
             .iter()
-            .filter(|(k, _)| !(plan.gateway && k == "ANTHROPIC_BASE_URL"))
+            .filter(|(k, _)| !hubs_own(k.as_str()))
             .cloned(),
     );
+    // its shell steps' opens (`work::trace`): Claude Code runs each Bash call through Gleipnir's wrapper (the full
+    // tier's), another CLI's whole tree gets the listener from the inner helper; never on macOS
+    let trace_sock = run.join(paths::SESSION_TRACE_SOCKET);
+    let trace = match (plan.trace, target) {
+        (Some(gleipnir::trace::Scope::Step), gleipnir::Target::LinuxBwrap) => {
+            vars.push((
+                "CLAUDE_CODE_SHELL_PREFIX".into(),
+                gleipnir::TRACE_INSIDE.into(),
+            ));
+            gleipnir::Trace::PerStep {
+                socket: trace_sock.clone(),
+            }
+        }
+        (
+            Some(gleipnir::trace::Scope::Tree),
+            gleipnir::Target::LinuxBwrap | gleipnir::Target::LinuxReduced,
+        ) => gleipnir::Trace::Tree {
+            socket: trace_sock.clone(),
+        },
+        _ => gleipnir::Trace::Off,
+    };
+    if !trace.is_off() {
+        sockets.push(trace_sock);
+    }
+    if browser.is_some() {
+        for (k, v) in &mut vars {
+            if k.as_str() == "PATH" {
+                *v = v
+                    .split(':')
+                    .filter(|d| !d.starts_with("/run/user"))
+                    .collect::<Vec<_>>()
+                    .join(":");
+            }
+        }
+        vars.retain(|(_, v)| !v.contains("/run/user"));
+    }
+    let mut extra_tcp_ports = Vec::new();
+    let spec_browser = browser.map(|(web_port, b)| {
+        // the program's own folder (a download's, or one outside /usr and /opt) and fontconfig's cache, read by the
+        // agent's layer and by the browser's
+        let mut extra_read: Vec<PathBuf> = Path::new(FONTCONFIG_CACHE)
+            .is_dir()
+            .then(|| PathBuf::from(FONTCONFIG_CACHE))
+            .into_iter()
+            .collect();
+        if let Some(dir) = b.program.parent()
+            && !["/usr", "/opt"].iter().any(|r| b.program.starts_with(r))
+        {
+            extra_read.push(dir.to_path_buf());
+        }
+        read.extend(extra_read.iter().cloned());
+        extra_tcp_ports.extend(b.local_ports.iter().copied());
+        let kind = match b.kind {
+            crate::browser::resolve::Kind::HeadlessShell => "--headless-shell",
+            crate::browser::resolve::Kind::Full => "--full",
+        };
+        gleipnir::SpecBrowser {
+            program: b.program.clone(),
+            own_dir: gleipnir::BROWSER_DIR_FULL.into(),
+            web_port,
+            local_ports: b.local_ports.clone(),
+            extra_read,
+            host_args: vec![
+                kind.into(),
+                "--max-message".into(),
+                b.max_message.to_string(),
+            ],
+        }
+    });
     let spec = Spec {
         read,
         write,
@@ -1094,7 +1452,9 @@ pub fn session_spec(
         net,
         tmp: Some(tmp),
         layers: Layers::for_target(target),
-        extra_tcp_ports: vec![],
+        extra_tcp_ports,
+        trace,
+        browser: spec_browser,
     };
     Ok(SessionSpec {
         spec,

@@ -79,6 +79,8 @@ pub struct Front {
     pub settings: Arc<crate::settings::Settings>,
     /// The subscribers: the editors the agents' settings tools ask ([`crate::settings::agents`]).
     pub editors: Arc<crate::settings::agents::Editors>,
+    /// Hrafn: the built-in model's worker, the open projects, the `search/*` methods ([`crate::search::methods`]).
+    pub search: crate::search::Hub,
     /// Test hooks (`--test-ignore-shutdown`): `shutdown` is answered and ignored, so `stop` reaches its signal.
     pub ignore_shutdown: AtomicBool,
     /// The store's other folders (home, config, `<state>/hub`), once the server opened it.
@@ -87,6 +89,9 @@ pub struct Front {
     pub shell_env: crate::shell_env::ShellEnv,
     /// The agent core's state ([`crate::agent_core`]): sessions, jobs, plan runs, the matrix, …
     pub core: crate::agent_core::Core,
+    /// What every browser session's web proxy treats as the host itself: the host's addresses and the hub's own
+    /// loopback ports ([`crate::browser::nevers`]), kept live once the hub starts its watches.
+    pub browser_nevers: crate::browser::nevers::Nevers,
     refusals: Mutex<Refusals>,
     /// work.db's `meta.schema` at the last look (0: none).
     schema: AtomicU32,
@@ -161,6 +166,7 @@ impl Front {
             gate,
             settings,
             editors,
+            search: crate::search::Hub::default(),
             ignore_shutdown: AtomicBool::new(false),
             dirs: OnceLock::new(),
             shell_env: crate::shell_env::ShellEnv::default(),
@@ -169,6 +175,7 @@ impl Front {
                 matrix,
                 ..Default::default()
             },
+            browser_nevers: crate::browser::nevers::Nevers::default(),
             tools,
             tool_hub,
             tool_list,
@@ -281,12 +288,19 @@ impl Front {
     pub fn gone(&self, conn: u64) {
         lock_conns(&self.conns).remove(&conn);
         self.editors.gone(conn);
+        self.core.presence.gone(conn);
+        self.core.map.gone(conn);
     }
 
     /// EVENT with DATA to every subscribed connection: queued for each before any is written (a queue never waits),
     /// so a newer event never reaches one subscriber before an older one.
     pub fn broadcast(&self, event: &str, data: Value) {
         self.editors.broadcast(event, data);
+    }
+
+    /// EVENT with DATA to connection CONN only (it must be subscribed); false when it took nothing.
+    pub fn send_to(&self, conn: u64, event: &str, data: Value) -> bool {
+        self.editors.send_to(conn, event, data)
     }
 
     /// `gateway/keys-changed` to the subscribers when the held keys' ids are no longer BEFORE (ids only).  A
@@ -329,12 +343,17 @@ impl Front {
     /// `settings.el` read again when its stamp changed (at start, and when a session starts); the problems the last
     /// read did not have go to the subscribers as notices.
     pub async fn refresh_settings(&self) {
+        let before = self.settings.current();
         for n in self.settings.refresh().await {
             self.broadcast("notice", n);
         }
         // a front with no config folder (a test's) keeps the table it was given
         if self.settings.is_open() {
             self.apply_settings();
+        }
+        // the matrix or the deny list may have changed: the browser sessions' web proxies read them again at once
+        if self.settings.current().loaded != before.loaded {
+            self.writer.signals.answers_changed();
         }
     }
 
@@ -359,7 +378,7 @@ impl Front {
     }
 
     /// `config/settings`: the editor's values of PROJECT (none: global) kept as last good and put to work.
-    async fn config_settings(
+    pub(crate) async fn config_settings(
         &self,
         p: runstav::methods::config::SettingsParams,
     ) -> Result<runstav::methods::config::SettingsApplied, Error> {
@@ -379,6 +398,7 @@ impl Front {
             .set_overrides(project.as_deref(), list)
             .await?;
         self.apply_settings();
+        self.writer.signals.answers_changed();
         Ok(runstav::methods::config::SettingsApplied { applied })
     }
 
@@ -494,6 +514,10 @@ impl Front {
                 stop = !self.ignore_shutdown.load(Ordering::Relaxed);
                 Ok(json!(true))
             }
+            Params::BrowserCheck(_) => {
+                self.refresh_settings().await;
+                Ok(json!(crate::browser::check::run(self).await))
+            }
             Params::Restart(_) => {
                 restart = true;
                 Ok(json!(true))
@@ -594,6 +618,10 @@ impl Front {
             | Params::AgentsMove(_)
             | Params::AgentsRole(_)
             | Params::AgentsSlice(_)
+            | Params::AgentsEntriesSubscribe(_)
+            | Params::AgentsEntriesUnsubscribe(_)
+            | Params::AgentsToolInput(_)
+            | Params::AgentsPause(_)
             | Params::AgentsProbe(_)
             | Params::MessagesRetract(_)
             | Params::ExecStart(_)
@@ -601,6 +629,7 @@ impl Front {
             | Params::ExecList(_)
             | Params::ExecStop(_)
             | Params::ExecLog(_)
+            | Params::ExecBump(_)
             | Params::JobPropose(_)
             | Params::JobStartTask(_)
             | Params::JobApprove(_)
@@ -627,10 +656,47 @@ impl Front {
             | Params::BudgetGet(_)
             | Params::BudgetSet(_)
             | Params::PaceGet(_)
+            | Params::ForecastGet(_)
+            | Params::ForecastSession(_)
+            | Params::ForecastAccuracy(_)
+            | Params::SayStart(_)
+            | Params::SayRevise(_)
+            | Params::SayEnd(_)
             | Params::RecordsImport(_)
             | Params::RecordsStatus(_)
             | Params::RecordsProposals(_)
-            | Params::RecordsDecide(_)) => crate::agent_core::serve(self, &caller, p)
+            | Params::RecordsDecide(_)
+            | Params::MachinesReport(_)
+            | Params::MachinesList(_)
+            | Params::RunnersList(_)
+            | Params::RunnersProbeHost(_)
+            | Params::RunnersAdd(_)
+            | Params::RunnersCheck(_)
+            | Params::RunnersBench(_)
+            | Params::RunnersSet(_)
+            | Params::RunnersUnbench(_)
+            | Params::RunnersRemove(_)
+            | Params::WorkConclusions(_)
+            | Params::AgentsPresenceSubscribe(_)
+            | Params::AgentsPresenceGet(_)
+            | Params::WorkMapSubscribe(_)
+            | Params::WorkMapSet(_)
+            | Params::WorkMapClose(_)
+            | Params::WorkFiles(_)
+            | Params::WorkHunks(_)
+            | Params::WorkFileAt(_)) => crate::agent_core::serve(self, &caller, p)
+                .await
+                .unwrap_or_else(|_| unserved(method)),
+            // Hrafn's (`search/*`)
+            p @ (Params::SearchQuery(_)
+            | Params::SearchStatus(_)
+            | Params::SearchIndex(_)
+            | Params::SearchEmbedders(_)
+            | Params::SearchModelDownload(_)
+            | Params::SearchServerPlan(_)
+            | Params::SearchServerStart(_)
+            | Params::SearchServerStop(_)
+            | Params::SearchTyping(_)) => crate::search::methods::serve(self, &caller, p)
                 .await
                 .unwrap_or_else(|_| unserved(method)),
             // the graph store's (`graph/*`, `tasks/*`); a settled card too (an access card becomes a grant)
@@ -847,12 +913,12 @@ mod tests {
         let f = front(dir.path());
         f.set_schema(6);
         assert_eq!(f.read_only(), None);
-        f.set_schema(9);
-        assert_eq!(f.read_only(), Some(9));
+        f.set_schema(99);
+        assert_eq!(f.read_only(), Some(99));
         let v = serde_json::to_value(f.status()).unwrap();
         assert_eq!(
             (v["read_only"].clone(), v["schema"].clone()),
-            (json!(9), json!(9))
+            (json!(99), json!(99))
         );
         f.set_schema(6);
         assert_eq!(f.read_only(), None);

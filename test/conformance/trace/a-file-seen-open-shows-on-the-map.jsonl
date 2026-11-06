@@ -1,0 +1,21 @@
+{"scenario": "trace/a-file-seen-open-shows-on-the-map", "requires": ["v1", "test-hooks", "linux"], "doc": "Linux, in the sandbox container (macOS has no tracer: `trace/macos-says-not-traced`):a Claude Code Bash call reads a.txt only inside `$(…)`, so the command parse (layer 1) never names it and only the trace supervisor sees it open. That read reaches the Work map like any other: within 250 ms of hub time a work-map delta shows the agent's card with the read counted (a file only read by one agent gets no card of its own). Pattern B on the hub's virtual clock: the turn's last step, then agents/presence/get answering the `opened` entry, are the gates (the trace's emission follows the listener's end); one __test_advance of 250 ms for the delta."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && printf 'one\\n' > $ROOT/work/a.txt"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "work/map/subscribe", "params": {"view": "a", "workspace": {"id": "workspace:000000000000", "roots": ["$ROOT/work"]}, "width_units": 250}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"version": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "provider:bash x=$(cat a.txt)\nsay done"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"turn_id": "t1"}}}, "within_ms": 30000}
+{"do": "poll", "conn": "c", "json": {"id": 3, "method": "agents/presence/get", "params": {"file": "$ROOT/work/a.txt"}}, "expect": {"id": 3, "result": {"file": "$ROOT/work/a.txt", "entries": [{"session": "$sid", "mode": "read", "source": "opened"}]}}, "within_ms": 20000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "__test_advance", "params": {"ms": 250}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "work-map", "data": {"view": "a", "changed": {"$contains": [{"kind": "agent", "fields": {"reads": 1}}]}}}, "within_ms": 10000}

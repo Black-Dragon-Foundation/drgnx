@@ -34,7 +34,8 @@
 (defface drgnx-outline-current '((t :inherit highlight :weight bold))
   "The definition the editor's point is in." :group 'drgnx)
 
-(defconst drgnx-outline-buffer-name " *drgnx outline*" "Internal (a leading space): not in C-x b or ibuffer.")
+(defconst drgnx-outline-title "Outline" "The Outline section's title.")
+(defconst drgnx-outline-buffer-name" *drgnx outline*" "Internal (a leading space): not in C-x b or ibuffer.")
 (defvar drgnx-outline--rows [] "Per line: [NAME DEPTH POSITION-or-nil KEY]; POSITION is an integer.")
 (defvar drgnx-outline--table (make-hash-table :test #'equal) "KEY -> the row of `drgnx-outline--rows' it names.")
 (defvar drgnx-outline--source nil "The buffer the Outline shows.")
@@ -49,7 +50,8 @@
 (define-derived-mode drgnx-outline-mode special-mode "Outline"
   "The editor's definitions."
   (setq-local truncate-lines t cursor-type nil mode-line-format nil)
-  (hl-line-mode 1))
+  (hl-line-mode 1)
+  (drgnx-wb-rows-setup))
 
 (defun drgnx-outline--buffer ()
   (or (get-buffer drgnx-outline-buffer-name)
@@ -220,10 +222,11 @@ window above it."
 
 (defun drgnx-outline-setup ()
   "Put the Outline in the dock, below the Explorer, following the editor."
-  (drgnx-wb-define-section 'outline :slot 1 :title " OUTLINE" :height 0.25 :buffer #'drgnx-outline--buffer
+  (drgnx-wb-define-section 'outline :slot 1 :title drgnx-outline-title :height 0.25 :buffer #'drgnx-outline--buffer
                            :on-show (lambda (_w) (drgnx-outline-refresh)))
   (drgnx-signal-subscribe 'editor-changed #'drgnx-outline-refresh)
-  (drgnx-signal-subscribe 'editor-point-changed #'drgnx-outline--mark-current))
+  (drgnx-signal-subscribe 'editor-point-changed #'drgnx-outline--mark-current)
+  (drgnx-wb-rows-follow))
 
 (provide 'drgnx-outline)
 ;;; drgnx-outline.el ends here

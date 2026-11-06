@@ -17,9 +17,10 @@
 (defconst drgnx-lint-runtime--doomed-files
   (mapcar (lambda (n) (format "core/drgnx-%s.el" n))
           '("hub" "job" "job-snapshot" "job-worktree" "job-clash" "jobs" "coord" "coord-mcp" "acp" "gateway" "mcp-bridge"
-            "sandbox" "sandbox-macos" "sandbox-mcp" "sandbox-proxy" "sandbox-relay"))
-  "The files the runtime deletion removed whole.  `core/drgnx-mcp.el' (it goes with the search indexer's port) joins
-the list when its callers are gone.")
+            "sandbox" "sandbox-macos" "sandbox-mcp" "sandbox-proxy" "sandbox-relay"
+            ;; Hrafn (in the hub) replaced the Lisp search, and the MCP server it was the only user of
+            "mcp" "search-chunk" "search-index" "search-mcp" "search-query" "search-store"))
+  "The files the runtime deletion removed whole.")
 
 (defconst drgnx-lint-runtime--agents-marker ";;;; The agent's requests"
   "In `core/drgnx-agents.el', the line from which the forms are the runtime half unless kept.")
@@ -180,23 +181,22 @@ list of (FILE . HASH-OF-SYMBOLS) for the kept forms."
 (defconst drgnx-lint-runtime--core-kept
   (cons "core/drgnx.el"
         (mapcar (lambda (n) (format "core/drgnx-%s.el" n))
-                '("agent-check" "agent-config-claude" "agent-config-codex" "agent-config-gemini" "agent-config-kimi"
-                  "agent-config" "agents-matrix" "agents-mirror" "agents" "ai-client" "ai-probe" "ai" "bootstrap" "build"
-                  "check" "cockpit-model" "compat-gryphn" "config" "coord-read" "deny" "doctor" "exec" "face-state" "file"
-                  "fmt" "frame-kind" "freezes" "gc-census" "gc" "guard" "heap" "hooks" "hub-client" "hub-core"
+                '("affected" "agent-check" "agent-config-claude" "agent-config-codex" "agent-config-gemini" "agent-config-kimi"
+                  "agent-config" "agents-cards" "agents-matrix" "agents-mirror" "agents" "ai-client" "ai-probe" "ai" "bootstrap" "build"
+                  "check" "color" "compat-gryphn" "config" "coord-read" "deny" "doctor" "exec" "face-state" "faces" "file"
+                  "file-stream" "fmt" "frame-kind" "freezes" "gc-census" "gc" "guard" "heap" "hooks" "hub-client" "hub-core" "icons"
                   "keys-edit" "keys-modal"
-                  "keys" "large-file" "lisp-index" "macos" "mcp" "memo" "modal-choose" "modal" "modules-fingerprint"
-                  "modules-helpers" "modules-record" "modules" "notice-desktop" "notice-echo" "notice-save" "notice"
-                  "notices" "onboard" "owner" "palette" "paths" "pkg-activate" "pkg" "platform" "portable" "projects"
-                  "records-review" "records" "registry" "sandbox-vc" "schema" "search-chunk" "search-index" "search-mcp"
-                  "search-query" "search-setup" "search-store" "secrets-scan" "secrets" "session" "setting"
+                  "keys" "large-file" "lisp-index" "macos" "memo" "modal-choose" "modal" "modules-fingerprint"
+                  "modules-helpers" "modules-record" "modules" "notice-desktop" "notice-echo" "notice-save" "notice-toast" "notice"
+                  "notices" "onboard" "owner" "palette-frame" "palette" "paths" "pixels" "pkg-activate" "pkg" "platform" "portable" "projects"
+                  "quick-open" "records-review" "records" "registry" "sandbox-vc" "say" "schema" "search-setup" "secrets-scan" "secrets" "session" "setting"
                   "settings-agents" "settings-apply" "settings-area" "settings-defaults" "settings-described"
                   "settings-editors" "settings-file" "settings-history" "settings-index" "settings-lisp-page"
                   "settings-live" "settings-migrate" "settings-mode" "settings-move" "settings-page" "settings-prov"
                   "settings-resolve" "settings-review" "settings-runtime" "settings-tidy" "settings-trust"
                   "settings-workspace" "shell-env" "shell" "startup-trace" "store-privacy" "surfaces" "timer" "toml"
-                  "trust" "tty-fallback" "tty-recommend" "tty" "ui-kit" "user-lisp" "watchdog-doctor" "watchdog" "work-db"
-                  "work-scan" "work")))
+                  "trust" "tty-fallback" "tty-recommend" "tty" "type-faces" "ui-kit" "user-lisp" "watchdog-doctor" "watchdog" "work-db"
+                  "work-client" "work-scan" "work" "workers-doctor")))
   "Every file under core/ after the Lisp agent runtime was deleted: a new core file is added here on purpose, so no
 runtime file comes back unnoticed.")
 

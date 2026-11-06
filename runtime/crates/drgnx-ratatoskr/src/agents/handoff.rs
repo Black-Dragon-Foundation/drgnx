@@ -188,7 +188,7 @@ pub async fn gather(front: &Front, sid: &str, cwd: &Path, task: Option<&str>) ->
         }
     };
     let cwd = cwd.to_owned();
-    let head = tokio::task::spawn_blocking(move || head_of(&cwd))
+    let head = crate::clock::blocking(move || head_of(&cwd))
         .await
         .ok()
         .flatten();

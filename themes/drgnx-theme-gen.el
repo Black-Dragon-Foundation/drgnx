@@ -1,0 +1,245 @@
+;;; drgnx-theme-gen.el --- One token table, three themes: the generator behind drgnx-dark, -light and -high-contrast -*- lexical-binding: t -*-
+
+;; SPDX-License-Identifier: GPL-3.0-or-later
+
+;;; Commentary:
+;; `themes/drgnx-tokens.eld' holds every colour drgnx has.  `drgnx-theme-define' turns one variant of it into a
+;; `deftheme': the semantic faces (core/drgnx-faces.el) and the standard faces the design lists, so that every package
+;; that inherits standard faces looks right.  Each face has a true-colour clause and a clause for terminals, in which
+;; the gap and the panel collapse to the editor's colour (there the cards are the vertical border, not tints).
+;; `drgnx-look-token' reads a token (tints composited over the editor); `drgnx-look-variant' says which variant is on.
+;; No colour literal lives in this file.  See docs/guide/look.md.
+
+;;; Code:
+(require 'cl-lib)
+(require 'drgnx-color)
+
+(defconst drgnx-theme--tokens-file
+  (expand-file-name "drgnx-tokens.eld" (file-name-directory (or load-file-name buffer-file-name)))
+  "The token table.")
+
+(defvar drgnx-theme--table nil "The token table once read: ((dark . ALIST) (light . ALIST) (hc . ALIST)).")
+
+(defun drgnx-theme--read ()
+  "The token table, read once."
+  (or drgnx-theme--table
+      (setq drgnx-theme--table
+            (with-temp-buffer
+              (insert-file-contents drgnx-theme--tokens-file)
+              (read (current-buffer))))))
+
+(defun drgnx-look-variant (&optional frame)
+  "The look's variant on FRAME: `dark', `light' or `hc'.
+From the active drgnx theme; with none, from the frame's background mode (`hc' only for drgnx-high-contrast)."
+  (cond ((memq 'drgnx-high-contrast custom-enabled-themes) 'hc)
+        ((memq 'drgnx-dark custom-enabled-themes) 'dark)
+        ((memq 'drgnx-light custom-enabled-themes) 'light)
+        ((eq (frame-parameter frame 'background-mode) 'light) 'light)
+        (t 'dark)))
+
+(defun drgnx-look-token (name &optional variant)
+  "The colour of token NAME as \"#rrggbb\", in VARIANT (`dark', `light' or `hc'; default the active one).
+A tint is composited over the variant's `editor'."
+  (let* ((variant (or variant (drgnx-look-variant)))
+         (v (alist-get name (alist-get variant (drgnx-theme--read)))))
+    (cond ((stringp v) v)
+          ((eq (car-safe v) 'tint)
+           (drgnx-color-over (if (stringp (cadr v)) (cadr v) (drgnx-look-token (cadr v) variant))
+                             (drgnx-look-token 'editor variant)
+                             (cddr v)))
+          (t (error "drgnx: no colour token `%s' in the %s variant" name variant)))))
+
+(defconst drgnx-theme--ansi
+  '((black . gap) (red . error) (green . ok) (yellow . warn) (blue . info) (magenta . kw) (cyan . ty) (white . fg))
+  "Terminal colour → token.")
+
+(defun drgnx-theme--faces (variant tok)
+  "Every face the themes style, as ((FACE . ATTRIBUTES)…), for VARIANT; TOK maps a token name to a colour."
+  (let ((hc (eq variant 'hc)))
+    (cl-flet ((c (name) (funcall tok name)))
+      (append
+       ;; the semantic faces
+       `((drgnx-surface-gap :background ,(c 'gap))
+         (drgnx-surface-panel :background ,(c 'panel))
+         (drgnx-surface-raised :background ,(c 'raised))
+         (drgnx-surface-overlay :background ,(c 'overlay))
+         (drgnx-text-muted :foreground ,(c 'muted))
+         (drgnx-text-subtle :foreground ,(c 'subtle))
+         (drgnx-text-disabled :foreground ,(c 'disabled))
+         (drgnx-border :foreground ,(c 'border) :background ,(c 'border))
+         (drgnx-border-strong :foreground ,(c 'border-strong) :background ,(c 'border-strong))
+         (drgnx-accent :foreground ,(c 'accent) :underline nil)
+         (drgnx-hover :background ,(c 'hover) :box (:line-width (-2 . -2) :style flat-button))
+         (drgnx-selected :background ,(c 'sel) ,@(and hc `(:foreground ,(c 'sel-fg))))
+         (drgnx-selected-quiet :background ,(c 'sel-quiet))
+         (drgnx-focus :box (:line-width (-2 . -2) :color ,(c 'focus)))
+         (drgnx-status-attention :foreground ,(c 'attention))
+         (drgnx-status-ok :foreground ,(c 'ok))
+         (drgnx-status-warn :foreground ,(c 'warn))
+         (drgnx-status-fail :foreground ,(c 'error))
+         (drgnx-status-info :foreground ,(c 'info))
+         (drgnx-agent-1 :foreground ,(c 'a1)) (drgnx-agent-2 :foreground ,(c 'a2)) (drgnx-agent-3 :foreground ,(c 'a3))
+         (drgnx-agent-4 :foreground ,(c 'a4)) (drgnx-agent-5 :foreground ,(c 'a5)) (drgnx-agent-6 :foreground ,(c 'a6))
+         (drgnx-control-hidden :foreground ,(c 'panel)))
+       ;; the editor and the standard faces
+       `((default :foreground ,(c 'fg) :background ,(c 'editor))
+         (cursor :background ,(c 'accent))
+         (region :background ,(c 'sel) :extend t ,@(and hc `(:foreground ,(c 'sel-fg))))
+         (secondary-selection :background ,(c 'sel-quiet))
+         (highlight :background ,(c 'hover))
+         (hl-line :background ,(c 'current-line) :extend t)
+         (fringe :foreground ,(c 'subtle) :background ,(c 'editor))
+         (line-number :foreground ,(c 'subtle))
+         (line-number-current-line :foreground ,(c 'fg))
+         (shadow :foreground ,(c 'muted))
+         (link :foreground ,(c 'accent) :underline t)
+         (link-visited :foreground ,(c 'accent) :underline t)
+         (error :foreground ,(c 'error))
+         (warning :foreground ,(c 'warn))
+         (success :foreground ,(c 'ok)))
+       ;; syntax
+       `((font-lock-keyword-face :foreground ,(c 'kw))
+         (font-lock-builtin-face :foreground ,(c 'kw))
+         (font-lock-preprocessor-face :foreground ,(c 'kw))
+         (font-lock-function-name-face :foreground ,(c 'fn))
+         (font-lock-function-call-face :foreground ,(c 'fn))
+         (font-lock-string-face :foreground ,(c 'str))
+         (font-lock-doc-face :foreground ,(c 'str))
+         (font-lock-type-face :foreground ,(c 'ty))
+         (font-lock-doc-markup-face :foreground ,(c 'ty))
+         (font-lock-constant-face :foreground ,(c 'const))
+         (font-lock-number-face :foreground ,(c 'const))
+         (font-lock-escape-face :foreground ,(c 'const))
+         (font-lock-regexp-grouping-backslash :foreground ,(c 'const))
+         (font-lock-regexp-grouping-construct :foreground ,(c 'const))
+         (font-lock-comment-face :foreground ,(c 'comment))
+         (font-lock-comment-delimiter-face :foreground ,(c 'comment))
+         (font-lock-punctuation-face :foreground ,(c 'punct))
+         (font-lock-bracket-face :foreground ,(c 'punct))
+         (font-lock-delimiter-face :foreground ,(c 'punct))
+         (font-lock-operator-face :foreground ,(c 'punct))
+         (font-lock-misc-punctuation-face :foreground ,(c 'punct))
+         (font-lock-negation-char-face :foreground ,(c 'punct))
+         (font-lock-variable-name-face :foreground ,(c 'fg))
+         (font-lock-variable-use-face :foreground ,(c 'fg))
+         (font-lock-property-name-face :foreground ,(c 'fg))
+         (font-lock-property-use-face :foreground ,(c 'fg))
+         (font-lock-warning-face :foreground ,(c 'warn)))
+       ;; bars, tabs, dividers
+       `((mode-line :foreground ,(c 'fg) :background ,(c 'gap))
+         (mode-line-active :foreground ,(c 'fg) :background ,(c 'gap))
+         (mode-line-inactive :foreground ,(c 'muted) :background ,(c 'gap))
+         (mode-line-emphasis :foreground ,(c 'accent))
+         (mode-line-highlight :background ,(c 'hover))
+         (mode-line-buffer-id :foreground ,(c 'fg))
+         (header-line :foreground ,(c 'muted) :background ,(c 'gap))
+         (header-line-highlight :background ,(c 'hover))
+         (tab-bar :foreground ,(c 'muted) :background ,(c 'panel))
+         (tab-bar-tab :foreground ,(c 'fg) :background ,(c 'editor))
+         (tab-bar-tab-inactive :foreground ,(c 'muted) :background ,(c 'panel))
+         (tab-line :foreground ,(c 'muted) :background ,(c 'panel))
+         (tab-line-tab :foreground ,(c 'fg) :background ,(c 'editor))
+         (tab-line-tab-current :foreground ,(c 'fg) :background ,(c 'editor))
+         (tab-line-tab-inactive :foreground ,(c 'muted) :background ,(c 'panel))
+         (tab-line-tab-special :foreground ,(c 'muted) :background ,(c 'panel))
+         (tab-line-highlight :background ,(c 'hover))
+         (tab-line-close-highlight :foreground ,(c 'accent))
+         (window-divider :foreground ,(c 'gap))
+         (window-divider-first-pixel :foreground ,(c 'gap))
+         (window-divider-last-pixel :foreground ,(c 'gap))
+         (vertical-border :foreground ,(c 'border))
+         (internal-border :background ,(c 'gap))
+         (child-frame-border :background ,(c 'border-strong))
+         ,@(and (not hc) `((child-frame-shadow :foreground ,(c 'gap) :background ,(c 'gap))))
+         (tooltip :foreground ,(c 'fg) :background ,(c 'raised))
+         (minibuffer-prompt :foreground ,(c 'accent))
+         (nidhogg-title-bar :foreground ,(c 'fg) :background ,(c 'gap))
+         (nidhogg-title-bar-inactive :foreground ,(c 'muted) :background ,(c 'gap)))
+       ;; search, matches, completion
+       `((isearch :foreground ,(c 'on-accent) :background ,(c 'accent-fill))
+         (lazy-highlight :background ,(drgnx-color-over (c 'accent) (c 'editor) 0.25))
+         (match :background ,(c 'accent-tint))
+         (show-paren-match :background ,(c 'accent-tint) :weight bold)
+         (show-paren-mismatch :foreground ,(c 'error) :background ,(c 'error-tint))
+         (completions-common-part :foreground ,(c 'accent))
+         (completions-first-difference :foreground ,(c 'fg) :weight bold)
+         (completions-highlight :background ,(c 'sel))
+         (completions-annotations :foreground ,(c 'subtle)))
+       ;; diffs and version control
+       `((diff-added :foreground ,(c 'add-fg) :background ,(c 'add-bg))
+         (diff-removed :foreground ,(c 'del-fg) :background ,(c 'del-bg))
+         (diff-changed :background ,(c 'warn-tint))
+         (diff-refine-added :background ,(drgnx-color-over (c 'ok) (c 'editor) 0.25))
+         (diff-refine-removed :background ,(drgnx-color-over (c 'error) (c 'editor) 0.25))
+         (diff-refine-changed :background ,(drgnx-color-over (c 'warn) (c 'editor) 0.25))
+         (diff-header :foreground ,(c 'muted) :background ,(c 'raised))
+         (diff-file-header :foreground ,(c 'fg) :weight bold)
+         (diff-hunk-header :foreground ,(c 'info))
+         (diff-indicator-added :foreground ,(c 'add-fg))
+         (diff-indicator-removed :foreground ,(c 'del-fg))
+         (diff-context :foreground ,(c 'muted))
+         (vc-up-to-date-state :foreground ,(c 'ok))
+         (vc-edited-state :foreground ,(c 'warn))
+         (vc-locally-added-state :foreground ,(c 'ok))
+         (vc-conflict-state :foreground ,(c 'error))
+         (vc-missing-state :foreground ,(c 'error))
+         (vc-removed-state :foreground ,(c 'error))
+         (vc-needs-update-state :foreground ,(c 'info))
+         (vc-state-base :foreground ,(c 'muted)))
+       ;; diagnostics and the language server
+       `((flymake-error :underline (:style wave :color ,(c 'error)))
+         (flymake-warning :underline (:style wave :color ,(c 'warn)))
+         (flymake-note :underline (:style wave :color ,(c 'info)))
+         (flymake-error-echo :foreground ,(c 'error))
+         (flymake-warning-echo :foreground ,(c 'warn))
+         (flymake-note-echo :foreground ,(c 'info))
+         (flymake-end-of-line-diagnostics-face :foreground ,(c 'subtle))
+         (eglot-highlight-symbol-face :background ,(c 'hover) :weight bold)
+         (eglot-mode-line :foreground ,(c 'accent))
+         (eglot-inlay-hint-face :foreground ,(c 'subtle))
+         (eglot-diagnostic-tag-unnecessary-face :foreground ,(c 'subtle))
+         (eglot-diagnostic-tag-deprecated-face :strike-through t))
+       ;; outlines: colour only, the height stays 1.0
+       (cl-loop for face in '(outline-1 outline-2 outline-3 outline-4 outline-5 outline-6 outline-7 outline-8)
+                for token in '(kw fn str ty const accent ok info)
+                collect `(,face :foreground ,(c token) :height 1.0))
+       ;; the terminal's sixteen colours
+       (cl-loop for (name . token) in drgnx-theme--ansi
+                append (list `(,(intern (format "ansi-color-%s" name)) :foreground ,(c token) :background ,(c token))
+                             `(,(intern (format "ansi-color-bright-%s" name))
+                               :foreground ,(drgnx-color-mix (c token) (c 'fg) 0.15)
+                               :background ,(drgnx-color-mix (c token) (c 'fg) 0.15))))))))
+
+(defun drgnx-theme--tty-token (tok)
+  "TOK for a terminal: the gap and the panel are the editor's colour."
+  (lambda (name) (funcall tok (if (memq name '(gap panel)) 'editor name))))
+
+(defconst drgnx-theme--terminal-faces
+  '((region :inverse-video t :extend t))
+  "Faces drawn without a colour on a terminal frame: the selection's tint is too close to the editor's colour for a
+terminal to tell apart (Emacs then blinks a copy, as for an unhighlighted region), so there it is inverse video.")
+
+(defun drgnx-theme--specs (variant)
+  "The arguments of `custom-theme-set-faces' for VARIANT: (FACE SPEC)…
+A true-colour clause first, then one for every other display with the terminal tier; one clause when they agree.
+A face of `drgnx-theme--terminal-faces' gets its terminal attributes in a first clause for every terminal."
+  (let ((full (drgnx-theme--faces variant (lambda (name) (drgnx-look-token name variant))))
+        (tty (drgnx-theme--faces variant (drgnx-theme--tty-token (lambda (name) (drgnx-look-token name variant))))))
+    (cl-mapcar (lambda (f g)
+                 (list (car f)
+                       (append (when-let* ((term (cdr (assq (car f) drgnx-theme--terminal-faces))))
+                                 `((((type tty)) ,@term)))
+                               (if (equal f g)
+                                   `((t ,@(cdr f)))
+                                 `((((class color) (min-colors 16777216)) ,@(cdr f)) (t ,@(cdr g)))))))
+               full tty)))
+
+(defmacro drgnx-theme-define (name variant)
+  "Define the theme NAME from the token table's VARIANT (`dark', `light' or `hc'), and provide it."
+  `(progn
+     (deftheme ,name ,(format "drgnx's %s theme, generated from themes/drgnx-tokens.eld." variant))
+     (apply #'custom-theme-set-faces ',name (drgnx-theme--specs ',variant))
+     (provide-theme ',name)))
+
+(provide 'drgnx-theme-gen)
+;;; drgnx-theme-gen.el ends here

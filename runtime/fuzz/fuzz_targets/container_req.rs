@@ -3,12 +3,11 @@
 //! request said; the command stays after the image.
 #![no_main]
 
-use drgnx_ratatoskr::agents::launch::NetCell;
 use drgnx_ratatoskr::exec::container::{Caps, ContainerReq, Proxy, argv};
 use drgnx_ratatoskr::settings::ContainerImage;
 use libfuzzer_sys::fuzz_target;
 
-const FIXED: [(usize, &str); 13] = [
+const FIXED: [(usize, &str); 17] = [
     (0, "run"),
     (1, "--rm"),
     (2, "--name"),
@@ -20,8 +19,12 @@ const FIXED: [(usize, &str); 13] = [
     (9, "--tmpfs"),
     (10, "/tmp"),
     (11, "--pids-limit"),
-    (18, "-v"),
-    (20, "-w"),
+    (13, "--memory"),
+    (15, "--memory-swap"),
+    (19, "--oom-score-adj=1000"),
+    (20, "--cgroup-conf=memory.oom.group=1"),
+    (22, "-v"),
+    (24, "-w"),
 ];
 
 fuzz_target!(|data: &[u8]| {
@@ -29,12 +32,7 @@ fuzz_target!(|data: &[u8]| {
     let mut f = text.split('\0');
     let mut next = || f.next().unwrap_or("").to_string();
     let (name, image, job, worktree, memory) = (next(), next(), next(), next(), next());
-    let net = match next().as_str() {
-        "a" => Some(NetCell::ProviderOnly),
-        "b" => Some(NetCell::ProviderAndPackages),
-        "c" => Some(NetCell::Open),
-        _ => None,
-    };
+    let net = matches!(next().as_str(), "a" | "b" | "c");
     let cmd: Vec<String> = f.map(str::to_string).collect();
     let caps = Caps {
         images: vec![ContainerImage {
@@ -57,6 +55,7 @@ fuzz_target!(|data: &[u8]| {
         subdir: "".into(),
         job,
         net,
+        runner: None,
     };
     let Ok(a) = argv(&req, &caps) else {
         return;
@@ -67,16 +66,17 @@ fuzz_target!(|data: &[u8]| {
         .collect();
     // a granted network adds the mounts, the env and the entrypoint before the image, and the forwarder's own
     // arguments after it; nothing else changes
-    let (extra, lead) = if net.is_some() { (14, 3) } else { (0, 0) };
-    assert_eq!(a.len(), 22 + extra + 1 + lead + cmd.len());
+    let (extra, lead) = if net { (14, 3) } else { (0, 0) };
+    assert_eq!(a.len(), 26 + extra + 1 + lead + cmd.len());
     for (i, want) in FIXED {
         assert_eq!(a[i], want, "flag {i}");
     }
     assert!(a[3].starts_with("drgnx-job-"));
-    assert_eq!(a[17], "--network=none");
-    assert!(a[19].ends_with(":/work:Z") && !a[19].contains(','));
-    assert_eq!(a[21], "/work");
-    assert_eq!(a[22 + extra], image);
+    assert_eq!(a[14], a[16], "swap equals memory");
+    assert_eq!(a[21], "--network=none");
+    assert!(a[23].ends_with(":/work:Z") && !a[23].contains(','));
+    assert_eq!(a[25], "/work");
+    assert_eq!(a[26 + extra], image);
     assert!(image.contains("@sha256:") && !image.starts_with('-'));
-    assert_eq!(a[22 + extra + 1 + lead..], cmd[..]);
+    assert_eq!(a[26 + extra + 1 + lead..], cmd[..]);
 });

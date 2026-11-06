@@ -343,6 +343,9 @@ fn decode_default(name: &str, default: &RuntimeValues, values: &mut RuntimeValue
         "drgnx-agents-start-env-names" => {
             values.agents_start_env_names = default.agents_start_env_names.clone();
         }
+        "drgnx-agents-trace-opens" => {
+            values.agents_trace_opens = default.agents_trace_opens.clone()
+        }
         "drgnx-ai-providers" => values.ai_providers = default.ai_providers.clone(),
         "drgnx-ai-roles" => values.ai_roles = default.ai_roles.clone(),
         "drgnx-agents-matrix" => values.agents_matrix = default.agents_matrix.clone(),
@@ -369,6 +372,48 @@ fn decode_default(name: &str, default: &RuntimeValues, values: &mut RuntimeValue
         }
         "drgnx-agents-manager-context" => {
             values.agents_manager_context = default.agents_manager_context;
+        }
+        "drgnx-agents-model-prices" => {
+            values.agents_model_prices = default.agents_model_prices.clone();
+        }
+        "drgnx-runners-send" => values.runners_send = default.runners_send.clone(),
+        "drgnx-runners-heavy" => values.runners_heavy = default.runners_heavy.clone(),
+        "drgnx-runners-image" => values.runners_image = default.runners_image.clone(),
+        "drgnx-runners-weight" => values.runners_weight = default.runners_weight,
+        "drgnx-runners-project-visibility" => {
+            values.runners_project_visibility = default.runners_project_visibility.clone();
+        }
+        "drgnx-sandbox-proxy-pinned-addresses" => {
+            values.sandbox_proxy_pins = default.sandbox_proxy_pins.clone();
+        }
+        "drgnx-search-model-mirror" => {
+            values.search_model_mirror = default.search_model_mirror.clone();
+        }
+        "drgnx-search-builtin" => values.search_builtin = default.search_builtin,
+        "drgnx-search-include" => values.search_include = default.search_include.clone(),
+        "drgnx-search-exclude" => values.search_exclude = default.search_exclude.clone(),
+        "drgnx-search-off" => values.search_off = default.search_off,
+        "drgnx-agents-browser-program" => {
+            values.agents_browser_program = default.agents_browser_program.clone();
+        }
+        "drgnx-agents-browser-local-ports" => {
+            values.agents_browser_local_ports = default.agents_browser_local_ports.clone();
+        }
+        "drgnx-agents-browser-deny-hosts" => {
+            values.agents_browser_deny_hosts = default.agents_browser_deny_hosts.clone();
+        }
+        "drgnx-agents-browser-max-message" => {
+            values.agents_browser_max_message = default.agents_browser_max_message;
+        }
+        "drgnx-agents-browser-idle" => values.agents_browser_idle = default.agents_browser_idle,
+        "drgnx-agents-browser-once-window" => {
+            values.agents_browser_once_window = default.agents_browser_once_window;
+        }
+        "drgnx-agents-session-memory" => {
+            values.agents_session_memory = default.agents_session_memory.clone();
+        }
+        "drgnx-agents-browser-memory-high" => {
+            values.agents_browser_memory_high = default.agents_browser_memory_high;
         }
         _ => {}
     }

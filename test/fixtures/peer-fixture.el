@@ -13,6 +13,18 @@
   "Deliver STRING to PEER's filter as one call; return after it ran."
   (nidhogg-test-peer-write peer string))
 
+(defun drgnx-test-peer-send (peer string)
+  "Write STRING to PEER and return at once.  For a peer whose input Nidhogg's reader frames: the reader delivers
+batches to a batch function, and the peer's own filter (which `drgnx-test-peer-write' waits for) never runs.  The
+test waits on what the batch function did (`drgnx-test-wait')."
+  (process-send-string (nidhogg-test-peer--state-client (process-get peer 'nidhogg-test-peer))
+                       (encode-coding-string string 'utf-8))
+  nil)
+
+(defun drgnx-test-peer-eof (peer)
+  "End PEER's input as a remote end closing does: what was sent arrives first, then PEER sees the end."
+  (delete-process (nidhogg-test-peer--state-client (process-get peer 'nidhogg-test-peer))))
+
 (defun drgnx-test-peer-calls (peer)
   "How many times PEER's filter ran."
   (nidhogg-test-peer-calls peer))

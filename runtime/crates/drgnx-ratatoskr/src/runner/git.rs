@@ -15,7 +15,7 @@ use runstav::methods::matrix::Facts;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::process::Command;
 
@@ -74,7 +74,12 @@ pub struct HubGit {
     /// Held while a run store is cloned, fetched or copied: a run's tasks start at once, and two clones (or a fetch
     /// into a half-made clone) of one store fail.
     stores: tokio::sync::Mutex<()>,
+    /// Where each new tree branched from (`work::bases`): the folder of the base snapshots and who is told.
+    bases: Option<(PathBuf, BaseSink)>,
 }
+
+/// Told, once per tree the hub makes, where it branched from.
+pub type BaseSink = Arc<dyn Fn(norn::write::work::WorktreeBase) + Send + Sync>;
 
 fn err(what: impl Into<String>, stderr: impl Into<String>) -> GitError {
     GitError {
@@ -129,7 +134,14 @@ impl HubGit {
             shell: crate::shell_env::ShellEnv::default(),
             checked: Mutex::new(HashMap::new()),
             stores: tokio::sync::Mutex::new(()),
+            bases: None,
         }
+    }
+
+    /// Tell SINK where each tree made from now on branched from; the base snapshots go under SNAP_ROOT.
+    pub fn with_bases(mut self, snap_root: PathBuf, sink: BaseSink) -> Self {
+        self.bases = Some((snap_root, sink));
+        self
     }
 
     /// Extra environment for every git process (tests point HOME at a temp folder).
@@ -632,9 +644,8 @@ impl HubGit {
                 .await
                 .is_ok(),
             TreeMode::Snapshot => {
-                let dot = path.join(".git");
-                dot.join("refs/heads").join(&branch).is_file()
-                    || std::fs::read_to_string(dot.join("packed-refs")).is_ok_and(|t| {
+                agent_text(&path, &format!(".git/refs/heads/{branch}")).is_some()
+                    || agent_text(&path, ".git/packed-refs").is_some_and(|t| {
                         t.lines()
                             .any(|l| l.ends_with(&format!(" refs/heads/{branch}")))
                     })
@@ -678,7 +689,24 @@ impl HubGit {
                 self.git_in(&path, &["reset", "-q", "--hard"]).await?;
             }
         }
+        self.note_base(repo, &tree).await;
         Ok(tree)
+    }
+
+    /// A tree was just made: where it branched from, and a snapshot of it, go to the sink (`work::bases`).
+    async fn note_base(&self, repo: &Path, tree: &TaskTree) {
+        let Some((root, sink)) = &self.bases else {
+            return;
+        };
+        let (root, repo, path) = (root.clone(), repo.to_path_buf(), tree.path.clone());
+        let (base, branch) = (tree.base.clone(), tree.branch.clone());
+        let row = crate::clock::blocking(move || {
+            crate::work::bases::row_for(&root, &repo, &path, &base, &branch)
+        })
+        .await;
+        if let Ok(row) = row {
+            sink(row);
+        }
     }
 
     async fn trial(&self, repo: &Path, branches: &[String]) -> Result<TrialResult, GitError> {
@@ -741,15 +769,32 @@ impl HubGit {
     }
 }
 
-/// BRANCH's tip in the snapshot tree at PATH, from its ref files (the agent writes that `.git`: no git runs there).
+/// The most of a ref file [`agent_text`] reads.
+const REF_FILE_MAX: u64 = 64 << 20;
+
+/// The file REL beneath the task folder TREE as text, read as a file the agent wrote is: no link followed below TREE,
+/// a FIFO or a device refused at once without blocking (`eitri::read_regular`), at most [`REF_FILE_MAX`] bytes.  None
+/// when it is missing, is not a regular file, is larger or is not UTF-8.  TREE itself is the hub's (its runs root).
+fn agent_text(tree: &Path, rel: &str) -> Option<String> {
+    use rustix::fs::{Mode, OFlags};
+    use std::os::fd::AsFd;
+    let dir = rustix::fs::open(
+        tree,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .ok()?;
+    let bytes = eitri::read_regular(dir.as_fd(), Path::new(rel), REF_FILE_MAX).ok()?;
+    String::from_utf8(bytes).ok()
+}
+
+/// BRANCH's tip in the snapshot tree at PATH, from its ref files (the agent writes that `.git`: no git runs there, and
+/// each file is read as [`agent_text`] reads).
 fn snapshot_tip(path: &Path, branch: &str) -> Option<String> {
-    let dot = path.join(".git");
     let is_sha = |s: &str| matches!(s.len(), 40 | 64) && s.bytes().all(|b| b.is_ascii_hexdigit());
-    let loose = std::fs::read_to_string(dot.join("refs/heads").join(branch))
-        .ok()
-        .map(|t| t.trim().to_owned());
+    let loose = agent_text(path, &format!(".git/refs/heads/{branch}")).map(|t| t.trim().to_owned());
     let packed = || {
-        let t = std::fs::read_to_string(dot.join("packed-refs")).ok()?;
+        let t = agent_text(path, ".git/packed-refs")?;
         let name = format!("refs/heads/{branch}");
         t.lines().find_map(|l| match l.split_once(' ') {
             Some((sha, n)) if n == name => Some(sha.to_owned()),

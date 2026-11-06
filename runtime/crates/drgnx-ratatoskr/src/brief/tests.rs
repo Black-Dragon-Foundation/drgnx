@@ -149,6 +149,24 @@ async fn brief_has_every_part() {
     assert!(text.contains("## Interfaces from earlier tasks"));
 }
 
+/// Pattern D: the brief names findings and decisions in the design's words.
+#[tokio::test(flavor = "multi_thread")]
+async fn brief_has_the_findings_paragraph() {
+    let (_d, db, _plan) = setup().await;
+    let (parts, pointer) = gathered(&db, "J#2").await;
+    let (text, parts, _) = assemble("J#2", parts, &pointer);
+    let f = &parts
+        .iter()
+        .find(|(p, _)| *p == BriefPart::Findings)
+        .unwrap()
+        .1;
+    assert_eq!(
+        f,
+        "When you establish a fact that changes what you do next, record it with `note_add` kind `finding`, naming its sources. When you choose between ways, use `record_decision`, as before."
+    );
+    assert!(text.contains(f.as_str()));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn missing_reports_leave_interfaces_empty() {
     let (_d, db, _) = setup().await;
@@ -158,7 +176,7 @@ async fn missing_reports_leave_interfaces_empty() {
         .find(|(p, _)| *p == BriefPart::Interfaces)
         .unwrap();
     assert!(i.1.is_empty());
-    assert_eq!(parts.len(), 7);
+    assert_eq!(parts.len(), 8);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -180,6 +198,29 @@ async fn edited_brief_wins() {
         db.write(meta(Class::User), |tx| set_in(tx, "J#9", "x".into()))
             .await
             .is_err()
+    );
+}
+
+/// Pure (D): a temp store.  A graph plan's task body is in its worker's brief, so a proposal from Say needs no
+/// `brief/set`.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_brief_carries_the_body() {
+    use crate::runner::graph_plan_tests::{front, proposed};
+    let dir = tempfile::tempdir().unwrap();
+    let f = front(dir.path());
+    let (id, _) = proposed(
+        &f,
+        dir.path(),
+        json!([{"number": "1", "title": "look", "role": "review",
+                "body": "Read the settings code and list each default."}]),
+    )
+    .await;
+    let b = build(&f, &format!("{id}#1"), None).await.unwrap();
+    assert!(
+        b.text
+            .contains("Read the settings code and list each default."),
+        "{}",
+        b.text
     );
 }
 

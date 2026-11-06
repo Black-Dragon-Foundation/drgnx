@@ -17,9 +17,32 @@ pub struct LinkKind {
 /// command the hub runs), `report` (what an agent ends a task with) and `proposal` (a generated view's edit, as a
 /// proposal the user decides: agent system part 1, Tasks 4 and 14b).
 pub const ENTITY_KINDS: &[&str] = &[
-    "task", "decision", "note", "grant", "agent", "session", "commit", "branch", "file", "symbol",
-    "spec", "plan", "step", "ruling", "todo", "worktree", "project", "option", "exec", "report",
+    "task",
+    "decision",
+    "note",
+    "grant",
+    "agent",
+    "session",
+    "commit",
+    "branch",
+    "file",
+    "symbol",
+    "spec",
+    "plan",
+    "step",
+    "ruling",
+    "todo",
+    "worktree",
+    "project",
+    "option",
+    "exec",
+    "report",
     "proposal",
+    "ask",
+    "runner",
+    "cloud_spend",
+    "key_sent",
+    "key_use",
 ];
 
 const ANY: &[&str] = &["*"];
@@ -94,6 +117,13 @@ pub const LINKS: &[LinkKind] = &[
         false,
     ),
     link("narrows", &["grant"], &["grant"], false),
+    // schema 9: what the user asked, and the work it led to
+    link(
+        "asked",
+        &["ask"],
+        &["spec", "plan", "task", "session"],
+        false,
+    ),
 ];
 
 /// Whether KIND is one of [`ENTITY_KINDS`].
@@ -124,9 +154,32 @@ mod tests {
         assert_eq!(
             ENTITY_KINDS,
             [
-                "task", "decision", "note", "grant", "agent", "session", "commit", "branch",
-                "file", "symbol", "spec", "plan", "step", "ruling", "todo", "worktree", "project",
-                "option", "exec", "report", "proposal"
+                "task",
+                "decision",
+                "note",
+                "grant",
+                "agent",
+                "session",
+                "commit",
+                "branch",
+                "file",
+                "symbol",
+                "spec",
+                "plan",
+                "step",
+                "ruling",
+                "todo",
+                "worktree",
+                "project",
+                "option",
+                "exec",
+                "report",
+                "proposal",
+                "ask",
+                "runner",
+                "cloud_spend",
+                "key_sent",
+                "key_use"
             ]
         );
         let rows: Vec<(&str, Vec<&str>, Vec<&str>, bool)> = LINKS
@@ -191,6 +244,12 @@ mod tests {
                 false,
             ),
             ("narrows", vec!["grant"], vec!["grant"], false),
+            (
+                "asked",
+                vec!["ask"],
+                vec!["spec", "plan", "task", "session"],
+                false,
+            ),
         ];
         assert_eq!(rows, expect);
         // Every named end is an entity kind, and only the two readiness links affect ready.
@@ -214,6 +273,8 @@ mod tests {
         assert!(link_allowed("narrows", "grant", "grant"));
         assert!(link_allowed("proposes", "proposal", "report"));
         assert!(!link_allowed("report_of", "report", "plan"));
+        assert!(link_allowed("asked", "ask", "session"));
+        assert!(!link_allowed("asked", "task", "ask"));
     }
 
     #[test]

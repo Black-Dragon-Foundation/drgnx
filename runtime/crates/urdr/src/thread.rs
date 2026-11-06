@@ -97,6 +97,8 @@ impl Handle {
         f: impl FnOnce(&Connection) -> Result<R> + Send + 'static,
         in_txn: bool,
     ) -> Result<R> {
+        #[cfg(feature = "test-hooks")]
+        let _waiting = crate::wait::begin();
         let (reply, answer) = oneshot::channel();
         let job = Job::Run(Box::new(move |conn: &Connection| {
             let out = catch_unwind(AssertUnwindSafe(|| {

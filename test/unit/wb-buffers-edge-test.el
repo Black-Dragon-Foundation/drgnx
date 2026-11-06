@@ -103,7 +103,7 @@
         (drgnx-buffers--fontify (point-min) (point-max))
         (let* ((bol (drgnx-buffers--row-pos b)) (b-pos (+ bol 4 3)))     ; the "b" of "a  b.txt"
           (should (equal (buffer-substring-no-properties b-pos (1+ b-pos)) "b"))
-          (should (eq (get-text-property b-pos 'mouse-face) 'highlight))
+          (should (eq (get-text-property b-pos 'mouse-face) 'drgnx-hover-row))
           (should-not (eq (get-text-property b-pos 'face) 'drgnx-buffers-dir))
           (should (eq (get-text-property (+ bol 4 (length "a  b.txt") 2) 'face) 'drgnx-buffers-dir)))))))
 

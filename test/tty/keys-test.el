@@ -226,7 +226,7 @@ sets `kx-returned' when it ends (C-g ends it early)."
         (drgnx-tty-session-wait-screen b "Command (# for a code question)")
         (drgnx-tty-keys-test--quit s b 'legacy)
         (drgnx-tty-session-key b "C-p" 'legacy)
-        (drgnx-tty-keys-test--ran s 'project-find-file "C-p")
+        (drgnx-tty-keys-test--ran s 'drgnx-quick-open "C-p")
         (drgnx-tty-session-wait s '(minibuffer-prompt))            ; it asks which project
         (drgnx-tty-keys-test--quit s b 'legacy)
         (let ((line `(with-selected-window (frame-selected-window ,(drgnx-tty-keys-test--frame b)) (line-number-at-pos))))

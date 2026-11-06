@@ -218,10 +218,12 @@
     (drgnx-chrome-test--open dir "c.txt")
     (let* ((tabs (window-parameter (selected-window) 'tab-line-format))
            (runs (drgnx-chrome-test--mouse-runs tabs)))
-      (should (= 6 (length runs)))                      ; a name and a × for each of the three tabs
-      (should (= 6 (length (seq-uniq (mapcar #'cdr runs) #'eq))))
+      ;; one run for each tab that is not shown (the whole tab, its × included); the shown tab has none
+      (should (= 2 (length runs)))
+      (should (= 2 (length (seq-uniq (mapcar #'cdr runs) #'eq))))
       (should-not (get-text-property (1- (string-search "  b.txt" tabs)) 'mouse-face tabs))   ; the gap: no hover
-      (should (get-text-property (string-search "b.txt" tabs) 'mouse-face tabs)))))
+      (should (get-text-property (string-search "b.txt" tabs) 'mouse-face tabs))
+      (should-not (get-text-property (string-search "c.txt" tabs) 'mouse-face tabs)))))
 
 (ert-deftest drgnx-chrome/tab-faces-pad-dim-and-mark-the-active-group ()
   (drgnx-chrome-test--with dir
@@ -232,8 +234,9 @@
       (should (string-search "  a.txt " tabs))            ; 2-space padding
       (should (eq (funcall face-of "a.txt") 'drgnx-chrome-tab))
       (should (eq (funcall face-of "b.txt") 'drgnx-chrome-tab-active)))
+    ;; no height of their own: a relative 1.0 kept the tab line's height and cost a font spec copy per tab run
     (dolist (f '(drgnx-chrome-tab drgnx-chrome-tab-current drgnx-chrome-tab-active))
-      (should (eql (face-attribute f :height nil nil) 1.0))))
+      (should (eq (face-attribute f :height nil nil) 'unspecified))))
   (should (eq (face-attribute 'drgnx-chrome-tab-active :overline nil nil) t))
   (should (memq (face-attribute 'drgnx-chrome-tab-current :overline nil nil) '(nil unspecified))))
 
@@ -330,7 +333,7 @@ call, no bus flush: the `windows-changed' `now' subscriber."
     (dolist (fn '(drgnx-chrome--windows-changed drgnx-chrome--editor-changed drgnx-chrome--apply-changed drgnx-chrome--memo-current-p drgnx-chrome--memo-set drgnx-chrome-apply drgnx-chrome--apply-window
                                                 drgnx-chrome--role drgnx-chrome--set drgnx-chrome--tab-line drgnx-chrome--note drgnx-chrome--note-history
                                                 drgnx-chrome-tabs drgnx-chrome-breadcrumb drgnx-chrome--project-root drgnx-chrome--text
-                                                drgnx-chrome--tab-buffer-p drgnx-chrome--close-glyph))
+                                                drgnx-chrome--tab-buffer-p drgnx-chrome--close-glyph drgnx-chrome--rows-key))
       (unless (compiled-function-p (symbol-function fn))      ; the tests load drgnx from source: measure what users run
         (let ((byte-compile-warnings nil)) (byte-compile fn))))
     (let ((window-min-width 2) (window-min-height 2))        ; a small batch frame
@@ -352,3 +355,138 @@ call, no bus flush: the `windows-changed' `now' subscriber."
       (setq runs (sort runs #'<))
       (message "chrome now subscribers, 7 windows: %.1f µs per call (median of 21 × %d)" (nth 10 runs) n)
       (should (<= (nth 10 runs) (* 50 (drgnx-run-ert-time-factor)))))))
+
+;;;; Docked panes as cards (ui/look under Glitnir)
+;; Race-proof pattern D (pure): window and frame parameters of one frame, no timing.
+
+(load (expand-file-name "modules/ui/drgnx-look" drgnx-dir) nil t)
+
+(ert-deftest drgnx-chrome/wb-card-params-set-and-undone ()
+  "A docked pane and an editor window get the card parameters and the frame the gap in its dividers; a popup lane
+window gets none.  Taking the cards off gives back the parameters and the divider widths the frame had."
+  (drgnx-chrome-test--with _dir
+    (let* ((f (selected-frame)) (editor (selected-window))
+           (dock (split-window editor nil 'left))
+           (lane (split-window editor nil 'below))
+           (gap (drgnx-look-density-value 'gap))
+           (before (list (frame-parameter f 'right-divider-width) (frame-parameter f 'bottom-divider-width))))
+      (set-window-parameter dock 'drgnx-role 'dock)
+      (set-window-parameter lane 'drgnx-popup (list :popup nil))
+      (drgnx-look--card-frame f)
+      (dolist (p '(corner-radius shadow))
+        (should (equal (window-parameter dock p) (drgnx-look--card-value p)))
+        (should (equal (window-parameter editor p) (drgnx-look--card-value p)))
+        (should-not (window-parameter lane p)))
+      (should (equal (window-parameter dock 'ring) (drgnx-look--card-value 'ring)))
+      (should-not (window-parameter lane 'ring))
+      (should (eql (frame-parameter f 'right-divider-width) (round (* gap (frame-scale-factor f)))))
+      (should (eql (frame-parameter f 'bottom-divider-width) (round (* gap (frame-scale-factor f)))))
+      (drgnx-look--card-frame f)               ; again: the saved widths are still the first ones
+      (drgnx-look--card-restore f)
+      (dolist (p '(corner-radius shadow ring))
+        (should-not (window-parameter dock p))
+        (should-not (window-parameter editor p)))
+      (should (equal before (list (frame-parameter f 'right-divider-width) (frame-parameter f 'bottom-divider-width)))))))
+
+(ert-deftest drgnx-chrome/wb-card-gap-is-in-logical-pixels ()
+  "The gap is logical: at a frame scale of 2 the dividers are twice the gap, in device pixels, and a change of the
+scale re-applies it.  Race-proof pattern D (pure: the scale is stubbed)."
+  (drgnx-chrome-test--with _dir
+    (let* ((f (selected-frame)) (gap (drgnx-look-density-value 'gap)) (scale 2)
+           (border (frame-parameter f 'internal-border-width)))
+      (cl-letf (((symbol-function 'frame-scale-factor) (lambda (&optional _frame) scale)))
+        (drgnx-look--card-frame f)
+        (should (eql (frame-parameter f 'right-divider-width) 12))
+        (should (eql (frame-parameter f 'bottom-divider-width) 12))
+        (should (eql (frame-parameter f 'internal-border-width) 12)) ; the frame's outer gap
+        (setq scale 1.25)
+        (drgnx-look--card-follow-scale f)
+        (should (eql (frame-parameter f 'right-divider-width) (round (* gap 1.25))))
+        (should (eql (frame-parameter f 'internal-border-width) (round (* gap 1.25))))
+        (drgnx-look--card-restore f)
+        (should (eql (frame-parameter f 'internal-border-width) (or border 0)))))))
+
+(ert-deftest drgnx-wb-chrome/card-ring-per-variant ()
+  "A card's ring is the border face at 0.6 (dark), 0.8 (light) and 1.0 (high contrast); its shadow 0.45, 0.08 and
+none.  The selected window's ring is the accent at 1.0 in every variant.  Race-proof pattern D (the variant is
+stubbed)."
+  (drgnx-chrome-test--with _dir
+    (let* ((editor (selected-window)) (other (split-window editor nil 'below)) (variant 'dark))
+      (cl-letf (((symbol-function 'drgnx-look-variant) (lambda (&optional _frame) variant)))
+        (pcase-dolist (`(,v ,ring ,opacity) '((dark 0.6 0.45) (light 0.8 0.08) (hc 1.0 nil)))
+          (setq variant v)
+          (should (equal (drgnx-look--card-value 'ring) (cons 'drgnx-border ring)))
+          (should (equal (plist-get (drgnx-look--card-value 'shadow) :opacity) opacity))
+          (drgnx-look--card-set other)
+          (drgnx-look--card-set editor)
+          (should (equal (window-parameter other 'ring) (cons 'drgnx-border ring)))
+          (should (equal (window-parameter editor 'ring) '(drgnx-accent . 1.0)))
+          (should (equal (window-parameter other 'shadow) (drgnx-look--card-value 'shadow))))))))
+
+(ert-deftest drgnx-wb-chrome/gap-follows-density ()
+  "The dividers and the frame's edge are the density's gap in device pixels, and a density change gives them again
+at once (the density's changed hook).  Race-proof pattern D (the scale is stubbed)."
+  (drgnx-chrome-test--with _dir
+    (let ((f (selected-frame)) (drgnx-look-density 'comfortable) (scale 2))
+      (cl-letf (((symbol-function 'frame-scale-factor) (lambda (&optional _frame) scale)))
+        (unwind-protect
+            (progn
+              (drgnx-look--islands-on)
+              (drgnx-look--card-frame f)
+              (should (eql (frame-parameter f 'right-divider-width) 12))
+              (setq drgnx-look-density 'roomy)
+              (run-hooks 'drgnx-look-density-changed-hook)
+              (dolist (p '(right-divider-width bottom-divider-width internal-border-width))
+                (should (eql (frame-parameter f p) 16)))
+              (setq drgnx-look-density 'compact)
+              (run-hooks 'drgnx-look-density-changed-hook)
+              (dolist (p '(right-divider-width bottom-divider-width internal-border-width))
+                (should (eql (frame-parameter f p) 8))))
+          (drgnx-look--islands-off)
+          (drgnx-look--card-restore f))))))
+
+(defvar glitnir-enable)
+(defvar drgnx-look--edge-before)
+(defvar drgnx-look--edge-door)
+
+(ert-deftest drgnx-wb-chrome/edge-at-birth-follows-density ()
+  "Under Glitnir a window made from now on is born with the density's gap as its edge (`default-frame-alist'), and
+after a density change with the new gap, so it never grows once shown.  Race-proof pattern D (Glitnir, the density
+and the alist are bound)."
+  (let ((features (cons 'glitnir features)) (glitnir-enable t) (default-frame-alist default-frame-alist)
+        (drgnx-look-density 'comfortable) (drgnx-look--edge-before nil) (drgnx-look--edge-door nil))
+    (unwind-protect
+        (progn
+          (drgnx-look--islands-on)
+          (drgnx-look--edge-at-birth)
+          (should (eql (alist-get 'internal-border-width default-frame-alist) 6))
+          (setq drgnx-look-density 'roomy)
+          (run-hooks 'drgnx-look-density-changed-hook)
+          (should (eql (alist-get 'internal-border-width default-frame-alist) 8)))
+      (drgnx-look--islands-off))))
+
+(ert-deftest drgnx-wb-chrome/divider-faces-restored-when-cards-go ()
+  "While cards show, the divider faces and the frame's edge take the gap's background on the frame, whatever the theme
+says (modus's grey stripes); a theme change gives them again; taking the cards off gives the theme's faces back.
+Race-proof pattern D."
+  (drgnx-chrome-test--with _dir
+    (let* ((f (selected-frame)) (gap "#102030")
+           (faces '((window-divider . :foreground) (window-divider-first-pixel . :foreground)
+                    (window-divider-last-pixel . :foreground) (internal-border . :background)))
+           (read (lambda () (mapcar (lambda (c) (face-attribute (car c) (cdr c) f)) faces)))
+           (spec (get 'drgnx-surface-gap 'face-defface-spec)))
+      (unwind-protect
+          (progn
+            (face-spec-set 'drgnx-surface-gap `((t :background ,gap)) 'face-defface-spec)
+            (set-face-foreground 'window-divider "#9f9f9f" f)
+            (drgnx-look--islands-on)
+            (drgnx-look--card-frame f)
+            (should (equal (funcall read) (make-list 4 gap)))
+            (set-face-foreground 'window-divider "#9f9f9f" f)       ; a theme change sets them again
+            (run-hook-with-args 'enable-theme-functions 'wombat)
+            (should (equal (funcall read) (make-list 4 gap)))
+            (drgnx-look--card-restore f)
+            (should-not (member gap (funcall read))))
+        (drgnx-look--islands-off)
+        (face-spec-set 'drgnx-surface-gap spec 'face-defface-spec)
+        (set-face-foreground 'window-divider nil f)))))

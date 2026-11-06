@@ -1,0 +1,44 @@
+{
+  "minute": 40,
+  "asks": [
+    {"key": "1", "text": "fix deferred testing rows", "to": ["spec:race-proof"]},
+    {"key": "2", "text": "go for the push", "to": ["spec:race-proof"]},
+    {"key": "3", "text": "jobq asap", "to": ["spec:job-scheduler"]}
+  ],
+  "specs": [
+    {"id": "race-proof", "title": "race-proof tests"},
+    {"id": "job-scheduler", "title": "job scheduler"}
+  ],
+  "plans": [
+    {"id": "deferred", "title": "deferred testing rows", "rank": 1, "spec": "race-proof", "progress": [3, 6]},
+    {"id": "i6", "title": "I6 integration", "rank": 2, "spec": "race-proof"},
+    {"id": "jobq", "title": "jobq P1–4", "rank": 3, "spec": "job-scheduler"}
+  ],
+  "tasks": [
+    {"id": "t1", "plan": "deferred", "title": "SESSION-END-LOSES-STARTED-1"},
+    {"id": "t2", "plan": "deferred", "title": "review item 3"},
+    {"id": "t3", "plan": "i6", "title": "merge 12 branches"},
+    {"id": "t4", "plan": "jobq", "title": "write plan"}
+  ],
+  "agents": [
+    {"id": "a1", "name": "hub rows", "model": "Opus", "state": "running", "since": 8, "seq": 1, "task": "t1",
+     "branch": "drgnx/rp-df-hub", "worktree": "wt/rp-df-hub", "base": "c-i6", "machine": "desktop", "spend": "$1.20",
+     "class": "test", "conclusion": "turn_core drops the started flag",
+     "files": {"drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs": [40, 3], "drgnx/runtime/crates/drgnx-ratatoskr/src/front.rs": [12, 1]}},
+    {"id": "a2", "name": "fx-sess", "model": "Sonnet", "state": "review", "since": 30, "seq": 2, "task": "t2",
+     "branch": "drgnx/rp-fx-sess", "worktree": "wt/rp-fx-sess", "base": "c-df-hub",
+     "conclusion": "fixed in seq", "class": "edit",
+     "files": {"drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs": [9, 2]}},
+    {"id": "a3", "name": "I6", "model": "Opus", "state": "running", "since": 28, "seq": 3, "task": "t3",
+     "branch": "drgnx/rp-i6", "worktree": "wt/rp-i6", "base": "c-main", "machine": "desktop"},
+    {"id": "a4", "name": "jobq plan", "model": "Opus", "state": "running", "since": 31, "seq": 4, "task": "t4",
+     "branch": "org/docs-plans-tooling", "worktree": "wt/org", "base": "c-org", "machine": "laptop"}
+  ],
+  "refs": [
+    {"branch": "drgnx/rp-fx-sess", "based_on": "drgnx/rp-df-hub"}
+  ],
+  "machines": [
+    {"name": "desktop", "slots": 16, "used": 3, "reported": true},
+    {"name": "laptop", "slots": 2, "used": 1, "reported": true}
+  ]
+}

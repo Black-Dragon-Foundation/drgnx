@@ -23,8 +23,8 @@
 
 (defconst drgnx-agents-matrix-actions
   '(agents.start agents.model agents.control graph.change task.done spend spend.over code.read code.edit commit
-                 merge.integration push.ci push.main code.ci-config machines job.container network unsandboxed
-                 settings.change user.private user.emacs chat.project-read)
+                 merge.integration push.ci push.main code.ci-config machines job.container network browser
+                 browser.web browser.private unsandboxed settings.change user.private user.emacs chat.project-read)
   "The matrix's rows, as the hub spells them (`Action::id' in runstav::methods::matrix).")
 
 (defconst drgnx-agents-matrix-schema
@@ -108,6 +108,54 @@ repository."
   :type 'sexp :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
   :runtime "NetHosts" :schema '(alist symbol (list-of (string :match ":[0-9]+\\'"))))
 
+(drgnx-defsetting drgnx-agents-browser-program nil
+  "The browser an agent session gets: the absolute path of a Chromium, Chrome or headless shell, or nil to find one
+(a distro package first, then the one `drgnx browser install' downloaded).  Only you can set it, never a repository."
+  :type '(choice (const :tag "find one" nil) file) :group 'drgnx :scope 'global :workspace 'never
+  :on-error 'strict :agents 'never :runtime "Option<String>" :schema '(or null (string :match "\\`/")))
+
+(drgnx-defsetting drgnx-agents-browser-local-ports '(3000 3001 4173 4200 5000 5173 8000 8080 8888)
+  "The TCP ports on the sandbox's own loopback that a session with the browser lets its agent and browser
+connect to, for the servers the agent starts there (a list of port numbers, 1 to 65535).  Servers on this machine are
+reached only as host.drgnx.internal:PORT, through a grant.  Only you can set it, never a repository."
+  :type '(repeat integer) :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "Vec<u16>" :schema '(list-of (integer :min 1 :max 65535)))
+
+(drgnx-defsetting drgnx-agents-browser-deny-hosts nil
+  "Host names (like \"example.com\") a session's browser never reaches, whatever you grant: a list of strings.
+Only you can set it, never a repository."
+  :type '(repeat string) :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "Vec<String>" :schema '(list-of string))
+
+(drgnx-defsetting drgnx-agents-browser-max-message 67108864
+  "The largest message, in bytes, that passes between an agent and its session's browser (64 MiB).
+Only you can set it, never a repository."
+  :type 'natnum :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "u64" :schema '(integer :min 1))
+
+(drgnx-defsetting drgnx-agents-browser-idle 600
+  "Seconds without a command after which a session's browser is stopped; the next command starts it again.
+Only you can set it, never a repository."
+  :type 'natnum :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "u64" :schema 'natnum)
+
+(drgnx-defsetting drgnx-agents-browser-once-window 600
+  "Seconds a one-time browser grant lasts after you give it.  Only you can set it, never a repository."
+  :type 'natnum :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "u64" :schema 'natnum)
+
+(drgnx-defsetting drgnx-agents-session-memory "4G"
+  "The memory cap of one agent session with its browser, like \"4G\" or \"512M\".
+Only you can set it, never a repository."
+  :type 'string :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "String" :schema '(string :match "\\`[1-9][0-9]*[KMGT]?\\'"))
+
+(drgnx-defsetting drgnx-agents-browser-memory-high 75
+  "The share of the session's memory cap (1 to 99, a percent) at which its browser is stopped.
+Only you can set it, never a repository."
+  :type 'natnum :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "u32" :schema '(integer :min 1 :max 99))
+
 (drgnx-defsetting drgnx-agents-container-images nil
   "The images container jobs may run: an alist NAME → image reference pinned by digest (\"registry/name@sha256:…\").
 The hub pulls them; a job names one of them and nothing else.  Only you can set it, never a repository."
@@ -134,6 +182,53 @@ The hub pulls them; a job names one of them and nothing else.  Only you can set 
   "The share of its context window (0 to 1) at which a manager is rotated."
   :type 'number :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
   :runtime "f64" :schema 'number)
+
+(drgnx-defsetting drgnx-agents-model-prices
+  '(("claude-fable-5-1" :in 10 :out 50 :cache-read 0.25 :write-5m 12.5 :write-1h 20 :as-of "2026-11-01")
+    ("claude-opus-5-5" :in 4 :out 20 :cache-read 0.2 :write-5m 5 :write-1h 8 :as-of "2026-11-01")
+    ("claude-sonnet-5-5" :in 2 :out 10 :cache-read 0.1 :write-5m 2.5 :write-1h 4 :as-of "2026-11-01")
+    ("claude-haiku-5-5" :in 0.5 :out 2.5 :cache-read 0.05 :write-5m 0.625 :write-1h 1 :as-of "2026-11-01")
+    ("claude" :in 4 :out 20 :cache-read 0.2 :write-5m 5 :write-1h 8 :as-of "2026-11-01"))
+  "What a model costs, for the forecasts: an alist KEY → (:in :out :cache-read :write-5m :write-1h :as-of), US dollars per
+million tokens.  KEY is a model id prefix (the longest match wins) or a provider name; `claude' is a Claude profile with
+no model set.  A cache price left out is the input price.  :as-of is the date the row was read off the provider's page;
+the forecast shows the oldest.  The shipped rows are Anthropic's pricing page of 2026-11-01; Haiku's is the tier above
+100,000 tokens (a request below it costs a fifth), because agent work runs past it.  A subscription's model is the CLI's
+choice, so a subscription's cost is an estimate.  A model with no row (every Codex and Gemini model until you add one)
+is unpriced; a gateway provider's `:price' in `drgnx-ai-providers' serves when no row matches.  Add a row for your
+own model, or change one when prices move.  Only you can set it, never a repository."
+  :type 'sexp :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "Vec<ModelPrice>"
+  :schema '(alist string (plist (:in number) (:out number) (:cache-read number) (:write-5m number) (:write-1h number)
+                                (:as-of string))))
+
+;; The runners' per-project settings: the hub's queue reads them (docs/guide/jobs.md, "The queue and priority").
+
+(drgnx-defsetting drgnx-runners-send "heavy"
+  "Which of the project's jobs may leave this machine for a runner: \"all\", \"heavy\" (only jobs marked heavy) or
+\"none\"."
+  :type '(choice (const "all") (const "heavy") (const "none")) :group 'drgnx :scope 'project :workspace 'data
+  :on-error 'strict :agents 'never :runtime "String" :schema '(string :match "\\`\\(?:all\\|heavy\\|none\\)\\'"))
+
+(drgnx-defsetting drgnx-runners-heavy nil
+  "Suite or command patterns whose jobs are heavy in this project (a job is heavy only when marked so)."
+  :type '(repeat string) :group 'drgnx :scope 'project :workspace 'data :on-error 'strict :agents 'never
+  :runtime "Vec<String>" :schema '(list-of string))
+
+(drgnx-defsetting drgnx-runners-image nil
+  "The image a runner runs the project's command jobs in, pinned by digest (\"registry/name@sha256:…\"), or nil."
+  :type '(choice (const nil) string) :group 'drgnx :scope 'project :workspace 'data :on-error 'strict
+  :agents 'never :runtime "Option<String>" :schema '(or null string))
+
+(drgnx-defsetting drgnx-runners-weight 1.0
+  "The project's weight when projects share the machines within a priority (2: twice the share of a project at 1)."
+  :type 'number :group 'drgnx :scope 'project :workspace 'data :on-error 'strict :agents 'never
+  :runtime "f64" :schema 'number)
+
+(drgnx-defsetting drgnx-runners-project-visibility "private"
+  "\"public\" or \"private\": a public project's job whose commit the public origin has may run on a shared runner."
+  :type '(choice (const "public") (const "private")) :group 'drgnx :scope 'project :workspace 'data
+  :on-error 'strict :agents 'never :runtime "String" :schema '(string :match "\\`\\(?:public\\|private\\)\\'"))
 
 (provide 'drgnx-agents-matrix)
 ;;; drgnx-agents-matrix.el ends here

@@ -650,7 +650,16 @@ after `drgnx-settings-live-start` get their watcher at the next sync.
   `:runtime`, `:on-error last-good`. `drgnx-agents-allow-unsandboxed` is new (nothing reads it before the sandbox
   tasks). The sandbox's `drgnx-sandbox-memory-max`, `drgnx-sandbox-secret-files` and
   `drgnx-sandbox-proxy-pinned-addresses` (`core/drgnx-settings-runtime.el`) are settings too: `:scope global`,
-  `:workspace never`, `:agents never` (design §13).
+  `:workspace never`, `:agents never` (design §13). The pins are `:runtime "ProxyPins"` (last good on a mistake): the
+  hub pins them in every session's provider proxy and container job's proxy, from `settings.el` or, when your Lisp
+  or Customize sets them, from the editor's `config/settings` (their encoder is an object NAME → address).
+- **Every runtime setting has an encoder but the matrix.** `drgnx-settings-runtime--encoders` turns each `:runtime`
+  setting's Lisp value into its runtime type's JSON, so a value only your Lisp or Customize sets reaches the hub
+  (`drgnx-settings-runtime/every-runtime-setting-but-the-matrix-has-an-encoder`). The agent limits of
+  `drgnx-agents-matrix.el` go as they are (numbers, a string) or as objects (`drgnx-agents-net-hosts`, NAME → list of
+  hosts; `drgnx-agents-container-images`, `drgnx-agents-silent-after`). `drgnx-agents-matrix` itself has none: its
+  plist would need the wire's own shape (the hub decodes settings.el's plist through huginn), so a matrix set only in
+  your Lisp or Customize does not reach the hub; set it in Settings → User (settings.el).
 - **Callers read `default-value`.** `drgnx-agents-profile`, `-profile-names`, `-default-profile`, `-mcp-names`,
   `drgnx-ai-providers` (the function), `drgnx-ai-role` and `drgnx-ai-user-role` read the global
   value, so a buffer-local value (a `.dir-locals.el`, a `setq-local`) never reaches them. Tests bind the variable with
@@ -671,7 +680,7 @@ after `drgnx-settings-live-start` get their watcher at the next sync.
 - **The old files.** `drgnx-config-define 'agents` and `'ai` stay, for the migration only (it reads the old files
   through them). `agents` and `ai` are out of `drgnx-settings-shim-areas`, so a file that stayed is no longer read.
   The project's `.drgnx/ai.eld` (`ai-project`) is unchanged until the workspace layers fold it in.
-- **Batch entry points.** A batch Emacs that loads no init (the hub, `search index`, `search mcp`/`query`, `onboard`)
+- **Batch entry points.** A batch Emacs that loads no init (the hub, `onboard`)
   calls `drgnx-settings-defaults-apply`: it applies drgnx's own entries of settings.el, so the profiles, routes,
   providers and roles are the user's there too.
 - **Tests.** `test/fixtures/runtime-settings-fixture.el`: `drgnx-test-with-runtime-settings` (the eight settings at
@@ -746,7 +755,8 @@ when it loads (`drgnx-settings-workspace-enable`, undone by `-disable`).
 - **`(drgnx-setting-for-root VAR ROOT)`**: the global value, then W1 (the old `.drgnx/{search,ai,large-files}.eld`
   through the config layer, `drgnx-settings-workspace-old-files`, ai.eld's roles through W1's filter, then `.drgnx/settings.el`'s filtered entries), then
   W2, each over the one below by its `:merge` (`replace`, `alist`, `append`, `lower-only`: the lower of two numbers,
-  anything else keeps the lower layer). `drgnx-search-config` reads `drgnx-search-{include,exclude,off}` this way.
+  anything else keeps the lower layer). `drgnx-setting-for-root` reads `drgnx-search-{include,exclude,off}` this way, and the editor sends the resolved values
+  per project to the hub.
 - **`(drgnx-settings-workspace-file ROOT &optional CREATE)`**: by root, else by `:project` through
   `drgnx-settings-workspace-project`, which returns nil until the Urdr gate (matching a moved folder by its project id
   is a post-gate row). CREATE writes `<slug>.el` (then `-2`, `-3` …) under the file's lock, with `:roots` and

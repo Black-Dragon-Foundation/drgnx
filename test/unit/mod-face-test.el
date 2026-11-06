@@ -5,6 +5,7 @@
 (load (expand-file-name "modules/ui/drgnx-face" drgnx-dir) nil t)
 (load (expand-file-name "modules/core/drgnx-basics" drgnx-dir) nil t)   ; New Untitled
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/measure-fixture" drgnx-dir) nil t)
 (defvar drgnx-untitled-p)
 
 (defvar drgnx-face-test--state nil "The temp directory that is the state directory while a test runs.")
@@ -286,6 +287,27 @@ too, no stubs — and turned off after, strictly: the state after equals the sta
     (setq major-mode 'drgnx-start-mode)
     (should (equal (drgnx-face-frame-title) "drgnx"))))
 
+(ert-deftest drgnx-face/a-redisplay-that-changes-nothing-reuses-the-frame-title ()
+  "Pattern D.  The title is formatted on every redisplay: with the same buffer, file, folder and project cache it is
+the string made last, and allocates nothing; a renamed buffer or another project makes it again."
+  (drgnx-test-compile "drgnx-face-")
+  (with-temp-buffer
+    (setq buffer-file-name "/x/proj/src/main.rs" default-directory "/x/proj/src/")
+    (setq-local drgnx-chrome--root (cons "/x/proj/src/" "/x/proj/"))
+    (let ((title (drgnx-face-frame-title)))
+      (should (equal title "main.rs — proj — drgnx"))
+      (should (eq title (drgnx-face-frame-title)))
+      (should (= 0 (drgnx-test-alloc (drgnx-face-frame-title))))
+      (setq-local drgnx-chrome--root (cons "/x/proj/src/" "/x/other/"))
+      (should (equal (drgnx-face-frame-title) "main.rs — other — drgnx"))
+      (setq buffer-file-name "/x/proj/src/lib.rs")
+      (should (equal (drgnx-face-frame-title) "lib.rs — other — drgnx"))))
+  (with-temp-buffer
+    (rename-buffer "one" t)
+    (let ((title (drgnx-face-frame-title)))
+      (rename-buffer "two" t)
+      (should-not (equal title (drgnx-face-frame-title))))))
+
 (ert-deftest drgnx-face/the-frame-title-setting-leaves-your-own-alone ()
   (let ((frame-title-format drgnx-face--stock-title))
     (drgnx-face-test--with
@@ -372,7 +394,9 @@ too, no stubs — and turned off after, strictly: the state after equals the sta
       (should (string-match-p "\\`[[:ascii:]]+\\'" (cdr g)))))
   ;; no two glyphs share an ASCII form: on a terminal that is not UTF-8 each still says which it is
   ;; (the meanings the UI kit added -- fail, stopped, dismiss, unqueue, info, warn -- may look like an older one)
-  (let ((ascii (mapcar #'cddr (seq-remove (lambda (g) (memq (car g) '(fail stopped dismiss unqueue info warn)))
+  ;; nor the glyphs of the icons (`drgnx-ui--icon-glyphs'): they stand in for a picture
+  (let ((ascii (mapcar #'cddr (seq-remove (lambda (g) (or (memq (car g) '(fail stopped dismiss unqueue info warn))
+                                                          (assq (car g) drgnx-ui--icon-glyphs)))
                                           (default-value 'drgnx-face-glyphs)))))
     (should (= (length ascii) (length (delete-dups (copy-sequence ascii))))))
   (should (equal (cdr (alist-get 'flag drgnx-face-glyphs)) "#"))
@@ -494,7 +518,8 @@ The frame is the batch one; its parameters are put back afterwards."
 (ert-deftest drgnx-face/title-follows-the-theme ()
   (drgnx-face-test--settings
     (drgnx-face-test--frame 'pgtk 'dark
-      (should (eq drgnx-face-title-bar 'dark))
+      (should (eq drgnx-face-title-bar 'auto))                       ; dark here: no Nidhogg shell
+      (should (eq 'dark (drgnx-face--title-bar (selected-frame))))
       (should (eq (drgnx-face-title-variant) 'dark))
       (set-frame-parameter nil 'background-mode 'light)
       (should (eq (drgnx-face-title-variant) 'light))

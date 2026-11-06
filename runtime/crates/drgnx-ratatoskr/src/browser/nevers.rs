@@ -1,0 +1,300 @@
+//! What the web proxies must treat as the host itself, kept live by the hub (docs/develop/hub.md, "The web proxy"):
+//! - the host's own addresses ([`HostAddrsWatch`]): every interface's, read with `getifaddrs` every 5 s; the web
+//!   policy treats each as loopback, reachable only as `host.drgnx.internal`;
+//! - the hub's own TCP endpoints on the host's loopback ([`NeverSetWatch`]): the gateway's port, every other listener
+//!   the hub registers, and an Emacs TCP server's port, read from its server file every 30 s.  No grant opens these.
+//!
+//! Every session's web proxy reads the same two sets at each request ([`Nevers`]), so a change reaches them all at
+//! once.
+
+use gleipnir::net::policy::{HostAddrs, NeverSet};
+use std::collections::BTreeSet;
+use std::io::{self, BufRead};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
+
+/// How often the interfaces are read again.
+pub const HOST_ADDRS_EVERY: Duration = Duration::from_secs(5);
+/// How often the Emacs server files are read again.
+pub const EMACS_EVERY: Duration = Duration::from_secs(30);
+
+/// The two sets every web proxy shares, and what keeps them live.
+#[derive(Clone, Default)]
+pub struct Nevers {
+    pub host_addrs: HostAddrsWatch,
+    pub never: NeverSetWatch,
+}
+
+impl Nevers {
+    /// The hub's watches, from now until the hub stops: the interfaces, and the Emacs server files in DIRS (see
+    /// [`emacs_server_dirs`]).  Call it inside a tokio runtime.
+    pub fn start(&self, dirs: Vec<PathBuf>) {
+        self.never.set_server_dirs(dirs);
+        crate::clock::spawn("browser:host-addrs", self.host_addrs.clone().run());
+        crate::clock::spawn("browser:nevers", self.never.clone().run());
+    }
+}
+
+fn read<T>(l: &RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
+    l.read().unwrap_or_else(|e| e.into_inner())
+}
+
+fn write<T>(l: &RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
+    l.write().unwrap_or_else(|e| e.into_inner())
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The host's own addresses, as the web policy reads them.
+#[derive(Clone, Default)]
+pub struct HostAddrsWatch {
+    addrs: Arc<RwLock<HostAddrs>>,
+}
+
+impl HostAddrsWatch {
+    /// The set the proxies read (`gleipnir::net::proxy::WebState::new`).
+    pub fn shared(&self) -> Arc<RwLock<HostAddrs>> {
+        self.addrs.clone()
+    }
+
+    /// Reads the interfaces once into the shared set; a failure keeps the last set (and is logged).
+    pub fn refresh(&self) {
+        match interface_addrs() {
+            Ok(a) => {
+                if *read(&self.addrs) != a {
+                    *write(&self.addrs) = a;
+                }
+            }
+            Err(e) => tracing::warn!("cannot read the host's interface addresses: {e}"),
+        }
+    }
+
+    /// [`Self::refresh`] every [`HOST_ADDRS_EVERY`], for good.
+    pub async fn run(self) {
+        loop {
+            self.refresh();
+            crate::clock::sleep(HOST_ADDRS_EVERY).await;
+        }
+    }
+}
+
+/// Every address of every interface (`getifaddrs`), up or not, loopback included.
+pub fn interface_addrs() -> io::Result<HostAddrs> {
+    let mut head = std::mem::MaybeUninit::<*mut libc::ifaddrs>::uninit();
+    // SAFETY: HEAD is valid for a write; getifaddrs writes it when it returns 0, with a list that freeifaddrs frees
+    // below; nothing of it outlives that.
+    if unsafe { libc::getifaddrs(head.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: getifaddrs returned 0, so it wrote HEAD (null for an empty list, which the loop handles).
+    let head = unsafe { head.assume_init() };
+    let mut out = BTreeSet::new();
+    let mut p = head;
+    while !p.is_null() {
+        // SAFETY: P is a node of the list getifaddrs made, alive until freeifaddrs.
+        let ifa = unsafe { &*p };
+        if !ifa.ifa_addr.is_null() {
+            // SAFETY: ifa_addr points at a sockaddr; its family says which sockaddr it is.
+            let family = i32::from(unsafe { (*ifa.ifa_addr).sa_family });
+            if family == libc::AF_INET {
+                // SAFETY: an AF_INET address is a sockaddr_in.
+                let sin = unsafe { &*ifa.ifa_addr.cast::<libc::sockaddr_in>() };
+                out.insert(IpAddr::V4(Ipv4Addr::from(u32::from_be(
+                    sin.sin_addr.s_addr,
+                ))));
+            } else if family == libc::AF_INET6 {
+                // SAFETY: an AF_INET6 address is a sockaddr_in6.
+                let sin6 = unsafe { &*ifa.ifa_addr.cast::<libc::sockaddr_in6>() };
+                out.insert(IpAddr::V6(Ipv6Addr::from(sin6.sin6_addr.s6_addr)));
+            }
+        }
+        p = ifa.ifa_next;
+    }
+    // SAFETY: HEAD came from getifaddrs and is freed once.
+    unsafe { libc::freeifaddrs(head) };
+    Ok(HostAddrs(out))
+}
+
+/// The hub's own TCP endpoints on the host's loopback.
+#[derive(Clone, Default)]
+pub struct NeverSetWatch {
+    never: Arc<RwLock<NeverSet>>,
+    /// The ports of the hub's own loopback listeners (the gateway's among them), as their code registered them.
+    held: Arc<Mutex<BTreeSet<u16>>>,
+    /// The Emacs TCP servers' ports, as last read.
+    emacs: Arc<Mutex<BTreeSet<u16>>>,
+    /// Where the Emacs server files are.
+    dirs: Arc<Mutex<Vec<PathBuf>>>,
+}
+
+impl NeverSetWatch {
+    /// The set the proxies read (`gleipnir::net::proxy::WebState::new`).
+    pub fn shared(&self) -> Arc<RwLock<NeverSet>> {
+        self.never.clone()
+    }
+
+    /// A loopback listener of the hub's on PORT, from now on (the code that binds it registers it).
+    pub fn hold(&self, port: u16) {
+        lock(&self.held).insert(port);
+        self.publish();
+    }
+
+    /// The listener on PORT is closed.
+    pub fn release(&self, port: u16) {
+        lock(&self.held).remove(&port);
+        self.publish();
+    }
+
+    /// The directories [`Self::read_emacs`] reads.
+    pub fn set_server_dirs(&self, dirs: Vec<PathBuf>) {
+        *lock(&self.dirs) = dirs;
+    }
+
+    /// Reads the Emacs server files again: the port of each that names a TCP server.
+    pub fn read_emacs(&self) {
+        let dirs = lock(&self.dirs).clone();
+        let ports: BTreeSet<u16> = dirs.iter().flat_map(|d| emacs_ports(d)).collect();
+        *lock(&self.emacs) = ports;
+        self.publish();
+    }
+
+    fn publish(&self) {
+        let loopback_ports: BTreeSet<u16> = lock(&self.held)
+            .iter()
+            .chain(lock(&self.emacs).iter())
+            .copied()
+            .collect();
+        let mut never = write(&self.never);
+        if never.loopback_ports != loopback_ports {
+            never.loopback_ports = loopback_ports;
+        }
+    }
+
+    /// [`Self::read_emacs`] every [`EMACS_EVERY`], for good.
+    pub async fn run(self) {
+        loop {
+            self.read_emacs();
+            crate::clock::sleep(EMACS_EVERY).await;
+        }
+    }
+}
+
+/// Where Emacs keeps the files of its TCP servers (`server-auth-dir`) under HOME, the hub's HOME: Emacs's default
+/// `~/.emacs.d/server/`, and `~/.config/emacs/server/` (XDG_CONFIG_HOME's when set), where it is when the init
+/// directory is there.  No drgnx setting names another directory.
+pub fn emacs_server_dirs(home: &Path, xdg_config_home: Option<&Path>) -> Vec<PathBuf> {
+    let config = xdg_config_home.map_or_else(|| home.join(".config"), Path::to_path_buf);
+    vec![
+        home.join(".emacs.d").join("server"),
+        config.join("emacs").join("server"),
+    ]
+}
+
+/// The ports the server files in DIR name.  A TCP server's file starts `HOST:PORT PID` on its first line; the line
+/// after holds its key, which is never read.  Sockets, directories and other files are passed over.
+fn emacs_ports(dir: &Path) -> Vec<u16> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .filter_map(|e| server_file_port(&e.path()))
+        .collect()
+}
+
+/// The port on the first line of the server file at PATH (at most 256 bytes of it are read).
+fn server_file_port(path: &Path) -> Option<u16> {
+    use std::io::Read;
+    let f = std::fs::File::open(path).ok()?;
+    let mut line = String::new();
+    io::BufReader::new(f.take(256)).read_line(&mut line).ok()?;
+    let line = line.strip_suffix('\n')?;
+    let (addr, pid) = line.split_once(' ')?;
+    pid.parse::<u32>().ok()?;
+    let (_, port) = addr.rsplit_once(':')?;
+    port.parse::<u16>().ok().filter(|p| *p != 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gleipnir::net::host::parse_target;
+    use gleipnir::net::policy::{Judgement, PrivateGrant, PrivateTarget, RefuseWhy, WebCtx, judge};
+
+    #[test]
+    fn gateway_and_emacs_ports_are_never() {
+        let home = tempfile::tempdir().unwrap();
+        let dirs = emacs_server_dirs(home.path(), None);
+        std::fs::create_dir_all(&dirs[0]).unwrap();
+        std::fs::create_dir_all(&dirs[1]).unwrap();
+        // a TCP server's file (its key on the second line), one in the XDG place, and files that are not servers'
+        std::fs::write(dirs[0].join("server"), "127.0.0.1:43123 4242\nSECRET-KEY").unwrap();
+        std::fs::write(dirs[1].join("work"), "127.0.0.1:43124 77\nk").unwrap();
+        std::fs::write(dirs[0].join("notes"), "no port here\n").unwrap();
+        std::fs::write(dirs[0].join("half"), "127.0.0.1:43125").unwrap();
+        std::fs::create_dir(dirs[0].join("sub")).unwrap();
+        let w = NeverSetWatch::default();
+        w.set_server_dirs(dirs.clone());
+        w.hold(4100);
+        w.read_emacs();
+        let shared = w.shared();
+        assert_eq!(
+            read(&shared).loopback_ports,
+            BTreeSet::from([4100, 43123, 43124])
+        );
+        // under a grant for the reserved name on that port, the web policy still refuses it
+        let ctx_judge = |port: u16| {
+            let t = parse_target(&format!("host.drgnx.internal:{port}")).unwrap();
+            let grants = vec![PrivateGrant {
+                target: PrivateTarget::HostPort(t.clone()),
+                expires: None,
+            }];
+            let never = read(&shared).clone();
+            let ctx = WebCtx {
+                web: true,
+                deny_hosts: &[],
+                grants: &grants,
+                now: 0.0,
+                host_addrs: &HostAddrs::default(),
+                never: &never,
+            };
+            judge(&t, &[], &ctx)
+        };
+        for port in [4100, 43123, 43124] {
+            assert_eq!(
+                ctx_judge(port),
+                Judgement::Refuse(RefuseWhy::Never),
+                "{port}"
+            );
+        }
+        assert!(matches!(ctx_judge(5173), Judgement::Connect(_)));
+        // the server ends and the gateway's listener closes: its ports are free to grant again
+        std::fs::remove_file(dirs[0].join("server")).unwrap();
+        w.release(4100);
+        w.read_emacs();
+        assert_eq!(read(&shared).loopback_ports, BTreeSet::from([43124]));
+    }
+
+    #[test]
+    fn host_addrs_include_every_interface() {
+        let a = interface_addrs().unwrap();
+        assert!(a.0.contains(&IpAddr::V4(Ipv4Addr::LOCALHOST)), "{:?}", a.0);
+        // every IPv6 address the kernel lists (/proc/net/if_inet6: 32 hex digits first on each line)
+        if let Ok(text) = std::fs::read_to_string("/proc/net/if_inet6") {
+            for line in text.lines() {
+                let hex = &line[..32];
+                let v6 = Ipv6Addr::from(u128::from_str_radix(hex, 16).unwrap());
+                assert!(a.0.contains(&IpAddr::V6(v6)), "{v6} not in {:?}", a.0);
+            }
+        }
+        // and the watch publishes them
+        let w = HostAddrsWatch::default();
+        w.refresh();
+        assert_eq!(*read(&w.shared()), a);
+    }
+}

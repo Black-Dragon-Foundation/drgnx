@@ -13,6 +13,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'drgnx-config)
 (require 'drgnx-setting)
 (require 'drgnx-settings-prov)
 (require 'drgnx-settings-workspace)
@@ -44,11 +45,49 @@ hidden in the sandbox.  npm's global config is PREFIX/etc/npmrc."
   :type '(repeat string) :group 'drgnx :scope 'global :workspace 'never :agents 'never)
 
 (drgnx-defsetting drgnx-sandbox-proxy-pinned-addresses nil
-  "Names the job proxies resolve to a fixed address instead of asking DNS: ((NAME . ADDRESS)…), ADDRESS an IPv4 or
-IPv6 literal.  A pinned name may lead to a private or loopback address (a registry on the company's network, a
+  "Names the agents' proxies resolve to a fixed address instead of asking DNS: ((NAME . ADDRESS)…), ADDRESS an IPv4
+or IPv6 literal.  A pinned name may lead to a private or loopback address (a registry on the company's network, a
 test's local upstream); a name resolved through DNS never does.  Pinning only resolves: the name must still be on the
-job's allowlist."
-  :type '(alist :key-type string :value-type string) :group 'drgnx :scope 'global :workspace 'never :agents 'never)
+allowlist.  The hub pins them in each session's provider proxy and each container job's proxy."
+  :type '(alist :key-type string :value-type string) :group 'drgnx :scope 'global :workspace 'never :agents 'never
+  :runtime "ProxyPins")
+
+(drgnx-defsetting drgnx-search-model-mirror nil
+  "Where embedding models are downloaded from: a URL laid out as the Hugging Face host, or nil for that host."
+  :type '(choice (const :tag "Hugging Face" nil) string) :group 'drgnx :scope 'global :workspace 'never
+  :on-error 'strict :agents 'never :runtime "Option<String>" :schema '(or null string))
+
+(drgnx-defsetting drgnx-search-builtin t
+  "Non-nil: the built-in embedding model indexes every project's code and your tasks and notes, whatever servers are
+running.  Nil: only a running server (TEI, Ollama) makes vectors, and with none, search is keyword and symbol only."
+  :type 'boolean :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "bool" :schema 'boolean)
+
+;; What a project's semantic search indexes: the hub (Hrafn) reads `.drgnx/search.eld' itself and takes the per-project
+;; values of these settings from the editor (`config/settings'), so a file narrows what the settings left.
+(drgnx-config-define 'search-project
+                     :dir 'project :file "search.eld"
+                     :schema '(plist (:include (list-of string)) (:exclude (list-of string)) (:off boolean))
+                     :doc "Narrows what a project's semantic search indexes: only these globs, not these, or off.")
+
+(defun drgnx-search--globs-p (x)
+  "Non-nil when X is a list of strings (globs): safe from any workspace, since it can only narrow the list."
+  (and (proper-list-p x) (cl-every #'stringp x)))
+
+(drgnx-defsetting drgnx-search-include nil
+  "Only files matching one of these globs are indexed (nil: all)."
+  :type '(repeat string) :group 'drgnx :safe #'drgnx-search--globs-p :scope 'project
+  :on-error 'strict :agents 'never :runtime "Vec<String>" :schema '(list-of string))
+
+(drgnx-defsetting drgnx-search-exclude nil
+  "Files matching one of these globs are not indexed; a workspace's are added to yours."
+  :type '(repeat string) :group 'drgnx :safe #'drgnx-search--globs-p :scope 'project :merge 'append
+  :on-error 'strict :agents 'never :runtime "Vec<String>" :schema '(list-of string))
+
+(drgnx-defsetting drgnx-search-off nil
+  "Non-nil turns a project's semantic search off."
+  :type 'boolean :group 'drgnx :safe #'booleanp :scope 'project
+  :on-error 'strict :agents 'never :runtime "bool" :schema 'boolean)
 
 ;;;; Encoding: Lisp values as the runtime types' JSON
 
@@ -96,6 +135,16 @@ job's allowlist."
          (cons :doc (plist-get p :doc))
          (cons :job_safe (and (plist-get p :job-safe) t)))))
 
+(defun drgnx-settings-runtime--price (p)
+  "A price row's plist P (:in :out :cache-read :write-5m :write-1h :as-of) as `ModelPrice' takes it."
+  (drgnx-settings-runtime--plist
+   (list (cons :in (plist-get p :in))
+         (cons :out (plist-get p :out))
+         (cons :cache_read (plist-get p :cache-read))
+         (cons :write_5m (plist-get p :write-5m))
+         (cons :write_1h (plist-get p :write-1h))
+         (cons :as_of (plist-get p :as-of)))))
+
 (defun drgnx-settings-runtime--alist (alist fn)
   "ALIST (KEY . VALUE)… as an object: KEY → (FN VALUE), in order."
   (cl-loop for (k . v) in alist append (list (drgnx-settings-runtime--key k) (funcall fn v))))
@@ -129,8 +178,45 @@ job's allowlist."
                    (cons :data_collection (drgnx-settings-runtime--str (plist-get v :data-collection)))
                    (cons :zdr (and (plist-member v :zdr) (drgnx-settings-runtime--bool (plist-get v :zdr)))))))))
     (drgnx-agents-allow-unsandboxed . drgnx-settings-runtime--bool)
-    (drgnx-agents-start-env-names . drgnx-settings-runtime--strings))
-  "Runtime setting → the function that turns its Lisp value into the JSON of its runtime type.")
+    (drgnx-search-builtin . drgnx-settings-runtime--bool)
+    (drgnx-search-include . drgnx-settings-runtime--strings)
+    (drgnx-search-exclude . drgnx-settings-runtime--strings)
+    (drgnx-search-off . drgnx-settings-runtime--bool)
+    (drgnx-agents-start-env-names . drgnx-settings-runtime--strings)
+    (drgnx-agents-trace-opens . drgnx-settings-runtime--strings)
+    ;; the agent limits (`drgnx-agents-matrix.el'); the matrix itself is read from settings.el alone
+    (drgnx-agents-away-after . identity)
+    (drgnx-agents-wait-refusals . identity)
+    (drgnx-agents-close-idle-after . identity)
+    (drgnx-agents-checkpoint-cap . identity)
+    (drgnx-agents-job-memory . identity)
+    (drgnx-agents-job-cpus . identity)
+    (drgnx-agents-net-hosts . ,(lambda (v) (drgnx-settings-runtime--alist v #'drgnx-settings-runtime--strings)))
+    (drgnx-agents-container-images . ,(lambda (v) (drgnx-settings-runtime--alist v #'identity)))
+    (drgnx-agents-silent-after . ,(lambda (v) (drgnx-settings-runtime--alist v #'identity)))
+    (drgnx-agents-repeat-limit . identity)
+    (drgnx-agents-no-progress-tokens . identity)
+    (drgnx-agents-manager-context . identity)
+    (drgnx-agents-model-prices . ,(lambda (v) (drgnx-settings-runtime--alist v #'drgnx-settings-runtime--price)))
+    ;; the agent browser and its session's memory cap
+    (drgnx-agents-browser-program . ,(lambda (v) (or v :null)))
+    (drgnx-agents-browser-local-ports . vconcat)
+    (drgnx-agents-browser-deny-hosts . vconcat)
+    (drgnx-agents-browser-max-message . identity)
+    (drgnx-agents-browser-idle . identity)
+    (drgnx-agents-browser-once-window . identity)
+    (drgnx-agents-session-memory . identity)
+    (drgnx-agents-browser-memory-high . identity)
+    ;; the runners' per-project settings (`drgnx-agents-matrix.el') and Hrafn's model mirror
+    (drgnx-runners-send . drgnx-settings-runtime--str)
+    (drgnx-runners-heavy . drgnx-settings-runtime--strings)
+    (drgnx-runners-image . ,(lambda (v) (or (drgnx-settings-runtime--str v) :null)))
+    (drgnx-runners-weight . identity)
+    (drgnx-runners-project-visibility . drgnx-settings-runtime--str)
+    (drgnx-search-model-mirror . ,(lambda (v) (or (drgnx-settings-runtime--str v) :null)))
+    (drgnx-sandbox-proxy-pinned-addresses . ,(lambda (v) (drgnx-settings-runtime--alist v #'identity))))
+  "Runtime setting → the function that turns its Lisp value into the JSON of its runtime type.  `drgnx-agents-matrix'
+has none: the hub reads its plist from settings.el alone.")
 
 (defun drgnx-settings-runtime--vars ()
   "The settings declared `:runtime' that this editor can encode."

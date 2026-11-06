@@ -1,0 +1,31 @@
+{"scenario": "system/say-it-survives-a-restart", "requires": ["v1", "test-hooks"], "doc": "Say it across a restart of the hub. A planning chat on the `say` route's profile (a route named say is read from settings.el) turns one prompt into a proposed job with its card; the hub is stopped and a second hub starts on the same root. The job is still proposed with its card open and its forecast rows, forecast/get still answers for it, say/revise on the old planning session says the planning stopped, and job/approve starts the job. Pattern C: the first hub's exit is the handshake, and the second hub's first answer is the gate; before the restart, each check reads after the event or answer that follows the fact it checks."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$ROOT/s.txt", "text": "say ```drgnx-proposal\\nsay {\"title\": \"Docs pass\", \"tasks\": [{\"n\": 1, \"title\": \"Write the docs\", \"role\": \"docs\", \"deps\": [], \"body\": \"Write the settings docs.\"}], \"budget\": [{\"amount\": 5, \"unit\": \"usd\"}]}\\nsay ```\n"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-planner\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/s.txt\" \"--log\" \"$ROOT/s.log\")) (\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/w.log\")))) (drgnx-agents-routes ((say \"mock-planner\") (implement \"mock-claude\") (docs \"mock-claude\"))))\n"}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "say/start", "params": {"text": "write the settings docs", "repo": "$ROOT/repo"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "say-proposal", "data": {"id": "$sid", "job": "$capture:job"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/list"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"sessions": [{"id": "$sid", "profile": "mock-planner", "role": "chat"}]}}, "within_ms": 5000}
+{"do": "sql_expect", "sql": "select (select status from job where id = '$job'), (select count(*) from card where job = '$job' and kind = 'proposal' and state = 'open'), (select count(*) from forecast_made where job = '$job')", "rows": [["proposed", 1, 2]]}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0, "within_ms": 15000}
+{"do": "start", "hub": "h2", "same_root_as": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "c2", "hub": "h2"}
+{"do": "send", "conn": "c2", "json": {"id": 1, "method": "job/status", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c2", "json": {"id": 1, "result": {"id": "$job", "status": "proposed"}}, "within_ms": 10000}
+{"do": "sql_expect", "sql": "select (select count(*) from card where job = '$job' and kind = 'proposal' and state = 'open'), (select count(*) from forecast_made where job = '$job')", "rows": [[1, 2]]}
+{"do": "send", "conn": "c2", "json": {"id": 2, "method": "forecast/get", "params": {"job": "$job"}}}
+{"do": "expect", "conn": "c2", "json": {"id": 2, "result": {"tasks": [{"n": 1, "role": "docs", "profile": "mock-claude"}], "prices_as_of": "2026-11-01"}}, "within_ms": 10000}
+{"do": "send", "conn": "c2", "json": {"id": 3, "method": "say/revise", "params": {"id": "$sid", "text": "and the guide"}}}
+{"do": "expect", "conn": "c2", "json": {"id": 3, "error": {"code": "$any", "message": "the planning stopped: say it again"}}, "within_ms": 5000}
+{"do": "send", "conn": "c2", "json": {"id": 4, "method": "job/approve", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c2", "json": {"id": 4, "result": {"id": "$job", "status": "running"}}, "within_ms": 10000}
+{"do": "sql_expect", "sql": "select state, choice from card where job = '$job' and kind = 'proposal'", "rows": [["settled", "approve"]]}

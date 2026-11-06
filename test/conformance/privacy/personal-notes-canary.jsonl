@@ -1,4 +1,4 @@
-{"scenario": "privacy/personal-notes-canary", "requires": ["v1"], "doc": "The personal-notes canary (Urdr Task 19; storage §5.6). Random bytes made here sit in ~/org/notes.org, ~/org/other.md and ~/org/reading.org (opted in, with notes.org: that opt-in opens nothing). A schema-6 work.db holding the first two (spec, file, link and dot-dot forms) is migrated at hub start; the editor's scan (a batch Emacs, a client of the hub; no Lisp hub or backend is involved) is given HOME and HOME/org, refuses HOME/org before reading anything in it, and reads HOME, where plans name ../../org/notes.org, a link to it, a linked folder into org and the opted-in reading.org as their specs, and the board's TODO is read; a tampered export is imported; the editor's search indexer runs on HOME (as a project holding org/) against a mock TEI and is refused a project inside org; reading.org's opt-in is revoked; the store is exported; a note whose data.path is notes.org is planted in work.db past every other door, and a tei provider is configured for the hub's entity embedder (door 4), which skips it and sends stored entities to the mock TEI after a quiet minute (no text written for a minute), and the row waits for that round. No canary is in work.db, its WAL, the code index, the export, the TEI requests or the hub log, and no file under HOME/org changed."}
+{"scenario": "privacy/personal-notes-canary", "requires": ["v1"], "doc": "The personal-notes canary (Urdr Task 19; storage §5.6). Random bytes made here sit in ~/org/notes.org, ~/org/other.md and ~/org/reading.org (opted in, with notes.org: that opt-in opens nothing). A schema-6 work.db holding the first two (spec, file, link and dot-dot forms) is migrated at hub start; the editor's scan (a batch Emacs, a client of the hub; no Lisp hub or backend is involved) is given HOME and HOME/org, refuses HOME/org before reading anything in it, and reads HOME, where plans name ../../org/notes.org, a link to it, a linked folder into org and the opted-in reading.org as their specs, and the board's TODO is read; a tampered export is imported; Hrafn's index in the hub (bin/drgnx search, the hub under test) runs on HOME (as a project holding org/): it holds the home readme and none of the three canaries, a search for each canary returns nothing of it, and a project inside org is refused; reading.org's opt-in is revoked; the store is exported; a note whose data.path is notes.org is planted in work.db past every other door, and a tei provider is configured for the hub's entity embedder (door 4), which skips it and sends stored entities to the mock TEI after a quiet minute (no text written for a minute), and the row waits for that round. No canary is in work.db, its WAL, the code index, the export, the TEI requests or the hub log, and no file under HOME/org changed."}
 {"do": "root"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "c() { od -An -N32 -tx1 /dev/urandom | tr -d ' \\n'; }; printf '{\"notes\": \"%s\", \"other\": \"%s\", \"reading\": \"%s\"}' \"$(c)\" \"$(c)\" \"$(c)\" > $ROOT/canary.json"], "expect_code": 0}
 {"do": "capture_file", "path": "$ROOT/canary.json", "capture": "notes", "json_path": "notes"}
@@ -28,7 +28,7 @@
 {"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
 {"do": "expect", "conn": "e", "json": {"id": 1, "result": "$any"}}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "status"}}
-{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"schema": 8, "store": {"schema": 8, "writer": "ready"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"schema": 11, "store": {"schema": 11, "writer": "ready"}}}}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "graph/privacy", "params": {"reload": true}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"excised": 0}}}
 {"do": "sql_expect", "sql": "select count(*) from entity where id = 'plan:$HOME/proj/plans/old.md'", "rows": [[1]]}
@@ -41,10 +41,15 @@
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "graph/import", "params": {"dir": "$ROOT/tampered"}}}
 {"do": "expect", "conn": "c", "json": {"id": 3, "result": {"entities": 1, "skipped": 4}}}
 {"do": "sql_expect", "sql": "select count(*) from entity where id = 'note:plain'", "rows": [[1]]}
-{"do": "run", "bin": "/bin/sh", "args": ["-c", "$SCENARIOS/../../bin/drgnx search index $HOME"], "expect_code": 0, "expect_stdout": "search index: added 2"}
-{"do": "file", "path": "$ROOT/tei.log", "contains": "marker-readme-19c", "within_ms": 10000}
-{"do": "file", "path": "$ROOT/tei.log", "contains": "marker-board-19c"}
-{"do": "run", "bin": "/bin/sh", "args": ["-c", "$SCENARIOS/../../bin/drgnx search index $HOME/org/proj"], "expect_code": 1, "expect_stdout": "the search index never reads ~/org (personal notes)"}
+{"do": "install_bin", "to": "$ROOT/bin/ratatoskr"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "DRGNX_RATATOSKR_BIN=$ROOT/bin/ratatoskr $SCENARIOS/../../bin/drgnx search index $HOME"], "expect_code": 0, "expect_stdout": "\"started\""}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "DRGNX_RATATOSKR_BIN=$ROOT/bin/ratatoskr $SCENARIOS/../../bin/drgnx search query $HOME the home project --scope all"], "expect_code": 0, "expect_stdout": "readme.md", "retry_ms": 30000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "for q in notes other reading org; do out=$(DRGNX_RATATOSKR_BIN=$ROOT/bin/ratatoskr $SCENARIOS/../../bin/drgnx search query $HOME $q --scope all) || exit 2; case \"$out\" in *$notes*|*$other*|*$reading*|*org/*) echo \"a search for $q returned personal notes: $out\"; exit 1;; esac; done"], "expect_code": 0}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "grep -rq marker-readme-19c $STATE/code"], "expect_code": 0}
+{"do": "file_grep", "paths": ["$STATE/code/*"], "absent": "$notes"}
+{"do": "file_grep", "paths": ["$STATE/code/*"], "absent": "$other"}
+{"do": "file_grep", "paths": ["$STATE/code/*"], "absent": "$reading"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "DRGNX_RATATOSKR_BIN=$ROOT/bin/ratatoskr $SCENARIOS/../../bin/drgnx search index $HOME/org/proj"], "expect_code": 1, "expect_stderr": "the project root is refused"}
 {"do": "write_file", "path": "$CONFIG/personal-notes-allow.json", "json": {"version": 1, "paths": []}, "mode": "0600"}
 {"do": "expect", "conn": "e", "json": {"event": "notice", "data": {"id": "privacy-opt-ins", "text": "$string"}}, "within_ms": 10000}
 {"do": "sql_expect", "sql": "select (select count(*) from entity where instr(id || coalesce(title, '') || data, '$reading') > 0) + (select count(*) from entity_hist where instr(coalesce(title, '') || coalesce(data, ''), '$reading') > 0)", "rows": [[0]]}
@@ -56,7 +61,7 @@
 {"do":"expect","conn":"c","json":{"id":5,"result":{"applied":1}}}
 {"do": "file", "path": "$ROOT/tei.log", "contains": "a plain imported note", "within_ms": 120000}
 {"do": "file_grep", "paths": ["$ROOT/tei.log"], "absent": "marker-denied-19c"}
-{"do": "file_grep", "paths": ["$DATA/work.db", "$DATA/work.db-*", "$STATE/search/*", "$ROOT/export/**", "$ROOT/tei.log", "$STATE/hub/log/*"], "absent": "$notes"}
-{"do": "file_grep", "paths": ["$DATA/work.db", "$DATA/work.db-*", "$STATE/search/*", "$ROOT/export/**", "$ROOT/tei.log", "$STATE/hub/log/*"], "absent": "$other"}
-{"do": "file_grep", "paths": ["$DATA/work.db", "$DATA/work.db-*", "$STATE/search/*", "$ROOT/export/**", "$ROOT/tei.log", "$STATE/hub/log/*"], "absent": "$reading"}
+{"do": "file_grep", "paths": ["$DATA/work.db", "$DATA/work.db-*", "$STATE/search/*", "$STATE/code/*", "$ROOT/export/**", "$ROOT/tei.log", "$STATE/hub/log/*"], "absent": "$notes"}
+{"do": "file_grep", "paths": ["$DATA/work.db", "$DATA/work.db-*", "$STATE/search/*", "$STATE/code/*", "$ROOT/export/**", "$ROOT/tei.log", "$STATE/hub/log/*"], "absent": "$other"}
+{"do": "file_grep", "paths": ["$DATA/work.db", "$DATA/work.db-*", "$STATE/search/*", "$STATE/code/*", "$ROOT/export/**", "$ROOT/tei.log", "$STATE/hub/log/*"], "absent": "$reading"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "set -e; cd $HOME/org; find . -path ./proj/.git -prune -o -print | LC_ALL=C sort | xargs sh -c 'if stat -c %a . >/dev/null 2>&1; then stat -c \"%n %s %Y %a\" \"$@\"; else stat -f \"%N %z %m %Lp\" \"$@\"; fi' sh > $ROOT/org.after; find . -path ./proj/.git -prune -o -type f -print | LC_ALL=C sort | xargs sh -c 'if command -v sha256sum >/dev/null; then sha256sum \"$@\"; else shasum -a 256 \"$@\"; fi' sh >> $ROOT/org.after; cmp $ROOT/org.before $ROOT/org.after"], "expect_code": 0}

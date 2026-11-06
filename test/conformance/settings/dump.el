@@ -24,6 +24,7 @@
 (require 'drgnx-ai)
 (require 'drgnx-agents)
 (require 'drgnx-hub-client)
+(require 'drgnx-settings-runtime)       ; the sandbox's settings, `drgnx-sandbox-proxy-pinned-addresses' among them
 (load (expand-file-name "test/fixtures/huginn/gen.el" drgnx-dir) nil t)
 
 (defconst drgnx-settings-dump-dir (file-name-directory (or load-file-name buffer-file-name))

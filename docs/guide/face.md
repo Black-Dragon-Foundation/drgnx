@@ -23,8 +23,8 @@ Put your choices in `config.el` ([modules.md](modules.md#your-own-code-configel)
 | `drgnx-face-dividers` | `t` | A thin line between windows, in the theme's colours. In a terminal the border is the terminal's own, drawn in the same colour. Turning it off turns `window-divider-mode` off only if drgnx turned it on; yours stays. |
 | `drgnx-face-divider-width` | `1` | The line's width in pixels (graphical frames). |
 | `drgnx-face-line-wrap` | `word` | What a line longer than its window does: `word` wraps it at a space onto the next row (never in the middle of a word, and in narrow windows too, where Emacs would cut the line below 50 columns), `truncate` keeps one row and lets the rest run off the edge, `nil` leaves Emacs's own setting. **Toggle Word Wrap** (palette, View menu) flips one buffer. Buffers that set their own (the Explorer, tables, the work graph) keep it. |
-| `drgnx-face-frame-title` | `t` | The window's title is `FILE — PROJECT — drgnx` (the file's name, else the buffer's; no project: `FILE — drgnx`; the start page: `drgnx`), in the taskbar, the window list and the title bar when the system draws it. A `frame-title-format` of your own is left alone. |
-| `drgnx-face-line-spacing` | `nil` | Extra pixels between lines; `2` or `3` reads calmer. `nil` leaves Emacs's (or your own `line-spacing`) alone. |
+| `drgnx-face-frame-title` | `t` | The window's title is `FILE — PROJECT — drgnx` (the file's name, else the buffer's; no project: `FILE — drgnx`; the start page: `drgnx`), in the taskbar, the window list and the title bar when the system draws it. It is made again only when the buffer, its file, name, folder, project or mode changes (every redisplay reads it). A `frame-title-format` of your own is left alone. |
+| `drgnx-face-line-spacing` | `nil` | Obsolete: with `ui/look` the code line is the `:line-height` of the code font role or the [density](look.md#density). Extra pixels between lines; `2` or `3` reads calmer. `nil` leaves Emacs's (or your own `line-spacing`) alone; set, it still wins over the density. |
 
 The menu bar and the scroll bar are off from the very first moment (no light bar flashes up before the theme
 loads): `init/early-init.el` starts the frame without them (on a Mac the menu bar is the system's and is left alone),
@@ -42,8 +42,14 @@ the dark bar, a light theme for the light one, so changing the theme in Preferen
 
 | Setting | Default | What it does |
 |---|---|---|
-| `drgnx-face-title-bar` | `dark` | `dark`: the system's title bar in the variant of your theme. `system`: drgnx leaves the title bar alone. `drgnx`: drgnx draws the title bar itself (see below). |
+| `drgnx-face-title-bar` | `auto` | `auto`: `drgnx` where the desktop suits it, else `dark` (below). `dark`: the system's title bar in the variant of your theme. `system`: drgnx leaves the title bar alone. `drgnx`: drgnx draws the title bar itself (see below). |
 | `drgnx-face-gtk-theme` | `"Adwaita"` | The GTK theme whose dark (or light) variant the bar uses: GTK is started with `GTK_THEME=Adwaita:dark`. Give the name of a GTK theme you have installed, without a variant: drgnx adds `:dark` or `:light`. Letters, digits and `. _ + -` only. |
+
+`auto` is what `drgnx-face-title-bar-default` answers for each window: `drgnx` under GNOME's window manager when
+Nidhogg's shell can keep an undecorated frame's resize margins, rounded corners and shadow
+(`nhwl-toplevel-chrome-p`), else `dark`; never under a tiling window manager. A window whose title bar drgnx draws on
+Nidhogg's shell gets corners of radius 12 and the popups' shadow of the theme's variant (none in High Contrast), the
+frame parameter `toplevel-chrome`.
 
 What happens depends on where drgnx runs:
 
@@ -95,6 +101,14 @@ The number column is as wide as the file needs when it opens; it never narrows, 
 another digit, so the text does not shift sideways while you type. **Toggle Line Numbers** (palette, View menu) still
 turns them off in one buffer.
 
+### The editor
+
+A code buffer (the buffers that show line numbers) has a two-pixel bar cursor, and its current line is marked across the
+full width of the window. A cursor a mode chose, such as Vim's box in normal state, stays. The blame hint at the end of
+a line (`extra/blame`) is italic, in the subtle text colour and the caption font, after a gap of 24 logical pixels. An
+inlay hint from the language server (`eglot-inlay-hint-face`) takes the same caption font and subtle colour, on the
+quiet selection colour.
+
 ## Glyphs
 
 drgnx draws a few symbols (a drag handle, a close mark, a branch sign, warnings, checks, busy and waiting marks,
@@ -110,6 +124,10 @@ drawn title bar) uses the one `close` glyph, `×`, which every monospace font ha
 
 The table is in Customize's group `drgnx` (not `drgnx-face`), because it is part of the core. A table you saved
 before drgnx added a glyph still works: a glyph missing from it is drawn as the standard one.
+
+Every [Lucide icon](look.md#icons) has a glyph of the same name in the table (`file-code`, `chevron-right`,
+`git-branch`, `circle-check`, ...): it is what a terminal frame, or the setting `drgnx-look-icons` set to `glyphs`,
+shows in the icon's place. They are not in the table below.
 
 | Name | Unicode | ASCII | Name | Unicode | ASCII |
 |---|---|---|---|---|---|
@@ -140,7 +158,10 @@ For code: `(drgnx-face-glyph 'close)` is the string for the selected frame, `(dr
 
 In place of Emacs's raw mode line (`-:@--- file All L5 Git-main (YAML)`) each editor window ends in a quiet bar:
 what you need at a glance, nothing that shouts. It is built from **segments**. Turn it off and on with **Toggle
-Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
+Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch. While it is on, the mode line's own faces
+(`mode-line-active`, `mode-line-inactive`) inherit the caption type face, which the bar's text is in, so Emacs merges no
+other font into each piece of the bar; a buffer that keeps its own mode line shows it in that face too. They do so only
+while the caption's height is absolute, as ui/look writes it: a relative one (ui/look off) would apply twice to the bar.
 
 | Left | Shows | Click |
 |---|---|---|
@@ -152,7 +173,9 @@ Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
 | `agents` | `◎ 1 busy` (the Agents module's: gone when it is off) | the Agents tab |
 | `needs-you` | `◐ 2 waiting on you` (in the needs-you colour): the one count of everything that waits for you | the newest item's own command when every item comes from one source, else the Notices list |
 | `drgnx` | `✕ 1`, `⚠ 2` or `✕ 1 ⚠ 2`: drgnx's own failed and warned conditions (a module that did not start …) | the Notices list |
+| `toasts` | `+2`: the notices that wait for a place while three toasts show (notices.md, "Toasts") | the Notices list |
 | `modal` | the modal-editing state (`NORMAL`, `INSERT` …), when that module is loaded | |
+| `mode` | the buffer's `mode-name`: the bar of Magit, Help and the other read-only buffers (`drgnx-statusbar-other`) | |
 | `misc` | what stock Emacs shows beside the file: evil's state tag (`<N>`, when evil runs without drgnx's `editor/evil` module; with it, `modal` shows the state), the last key and command of **Show Keys As I Type** (keycast), a keyboard macro being recorded (`● Rec`), `Narrowed`, `Remote: host`, the buffer's process (`:run`), the function point is in (`which-function-mode`), and what other packages add to `mode-line-misc-info` and `global-mode-string` (the clock, a battery, other modules' marks) without the job badge | |
 
 | Right | Shows | Click |
@@ -164,11 +187,31 @@ Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
 | `eol` | `LF`, `CRLF` or `CR` | change it |
 | `language` | the language as VS Code names it: `Rust`, `Go`, `YAML`, `Python`, `Emacs Lisp`, `Shell Script`, `Plain Text` (`drgnx-statusbar-language-names`, else the mode's own name) | **Change Language Mode**: pick another major mode for the buffer |
 
+**Pixels, not columns.** On a graphical frame the bar is laid out in pixels, in the caption type face: it is
+`panel-padding` wide at each end (12 logical pixels at the comfortable density), the right-hand segments end one
+padding from the window's edge whatever the font, and when the window is too narrow the segments of
+`drgnx-statusbar-drop-order` go by the pixels they take. A terminal frame still counts columns. The bar measures only
+when something it shows changes: zooming with `global-text-scale-adjust`, a scale change (the display's scale), another
+density and a change of a font role each lay it out again, so the right edge never goes stale. `drgnx-look-pixel-width`
+is the function that measures a string in a face.
+
+**The look.** The bar is set in the caption type face (`drgnx-ui-caption`, through the face `drgnx-statusbar`) on the
+`gap` surface, which is the themes' mode line, and it is `status-bar` high (24 logical pixels at the comfortable
+density, 22 compact, 28 roomy) at any scale. Each segment is a target that lights with `drgnx-hover` under the pointer.
+On a graphical frame the marks are line icons: `git-branch` before the branch, `circle-x` and `triangle-alert` with the
+error and warning counts (in `drgnx-status-fail` and `drgnx-status-warn`; a zero is dimmed), `circle-check` or
+`circle-x` before the tests. A terminal keeps the glyphs. Only the `needs-you` segment is in the attention colour
+(`drgnx-status-attention`, through `drgnx-statusbar-waiting`); the others use the ok, warn and fail faces.
+
+Windows that are not editors get the bar too: a buffer in a mode derived from one of `drgnx-statusbar-other-modes`
+(`special-mode`: Magit, Help, `*Messages*`) shows the segments of `drgnx-statusbar-other` (`mode`, the buffer's
+`mode-name`, then `misc`) on the left and no line and column.
+
 The most recently used editor window shows the whole bar; the other editor groups show `drgnx-statusbar-compact`
 (position and language). The bar is for the buffers you edit: a buffer that visits a file, an editor made with
 **New Untitled** (in whatever language you give it), or a buffer that is code, text or configuration
 (`drgnx-statusbar-modes`: `prog-mode`, `text-mode`, `conf-mode` and what derives from them). The start page gets a
-quiet bar: only the left side (`drgnx-statusbar-quiet`: `folder` — the Explorer's folder, or `No folder open` — branch, agents, jobs, `needs-you`, `drgnx`, tests and `misc`), no line and column,
+quiet bar: only the left side (`drgnx-statusbar-quiet`: `folder` — the Explorer's folder, or `No folder open` — branch, agents, jobs, `needs-you`, `drgnx`, `toasts`, tests and `misc`), no line and column,
 for the modes in `drgnx-statusbar-quiet-modes`. Every other buffer (Magit, Dired, help, Info, a shell, compilation,
 drgnx's own panes) keeps its own mode line, and a buffer whose own `mode-line-format` is nil keeps none. In a narrow window the bar never wraps: segments go in the order of
 `drgnx-statusbar-drop-order` (line endings first), and the branch is cut with an ellipsis, never dropped (in a column or
@@ -238,9 +281,9 @@ and a segment of your own that has not called `(drgnx-statusbar-refresh t)`.
 
 | Setting | Default | What it does |
 |---|---|---|
-| `drgnx-statusbar-left` | `(branch trust problems tests jobs agents needs-you drgnx modal misc)` | segments on the left, in order |
+| `drgnx-statusbar-left` | `(branch trust problems tests jobs agents needs-you drgnx toasts modal misc)` | segments on the left, in order |
 | `drgnx-statusbar-right` | `(lsp position indent encoding eol language)` | segments on the right, in order |
-| `drgnx-statusbar-drop-order` | `(eol indent encoding lsp language misc tests jobs drgnx trust)` | dropped first to last when the window is narrow; `needs-you` is never dropped |
+| `drgnx-statusbar-drop-order` | `(eol indent encoding lsp language misc tests jobs toasts drgnx trust)` | dropped first to last when the window is narrow; `needs-you` is never dropped |
 | `drgnx-statusbar-compact` | `(position language)` | what the other editor groups show |
 | `drgnx-statusbar-place` | `editors` | `editors`; `frame` (one bar across the frame) arrives with the grid |
 | `drgnx-statusbar-indent-vars` | the common indent offsets | the variables `indent` reads, first bound one wins |
@@ -287,7 +330,13 @@ A quiet line along the top of the frame says where you are and where to start:
 
 On the left, the project and branch of the editor you used last (the folder of the project's root, and the same
 branch the status bar shows, so a new file git does not track yet has it too; with no project it says `drgnx`, with
-no git it leaves the branch out).
+no git it leaves the branch out). The branch is a chip of its own on a graphical frame. The search box before the keys
+opens the command palette. At the right end, before the window controls, two chips show while they have something to
+say: `1 needs you` (the count of everything that waits on you; a click opens it) and the agents at work (`N agents`;
+the agents module tells the row how many through `drgnx-topline-agents-function`).
+
+A double click on the row's empty part maximises the window or restores it (**Maximize or Restore Window**,
+`title-row-maximize`, in the palette too).
 In the middle, the three keys that open everything, as the profile you chose has them: **Quick Open** (files),
 the **Command Palette** (commands) and **Keyboard Shortcuts** (all keys). Each one is a button: click `C-S-p
 commands` and the palette opens. A command with no key of its own in your profile shows the key Emacs gives it
@@ -298,6 +347,9 @@ too narrow for the hint, the hint goes first and the place is cut with an ellips
 When drgnx draws the window's title itself (`drgnx-face-title-bar` set to `drgnx`: [the title bar](#the-title-bar))
 the right end has `– ▢ ×` (minimise, maximise, close) and the empty part of the line moves the window when you drag
 it. With the system's own title bar (the default) those buttons would be a second set, so they are not there.
+
+On a graphical frame the line is laid out in pixels too: the hint is centred on the frame to the pixel, and the window
+controls sit at the right edge, whatever the font and the zoom. A new width, a zoom or a font change lays it out again.
 
 The line is Emacs's tab bar with no tabs, since drgnx has no workspaces. It only reads what is already known: the
 branch from drgnx's git cache, as the status bar reads it (until the cache has read the repository, the file's
@@ -383,9 +435,10 @@ value; Open Help has the full story.
 
 An empty editor tells you nothing, so drgnx fills it. **`*drgnx start*`** says what drgnx is in two lines, shows the
 three keys that open everything (the files, the commands, all keys — the same ones the top line shows, from the
-active profile: `C-p`, `C-S-p` and `C-k C-r` in VS Code's) and has four buttons: **Open a Folder…**, **Open the Work
-Graph**, **All Keys** and **Don't show this again**. `Tab` and `Shift-Tab` move between the buttons, `Return` presses
-one. A button whose command is not there (its module is off) is left out. The block is centred in the window, whatever its width (a window narrower than the block shows it from the left
+active profile: `C-p`, `C-S-p` and `C-k C-r` in VS Code's) and has four buttons: **Open a folder…**, **Open the work
+graph**, **All keys** and **Don't show this again**. The page is set in the look's type faces: the name in the title
+face (`drgnx-ui-title`), the keys in the heading face, the sentences in the UI text face, muted; the labels are in
+sentence case. `Tab` and `Shift-Tab` move between the buttons, `Return` presses one. A button whose command is not there (its module is off) is left out. The block is centred in the window, whatever its width (a window narrower than the block shows it from the left
 edge), with plain bullets before the keys. In a graphical window that shows JPEG images, the Black Dragon logo (the
 dragon, wings spread) sits above the name, on the block's left edge like every line under it: nine lines of your
 default font tall (so it grows with the font and the display's scaling), lower when a narrow window would otherwise
@@ -417,3 +470,27 @@ styles `window-divider` itself keeps its choice, and every colour you see comes 
 `drgnx-start-title` (inherits `bold`), `drgnx-start-key` (inherits `bold`) and `drgnx-start-quiet` (inherits `shadow`).
 The × of the panes, popups and dock sections is `drgnx-ui-close` (inherits `shadow`; `drgnx-wb-close`, its old
 name, is the same face). The UI kit's buttons are `drgnx-ui-button` (inherits `button`).
+
+### Faces for theme authors
+
+drgnx's chrome reads these semantic faces (group `drgnx-look`) and no colours. A theme that does not know them gets
+the defaults below, which inherit standard faces, so any Emacs theme works; a theme that styles them gets exactly the
+look it describes.
+
+| Face | Default inherits | Used for |
+|---|---|---|
+| `drgnx-surface-gap`, `-panel`, `-raised`, `-overlay` | `default` | the gap and bars, side panels, raised things (chips, the current tab), popups |
+| `drgnx-text-muted`, `-subtle`, `-disabled` | `shadow` | secondary, tertiary and unavailable text |
+| `drgnx-border`, `drgnx-border-strong` | `window-divider`, `vertical-border` | a card's hairline, an input's or popup's ring |
+| `drgnx-accent` | `link` (no underline) | the focus and the current thing |
+| `drgnx-hover` | `highlight` | a hovered row; its box has the widths of the focus ring |
+| `drgnx-selected`, `drgnx-selected-quiet` | `region`, `drgnx-surface-raised` | the selection, and the selection without the focus |
+| `drgnx-focus` | none (a box) | the keyboard focus ring; the theme sets its colour |
+| `drgnx-status-attention` | `error` | something waits for you (`drgnx-status-needs-you` inherits it) |
+| `drgnx-agent-1` to `drgnx-agent-6` | `default` | the agents' colours |
+| `drgnx-control-hidden`, `drgnx-hover-row` | `shadow`, `drgnx-hover` | a row's × or ⋯ while it is not hovered (its foreground is the row's background; on a terminal, where the control is never hidden, a theme derive colours keeps it `shadow`), and the `mouse-face` of the row that reveals it |
+
+A row with a hidden control puts `mouse-face` `drgnx-hover-row` on the whole row and draws the control with
+`drgnx-look-hover-control`; the selected row, a row with the keyboard focus and terminal frames always show it. Pass
+the row's frame as its third argument when you know it (a tab line does): the frame decides, not the selected one, so
+a terminal frame's tabs keep their × while a graphical frame of the same daemon is in use.

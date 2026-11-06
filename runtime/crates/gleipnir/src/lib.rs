@@ -11,6 +11,8 @@
 //!   prepares a run; [`inner`], [`landlock`], [`seccomp`]: the Linux layers. Every `cfg(target_os)` sits inside
 //!   these module files, never here.
 //! - [`check`]: whether the sandbox can start here, and the fix when it cannot.
+//! - [`trace`]: seeing the files a shell step opens (a seccomp user-notification listener that only records), the
+//!   `gleipnir-trace` wrapper and the hand-off of its fd to a supervisor outside.
 
 pub mod backend;
 pub mod bwrap;
@@ -22,6 +24,7 @@ pub mod sbpl;
 pub mod seccomp;
 pub mod spec;
 pub mod toolchain;
+pub mod trace;
 pub mod validate;
 
 // What a caller needs to run something in the sandbox (docs/develop/gleipnir.md, "Using it").
@@ -30,11 +33,12 @@ pub use backend::TestHooks;
 pub use backend::{BackendKind, Invocation, Prepared, Sandbox};
 pub use bwrap::InnerCommand;
 pub use inner::{LayersReport, read_status};
-pub use landlock::Tier;
+pub use landlock::{BrowserInputs, Tier, browser_plan};
 pub use validate::{Context, Refusal, Rule, validate};
 
 pub use spec::{
-    BASE_ENV_DENY, Bind, HELPER_INSIDE, LANDLOCK_ABI_MAX, LANDLOCK_FLOOR_FULL,
-    LANDLOCK_FLOOR_REDUCED, LANDLOCK_FLOOR_SHARED_NET, Layers, Mode, Net, RESERVED_DESTS,
-    RelayPort, SECRET_DIRS, SECRET_DIRS_MACOS, SYSTEM_CLOSED, Spec, Target, ValidSpec,
+    BASE_ENV_DENY, BROWSER_DIR_FULL, Bind, HELPER_INSIDE, LANDLOCK_ABI_MAX, LANDLOCK_FLOOR_BROWSER,
+    LANDLOCK_FLOOR_FULL, LANDLOCK_FLOOR_REDUCED, LANDLOCK_FLOOR_SHARED_NET, Layers, Mode, Net,
+    RESERVED_DESTS, RelayPort, SECRET_DIRS, SECRET_DIRS_MACOS, SYSTEM_CLOSED, Spec, SpecBrowser,
+    TRACE_INSIDE, Target, Trace, ValidSpec,
 };

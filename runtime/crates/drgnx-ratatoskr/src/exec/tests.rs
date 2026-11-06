@@ -19,6 +19,7 @@ fn spec(starter: Starter, cwd: &Path, script: &str, timebox: Duration) -> ExecSp
         kind: CheckKind::Other,
         container: None,
         user: UserJob::default(),
+        place: Placement::default(),
     }
 }
 
@@ -248,6 +249,8 @@ fn a_job_whose_process_is_gone_is_lost() {
         image: None,
         name: None,
         queued: false,
+        machine: None,
+        priority: None,
     };
     std::fs::write(dir.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -265,13 +268,24 @@ fn start_params(machine: Option<&str>) -> StartParams {
     .unwrap()
 }
 
-#[test]
-fn exec_remote_machine_refused() {
-    assert!(check_machine(&start_params(None)).is_ok());
-    assert!(check_machine(&start_params(Some("local"))).is_ok());
-    let e = check_machine(&start_params(Some("desktop"))).unwrap_err();
+/// [D] `machine`: none or `auto`, `local`, or a runner the hub knows; any other name is refused before anything starts.
+#[tokio::test]
+async fn a_machine_the_hub_does_not_know_is_refused() {
+    let d = tempfile::tempdir().unwrap();
+    let r = open(d.path());
+    let q = &r.inner.get().unwrap().queue;
+    assert_eq!(machine(&start_params(None), q).unwrap(), Machine::Auto);
+    assert_eq!(
+        machine(&start_params(Some("auto")), q).unwrap(),
+        Machine::Auto
+    );
+    assert_eq!(
+        machine(&start_params(Some("local")), q).unwrap(),
+        Machine::Local
+    );
+    let e = machine(&start_params(Some("desktop")), q).unwrap_err();
     assert_eq!(e.code, ErrorCode::InvalidParams);
-    assert!(e.message.contains("this machine only"));
+    assert!(e.message.contains("no runner desktop"), "{}", e.message);
 }
 
 fn params(extra: serde_json::Value) -> StartParams {
@@ -380,6 +394,8 @@ fn a_job_without_a_time_box_has_no_deadline() {
         image: None,
         name: None,
         queued: false,
+        machine: None,
+        priority: None,
     };
     // the timer path has nothing to wait for
     assert_eq!(meta.time_left(), None);
@@ -632,10 +648,12 @@ fn container_spec(cwd: &Path) -> ExecSpec {
                 pids: container::PIDS,
                 proxy: None,
                 net_hosts: vec![],
+                pins: vec![],
             },
             net: None,
         }),
         user: UserJob::default(),
+        place: Placement::default(),
     }
 }
 
@@ -723,12 +741,12 @@ async fn a_container_job_runs_the_fixed_podman_line() {
 }
 
 /// A runner whose sessions' jobs run unsandboxed (as the conformance lane's do).
-fn plain(root: &Path, slots: usize) -> Runner {
+fn plain(root: &Path, slots: u32) -> Runner {
     let r = Runner::default();
     r.open(
         root.join("exec"),
         Hooks {
-            slots,
+            admission: crate::runners::local::Admission::Fixed(slots),
             plain_sessions: true,
             ..hooks()
         },
@@ -865,7 +883,8 @@ fn a_container_job_in_a_subfolder_mounts_the_worktree() {
         worktree: "/work/tree".into(),
         subdir: "crates/x".into(),
         job: "x1a".into(),
-        net: None,
+        net: false,
+        runner: None,
     };
     let caps = container::Caps {
         images: vec![crate::settings::ContainerImage {
@@ -877,6 +896,7 @@ fn a_container_job_in_a_subfolder_mounts_the_worktree() {
         pids: container::PIDS,
         proxy: None,
         net_hosts: vec![],
+        pins: vec![],
     };
     let a: Vec<String> = container::argv(&req, &caps)
         .unwrap()
@@ -973,6 +993,8 @@ async fn a_queued_job_can_be_stopped_and_survives_a_restart() {
         image: None,
         name: None,
         queued: true,
+        machine: None,
+        priority: None,
     };
     std::fs::write(dir.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
     let pending = Pending::of(&spec(
@@ -990,6 +1012,103 @@ async fn a_queued_job_can_be_stopped_and_survives_a_restart() {
     let row = ended(&next, "xwaiting").await;
     assert_eq!(row.status, ExecStatus::Done);
     assert_eq!(row.summary.unwrap().lines, vec!["late".to_string()]);
+}
+
+/// [D] (files and a store): a queued job an older hub left as `pending.json` is read into `rq_job` once, its file
+/// then gone, and a second open (the next hub) reads nothing twice. No slot here (fixed 0), so it stays queued.
+#[tokio::test]
+async fn a_queued_pending_json_is_read_once() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().join("exec/xolder");
+    std::fs::create_dir_all(&dir).unwrap();
+    let now = now();
+    let meta = Meta {
+        id: "xolder".into(),
+        session: Some("S1".into()),
+        kind: "other".into(),
+        argv: vec!["echo".into(), "older".into()],
+        cwd: d.path().display().to_string(),
+        started: now,
+        timebox_s: Some(30),
+        deadline: Some(now + 30.0),
+        unit: None,
+        pid: None,
+        start_time: None,
+        entity: None,
+        image: None,
+        name: None,
+        queued: true,
+        machine: None,
+        priority: None,
+    };
+    std::fs::write(dir.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
+    let pending = Pending::of(&agents(d.path(), "echo older"));
+    std::fs::write(
+        dir.join("pending.json"),
+        serde_json::to_vec(&pending).unwrap(),
+    )
+    .unwrap();
+    let (_store, db) = crate::runtime_db::open(d.path()).unwrap();
+    let rows = || {
+        let db = db.clone();
+        async move {
+            db.read(|c| {
+                let mut st = c.prepare("select id, own, state, spec from rq_job")?;
+                let rows = st
+                    .query_map([], |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, i64>(1)?,
+                            r.get::<_, String>(2)?,
+                            r.get::<_, String>(3)?,
+                        ))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .await
+            .unwrap()
+        }
+    };
+    let opened = |db: urdr::Handle| {
+        let r = Runner::default();
+        r.open(
+            d.path().join("exec"),
+            Hooks {
+                runtime: Some(db),
+                admission: crate::runners::local::Admission::Fixed(0),
+                plain_sessions: true,
+                ..hooks()
+            },
+        );
+        r
+    };
+    let first = opened(db.clone());
+    let got = skuld::wait_until_async("the pending job in rq_job", 30, || {
+        let rows = rows();
+        async move { Some(rows.await).filter(|r| !r.is_empty()) }
+    })
+    .await;
+    assert_eq!(got.len(), 1, "{got:?}");
+    let (id, own, state, spec) = &got[0];
+    assert_eq!((id.as_str(), *own, state.as_str()), ("xolder", 3, "queued"));
+    assert!(spec.contains("echo older"), "{spec}");
+    skuld::wait_until_async("pending.json to go", 30, || {
+        std::future::ready((!dir.join("pending.json").exists()).then_some(()))
+    })
+    .await;
+    assert_eq!(first.get("xolder").unwrap().status, ExecStatus::Queued);
+    drop(first);
+    let second = opened(db.clone());
+    // its queue holds it again (from rq_job: the file is gone), and says why it waits
+    let row = skuld::wait_until_async("the next hub's queue to hold it", 30, || {
+        std::future::ready(second.get("xolder").filter(|r| r.waiting.is_some()))
+    })
+    .await;
+    assert_eq!(row.status, ExecStatus::Queued);
+    assert_eq!(row.priority, Some(3));
+    assert_eq!(rows().await.len(), 1);
+    drop(second);
 }
 
 /// S7: finished job folders past the retention are removed (the newest kept, a fresh one never), running ones stay.

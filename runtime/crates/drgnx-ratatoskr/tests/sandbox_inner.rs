@@ -4,7 +4,7 @@
 // Linux only: the inner helper is Linux only (Android: no backend; apps get no user namespaces; fails closed).
 #![cfg(target_os = "linux")]
 
-use gleipnir::inner::{self, InnerSpec, LayersReport, RelayPlan};
+use gleipnir::inner::{self, BrowserPlan, InnerSpec, LayersReport, RelayPlan};
 use gleipnir::landlock::{self, LandlockPlan, Tier};
 use gleipnir::validate::{Refusal, Rule};
 use std::io::{self, Read};
@@ -66,6 +66,8 @@ struct Opts {
     deny: Option<libc::c_long>,
     /// Run the command directly, without the helper (a control).
     bare: bool,
+    /// The browser's socketpair end, passed at fd 5 as the full tier passes it.
+    hub: Option<OwnedFd>,
 }
 
 struct Outcome {
@@ -117,6 +119,8 @@ fn run_fd(spec_fd: OwnedFd, cmd: &[&str], o: Opts) -> Outcome {
         c.process_group(0);
     }
     let (s, w, setsid, canary) = (hs.as_raw_fd(), hw.as_raw_fd(), o.setsid, o.canary_fd7);
+    let hh = o.hub.as_ref().map(high);
+    let hub = hh.as_ref().map(AsRawFd::as_raw_fd);
     let filter = o.deny.map(deny_filter);
     // SAFETY: only async-signal-safe calls (setsid, dup2, prctl) on values made before the fork.
     unsafe {
@@ -126,6 +130,11 @@ fn run_fd(spec_fd: OwnedFd, cmd: &[&str], o: Opts) -> Outcome {
                 return fail();
             }
             if libc::dup2(s, 3) < 0 || libc::dup2(w, 4) < 0 {
+                return fail();
+            }
+            if let Some(h) = hub
+                && libc::dup2(h, 5) < 0
+            {
                 return fail();
             }
             if canary && libc::dup2(2, 7) < 0 {
@@ -150,7 +159,7 @@ fn run_fd(spec_fd: OwnedFd, cmd: &[&str], o: Opts) -> Outcome {
         });
     }
     let mut child = c.spawn().unwrap();
-    drop((hs, hw));
+    drop((hs, hw, hh, o.hub));
     let mut out = child.stdout.take().unwrap();
     let out = std::thread::spawn(move || {
         let mut s = String::new();
@@ -218,6 +227,7 @@ fn status_reports_layers() {
             new_session: false,
             relay: false,
             seatbelt: false,
+            browser: false,
         }
     );
     assert_eq!(o.code, Some(0), "{}", o.stderr);
@@ -504,6 +514,167 @@ fn landlock_restrict_failure_exits_125() {
     );
 }
 
+/// What the test's supervisor saw at a whole-tree spec's trace socket.
+#[derive(Debug)]
+enum AtSocket {
+    /// No offer: only the test's own wake-up connected.
+    Nothing,
+    /// The listener came over the socket; every open it was notified of until the traced tree was gone.
+    Traced {
+        hello: gleipnir::trace::Hello,
+        opens: Vec<gleipnir::trace::Open>,
+    },
+    /// The hello, answered `trace` with the read side already shut, so the fd could not arrive (the stream is held
+    /// until the join).
+    Shut {
+        hello: String,
+        _stream: std::os::unix::net::UnixStream,
+    },
+}
+
+/// A supervisor for one offer at `sock`. `shut`: read the hello, shut the read side, then answer `trace`; otherwise
+/// take the listener and answer every open until the traced tree is gone. Its result is taken with [`supervised`].
+fn supervise(sock: &Path, shut: bool) -> std::thread::JoinHandle<AtSocket> {
+    use gleipnir::trace as gt;
+    use std::io::Write;
+    let l = std::os::unix::net::UnixListener::bind(sock).unwrap();
+    std::thread::spawn(move || {
+        let Ok((s, _)) = l.accept() else {
+            return AtSocket::Nothing;
+        };
+        if shut {
+            let mut hello = Vec::new();
+            let mut b = [0u8; 1];
+            loop {
+                match (&s).read(&mut b) {
+                    Ok(1) if b[0] == b'\n' => break,
+                    Ok(1) => hello.push(b[0]),
+                    _ => return AtSocket::Nothing,
+                }
+            }
+            s.shutdown(std::net::Shutdown::Read).unwrap();
+            (&s).write_all(b"trace\n").unwrap();
+            return AtSocket::Shut {
+                hello: String::from_utf8_lossy(&hello).into_owned(),
+                _stream: s,
+            };
+        }
+        let Ok(offer) = gt::accept(s) else {
+            return AtSocket::Nothing;
+        };
+        let hello = offer.hello.clone();
+        match offer.trace() {
+            Ok(gt::Handed::Listener(fd)) => {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let listener = gt::listen(fd, gt::ListenOptions::default(), tx).unwrap();
+                listener.join();
+                AtSocket::Traced {
+                    hello,
+                    opens: rx.try_iter().collect(),
+                }
+            }
+            other => panic!("the listener did not come over the socket: {other:?}"),
+        }
+    })
+}
+
+/// The supervisor's result once the helper is gone: a connection of our own wakes an `accept` the helper never
+/// reached (it has exited, so it never will), and is then nothing.
+fn supervised(sock: &Path, h: std::thread::JoinHandle<AtSocket>) -> AtSocket {
+    let _ = std::os::unix::net::UnixStream::connect(sock);
+    h.join().unwrap()
+}
+
+/// A whole-tree spec (pattern C, handshake: the helper offers and parks on the reply; nothing waits on time). The
+/// listener is installed after Gleipnir's own layers, on the program's whole tree, and its fd reaches the supervisor:
+/// one more filter than Gleipnir's, a child's open notified, none of the helper's own Landlock opens (`O_PATH`, before
+/// the listener). A listener whose fd cannot reach the supervisor stops the setup: 125, and the program never runs.
+#[test]
+fn a_whole_tree_spec_hands_its_listener_over() {
+    if !landlock_here("a_whole_tree_spec_hands_its_listener_over") {
+        return;
+    }
+    let dir = fixture();
+    let root = dir.path().canonicalize().unwrap();
+    let marker = root.join("marker");
+    std::fs::write(&marker, "seen\n").unwrap();
+    let sock = root.join("trace.sock");
+    let mut s = spec(&root);
+    s.landlock.unix_connect_roots = vec![sock.clone()];
+    s.trace_tree = Some(sock.clone());
+    let status = ["/usr/bin/cat", "/proc/self/status"];
+    let control = run(
+        &s,
+        &status,
+        Opts {
+            bare: true,
+            ..Opts::default()
+        },
+    );
+    let script = format!(
+        "/usr/bin/cat {}; /usr/bin/cat /proc/self/status",
+        marker.display()
+    );
+    let cmd = ["/bin/sh", "-c", script.as_str()];
+    let h = supervise(&sock, false);
+    let o = run(&s, &cmd, Opts::default());
+    let seen = supervised(&sock, h);
+    assert!(o.status.is_ok(), "{:?}: {}", o.status, o.stderr);
+    assert_eq!(o.code, Some(0), "{}", o.stderr);
+    let AtSocket::Traced { hello, opens } = seen else {
+        panic!(
+            "the listener never reached the supervisor: {seen:?}; stderr {}",
+            o.stderr
+        );
+    };
+    assert_eq!(hello.scope, gleipnir::trace::Scope::Tree);
+    assert_eq!(hello.command, cmd.join(" "));
+    assert!(
+        opens
+            .iter()
+            .any(|p| p.full().as_deref() == Some(marker.as_path())),
+        "the child's open of the marker was notified: {opens:?}"
+    );
+    let landlock_opens: Vec<_> = opens
+        .iter()
+        .filter(|p| {
+            p.flags & libc::O_PATH as u64 != 0
+                && [Path::new("/"), root.as_path()].contains(&p.path.as_path())
+        })
+        .collect();
+    assert_eq!(landlock_opens.len(), 0, "{landlock_opens:?}");
+    let filters = |out: &str| status_field(out, "Seccomp_filters:").unwrap();
+    assert_eq!(
+        filters(&o.stdout),
+        filters(&control.stdout) + 2,
+        "Gleipnir's filter and the listener's"
+    );
+    assert_eq!(status_field(&o.stdout, "NoNewPrivs:"), Some(1));
+    // The fd cannot arrive (the supervisor's read side is shut before it answers): setup fails, nothing runs.
+    std::fs::remove_file(&sock).unwrap();
+    let touched = root.join("touched");
+    let h = supervise(&sock, true);
+    let o = run(
+        &s,
+        &["/usr/bin/touch", touched.to_str().unwrap()],
+        Opts::default(),
+    );
+    let seen = supervised(&sock, h);
+    let AtSocket::Shut { hello, .. } = &seen else {
+        panic!("the helper never offered: {seen:?}; stderr {}", o.stderr);
+    };
+    assert!(hello.contains(r#""scope":"tree""#), "{hello}");
+    let r = refusal(&o);
+    assert_eq!(r.rule, Rule::Setup);
+    assert!(
+        r.message.contains("trace:") && r.message.contains("did not reach the supervisor"),
+        "{}",
+        r.message
+    );
+    assert_eq!(o.code, Some(inner::EXIT_SETUP));
+    assert!(!touched.exists(), "nothing was exec'd");
+}
+
 /// The reduced run path end to end (ABI 9): a validated reduced spec, `reduced::inner_spec` and `prepare`, the
 /// helper spawned as a session leader. The program writes its write root and nothing else, and reaches no TCP port.
 #[test]
@@ -540,6 +711,8 @@ fn a_reduced_run_end_to_end() {
         tmp: Some(root.join("t")),
         layers: Layers::for_target(Target::LinuxReduced),
         extra_tcp_ports: vec![],
+        trace: Default::default(),
+        browser: None,
     };
     let valid = gleipnir::validate::validate(s, &ctx, Target::LinuxReduced).unwrap();
     let inner = reduced::inner_spec(&valid, Path::new(HELPER), &["relay".into()]).unwrap();
@@ -591,4 +764,221 @@ fn a_reduced_run_end_to_end() {
     );
     assert_eq!(std::fs::read_to_string(root.join("w/f")).unwrap(), "in\n");
     assert!(!out.join("f").exists());
+}
+
+fn abi9_here(test: &str) -> bool {
+    let abi = landlock::kernel_abi();
+    if abi < 9 {
+        eprintln!("SKIP {test}: the kernel's Landlock ABI is {abi}, the browser needs 9");
+    }
+    abi >= 9
+}
+
+/// A socketpair: (the hub's end, the browser host's end).
+fn hub_pair() -> (std::os::unix::net::UnixStream, OwnedFd) {
+    let (ours, theirs) = std::os::unix::net::UnixStream::pair().unwrap();
+    (ours, theirs.into())
+}
+
+/// The browser host's plan for a run without bwrap: `argv`, its own dir `dir/own`, the browser layer with `extra`
+/// as more read roots.
+fn browser(
+    dir: &Path,
+    argv: &[&str],
+    timeout_ms: u32,
+    extra: Vec<std::path::PathBuf>,
+) -> BrowserPlan {
+    let own = dir.join("own");
+    BrowserPlan {
+        hub_fd: 5,
+        argv: argv.iter().map(|a| a.to_string()).collect(),
+        env: vec![
+            ("HOME".into(), own.to_str().unwrap().into()),
+            ("PATH".into(), "/usr/bin:/bin".into()),
+        ],
+        own_dir: own.clone(),
+        landlock: landlock::browser_plan(&gleipnir::BrowserInputs {
+            tier: Tier::Full,
+            program_dir: "/usr/bin".into(),
+            own_dir: own,
+            helper: HELPER.into(),
+            extra_read: extra,
+            web_port: 3130,
+            local_ports: vec![],
+        }),
+        ready_timeout_ms: timeout_ms,
+    }
+}
+
+/// The browser host is forked under its layer and ready before the program runs: it holds the hub's end at fd 3
+/// (a socket: what it writes reaches the hub's end), writes in its own dir (made by the helper), and says `ready` on
+/// fd 4; the status reports it. A host that exits first, says something else or is late fails the run (125), and the
+/// program never runs.
+#[test]
+fn a_browser_host_is_ready_before_exec() {
+    if !abi9_here("a_browser_host_is_ready_before_exec") {
+        return;
+    }
+    let dir = fixture();
+    let d = dir.path().to_str().unwrap();
+    let host = "test -S /proc/self/fd/3 && printf hello >&3 && : > $HOME/host-was-here && echo ready >&4; \
+                exec sleep 30";
+    let mut s = spec(dir.path());
+    s.browser = Some(browser(dir.path(), &["/bin/sh", "-c", host], 5000, vec![]));
+    let check = format!("test -e {d}/own/host-was-here && echo after");
+    let (mut ours, theirs) = hub_pair();
+    let o = run(
+        &s,
+        &["/bin/sh", "-c", &check],
+        Opts {
+            pgroup: true,
+            hub: Some(theirs),
+            ..Opts::default()
+        },
+    );
+    let l = o
+        .status
+        .as_ref()
+        .unwrap_or_else(|r| panic!("{r}: {}", o.stderr));
+    assert!(l.browser, "{l:?}");
+    assert_eq!(o.stdout, "after\n", "{}", o.stderr);
+    let mut hello = [0u8; 5];
+    ours.read_exact(&mut hello).unwrap();
+    assert_eq!(&hello, b"hello");
+    // The status of a run that asked for the browser is read with it required; a v1 spec with one is refused.
+    let marker = dir.path().join("marker");
+    let touch = ["/usr/bin/touch", marker.to_str().unwrap()];
+    for (script, timeout, why) in [
+        (
+            "exit 0",
+            5000,
+            "the browser host exited before it was ready",
+        ),
+        ("echo nope >&4; exec sleep 30", 5000, "not ready"),
+        ("exec sleep 30", 300, "not ready within 300 ms"),
+    ] {
+        s.browser = Some(browser(
+            dir.path(),
+            &["/bin/sh", "-c", script],
+            timeout,
+            vec![],
+        ));
+        let o = run(
+            &s,
+            &touch,
+            Opts {
+                pgroup: true,
+                hub: Some(hub_pair().1),
+                ..Opts::default()
+            },
+        );
+        let r = refusal(&o);
+        assert!(r.message.contains(why), "{script}: {}", r.message);
+        assert_eq!(o.code, Some(inner::EXIT_SETUP), "{script}");
+        assert!(!marker.exists(), "{script}");
+    }
+    let mut v1 = s.clone();
+    v1.version = inner::VERSION_V1;
+    let o = run(
+        &v1,
+        &touch,
+        Opts {
+            hub: Some(hub_pair().1),
+            ..Opts::default()
+        },
+    );
+    assert!(
+        refusal(&o).message.contains("version 2"),
+        "{}",
+        refusal(&o).message
+    );
+    // No hub end at fd 5: refused, nothing run.
+    s.browser = Some(browser(dir.path(), &["/bin/sh", "-c", host], 5000, vec![]));
+    let o = run(&s, &touch, Opts::default());
+    assert!(
+        refusal(&o).message.contains("fd 5"),
+        "{}",
+        refusal(&o).message
+    );
+    assert!(!marker.exists());
+}
+
+/// The browser host runs under its own Landlock layer from its first instruction: the escape probe, run as the
+/// host, cannot connect to the session's `hub.sock` (the agent can) or create a file in the agent's write root, and
+/// can create one in its own dir; then it says `ready` and the agent's command runs.
+#[test]
+#[ignore = "needs the gleipnir-probe binary next to ratatoskr, and Landlock ABI 9 (the VM)"]
+fn a_browser_child_is_layered_before_it_runs() {
+    if !abi9_here("a_browser_child_is_layered_before_it_runs") {
+        return;
+    }
+    let probe = Path::new(HELPER).with_file_name("gleipnir-probe");
+    assert!(
+        probe.exists(),
+        "build gleipnir-probe first: {}",
+        probe.display()
+    );
+    let dir = fixture();
+    let run_dir = dir.path().join("run");
+    std::fs::create_dir(&run_dir).unwrap();
+    let sock = run_dir.join("hub.sock");
+    let _listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+    let mut s = spec(dir.path());
+    s.landlock.unix_connect_roots = vec![run_dir.clone()];
+    let script = format!(
+        "{p} connect-unix {sock} --and create {w}/agent-file --and create {w}/own/x >&2; echo ready >&4",
+        p = probe.display(),
+        sock = sock.display(),
+        w = dir.path().display(),
+    );
+    s.browser = Some(browser(
+        dir.path(),
+        &["/bin/sh", "-c", &script],
+        5000,
+        vec![probe.parent().unwrap().to_owned()],
+    ));
+    let agent = format!(
+        "{p} connect-unix {sock}",
+        p = probe.display(),
+        sock = sock.display()
+    );
+    let o = run(
+        &s,
+        &["/bin/sh", "-c", &agent],
+        Opts {
+            pgroup: true,
+            hub: Some(hub_pair().1),
+            ..Opts::default()
+        },
+    );
+    let l = o
+        .status
+        .as_ref()
+        .unwrap_or_else(|r| panic!("{r}: {}", o.stderr));
+    assert!(l.browser && l.landlock_abi >= 9, "{l:?}");
+    let results = |text: &str| -> Vec<(String, String)> {
+        text.lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .map(|v| {
+                (
+                    v["probe"].as_str().unwrap_or("").to_owned(),
+                    v["result"].as_str().unwrap_or("").to_owned(),
+                )
+            })
+            .collect()
+    };
+    let browser_lines = results(&o.stderr);
+    let want = [
+        ("connect-unix", "blocked"),
+        ("create", "blocked"),
+        ("create", "reached"),
+    ]
+    .map(|(a, b)| (a.to_owned(), b.to_owned()));
+    assert_eq!(browser_lines, want, "{}", o.stderr);
+    assert_eq!(
+        results(&o.stdout),
+        [("connect-unix".to_owned(), "reached".to_owned())],
+        "control: the agent reaches hub.sock"
+    );
+    assert!(!dir.path().join("agent-file").exists());
 }

@@ -1,12 +1,14 @@
-# Every push to main or a ci/* branch, nightly and on demand: the GUI, live, scenario and perf tiers — real Nidhogg
-# sessions under headless mutter, in test/container/Containerfile.gui (drgnx-tiers.yml, on the pinned release). Not on a
-# joint round's branch (ci/joint/*): Nidhogg's run tests the GUI tier on its new build. The `gate` job ("GUI tier gate")
-# is the check branch protection requires. docs/develop/ci.md
+# Every push to main or a ci/* branch, every pull request, nightly and on demand: the GUI, live, scenario and perf tiers —
+# real Nidhogg sessions under headless mutter, in test/container/Containerfile.gui (drgnx-tiers.yml, on the pinned
+# release). Not on a joint round's branch (ci/joint/*): Nidhogg's run tests the GUI tier on its new build. The `gate` job
+# ("GUI tier gate") is the check branch protection requires; a dispatched run's gate does not count there, so a
+# pull request runs this workflow itself. docs/develop/ci.md
 name: GUI tier
 
 on:
   push:
     branches: [main, "ci/**", "!ci/joint/**"]
+  pull_request:
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
@@ -14,9 +16,10 @@ on:
 permissions:
   contents: read
 
-# a newer push to a ci/* branch cancels the older run; a run on main (push or nightly) is never cancelled
+# a newer push to a ci/* branch or a pull request cancels the older run; a run on main (push or nightly) is never
+# cancelled
 concurrency:
-  group: gui-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
+  group: gui-${{ github.event_name }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
@@ -34,23 +37,36 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
           sparse-checkout: .github/ci
       - id: c
         env:
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref }}
-          SHA: ${{ github.sha }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           REPO: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          BASE: ${{ github.event.pull_request.base.sha }}
           GATE: GUI tier gate
           PUSH: ui scenario perf
           GH_TOKEN: ${{ github.token }}
         run: bash .github/ci/changes.sh .github/ci/paths.txt | tee -a "$GITHUB_OUTPUT"
 
+  # The prebuilt images of this checkout's inputs, as ci.yml's job: each missing tag built once before the tiers pull
+  # it; this repository's own runs only (a fork's tiers build their own, and the gate lets this be skipped there)
+  images:
+    name: Test images
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/images.yml
+
+  # after the images, whatever they did (`!cancelled()`: a job without its image builds it)
   tiers:
     name: Tiers
-    needs: changes
+    needs: [changes, images]
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.tiers != '') }}
     permissions:
       contents: read
@@ -66,15 +82,18 @@ jobs:
   gate:
     name: GUI tier gate
     if: always()
-    needs: [changes, tiers]
+    needs: [changes, images, tiers]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
           sparse-checkout: .github/actions
       - uses: ./.github/actions/gate
         with:
           needs: ${{ toJSON(needs) }}
-          allow-skipped: ${{ needs.changes.result == 'success' && needs.changes.outputs.tiers == '' && 'tiers' || '' }}
+          allow-skipped: >-
+            ${{ needs.changes.result == 'success' && needs.changes.outputs.tiers == '' && 'tiers' || '' }}
+            ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'images' || '' }}

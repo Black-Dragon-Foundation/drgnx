@@ -24,6 +24,8 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-timer)
+(require 'drgnx-guard)
+(require 'drgnx-file-stream)
 (require 'drgnx-wb)
 (require 'drgnx-view)
 (require 'drgnx-large-file)             ; a large file: Replace needs it whole (lean), never asks; skips chunks and raw
@@ -843,6 +845,7 @@ this once evil is loaded).  The undo puts each mode's earlier state back, only w
 (defun drgnx-replace--clear ()
   "Forget the matches and their ticks: a new search.  The rows go in slices (the view's reset), never erased."
   (when (overlayp drgnx-replace--shown) (delete-overlay drgnx-replace--shown))
+  (drgnx-replace--rs-feed '(new-search))                  ; blocks still on their way are no use to the new rows
   (drgnx-view-reset drgnx-view nil)
   (setq drgnx-replace--matches nil drgnx-replace--tail nil drgnx-replace--status "" drgnx-replace--end-file nil
         drgnx-replace--new (drgnx-replace--text 'replace))
@@ -1192,12 +1195,79 @@ ORIGIN: the marker the view works for (default: point in the editor)."
         (setq drgnx-replace--stale t)
         (drgnx-replace--message "The code changed: Rename Symbol again to see the edits as they are now"))
     (cl-pushnew file drgnx-replace--changed :test #'equal)
+    (when (drgnx-replace--async-file-p file) (drgnx-replace--rs-feed (list 'file-changed file)))
     (drgnx-replace--refresh-later)))
 
 (defun drgnx-replace--refresh-later ()
   "Refresh the changed files' rows after `drgnx-replace-refresh-delay' with no further change (a debounce)."
   (drgnx-timer-debounce (cons 'replace-refresh (current-buffer)) drgnx-replace-refresh-delay #'drgnx-replace--refresh
                         :args (list (current-buffer)) :owner (current-buffer)))
+
+;; A rescan reads a file with no buffer off the main thread when Nidhogg's workers are on (`drgnx-file-stream-available-p'):
+;; the file's block (`nidhogg-read-file-async') is put into a temp buffer by `nidhogg-insert-file-block' and scanned as
+;; the file's text is.  Only this refresh reads that way; what a replace writes is decided from files read at once
+;; (`drgnx-replace--file-edits' and the checks before it).  What may happen when is a pure core,
+;; `drgnx-replace--rescan-step', tested in every order: a block that lands after the file changed again, after a new
+;; search started or after a replace is dropped.
+(cl-defstruct (drgnx-replace--rs (:constructor drgnx-replace--rs-make) (:copier drgnx-replace--rs-copy))
+  "PENDING (files changed, not read yet), INFLIGHT ((FILE . GEN)...: the reads that run) and COUNTER (the last GEN)."
+  pending inflight (counter 0))
+
+(defun drgnx-replace--rescan-step (state event)
+  "STATE after EVENT, as (STATE . EFFECTS); STATE is not changed.  The events: (file-changed FILE), (tick) the pause
+after the changes is over, (block-landed FILE GEN) a read ended, (new-search) and (replace).  The effects: (read FILE
+GEN) and (apply FILE GEN), which shows the rows of the block that landed."
+  (let ((s (drgnx-replace--rs-copy state)) effects)
+    (pcase event
+      (`(file-changed ,file)
+       (cl-pushnew file (drgnx-replace--rs-pending s) :test #'equal)
+       (setf (drgnx-replace--rs-inflight s) (assoc-delete-all file (copy-sequence (drgnx-replace--rs-inflight s)))))
+      (`(tick)
+       (dolist (file (reverse (drgnx-replace--rs-pending s)))
+         (unless (assoc file (drgnx-replace--rs-inflight s))
+           (let ((gen (cl-incf (drgnx-replace--rs-counter s))))
+             (push (cons file gen) (drgnx-replace--rs-inflight s))
+             (push (list 'read file gen) effects)
+             (setf (drgnx-replace--rs-pending s) (delete file (copy-sequence (drgnx-replace--rs-pending s))))))))
+      (`(block-landed ,file ,gen)
+       (when (eql (cdr (assoc file (drgnx-replace--rs-inflight s))) gen)
+         (setf (drgnx-replace--rs-inflight s) (assoc-delete-all file (copy-sequence (drgnx-replace--rs-inflight s))))
+         (push (list 'apply file gen) effects)))
+      ((or `(new-search) `(replace))
+       (setf (drgnx-replace--rs-pending s) nil (drgnx-replace--rs-inflight s) nil)))
+    (cons s (nreverse effects))))
+
+(defvar-local drgnx-replace--rs (drgnx-replace--rs-make) "The view's rescans, for `drgnx-replace--rescan-step'.")
+(defvar-local drgnx-replace--blocks nil "((FILE . GEN) . BLOCK) for the reads that landed and are not shown yet.")
+
+(defun drgnx-replace--async-file-p (file)
+  "Non-nil when FILE's rows are searched again off the main thread: no buffer visits it, and the workers are on."
+  (and (not (find-buffer-visiting file)) (drgnx-file-stream-available-p file) (fboundp 'nidhogg-read-file-async)))
+
+(defun drgnx-replace--rs-feed (event)
+  "Give EVENT to the view's rescans (the current buffer is the view) and run the effects."
+  (let ((r (drgnx-replace--rescan-step drgnx-replace--rs event)))
+    (setq drgnx-replace--rs (car r))
+    (dolist (effect (cdr r))
+      (pcase effect
+        (`(read ,file ,gen)
+         (let ((view (current-buffer)))
+           (unless (ignore-errors
+                     (nidhogg-read-file-async
+                      file (drgnx-guard-wrap
+                            (lambda (block _err)
+                              (when (buffer-live-p view)
+                                (with-current-buffer view
+                                  (push (cons (cons file gen) block) drgnx-replace--blocks)
+                                  (drgnx-replace--rs-feed (list 'block-landed file gen))
+                                  (setq drgnx-replace--blocks (assoc-delete-all (cons file gen) drgnx-replace--blocks)))))
+                            "replace rescan")))
+             ;; not started: land at once without a block, and the rescan reads the file itself
+             (drgnx-replace--rs-feed (list 'block-landed file gen)))))
+        (`(apply ,file ,gen)
+         (when (gethash file drgnx-replace--listed)
+           (drgnx-replace--rescan file (cdr (assoc (cons file gen) drgnx-replace--blocks)))
+           (drgnx-replace--update-status)))))))
 
 (defun drgnx-replace--refresh (buf)
   "The pause after listed files changed is over: search them again, their rows only.  A timer: never signals."
@@ -1208,12 +1278,19 @@ ORIGIN: the marker the view works for (default: point in the editor)."
                 (drgnx-replace--searching (drgnx-replace--refresh-later))                        ; after the search
                 (t (let ((files (reverse drgnx-replace--changed)))
                      (setq drgnx-replace--changed nil)
-                     (dolist (f files) (when (gethash f drgnx-replace--listed) (drgnx-replace--rescan f)))
+                     (dolist (f files)
+                       (when (and (gethash f drgnx-replace--listed) (not (drgnx-replace--async-file-p f)))
+                         (drgnx-replace--rescan f)))
+                     (drgnx-replace--rs-feed '(tick))
                      (drgnx-replace--update-status))))
         (error (drgnx-replace--message "%s" (error-message-string e)))))))
 
-(defun drgnx-replace--scan (file)
-  "FILE's matches for the fields' text, read from its buffer when visited (unsaved edits too), else from disk.
+(declare-function nidhogg-insert-file-block "nidhogg-blk.c" (block))
+(declare-function nidhogg-read-file-async "nidhogg-blk.c" (file callback &rest args))
+
+(defun drgnx-replace--scan (file &optional block)
+  "FILE's matches for the fields' text, read from its buffer when visited (unsaved edits too), else from disk, or
+from BLOCK, the file block `nidhogg-read-file-async' read.
 Nil when it is gone; `big' when it is bigger than `drgnx-replace-refresh-max-bytes'."
   (let* ((text (drgnx-replace--text 'find)) (case (drgnx-replace--opt :case)) (regexp (drgnx-replace--opt :regexp))
          (re (drgnx-replace--line-regexp (list :text text :regexp regexp :word (drgnx-replace--opt :word))))
@@ -1224,10 +1301,11 @@ Nil when it is gone; `big' when it is bigger than `drgnx-replace-refresh-max-byt
      ((null size) nil)
      ((> size drgnx-replace-refresh-max-bytes) 'big)
      (t (with-temp-buffer
-          (if buf
-              (insert (with-current-buffer buf
-                        (save-restriction (widen) (buffer-substring-no-properties (point-min) (point-max)))))
-            (insert-file-contents file))
+          (cond (buf
+                 (insert (with-current-buffer buf
+                           (save-restriction (widen) (buffer-substring-no-properties (point-min) (point-max))))))
+                (block (nidhogg-insert-file-block block))
+                (t (insert-file-contents file)))
           (let ((case-fold-search (not case)) (line 1) (last (point-min)) (lines nil) (done nil))
             (with-syntax-table drgnx-replace--syntax
               (goto-char (point-min))
@@ -1242,11 +1320,11 @@ Nil when it is gone; `big' when it is bigger than `drgnx-replace-refresh-max-byt
                   (if (>= eol (point-max)) (setq done t) (goto-char (1+ eol))))))
             (apply #'nconc (nreverse lines))))))))
 
-(defun drgnx-replace--rescan (file)
+(defun drgnx-replace--rescan (file &optional block)
   "Search FILE again: its rows become its matches now, unticked where an unticked one had the same text around it.
 Only FILE's rows move: the old ones go, the new ones come after its header (drawn again for its box); a file with no
-match left loses its header too."
-  (let ((new (drgnx-replace--scan file)))
+match left loses its header too.  BLOCK: the file read off the main thread (see `drgnx-replace--scan')."
+  (let ((new (drgnx-replace--scan file block)))
     (unless (eq new 'big)
       (let* ((key (lambda (m) (list (plist-get m :before) (plist-get m :text) (plist-get m :after))))
              (mine (lambda (m) (equal (plist-get m :file) file)))
@@ -1327,6 +1405,7 @@ match left loses its header too."
         (unless ms (user-error "Nothing to replace: no match is ticked"))
         (drgnx-replace-cancel drgnx-replace--handle)
         (setq drgnx-replace--handle nil drgnx-replace--searching nil)
+        (drgnx-replace--rs-feed '(replace))               ; the replace reads the files itself, at once
         (let* ((res (let ((drgnx-replace--applying t)) (drgnx-replace-apply ms new)))
                (msg (drgnx-replace--apply-report res)))
           (drgnx-replace--clear)
@@ -1340,6 +1419,7 @@ match left loses its header too."
   (with-current-buffer (drgnx-replace--live-view)
     (let ((m (or (get-text-property (point) 'drgnx-replace-match) (user-error "No match on this row")))
           (new (drgnx-replace--new-name)))
+      (drgnx-replace--rs-feed '(replace))
       (let* ((res (let ((drgnx-replace--applying t)) (drgnx-replace-apply (list m) new)))
              (msg (drgnx-replace--apply-report res)))
         (if (plist-get res :skipped)

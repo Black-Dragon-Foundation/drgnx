@@ -1,0 +1,22 @@
+{"scenario": "work/a-second-connection-gets-none", "requires": ["v1", "test-hooks"], "doc": "work-map goes to the connection whose view it is (Front::send_to), never to the others subscribed to the hub's events, though they hear the same session's snapshots. Pattern B on the hub's virtual clock: the start's answer is the gate, __test_advance for the delta."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "connect", "conn": "o", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "o", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "o", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "work/map/subscribe", "params": {"view": "a", "workspace": {"id": "workspace:000000000000", "roots": ["$ROOT/work"]}, "width_units": 250}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"version": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "__test_advance", "params": {"ms": 250}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "work-map", "data": {"view": "a", "changed": {"$contains": [{"kind": "agent"}]}}}, "within_ms": 10000}
+{"do": "expect", "conn": "o", "json": {"event": "agent", "data": {"id": "$sid"}}, "within_ms": 10000}
+{"do": "count_events", "conn": "o", "for_ms": 300, "none": ["work-map"]}

@@ -90,6 +90,21 @@ after another (the last repeats).  Binds `history' (the history file) and `start
       (should (file-exists-p history))
       (should (string-match-p "frame p50 1 p90 nil ms (loaded)" out)))))
 
+(ert-deftest drgnx-perf-run/a-run-waits-for-native-compilation-before-its-first-workload ()
+  "Pattern D.  A built tree's session compiles the files it loads natively, in the background, when it starts; the
+first workload (typing) paid for it (its calibration loop ran 4x slower than the later workloads').  The run waits for
+that to drain (`drgnx-perf-ab--settle-form', as an A/B does) before it calibrates or measures anything."
+  (drgnx-perf-run-test--with-fake-run '(1.0)
+    (let* ((forms nil) (fake (symbol-function 'drgnx-perf-run--call)))
+      (cl-letf (((symbol-function 'drgnx-perf-run--call) (lambda (s form &rest r) (push form forms) (apply fake s form r))))
+        (with-output-to-string (drgnx-perf-run)))
+      (setq forms (nreverse forms))
+      (let ((settle (seq-position forms drgnx-perf-ab--settle-form))
+            (calibrate (seq-position forms "(drgnx-perf-calibrate)")))
+        (should settle)
+        (should calibrate)
+        (should (< settle calibrate))))))
+
 (ert-deftest drgnx-perf/results-are-written-as-json ()
   (drgnx-perf-run-test--with-fake-run '(1.0)
     (let* ((file (expand-file-name "out/results.json" dir))
@@ -209,6 +224,40 @@ without them would pass unjudged), unless `drgnx-perf-run-unseeded' says why it 
       (should (assq (car u) drgnx-perf-run-unseeded))
       (should (stringp (cdr u))))))
 
+(ert-deftest drgnx-perf-run/the-terminal-workloads-run-in-the-container-with-eat ()
+  ;; DRGNX_USER_ELPA with an eat package: the terminal workloads are not skipped, and their setup names that directory
+  ;; (the session does not inherit the variable); the other skipped workloads stay skipped
+  (let ((elpa (make-temp-file "drgnx-perf-elpa" t)))
+    (unwind-protect
+        (progn
+          (let ((process-environment (cons "DRGNX_USER_ELPA" process-environment)))
+            (should (stringp (drgnx-perf-run--container-skip 'terminal-output))))
+          (let ((process-environment (cons (concat "DRGNX_USER_ELPA=" elpa) process-environment)))
+            (should (stringp (drgnx-perf-run--container-skip 'terminal-output)))   ; no eat in it yet
+            (make-directory (expand-file-name "eat-0.9.4" elpa))
+            (should-not (drgnx-perf-run--container-skip 'terminal-output))
+            (should-not (drgnx-perf-run--container-skip 'terminal-typing))
+            (should (stringp (drgnx-perf-run--container-skip 'live-view)))
+            (should (string-search (prin1-to-string elpa)
+                                   (plist-get (cdr (assq 'terminal-output (drgnx-perf-run--workloads))) :setup)))))
+      (delete-directory elpa t))))
+
+(ert-deftest drgnx-perf-run/the-live-view-runs-in-the-container-with-websocket ()
+  ;; DRGNX_USER_ELPA with a websocket package: live-view is not skipped, its setup names that directory and counts
+  ;; blank frames (its :measure)
+  (let ((elpa (make-temp-file "drgnx-perf-elpa" t)))
+    (unwind-protect
+        (let ((process-environment (cons (concat "DRGNX_USER_ELPA=" elpa) process-environment)))
+          (should (stringp (drgnx-perf-run--container-skip 'live-view)))
+          (make-directory (expand-file-name "websocket-1.16" elpa))
+          (should-not (drgnx-perf-run--container-skip 'live-view))
+          (should (stringp (drgnx-perf-run--container-skip 'terminal-output)))
+          (let ((w (cdr (assq 'live-view (drgnx-perf-run--workloads)))))
+            (should (string-search (prin1-to-string elpa) (plist-get w :setup)))
+            (should (equal (plist-get w :measure) "(drgnx-perf--live-measure)"))
+            (should (string-search "drgnx-perf--live-blank-sample" (plist-get w :setup)))))
+      (delete-directory elpa t))))
+
 (ert-deftest drgnx-perf-run/the-terminal-workloads-run-a-program-not-a-shell ()
   "terminal-typing runs cat, terminal-output a seq loop; their setup forms are readable and name no shell config."
   (let ((ws (drgnx-perf-run--workloads)))
@@ -222,13 +271,51 @@ without them would pass unjudged), unless `drgnx-perf-run-unseeded' says why it 
         (should-not (string-match-p "\\.bashrc\\|\\.zshrc\\|SHELL" setup))))
     (should (string-match-p "seq 1 2000" (plist-get (cdr (assq 'terminal-output ws)) :setup)))))
 
+(defvar drgnx-perf-run-test--reach 0 "The furthest point a `forward-sexp' reached (`point-max' for a failed one).")
+
+(defun drgnx-perf-run-test--forward-sexp (f &rest args)
+  "Around `forward-sexp': note how far F got in `drgnx-perf-run-test--reach'."
+  (condition-case err
+      (prog1 (apply f args) (setq drgnx-perf-run-test--reach (max drgnx-perf-run-test--reach (point))))
+    (scan-error (setq drgnx-perf-run-test--reach (point-max)) (signal (car err) (cdr err)))))
+
+(ert-deftest drgnx-perf-run/typing-at-the-fixtures-spot-never-scans-past-its-form ()
+  "Pattern D (pure: the real fixture in a buffer, the typing workload's characters inserted one by one and the line
+fontified after each, as redisplay does; no session, no clock).  The fixture is core/ three times, so where its middle
+falls changes with every core file; when the keys went to a line with too few lists around it, each `(let ((x' typed
+left a list open past its form, and Emacs Lisp's font-lock (`lisp--el-funcall-position-p', through `forward-sexp')
+scanned the rest of the 4 MB file at every key.  The keys go to a spot of the fixture's own, the same in every tree:
+no `forward-sexp' of the font-lock goes past the form that holds it."
+  (let* ((drgnx-perf-run--fixture (drgnx-perf-run--make-fixture))
+         (text (mapconcat (lambda (a) (plist-get a :type)) (plist-get (cdr (assq 'typing (drgnx-perf-run--workloads))) :actions) ""))
+         (drgnx-perf-run-test--reach 0))
+    (unwind-protect
+        (progn
+          (should (eq t (eval (read (drgnx-perf-run--visit-fixture-form)) t)))
+          (with-current-buffer (find-buffer-visiting drgnx-perf-run--fixture)
+            (let* ((top (car (nth 9 (syntax-ppss)))) (end (and top (scan-lists top 1 0))))
+              (should top)                      ; inside a form
+              (font-lock-set-defaults)
+              (font-lock-fontify-region (line-beginning-position) (line-end-position))
+              (advice-add 'forward-sexp :around #'drgnx-perf-run-test--forward-sexp)
+              (dotimes (i (length text))
+                (insert (aref text i))
+                (font-lock-fontify-region (line-beginning-position) (line-end-position)))
+              (should (<= drgnx-perf-run-test--reach (+ end (length text)))))))
+      (advice-remove 'forward-sexp #'drgnx-perf-run-test--forward-sexp)
+      (when-let* ((b (find-buffer-visiting drgnx-perf-run--fixture))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))
+      (delete-file drgnx-perf-run--fixture))))
+
 
 ;;; perf-run-test.el ends here
 
-(ert-deftest drgnx-perf-run/the-typing-workloads-gate-a-normal-keys-cpu-too ()
-  "p90 sits on the 1-in-10 key spike (PERF-KEYSPIKE-1); the p50 row gates the keys that are not spikes."
+(ert-deftest drgnx-perf-run/the-typing-workloads-cpu-rows-catch-a-key-spike ()
+  "Pattern D.  The typing workloads' CPU rows were 350-420 ms at p90 while one key in ten cost 100-200 ms; with that
+gone (seeded 2026-11-05: p90 5-8.5 ms in the GUI container) a key that costs 20 ms at p90, or 15 at p50, fails the
+run, also before `DRGNX_PERF_CPU_FACTOR'."
   (let ((budgets (drgnx-perf-run--budgets)))
     (dolist (w '(typing typing-with-ghost remote-typing))
-      (let ((b (seq-find (lambda (b) (and (eq (car b) w) (equal (cadr b) '(:cpu_ms :p50)))) budgets)))
-        (should b)
-        (should (<= (nth 2 b) 30))))))
+      (dolist (row '(((:cpu_ms :p50) . 15) ((:cpu_ms :p90) . 20)))
+        (let ((b (seq-find (lambda (b) (and (eq (car b) w) (equal (cadr b) (car row)))) budgets)))
+          (should b)
+          (should (<= (nth 2 b) (cdr row))))))))

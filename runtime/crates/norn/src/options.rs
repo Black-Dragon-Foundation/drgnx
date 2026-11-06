@@ -468,7 +468,7 @@ pub fn may_read(
                     What::Project(p) => want == What::OptionsProject && caller.project == Some(p),
                     _ => false,
                 },
-                Access::EditUserTasks => false,
+                Access::EditUserTasks | Access::Matrix => false,
             }
     });
     Ok(if covered { Ok(()) } else { Err(NO_READ_GRANT) })

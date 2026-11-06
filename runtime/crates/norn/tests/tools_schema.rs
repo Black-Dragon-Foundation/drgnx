@@ -82,8 +82,9 @@ const BUDGET_BYTES_16: usize = 9_823;
 const BUDGET_JOBS: usize = 6_000;
 /// The three tools the rest of part 1 added for every worker (Task 21): `report_submit`, `plan_read`, `plan_write`.
 /// Their schemas come from the plan methods' types.  Measured after the schemas were trimmed (`guard::compact_schema`):
-/// 4,105 bytes together (report_submit 2,058, plan_write 1,756, plan_read 277, plus the list's own brackets).
-const BUDGET_PART1: usize = 4_105;
+/// 4,105 bytes together (report_submit 2,058, plan_write 1,756, plan_read 277, plus the list's own brackets); 4,266
+/// since a plan's task names its role, profile and body (161 bytes, no descriptions).
+const BUDGET_PART1: usize = 4_266;
 const _: () = assert!(BUDGET_BYTES + BUDGET_JOBS <= 40_000);
 
 const PART1_TOOLS: [&str; 3] = ["report_submit", "plan_read", "plan_write"];

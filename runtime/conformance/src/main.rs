@@ -95,6 +95,55 @@ fn no_real_sandbox(bin: &std::path::Path) -> Option<String> {
     }
 }
 
+/// The JSON `bin ARGS` prints, run in a fresh root (nothing of `~` is read).
+fn hub_json(bin: &std::path::Path, args: &[&str]) -> Option<serde_json::Value> {
+    let root = hub::Root::new().ok()?;
+    let out = Command::new(bin)
+        .args(args)
+        .env_clear()
+        .envs(root.base_env(vec![]))
+        .output()
+        .ok()?;
+    serde_json::from_slice(&out.stdout).ok()
+}
+
+/// Why the hub `bin` gives sessions no browser here, for a `chromium` row: its kernel's Landlock ABI (from its
+/// `sandbox check`) is below the browser's 9, or it resolves no Chromium (`browser list`).  `None`: it does.
+fn no_browser(bin: &std::path::Path) -> Option<String> {
+    let abi = hub_json(bin, &["sandbox", "check", "--json"])
+        .and_then(|c| c["landlock_abi"].as_u64())
+        .unwrap_or(0);
+    if abi < 9 {
+        return Some(format!(
+            "Landlock ABI {abi} is below 9: the hub gives sessions no browser here"
+        ));
+    }
+    match hub_json(bin, &["browser", "list", "--json"]) {
+        Some(l) if !l["browser"].is_null() => None,
+        Some(l) => Some(format!(
+            "no Chromium for sessions here: {}",
+            l["fix"].as_str().unwrap_or("`browser list` found none")
+        )),
+        None => Some("no Chromium for sessions here: `browser list --json` gave no answer".into()),
+    }
+}
+
+/// Why `ratatoskr-mock cdp-drive` cannot run Playwright MCP here: no `node` on the PATH, or no Playwright MCP in
+/// `/opt/pw-mcp` (the browser test image's).  `None`: it can.
+fn no_playwright() -> Option<String> {
+    let node = std::env::var_os("PATH")
+        .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("node").is_file()));
+    let cli = std::path::Path::new("/opt/pw-mcp/node_modules/@playwright/mcp/cli.js");
+    match (node, cli.is_file()) {
+        (false, _) => Some("needs node on the PATH (the browser test image)".into()),
+        (_, false) => Some(format!(
+            "needs Playwright MCP at {} (the browser test image)",
+            cli.display()
+        )),
+        _ => None,
+    }
+}
+
 fn connect_as(argv: &[String]) -> Result<(), String> {
     let path = match argv {
         [flag, p] if flag == "--socket" => p,
@@ -152,6 +201,18 @@ fn main() -> ExitCode {
     let hooks_needed = scenarios
         .iter()
         .any(|s| s.requires.iter().any(|t| t == "test-hooks"));
+    // a tag's probe runs only when a row this run selects needs it
+    let selected_need = |tag: &str| {
+        scenarios
+            .iter()
+            .filter(|s| {
+                args.only
+                    .as_deref()
+                    .is_none_or(|g| scenario::glob(g, &s.name))
+            })
+            .any(|s| s.requires.iter().any(|t| t == tag))
+    };
+    let on = |name: &str| std::env::var(name).as_deref() == Ok("1");
     let host = Host {
         sudo: scenarios
             .iter()
@@ -163,16 +224,17 @@ fn main() -> ExitCode {
         perf: args.perf.is_some(),
         podman: scenario::podman_available(),
         ptrace_stays: scenario::ptrace_effective() && !scenario::setpriv_available(),
-        no_real_sandbox: scenarios
-            .iter()
-            .filter(|s| {
-                args.only
-                    .as_deref()
-                    .is_none_or(|g| scenario::glob(g, &s.name))
-            })
-            .any(|s| s.requires.iter().any(|t| t == "real-sandbox"))
+        no_real_sandbox: selected_need("real-sandbox")
             .then(|| no_real_sandbox(&args.hub_bin))
             .flatten(),
+        no_browser: selected_need("chromium")
+            .then(|| no_browser(&args.hub_bin))
+            .flatten(),
+        no_playwright: selected_need("playwright-mcp")
+            .then(no_playwright)
+            .flatten(),
+        browsers_required: on("DRGNX_TEST_REAL_BROWSER"),
+        internet: on("DRGNX_TEST_INTERNET"),
     };
     let cfg = exec::Config {
         hub_bin: args.hub_bin.clone(),

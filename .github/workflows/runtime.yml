@@ -1,6 +1,6 @@
 # The Rust runtime (runtime/), Ratatoskr: on Linux (Fedora 45) and macOS 27 the unit tests, the conformance suite
 # against the built binary (every row, the v0 rows through the front too), a release build and the recorded perf
-# baseline; plus the oldest supported compiler (MSRV 1.88), the supply-chain policy and the fuzz targets.
+# baseline; plus the oldest supported compiler (MSRV 1.95), the supply-chain policy and the fuzz targets.
 #
 # Push (main, ci/*) and pull-request runs come from ci.yml, which calls this file (`workflow_call`), so these jobs are
 # part of ci.yml's `CI gate`. Running this file on push as well would build everything twice, so its own triggers are
@@ -20,7 +20,7 @@ on:
         type: string
         default: "10"
       only:
-        description: "Narrowed: the jobs to run, of rt-linux rt-msrv rt-escape rt-containers rt-android rt-deny rt-fuzz rt-macos (empty: all)"
+        description: "Narrowed: the jobs to run, of rt-linux rt-msrv rt-escape rt-containers rt-fleet rt-android rt-deny rt-fuzz rt-macos (empty: all)"
         type: string
         default: ""
   workflow_call:
@@ -65,8 +65,9 @@ env:
 jobs:
   # The Fedora 45 job's prebuilt container (`Test images`, images.yml: test/container/Containerfile.rust), by digest: a
   # job's container is named before its steps run, so this job looks it up, by the tag of this checkout's inputs
-  # (test/container/image-tag.sh). The output is empty when GHCR has no image for them (a change not yet on main), and
-  # the job then installs what the image holds itself. (The escape legs look their bubblewrap up in their own step.)
+  # (test/container/image-tag.sh). ci.yml's `images` job built and pushed any missing tag before this workflow ran; the
+  # output is empty when GHCR still has none (a fork's pull request), and the job then installs what the image holds
+  # itself. (The escape legs look their bubblewrap up in their own step.)
   images:
     name: Prebuilt image (Fedora 45 job)
     if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-linux ')) }}
@@ -101,15 +102,16 @@ jobs:
     permissions:
       contents: read
       packages: read
-    # the prebuilt image (Fedora 45 with rust-packages.sh and Nidhogg), else plain Fedora 45 and the steps install them
-    container:
-      image: ${{ needs.images.outputs.rust || 'registry.fedoraproject.org/fedora:45' }}
-      credentials:
-        username: ${{ needs.images.outputs.rust && github.actor || '' }}
-        password: ${{ needs.images.outputs.rust && github.token || '' }}
-      # a real PID 1 that reaps orphans: draugr's reap tests check a killed group is gone, and an unreaped zombie
-      # still answers kill(-pgid, 0) (the same reason ctr.sh runs podman with --init)
-      options: --init
+    # the prebuilt image (Fedora 45 with rust-packages.sh and Nidhogg) with a token to pull it, else plain Fedora 45
+    # and the steps install them. One expression for the whole container: GitHub refuses a job whose `credentials`
+    # come out empty ("Unexpected value ''") before any step runs, so the fallback names none.
+    # --init: a real PID 1 that reaps orphans: draugr's reap tests check a killed group is gone, and an unreaped zombie
+    # still answers kill(-pgid, 0) (the same reason ctr.sh runs podman with --init)
+    container: >-
+      ${{ needs.images.outputs.rust
+      && fromJSON(format('{{"image":"{0}","options":"--init","credentials":{{"username":"{1}","password":"{2}"}}}}',
+      needs.images.outputs.rust, github.actor, github.token))
+      || fromJSON('{"image":"registry.fedoraproject.org/fedora:45","options":"--init"}') }}
     timeout-minutes: 45
     defaults:
       run:
@@ -154,8 +156,35 @@ jobs:
       - run: cargo fmt --check
       - if: ${{ !cancelled() }}
         run: cargo clippy --locked --workspace --all-targets --features drgnx-ratatoskr/test-hooks -- -D warnings
-      # --no-fail-fast: every crate's failures in one run
+      # The pinned model files the tests run the built-in model from (they fail without DRGNX_TEST_MODELS), beside the
+      # checkout, not in it (the tests that list a checkout would find them): one cache for Linux and macOS, kept by
+      # the list's hash; models.sh checks each restored file's sum and fetches what is missing from Hugging Face at its
+      # pinned revision. A same-repository pull request saves it too (950 MB a fetch).
+      - id: models
+        if: ${{ !cancelled() }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ../test-models
+          key: models-${{ hashFiles('.github/ci/models.txt') }}
+          enableCrossOsArchive: true
+      - name: the model files (DRGNX_TEST_MODELS)
+        id: models-fetch
+        if: ${{ !cancelled() }}
+        working-directory: ${{ github.workspace }}
+        run: |
+          bash .github/ci/models.sh ../test-models
+          echo "DRGNX_TEST_MODELS=$(cd ../test-models && pwd)" >> "$GITHUB_ENV"
+      - if: ${{ !cancelled() && (env.CACHE_SAVE == 'true' || env.CACHE_SAVE_PR == 'true') && steps.models.outputs.cache-hit != 'true' && steps.models-fetch.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ../test-models
+          key: ${{ steps.models.outputs.cache-primary-key }}
+          enableCrossOsArchive: true
+      # --no-fail-fast: every crate's failures in one run. The GPU tests run the real shaders on llvmpipe, Mesa's
+      # software Vulkan driver (rust-packages.sh installs it), so they need no GPU
       - if: ${{ !cancelled() }}
+        env:
+          DRGNX_TEST_ADAPTER: llvmpipe
         run: cargo test --locked --no-fail-fast --workspace --features drgnx-ratatoskr/test-hooks
       # the test-hooks binary and the harness for the steps below
       # (+ gleipnir-probe and gleipnir-escape, the escape suite's two binaries: glibc builds, so the same ones run on a VM)
@@ -267,7 +296,7 @@ jobs:
           key: ${{ steps.registry.outputs.cache-primary-key }}
 
   msrv:
-    name: MSRV 1.88 builds
+    name: MSRV 1.95 builds
     if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-msrv ')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -290,17 +319,17 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: runtime/target
-          key: cargo-${{ runner.os }}-msrv188-mt1-1.88.0-${{ hashFiles('runtime/Cargo.lock', 'runtime/Cargo.toml', 'runtime/*/Cargo.toml', 'runtime/crates/*/Cargo.toml') }}
-          restore-keys: cargo-${{ runner.os }}-msrv188-mt1-1.88.0-
+          key: cargo-${{ runner.os }}-msrv195-mt1-1.95.0-${{ hashFiles('runtime/Cargo.lock', 'runtime/Cargo.toml', 'runtime/*/Cargo.toml', 'runtime/crates/*/Cargo.toml') }}
+          restore-keys: cargo-${{ runner.os }}-msrv195-mt1-1.95.0-
       - name: Each tracked file at its last commit's time (cargo rebuilds only what changed since the cache)
         run: bash .github/ci/commit-times.sh runtime/target/.drgnx-built-from
-      - run: rustup toolchain install 1.88.0 --profile minimal
+      - run: rustup toolchain install 1.95.0 --profile minimal
       - id: build
-        run: cargo +1.88.0 build --locked --manifest-path runtime/Cargo.toml
+        run: cargo +1.95.0 build --locked --manifest-path runtime/Cargo.toml
       - id: prune
         if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
         env:
-          RUSTUP_TOOLCHAIN: 1.88.0
+          RUSTUP_TOOLCHAIN: 1.95.0
         run: |
           bash .github/ci/cargo-prune.sh runtime/Cargo.toml runtime/target
           # the commit it was built from, only when every step before passed: after a step that failed some outputs
@@ -434,10 +463,51 @@ jobs:
           cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --no-run
       # Landlock ABI 9 is the reduced tier's floor; on a runner kernel below it the launch rows of the reduced tier run
       # on the full tier (tests/launch_sandboxed.rs), which needs bubblewrap 0.12 only. --no-fail-fast: every test
-      # binary's failures in one run.
+      # binary's failures in one run. The crate's timing rows (#[ignore = "timing: …"], test/timing-rust.txt) are
+      # ignored too, but they are the timing lane's: a debug build on a shared runner judges no budget, so they are skipped.
+      # The agent browser's rows (tests/browser_sandboxed.rs) need Landlock ABI 9 on both tiers, which these runners'
+      # Linux 7.0 lacks (ABI 8): they run in the Fedora 45 VM of the next step instead (x64 only), by the names their
+      # binary lists.
       - name: agent core, sandbox lane (--ignored)
         if: ${{ !cancelled() && steps.core-build.outcome == 'success' }}
-        run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks -- --ignored --test-threads 1
+        run: |
+          skips=$(sed 's/#.*//' test/timing-rust.txt | awk '$1 == "drgnx-ratatoskr" { printf " --skip %s", $3 }')
+          vm=$(cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --test browser_sandboxed -- --list --format terse --ignored | sed -n 's/: test$//p')
+          [ -n "$vm" ] || { echo "browser_sandboxed lists no rows" >&2; exit 1; }
+          skips="$skips$(printf '%s\n' "$vm" | awk '{ printf " --skip %s", $1 }')"
+          cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks -- --ignored --test-threads 1 $skips
+      # The agent browser's rows where they can run: a Fedora 45 VM on the x64 runners (Linux 7.1 or later, Landlock ABI 9
+      # or later, as the Fedora hosts drgnx supports have), booted under QEMU with KVM by .github/ci/browser-vm.sh, with
+      # this job's bubblewrap and the binaries copied in at their own paths (the test binary names its data and the hub by
+      # their absolute paths). docs/develop/ci.md, "The browser rows in a VM"
+      - name: the agent browser's rows in a Fedora 45 VM (Landlock ABI 9)
+        if: ${{ !cancelled() && steps.core-build.outcome == 'success' && runner.arch == 'X64' }}
+        run: |
+          bin=$(cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --test browser_sandboxed --no-run --message-format=json | jq -r 'select(.reason == "compiler-artifact" and .executable != null and .target.name == "browser_sandboxed" and (.target.kind | index("test"))) | .executable')
+          # the build also reports the ratatoskr bin (the test depends on it): exactly one path must be the test binary
+          [ -n "$bin" ] && [ "$(printf '%s\n' "$bin" | wc -l)" = 1 ] || { echo "expected one browser_sandboxed test binary, got: ${bin:-none}" >&2; exit 1; }
+          t=$PWD/runtime/target/debug
+          bash .github/ci/browser-vm.sh up "$RUNNER_TEMP/vm"
+          bash .github/ci/browser-vm.sh put "$RUNNER_TEMP/vm" /usr/bin/bwrap "$t/ratatoskr" "$t/gleipnir-probe" "$t/ratatoskr-mock" \
+            "$PWD/runtime/crates/drgnx-ratatoskr/tests/data" "$bin"
+          bash .github/ci/browser-vm.sh run "$RUNNER_TEMP/vm" "cd '$PWD/runtime' && '$bin' --ignored --test-threads 1"
+      # The arm runners have no KVM, and an emulated guest never answered within 20 minutes. The rows' only arm64-specific
+      # part, the browser host's seccomp filter, is installed for real by gleipnir's own tests above
+      # (`installed_filter_denies`, its `browser-` cases); the rest is the same code as on x64, whose VM runs it.
+      - name: the agent browser's rows skip on arm64 (Landlock ABI 8 here; they run in the x64 legs' VM)
+        if: ${{ !cancelled() && steps.core-build.outcome == 'success' && runner.arch == 'ARM64' }}
+        run: |
+          echo "::notice title=browser rows skipped::the arm runners have no KVM for the Fedora 45 VM and boot Linux $(uname -r), whose Landlock ABI the browser's rows need at 9 or later: tests/browser_sandboxed.rs runs in the x64 legs' VM"
+      # The real-start rows (docs/develop/runtime.md, "The real-start rows"): a release hub, no test hooks, so each
+      # agents/start goes through the real launch, Gleipnir's validation and bwrap. --require-all: a row that cannot
+      # start sandboxed fails here; the browser row is an excused skip on this runner (no Chromium, and a Landlock ABI
+      # below 9), as is the internet row.
+      - name: real-start rows (release hub)
+        if: ${{ !cancelled() && steps.core-build.outcome == 'success' }}
+        run: |
+          cargo build --locked --release --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr
+          runtime/target/release/domr --hub-bin runtime/target/release/ratatoskr \
+            --scenarios test/conformance --only 'real-start/*' --require-all
       # last, whatever the tests said
       - id: prune
         if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && (steps.build.outcome == 'success' || steps.core-build.outcome == 'success') }}
@@ -505,6 +575,9 @@ jobs:
           rustup target add x86_64-unknown-linux-musl
           cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-fwd --target x86_64-unknown-linux-musl --target-dir runtime/target/fwd
           cp runtime/target/fwd/x86_64-unknown-linux-musl/debug/drgnx-fwd runtime/target/debug/drgnx-fwd
+      # sleipnir in jobq's shape (`linux,sync`: docs/develop/sleipnir.md) builds static too, in the forwarder's target dir
+      - if: ${{ !cancelled() }}
+        run: cargo build --locked --manifest-path runtime/Cargo.toml -p sleipnir --no-default-features --features linux,sync --target x86_64-unknown-linux-musl --target-dir runtime/target/fwd
       # The runner's user has no systemd user session, so rootless podman would fall back to cgroupfs and drop the
       # caps (the hub refuses container jobs then: exec/container.rs, check_limits). Lingering starts the user's
       # systemd; the hub's podman reaches it over the session bus (domr passes DBUS_SESSION_BUS_ADDRESS through).
@@ -523,6 +596,18 @@ jobs:
         run: |
           runtime/target/debug/domr --hub-bin runtime/target/debug/ratatoskr \
             --scenarios test/conformance --only 'container*/*' --require-all
+      # the runner bundles of both architectures, static (`bin/drgnx build runner-bundle`, docs/develop/sleipnir.md),
+      # and the x86_64 one run in an image of another libc (Alpine's musl, pinned by the digest pulled now)
+      - name: runner bundles, and the bundle in a musl image
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+          bin/drgnx build runner-bundle --arch x86_64
+          bin/drgnx build runner-bundle --arch aarch64
+          podman pull -q docker.io/library/alpine:3.22
+          img="docker.io/library/alpine@$(podman image inspect docker.io/library/alpine:3.22 --format '{{.Digest}}')"
+          DRGNX_TEST_BUNDLE="$PWD/runtime/target/bundle/x86_64" DRGNX_TEST_FOREIGN_IMAGE="$img" \
+            cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p sleipnir --test bundle_host -- --ignored
       # last, whatever the rows said
       - id: prune
         if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
@@ -545,6 +630,34 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
           key: ${{ steps.registry.outputs.cache-primary-key }}
+
+  # The fake fleet (test/runners/README.md): containers with sshd and rootless podman inside, as SSH runners. On demand
+  # only until the spike's verdict is in (`only: rt-fleet`); it is never part of a push's gate.
+  fleet:
+    name: fake runner fleet
+    if: ${{ github.event_name == 'workflow_dispatch' && contains(format(' {0} ', inputs.only), ' rt-fleet ') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      DRGNX_ORG: ${{ github.workspace }}
+      DRGNX_FLEET_HOST_RUSTC: "1"
+      DRGNX_FLEET_HUB_IMAGE: localhost/drgnx-fake-runner:f45   # built by `up`; has the ssh client
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - run: podman --version
+      - run: rustup toolchain install stable --profile minimal
+      - name: runners up
+        run: bash test/runners/fleet.sh up --runners 2
+      - name: the spike's checks in every runner
+        run: bash test/runners/fleet.sh s1
+      - name: linger over ssh
+        run: bash test/runners/fleet.sh check-linger
+      - name: down
+        if: ${{ always() }}
+        run: bash test/runners/fleet.sh down
 
   # The Android type-check (Android is not a target; the door stays open: docs/develop/runtime.md). The fake C compiler
   # is for urdr's bundled SQLite: a type-check does not link.
@@ -582,11 +695,16 @@ jobs:
           restore-keys: cargo-${{ runner.os }}-android-mt1-${{ steps.rv.outputs.v }}-
       - name: Each tracked file at its last commit's time (cargo rebuilds only what changed since the cache)
         run: bash .github/ci/commit-times.sh runtime/target/.drgnx-built-from
+      # + the runner's protocol and sync alone: the shape jobq and the Android door take (docs/develop/sleipnir.md)
       - id: build
-        run: cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p huginn -p drgnx-ratatoskr
+        run: |
+          cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p huginn -p heimdall -p drgnx-ratatoskr -p forseti
+          cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p sleipnir --no-default-features --features proto,sync
       # the pure-Rust crates' tests too: only clippy's test build shows code that is dead on Android (gate review M21)
       - if: ${{ !cancelled() }}
-        run: cargo clippy --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android --all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -p bifrost -p huginn -- -D warnings
+        run: |
+          cargo clippy --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android --all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -p bifrost -p huginn -p heimdall -p forseti -- -D warnings
+          cargo clippy --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android --all-targets -p sleipnir --no-default-features --features proto,sync -- -D warnings
       - id: prune
         if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
         run: |
@@ -828,7 +946,26 @@ jobs:
           xcode-select -p
           sudo xcode-select -s /Library/Developer/CommandLineTools
           xcode-select -p
-      # --no-fail-fast: every crate's failures in one run (no Mac to try them on before CI)
+      # the model files, as the Fedora 45 job (one cache for both)
+      - id: models
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ../test-models
+          key: models-${{ hashFiles('.github/ci/models.txt') }}
+          enableCrossOsArchive: true
+      - name: the model files (DRGNX_TEST_MODELS)
+        id: models-fetch
+        run: |
+          /bin/bash .github/ci/models.sh ../test-models
+          echo "DRGNX_TEST_MODELS=$(cd ../test-models && pwd)" >> "$GITHUB_ENV"
+      - if: ${{ !cancelled() && (env.CACHE_SAVE == 'true' || env.CACHE_SAVE_PR == 'true') && steps.models.outputs.cache-hit != 'true' && steps.models-fetch.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ../test-models
+          key: ${{ steps.models.outputs.cache-primary-key }}
+          enableCrossOsArchive: true
+      # --no-fail-fast: every crate's failures in one run (no Mac to try them on before CI). No GPU adapter is named: the
+      # GPU tests are ignored on macOS (the runner has no GPU; Metal parity is a real Mac's)
       - run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks
       # (+ gleipnir-probe and gleipnir-escape for the Seatbelt rows below). The workspace tests above already run
       # `eitri` and `draugr` on macOS (their O_NOFOLLOW_ANY, xcode-select-link and CLOEXEC-loop paths).
@@ -901,7 +1038,7 @@ jobs:
       # (gate review M21). After the escape rows, whatever they say, so neither hides the other.
       - name: clippy on darwin (the pure-Rust crates)
         if: ${{ !cancelled() }}
-        run: cargo clippy --locked --manifest-path runtime/Cargo.toml --all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -p bifrost -p huginn -- -D warnings
+        run: cargo clippy --locked --manifest-path runtime/Cargo.toml --all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -p bifrost -p huginn -p heimdall -- -D warnings
       - id: prune
         if: ${{ !cancelled() && (env.CACHE_SAVE == 'true' || env.CACHE_SAVE_PR == 'true') && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
         run: |

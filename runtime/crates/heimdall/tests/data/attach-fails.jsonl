@@ -1,0 +1,26 @@
+{"note":"a Chromium where attachToBrowserTarget fails: the agent gets the root session as it is"}
+{"to_browser":{"id":1073741824,"method":"Target.attachToBrowserTarget"}}
+{"agent":{"id":1,"method":"Browser.getVersion"}}
+{"to_agent":{"id":1,"error":{"code":-32000,"message":"the browser is starting"}}}
+{"browser":{"id":1073741824,"error":{"code":-32601,"message":"'Target.attachToBrowserTarget' wasn't found"}}}
+{"event":"no-browser-session"}
+{"agent":{"id":1,"method":"Browser.getVersion"}}
+{"to_browser":"same"}
+{"browser":{"id":1,"result":{"protocolVersion":"1.3","product":"HeadlessChrome/142.0.7444.59"}}}
+{"to_agent":"same"}
+{"agent":{"id":2,"method":"Target.setAutoAttach","params":{"autoAttach":true,"waitForDebuggerOnStart":true,"flatten":true}}}
+{"to_browser":"same"}
+{"note":"root events are the agent's now"}
+{"browser":{"method":"Target.attachedToTarget","params":{"sessionId":"S-page","targetInfo":{"targetId":"T-page","type":"page","title":"","url":"about:blank","attached":true,"canAccessOpener":false},"waitingForDebugger":true}}}
+{"to_agent":"same"}
+{"agent":{"id":3,"method":"Page.enable","sessionId":"S-page"}}
+{"to_browser":"same"}
+{"note":"the hub's ids stay the hub's on the shared root"}
+{"agent":{"id":1073741824,"method":"Browser.getVersion"}}
+{"to_agent":{"id":1073741824,"error":{"code":-32600,"message":"the id is out of range"}}}
+{"note":"the agent goes: the paused page is resumed and detached, and the root's auto-attach and discovery are turned off"}
+{"close":true}
+{"to_browser":{"id":1073741825,"method":"Runtime.runIfWaitingForDebugger","params":{},"sessionId":"S-page"}}
+{"to_browser":{"id":1073741826,"method":"Target.detachFromTarget","params":{"sessionId":"S-page"}}}
+{"to_browser":{"id":1073741827,"method":"Target.setAutoAttach","params":{"autoAttach":false,"waitForDebuggerOnStart":false,"flatten":true}}}
+{"to_browser":{"id":1073741828,"method":"Target.setDiscoverTargets","params":{"discover":false}}}

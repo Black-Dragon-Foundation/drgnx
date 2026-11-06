@@ -81,7 +81,7 @@
   (let ((gui (drgnx-ci-test--yml "gui.yml")) (tiers (drgnx-ci-test--yml "drgnx-tiers.yml")))
     (skip-unless (and gui tiers))
     (drgnx-ci-test--has gui "push:\n    branches: [main, \"ci/**\", \"!ci/joint/**\"]" "schedule:" "workflow_dispatch:"
-                        "group: gui-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}")
+                        "group: gui-${{ github.event_name }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}")
     (drgnx-ci-test--has tiers "bin/drgnx test --container --ui" "bin/drgnx test --container --scenario"
                         "bin/drgnx test --container --perf" "DRGNX_PERF_CPU_FACTOR: \"2\""
                         "DRGNX_PERF_RESULTS: perf-results.json" "if: always()" "name: perf-results")
@@ -111,12 +111,13 @@
     (should-not (string-search "emacs-30" tiers))))
 
 (ert-deftest drgnx-ci/the-modal-and-kitty-tiers-get-the-pinned-evil-and-kkp ()
-  ;; without DRGNX_MODAL_ELPA / DRGNX_USER_ELPA the evil teardown, the modal isolation test and kitty's kkp tests skip
+  ;; without DRGNX_MODAL_ELPA / DRGNX_USER_ELPA the evil teardown, the modal isolation test and kitty's kkp tests skip,
+  ;; and so do Quick Open's vertico rows, which test/no-skip.eld then fails: in the gate's job too
   (let ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")) (action (drgnx-ci-test--action "test-elpa")))
     (skip-unless (and tiers action))
     (drgnx-ci-test--has action "test/container/modal-elpa.sh" "echo \"DRGNX_MODAL_ELPA=" "echo \"DRGNX_USER_ELPA="
                         "etc/drgnx.lock.eld")
-    (dolist (job '("unit" "ui" "tty"))
+    (dolist (job '("unit" "no-lisp-writes" "ui" "tty"))
       (drgnx-ci-test--has (drgnx-ci-test--job tiers job) "uses: ./drgnx/.github/actions/test-elpa"))))
 
 (ert-deftest drgnx-ci/the-timing-lane-judges-and-calibrates-in-the-image ()
@@ -150,6 +151,88 @@
     ;; one report and one cache per image
     (drgnx-ci-test--has job "escape-report-host-${{ matrix.os }}" "-escape-${{ matrix.os }}-")))
 
+(ert-deftest drgnx-ci/the-escape-legs-run-the-browser-rows-in-a-vm ()
+  ;; the agent browser's rows need Landlock ABI 9 (Linux 7.1), and the runners boot Linux 7.0 (ABI 8): the x64 escape
+  ;; legs run them in a Fedora 45 VM under KVM, after the host sandbox lane, which leaves out exactly them (the names
+  ;; their binary lists), so they neither fail there nor go unrun. The arm legs have no KVM, and emulated the guest
+  ;; never answered; the rows' one arm64-specific part, the browser's seccomp filter, is installed for real by gleipnir's
+  ;; own tests on the arm runner, so the arm legs skip the VM and say why
+  (let* ((rt (drgnx-ci-test--yml "runtime.yml")) (job (and rt (drgnx-ci-test--job rt "escape-host")))
+         (vm (drgnx-ci-test--file ".github/ci/browser-vm.sh")))
+    (skip-unless job)
+    (should vm)
+    (drgnx-ci-test--has job "--test browser_sandboxed -- --list --format terse --ignored"
+                        "bash .github/ci/browser-vm.sh up \"$RUNNER_TEMP/vm\""
+                        "bash .github/ci/browser-vm.sh put \"$RUNNER_TEMP/vm\" /usr/bin/bwrap"
+                        "'$bin' --ignored --test-threads 1")
+    (let* ((lane (string-search "name: agent core, sandbox lane" job))
+           (in-vm (string-search "name: the agent browser's rows in a Fedora 45 VM" job))
+           (step (and in-vm (substring job in-vm (string-search "\n      - " job in-vm))))
+           (arm (string-search "name: the agent browser's rows skip on arm64" job)))
+      (should (and lane in-vm (< lane in-vm)))
+      (should (string-search "runner.arch == 'X64'" step))
+      (should (and arm (string-search "runner.arch == 'ARM64'" job arm))))
+    ;; the x86_64 image is pinned by its sha256, which is checked; no arm64 image; the script is shellchecked
+    (drgnx-ci-test--has vm "Fedora-Cloud-Base-Generic-45-" "sha256sum -c -" "x86_64)")
+    (should-not (string-search "aarch64)" vm))
+    (should (= 1 (length (drgnx-ci-test--matches "sha=\\([0-9a-f]\\{64\\}\\)" vm))))
+    (drgnx-ci-test--has (drgnx-ci-test--yml "ci.yml") " .github/ci/browser-vm.sh ")))
+
+(ert-deftest drgnx-ci/the-msrv-is-one-number ()
+  ;; 1.95 since 2026-11-06 (wasmtime's 48 LTS needs it): the workspace's rust-version, the job that builds with it, and
+  ;; install.sh's floor; the toolchain install.sh's private rustup brings is not older
+  (let* ((rt (drgnx-ci-test--yml "runtime.yml")) (job (and rt (drgnx-ci-test--job rt "msrv")))
+         (cargo (drgnx-ci-test--file "runtime/Cargo.toml")) (install (drgnx-ci-test--file "install.sh"))
+         (private (and install (string-match "\nRUST_PRIVATE=\\([0-9.]+\\)\n" install) (match-string 1 install))))
+    (skip-unless (and job cargo install))
+    (should (string-search "\nrust-version = \"1.95\"\n" cargo))
+    (drgnx-ci-test--has job "name: MSRV 1.95 builds\n" "-msrv195-mt1-1.95.0-" "rustup toolchain install 1.95.0 --profile minimal\n"
+                        "cargo +1.95.0 build --locked --manifest-path runtime/Cargo.toml\n" "RUSTUP_TOOLCHAIN: 1.95.0\n")
+    (should (string-search "\nRUST_MIN=1.95\n" install))
+    (should private)
+    (should (version<= "1.95" private))))
+
+(ert-deftest drgnx-ci/the-rust-test-jobs-have-the-models-and-linux-has-llvmpipe ()
+  ;; the tests that run the built-in model fail without DRGNX_TEST_MODELS, the GPU tests without DRGNX_TEST_ADAPTER
+  ;; (never a skip): both workspace test jobs fetch the pinned files before `cargo test', and the Fedora 45 one runs
+  ;; the shaders on llvmpipe; macOS has no adapter and ignores its GPU rows
+  (let* ((rt (drgnx-ci-test--yml "runtime.yml")) (list (drgnx-ci-test--file ".github/ci/models.txt"))
+         (packages (drgnx-ci-test--file "test/container/rust-packages.sh")))
+    (skip-unless (and rt packages))
+    (should list)
+    (dolist (job '("linux" "macos"))
+      (let* ((text (drgnx-ci-test--job rt job))
+             (fetch (string-search "models.sh ../test-models\n" text))
+             (test (string-search "--no-fail-fast --" text)))
+        (drgnx-ci-test--has text "key: models-${{ hashFiles('.github/ci/models.txt') }}\n" "enableCrossOsArchive: true\n"
+                            "echo \"DRGNX_TEST_MODELS=$(cd ../test-models && pwd)\" >> \"$GITHUB_ENV\"\n")
+        (should (and fetch test (< fetch test)))
+        (should (string-search "env.CACHE_SAVE_PR == 'true') && steps.models.outputs.cache-hit != 'true'" text))))
+    (should (string-match-p "DRGNX_TEST_ADAPTER: llvmpipe\n *run: cargo test --locked --no-fail-fast --workspace"
+                            (drgnx-ci-test--job rt "linux")))
+    (should-not (string-search "DRGNX_TEST_ADAPTER:" (drgnx-ci-test--job rt "macos")))
+    (drgnx-ci-test--has packages "vulkan-loader mesa-vulkan-drivers")
+    (should (string-search "https://huggingface.co/$repo/resolve/$rev/$name" (drgnx-ci-test--file ".github/ci/models.sh")))))
+
+(ert-deftest drgnx-ci/the-runner-crates-are-checked-for-android-built-static-and-denied ()
+  ;; forseti and sleipnir's protocol and sync are what jobq and the Android door take; the runner ships static (musl)
+  (let* ((rt (drgnx-ci-test--yml "runtime.yml"))
+         (android (and rt (drgnx-ci-test--job rt "android")))
+         (containers (and rt (drgnx-ci-test--job rt "agent-containers")))
+         (deny (and rt (drgnx-ci-test--job rt "deny"))))
+    (skip-unless (and android containers deny))
+    (drgnx-ci-test--has android
+                        "--target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p huginn -p heimdall -p drgnx-ratatoskr -p forseti\n"
+                        "--target aarch64-linux-android -p sleipnir --no-default-features --features proto,sync\n"
+                        "--all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -p bifrost -p huginn -p heimdall -p forseti -- -D warnings\n"
+                        "--all-targets -p sleipnir --no-default-features --features proto,sync -- -D warnings\n")
+    (drgnx-ci-test--has containers
+                        "-p sleipnir --no-default-features --features linux,sync --target x86_64-unknown-linux-musl --target-dir runtime/target/fwd\n")
+    ;; deny reads the whole workspace (every crate under crates/) for every target the crates ship to
+    (drgnx-ci-test--has deny "run: cargo-deny --manifest-path runtime/Cargo.toml check\n")
+    (drgnx-ci-test--has (drgnx-ci-test--file "runtime/Cargo.toml") "members = [\"conformance\", \"crates/*\"]")
+    (drgnx-ci-test--has (drgnx-ci-test--file "runtime/deny.toml") "\"x86_64-unknown-linux-musl\"" "\"aarch64-linux-android\"")))
+
 (ert-deftest drgnx-ci/every-rust-timing-test-is-in-the-timing-list ()
   ;; the Rust tests marked #[ignore = "timing: …"] run in the timing lane's Rust step and nowhere else
   (let ((list-file (expand-file-name "test/timing-rust.txt" drgnx-ci-test--root))
@@ -170,6 +253,22 @@
             (push (nth 2 (split-string line)) listed)))
         (forward-line 1)))
     (should (equal (sort (copy-sequence found) #'string<) (sort (copy-sequence listed) #'string<)))))
+
+(ert-deftest drgnx-ci/a-run-of-ignored-tests-skips-the-timing-rows ()
+  ;; the timing rows are #[ignore] too: a `cargo test … -- --ignored' of a crate the timing list names skips that
+  ;; crate's rows (a debug build on a shared runner judged a release budget: search/query p95 in the escape legs)
+  (let ((rt (drgnx-ci-test--yml "runtime.yml")) (rows (drgnx-ci-test--file "test/timing-rust.txt")) timed (runs 0))
+    (skip-unless (and rt rows))
+    (dolist (line (split-string rows "\n" t))
+      (unless (string-match-p "\\`\\s-*#" line) (push (car (split-string line)) timed)))
+    (dolist (line (split-string rt "\n"))
+      (when (and (string-match-p "cargo test .*-- --ignored" line) (string-match "-p \\([a-z0-9-]+\\)" line)
+                 (member (match-string 1 line) timed))
+        (setq runs (1+ runs))
+        (should (string-suffix-p " $skips" line))))
+    (should (= runs 1))
+    (drgnx-ci-test--has (drgnx-ci-test--job rt "escape-host")
+                        "skips=$(sed 's/#.*//' test/timing-rust.txt | awk '$1 == \"drgnx-ratatoskr\" { printf \" --skip %s\", $3 }')\n")))
 
 (ert-deftest drgnx-ci/the-timing-job-runs-the-rust-timing-tests-report-only ()
   (let* ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")) (script (expand-file-name "test/timing-rust.sh" drgnx-ci-test--root)))
@@ -215,6 +314,19 @@
     (let ((yml (drgnx-ci-test--yml f)))
       (skip-unless yml)
       (should-not (string-search "DRGNX_TEST_TIME_FACTOR" yml)))))
+
+(ert-deftest drgnx-ci/macos-jobs-select-the-git-the-hub-trusts-before-their-tests ()
+  ;; pattern D: the hub runs only the git of the developer dir xcode-select names and refuses the image's Xcode under
+  ;; /Applications, so without the Command Line Tools no folder is a project and a task cannot be made
+  (dolist (spec '(("drgnx-tiers.yml" "macos" "bin/drgnx test") ("runtime.yml" "macos" "cargo test")))
+    (let ((yml (drgnx-ci-test--yml (nth 0 spec))))
+      (skip-unless yml)
+      (let* ((job (drgnx-ci-test--job yml (nth 1 spec)))
+             (select (string-search "sudo xcode-select -s /Library/Developer/CommandLineTools" job))
+             (tests (string-search (nth 2 spec) job)))
+        (should select)
+        (should tests)
+        (should (< select tests))))))
 
 (defun drgnx-ci-test--workflows-and-actions (workflows)
   "The text of each of WORKFLOWS and of every local action."
@@ -276,9 +388,11 @@
         (should (equal (sort (copy-sequence needs) #'string<)
                        (sort (cl-set-difference (drgnx-ci-test--job-ids yml) (cons "gate" (nth 2 spec)) :test #'equal)
                              #'string<)))
-        ;; besides the gate's, the only `needs:' is the path filter's (no job waits on another it does not take data
-        ;; from); a job's own key, not the gate action's `needs' input
-        (should (= 1 (length (drgnx-ci-test--matches "^    needs: \\(\\[\\)" yml))))
+        ;; besides the gate's, a job waits only for the path filter and the images it pulls (no job waits on another it
+        ;; does not take data from); a job's own key, not the gate action's `needs' input
+        (dolist (n (drgnx-ci-test--matches "^    needs: \\[\\([^]]*\\)\\]$"
+                                           (substring yml 0 (string-search "\n  gate:\n" yml))))
+          (should (equal (split-string n ", *" t) '("changes" "images"))))
         (dolist (n (drgnx-ci-test--matches "^    needs: \\([^[\n]*\\)$" yml))
           (should (equal n "changes")))
         ;; the gate lets a job be skipped only when the path filter skipped it (or on a joint round, below)
@@ -336,7 +450,7 @@
           (let ((rk (match-string 1 head)))
             (should (or (string-search "hashFiles(" rk)
                         (and (string-prefix-p "cargo-" rk)
-                             (string-match-p "steps\\.rv\\.outputs\\.v\\|1\\.88\\.0\\|env\\.NIGHTLY" rk))
+                             (string-match-p "steps\\.rv\\.outputs\\.v\\|1\\.95\\.0\\|env\\.NIGHTLY" rk))
                         (string-prefix-p "fuzz-corpus-" rk)
                         ;; the registry: an older index and set of .crate files only lack crates cargo then fetches
                         (string-prefix-p "cargo-registry-" rk)))))))))
@@ -354,6 +468,9 @@
       (should (or (string-search "steps.prune.outcome == 'success'" c)
                   ;; runtime.yml's main-only flag (no pull request): the Nidhogg tarball
                   (and (string-search "env.CACHE_SAVE == 'true'" c) (not (string-search "CACHE_SAVE_PR" c)))
+                  ;; the model files: main and a pull request from this repository (CACHE_SAVE_PR), once models.sh
+                  ;; checked every file's sum
+                  (string-search "(env.CACHE_SAVE == 'true' || env.CACHE_SAVE_PR == 'true') && steps.models.outputs.cache-hit != 'true' && steps.models-fetch.outcome == 'success'" c)
                   (string-search "github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')" c))))
     ;; an action the tiers run on another commit than the workflow's own (Nidhogg's drgnx_ref) saves only its own
     (when (string-search "inputs.dir" yml)
@@ -462,13 +579,17 @@
   ;; main moves to a pull request's head by fast-forward: every checkout of the workflows a pull request runs takes the
   ;; head (on other events the expression is empty: the event's own commit), the path filter diffs the head, and the
   ;; head must descend from main's tip
-  (dolist (name '("ci.yml" "macos.yml" "runtime.yml" "drgnx-tiers.yml"))
+  (dolist (name '("ci.yml" "macos.yml" "gui.yml" "runtime.yml" "drgnx-tiers.yml" "images.yml"))
     (let ((yml (drgnx-ci-test--yml name)))
       (skip-unless yml)
       (should (= (length (drgnx-ci-test--matches "\\(uses: actions/checkout@\\)" yml))
                  (length (drgnx-ci-test--matches "\\(ref: \\${{ \\(?:inputs\\.drgnx_ref || \\)?github\\.event\\.pull_request\\.head\\.sha }}\\)" yml))))))
-  (dolist (name '("ci.yml" "macos.yml"))
+  (dolist (name '("ci.yml" "macos.yml" "gui.yml"))
     (should (string-search "SHA: ${{ github.event.pull_request.head.sha || github.sha }}" (drgnx-ci-test--yml name))))
+  ;; main's protection requires each of the three gates, and only a pull request's own run of a workflow counts
+  ;; there (a dispatched run's gate does not), so every gated workflow runs on pull requests
+  (dolist (name '("ci.yml" "macos.yml" "gui.yml"))
+    (should (string-match-p "^  pull_request:" (drgnx-ci-test--yml name))))
   (drgnx-ci-test--has (drgnx-ci-test--yml "ci.yml")
                       "name: The pull request's head descends from the default branch's tip"
                       "compare/$tip...$HEAD_SHA"))
@@ -564,18 +685,81 @@
                         "ghcr.sh ref drgnx-bwrap \"$(bash test/container/image-tag.sh .github/ci/bwrap/Containerfile)-$ARCH\"")
     (should-not (string-search "needs: images" (drgnx-ci-test--job rt "escape-host")))
     (drgnx-ci-test--has (drgnx-ci-test--job rt "linux")
-                        "image: ${{ needs.images.outputs.rust || 'registry.fedoraproject.org/fedora:45' }}"
+                        "|| fromJSON('{\"image\":\"registry.fedoraproject.org/fedora:45\",\"options\":\"--init\"}') }}"
                         "run: sh test/container/rust-packages.sh" "if: ${{ env.PREBUILT == '' }}")))
 
-(ert-deftest drgnx-ci/images-are-published-only-by-main-and-manual-runs ()
-  ;; a pull request or a ci/* push never publishes: a run whose inputs have no image yet builds its own
+(ert-deftest drgnx-ci/a-job-container-names-credentials-only-with-its-image ()
+  ;; GitHub refuses a job whose container `credentials' come out empty ("Unexpected value ''") before any step runs:
+  ;; the Rust job's fallback to plain Fedora (no prebuilt image for its inputs yet) never started. So no workflow
+  ;; has a `credentials:' block, and the Rust job's container is one expression: the prebuilt image with a token to
+  ;; pull it, else plain Fedora with none
+  (dolist (f '("ci.yml" "macos.yml" "gui.yml" "drgnx-tiers.yml" "tty.yml" "images.yml" "bootstrap.yml" "runtime.yml"))
+    (let ((yml (drgnx-ci-test--yml f)))
+      (skip-unless yml)
+      (should-not (string-match-p "^ +credentials:" yml))))
+  (let* ((linux (drgnx-ci-test--job (drgnx-ci-test--yml "runtime.yml") "linux"))
+         (start (string-search "\n    container: >-\n      ${{ needs.images.outputs.rust\n" linux))
+         (end (and start (string-search " }}\n" linux start)))
+         (expr (and end (substring linux start end)))
+         (or-at (and expr (string-search "\n      || " expr))))
+    (should or-at)
+    (drgnx-ci-test--has (substring expr 0 or-at) "\"credentials\":{{\"username\":\"{1}\",\"password\":\"{2}\"}}"
+                        "needs.images.outputs.rust, github.actor, github.token" "\"options\":\"--init\"")
+    (should (equal (substring expr or-at)
+                   "\n      || fromJSON('{\"image\":\"registry.fedoraproject.org/fedora:45\",\"options\":\"--init\"}')"))))
+
+(ert-deftest drgnx-ci/test-images-are-built-on-published-bases ()
+  ;; each test image adds Nidhogg and a few small files to a base of only the Fedora packages (test/container/base/);
+  ;; images.yml publishes the bases first, then the images FROM the one it pulled, and the base's tag is part of the
+  ;; image's (image-tag.sh reads the `# base:' line)
   (let ((images (drgnx-ci-test--yml "images.yml")))
     (skip-unless images)
-    (drgnx-ci-test--has images "push:\n    branches: [main]\n" "workflow_dispatch:" "schedule:")
-    (should-not (string-search "pull_request" images))
-    (should-not (string-search "ci/**" images))
-    ;; a push or a manual run builds only the tags GHCR lacks; the weekly run rebuilds them all
-    (drgnx-ci-test--has images "if [ \"$EVENT\" != schedule ] && [ -n \"$(bash .github/ci/ghcr.sh ref \"$NAME\" \"$tag\")\" ]")))
+    (dolist (c '(("Containerfile" "drgnx-base-test" "base/Containerfile")
+                 ("Containerfile.gui" "drgnx-base-gui" "base/Containerfile.gui")
+                 ("Containerfile.tty" "drgnx-base-tty" "base/Containerfile.tty")))
+      (let ((top (drgnx-ci-test--file (concat "test/container/" (car c))))
+            (base (drgnx-ci-test--file (concat "test/container/" (nth 2 c)))))
+        (should top)
+        (should base)
+        (drgnx-ci-test--has top (format "# base: %s %s\n" (nth 1 c) (nth 2 c)) "ARG BASE\n" "FROM ${BASE}\n"
+                            "COPY nidhogg.sh")
+        (should-not (string-search "dnf" top))
+        (drgnx-ci-test--has base "FROM registry.fedoraproject.org/fedora:" "dnf -y")
+        (should-not (string-search "nidhogg" base))
+        (should (string-match-p (format "- name: %s\n *file: test/container/%s\n" (regexp-quote (nth 1 c)) (regexp-quote (nth 2 c)))
+                                images))))
+    ;; the images are built after the bases, on the base GHCR holds for the checkout's base tag
+    (drgnx-ci-test--has images "needs: bases" "BASE_FILE: ${{ matrix.base-file }}"
+                        "--build-arg \"BASE=$base\"")))
+
+(ert-deftest drgnx-ci/a-round-builds-each-missing-image-once-before-its-jobs ()
+  ;; The tiers' and the runtime's images were built by every job of a round whose inputs changed (seven builds a run):
+  ;; images.yml published only on main. Now ci.yml and gui.yml call it first, for this repository's own pushes and
+  ;; pull requests (never a fork's: its token cannot push, and its jobs build their own), and the jobs that pull
+  ;; images wait for it whatever it did; the gate lets it be skipped only on a fork's pull request
+  (let ((images (drgnx-ci-test--yml "images.yml"))
+        (own "if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}")
+        (fork "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'images' || '' }}"))
+    (skip-unless images)
+    (drgnx-ci-test--has images "on:\n  workflow_call:\n" "workflow_dispatch:" "schedule:"
+                        "group: images-${{ github.workflow }}-${{ github.ref }}")
+    (should-not (string-match-p "^  \\(push\\|pull_request\\):" images))
+    ;; a call or a manual run builds only the tags GHCR lacks; this workflow's own weekly run rebuilds them all (a
+    ;; caller's nightly does not); main moves the `f45' name to a tag an earlier round built
+    (drgnx-ci-test--has images
+                        "REBUILD: ${{ github.workflow == 'Test images' && github.event_name == 'schedule' }}"
+                        "if [ \"$REBUILD\" != true ] && have=\"$(bash .github/ci/ghcr.sh ref \"$NAME\" \"$tag\")\" && [ -n \"$have\" ]; then"
+                        "podman tag \"$have\" \"$image:f45\"" "if [ \"$moving\" = refs/heads/main ]; then podman tag")
+    (should-not (string-search "$EVENT" images))
+    (dolist (spec '(("ci.yml" "runtime" "tiers") ("gui.yml" "tiers")))
+      (let ((yml (drgnx-ci-test--yml (car spec))))
+        (drgnx-ci-test--has (drgnx-ci-test--job yml "images") own "packages: write"
+                            "uses: ./.github/workflows/images.yml")
+        (dolist (j (cdr spec))
+          (drgnx-ci-test--has (drgnx-ci-test--job yml j) "needs: [changes, images]" "if: ${{ !cancelled() && "))
+        (drgnx-ci-test--has (drgnx-ci-test--job yml "gate") fork)
+        ;; no other job may push: only the images job asks for packages: write
+        (should (= 1 (length (drgnx-ci-test--matches "\\(packages: write\\)" yml))))))))
 
 (ert-deftest drgnx-ci/an-image-tag-hashes-every-file-it-copies ()
   :tags '(:cond)
