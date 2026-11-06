@@ -232,6 +232,25 @@ The profile New Agent Session offers on Return: a profile's name, or nil for cla
 | `:agents` | `never` |
 | `:schema` | `(or null string)` |
 
+## drgnx-agents-identity-walk
+
+How agents are given a colour and a mark: `diagonal' (the look's six colours each with its own mark, then the
+rest) or `colour-first' (every colour with the circle first, marks from the agent after the last colour).  A change
+applies to the agents shown from then on.
+
+| Key | Value |
+| --- | --- |
+| Default | `diagonal` |
+| Type | `(choice (const :tag "Diagonal" diagonal) (const :tag "Colour first" colour-first))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-agent-identity-clear` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum diagonal colour-first)` |
+
 ## drgnx-agents-job-cpus
 
 How many CPUs one job may use.
@@ -549,6 +568,24 @@ PASSWORD, PASSPHRASE or CREDENTIAL), whatever this lists.  Only you can set it, 
 | `:runtime` | `"Vec<String>"` |
 | `:agents` | `never` |
 | `:schema` | `(list-of string)` |
+
+## drgnx-agents-tags
+
+When an agent's name tag shows beside its cursor: `activity' (for 2 s after it moves), `always' or `never'.
+Two agents of one colour, and the agent you follow, keep their tags on whatever this says (except `never').
+
+| Key | Value |
+| --- | --- |
+| Default | `activity` |
+| Type | `(choice (const :tag "After a move" activity) (const :tag "Always" always) (const :tag "Never" never))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-agents-editor-draw--tags-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum activity always never)` |
 
 ## drgnx-agents-trace-opens
 

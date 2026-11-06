@@ -306,6 +306,10 @@ An error here must never stop the kill."
                   (when-let* ((p (let ((non-essential t)) (project-current)))) (project-root p))))))
   (cdr drgnx-chrome--root))
 
+(defvar drgnx-chrome-short-breadcrumb-functions nil
+  "Functions of a window: when one returns non-nil the breadcrumb shows only the file name (the header's tail has
+something to say: the agent line).  Re-apply the chrome after the answer changes.")
+
 (defun drgnx-chrome-breadcrumb (w)
   "W's breadcrumb: project › folders › file (● when unsaved).  A buffer without a file has no path to show and its tab
 already names it: the row stays (a window's rows never change with its buffer, I3) but is empty."
@@ -321,8 +325,11 @@ already names it: the row stays (a window's rows never change with its buffer, I
              " "
              (if (not file)
                  ""
-               (let* ((root (with-current-buffer b (drgnx-chrome--project-root file)))
-                      (rel (if root (file-relative-name file root) (abbreviate-file-name file)))
+               (let* ((short (run-hook-with-args-until-success 'drgnx-chrome-short-breadcrumb-functions w))
+                      (root (and (not short) (with-current-buffer b (drgnx-chrome--project-root file))))
+                      (rel (cond (short (file-name-nondirectory file))
+                                 (root (file-relative-name file root))
+                                 (t (abbreviate-file-name file))))
                       (parts (split-string rel "/" t)))
                  (concat (if root (propertize (concat (drgnx-chrome--text (file-name-nondirectory (directory-file-name root))) " › ")
                                               'face 'drgnx-chrome-crumb)
@@ -347,6 +354,42 @@ sets it to its own construct while it is on.  Re-apply the chrome after changing
   "A mode-line construct an editor window's header shows after its breadcrumb — set buffer-locally (sticky scroll's
 scopes: modules/editor/drgnx-sticky.el); re-apply the chrome after changing it.")
 
+(defvar drgnx-chrome-tail-providers nil
+  "Functions of a window, in depth order (lowest first), each returning a string the header shows after the breadcrumb,
+or nil.  A string must be safe for the mode line (a `%' doubled).  Add and remove with
+`drgnx-chrome-add-tail-provider' and `drgnx-chrome-remove-tail-provider'.  A provider answers from cached state: it
+runs in redisplay.")
+
+(defconst drgnx-chrome--providers-tail '(:eval (drgnx-chrome--tail-string (selected-window)))
+  "The header's tail while there are providers: what they return, in order.")
+
+(defun drgnx-chrome--tail-string (w)
+  "The providers' strings for window W, joined."
+  (let (out)
+    (dolist (fn drgnx-chrome-tail-providers)
+      (let ((s (condition-case nil (funcall fn w) (error nil))))
+        (when (and (stringp s) (not (string-empty-p s))) (push s out))))
+    (apply #'concat (nreverse out))))
+
+(defun drgnx-chrome--reapply ()
+  (when (bound-and-true-p drgnx-chrome-mode)
+    (dolist (f (frame-list)) (drgnx-chrome-apply f))))
+
+(defun drgnx-chrome-add-tail-provider (fn depth)
+  "Show FN's string after the breadcrumb; lower DEPTH comes first (the large-files header 10, sticky scroll 20, the
+agent line 30).  Adding FN again moves it to its new depth."
+  (put fn 'drgnx-chrome-tail-depth depth)
+  (setq drgnx-chrome-tail-providers
+        (sort (cons fn (delq fn (copy-sequence drgnx-chrome-tail-providers)))
+              (lambda (a b) (< (get a 'drgnx-chrome-tail-depth) (get b 'drgnx-chrome-tail-depth)))))
+  (drgnx-chrome--reapply))
+
+(defun drgnx-chrome-remove-tail-provider (fn)
+  "Stop showing FN's string."
+  (setq drgnx-chrome-tail-providers (delq fn (copy-sequence drgnx-chrome-tail-providers)))
+  (put fn 'drgnx-chrome-tail-depth nil)
+  (drgnx-chrome--reapply))
+
 (defconst drgnx-chrome--own-header '(:eval header-line-format)
   "The header of a buffer that has its own (tabulated-list column headings, clicked to sort).")
 
@@ -366,10 +409,11 @@ scopes: modules/editor/drgnx-sticky.el); re-apply the chrome after changing it."
                                  drgnx-chrome--own-header)
                                 ;; a short terminal frame has no row to spare (ui/terminal-layout sets this)
                                 ((eq (frame-parameter (window-frame w) 'drgnx-chrome-breadcrumb) 'off) 'none)
-                                (t (let ((tail (buffer-local-value 'drgnx-chrome-header-tail (window-buffer w))))
-                                     (if tail
-                                         (list (drgnx-wb-bar (drgnx-chrome-breadcrumb w) t) tail
-                                               (propertize " " 'display '(space :align-to right) 'face 'drgnx-wb-bar))
+                                (t (let ((tail (buffer-local-value 'drgnx-chrome-header-tail (window-buffer w)))
+                                         (providers (and drgnx-chrome-tail-providers drgnx-chrome--providers-tail)))
+                                     (if (or tail providers)
+                                         (delq nil (list (drgnx-wb-bar (drgnx-chrome-breadcrumb w) t) providers tail
+                                                         (propertize " " 'display '(space :align-to right) 'face 'drgnx-wb-bar)))
                                        (drgnx-wb-bar (drgnx-chrome-breadcrumb w))))))))
      (drgnx-chrome--set w 'mode-line-format drgnx-chrome-editor-mode-line))
     ((or 'dock 'area)

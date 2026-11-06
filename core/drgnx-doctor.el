@@ -485,6 +485,7 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :sqlite (and (fboundp 'sqlite-available-p) (sqlite-available-p))
            :svg (image-type-available-p 'svg)
            :font-fallbacks (and (fboundp 'drgnx-look-fonts-fallback-report) (drgnx-look-fonts-fallback-report))
+           :agent-colours (and (fboundp 'drgnx-agent-identity-colour-count) (drgnx-agent-identity-colour-count))
            :work-plans (drgnx-doctor--work-plans)
            :ai-up (drgnx-doctor--ai-up)
            :search (drgnx-doctor--search)
@@ -694,6 +695,11 @@ severity, the fix the first `:fix'."
                                                      entries "; ")
                                           (or (plist-get r :fix) "install the font families the look names (docs/guide/install.md, \"Fonts\")"))
                                   (list 'ok "every font role has its family" nil)))))
+
+(drgnx-doctor-define 'agent-colours :group "Emacs" :doc "How many colours the active theme gives agents (6 to 12; marks tell the rest apart)"
+                     :check (lambda (f)
+                              (when-let* ((n (plist-get f :agent-colours)))
+                                (list 'ok (format "%d agent colours, %d agents told apart by colour and mark" n (* 6 n)) nil))))
 
 (defun drgnx-doctor--security-issues (version &optional nidhogg)
   "The `drgnx-doctor-security-issues' that apply to Emacs VERSION, as \"ID\" or \"ID (partly fixed here)\" strings.

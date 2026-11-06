@@ -137,6 +137,7 @@
         (work-diff-accept-hunk "a")
         (work-diff-reject-hunk "D")
         (work-who-is-here "C-k h")
+        (agents-follow "C-k f")
         (ai-tab "TAB" :map drgnx-ai-ghost-mode-map)
         (ai-accept :none "Tab while a suggestion shows; the palette")
         (ai-accept-word "C-<right>" :map drgnx-ai-ghost-showing-map)

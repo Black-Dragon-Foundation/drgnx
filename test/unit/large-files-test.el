@@ -37,7 +37,7 @@
 (defvar drgnx-large-file-mode)
 (defvar drgnx-large-files--header)
 (defvar drgnx-chrome-mode)
-(defvar drgnx-chrome-header-tail)
+(declare-function drgnx-large-files--tail "drgnx-large-files")
 (defvar revert-buffer-internal-hook)    ; files.el only declares it
 
 (defmacro drgnx-large-files-test--with (&rest body)
@@ -1014,7 +1014,9 @@ sent the client."
         ;; with the workbench's chrome, after the breadcrumb
         (let ((drgnx-chrome-mode t))
           (drgnx-large-files--header-refresh)
-          (should (eq drgnx-chrome-header-tail 'drgnx-large-files--header))
+          (save-window-excursion
+            (set-window-buffer (selected-window) (current-buffer))
+            (should (equal drgnx-large-files--header (drgnx-large-files--tail (selected-window)))))
           (should-not (local-variable-p 'header-line-format))))
       (drgnx-large-files-remember raw 'raw)
       (with-current-buffer (find-file-noselect raw)

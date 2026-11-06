@@ -163,3 +163,22 @@
   ;; the loaded faces carry no Glitnir key on stock Emacs
   (dolist (entry drgnx-decor--boxes)
     (should-not (plist-member (face-attribute (car entry) :box nil t) :corner-radius))))
+
+(ert-deftest drgnx-decor/cursor-move-now-moves-without-the-flush ()
+  (drgnx-decor-test--glitnir t
+    (drgnx-decor-test--cursors
+      (let* ((ov (drgnx-decor-cursor-put (current-buffer) 'claude 1 "#123456" "Claude")) (moves 0))
+        (advice-add 'move-overlay :before (lambda (&rest _) (cl-incf moves)) '((name . decor-count)))
+        (unwind-protect
+            (progn
+              (drgnx-decor-cursor-move-now (current-buffer) 'claude 9)
+              ;; at once, with no timer: the same overlay, one move, and the tag shows for 2 s
+              (should (= 9 (overlay-start ov)))
+              (should (= 1 moves))
+              (should (eq ov (drgnx-decor-cursor-overlay (current-buffer) 'claude)))
+              (should (numberp (drgnx-decor-cursor-label-state (current-buffer) 'claude)))
+              (drgnx-test-advance 0.1)
+              (should (= 1 moves))
+              (drgnx-test-advance 2.5)
+              (should-not (drgnx-decor-cursor-label-state (current-buffer) 'claude)))
+          (advice-remove 'move-overlay 'decor-count))))))

@@ -184,7 +184,9 @@ restated, with only the background and the tag changed (a boxed cursor face woul
                  :box (if (and tag (keywordp (car-safe under))) (append under tag) under)))
           (glitnir (list :background color
                          :box (append (list :line-width '(-2 . -1) :color color :open '(top right bottom)) tag)))
-          (t (list :background color)))))
+          ((display-graphic-p) (list :background color))
+          ;; a terminal has no 2 px edge: the character under the bar in the colour's inverse
+          (t (list :foreground color :inverse-video t)))))
 
 (defun drgnx-decor--cursor-apply (cur)
   "Put CUR's overlay's face in line with its position and name tag."
@@ -205,7 +207,7 @@ restated, with only the background and the tag changed (a boxed cursor face woul
        (if (not (buffer-live-p (car key)))
            (progn (remhash key drgnx-decor--cursors) (ignore-errors (delete-overlay (drgnx-decor--cursor-overlay cur))))
          (let ((until (drgnx-decor--cursor-label-until cur)))
-           (when until
+           (when (and until (not (eq until 'always)))
              (if (<= until (+ now 1e-6))
                  (progn (setf (drgnx-decor--cursor-label-until cur) nil) (drgnx-decor--cursor-apply cur))
                (setq next (min until (or next until))))))))
@@ -250,6 +252,49 @@ An existing cursor of AGENT in BUFFER is replaced.  The tag shows for 2 s."
   (when-let* ((cur (gethash (drgnx-decor--cursor-key buffer agent) drgnx-decor--cursors)))
     (setf (drgnx-decor--cursor-pending cur) pos)
     (drgnx-timer-soon 'decor-cursor-flush drgnx-decor-cursor-batch #'drgnx-decor--flush)))
+
+(defvar drgnx-decor--label-mode 'activity
+  "How name tags show on cursors moved now: `activity' (2 s after a move) or `never'; `drgnx-decor-cursor-keep-label'
+holds one tag on.")
+
+;; A frame the editor client applies at once does not wait for the 50 ms batch.
+
+(defun drgnx-decor-cursor-move-now (buffer agent pos)
+  "Move AGENT's cursor in BUFFER to POS now: the same overlay moves, no batch timer.  Its name tag follows the tag mode
+\(`drgnx-decor-cursor-label-mode')."
+  (when-let* ((cur (gethash (drgnx-decor--cursor-key buffer agent) drgnx-decor--cursors)))
+    (with-current-buffer buffer
+      (let ((pos (max (point-min) (min pos (max (point-min) (1- (point-max)))))))
+        (move-overlay (drgnx-decor--cursor-overlay cur) pos (min (point-max) (1+ pos)))))
+    (setf (drgnx-decor--cursor-pending cur) nil)
+    (unless (eq (drgnx-decor--cursor-label-until cur) 'always)
+      (setf (drgnx-decor--cursor-label-until cur)
+            (and (not (eq drgnx-decor--label-mode 'never)) (+ (drgnx-timer-now) drgnx-decor-cursor-label-time))))
+    (drgnx-decor--cursor-apply cur)
+    (when (numberp (drgnx-decor--cursor-label-until cur))
+      (drgnx-timer-start 'decor-cursor-label drgnx-decor-cursor-label-time #'drgnx-decor--sweep))))
+
+(defun drgnx-decor-cursor-label-mode (mode)
+  "Set the tag mode for cursors moved now: `activity' or `never'."
+  (setq drgnx-decor--label-mode mode))
+
+(defun drgnx-decor-cursor-keep-label (buffer agent keep)
+  "KEEP non-nil: AGENT's name tag in BUFFER stays on; nil: it follows the tag mode again."
+  (when-let* ((cur (gethash (drgnx-decor--cursor-key buffer agent) drgnx-decor--cursors)))
+    (setf (drgnx-decor--cursor-label-until cur)
+          (cond (keep 'always) ((eq drgnx-decor--label-mode 'never) nil)
+                (t (+ (drgnx-timer-now) drgnx-decor-cursor-label-time))))
+    (drgnx-decor--cursor-apply cur)))
+
+(defun drgnx-decor-cursor-overlay (buffer agent)
+  "AGENT's cursor overlay in BUFFER, or nil."
+  (when-let* ((cur (gethash (drgnx-decor--cursor-key buffer agent) drgnx-decor--cursors)))
+    (drgnx-decor--cursor-overlay cur)))
+
+(defun drgnx-decor-cursor-label-state (buffer agent)
+  "AGENT's tag in BUFFER: `always', the time it is due off, or nil (not shown)."
+  (when-let* ((cur (gethash (drgnx-decor--cursor-key buffer agent) drgnx-decor--cursors)))
+    (drgnx-decor--cursor-label-until cur)))
 
 (defun drgnx-decor-cursor-remove (buffer agent)
   "Remove AGENT's cursor from BUFFER."
