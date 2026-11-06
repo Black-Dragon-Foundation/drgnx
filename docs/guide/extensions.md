@@ -228,8 +228,9 @@ or changed) is marked with the attention colour. Settings → Plugins and the pl
 A plugin's page is the plugins page: its state and hash, what it declares (abilities, hooks with their verdicts and
 reach, hosts), what it sees, and "In this project". Above those, for a plugin that **changed** since you approved it,
 the page leads with **what the new version adds**: new hosts, new abilities, new hooks, a new verdict (a `change` at a
-point where it only allowed or denied before), and a hook that now matches more tools, tool kinds or paths. Under the
-header the buttons are:
+point where it only allowed or denied before), and a hook that now matches more tools, tool kinds or paths. When drgnx
+does not know what you approved before (an approval from an older drgnx), the page says *What you approved before is
+not known: read the whole reach below* instead, in the attention colour. Under the header the buttons are:
 
 - **Approve** (the page's button, or the command *Approve Plugin*): sends the hash the page showed you. If the files
   changed since, the hub refuses and the page shows the new state.

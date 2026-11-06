@@ -193,14 +193,19 @@ now."
 
 (defun drgnx-extensions-plugins--diff-section (_name row)
   "A section of the plugins page (`drgnx-plugins-page-sections'): for a plugin that changed since it was approved, what
-the new version adds, in the attention face."
-  (when (and (equal (plist-get row :state) "changed") (plist-get row :approved_reach))
-    (let ((lines (drgnx-extensions-plugins-diff row (plist-get row :approved_reach))))
-      (insert "\n" (propertize "What the new version adds" 'face 'bold) "\n")
-      (if lines
-          (dolist (l lines)
-            (insert "  " (propertize (concat (drgnx-face-glyph 'warn) " " l) 'face (drgnx-extensions-list--attention)) "\n"))
-        (insert "  nothing new: its files changed, what it may reach did not\n")))))
+the new version adds, in the attention face.  Without the approved reach (an approval stored before the hub kept it,
+or a stored copy that does not read) it says so, so the page never looks like nothing is new."
+  (when (equal (plist-get row :state) "changed")
+    (if (not (plist-get row :approved_reach))
+        (insert "\n" (propertize "What you approved before is not known: read the whole reach below"
+                                 'face (drgnx-extensions-list--attention))
+                "\n")
+      (let ((lines (drgnx-extensions-plugins-diff row (plist-get row :approved_reach))))
+        (insert "\n" (propertize "What the new version adds" 'face 'bold) "\n")
+        (if lines
+            (dolist (l lines)
+              (insert "  " (propertize (concat (drgnx-face-glyph 'warn) " " l) 'face (drgnx-extensions-list--attention)) "\n"))
+          (insert "  nothing new: its files changed, what it may reach did not\n"))))))
 
 ;;;; Actions on a page
 

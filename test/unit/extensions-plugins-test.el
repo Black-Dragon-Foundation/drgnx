@@ -74,6 +74,16 @@
       (should (eq (get-text-property (string-search "New host" text) 'face text)
                   (drgnx-extensions-list--attention))))))
 
+(ert-deftest drgnx-extensions-plugins/a-changed-plugin-without-its-approved-reach-says-so ()
+  ;; an approval stored before the hub kept the approved reach, or one whose stored copy does not read
+  (let ((drgnx-plugins--rows (list (drgnx-extensions-plugins-test--row :state "changed")))
+        (drgnx-plugins-page-sections (list #'drgnx-extensions-plugins--diff-section)))
+    (let* ((text (with-temp-buffer (drgnx-plugins-page-insert "rewrite-msg") (buffer-string)))
+           (at (string-search "What you approved before is not known: read the whole reach below" text)))
+      (should at)
+      (should (< at (string-search "What it may reach" text)))
+      (should (eq (get-text-property at 'face text) (drgnx-extensions-list--attention))))))
+
 (ert-deftest drgnx-extensions-plugins/approve-sends-the-displayed-hash ()
   (let ((drgnx-plugins--rows (list (drgnx-extensions-plugins-test--row :state "unapproved"))) calls)
     (cl-letf (((symbol-function 'drgnx-hub-call)
