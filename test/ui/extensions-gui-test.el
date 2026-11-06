@@ -16,6 +16,7 @@
 (require 'drgnx)
 (load (expand-file-name "modules/tools/drgnx-extensions-list" drgnx-ui-extensions--repo) nil t)
 (load (expand-file-name "modules/tools/drgnx-extensions-details" drgnx-ui-extensions--repo) nil t)
+(load (expand-file-name "modules/tools/drgnx-extensions-jobs" drgnx-ui-extensions--repo) nil t)
 
 (defun drgnx-ui-extensions--row (name kind state &rest more)
   (append (list :id (format "%s:%s" (pcase kind ("module" "module") (_ "pkg")) name) :kind kind :name name
@@ -36,12 +37,10 @@
   (drgnx-extensions-list--receive 'recommended (list (drgnx-ui-extensions--row "rust-mode" "package" "available")) 1 0))
 
 (defmacro drgnx-ui-extensions--with-jobs (&rest body)
-  `(cl-letf (((symbol-function 'drgnx-extensions-jobs-state)
-              (lambda (id)
-                (pcase id
-                  ("pkg:forge" (list :status 'busy :step 'native :i 14 :n 37 :since (- (float-time) 12)))
-                  ("pkg:vterm" (list :status 'failed :error "download failed; nothing was changed"))
-                  ("pkg:dash" (list :status 'done :warnings '("a.el" "b.el")))))))
+  `(let ((drgnx-extensions-jobs--state (make-hash-table)))
+     (drgnx-extensions-jobs--put '(forge) (list :status 'busy :step 'native :i 14 :n 37 :since (- (float-time) 12)))
+     (drgnx-extensions-jobs--put '(vterm) (list :status 'failed :error "download failed; nothing was changed"))
+     (drgnx-extensions-jobs--put '(dash) (list :status 'done :warnings '("a.el" "b.el")))
      ,@body))
 
 (defun drgnx-ui-extensions--show ()
@@ -68,7 +67,7 @@
          (drgnx-ui-extensions--fixture)
          (add-hook 'drgnx-extensions-jobs-changed-functions #'drgnx-extensions-list--jobs-changed)
          (let ((buf (drgnx-ui-extensions--show)))
-           (run-hook-with-args 'drgnx-extensions-jobs-changed-functions '("pkg:forge" "pkg:vterm" "pkg:dash"))
+           (run-hook-with-args 'drgnx-extensions-jobs-changed-functions '(forge vterm dash))
            (drgnx-view-draw-now drgnx-view)
            (redisplay t)
            (with-current-buffer buf
@@ -98,9 +97,9 @@
          (progn
            (drgnx-ui-extensions--fixture)
            (let ((buf (drgnx-ui-extensions--show)))
-             (run-hook-with-args 'drgnx-extensions-jobs-changed-functions '("pkg:forge"))
+             (run-hook-with-args 'drgnx-extensions-jobs-changed-functions '(forge))
              (with-current-buffer buf
-               (drgnx-extensions-list--jobs-changed '("pkg:forge"))
+               (drgnx-extensions-list--jobs-changed '(forge))
                (drgnx-view-draw-now drgnx-view)
                (let ((text (buffer-string)))
                  (should (string-search "P magit" text))
