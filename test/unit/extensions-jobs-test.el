@@ -94,9 +94,8 @@ on the virtual clock.  The hub's job list has not answered yet: `drgnx-extension
     tickets))
 
 (defun drgnx-extensions-jobs-test--seen (&optional file)
-  "The watch tells of a change to FILE (default any), and the reads it asks for run."
-  (funcall drgnx-extensions-jobs-test--notify
-           (list 'progress-watch 'changed (or file (expand-file-name "x.json" (drgnx-extensions-jobs-dir)))))
+  "The watch tells of a change to FILE (default: an event that names no file), and the reads it asks for run."
+  (funcall drgnx-extensions-jobs-test--notify (if file (list 'progress-watch 'changed file) (list 'progress-watch 'changed)))
   (drgnx-test-advance 1))
 
 (defun drgnx-extensions-jobs-test--done (job &optional exit lines status)
@@ -260,6 +259,41 @@ on the virtual clock.  The hub's job list has not answered yet: `drgnx-extension
         (should (<= reads 5))
         (should (eql (plist-get (drgnx-extensions-jobs-state 'magit) :i) 20))))))
 
+(ert-deftest drgnx-extensions-jobs/a-read-reads-only-the-files-it-was-told-of ()
+  (drgnx-extensions-jobs-test--with root
+    (drgnx-extensions-jobs-test--listed)
+    (drgnx-extensions-jobs-queue '(:add magit))
+    (let* ((job (drgnx-extensions-jobs-test--job 1)) (file (drgnx-extensions-jobs-test--file job))
+           (parsed nil) (json (symbol-function 'drgnx-extensions-jobs--json)))
+      (drgnx-extensions-jobs-test--take job)
+      ;; thirty plan files other sessions' jobs left in the shared directory (a full read parses each)
+      (dotimes (i 30)
+        (drgnx-extensions-jobs-test--write (expand-file-name (format "old-%d.json.plan.json" i) (drgnx-extensions-jobs-dir))
+                                           '(:step "plan" :seq 1 :generation 1 :replaces [] :removes [] :adds [])))
+      (cl-letf (((symbol-function 'drgnx-extensions-jobs--json) (lambda (f) (push f parsed) (funcall json f))))
+        (drgnx-extensions-jobs-test--write file '(:step "download" :pkg "magit" :i 1 :n 1))
+        (drgnx-extensions-jobs-test--seen file)
+        (should (equal parsed (list file)))
+        (should (eq (plist-get (drgnx-extensions-jobs-state 'magit) :step) 'download))
+        ;; an event that names no file reads the whole directory
+        (setq parsed nil)
+        (funcall drgnx-extensions-jobs-test--notify (list 'progress-watch 'changed))
+        (drgnx-test-advance 1)
+        (should (> (length parsed) 30))))))
+
+(ert-deftest drgnx-extensions-jobs/a-day-old-progress-file-is-swept ()
+  (drgnx-extensions-jobs-test--with root
+    (let ((old (expand-file-name "old.json" (drgnx-extensions-jobs-dir)))
+          (fresh (expand-file-name "fresh.json" (drgnx-extensions-jobs-dir))))
+      (drgnx-extensions-jobs-test--write old '(:step "start"))
+      (drgnx-extensions-jobs-test--write fresh '(:step "start"))
+      (set-file-times old (time-subtract (drgnx-timer-now) (* 2 24 3600)))
+      (set-file-times fresh (time-subtract (drgnx-timer-now) 3600))
+      (drgnx-extensions-jobs-teardown)
+      (drgnx-extensions-jobs-setup)
+      (should-not (file-exists-p old))
+      (should (file-exists-p fresh)))))
+
 (ert-deftest drgnx-extensions-jobs/no-notify-backend-shows-elapsed-only ()
   (let ((drgnx-extensions-jobs-test--backend nil))
     (drgnx-extensions-jobs-test--with root
@@ -391,7 +425,8 @@ on the virtual clock.  The hub's job list has not answered yet: `drgnx-extension
                (lambda (_entry) (signal 'drgnx-file-busy (list (drgnx-pkg-pending-file) "4242")))))
       (should-not (drgnx-extensions-jobs-queue '(:add magit))))
     (let ((s (drgnx-extensions-jobs-state 'magit)))
-      (should (eq (plist-get s :status) 'busy))
+      ;; refused, neither a running job nor a failure
+      (should (eq (plist-get s :status) 'refused))
       (should (equal (plist-get s :error) "busy, try again")))
     (should-not drgnx-extensions-jobs-test--starts)
     ;; the next click goes through

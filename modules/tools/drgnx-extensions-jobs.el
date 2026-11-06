@@ -58,7 +58,12 @@ result).")
 
 (defconst drgnx-extensions-jobs-timebox 7200 "Seconds an Extensions job may run.")
 
-(defconst drgnx-extensions-jobs--keep (* 7 24 3600) "Seconds a progress file no result read is kept.")
+(defconst drgnx-extensions-jobs--keep (* 24 3600)
+  "Seconds a progress file no result read is kept (a job's time box is two hours).")
+
+(defvar drgnx-extensions-jobs--named nil
+  "The progress files the change events since the last read named, or t when one named none (then a read reads the
+whole directory).")
 
 (defvar drgnx-extensions-jobs--jobs (make-hash-table :test #'equal)
   "Token → the plist of a job this session follows: (:token :kind :id :status :since :start-seen :tickets :ids :step
@@ -387,23 +392,33 @@ The new tickets."
 
 ;;;; Progress
 
-(defun drgnx-extensions-jobs--notify (_event)
-  "The progress directory changed: read it soon, at most four times a second; the last change is always read."
+(defun drgnx-extensions-jobs--notify (event)
+  "The progress directory changed (EVENT, a file-notify event): note the files it names and read them soon, at most
+four times a second; the last change is always read."
   (when drgnx-extensions-jobs--on
+    (let ((files (seq-filter #'stringp (list (nth 2 event) (nth 3 event)))))
+      (unless (eq drgnx-extensions-jobs--named t)
+        (setq drgnx-extensions-jobs--named
+              (if files (seq-union files drgnx-extensions-jobs--named) t))))
     (drgnx-timer-soon 'extensions-jobs-read 0.1 #'drgnx-extensions-jobs--read :min-interval 0.25
                       :owner drgnx-extensions-jobs--owner)))
 
 (defun drgnx-extensions-jobs--read ()
-  "Read the progress directory: the steps of the jobs this session follows, and every new plan of any job."
+  "Read the progress files the change events named (the whole directory when one named none): the steps of the jobs
+this session follows, every new plan of any job, and the plans that went."
   (when drgnx-extensions-jobs--on
-    (let ((dir (drgnx-extensions-jobs-dir)) (seen nil) (ids nil))
-      (dolist (f (and (file-directory-p dir) (directory-files dir t "\\.json\\'")))
-        (push f seen)
+    (let* ((dir (drgnx-extensions-jobs-dir)) (named drgnx-extensions-jobs--named) (ids nil)
+           (all (and (file-directory-p dir) (directory-files dir t "\\.json\\'")))
+           (files (if (eq named t) all
+                    (seq-filter (lambda (f) (and (string-suffix-p ".json" f) (member f all)))
+                                (mapcar #'expand-file-name named)))))
+      (setq drgnx-extensions-jobs--named nil)
+      (dolist (f files)
         (if (string-suffix-p ".plan.json" f)
             (drgnx-extensions-jobs--read-plan f)
           (setq ids (append (drgnx-extensions-jobs--read-step (file-name-base f) f) ids))))
       (let (gone)
-        (maphash (lambda (f _) (unless (member f seen) (push f gone))) drgnx-extensions-jobs--plans)
+        (maphash (lambda (f _) (unless (member f all) (push f gone))) drgnx-extensions-jobs--plans)
         (dolist (f gone) (drgnx-extensions-jobs--plan-gone f)))
       (drgnx-extensions-jobs--changed ids))))
 
@@ -584,7 +599,7 @@ click left in the queue."
     (drgnx-extensions-jobs--changed (drgnx-extensions-jobs--reconcile))))
 
 (defun drgnx-extensions-jobs--sweep ()
-  "Delete the progress files older than a week: no session read their jobs' results."
+  "Delete the progress files older than a day: no session read their jobs' results."
   (let ((dir (drgnx-extensions-jobs-dir)) (old (- (drgnx-timer-now) drgnx-extensions-jobs--keep)))
     (dolist (f (and (file-directory-p dir) (directory-files dir t "\\.json\\'")))
       (when-let* ((attrs (file-attributes f)))
@@ -615,7 +630,7 @@ running in the hub; the next setup follows them again."
   (remove-hook 'drgnx-hub-event-functions #'drgnx-extensions-jobs--event)
   (remove-hook 'drgnx-exec-listed-hook #'drgnx-extensions-jobs--listed)
   (setq drgnx-extensions-jobs--on nil drgnx-extensions-jobs--listed nil drgnx-extensions-jobs--watch nil
-        drgnx-extensions-jobs--owner :core)
+        drgnx-extensions-jobs--owner :core drgnx-extensions-jobs--named nil)
   (dolist (table (list drgnx-extensions-jobs--jobs drgnx-extensions-jobs--ids drgnx-extensions-jobs--tickets
                        drgnx-extensions-jobs--state drgnx-extensions-jobs--plans))
     (clrhash table)))

@@ -297,9 +297,10 @@ one is in force returns it (the comparison's setup calls the common one inside i
                :open_max_ms (drgnx-perf-extensions--r (apply #'max times)))))
      (defun drgnx-perf-extensions-details-teardown () (drgnx-perf-extensions--common-teardown))
 
-     ;; extensions-progress: a job writes steps, the layer reads them at most four times a second, and typing goes on
-     (defvar drgnx-perf-extensions--reads 0 "How many times the progress directory was read.")
-     (defun drgnx-perf-extensions--count-read (&rest _) (cl-incf drgnx-perf-extensions--reads))
+     ;; extensions-progress: a job writes steps, the layer reads them at most four times a second (no two reads closer
+     ;; than the throttle's gap), the last write is always read, and typing goes on
+     (defvar drgnx-perf-extensions--reads nil "When the progress directory was read, newest first.")
+     (defun drgnx-perf-extensions--count-read (&rest _) (push (float-time) drgnx-perf-extensions--reads))
      (defun drgnx-perf-extensions-progress-setup ()
        (drgnx-perf-extensions--common-setup "jobs")
        (make-directory (drgnx-extensions-jobs-dir) t)
@@ -311,9 +312,10 @@ one is in force returns it (the comparison's setup calls the common one inside i
        t)
      (defun drgnx-perf-extensions-progress-each () (drgnx-perf-extensions--common-each))
      (defun drgnx-perf-extensions--progress-run (storm)
-       "A second or so of keys in a scratch buffer, each drawn; with STORM a progress file written and announced before
-each: (TIMES . READS-PER-SECOND)."
-       (setq drgnx-perf-extensions--reads 0)
+       "A second or so of keys in a scratch buffer, each drawn; with STORM a progress file written and announced (the
+event names it) before each, then a wait for the read after the last write: (TIMES . LAST-I), LAST-I the last step
+written, or nil."
+       (setq drgnx-perf-extensions--reads nil)
        (let* ((seconds (drgnx-perf-extensions--size 'progress)) (file (drgnx-extensions-jobs--file "perf-job"))
               (t0 (float-time)) (i 0) times (buf (get-buffer-create " *perf progress*")))
          (with-current-buffer buf (erase-buffer))
@@ -322,17 +324,31 @@ each: (TIMES . READS-PER-SECOND)."
            (cl-incf i)
            (when storm
              (drgnx-perf-extensions--write file (format "{\"step\":\"native\",\"pkg\":\"perf-installed-0\",\"i\":%d,\"n\":400}" i))
-             (drgnx-extensions-jobs--notify nil))
+             (drgnx-extensions-jobs--notify (list 'perf-watch 'changed file)))
            (push (drgnx-perf-extensions--ms (lambda () (with-current-buffer buf (insert "x")) (redisplay t))) times)
            (sit-for 0.01))
+         (when storm                            ; the throttle's trailing read, at most 0.25 s after the last
+           (let ((end (+ (float-time) 1.0)))
+             (while (and (drgnx-timer-active-p 'extensions-jobs-read) (< (float-time) end)) (sit-for 0.02))))
          (kill-buffer buf)
-         (cons times (/ drgnx-perf-extensions--reads (max 0.001 (- (float-time) t0))))))
+         (cons times (and storm i))))
+     (defun drgnx-perf-extensions--gaps ()
+       "The gaps between the recorded reads, in milliseconds."
+       (let ((ts drgnx-perf-extensions--reads) gaps)
+         (while (cdr ts) (push (* 1000 (- (car ts) (cadr ts))) gaps) (setq ts (cdr ts)))
+         gaps))
      (defun drgnx-perf-extensions-progress-measure ()
        (drgnx-perf-extensions--open-ms)
        (let* ((quiet (drgnx-perf-extensions--progress-run nil))
               (storm (drgnx-perf-extensions--progress-run t))
+              (gaps (drgnx-perf-extensions--gaps))
+              (seen (plist-get (gethash "perf-job" drgnx-extensions-jobs--jobs) :i))
               (p0 (drgnx-perf-extensions--pct (car quiet) 0.95)) (p1 (drgnx-perf-extensions--pct (car storm) 0.95)))
-         (list :reads_per_s (drgnx-perf-extensions--r (cdr storm)) :typing_p95_ms (drgnx-perf-extensions--r p1)
+         (list :reads (length drgnx-perf-extensions--reads)
+               :read_gap_min_ms (drgnx-perf-extensions--r (if gaps (apply #'min gaps) 0))
+               :reads_too_close (seq-count (lambda (g) (< g 240)) gaps)
+               :last_unread (if (eql seen (cdr storm)) 0 1)
+               :typing_p95_ms (drgnx-perf-extensions--r p1)
                :typing_p95_idle_ms (drgnx-perf-extensions--r p0) :typing_delta_ms (drgnx-perf-extensions--r (- p1 p0)))))
      (defun drgnx-perf-extensions-progress-teardown ()
        (advice-remove 'drgnx-extensions-jobs--read #'drgnx-perf-extensions--count-read)

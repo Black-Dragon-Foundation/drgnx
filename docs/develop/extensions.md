@@ -73,9 +73,10 @@ module's setup calls `drgnx-extensions-jobs-setup` and its teardown `drgnx-exten
 - **Progress.** Each job's progress file is `<state>/extensions/progress/TOKEN.json`, TOKEN made by the editor
   before the job starts (so a job is followed before the hub names it); `TOKEN.json.plan.json` is its swap plan. One
   file-notify watch on the directory while the module runs; reads are coalesced by `drgnx-timer-soon` (at most four a
-  second, the last change always read). Without a file-notify backend the rows show the elapsed time only, and the end
-  still comes from the hub's `exec-done`. A job's files are deleted once its result is read, and files older than a
-  week at setup. Syncs run from the command line or by onboarding write no progress file.
+  second, the last change always read) and parse only the files the change events named (an event that names none
+  reads the whole directory), so files other sessions' jobs left cost nothing per read. Without a file-notify backend
+  the rows show the elapsed time only, and the end still comes from the hub's `exec-done`. A job's files are deleted
+  once its result is read, and files older than a day (a job's time box is two hours) at setup. Syncs run from the command line or by onboarding write no progress file.
 - **Plans.** A new `*.plan.json` runs `drgnx-extensions-jobs-plan-functions` once per `seq`, for every Extensions job's
   file whichever session started it: the state directory is shared, so every running drgnx repoints before the swap.
   When a plan file a read saw is gone and no job of this session wrote it (another session's job ended),
