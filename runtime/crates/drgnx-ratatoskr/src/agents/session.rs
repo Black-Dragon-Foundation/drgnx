@@ -2138,7 +2138,7 @@ impl Session {
                     .is_some_and(|m| mids.contains(m))
             })
             .take(cap)
-            .map(|(i, e)| (i as u64, e.clone()))
+            .map(|(i, e)| (i as u64, super::wire::with_blocks(e.clone())))
             .collect()
     }
 }
@@ -3054,7 +3054,12 @@ impl Session {
         let st = lock(&self.state);
         Transcript {
             session: snap,
-            entries: st.entries.clone(),
+            entries: st
+                .entries
+                .iter()
+                .cloned()
+                .map(super::wire::with_blocks)
+                .collect(),
             seq: st.seq,
         }
     }
