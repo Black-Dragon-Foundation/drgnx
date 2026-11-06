@@ -729,7 +729,8 @@ A budget is a limit with a unit, set on a project, a plan, a manager or a worker
 (counted per conversation, so a manager's rotation or a fresh start after a restart adds to what the session spent),
 `tokens` and `count` are what they say, and `limit-share` is a share (0 to 1) of a subscription's usage window.
 `usd-est` and `limit-share` are estimates and are labelled so, in the budget card and in `pace/get`. A limit in one
-unit is only ever used up by spending in that unit.
+unit is only ever used up by spending in that unit. A job's dollar budget therefore sets a `usd` limit and, when a
+subscription profile can run its tasks, a `usd-est` limit of the same amount ([jobs.md](jobs.md#routes-and-the-estimate)).
 
 Budgets nest. What a worker spends counts against the worker, its manager, its plan and its project, and what it may
 still spend is the least remaining over that chain. The gateway admits `usd` against the same minimum: a session on a

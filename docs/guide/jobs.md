@@ -246,11 +246,17 @@ Each role's value is a list of profile names, or one name. If the entry has a mi
 or `settings.el` does not read, no route is read from it until it is fixed: the roles use `drgnx-job-default-profile`, and
 the message that names the line is said once (Preferences: Open Config File… opens the file).
 
-A role without a route gets `drgnx-job-default-profile` ("claude"). The estimate counts
-`drgnx-job-task-tokens` (150 000 in, 15 000 out) per task at the price of the profile's provider when its traffic
-goes through the gateway; profiles drgnx cannot price (a subscription) are listed as unpriced. With a `--budget`, the
-proposal also warns about a profile on a route whose provider has no `:price` in `drgnx-ai-providers`: the gateway cannot count
-what it spends, so the budget would not stop it.
+A role without a route gets `drgnx-job-default-profile` ("claude"). The estimate on the proposal is a forecast from the
+history of similar finished tasks (same role, profile and model, then wider; with no history, a labelled prior with a
+wide range): tokens, the cost and the time, each as a middle and a high end ("3 tasks, about 12–41 USD (estimate),
+40M–130M tokens, 2 h 10–4 h"). Tokens are priced at the rates of `drgnx-agents-model-prices`; a profile with no price
+(a model with no row and no gateway `:price`) is listed as unpriced and shows tokens only, never a price of 0. A
+subscription's cost is an estimate at API prices and is labelled so. With a `--budget`, the proposal warns when the
+plan's high end is over it (you decide; nothing is refused), and also about a profile on a route whose provider has no
+`:price` in `drgnx-ai-providers`: the gateway cannot count what it spends, so the budget would not stop it.
+
+A dollar budget on a plan that has a subscription profile also sets a limit of the same amount in `usd-est`, because a
+subscription's spend lands there; without it the dollar limit would never fire. The budget view says both.
 
 **Only job-safe profiles run a job's agents.** A job's agent works unwatched in a repository you may not have
 written, and that repository's own settings (`.claude/settings.json`, a `.gemini/` folder, …) could let its agent act

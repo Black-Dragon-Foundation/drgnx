@@ -19,7 +19,6 @@ use norn::write::jobs::job_set;
 use norn::write::tasks::force_status;
 use runstav::methods::agents::{AgentOp, DoParams, EntryType, SessionStatus, Snapshot, Transcript};
 use runstav::methods::jobs::{JobSummary, WithBudget};
-use runstav::methods::matrix::{Limit, Unit};
 use runstav::methods::timeline::BudgetScope;
 use runstav::types::{Bounded, Id};
 use serde_json::{Value, json};
@@ -264,10 +263,7 @@ pub(crate) fn set_budget(front: &Front, job: &Job, usd: f64, bind: bool) {
     b.enroll(&scope);
     let hits = b.set(
         &scope,
-        vec![Limit {
-            amount: usd,
-            unit: Unit::Usd,
-        }],
+        super::budget_limits(usd, super::has_subscription_profile(front, job)),
     );
     if bind {
         b.bind_job(&job.id, &scope);

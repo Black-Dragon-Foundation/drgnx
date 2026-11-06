@@ -39,11 +39,13 @@ use norn::write::jobs::{self as write_jobs, NewJob, NewTask};
 use norn::write::messages::{self as write_messages, Send, SendResult};
 use norn::write::tasks as write_tasks;
 use runstav::methods::agents::ById;
+use runstav::methods::forecast::Forecast;
 use runstav::methods::jobs::{
     BlockParams, ByMessage, ByTask, CardParams, JobStatusResult, JobSummary, MergeGate,
     OrderParams, PlanRef, ProposeParams, ReassignParams, ReplyParams, StartTaskParams,
     StatusParams, TaskNo, WithBudget,
 };
+use runstav::methods::matrix::{Limit, Unit};
 use runstav::registry::Class;
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Map, Value, json};
@@ -65,14 +67,6 @@ pub(crate) fn agent_slots(_front: &Front) -> usize {
 pub const START_TRIES: i64 = 3;
 /// The most characters of a blocked task's reason that are kept.
 pub const BLOCK_REASON_MAX: usize = 500;
-/// The tokens one task is estimated at: (input, output) (`drgnx-job-task-tokens`).
-pub const TASK_TOKENS: (u64, u64) = (150_000, 15_000);
-
-/// What one task costs at PRICE (US dollars per million tokens in, out): an estimate (`usd-est`).
-pub(crate) fn task_usd(price: (f64, f64)) -> f64 {
-    (TASK_TOKENS.0 as f64 * price.0 + TASK_TOKENS.1 as f64 * price.1) / 1_000_000.0
-}
-
 /// The price the user configured for PROFILE's gateway provider (`drgnx-ai-providers` `:price`); none for a profile
 /// without a gateway or a provider without a price (a subscription profile stays unpriced).
 pub(crate) fn profile_price(front: &Front, profile: &str) -> Option<(f64, f64)> {
@@ -88,6 +82,183 @@ pub(crate) fn profile_price(front: &Front, profile: &str) -> Option<(f64, f64)> 
         .find(|c| c.id.as_str() == provider)
         .and_then(|c| c.price)
         .map(|p| (p.input.get(), p.output.get()))
+}
+
+// ---- the forecast on a proposal ------------------------------------------------------------------------------------
+
+/// 40000000 as `40M`, 1200 as `1k`.
+fn tokens_text(n: f64) -> String {
+    if n >= 1e6 {
+        format!("{:.0}M", n / 1e6)
+    } else if n >= 1e3 {
+        format!("{:.0}k", n / 1e3)
+    } else {
+        format!("{n:.0}")
+    }
+}
+
+/// US dollars: whole from 10, else to the cent.
+fn money_text(x: f64) -> String {
+    if x >= 10.0 {
+        format!("{x:.0}")
+    } else {
+        format!("{x:.2}")
+    }
+}
+
+/// 7800 s as `2 h 10`, 14400 as `4 h`, 600 as `10 min`.
+fn duration_text(secs: f64) -> String {
+    let m = (secs / 60.0).round() as u64;
+    match (m / 60, m % 60) {
+        (0, m) => format!("{m} min"),
+        (h, 0) => format!("{h} h"),
+        (h, m) => format!("{h} h {m}"),
+    }
+}
+
+/// A..B in TEXT's words; one value when both read alike.
+fn range_text(r: &runstav::methods::forecast::Range, text: fn(f64) -> String) -> String {
+    let (a, b) = (text(r.p50), text(r.p90));
+    if a == b { a } else { format!("{a}–{b}") }
+}
+
+/// The proposal card's title: the tasks, the cost range (an estimate when it is one), the tokens and the time, or
+/// the word `unpriced` where there is no price.  Never `0.00` for what has no price.
+pub(crate) fn card_title(n: usize, f: &Forecast) -> String {
+    let mut parts = vec![format!("{n} task{}", if n == 1 { "" } else { "s" })];
+    if !f.cost.is_empty() {
+        let mut notes: Vec<&str> = Vec::new();
+        if f.cost.iter().any(|c| c.estimate) {
+            notes.push("estimate");
+        }
+        if !f.unpriced.is_empty() {
+            notes.push("some unpriced");
+        }
+        let amounts: Vec<String> = f
+            .cost
+            .iter()
+            .map(|c| {
+                range_text(
+                    &runstav::methods::forecast::Range {
+                        p50: c.p50,
+                        p90: c.p90,
+                    },
+                    money_text,
+                )
+            })
+            .collect();
+        parts.push(format!(
+            "about {} USD{}",
+            amounts.join(" + "),
+            if notes.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", notes.join(", "))
+            }
+        ));
+    }
+    parts.push(format!("{} tokens", range_text(&f.tokens, tokens_text)));
+    parts.push(range_text(&f.wall_secs, duration_text));
+    if f.cost.is_empty() && !f.unpriced.is_empty() {
+        parts.push("unpriced".to_owned());
+    }
+    format!("{}: approve to start", parts.join(", "))
+}
+
+/// A proposal's `estimate`: `usd` (the middle of the priced units), `unit`, `tokens` (the middle) and `unpriced` keep
+/// their keys and types; `forecast` holds the ranges.  With no forecast the tokens are the prior's, and `forecast`
+/// is null.
+pub(crate) fn estimate_of(f: Option<&Forecast>, tasks: usize) -> Value {
+    let Some(f) = f else {
+        let per_task = norn::forecast::model::prior()
+            .get(2)
+            .map_or(0, |o| o.usage.total());
+        return json!({"usd": 0.0, "unit": "usd-est", "tokens": per_task * tasks as u64,
+                      "unpriced": [], "forecast": null});
+    };
+    let mut basis: Vec<&str> = Vec::new();
+    for t in &f.tasks {
+        if !basis.contains(&t.basis.label.as_str()) {
+            basis.push(&t.basis.label);
+        }
+    }
+    json!({
+        "usd": f.cost.iter().map(|c| c.p50).sum::<f64>(),
+        "unit": if f.cost.iter().all(|c| !c.estimate) && !f.cost.is_empty() { "usd" } else { "usd-est" },
+        "tokens": f.tokens.p50.round() as u64,
+        "unpriced": f.unpriced,
+        "forecast": {
+            "tokens": f.tokens, "active_secs": f.active_secs, "wall_secs": f.wall_secs, "cost": f.cost,
+            "basis": basis, "wake": f.wake, "manager": f.manager, "prices_as_of": f.prices_as_of,
+            "made_at": f.made_at,
+        },
+    })
+}
+
+/// A warning for each cost whose p90 is over BUDGET dollars.  The user decides; nothing is refused.
+pub(crate) fn budget_warnings(f: &Forecast, budget: Option<f64>) -> Vec<String> {
+    let Some(budget) = budget else {
+        return Vec::new();
+    };
+    f.cost
+        .iter()
+        .filter(|c| c.p90 > budget)
+        .map(|c| {
+            format!(
+                "the plan's p90 cost, {} USD{}, is over the budget of {} USD",
+                money_text(c.p90),
+                if c.estimate { " (estimate)" } else { "" },
+                money_text(budget)
+            )
+        })
+        .collect()
+}
+
+/// The limits a dollar budget of USD sets: `usd` (what the gateway measures), and for a plan with a subscription
+/// profile `usd-est` too, because a subscription's spend lands there and a `usd` limit would never fire.
+pub(crate) fn budget_limits(usd: f64, subscription: bool) -> Vec<Limit> {
+    let mut limits = vec![Limit {
+        amount: usd,
+        unit: Unit::Usd,
+    }];
+    if subscription {
+        limits.push(Limit {
+            amount: usd,
+            unit: Unit::UsdEst,
+        });
+    }
+    limits
+}
+
+/// Whether any profile JOB may run a task on (a route, its fallbacks, a reassignment) is a subscription's.
+pub(crate) fn has_subscription_profile(front: &Front, job: &Job) -> bool {
+    let data = data_of(job);
+    let mut names: Vec<String> = Vec::new();
+    for key in ["routes", "profiles"] {
+        if let Some(m) = data.get(key).and_then(Value::as_object) {
+            names.extend(m.values().filter_map(Value::as_str).map(str::to_owned));
+            if key == "routes" {
+                for role in m.keys() {
+                    names.extend(route(front, role));
+                }
+            }
+        }
+    }
+    names
+        .iter()
+        .any(|n| crate::agents::session::find_profile(front, n).is_some_and(|p| p.ai.is_none()))
+}
+
+/// The job, its tasks and what was forecast for them, in one write: no approval can see one without the other.
+pub(crate) fn create_with_forecast(
+    tx: &mut norn::store::WTx<'_>,
+    job: NewJob,
+    made: &[norn::forecast::sample::Made],
+    at: f64,
+) -> Result<String, norn::store::CoordError> {
+    let id = write_jobs::job_create(tx, job, at)?;
+    norn::forecast::sample::record_made(tx, made)?;
+    Ok(id)
 }
 
 /// What Task 16b adds to the tick: reviews, the merge gate, fallback, the budget pause.  Set once by the server
@@ -1064,35 +1235,51 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
             )
         })
         .collect();
-    // usd-est: tokens at the price the user configured for the profile's gateway provider; no price: unpriced
-    let mut unpriced: Vec<String> = Vec::new();
-    let mut usd = 0.0;
-    for t in &tasks {
-        let profile = routes
-            .get(&t.role)
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        match profile_price(front, profile) {
-            Some(price) => usd += task_usd(price),
-            None => {
-                if !unpriced.iter().any(|u| u == profile) {
-                    unpriced.push(profile.to_owned());
-                }
-            }
-        }
-    }
-    let per_task = TASK_TOKENS.0 + TASK_TOKENS.1;
-    let estimate = json!({"usd": usd, "unit": "usd-est", "tokens": per_task * tasks.len() as u64, "unpriced": unpriced});
     let gate = match gate.unwrap_or(MergeGate::Review) {
         MergeGate::Review => "review",
         MergeGate::ReviewAccept => "review+accept",
     };
-    let data = json!({
+    let mut data = json!({
         "plan": file.to_string_lossy(), "hash": read.hash, "repo": repo, "title": read.title,
         "tasks": tasks.iter().map(|t| json!({"n": t.n, "title": t.title, "role": t.role,
                                               "deps": t.deps, "body": t.body})).collect::<Vec<_>>(),
-        "routes": routes, "estimate": estimate, "budget": budget, "gate": gate,
+        "routes": routes, "budget": budget, "gate": gate,
     });
+    // the forecast: from the history of similar tasks, before the write; a forecast that fails never blocks a
+    // proposal (the estimate then has the prior's tokens and no range)
+    let project = {
+        let dir = PathBuf::from(&repo);
+        crate::clock::blocking(move || norn::project::resolve(&dir).map(|p| p.id))
+            .await
+            .ok()
+            .flatten()
+    };
+    if let Some(p) = &project {
+        data["project"] = json!(p);
+    }
+    let wants = match &data {
+        Value::Object(m) => crate::forecast::wants_from(front, &id, m),
+        _ => Vec::new(),
+    };
+    let (forecast, made) = match crate::forecast::for_job(front, &id, wants).await {
+        Ok((f, made)) => (Some(f), made),
+        Err(e) => {
+            tracing::warn!("job {id}: no forecast: {}", e.message);
+            (None, Vec::new())
+        }
+    };
+    let mut warnings: Vec<String> = forecast
+        .as_ref()
+        .map_or_else(Vec::new, |f| f.warnings.clone());
+    if let Some(f) = &forecast {
+        warnings.extend(budget_warnings(f, budget));
+    }
+    data["estimate"] = estimate_of(forecast.as_ref(), tasks.len());
+    data["warnings"] = json!(warnings);
+    let title = match &forecast {
+        Some(f) => card_title(tasks.len(), f),
+        None => format!("{} tasks, no forecast: approve to start", tasks.len()),
+    };
     let job = NewJob {
         id: id.clone(),
         title: read.title.clone(),
@@ -1112,7 +1299,7 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
     let created = front
         .writer
         .write(caller, "coord/job-create", move |tx| {
-            write_jobs::job_create(tx, job.clone(), now())
+            create_with_forecast(tx, job.clone(), &made, now())
         })
         .await
         .map_err(fail)?;
@@ -1139,25 +1326,7 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
     if auto {
         approve_job(front, caller, &created, None).await?;
     } else {
-        let usd = 0.0_f64;
-        raise_card(
-            front,
-            caller,
-            &created,
-            None,
-            "proposal",
-            &format!(
-                "{} tasks, about {usd:.2} USD{}: approve to start",
-                tasks.len(),
-                if unpriced.is_empty() {
-                    ""
-                } else {
-                    " (some unpriced)"
-                }
-            ),
-            json!({}),
-        )
-        .await?;
+        raise_card(front, caller, &created, None, "proposal", &title, json!({})).await?;
     }
     changed(front, &created).await;
     summary(front, &created, false).await
@@ -1480,12 +1649,221 @@ mod price_tests {
         assert_eq!(plan_scope(&job(None)), "plan:JOB");
     }
 
+    use runstav::methods::forecast::{CostRange, Forecast, Range};
+    use runstav::methods::matrix::{Limit, Unit};
+
+    fn range(p50: f64, p90: f64) -> Range {
+        Range { p50, p90 }
+    }
+
+    /// A forecast of 40M to 130M tokens in 2 h 10 to 4 h, costing the amounts COST (unit, p50, p90).
+    fn forecast(cost: &[(Unit, f64, f64)], unpriced: &[&str]) -> Forecast {
+        Forecast {
+            tasks: Vec::new(),
+            tokens: range(40.0e6, 130.0e6),
+            active_secs: range(3600.0, 7200.0),
+            wall_secs: range(7800.0, 14400.0),
+            cost: cost
+                .iter()
+                .map(|&(unit, p50, p90)| CostRange {
+                    unit,
+                    p50,
+                    p90,
+                    estimate: unit == Unit::UsdEst,
+                })
+                .collect(),
+            unpriced: unpriced.iter().map(|s| (*s).to_owned()).collect(),
+            wake: None,
+            manager: None,
+            pace: Vec::new(),
+            warnings: Vec::new(),
+            prices_as_of: "2026-11-01".into(),
+            made_at: 0.0,
+        }
+    }
+
+    /// Pure (D).
     #[test]
-    fn a_task_costs_its_tokens_at_the_configured_price() {
-        // 150k in at 3 $/M + 15k out at 15 $/M = 0.45 + 0.225
-        let usd = task_usd((3.0, 15.0));
-        assert!((usd - 0.675).abs() < 1e-9, "{usd}");
-        assert_eq!(task_usd((0.0, 0.0)), 0.0);
+    fn the_card_shows_the_range_not_zero() {
+        let f = forecast(&[(Unit::UsdEst, 12.4, 41.2)], &[]);
+        assert_eq!(
+            card_title(3, &f),
+            "3 tasks, about 12–41 USD (estimate), 40M–130M tokens, 2 h 10–4 h: approve to start"
+        );
+    }
+
+    /// Pure (D).
+    #[test]
+    fn an_unpriced_profile_shows_tokens_and_never_zero() {
+        let f = forecast(&[], &["local"]);
+        let title = card_title(3, &f);
+        assert_eq!(
+            title,
+            "3 tasks, 40M–130M tokens, 2 h 10–4 h, unpriced: approve to start"
+        );
+        assert!(!title.contains("0.00"));
+    }
+
+    /// Pure (D).
+    #[test]
+    fn some_unpriced_is_said() {
+        let f = forecast(&[(Unit::Usd, 1.5, 4.0)], &["local"]);
+        let title = card_title(1, &f);
+        assert!(
+            title.starts_with("1 task, about 1.50–4.00 USD (some unpriced), "),
+            "{title}"
+        );
+    }
+
+    /// Pure (D): `usd`, `unit`, `tokens` and `unpriced` keep their keys and types for the frozen reader.
+    #[test]
+    fn the_estimate_keeps_its_keys() {
+        let f = forecast(&[(Unit::UsdEst, 12.4, 41.2)], &["x"]);
+        let e = estimate_of(Some(&f), 3);
+        assert!(e["usd"].is_number());
+        assert_eq!(e["unit"], "usd-est");
+        assert_eq!(e["tokens"], 40_000_000);
+        assert_eq!(e["unpriced"], json!(["x"]));
+        assert_eq!(e["forecast"]["wall_secs"]["p50"], 7800.0);
+        // no forecast: the prior's tokens, a null forecast, never a zero price
+        let none = estimate_of(None, 2);
+        assert!(none["forecast"].is_null());
+        assert!(none["tokens"].as_u64().unwrap() > 0);
+    }
+
+    /// Pure (D): a dollar budget on a plan with a subscription profile binds the estimate too.
+    #[test]
+    fn a_dollar_budget_on_a_subscription_plan_adds_the_estimate_limit() {
+        assert_eq!(
+            budget_limits(20.0, true),
+            [
+                Limit {
+                    amount: 20.0,
+                    unit: Unit::Usd
+                },
+                Limit {
+                    amount: 20.0,
+                    unit: Unit::UsdEst
+                }
+            ]
+        );
+    }
+
+    /// Pure (D).
+    #[test]
+    fn a_gateway_only_plan_keeps_one_limit() {
+        assert_eq!(
+            budget_limits(20.0, false),
+            [Limit {
+                amount: 20.0,
+                unit: Unit::Usd
+            }]
+        );
+    }
+
+    /// Pure (D): a p90 over the budget is a warning, never a refusal.
+    #[test]
+    fn p90_over_budget_warns_and_does_not_block() {
+        let f = forecast(&[(Unit::UsdEst, 12.0, 41.0)], &[]);
+        let w = budget_warnings(&f, Some(20.0));
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("41") && w[0].contains("20"), "{}", w[0]);
+        assert!(budget_warnings(&f, Some(50.0)).is_empty());
+        assert!(budget_warnings(&f, None).is_empty());
+    }
+
+    fn made(job: &str, task: &str, p50: f64) -> norn::forecast::sample::Made {
+        norn::forecast::sample::Made {
+            job: job.into(),
+            task: task.into(),
+            made_at: 1.0,
+            role: Some("implement".into()),
+            profile: Some("claude".into()),
+            model: None,
+            tokens_p50: p50,
+            tokens_p90: p50 * 2.0,
+            secs_p50: 1.0,
+            secs_p90: 2.0,
+            cost_p50: None,
+            cost_p90: None,
+            cost_unit: None,
+            basis: "no history: prior".into(),
+            n: 0,
+        }
+    }
+
+    fn new_job(id: &str) -> NewJob {
+        NewJob {
+            id: id.into(),
+            title: "t".into(),
+            plan: None,
+            repo: None,
+            tasks: vec![],
+            data: None,
+        }
+    }
+
+    fn front(dir: &Path) -> Front {
+        Front::new(
+            runstav::proof::Cap::generate().unwrap(),
+            dir.join("hub-x.sock"),
+            crate::store::WorkDb::spawn(dir.join("work.db")).unwrap(),
+            norn::store::CoordDb::spawn(dir.join("work.db")),
+        )
+    }
+
+    /// Pure (D): a temp store.  One forecast row per task and one for the plan are written with the job.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn every_forecast_made_is_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        let rows = vec![
+            made("J", "J#1", 10.0),
+            made("J", "J#2", 20.0),
+            made("J", "J", 30.0),
+        ];
+        f.writer
+            .write(&user(), "coord/job-create", move |tx| {
+                create_with_forecast(tx, new_job("J"), &rows, 1.0)
+            })
+            .await
+            .unwrap();
+        let n = f
+            .writer
+            .db
+            .read(|c| {
+                Ok(c.query_row(
+                    "select count(*) from forecast_made where job = 'J'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(n, 3);
+    }
+
+    /// Pure (D): when the forecast rows do not write, the job is not made either.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_job_and_its_forecast_are_one_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        f.writer
+            .write(&user(), "coord/job-create", |tx| {
+                create_with_forecast(tx, new_job("K"), &[], 1.0)
+            })
+            .await
+            .unwrap();
+        // a NaN is stored as NULL, which the not-null column refuses
+        let bad = vec![made("J", "J#1", f64::NAN)];
+        let got = f
+            .writer
+            .write(&user(), "coord/job-create", move |tx| {
+                create_with_forecast(tx, new_job("J"), &bad, 1.0)
+            })
+            .await;
+        assert!(got.is_err());
+        assert!(load(&f, "J", false).await.unwrap().is_none());
     }
 }
 
