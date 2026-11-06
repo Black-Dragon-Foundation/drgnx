@@ -133,6 +133,12 @@ properties, KIND `diff' only diff-mode's faces.  Called when the text arrives, n
 (defun drgnx-extensions-trust--installed-p (row)
   (memq (plist-get row :state) '(installed update held dependency incompat)))
 
+(defun drgnx-extensions-trust--signs-p (row)
+  "Non-nil when ROW's source signs: verified in the lock (`signed'), or from an archive that signs and is checked at
+install (`signing-archive', GNU and NonGNU ELPA).  Every other source (unsigned archive, local, Git commit, unknown)
+gets the card."
+  (memq (plist-get row :signed) '(signed signing-archive)))
+
 ;;;; The card
 
 (defvar drgnx-extensions-trust-mode-map (make-sparse-keymap) "Keys of a trust card (the key profiles bind them).")
@@ -143,8 +149,9 @@ properties, KIND `diff' only diff-mode's faces.  Called when the text arrives, n
   (buffer-disable-undo))
 
 (defvar-local drgnx-extensions-trust--card nil
-  "The card's state: (:id ID :name NAME :row ROW :info DETAILS :then FN :deps NAMES :seen TABLE :pending N :done
-BOOL).  DEPS are the unsigned packages it brings that are not installed.")
+  "The card's state: (:id ID :name NAME :row ROW :info DETAILS :then FN :deps NAMES :unchecked NAMES :seen TABLE
+:pending N :done BOOL).  DEPS are the unsigned packages it brings that are not installed; UNCHECKED the requirements
+whose details the hub could not give.  DETAILS is (:error TEXT) when the package's own lookup failed (no Install).")
 
 (defun drgnx-extensions-trust-card-name (name) (format "*Extension trust: %s*" name))
 
@@ -154,6 +161,8 @@ BOOL).  DEPS are the unsigned packages it brings that are not installed.")
     (with-current-buffer buffer
       (let* ((card drgnx-extensions-trust--card) (row (plist-get card :row)) (info (plist-get card :info))
              (name (plist-get card :name)) (deps (sort (copy-sequence (plist-get card :deps)) #'string<))
+             (unchecked (sort (copy-sequence (plist-get card :unchecked)) #'string<))
+             (failed (plist-get info :error))
              (inhibit-read-only t))
         (erase-buffer)
         (insert (propertize (drgnx-extensions-trust--line name) 'face 'bold)
@@ -172,12 +181,20 @@ BOOL).  DEPS are the unsigned packages it brings that are not installed.")
                  "\n")
                 "\n")
         (insert (cond ((not (plist-get card :done)) (format "Checking the packages %s needs…\n" name))
+                      (failed (propertize (format "Could not check what %s needs: %s\n" name
+                                                  (drgnx-extensions-trust--line (format "%s" failed)))
+                                          'face 'drgnx-status-fail))
                       (deps (format "It also brings %d unsigned package%s it needs: %s\n" (length deps)
                                     (if (= (length deps) 1) "" "s") (string-join deps ", ")))
                       (t "It brings no other unsigned package.\n"))
+                (if (and (plist-get card :done) unchecked)
+                    (propertize (format "Not checked: %s (the catalog could not say where %s from)\n"
+                                        (string-join unchecked ", ") (if (cdr unchecked) "they come" "it comes"))
+                                'face 'drgnx-status-warn)
+                  "")
                 "After this install drgnx pins its hash in the lock.\n\n")
         (insert (drgnx-ui-button "[Cancel]" 'extensions-trust-cancel :help "Close the card; nothing is installed"))
-        (when (plist-get card :done)
+        (when (and (plist-get card :done) (not failed))
           (insert " " (drgnx-ui-button "[Install]" 'extensions-trust-install
                                        :help "Install it and what it brings; this card is not shown for them again")))
         (insert "\n")
@@ -198,19 +215,22 @@ no answer is left to wait for."
       ;; every one is counted before the first answer, which may come at once
       (cl-incf (plist-get drgnx-extensions-trust--card :pending) (length ask)))
     (dolist (id (nreverse ask))
-      (drgnx-extensions-trust--details id (lambda (info err) (drgnx-extensions-trust--visited buffer info err)))))
+      (let ((name (substring id 4)))
+        (drgnx-extensions-trust--details id (lambda (info err) (drgnx-extensions-trust--visited buffer name info err))))))
   (drgnx-extensions-trust--maybe-done buffer))
 
-(defun drgnx-extensions-trust--visited (buffer info err)
-  "A requirement's details came for BUFFER's card (ERR: it is not in the catalog, a built-in: skipped)."
+(defun drgnx-extensions-trust--visited (buffer name info err)
+  "Requirement NAME's details came for BUFFER's card; with ERR (the hub could not say what it is) it is named as not
+checked, never dropped."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (cl-decf (plist-get drgnx-extensions-trust--card :pending))
-      (let ((row (and (not err) info (drgnx-extensions-list--normalize (plist-get info :row)))))
-        (when (and row (not (drgnx-extensions-trust--installed-p row)))
-          (unless (eq (plist-get row :signed) 'signed)
-            (push (plist-get row :name) (plist-get drgnx-extensions-trust--card :deps)))
-          (drgnx-extensions-trust--visit buffer (plist-get info :requires))))
+      (let ((row (and (not err) info (plist-get info :row) (drgnx-extensions-list--normalize (plist-get info :row)))))
+        (cond ((null row) (push name (plist-get drgnx-extensions-trust--card :unchecked)))
+              ((not (drgnx-extensions-trust--installed-p row))
+               (unless (drgnx-extensions-trust--signs-p row)
+                 (push (plist-get row :name) (plist-get drgnx-extensions-trust--card :deps)))
+               (drgnx-extensions-trust--visit buffer (plist-get info :requires)))))
       (drgnx-extensions-trust--maybe-done buffer))))
 
 (defun drgnx-extensions-trust--maybe-done (buffer)
@@ -225,7 +245,7 @@ no answer is left to wait for."
   (let* ((name (plist-get row :name)) (buffer (get-buffer-create (drgnx-extensions-trust-card-name name))))
     (with-current-buffer buffer
       (drgnx-extensions-trust-mode)
-      (setq drgnx-extensions-trust--card (list :id id :name name :row row :info info :then then :deps nil
+      (setq drgnx-extensions-trust--card (list :id id :name name :row row :info info :then then :deps nil :unchecked nil
                                                :seen (make-hash-table :test #'equal) :pending 0 :done nil))
       (puthash name t (plist-get drgnx-extensions-trust--card :seen)))
     (drgnx-extensions-trust--render buffer)
@@ -235,14 +255,16 @@ no answer is left to wait for."
        id (lambda (info err)
             (when (buffer-live-p buffer)
               (with-current-buffer buffer
-                (setq drgnx-extensions-trust--card (plist-put drgnx-extensions-trust--card :info (or info (list :error err)))))
+                (setq drgnx-extensions-trust--card
+                      (plist-put drgnx-extensions-trust--card :info
+                                 (if (or err (null info)) (list :error (or err "the hub sent nothing")) info))))
               (drgnx-extensions-trust--visit buffer (plist-get info :requires))))))
     (pop-to-buffer buffer)
     buffer))
 
 (defun drgnx-extensions-trust--decide (id row info then)
-  "THEN at once for a signed source or a package whose card was seen here; else its card."
-  (if (or (eq (plist-get row :signed) 'signed) (drgnx-extensions-trusted-p (plist-get row :name)))
+  "THEN at once for a source that signs or a package whose card was seen here; else its card."
+  (if (or (drgnx-extensions-trust--signs-p row) (drgnx-extensions-trusted-p (plist-get row :name)))
       (progn (funcall then) t)
     (drgnx-extensions-trust--show-card id row info then)
     t))
@@ -273,6 +295,8 @@ then the install is queued."
   (let ((card drgnx-extensions-trust--card))
     (unless (derived-mode-p 'drgnx-extensions-trust-mode) (user-error "Not a trust card"))
     (unless (plist-get card :done) (user-error "The card is still checking what %s needs" (plist-get card :name)))
+    (when (plist-get (plist-get card :info) :error)
+      (user-error "Could not check what %s needs, so it is not installed" (plist-get card :name)))
     (drgnx-extensions-trust--record (mapcar #'intern (cons (plist-get card :name) (plist-get card :deps))))
     (kill-buffer (current-buffer))
     (funcall (plist-get card :then))))

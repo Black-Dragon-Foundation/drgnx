@@ -386,7 +386,7 @@ ticket (an integer) has no row, nil."
 (defun drgnx-extensions-list--trust (row)
   "The trust word of ROW's source, or nil."
   (pcase (plist-get row :signed)
-    ('signed "signed") ('unsigned-archive "unsigned archive") ('local "local") ('git-commit "Git commit")
+    ('signed "signed") ('signing-archive "signed archive") ('unsigned-archive "unsigned archive") ('local "local") ('git-commit "Git commit")
     ('hash-approved "hash approved") (_ nil)))
 
 (defun drgnx-extensions-list--job-chip (st)

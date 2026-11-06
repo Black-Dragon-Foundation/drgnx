@@ -374,7 +374,7 @@
         (extensions-rollback :none "the Generations section's Roll back; the palette")
         (extensions-restart :none "the Extensions header button; the palette")
         (extensions-more :none "the ⋯ button of a page; the palette")
-        (extensions-trust-install "i" :map (drgnx-extensions-trust . drgnx-extensions-trust-mode-map))
+        (extensions-trust-install :none "the card's Install button only: the list's i opens the card, so no key installs")
         (extensions-trust-cancel "q" :map (drgnx-extensions-trust . drgnx-extensions-trust-mode-map))
         (extensions-review-apply :none "the Apply update button of a reviewed update; the palette")
         (extensions-show-recommended :none "a project's recommendation notice; the palette")

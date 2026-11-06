@@ -2303,8 +2303,9 @@ and never reaches the network here: the refresh job (`drgnx extensions refresh`)
   plan does not take), `incompat` (the newest version needs a newer Emacs), `dependency` (installed only because
   another installed package requires it), `missing` (a module, `packages.eld` or the wanted file names it and the lock
   does not have it), `available`, `built-in`, and for modules `on`, `off`, `needs-package`, `failed`.
-- **Signed:** `signed` only for a lock entry with `:verified t`; an installed MELPA package is `unsigned-archive`, a
-  directory archive `local`, a Git package `git-commit`. A lock entry without `:sha256` (and not Git) is `by-hand`.
+- **Signed:** `signed` only for a lock entry with `:verified t`; a row of an archive that signs without one (GNU or
+  NonGNU, not installed yet) is `signing-archive` (no trust card: the sync checks its signature); a MELPA package is
+  `unsigned-archive`, a directory archive `local`, a Git package `git-commit`. A lock entry without `:sha256` (and not Git) is `by-hand`.
 - **Search:** words are lower-cased; a row matches when each word is a prefix of a word of its name or a substring of
   its name, keywords or summary. Rank: exact name, name prefix, name word prefix, inside the name, keyword, summary
   (the worst of the words), then installed first, then downloads, then name. `limit` is 1 to 500 (default 200).

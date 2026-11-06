@@ -464,7 +464,8 @@ pub fn build(inputs: Inputs) -> Index {
             } else if !a.signed {
                 w::Signed::UnsignedArchive
             } else {
-                w::Signed::None
+                // from an archive that signs, with no verified lock entry (not installed yet): the sync checks it
+                w::Signed::SigningArchive
             }
         } else {
             w::Signed::None
@@ -842,9 +843,9 @@ mod tests {
     #[test]
     fn signed_needs_verified_in_the_lock() {
         let i = fixture_index();
-        // a gnu entry with :verified t is signed; the same archive without it says nothing
+        // a gnu entry with :verified t is signed; the same archive without it is a signing archive, not unsigned
         assert_eq!(row(&i, "pkg:with-editor").signed, w::Signed::Signed);
-        assert_eq!(row(&i, "pkg:dash").signed, w::Signed::None);
+        assert_eq!(serde_json::to_value(row(&i, "pkg:dash").signed).unwrap(), "signing-archive");
         // MELPA does not sign, a directory archive is local, a repository is a commit
         assert_eq!(row(&i, "pkg:magit").signed, w::Signed::UnsignedArchive);
         assert_eq!(row(&i, "pkg:in-a-directory").signed, w::Signed::Local);

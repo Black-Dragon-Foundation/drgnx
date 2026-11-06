@@ -9236,6 +9236,11 @@
                 "type": "string"
               },
               {
+                "const": "signing-archive",
+                "description": "From an archive that signs, with no verified lock entry: the sync checks its signature before it installs.",
+                "type": "string"
+              },
+              {
                 "const": "local",
                 "description": "A directory archive.",
                 "type": "string"
@@ -9640,6 +9645,11 @@
               {
                 "const": "signed",
                 "description": "The lock entry says `:verified t`.",
+                "type": "string"
+              },
+              {
+                "const": "signing-archive",
+                "description": "From an archive that signs, with no verified lock entry: the sync checks its signature before it installs.",
                 "type": "string"
               },
               {
@@ -10054,6 +10064,11 @@
               {
                 "const": "signed",
                 "description": "The lock entry says `:verified t`.",
+                "type": "string"
+              },
+              {
+                "const": "signing-archive",
+                "description": "From an archive that signs, with no verified lock entry: the sync checks its signature before it installs.",
                 "type": "string"
               },
               {

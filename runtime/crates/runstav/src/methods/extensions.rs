@@ -67,6 +67,8 @@ pub enum State {
 pub enum Signed {
     /// The lock entry says `:verified t`.
     Signed,
+    /// From an archive that signs, with no verified lock entry: the sync checks its signature before it installs.
+    SigningArchive,
     UnsignedArchive,
     /// A directory archive.
     Local,

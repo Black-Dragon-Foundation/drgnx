@@ -100,23 +100,30 @@ lock, and each package's settings group says *magit 4.1 · Extensions* with a li
 ## Where it comes from
 
 Every package runs inside Emacs as you, so its page says how far its source can be trusted. GNU ELPA and NonGNU ELPA
-sign their packages, and drgnx checks the signature: *signed*. MELPA and stable MELPA do not sign (*unsigned archive*);
-a directory archive is *local*; a Git package is pinned to a *Git commit*; a plugin is *hash approved*.
+sign their packages, and drgnx checks the signature: *signed* once installed, *signed archive* before (the sync
+checks the signature before it installs). MELPA and stable MELPA do not sign (*unsigned archive*); a directory archive
+is *local*; a Git package is pinned to a *Git commit*; a plugin is *hash approved*.
 
 The first time you install a package from a source that does not sign, a **trust card** opens before anything is
 queued. It names the package's source and commit, its downloads and maintainer, says *Runs inside Emacs as you: it
 can read your files and reach the network.*, and lists every package it brings that is not installed and comes from
-an unsigned source too ("It also brings 3 unsigned packages it needs: magit-section, transient, with-editor"). After
-the install drgnx pins the package's hash in the lock, so a later sync installs exactly that file.
+an unsigned source too ("It also brings 3 unsigned packages it needs: magit-section, transient, with-editor"). A
+package it needs that the catalog could not look up is named ("Not checked: …"), never left out; when the package's
+own lookup fails the card says "Could not check what NAME needs" and has no Install. After the install drgnx pins the
+package's hash in the lock, so a later sync installs exactly that file.
 
 | On the card | VS Code | Emacs | Vim |
 |---|---|---|---|
-| Install | `i` | `i` | `i` |
+| Install | its button only | its button only | its button only |
 | Cancel | `q` | `q` | `q` |
+
+No key installs from the card: the list's `i` opens it, so a second `i` must not install what you have not read.
+Click **Install**, or move to it and press `RET`.
 
 **Install** queues the install and remembers, on this machine, that you saw the card for that package and the ones it
 brings (`~/.local/state/drgnx/extensions/trusted.eld`): the card does not come back for them here, and does on a new
-machine. **Cancel** queues nothing. A signed package installs with no card. The card is only ever opened by your own
+machine. **Cancel** queues nothing. A package from GNU ELPA or NonGNU ELPA (signed, or from a signed archive)
+installs with no card. The card is only ever opened by your own
 Install: nothing that runs by itself (a timer, a hook, an agent) can open it, answer it or install anything. An agent
 can only suggest a package, and its suggestion has no Install button.
 

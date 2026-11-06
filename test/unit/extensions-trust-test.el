@@ -110,7 +110,10 @@ variable stays unbound, no `emacs-lisp-mode-hook', no Flymake."
 ;;;; The trust card
 
 (defconst drgnx-extensions-trust-test--rows
-  '(("pkg:compat" :id "pkg:compat" :kind "package" :name "compat" :state "available" :source "gnu" :signed "signed")
+  ;; the hub's own values: a package from an archive that signs and is not installed yet is "signing-archive"; "signed"
+  ;; only once the lock says :verified t
+  '(("pkg:compat" :id "pkg:compat" :kind "package" :name "compat" :state "available" :source "gnu"
+     :signed "signing-archive")
     ("pkg:dash" :id "pkg:dash" :kind "package" :name "dash" :state "installed" :source "melpa" :signed "unsigned-archive")
     ("pkg:with-editor" :id "pkg:with-editor" :kind "package" :name "with-editor" :state "available" :source "melpa"
      :signed "unsigned-archive")
@@ -120,15 +123,19 @@ variable stays unbound, no `emacs-lisp-mode-hook', no Flymake."
      :source "melpa" :signed "unsigned-archive")
     ("pkg:magit" :id "pkg:magit" :kind "package" :name "magit" :state "available" :source "melpa"
      :signed "unsigned-archive" :summary "A Git porcelain" :downloads 1234567)
-    ("pkg:gnu-a" :id "pkg:gnu-a" :kind "package" :name "gnu-a" :state "available" :source "gnu" :signed "signed"))
+    ("pkg:gnu-a" :id "pkg:gnu-a" :kind "package" :name "gnu-a" :state "available" :source "gnu"
+     :signed "signing-archive")
+    ("pkg:needs-lost" :id "pkg:needs-lost" :kind "package" :name "needs-lost" :state "available" :source "melpa"
+     :signed "unsigned-archive"))
   "The catalog the hub stub answers from.")
 
 (defconst drgnx-extensions-trust-test--requires
   '(("pkg:magit" "emacs" "compat" "dash" "with-editor" "transient" "magit-section")
     ("pkg:magit-section" "dash" "compat")
     ("pkg:with-editor" "compat")
-    ("pkg:transient" "compat"))
-  "ID → the names it requires.")
+    ("pkg:transient" "compat")
+    ("pkg:needs-lost" "lost-dep"))
+  "ID → the names it requires (lost-dep is in no table: its details call fails).")
 
 (defvar drgnx-extensions-trust-test--asked nil "The hub methods asked, newest first.")
 
@@ -221,6 +228,54 @@ names the three, and only them."
         (should (string-search "It also brings 3 unsigned packages it needs: magit-section, transient, with-editor" card))
         (should-not (string-search "dash" card))
         (should-not (string-search "compat" card))))))
+
+(ert-deftest drgnx-extensions-trust/a-lookup-that-fails-is-said-and-hides-install ()
+  "D: a dependency whose details the hub could not give is named, never dropped; when the package's own lookup fails
+the card says so and has no Install."
+  (drgnx-extensions-trust-test--with
+    (let ((this-command 'extensions-install))
+      (drgnx-extensions-trust-before-install "pkg:needs-lost" #'ignore)
+      (let ((card (drgnx-extensions-trust-test--card "needs-lost")))
+        (should (string-search "Not checked: lost-dep" card))
+        (should (string-search "[Install]" card)))
+      ;; the list knows the row, the hub cannot answer for it
+      (let ((drgnx-extensions-list--rows (make-hash-table :test 'equal)))
+        (puthash "pkg:ghost" (list :id "pkg:ghost" :kind 'package :name "ghost" :state 'available :source "melpa"
+                                   :signed 'unsigned-archive)
+                 drgnx-extensions-list--rows)
+        (drgnx-extensions-trust-before-install "pkg:ghost" #'ignore)
+        (let ((card (drgnx-extensions-trust-test--card "ghost")))
+          (should (string-search "Could not check what ghost needs" card))
+          (should-not (string-search "[Install]" card)))))))
+
+(ert-deftest drgnx-extensions-trust/the-card-has-no-key-that-installs ()
+  "D: the list's i opens the card; nothing on the card's keymap installs (only its Install button does)."
+  (dolist (profile '("vscode" "emacs" "vim"))
+    (let ((rows (with-temp-buffer
+                  (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir))
+                  (plist-get (read (current-buffer)) :bind))))
+      (should (eq (cadr (assq 'extensions-trust-install rows)) :none)))))
+
+(ert-deftest drgnx-extensions-trust/a-reviewed-update-with-a-new-dependency-applies ()
+  "D: the staged update of magit brings b 2.0: both are compared and shown, and Apply goes through."
+  (drgnx-extensions-trust-test--with
+    (let ((this-command 'extensions-update) (drgnx-extensions-review '(magit)) (diffs nil))
+      (cl-letf (((symbol-function 'drgnx-extensions-trust--diff)
+                 (lambda (name entry callback) (push name diffs)
+                   (funcall callback (format "+(new code of %s)\n" (car entry)) nil))))
+        (drgnx-extensions-trust-update "magit")
+        (drgnx-file-write (drgnx-pkg-staged-file)
+                          '((magit :version "4.2" :file "magit-4.2.tar" :sha256 "abc123" :verified nil)
+                            (b :version "2.0" :file "b-2.0.tar" :sha256 "bbb222" :verified t)))
+        (run-hook-with-args 'drgnx-extensions-jobs-done-functions "job-1" '(:status done :kind upgrade))
+        (should (equal (sort diffs #'string<) '("b" "magit")))
+        (let ((page (with-current-buffer (drgnx-extensions-details-open "pkg:magit")
+                      (drgnx-extensions-details--render-body))))
+          (should (string-search "+(new code of magit)" page))
+          (should (string-search "+(new code of b)" page))
+          (should (string-search "bbb222" page)))
+        (drgnx-extensions-trust-apply "magit")
+        (should (= 2 (length drgnx-extensions-trust-test--starts)))))))
 
 (ert-deftest drgnx-extensions-trust/the-card-shows-once-per-package ()
   "D: Install on the card records the package and what it brings and runs the install once; the next install of it
