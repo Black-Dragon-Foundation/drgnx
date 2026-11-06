@@ -480,6 +480,19 @@ fn gemini_policy_problem(text: &str) -> Option<String> {
     })
 }
 
+/// The file name of the admin POLICY: `drgnx-` and the first 16 hex digits of its SHA-256.  drgnx's Gemini fork counts
+/// the rules whose source is `Admin: <the file's name>` (`packages/cli/src/acp/acpDrgnxPanel.ts:56-86`), and a policy in
+/// Gemini's system folder has the same source form, so the name is one no such file has by accident.
+fn gemini_policy_name(policy: &[u8]) -> String {
+    use sha2::Digest;
+    let hash: String = sha2::Sha256::digest(policy)
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    format!("drgnx-{hash}.toml")
+}
+
 /// How many rules the lock wrote in the policy file PLAN's `--admin-policy` names (none passed: 0).
 pub fn gemini_policy_rules(plan: &LaunchPlan) -> usize {
     let Some(file) = plan
@@ -625,7 +638,7 @@ impl LaunchPlan {
                     tracing::warn!("{GEMINI_POLICY_DROPPED}: {why}");
                     self.enforced = Enforced::No(GEMINI_POLICY_DROPPED);
                 } else {
-                    let file = at.dir.join("gemini-policy.toml");
+                    let file = at.dir.join(gemini_policy_name(&policy));
                     self.argv.push("--admin-policy".into());
                     self.argv.push(file.clone().into());
                     self.put_file(file, policy);

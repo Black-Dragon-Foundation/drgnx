@@ -99,6 +99,16 @@ fn env_of<'a>(plan: &'a LaunchPlan, name: &str) -> Option<&'a str> {
         .map(|(_, v)| v.as_str())
 }
 
+/// The file PLAN's `--admin-policy` names.
+fn admin_policy(plan: &LaunchPlan) -> PathBuf {
+    let a = args(plan);
+    let i = a
+        .iter()
+        .position(|x| x == "--admin-policy")
+        .expect("an admin policy");
+    PathBuf::from(&a[i + 1])
+}
+
 fn file_of(plan: &LaunchPlan, path: &Path) -> Option<String> {
     plan.ro_files
         .iter()
@@ -200,7 +210,8 @@ fn gemini_gets_an_admin_policy_for_subscribed_kinds() {
     let d = tempfile::tempdir().unwrap();
     let g = profile(&["gemini", "--acp", "--yolo"], None, &[], None);
     let plan = locked(&g, &["read", "execute"], d.path());
-    let file = d.path().join("run/lock/gemini-policy.toml");
+    let file = admin_policy(&plan);
+    assert_eq!(file.parent(), Some(d.path().join("run/lock").as_path()));
     assert_eq!(
         args(&plan),
         [
@@ -233,11 +244,8 @@ fn gemini_gets_an_admin_policy_for_subscribed_kinds() {
     );
     assert_eq!(plan.enforced, Enforced::Yes);
     // a kind with no tool names drgnx knows asks for every tool
-    let wide = file_of(
-        &locked(&g, &["think"], d.path()),
-        &d.path().join("run/lock/gemini-policy.toml"),
-    )
-    .unwrap();
+    let think = locked(&g, &["think"], d.path());
+    let wide = file_of(&think, &admin_policy(&think)).unwrap();
     assert!(wide.contains("toolName = \"*\""), "{wide}");
     let none = locked(&g, &[], d.path());
     assert!(!args(&none).iter().any(|a| a == "--admin-policy"));
@@ -325,11 +333,39 @@ fn gemini_policy_must_be_reported_loaded() {
     let d = tempfile::tempdir().unwrap();
     let g = profile(&["gemini", "--acp"], None, &[], None);
     let plan = locked(&g, &["read", "execute"], d.path());
-    let file = d.path().join("run/lock/gemini-policy.toml");
+    let file = admin_policy(&plan);
     let n = file_of(&plan, &file).unwrap().matches("[[rule]]").count();
     assert!(n >= 4, "{n}");
     assert_eq!(gemini_policy_rules(&plan), n);
     assert_eq!(gemini_policy_rules(&locked(&g, &[], d.path())), 0);
+}
+
+// [D] pure: drgnx's Gemini fork counts the rules whose source is `Admin: <basename>` of an `--admin-policy` file
+// (`packages/cli/src/acp/acpDrgnxPanel.ts:56-86`), so the policy's name is its own: `drgnx-` and the first 16 hex
+// digits of its content's SHA-256, which no file of Gemini's system folder shares by accident; other kinds, another name.
+#[test]
+fn gemini_policy_is_named_by_its_content() {
+    use sha2::Digest;
+    let d = tempfile::tempdir().unwrap();
+    let g = profile(&["gemini", "--acp"], None, &[], None);
+    let plan = locked(&g, &["read", "execute"], d.path());
+    let file = admin_policy(&plan);
+    let text = file_of(&plan, &file).unwrap();
+    let hash: String = sha2::Sha256::digest(text.as_bytes())
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(
+        file.file_name().and_then(|n| n.to_str()),
+        Some(format!("drgnx-{hash}.toml").as_str())
+    );
+    let other = admin_policy(&locked(&g, &["read"], d.path()));
+    assert_ne!(other.file_name(), file.file_name());
+    assert_eq!(
+        admin_policy(&locked(&g, &["execute", "read"], d.path())),
+        file
+    );
 }
 
 // [D] pure: a policy in Gemini's system folder makes it ignore `--admin-policy`: the lock says so, the kinds are

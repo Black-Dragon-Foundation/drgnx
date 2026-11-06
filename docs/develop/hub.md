@@ -890,8 +890,9 @@ refuses at once, an ask waits for the user; a session's `exec/start` is checked 
 browser rows an ask that the user's matrix grant for the session or its plan already covers is allowed with no card
 ([coordination.md](coordination.md), "Grant records").
 
-**The lock's files** (`LaunchPlan::ro_files`, `sandbox::lock_files`): one in the session dir (`lock/gemini-policy.toml`,
-`lock/dsh-overlay.yml`) is written there, and the agent reads that dir and never writes it on every target; one at a
+**The lock's files** (`LaunchPlan::ro_files`, `sandbox::lock_files`): one in the session dir (`lock/drgnx-<hash>.toml`,
+Gemini's admin policy, named by the first 16 hex digits of its content's SHA-256 so the rules drgnx's Gemini fork counts
+by file name, `Admin: <name>`, are drgnx's and no system policy's; `lock/dsh-overlay.yml`) is written there, and the agent reads that dir and never writes it on every target; one at a
 fixed path (`/etc/codex/requirements.toml`, `/etc/codex/config.toml`, Kimi Code's `config.toml` in its home) is
 written to the session's scratch and bound read-only at that path, which only the full tier can do: elsewhere the
 launch is refused (`Rule::Setup`). The user's own `/etc` is never touched. A gateway plan's `gateway_url_env` names the
