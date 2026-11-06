@@ -1350,6 +1350,9 @@ pub(super) async fn prepare(
     job: Option<&str>,
     module_env: &[(String, String)],
 ) -> Result<Prepared, Error> {
+    // while replaying a run, the agent is the ACP replayer of the recording (the rest of the launch is as live)
+    let replayed = crate::recording::replayed_profile(profile);
+    let profile = replayed.as_ref().unwrap_or(profile);
     // a gateway profile's agent reaches its provider only through the hub's gateway, with a token of its own
     let (profile, gateway, relayed) = match gateway_env(front, profile, role, sid, job).await? {
         Some((env, token, relayed)) => {
@@ -1834,7 +1837,12 @@ async fn launch(
         .traces
         .open(front, sid, cwd, &run, prep.trace.clone())
         .map_err(|e| internal(format!("the session's trace socket: {e}")))?;
-    let (conn, rx) = Conn::spawn(prep.spec, ConnOpts::default())
+    // while recording, the connection's lines, MCP calls and worktree changes go into the run (in spawn order)
+    let opts = ConnOpts {
+        tap: crate::recording::acp_tap(sid, job, &profile.name, &prep.spec, cwd),
+        ..ConnOpts::default()
+    };
+    let (conn, rx) = Conn::spawn(prep.spec, opts)
         .await
         .map_err(|e| internal(e.to_string()))?;
     let kill = || draugr::kill_group(conn.pid(), Duration::ZERO, &draugr::RealSignaller);

@@ -125,7 +125,8 @@ pub trait Ledger: Send + Sync {
 /// ([`Keys::scrub`]), and `headers` leaves out the sensitive ones (the provider's auth header).
 pub struct Sent<'a> {
     pub provider: &'a str,
-    /// The session whose socket the request came in on (a session's registration), else none.
+    /// The session the request is for: the one whose socket it came in on, else the job a loopback registration is
+    /// booked under (a session's own id when it has no job); none for the editor.
     pub session: Option<&'a str>,
     /// The client's path: an agent's target (`/v1/messages…`), the editor's REST (`/chat/completions`).
     pub path: &'a str,
@@ -290,7 +291,7 @@ impl Gateway {
             .collect();
         let session = match &reg.listener {
             ListenerId::Session(sid) => Some(sid.as_str()),
-            ListenerId::Loopback => None,
+            ListenerId::Loopback => reg.job.as_deref(),
         };
         let x = tap.begin(Sent {
             provider,

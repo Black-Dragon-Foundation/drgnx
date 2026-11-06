@@ -1122,3 +1122,29 @@ fn the_cdp_secret_is_never_in_argv_or_logs() {
         launch.spec.pass_fds
     );
 }
+
+// Pattern D (pure): a replayed run's sandboxed agent reads the recording and the mock's dir and writes its scratch dir.
+#[test]
+fn a_replayed_launch_sees_the_recording_and_its_scratch_dir() {
+    let shape = SessionShape {
+        sid: "a0123456789ab".into(),
+        cwd: "/w/t".into(),
+        write: vec!["/w/t".into()],
+        read: vec!["/w/r".into()],
+        net: NetCell::ProviderOnly,
+        browser: None,
+    };
+    let dirs = crate::recording::ReplayDirs {
+        read: vec!["/rec/run".into(), "/bin/dir".into()],
+        write: vec!["/scratch/replay".into()],
+    };
+    let s = with_replay_dirs(&shape, Some(&dirs));
+    assert_eq!(
+        s.read,
+        [PathBuf::from("/w/r"), "/rec/run".into(), "/bin/dir".into()]
+    );
+    assert_eq!(s.write, [PathBuf::from("/w/t"), "/scratch/replay".into()]);
+    // not replaying: the shape is the caller's
+    let same = with_replay_dirs(&shape, None);
+    assert_eq!((same.read, same.write), (shape.read, shape.write));
+}

@@ -83,6 +83,15 @@ impl Tool<Ctx> for AfterTool {
         args: serde_json::Value,
     ) -> mimir::BoxFuture<'a, mimir::ToolResult> {
         Box::pin(async move {
+            // while recording, the call as the agent made it goes into its session's stream (an outside agent's MCP
+            // calls never cross the ACP pipe), a call a hook refuses too: the replayer makes it again and the
+            // replayed hub's hooks decide again
+            let recorded = crate::recording::is_recording().then(|| args.clone());
+            let note = |r: &mimir::ToolResult| {
+                if let (Some(args), Identity::Session { sid, .. }) = (&recorded, &ctx.1) {
+                    crate::recording::mcp(sid, self.0.name(), args, r);
+                }
+            };
             let mut args = args;
             if let Identity::Session { sid, .. } = &ctx.1 {
                 let asked = args.clone();
@@ -93,18 +102,25 @@ impl Tool<Ctx> for AfterTool {
                     .await
                 {
                     Ok(a) => args = a,
-                    Err(text) => return mimir::ToolResult::Err(text),
+                    Err(text) => {
+                        let r = mimir::ToolResult::Err(text);
+                        note(&r);
+                        return r;
+                    }
                 }
                 if args != asked
                     && let Err(e) = self.0.check(&args)
                 {
-                    return mimir::ToolResult::Err(format!(
+                    let r = mimir::ToolResult::Err(format!(
                         "drgnx refused {}: a hook's change does not fit its arguments: {e}",
                         self.0.name()
                     ));
+                    note(&r);
+                    return r;
                 }
             }
             let r = self.0.call(ctx, args).await;
+            note(&r);
             if let Identity::Session { sid, .. } = &ctx.1 {
                 ctx.0.hub().after_tool(sid, self.0.name()).await;
             }

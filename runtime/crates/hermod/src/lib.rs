@@ -2,10 +2,12 @@
 //! line codec, with no SDK role framework (V2 runtime design §5.7; `docs/develop/runtime.md`, "hermod").  Generic:
 //! no drgnx type.  One reader task and one writer task per connection; a watchdog task that waits for the child,
 //! drains what it wrote and sends [`Event::Exit`] exactly once; a receipt stamp on every update; the
-//! `_meta.jetbrains.air.fork` shape for forking at a message.
+//! `_meta.jetbrains.air.fork` shape for forking at a message; an optional line tap that sees both directions (a
+//! recording).
 //!
-//! Modules: `conn` (spawn, the tasks, calls with deadlines), `types` (`ConnOpts`, `AgentInfo`, `PromptOutcome`,
-//! `ForkPoint`, `ForkInto`, `Event`, `Error`), `incoming` (the agent's requests and their responders), `stamp` (receipt stamps).
+//! Modules: `conn` (spawn, the tasks, calls with deadlines), `types` (`ConnOpts`, `LineTap`, `Dir`, `AgentInfo`,
+//! `PromptOutcome`, `ForkPoint`, `ForkInto`, `Event`, `Error`), `incoming` (the agent's requests and their
+//! responders), `stamp` (receipt stamps).
 
 pub mod conn;
 pub mod incoming;

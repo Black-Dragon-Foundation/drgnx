@@ -86,6 +86,8 @@ fn main() -> ExitCode {
         Command::Search(s) => return code(drgnx_ratatoskr::search_cli::run(&Env::process(), s)),
         // Hrafn's embed worker: threads of its own (stdin, the CPU path's pool), never a tokio runtime.
         Command::EmbedWorker(args) => return code(drgnx_ratatoskr::search::worker::run(args)),
+        // No hub, no runtime: the lint reads files.
+        Command::Recording(r) => return code(drgnx_ratatoskr::recording_cli::run(&r)),
         // Test builds only: one command under the sandbox, judged by its --result file.
         #[cfg(feature = "test-hooks")]
         Command::SandboxRun(args) => return code(drgnx_ratatoskr::sandbox::run(args)),

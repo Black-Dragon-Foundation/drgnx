@@ -107,6 +107,7 @@ pub mod peer;
 pub mod plugins;
 pub mod plugins_cli;
 pub mod recording;
+pub mod recording_cli;
 pub mod records;
 pub mod runner;
 pub mod runner_cli;

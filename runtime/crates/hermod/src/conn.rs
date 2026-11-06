@@ -4,7 +4,7 @@ use crate::incoming::{Incoming, Responder};
 use crate::schema::v1 as acp;
 use crate::stamp;
 use crate::types::{
-    AgentInfo, ClientCaps, ConnOpts, ContentBlock, Error, Event, ForkInto, McpServer,
+    AgentInfo, ClientCaps, ConnOpts, ContentBlock, Dir, Error, Event, ForkInto, LineTap, McpServer,
     PromptOutcome, SessionId,
 };
 use bytes::BytesMut;
@@ -87,8 +87,12 @@ impl Conn {
         let (tx, mut wrx) = mpsc::unbounded_channel::<String>();
         let (etx, erx) = mpsc::channel(EVENT_QUEUE);
 
+        let wtap = opts.tap.clone();
         tokio::spawn(async move {
             while let Some(mut line) = wrx.recv().await {
+                if let Some(t) = &wtap {
+                    t.line(Dir::In, &line, std::time::Instant::now());
+                }
                 line.push('\n');
                 if stdin.write_all(line.as_bytes()).await.is_err() || stdin.flush().await.is_err() {
                     break;
@@ -101,9 +105,11 @@ impl Conn {
             shared.clone(),
             tx.downgrade(),
             etx.clone(),
+            opts.tap.clone(),
         ));
 
         let sh = shared.clone();
+        let (tail_max, xtap) = (opts.stderr_tail, opts.tap.clone());
         tokio::spawn(async move {
             let status = child.wait().await.ok().flatten();
             let mut reader = reader;
@@ -120,8 +126,11 @@ impl Conn {
                 (s.code(), s.signal())
             });
             let tail = child.stderr_tail();
-            let skip = tail.chars().count().saturating_sub(opts.stderr_tail);
-            let stderr = tail.chars().skip(skip).collect();
+            let skip = tail.chars().count().saturating_sub(tail_max);
+            let stderr: String = tail.chars().skip(skip).collect();
+            if let Some(t) = &xtap {
+                t.exit(code, signal, &stderr);
+            }
             let _ = etx
                 .send(Event::Exit {
                     code,
@@ -399,13 +408,22 @@ async fn read_loop(
     shared: Arc<Shared>,
     wtx: WeakUnboundedSender<String>,
     etx: mpsc::Sender<Event>,
+    tap: Option<Arc<dyn LineTap>>,
 ) {
     let mut codec = runstav::line::codec();
     let mut buf = BytesMut::with_capacity(8192);
+    let seen = |line: &str| {
+        if let Some(t) = &tap {
+            t.line(Dir::Out, line, std::time::Instant::now());
+        }
+    };
     loop {
         loop {
             match codec.decode(&mut buf) {
-                Ok(Some(line)) => handle(&line, &shared, &wtx, &etx).await,
+                Ok(Some(line)) => {
+                    seen(&line);
+                    handle(&line, &shared, &wtx, &etx).await;
+                }
                 Ok(None) => break,
                 Err(e) => tracing::warn!("hermod: dropped a line from the agent: {e}"),
             }
@@ -416,6 +434,7 @@ async fn read_loop(
         }
     }
     if let Ok(Some(line)) = codec.decode_eof(&mut buf) {
+        seen(&line);
         handle(&line, &shared, &wtx, &etx).await;
     }
 }
