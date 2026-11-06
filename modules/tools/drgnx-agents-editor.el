@@ -35,7 +35,10 @@
 (declare-function drgnx-agents-editor-draw-setup "drgnx-agents-editor-draw")
 (declare-function drgnx-agents-editor-draw-teardown "drgnx-agents-editor-draw")
 (declare-function drgnx-agent-identity-clear "drgnx-agent-identity")
+(declare-function drgnx-agents-editor-here-identities-changed "drgnx-agents-editor-here")
 (defvar drgnx-agent-identity-watched-function)
+(defvar drgnx-agent-identity-sessions-function)
+(defvar drgnx-agents-editor-here-ordinal-function)
 
 ;;;; The pure core
 
@@ -186,13 +189,48 @@ the :agents and :gutter that changed (each replaces the frame's whole list)."
       (unless (gethash b drgnx-agents-editor--states) (drgnx-agents-editor--watch b)))))
 
 (defun drgnx-agents-editor--event (event data)
-  "An event from the hub (`drgnx-hub-event-functions'): `agent-buffer' for a view this Emacs watches."
-  (when (equal event "agent-buffer")
-    (when-let* ((buffer (gethash (plist-get data :view) drgnx-agents-editor--views)))
-      (drgnx-agents-editor--feed buffer (if (plist-get data :full) (list 'frame data) (list 'delta data))))))
+  "An event from the hub (`drgnx-hub-event-functions'): `agent-buffer' for a view this Emacs watches, `agent' for
+a session's identity."
+  (pcase event
+    ("agent-buffer"
+     (when-let* ((buffer (gethash (plist-get data :view) drgnx-agents-editor--views)))
+       (drgnx-agents-editor--feed buffer (if (plist-get data :full) (list 'frame data) (list 'delta data)))))
+    ("agent" (drgnx-agents-editor--note-snapshot (plist-get data :id) (plist-get data :session)))))
+
+;;;; Identities
+
+(defvar drgnx-agents-editor--identities (make-hash-table :test 'equal)
+  "Session id → (ORDINAL . LAST-ACTIVE) from the hub's `agent' snapshots.  Bounded by the live sessions: a snapshot
+without an ordinal (the session ended) removes its session.")
+
+(defun drgnx-agents-editor--note-snapshot (id snap)
+  "Keep session ID's ordinal and last activity from its snapshot SNAP; the who-is-here marks follow a change."
+  (when id
+    (let ((old (car (gethash id drgnx-agents-editor--identities)))
+          (ord (plist-get snap :ordinal)))
+      (if ord
+          (puthash id (cons ord (or (plist-get snap :last_active) 0)) drgnx-agents-editor--identities)
+        (remhash id drgnx-agents-editor--identities))
+      (unless (eql old ord) (drgnx-agents-editor-here-identities-changed)))))
+
+(defun drgnx-agents-editor-ordinal (session)
+  "SESSION's ordinal in its workspace (the hub's), or nil before its first snapshot and after it ended."
+  (car (gethash session drgnx-agents-editor--identities)))
+
+(defun drgnx-agents-editor--sessions ()
+  "((ORDINAL . LAST-ACTIVE)...) of the live sessions (for `drgnx-agent-identity-sessions-function')."
+  (let (out) (maphash (lambda (_ v) (push v out)) drgnx-agents-editor--identities) out))
+
+(defun drgnx-agents-editor--seed ()
+  "Ask the hub for the live sessions' snapshots: their identities, before any of them changes."
+  (drgnx-agents-editor--ask "agents/list" nil
+                            (lambda (r)
+                              (dolist (snap (append (plist-get r :sessions) nil))
+                                (drgnx-agents-editor--note-snapshot (plist-get snap :id) snap)))))
 
 (defun drgnx-agents-editor--rewatch ()
-  "A new connection to the hub: every watched buffer asks for its frame again."
+  "A new connection to the hub: every watched buffer asks for its frame again, and the identities are asked for."
+  (drgnx-agents-editor--seed)
   (maphash (lambda (b _) (drgnx-agents-editor--feed b '(restart))) drgnx-agents-editor--states))
 
 (defun drgnx-agents-editor--present-ordinals ()
@@ -214,7 +252,10 @@ the :agents and :gutter that changed (each replaces the frame's whole list)."
 
 (defun drgnx-agents-editor--setup ()
   (require 'drgnx-agent-identity)
-  (setq drgnx-agent-identity-watched-function #'drgnx-agents-editor--present-ordinals)
+  (setq drgnx-agent-identity-watched-function #'drgnx-agents-editor--present-ordinals
+        drgnx-agent-identity-sessions-function #'drgnx-agents-editor--sessions
+        drgnx-agents-editor-here-ordinal-function #'drgnx-agents-editor-ordinal)
+  (drgnx-agents-editor--seed)
   (drgnx-agents-editor-draw-setup)
   (drgnx-agents-editor-line-setup)
   (drgnx-agents-editor-here-setup)
@@ -225,9 +266,14 @@ the :agents and :gutter that changed (each replaces the frame's whole list)."
   (drgnx-agents-editor-sync-windows))
 
 (defun drgnx-agents-editor--teardown ()
-  "Unwatch every buffer, forget every frame and give identity its watched-function back."
+  "Unwatch every buffer, forget every frame and the identities, and give identity its functions back."
   (when (eq drgnx-agent-identity-watched-function #'drgnx-agents-editor--present-ordinals)
     (setq drgnx-agent-identity-watched-function nil))
+  (when (eq drgnx-agent-identity-sessions-function #'drgnx-agents-editor--sessions)
+    (setq drgnx-agent-identity-sessions-function nil))
+  (when (eq drgnx-agents-editor-here-ordinal-function #'drgnx-agents-editor-ordinal)
+    (setq drgnx-agents-editor-here-ordinal-function nil))
+  (clrhash drgnx-agents-editor--identities)
   (maphash (lambda (view b) (drgnx-agents-editor--unwatch view b)) (copy-hash-table drgnx-agents-editor--views))
   (clrhash drgnx-agents-editor--states)
   (clrhash drgnx-agents-editor--views)

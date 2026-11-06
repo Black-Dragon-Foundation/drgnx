@@ -50,7 +50,8 @@
             (set-window-buffer (selected-window) b)
             (drgnx-agents-editor-sync-windows)
             (should (equal (list b) (drgnx-agents-editor-watched-buffers)))
-            (should (equal '("agents/buffer/watch" "agents/buffer/unwatch" "agents/buffer/watch")
+            ;; the setup asks for the sessions' identities first
+            (should (equal '("agents/list" "agents/buffer/watch" "agents/buffer/unwatch" "agents/buffer/watch")
                            (drgnx-agents-editor-test--methods)))
             ;; a window with a buffer that has no file is never watched
             (set-window-buffer (selected-window) (get-buffer-create "*agents-editor-scratch*"))
@@ -92,7 +93,8 @@
                 (should (equal (list buf) (drgnx-agents-editor-watched-buffers)))
                 (should drgnx-agent-identity-watched-function)))
             ;; after the module is off
-            (should (equal '("agents/buffer/unwatch") (cl-remove "agents/buffer/watch" (mapcar #'car (reverse calls)) :test #'equal)))
+            (should (equal '("agents/list" "agents/buffer/unwatch")
+                           (cl-remove "agents/buffer/watch" (mapcar #'car (reverse calls)) :test #'equal)))
             (should-not drgnx-agent-identity-watched-function)
             (should-not (buffer-local-value 'drgnx-agents-editor--view buf))
             (should (equal before (list window-buffer-change-functions window-size-change-functions

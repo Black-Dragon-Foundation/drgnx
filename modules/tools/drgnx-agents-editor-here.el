@@ -12,8 +12,8 @@
 ;;   - the `agents-here' status segment: one mark per agent working in the project (eight, then "+N"), in the attention
 ;;     face for an agent that needs you; it opens who is here.
 ;;   - who is here: a list of the agents (mark, handle, mode, file, line); RET follows the agent.
-;; An agent's ordinal comes from `drgnx-agents-editor-here-ordinal-function' when set; until the mirrored sessions carry
-;; the hub's ordinal, sessions are numbered in the order this file first sees them.
+;; An agent's ordinal is the hub's, from `drgnx-agents-editor-here-ordinal-function' (the client sets it from each
+;; session's `agent' snapshot); an agent the hub has not named yet has no mark until its snapshot comes.
 ;; See docs/guide/agents-in-the-editor.md and docs/develop/agents-editor.md.
 
 ;;; Code:
@@ -40,7 +40,7 @@
 (defvar drgnx-hub-connected-functions)
 
 (defvar drgnx-agents-editor-here-ordinal-function nil
-  "A function of a session id returning its ordinal (1-based), or nil: the hub's ordinal, once the mirror carries it.")
+  "A function of a session id returning the hub's ordinal for it (1-based), or nil when the hub has not named it.")
 (defvar drgnx-agents-editor-here-needs-you-function #'drgnx-agents-editor-here--needs-you
   "A function of a session id: non-nil when the agent waits on you (its mark takes the attention colour).")
 (defvar drgnx-agents-editor-here-paired-function nil
@@ -57,14 +57,15 @@
 (defvar drgnx-agents-editor-here--rows nil
   "Who is here: ((SESSION ORDINAL MODE USER-FILE LINE)...), one per agent, its newest entry.")
 (defvar drgnx-agents-editor-here--status nil "The status segment's string, or nil.")
-(defvar drgnx-agents-editor-here--ordinals (make-hash-table :test 'equal) "Interim: session id → ordinal.")
 (defvar drgnx-agents-editor-here--initials (make-hash-table) "Ordinal → the first letter of its agent's name.")
 (defvar drgnx-agents-editor-here--tops (make-hash-table :test 'equal) "Directory → its repository's main checkout, or t.")
 
 (defun drgnx-agents-editor-here--ordinal (session)
-  (or (and drgnx-agents-editor-here-ordinal-function (funcall drgnx-agents-editor-here-ordinal-function session))
-      (or (gethash session drgnx-agents-editor-here--ordinals)
-          (puthash session (1+ (hash-table-count drgnx-agents-editor-here--ordinals)) drgnx-agents-editor-here--ordinals))))
+  (and drgnx-agents-editor-here-ordinal-function (funcall drgnx-agents-editor-here-ordinal-function session)))
+
+(defun drgnx-agents-editor-here-identities-changed ()
+  "A session's ordinal came, changed or went: rebuild what is drawn (while the module shows who is here)."
+  (when drgnx-agents-editor-here--on (drgnx-agents-editor-here--rebuild)))
 
 (defun drgnx-agents-editor-here--needs-you (session)
   (when-let* ((s (and (fboundp 'drgnx-work-code--session) (drgnx-work-code--session session))))
@@ -144,7 +145,7 @@ root is itself; a file in a linked worktree lands at its relative path in the ma
      (lambda (_ fp)
        (when-let* ((path (drgnx-agents-editor-here--user-path fp roots)))
          (dolist (e (plist-get fp :entries))
-           (let* ((sid (plist-get e :session)) (ord (drgnx-agents-editor-here--ordinal sid)))
+           (when-let* ((sid (plist-get e :session)) (ord (drgnx-agents-editor-here--ordinal sid)))
              (puthash ord (upcase (substring (drgnx-agents-editor-here--name sid) 0 1)) drgnx-agents-editor-here--initials)
              (cl-pushnew sid sessions :test #'equal)
              (let ((old (assoc sid rows)))
@@ -214,7 +215,7 @@ root is itself; a file in a linked worktree lands at its relative path in the ma
 
 (defun drgnx-agents-editor-here-choose (rows)
   "Ask which of ROWS ((SESSION ORDINAL MODE FILE LINE)...) to follow: RET follows it.  Interactive commands only."
-  (when rows
+  (when-let* ((rows (seq-filter #'cadr rows)))   ; an agent the hub has not named yet is not listed
     (let* ((labels (mapcar (lambda (r) (cons (drgnx-agents-editor-here--label r) r)) rows))
            (pick (completing-read "Follow: " (mapcar #'car labels) nil t)))
       (when-let* ((row (cdr (assoc pick labels)))) (drgnx-agents-editor-here-follow row)))))
@@ -284,7 +285,6 @@ root is itself; a file in a linked worktree lands at its relative path in the ma
     (drgnx-explorer-remove-decorator #'drgnx-agents-editor-here--decorate))
   (clrhash drgnx-agents-editor-here--files)
   (clrhash drgnx-agents-editor-here--badges)
-  (clrhash drgnx-agents-editor-here--ordinals)
   (clrhash drgnx-agents-editor-here--initials)
   (clrhash drgnx-agents-editor-here--tops)
   (setq drgnx-agents-editor-here--rows nil drgnx-agents-editor-here--status nil drgnx-agents-editor-here--on nil))

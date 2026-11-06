@@ -93,8 +93,11 @@ The draw file adds itself to `drgnx-agents-editor-apply-functions` and draws fro
   `.git` file names plus the entry's `rel`; it is shown only when that checkout is a workspace root. The Explorer
   paints a badge through `drgnx-explorer-add-decorator` (an overlay at the row's end with `drgnx-git` set, so the next
   paint of the row removes it); the status bar through `drgnx-statusbar-define-segment` and `agents-here` set after
-  `agents` in `drgnx-statusbar-left`. Interim: the mirrored sessions carry no ordinal yet, so
-  `drgnx-agents-editor-here-ordinal-function` is nil and ordinals are numbered in the order sessions are first seen;
+  `agents` in `drgnx-statusbar-left`. Ordinals are the hub's: the client keeps each session's `(ordinal .
+  last_active)` from its `agent` snapshots (and `agents/list` at setup and on each new connection), forgets a session
+  whose snapshot has no ordinal (it ended), and sets both `drgnx-agents-editor-here-ordinal-function` and
+  `drgnx-agent-identity-sessions-function` (identity's reuse past capacity) from it; an agent the hub has not named yet
+  has no mark and no who-is-here row until its snapshot comes, and a change of ordinals rebuilds the three;
   `drgnx-agents-editor-here-paired-function` (a ring on a paired agent's mark) is nil until the pair feature sets it.
   `work-who-is-here`, called interactively, ends in `drgnx-agents-editor-here-choose` (RET follows); its `o` (open the
   panel) comes with the panel.

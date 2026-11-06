@@ -15,6 +15,10 @@
 (declare-function drgnx-agents-editor-here--event "drgnx-agents-editor-here")
 (declare-function drgnx-agents-editor-here--user-path "drgnx-agents-editor-here")
 (declare-function drgnx-agents-editor-here-choose "drgnx-agents-editor-here")
+(declare-function drgnx-agents-editor--event "drgnx-agents-editor")
+(declare-function drgnx-agents-editor-ordinal "drgnx-agents-editor")
+(defvar drgnx-agents-editor-here--rows)
+(defvar drgnx-agent-identity-sessions-function)
 (defvar drgnx-agents-editor-here--badges)
 (defvar drgnx-agents-editor-here--status)
 (defvar drgnx-agents-editor-here--tops)
@@ -38,12 +42,25 @@
        (delete-directory root t))))
 
 (defun drgnx-agents-editor-here-test--presence (file &rest entries)
-  "Feed the module `agent-presence' data for FILE: ENTRIES are (SESSION MODE LINE)."
+  "Feed the module `agent-presence' data for FILE: ENTRIES are (SESSION MODE LINE).  A session the hub has not named
+yet gets the next ordinal first, as its `agent' snapshot would give it."
+  (dolist (e entries)
+    (unless (drgnx-agents-editor-ordinal (nth 0 e))
+      (drgnx-agents-editor-here-test--snapshot
+       (nth 0 e) (1+ (length (funcall drgnx-agent-identity-sessions-function))))))
+  (apply #'drgnx-agents-editor-here-test--presence-raw file entries))
+
+(defun drgnx-agents-editor-here-test--presence-raw (file &rest entries)
+  "Feed the module `agent-presence' data for FILE: ENTRIES are (SESSION MODE LINE), named or not."
   (drgnx-agents-editor-here--event
    "agent-presence"
    (list :file file :rel nil
          :entries (mapcar (lambda (e) (list :session (nth 0 e) :file file :mode (nth 1 e) :line (nth 2 e) :at 1.0 :source "edit"))
                           entries))))
+
+(defun drgnx-agents-editor-here-test--snapshot (sid ordinal &optional last-active)
+  "Feed the module the hub's `agent' snapshot of SID with ORDINAL (nil: the session ended) and LAST-ACTIVE."
+  (drgnx-agents-editor--event "agent" (list :id sid :session (list :id sid :ordinal ordinal :last_active (or last-active 1.0)))))
 
 (defun drgnx-agents-editor-here-test--marks (s)
   "How many agent marks S holds."
@@ -118,6 +135,27 @@
             (should (equal file (buffer-file-name)))
             (should (= 3 (line-number-at-pos))))
         (when-let* ((b (get-file-buffer file))) (kill-buffer b))))))
+
+(ert-deftest drgnx-agents-editor/ordinals-come-from-the-hubs-snapshots ()
+  (drgnx-agents-editor-here-test--with
+    (let ((file (expand-file-name "a.el" root))
+          (by-ordinal (lambda (l) (sort (copy-sequence l) (lambda (a b) (< (car a) (car b)))))))
+      (drgnx-agents-editor-here-test--snapshot "s1" 4 20.0)
+      (drgnx-agents-editor-here-test--snapshot "s2" 2 10.0)
+      ;; identity's reuse past capacity reads the live sessions and when each was last active
+      (should (equal '((2 . 10.0) (4 . 20.0)) (funcall by-ordinal (funcall drgnx-agent-identity-sessions-function))))
+      (drgnx-agents-editor-here-test--presence-raw file '("s1" "edit" 3) '("s2" "edit" 4))
+      (should (equal '(2 4) (mapcar #'cadr drgnx-agents-editor-here--rows)))
+      ;; an agent the hub has not named yet gets no mark; its snapshot gives it its own
+      (drgnx-agents-editor-here-test--presence-raw file '("s1" "edit" 3) '("s3" "edit" 5))
+      (should (equal '(4) (mapcar #'cadr drgnx-agents-editor-here--rows)))
+      (drgnx-agents-editor-here-test--snapshot "s3" 1 30.0)
+      (should (equal '(1 4) (mapcar #'cadr drgnx-agents-editor-here--rows)))
+      ;; an ended session has no ordinal any more
+      (drgnx-agents-editor-here-test--snapshot "s1" nil)
+      (should (equal '((1 . 30.0) (2 . 10.0)) (funcall by-ordinal (funcall drgnx-agent-identity-sessions-function))))
+      (should (equal '(1) (mapcar #'cadr drgnx-agents-editor-here--rows)))))
+  (should-not drgnx-agent-identity-sessions-function))
 
 (ert-deftest drgnx-agents-editor/a-worktree-agents-file-lands-on-the-users-tree ()
   ;; the [B] row, with a real hub, comes with the hub's presence feed; this one has a real git worktree
