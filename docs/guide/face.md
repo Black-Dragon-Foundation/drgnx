@@ -485,4 +485,6 @@ look it describes.
 | `drgnx-control-hidden`, `drgnx-hover-row` | `shadow`, `drgnx-hover` | a row's × or ⋯ while it is not hovered (its foreground is the row's background), and the `mouse-face` of the row that reveals it |
 
 A row with a hidden control puts `mouse-face` `drgnx-hover-row` on the whole row and draws the control with
-`drgnx-look-hover-control`; the selected row, a row with the keyboard focus and terminal frames always show it.
+`drgnx-look-hover-control`; the selected row, a row with the keyboard focus and terminal frames always show it. Pass
+the row's frame as its third argument when you know it (a tab line does): the frame decides, not the selected one, so
+a terminal frame's tabs keep their × while a graphical frame of the same daemon is in use.

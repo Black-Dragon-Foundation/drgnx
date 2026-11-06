@@ -140,7 +140,8 @@ rounded and its bottom open where the compositor draws such boxes."
   "The text of B's tab in W's tab line.  SHOWN: B is the window's buffer; ACTIVE: W is the active editor group;
 ROWS: `drgnx-chrome--tab-rows'.  The whole tab carries one `mouse-face' value of its own (a fresh list, not `eq' to
 another tab's: Emacs lights the run of text whose value is `eq') unless it is shown, and its close mark is drawn in
-the row's colour until the pointer is on the tab (`drgnx-look-hover-control')."
+the row's colour until the pointer is on the tab (`drgnx-look-hover-control', decided by W's frame: a terminal's
+tabs always show it, whichever frame is selected when the tab lines are made)."
   (let* ((face (cond ((not shown) 'drgnx-chrome-tab) (active 'drgnx-chrome-tab-active) (t 'drgnx-chrome-tab-current)))
          (face (if (string-match-p drgnx-chrome-transient-tabs (buffer-name b))
                    (list 'drgnx-chrome-tab-preview face)
@@ -157,7 +158,7 @@ the row's colour until the pointer is on the tab (`drgnx-look-hover-control')."
                (propertize " ●" 'face (cons 'drgnx-text-muted (ensure-list face))
                            'help-echo "Show; middle-click closes" 'local-map drgnx-chrome--tab-map))
              (propertize " " 'face face 'help-echo "Show; middle-click closes" 'local-map drgnx-chrome--tab-map)
-             (propertize (drgnx-look-hover-control (drgnx-chrome--close-glyph w) shown)
+             (propertize (drgnx-look-hover-control (drgnx-chrome--close-glyph w) shown (window-frame w))
                          'help-echo "Close this tab" 'local-map drgnx-chrome--close-map)
              (propertize "  " 'face face 'help-echo "Close this tab" 'local-map drgnx-chrome--close-map))))
     (add-text-properties 0 (length s) (list 'drgnx-buffer b) s)

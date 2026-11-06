@@ -107,5 +107,22 @@ roomy), although no tab and no buffer changed."
           (should (equal (round (* 38 s))
                          (drgnx-look-tabs-test--row-height (window-parameter (selected-window) 'tab-line-format)))))))))
 
+(ert-deftest drgnx-look-tabs/the-close-is-decided-by-the-tab-s-frame ()
+  "Pattern D: whether a tab's close mark is hidden is decided by the frame of the tab's window, never the selected
+frame: a terminal frame's tabs keep their × when a graphical frame refreshes every tab line."
+  (drgnx-chrome-test--with dir
+    (let ((asked nil) (orig (symbol-function 'drgnx-look-hover-control)))
+      (cl-letf (((symbol-function 'drgnx-look-hover-control)
+                 (lambda (s &optional selected frame) (push frame asked) (funcall orig s selected frame))))
+        (drgnx-chrome-test--open dir "a.txt")
+        (drgnx-chrome-test--open dir "b.txt")
+        (setq asked nil)
+        (drgnx-chrome-apply nil t)
+        (should asked)
+        (should (seq-every-p (lambda (f) (eq f (window-frame (selected-window)))) asked)))))
+  (cl-letf (((symbol-function 'drgnx-state-frame-kind) (lambda (&optional f) (if (eq f 'a-terminal) 'tty 'gui))))
+    (should (eq 'drgnx-ui-close (get-text-property 0 'face (drgnx-look-hover-control "×" nil 'a-terminal))))
+    (should (eq 'drgnx-control-hidden (get-text-property 0 'face (drgnx-look-hover-control "×"))))))
+
 (provide 'look-tabs-test)
 ;;; look-tabs-test.el ends here

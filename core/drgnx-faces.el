@@ -69,10 +69,12 @@ a theme that does not leaves it dim but visible."
   "The `mouse-face' of a row with a hidden control: the hover colour and the body foreground, which shows the control."
   :group 'drgnx-look)
 
-(defun drgnx-look-hover-control (string &optional selected)
-  "STRING as a row's control: hidden in `drgnx-control-hidden' on a graphical frame, in its real face when SELECTED
-is non-nil or the frame is a terminal.  The caller puts `mouse-face' `drgnx-hover-row' on the whole row."
-  (propertize string 'face (if (or selected (not (memq (drgnx-state-frame-kind (selected-frame)) '(gui child))))
+(defun drgnx-look-hover-control (string &optional selected frame)
+  "STRING as a row's control: hidden in `drgnx-control-hidden' on a graphical FRAME (default: the selected one), in
+its real face when SELECTED is non-nil or FRAME is a terminal.  A caller that knows the row's frame passes it: a
+terminal frame's controls stay shown when a graphical frame is selected.  The caller puts `mouse-face'
+`drgnx-hover-row' on the whole row."
+  (propertize string 'face (if (or selected (not (memq (drgnx-state-frame-kind (or frame (selected-frame))) '(gui child))))
                                'drgnx-ui-close
                              'drgnx-control-hidden)))
 
