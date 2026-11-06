@@ -51,7 +51,9 @@ part that exists so far: which buffers are watched.
   working in its own worktree of your project lands on your tree's row for the same file.
 - **Status bar.** The segment `agents-here` (after `agents`) shows one mark for each agent working in this project,
   eight at most, then "+N". An agent that waits on you has its mark in the attention colour. Click it for who is here.
-- **Who is here.** The command **Who Is Here** lists the agents in the project (mark, name, what it does, file and
-  line); RET opens the one you choose at its line and follows it. **Who Is in This File** does the same for the
-  current file. **Follow Agent** (`agents-follow`, `C-c w f` in the Emacs profile, `C-k f` in VS Code, `SPC a f` in Vim)
+- **Who is here.** The command **Who Is Here** opens a small list window with one row per agent in the project (mark,
+  name, what it does, file and line). On a row, RET opens the agent's file at its line and follows it, `o` opens the
+  agent's panel, and `q` closes the list. (The keys are the profiles' rows for **Follow the Agent on the Row**, **Open
+  the Agent's Panel from the Row** and **Close Who Is Here**.) **Who Is in This File** (`C-k h` in VS Code, `C-c w h`
+  in Emacs, `SPC a h` in Vim) lists the agents in the current file the same way. **Follow Agent** (`agents-follow`, `C-c w f` in the Emacs profile, `C-k f` in VS Code, `SPC a f` in Vim)
   follows the agent nearest your cursor.

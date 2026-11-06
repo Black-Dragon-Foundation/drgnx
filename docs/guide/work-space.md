@@ -174,7 +174,8 @@ only say so.
 
 **Who Is in This File** (`work-who-is-here`: `C-k h` in the VS Code profile, `C-c w h` in Emacs, `SPC a h` in Vim) works
 from any buffer that visits a file. It names the agents in the file, the way they are in it and their lines, selects the
-file on the map when the map shows it, and focuses the map. With nobody in it, the echo area says "No agent in this
+file on the map when the map shows it, and focuses the map. With the editor's agents on it also opens a small list
+window of them (RET follows the agent, `o` opens its panel, `q` closes the list). With nobody in it, the echo area says "No agent in this
 file" and nothing moves.
 
 ### The outline

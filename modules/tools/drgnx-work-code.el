@@ -25,7 +25,7 @@
 (declare-function tab-line-mode "tab-line")
 (defvar drgnx-agents-editor-here--on)
 (declare-function drgnx-agents-editor-here-row "drgnx-agents-editor-here")
-(declare-function drgnx-agents-editor-here-choose "drgnx-agents-editor-here")
+(declare-function drgnx-agents-editor-here-show "drgnx-agents-editor-here")
 (defvar tab-line-tabs-function)
 (declare-function drgnx-hub-call "drgnx-hub-client")
 (declare-function drgnx-work-nav-chain "drgnx-work-detail")
@@ -363,9 +363,9 @@ the popup lane unless NO-DISPLAY.  Returns the picker buffer, filled when the hu
                                                 (m (or m "in")))
                                          (if-let* ((l (plist-get e :line))) (format "line %d" l) "(file only)")))
                                now "; "))
-           ;; with the editor's agents on, the agents are a list: RET follows the one chosen
+           ;; with the editor's agents on, the agents are a small list: RET follows the one on the row, `o' opens its panel
            (when (and ask (bound-and-true-p drgnx-agents-editor-here--on))
-             (drgnx-agents-editor-here-choose (mapcar (lambda (e) (drgnx-agents-editor-here-row e file)) now)))))))
+             (drgnx-agents-editor-here-show (mapcar (lambda (e) (drgnx-agents-editor-here-row e file)) now)))))))
     result))
 
 (defun drgnx-work-code--select-file (repo rel)

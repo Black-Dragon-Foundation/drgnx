@@ -99,8 +99,11 @@ The draw file adds itself to `drgnx-agents-editor-apply-functions` and draws fro
   `drgnx-agent-identity-sessions-function` (identity's reuse past capacity) from it; an agent the hub has not named yet
   has no mark and no who-is-here row until its snapshot comes, and a change of ordinals rebuilds the three;
   `drgnx-agents-editor-here-paired-function` (a ring on a paired agent's mark) is nil until the pair feature sets it.
-  `work-who-is-here`, called interactively, ends in `drgnx-agents-editor-here-choose` (RET follows); its `o` (open the
-  panel) comes with the panel.
+  `work-who-is-here`, called interactively, ends in `drgnx-agents-editor-here-show`: a small list window
+  (`drgnx-agents-here-mode`, placed in the popup lane, buffer `*drgnx agents here*`), one row per agent with the
+  identity's mark and face. Its keys are registry commands on the mode's map, so the profiles bind them:
+  `agents-here-follow` (RET), `agents-here-panel` (`o`, `drgnx-agent-panel-open` with the hub's session id) and
+  `agents-here-quit` (`q`). The list is plain text drawn once per call; teardown kills it.
 - A buffer that stops being watched (`drgnx-agents-editor-unwatch-functions`) or is killed loses its bars, ring
   overlays and tags.
 
@@ -120,4 +123,3 @@ three gutter ranges, an 80 to 95 row window). These are readings; the verdicts w
 - The rows that need the hub (`agents-editor-hub-test.el`, the client's [B] row, and the Explorer's
   `badges-land-on-the-users-tree-for-a-worktree-agent`) come with the hub's buffer view and presence feed; the same
   mapping is tested here with a real git worktree.
-- The who-is-here list's `o` (open the panel) comes once the panel is in `p3`.

@@ -11,7 +11,8 @@
 ;;     (its `.git' file names the main checkout) and path relative to its top.
 ;;   - the `agents-here' status segment: one mark per agent working in the project (eight, then "+N"), in the attention
 ;;     face for an agent that needs you; it opens who is here.
-;;   - who is here: a list of the agents (mark, handle, mode, file, line); RET follows the agent.
+;;   - who is here: a small list window, one row per agent (mark, handle, mode, file, line); RET follows the agent,
+;;     `o' opens its panel, `q' closes the list (keys from the profiles).
 ;; An agent's ordinal is the hub's, from `drgnx-agents-editor-here-ordinal-function' (the client sets it from each
 ;; session's `agent' snapshot); an agent the hub has not named yet has no mark until its snapshot comes.
 ;; See docs/guide/agents-in-the-editor.md and docs/develop/agents-editor.md.
@@ -194,10 +195,44 @@ root is itself; a file in a linked worktree lands at its relative path in the ma
 
 ;;;; Who is here
 
-(defun drgnx-agents-editor-here--label (row)
-  (pcase-let ((`(,sid ,ord ,mode ,file ,line) row))
-    (format "%s %s · %s · %s%s" (drgnx-agent-identity-text ord) (drgnx-agents-editor-here--name sid) (or mode "here")
-            (file-name-nondirectory file) (if line (format ":%d" line) ""))))
+(defconst drgnx-agents-here-buffer-name "*drgnx agents here*" "The who-is-here list's buffer.")
+
+(defvar-local drgnx-agents-here--rows nil "The list's rows, one per line: (SESSION ORDINAL MODE FILE LINE).")
+
+(define-derived-mode drgnx-agents-here-mode special-mode "Here"
+  "A small list of the agents working here.  Keys come from the key profiles: RET follows the agent on the row,
+`o' opens its panel, `q' closes the list."
+  (setq-local truncate-lines t cursor-type nil)
+  (buffer-disable-undo)
+  (hl-line-mode 1))
+
+(defun drgnx-agents-editor-here--row-text (row)
+  "ROW as one line: the agent's mark and name in its colour, then what it does and where."
+  (pcase-let* ((`(,sid ,ord ,mode ,file ,line) row)
+               (face (plist-get (drgnx-agent-identity ord) :face)))
+    (concat (propertize (format "%s %s" (drgnx-agent-identity-text ord) (drgnx-agents-editor-here--name sid)) 'face face)
+            (propertize (format " · %s · %s%s" (or mode "here") (file-name-nondirectory file) (if line (format ":%d" line) ""))
+                        'face 'shadow)
+            "\n")))
+
+(defun drgnx-agents-editor-here-show (rows)
+  "List ROWS ((SESSION ORDINAL MODE FILE LINE)...) in a small window and return its buffer.  An agent the hub has not
+named yet (no ordinal) is not listed."
+  (let ((rows (seq-filter #'cadr rows))
+        (buffer (get-buffer-create drgnx-agents-here-buffer-name)))
+    (with-current-buffer buffer
+      (unless (derived-mode-p 'drgnx-agents-here-mode) (drgnx-agents-here-mode))
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (dolist (r rows) (insert (drgnx-agents-editor-here--row-text r))))
+      (setq drgnx-agents-here--rows rows)
+      (goto-char (point-min)))
+    (when-let* ((w (display-buffer buffer)))
+      (ignore-errors (fit-window-to-buffer w 12 2)))
+    buffer))
+
+(defun drgnx-agents-here--row-at-point ()
+  (or (nth (1- (line-number-at-pos (point) t)) drgnx-agents-here--rows) (user-error "No agent on this row")))
 
 (defun drgnx-agents-editor-here-row (entry file)
   "The who-is-here row of presence ENTRY (a plist) in FILE: (SESSION ORDINAL MODE FILE LINE)."
@@ -213,18 +248,30 @@ root is itself; a file in a linked worktree lands at its relative path in the ma
     (dolist (b (drgnx-agents-editor-watched-buffers))
       (when-let* ((f (drgnx-agents-editor-frame b))) (drgnx-agents-editor-draw--apply b f)))))
 
-(defun drgnx-agents-editor-here-choose (rows)
-  "Ask which of ROWS ((SESSION ORDINAL MODE FILE LINE)...) to follow: RET follows it.  Interactive commands only."
-  (when-let* ((rows (seq-filter #'cadr rows)))   ; an agent the hub has not named yet is not listed
-    (let* ((labels (mapcar (lambda (r) (cons (drgnx-agents-editor-here--label r) r)) rows))
-           (pick (completing-read "Follow: " (mapcar #'car labels) nil t)))
-      (when-let* ((row (cdr (assoc pick labels)))) (drgnx-agents-editor-here-follow row)))))
+(defun drgnx-agents-here-follow ()
+  "Follow the agent on the row at point."
+  (interactive)
+  (drgnx-agents-editor-here-follow (drgnx-agents-here--row-at-point)))
+
+(defun drgnx-agents-here-panel ()
+  "Open the panel of the agent on the row at point."
+  (interactive)
+  (let ((sid (car (drgnx-agents-here--row-at-point))))
+    (if (fboundp 'drgnx-agent-panel-open)
+        (drgnx-agent-panel-open sid)
+      (user-error "The agent panel is not loaded"))))
+
+(defun drgnx-agents-here-quit ()
+  "Close the list."
+  (interactive)
+  (let ((window (get-buffer-window (current-buffer))))
+    (if (window-live-p window) (quit-window t window) (kill-buffer (current-buffer)))))
 
 (defun drgnx-agents-editor-here ()
-  "Who is here: the agents working in this project; RET follows the one you choose."
+  "Who is here: the agents working in this project, in a small list; RET follows the one on the row."
   (interactive)
   (if drgnx-agents-editor-here--rows
-      (drgnx-agents-editor-here-choose drgnx-agents-editor-here--rows)
+      (drgnx-agents-editor-here-show drgnx-agents-editor-here--rows)
     (message "No agent is working in this project")))
 
 ;;;; The feed
@@ -270,6 +317,13 @@ root is itself; a file in a linked worktree lands at its relative path in the ma
   (drgnx-command-define 'agents-here :category "Agents" :title "Who Is Here"
                         :command #'drgnx-agents-editor-here
                         :doc "The agents working in this project; RET follows the one you choose")
+  (when (fboundp 'drgnx-wb-place) (drgnx-wb-place 'drgnx-agents-here-mode 'popup))
+  (pcase-dolist (`(,id ,title ,fn ,doc)
+                 '((agents-here-follow "Follow the Agent on the Row" drgnx-agents-here-follow "Follow the agent on this row of the list")
+                   (agents-here-panel "Open the Agent's Panel from the Row" drgnx-agents-here-panel "Open the panel of the agent on this row")
+                   (agents-here-quit "Close Who Is Here" drgnx-agents-here-quit "Close the list of the agents here")))
+    (drgnx-command-define id :category "Agents" :title title :command fn :doc doc
+                          :map 'drgnx-agents-here-mode-map :when (lambda () (derived-mode-p 'drgnx-agents-here-mode))))
   (eval-after-load 'drgnx-explorer (drgnx-modules-with-owner (drgnx-explorer-add-decorator #'drgnx-agents-editor-here--decorate)))
   (eval-after-load 'drgnx-statusbar
     (drgnx-modules-with-owner
@@ -287,6 +341,7 @@ root is itself; a file in a linked worktree lands at its relative path in the ma
   (clrhash drgnx-agents-editor-here--badges)
   (clrhash drgnx-agents-editor-here--initials)
   (clrhash drgnx-agents-editor-here--tops)
+  (when-let* ((b (get-buffer drgnx-agents-here-buffer-name))) (kill-buffer b))
   (setq drgnx-agents-editor-here--rows nil drgnx-agents-editor-here--status nil drgnx-agents-editor-here--on nil))
 
 (provide 'drgnx-agents-editor-here)
