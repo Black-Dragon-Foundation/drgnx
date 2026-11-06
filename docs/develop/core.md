@@ -2318,7 +2318,9 @@ The two checks of the agent settings pages. Both run the user's configured comma
 `emacs --batch -Q -l mock-mcp.el -f drgnx-mock-mcp-main MODE MARKER`, plus `error` and `oom`; an HTTP one,
 `drgnx-mock-mcp-http-start MODE` with `ok`, `needs-login`, `hang`, `error-body`, `echo-path` and `legacy-sse`, served by
 the test Emacs); never the user's servers, hooks or agent homes. The tests run with `DRGNX_JOBS_LAUNCHER=detached`, so
-they never create a scope in the user's systemd manager.
+they never create a scope in the user's systemd manager. A check that ends starts `systemctl` to clear its scope and does
+not wait for it; the tests' fake `systemctl` logs into the fixture's temp folder, so the fixture's teardown
+(`drgnx-agent-check-test-env`) waits until every such call has ended before it deletes the folder.
 
 | Function | Does |
 | --- | --- |
