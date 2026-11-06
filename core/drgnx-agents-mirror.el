@@ -29,8 +29,10 @@
 (defun drgnx-agents-mirror--find (id) (seq-find (lambda (s) (equal (drgnx-agent-session-remote s) id)) drgnx-agents--sessions))
 
 (defconst drgnx-agents-mirror--slots
-  '(name profile cwd task job status via mode queue paused permissions reviews usage commands capabilities exit stderr)
-  "The session slots a hub snapshot fills (its keys are the slot names).")
+  '(name profile cwd task job status via mode queue paused permissions reviews usage commands capabilities exit stderr
+         hooked panel)
+  "The session slots a hub snapshot fills (its keys are the slot names).  `plugins-changed' is filled by hand (the key
+is `plugins_changed').")
 
 (defun drgnx-agents-mirror--fetching-p (id) (not (eq (gethash id drgnx-agents-mirror--fetching :none) :none)))
 
@@ -147,6 +149,7 @@ turn begins and ends, and the one open now begins."
       (push m drgnx-agents--sessions))
     (dolist (slot drgnx-agents-mirror--slots)
       (setf (cl-struct-slot-value 'drgnx-agent-session slot m) (plist-get snap (intern (concat ":" (symbol-name slot))))))
+    (setf (drgnx-agent-session-plugins-changed m) (and (plist-get snap :plugins_changed) t))
     ;; a false flag is not in a decoded record (nil-valued keys are left out): the hub's reason says the lock is not held
     (progn
       (puthash id (plist-get snap :enforced_why) drgnx-agents-mirror--lock)
@@ -330,8 +333,34 @@ different connections, so the fetch waits): the entries between the two wait (`-
   "A new connection to the hub (after a restart): ask again for the entries of the sessions shown."
   (maphash (lambda (id _) (drgnx-agents-mirror--subscribe id)) drgnx-agents-mirror--shown))
 
+(defconst drgnx-agents-mirror--hook-steps-max 100 "How many steps' hook rows a mirror keeps (the newest).")
+
+(defun drgnx-agents-mirror--last-tool-id (m)
+  "The `:id' of the newest top-level tool entry of mirror M's transcript, or nil."
+  (let (id)
+    (dolist (e (drgnx-agent-session-entries m))
+      (when (eq (plist-get e :type) 'tool) (setq id (plist-get e :id))))
+    id))
+
+(defun drgnx-agents-mirror--step (data)
+  "An `agent-step' event (DATA `{session, step}') whose step carries hook rows (`hooks': each hook point run on it):
+mirror M of that session keeps them as (STEP TOOL-ID ROWS), TOOL-ID being the tool entry that was the newest when the
+rows first arrived (the hook ran on that step's call; a step has no id in the transcript).  A step seen again
+replaces its rows and keeps its tool entry.  Only the newest `drgnx-agents-mirror--hook-steps-max' steps are kept."
+  (let* ((step (plist-get data :step)) (rows (append (plist-get step :hooks) nil)))
+    (when-let* ((rows rows) (seq (plist-get step :seq))
+                (m (drgnx-agents-mirror--find (plist-get step :session))))
+      (let* ((old (assq seq (drgnx-agent-session-hooks m)))
+             (entry (list seq (if old (nth 1 old) (drgnx-agents-mirror--last-tool-id m)) rows)))
+        (setf (drgnx-agent-session-hooks m)
+              (seq-take (cons entry (seq-remove (lambda (e) (eql (car e) seq)) (drgnx-agent-session-hooks m)))
+                        drgnx-agents-mirror--hook-steps-max))
+        (drgnx-agents--changed m)))))
+
 (defun drgnx-agents-mirror--event (event data)
   "An event from the hub (`drgnx-hub-event-functions')."
+  (when (and (equal event "agent-step") (not drgnx-agents-mirror--paused))
+    (drgnx-agents-mirror--step data))
   (when (and (member event '("agent" "agent-entries")) (not drgnx-agents-mirror--paused))
     (let ((id (plist-get data :id)) (seq (or (plist-get data :seq) 0)))
       (cond

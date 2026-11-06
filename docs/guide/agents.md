@@ -140,6 +140,22 @@ A step an agent asked for can be refused before you see it:
 A note a rule or hook added shows under the step. The session's `hooked` mark says which kinds of step its hooks see
 and which the agent runs without asking.
 
+**In the transcript** a hook's word is a line under the step, in theme colours: `⛔ refused by deny-rm 0.1 · "rm
+outside the worktree"`, `↻ changed by rewrite-commit-msg`, `✎ note by annotate-edit · text`, `⏳ NAME 0.1 was busy: its hook
+did not run` (a hook the plugin host had no room for, told apart from other failures), and, for a hub tool, `hooked at
+the hub's server`. Press RET on a line for its provenance: the source, version and hash, the verdict, how many
+milliseconds it took and what the hook was asked (the point, where it ran, the tool and the step). The lines come from
+what the hub already told the editor: nothing is asked while the transcript is drawn, and a step the editor was not
+watching when it ran has no line (its note still shows).
+
+**The header** above the transcript says `context N%` and, when the agent sends a breakdown (an agent from the org's
+adapter forks does; others do not and show none), the figure opens the breakdown: a bar of the parts of the window
+(system, tools, files, tool output, conversation, free), each part's items, `[drop]` and `[pin]` for an item where the
+agent offers them, and `[What /compact keeps]` where it can tell (nothing is compacted by looking). The header also says
+`not hooked: KINDS` for the kinds of step no hook reaches (with why), `hooked by the adapter: KINDS` for those the agent's
+adapter enforces itself, and `plugins changed: restart the session to use the new set` when you approved or disabled a
+plugin after the session began (a session keeps the plugin set it started with).
+
 ## Reviewing an agent's edits
 
 When an agent writes a file (ACP `fs/write_text_file`), the file is not changed: the transcript offers **Review**,

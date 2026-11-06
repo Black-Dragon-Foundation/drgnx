@@ -126,6 +126,8 @@ before drgnx added a glyph still works: a glyph missing from it is drawn as the 
 | `fail` | ✕ | `X` | `stopped` | ■ | `#` |
 | `dismiss` | × | `x` | `unqueue` | − | `-` |
 | `info` | ℹ | `i` | `warn` | ⚠ | `!` |
+| `refused` | ⛔ | `X` | `note` | ✎ | `n` |
+| `changed` | ↻ | `~` | `hook-busy` | ⏳ | `...` |
 
 The glyphs are by meaning. `close` is the mark of a close button, `fail` is "something failed", `dismiss` dismisses a
 notice and `unqueue` takes a queued message back. Some look alike by default, but each is its own entry, so restyling
