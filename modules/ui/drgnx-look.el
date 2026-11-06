@@ -17,6 +17,15 @@
 ;; the decorations module sits beside this file (modules are not on the load path)
 (unless (featurep 'drgnx-decor)
   (load (expand-file-name "drgnx-decor" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+;; so does the font roles' (their settings are declared when it loads)
+(unless (featurep 'drgnx-look-fonts)
+  (load (expand-file-name "drgnx-look-fonts" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-look-density)
+  (load (expand-file-name "drgnx-look-density" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(declare-function drgnx-look-density-on "drgnx-look-density" ())
+(declare-function drgnx-look-density-off "drgnx-look-density" ())
+(declare-function drgnx-look-fonts-on "drgnx-look-fonts" ())
+(declare-function drgnx-look-fonts-off "drgnx-look-fonts" ())
 (declare-function drgnx-decor-faces-on "drgnx-decor" ())
 (declare-function drgnx-decor-activate "drgnx-decor" ())
 
@@ -174,6 +183,8 @@ loaded since.  Its teardown gives the previous ones back.")
   "Zen mode off; the themes the module loaded off, the ones enabled before its setup on again (a theme someone
 else enabled since stays)."
   (when (frame-parameter nil 'drgnx-look-zen) (drgnx-look-zen))
+  (drgnx-look-density-off)
+  (drgnx-look-fonts-off)
   (when drgnx-look--taken
     (dolist (theme (plist-get drgnx-look--taken :ours))
       (when (memq theme custom-enabled-themes) (disable-theme theme)))
@@ -262,6 +273,8 @@ refuses (`drgnx-settings-refused') before the theme changes."
                        (drgnx-state-subscribe 'windows-changed #'drgnx-look--cards-windows-changed :lane 'now)
                        (drgnx-state-subscribe 'frame-resized #'drgnx-look--cards-frame-resized)
                        (drgnx-look-cards-apply)
+                       (drgnx-look-fonts-on)
+                       (drgnx-look-density-on)
                        (drgnx-command-define 'preferences-theme :category "Preferences" :title "Color Theme"
                                              :command #'drgnx-look-choose-theme :menu '("Options") :doc "Pick the colour theme (remembered)")
                        (drgnx-command-define 'view-zen :category "View" :title "Zen Mode" :scope 'window

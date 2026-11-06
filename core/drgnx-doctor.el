@@ -484,6 +484,7 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
                        (error (list :error (error-message-string err))))
            :sqlite (and (fboundp 'sqlite-available-p) (sqlite-available-p))
            :svg (image-type-available-p 'svg)
+           :font-fallbacks (and (fboundp 'drgnx-look-fonts-fallback-report) (drgnx-look-fonts-fallback-report))
            :work-plans (drgnx-doctor--work-plans)
            :ai-up (drgnx-doctor--ai-up)
            :search (drgnx-doctor--search)
@@ -681,6 +682,18 @@ severity, the fix the first `:fix'."
                      :check (lambda (f)
                               (if-let* ((g (plist-get f :gui))) (list 'ok (format "graphical build (%s)" g) nil)
                                 (list 'ok "terminal-only Emacs: drgnx runs in terminals (no images, one font size)" nil))))
+
+(drgnx-doctor-define 'fonts :group "Emacs" :doc "The look's font families are installed (a missing one falls back down its list)"
+                     :check (lambda (f)
+                              (when-let* ((r (plist-get f :font-fallbacks)))
+                                (if-let* ((entries (plist-get r :fallbacks)))
+                                    (list 'warn
+                                          (mapconcat (lambda (e)
+                                                       (format "%s: %s is not installed, %s" (nth 0 e) (nth 1 e)
+                                                               (if (nth 2 e) (format "using %s" (nth 2 e)) "no fallback found")))
+                                                     entries "; ")
+                                          (or (plist-get r :fix) "install the font families the look names (docs/guide/install.md, \"Fonts\")"))
+                                  (list 'ok "every font role has its family" nil)))))
 
 (defun drgnx-doctor--security-issues (version &optional nidhogg)
   "The `drgnx-doctor-security-issues' that apply to Emacs VERSION, as \"ID\" or \"ID (partly fixed here)\" strings.

@@ -195,7 +195,7 @@ list of (FILE . HASH-OF-SYMBOLS) for the kept forms."
                   "settings-live" "settings-migrate" "settings-mode" "settings-move" "settings-page" "settings-prov"
                   "settings-resolve" "settings-review" "settings-runtime" "settings-tidy" "settings-trust"
                   "settings-workspace" "shell-env" "shell" "startup-trace" "store-privacy" "surfaces" "timer" "toml"
-                  "trust" "tty-fallback" "tty-recommend" "tty" "ui-kit" "user-lisp" "watchdog-doctor" "watchdog" "work-db"
+                  "trust" "tty-fallback" "tty-recommend" "tty" "type-faces" "ui-kit" "user-lisp" "watchdog-doctor" "watchdog" "work-db"
                   "work-client" "work-scan" "work" "workers-doctor")))
   "Every file under core/ after the Lisp agent runtime was deleted: a new core file is added here on purpose, so no
 runtime file comes back unnoticed.")
