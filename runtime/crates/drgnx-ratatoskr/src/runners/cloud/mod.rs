@@ -13,6 +13,8 @@
 pub mod aws;
 pub mod ca;
 pub mod creds;
+pub mod image;
+pub mod user_data;
 
 use mimir::BoxFuture;
 use std::collections::BTreeMap;
