@@ -61,6 +61,7 @@ How drgnx is built, tested and measured.
 - [Scenarios](develop/scenarios.md): behaviour scenarios and the evidence behind the workbench design.
 - [Formatting](develop/formatting.md): `bin/drgnx fmt` — the Emacs Lisp formatter, and where it is enforced.
 - [bin/drgnx check](develop/check.md): build and every test tier in one parallel run; shards, GUI slots, phases, the leak census, the shuffled test order and the polluter bisect.
+- [Testing a change](develop/testing.md): `bin/drgnx test --affected A..B` picks the test groups a git range can affect (the map `test/affected.eld`) and `--run` skips groups green on unchanged inputs (the result cache).
 - [CI](develop/ci.md): the GitHub Actions workflows — Emacs 31.1 suite, shellcheck, leak scan, nightly GUI tier.
 - [The runtime workspace](develop/runtime.md): `runtime/`, the Cargo workspace (MSRV, deny policy, locked builds), the crate names, and the conformance harness: scenario files run against a hub binary, one socket-path fixture for Lisp and Rust.
 - [forseti](develop/forseti.md): the scheduler core the hub, its runners and jobq share — the job model, priority and the queue order, admission and grants, eviction and drains, two schedulers on one machine, the memory cap and ladder, kill classes, expected times, placement by finish time, the trust filter, fairness; pure.
