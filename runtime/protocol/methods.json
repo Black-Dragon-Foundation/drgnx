@@ -454,9 +454,18 @@
             "description": "One session in one file: the presence model's entry.",
             "properties": {
               "at": {
-                "description": "The hub's time of the step (seconds since the epoch).",
+                "description": "The hub's time of the step, or of the tool call's last update (seconds since the epoch).",
                 "format": "double",
                 "type": "number"
+              },
+              "col": {
+                "description": "The column after the last character an edit inserted (0-based, in characters): where its cursor sits.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
               },
               "file": {
                 "description": "An absolute path in one of the workspace's repositories.",
@@ -471,6 +480,19 @@
                   "null"
                 ]
               },
+              "line_end": {
+                "description": "The last line of its range (a read's `limit`, an edit's changed lines); absent: `line` only.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "live": {
+                "description": "From a tool call still running (`tool_call` names it): replaced by its step's entry when the step closes, and\nnever kept across a hub restart.",
+                "type": "boolean"
+              },
               "mode": {
                 "$ref": "#/$defs/PresenceMode"
               },
@@ -481,9 +503,15 @@
                 "$ref": "#/$defs/PresenceSource"
               },
               "step": {
-                "description": "The timeline step it came from.",
+                "description": "The timeline step it came from; 0 while it is live.",
                 "format": "int64",
                 "type": "integer"
+              },
+              "tool_call": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -508,6 +536,11 @@
               {
                 "const": "listed",
                 "description": "A directory listing or a recursive search over it.",
+                "type": "string"
+              },
+              {
+                "const": "pending",
+                "description": "About to change: an edit waiting for the user's permission, or still streaming its input.",
                 "type": "string"
               },
               {
@@ -561,6 +594,20 @@
           },
           "file": {
             "type": "string"
+          },
+          "rel": {
+            "description": "FILE relative to the top of its git checkout, so a badge lands on the user's tree whatever worktree the agent\nis in; absent outside git.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo": {
+            "description": "The project of that checkout: 16 hex digits of its git common directory's main checkout (the same id for every\nworktree of one repository, as the code index's).",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -3379,9 +3426,18 @@
             "description": "One session in one file: the presence model's entry.",
             "properties": {
               "at": {
-                "description": "The hub's time of the step (seconds since the epoch).",
+                "description": "The hub's time of the step, or of the tool call's last update (seconds since the epoch).",
                 "format": "double",
                 "type": "number"
+              },
+              "col": {
+                "description": "The column after the last character an edit inserted (0-based, in characters): where its cursor sits.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
               },
               "file": {
                 "description": "An absolute path in one of the workspace's repositories.",
@@ -3396,6 +3452,19 @@
                   "null"
                 ]
               },
+              "line_end": {
+                "description": "The last line of its range (a read's `limit`, an edit's changed lines); absent: `line` only.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "live": {
+                "description": "From a tool call still running (`tool_call` names it): replaced by its step's entry when the step closes, and\nnever kept across a hub restart.",
+                "type": "boolean"
+              },
               "mode": {
                 "$ref": "#/$defs/PresenceMode"
               },
@@ -3406,9 +3475,15 @@
                 "$ref": "#/$defs/PresenceSource"
               },
               "step": {
-                "description": "The timeline step it came from.",
+                "description": "The timeline step it came from; 0 while it is live.",
                 "format": "int64",
                 "type": "integer"
+              },
+              "tool_call": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -3433,6 +3508,11 @@
               {
                 "const": "listed",
                 "description": "A directory listing or a recursive search over it.",
+                "type": "string"
+              },
+              {
+                "const": "pending",
+                "description": "About to change: an edit waiting for the user's permission, or still streaming its input.",
                 "type": "string"
               },
               {
@@ -3486,6 +3566,20 @@
           },
           "file": {
             "type": "string"
+          },
+          "rel": {
+            "description": "FILE relative to the top of its git checkout, so a badge lands on the user's tree whatever worktree the agent\nis in; absent outside git.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo": {
+            "description": "The project of that checkout: 16 hex digits of its git common directory's main checkout (the same id for every\nworktree of one repository, as the code index's).",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -3565,6 +3659,20 @@
               },
               "file": {
                 "type": "string"
+              },
+              "rel": {
+                "description": "FILE relative to the top of its git checkout, so a badge lands on the user's tree whatever worktree the agent\nis in; absent outside git.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "repo": {
+                "description": "The project of that checkout: 16 hex digits of its git common directory's main checkout (the same id for every\nworktree of one repository, as the code index's).",
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -3577,9 +3685,18 @@
             "description": "One session in one file: the presence model's entry.",
             "properties": {
               "at": {
-                "description": "The hub's time of the step (seconds since the epoch).",
+                "description": "The hub's time of the step, or of the tool call's last update (seconds since the epoch).",
                 "format": "double",
                 "type": "number"
+              },
+              "col": {
+                "description": "The column after the last character an edit inserted (0-based, in characters): where its cursor sits.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
               },
               "file": {
                 "description": "An absolute path in one of the workspace's repositories.",
@@ -3594,6 +3711,19 @@
                   "null"
                 ]
               },
+              "line_end": {
+                "description": "The last line of its range (a read's `limit`, an edit's changed lines); absent: `line` only.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "live": {
+                "description": "From a tool call still running (`tool_call` names it): replaced by its step's entry when the step closes, and\nnever kept across a hub restart.",
+                "type": "boolean"
+              },
               "mode": {
                 "$ref": "#/$defs/PresenceMode"
               },
@@ -3604,9 +3734,15 @@
                 "$ref": "#/$defs/PresenceSource"
               },
               "step": {
-                "description": "The timeline step it came from.",
+                "description": "The timeline step it came from; 0 while it is live.",
                 "format": "int64",
                 "type": "integer"
+              },
+              "tool_call": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -3631,6 +3767,11 @@
               {
                 "const": "listed",
                 "description": "A directory listing or a recursive search over it.",
+                "type": "string"
+              },
+              {
+                "const": "pending",
+                "description": "About to change: an edit waiting for the user's permission, or still streaming its input.",
                 "type": "string"
               },
               {

@@ -146,6 +146,8 @@ pub enum PresenceMode {
     /// A directory listing or a recursive search over it.
     Listed,
     Read,
+    /// About to change: an edit waiting for the user's permission, or still streaming its input.
+    Pending,
     /// Written by a shell command.
     Write,
     /// Changed by an edit tool.
@@ -179,11 +181,23 @@ pub struct PresenceEntry {
     /// The last line known; absent: the file only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<u32>,
+    /// The last line of its range (a read's `limit`, an edit's changed lines); absent: `line` only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_end: Option<u32>,
+    /// The column after the last character an edit inserted (0-based, in characters): where its cursor sits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub col: Option<u32>,
     pub source: PresenceSource,
-    /// The timeline step it came from.
+    /// The timeline step it came from; 0 while it is live.
     pub step: i64,
-    /// The hub's time of the step (seconds since the epoch).
+    /// The hub's time of the step, or of the tool call's last update (seconds since the epoch).
     pub at: f64,
+    /// From a tool call still running (`tool_call` names it): replaced by its step's entry when the step closes, and
+    /// never kept across a hub restart.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub live: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call: Option<String>,
 }
 
 /// Who is in FILE now; the data of `agent-presence`.
@@ -191,6 +205,14 @@ pub struct PresenceEntry {
 #[serde(deny_unknown_fields)]
 pub struct FilePresence {
     pub file: String,
+    /// FILE relative to the top of its git checkout, so a badge lands on the user's tree whatever worktree the agent
+    /// is in; absent outside git.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rel: Option<String>,
+    /// The project of that checkout: 16 hex digits of its git common directory's main checkout (the same id for every
+    /// worktree of one repository, as the code index's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
     #[serde(default, deserialize_with = "null_as_empty")]
     pub entries: Vec<PresenceEntry>,
 }

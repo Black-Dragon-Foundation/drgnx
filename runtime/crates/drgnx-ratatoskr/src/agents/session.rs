@@ -176,6 +176,32 @@ struct State {
     steps_begun: i64,
     /// Tool steps of a conclusion's drgnx tool begun since the reader last looked: (key, tool name).
     mcp_begun: Vec<(i64, String)>,
+    /// What the updates since the reader last looked tell the presence model, by tool call.
+    live_out: Vec<(String, LiveOut)>,
+}
+
+/// What a tool call's update tells the presence model's live feed ([`crate::work::presence`]): taken under the state's
+/// lock, applied after it.
+#[derive(Clone, Debug)]
+enum LiveOut {
+    /// It runs: its detail as it stands now (the path as the agent gave it) and its status.
+    At {
+        detail: Box<norn::write::work::StepDetail>,
+        status: crate::work::presence::CallStatus,
+    },
+    /// It failed, or it ended with no step of its own open: its live entry goes.
+    Gone,
+}
+
+/// A tool call entry's ACP status (absent: pending).
+fn call_status(rest: &Map<String, Value>) -> crate::work::presence::CallStatus {
+    use crate::work::presence::CallStatus;
+    match rest.get("status").and_then(Value::as_str) {
+        Some("in_progress") => CallStatus::InProgress,
+        Some("completed") => CallStatus::Completed,
+        Some("failed") => CallStatus::Failed,
+        _ => CallStatus::Pending,
+    }
 }
 
 /// What a turn core step decided, with the permission requests it took out of the snapshot.
@@ -223,6 +249,9 @@ struct ClosedStep {
     command: Option<String>,
     /// The session's context size in tokens when the step closed: kept on a turn's last step and on a job wait.
     context: Option<i64>,
+    /// A tool step's call had ended when the step closed (completed or failed); none: the step was cut (a wait, the
+    /// next call) while the call runs on, and its live presence entry still stands for it.
+    call_end: Option<crate::work::presence::CallStatus>,
 }
 
 /// What a provider says of a tool call beyond ACP's fields: Claude's `_meta.claudeCode`.
@@ -261,6 +290,7 @@ impl State {
             turns: 0,
             steps_begun: 0,
             mcp_begun: Vec::new(),
+            live_out: Vec::new(),
             closed: Vec::new(),
             seq: 0,
             entries: Vec::new(),
@@ -313,9 +343,19 @@ impl State {
                     .parent_tool = Some(p.clone());
             }
             let command = open.tool_id.as_deref().and_then(|id| self.tool_command(id));
+            let call_end = open
+                .tool_id
+                .as_deref()
+                .and_then(|id| self.entries.get(*self.tools.get(id)?))
+                .map(|e| call_status(&e.rest))
+                .filter(|s| {
+                    use crate::work::presence::CallStatus;
+                    matches!(s, CallStatus::Completed | CallStatus::Failed)
+                });
             self.closed.push(ClosedStep {
                 detail,
                 command,
+                call_end,
                 open,
                 end,
                 turn_id: u.turn_id,
@@ -631,6 +671,26 @@ impl State {
                     (s("title"), s("kind"), s("status"))
                 };
                 let id = u.get("toolCallId").and_then(Value::as_str).unwrap_or("");
+                // the live presence feed: a running call where it is now; one that ended gives way to its step's
+                // close, or goes now when no step of its own is open to close (cut by the next call)
+                {
+                    use crate::work::presence::CallStatus;
+                    let step_open = [self.cur.as_ref(), self.stash.as_ref()]
+                        .into_iter()
+                        .flatten()
+                        .any(|c| c.tool_id.as_deref() == Some(id));
+                    let out = match call_status(&self.entries[idx].rest) {
+                        CallStatus::Failed => Some(LiveOut::Gone),
+                        CallStatus::Completed => (!step_open).then_some(LiveOut::Gone),
+                        status => self.tool_detail(id).map(|detail| LiveOut::At {
+                            detail: Box::new(detail),
+                            status,
+                        }),
+                    };
+                    if let Some(out) = out {
+                        self.live_out.push((id.to_string(), out));
+                    }
+                }
                 if self.cur.as_ref().and_then(|c| c.tool_id.as_deref()) != Some(id)
                     && !matches!(status.as_deref(), Some("completed" | "failed"))
                 {
@@ -743,6 +803,8 @@ pub struct Session {
     editors: Arc<crate::settings::agents::Editors>,
     /// The Work map: each snapshot reaches it too ([`crate::work::map`]).
     map: Arc<crate::work::map::Map>,
+    /// The presence model: its tool calls feed it as they run ([`Session::feed_live`]).
+    presence: Arc<crate::work::presence::Live>,
     /// What the matrix decides at the permission seam: the gate, the settings it reads, the store its cards go to.
     gate: MatrixGate,
     settings: Arc<crate::settings::Settings>,
@@ -1885,6 +1947,7 @@ fn assemble(
         acp: l.acp,
         editors: front.editors.clone(),
         map: front.core.map.clone(),
+        presence: front.core.presence.clone(),
         gate: front.core.matrix.clone(),
         settings: front.settings.clone(),
         writer: front.writer.clone(),
@@ -2405,27 +2468,65 @@ async fn write_steps(
             cost_unit: c.cost.map(|_| Unit::UsdEst),
             detail: c.detail.as_ref().map(crate::work::detail::wire),
         };
-        // the files the step was in: the presence model (a shell step's command looked up off the async threads)
+        // the files the step was in: the presence model (a shell step's command looked up off the async threads).  A
+        // tool call's own file is its live entry while it runs: the call's end replaces that with the step's entry
+        // (none when it failed), and a step cut while its call runs on leaves it standing.
         if let Some(live) = &sink.presence
-            && id != 0
-            && (c.detail.is_some() || c.command.is_some())
+            && (c.detail.is_some() || c.command.is_some() || c.open.tool_id.is_some())
         {
+            use crate::work::presence::{self as presence, CallStatus};
             let (d, cmd, dir) = (c.detail.clone(), c.command.clone(), ctx.cwd.clone());
-            let files = crate::clock::blocking(move || {
-                crate::work::presence::touches_of_step(d.as_ref(), cmd.as_deref(), &dir)
+            let (mine, mut files) = crate::clock::blocking(move || {
+                (
+                    d.as_ref()
+                        .map(|d| presence::touches_of_detail(d, &dir))
+                        .unwrap_or_default(),
+                    presence::touches_of_step(None, cmd.as_deref(), &dir),
+                )
             })
             .await
             .unwrap_or_default();
-            if !files.is_empty() {
-                let changed = live.apply(crate::work::presence::PresenceEv::Step {
+            let mut changed = Vec::new();
+            match (&c.open.tool_id, c.call_end) {
+                (Some(call), Some(end)) => {
+                    let closed = mine
+                        .into_iter()
+                        .next()
+                        .filter(|_| end == CallStatus::Completed && id != 0)
+                        .map(|t| presence::Entry {
+                            session: ctx.session.clone(),
+                            file: t.file,
+                            mode: t.mode,
+                            line: t.line,
+                            line_end: c
+                                .detail
+                                .as_ref()
+                                .and_then(|d| d.line_end)
+                                .and_then(|l| u32::try_from(l).ok()),
+                            col: None,
+                            source: t.source,
+                            step: id,
+                            at: step.start,
+                            live: false,
+                            tool_call: None,
+                        });
+                    changed.extend(live.close_live(&ctx.session, call, closed));
+                }
+                (Some(_), None) => {}
+                (None, _) => files.extend(mine),
+            }
+            if id != 0 && !files.is_empty() {
+                changed.extend(live.apply(presence::PresenceEv::Step {
                     session: ctx.session.clone(),
                     step: id,
                     at: step.start,
                     files,
-                });
-                if let Some(map) = &sink.map {
-                    map.presence(&live.now_in(&changed));
-                }
+                }));
+            }
+            if !changed.is_empty()
+                && let Some(map) = &sink.map
+            {
+                map.presence(&live.now_in(&changed));
             }
         }
         // the step's class is the agent card's activity
@@ -3023,16 +3124,20 @@ impl Session {
                             lock(&self.state).add_turn_cost(booked.delta);
                             self.budgets.notify(booked.hits);
                         }
-                        let (stepped, begun) = {
+                        let (stepped, begun, live_out) = {
                             let mut st = lock(&self.state);
                             st.apply(&v);
                             let begun = std::mem::take(&mut st.mcp_begun);
+                            let live_out = std::mem::take(&mut st.live_out);
                             (
                                 std::mem::take(&mut st.tool_ended)
                                     .then(|| st.turn_step(TurnEvent::ToolCompleted)),
                                 begun,
+                                live_out,
                             )
                         };
+                        // the cursor moves as the call runs, before its step closes
+                        self.feed_live(live_out);
                         // a conclusion's tool step began: the stamp core pairs it with its MCP call
                         for (key, tool_name) in begun {
                             let s = self
@@ -3137,6 +3242,36 @@ impl Session {
                     self.schedule();
                 }
             }
+        }
+    }
+
+    /// What the updates said of the running tool calls, into the presence model's live feed (and the map's presence).
+    fn feed_live(&self, outs: Vec<(String, LiveOut)>) {
+        use crate::work::presence::{LiveUpdate, touches_of_detail};
+        let mut changed = Vec::new();
+        for (call, out) in outs {
+            match out {
+                LiveOut::At { detail, status } => {
+                    let Some(t) = touches_of_detail(&detail, &self.cwd).into_iter().next() else {
+                        continue;
+                    };
+                    let update = LiveUpdate {
+                        path: t.file,
+                        mode: t.mode,
+                        line: t.line,
+                        line_end: detail.line_end.and_then(|l| u32::try_from(l).ok()),
+                        col: None,
+                        status,
+                        source: t.source,
+                        at: crate::clock::wall_secs(),
+                    };
+                    changed.extend(self.presence.apply_live(&self.id, &call, update));
+                }
+                LiveOut::Gone => changed.extend(self.presence.close_live(&self.id, &call, None)),
+            }
+        }
+        if !changed.is_empty() {
+            self.map.presence(&self.presence.now_in(&changed));
         }
     }
 
@@ -4673,6 +4808,7 @@ mod tests {
                 detail: None,
                 command: None,
                 context: None,
+                call_end: None,
             })
             .unwrap();
         }
@@ -4767,6 +4903,7 @@ mod tests {
                 detail: None,
                 command: None,
                 context: None,
+                call_end: None,
             })
             .unwrap();
         }
@@ -4840,6 +4977,7 @@ mod tests {
                 detail: None,
                 command: None,
                 context: None,
+                call_end: None,
             })
             .unwrap();
         }
