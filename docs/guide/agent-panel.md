@@ -56,3 +56,12 @@ What the agent changed and what it asks sit under the transcript as cards.
   of its own; both keys are the review view's own functions (module `tools/work-space`).
 - **Permission cards:** a request the agent waits on, ringed in the attention colour. `RET` allows it once, `A` always,
   `D` denies it. The card goes when the hub's next snapshot no longer holds the request.
+
+## Pins, the to-do list and the edits ledger
+
+- `P` on a step or a card pins it under the chips, for this chat; `P` on the pinned card unpins it.
+- The agent's plan shows inline as a to-do list ("To do · 1 of 3 done"), replaced as the agent updates it, from its plan
+  entries. It is there only when the agent made a plan.
+- The **edits ledger** lists the files the agent edited with their added and removed lines (`L` lists or folds it). The
+  line says how many edits came **since you looked**: looking is opening the ledger, which sets a mark at the newest
+  entry, and later edits count from there. A panel you have never looked at counts every edit.
