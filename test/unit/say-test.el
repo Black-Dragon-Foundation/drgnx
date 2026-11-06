@@ -130,4 +130,20 @@ scripted planning agent) routed for implement and docs, a git repository in `rep
                                   (drgnx-notices :source 'hub))))
       (delete-process conn))))
 
+(ert-deftest drgnx-say/an-autonomous-start-is-not-called-waiting ()
+  ;; handshake-free: a stand-in connection that proved itself carries the events; no hub
+  (let ((conn (make-pipe-process :name "say-proven" :noquery t :buffer nil)) (drgnx-say--sessions nil))
+    (unwind-protect
+        (let ((drgnx-hub--event-conn conn)
+              (text (lambda (job) (plist-get (cl-find-if (lambda (n) (equal (plist-get n :command) (list 'drgnx-say-show job)))
+                                                         (drgnx-notices :source 'hub))
+                                             :text))))
+          (process-put conn :drgnx-proven t)
+          (drgnx-say-event "say-proposal" (list :id "s1" :job "j1" :started t))
+          (drgnx-say-event "say-proposal" (list :id "s2" :job "j2" :started :false))
+          (should (equal (funcall text "j1") "Started by the Autonomous preset"))
+          (should (equal (funcall text "j2") "A proposal is waiting for your OK")))
+      (drgnx-notice-clear 'hub)
+      (delete-process conn))))
+
 ;;; say-test.el ends here

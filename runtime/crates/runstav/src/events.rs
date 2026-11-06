@@ -290,7 +290,7 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
         event!(
             "say-proposal",
             crate::methods::say::SayProposal,
-            "a planning session's proposal is a job, waiting for the user's OK"
+            "a planning session's proposal is a job, waiting for the user's OK or started by the Autonomous preset"
         ),
         event!(
             "say-message",

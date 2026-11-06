@@ -328,10 +328,16 @@ itself.  Nothing asks, nothing waits: the notice carries the command that does."
       (pcase event
         ("say-proposal"
          (when (and (stringp job) (stringp session))
-           (drgnx-say--remember job session)
-           (drgnx-notify 'hub 'info "A proposal is waiting for your OK"
-                         :id (drgnx-say--notice-id job) :life 'condition
-                         :fix "Show" :command (list 'drgnx-say-show job))))
+           ;; a job the Autonomous preset started is running: it waits for nothing, and its planning is done
+           (if (eq (plist-get params :started) t)
+               (drgnx-notify 'hub 'info "Started by the Autonomous preset"
+                             :id (drgnx-say--notice-id job) :life 'event
+                             :detail (format "Job %s started within the preset's cells" job)
+                             :fix "Show" :command (list 'drgnx-say-show job))
+             (drgnx-say--remember job session)
+             (drgnx-notify 'hub 'info "A proposal is waiting for your OK"
+                           :id (drgnx-say--notice-id job) :life 'condition
+                           :fix "Show" :command (list 'drgnx-say-show job)))))
         ("say-message"
          (when (stringp session)
            (drgnx-notify 'hub 'info "The planning agent asks something"

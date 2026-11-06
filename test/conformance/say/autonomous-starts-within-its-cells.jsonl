@@ -11,7 +11,7 @@
 {"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "say/start", "params": {"text": "fix the two bugs", "repo": "$ROOT/repo"}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}, "within_ms": 30000}
-{"do": "expect", "conn": "e", "json": {"event": "say-proposal", "data": {"id": "$sid", "job": "$capture:job"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "say-proposal", "data": {"id": "$sid", "job": "$capture:job", "started": true}}, "within_ms": 30000}
 {"do": "sql_expect", "sql": "select count(*) from job where id = '$job' and status <> 'proposed' and json_extract(data, '$.waits') is null", "rows": [[1]]}
 {"do": "sql_expect", "sql": "select count(*) from card where job = '$job' and kind = 'proposal'", "rows": [[0]]}
 {"do": "sql_expect", "sql": "select author, reason from decision where job = '$job'", "rows": [["user", "started by the Autonomous preset within its cells"]]}

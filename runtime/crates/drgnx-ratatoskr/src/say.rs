@@ -898,7 +898,10 @@ async fn perform(
                     if started {
                         front.core.say.mark_started(sid, j);
                     }
-                    front.broadcast("say-proposal", json!({"id": sid, "job": j}));
+                    front.broadcast(
+                        "say-proposal",
+                        json!({"id": sid, "job": j, "started": started}),
+                    );
                 }
                 p.core.step(SayEvent::Proposed { job, started })
             }

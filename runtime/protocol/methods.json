@@ -1827,23 +1827,28 @@
       "data": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`say-proposal`: the planning session's proposal is job JOB, waiting for the user's OK.",
+        "description": "`say-proposal`: the planning session's proposal is job JOB, waiting for the user's OK unless it started.",
         "properties": {
           "id": {
             "type": "string"
           },
           "job": {
             "type": "string"
+          },
+          "started": {
+            "description": "Started at once by the Autonomous preset within its cells: nothing waits for an OK.",
+            "type": "boolean"
           }
         },
         "required": [
           "id",
-          "job"
+          "job",
+          "started"
         ],
         "title": "SayProposal",
         "type": "object"
       },
-      "doc": "a planning session's proposal is a job, waiting for the user's OK",
+      "doc": "a planning session's proposal is a job, waiting for the user's OK or started by the Autonomous preset",
       "name": "say-proposal"
     },
     {

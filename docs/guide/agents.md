@@ -635,7 +635,9 @@ hello — will still show there when it works in a git worktree, with the worktr
 
 Say what you want done in one prompt, and the hub turns it into a proposed job (`say/start`). In the editor, **Say It**
 (from the palette) asks for your words and plans in the current project's repository; nothing blocks while it plans.
-When the proposal is ready you get a notice ("A proposal is waiting for your OK"), and **Show** opens it. A planning chat drafts the plan with no access to your repository or your records: it
+When the proposal is ready you get a notice ("A proposal is waiting for your OK"), and **Show** opens it; when the
+Autonomous preset started it at once (below), the notice says "Started by the Autonomous preset" instead, and **Show**
+opens the running job. A planning chat drafts the plan with no access to your repository or your records: it
 sees only your words and a list of your profiles, routes and roles. Each task gets a role, a profile when it names
 one, and a body that becomes the start of its brief. The hub checks the draft (known roles and profiles, at most 32
 tasks, no task over 16 KiB, no dependency loops, a budget in dollars) and asks the chat again when it does not hold;

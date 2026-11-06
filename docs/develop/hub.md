@@ -2618,7 +2618,8 @@ answered with the reasons, twice at most; the third is `say-failed {id, why}` an
 that holds is written as a graph plan as the user would (`plans/write`: each task's `role`, `profile` and `body`)
 and proposed with the repository `say/start` named, the smallest dollar budget of the block and its gate
 (`runner::propose_graph`): the job is `proposed` with its proposal card, whose title is the hub's (`card_title`),
-never the block's, and `say-proposal {id, job}` names it. The planning session's own use is the job's
+never the block's, and `say-proposal {id, job, started}` names it (`started`: the Autonomous preset started it at
+once, so nothing waits for an OK and the editor says so). The planning session's own use is the job's
 `data.planning` (`tokens`, `usd_est`, `usd`: numbers only), shown and not budgeted.
 
 A Say proposal waits for the user's OK (`job/approve`, a user-class method: an agent's connection is refused, and
@@ -2667,4 +2668,4 @@ planning stopped: say it again", and a proposal it made stays a job with its car
 | `say/revise` | user | true (refused for a planning session the hub no longer holds, or whose job has started) |
 | `say/end` | user | true, or false for a session that is not a planning session |
 
-Events: `say-proposal {id, job}`, `say-message {id, text}` (agent-written), `say-failed {id, why}`.
+Events: `say-proposal {id, job, started}`, `say-message {id, text}` (agent-written), `say-failed {id, why}`.

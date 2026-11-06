@@ -44,12 +44,14 @@ pub struct SayStarted {
     pub id: String,
 }
 
-/// `say-proposal`: the planning session's proposal is job JOB, waiting for the user's OK.
+/// `say-proposal`: the planning session's proposal is job JOB, waiting for the user's OK unless it started.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SayProposal {
     pub id: String,
     pub job: String,
+    /// Started at once by the Autonomous preset within its cells: nothing waits for an OK.
+    pub started: bool,
 }
 
 /// `say-message`: the planning agent asks the user something (its words, agent-written).
