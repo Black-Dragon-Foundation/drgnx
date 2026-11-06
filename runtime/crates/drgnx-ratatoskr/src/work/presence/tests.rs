@@ -290,3 +290,24 @@ fn a_file_is_found_by_a_name_through_a_link() {
     };
     assert!(root.wants(&file));
 }
+
+/// Pattern D. A file that does not exist (an agent read it before it was made, or after it was removed) under a folder
+/// reached through a link is named by that folder's true name, as the folder is: a workspace root asked through the
+/// link (macOS's `/tmp/…`) still wants it, and asking for the file through the link finds it.
+#[test]
+fn a_missing_file_is_named_by_its_folders_true_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = std::fs::canonicalize(dir.path()).unwrap().join("real");
+    std::fs::create_dir(&real).unwrap();
+    let link = real.with_file_name("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let file = place(&link, "src/../src/b.rs");
+    assert_eq!(file, real.join("src/b.rs").to_string_lossy());
+    let root = Sub {
+        roots: vec![true_name(&link.to_string_lossy())],
+        files: BTreeSet::new(),
+    };
+    assert!(root.wants(&file), "{file} under {:?}", root.roots);
+    let asked = link.join("src/b.rs").to_string_lossy().into_owned();
+    assert_eq!(true_name(&asked), file);
+}

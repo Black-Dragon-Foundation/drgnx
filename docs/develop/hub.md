@@ -348,6 +348,13 @@ its time box is a `clock::real` wait, so an advance past the time box answers af
 not mark, on something outside the hub that has not answered yet (a raw thread, a raw-spawned task's work), is still
 not seen: a barrier there answers as if the task were parked.
 
+**In-process tests** (a crate test that runs the hub's tasks itself, as `tests/search_index.rs` does with a project's
+tier 2) call `clock::install_virtual()`, `clock::advance(d)` and `clock::barrier()`, the barrier's steps 2 and 3, which
+answers the origins still waiting or busy (none when it held). Both wait for the runtime's workers to park, which only
+a runtime built with `clock::worker_parks` and `clock::worker_unparks` as its park hooks reports: on a plain
+`#[tokio::test]` runtime every advance runs out its 5 s of real time instead. The clock is the process's, so these
+tests share one such runtime and run one at a time.
+
 A hub without the sequencer refuses `__test_barrier` (`not-allowed`). A release build has none of these: `__test_advance`
 and `__test_barrier` are unknown methods (`no-method`), `__seq` is dropped and listed in the answer's `ignored`, and
 `serve --test-clock` or `--test-sequencer` is a usage error (exit 2).
@@ -1467,7 +1474,9 @@ Who is in which file, at which line, now (`work::presence`; agent system part 2 
 and badges build on it). This is its contract.
 
 - **An entry** is one session's latest `{session, file, mode, line?, source, step, at}` in one file
-  (`runstav::methods::work::PresenceEntry`). `file` is an absolute path (links followed when the file exists); `mode`
+  (`runstav::methods::work::PresenceEntry`). `file` is an absolute path, its links followed: a file that does not exist
+  (not made yet, or removed) under the true name of its nearest folder that does, as a workspace root is (on macOS a
+  root asked as `/tmp/…` and a missing file under it are both `/private/tmp/…`); `mode`
   is `read`, `edit`, `listed` (a listing, a recursive search) or `write` (a shell command's); `line` is the last line
   known, or absent ("file only"); `source` is `acp` (a read or search step's fields), `edit` (an edit step), `command`
   (a file a shell step's command names, from `work::shell_read`, only inside the session's folder) or `opened` (a file

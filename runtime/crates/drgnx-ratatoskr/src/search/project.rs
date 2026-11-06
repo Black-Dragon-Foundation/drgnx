@@ -12,7 +12,8 @@
 //! - **Tier 2.** Requests of [`REQUEST_KEYS`] missing keys to each embedder that answers (a server that is not running
 //!   gets none, and is no failure, until the next change wakes tier 2). Between requests it waits while typing
 //!   holds ([`TYPING_HOLD`] from the last [`Project::note_typing`]) and, on battery, until AC or
-//!   [`Project::index_now`]. What it does is published as a [`Status`].
+//!   [`Project::index_now`]. Idle, it stays idle until a wake finds a key missing. What it does is published as a
+//!   [`Status`].
 
 use super::{DocEmbedder, power};
 use crate::clock;
@@ -573,13 +574,33 @@ impl Inner {
                 if let Ok(mut g) = self.gate.lock() {
                     g.overriding = false;
                 }
-                if !matches!(self.status.borrow().tier2, Tier2::Failed(_)) {
-                    self.publish(Tier2::Idle);
-                }
                 for e in &self.embedders {
                     let _ = hrafn::collect(&self.store, e.model()).await;
                 }
-                self.wake.notified().await;
+                if !matches!(self.status.borrow().tier2, Tier2::Failed(_)) {
+                    self.publish(Tier2::Idle);
+                }
+                self.until_missing().await;
+            }
+        }
+    }
+
+    /// Waits until a wake finds a key missing for an embedder that answers. A wake is only a hint: `Notify` keeps one
+    /// sent while tier 2 was not waiting (a refresh, `index now` read before its wake), so one that finds nothing to
+    /// do leaves tier 2 where it is, idle, and ends an `index now`, rather than taking it back to its gates.
+    async fn until_missing(&self) {
+        loop {
+            self.wake.notified().await;
+            for e in &self.embedders {
+                // a store error is the pass's to report
+                if e.answers().await
+                    && !matches!(hrafn::missing(&self.store, e.model(), 1).await, Ok(k) if k.is_empty())
+                {
+                    return;
+                }
+            }
+            if let Ok(mut g) = self.gate.lock() {
+                g.overriding = false;
             }
         }
     }

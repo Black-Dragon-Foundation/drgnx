@@ -21,8 +21,8 @@ use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
-use std::sync::Arc;
 use std::sync::mpsc::{Receiver, channel};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::sync::Semaphore;
@@ -433,6 +433,27 @@ fn project_spec(f: &Fixture, embedders: Vec<Arc<WorkerEmbedder>>, power: &Path) 
     }
 }
 
+/// F on the virtual clock, on the hub's runtime (`serve`'s: two workers and the clock's park hooks), one F at a time.
+/// The clock is the process's, and so is this runtime: an advance and a barrier wait for the workers to park, which
+/// only a runtime with the hooks reports, and for every task the clock tracks, so the tests that start tier 2 run
+/// here, one after another.
+fn on_hub_runtime<F: std::future::Future>(f: F) -> F::Output {
+    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    static ONE: Mutex<()> = Mutex::new(());
+    let _one = ONE.lock().unwrap_or_else(PoisonError::into_inner);
+    clock::install_virtual();
+    RT.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .on_thread_park(clock::worker_parks)
+            .on_thread_unpark(clock::worker_unparks)
+            .build()
+            .unwrap()
+    })
+    .block_on(f)
+}
+
 async fn status_until(p: &Project, what: &str, f: impl Fn(&Status) -> bool) -> Status {
     let mut rx = p.status();
     let got = tokio::time::timeout(BOUND, rx.wait_for(|s| f(s)))
@@ -562,116 +583,159 @@ async fn denied_root_refused_and_canary_never_embedded() {
 
 /// Pattern B: tier 2 holds while typing holds, and only between requests. The clock moves by 250 ms advances;
 /// tier 2 takes each request on a permit the test gives.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn typing_holds_tier2_between_requests() {
-    clock::install_virtual();
-    let (cache, ac) = (tempfile::tempdir().unwrap(), power(true));
-    let f = fixture(&lisp_files(20));
-    let embedder = Arc::new(WorkerEmbedder::new(spec(
-        cache.path(),
-        ac.path(),
-        &["--device", "cpu"],
-    )));
-    let permits = Arc::new(Semaphore::new(0));
-    let mut s = project_spec(&f, vec![embedder], ac.path());
-    s.test_permits = Some(permits.clone());
-    let p = Project::open(s).await.unwrap();
-    let total = p.refresh_now().await.unwrap().keys_missing as u64;
-    assert_eq!(total, 20);
+#[test]
+fn typing_holds_tier2_between_requests() {
+    on_hub_runtime(async {
+        let (cache, ac) = (tempfile::tempdir().unwrap(), power(true));
+        let f = fixture(&lisp_files(20));
+        let embedder = Arc::new(WorkerEmbedder::new(spec(
+            cache.path(),
+            ac.path(),
+            &["--device", "cpu"],
+        )));
+        let permits = Arc::new(Semaphore::new(0));
+        let mut s = project_spec(&f, vec![embedder], ac.path());
+        s.test_permits = Some(permits.clone());
+        let p = Project::open(s).await.unwrap();
+        let total = p.refresh_now().await.unwrap().keys_missing as u64;
+        assert_eq!(total, 20);
 
-    p.note_typing();
-    p.start_tier2();
-    permits.add_permits(1);
-    let held = status_until(&p, "typing", |s| s.tier2 == Tier2::Typing).await;
-    assert_eq!(held.embedded, 0);
-    for _ in 0..11 {
+        p.note_typing();
+        p.start_tier2();
+        permits.add_permits(1);
+        let held = status_until(&p, "typing", |s| s.tier2 == Tier2::Typing).await;
+        assert_eq!(held.embedded, 0);
+        for _ in 0..11 {
+            clock::advance(Duration::from_millis(250)).await;
+            let now = p.status().borrow().clone();
+            assert_eq!(
+                (now.tier2, now.embedded),
+                (Tier2::Typing, 0),
+                "held for 3 s from the last keystroke"
+            );
+        }
         clock::advance(Duration::from_millis(250)).await;
-        let now = p.status().borrow().clone();
+        // one request of 8 keys, then tier 2 waits for its next permit
+        let after_one = status_until(&p, "the first request", |s| s.embedded == 8).await;
+        assert_eq!(after_one.tier2, Tier2::Running);
+
+        p.note_typing();
+        permits.add_permits(1);
+        let again = status_until(&p, "typing again", |s| s.tier2 == Tier2::Typing).await;
+        assert_eq!(again.embedded, 8, "held between requests, never inside one");
         assert_eq!(
-            (now.tier2, now.embedded),
-            (Tier2::Typing, 0),
-            "held for 3 s from the last keystroke"
+            p.lag(Some(MODEL)).await.unwrap().chunks_behind as u64,
+            total - 8
         );
-    }
-    clock::advance(Duration::from_millis(250)).await;
-    // one request of 8 keys, then tier 2 waits for its next permit
-    let after_one = status_until(&p, "the first request", |s| s.embedded == 8).await;
-    assert_eq!(after_one.tier2, Tier2::Running);
 
-    p.note_typing();
-    permits.add_permits(1);
-    let again = status_until(&p, "typing again", |s| s.tier2 == Tier2::Typing).await;
-    assert_eq!(again.embedded, 8, "held between requests, never inside one");
-    assert_eq!(
-        p.lag(Some(MODEL)).await.unwrap().chunks_behind as u64,
-        total - 8
-    );
-
-    permits.add_permits(100);
-    for _ in 0..12 {
-        clock::advance(Duration::from_millis(250)).await;
-    }
-    let done = status_until(&p, "idle", |s| s.tier2 == Tier2::Idle).await;
-    assert_eq!(done.embedded, total);
-    assert_eq!(p.lag(Some(MODEL)).await.unwrap().chunks_behind, 0);
+        permits.add_permits(100);
+        for _ in 0..12 {
+            clock::advance(Duration::from_millis(250)).await;
+        }
+        let done = status_until(&p, "idle", |s| s.tier2 == Tier2::Idle).await;
+        assert_eq!(done.embedded, total);
+        assert_eq!(p.lag(Some(MODEL)).await.unwrap().chunks_behind, 0);
+    })
 }
 
 /// Pattern B (the gate is the power supply's state). On battery tier 2 waits for AC and no worker starts; tier 1
 /// goes on.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn battery_holds_tier2_and_tier1_goes_on() {
-    clock::install_virtual();
-    let (cache, bat) = (tempfile::tempdir().unwrap(), power(false));
-    let f = fixture(&lisp_files(3));
-    let embedder = Arc::new(WorkerEmbedder::new(spec(cache.path(), bat.path(), &[])));
-    let p = Project::open(project_spec(&f, vec![embedder.clone()], bat.path()))
-        .await
-        .unwrap();
-    assert_eq!(p.refresh_now().await.unwrap().files_changed, 3);
-    p.start_tier2();
-    let held = status_until(&p, "battery", |s| s.tier2 == Tier2::Battery).await;
-    assert_eq!(held.embedded, 0);
-    assert_eq!(embedder.facts().spawns, 0, "no worker on battery");
+#[test]
+fn battery_holds_tier2_and_tier1_goes_on() {
+    on_hub_runtime(async {
+        let (cache, bat) = (tempfile::tempdir().unwrap(), power(false));
+        let f = fixture(&lisp_files(3));
+        let embedder = Arc::new(WorkerEmbedder::new(spec(cache.path(), bat.path(), &[])));
+        let p = Project::open(project_spec(&f, vec![embedder.clone()], bat.path()))
+            .await
+            .unwrap();
+        assert_eq!(p.refresh_now().await.unwrap().files_changed, 3);
+        p.start_tier2();
+        let held = status_until(&p, "battery", |s| s.tier2 == Tier2::Battery).await;
+        assert_eq!(held.embedded, 0);
+        assert_eq!(embedder.facts().spawns, 0, "no worker on battery");
 
-    std::fs::write(
-        f.root.join("core/f1.el"),
-        ";;; f1.el\n(defun f1-run () \"Changed.\" 10)\n",
-    )
-    .unwrap();
-    assert_eq!(p.refresh_now().await.unwrap().files_changed, 1);
-    assert_eq!(p.status().borrow().tier2, Tier2::Battery);
-    assert_eq!(embedder.facts().spawns, 0);
+        std::fs::write(
+            f.root.join("core/f1.el"),
+            ";;; f1.el\n(defun f1-run () \"Changed.\" 10)\n",
+        )
+        .unwrap();
+        assert_eq!(p.refresh_now().await.unwrap().files_changed, 1);
+        assert_eq!(p.status().borrow().tier2, Tier2::Battery);
+        assert_eq!(embedder.facts().spawns, 0);
+    })
 }
 
 /// Pattern B. `index now` overrides the battery wait, in a worker started with `--device auto`; on battery that
 /// worker measures nothing and caches nothing.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn index_now_overrides_battery() {
-    clock::install_virtual();
-    let (cache, bat) = (tempfile::tempdir().unwrap(), power(false));
-    let f = fixture(&lisp_files(3));
-    let embedder = Arc::new(WorkerEmbedder::new(spec(cache.path(), bat.path(), &[])));
-    let p = Project::open(project_spec(&f, vec![embedder.clone()], bat.path()))
-        .await
-        .unwrap();
-    p.refresh_now().await.unwrap();
-    p.start_tier2();
-    status_until(&p, "battery", |s| s.tier2 == Tier2::Battery).await;
-    p.index_now();
-    let done = status_until(&p, "idle", |s| s.tier2 == Tier2::Idle).await;
-    assert_eq!(done.embedded, 3);
-    let facts = embedder.facts();
-    assert_eq!(facts.device_arg.as_deref(), Some("auto"), "{facts:?}");
-    let ready = facts.ready.expect("the worker said its device");
-    assert_eq!(ready["device"], "cpu");
-    assert!(
-        ready["why"].as_str().unwrap().contains("battery"),
-        "{ready}"
-    );
-    assert!(
-        !cache.path().join("device.json").exists(),
-        "nothing measured on battery is kept"
-    );
+#[test]
+fn index_now_overrides_battery() {
+    on_hub_runtime(async {
+        let (cache, bat) = (tempfile::tempdir().unwrap(), power(false));
+        let f = fixture(&lisp_files(3));
+        let embedder = Arc::new(WorkerEmbedder::new(spec(cache.path(), bat.path(), &[])));
+        let p = Project::open(project_spec(&f, vec![embedder.clone()], bat.path()))
+            .await
+            .unwrap();
+        p.refresh_now().await.unwrap();
+        p.start_tier2();
+        status_until(&p, "battery", |s| s.tier2 == Tier2::Battery).await;
+        p.index_now();
+        let done = status_until(&p, "idle", |s| s.tier2 == Tier2::Idle).await;
+        assert_eq!(done.embedded, 3);
+        let facts = embedder.facts();
+        assert_eq!(facts.device_arg.as_deref(), Some("auto"), "{facts:?}");
+        let ready = facts.ready.expect("the worker said its device");
+        assert_eq!(ready["device"], "cpu");
+        assert!(
+            ready["why"].as_str().unwrap().contains("battery"),
+            "{ready}"
+        );
+        assert!(
+            !cache.path().join("device.json").exists(),
+            "nothing measured on battery is kept"
+        );
+    })
+}
+
+/// Pattern B. A wake that finds nothing missing leaves tier 2 idle. The refresh before tier 2 starts leaves a wake
+/// (`Notify` keeps it), and `index now`, read at the gate of tier 2's first pass, is never waited for; once the request
+/// is done that kept wake must not take tier 2 back to its battery gate. Tier 2 takes each pass on a permit, and the
+/// test gives one more than the request and the pass that finds nothing; the hub's barrier is the gate after them.
+#[test]
+fn a_wake_with_nothing_missing_stays_idle() {
+    on_hub_runtime(async {
+        let (cache, bat) = (tempfile::tempdir().unwrap(), power(false));
+        let f = fixture(&lisp_files(3));
+        let embedder = Arc::new(WorkerEmbedder::new(spec(cache.path(), bat.path(), &[])));
+        let permits = Arc::new(Semaphore::new(0));
+        let mut s = project_spec(&f, vec![embedder], bat.path());
+        s.test_permits = Some(permits.clone());
+        let p = Project::open(s).await.unwrap();
+        assert_eq!(p.refresh_now().await.unwrap().keys_missing, 3);
+        p.start_tier2();
+        p.index_now();
+        permits.add_permits(3);
+        let done = status_until(&p, "the request's end", |s| {
+            s.embedded == 3 && s.tier2 != Tier2::Running
+        })
+        .await;
+        assert_eq!(done.tier2, Tier2::Idle);
+        assert_eq!(
+            clock::barrier().await,
+            Vec::<String>::new(),
+            "the barrier held"
+        );
+        assert_eq!(
+            *p.status().borrow(),
+            Status {
+                tier2: Tier2::Idle,
+                embedded: 3
+            },
+            "nothing is missing: tier 2 stays idle"
+        );
+        assert_eq!(permits.available_permits(), 1, "no pass after the last");
+    })
 }
 
 /// Pattern B. A query on battery uses the CPU path, so it doesn't wake a sleeping dGPU.
