@@ -25,7 +25,7 @@ mod revert_props;
 mod schema;
 pub mod store;
 pub mod text;
-mod threeway;
+pub mod threeway;
 
 pub use anchor::{AnchorId, Blame, FileHunks, LineHunk, Resolved, Side, When};
 pub use apply::{FileDiff, Hunk, HunkRef};

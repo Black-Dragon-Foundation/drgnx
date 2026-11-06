@@ -99,7 +99,9 @@ text after the scope; theirs: the text before it), run over three temporary file
 that differs is a bug in the span revert: the preview says `threeway_differs` and carries git's text, which the apply
 then writes. `src/revert_props.rs` holds the property in 10,000 seeded cases (the spike's, through the history's own
 records and a reload of each document from its rows): every case without an overlap equals git, and every overlap the
-case made is found, and no other.
+case made is found, and no other. `verdandi::threeway::conflicts(base, ours, theirs)` is the public count of the same
+merge's conflicting hunks (0: clean; git counts at most 127, more is an error), for callers that only need to know
+whether two edits meet.
 
 **Roll back mine too** (`Mode::RollBackMine`). The text goes back to what it was before the scope, applied as new
 operations; the document as it was is kept as branch `undone/<record>`, so its hunks can be redone.
