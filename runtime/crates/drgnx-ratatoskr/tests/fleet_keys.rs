@@ -113,6 +113,53 @@ fn serve(runner: &str, root: &str, prefix: &str, hub: &str) -> (Channels, tokio:
     (channels, child)
 }
 
+/// Whether the filter of [`without_key_frames`] holds back a frame of type T.
+fn swallowed(t: &str) -> bool {
+    t == "key"
+}
+
+/// W with every `key` frame held back: the hub sends it (its audit says so) and the link stays up (pings, offers and
+/// everything else go through), but the runner never sees it. Lines and length-prefixed chunks are copied whole.
+fn without_key_frames(
+    mut w: drgnx_ratatoskr::runners::transport::Writer,
+) -> drgnx_ratatoskr::runners::transport::Writer {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+    #[derive(serde::Deserialize)]
+    struct Head {
+        t: String,
+        len: Option<u64>,
+    }
+    let (tx, rx) = tokio::io::duplex(1 << 20);
+    tokio::spawn(async move {
+        let mut rx = tokio::io::BufReader::new(rx);
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            if !matches!(rx.read_until(b'\n', &mut line).await, Ok(n) if n > 0) {
+                break;
+            }
+            let head: Option<Head> = serde_json::from_slice(&line).ok();
+            let mut chunk = Vec::new();
+            if let Some(len) = head.as_ref().and_then(|h| h.len) {
+                chunk.resize(4 + len as usize, 0);
+                if rx.read_exact(&mut chunk).await.is_err() {
+                    break;
+                }
+            }
+            if head.as_ref().is_some_and(|h| swallowed(&h.t)) {
+                continue;
+            }
+            if w.write_all(&line).await.is_err()
+                || w.write_all(&chunk).await.is_err()
+                || w.flush().await.is_err()
+            {
+                break;
+            }
+        }
+    });
+    Box::new(tx)
+}
+
 /// The wall clock as the queue takes it: a value, never waited on.
 fn now() -> u64 {
     skuld::host_now()
@@ -184,6 +231,23 @@ fn queue_r1(
     UnboundedReceiver<LinkEvent>,
     tokio::process::Child,
 ) {
+    queue_r1_with(dir, root, prefix, hub, img, trust, false)
+}
+
+/// [`queue_r1`], with the `key` frames the hub sends held back on the way when DROP_KEYS.
+fn queue_r1_with(
+    dir: &Path,
+    root: &str,
+    prefix: &str,
+    hub: &str,
+    img: &str,
+    trust: RunnerTrust,
+    drop_keys: bool,
+) -> (
+    Arc<Queue>,
+    UnboundedReceiver<LinkEvent>,
+    tokio::process::Child,
+) {
     let (q, events) = Queue::new(QueueCfg {
         hub_id: hub.into(),
         exec_root: dir.join("exec"),
@@ -191,7 +255,10 @@ fn queue_r1(
         db: None,
     });
     q.adopt("xbusy", Priority::P1, now());
-    let (channels, child) = serve("r1", root, prefix, hub);
+    let (mut channels, child) = serve("r1", root, prefix, hub);
+    if drop_keys {
+        channels.control.tx = without_key_frames(channels.control.tx);
+    }
     let session = Session::start("r1", channels, q.route(), q.link_events());
     q.add_runner(
         RemoteRunner {
@@ -419,8 +486,10 @@ mod keys {
         assert!(q.keys().audit(None, None).is_empty());
     }
 
-    /// [C] A job naming a key the hub doesn't hold: the hub asks for it and the job's `drgnx-key` gives up after its
-    /// wait; the verdict is infra (`key not delivered`), never red, and no key went anywhere.
+    /// [C] A key the hub held and sent, that didn't arrive on a link that stayed up (its `key` frame is held back on
+    /// the way; pings and everything else go through): the job's `drgnx-key` gives up after its 60 s, which pass on
+    /// the runner while the row waits on the announced result; the verdict is infra (`key not delivered`), never red;
+    /// the audit has the send and no read; the link was never lost (a lost link fails the row inside `drive`).
     #[tokio::test]
     #[ignore = "fleet"]
     async fn a_key_that_never_arrives_is_infra_not_red() {
@@ -428,18 +497,35 @@ mod keys {
         let root = root("r1", "fl-nokey");
         let img = image("r1");
         let dir = tempfile::tempdir().unwrap();
-        let (q, mut events, _child) =
-            queue_r1(dir.path(), &root, prefix, hub, &img, RunnerTrust::Mine);
+        let v = throwaway();
+        let (q, mut events, _child) = queue_r1_with(
+            dir.path(),
+            &root,
+            prefix,
+            hub,
+            &img,
+            RunnerTrust::Mine,
+            true,
+        );
         let mut outcomes = vec![];
         ready(&q, &mut events, &mut outcomes).await;
-        q.submit(job("xnokey", "true", &["FLEET_MISSING"], &img), now());
+        hold(&q, &[("FLEET_LOST", &v)]);
+        q.submit(job("xnokey", "true", &["FLEET_LOST"], &img), now());
         let r = result(&q, &mut events, &mut outcomes, "xnokey").await;
         assert_eq!(
             r["verdict"],
             serde_json::json!({"Infra": forseti::classify::infra::KEY_NOT_DELIVERED}),
             "{r}"
         );
-        assert!(q.keys().audit(None, None).is_empty());
+        let audit = q.keys().audit(Some("xnokey"), None);
+        let count = |kind: AuditKind| audit.iter().filter(|x| x.kind == kind).count();
+        assert_eq!(count(AuditKind::Sent), 1, "the hub sent it: {audit:?}");
+        assert_eq!(count(AuditKind::Use), 0, "the job never read it: {audit:?}");
+        assert_eq!(
+            q.runner("r1").map(|r| r.state),
+            Some("ready".to_string()),
+            "the link stayed up"
+        );
     }
 
     /// [C] While a keyed job runs (parked on a FIFO after it read its key), `podman inspect` of its container holds
