@@ -181,7 +181,12 @@ package to install.
 
 The role faces are `drgnx-ui-text`, `drgnx-ui-heading`, `drgnx-ui-caption`, `drgnx-ui-title`, `drgnx-code-small`,
 `drgnx-agent-prose` and `drgnx-terminal`; the code role is the `default` and `fixed-pitch` faces and the UI role also
-sets `variable-pitch`. Their specs hold `:family`, `:height` (relative) and `:weight` only, never `:font`.
+sets `variable-pitch`. Their specs hold `:family`, `:height` and `:weight` only, never `:font`. The height is
+relative to `default`, except for the chrome's faces (`drgnx-ui-text`, `drgnx-ui-heading`, `drgnx-ui-caption`,
+`drgnx-ui-title`, `drgnx-code-small`): they get the absolute height their size gives on `default` (Emacs copies a font
+spec at every run of a face with a relative height, and the bars and the sidebar's rows are many runs). drgnx writes it
+again whenever the code size, the theme or a zoom (`View: Zoom In`) changes `default`, and in a buffer you scale with
+`C-x C-+` it remaps them by the same scale, so they look as a relative height would.
 
 ## Density
 

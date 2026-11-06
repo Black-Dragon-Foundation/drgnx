@@ -216,5 +216,52 @@ init ended) is your Lisp: it stays with no theme and under drgnx's own, and the 
         (dolist (spec (list (get f 'face-override-spec) (get f 'face-defface-spec)))
           (should-not (memq :font (drgnx-look-fonts-test--keys spec))))))))
 
+(defun drgnx-look-fonts-test--chrome-heights (code)
+  "Each chrome type face's `:height' is the absolute one its ratio gives on a `default' of CODE (tenths of a point):
+what Emacs merged the old relative height to."
+  (pcase-dolist (`(,face ,ratio) '((drgnx-ui-text 0.963) (drgnx-ui-heading 0.963) (drgnx-ui-caption 0.889)
+                                   (drgnx-ui-title 1.259) (drgnx-code-small 0.889)))
+    (should (equal (list face (merge-face-attribute :height ratio code)) (list face (face-attribute face :height))))))
+
+(ert-deftest drgnx-look-fonts/the-chrome-faces-have-absolute-heights-that-follow-the-code-size ()
+  "Pattern D: the chrome's type faces (UI text, heading, caption, title, small code) get an absolute `:height': the
+one their ratio gave on `default' before, at the default size, after a live change of the code size and after a zoom
+\(which sets `default' on the graphical frame); the agent's prose stays relative.  A float `:height' made Emacs copy
+a font spec at every face run of the bars and the dock rows."
+  (drgnx-look-fonts-test--clean
+    (drgnx-look-fonts-test--default-kept
+      (drgnx-look-fonts-apply)
+      (drgnx-look-fonts-test--chrome-heights 101)
+      (should (equal 0.963 (face-attribute 'drgnx-agent-prose :height)))
+      (let ((drgnx-look-font-code '(:family "JetBrains Mono" :size 1.25)))   ; the debounced end of a live change
+        (drgnx-look-fonts-apply)
+        (should (= 127 (plist-get (drgnx-look-fonts-resolve 'code) :height)))
+        (drgnx-look-fonts-test--chrome-heights 127))
+      (drgnx-look-fonts-apply)
+      (drgnx-look-fonts-test--chrome-heights 101)
+      (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t)))
+        (set-face-attribute 'default (selected-frame) :height 130)   ; what `global-text-scale-adjust' does
+        (drgnx-look-fonts--zoomed)
+        (drgnx-look-fonts-test--chrome-heights 130)))))
+
+(ert-deftest drgnx-look-fonts/text-scale-reaches-the-chrome-faces ()
+  "Pattern D: `text-scale-mode' remaps only `default'; in a scaled buffer each chrome face is remapped to the height
+its ratio gives on the scaled `default', and the remap goes when the scale is back at 0 or the module is off."
+  (drgnx-look-fonts-test--clean
+    (drgnx-look-fonts-on)
+    (with-temp-buffer
+      (text-scale-set 2)
+      (let ((want (merge-face-attribute :height 0.889 (merge-face-attribute :height (expt text-scale-mode-step 2) 101)))
+            (spec (cadr (assq 'drgnx-ui-caption face-remapping-alist))))
+        (should spec)
+        (should (= want (merge-face-attribute :height (plist-get spec :height)
+                                              (face-attribute 'drgnx-ui-caption :height)))))
+      (text-scale-set 0)
+      (should-not face-remapping-alist)
+      (text-scale-set 1)
+      (drgnx-look-fonts-off)
+      (should-not (assq 'drgnx-ui-caption face-remapping-alist))
+      (should (assq 'default face-remapping-alist)))))
+
 (provide 'look-fonts-test)
 ;;; look-fonts-test.el ends here

@@ -14,7 +14,10 @@
 ;; drgnx's defaults are the face's defface spec, and also its override spec while a theme styles the face (Emacs
 ;; skips the defface spec of a themed face, and drgnx's themes style `default'), for the attributes the theme does
 ;; not name.  `default's attributes are your Lisp's when they changed between ui/look's setup and the end of init
-;; (config.el runs in between).  A spec holds `:family', `:height' (relative) and `:weight' only, never `:font'.
+;; (config.el runs in between).  A spec holds `:family', `:height' and `:weight' only, never `:font'.  `:height' is
+;; relative, except in the first face of the chrome's roles (`drgnx-look-fonts--absolute-roles'): there it is the
+;; absolute height the size gives on `default', written again when the code size, a theme or a zoom changes it, and
+;; carried into text-scaled buffers by a remap (`drgnx-look-fonts--text-scaled').
 ;; `drgnx-look-fonts-resolve-in' is the pure core: layers in, one resolution out.
 
 ;;; Code:
@@ -41,6 +44,12 @@
     (terminal drgnx-look-font-terminal drgnx-terminal))
   "The font roles: (ROLE SETTING FACE...).  The first face carries the role's size; the others only the family and
 weight.")
+
+(defconst drgnx-look-fonts--absolute-roles '(ui ui-heading ui-caption title code-small)
+  "The chrome's roles: their first face gets an absolute `:height' (its size times the height of `default'), written
+again whenever that changes.  Emacs copies a font spec at every face run whose face has a float `:height'; the bars
+and the dock rows are many runs, drawn at every redisplay.  The agent's prose and the terminal keep a relative height:
+they are their buffer's text.")
 
 (defconst drgnx-look-fonts-sources '(lisp customize setting theme desktop default)
   "Where a value comes from, highest first.")
@@ -411,24 +420,65 @@ role's first face."
   (cl-some (lambda (entry) (and (not (eq (car entry) 'user)) (custom-theme-enabled-p (car entry))))
            (get face 'theme-face)))
 
+(defvar drgnx-look-fonts--absolute nil
+  "The chrome's faces that have an absolute `:height' now: an alist (FACE RATIO . HEIGHT), RATIO the role's size.")
+(defvar drgnx-look-fonts--absolute-code nil "The height of `default' the heights of `drgnx-look-fonts--absolute' are of.")
+
+(defun drgnx-look-fonts--code-height ()
+  "The height of `default' in tenths of a point that the chrome's sizes are ratios of: on the selected frame when it
+is graphical, else on the first graphical frame (a zoom and your Lisp's `default' are there); with none (a daemon
+before its first frame, batch), the code role's."
+  (let* ((frame (if (display-graphic-p) (selected-frame) (cl-find-if #'display-graphic-p (frame-list))))
+         (h (and frame (face-attribute 'default :height frame))))
+    (if (integerp h) h (plist-get (drgnx-look-fonts-resolve 'code) :height))))
+
+(defun drgnx-look-fonts--write-absolute (later)
+  "Write the specs of the chrome's first faces, LATER a list (FACE RES OVERRIDE DEFFACE) of the plists `apply' made,
+with the absolute `:height' of the role's size on `default' now (`drgnx-look-fonts--code-height'), the one Emacs
+merged the relative height to: in the override spec when that holds the height, else in the defface spec when the
+size is the desktop's or drgnx's default.  A size your Lisp, Customize or a theme gave stays as they gave it."
+  (let ((code (drgnx-look-fonts--code-height))
+        (absolute (cl-remove-if (lambda (e) (assq (car e) later)) drgnx-look-fonts--absolute)))   ; the roles not written now
+    (pcase-dolist (`(,face ,res ,override ,defface) later)
+      (let* ((ratio (plist-get res :height))
+             (h (and (numberp ratio) (merge-face-attribute :height ratio code))))
+        (when (integerp h)
+          (cond ((plist-get override :height) (setq override (plist-put override :height h)) (push (cons face (cons ratio h)) absolute))
+                ((memq (plist-get (plist-get res :sources) :size) '(default desktop))
+                 (setq defface (plist-put defface :height h)) (push (cons face (cons ratio h)) absolute))))
+        (drgnx-look-fonts--set-override face override)
+        (drgnx-look-fonts--set-defface face defface)))
+    (unless (and (equal absolute drgnx-look-fonts--absolute) (eql code drgnx-look-fonts--absolute-code))
+      (setq drgnx-look-fonts--absolute absolute drgnx-look-fonts--absolute-code code)
+      (drgnx-look-fonts--rescale-buffers))))
+
 (defun drgnx-look-fonts-apply (&optional roles)
   "Write the faces of ROLES (default all) from the settings, at once on every frame: an override spec for what the
 setting set, the defface spec for the desktop's fonts and drgnx's defaults, nothing from the setting for a face your
 Lisp or Customize set.  A face an enabled theme styles (drgnx's themes style `default') never shows its defface
 spec, so its desktop and default attributes go in the override spec too: only those the theme does not name, as
-the resolution says.  Runs again whenever a theme is enabled or disabled."
-  (dolist (role (or roles (mapcar #'car drgnx-look-fonts-roles)))
-    (let ((res (drgnx-look-fonts-resolve role)))
-      (dolist (face (drgnx-look-fonts--faces role))
-        (let ((base (if (drgnx-look-fonts--own-face-p face) '(desktop) '(default desktop))))
-          (drgnx-look-fonts--set-override
-           face (drgnx-look-fonts--plist-for role face res
-                                             (append (unless (drgnx-look-fonts--owned-p face) '(setting))
-                                                     (when (drgnx-look-fonts--themed-p face) base))))
-          (drgnx-look-fonts--set-defface face (drgnx-look-fonts--plist-for role face res base))))))
-  (drgnx-look-fonts--apply-alternatives)
-  (drgnx-look-fonts--ligatures-sync)
-  (drgnx-look-fonts--put-back-lisp)
+the resolution says.  The chrome's first faces (`drgnx-look-fonts--absolute-roles') are written last, with an
+absolute height, once your Lisp's attributes are back on `default' (`drgnx-look-fonts--write-absolute').  Runs
+again whenever a theme is enabled or disabled, and after a zoom."
+  (let (later)
+    (dolist (role (or roles (mapcar #'car drgnx-look-fonts-roles)))
+      (let ((res (drgnx-look-fonts-resolve role)))
+        (dolist (face (drgnx-look-fonts--faces role))
+          (let* ((base (if (drgnx-look-fonts--own-face-p face) '(desktop) '(default desktop)))
+                 (override (drgnx-look-fonts--plist-for role face res
+                                                        (append (unless (drgnx-look-fonts--owned-p face) '(setting))
+                                                                (when (drgnx-look-fonts--themed-p face) base))))
+                 (defface (drgnx-look-fonts--plist-for role face res base)))
+            (if (and (memq role drgnx-look-fonts--absolute-roles) (eq face (car (drgnx-look-fonts--faces role))))
+                (push (list face res override defface) later)
+              (drgnx-look-fonts--set-override face override)
+              (drgnx-look-fonts--set-defface face defface))))))
+    (drgnx-look-fonts--apply-alternatives)
+    (drgnx-look-fonts--ligatures-sync)
+    (drgnx-look-fonts--put-back-lisp)
+    (when later
+      (drgnx-look-fonts--write-absolute (nreverse later))
+      (drgnx-look-fonts--put-back-lisp)))   ; a spec write wipes your Lisp's attributes of those faces
   (drgnx-look-fonts--remap-all)
   (run-hooks 'drgnx-look-fonts-applied-hook))
 
@@ -494,6 +544,35 @@ that has an override gets a remap: a non-nil `face-remapping-alist' takes a buff
       (when (or drgnx-look-fonts--remap
                 (cl-some (lambda (spec) (local-variable-p (nth 1 spec))) drgnx-look-fonts-roles))
         (drgnx-look-fonts-remap-buffer)))))
+
+;;;; Zooms: the absolute heights follow `default'
+
+(defvar text-scale-mode-remapping)
+(defvar text-scale-mode-amount)
+(defvar text-scale-mode-step)
+
+(defun drgnx-look-fonts--zoomed (&rest _)
+  "After `global-text-scale-adjust' (View: Zoom In and the keys after it): `default' has another height on every
+frame, and the chrome's absolute heights follow it."
+  (drgnx-look-fonts-apply))
+
+(defun drgnx-look-fonts--text-scaled ()
+  "`text-scale-mode-hook': the mode remaps only `default', which the chrome's absolute heights do not follow.  In a
+scaled buffer each of those faces is remapped to the height its size gives on the scaled `default' (what the
+relative height merged to), among the mode's own remaps, which it takes away at its next change."
+  (when (and text-scale-mode drgnx-look-fonts--absolute)
+    (let ((code (merge-face-attribute :height (expt text-scale-mode-step text-scale-mode-amount)
+                                      drgnx-look-fonts--absolute-code)))
+      (pcase-dolist (`(,face ,ratio . ,height) drgnx-look-fonts--absolute)
+        ;; a factor whose product with HEIGHT truncates to the wanted height
+        (push (face-remap-add-relative face :height (/ (+ (merge-face-attribute :height ratio code) 0.5) height))
+              text-scale-mode-remapping)))))
+
+(defun drgnx-look-fonts--rescale-buffers ()
+  "Every buffer `text-scale-mode' scales gets its remaps again, the chrome's at the heights they have now."
+  (dolist (b (buffer-list))
+    (when (buffer-local-value 'text-scale-mode b)
+      (with-current-buffer b (text-scale-mode 1)))))
 
 ;;;; Ligatures: composition rules, a switch
 
@@ -649,6 +728,8 @@ again (which gives your Lisp's attributes back)."
   (add-hook 'disable-theme-functions #'drgnx-look-fonts--after-theme)
   (add-hook 'after-change-major-mode-hook #'drgnx-look-fonts--mode-hook)
   (add-hook 'server-after-make-frame-hook #'drgnx-look-fonts--check-frame)
+  (add-hook 'text-scale-mode-hook #'drgnx-look-fonts--text-scaled)
+  (advice-add 'global-text-scale-adjust :after #'drgnx-look-fonts--zoomed)
   (when (display-graphic-p) (drgnx-look-fonts--check-frame))
   (if after-init-time
       (drgnx-look-fonts--after-init)
@@ -662,6 +743,8 @@ Your Lisp's attributes and Customize entries stay."
   (remove-hook 'after-init-hook #'drgnx-look-fonts--after-init)
   (remove-hook 'after-change-major-mode-hook #'drgnx-look-fonts--mode-hook)
   (remove-hook 'server-after-make-frame-hook #'drgnx-look-fonts--check-frame)
+  (remove-hook 'text-scale-mode-hook #'drgnx-look-fonts--text-scaled)
+  (advice-remove 'global-text-scale-adjust #'drgnx-look-fonts--zoomed)
   (setq drgnx-look-fonts--fallback-report nil)
   (drgnx-look-fonts--ligatures-off)
   (dolist (b (buffer-list))
@@ -677,7 +760,10 @@ Your Lisp's attributes and Customize entries stay."
   (setq drgnx-look-fonts--orig nil)
   (dolist (e drgnx-look-fonts--alternatives)
     (setq face-font-family-alternatives (delq e face-font-family-alternatives)))
-  (setq drgnx-look-fonts--alternatives nil))
+  (setq drgnx-look-fonts--alternatives nil)
+  (when drgnx-look-fonts--absolute          ; the faces are relative again: the scaled buffers' remaps without them
+    (setq drgnx-look-fonts--absolute nil drgnx-look-fonts--absolute-code nil)
+    (drgnx-look-fonts--rescale-buffers)))
 
 (provide 'drgnx-look-fonts)
 ;;; drgnx-look-fonts.el ends here
