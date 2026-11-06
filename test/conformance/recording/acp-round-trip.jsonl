@@ -17,8 +17,9 @@
 {"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"permissions": {"$contains": [{"id": "$capture:req", "options": "$any"}]}}}}, "within_ms": 15000}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/permission", "params": {"id": "$sid", "request": "$req", "option": "allow_once"}}}
 {"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
-{"do": "expect", "conn": "e", "json": {"event": "agent-entries", "data": {"id": "$sid", "entries": {"$contains": [["$any", {"type": "agent", "text": "permission: allow_oncecall: {\"ok\":true,\"n\":1,\"status\":\"proposed\",\"version\":1}committed: smoke"}]]}}}, "within_ms": 15000}
+{"do": "expect", "conn": "e", "json": {"event": "agent-entries", "data": {"id": "$sid", "entries": {"$contains": [["$any", {"type": "agent", "text": "call: {\"ok\":true,\"n\":1,\"status\":\"proposed\",\"version\":1}committed: smoke"}]]}}}, "within_ms": 15000}
 {"do": "file", "path": "$ROOT/rec/acp/1.jsonl", "contains": "\"stopReason\"", "within_ms": 15000}
+{"do": "file", "path": "$ROOT/rec/acp/1.jsonl", "contains": "permission: allow_once"}
 {"do": "file", "path": "$ROOT/rec/acp/1.jsonl", "contains": "\"dir\":\"in\""}
 {"do": "file", "path": "$ROOT/rec/acp/1.jsonl", "contains": "\"dir\":\"out\""}
 {"do": "file", "path": "$ROOT/rec/acp/1.jsonl", "contains": "\"dir\":\"mcp\"", "count": 1, "at_most": 1}
@@ -47,7 +48,7 @@
 {"do": "expect", "conn": "f", "json": {"event": "agent", "data": {"id": "$sid2", "session": {"permissions": {"$contains": [{"id": "$capture:req2", "options": "$any"}]}}}}, "within_ms": 15000}
 {"do": "send", "conn": "r", "json": {"id": 3, "method": "agents/permission", "params": {"id": "$sid2", "request": "$req2", "option": "allow_once"}}}
 {"do": "expect", "conn": "r", "json": {"id": 3, "result": true}}
-{"do": "expect", "conn": "f", "json": {"event": "agent-entries", "data": {"id": "$sid2", "entries": {"$contains": [["$any", {"type": "agent", "text": "permission: allow_oncecall: {\"ok\":true,\"n\":1,\"status\":\"proposed\",\"version\":1}committed: smoke"}]]}}}, "within_ms": 15000}
+{"do": "expect", "conn": "f", "json": {"event": "agent-entries", "data": {"id": "$sid2", "entries": {"$contains": [["$any", {"type": "agent", "text": "call: {\"ok\":true,\"n\":1,\"status\":\"proposed\",\"version\":1}committed: smoke"}]]}}}, "within_ms": 15000}
 {"do": "expect", "conn": "f", "json": {"event": "agent", "data": {"id": "$sid2", "session": {"status": "idle"}}}, "within_ms": 15000}
 {"do": "sql_expect", "sql": "select kind, subject from decision", "rows": [["build", "smoke ok"]]}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "test \"$(git -C $ROOT/work rev-parse HEAD)\" = \"$(cat $ROOT/live-head)\" && cmp $ROOT/work/hello.txt $ROOT/work-live/hello.txt && test -z \"$(git -C $ROOT/work status --porcelain)\""], "expect_code": 0}
