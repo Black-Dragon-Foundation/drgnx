@@ -25,6 +25,7 @@
 (declare-function drgnx-work-map-mode "drgnx-work-map")
 (declare-function drgnx-work-map-select "drgnx-work-map")
 (declare-function drgnx-work-map-open-selection "drgnx-work-map")
+(declare-function drgnx-work-detail-buffer "drgnx-work-detail")
 (declare-function drgnx-view-attach "drgnx-view")
 (declare-function drgnx-view-touch "drgnx-view")
 (declare-function drgnx-view-draw-now "drgnx-view")
@@ -85,7 +86,13 @@
               (when (and dir (file-directory-p dir))
                 (with-temp-file (expand-file-name (format "jank-s%d.eld" scale) dir)
                   (let ((print-length nil) (print-level nil)) (prin1 report (current-buffer))))))
-            (drgnx-work-runners-ui--shot (format "queue-s%d" scale)))
+            ;; the panel in a window of its own beside the map, drawn now
+            (let* ((panel (drgnx-work-detail-buffer buf))
+                   (win (split-window-right (floor (* (window-total-width) 0.55)))))
+              (set-window-buffer win panel)
+              (with-current-buffer panel (drgnx-view-draw-now drgnx-view))
+              (should (string-search "suite" (with-current-buffer panel (buffer-string))))
+              (drgnx-work-runners-ui--shot (format "queue-panel-s%d" scale))))
         (kill-buffer buf)))))
 
 (provide 'work-space-runners-ui-test)
