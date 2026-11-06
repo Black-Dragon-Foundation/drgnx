@@ -191,5 +191,56 @@ unanswered, and panel \"s1\" as `buf'."
         (unwind-protect (should (equal '(edit execute) (buffer-local-value 'drgnx-agent-panel--disclosure other)))
           (kill-buffer other))))))
 
+(declare-function drgnx-agent-panel-send "drgnx-agent-panel-composer")
+(declare-function drgnx-agent-panel-edit-queued "drgnx-agent-panel-composer")
+(declare-function drgnx-agent-panel-drop-queued "drgnx-agent-panel-composer")
+(declare-function drgnx-command-define "drgnx-registry")
+
+(ert-deftest drgnx-agent-panel/send-queues-while-the-agent-works ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-snapshot (list :id "s1" :status "busy" :mode "queue"))
+      (setq drgnx-agent-panel-test--calls nil)
+      (cl-letf (((symbol-function 'drgnx-agent-panel-composer--read) (lambda (_) " go on ")))
+        (drgnx-agent-panel-send))
+      ;; one send, and nothing that ends the turn
+      (should (equal '(("agents/send" :id "s1" :text "go on")) (reverse drgnx-agent-panel-test--calls)))
+      ;; a mode that would cancel is refused, nothing is sent
+      (setq drgnx-agent-panel-test--calls nil)
+      (drgnx-agent-panel--take-snapshot (list :id "s1" :status "busy" :mode "interrupt"))
+      (cl-letf (((symbol-function 'drgnx-agent-panel-composer--read) (lambda (_) "stop now")))
+        (should-error (drgnx-agent-panel-send) :type 'user-error))
+      (should-not drgnx-agent-panel-test--calls))))
+
+(ert-deftest drgnx-agent-panel/a-queued-note-is-editable-until-sent ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-snapshot (list :id "s1" :status "busy" :queue (list "first" "second")))
+      (let ((text (drgnx-agent-panel-test--text buf)))
+        (should (string-match-p "queued 1  first" text))
+        (should (string-match-p "queued 2  second" text)))
+      (goto-char (drgnx-view-row-start drgnx-view '(:q 1)))
+      (cl-letf (((symbol-function 'read-string) (lambda (_p &optional init &rest _) (concat init " edited"))))
+        (drgnx-agent-panel-edit-queued))
+      (should (equal '("agents/do" :id "s1" :op "requeue" :n 1 :text "second edited") (car drgnx-agent-panel-test--calls)))
+      (drgnx-agent-panel-drop-queued)
+      (should (equal '("agents/do" :id "s1" :op "unqueue" :n 1) (car drgnx-agent-panel-test--calls)))
+      ;; the hub's next snapshot is what the queue shows: the note is edited in place, the other is gone
+      (drgnx-agent-panel--take-snapshot (list :id "s1" :status "busy" :queue (list "second edited")))
+      (let ((text (drgnx-agent-panel-test--text buf)))
+        (should (string-match-p "queued 1  second edited" text))
+        (should-not (string-match-p "queued 2" text))))))
+
+(ert-deftest drgnx-agent-panel/pair-chip-hidden-without-the-command ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-snapshot (list :id "s1" :status "idle" :paired t :waiting t))
+      (should-not (string-match-p "Pair · waiting" (drgnx-agent-panel-test--text buf)))
+      (drgnx-command-define 'agents-pair :category "Agents" :title "Pair" :command #'ignore :doc "test")
+      (unwind-protect
+          (progn (drgnx-agent-panel--take-snapshot (list :id "s1" :status "idle" :paired t :waiting t))
+                 (should (string-match-p "Pair · waiting for you" (drgnx-agent-panel-test--text buf))))
+        (drgnx-command-undefine 'agents-pair)))))
+
 (provide 'agent-panel-test)
 ;;; agent-panel-test.el ends here

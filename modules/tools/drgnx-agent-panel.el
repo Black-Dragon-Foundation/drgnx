@@ -87,6 +87,14 @@ to its top.  The hub gives at most 50."
 (declare-function drgnx-agent-panel-steps-teardown "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel-steps-setup "drgnx-agent-panel-steps")
 
+(declare-function drgnx-agent-panel-composer-keys "drgnx-agent-panel-composer")
+(declare-function drgnx-agent-panel-composer-redraw "drgnx-agent-panel-composer")
+(declare-function drgnx-agent-panel-composer-setup "drgnx-agent-panel-composer")
+(declare-function drgnx-agent-panel-composer--queue-row "drgnx-agent-panel-composer")
+(declare-function drgnx-agent-panel-composer--row "drgnx-agent-panel-composer")
+
+(unless (featurep 'drgnx-agent-panel-composer)
+  (load (expand-file-name "drgnx-agent-panel-composer" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-agent-panel-steps)
   (load (expand-file-name "drgnx-agent-panel-steps" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 
@@ -170,6 +178,8 @@ folds under it."
     (:more (propertize "  ↑ earlier steps load when you scroll up\n" 'face 'drgnx-agent-panel-subtle))
     (:e (drgnx-agent-panel--entry-row (cadr key)))
     (:strip (drgnx-agent-panel--strip-row))
+    (:q (drgnx-agent-panel-composer--queue-row (cadr key)))
+    (:composer (drgnx-agent-panel-composer--row))
     (_ "\n")))
 
 (drgnx-view-define 'agent-panel :render #'drgnx-agent-panel--render :follow-tail t :slice drgnx-view-slice)
@@ -182,7 +192,8 @@ folds under it."
           (list (list :strip))
           (and drgnx-agent-panel--more drgnx-agent-panel--loaded (list (list :more)))
           (let ((idxs (sort (hash-table-keys drgnx-agent-panel--entries) #'<)))
-            (mapcar (lambda (i) (list :e i)) (seq-filter #'drgnx-agent-panel--row-p idxs)))))
+            (mapcar (lambda (i) (list :e i)) (seq-filter #'drgnx-agent-panel--row-p idxs)))
+          (drgnx-agent-panel-composer-keys)))
 
 (defun drgnx-agent-panel--reconcile ()
   "Tell the view which rows appeared or went: new keys go in after the key before them, none is drawn again."
@@ -213,7 +224,7 @@ folds under it."
           ((not (equal now "busy")) (setq drgnx-agent-panel--busy-since nil)))
     (drgnx-agent-panel--dirty (list :header) (list :chips))
     (drgnx-agent-panel--reconcile)
-    nil))
+    (drgnx-agent-panel-composer-redraw)))
 
 (defun drgnx-agent-panel--take-entries (pairs &optional from-slice)
   "PAIRS, (INDEX ENTRY) as the hub sends them, are in the transcript: a new entry is appended, a changed one patched.
@@ -431,6 +442,7 @@ FROM-SLICE: they come from a page, which never overwrites an entry the hub sent 
   (drgnx-module-hook 'drgnx-hub-connected-functions panel-resubscribe () (drgnx-agent-panel--resubscribe))
   (drgnx-module-hook 'window-buffer-change-functions panel-windows (frame) (drgnx-agent-panel-sync-windows frame))
   (drgnx-agent-panel-steps-setup)
+  (drgnx-agent-panel-composer-setup)
   (drgnx-agent-panel-sync-windows))
 
 (defun drgnx-agent-panel--teardown ()

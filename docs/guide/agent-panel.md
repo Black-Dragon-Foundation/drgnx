@@ -32,3 +32,16 @@ that is on shows the detail of its steps; `T` flips one, `TAB` opens or folds th
 A step that failed opens by itself. `1`, `2` and `3` are presets: **watch** (titles only), **review** (edits and
 commands open) and **debug** (everything, thinking included). What is open belongs to the chat. `M` makes the current
 choice the default for new panels and saves it in your settings (`drgnx-agent-panel-disclosure`).
+
+## Steering
+
+Under the transcript are the notes waiting for the agent's turn to end, one row each, and the composer.
+
+- `s` writes to the agent. While it works, the message is queued and goes in when the turn ends; **sending never cancels
+  the turn**. In the message, `@` completes a file of the agent's folder and `/` at the start completes one of its
+  commands.
+- `e` edits the queued note at point, `d` takes it out, until it is sent.
+- `p` stops the agent after its current step and holds its queue, `u` resumes it with a plain "continue". `x` stops
+  the turn, after a confirmation line; it also ends after the current step.
+- `C` and the Pair chip next to the composer start pair mode. They are there only when pair mode is.
+- The model and mode chips are read-only here.
