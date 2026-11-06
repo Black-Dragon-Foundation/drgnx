@@ -42,8 +42,8 @@ Only chains in listings already read are joined: a closed folder is never read f
   :type 'boolean :group 'drgnx)
 
 (defface drgnx-explorer-root '((t :inherit bold)) "The root rows." :group 'drgnx)
-(defface drgnx-explorer-directory '((t :inherit default)) "Folder names." :group 'drgnx)
-(defface drgnx-explorer-file '((t :inherit default)) "File names." :group 'drgnx)
+(defface drgnx-explorer-directory '((t :inherit drgnx-ui-text)) "Folder names, in the rows' UI font." :group 'drgnx)
+(defface drgnx-explorer-file '((t :inherit drgnx-ui-text)) "File names, in the rows' UI font." :group 'drgnx)
 (defface drgnx-explorer-guide '((t :inherit shadow)) "Indent guides and chevrons." :group 'drgnx)
 (defface drgnx-explorer-selected '((t :inherit region)) "Rows selected together (multi-select)." :group 'drgnx)
 

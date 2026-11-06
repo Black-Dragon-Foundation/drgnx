@@ -207,6 +207,9 @@ from the buffer's major mode; a density change, a scale change and the buffer's 
 fit the rows again (`drgnx-wb-rows-follow')."
   (add-hook 'jit-lock-functions #'drgnx-wb--rows-face 90 t)
   (jit-lock-mode t)
+  ;; the hover face takes `default' for its foreground, and with it the code font: here the UI face comes first.  No
+  ;; remap of `default', so the other faces' lookups only miss in the alist.
+  (face-remap-add-relative 'drgnx-hover-row 'drgnx-ui-text)
   (setq-local drgnx-wb--selected-overlay nil drgnx-wb--tail-shown nil drgnx-wb--rows-key nil)
   (add-hook 'post-command-hook #'drgnx-wb-selection-sync nil t)
   (unless (memq (current-buffer) drgnx-wb--rows-buffers) (push (current-buffer) drgnx-wb--rows-buffers))
