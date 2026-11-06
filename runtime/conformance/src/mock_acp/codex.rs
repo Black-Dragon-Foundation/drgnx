@@ -30,6 +30,11 @@ pub fn after_turn(sid: &str, turn: u64, prompt_len: usize) -> Vec<(&'static str,
     ]
 }
 
+/// The `tool_call` fields of an edit of PATH: a kind, a title and `locations`; the changes come as `Diff` content.
+pub fn edit_shape(path: &str) -> Value {
+    json!({"title": format!("Edit {path}"), "kind": "edit", "locations": [{"path": path}]})
+}
+
 /// The `tool_call` fields codex-acp sends for WHAT (see the Claude personality): parsed reads and searches are kind
 /// `read`/`search` with a path and no line; a web search is kind `fetch` with `rawInput {query, action}`.  No tool name.
 pub fn tool_shape(what: &str, arg: &str) -> Option<Value> {

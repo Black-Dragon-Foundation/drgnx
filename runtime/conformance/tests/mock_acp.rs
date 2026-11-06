@@ -65,6 +65,29 @@ impl Acp {
                 return m;
             }
             if m.get("method").is_some() && m.get("id").is_some() {
+                // the editor's side of the file calls: read and write what the path names
+                match m["method"].as_str() {
+                    Some("fs/read_text_file") => {
+                        let text = std::fs::read_to_string(m["params"]["path"].as_str().unwrap())
+                            .unwrap_or_default();
+                        self.write(
+                            json!({"jsonrpc": "2.0", "id": m["id"], "result": {"content": text}}),
+                        );
+                        self.seen.push(m);
+                        continue;
+                    }
+                    Some("fs/write_text_file") => {
+                        std::fs::write(
+                            m["params"]["path"].as_str().unwrap(),
+                            m["params"]["content"].as_str().unwrap(),
+                        )
+                        .unwrap();
+                        self.write(json!({"jsonrpc": "2.0", "id": m["id"], "result": null}));
+                        self.seen.push(m);
+                        continue;
+                    }
+                    _ => {}
+                }
                 let answer = if self.allow == "cancelled" {
                     json!({"outcome": "cancelled"})
                 } else {
@@ -492,4 +515,168 @@ fn llm_gets_one_request_per_turn() {
     let _ = llm.kill();
     let _ = llm.wait();
     assert_eq!(n, 2);
+}
+
+/// A session in a fresh directory holding `a.txt`; the agent started as WHO.
+fn editing(who: &str, text: &str) -> (tempfile::TempDir, Acp, String) {
+    let d = dir();
+    std::fs::write(d.path().join("a.txt"), text).unwrap();
+    let mut a = Acp::start(&["--as", who]);
+    a.init();
+    let sid = a.new_session(d.path().to_str().unwrap(), json!({}));
+    (d, a, sid)
+}
+
+/// The `tool_call` and `tool_call_update` payloads, in the order they were sent.
+fn tool_updates(a: &Acp) -> Vec<Value> {
+    a.seen
+        .iter()
+        .map(|m| m["params"]["update"].clone())
+        .filter(|u| u["sessionUpdate"] == "tool_call" || u["sessionUpdate"] == "tool_call_update")
+        .collect()
+}
+
+#[test]
+fn claude_edit_stream_names_the_path_first_then_fills_the_input_then_completes() {
+    let (_d, mut a, sid) = editing("claude", "one\n");
+    a.prompt(&sid, "provider:edit-stream a.txt \"old text\" new");
+    let u = tool_updates(&a);
+    assert_eq!(u.len(), 4);
+    assert_eq!(u[0]["sessionUpdate"], "tool_call");
+    assert_eq!(u[0]["kind"], "edit");
+    assert_eq!(u[0]["status"], "pending");
+    assert_eq!(u[0]["_meta"]["claudeCode"]["toolName"], "Edit");
+    assert_eq!(u[0]["locations"][0]["path"], "a.txt");
+    assert_eq!(u[0]["rawInput"], json!({"file_path": "a.txt"}));
+    assert_eq!(
+        u[1]["rawInput"],
+        json!({"file_path": "a.txt", "old_string": "old text"})
+    );
+    assert_eq!(
+        u[2]["rawInput"],
+        json!({"file_path": "a.txt", "old_string": "old text", "new_string": "new"})
+    );
+    assert_eq!(u[3]["status"], "completed");
+    assert_eq!(u[3]["content"][0]["type"], "diff");
+    assert_eq!(u[3]["content"][0]["oldText"], "old text");
+    assert_eq!(u[3]["content"][0]["newText"], "new");
+    assert_eq!(u[0]["toolCallId"], u[3]["toolCallId"]);
+}
+
+#[test]
+fn pending_edit_asks_with_the_diff_before_the_edit_is_reported() {
+    let (_d, mut a, sid) = editing("claude", "one\n");
+    a.prompt(&sid, "provider:pending-edit a.txt one two");
+    let ask = a
+        .seen
+        .iter()
+        .position(|m| m["method"] == "session/request_permission")
+        .expect("a request");
+    let call = a
+        .seen
+        .iter()
+        .position(|m| m["params"]["update"]["sessionUpdate"] == "tool_call")
+        .expect("the edit");
+    assert!(ask < call);
+    let tc = &a.seen[ask]["params"]["toolCall"];
+    assert_eq!(tc["kind"], "edit");
+    assert_eq!(tc["content"][0]["type"], "diff");
+    assert_eq!(tc["content"][0]["path"], "a.txt");
+    assert_eq!(tc["content"][0]["oldText"], "one");
+    assert_eq!(tc["content"][0]["newText"], "two");
+    assert_eq!(tool_updates(&a).last().unwrap()["status"], "completed");
+    assert!(a.said().contains("permission: allow_once"));
+}
+
+#[test]
+fn a_rejected_pending_edit_is_never_reported() {
+    let (_d, mut a, sid) = editing("codex", "one\n");
+    a.allow = "reject_once";
+    a.prompt(&sid, "provider:pending-edit a.txt one two");
+    assert!(tool_updates(&a).is_empty());
+    assert!(a.said().contains("permission: reject_once"));
+}
+
+#[test]
+fn codex_diff_hunks_sends_one_diff_per_hunk() {
+    let (_d, mut a, sid) = editing("codex", "one\n");
+    a.prompt(&sid, "provider:diff-hunks a.txt a b c d e f");
+    let u = tool_updates(&a);
+    let first = &u[0];
+    assert_eq!(first["kind"], "edit");
+    assert!(first.get("_meta").is_none());
+    let diffs = first["content"].as_array().unwrap();
+    assert_eq!(diffs.len(), 3);
+    for (i, (old, new)) in [("a", "b"), ("c", "d"), ("e", "f")].iter().enumerate() {
+        assert_eq!(diffs[i]["type"], "diff");
+        assert_eq!(diffs[i]["path"], "a.txt");
+        assert_eq!(diffs[i]["oldText"], *old);
+        assert_eq!(diffs[i]["newText"], *new);
+    }
+    assert_eq!(u.last().unwrap()["status"], "completed");
+}
+
+#[test]
+fn gemini_whole_diff_has_no_raw_input_and_writes_through_the_editor() {
+    let (d, mut a, sid) = editing("gemini", "one\n");
+    a.prompt(&sid, "provider:whole-diff a.txt");
+    let u = tool_updates(&a);
+    assert!(u[0].get("rawInput").is_none());
+    assert_eq!(u[0]["kind"], "edit");
+    assert_eq!(u[0]["content"][0]["type"], "diff");
+    assert_eq!(u[0]["content"][0]["oldText"], "one\n");
+    let new = u[0]["content"][0]["newText"].as_str().unwrap();
+    assert!(new.starts_with("one\n") && new.len() > 4);
+    let at = |method: &str| a.seen.iter().position(|m| m["method"] == method).unwrap();
+    assert!(at("fs/read_text_file") < at("fs/write_text_file"));
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("a.txt")).unwrap(),
+        new
+    );
+    assert_eq!(u.last().unwrap()["status"], "completed");
+}
+
+#[test]
+fn native_edit_is_attempted_in_each_personalitys_shape_and_fails() {
+    for (who, tool) in [("claude", Some("Edit")), ("codex", None), ("gemini", None)] {
+        let (d, mut a, sid) = editing(who, "one\n");
+        a.prompt(&sid, "provider:native-edit a.txt");
+        let u = tool_updates(&a);
+        assert_eq!(u.len(), 2, "{who}");
+        assert_eq!(u[0]["kind"], "edit", "{who}");
+        assert_eq!(u[0]["locations"][0]["path"], "a.txt", "{who}");
+        assert_eq!(
+            u[0]["_meta"]["claudeCode"]["toolName"].as_str(),
+            tool,
+            "{who}"
+        );
+        assert_eq!(u[1]["status"], "failed", "{who}");
+        assert_eq!(
+            std::fs::read_to_string(d.path().join("a.txt")).unwrap(),
+            "one\n",
+            "{who}"
+        );
+    }
+}
+
+#[test]
+fn moves_sends_the_cursor_through_n_lines_per_second() {
+    let (_d, mut a, sid) = editing("claude", "one\n");
+    a.prompt(&sid, "moves 20 0.5");
+    let u = tool_updates(&a);
+    let lines: Vec<u64> = u
+        .iter()
+        .filter_map(|x| x["locations"][0]["line"].as_u64())
+        .collect();
+    assert_eq!(lines.len(), 10);
+    assert!(lines.windows(2).all(|w| w[0] < w[1]));
+    assert_eq!(u.last().unwrap()["status"], "completed");
+}
+
+#[test]
+fn the_new_words_leave_the_old_ones_alone() {
+    let (_d, mut a, sid) = editing("claude", "one\n");
+    a.prompt(&sid, "provider:write a.txt");
+    let u = tool_updates(&a);
+    assert_eq!(u[0]["rawInput"]["content"], "written by the mock\n");
 }

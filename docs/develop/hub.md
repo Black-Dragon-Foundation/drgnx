@@ -1460,6 +1460,8 @@ write `command` and `opened` details). The detail is the step's `detail` on `age
 (`runstav::methods::timeline::StepDetail`). The mock agent's `provider:read|grep|web-search|web-fetch|write` words
 send each personality's real shapes. A Claude Code subagent's steps (the `Task` tool's nested calls) keep the
 `Task` call's id as `detail.parent_tool` (`work::subagents`); the mock's `provider:task DESCRIPTION` sends one.
+Edits have their own words (table in `runtime/conformance/src/mock_acp/mod.rs`): `provider:edit-stream`,
+`provider:pending-edit`, `provider:diff-hunks`, `provider:whole-diff`, `provider:native-edit` and `moves N [SECONDS]`.
 
 ### The presence model
 
