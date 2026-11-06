@@ -6,8 +6,9 @@
 ;; With `drgnx-look-theme' at `auto' (the default) the theme is drgnx Dark, Light or High Contrast as the desktop's
 ;; portal says (Nidhogg's `nhwl-settings': `color-scheme', `contrast', `accent-color'), switching when an answer
 ;; comes and when it changes.  The portal is read asynchronously by `nhwl-settings', so the first frame never waits:
-;; until it answers, the theme is Dark.  `auto' acts only while no theme but drgnx's three is on: one loaded any other
-;; way (`load-theme' in config.el, a package, Color Theme) pauses it for the session, with one notice.  With
+;; until it answers, the theme is Dark.  `auto' acts only while no theme it did not load is on: one loaded any other
+;; way (`load-theme' in config.el, a package, Color Theme), drgnx's own three included, pauses it for the session,
+;; with one notice.  With
 ;; `drgnx-look-accent' `system' the accent and focus faces take the portal's accent colour as text for the variant.
 ;; Nothing here prompts or blocks: it runs in the portal's signal handler.  See docs/guide/look.md ("Following the
 ;; desktop").
@@ -55,7 +56,7 @@
 (defvar drgnx-look-follow--on nil "Non-nil while the follower runs.")
 
 (defvar drgnx-look-follow--paused nil
-  "Non-nil once a theme other than drgnx's was enabled by anything but the follower; for the session.")
+  "Non-nil once a theme (drgnx's own included) was enabled by anything but drgnx itself; until the follower is off.")
 
 (defvar drgnx-look-follow--loading nil
   "Non-nil while drgnx itself enables a theme (the follower, Color Theme): that is not a theme from elsewhere.")
@@ -173,9 +174,10 @@ whether the colour scheme was answered (0 is both GNOME's Light and the default)
       (drgnx-look-follow--clear-accent))))
 
 (defun drgnx-look-follow--on-theme (theme &rest _)
-  "`enable-theme-functions': a theme from elsewhere pauses `auto'; the accent follows the variant."
+  "`enable-theme-functions': a theme enabled by anything but drgnx itself (one of drgnx's own three included) is
+chosen and pauses `auto'; the accent follows the variant."
   (when (and (eq drgnx-look-theme 'auto) (not drgnx-look-follow--loading) (not drgnx-look-follow--paused)
-             (not (memq theme drgnx-look-follow--own-themes)) (not (eq theme 'user)))
+             (not (eq theme 'user)))
     (drgnx-look-follow--pause theme))
   (when (eq drgnx-look-theme 'auto) (drgnx-look-follow--apply-accent)))
 
@@ -188,8 +190,12 @@ whether the colour scheme was answered (0 is both GNOME's Light and the default)
   (drgnx-look-follow-apply))
 
 (defun drgnx-look-follow-on ()
-  "Follow the desktop: listen to the portal and to themes, say the migration notice, and switch now."
+  "Follow the desktop: listen to the portal and to themes, say the migration notice, and switch now.  A theme already
+on was chosen before ui/look's setup (`load-theme' in config.el, one of drgnx's three included: ui/look's teardown
+takes the themes drgnx loaded away), so `auto' starts paused."
   (setq drgnx-look-follow--on t)
+  (when-let* (((eq drgnx-look-theme 'auto)) (theme (car (drgnx-look-follow--themes))))
+    (drgnx-look-follow--pause theme))
   (add-hook 'enable-theme-functions #'drgnx-look-follow--on-theme)
   (add-hook 'nhwl-settings-changed-functions #'drgnx-look-follow--on-setting)
   (add-hook 'ns-system-appearance-change-functions #'drgnx-look-follow--on-ns)
@@ -197,8 +203,9 @@ whether the colour scheme was answered (0 is both GNOME's Light and the default)
   (drgnx-look-follow-apply))
 
 (defun drgnx-look-follow-off ()
-  "Undo `drgnx-look-follow-on': the listeners off, the accent back to the theme's.  The theme stays."
-  (setq drgnx-look-follow--on nil)
+  "Undo `drgnx-look-follow-on': the listeners off, the accent back to the theme's, not paused any more.  The theme
+stays."
+  (setq drgnx-look-follow--on nil drgnx-look-follow--paused nil)
   (remove-hook 'enable-theme-functions #'drgnx-look-follow--on-theme)
   (remove-hook 'nhwl-settings-changed-functions #'drgnx-look-follow--on-setting)
   (remove-hook 'ns-system-appearance-change-functions #'drgnx-look-follow--on-ns)

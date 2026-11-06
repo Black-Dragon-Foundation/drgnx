@@ -31,6 +31,7 @@
 (defun look-follow-orders-test--step (_st ev)
   (pcase ev
     (`(config-load-theme) (load-theme 'doom-one-fixture t))
+    (`(config-load-own-theme) (load-theme 'drgnx-light t))
     (`(module-setup) (drgnx-look-follow-on))
     (`(setting-change) (drgnx-look-follow-apply))
     (`(,(and kind (or 'portal-color-scheme 'portal-contrast 'portal-accent)) ,value)
@@ -78,6 +79,24 @@
                    (cons 'config '((config-load-theme))))
     :init #'look-follow-orders-test--init :step #'look-follow-orders-test--step
     :check #'look-follow-orders-test--check-chosen)))
+
+(defun look-follow-orders-test--check-chosen-own (_st _order)
+  (cond ((not (memq 'drgnx-light custom-enabled-themes)) "the user's drgnx-light was replaced")
+        ((not drgnx-look-follow--paused) "the follower is not paused")))
+
+(ert-deftest drgnx-look-follow/never-replaces-a-chosen-drgnx-theme ()
+  "Pattern A: one of drgnx's own themes loaded in config.el is chosen too: in every order it stays enabled and the
+follower is paused, whatever the desktop says (here Dark, against the user's Light)."
+  (look-follow-orders-test--fake
+   (drgnx-test-every-order
+    :kinds '(config-load-own-theme module-setup portal-color-scheme portal-contrast setting-change)
+    :sources (list (cons 'setup '((module-setup)))
+                   (cons 'scheme '((portal-color-scheme 1)))
+                   (cons 'contrast '((portal-contrast 1) (portal-contrast 0)))
+                   (cons 'setting '((setting-change)))
+                   (cons 'config '((config-load-own-theme))))
+    :init #'look-follow-orders-test--init :step #'look-follow-orders-test--step
+    :check #'look-follow-orders-test--check-chosen-own)))
 
 (ert-deftest drgnx-look-follow/without-a-chosen-theme-the-pick-wins ()
   "Pattern A: in every order without the user's theme, the enabled theme is the pick for the portal's last values."

@@ -47,9 +47,9 @@ its settings portal; on macOS, the system appearance).
 
 The portal is read in the background and never waited for, so the first frame is drawn at once in Dark and the theme
 switches when the answer comes, and again whenever you change the desktop's setting. A theme you choose yourself
-(Color Theme, `load-theme` in `config.el`, a package) switches `auto` off for the session, and one notice says so
-("Theme follows the desktop: paused while modus-vivendi is on"); drgnx never replaces it. To keep one theme, pick it
-with Color Theme; set `drgnx-look-theme` to `nil` to keep Emacs's own colours.
+(Color Theme, `load-theme` in `config.el`, a package), drgnx's own three included, switches `auto` off for the
+session, and one notice says so ("Theme follows the desktop: paused while modus-vivendi is on"); drgnx never replaces
+it. To keep one theme, pick it with Color Theme; set `drgnx-look-theme` to `nil` to keep Emacs's own colours.
 
 The first time drgnx starts with `auto` because your `settings.el` named no theme, one notice says "drgnx now has its
 own themes; Color Theme picks another". It is shown once.

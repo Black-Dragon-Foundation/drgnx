@@ -111,6 +111,8 @@ including nil, gets none and loads no theme of its own."
   (let ((look-follow-test--entry nil) (look-follow-test--seen nil))
     (look-follow-test--with '(:scheme 1 :contrast 0 :accent nil :answered t)
       (drgnx-look-follow-on) (drgnx-look-follow-off)
+      ;; the next start: ui/look's teardown took the theme the follower loaded away
+      (mapc #'disable-theme custom-enabled-themes)
       (drgnx-look-follow-on)
       (should (equal look-follow-test--notices '(look-themes)))
       (should look-follow-test--seen)))
