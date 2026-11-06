@@ -307,6 +307,19 @@
       (skip-unless yml)
       (should-not (string-search "DRGNX_TEST_TIME_FACTOR" yml)))))
 
+(ert-deftest drgnx-ci/macos-jobs-select-the-git-the-hub-trusts-before-their-tests ()
+  ;; pattern D: the hub runs only the git of the developer dir xcode-select names and refuses the image's Xcode under
+  ;; /Applications, so without the Command Line Tools no folder is a project and a task cannot be made
+  (dolist (spec '(("drgnx-tiers.yml" "macos" "bin/drgnx test") ("runtime.yml" "macos" "cargo test")))
+    (let ((yml (drgnx-ci-test--yml (nth 0 spec))))
+      (skip-unless yml)
+      (let* ((job (drgnx-ci-test--job yml (nth 1 spec)))
+             (select (string-search "sudo xcode-select -s /Library/Developer/CommandLineTools" job))
+             (tests (string-search (nth 2 spec) job)))
+        (should select)
+        (should tests)
+        (should (< select tests))))))
+
 (defun drgnx-ci-test--workflows-and-actions (workflows)
   "The text of each of WORKFLOWS and of every local action."
   (append (mapcar #'drgnx-ci-test--yml workflows) (mapcar #'drgnx-ci-test--action drgnx-ci-test--actions)))
