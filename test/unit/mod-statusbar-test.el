@@ -333,9 +333,10 @@ active (`drgnx-statusbar-test--epochs')."
 (ert-deftest drgnx-statusbar/only-files-code-and-text-get-the-bar ()
   (drgnx-statusbar-test--with
     (let ((stock (default-value 'mode-line-format)))
-      ;; a special buffer (Magit, Dired, help, Info, the agent pane...) keeps the stock mode line
+      ;; a special buffer (Magit, help...) gets the bar of `drgnx-statusbar-other', not the stock mode line; any other
+      ;; buffer that is not a file (Dired, Info, the agent pane...) keeps it
       (drgnx-statusbar-test--in-buffer #'special-mode
-        (should (equal (drgnx-statusbar-mode-line) stock)))
+        (should-not (equal (drgnx-statusbar-mode-line) stock)))
       ;; code and text get the bar; so does any buffer that visits a file
       (dolist (mode '(emacs-lisp-mode text-mode conf-mode))
         (drgnx-statusbar-test--in-buffer mode
@@ -1141,7 +1142,7 @@ names), again only when the cache learns of a root or the buffer's file changes.
               (progn (drgnx-statusbar--compilation-finished b "exited abnormally with code 1\n")
                      (should (equal (drgnx-statusbar-test--seg 'tests) "× tests 2 failed"))
                      (let ((s (funcall (plist-get (gethash 'tests drgnx-statusbar--segments) :fn))))
-                       (should (eq (get-text-property 0 'face s) 'error))))
+                       (should (eq (get-text-property 0 'face s) 'drgnx-status-fail))))
             (kill-buffer b)))
         ;; bin/drgnx test --ui's line
         (let ((b (drgnx-statusbar-test--compilation "bin/drgnx test --ui" "ui ERT: 25/27 passed")))
@@ -1617,12 +1618,16 @@ was built once; no other package's entry yet."
       (should (eq (drgnx-statusbar--bar w width nil) (drgnx-statusbar-mode-line)))
       (should (= 0 (drgnx-memo-fixture-alloc (lambda () (drgnx-statusbar--bar w width nil))
                                              'drgnx-statusbar--bar 'drgnx-statusbar--misc 'drgnx-statusbar--misc-entries
-                                             'drgnx-statusbar--selected-p 'drgnx-statusbar--which-func)))
+                                             'drgnx-statusbar--selected-p 'drgnx-statusbar--which-func
+                                             'drgnx-statusbar--layout-key 'drgnx-look-density-value
+                                             'drgnx-statusbar--position-key 'drgnx-statusbar--position-text
+                                             'drgnx-statusbar--toasts-waiting 'drgnx-notice-toast-more-count)))
       (should (= drgnx-statusbar-test--builds 1)))))
 
 (ert-deftest drgnx-statusbar/the-key-is-epochs-and-plain-values ()
-  "The memo's keys call no helper of the bar but the window's selection, which-function's cached name and the text
-of other packages' entries; the rest are the six epochs and plain values."
+  "The memo's keys call no helper of the bar but the window's selection, which-function's cached name, the text
+of other packages' entries, the shown position (its own memo), the waiting toasts' count and the layout; the rest are
+the six epochs and plain values."
   (let ((keys (drgnx-memo--def-keys (get 'statusbar-bar 'drgnx-memo--def))) (helpers nil) (epochs nil))
     (cl-labels ((walk (f)
                   (when (consp f)
@@ -1632,9 +1637,13 @@ of other packages' entries; the rest are the six epochs and plain values."
                     (mapc #'walk (cdr f)))))
       (mapc #'walk keys))
     (should (equal (sort (delete-dups helpers) #'string<)
-                   '(drgnx-statusbar--misc drgnx-statusbar--selected-p drgnx-statusbar--which-func)))
+                   '(drgnx-statusbar--layout-key drgnx-statusbar--misc drgnx-statusbar--position-key
+                                                 drgnx-statusbar--selected-p drgnx-statusbar--toasts-waiting
+                                                 drgnx-statusbar--which-func)))
     (should (equal (sort epochs #'string<) '(buffer-look eglot flymake git misc-info statusbar)))
-    (should (= 22 (length keys)))))                     ; 6 epochs, 8 values of the window, 7 hot plain values, the notice tick
+    ;; 6 epochs, 8 values of the window (the shown position, not the point), 7 hot plain values, the notice tick,
+    ;; the waiting toasts, the layout key
+    (should (= 24 (length keys)))))
 
 (ert-deftest drgnx-statusbar/memoised-on-the-notice-tick ()
   "A change of the notice model builds the bar again; nothing else of it does."

@@ -1,0 +1,59 @@
+{"scenario": "system/a-forecast-before-dispatch", "requires": ["v1", "test-hooks"], "doc": "A forecast before dispatch, and records that match it after, on mocks. Four finished implement tasks on mock-claude are in the store (under five, so the class is still the prior's). A two-task plan, one task on a subscription Claude mock (implement) and one on an API-key profile through the gateway with a provider price (docs), is proposed: its card carries a range in tokens and never 0.00, its forecast has a dollar line (the gateway's price) and an estimate line (Claude's), both tasks come from the prior, and no worker exists before the OK. The OK runs it to the end (each task edits its own file, commits and completes; a Gemini reviewer passes both); the gateway task's requests go through the gateway as two priced requests (the stand-in for its agent's own). Then the records agree: each task's and the plan's rollup tokens equal the step table summed in SQL; the plan's usd-est equals its steps' cost and what budget/get booked for the plan; the gateway task's usd equals its spend rows (0.6) and what spend answers. forecast/accuracy has a row for each role, and a second proposal of the plan forecasts the implement task from a class of five (the four plus this run's), no longer the prior: five implement tasks on mock-claude, at the profile level (the reviewer's steps count on the task, but its sample keeps the worker's profile). Waits are polls on a condition (a job's status, the accuracy rows) with a deadline, never a quiet period."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/v1/messages", "body": "{\"id\": \"msg-1\", \"type\": \"message\", \"content\": [], \"usage\": {\"input_tokens\": 200, \"output_tokens\": 50}}"}]}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && printf 'a\\n' > a.txt && printf 'b\\n' > b.txt && git add a.txt b.txt && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/w.txt\" \"--log\" \"$ROOT/w.log\")) (\"mock-gw\" :ai claude-anthropic :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/g.txt\" \"--log\" \"$ROOT/g.log\")) (\"mock-reviewer\" :provider gemini :command (\"$MOCK\" \"acp\" \"--as\" \"gemini\" \"--script\" \"$ROOT/r.txt\" \"--log\" \"$ROOT/r.log\")))) (drgnx-agents-routes ((implement \"mock-claude\") (docs \"mock-gw\") (review \"mock-reviewer\"))))\n"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# Mixed\n\n**Repo:** $ROOT/repo\n\n### Task 1: Claude edits a\n\n**Role:** implement\n\nEdit a.txt.\n\n### Task 2: The gateway edits b\n\n**Role:** docs\n\nEdit b.txt.\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "sqlite", "path": "$DATA/work.db", "sql": ["insert into forecast_sample (task, job, project, role, profile, provider, model, brief_bytes, tasks, tokens_in, tokens_out, cache_read, cache_write, turns, active_secs, wall_secs, job_wait_secs, wakes, cold_wakes, context, cost, cost_unit, outcome, last_step, at) values ('H#1','H',NULL,'implement','mock-claude','claude',NULL,1000,1,1000,2000,3000000,100000,5,600,900,0,1,0,200000,NULL,NULL,'done',1,1.0), ('H#2','H',NULL,'implement','mock-claude','claude',NULL,1000,1,1100,2100,3100000,110000,5,620,920,0,1,0,200000,NULL,NULL,'done',2,2.0), ('H#3','H',NULL,'implement','mock-claude','claude',NULL,1000,1,1200,2200,3200000,120000,5,640,940,0,1,0,200000,NULL,NULL,'done',3,3.0), ('H#4','H',NULL,'implement','mock-claude','claude',NULL,1000,1,1300,2300,3300000,130000,5,660,960,0,1,0,200000,NULL,NULL,'done',4,4.0)"]}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-ai-providers", "source": "row", "value": {"anthropic": {"kind": "anthropic", "url": "http://127.0.0.1:$port", "caps": ["chat"], "messages": true, "price": [1000, 2000]}}}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:job", "status": "proposed", "estimate": {"unpriced": [], "forecast": {"cost": {"$contains": [{"unit": "usd", "estimate": false}, {"unit": "usd-est", "estimate": true}]}}}}}, "within_ms": 10000}
+{"do": "sql_expect", "sql": "select count(*) from card where job = '$job' and kind = 'proposal' and state = 'open' and title like '%tokens%' and title not like '%0.00%'", "rows": [[1]]}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "forecast/get", "params": {"job": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"tasks": [{"n": 1, "role": "implement", "basis": {"level": "prior", "n": 0}}, {"n": 2, "role": "docs", "basis": {"level": "prior", "n": 0}}]}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/list"}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"sessions": []}}, "within_ms": 5000}
+{"do": "write_file", "path": "$ROOT/w.txt", "text": "tool:edit a.txt\\ncommit claude\\ncall:complete_task {\"task\": \"$job#1\", \"seen_version\": 0}\n"}
+{"do": "write_file", "path": "$ROOT/g.txt", "text": "tool:edit b.txt\\ncommit gateway\\ncall:complete_task {\"task\": \"$job#2\", \"seen_version\": 0}\n"}
+{"do": "write_file", "path": "$ROOT/r.txt", "text": "say **VERDICT: pass**\n"}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "job/approve", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"id": "$job", "status": "running"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "gateway/register", "params": {"chain": [["anthropic", null]], "job": "$job", "task": "$job#2", "agent": "a1", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"token": "$capture:tok"}}}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"gateway": {"port": "$capture:gw"}}}}
+{"do": "http", "conn": "g", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}"}
+{"do": "expect_http", "conn": "g", "status": 200, "body_json": {"id": "msg-1"}}
+{"do": "expect", "conn": "e", "json": {"event": "request", "data": {"agent": "a1", "job": "$job", "task": "$job#2", "status": 200, "cost": 0.3}}, "within_ms": 10000}
+{"do": "http", "conn": "g2", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": [{\"role\": \"user\", \"content\": \"again\"}]}"}
+{"do": "expect_http", "conn": "g2", "status": 200, "body_json": {"id": "msg-1"}}
+{"do": "expect", "conn": "e", "json": {"event": "request", "data": {"agent": "a1", "job": "$job", "task": "$job#2", "status": 200, "cost": 0.3}}, "within_ms": 10000}
+{"do": "poll", "conn": "c", "json": {"id": 8, "method": "job/status", "params": {"id": "$job"}}, "expect": {"id": 8, "result": {"id": "$job", "status": "done", "tasks": [{"n": 1, "status": "done"}, {"n": 2, "status": "done"}]}}, "within_ms": 180000, "every_ms": 500}
+{"do": "send", "conn": "c", "json": {"id": 9, "method": "timeline/get", "params": {"scope": "task", "id": "$job#1", "rollup": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 9, "result": {"rollup": {"tokens": {"in": "$capture:t1in", "out": "$capture:t1out"}}}}}
+{"do": "sql_expect", "sql": "select sum(tokens_in) = $t1in, sum(tokens_out) = $t1out, sum(tokens_in) > 0 from step where task = '$job#1'", "rows": [[1, 1, 1]]}
+{"do": "send", "conn": "c", "json": {"id": 10, "method": "timeline/get", "params": {"scope": "task", "id": "$job#2", "rollup": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 10, "result": {"rollup": {"tokens": {"in": "$capture:t2in"}, "cost": {"$contains": [{"unit": "usd", "amount": "$capture:t2usd"}]}}}}}
+{"do": "sql_expect", "sql": "select (select sum(tokens_in) from step where task = '$job#2') = $t2in, (select abs(sum(cost) - $t2usd) < 0.000001 from spend where task = '$job#2'), (select round(sum(cost), 6) from spend where task = '$job#2')", "rows": [[1, 1, 0.6]]}
+{"do": "send", "conn": "c", "json": {"id": 11, "method": "spend", "params": {"task": "$job#2"}}}
+{"do": "expect", "conn": "c", "json": {"id": 11, "result": {"input": 400, "output": 100, "requests": 2}}}
+{"do": "send", "conn": "c", "json": {"id": 12, "method": "timeline/get", "params": {"scope": "plan", "id": "plan:$ROOT/plan.md", "rollup": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 12, "result": {"rollup": {"tokens": {"in": "$capture:pin", "out": "$capture:pout"}, "cost": {"$contains": [{"unit": "usd-est", "amount": "$capture:pest"}, {"unit": "usd", "amount": "$capture:pusd"}]}}}}}
+{"do": "sql_expect", "sql": "select sum(tokens_in) = $pin, sum(tokens_out) = $pout, abs(sum(case when cost_unit = 'usd-est' then cost end) - $pest) < 0.000001, abs($pusd - 0.6) < 0.000001 from step where plan = 'plan:$ROOT/plan.md'", "rows": [[1, 1, 1, 1]]}
+{"do": "send", "conn": "c", "json": {"id": 13, "method": "budget/get", "params": {"scope": {"plan": "plan:$ROOT/plan.md"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 13, "result": {"spent": {"$contains": [{"unit": "usd-est", "amount": "$capture:best"}]}}}}
+{"do": "sql_expect", "sql": "select abs($best - $pest) < 0.000001, $best > 0", "rows": [[1, 1]]}
+{"do": "poll", "conn": "c", "json": {"id": 14, "method": "forecast/accuracy", "params": {}}, "expect": {"id": 14, "result": {"rows": {"$contains": [{"role": "implement", "profile": "mock-claude", "n": "$number"}, {"role": "docs", "profile": "mock-gw", "n": "$number"}]}}}, "within_ms": 60000, "every_ms": 500}
+{"do": "sql_expect", "sql": "select count(*) from forecast_sample where job = '$job'", "rows": [[2]]}
+{"do": "send", "conn": "c", "json": {"id": 15, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 15, "result": {"id": "$capture:job2", "status": "proposed"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 16, "method": "forecast/get", "params": {"job": "$job2"}}}
+{"do": "expect", "conn": "c", "json": {"id": 16, "result": {"tasks": [{"n": 1, "role": "implement", "basis": {"level": "profile", "n": 5, "other_model": false, "label": "5 implement tasks on mock-claude"}}, {"n": 2}]}}, "within_ms": 10000}

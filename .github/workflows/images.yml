@@ -3,18 +3,16 @@
 # (drgnx-base-{test,gui,tty}, test/container/base/), the Rust job's (Containerfile.rust) and bubblewrap for the escape suite's
 # runner jobs (.github/ci/bwrap, one per architecture). Each is tagged with test/container/image-tag.sh: a hash of the
 # Containerfile and every file it copies. CI looks the tag of its checkout up (.github/ci/ghcr.sh ref) and pulls that
-# digest, else builds the image itself. Published only by `main` (a push that changes their inputs, the weekly
-# rebuild) and this repository's manual runs, never by a pull request or a ci/* push: a run whose inputs have no image
-# yet builds its own and pushes nothing. A push or a manual run builds only the tags GHCR lacks; the weekly run
-# rebuilds every one, so distribution updates arrive (each run pins the digest it looked up). No gate: it makes a
-# cache, not a verdict (a job without its image builds it), and its paths filter means most pushes never run it.
-# docs/develop/ci.md
+# digest, else builds the image itself. ci.yml and gui.yml call this first (their `images` job, which the jobs on
+# images wait for) on every push and every pull request of this repository, so a round whose inputs changed builds
+# each missing tag once and every job of it pulls them; a fork's pull request never calls it (its token cannot push)
+# and its jobs build their own image and push nothing. A call or a manual run builds only the tags GHCR lacks; the
+# weekly run of this workflow itself rebuilds every one, so distribution updates arrive (each job pins the digest it
+# looked up). docs/develop/ci.md
 name: Test images
 
 on:
-  push:
-    branches: [main]
-    paths: ["test/container/**", ".github/ci/bwrap/**", ".github/workflows/images.yml"]
+  workflow_call:
   schedule:
     - cron: "41 2 * * 1"
   workflow_dispatch:
@@ -23,9 +21,10 @@ permissions:
   contents: read
   packages: write
 
-# one run at a time per ref, none cancelled
+# one run at a time per calling workflow and ref, none cancelled (a group shared by ci.yml's and gui.yml's calls would
+# cancel a waiting one)
 concurrency:
-  group: images-${{ github.ref }}
+  group: images-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -48,6 +47,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
       - name: Build and push ghcr.io/black-dragon-foundation/${{ matrix.name }}
         env:
@@ -55,12 +55,13 @@ jobs:
           ACTOR: ${{ github.actor }}
           NAME: ${{ matrix.name }}
           FILE: ${{ matrix.file }}
-          EVENT: ${{ github.event_name }}
+          # the weekly rebuild is this workflow's own schedule, not a caller's nightly
+          REBUILD: ${{ github.workflow == 'Test images' && github.event_name == 'schedule' }}
           SOURCE: ${{ github.server_url }}/${{ github.repository }}
         run: |
           image="ghcr.io/black-dragon-foundation/$NAME"
           tag="$(bash test/container/image-tag.sh "$FILE")"
-          if [ "$EVENT" != schedule ] && [ -n "$(bash .github/ci/ghcr.sh ref "$NAME" "$tag")" ]; then
+          if [ "$REBUILD" != true ] && [ -n "$(bash .github/ci/ghcr.sh ref "$NAME" "$tag")" ]; then
             echo "$image:$tag is on GHCR already"; exit 0
           fi
           printf '%s' "$TOKEN" | podman login ghcr.io -u "$ACTOR" --password-stdin
@@ -101,6 +102,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
       - name: Build and push ghcr.io/black-dragon-foundation/${{ matrix.name }}
         env:
@@ -111,14 +113,21 @@ jobs:
           BASE_NAME: ${{ matrix.base-name }}
           BASE_FILE: ${{ matrix.base-file }}
           ARCH: ${{ matrix.arch }}
-          EVENT: ${{ github.event_name }}
+          REBUILD: ${{ github.workflow == 'Test images' && github.event_name == 'schedule' }}
           SOURCE: ${{ github.server_url }}/${{ github.repository }}
           REF: ${{ github.ref }}
         run: |
           image="ghcr.io/black-dragon-foundation/$NAME"
           tag="$(bash test/container/image-tag.sh "$FILE")${ARCH:+-$ARCH}"
-          if [ "$EVENT" != schedule ] && [ -n "$(bash .github/ci/ghcr.sh ref "$NAME" "$tag")" ]; then
-            echo "$image:$tag is on GHCR already"; exit 0
+          case "$NAME" in drgnx-test|drgnx-test-gui|drgnx-test-tty) moving=$REF ;; *) moving= ;; esac
+          if [ "$REBUILD" != true ] && have="$(bash .github/ci/ghcr.sh ref "$NAME" "$tag")" && [ -n "$have" ]; then
+            echo "$image:$tag is on GHCR already"
+            # main still moves `f45` to it (a pull request's round built it before main fast-forwarded there)
+            if [ "$moving" = refs/heads/main ]; then
+              printf '%s' "$TOKEN" | podman login ghcr.io -u "$ACTOR" --password-stdin
+              podman pull -q "$have" >/dev/null; podman tag "$have" "$image:f45"; podman push "$image:f45"
+            fi
+            exit 0
           fi
           printf '%s' "$TOKEN" | podman login ghcr.io -u "$ACTOR" --password-stdin
           # an image on a base builds FROM the base GHCR holds for this checkout's base tag (the `bases` job pushed it)
@@ -132,6 +141,4 @@ jobs:
             -t "$image:$tag" -f "$FILE" "$(dirname "$FILE")"
           podman push "$image:$tag"
           # the moving name of the test images, for a local `DRGNX_TEST_IMAGE=…:f45` (main only)
-          case "$NAME" in drgnx-test|drgnx-test-gui|drgnx-test-tty)
-            if [ "$REF" = refs/heads/main ]; then podman tag "$image:$tag" "$image:f45"; podman push "$image:f45"; fi ;;
-          esac
+          if [ "$moving" = refs/heads/main ]; then podman tag "$image:$tag" "$image:f45"; podman push "$image:f45"; fi

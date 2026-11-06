@@ -11,7 +11,7 @@
 
 #[cfg(test)]
 pub(crate) mod attach_tests;
-mod turn_core;
+pub(crate) mod turn_core;
 
 use super::launch;
 use super::lock as plock;
@@ -779,6 +779,11 @@ pub struct Session {
     asks: crate::work::asks::AskTx,
     /// Where its conclusions' tool steps go ([`crate::work::conclusions`]).
     stamps: Arc<crate::work::conclusions::Stamps>,
+    /// A planning session's turn ends go to Say it ([`crate::say`]).
+    say: crate::say::SayTx,
+    /// The projects' edit histories and the hub's state folder they live under: every write the hub serves for the
+    /// agent is recorded there (none: the hub has no state folder).
+    history: Option<(Arc<crate::history::wire::Hubs>, PathBuf)>,
 }
 
 /// What `Conn::prompt` answered for a turn.
@@ -1981,6 +1986,11 @@ fn assemble(
         done,
         asks: front.core.asks.handle(),
         stamps: front.core.stamps.clone(),
+        say: front.core.say.handle(),
+        history: front
+            .dirs
+            .get()
+            .map(|d| (front.core.history.clone(), d.hub.clone())),
     });
     (s, done_rx)
 }
@@ -3799,8 +3809,9 @@ impl Session {
         self.perform(fx);
     }
 
-    /// Its new conversation is live (a rewind's): TOLD first, then the queue as the swap kept it.
-    fn reattach(self: &Arc<Self>, told: Option<String>) {
+    /// Its new conversation is live (a rewind's): TOLD first, then the queue as the swap kept it.  Also a revert's
+    /// that stopped before anything changed: the same conversation goes on.
+    pub(crate) fn reattach(self: &Arc<Self>, told: Option<String>) {
         let fx = lock(&self.state).turn_step(TurnEvent::Reattach { told });
         self.perform(fx);
     }
@@ -3835,9 +3846,51 @@ impl Session {
         let path = req.get("path").and_then(Value::as_str).unwrap_or("");
         let content = req.get("content").and_then(Value::as_str).unwrap_or("");
         let real = self.fence().check(path, true)?;
+        self.record_write(&real, content).await;
         tokio::fs::write(&real, content)
             .await
             .map_err(|e| format!("{path}: {e}"))
+    }
+
+    /// The agent's write of CONTENT to REAL (a path the fence allowed), recorded in its project's history before the
+    /// file is written, so the watcher's event about it finds the version known: operations by the agent's peer on its
+    /// worktree's branch, one `agent_step` record caused by this session.  A folder that is no git worktree, a path
+    /// outside it (a brainstorm's document) or a history that fails leave the write as it is: best effort.
+    async fn record_write(&self, real: &Path, content: &str) {
+        let Some((hubs, state)) = &self.history else {
+            return;
+        };
+        let Some(rel) = real
+            .strip_prefix(resolve(&self.cwd))
+            .ok()
+            .and_then(|r| r.to_str())
+            .filter(|r| !r.is_empty())
+            .map(str::to_owned)
+        else {
+            return;
+        };
+        let Ok((hub, tree)) = hubs.of_tree(state, &self.cwd) else {
+            return;
+        };
+        let cause = verdandi::Cause {
+            session: Some(self.id.clone()),
+            ..Default::default()
+        };
+        let (sid, bytes, now) = (
+            self.id.clone(),
+            content.as_bytes().to_vec(),
+            crate::clock::wall_secs(),
+        );
+        let r = crate::clock::blocking(move || {
+            hub.on_agent_write(&tree, &rel, &bytes, &sid, cause, now)
+        })
+        .await;
+        if let Ok(Err(e)) = r {
+            tracing::info!(
+                sid = self.id,
+                "the agent's write is not in the history: {e}"
+            );
+        }
     }
 
     /// Cancel the turn and end the process group.
@@ -4030,6 +4083,9 @@ impl Session {
             let stepped = st.turn_step(ev);
             (stepped, st.core.ending())
         };
+        // a planning session's answer (empty when the turn failed) goes to Say it; any other chat pays one lookup
+        self.say
+            .turn_ended(&self.id, message.as_deref().unwrap_or(""));
         if let Some(m) = message.filter(|m| {
             (m.contains("drgnx-report") || m.contains("drgnx-conclusion")) && self.task.is_some()
         }) {
@@ -4258,6 +4314,8 @@ pub async fn send(f: &Front, c: &Caller, p: SendParams) -> Result<bool, Error> {
 }
 
 pub async fn stop(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
+    // a planning session's planning stops with it (Say it)
+    f.core.say.stopped(p.id.as_str());
     // a turn running is cancelled (the session stays); an idle or starting session is ended: its token and socket go
     let ends = f
         .core
@@ -4318,6 +4376,7 @@ pub fn pause(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
 }
 
 pub async fn kill(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
+    f.core.say.stopped(p.id.as_str());
     let r = f.core.agents.kill(p.id.as_str()).await;
     if r.is_ok() {
         gateway_gone(f, p.id.as_str()).await;

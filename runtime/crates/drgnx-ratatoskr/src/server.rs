@@ -255,6 +255,8 @@ pub async fn run(args: ServeArgs) -> Exit {
     crate::clock::spawn("machines:run", crate::work::machines::run(front.clone()));
     // the sessions' writes and starts link to the asks behind them
     crate::clock::spawn("asks:run", crate::work::asks::run(front.clone()));
+    // a planning session's turn ends, the user's revisions and ends, through each session's order
+    crate::clock::spawn("say:run", crate::say::run(front.clone()));
     // finished tasks, including part 1's history, become forecast samples
     {
         let f = front.clone();

@@ -148,8 +148,8 @@ sideways to the nearest column that has cards, at the same height or the last ca
 (defvar-local drgnx-work-board--plans nil "The plans the board is scoped to; nil: every task.")
 (defvar-local drgnx-work-board--gen 0 "The refresh in flight; an answer to an older one is dropped.")
 
-(defface drgnx-work-bar '((t :inherit highlight)) "The done part of a card's progress bar." :group 'drgnx-work-space)
-(defface drgnx-work-bar-rest '((t :inherit secondary-selection)) "The rest of a card's progress bar."
+(defface drgnx-work-bar '((t :inherit drgnx-selected)) "The done part of a card's progress bar." :group 'drgnx-work-space)
+(defface drgnx-work-bar-rest '((t :inherit drgnx-selected-quiet)) "The rest of a card's progress bar."
   :group 'drgnx-work-space)
 
 (defvar drgnx-work-board-mode-map

@@ -150,8 +150,21 @@ at most 0.9 of the frame wide and 0.33 high, and not the selected frame."
         (should (eq child (drgnx-popup-float-ui-test--child root)))
         (when (buffer-live-p b) (kill-buffer b))))))
 
+(ert-deftest drgnx-ui-popup-lane-float/an-ended-lane-gives-the-selection-back ()
+  "A popup that selects its window (the calendar: `pop-to-buffer') selects the lane's frame; when the lane ends the
+root's window is selected again, not a hidden frame.  Pattern D (pure)."
+  (drgnx-popup-float-ui-test--with
+    (let* ((editor (selected-window))
+           (w (progn (pop-to-buffer (drgnx-popup-float-ui-test--buffer "*Calendar*")) (selected-window)))
+           (child (window-frame w)))
+      (should (eq (selected-frame) child))
+      (delete-window w)
+      (should-not (frame-visible-p child))
+      (should (eq (selected-frame) root))
+      (should (eq (selected-window) editor)))))
+
 (ert-deftest drgnx-ui-popup-lane-float/frame-reused ()
-  "Two popups in a row, and one after the lane ended, use the same child frame; the root has only that one."
+  "Two popups in a row, and one after the lane ended, use the same child frame; it is the root's only lane frame."
   (drgnx-popup-float-ui-test--with
     (let* ((w1 (display-buffer (drgnx-popup-float-ui-test--buffer "*Calendar*")))
            (child (window-frame w1))
@@ -161,7 +174,9 @@ at most 0.9 of the frame wide and 0.33 high, and not the selected frame."
       (let ((w3 (display-buffer (get-buffer "*Calendar*"))))
         (should (eq child (window-frame w3)))
         (should (frame-visible-p child)))
-      (should (= 1 (length (seq-filter (lambda (f) (eq (frame-parent f) root)) (frame-list))))))))
+      ;; the lane's frames only: the session's other rows leave child frames of their own (corfu's, quick help's)
+      (should (= 1 (length (seq-filter (lambda (f) (and (eq (frame-parent f) root) (frame-parameter f 'drgnx-popup)))
+                                       (frame-list))))))))
 
 (provide 'popup-lane-float-test)
 ;;; popup-lane-float-test.el ends here

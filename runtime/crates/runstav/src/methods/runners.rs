@@ -4,7 +4,7 @@
 
 use super::{Empty, invalid, method};
 use crate::registry::Method;
-use crate::types::{AbsPath, Bounded, Id, null_as_empty};
+use crate::types::{AbsPath, Bounded, Id, KeyName, RunnerKeys, null_as_empty};
 use crate::wire::Error;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -194,6 +194,66 @@ pub struct Removed {
     pub name: String,
 }
 
+/// `runners/keys`' params: the job keys the editor read from the user's store. No `Debug`: it holds keys.
+#[derive(Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct KeysParams {
+    pub keys: RunnerKeys,
+}
+
+/// The names of the job keys the hub holds or needs, never a value: `runners/keys-held`'s answer, and the data of the
+/// event `runners/need-keys`.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct KeyNames {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub names: Vec<KeyName>,
+}
+
+/// `runners/audit`'s params: the rows of one job, one key, or every row.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AuditParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<KeyName>,
+}
+
+/// What an audit row records.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuditKind {
+    /// The hub sent the key to the attempt (what the hub knows for sure).
+    Sent,
+    /// The job read the key, as its runner reports it.
+    Use,
+}
+
+/// One `key_sent` or `key_use` record: the key's name, never its value.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AuditRow {
+    pub kind: AuditKind,
+    pub job: String,
+    pub attempt: u32,
+    pub key: KeyName,
+    pub runner: String,
+    /// Seconds since the epoch.
+    pub at: u64,
+    /// The runner said so; the hub can't check it (every `use` row).
+    #[serde(default)]
+    pub runner_reported: bool,
+}
+
+/// `runners/audit`'s answer, oldest first.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Audit {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub rows: Vec<AuditRow>,
+}
+
 fn check_remove(p: &RemoveParams) -> Result<(), Error> {
     if p.confirm {
         Ok(())
@@ -247,6 +307,21 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: true,
             doc: "a runner removed: our units and containers there stopped, its folder deleted (confirm: true)",
             check: check_remove,
+        ),
+        method!(
+            "runners/keys", RunnersKeys(KeysParams) -> bool,
+            classes: [User], writes: false,
+            doc: "job keys to the hub's memory (never a file), sent to the runners' jobs that name them",
+        ),
+        method!(
+            "runners/keys-held", RunnersKeysHeld(Empty) -> KeyNames,
+            classes: [User], writes: false,
+            doc: "the job keys the hub holds (names only)",
+        ),
+        method!(
+            "runners/audit", RunnersAudit(AuditParams) -> Audit,
+            classes: [User], writes: false,
+            doc: "the keys sent to jobs (key_sent) and their reads as runners report them (key_use): names, jobs, attempts, runners, times",
         ),
     ]
 }

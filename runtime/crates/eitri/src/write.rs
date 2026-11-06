@@ -57,9 +57,86 @@ pub fn write_regular(
     done
 }
 
+/// The parent of `rel`, opened beneath `dir` with `open_beneath` (a link in it is refused), and `rel`'s last name.
+fn parent_of<'r>(
+    dir: BorrowedFd<'_>,
+    rel: &'r Path,
+) -> Result<(crate::Pinned, &'r OsStr), FsError> {
+    checked_rel(rel)?;
+    let raw = rel.as_os_str().as_bytes();
+    let last = raw.rsplit(|b| *b == b'/').next().unwrap_or_default();
+    if last.is_empty() || last == b"." {
+        return Err(invalid("the path names no file"));
+    }
+    let parent = match &raw[..raw.len() - last.len()] {
+        [] => Path::new("."),
+        p => Path::new(OsStr::from_bytes(p)),
+    };
+    Ok((
+        open_beneath(dir, parent, Kind::Dir)?,
+        OsStr::from_bytes(last),
+    ))
+}
+
+/// Removes the leaf `rel` beneath `dir`: every component before it through `open_beneath` (a link there is refused),
+/// the leaf unlinked at the parent's held fd, so a leaf that is a link is removed as a link and what it names is never
+/// touched.  A leaf that is gone already is done; a directory is `NotRegular`.
+pub fn remove_beneath(dir: BorrowedFd<'_>, rel: &Path) -> Result<(), FsError> {
+    let (parent, name) = parent_of(dir, rel)?;
+    match unlinkat(parent.fd.as_fd(), name, AtFlags::empty()) {
+        Ok(()) | Err(Errno::NOENT) => Ok(()),
+        Err(Errno::ISDIR) => Err(FsError::NotRegular),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Makes `rel` beneath `dir` a link holding the bytes `target`, never resolved: the parent through `open_beneath` (a
+/// link in it is refused), the link made at a temporary name with `symlinkat` at the parent's held fd, then
+/// `renameat`ed over `rel`.  An old leaf that is a link or a regular file is replaced, never followed; anything else is
+/// `NotRegular`.  An empty target, or one with a NUL byte, is refused.
+pub fn symlink_beneath(dir: BorrowedFd<'_>, rel: &Path, target: &[u8]) -> Result<(), FsError> {
+    if target.is_empty() || target.contains(&0) {
+        return Err(invalid("a link target that is empty or holds a NUL byte"));
+    }
+    let (parent, name) = parent_of(dir, rel)?;
+    let parent = parent.fd.as_fd();
+    let mut made = None;
+    for _ in 0..16 {
+        let tmp = temp_name();
+        match rustix::fs::symlinkat(OsStr::from_bytes(target), parent, tmp.as_str()) {
+            Ok(()) => {
+                made = Some(tmp);
+                break;
+            }
+            Err(Errno::EXIST) => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    let tmp = made.ok_or_else(|| {
+        FsError::Io(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "no free temporary name",
+        ))
+    })?;
+    let done = replaceable(parent, name)
+        .and_then(|()| renameat(parent, tmp.as_str(), parent, name).map_err(FsError::from));
+    if done.is_err() {
+        let _ = unlinkat(parent, tmp.as_str(), AtFlags::empty());
+    }
+    done
+}
+
+/// A fresh `.eitri-<16 hex>` name.
+fn temp_name() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let mut h = RandomState::new().build_hasher();
+    h.write_u64(COUNTER.fetch_add(1, Ordering::Relaxed));
+    h.write_u32(std::process::id());
+    format!(".eitri-{:016x}", h.finish())
+}
+
 /// `.eitri-<16 hex>`, made with `O_EXCL` (a name that exists, a link included, is never opened: another is tried).
 fn create_temp(parent: BorrowedFd<'_>, mode: u32) -> Result<(String, OwnedFd), FsError> {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
     let flags = OFlags::WRONLY
         | OFlags::CREATE
         | OFlags::EXCL
@@ -67,10 +144,7 @@ fn create_temp(parent: BorrowedFd<'_>, mode: u32) -> Result<(String, OwnedFd), F
         | OFlags::CLOEXEC
         | OFlags::NOCTTY;
     for _ in 0..16 {
-        let mut h = RandomState::new().build_hasher();
-        h.write_u64(COUNTER.fetch_add(1, Ordering::Relaxed));
-        h.write_u32(std::process::id());
-        let name = format!(".eitri-{:016x}", h.finish());
+        let name = temp_name();
         match openat(parent, &name, flags, Mode::from_raw_mode(mode as RawMode)) {
             Ok(fd) => return Ok((name, fd)),
             Err(Errno::EXIST) => continue,
@@ -218,6 +292,75 @@ mod tests {
             assert!(matches!(r, Err(FsError::Io(_))), "{r:?}");
             assert!(fs::read_dir(&ro).unwrap().next().is_none());
         }
+    }
+
+    /// Pattern D. A link planted as the leaf is removed as a link (what it names is left); one planted as a middle
+    /// component is refused, and nothing behind it is touched.
+    #[test]
+    fn remove_beneath_refuses_a_planted_link() {
+        let (root, fd) = root();
+        let outside = tempfile::tempdir().unwrap();
+        let canary = outside.path().join("canary");
+        fs::write(&canary, b"keep").unwrap();
+        fs::write(outside.path().join("f"), b"keep too").unwrap();
+        fs::create_dir(root.path().join("d")).unwrap();
+        fs::write(root.path().join("d/plain"), b"x").unwrap();
+        symlink(&canary, root.path().join("d/leaf")).unwrap();
+        symlink(outside.path(), root.path().join("mid")).unwrap();
+
+        remove_beneath(fd.as_fd(), Path::new("d/plain")).unwrap();
+        assert!(fs::symlink_metadata(root.path().join("d/plain")).is_err());
+        remove_beneath(fd.as_fd(), Path::new("d/leaf")).unwrap();
+        assert!(fs::symlink_metadata(root.path().join("d/leaf")).is_err());
+        assert_eq!(fs::read(&canary).unwrap(), b"keep");
+
+        let r = remove_beneath(fd.as_fd(), Path::new("mid/f"));
+        assert!(matches!(r, Err(FsError::Link { .. })), "{r:?}");
+        assert_eq!(fs::read(outside.path().join("f")).unwrap(), b"keep too");
+        // gone already: done
+        remove_beneath(fd.as_fd(), Path::new("d/plain")).unwrap();
+        let r = remove_beneath(fd.as_fd(), Path::new("../x"));
+        assert!(matches!(r, Err(FsError::Escapes)), "{r:?}");
+    }
+
+    /// Pattern D. A link made over an old leaf that is itself a link replaces it: the old target is never written,
+    /// and the new link holds the bytes given, unresolved.
+    #[test]
+    fn symlink_beneath_never_follows_the_old_leaf() {
+        let (root, fd) = root();
+        let outside = tempfile::tempdir().unwrap();
+        let canary = outside.path().join("canary");
+        fs::write(&canary, b"keep").unwrap();
+        symlink(&canary, root.path().join("l")).unwrap();
+        fs::write(root.path().join("r"), b"regular").unwrap();
+
+        symlink_beneath(fd.as_fd(), Path::new("l"), b"../nowhere/\xffx").unwrap();
+        assert_eq!(
+            fs::read_link(root.path().join("l"))
+                .unwrap()
+                .as_os_str()
+                .as_bytes(),
+            b"../nowhere/\xffx"
+        );
+        assert_eq!(fs::read(&canary).unwrap(), b"keep");
+        symlink_beneath(fd.as_fd(), Path::new("r"), b"l").unwrap();
+        assert!(
+            fs::symlink_metadata(root.path().join("r"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        symlink_beneath(fd.as_fd(), Path::new("new"), b"r").unwrap();
+        assert_eq!(
+            fs::read_link(root.path().join("new")).unwrap(),
+            Path::new("r")
+        );
+        // a link in the parent is refused, and nothing is made behind it
+        symlink(outside.path(), root.path().join("ldir")).unwrap();
+        let r = symlink_beneath(fd.as_fd(), Path::new("ldir/x"), b"y");
+        assert!(matches!(r, Err(FsError::Link { .. })), "{r:?}");
+        assert!(fs::symlink_metadata(outside.path().join("x")).is_err());
+        assert!(temps(root.path()).is_empty() && temps(outside.path()).is_empty());
     }
 
     #[test]

@@ -9,6 +9,7 @@ pub mod agents;
 pub mod config;
 pub mod coord;
 pub mod exec;
+pub mod forecast;
 pub mod gateway;
 pub mod graph;
 pub mod history;
@@ -19,6 +20,7 @@ pub mod mcp;
 pub mod plans;
 pub mod records;
 pub mod runners;
+pub mod say;
 pub mod search;
 pub mod settings;
 pub mod tasks;
@@ -220,6 +222,12 @@ params! {
     BudgetGet(timeline::BudgetGetParams),
     BudgetSet(timeline::BudgetSetParams),
     PaceGet(timeline::PaceParams),
+    ForecastGet(forecast::ForecastParams),
+    ForecastSession(forecast::SessionForecastParams),
+    ForecastAccuracy(forecast::AccuracyParams),
+    SayStart(say::SayStart),
+    SayRevise(say::SayRevise),
+    SayEnd(say::SayById),
     RecordsImport(records::ImportParams),
     RecordsStatus(records::ByPath),
     RecordsProposals(records::ByPath),
@@ -254,8 +262,18 @@ params! {
     HistoryBatch(history::BatchParams),
     HistoryResync(history::ResyncParams),
     HistoryUnregister(history::UnregisterParams),
+    HistoryRevertPreview(history::RevertPreviewParams),
+    HistoryRevertApply(history::RevertApplyParams),
+    HistoryFork(history::ForkParams),
+    HistoryForkDrop(history::ForkDropParams),
+    HistoryCompare(history::CompareParams),
+    HistoryTake(history::TakeParams),
+    HistoryRedo(history::RedoParams),
     RunnersUnbench(runners::ByName),
     RunnersRemove(runners::RemoveParams),
+    RunnersKeys(runners::KeysParams),
+    RunnersKeysHeld(Empty),
+    RunnersAudit(runners::AuditParams),
 }
 
 /// Every method, in no order.
@@ -274,6 +292,8 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(matrix::methods());
     v.extend(plans::methods());
     v.extend(timeline::methods());
+    v.extend(forecast::methods());
+    v.extend(say::methods());
     v.extend(records::methods());
     v.extend(work::methods());
     v.extend(search::methods());

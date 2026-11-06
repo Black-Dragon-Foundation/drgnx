@@ -8,8 +8,10 @@
   "(drgnx-uitest--json (list :edges (format \"%S\" (mapcar (lambda (w) (list (buffer-name (window-buffer w)) (window-pixel-edges w))) (window-list nil 'nomini)))
                              :geometry (format \"%S\" (mapcar #'window-pixel-edges (window-list nil 'nomini)))
                              :minibuffer (if (minibufferp (window-buffer (selected-window))) t :false)
-                             :panel (if (drgnx-wb-area-window 'panel) (buffer-name (window-buffer (drgnx-wb-area-window 'panel))) \"\")))"
-  "Every window's buffer and pixel edges, whether the minibuffer is selected, what the panel shows.")
+                             :panel (if (drgnx-wb-area-window 'panel) (buffer-name (window-buffer (drgnx-wb-area-window 'panel))) \"\")
+                             :shown (if (let ((w (drgnx-popup--window))) (and w (frame-visible-p (window-frame w)))) t :false)))"
+  "Every window's buffer and pixel edges, whether the minibuffer is selected, what the panel shows, whether a popup
+is on screen (in a window of the frame, or under Glitnir in the lane's child frame).")
 
 (defmacro drgnx-live-popup--with (sess &rest body)
   (declare (indent 1))
@@ -40,10 +42,12 @@ BORROWED: while open, no window moved either (the popup is in the panel's window
   (let* ((r (drgnx-ui-call sess drgnx-live-popup--edges)) (before (plist-get r :edges)))
     (drgnx-live-popup--measure sess(list (list :keys open)))
     (let ((open-r (drgnx-ui-call sess drgnx-live-popup--edges)))
-      (should-not (equal before (plist-get open-r :edges)))                 ; it showed
+      (should (eq t (plist-get open-r :shown)))                              ; it showed
       (when borrowed (should (equal (plist-get r :geometry) (plist-get open-r :geometry)))))
     (drgnx-live-popup--measure sess(list (list :keys close)))
-    (should (equal before (plist-get (drgnx-ui-call sess drgnx-live-popup--edges) :edges)))))
+    (let ((after (drgnx-ui-call sess drgnx-live-popup--edges)))
+      (should (eq :false (plist-get after :shown)))
+      (should (equal before (plist-get after :edges))))))
 
 (ert-deftest drgnx-live/transient-leaves-no-trace-with-and-without-the-panel ()
   (drgnx-live-popup--with sess
@@ -67,8 +71,8 @@ BORROWED: while open, no window moved either (the popup is in the panel's window
     (drgnx-live-popup--measure sess(list (list :keys "C-g")))))
 
 (ert-deftest drgnx-live/completions-in-the-panel-are-filled-and-given-back ()
-  ;; The panel open: *Completions* borrows it, has candidates (its body-function ran), and leaving
-  ;; the minibuffer (which restores the window configuration) gives the panel back with its tab row.
+  ;; The panel open: *Completions* borrows it (under Glitnir: shows in the lane's child frame), has candidates (its
+  ;; body-function ran), and leaving the minibuffer ends it and gives the panel back with its tab row.
   (drgnx-live-popup--with sess
     (drgnx-live-popup--measure sess(list (list :keys "C-`")))
     (let ((before (plist-get (drgnx-ui-call sess drgnx-live-popup--edges) :edges))

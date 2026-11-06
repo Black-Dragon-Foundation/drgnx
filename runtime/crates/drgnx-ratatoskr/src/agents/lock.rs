@@ -24,6 +24,10 @@ pub const PROTECTED_RO: [&str; 6] = [
     "mise.toml",
 ];
 
+/// What the hub never writes into an agent's tree and a runner's returned patch never touches, at any depth: the
+/// lock's protected paths (with `.envrc` and `mise.toml`).  Anything under `.git` is refused beside them.
+pub const NEVER_RESTORED: [&str; 6] = PROTECTED_RO;
+
 /// The entries of [`PROTECTED_RO`] that are files (the others are folders): a missing one is created empty to be pinned.
 pub const PROTECTED_FILES: [&str; 2] = [".envrc", "mise.toml"];
 
@@ -112,6 +116,16 @@ fn env_object(env: &[String]) -> Value {
     Value::Object(object)
 }
 
+/// The prompt cache time to live a Claude session is asked for, and its length in seconds.
+pub const LONG_CACHE_TTL: &str = "1h";
+pub const LONG_CACHE_SECS: f64 = 3600.0;
+
+/// Whether a lock asks a Claude session of profile P in ROLE for the long cache: a gateway worker or manager (a chat
+/// keeps the five minutes).  A subscription's main conversation gets the hour from Claude Code itself.
+pub fn gateway_long_cache(p: &AgentProfile, role: Role) -> bool {
+    p.ai.is_some() && matches!(role, Role::Worker | Role::Manager)
+}
+
 /// The launch plan of profile P in ROLE.  `_e` (what the session may do) does not shape a lock: every action goes
 /// through the matrix at the permission seam; a lock only makes the CLI ask.
 pub fn plan(p: &AgentProfile, role: Role, _e: &Effective) -> LaunchPlan {
@@ -128,8 +142,11 @@ pub fn plan(p: &AgentProfile, role: Role, _e: &Effective) -> LaunchPlan {
                 "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".to_string(),
                 "1".to_string(),
             ));
-            if p.ai.is_some() && matches!(role, Role::Worker | Role::Manager) {
-                env.push(("CLAUDE_CODE_PROMPT_CACHE_TTL".to_string(), "1h".to_string()));
+            if gateway_long_cache(p, role) {
+                env.push((
+                    "CLAUDE_CODE_PROMPT_CACHE_TTL".to_string(),
+                    LONG_CACHE_TTL.to_string(),
+                ));
             }
             let mut all: Vec<String> = p.env.clone();
             all.extend(env.iter().map(|(k, v)| format!("{k}={v}")));

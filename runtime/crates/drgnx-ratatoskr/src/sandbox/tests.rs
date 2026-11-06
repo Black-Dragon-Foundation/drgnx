@@ -487,3 +487,47 @@ fn no_browser_without_abi9_or_bwrap_or_program() {
     assert_eq!(none.kind, "program");
     assert_eq!(none.fix, "run drgnx browser install");
 }
+
+/// [D]a one-shot run in a session's tree (a commit) removes the placeholders it made to pin the absent protected
+/// files, and only those: the session's own stubs, made at its launch, stay listed and in place for its sandbox.
+#[test]
+fn a_one_shot_run_removes_only_the_stubs_it_made() {
+    let fx = Fx::new();
+    let (scratch, wt) = (fx.p("scratch"), fx.p("wt"));
+    fs::create_dir_all(&scratch).unwrap();
+    fs::create_dir_all(&wt).unwrap();
+    // the session's launch pinned `.envrc`
+    fs::write(wt.join(".envrc"), "").unwrap();
+    fs::write(
+        stubs_file(&scratch),
+        format!("{}\n", wt.join(".envrc").display()),
+    )
+    .unwrap();
+    let mark = stubs_mark(&scratch);
+    // the one-shot run pinned `mise.toml` and `.claude`
+    let (_, made) = pin_protected(
+        &wt,
+        &[
+            PathBuf::from(".envrc"),
+            PathBuf::from("mise.toml"),
+            PathBuf::from(".claude"),
+        ],
+    )
+    .unwrap();
+    assert_eq!(made, [wt.join("mise.toml"), wt.join(".claude")]);
+    let mut list = fs::read_to_string(stubs_file(&scratch)).unwrap();
+    for p in &made {
+        list.push_str(&format!("{}\n", p.display()));
+    }
+    fs::write(stubs_file(&scratch), list).unwrap();
+    remove_stubs_since(&scratch, &wt, mark);
+    assert!(!wt.join("mise.toml").exists() && !wt.join(".claude").exists());
+    assert!(wt.join(".envrc").is_file(), "the session's own stub stays");
+    assert_eq!(
+        fs::read_to_string(stubs_file(&scratch)).unwrap(),
+        format!("{}\n", wt.join(".envrc").display())
+    );
+    // the session's end removes its own as before
+    remove_stubs(&scratch, &wt);
+    assert!(!wt.join(".envrc").exists());
+}

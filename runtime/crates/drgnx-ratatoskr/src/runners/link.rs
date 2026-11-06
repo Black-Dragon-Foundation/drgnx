@@ -23,6 +23,19 @@ pub const LOST_AFTER: Duration = Duration::from_secs(45);
 /// `None` (the frame is ignored with a notice).
 pub trait Route: Send + Sync {
     fn log_path(&self, runner: &str, r: &JobRef) -> Option<PathBuf>;
+
+    /// Writes BYTES, which start at OFFSET of the runner's log of R, into the hub's copy: the copy's end after it, in
+    /// the runner's offsets; `None` when the frame is ignored. The queue's own redacts a keyed job's log first.
+    fn write_log(
+        &self,
+        runner: &str,
+        r: &JobRef,
+        offset: u64,
+        bytes: &[u8],
+    ) -> Option<std::io::Result<u64>> {
+        let path = self.log_path(runner, r)?;
+        Some(append_at(&path, offset, bytes))
+    }
 }
 
 /// What a session tells the hub.
@@ -204,23 +217,21 @@ async fn read_loop(
                 let _ = events.send(LinkEvent::Bye { runner });
                 return;
             }
-            Frame::Log { r, offset, bytes } => match route.log_path(&runner, &r) {
+            Frame::Log { r, offset, bytes } => match route.write_log(&runner, &r, offset, &bytes) {
                 None => tracing::info!(
                     "runners: {runner}: a log frame about {} attempt {} ({:?}), which the hub never gave it: ignored",
                     r.job,
                     r.attempt,
                     r.nonce
                 ),
-                Some(path) => match append_at(&path, offset, &bytes) {
-                    Ok(upto) => {
-                        let _ = events.send(LinkEvent::Logged {
-                            runner: runner.clone(),
-                            r,
-                            upto,
-                        });
-                    }
-                    Err(e) => tracing::warn!("runners: {runner}: {}: {e}", path.display()),
-                },
+                Some(Ok(upto)) => {
+                    let _ = events.send(LinkEvent::Logged {
+                        runner: runner.clone(),
+                        r,
+                        upto,
+                    });
+                }
+                Some(Err(e)) => tracing::warn!("runners: {runner}: {} log: {e}", r.job),
             },
             frame => {
                 let _ = events.send(LinkEvent::Frame {

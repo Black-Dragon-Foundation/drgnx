@@ -1,5 +1,5 @@
 //! Size, expiry and compaction.  The history is capped ([`DEFAULT_CAP`], 2 GiB per project).  Branches that are set
-//! aside (an undone set, a frozen worktree) expire after [`EXPIRY_SECS`] (90 days) unless pinned.  Over the cap,
+//! aside (an undone set, a frozen worktree, a dropped fork) expire after [`EXPIRY_SECS`] (90 days) unless pinned.  Over the cap,
 //! each document is cut shallow at the oldest live reference: an anchor, or another branch of the document (live,
 //! frozen, or undone) that has not expired.  A record at or before the cut can no longer be reverted, and the revert
 //! says so.  Nothing here reads a clock: `now` is a parameter.
@@ -70,7 +70,7 @@ impl History {
         Ok(())
     }
 
-    /// BRANCH (a worktree that went away) starts its 90 days at AT.
+    /// BRANCH (a worktree that went away, a fork dropped) starts its 90 days at AT.
     pub fn freeze(&mut self, branch: BranchId, at: f64) -> Result<()> {
         let n = self.conn.execute(
             "update branch set frozen_at = ?2 where id = ?1",
@@ -82,13 +82,13 @@ impl History {
         Ok(())
     }
 
-    /// Remove the undone branches and frozen worktrees set aside 90 days or more before NOW, unless pinned, with
-    /// their documents and anchors.  The branches removed.
+    /// Remove the undone branches, frozen worktrees and dropped forks set aside 90 days or more before NOW, unless
+    /// pinned, with their documents and anchors.  The branches removed.
     pub fn expire(&mut self, now: f64) -> Result<Vec<BranchId>> {
         let gone: Vec<BranchId> = {
             let mut st = self.conn.prepare(
                 "select id from branch where frozen_at is not null and frozen_at <= ?1 and pinned = 0 \
-                 and kind in ('undone', 'wt') order by id",
+                 and kind in ('undone', 'wt', 'fork') order by id",
             )?;
             st.query_map([now - EXPIRY_SECS], |r| Ok(BranchId(r.get(0)?)))?
                 .collect::<std::result::Result<Vec<_>, _>>()?

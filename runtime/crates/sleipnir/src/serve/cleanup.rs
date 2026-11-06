@@ -259,6 +259,8 @@ mod tests {
                 unit: Some(format!("run-{job}-1")),
                 admitted: 0,
                 started: Some(0),
+                input_key: String::new(),
+                slot: None,
             },
             state,
             log_len: 0,

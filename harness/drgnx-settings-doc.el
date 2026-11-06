@@ -7,38 +7,36 @@
 ;; from the code.  Regenerate it after declaring or changing one (docs/develop/core.md):
 ;;   emacs --batch -Q -L core -L wb -L harness -L modules/tools -L modules/editor -L modules/ui -l drgnx-settings-doc \
 ;;         --eval '(drgnx-settings-doc-regenerate "docs/reference/settings.md")'
-;; Settings declared in a file are reached by a `(require FEATURE)' entry of `drgnx-settings-doc-sources'; each
-;; port appends its own entry (one line each) and regenerates the reference.
+;; Every file under core/, wb/, modules/ and harness/ with a line that starts `(drgnx-defsetting ' is loaded, so a
+;; setting declared anywhere is in the reference (test/unit/settings-doc-test.el reads the files on its own and fails
+;; on a declared setting the reference lacks).
 
 ;;; Code:
 (require 'cl-lib)
 (require 'subr-x)
+(require 'drgnx-paths)
 (require 'drgnx-file)
 (require 'drgnx-setting)
 
-(defvar drgnx-settings-doc-sources
-  '(
-    ;; one entry per line, appended below by each port
-    (require drgnx-agents)                ; Task 15: drgnx-agents-*
-    (require drgnx-agents-matrix)         ; agent system Task 13: the matrix and the agent limits
-    (require drgnx-ai)                    ; Task 15: drgnx-ai-providers, drgnx-ai-roles
-    (require drgnx-keys)
-    (require drgnx-modules)
-    (require drgnx-session)
-    (require drgnx-look)
-    (require drgnx-large-files)
-    (require drgnx-settings-runtime)      ; drgnx-sandbox-memory-max, -secret-files, -proxy-pinned-addresses, drgnx-search-{model-mirror,builtin,include,exclude,off}
-    (require drgnx-settings-trust)        ; Task 18: drgnx-trust-parents
-    (require drgnx-user-lisp)             ; Task 29: drgnx-user-lisp-files
-    (require drgnx-watchdog))             ; drgnx-speed-watchdog
-  "What declares the settings of the reference: entries `(require FEATURE)'.")
+(defconst drgnx-settings-doc-dirs '("core" "wb" "modules" "harness")
+  "The folders of the checkout whose Lisp files may declare settings.")
+
+(defun drgnx-settings-doc-files ()
+  "Every Lisp file under `drgnx-settings-doc-dirs' with a line that starts `(drgnx-defsetting ', sorted."
+  (let (files)
+    (dolist (dir drgnx-settings-doc-dirs)
+      (dolist (file (directory-files-recursively (expand-file-name dir drgnx-dir) "\\.el\\'"))
+        (with-temp-buffer
+          (insert-file-contents file)
+          (when (re-search-forward "^[ \t]*(drgnx-defsetting[ \t]" nil t) (push file files)))))
+    (sort files #'string<)))
 
 (defun drgnx-settings-doc-load ()
-  "Load what `drgnx-settings-doc-sources' names, so every setting is declared."
-  (dolist (source drgnx-settings-doc-sources)
-    (pcase source
-      (`(require ,feature) (require feature))
-      (_ (error "drgnx-settings-doc: %S is not (require FEATURE)" source)))))
+  "Load every file that declares a setting (`drgnx-settings-doc-files'), so every setting is declared.  A file whose
+feature is already there is not loaded again."
+  (dolist (file (drgnx-settings-doc-files))
+    (unless (featurep (intern (file-name-base file)))
+      (load (file-name-sans-extension file) nil t))))
 
 (defun drgnx-settings-doc--cell (text)
   "TEXT as a table cell: one line, no bare bars."

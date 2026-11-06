@@ -56,7 +56,7 @@
 
 (ert-deftest drgnx-ui-kit/status-faces-inherit ()
   (pcase-dolist (`(,face . ,parent) '((drgnx-status-ok . success) (drgnx-status-info . shadow) (drgnx-status-warn . warning)
-                                      (drgnx-status-fail . error) (drgnx-status-needs-you . error)))
+                                      (drgnx-status-fail . error) (drgnx-status-needs-you . drgnx-status-attention)))
     (should (facep face))
     (should (equal (face-attribute face :inherit nil nil) parent))
     (should-not (cl-some (lambda (a) (stringp (face-attribute face a nil nil))) '(:foreground :background)))))

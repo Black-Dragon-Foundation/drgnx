@@ -8,6 +8,7 @@
 //! - [`text`]: what a document holds: UTF-8 with LF, or the snapshot class.
 //! - [`log`]: the operation log's records, their causes, and the settle rule that groups typing into them.
 //! - [`revert`]: span revert on element ids, the overlaps a user's later edits make, the 3-way check.
+//! - [`pending`]: a revert's pending record (what a crash between its steps needs to finish), and its scope by session.
 
 pub mod anchor;
 pub mod apply;
@@ -16,6 +17,7 @@ pub mod docs;
 pub mod excise;
 pub mod log;
 mod merge;
+pub mod pending;
 pub mod redact;
 pub mod revert;
 #[cfg(test)]
@@ -23,7 +25,7 @@ mod revert_props;
 mod schema;
 pub mod store;
 pub mod text;
-mod threeway;
+pub mod threeway;
 
 pub use anchor::{AnchorId, Blame, FileHunks, LineHunk, Resolved, Side, When};
 pub use apply::{FileDiff, Hunk, HunkRef};
@@ -34,6 +36,12 @@ pub use log::{FlushReason, Settler};
 pub use revert::{FilePreview, Mode, Overlap, OverlapChoice, RevertPreview};
 pub use store::{BranchKind, Cause, DocUpdate, History, Kind, OpRecord, Record};
 pub use text::{Coding, NotText};
+
+/// The 3-way merge of OURS and THEIRS from BASE (`git merge-file`): whether it is clean, and the merged text (with
+/// git's markers when it is not).
+pub fn merge3(base: &str, ours: &str, theirs: &str) -> Result<(bool, String)> {
+    threeway::merge(base, ours, theirs)
+}
 
 use std::fmt;
 use std::path::Path;

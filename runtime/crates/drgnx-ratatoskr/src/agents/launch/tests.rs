@@ -1092,6 +1092,15 @@ fn the_cdp_secret_is_never_in_argv_or_logs() {
         eprintln!("no bubblewrap here: the argv half is the sandbox lane's");
         return;
     };
+    // macOS's one backend is Seatbelt, whatever the tier, and the browser is bubblewrap's alone: the launch is
+    // refused, and its refusal (a line a log shows) holds no secret either
+    if sb.kind() != gleipnir::BackendKind::Bwrap {
+        match launch_on(&env, &sb, &fx.plan(".claude"), &shape) {
+            Ok(_) => panic!("a browser on a backend other than bubblewrap was launched"),
+            Err(refused) => assert!(!refused.to_string().contains(&hex), "{refused}"),
+        }
+        return;
+    }
     let launch = launch_on(&env, &sb, &fx.plan(".claude"), &shape)
         .unwrap_or_else(|r| panic!("refused: {r}"));
     let argv = std::iter::once(launch.spec.program.as_os_str())

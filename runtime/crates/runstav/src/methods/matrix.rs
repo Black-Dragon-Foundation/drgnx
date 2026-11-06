@@ -53,6 +53,10 @@ pub enum Action {
     Machines,
     #[serde(rename = "job.container")]
     JobContainer,
+    // a job names keys: they reach the job's own process only, and only names on the project's
+    // `drgnx-runners-job-keys` list (a plain comment: a doc comment on one variant makes the schema a `oneOf`)
+    #[serde(rename = "job.keys")]
+    JobKeys,
     #[serde(rename = "network")]
     Network,
     #[serde(rename = "browser")]
@@ -75,7 +79,7 @@ pub enum Action {
 
 impl Action {
     /// Every action, in the matrix's row order.
-    pub const ALL: [Action; 25] = [
+    pub const ALL: [Action; 26] = [
         Action::AgentsStart,
         Action::AgentsModel,
         Action::AgentsControl,
@@ -92,6 +96,7 @@ impl Action {
         Action::CodeCiConfig,
         Action::Machines,
         Action::JobContainer,
+        Action::JobKeys,
         Action::Network,
         Action::Browser,
         Action::BrowserWeb,
@@ -122,6 +127,7 @@ impl Action {
             Action::CodeCiConfig => "code.ci-config",
             Action::Machines => "machines",
             Action::JobContainer => "job.container",
+            Action::JobKeys => "job.keys",
             Action::Network => "network",
             Action::Browser => "browser",
             Action::BrowserWeb => "browser.web",

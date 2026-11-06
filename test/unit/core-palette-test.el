@@ -96,15 +96,14 @@
 (defvar vertico-count)
 
 (defun drgnx-test--palette-placed (parent-width)
-  "The (WIDTH HEIGHT) `drgnx-palette-frame--place' gives a parent PARENT-WIDTH frame pixels wide."
+  "The (WIDTH HEIGHT) `drgnx-palette-frame--place' gives a parent PARENT-WIDTH frame pixels wide, for 20 px lines."
   (let ((vertico-count 10) (drgnx-palette-frame-width 640) sized)
-    (cl-letf (((symbol-function 'frame-char-height) (lambda (&rest _) 20))
-              ((symbol-function 'frame-pixel-width) (lambda (f) (if (eq f 'parent) parent-width (car sized))))
+    (cl-letf (((symbol-function 'frame-pixel-width) (lambda (f) (if (eq f 'parent) parent-width (car sized))))
               ((symbol-function 'frame-pixel-height) (lambda (_) 2000))
               ((symbol-function 'frame-scale-factor) (lambda (_) 2.0))
               ((symbol-function 'set-frame-size) (lambda (_f w h _pixelwise) (setq sized (list w h))))
               ((symbol-function 'set-frame-position) #'ignore))
-      (drgnx-palette-frame--place 'child 'parent))
+      (drgnx-palette-frame--place 'child 'parent 20))
     sized))
 
 (ert-deftest core-palette-float-sizes-are-logical-pixels ()

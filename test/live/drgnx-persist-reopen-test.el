@@ -20,8 +20,11 @@
                 (drgnx-groups-list))
         (drgnx-wb-sidebar-showing-p)
         drgnx-explorer--roots
+        (list (frame-pixel-width) (frame-inner-width))
         (mapcar #'window-pixel-width (drgnx-groups-list)))"
-  "What a restore must bring back, as the session sees it.")
+  "What a restore must bring back, as the session sees it.  The window's own size is in it: both windows are made the
+same way, so a different one is a frame that resized itself after it was shown (the cards' edge once did, and the
+compositor's answer to the size it was made with could put that back after the split was laid out, 8 px short).")
 
 (ert-deftest drgnx-persist/reopen-brings-the-split-the-file-and-the-folders-back ()
   (let* ((root (make-temp-file "drgnx-reopen" t))
@@ -30,7 +33,8 @@
          (s (progn (make-directory project t)
                    (dolist (f '("README.md" "a.txt" "b.txt"))
                      (write-region (format "%s\n" f) nil (expand-file-name f project) nil 'silent))
-                   (drgnx-ui-start "drgnx" "1400x800" 30 t)))
+                   ;; the tier's monitor size: mutter has no scale 2 for a 1400x800 one
+                   (drgnx-ui-start "drgnx" nil 30 t)))
          (name (plist-get s :name))
          (sess (drgnx-ui-own-session name)))
     (unwind-protect
@@ -49,7 +53,7 @@
             (should (equal (plist-get (drgnx-ui-call sess "(drgnx-uitest-api-gui-frames)") :count) 0))
             (should (eq t (car (read-from-string
                                 (plist-get (drgnx-ui-call sess "(drgnx-uitest--json (list :v (prin1-to-string (file-exists-p (drgnx-persist--file)))))") :v)))))
-            ;; A new window: same split, same files, same Explorer folders.
+            ;; A new window: same size, same split, same files, same Explorer folders.
             (should (eql 0 (plist-get (drgnx-ui-new-frame sess) :exit)))
             (let (after)
               (condition-case nil

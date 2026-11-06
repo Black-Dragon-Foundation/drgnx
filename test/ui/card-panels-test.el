@@ -19,6 +19,8 @@
   (add-to-list 'load-path (expand-file-name d drgnx-card-panels-ui-test--repo)))
 (require 'drgnx)
 (require 'drgnx-wb)
+(require 'drgnx-color)
+(require 'drgnx-faces)
 (load (expand-file-name "modules/ui/drgnx-look" drgnx-card-panels-ui-test--repo) nil t)
 
 (defvar drgnx-look-card)
@@ -38,10 +40,13 @@
                                                      (erase-buffer) (insert "dock text\n") (current-buffer))))
        (unwind-protect
            (progn (drgnx-wb-show-sidebar)
+                  ;; a gap that stands out from the cards, as under any theme (no theme is on in this session)
+                  (set-face-background 'drgnx-surface-gap "#c8c8d0" (selected-frame))
                   (drgnx-look-cards-apply)
                   (drgnx-test-wait-presented)
                   ,@body)
          (drgnx-look-cards-clear)
+         (face-spec-recalc 'drgnx-surface-gap (selected-frame))
          (drgnx-wb-hide-sidebar)
          (drgnx-wb-undefine-section 'card-panels)
          (when (get-buffer "*card-panels*") (kill-buffer "*card-panels*"))
@@ -69,10 +74,10 @@
 With the corners as the card's only chrome (a shadow would darken the gap), that pixel is exactly the colour beneath
 the card: the frame's margin, painted in the dividers' colour."
   (drgnx-card-panels-ui-test--with-explorer
-    (let* ((dock (car (drgnx-wb--dock-windows))) (gap (alist-get 'gap drgnx-look-card)))
+    (let* ((dock (car (drgnx-wb--dock-windows))) (gap (drgnx-look-density-value 'gap)))
       (should dock)
       (dolist (p '(corner-radius shadow ring))
-        (should (equal (window-parameter dock p) (alist-get p drgnx-look-card))))
+        (should (equal (window-parameter dock p) (drgnx-look--card-value p))))
       (should (eql (frame-parameter nil 'right-divider-width) (round (* gap (frame-scale-factor)))))
       (let* ((on (drgnx-uitest-snapshot)) (r (drgnx-card-panels-ui-test--rect dock))
              (corner (drgnx-uitest-pixel on (nth 0 r) (nth 1 r)))
@@ -159,7 +164,7 @@ bar are other modules')."
 \(`DRGNX_UI_SCALE=2')."
   (drgnx-card-panels-ui-test--with-explorer
     (let* ((dock (car (drgnx-wb--dock-windows)))
-           (want (round (* (alist-get 'gap drgnx-look-card) (frame-scale-factor)))))
+           (want (round (* (drgnx-look-density-value 'gap) (frame-scale-factor)))))
       (should (eql (window-right-divider-width dock) want))
       (should (eql (frame-parameter nil 'right-divider-width) want))
       (should (eql (frame-parameter nil 'bottom-divider-width) want)))))
@@ -170,7 +175,7 @@ and the margin is painted in the divider's colour, the one between the cards (re
 two cards has their shadows in it, the margin none).  Pattern D."
   (drgnx-card-panels-ui-test--with-explorer
     (let* ((dock (car (drgnx-wb--dock-windows)))
-           (want (round (* (alist-get 'gap drgnx-look-card) (frame-scale-factor))))
+           (want (round (* (drgnx-look-density-value 'gap) (frame-scale-factor))))
            (snap (drgnx-uitest-snapshot))
            (r (drgnx-card-panels-ui-test--rect dock))
            (between (cons 255 (mapcar (lambda (v) (ash v -8))
@@ -188,7 +193,7 @@ the corner pixel and the frame's margin are the new colour, not the one the card
 reads a card's colours when it resolves the card).  Pattern D (read after `drgnx-test-wait-presented')."
   (drgnx-card-panels-ui-test--with-explorer
     (let* ((dock (car (drgnx-wb--dock-windows))) (frame (selected-frame))
-           (old (face-foreground 'window-divider frame t))
+           (old (face-background 'drgnx-surface-gap frame t))
            (new (face-foreground 'error frame t))
            (want (cons 255 (mapcar (lambda (v) (ash v -8)) (color-values new))))
            ;; the corners as the card's only chrome, so applying the cards again changes no window parameter: the
@@ -200,14 +205,79 @@ reads a card's colours when it resolves the card).  Pattern D (read after `drgnx
             ;; resolved with the old colour first
             (dolist (p '(shadow ring)) (set-window-parameter dock p nil))
             (drgnx-test-wait-presented)
-            (set-face-foreground 'window-divider new frame)
+            (set-face-background 'drgnx-surface-gap new frame)
             (drgnx-look-cards-apply)
             (drgnx-test-wait-presented)
             (let ((snap (drgnx-uitest-snapshot)) (r (drgnx-card-panels-ui-test--rect dock)))
               (should (equal (drgnx-uitest-pixel snap 0 0) want))
               (should (equal (drgnx-uitest-pixel snap (nth 0 r) (nth 1 r)) want))))
-        (set-face-foreground 'window-divider old frame)
+        (set-face-background 'drgnx-surface-gap old frame)
         (drgnx-look-cards-apply)))))
+
+(defun drgnx-card-panels-ui-test--rgb (colour)
+  "COLOUR (a name) as the snapshot's (255 R G B)."
+  (cons 255 (mapcar (lambda (v) (ash v -8)) (color-values colour))))
+
+(defun drgnx-card-panels-ui-test--near-p (pixel colour)
+  "Non-nil when the snapshot PIXEL is within 24 per channel of COLOUR."
+  (cl-every (lambda (a b) (<= (abs (- a b)) 24)) (cdr pixel) (cdr (drgnx-card-panels-ui-test--rgb colour))))
+
+(ert-deftest drgnx-ui-card-panels/modus-operandi-gap-not-striped ()
+  "Under modus-operandi with the cards on, the pixels along a divider are the derived gap, never the theme's grey
+divider (#9f9f9f stripes): the margin, the dock's cut corner and the editor's are all `drgnx-surface-gap'.  Pattern D
+\(read after `drgnx-test-wait-presented')."
+  (drgnx-card-panels-ui-test--with-explorer
+    (unwind-protect
+        (progn
+          (mapc #'disable-theme custom-enabled-themes)
+          (load-theme 'modus-operandi t)
+          (drgnx-look-derive-on)
+          (drgnx-look-cards-apply)
+          (drgnx-test-wait-presented)
+          (let* ((gap (drgnx-card-panels-ui-test--rgb (drgnx-face-color 'drgnx-surface-gap :background 'gui)))
+                 (dock (car (drgnx-wb--dock-windows)))
+                 (snap (drgnx-uitest-snapshot))
+                 (r (drgnx-card-panels-ui-test--rect dock)))
+            (should (equal (drgnx-uitest-pixel snap 0 0) gap))
+            (should (equal (drgnx-uitest-pixel snap (nth 0 r) (nth 1 r)) gap))
+            (should (equal (drgnx-uitest-pixel snap (/ (+ (nth 0 r) (nth 2 r)) 2) 0) gap))
+            (should-not (equal (drgnx-uitest-pixel snap 0 0) (drgnx-card-panels-ui-test--rgb "#9f9f9f")))))
+      (drgnx-look-derive-off)
+      (mapc #'disable-theme custom-enabled-themes))))
+
+(ert-deftest drgnx-ui-card-panels/focused-tile-ring-is-accent ()
+  "The selected window's card ring is the accent; another window's is the border blend.  A ring pixel just outside the
+card's left edge, halfway down.  Pattern D (read after `drgnx-test-wait-presented')."
+  (drgnx-card-panels-ui-test--with-explorer
+    (let* ((dock (car (drgnx-wb--dock-windows))) (editor (drgnx-card-panels-ui-test--editor))
+           (ring-pixel (lambda (w)
+                         (let ((r (drgnx-card-panels-ui-test--rect w)))
+                           (drgnx-uitest-pixel (drgnx-uitest-snapshot) (1- (nth 0 r)) (/ (+ (nth 1 r) (nth 3 r)) 2)))))
+           (accent (face-foreground 'drgnx-accent nil t))
+           (blend (drgnx-color-over (face-foreground 'drgnx-border nil t)
+                                    (face-background 'drgnx-surface-gap nil t) 0.6)))
+      (select-window editor)
+      (drgnx-test-wait-presented)
+      (should (drgnx-card-panels-ui-test--near-p (funcall ring-pixel editor) accent))
+      (should (drgnx-card-panels-ui-test--near-p (funcall ring-pixel dock) blend)))))
+
+(ert-deftest drgnx-ui-card-panels/four-themes-cards ()
+  "The corner pixel of a card is the gap under each of the four test themes.  Pattern D (read after
+`drgnx-test-wait-presented')."
+  (drgnx-card-panels-ui-test--with-explorer
+    (unwind-protect
+        (dolist (theme '(drgnx-dark drgnx-light drgnx-high-contrast modus-operandi))
+          (mapc #'disable-theme custom-enabled-themes)
+          (load-theme theme t)
+          (drgnx-look-derive-on)
+          (drgnx-look-cards-apply)
+          (drgnx-test-wait-presented)
+          (let* ((dock (car (drgnx-wb--dock-windows)))
+                 (r (drgnx-card-panels-ui-test--rect dock))
+                 (gap (drgnx-card-panels-ui-test--rgb (drgnx-face-color 'drgnx-surface-gap :background 'gui))))
+            (should (equal (drgnx-uitest-pixel (drgnx-uitest-snapshot) (nth 0 r) (nth 1 r)) gap))))
+      (drgnx-look-derive-off)
+      (mapc #'disable-theme custom-enabled-themes))))
 
 (provide 'card-panels-test)
 ;;; card-panels-test.el ends here

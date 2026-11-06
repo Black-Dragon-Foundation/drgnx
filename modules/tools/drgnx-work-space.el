@@ -103,25 +103,25 @@ it (a notes repository with the code repositories inside it)."
   "How roomy the map is: `compact', `comfortable' or `roomy' (card sizes, gaps and bands)."
   :type '(choice (const compact) (const comfortable) (const roomy)) :group 'drgnx-work-space)
 
-;;;; Faces: stock faces until the look's semantic ones exist; its one table retargets them
+;;;; Faces: they inherit the look's semantic faces (core/drgnx-faces.el)
 
-(defface drgnx-work-dim '((t :inherit shadow)) "Items off the selection's chain." :group 'drgnx-work-space)
+(defface drgnx-work-dim '((t :inherit drgnx-text-muted)) "Items off the selection's chain." :group 'drgnx-work-space)
 (defface drgnx-work-card '((t :inherit default)) "A card's text." :group 'drgnx-work-space)
-(defface drgnx-work-selected '((t :inherit highlight)) "The selected item." :group 'drgnx-work-space)
-(defface drgnx-work-chain '((t :inherit link :underline nil)) "Items on the selection's chain." :group 'drgnx-work-space)
+(defface drgnx-work-selected '((t :inherit drgnx-selected)) "The selected item." :group 'drgnx-work-space)
+(defface drgnx-work-chain '((t :inherit drgnx-accent)) "Items on the selection's chain." :group 'drgnx-work-space)
 (defface drgnx-work-overlap '((t :inherit warning)) "An overlap's flag and its edge." :group 'drgnx-work-space)
-(defface drgnx-work-needs-you '((t :inherit error)) "A thing that needs you." :group 'drgnx-work-space)
-(defface drgnx-work-edge '((t :inherit shadow)) "An edge." :group 'drgnx-work-space)
-(defface drgnx-work-edge-strong '((t :inherit shadow :weight bold)) "An edge that edits." :group 'drgnx-work-space)
-(defface drgnx-work-label '((t :inherit shadow)) "A layer's label." :group 'drgnx-work-space)
-(defface drgnx-work-chip '((t :inherit secondary-selection)) "A chip." :group 'drgnx-work-space)
+(defface drgnx-work-needs-you '((t :inherit drgnx-status-attention)) "A thing that needs you." :group 'drgnx-work-space)
+(defface drgnx-work-edge '((t :inherit drgnx-text-subtle)) "An edge." :group 'drgnx-work-space)
+(defface drgnx-work-edge-strong '((t :inherit drgnx-text-muted :weight bold)) "An edge that edits." :group 'drgnx-work-space)
+(defface drgnx-work-label '((t :inherit drgnx-text-muted)) "A layer's label." :group 'drgnx-work-space)
+(defface drgnx-work-chip '((t :inherit drgnx-selected-quiet)) "A chip." :group 'drgnx-work-space)
 (defface drgnx-work-new '((t :inherit success)) "The mark of a new conclusion." :group 'drgnx-work-space)
-(defface drgnx-work-agent-1 '((t :inherit ansi-color-blue)) "The first agent colour." :group 'drgnx-work-space)
-(defface drgnx-work-agent-2 '((t :inherit ansi-color-green)) "The second agent colour." :group 'drgnx-work-space)
-(defface drgnx-work-agent-3 '((t :inherit ansi-color-magenta)) "The third agent colour." :group 'drgnx-work-space)
-(defface drgnx-work-agent-4 '((t :inherit ansi-color-cyan)) "The fourth agent colour." :group 'drgnx-work-space)
-(defface drgnx-work-agent-5 '((t :inherit ansi-color-yellow)) "The fifth agent colour." :group 'drgnx-work-space)
-(defface drgnx-work-agent-6 '((t :inherit ansi-color-red)) "The sixth agent colour." :group 'drgnx-work-space)
+(defface drgnx-work-agent-1 '((t :inherit drgnx-agent-1)) "The first agent colour." :group 'drgnx-work-space)
+(defface drgnx-work-agent-2 '((t :inherit drgnx-agent-2)) "The second agent colour." :group 'drgnx-work-space)
+(defface drgnx-work-agent-3 '((t :inherit drgnx-agent-3)) "The third agent colour." :group 'drgnx-work-space)
+(defface drgnx-work-agent-4 '((t :inherit drgnx-agent-4)) "The fourth agent colour." :group 'drgnx-work-space)
+(defface drgnx-work-agent-5 '((t :inherit drgnx-agent-5)) "The fifth agent colour." :group 'drgnx-work-space)
+(defface drgnx-work-agent-6 '((t :inherit drgnx-agent-6)) "The sixth agent colour." :group 'drgnx-work-space)
 
 (defconst drgnx-work-space-command-ids
   '(work-view work-outline work-left work-right work-why work-touches work-next-agent work-previous-agent work-open
