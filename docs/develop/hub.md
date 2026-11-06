@@ -1077,6 +1077,10 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `exec/log` | user | `{from?: natnum, id: Id, n?: natnum, tail_bytes?: natnum}` | `{from?: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no |
 | `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, priority?: natnum, timebox_s?: natnum, writes?: [string]}` | `{id: string, text: string}` | yes |
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
+| `extensions/details` | user, agent | `{id: string}` | `DetailsResult` | no |
+| `extensions/modules` | user | `{modules: [{doc?: string, flags?: [string], name: string, packages?: [string], state: "on" \| "off" \| "needs-package" \| "failed"}]}` | `{}` | no |
+| `extensions/rows` | user | `{ids: [string]}` | `{rows: [Row]}` | no |
+| `extensions/search` | user, agent | `{filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}` | `{rows: [Row], total: natnum}` | no |
 | `gateway/editor-token` | user | `{}` | `{token: string, url: string}` | no |
 | `gateway/keys` | user | `{keys: ProviderKeys}` | `boolean` | no |
 | `gateway/keys-held` | user | `{}` | `{providers?: [Id]}` | no |
@@ -2219,6 +2223,37 @@ of rotation, its reason on a line of its own. `runner remove` without `--yes` on
 Tests: `norn::write::runners::` [D]; `runners::registry::` and `runner_cli::` [D]; `work::machines::` [D]; conformance
 `runners/methods-are-user-only` [B]; `tests/fleet_registry.rs` [C]: add (probe, copy, pull, bench, link), the contract's
 refusal with its list, the hub's own machine, a removal that leaves nothing of ours.
+
+## Extensions
+
+`extensions/*` (`drgnx-ratatoskr/src/extensions/`) serve the Extensions view's list from memory. The hub never installs
+and never reaches the network here: the refresh job (`drgnx extensions refresh`) writes
+`<cache>/extensions/catalog.json` (docs/develop/extensions.md), `drgnx sync` writes the lock, and the hub reads them.
+
+- **Sources, merged into rows:** the catalog; the user's lock (`<config>/drgnx.lock.eld`, read up to 8 MiB); the wanted
+  file (`<state>/packages-wanted.eld`); `packages.eld`'s `:packages` and `:git` names; the modules the editor sent with
+  `extensions/modules` (held in memory, replaced by each call); and Emacs's built-ins from the catalog. All Lisp files
+  are read as data with `huginn`, never evaluated.
+- **Reload:** each call looks at the four files' `(mtime, size)` in a blocking task and reads only those that changed,
+  so a refresh run from the command line is seen too. A file that does not read (truncated JSON, a catalog of another
+  `version`, a lock with a mistake) keeps its last good copy; `extensions/details` carries a note saying so. A file that
+  is gone is empty.
+- **Ids:** `pkg:NAME`, `module:NAME`, `emacs:NAME` (`plugin:NAME` arrives with the plugins).
+- **State:** `installed`, `update` (the catalog's update plan takes a newer version), `held` (a newer version exists the
+  plan does not take), `incompat` (the newest version needs a newer Emacs), `dependency` (installed only because
+  another installed package requires it), `missing` (a module, `packages.eld` or the wanted file names it and the lock
+  does not have it), `available`, `built-in`, and for modules `on`, `off`, `needs-package`, `failed`.
+- **Signed:** `signed` only for a lock entry with `:verified t`; an installed MELPA package is `unsigned-archive`, a
+  directory archive `local`, a Git package `git-commit`. A lock entry without `:sha256` (and not Git) is `by-hand`.
+- **Search:** words are lower-cased; a row matches when each word is a prefix of a word of its name or a substring of
+  its name, keywords or summary. Rank: exact name, name prefix, name word prefix, inside the name, keyword, summary
+  (the worst of the words), then installed first, then downloads, then name. `limit` is 1 to 500 (default 200).
+- **Classes:** `extensions/search` and `extensions/details` are open to agents; `extensions/rows` and
+  `extensions/modules` are the user's.
+
+Tests: `extensions::catalog::` [D, one every-order test A] and `extensions::rank::` [D]; conformance
+`extensions/search-ranks-the-fixture`, `details-of-an-installed-package`, `rows-keep-their-order`,
+`a-new-catalog-is-read-on-the-next-call` and `an-agent-may-search-but-not-send-modules` [B].
 
 ## The timeline
 

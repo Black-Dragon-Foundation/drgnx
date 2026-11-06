@@ -61,6 +61,8 @@
 //! - [`records`]: the records importer and their views.
 //!
 //! Runners (other machines that run jobs): [`runners`], the generated ssh config and the transport.
+//!
+//! The Extensions view: [`extensions`], the catalog of packages, modules and built-ins, searched in memory.
 
 pub mod agent_core;
 pub mod agents;
@@ -79,6 +81,7 @@ pub mod doctor;
 pub mod embed;
 pub mod eval_cli;
 pub mod exec;
+pub mod extensions;
 pub mod front;
 pub mod gateway;
 pub mod graph;
