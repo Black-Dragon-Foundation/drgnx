@@ -2718,6 +2718,7 @@ unspecified never makes colour code signal.
 | `(drgnx-color-over FG BG ALPHA)` | FG at ALPHA over BG in sRGB, for tints |
 | `(drgnx-color-contrast A B)` | the WCAG 2.x ratio, 1..21 |
 | `(drgnx-color-solve COLOR TOWARD BG RATIO &optional SPACE)` | the smallest move of COLOR toward TOWARD that reaches RATIO on BG (TOWARD itself when none does) |
+| `(drgnx-color-lch L C H)` | OKLCH as `#rrggbb`, clamped to the gamut; `(drgnx-color-oklch COLOR)` is the inverse, `(L C H)` |
 | `(drgnx-color-hue-distance A B)` | the OKLCH hue distance in degrees, 0..180 |
 | `(drgnx-color-delta-e A B)` | the OKLab distance times 100 |
 

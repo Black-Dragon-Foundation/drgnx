@@ -130,6 +130,21 @@ reach 4.5:1 on the editor, the panel and raised surfaces, and the panel stands o
     (mapatoms (lambda (s) (when (and (facep s) (string-prefix-p "drgnx-" (symbol-name s))) (push s faces))))
     faces))
 
+(ert-deftest drgnx-lint/contrast-agent-colours-one-to-twelve ()
+  "Pattern D: with derive run, agents 1 to 6 of drgnx's themes reach 4.5:1 on the editor and raised surfaces (a third-party theme's own colours are not ours to lint) and the variants 7 to 12 reach
+3:1 on the editor, under the three drgnx themes and the third-party ones."
+  (dolist (theme (append (mapcar #'car drgnx-lint-contrast--own) drgnx-lint-contrast--other))
+    (drgnx-lint-contrast--with theme t
+      (should-not (when-let* ((fails (append
+                                      (and (assq theme drgnx-lint-contrast--own)
+                                           (drgnx-lint-contrast--pairs 4.5 drgnx-lint-contrast--agents
+                                                                       '(default drgnx-surface-raised)))
+                                      (drgnx-lint-contrast--pairs
+                                       3.0 (mapcar (lambda (i) (intern (format "drgnx-agent-%d" i)))
+                                                   '(7 8 9 10 11 12))
+                                       '(default)))))
+                    (cons theme fails))))))
+
 (ert-deftest drgnx-lint/no-face-inheritance-cycles ()
   "Pattern D: every drgnx face's `:inherit' chain ends, on a graphical and a terminal display, under each of the
 seven themes."

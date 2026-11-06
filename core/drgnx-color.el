@@ -74,6 +74,16 @@ FRAME is the frame whose display resolves a colour name."
   (let ((rad (degrees-to-radians h)))
     (drgnx-color-hex (drgnx-color--from-oklab (list l (* c (cos rad)) (* c (sin rad)))))))
 
+(defun drgnx-color-lch (l c h)
+  "OKLCH (lightness L 0..1, chroma C, hue H in degrees) as \"#rrggbb\", clamped to the sRGB gamut."
+  (drgnx-color--from-lch l c h))
+
+(defun drgnx-color-oklch (color)
+  "COLOR's OKLCH as (L C H), H in degrees 0..360; nil when COLOR is no colour."
+  (when-let* ((rgb (drgnx-color-rgb color)))
+    (pcase-let ((`(,l ,a ,b) (drgnx-color--to-oklab rgb)))
+      (list l (sqrt (+ (* a a) (* b b))) (mod (radians-to-degrees (atan b a)) 360.0)))))
+
 ;;;; Mixing
 
 (defun drgnx-color-mix (a b amount &optional space)
