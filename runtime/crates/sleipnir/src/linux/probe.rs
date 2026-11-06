@@ -150,9 +150,10 @@ impl Probe {
         Ok(d)
     }
 
-    /// Test builds only: a fake runner shares its host's `/proc/pressure`, `/proc/meminfo` and disk, so the folder's
-    /// [`TEST_MACHINE`] file, when there is one, sets the machine's pressure, disk and available memory. A file that
-    /// can't be read as one is an error, never the host's figures.
+    /// Test builds only: a fake runner shares its host's `/proc/pressure`, `/proc/meminfo`, disk and
+    /// `/sys/class/power_supply`, so the folder's [`TEST_MACHINE`] file, when there is one, sets the machine's
+    /// pressure, disk, available memory and mains power. A file that can't be read as one is an error, never the
+    /// host's figures.
     #[cfg(feature = "test-hooks")]
     fn test_machine(&self, mut m: MachineState) -> io::Result<MachineState> {
         #[derive(serde::Deserialize)]
@@ -162,6 +163,7 @@ impl Probe {
             disk_free_gb: Option<u64>,
             disk_total_gb: Option<u64>,
             mem_available_mib: Option<u64>,
+            on_ac: Option<bool>,
         }
         let path = self.folder.join(TEST_MACHINE);
         let text = match fs::read_to_string(&path) {
@@ -179,6 +181,7 @@ impl Probe {
         m.disk_free_gb = f.disk_free_gb.unwrap_or(m.disk_free_gb);
         m.disk_total_gb = f.disk_total_gb.unwrap_or(m.disk_total_gb);
         m.mem_available_mib = f.mem_available_mib.unwrap_or(m.mem_available_mib);
+        m.on_ac = f.on_ac.unwrap_or(m.on_ac);
         Ok(m)
     }
 
