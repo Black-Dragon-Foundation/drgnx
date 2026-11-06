@@ -1,8 +1,8 @@
 # The drgnx runtime workspace (docs/develop/runtime.md).  Later tasks add crates under crates/ (a glob) and write
-# `x.workspace = true`; the fuzz crate is its own workspace.
+# `x.workspace = true`; the fuzz crate and the plugin fixtures and template are their own workspaces.
 [workspace]
 members = ["conformance", "crates/*"]
-exclude = ["fuzz"]
+exclude = ["fuzz", "plugins/fixtures", "plugins/template"]
 resolver = "3"
 
 [workspace.package]

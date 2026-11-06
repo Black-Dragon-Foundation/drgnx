@@ -1,0 +1,13 @@
+{
+  "name": "http-ability",
+  "version": "0.1.0",
+  "abilities": [
+    {"name": "fetch", "description": "Fetches a URL through the host's HTTP.",
+     "input_schema": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}},
+    {"name": "kv", "description": "Reads and writes the plugin's key-value store.",
+     "input_schema": {"type": "object", "properties": {"op": {"type": "string"}, "key": {"type": "string"}}, "required": ["op", "key"]}},
+    {"name": "chatter", "description": "Writes to the host's log and to stdout.",
+     "input_schema": {"type": "object"}}
+  ],
+  "hosts": ["api.example.com"]
+}

@@ -62,6 +62,28 @@ link, or a stray file, is skipped. A folder that cannot be read, whose manifest 
 another plugin is an error named by the folder. `root` itself may pass through links (it is the user's own
 configuration). Results come in folder-name order.
 
+## Test fixtures
+
+`runtime/plugins/fixtures` is a crate of its own (its own workspace, excluded from the runtime workspace, so
+`cargo test --workspace` never builds it for the host). One binary per test plugin, each with its manifest in
+`manifests/NAME.json`: `echo-ability`, `deny-rm-hook`, `rewrite-commit-msg`, `annotate-edit`, `slow-hook` (spins),
+`trap-hook` (traps), `big-alloc` (allocates `mib` MiB), `fs-importer` (std file access, so it imports
+`wasi:filesystem`), `http-ability` (the host's HTTP, key-value store and log), and the three that must fail to load,
+`http-importer` (`wasi:http`) and `socket-importer` (`std::net`, so `wasi:sockets`). The guests use `wit-bindgen`
+0.63.0 and plain `cargo build --target wasm32-wasip2 --release`; no binary is ever committed.
+
+`brokkr::test_support::fixture(name)` (feature `test-support`, or `cfg(test)` inside `brokkr`) builds all of them with
+one cargo run under a lock file, so parallel tests and test binaries build once, and returns an install folder
+(`plugin.json` and `plugin.wasm`) that `scan` reads. It needs the `wasm32-wasip2` target of the toolchain that runs
+the tests. `test_support::template()` builds the template the same way.
+
+## The template
+
+`runtime/plugins/template` is a minimal plugin with one ability (`shout`) and one `before-tool` hook, commented for
+plugin authors. Build it with `cargo build --target wasm32-wasip2 --release`, copy `my_plugin.wasm` to `plugin.wasm`
+beside `plugin.json` in a folder named after the plugin, and install the folder. Outside the drgnx sources, copy
+`runtime/crates/brokkr/wit` next to the plugin and change the `path` in `wit_bindgen::generate!`.
+
 ## The interface
 
 `runtime/crates/brokkr/wit/agent-tools.wit` is package `drgnx:agent-tools@0.1.0`. World `plugin` exports

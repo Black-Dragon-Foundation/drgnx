@@ -7,6 +7,8 @@
 
 pub mod manifest;
 pub mod store;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 
 pub use manifest::{
     AbilityDecl, Filter, HookDecl, HostName, Manifest, ManifestError, PluginName, Point, ToolName,
