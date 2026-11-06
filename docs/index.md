@@ -34,7 +34,7 @@ Using drgnx.
 - [The face](guide/face.md): no light menu bar or scroll bar, thin themed dividers, line numbers in code that never shift sideways, problems at the end of their line, a top line (project, branch, the three keys that open everything), a status bar built from segments you can reorder, drop or add to, a dark title bar that follows the theme, glyphs with an ASCII form, quick help in a card beside the symbol (a strip in terminals), a × and Esc/q that close every help pane, popup and side pane, a start page in an empty editor; every choice a setting.
 - [Editor features vs VS Code, Zed and Cursor](guide/editor-matrix.md): what drgnx has, where it is described, its GUI test and perf workload.
 - [Trusted folders](guide/security.md): Trust This Folder, the "Restricted Mode" mark, what files from untrusted folders cannot make Emacs do.
-- [Plugins, rules and hooks](guide/plugins.md): how your hook rules and plugins' hooks decide an agent's step (first deny wins, changes chain, the point's time, failures refuse); the rule format; rules are guardrails (being written).
+- [Plugins, rules and hooks](guide/plugins.md): installing and approving a plugin, choosing the plugins of one project, how your hook rules and plugins' hooks decide an agent's step (first deny wins, changes chain, the point's time, failures refuse); the rule format; rules are guardrails (being written).
 - [In a terminal](guide/terminal.md): the graphical window, a capable terminal and a legacy one (Alt+Shift and F6); what each terminal can do (kitty, WezTerm, foot, Ghostty, Ptyxis, tmux …) and which rows a test ran, the lines that fix what is missing, SSH, tmux, `EDITOR`, the clipboard, the mouse, colours.
 - [Settings](guide/settings.md): settings.el, the Settings page, and how your settings meet your Lisp, Customize and packages (being written).
 - [Your files](guide/files.md): when a settings file has a mistake (the last good copy, Open and Reset), backups, locks and `config-good/`, two machines sharing one folder.
@@ -72,7 +72,7 @@ How drgnx is built, tested and measured.
 - [Records (saga)](develop/records.md): reading and writing a project's plan, ledger, deferred-list and board files without changing a byte.
 - [Agent coordination](develop/coordination.md): jobs, tasks and leases, the decision log, messages, the MCP tools (and the identity and limits of agents outside drgnx), delivery.
 - [The job sandbox](develop/sandbox.md): where the job sandbox's documentation is, and the VC guard (no git of yours runs in a task's folder).
-- [Plugins](develop/plugins.md): the plugin host `brokkr` — the manifest, the approval hash, the install scan and the WIT world plugins implement; the hook engine (`norn::hooks`); what a plugin can reach (the WASM host).
+- [Plugins](develop/plugins.md): the plugin host `brokkr` — the manifest, the approval hash, the install scan and the WIT world plugins implement; the hook engine (`norn::hooks`); what a plugin can reach (the WASM host); the hub's plugins (install, approval, cards, the lists per project, the host's I/O).
 - [Gleipnir](develop/gleipnir.md): the Rust sandbox in `runtime/` that every agent session runs in — its spec and what it refuses, bwrap, the inner helper, Landlock, seccomp, Seatbelt, the relay and the proxy, the check, and the escape rows that prove it.
 
 Docs are updated in the same commit as the code they describe.

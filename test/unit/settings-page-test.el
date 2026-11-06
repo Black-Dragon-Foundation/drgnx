@@ -24,7 +24,10 @@
     (drgnx-defsetting sat-pg-over 1 "Overridden by Lisp." :type 'integer :group 'sat-pg :scope 'global)
     (drgnx-defsetting sat-pg-mod 1 "Modified in settings." :type 'integer :group 'sat-pg :scope 'global)
     (drgnx-defsetting sat-pg-plain 1 "Never changed." :type 'integer :group 'sat-pg :scope 'global)
-    (drgnx-defsetting sat-pg-rt 1 "Runtime." :type 'integer :group 'sat-pg :scope 'global :runtime t))
+    (drgnx-defsetting sat-pg-rt 1 "Runtime." :type 'integer :group 'sat-pg :scope 'global :runtime t)
+    (defgroup sat-nv nil "Test group 2." :group 'tools)
+    (drgnx-defsetting sat-nv-mine 1 "A project's own security choice." :type 'integer :group 'sat-nv
+      :scope 'project :workspace 'never))
   "Forms that declare the settings the tests use.")
 
 (defun drgnx-settings-page-test--run (files forms &optional env)
@@ -108,6 +111,16 @@
                       (condition-case nil (progn (drgnx-settings-page-reset 'sat-pg-glob 'workspace root) 'no)
                         (user-error 'refused))))))))
     (should (equal r '((user) (user workspace shared) (user) t t nil refused)))))
+
+(ert-deftest drgnx-settings-page/a-never-project-setting-has-no-shared-tab ()
+  ;; the Workspace tab holds your own per-project security choices; Shared (the repository's file) never does
+  (let ((r (drgnx-settings-page-test--run
+            '(("~/proj/.git/HEAD" . "ref: x\n"))
+            '((let ((root (file-name-as-directory (expand-file-name "proj" (getenv "HOME")))))
+                (list (drgnx-settings-page-tabs-for 'sat-nv-mine root)
+                      (drgnx-settings-page-tabs-for 'sat-nv-mine nil)
+                      (drgnx-settings-page-tabs-for 'sat-pg-buf root)))))))
+    (should (equal r '((user workspace) (user) (user workspace shared))))))
 
 (ert-deftest drgnx-settings-page/filters ()
   (let ((r (drgnx-settings-page-test--run

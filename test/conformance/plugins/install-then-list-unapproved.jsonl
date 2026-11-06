@@ -1,0 +1,16 @@
+{"scenario": "plugins/install-then-list-unapproved", "requires": ["v1"], "doc": "[B] ratatoskr plugins install copies a folder into the data folder and tells a running hub: plugins/list shows the plugin unapproved with the hash the install printed, and one `plugin` card waits for the user. A name already installed is refused without --replace."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "write_file", "path": "$ROOT/src/plugin.json", "json": {"name": "alpha", "version": "1.0.0", "hosts": ["api.example.com"]}}
+{"do": "write_file", "path": "$ROOT/src/plugin.wasm", "text": "wasm-one"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "plugins/list", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"plugins": []}}, "within_ms": 10000}
+{"do": "run", "args": ["plugins", "install", "$ROOT/src"], "expect_code": 0, "expect_stdout": "approve it in drgnx (Extensions or Settings → Plugins)"}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "plugins/list", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"plugins": [{"name": "alpha", "version": "1.0.0", "state": "unapproved", "hosts": ["api.example.com:443"], "hash": "$capture:h"}]}}, "within_ms": 10000}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select count(*) from card where kind = 'plugin' and state = 'open' and json_extract(data, '$.plugin') = 'alpha' and json_extract(data, '$.why') = 'unapproved'", "rows": [[1]]}
+{"do": "run", "args": ["plugins", "install", "$ROOT/src"], "expect_code": 1, "expect_stderr": "--replace"}
+{"do": "run", "args": ["plugins", "install", "$ROOT/src", "--replace"], "expect_code": 0, "expect_stdout": "installed alpha 1.0.0"}
+{"do": "run", "args": ["plugins", "list"], "expect_code": 0, "expect_stdout": "unapproved"}

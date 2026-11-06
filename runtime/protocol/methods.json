@@ -1525,6 +1525,30 @@
       "data": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
+        "description": "The event `plugin`: a plugin's state changed.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "description": "A [`PluginState`], or `removed` when its folder is gone.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "state"
+        ],
+        "title": "PluginChanged",
+        "type": "object"
+      },
+      "doc": "a plugin's state changed (installed, approved, changed on disk, disabled, broken or removed): its name and new state",
+      "name": "plugin"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "description": "One request the gateway forwarded, and what it cost.",
         "properties": {
           "agent": {
@@ -14458,6 +14482,683 @@
         "type": "object"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "approve the plugin whose files hash to hash (the hash the user was shown; a stale one is refused); only the user does",
+      "name": "plugins/approve",
+      "params": {
+        "$defs": {
+          "Hex64": {
+            "description": "64 lowercase hex digits",
+            "maxLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`plugins/approve`'s params: the plugin and the hash the user was shown.",
+        "properties": {
+          "hash": {
+            "$ref": "#/$defs/Hex64",
+            "description": "The hash `plugins/list` gave and the editor displayed; a plugin whose files are not these any more is refused."
+          },
+          "name": {
+            "maxLength": 32,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "hash"
+        ],
+        "title": "ApproveParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Hex64": {
+            "description": "64 lowercase hex digits",
+            "maxLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "HookReach": {
+            "additionalProperties": false,
+            "description": "What one hook of a plugin may see and say: the manifest's declaration, as written.",
+            "properties": {
+              "paths": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "point": {
+                "description": "`before-tool`, `after-edit`, `before-commit` or `at-review`.",
+                "type": "string"
+              },
+              "tool_kinds": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "tools": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "verdicts": {
+                "default": [],
+                "description": "`allow`, `deny`, `change` and `annotate`, those the hook may return.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "point"
+            ],
+            "type": "object"
+          },
+          "PluginState": {
+            "description": "Where a plugin stands.  Only `approved` runs.",
+            "oneOf": [
+              {
+                "const": "unapproved",
+                "description": "Installed, never approved.",
+                "type": "string"
+              },
+              {
+                "const": "approved",
+                "description": "Approved at the hash on disk now.",
+                "type": "string"
+              },
+              {
+                "const": "changed",
+                "description": "The files on disk are not the ones that were approved.",
+                "type": "string"
+              },
+              {
+                "const": "disabled",
+                "description": "Switched off by the user.",
+                "type": "string"
+              },
+              {
+                "const": "broken",
+                "description": "The manifest does not read; `problem` says why.",
+                "type": "string"
+              }
+            ]
+          },
+          "Reach": {
+            "additionalProperties": false,
+            "description": "Everything a manifest lets a plugin do.",
+            "properties": {
+              "abilities": {
+                "default": [],
+                "description": "The abilities' names (the tools it offers).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "hooks": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/HookReach"
+                },
+                "type": "array"
+              },
+              "hosts": {
+                "default": [],
+                "description": "The hosts it may reach over https, `host:port`.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "One installed plugin.",
+        "properties": {
+          "abilities": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "approved_reach": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Reach"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "With `state` `changed`: the reach the user approved, in the shape of the current entry's."
+          },
+          "hash": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Hex64"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "SHA-256 over the manifest and the component on disk now (the hash `plugins/approve` takes); none when they\ncannot be read."
+          },
+          "hooks": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/HookReach"
+            },
+            "type": "array"
+          },
+          "hosts": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kv_bytes": {
+            "description": "The bytes its key-value store may hold.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "problem": {
+            "description": "With `state` `broken`: why.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/$defs/PluginState"
+          },
+          "version": {
+            "description": "The manifest's version; none when the manifest does not read.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "state"
+        ],
+        "title": "PluginRow",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "switch a plugin off until the user approves it again",
+      "name": "plugins/disable",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`plugins/disable`'s params.",
+        "properties": {
+          "name": {
+            "maxLength": 32,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "DisableParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Hex64": {
+            "description": "64 lowercase hex digits",
+            "maxLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "HookReach": {
+            "additionalProperties": false,
+            "description": "What one hook of a plugin may see and say: the manifest's declaration, as written.",
+            "properties": {
+              "paths": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "point": {
+                "description": "`before-tool`, `after-edit`, `before-commit` or `at-review`.",
+                "type": "string"
+              },
+              "tool_kinds": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "tools": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "verdicts": {
+                "default": [],
+                "description": "`allow`, `deny`, `change` and `annotate`, those the hook may return.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "point"
+            ],
+            "type": "object"
+          },
+          "PluginState": {
+            "description": "Where a plugin stands.  Only `approved` runs.",
+            "oneOf": [
+              {
+                "const": "unapproved",
+                "description": "Installed, never approved.",
+                "type": "string"
+              },
+              {
+                "const": "approved",
+                "description": "Approved at the hash on disk now.",
+                "type": "string"
+              },
+              {
+                "const": "changed",
+                "description": "The files on disk are not the ones that were approved.",
+                "type": "string"
+              },
+              {
+                "const": "disabled",
+                "description": "Switched off by the user.",
+                "type": "string"
+              },
+              {
+                "const": "broken",
+                "description": "The manifest does not read; `problem` says why.",
+                "type": "string"
+              }
+            ]
+          },
+          "Reach": {
+            "additionalProperties": false,
+            "description": "Everything a manifest lets a plugin do.",
+            "properties": {
+              "abilities": {
+                "default": [],
+                "description": "The abilities' names (the tools it offers).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "hooks": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/HookReach"
+                },
+                "type": "array"
+              },
+              "hosts": {
+                "default": [],
+                "description": "The hosts it may reach over https, `host:port`.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "One installed plugin.",
+        "properties": {
+          "abilities": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "approved_reach": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Reach"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "With `state` `changed`: the reach the user approved, in the shape of the current entry's."
+          },
+          "hash": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Hex64"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "SHA-256 over the manifest and the component on disk now (the hash `plugins/approve` takes); none when they\ncannot be read."
+          },
+          "hooks": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/HookReach"
+            },
+            "type": "array"
+          },
+          "hosts": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kv_bytes": {
+            "description": "The bytes its key-value store may hold.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "problem": {
+            "description": "With `state` `broken`: why.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/$defs/PluginState"
+          },
+          "version": {
+            "description": "The manifest's version; none when the manifest does not read.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "state"
+        ],
+        "title": "PluginRow",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the installed plugins (the folder is read again): state, hash, what each reaches, and for a changed one the reach that was approved",
+      "name": "plugins/list",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Hex64": {
+            "description": "64 lowercase hex digits",
+            "maxLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "HookReach": {
+            "additionalProperties": false,
+            "description": "What one hook of a plugin may see and say: the manifest's declaration, as written.",
+            "properties": {
+              "paths": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "point": {
+                "description": "`before-tool`, `after-edit`, `before-commit` or `at-review`.",
+                "type": "string"
+              },
+              "tool_kinds": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "tools": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "verdicts": {
+                "default": [],
+                "description": "`allow`, `deny`, `change` and `annotate`, those the hook may return.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "point"
+            ],
+            "type": "object"
+          },
+          "PluginRow": {
+            "additionalProperties": false,
+            "description": "One installed plugin.",
+            "properties": {
+              "abilities": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "approved_reach": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Reach"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "With `state` `changed`: the reach the user approved, in the shape of the current entry's."
+              },
+              "hash": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Hex64"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "SHA-256 over the manifest and the component on disk now (the hash `plugins/approve` takes); none when they\ncannot be read."
+              },
+              "hooks": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/HookReach"
+                },
+                "type": "array"
+              },
+              "hosts": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "kv_bytes": {
+                "description": "The bytes its key-value store may hold.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "problem": {
+                "description": "With `state` `broken`: why.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "state": {
+                "$ref": "#/$defs/PluginState"
+              },
+              "version": {
+                "description": "The manifest's version; none when the manifest does not read.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "state"
+            ],
+            "type": "object"
+          },
+          "PluginState": {
+            "description": "Where a plugin stands.  Only `approved` runs.",
+            "oneOf": [
+              {
+                "const": "unapproved",
+                "description": "Installed, never approved.",
+                "type": "string"
+              },
+              {
+                "const": "approved",
+                "description": "Approved at the hash on disk now.",
+                "type": "string"
+              },
+              {
+                "const": "changed",
+                "description": "The files on disk are not the ones that were approved.",
+                "type": "string"
+              },
+              {
+                "const": "disabled",
+                "description": "Switched off by the user.",
+                "type": "string"
+              },
+              {
+                "const": "broken",
+                "description": "The manifest does not read; `problem` says why.",
+                "type": "string"
+              }
+            ]
+          },
+          "Reach": {
+            "additionalProperties": false,
+            "description": "Everything a manifest lets a plugin do.",
+            "properties": {
+              "abilities": {
+                "default": [],
+                "description": "The abilities' names (the tools it offers).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "hooks": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/HookReach"
+                },
+                "type": "array"
+              },
+              "hosts": {
+                "default": [],
+                "description": "The hosts it may reach over https, `host:port`.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`plugins/list`'s answer.",
+        "properties": {
+          "plugins": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/PluginRow"
+            },
+            "type": "array"
+          }
+        },
+        "title": "PluginList",
+        "type": "object"
+      },
+      "writes": false
     },
     {
       "classes": [

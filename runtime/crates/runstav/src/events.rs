@@ -258,6 +258,11 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "the runners changed (one added, removed, benched or back in rotation, its trust or state, its load): the whole list"
         ),
         event!(
+            "plugin",
+            crate::methods::plugins::PluginChanged,
+            "a plugin's state changed (installed, approved, changed on disk, disabled, broken or removed): its name and new state"
+        ),
+        event!(
             "agent-presence",
             crate::methods::work::FilePresence,
             "who is in a file now changed: its entries, at most once per file per 100 ms, to the connections that asked (agents/presence/subscribe)"
@@ -348,6 +353,7 @@ mod tests {
                     // agent system part 2
                     "machines-changed",
                     "runners-changed",
+                    "plugin",
                     "agent-presence",
                     "work-map",
                 ]
@@ -364,7 +370,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 24);
+        assert_eq!(events().len(), 25);
         assert!(event("settings/proposed").is_some());
         // ids only: a key-shaped value is no id, and nothing but `providers` is taken
         let changed = event("gateway/keys-changed").unwrap();

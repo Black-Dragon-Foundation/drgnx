@@ -1098,6 +1098,7 @@ name = "drgnx-ratatoskr"
 version = "0.1.0"
 dependencies = [
  "bifrost",
+ "brokkr",
  "bytes",
  "draugr",
  "eitri",

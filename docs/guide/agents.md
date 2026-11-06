@@ -332,6 +332,19 @@ Onboarding's Agents step asks for both and writes them without touching the rest
 edit them by hand too. The search tool lets an agent read the indexed code of any of your projects, so it is off until
 you say yes.
 
+### The plugin tier of the network list
+
+`agents-net-hosts` names the hosts each network tier reaches (`provider-only`, `packages`). A plugin's HTTP requests
+are not the agent's: they have a tier of their own, `plugin`. A plugin reaches a host only when its approved manifest
+names it and, unless the session's network is open, you also list it as `"host:port"` under `plugin`:
+
+```elisp
+(drgnx-agents-net-hosts ((plugin "api.example.com:443")))
+```
+
+The agent's own tiers are never consulted for a plugin, and addresses on your machine or your network stay out of
+reach whatever the lists say ([plugins.md](plugins.md#installing-and-approving)).
+
 ### What a session gets with the browser
 
 When the matrix's `browser` cell allows it (Balanced: managers and workers; a chat asks), a session also gets a

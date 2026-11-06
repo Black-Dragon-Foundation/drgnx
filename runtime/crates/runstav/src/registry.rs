@@ -369,7 +369,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 142, "{names:?}");
+        assert_eq!(names.len(), 145, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -400,6 +400,8 @@ mod tests {
             "runners/set",
             "runners/unbench",
         ]);
+        // the plugins': an approval and a switch-off change what the hub may run
+        want.extend(["plugins/approve", "plugins/disable"]);
         want.extend(
             registry()
                 .iter()
@@ -651,7 +653,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 101);
+        assert_eq!(with, 103);
     }
 
     #[test]
