@@ -66,6 +66,39 @@ The runner list is yours alone: an agent can't add, bench, change or remove a ma
 when drgnx starts stays in the list as `not connected`; `drgnx runner check NAME` connects it again. Removing a runner
 refuses while a job is on it.
 
+## The runner list
+
+**Show Runners** (palette) opens the list in the editor: a row per runner, the same as `drgnx runner list`, in at most
+60 columns. A runner is a dot (full while it takes jobs, empty while it is out of rotation), its name, trust, profile and
+what it accepts; the second line is its size, the jobs running there, its free disk and when it was last checked (UTC),
+with the numbers in the code face. A runner out of rotation says why on lines of its own, for example
+`benched: image pull failed twice (14:02, 14:20)`. A runner of trust `my-cloud` carries a cloud mark. The list follows the
+hub: a change shows at once, and **g** reads it again.
+
+The commands for the row at point (all in the palette; none has a key of its own):
+
+| Command | Does |
+|---|---|
+| Check Runner | its probe, its contract and a canary, now |
+| Bench Runner / Unbench Runner | out of rotation / back in rotation at once |
+| Set Runner Trust… | `mine`, `my-cloud` or `shared` |
+| Set Runner Jobs… | accepts `all` jobs or only the `heavy` ones |
+| Remove Runner | stops our units and containers there and deletes its folder (asks first) |
+| Show Runner Log | what the hub knows of it: state, strikes, last strike |
+
+Global: **Add Runner…** (a host as your ssh knows it, and its trust) and **Runners: Load Keys**. Which settings a
+project and you choose for runners are listed under "Which jobs go where"; `drgnx-runners-key-host` (default
+`drgnx-runner-keys`) is the host your job keys are filed under in your key store.
+
+**Cards.** What waits for you is a card in the Notices list and the needs-you count, and goes by itself when the hub's
+list or ask no longer says it:
+
+- "Log in to desktop: run `ssh desk true` in a terminal" while a runner waits for a login;
+- "desktop benched: image pull failed twice (14:02, 14:20)" while a runner is benched;
+- "needs your keys: run Runners: Load Keys" while the hub asks for job keys it doesn't hold.
+
+A card only says what to run. The editor never answers a login, and never reads your key store on its own.
+
 ## Keys
 
 Some jobs need a secret: a registry token to publish, a deploy key to fetch a private dependency. A job names the
@@ -78,6 +111,11 @@ keys it needs (names only); drgnx gets them to the job on the runner without wri
 - **You hand them over, the hub keeps them in memory.** When a job needs a key the hub doesn't hold, the hub asks
   (`runners/need-keys`, names only); your editor answers from your key store with `runners/keys`, from a command you
   run, never by itself. The hub holds the values in memory only, until it stops; `runners/keys-held` lists the names.
+  In the editor the ask is a card, "needs your keys: run Runners: Load Keys". **Runners: Load Keys** (and **Add
+  Runner…**, for the keys the project lists) read each key from your key store (an auth-source entry: host
+  `drgnx-runners-key-host`, user the key's name; it may ask for a passphrase, because you ran it) and send it. The
+  editor keeps what it sent in its own memory for the session, sends it again whenever a hub proves itself after a
+  reconnect or restart, and forgets it when the runners module is turned off.
 - **Only where trust allows, only after the job started.** Keys go to a `mine` runner, to a `my-cloud` runner only
   those on its own list, and never to a `shared` one; and only once the job has started there, one at a time. A
   keyed job never runs on this machine for now: it waits for a runner and says so.
