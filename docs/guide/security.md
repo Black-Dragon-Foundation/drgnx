@@ -492,6 +492,14 @@ again, so the agent's retry goes through without a second card.
   the narrowest answer (once) and Deny is Refuse.
 - A grant is yours alone (an agent cannot write one), and switching the row to Never ends it at once.
 
+### Hooks never widen
+
+Your hook rules and your plugins' hooks ([plugins.md](plugins.md#rules-and-hooks)) look at a step after the matrix
+has, and they can only narrow what it says. A hook's `allow` means "no objection": a step the matrix asks about is
+still asked about, and a step it refuses is refused before any hook runs. A hook can turn Allow or Ask into a refusal,
+never the other way. A hook that fails (it times out, crashes, is busy, or answers something its manifest did not
+declare) refuses the step too, unless it is declared advisory, and then its failure is a note under the step.
+
 ## Checking it
 
 `drgnx doctor` has a `security` line. It names the Emacs security issues that apply to your version (CVE numbers)

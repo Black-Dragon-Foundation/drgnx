@@ -84,6 +84,43 @@ plugin authors. Build it with `cargo build --target wasm32-wasip2 --release`, co
 beside `plugin.json` in a folder named after the plugin, and install the folder. Outside the drgnx sources, copy
 `runtime/crates/brokkr/wit` next to the plugin and change the `path` in `wit_bindgen::generate!`.
 
+## The hook engine
+
+`norn::hooks` decides a step from the user's rules and the plugins' hooks. It is pure: it runs no plugin and touches
+no store. The hub's points (before a tool call, after an edit, before a commit, at review) call it.
+
+- `parse_rules(&Value)` checks `drgnx-agents-hook-rules` (the rule format: [guide](../guide/plugins.md#your-rules)):
+  unknown keys refused, every error with its JSON path (`[2].id`), ids unique, `command` compiled by the `regex`
+  crate (linear time) under a 1 MiB size limit, never `fancy-regex`. `glob_match` is the segment-aware glob of rules
+  and hook filters (`*` and `?` in one segment, a `**` segment across segments), iterative with one backtrack point
+  per level; `runner/clash.rs`'s glob is not reused (there `*` crosses `/`, and it recurses).
+- `acp_kind(raw, tool_name)` normalises an agent's kind: an ACP kind stays, anything else (`drgnx` included) is
+  `other`, and an `other` named `NotebookEdit` is `edit`. It never returns `drgnx`; only the hub's servers set it.
+- `subscribed(input, rules, plugins)` is the points' fast path: does any rule, or any plugin's hook at the point
+  whose `filter` matches, look at this step.
+- `run(input, budget, rules, plugins, host)` runs the matching rules in list order, then each plugin's matching hook
+  in plugin order, and returns one `Record {source, verdict, ms, error, advisory}` per match. A deny, or a failure of
+  a non-advisory hook, stops the run (later matches are recorded with no verdict and no error: not run). Each hook
+  gets `min(deadline_ms, what is left of the point's budget)`, measured on `HookHost::now` (the hub's clock); with
+  nothing left it is not run and its record is that failure. A verdict outside the manifest's `verdicts` (`allow` is
+  always allowed) and a change that is not the point's replacement object (`{"arguments": object}`, `{"content":
+  string}`, `{"message": string}`, `{"notes": string}`) are failures. Each hook's input is the point's `detail`
+  object with `v`, `point`, `session`, `step` and `previous` (`[{source, verdict}]`) set, and the last change written
+  in (`tool.input`, `edit.content`, `commit.message`, `review.notes`); matching always uses the input as the point
+  gave it.
+- `HookHost` is what `run` calls a hook through: `run_hook(plugin, point, input, deadline)`, which keeps the hook
+  within its deadline, and `now()`. The plugin host implements it with the call's I/O; `HookPlugin` (a manifest and
+  its approved hash) is implemented for `brokkr::Installed`.
+- `combine(cell, accepts_change, records) -> Outcome {decision, decided_by, annotations, provenance}`. A `Never`
+  cell stays `Deny`; `Ask` stays `Ask` and `Allow` (or `None`: a hub tool whose matrix checks are in its body)
+  stays `Proceed`, unless a record denies. The first deny decides (`decided_by` is its index); a failure is a deny,
+  or a note when advisory; a change where `accepts_change` is false is the failure "change is not accepted here";
+  the last accepted change rides on `Proceed` or `Ask`. Notes are capped at 8 of 2 KiB, then "+N more".
+- Sources print as `rule:ID` (else `rule:N`) and `plugin:NAME@VERSION#` with the hash's first 4 bytes in hex.
+
+`hooks::tests::allow_never_widens` checks every cell, both contexts and every list of up to three records of every
+kind (3 200 cases).
+
 ## The interface
 
 `runtime/crates/brokkr/wit/agent-tools.wit` is package `drgnx:agent-tools@0.1.0`. World `plugin` exports

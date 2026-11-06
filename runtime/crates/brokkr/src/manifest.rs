@@ -21,8 +21,8 @@ const MAX_HOSTS: usize = 16;
 const MAX_DESCRIPTION_CHARS: usize = 1024;
 /// `len(name) + 1 + len(ability)`: the full tool name `mcp__drgnx-plugins__NAME_ABILITY` stays within 64 characters.
 const MAX_QUALIFIED_ABILITY: usize = 44;
-/// The ACP tool kinds, and `drgnx` for the hub's own tools.
-const TOOL_KINDS: &[&str] = &[
+/// The ACP tool kinds, then `drgnx` (last) for the hub's own tools. The hook engine's rules use the same list.
+pub const TOOL_KINDS: &[&str] = &[
     "read",
     "edit",
     "delete",

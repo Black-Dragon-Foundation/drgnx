@@ -11,7 +11,7 @@ pub mod store;
 pub mod test_support;
 
 pub use manifest::{
-    AbilityDecl, Filter, HookDecl, HostName, Manifest, ManifestError, PluginName, Point, ToolName,
-    VerdictKind, parse, plugin_hash,
+    AbilityDecl, Filter, HookDecl, HostName, Manifest, ManifestError, PluginName, Point,
+    TOOL_KINDS, ToolName, VerdictKind, parse, plugin_hash,
 };
 pub use store::{Installed, scan};

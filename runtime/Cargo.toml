@@ -21,6 +21,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
 schemars = "1.2"
 serde_path_to_error = "0.1"
+# the hook rules' `command` (norn::hooks): linear time, compiled under a size limit; already in the lock as a
+# transitive dependency, so nothing new is downloaded. Never fancy-regex for a user's pattern
+regex = "1.13"
 serde_ignored = "0.1"
 hmac = "0.13"
 sha2 = "0.11"
