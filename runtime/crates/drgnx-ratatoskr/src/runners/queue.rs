@@ -511,6 +511,20 @@ fn hist_row(spec: &JobSpec, machine: &str, result: &Value, now: u64) -> Option<H
     })
 }
 
+/// RESULT with the counts, rows and failing names of every attempt's ROWS (`attempts::union_result`, under SPEC's
+/// `expect`), and the `split` line when they came from more than one attempt; RESULT as it is with no rows.
+fn merged(result: &Value, rows: &Rows, spec: &JobSpec, suite: Option<&Suite>) -> Value {
+    if rows.is_empty() {
+        return result.clone();
+    }
+    let mut out = attempts::union_result(result, rows, &spec.expect);
+    let split = suite.and_then(|s| crate::exec::summary::split_line(&s.listed, &rows.union()));
+    if let (Some(line), Some(o)) = (split, out.as_object_mut()) {
+        o.insert("split".into(), line.into());
+    }
+    out
+}
+
 fn no_grant() -> forseti::Grant {
     forseti::Grant {
         cores: 0,
@@ -2497,15 +2511,7 @@ impl Queue {
                         {
                             self.record_run(st, &spec, r, &result, now);
                         }
-                        if !rows.is_empty() {
-                            result = attempts::union_result(&result, &rows, &spec.expect);
-                            let split = suite.and_then(|s| {
-                                crate::exec::summary::split_line(&s.listed, &rows.union())
-                            });
-                            if let (Some(line), Some(o)) = (split, result.as_object_mut()) {
-                                o.insert("split".into(), line.into());
-                            }
-                        }
+                        result = merged(&result, &rows, &spec, suite.as_ref());
                     }
                     st.jobs.remove(&job);
                     st.attempts.forget(&job);
@@ -2532,11 +2538,39 @@ impl Queue {
                     self.put_job(&j, j.s.own);
                     // the rows its log shows have their results, so the next attempt runs only the rest; this one
                     // stops once its runner is heard from again
-                    if let Some(suite) = &j.s.place.suite {
-                        self.rows_from_log(st, &job, n, &suite.parser, &kept);
-                        if selects_rows(&j.s.spec, Some(suite)) {
-                            st.cancel_late.insert((job.clone(), n));
-                        }
+                    let Some(suite) = &j.s.place.suite else {
+                        continue;
+                    };
+                    self.rows_from_log(st, &job, n, &suite.parser, &kept);
+                    if !selects_rows(&j.s.spec, Some(suite)) {
+                        continue;
+                    }
+                    st.cancel_late.insert((job.clone(), n));
+                    // every listed row has its result already: the job ends from them, judged as a finish is, and
+                    // nothing runs again
+                    let done = st.rows.get(&job).map(Rows::done).unwrap_or_default();
+                    if forseti::split::remaining_rows(&suite.listed, &done).is_empty() {
+                        let rows = st.rows.remove(&job).unwrap_or_default();
+                        let ran = json!({"verdict": "Pass"});
+                        let result = merged(&ran, &rows, &j.s.spec, Some(suite));
+                        let shared = st
+                            .attempts
+                            .attempt(&job, n)
+                            .map(|a| a.runner.clone())
+                            .filter(|r| {
+                                st.runners
+                                    .get(r)
+                                    .is_some_and(|x| x.r.trust == RunnerTrust::Shared)
+                            });
+                        st.jobs.remove(&job);
+                        st.attempts.forget(&job);
+                        self.drop_job(&job);
+                        out.push(Outcome::Done {
+                            id: job,
+                            attempt: n,
+                            result,
+                            shared,
+                        });
                     }
                 }
                 Effect::Lost { job } if is_canary(&job) => {
@@ -2788,6 +2822,113 @@ mod tests {
             assert_eq!(attempt_spec(s, su, Some(&rows)), *s);
         }
         assert!(selects_rows(&spec, Some(&suite)));
+    }
+
+    // [D] pure (a runner's link fed by hand): attempt 1 is lost after every row is in the hub's copy of its log; the
+    // job ends from those rows, judged as a finish is, and nothing runs again
+    #[tokio::test]
+    async fn a_requeue_with_every_row_done_finishes_from_the_rows() {
+        use super::super::transport::{Channel, Channels};
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = Queue::new(QueueCfg {
+            hub_id: "h".into(),
+            exec_root: dir.path().to_path_buf(),
+            local: LocalRunner::new(super::super::local::Admission::Fixed(1), dir.path()),
+            db: None,
+        });
+        q.adopt("xbusy", Priority::P1, 100);
+        let idle = || Channel::new(Box::new(tokio::io::sink()), Box::new(tokio::io::empty()));
+        let session = Session::start(
+            "r1",
+            Channels {
+                control: idle(),
+                bulk_in: idle(),
+                bulk_out: idle(),
+            },
+            q.route(),
+            q.link_events(),
+        );
+        q.add_runner(
+            RemoteRunner {
+                name: "r1".into(),
+                trust: RunnerTrust::Mine,
+                accept: Accept::All,
+                grace_s: 0,
+                image: None,
+            },
+            session,
+        );
+        let hello = Frame::HelloOk {
+            version: PROTO_VERSION,
+            bundle: String::new(),
+            hub_id: "h".into(),
+            runner_id: String::new(),
+            boot_id: String::new(),
+            linger: false,
+            attempts: vec![],
+            missing: vec![],
+        };
+        q.on_link(
+            LinkEvent::Frame {
+                runner: "r1".into(),
+                frame: hello,
+            },
+            100,
+        );
+        let listed: Vec<String> = ["t1", "t2", "t3"].map(String::from).to_vec();
+        let mut spec = blank_spec("x1");
+        spec.command = vec!["run".into(), ROWS.into()];
+        q.submit(
+            Submit {
+                id: "x1".into(),
+                session: Some("s1".into()),
+                own: Priority::P3,
+                spec,
+                place: Placement {
+                    heavy: true,
+                    suite: Some(Suite {
+                        parser: "plist".into(),
+                        listed,
+                    }),
+                    ..Placement::default()
+                },
+                pending: Value::Null,
+                inputs: None,
+            },
+            100,
+        );
+        q.tick(100);
+        assert_eq!(q.row("x1").and_then(|r| r.machine), Some("r1".into()));
+        // every listed row reached the hub's copy before the link was lost
+        std::fs::create_dir_all(dir.path().join("x1")).unwrap();
+        let rows = "(:name \"t1\" :verdict pass)\n(:name \"t2\" :verdict skip)\n(:name \"t3\" :verdict pass)\n";
+        std::fs::write(dir.path().join("x1/log"), rows).unwrap();
+        let out = q.on_link(
+            LinkEvent::Lost {
+                runner: "r1".into(),
+                why: "test".into(),
+            },
+            110,
+        );
+        let [
+            Outcome::Done {
+                id,
+                attempt: 1,
+                result,
+                shared: None,
+            },
+        ] = &out[..]
+        else {
+            panic!("the job didn't end from its rows: {out:?}");
+        };
+        assert_eq!(id, "x1");
+        assert_eq!(result["verdict"], "Pass", "{result}");
+        assert_eq!(
+            result["counts"],
+            json!({"ran": 2, "passed": 2, "failed": 0, "skipped": 1, "crashed": 0})
+        );
+        assert_eq!(q.row("x1"), None, "the job left the queue");
+        assert!(q.tick(120).starts.is_empty());
     }
 
     // [D] pure (runtime.db in a folder): what placement learned comes back after a hub restart; with no history,

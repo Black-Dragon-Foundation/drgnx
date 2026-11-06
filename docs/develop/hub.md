@@ -2175,7 +2175,9 @@ parser that reads no rows (`exit`), or no `{rows}` in its command (`selects_rows
 runner with that nonce, current or late, until the job's verdict (`attempts::Rows`, and `rq_rows`). A runner sends its
 rows at an attempt's end, so when an attempt is requeued the hub reads the rows its own copy of the log shows (up to the
 last whole line) as that attempt's. A requeued attempt whose rows the next one reruns is cancelled when its runner lists
-it again (an `attach`, then a `cancel`; its log and result are kept as late), so no row runs to its end twice.
+it again (an `attach`, then a `cancel`; its log and result are kept as late), so no row runs to its end twice. When
+every listed row already has its result at the requeue, nothing runs again: the job ends there from those rows, judged
+as a finish is (a `Pass` judged over the union), and the job layer gets its `Outcome::Done` for that attempt.
 
 At the verdict, `attempts::union_result` gives the runner's `result.json` the union's `counts`, `rows` (each with its
 attempt and machine) and `failing`: each row once, from its latest attempt. A `Pass` is judged again over the union
