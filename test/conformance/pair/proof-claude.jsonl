@@ -1,0 +1,30 @@
+{"scenario": "pair/proof-claude", "requires": ["v1", "test-hooks"], "doc": "Gated (B), Claude's pair proof. A Claude chat in a project starts with its native Edit, Write, MultiEdit and NotebookEdit disallowed (session/new's _meta.claudeCode.options); a native edit attempt fails and writes nothing; its edits through the drgnx tools reach the door: edit_file as given, write_file after read_file as hunks against the editor's text."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/project && echo readme > $ROOT/project/README"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-matrix (:preset autonomous)) (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/a.log\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 90, "method": "pair/open", "params": {"file": "$ROOT/project/README", "kind": "normal"}}}
+{"do": "expect", "conn": "e", "json": {"id": 90, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/project"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}}
+{"do": "file", "path": "$ROOT/a.log", "contains": "\"disallowedTools\":[\"Edit\",\"Write\",\"MultiEdit\",\"NotebookEdit\"]", "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "provider:native-edit README\ncall:edit_file {\"path\": \"$ROOT/project/README\", \"old\": \"readme\", \"new\": \"README\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "pair-apply", "data": {"write": "$capture:w", "session": "$sid", "edits": [{"kind": "replace", "old": "readme", "new": "README"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "pair/answer", "params": {"write": "$w", "result": "applied", "version": 2, "saved": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 3, "method": "agents/get", "params": {"id": "$sid"}}, "expect": {"id": 3, "result": {"session": {"status": "idle"}, "entries": {"$contains": [{"type": "tool", "status": "failed", "kind": "edit"}, {"type": "agent", "text": "call: applied in the editor and saved"}]}}}, "within_ms": 20000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/send", "params": {"id": "$sid", "text": "call:read_file {\"path\": \"$ROOT/project/README\"}\ncall:write_file {\"path\": \"$ROOT/project/README\", \"content\": \"README\\nmore\\n\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "pair-read", "data": {"req": "$capture:r", "file": "$ROOT/project/README"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "pair/read-answer", "params": {"req": "$r", "text": "README\n", "version": 2}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "pair-apply", "data": {"write": "$capture:w2", "version": 2, "edits": [{"kind": "lines", "line": 2, "delete": 0, "text": "more\n"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "pair/answer", "params": {"write": "$w2", "result": "applied", "version": 3, "saved": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "cat $ROOT/project/README"], "expect_code": 0, "expect_stdout": "readme\n"}

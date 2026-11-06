@@ -368,7 +368,24 @@ impl LaunchPlan {
         }
         self
     }
+
+    /// A chat in a project: Claude's own edit tools are off from its start ([`PAIR_DISALLOWED`]), so its edits of the
+    /// checkout go through the pair door; its `Read` stays.  A no-op for another provider's plan.
+    pub fn with_project_chat(mut self) -> Self {
+        if let Some(options) = self
+            .session_meta
+            .as_mut()
+            .and_then(|m| m.pointer_mut("/claudeCode/options"))
+            .and_then(Value::as_object_mut)
+        {
+            options.insert("disallowedTools".into(), json!(PAIR_DISALLOWED));
+        }
+        self
+    }
 }
+
+/// Claude Code's edit tools, off in every chat in a project (pair mode writes through the hub's door instead).
+pub const PAIR_DISALLOWED: [&str; 4] = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
 
 impl LaunchPlan {
     /// Codex only: the worktree CWD is marked `untrusted` (`projects."<cwd>".trust_level`), so a `.codex/config.toml`

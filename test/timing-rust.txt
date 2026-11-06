@@ -13,6 +13,7 @@ gleipnir timing traced_2000_opens_within_budget release
 saga records a_1600_row_table_parses_under_50_ms
 drgnx-ratatoskr work_timing shell_parse_within_200_us release
 drgnx-ratatoskr editor_timing project_5_agents_5000_lines_within_2_ms release
+drgnx-ratatoskr pair_timing whole_file_5000_lines_within_2_ms release
 drgnx-ratatoskr timing query_p95_at_50k_chunks release
 drgnx-ratatoskr timing query_p95_at_100k_chunks release
 drgnx-ratatoskr timing tier1_of_a_checkout_and_one_saved_file release

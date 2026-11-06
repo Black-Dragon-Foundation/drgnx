@@ -1035,10 +1035,12 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `agents/do` | user | `{id: Id, item?: RequestId, n?: natnum, op: "deliver-queue" \| "unqueue" \| "requeue" \| "review", reject?: boolean, text?: Prompt}` | `boolean` | yes |
 | `agents/entries/subscribe` | user | `{session: Id}` | `{seq: natnum}` | no |
 | `agents/entries/unsubscribe` | user | `{session: Id}` | `boolean` | no |
+| `agents/follow` | user | `{session: Id, view: string}` | `boolean` | no |
 | `agents/get` | user | `{id: Id}` | `{entries?: [Entry], seq: natnum, session: Snapshot}` | no |
 | `agents/kill` | user | `{id: Id}` | `boolean` | yes |
 | `agents/list` | user, agent, service | `{}` | `{sessions?: [Snapshot]}` | no |
 | `agents/move` | user | `{id: Id, profile: string}` | `{id: string, name: string}` | yes |
+| `agents/pair` | user | `{id: Id, on: boolean}` | `boolean` | no |
 | `agents/pause` | user | `{id: Id}` | `boolean` | yes |
 | `agents/permission` | user | `{id: Id, option?: string, request: RequestId}` | `boolean` | yes |
 | `agents/presence/get` | user | `{file: string}` | `{entries?: [PresenceEntry], file: string, rel?: string, repo?: string}` | no |
@@ -1050,6 +1052,10 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `agents/start` | user | `{about?: string, cwd?: AbsPath, document?: AbsPath, env?: [{name: EnvName, value: string}], job?: Id, profile: string, role?: "manager" \| "worker" \| "chat", task?: TaskRef}` | `{id: string, name: string}` | yes |
 | `agents/stop` | user | `{id: Id}` | `boolean` | yes |
 | `agents/tool-input` | user | `{session: Id, tool_call: string}` | `{raw_input: any, truncated: boolean}` | no |
+| `agents/unfollow` | user | `{view: string}` | `boolean` | no |
+| `agents/wheel/give` | user | `{id: Id}` | `boolean` | yes |
+| `agents/wheel/saved` | user | `{req: natnum, unsaved?: [AbsPath]}` | `boolean` | no |
+| `agents/wheel/take` | user | `{id: Id}` | `boolean` | yes |
 | `brief/build` | user | `{task: string}` | `{cut: boolean, edited: boolean, parts?: [BriefPartText], task: string, text: string}` | no |
 | `brief/set` | user | `{task: string, text: string}` | `{note: string}` | yes |
 | `browser/check` | user | `{}` | `BrowserCheckResult` | no |
@@ -1122,7 +1128,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `job/unblock` | user | `{task: TaskRef}` | `JobSummary` | yes |
 | `machines/list` | user | `{}` | `{machines?: [Machine]}` | no |
 | `machines/report` | user | `{machine: string, slots?: [{holder?: string, id: string, kind: string}], ttl: number}` | `{local: boolean, machine: string, slots?: [Slot]}` | no |
-| `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "network" \| "browser" \| "browser.web" \| "browser.private" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no |
+| `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "network" \| "browser" \| "browser.web" \| "browser.private" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read" \| "chat.project-edit", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no |
 | `matrix/get` | user | `{plan?: string, project?: string, who?: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `MatrixView` | no |
 | `mcp/attach` | service | `{kind: AgentKind}` | `{identity: string}` | no |
 | `mcp/session` | user | `{agent: AgentName, cwd?: AbsPath, job?: Id, owner: natnum, profile?: Id, sid?: SessionId, task?: TaskRef, tools?: {tracker: boolean}}` | `{sid: string, socket: string}` | no |
@@ -1131,6 +1137,11 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `messages/retract` | user | `{id: natnum}` | `{retracted: boolean, status: string}` | yes |
 | `messages/send` | user | `{answers?: natnum, job?: Id, question?: boolean, recipient: AgentName, seen?: natnum, sender?: AgentName, text: Text}` | `SendResult` | yes |
 | `pace/get` | user | `{provider?: string}` | `{meters?: [Pace]}` | no |
+| `pair/answer` | user | `{lines?: [natnum], not_saved?: Text, reason?: Text, result: "applied" \| "refused" \| "dropped", saved?: boolean, version?: natnum, write: natnum}` | `boolean` | no |
+| `pair/closed` | user | `{file: AbsPath}` | `boolean` | no |
+| `pair/open` | user | `{file: AbsPath, kind: "normal" \| "large" \| "remote"}` | `boolean` | no |
+| `pair/open-set` | user | `{files: [{file: AbsPath, kind: "normal" \| "large" \| "remote"}]}` | `boolean` | no |
+| `pair/read-answer` | user | `{error?: Text, req: natnum, text?: string, version?: natnum}` | `boolean` | no |
 | `ping` | user, agent, service | `{}` | `{pid: natnum}` | no |
 | `plans/get` | user | `{plan: string}` | `PlanView` | no |
 | `plans/write` | user | `{base_version?: natnum, plan?: string, project?: string, tasks?: [{blocks?: [string], body?: Text, interfaces?: Text, model?: string, number: string, profile?: string, role?: string, status?: Status, steps?: [{done: boolean, text: string}], title?: string}], title?: string}` | `{plan: string, tasks?: [TaskId], tx: natnum}` | yes |
@@ -1270,12 +1281,56 @@ result is (`event(NAME).check`):
 | `agent-presence` | the presence model (to the connections that asked) | `{file, rel?, repo?, entries: [{session, file, mode, line?, line_end?, col?, source, step, at, live?, tool_call?}]}`: who is in the file now (running tool calls included), at most once per file per 100 ms ("The presence model") |
 | `agent-buffer` | the buffer views (to the view's connection only) | `{view, version, base, doc_version?, approximate?, agents: [{session, ordinal?, handle?, mode, line?, line_end?, col?, source, live?, projected?, step_title?, plan_entry?}], gutter: [{session, kind, start, end, projected?, help}]}`: a watched buffer's frame, at most once per view per 50 ms ("The buffer view") |
 | `work-map` | the Work map (to the view's connection only) | `{view, version, base, full?, changed: [Item], removed: [Id], entered: [Id], places?, edges?, layout?, needs_you?, chips?, stale?}`: what changed in one map view since version `base` ("The Work map") |
+| `agent-follow` | the follow feed (to the view's connection only) | `{view, session, file?, worktree, line?, col?, mode: listed \| read \| pending \| write \| edit, step_title?, plan_entry?, why_source: plan_entry \| step_title, changed?}`: where the followed session is now, at most once per 200 ms ("The follow feed") |
 | `supervisor` | the supervisor | `{rule, session?, exec?, task?, card?, text}` |
 | `view-written` | records | `{path, kind, hash}`: a view file written (never committed) |
 | `view-proposal` | records | `{id, path, by?}`: a hand edit to a view became a proposal |
+| `agent-wheel` | sessions | `{id, state: held \| free}`: the user's hold on a session's wheel; `held` once the turn the take stopped has ended and its step snapshot is taken (coordination.md, "Take the wheel") |
+| `wheel-save` | sessions (a give) | `{req, id, worktree}`: the editor saves its buffers in the session's worktree and answers `agents/wheel/saved {req, unsaved}` |
+| `pair-apply` | the pair door (to the editor that has the file) | `{write, session, ordinal, file, version?, floor?, edits: [{kind: replace, old, new} \| {kind: lines, line, delete, text}], ttl_ms}`: applied whole or refused whole, answered by `pair/answer` ([Pair mode](#pair-mode)) |
+| `pair-read` | the pair door | `{req, file}`: the editor answers `pair/read-answer` with the buffer's text and version |
+| `pair-reconcile` | the pair door | `{write, file}`: no answer in `ttl_ms` plus a margin; the editor answers `pair/answer` from what it applied |
+| `pair-drop` | the pair door (to each editor holding the session's writes) | `{session, reason: pair-off \| held}`: drop the session's queued writes, each answered `dropped` with the reason |
 
 The hub sends every event it lists; `card` and `lease-released` are in the registry for the clients that read them,
 and nothing sends them now (`runstav/src/events.rs`).
+
+## Pair mode
+
+A chat in a project edits your checkout only through the hub's door (`src/pair/`; user guide:
+[pair-mode.md](../guide/pair-mode.md); per agent: [pair-routing.md](pair-routing.md)). The sandbox still binds the
+checkout read-only for it.
+
+- **Its tools.** Every chat in a project gets `read_file {path}`, `edit_file {path, old, new}` and `write_file {path,
+  content}` on its `mcp.sock` (`norn::tools::pair`, through `Hub::pair_read` / `Hub::pair_write`); a Claude chat also
+  starts with `disallowedTools` = `Edit`, `Write`, `MultiEdit`, `NotebookEdit` (`lock::LaunchPlan::with_project_chat`;
+  its `Read` stays). A chat's ACP `fs/read_text_file` and `fs/write_text_file` inside the project go to the same door,
+  on a task of their own so the session's reader loop never waits on an editor; every other session keeps the fence.
+- **The gates.** `pair::gate`: `chat.project-edit` decides (never: refused; ask: the Pair toggle is the user's;
+  allow: paired from the start), never the chat's `code.edit`; `chat.project-read` too; an absolute path inside the
+  checkout, links resolved, never `.git/`, the protected agent-config paths, a CI or build file or a credential file.
+  `pair::read_gate` (every hub-served read): `chat.project-read`, inside the checkout, never a credential file.
+- **A write** goes to the editor as `pair-apply` with a relative `ttl_ms` (2000) the editor counts from its arrival.
+  `edit_file` travels as it is (the editor needs one match at apply time); `write_file` of an existing file needs a
+  read the editor served to that session (`read_file`, `fs/read_text_file`), and is diffed into line hunks against it
+  at its version; a new file needs none. One file's writes go one at a time, in order (`pair::writes::FileQueue`).
+- **The verdict is the editor's** (`pair/answer {write, result: applied | refused | dropped, version?, reason?, lines?,
+  saved?, not_saved?}`), from the connection the write went to. At `ttl_ms` plus a second with no answer the hub sends
+  `pair-reconcile`, which the editor answers from what it applied; the hub's timer never refuses. An editor that goes
+  away leaves a write in flight unknown ("read it with read_file to see"), never refused.
+- **Refusals** that need a re-read name `read_file`. Two refusals of one file within 60 s add "wait for the user or ask
+  them", and the session's snapshot carries `waiting {file, lines?}` until a write of that file applies.
+- **The open set** (`pair::open_set`): the editor tells the hub which files it has open, `pair/open {file, kind:
+  normal | large | remote}` and `pair/closed {file}`, and sends its full set (`pair/open-set {files: [{file, kind}]}`)
+  at its module's setup and on every connection, replacing what the hub held for it. A write and a hub-served read go
+  to the editor that has the file in a normal buffer; a large or remote buffer refuses the write; a file open in an
+  editor that went away refuses "the editor is away" until an editor opens it again or sends its set; a file no editor
+  has refuses "not open in the editor" (this version never writes the disk itself), and its read comes from the disk.
+- **The toggle** (`agents/pair {id, on}`, the user's only): on needs `chat.project-edit` not never; off closes the
+  door at once: the session's writes not yet sent are refused "pair mode was turned off by the user", each editor
+  holding one is sent `pair-drop` (its answers `dropped` are the verdicts), and a note is queued to the agent; nothing
+  is cancelled. The snapshot's `paired` (chats in a project only) is the toggle, else the cell's allow.
+  `Door::hold` closes the door the same way while the user holds the wheel ("the user holds the wheel").
 
 ## Per-session sockets
 
@@ -1601,6 +1656,28 @@ view only what changed, to the connection that shows it.
   finished edit still overlaps.
 - **Restart:** nothing is kept. The editor's re-subscription after a restart gets a full frame from the new hub's
   sessions and store.
+
+### The follow feed
+
+A follow window in the editor shows where one agent is (`editor::follow`). `agents/follow {view, session}` (user
+connections) makes the connection's VIEW follow SESSION from now on, its latest place first; `agents/unfollow {view}`
+ends it (true when it followed one), and a connection's views end with it. The event `agent-follow {view, session,
+file?, worktree, line?, col?, mode, step_title?, plan_entry?, why_source, changed?}` goes by `Front::send_to` to the
+view's connection only.
+
+- **Source:** each tool call update of the session (`tool_call`, `tool_call_update`), as the transcript merges it:
+  its first location is the place, its kind the mode (`read`; `search` → `listed`; `edit`, `delete`, `move` →
+  `pending` until completed, then `edit`, or `write` for a whole-file write). A failed call and other kinds (a
+  command, a fetch) do not move the window.
+- **The rules** (`editor::follow::Core`, pure, tested in every order on the hub's clock): at most one move per 200 ms
+  per view (the latest one held goes when the window ends); a read of another file switches only after the agent has
+  stayed in it 500 ms (a third file starts the dwell again, a move back cancels it); a search or a glob never switches
+  files: its query (the step's title) goes in the line and the window stays; an edit, a write or a pending edit
+  switches at once (the throttle still holds). `changed` is set when a completed edit changed the file shown, so the
+  window reverts it from disk.
+- **The line is the agent's own words:** the plan's `in_progress` entry when the agent sends plans
+  (`why_source: plan_entry`), else the tool call's title (`step_title`). Nothing is generated.
+- **Restart:** nothing is kept; the editor follows again.
 
 ### After a restart
 

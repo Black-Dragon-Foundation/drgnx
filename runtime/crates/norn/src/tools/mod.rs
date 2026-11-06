@@ -18,6 +18,7 @@ pub mod identity;
 pub mod job;
 pub mod jobs;
 pub mod manager;
+pub mod pair;
 pub mod plan;
 pub mod read;
 pub mod records;
@@ -131,6 +132,18 @@ pub trait Hub: Send + Sync {
 
     /// The session SID waited on a job that runs (refused): the hub counts it and cancels the turn at the limit.
     fn wait_refused(&self, _sid: &str) {}
+
+    /// A paired chat SID's read of PATH (pair mode): the editor's text (unsaved edits included) or the disk's, or the
+    /// refusal's text.  The default (no hub): none.
+    fn pair_read(&self, _sid: &str, _path: String) -> BoxFuture<'_, Result<String, String>> {
+        Box::pin(async { Err("pair mode is the hub's: none here".to_string()) })
+    }
+
+    /// A paired chat SID's write W, through the editor that has the file open: the editor's verdict as text, or the
+    /// refusal's.  The default (no hub): none.
+    fn pair_write(&self, _sid: &str, _w: pair::PairWrite) -> BoxFuture<'_, Result<String, String>> {
+        Box::pin(async { Err("pair mode is the hub's: none here".to_string()) })
+    }
 
     /// Session SID's call of the tool TOOL ended; its answer goes out once this returns.  The hub reads what the call
     /// wrote first (the ask it links to).  The default: nothing.
@@ -285,6 +298,11 @@ pub fn core_tools() -> Vec<Box<dyn mimir::Tool<Ctx>>> {
 /// The tools of [`MANAGER_TOOLS`], in that order.
 pub fn manager_tools() -> Vec<Box<dyn mimir::Tool<Ctx>>> {
     manager::tools()
+}
+
+/// The tools of [`pair::PAIR_TOOLS`], in that order: a chat in a project's (pair mode).
+pub fn pair_tools() -> Vec<Box<dyn mimir::Tool<Ctx>>> {
+    pair::tools()
 }
 
 #[cfg(test)]

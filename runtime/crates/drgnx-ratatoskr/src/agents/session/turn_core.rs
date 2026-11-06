@@ -79,6 +79,8 @@ pub(crate) enum QueueEdit {
     Requeue(usize, String),
     /// TEXT goes ahead of the ordinary queued prompts, without starting a turn (the freshness gate's notice).
     SteerIn(String),
+    /// The user gave the wheel back: ITEM goes first, the hold lifts and the next prompt starts.
+    Resume(Queued),
 }
 
 /// What the shell does about a step.
@@ -163,6 +165,8 @@ pub(crate) struct TurnCore {
     held: Vec<(u64, Option<i64>)>,
     /// The event pair's timer runs.
     emit_armed: bool,
+    /// The user holds the wheel (`agents::wheel`): no turn starts, whatever is sent or delivered, until the give.
+    wheel: bool,
 }
 
 impl Default for TurnCore {
@@ -180,6 +184,7 @@ impl Default for TurnCore {
             ending: false,
             held: Vec::new(),
             emit_armed: false,
+            wheel: false,
         }
     }
 }
@@ -384,6 +389,15 @@ impl TurnCore {
                         }
                     }
                     QueueEdit::SteerIn(text) => self.queue.push(text, Origin::Hub, true),
+                    QueueEdit::Resume(item) => {
+                        self.wheel = false;
+                        self.paused = false;
+                        self.queue.push_front(item);
+                        let mut fx = vec![E::Persist];
+                        fx.extend(self.next());
+                        fx.push(E::Announce);
+                        return fx;
+                    }
                 }
                 vec![E::Persist, E::Announce]
             }
@@ -430,9 +444,14 @@ impl TurnCore {
         &mut self.queue
     }
 
+    /// The user holds the wheel (ON) or no longer does: while held no turn starts.
+    pub(crate) fn set_wheel(&mut self, on: bool) {
+        self.wheel = on;
+    }
+
     /// The next queued prompt starts when the session is idle (or waiting on a job), not held, and not ending.
     pub(crate) fn next(&mut self) -> Vec<TurnEffect> {
-        if !self.idle() || self.paused || self.killed || self.ending {
+        if !self.idle() || self.paused || self.wheel || self.killed || self.ending {
             return Vec::new();
         }
         let Some(item) = self.queue.pop() else {
@@ -514,7 +533,11 @@ impl TurnCore {
     /// Can a new turn start now without joining anything: idle (not busy, not waiting on a job), not held, nothing
     /// queued, and its process not being ended.
     pub(crate) fn is_free(&self) -> bool {
-        self.status == SessionStatus::Idle && !self.paused && self.queue.is_empty() && !self.killed
+        self.status == SessionStatus::Idle
+            && !self.paused
+            && !self.wheel
+            && self.queue.is_empty()
+            && !self.killed
     }
 
     pub(crate) fn status(&self) -> SessionStatus {

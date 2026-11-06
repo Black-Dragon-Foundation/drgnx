@@ -2,6 +2,7 @@
 //!
 //! - [`buffer_view`]: which views get a frame and when (pure).
 //! - [`project`]: another worktree's agent mapped three-way onto the user's text (pure).
+//! - [`follow`]: the follow feed (docs/develop/hub.md, "The follow feed").
 //!
 //! The shell here keeps the views of every connection ([`Buffers`]), hears the presence model's changes, and builds a
 //! frame for each view the core says is due: the agents in the file (from presence, with their identities and what
@@ -11,6 +12,7 @@
 //! for a file no view shows.
 
 pub mod buffer_view;
+pub mod follow;
 pub mod project;
 
 use crate::dispatch::Caller;
@@ -18,9 +20,11 @@ use crate::front::Front;
 use crate::work::presence::{self, RepoPath};
 use buffer_view::{ViewEv, ViewOut, Views};
 use runstav::methods::editor::{
-    BufferAgent, BufferFrame, BufferUnwatch, BufferWatch, GutterKind, GutterRange, Projected,
+    BufferAgent, BufferFrame, BufferUnwatch, BufferWatch, FollowParams, GutterKind, GutterRange,
+    Projected, UnfollowParams,
 };
 use runstav::methods::work::PresenceMode;
+use runstav::registry::Class;
 use runstav::wire::Error;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -491,4 +495,22 @@ pub fn unwatch(f: &Front, c: &Caller, p: BufferUnwatch) -> Result<bool, Error> {
     });
     f.core.buffers.prune();
     Ok(!outs.contains(&ViewOut::NoView))
+}
+
+/// `agents/follow`: the connection's view follows a session (the user's).
+pub fn follow(f: &Front, c: &Caller, p: FollowParams) -> Result<bool, Error> {
+    if c.class != Class::User {
+        return Err(crate::agents::session::refuse(
+            "only the user follows an agent",
+        ));
+    }
+    f.core.agents.find(p.session.as_str())?;
+    f.follows
+        .follow(c.conn_id, p.view.0, p.session.as_str().to_string());
+    Ok(true)
+}
+
+/// `agents/unfollow`: the connection's view follows nothing any more.
+pub fn unfollow(f: &Front, c: &Caller, p: UnfollowParams) -> Result<bool, Error> {
+    Ok(f.follows.unfollow(c.conn_id, p.view.0))
 }

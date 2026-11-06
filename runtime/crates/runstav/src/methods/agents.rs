@@ -177,6 +177,61 @@ pub struct Snapshot {
     /// capacity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_active: Option<f64>,
+    /// A paired chat whose writes of one file were refused twice within a minute: it waits for the user (or asks)
+    /// until a write of that file applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting: Option<Waiting>,
+    /// A chat in a project: whether pair mode is on for it (its edits of your checkout go through the editor).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paired: Option<bool>,
+    /// Who holds the session's wheel (`user`, from `agents/wheel/take` until the give): the agent stops after its
+    /// step and nothing of it is written until the wheel is given back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_by: Option<String>,
+}
+
+/// The file (and the user's lines in it) a paired chat waits on.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Waiting {
+    pub file: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines: Option<[u64; 2]>,
+}
+
+/// Where a session's wheel is: `held` once the turn the take stopped has ended, `free` once it is given back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum WheelState {
+    Held,
+    Free,
+}
+
+/// `agent-wheel`: session ID's wheel is now in STATE.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AgentWheel {
+    pub id: String,
+    pub state: WheelState,
+}
+
+/// `wheel-save`: the user gives back the wheel of session ID, which works in WORKTREE (a worktree of its own): the
+/// editor saves its buffers there and answers `agents/wheel/saved` with the same REQ.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WheelSave {
+    pub req: u64,
+    pub id: String,
+    pub worktree: String,
+}
+
+/// `agents/wheel/saved` (the editor): the answer to `wheel-save` REQ, with the files whose buffers stayed unsaved
+/// (empty: everything there is on disk).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct WheelSaved {
+    pub req: u64,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub unsaved: Vec<AbsPath>,
 }
 
 /// What a transcript entry is (`usage`, `notice` and `compaction` are reserved).
@@ -490,6 +545,21 @@ pub(crate) fn methods() -> Vec<Method> {
             "agents/pause", AgentsPause(ById) -> bool,
             classes: [User], writes: true,
             doc: "the session's turn is cancelled once the tool call running now completes, and its queue is held",
+        ),
+        method!(
+            "agents/wheel/take", AgentsWheelTake(ById) -> bool,
+            classes: [User], writes: true,
+            doc: "the user takes the session's wheel: it stops after its current step, and once that turn has ended (agent-wheel held) nothing of it is written until the give",
+        ),
+        method!(
+            "agents/wheel/give", AgentsWheelGive(ById) -> bool,
+            classes: [User], writes: true,
+            doc: "the user gives the wheel back (refused until held, and while the editor has unsaved buffers in the session's own worktree): the user's changes since the take go to the agent first, then its queue",
+        ),
+        method!(
+            "agents/wheel/saved", AgentsWheelSaved(WheelSaved) -> bool,
+            classes: [User], writes: false,
+            doc: "the editor's answer to wheel-save: the files it left unsaved (true when a give was waiting for it)",
         ),
         method!(
             "agents/probe", AgentsProbe(ProbeParams) -> ProbeResult,
