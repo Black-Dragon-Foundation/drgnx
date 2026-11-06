@@ -321,6 +321,21 @@ read them) and start keeping the records."
     (setq drgnx-perf--stalls-snapshot (drgnx-perf-watchdog-snapshot))
     (add-hook 'nidhogg-watchdog-record-functions #'drgnx-perf--stall-record)))
 
+(defun drgnx-perf--stall-top (stalls)
+  "The attribution of STALLS (records of `drgnx-perf--stall-record'): a vector of strings \"N× SIGNATURE (max MS ms;
+CULPRIT)\" for the five most frequent signatures, the most frequent first (an empty signature reads \"unsampled\")."
+  (let (by)
+    (dolist (s stalls)
+      (let* ((sig (if (string-empty-p (or (plist-get s :signature) "")) "unsampled" (plist-get s :signature)))
+             (c (assoc sig by)) (wall (or (plist-get s :wall-ms) 0.0)))
+        (if c
+            (progn (cl-incf (nth 1 c))
+                   (when (> wall (nth 2 c)) (setf (nth 2 c) wall (nth 3 c) (plist-get s :culprit))))
+          (push (list sig 1 wall (plist-get s :culprit)) by))))
+    (vconcat (mapcar (lambda (c) (format "%d× %s (max %.0f ms; %s)" (nth 1 c) (nth 0 c) (nth 2 c)
+                                         (let ((u (nth 3 c))) (cond ((stringp u) u) (u (format "%S" u)) (t "-")))))
+                     (seq-take (sort by (lambda (a b) (> (nth 1 a) (nth 1 b)))) 5)))))
+
 (defun drgnx-perf--stalls-end ()
   "The probe's keys (:stalls :stalls-felt :stall-max-ms :watchdog) for the workload just run: only :watchdog nil
 without the watchdog."
@@ -337,6 +352,7 @@ without the watchdog."
             :stalls-ge16 (seq-count (lambda (w) (>= w 16)) walls)
             :stalls-ge100 (seq-count (lambda (w) (>= w 100)) walls)
             :stall-max-ms (drgnx-perf--round (if walls (apply #'max walls) 0.0))
+            :stall-top (drgnx-perf--stall-top drgnx-perf--stalls)
             :watchdog (list :missed (plist-get d :missed) :spans (plist-get d :spans) :samples (plist-get d :samples)
                             :monitor-cpu-ms (plist-get d :monitor-cpu-ms)
                             :drain-p95-ms (plist-get d :drain-p95-ms)

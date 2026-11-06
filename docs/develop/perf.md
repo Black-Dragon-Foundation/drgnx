@@ -557,7 +557,9 @@ drains again and reports `(:stalls N :stalls-felt N :stall-max-ms F :gc (:count 
 never reset: the probe snapshots them at the start and reports the difference (a reset would zero the totals the day reads
 and the deltas of the watchdog's own summary lines). The difference comes from Nidhogg's `nidhogg-watchdog--stats-delta`
 (which copes with a reset in between) and the drain p95 and largest bucket are read on Nidhogg's own drain edges
-(1 2 4 8 16 33 50 100 ms; a forced `drain-now` is not in them); a build without these falls back to the C bucket edges. Each stall it keeps carries its wall time, felt, signature and culprit. `:stalls` is the counter's difference, not the number of records kept: the watchdog holds only its newest 32 records and the ring is not drained during a workload, so the records give `:stalls-felt`, `:stall-max-ms` and the stacks. `:typing :ge16` is the percent of commands at 16 ms or more.
+(1 2 4 8 16 33 50 100 ms; a forced `drain-now` is not in them); a build without these falls back to the C bucket edges. Each stall it keeps carries its wall time, felt, signature and culprit. `:stalls` is the counter's difference, not the number of records kept: the watchdog holds only its newest 32 records and the ring is not drained during a workload, so the records give `:stalls-felt`, `:stall-max-ms` and the stacks. `:stall-top` (in the results JSON) names the five
+most frequent signatures with their count, longest wall time and culprit: where a workload's stalls come from, the
+lab's own waits included. `:typing :ge16` is the percent of commands at 16 ms or more.
 Without the feature the probe reports `:watchdog nil` and no stalls row is judged. The soak also prints `(:heap :live_mb
 F)`, the live Lisp heap after its last collection (from `garbage-collect-heapsize`); reported, not gated.
 
