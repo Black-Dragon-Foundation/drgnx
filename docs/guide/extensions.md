@@ -58,8 +58,9 @@ Every command is also in the palette, under Extensions: **Open Extensions**, **S
 Details**, **Install Extension**, **Update Extension**, **Update All Extensions**, **Uninstall Extension**, **Turn
 Extension On or Off Here**, **Refresh Extensions**, **Cancel Extension Job**, **Show Extension Job Log**, **Roll Back
 Packages**, **Restart drgnx**, **More About Extension**, **Show Recommended Extensions**, **Show Suggested Extension**,
-and, for the trust card and a reviewed update, **Install After the Trust Card**, **Cancel the Trust Card** and **Apply
-Reviewed Update**. The row commands act on the row at point; with the search or a page open they act on that page.
+for plugins **Install a Plugin from a Folder**, **Approve Plugin**, **Turn Plugin On or Off**, **Move Plugin Up**,
+**Move Plugin Down**, **Replace Plugin** and **Remove Plugin**, and, for the trust card and a reviewed update,
+**Install After the Trust Card**, **Cancel the Trust Card** and **Apply Reviewed Update**. The row commands act on the row at point; with the search or a page open they act on that page.
 
 ## Settings
 
@@ -239,6 +240,8 @@ not known: read the whole reach below* instead, in the attention colour. Under t
 - **In this project:** as on the plugins page: the project's own plugin list, written to your private workspace file.
 - **Replace…** (a newer copy from a folder: the plugin is *changed* until you approve it) and **Remove** are background
   jobs. *Install a Plugin from a Folder* is in the palette. Nothing here approves for you.
+- **Remove** asks first ("Remove plugin NAME and what it stored?"), unlike a package's Uninstall: a rollback brings a
+  package back, but nothing brings back a removed plugin or what it stored.
 
 ## In one project
 

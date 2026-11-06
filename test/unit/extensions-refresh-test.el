@@ -1,9 +1,10 @@
 ;;; extensions-refresh-test.el --- the catalog refresh job: archives in, one catalog.json out -*- lexical-binding: t -*-
-;; test-class: det
-;; Offline and in temp dirs (pattern D: no process, no clock): the archives are local directories, the job runs in this
-;; Emacs through `drgnx-extensions-refresh-cli-run' (the function bin/drgnx's `extensions' command calls), and its
-;; exit code is the return value.  Never MELPA, never GNU ELPA, never the user's cache.  The signing tests run gpg, run
-;; to its end, on a test key in a temp GNUPGHOME (pkg-fixture.el's signed archives).
+;; test-class: cond
+;; test-pattern: handshake
+;; Offline and in temp dirs, no clock: the archives are local directories, the job runs in this Emacs through
+;; `drgnx-extensions-refresh-cli-run' (the function bin/drgnx's `extensions' command calls), and its exit code is the
+;; return value.  Never MELPA, never GNU ELPA, never the user's cache.  The signing tests run gpg, waited for to its
+;; exit (the handshake), on a test key in a temp GNUPGHOME (pkg-fixture.el's signed archives).
 (require 'ert)
 (require 'cl-lib)
 (require 'json)
